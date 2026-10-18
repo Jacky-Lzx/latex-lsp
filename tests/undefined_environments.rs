@@ -30,6 +30,82 @@ fn repeated_undefined_environments_on_one_line_keep_separate_utf16_name_ranges()
 }
 
 #[test]
+fn mismatched_environment_ends_use_the_actual_closing_name_and_preserve_the_expected_environment() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    let source = "😀 \\begin{equation}x\\end{algin} \\end{algin}\n";
+    std::fs::write(&main, source).unwrap();
+    for numbered in [false, true] {
+        let header = if numbered { "./main.tex:1:" } else { "!" };
+        let log = format!("(./main.tex\n{header} LaTeX Error: \\begin{{equation}} on input line 1 ended by \\end{{algin}}.\n{HELP}l.1 😀 \\begin{{equation}}x\\end{{algin}}\n{header} LaTeX Error: \\begin{{document}} ended by \\end{{algin}}.\n{HELP}l.1 😀 \\begin{{equation}}x\\end{{algin}} \\end{{algin}}\n)\n");
+        let diagnostics = build_log::parse(&main, &log);
+        let errors = &diagnostics[&Url::from_file_path(&main).unwrap()];
+        assert_eq!(errors.len(), 2, "{numbered}: {errors:?}");
+        let text = Text::new(source.into());
+        for ((error, (start, _)), expected) in errors
+            .iter()
+            .zip(source.match_indices("\\end{algin}"))
+            .zip(["equation", "document"])
+        {
+            let start = start + "\\end{".len();
+            assert_eq!(error.range, text.range(start, start + 5));
+            assert_eq!(
+                error.code,
+                Some(NumberOrString::String("mismatched-environment-end".into()))
+            );
+            assert_eq!(error.data.as_ref().unwrap()["environment"], "algin");
+            assert_eq!(
+                error.data.as_ref().unwrap()["expectedEnvironment"],
+                expected
+            );
+        }
+    }
+}
+
+#[test]
+fn mismatched_end_ranges_require_valid_messages_matching_source_and_direct_context() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    let source = "Text \\end{algin} \\broken\n";
+    std::fs::write(&main, source).unwrap();
+    for (message, context) in [
+        (
+            r"LaTeX Error: \begin{equation} on input line nope ended by \end{algin}.",
+            "l.1 Text \\end{algin}",
+        ),
+        (
+            r"LaTeX Error: \begin{equation} ended by \end{other}.",
+            "l.1 Text \\end{algin}",
+        ),
+        (
+            r"LaTeX Error: \begin{\name} ended by \end{algin}.",
+            "l.1 Text \\end{algin}",
+        ),
+        (
+            r"LaTeX Error: \begin{equation} ended by \end{algin}. Extra text.",
+            "l.1 Text \\end{algin}",
+        ),
+        (
+            r"LaTeX Error: \begin{equation} ended by \end{algin}.",
+            "<argument> \\end{algin}\nl.1 Text \\end{algin}",
+        ),
+        (
+            r"LaTeX Error: \begin{equation} ended by \end{algin}.",
+            "l.1 Text \\end{algin} \\broken",
+        ),
+    ] {
+        let log = format!("(./main.tex\n./main.tex:1: {message}\n{HELP}{context}\n)\n");
+        let diagnostics = build_log::parse(&main, &log);
+        let error = &diagnostics[&Url::from_file_path(&main).unwrap()][0];
+        assert_eq!(error.range.start.character, 0, "{message}: {error:?}");
+        assert!(
+            error.code.is_none() && error.data.is_none(),
+            "{message}: {error:?}"
+        );
+    }
+}
+
+#[test]
 fn multiline_environment_arguments_can_point_back_to_the_unicode_name() {
     let directory = tempfile::tempdir().unwrap();
     let main = directory.path().join("main.tex");
@@ -182,6 +258,31 @@ fn real_engines_pinpoint_environment_names_and_keep_macro_expansion_errors_on_th
                     text.range(source.find("\\broken").unwrap(), source.len() - 1)
                 );
                 assert!(errors[2].code.is_none() && errors[2].data.is_none());
+                let ends: Vec<_> = diagnostics[&Url::from_file_path(&child).unwrap()]
+                    .iter()
+                    .filter(|error| error.message.starts_with("LaTeX Error: \\begin{"))
+                    .collect();
+                assert_eq!(ends.len(), 3, "{engine}/{numbered}: {ends:?}\n{log}");
+                for (error, (start, _)) in
+                    ends[..2].iter().zip(source.match_indices("\\end{algin}"))
+                {
+                    let start = start + "\\end{".len();
+                    assert_eq!(
+                        error.range,
+                        text.range(start, start + 5),
+                        "{engine}/{numbered}: {error:?}\n{log}"
+                    );
+                    assert_eq!(
+                        error.code,
+                        Some(NumberOrString::String("mismatched-environment-end".into()))
+                    );
+                    assert_eq!(
+                        error.data.as_ref().unwrap()["expectedEnvironment"],
+                        "document"
+                    );
+                }
+                assert_eq!(ends[2].range, errors[2].range);
+                assert!(ends[2].code.is_none() && ends[2].data.is_none());
             }
         }
     }

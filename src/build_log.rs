@@ -362,18 +362,66 @@ pub(crate) fn undefined_environment_name(message: &str) -> Option<&str> {
     crate::syntax::is_static_key(name).then_some(name)
 }
 
-fn undefined_environment_range(text: &Text, line: u32, context: &str, name: &str) -> Option<Range> {
+struct EnvironmentError<'a> {
+    command: &'static str,
+    name: &'a str,
+    code: &'static str,
+    expected: Option<&'a str>,
+}
+
+fn environment_error(message: &str) -> Option<EnvironmentError<'_>> {
+    if let Some(name) = undefined_environment_name(message) {
+        return Some(EnvironmentError {
+            command: "begin",
+            name,
+            code: "undefined-environment",
+            expected: None,
+        });
+    }
+    let tail = message.strip_prefix("LaTeX Error: \\begin{")?;
+    let (expected, tail) = tail.split_once('}')?;
+    let tail = if let Some(tail) = tail.strip_prefix(" on input line ") {
+        let length = tail.bytes().take_while(u8::is_ascii_digit).count();
+        if length == 0 {
+            return None;
+        }
+        &tail[length..]
+    } else {
+        tail
+    };
+    let name = tail
+        .strip_prefix(" ended by \\end{")?
+        .strip_suffix("}.")?
+        .trim();
+    let expected = expected.trim();
+    (crate::syntax::is_static_key(name) && crate::syntax::is_static_key(expected)).then_some(
+        EnvironmentError {
+            command: "end",
+            name,
+            code: "mismatched-environment-end",
+            expected: Some(expected),
+        },
+    )
+}
+
+fn environment_name_range(
+    text: &Text,
+    line: u32,
+    context: &str,
+    error: &EnvironmentError<'_>,
+) -> Option<Range> {
     let prefix = context.trim_end();
     let shortened = shortened_context(prefix);
     let start = text.offset(Position::new(line, 0))?;
     let syntax = crate::syntax::Syntax::latex(text);
     let mut matches = syntax.commands.iter().filter_map(|command| {
-        if command.name != "begin" {
+        if command.name != error.command {
             return None;
         }
         let argument = command.argument.as_ref()?;
         let span = crate::syntax::trimmed_span(&text.source, argument.span.clone());
-        if text.source[span.clone()] != *name || text.position(argument.outer_span.end).line != line
+        if text.source[span.clone()] != *error.name
+            || text.position(argument.outer_span.end).line != line
         {
             return None;
         }
@@ -470,10 +518,11 @@ fn emit_with_context(
     .then(|| context.and_then(|context| undefined_command_range(&text, line, context)))
     .flatten();
     ranges.extend(command_range);
-    let environment_name = undefined_environment_name(&message);
-    let environment_range = environment_name
+    let environment = environment_error(&message);
+    let environment_range = environment
+        .as_ref()
         .filter(|_| reported_line.checked_sub(1) == Some(line))
-        .and_then(|name| undefined_environment_range(&text, line, context?, name));
+        .and_then(|error| environment_name_range(&text, line, context?, error));
     ranges.extend(environment_range);
     let command_name = command_range.and_then(|range| {
         let start = text.offset(range.start)?;
@@ -508,7 +557,7 @@ fn emit_with_context(
                 code: box_code(&message)
                     .or_else(|| missing_include_key(&message).map(|_| "missing-include"))
                     .or_else(|| command_range.map(|_| "undefined-control-sequence"))
-                    .or_else(|| environment_range.map(|_| "undefined-environment"))
+                    .or_else(|| environment_range.and(environment.as_ref()).map(|error| error.code))
                     .map(|code| NumberOrString::String(code.into())),
                 message: message.clone(),
                 data: rewritten
@@ -516,8 +565,11 @@ fn emit_with_context(
                     .or_else(|| command_name.map(|name| serde_json::json!({"command":name})))
                     .or_else(|| {
                         environment_range
-                            .and(environment_name)
-                            .map(|name| serde_json::json!({"environment":name}))
+                            .and(environment.as_ref())
+                            .map(|error| match error.expected {
+                                Some(expected) => serde_json::json!({"environment":error.name,"expectedEnvironment":expected}),
+                                None => serde_json::json!({"environment":error.name}),
+                            })
                     }),
                 ..Default::default()
             }
