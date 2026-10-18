@@ -272,6 +272,9 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
         return vec![];
     }
     if let Some((command, span)) = argument_context(doc, offset) {
+        if syntax::file_extensions(&command.name).is_some() {
+            return crate::path_completion::complete(workspace, uri, &command.name, span);
+        }
         let prefix = &doc.text.source[span.clone()];
         // Replace the rest of this key too when completing inside an existing
         // reference/environment; separators and following arguments stay intact.

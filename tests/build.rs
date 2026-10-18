@@ -265,6 +265,28 @@ fn cancellation_and_timeout_terminate_the_compiler_process_group() {
 }
 
 #[test]
+#[ignore = "requires pdflatex and hyperref"]
+fn real_hyperref_urls_with_percent_escapes_compile_without_syntax_errors() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    let source = "\\documentclass{article}\n\\usepackage{hyperref}\n\\begin{document}\n\\url{https://example.com/a%20b?x=some_value}\n\\href{https://example.com/a%20b#section}{\\textbf{Link}}\n\\end{document}\n";
+    std::fs::write(&main, source).unwrap();
+    let uri = Url::from_file_path(&main).unwrap();
+    let document = latex_lsp::workspace::Document::new(&uri, source.into(), Some(1));
+    assert!(latex_lsp::features::diagnostics(&document).is_empty());
+    let config = BuildConfig {
+        executable: "pdflatex".into(),
+        ..Default::default()
+    };
+    let outcome = build::run(&main, &config, &AtomicBool::new(false));
+    assert_eq!(
+        outcome.status, "success",
+        "{}\n{}",
+        outcome.message, outcome.output
+    );
+}
+
+#[test]
 #[ignore = "requires latexmk, BibTeX and a TeX installation"]
 fn real_bibliography_supports_configured_hidden_and_external_output_directories() {
     let directory = tempfile::tempdir().unwrap();

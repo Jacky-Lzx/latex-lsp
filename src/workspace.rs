@@ -130,10 +130,7 @@ impl Workspace {
                     .argument
                     .as_ref()
                     .map(|arg| {
-                        let multiple = matches!(
-                            command.name.as_str(),
-                            "bibliography" | "usepackage" | "RequirePackage"
-                        );
+                        let multiple = crate::syntax::file_list(&command.name);
                         let values = if multiple {
                             arg.value.split(',').collect::<Vec<_>>()
                         } else {

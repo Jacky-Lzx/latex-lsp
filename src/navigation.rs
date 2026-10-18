@@ -241,19 +241,12 @@ pub fn document_links(workspace: &Workspace, uri: &Url) -> Vec<DocumentLink> {
         let Some(argument) = &command.argument else {
             continue;
         };
-        let extensions: &[&str] = match command.name.as_str() {
-            "input" | "include" | "subfile" => &["tex"],
-            "bibliography" | "addbibresource" => &["bib"],
-            "usepackage" | "RequirePackage" => &["sty"],
-            "documentclass" | "LoadClass" => &["cls"],
-            "includegraphics" => &["pdf", "png", "jpg", "jpeg", "eps", "svg"],
-            "url" | "href" => &[],
-            _ => continue,
+        let extensions = match syntax::file_extensions(&command.name) {
+            Some(extensions) => extensions,
+            None if matches!(command.name.as_str(), "url" | "href") => &[],
+            None => continue,
         };
-        let multiple = matches!(
-            command.name.as_str(),
-            "bibliography" | "usepackage" | "RequirePackage"
-        );
+        let multiple = syntax::file_list(&command.name);
         let mut start = argument.span.start;
         for name in if multiple {
             argument.value.split(',').collect::<Vec<_>>()

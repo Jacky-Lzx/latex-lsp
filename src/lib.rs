@@ -6,6 +6,7 @@ pub mod editing;
 pub mod features;
 pub mod file_operations;
 pub mod navigation;
+pub mod path_completion;
 pub mod syntax;
 pub mod text;
 pub mod workspace;
@@ -160,7 +161,7 @@ impl LanguageServer for Backend {
                     },
                 )),
                 completion_provider: Some(CompletionOptions {
-                    trigger_characters: Some(vec!["\\".into(), "{".into(), ",".into()]),
+                    trigger_characters: Some(vec!["\\".into(), "{".into(), ",".into(), "/".into()]),
                     ..Default::default()
                 }),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),

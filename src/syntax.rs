@@ -68,6 +68,16 @@ fn skip_space(source: &str, mut i: usize) -> usize {
 
 /// Read a balanced group, ignoring comments and escaped delimiters.
 fn group(source: &str, i: usize, open: u8, close: u8) -> Option<(Argument, usize)> {
+    group_mode(source, i, open, close, true)
+}
+
+fn group_mode(
+    source: &str,
+    i: usize,
+    open: u8,
+    close: u8,
+    comments: bool,
+) -> Option<(Argument, usize)> {
     let bytes = source.as_bytes();
     if bytes.get(i) != Some(&open) {
         return None;
@@ -84,7 +94,7 @@ fn group(source: &str, i: usize, open: u8, close: u8) -> Option<(Argument, usize
                 }
                 continue;
             }
-            b'%' => {
+            b'%' if comments => {
                 while i < bytes.len() && bytes[i] != b'\n' {
                     i += 1;
                 }
@@ -115,6 +125,21 @@ pub fn is_reference(name: &str) -> bool {
         name,
         "ref" | "eqref" | "pageref" | "autoref" | "cref" | "Cref" | "vref" | "nameref"
     )
+}
+
+pub fn file_extensions(name: &str) -> Option<&'static [&'static str]> {
+    Some(match name {
+        "input" | "include" | "subfile" => &["tex"],
+        "bibliography" | "addbibresource" => &["bib"],
+        "usepackage" | "RequirePackage" => &["sty"],
+        "documentclass" | "LoadClass" => &["cls"],
+        "includegraphics" => &["pdf", "png", "jpg", "jpeg", "eps", "svg"],
+        _ => return None,
+    })
+}
+
+pub fn file_list(name: &str) -> bool {
+    matches!(name, "bibliography" | "usepackage" | "RequirePackage")
 }
 
 pub fn is_citation(name: &str) -> bool {
@@ -244,7 +269,8 @@ impl Syntax {
                     while let Some((_, end)) = group(source, arg_start, b'[', b']') {
                         arg_start = skip_space(source, end);
                     }
-                    let parsed = group(source, arg_start, b'{', b'}');
+                    let url_argument = matches!(name, "url" | "href");
+                    let parsed = group_mode(source, arg_start, b'{', b'}', !url_argument);
                     let argument = parsed.as_ref().map(|(a, _)| a.clone());
                     let command = Command {
                         name: name.into(),
@@ -325,6 +351,12 @@ impl Syntax {
                                 }
                             }
                             _ => {}
+                        }
+                    }
+                    if url_argument {
+                        if let Some((argument, end)) = parsed {
+                            result.ignored.push(argument.span);
+                            i = end;
                         }
                     }
                     result.commands.push(command);

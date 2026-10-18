@@ -125,6 +125,30 @@ fn links_and_definitions_select_individual_files_and_ignore_comments() {
 }
 
 #[test]
+fn urls_accept_percent_escapes_and_keep_their_contents_out_of_latex_analysis() {
+    let uri = Url::parse("file:///navigation/urls.tex").unwrap();
+    let source = r"\url{https://example.com/a%20b?q=some_value&x=2#section}\href{https://example.com/\label{hidden}}{\label{visible}Text}";
+    let mut workspace = Workspace::default();
+    insert(&mut workspace, &uri, source);
+    let doc = &workspace.documents[&uri];
+    assert!(features::diagnostics(doc).is_empty());
+    assert_eq!(doc.syntax.labels.len(), 1);
+    assert_eq!(doc.syntax.labels[0].name, "visible");
+    let links = navigation::document_links(&workspace, &uri);
+    assert_eq!(links.len(), 2);
+    assert_eq!(
+        links[0].target.as_ref().unwrap().as_str(),
+        "https://example.com/a%20b?q=some_value&x=2#section"
+    );
+    assert!(features::completion(
+        &workspace,
+        &uri,
+        doc.text.position(source.find("hidden").unwrap())
+    )
+    .is_empty());
+}
+
+#[test]
 fn magic_root_links_select_the_real_directive_and_support_definition_jumps() {
     let directory = tempfile::tempdir().unwrap();
     std::fs::write(

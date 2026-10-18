@@ -152,6 +152,34 @@ fn batched_file_renames_update_tex_bib_packages_images_and_magic_root_comments()
 }
 
 #[test]
+fn file_urls_preserve_percent_encoding_when_assets_are_renamed() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let mut workspace = project(root);
+    let original = uri(root, "original file.pdf");
+    std::fs::write(original.to_file_path().unwrap(), "pdf").unwrap();
+    let new = uri(root, "renamed file#1.pdf");
+    let main = uri(root, "main.tex");
+    let source = format!("\\url{{{original}}}");
+    workspace
+        .documents
+        .insert(main.clone(), Document::new(&main, source.clone(), Some(1)));
+    let files = [FileRename {
+        old_uri: original.to_string(),
+        new_uri: new.to_string(),
+    }];
+    let edits = edits(
+        file_operations::will_rename(&workspace, &files)
+            .unwrap()
+            .unwrap(),
+    );
+    let source = apply(&source, edits[&main].clone());
+    assert_eq!(source, format!("\\url{{{new}}}"));
+    let document = Document::new(&main, source, Some(2));
+    assert!(latex_lsp::features::diagnostics(&document).is_empty());
+}
+
+#[test]
 fn directory_moves_rebase_references_inside_moved_documents() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();

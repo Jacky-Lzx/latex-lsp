@@ -920,7 +920,19 @@ fn navigation_capabilities_and_requests_work_over_stdio() {
         json!({"textDocument":{"uri":uri}}),
     );
     assert!(links[0]["target"].as_str().unwrap().ends_with("child.tex"));
-    server.request(5, "shutdown", Value::Null);
+    let completions = server.request(
+        5,
+        "textDocument/completion",
+        json!({"textDocument":{"uri":uri},"position":{"line":1,"character":9}}),
+    );
+    let item = completions
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["label"] == "child.tex")
+        .unwrap();
+    assert_eq!(item["textEdit"]["newText"], "child");
+    server.request(6, "shutdown", Value::Null);
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
