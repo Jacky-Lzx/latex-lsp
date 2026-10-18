@@ -60,6 +60,7 @@ pub struct Syntax {
     pub definitions: Vec<Entry>,
     pub environments: Vec<Entry>,
     pub counters: Vec<Entry>,
+    pub conditionals: Vec<Entry>,
     pub diagnostics: Vec<Diagnostic>,
     pub ignored: Vec<Range<usize>>,
     pub fixes: Vec<QuickFix>,
@@ -352,6 +353,15 @@ fn control_word(source: &str, start: usize) -> Option<Range<usize>> {
     (length > 0).then_some(start..start + 1 + length)
 }
 
+pub(crate) fn conditional_declaration(source: &str, command: &Command) -> Option<Range<usize>> {
+    if command.name != "newif" {
+        return None;
+    }
+    let span = control_word(source, skip_space(source, command.span.end))?;
+    let name = source[span.start + 1..span.end].strip_prefix("if")?;
+    (!name.is_empty()).then_some(span.start + 3..span.end)
+}
+
 pub fn is_citation(name: &str) -> bool {
     matches!(
         name,
@@ -494,6 +504,14 @@ impl Syntax {
                         span: start..command_end,
                         argument,
                     };
+                    if let Some(span) = conditional_declaration(source, &command) {
+                        result.conditionals.push(Entry {
+                            name: source[span.clone()].into(),
+                            span,
+                            detail: "Defined with \\newif".into(),
+                            is_variable: false,
+                        });
+                    }
                     let declaration = if declares_command(name) {
                         if let Some(argument) = &command.argument {
                             let span = trimmed_span(source, argument.span.clone());
@@ -1015,6 +1033,7 @@ mod tests {
                             .chain(&syntax.definitions)
                             .chain(&syntax.environments)
                             .chain(&syntax.counters)
+                            .chain(&syntax.conditionals)
                             .map(|entry| entry.span.clone()),
                     )
                     .chain(syntax.ignored.iter().cloned());

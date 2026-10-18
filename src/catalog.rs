@@ -1,5 +1,5 @@
-/// Register primitives whose names must remain reserved during rename.
-pub(crate) const REGISTER_PRIMITIVES: &[&str] = &[
+/// TeX primitives whose names must remain reserved during rename.
+pub(crate) const PRIMITIVES: &[&str] = &[
     "count",
     "dimen",
     "skip",
@@ -20,11 +20,40 @@ pub(crate) const REGISTER_PRIMITIVES: &[&str] = &[
     "textfont",
     "scriptfont",
     "scriptscriptfont",
+    "iftrue",
+    "iffalse",
+    "ifnum",
+    "ifdim",
+    "ifcase",
+    "ifodd",
+    "ifvmode",
+    "ifhmode",
+    "ifmmode",
+    "ifinner",
+    "ifhbox",
+    "ifvbox",
+    "ifvoid",
+    "ifx",
+    "ifcat",
+    "ifeof",
+    "ifcsname",
+    "ifdefined",
+    "iffontchar",
+    "ifincsname",
+    "else",
+    "fi",
+    "or",
+    "unless",
 ];
 
 /// Command name, snippet template (without leading backslash), short documentation.
 /// Templates retain literal TeX backslashes; completion escapes them for the client.
 pub const COMMANDS: &[(&str, &str, &str)] = &[
+    (
+        "newif",
+        "newif\\if${1:condition}",
+        "Declare a conditional and its true/false setter commands.",
+    ),
     (
         "newlength",
         "newlength{\\${1:length}}",

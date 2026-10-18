@@ -16,6 +16,18 @@ enum TargetKind {
     Command,
     Environment,
     Counter,
+    Conditional,
+}
+
+impl TargetKind {
+    fn generated_kind(self) -> Option<crate::generated::Kind> {
+        match self {
+            Self::Environment => Some(crate::generated::Kind::Environment),
+            Self::Counter => Some(crate::generated::Kind::Counter),
+            Self::Conditional => Some(crate::generated::Kind::Conditional),
+            _ => None,
+        }
+    }
 }
 
 struct Target<'a> {
@@ -104,25 +116,25 @@ fn target<'a>(workspace: &'a Workspace, uri: &Url, offset: usize) -> Option<Targ
     {
         return raw;
     }
-    if let Some((name, span)) =
-        crate::generated::target(workspace, &workspace.symbol_scope(uri), doc, offset, true)
-    {
-        return Some(Target {
-            kind: TargetKind::Environment,
-            name,
-            span,
-            control_word: false,
-        });
-    }
-    if let Some((name, span)) =
-        crate::generated::target(workspace, &workspace.symbol_scope(uri), doc, offset, false)
-    {
-        return Some(Target {
-            kind: TargetKind::Counter,
-            name,
-            span,
-            control_word: false,
-        });
+    for (target_kind, generated_kind) in [
+        (TargetKind::Environment, crate::generated::Kind::Environment),
+        (TargetKind::Counter, crate::generated::Kind::Counter),
+        (TargetKind::Conditional, crate::generated::Kind::Conditional),
+    ] {
+        if let Some((name, span)) = crate::generated::target(
+            workspace,
+            &workspace.symbol_scope(uri),
+            doc,
+            offset,
+            generated_kind,
+        ) {
+            return Some(Target {
+                kind: target_kind,
+                name,
+                span,
+                control_word: false,
+            });
+        }
     }
     for index in 0..doc.syntax.commands.len() {
         if let Some(span) = syntax::literal_csname(&doc.text.source, &doc.syntax.commands, index) {
@@ -146,6 +158,7 @@ fn entries(doc: &Document, kind: TargetKind) -> &[Entry] {
         TargetKind::Command => &doc.syntax.definitions,
         TargetKind::Environment => &doc.syntax.environments,
         TargetKind::Counter => &doc.syntax.counters,
+        TargetKind::Conditional => &doc.syntax.conditionals,
     }
 }
 
@@ -284,7 +297,7 @@ pub fn rename(
         TargetKind::Command | TargetKind::Environment => {
             COMMANDS.iter().any(|(name, _, _)| *name == new_name)
                 || syntax::declares_register(new_name)
-                || crate::catalog::REGISTER_PRIMITIVES.contains(&new_name)
+                || crate::catalog::PRIMITIVES.contains(&new_name)
                 || ENVIRONMENTS
                     .iter()
                     .any(|name| *name == new_name || format!("end{name}") == new_name)
@@ -296,14 +309,9 @@ pub fn rename(
             "The name `{new_name}` is already defined"
         )));
     }
-    if target.kind == TargetKind::Environment {
-        if let Some(environment) = crate::generated::in_scope(workspace, &scope, target.name, true)
-        {
-            crate::generated::validate(workspace, &scope, target.name, new_name, environment)?;
-        }
-    } else if target.kind == TargetKind::Counter {
-        if let Some(counter) = crate::generated::in_scope(workspace, &scope, target.name, false) {
-            crate::generated::validate(workspace, &scope, target.name, new_name, counter)?;
+    if let Some(kind) = target.kind.generated_kind() {
+        if let Some(model) = crate::generated::in_scope(workspace, &scope, target.name, kind) {
+            crate::generated::validate(workspace, &scope, target.name, new_name, model)?;
         }
     }
     let mut changes: std::collections::BTreeMap<Url, Vec<TextEdit>> =
@@ -570,6 +578,35 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
             });
         }
     }
+    for entry in workspace
+        .documents
+        .iter()
+        .filter(|(uri, _)| scope.contains(*uri))
+        .flat_map(|(_, doc)| &doc.syntax.conditionals)
+    {
+        for (index, name) in crate::generated::conditional_names(&entry.name)
+            .into_iter()
+            .enumerate()
+        {
+            if name.starts_with(prefix) && seen.insert(name.clone()) {
+                result.push(CompletionItem {
+                    label: name.clone(),
+                    kind: Some(if index == 0 {
+                        CompletionItemKind::VARIABLE
+                    } else {
+                        CompletionItemKind::FUNCTION
+                    }),
+                    detail: Some(format!("Conditional `{}` — {}", entry.name, entry.detail)),
+                    insert_text_format: Some(InsertTextFormat::PLAIN_TEXT),
+                    text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                        range,
+                        new_text: name,
+                    })),
+                    ..Default::default()
+                });
+            }
+        }
+    }
     for &(name, snippet, documentation) in COMMANDS {
         if name.starts_with(prefix) && seen.insert(name.into()) {
             result.push(CompletionItem {
@@ -742,19 +779,23 @@ fn all_references(
     else {
         return vec![];
     };
-    let environment = if target.kind == TargetKind::Environment {
-        crate::generated::in_scope(workspace, &workspace.symbol_scope(uri), target.name, true)
-    } else if target.kind == TargetKind::Counter {
-        crate::generated::in_scope(workspace, &workspace.symbol_scope(uri), target.name, false)
-    } else {
-        None
-    };
+    let generated = target.kind.generated_kind().and_then(|kind| {
+        crate::generated::in_scope(workspace, &workspace.symbol_scope(uri), target.name, kind)
+    });
     let mut result = Vec::new();
     for (uri, doc) in &workspace.documents {
-        if let Some(environment) = environment {
+        if let Some(model) = generated {
             result.extend(
-                crate::generated::references(doc, target.name, environment)
+                crate::generated::references(doc, target.name, model)
                     .into_iter()
+                    .filter(|reference| {
+                        target.kind != TargetKind::Conditional
+                            || !doc
+                                .syntax
+                                .conditionals
+                                .iter()
+                                .any(|entry| entry.span == reference.span)
+                    })
                     .map(|reference| Location {
                         uri: uri.clone(),
                         range: doc.text.range(reference.span.start, reference.span.end),
@@ -825,7 +866,7 @@ fn all_references(
                 TargetKind::Label => syntax::is_reference(&command.name),
                 TargetKind::Citation => syntax::is_citation(&command.name),
                 TargetKind::Command => false,
-                TargetKind::Counter => false,
+                TargetKind::Counter | TargetKind::Conditional => false,
                 TargetKind::Environment => matches!(command.name.as_str(), "begin" | "end"),
             };
             if !matches {
@@ -968,6 +1009,7 @@ pub fn symbols(doc: &Document) -> Vec<DocumentSymbol> {
         (&doc.syntax.definitions, SymbolKind::FUNCTION),
         (&doc.syntax.environments, SymbolKind::CLASS),
         (&doc.syntax.counters, SymbolKind::VARIABLE),
+        (&doc.syntax.conditionals, SymbolKind::BOOLEAN),
     ] {
         result.extend(entries.iter().map(|entry| DocumentSymbol {
             name: entry.name.clone(),

@@ -1,4 +1,4 @@
-//! Generated commands and dependencies of environments and counters.
+//! Generated commands and dependencies of environments, counters and conditionals.
 use crate::{
     syntax::{self, Argument, Command},
     workspace::{Document, Workspace},
@@ -9,9 +9,16 @@ use tower_lsp::{
     lsp_types::Url,
 };
 
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum Kind {
+    Environment,
+    Counter,
+    Conditional,
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct Generated {
-    is_environment: bool,
+    kind: Kind,
     numbered: bool,
     owns_counter: bool,
     alias: bool,
@@ -20,7 +27,7 @@ pub(crate) struct Generated {
 impl Generated {
     fn counter(alias: bool) -> Self {
         Self {
-            is_environment: false,
+            kind: Kind::Counter,
             numbered: true,
             owns_counter: true,
             alias,
@@ -36,6 +43,19 @@ struct Declaration<'a> {
 }
 
 fn declaration<'a>(doc: &'a Document, command: &Command) -> Option<Declaration<'a>> {
+    if let Some(span) = syntax::conditional_declaration(&doc.text.source, command) {
+        return Some(Declaration {
+            name: &doc.text.source[span],
+            environment: Generated {
+                kind: Kind::Conditional,
+                numbered: false,
+                owns_counter: false,
+                alias: false,
+            },
+            shared: None,
+            within: None,
+        });
+    }
     if !syntax::declares_environment(&command.name)
         && !matches!(command.name.as_str(), "newcounter" | "newaliascnt")
     {
@@ -59,7 +79,7 @@ fn declaration<'a>(doc: &'a Document, command: &Command) -> Option<Declaration<'
         return Some(Declaration {
             name,
             environment: Generated {
-                is_environment: true,
+                kind: Kind::Environment,
                 numbered: false,
                 owns_counter: false,
                 alias: false,
@@ -87,7 +107,7 @@ fn declaration<'a>(doc: &'a Document, command: &Command) -> Option<Declaration<'
     Some(Declaration {
         name,
         environment: Generated {
-            is_environment: true,
+            kind: Kind::Environment,
             numbered,
             owns_counter: numbered && shared.is_none(),
             alias: false,
@@ -103,7 +123,8 @@ pub(crate) fn counters(doc: &Document) -> impl Iterator<Item = &str> {
         .iter()
         .filter_map(|command| declaration(doc, command))
         .filter(|declaration| {
-            declaration.environment.is_environment && declaration.environment.owns_counter
+            declaration.environment.kind == Kind::Environment
+                && declaration.environment.owns_counter
         })
         .map(|declaration| declaration.name)
 }
@@ -112,7 +133,7 @@ pub(crate) fn in_scope(
     workspace: &Workspace,
     scope: &BTreeSet<Url>,
     name: &str,
-    environment: bool,
+    kind: Kind,
 ) -> Option<Generated> {
     workspace
         .documents
@@ -124,8 +145,7 @@ pub(crate) fn in_scope(
                 .iter()
                 .filter_map(|command| declaration(doc, command))
                 .find(|declaration| {
-                    declaration.name == name
-                        && declaration.environment.is_environment == environment
+                    declaration.name == name && declaration.environment.kind == kind
                 })
                 .map(|declaration| declaration.environment)
         })
@@ -133,7 +153,10 @@ pub(crate) fn in_scope(
 
 fn generated_names(name: &str, environment: Generated) -> Vec<(String, usize)> {
     let mut names = Vec::new();
-    if environment.is_environment {
+    if environment.kind == Kind::Conditional {
+        return conditional_names(name).into_iter().zip([2, 0, 0]).collect();
+    }
+    if environment.kind == Kind::Environment {
         names.extend([(name.into(), 0), (format!("end{name}"), 3)]);
     }
     if environment.numbered {
@@ -149,6 +172,14 @@ fn generated_names(name: &str, environment: Generated) -> Vec<(String, usize)> {
         names.push((format!("AC@cnt@{name}"), 7));
     }
     names
+}
+
+pub(crate) fn conditional_names(name: &str) -> [String; 3] {
+    [
+        format!("if{name}"),
+        format!("{name}true"),
+        format!("{name}false"),
+    ]
 }
 
 pub(crate) struct Reference {
@@ -186,7 +217,9 @@ pub(crate) fn references(doc: &Document, name: &str, environment: Generated) -> 
             }
         }
         let mut arguments = Vec::new();
-        if matches!(command.name.as_str(), "crefname" | "Crefname") {
+        if environment.kind != Kind::Conditional
+            && matches!(command.name.as_str(), "crefname" | "Crefname")
+        {
             arguments.extend(command.argument.iter().cloned());
         }
         if environment.owns_counter {
@@ -283,7 +316,7 @@ pub(crate) fn target<'a>(
     scope: &BTreeSet<Url>,
     doc: &Document,
     offset: usize,
-    environment: bool,
+    kind: Kind,
 ) -> Option<(&'a str, Range<usize>)> {
     let mut target = None;
     for (uri, definition) in &workspace.documents {
@@ -295,7 +328,7 @@ pub(crate) fn target<'a>(
             .commands
             .iter()
             .filter_map(|command| declaration(definition, command))
-            .filter(|declaration| declaration.environment.is_environment == environment)
+            .filter(|declaration| declaration.environment.kind == kind)
         {
             if let Some(reference) = references(doc, declaration.name, declaration.environment)
                 .into_iter()
@@ -332,8 +365,9 @@ pub(crate) fn validate(
             "The counter `{new}` is already defined"
         )));
     }
-    if !environment.is_environment
-        && in_scope(workspace, scope, old, true).is_some_and(|environment| environment.numbered)
+    if environment.kind == Kind::Counter
+        && in_scope(workspace, scope, old, Kind::Environment)
+            .is_some_and(|environment| environment.numbered)
     {
         return Err(Error::invalid_params(
             "Rename is ambiguous: a theorem and an independent counter share generated commands",
@@ -358,6 +392,11 @@ pub(crate) fn validate(
                 .iter()
                 .any(|entry| entry.name == *name)
                 || generated_command_exists(doc, name)
+                || crate::catalog::COMMANDS
+                    .iter()
+                    .any(|(command, _, _)| command == name)
+                || crate::catalog::PRIMITIVES.contains(&name.as_str())
+                || syntax::declares_register(name)
         });
         if counter_conflict || macro_conflict {
             return Err(Error::invalid_params(format!(
