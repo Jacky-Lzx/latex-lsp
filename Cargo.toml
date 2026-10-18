@@ -1,0 +1,19 @@
+[package]
+name = "latex-lsp"
+version = "0.1.0"
+edition = "2021"
+description = "A lightweight LaTeX language server"
+license = "MIT"
+
+[dependencies]
+serde_json = "1"
+tokio = { version = "1", features = ["io-std", "macros", "rt-multi-thread", "sync"] }
+tower-lsp = "0.20"
+tower = { version = "0.4", default-features = false }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
+strip = true

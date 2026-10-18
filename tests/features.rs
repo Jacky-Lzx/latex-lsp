@@ -1,0 +1,322 @@
+use latex_lsp::{
+    features,
+    text::Text,
+    workspace::{Document, Workspace},
+};
+use tower_lsp::lsp_types::{CompletionTextEdit, Position, TextDocumentContentChangeEvent, Url};
+
+fn uri(name: &str) -> Url {
+    Url::parse(&format!("file:///latex-lsp-tests/{name}")).unwrap()
+}
+
+fn insert(workspace: &mut Workspace, name: &str, source: &str) -> Url {
+    let uri = uri(name);
+    workspace
+        .documents
+        .insert(uri.clone(), Document::new(&uri, source.into(), Some(1)));
+    uri
+}
+
+fn cursor(source: &str, needle: &str) -> Position {
+    Text::new(source.into()).position(source.find(needle).unwrap() + needle.len())
+}
+
+#[test]
+fn labels_complete_and_navigate_across_documents() {
+    let mut workspace = Workspace::default();
+    let chapter = insert(
+        &mut workspace,
+        "chapter.tex",
+        "\\section{中文}\n\\label{sec:intro}",
+    );
+    let source = "😀 \\ref{sec:intro}\n\\ref{sec:";
+    let main = insert(&mut workspace, "main.tex", source);
+    let completions = features::completion(&workspace, &main, cursor(source, "\\ref{sec:"));
+    assert_eq!(completions.len(), 1);
+    assert_eq!(completions[0].label, "sec:intro");
+    let definitions = features::definitions(&workspace, &main, cursor(source, "\\ref{sec:int"));
+    assert_eq!(definitions.len(), 1);
+    assert_eq!(definitions[0].uri, chapter);
+    let refs = features::references(&workspace, &main, cursor(source, "\\ref{sec:int"), true);
+    assert_eq!(refs.len(), 2);
+    assert!(features::hover(&workspace, &main, cursor(source, "\\ref{sec:int")).is_some());
+}
+
+#[test]
+fn citations_replace_only_the_current_key() {
+    let mut workspace = Workspace::default();
+    let bib = insert(
+        &mut workspace,
+        "refs.bib",
+        "@article{alpha, title={A}}\n@book{beta, title={B}}",
+    );
+    let source = "\\citep[see][p.~2]{alpha, be";
+    let main = insert(&mut workspace, "main.tex", source);
+    let completions = features::completion(&workspace, &main, cursor(source, source));
+    assert_eq!(completions.len(), 1);
+    assert_eq!(completions[0].label, "beta");
+    let Some(CompletionTextEdit::Edit(edit)) = &completions[0].text_edit else {
+        panic!("missing edit");
+    };
+    assert_eq!(edit.range.start.character as usize, source.len() - 2);
+    let source = "\\cite{alpha, beta}";
+    insert(&mut workspace, "main.tex", source);
+    assert_eq!(
+        features::definitions(&workspace, &main, cursor(source, "\\cite{alpha, be"))[0].uri,
+        bib
+    );
+    assert_eq!(
+        features::references(&workspace, &main, cursor(source, "\\cite{alpha, be"), false).len(),
+        1
+    );
+}
+
+#[test]
+fn snippets_respect_client_capabilities() {
+    let mut workspace = Workspace::default();
+    let main = insert(&mut workspace, "main.tex", "\\sec");
+    let plain = features::completion(&workspace, &main, Position::new(0, 4));
+    let Some(CompletionTextEdit::Edit(edit)) = &plain[0].text_edit else {
+        panic!();
+    };
+    assert_eq!(edit.new_text, "section");
+    workspace.snippets = true;
+    let snippets = features::completion(&workspace, &main, Position::new(0, 4));
+    let Some(CompletionTextEdit::Edit(edit)) = &snippets[0].text_edit else {
+        panic!();
+    };
+    assert!(edit.new_text.contains("${1:Title}"));
+    assert_eq!(edit.range.start.character, 1);
+}
+
+#[test]
+fn completion_in_the_middle_replaces_the_remaining_word() {
+    let mut workspace = Workspace::default();
+    insert(&mut workspace, "chapter.tex", r"\label{sec:中文}");
+    insert(
+        &mut workspace,
+        "refs.bib",
+        "@book{knuth1984, title={The TeXbook}}",
+    );
+    for (marked, label, expected) in [
+        (r"\se|ction{Title}", "section", r"\section{Title}"),
+        (r"\ref{sec:|旧}", "sec:中文", r"\ref{sec:中文}"),
+        (
+            r"\cite{old, kn|uth1984}",
+            "knuth1984",
+            r"\cite{old, knuth1984}",
+        ),
+        (r"\begin{ali|gn}", "align", r"\begin{align}"),
+    ] {
+        let offset = marked.find('|').unwrap();
+        let source = marked.replace('|', "");
+        let main = insert(&mut workspace, "main.tex", &source);
+        let text = Text::new(source);
+        let completions = features::completion(&workspace, &main, text.position(offset));
+        let item = completions.iter().find(|item| item.label == label).unwrap();
+        let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+            panic!("missing completion edit");
+        };
+        let result = text
+            .changed(vec![TextDocumentContentChangeEvent {
+                range: Some(edit.range),
+                range_length: None,
+                text: edit.new_text.clone(),
+            }])
+            .unwrap();
+        assert_eq!(result.source, expected);
+    }
+}
+
+#[test]
+fn snippet_completion_preserves_existing_arguments() {
+    let mut workspace = Workspace {
+        snippets: true,
+        ..Default::default()
+    };
+    for source in [r"\section{Title}", r"\section*[Short]{Title}"] {
+        let main = insert(&mut workspace, "main.tex", source);
+        let completions = features::completion(&workspace, &main, Position::new(0, 3));
+        let item = completions
+            .iter()
+            .find(|item| item.label == "section")
+            .unwrap();
+        let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+            panic!("missing completion edit");
+        };
+        assert_eq!(edit.new_text, "section");
+        let result = Text::new(source.into())
+            .changed(vec![TextDocumentContentChangeEvent {
+                range: Some(edit.range),
+                range_length: None,
+                text: edit.new_text.clone(),
+            }])
+            .unwrap();
+        assert_eq!(result.source, source);
+    }
+}
+
+#[test]
+fn custom_commands_complete_hover_and_find_uses() {
+    let mut workspace = Workspace::default();
+    let macros = insert(
+        &mut workspace,
+        "macros.tex",
+        r"\newcommand{\hello}[1]{Hello #1}",
+    );
+    let main = insert(&mut workspace, "main.tex", "\\hello{世界}\n\\hel");
+    assert_eq!(
+        features::completion(&workspace, &main, Position::new(1, 4))[0].label,
+        "hello"
+    );
+    assert_eq!(
+        features::definitions(&workspace, &main, Position::new(0, 3))[0].uri,
+        macros
+    );
+    assert!(features::hover(&workspace, &main, Position::new(0, 3)).is_some());
+    assert_eq!(
+        features::references(&workspace, &main, Position::new(0, 3), false).len(),
+        1
+    );
+    assert_eq!(
+        features::references(&workspace, &main, Position::new(0, 3), true).len(),
+        2
+    );
+}
+
+#[test]
+fn suppress_features_in_comments_verbatim_and_escaped_commands() {
+    let mut workspace = Workspace::default();
+    for source in [
+        r"% \sec",
+        r"\verb|\sec|",
+        "\\begin{verbatim}\n\\sec",
+        r"\\sec",
+    ] {
+        let main = insert(&mut workspace, "main.tex", source);
+        let position = Text::new(source.into()).position(source.find("sec").unwrap() + 3);
+        assert!(
+            features::completion(&workspace, &main, position).is_empty(),
+            "{source}"
+        );
+        assert!(
+            features::hover(&workspace, &main, position).is_none(),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn environment_completion_and_duplicate_diagnostics() {
+    let mut workspace = Workspace::default();
+    let main = insert(&mut workspace, "main.tex", r"\begin{ali");
+    let completions = features::completion(&workspace, &main, Position::new(0, 10));
+    assert!(completions.iter().any(|item| item.label == "align"));
+    let main = insert(
+        &mut workspace,
+        "main.tex",
+        r"\label{x}\label{x}\begin{equation}",
+    );
+    let diagnostics = features::diagnostics(&workspace.documents[&main]);
+    assert_eq!(diagnostics.len(), 2);
+    assert!(diagnostics.iter().any(|d| d.message.contains("Duplicate")));
+}
+
+#[test]
+fn document_symbols_include_headings_labels_and_macros() {
+    let mut workspace = Workspace::default();
+    let main = insert(
+        &mut workspace,
+        "main.tex",
+        "\\section*{中文}\n\\label{sec:a}\n\\subsection{Details}\n\\newcommand{\\foo}{bar}",
+    );
+    let symbols = features::symbols(&workspace.documents[&main]);
+    assert_eq!(symbols.len(), 1);
+    assert_eq!(symbols[0].name, "中文");
+    let children = symbols[0].children.as_ref().unwrap();
+    assert_eq!(
+        children.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+        ["sec:a", "Details"]
+    );
+    assert_eq!(children[1].children.as_ref().unwrap()[0].name, "foo");
+    assert_eq!(symbols[0].selection_range.start, Position::new(0, 10));
+}
+
+#[test]
+fn indexes_closed_files_and_keeps_unsaved_content() {
+    let directory = tempfile::tempdir().unwrap();
+    let chapter = directory.path().join("chapter.tex");
+    std::fs::write(&chapter, r"\label{disk}").unwrap();
+    let chapter_uri = Url::from_file_path(&chapter).unwrap();
+    let mut workspace = Workspace::default();
+    workspace.add_root(directory.path().into());
+    assert_eq!(
+        workspace.documents[&chapter_uri].syntax.labels[0].name,
+        "disk"
+    );
+    workspace.open(chapter_uri.clone(), r"\label{unsaved}".into(), 2);
+    std::fs::write(&chapter, r"\label{changed}").unwrap();
+    workspace.reload(&chapter_uri);
+    assert_eq!(
+        workspace.documents[&chapter_uri].syntax.labels[0].name,
+        "unsaved"
+    );
+    workspace.documents.remove(&chapter_uri);
+    workspace.reload(&chapter_uri);
+    assert_eq!(
+        workspace.documents[&chapter_uri].syntax.labels[0].name,
+        "changed"
+    );
+}
+
+#[test]
+fn follows_external_includes_and_bibliography() {
+    let directory = tempfile::tempdir().unwrap();
+    let project = directory.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    std::fs::write(directory.path().join("chapter.tex"), r"\label{external}").unwrap();
+    std::fs::write(
+        directory.path().join("refs.bib"),
+        "@book{external2026, title={Example}}",
+    )
+    .unwrap();
+    let main = Url::from_file_path(project.join("main.tex")).unwrap();
+    let source =
+        "\\input{../chapter}\n\\addbibresource{../refs.bib}\n\\ref{external}\n\\cite{external2026}";
+    let mut workspace = Workspace::default();
+    workspace.open(main.clone(), source.into(), 1);
+    assert_eq!(workspace.documents.len(), 3);
+    assert_eq!(
+        features::definitions(&workspace, &main, cursor(source, "\\ref{exter")).len(),
+        1
+    );
+    assert_eq!(
+        features::definitions(&workspace, &main, cursor(source, "\\cite{exter")).len(),
+        1
+    );
+    let file = features::definitions(&workspace, &main, cursor(source, "\\input{../chap"));
+    assert_eq!(file.len(), 1);
+    assert!(file[0].uri.path().ends_with("chapter.tex"));
+}
+
+#[test]
+fn follows_preindexed_dependencies_and_handles_cycles() {
+    let directory = tempfile::tempdir().unwrap();
+    let project = directory.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    std::fs::write(project.join("chapter.tex"), r"\input{../external}").unwrap();
+    std::fs::write(
+        directory.path().join("external.tex"),
+        r"\label{external}\input{project/chapter}",
+    )
+    .unwrap();
+    let main = Url::from_file_path(project.join("main.tex")).unwrap();
+    let mut workspace = Workspace::default();
+    workspace.add_root(project);
+    workspace.open(main.clone(), r"\input{chapter}\ref{external}".into(), 1);
+    assert_eq!(workspace.documents.len(), 3);
+    assert_eq!(
+        features::definitions(&workspace, &main, Position::new(0, 22)).len(),
+        1
+    );
+}

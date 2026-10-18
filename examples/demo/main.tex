@@ -1,0 +1,24 @@
+\documentclass{article}
+\usepackage{amsmath,amssymb}
+\usepackage{hyperref}
+
+\newcommand{\R}{\mathbb{R}}
+\title{LaTeX LSP Demo}
+\author{Example Author}
+
+\begin{document}
+\maketitle
+\input{sections/introduction}
+
+\section{An example}
+See Section~\ref{sec:intro} and Equation~\eqref{eq:identity}.
+For more details, see~\cite{knuth1984}.
+
+\begin{equation}
+  x + 0 = x, \quad x \in \R
+  \label{eq:identity}
+\end{equation}
+
+\bibliographystyle{plain}
+\bibliography{references}
+\end{document}
