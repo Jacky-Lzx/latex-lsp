@@ -356,6 +356,45 @@ fn real_bibliography_supports_configured_hidden_and_external_output_directories(
 }
 
 #[test]
+#[ignore = "requires XeLaTeX and a TeX installation"]
+fn real_missing_glyphs_and_font_substitutions_are_warnings_even_with_a_valid_pdf() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    std::fs::write(&main, "\\documentclass{article}\n\\begin{document}\n\\fontfamily{missingfont}\\selectfont\nHello \\char\"1F600.\n\\end{document}\n").unwrap();
+    let config = BuildConfig {
+        executable: "xelatex".into(),
+        ..Default::default()
+    };
+    let outcome = build::run(&main, &config, &AtomicBool::new(false));
+    assert_eq!(
+        outcome.status, "success",
+        "{}\n{}",
+        outcome.message, outcome.output
+    );
+    assert!(outcome.pdf.unwrap().is_file());
+    let diagnostics = &outcome.diagnostics[&Url::from_file_path(&main).unwrap()];
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.starts_with("LaTeX Font Warning:")),
+        "{diagnostics:?}"
+    );
+    assert!(
+        diagnostics.iter().any(
+            |diagnostic| diagnostic.message.starts_with("Missing character:")
+                && diagnostic.message.contains("U+1F600")
+        ),
+        "{diagnostics:?}"
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.severity == Some(DiagnosticSeverity::WARNING)),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
 #[ignore = "requires latexmk, BibTeX and a TeX installation"]
 fn real_bibtex_failure_points_to_the_bib_file() {
     let directory = tempfile::tempdir().unwrap();

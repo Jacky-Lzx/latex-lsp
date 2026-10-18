@@ -20,7 +20,7 @@ fn numbered_error(line: &str) -> Option<(&str, u32, &str)> {
         let (number, message) = tail.split_once(':')?;
         if let Ok(number) = number.parse::<u32>() {
             let path = line[..colon].trim();
-            if [".tex", ".sty", ".cls", ".bib", ".ltx"]
+            if [".tex", ".sty", ".cls", ".clo", ".def", ".bib", ".ltx"]
                 .iter()
                 .any(|ext| path.trim_matches('"').ends_with(ext))
             {
@@ -54,6 +54,17 @@ fn emit(
     let Ok(uri) = Url::from_file_path(path) else {
         return;
     };
+    // Font/glyph diagnostics often repeat at shipout. Avoid reading and mapping
+    // the same source file once for every repetition of an identical warning.
+    if result.get(&uri).is_some_and(|diagnostics| {
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.message == message
+                && diagnostic.severity == Some(severity)
+                && diagnostic.range.start.line == line.saturating_sub(1)
+        })
+    }) {
+        return;
+    }
     let source = std::fs::read_to_string(path).unwrap_or_default();
     let text = Text::new(source);
     let last_line = text.text_line_count().saturating_sub(1) as u32;
@@ -75,6 +86,51 @@ fn emit(
         message,
         ..Default::default()
     });
+}
+
+fn warning_start(line: &str) -> bool {
+    (line.starts_with("LaTeX ") || line.starts_with("Package ") || line.starts_with("Class "))
+        && line.contains(" Warning:")
+        || [
+            "pdfTeX warning",
+            "LuaTeX warning",
+            "LuaHBTeX warning",
+            "XeTeX warning",
+        ]
+        .iter()
+        .any(|prefix| line.starts_with(prefix))
+}
+
+fn message_boundary(line: &str) -> bool {
+    let line = line.trim_start();
+    warning_start(line)
+        || line.starts_with("! ")
+        || line.starts_with("Missing character:")
+        || line.starts_with("Overfull ")
+        || line.starts_with("Underfull ")
+        || numbered_error(line).is_some()
+        || line
+            .strip_prefix("l.")
+            .is_some_and(|tail| tail.starts_with(|ch: char| ch.is_ascii_digit()))
+        || line.starts_with(')')
+        || line.starts_with('(')
+            && [".tex", ".sty", ".cls", ".clo", ".def", ".ltx"]
+                .iter()
+                .any(|extension| line.contains(extension))
+}
+
+fn wrapped_message(lines: &[&str], i: &mut usize) -> String {
+    let mut message = lines[*i].trim().to_owned();
+    while !message.ends_with(['.', '!']) && *i + 1 < lines.len() && message.len() < 4096 {
+        let next = lines[*i + 1];
+        if next.trim().is_empty() || message_boundary(next) {
+            break;
+        }
+        *i += 1;
+        message.push(' ');
+        message.push_str(next.trim());
+    }
+    message
 }
 
 fn update_file_stack(line: &str, root: &Path, stack: &mut Vec<Option<PathBuf>>) {
@@ -133,6 +189,9 @@ pub fn parse(root: &Path, log: &str) -> BTreeMap<Url, Vec<Diagnostic>> {
             emit(&mut result, &path, number, message.into(), severity);
             pending = None;
         } else if let Some(message) = line.strip_prefix("! ") {
+            if let Some((path, message)) = pending.take() {
+                emit(&mut result, &path, 1, message, DiagnosticSeverity::ERROR);
+            }
             pending = Some((current(), message.into()));
         } else if let Some(tail) = line.trim_start().strip_prefix("l.") {
             let number = tail
@@ -148,21 +207,10 @@ pub fn parse(root: &Path, log: &str) -> BTreeMap<Url, Vec<Diagnostic>> {
                     DiagnosticSeverity::ERROR,
                 );
             }
-        } else if line.starts_with("LaTeX Warning:")
-            || line.starts_with("Package ") && line.contains(" Warning:")
-        {
-            let mut message = line.trim().to_owned();
+        } else if warning_start(line) || line.starts_with("Missing character:") {
             let path = current();
             // TeX wraps warnings at its configured print width.
-            while !message.ends_with('.')
-                && i + 1 < lines.len()
-                && !lines[i + 1].trim().is_empty()
-                && message.len() < 4096
-            {
-                i += 1;
-                message.push(' ');
-                message.push_str(lines[i].trim());
-            }
+            let message = wrapped_message(&lines, &mut i);
             let number = input_line(&message).unwrap_or(1);
             emit(
                 &mut result,
@@ -411,6 +459,41 @@ mod tests {
         assert!(main
             .iter()
             .all(|diagnostic| diagnostic.range.start.line == 1));
+    }
+
+    #[test]
+    fn font_class_engine_and_glyph_warnings_preserve_adjacent_errors_and_deduplicate_shipout_messages(
+    ) {
+        let directory = tempfile::tempdir().unwrap();
+        let main = directory.path().join("main.tex");
+        std::fs::write(&main, "First\nSecond\nThird\n").unwrap();
+        let log = "(./main.tex\nClass memoir Warning: Option ignored\nLaTeX Font Warning: Font shape unavailable\n(Font) using a substitute on input line 3.\nMissing character: There is no 😀 (U+1F600) in font\n Latin Modern Roman!\nMissing character: There is no 😀 (U+1F600) in font\n Latin Modern Roman!\npdfTeX warning (dest): destination missing!\n! First error.\n! Second error.\nl.2 bad\n)\n";
+        let diagnostics = parse(&main, log);
+        let diagnostics = &diagnostics[&Url::from_file_path(&main).unwrap()];
+        assert_eq!(diagnostics.len(), 6, "{diagnostics:?}");
+        let font = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.message.starts_with("LaTeX Font Warning:"))
+            .unwrap();
+        assert_eq!(font.range.start.line, 2);
+        assert!(font.message.contains("(Font) using a substitute"));
+        let glyph = diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.message.starts_with("Missing character:"))
+            .collect::<Vec<_>>();
+        assert_eq!(glyph.len(), 1);
+        assert!(glyph[0].message.ends_with("Latin Modern Roman!"));
+        assert_eq!(glyph[0].severity, Some(DiagnosticSeverity::WARNING));
+        assert!(diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message == "Class memoir Warning: Option ignored"));
+        assert_eq!(
+            diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.severity == Some(DiagnosticSeverity::ERROR))
+                .count(),
+            2
+        );
     }
 
     #[test]
