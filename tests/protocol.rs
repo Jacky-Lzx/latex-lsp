@@ -1377,6 +1377,44 @@ fn real_ltx_root_and_dynamically_input_definition_files_compile_and_keep_root_de
     server.wait_exit(0);
 }
 
+#[test]
+fn signature_help_tracks_incremental_edits_and_custom_macros_over_stdio() {
+    let mut server = Server::start();
+    let init = server.request(1, "initialize", json!({"processId":null,"capabilities":{}}));
+    assert!(
+        init["capabilities"]["signatureHelpProvider"]["triggerCharacters"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("{"))
+    );
+    server.notify("initialized", json!({}));
+    let macros = "file:///signature-protocol/macros.sty";
+    let main = "file:///signature-protocol/main.tex";
+    server.notify("textDocument/didOpen",json!({"textDocument":{"uri":macros,"languageId":"latex","version":1,"text":"\\newcommand{\\pair}[2][blue]{#1:#2}"}}));
+    server.notify("textDocument/didOpen",json!({"textDocument":{"uri":main,"languageId":"latex","version":1,"text":"\\pair{value}"}}));
+    let help = server.request(
+        2,
+        "textDocument/signatureHelp",
+        json!({"textDocument":{"uri":main},"position":{"line":0,"character":10}}),
+    );
+    assert_eq!(help["signatures"][0]["label"], "\\pair[#1=blue]{#2}");
+    assert_eq!(help["activeParameter"], 1);
+    server.notify("textDocument/didChange",json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":"\\frac{one}{two}"}]}));
+    let help = server.request(
+        3,
+        "textDocument/signatureHelp",
+        json!({"textDocument":{"uri":main},"position":{"line":0,"character":13}}),
+    );
+    assert_eq!(
+        help["signatures"][0]["label"],
+        "\\frac{numerator}{denominator}"
+    );
+    assert_eq!(help["activeParameter"], 1);
+    server.request(4, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
 impl Drop for Server {
     fn drop(&mut self) {
         let _ = self.child.kill();

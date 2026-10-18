@@ -60,7 +60,7 @@ pub fn diagnostic(text: &Text, span: Range<usize>, message: String) -> Diagnosti
     }
 }
 
-fn skip_space(source: &str, mut i: usize) -> usize {
+pub(crate) fn skip_space(source: &str, mut i: usize) -> usize {
     let bytes = source.as_bytes();
     loop {
         while i < bytes.len() && bytes[i].is_ascii_whitespace() {
@@ -76,7 +76,7 @@ fn skip_space(source: &str, mut i: usize) -> usize {
 }
 
 /// Read a balanced group, ignoring comments and escaped delimiters.
-fn group(source: &str, i: usize, open: u8, close: u8) -> Option<(Argument, usize)> {
+pub(crate) fn group(source: &str, i: usize, open: u8, close: u8) -> Option<(Argument, usize)> {
     group_mode(source, i, open, close, true)
 }
 
@@ -94,6 +94,7 @@ fn group_mode(
     let start = i + 1;
     let mut i = start;
     let mut depth = 1;
+    let mut braces = 0usize;
     while i < bytes.len() {
         match bytes[i] {
             b'\\' => {
@@ -109,8 +110,10 @@ fn group_mode(
                 }
                 continue;
             }
-            c if c == open => depth += 1,
-            c if c == close => {
+            b'{' if open != b'{' => braces += 1,
+            b'}' if open != b'{' => braces = braces.saturating_sub(1),
+            c if c == open && braces == 0 => depth += 1,
+            c if c == close && braces == 0 => {
                 depth -= 1;
                 if depth == 0 {
                     return Some((

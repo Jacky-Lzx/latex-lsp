@@ -9,6 +9,7 @@ pub mod file_operations;
 pub mod navigation;
 pub mod path_completion;
 pub mod recorder;
+pub mod signature;
 pub mod synctex;
 pub mod syntax;
 pub mod text;
@@ -170,6 +171,11 @@ impl LanguageServer for Backend {
                     ..Default::default()
                 }),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
+                signature_help_provider: Some(SignatureHelpOptions {
+                    trigger_characters: Some(vec!["{".into(), "[".into(), ",".into()]),
+                    retrigger_characters: Some(vec!["}".into(), "]".into()]),
+                    ..Default::default()
+                }),
                 definition_provider: Some(OneOf::Left(true)),
                 references_provider: Some(OneOf::Left(true)),
                 document_highlight_provider: Some(OneOf::Left(true)),
@@ -497,6 +503,15 @@ impl LanguageServer for Backend {
             &*self.workspace.read().await,
             &position.text_document.uri,
             position.position,
+        ))
+    }
+
+    async fn signature_help(&self, params: SignatureHelpParams) -> Result<Option<SignatureHelp>> {
+        let params = params.text_document_position_params;
+        Ok(signature::help(
+            &*self.workspace.read().await,
+            &params.text_document.uri,
+            params.position,
         ))
     }
 

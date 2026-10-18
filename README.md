@@ -11,6 +11,7 @@
 - 快速修复：补全缺失花括号、闭合环境、删除多余的闭合符号；支持版本化编辑和旧客户端的命令式操作，拒绝过期修复。
 - 补全：常用 LaTeX 命令、环境、用户命令、跨文件标签、BibTeX 文献键及输入文件/图片/本地包等路径。支持词中替换，根据客户端能力提供 snippet，并保留已有参数。
 - 悬浮提示：内置命令说明、标签/文献/自定义命令的定义位置。
+- 参数提示：常用命令及跨文件用户宏的签名，区分必选/可选参数，跟踪嵌套调用中的当前参数。
 - 定义跳转：`\ref` / `\eqref` / `\cref` 等引用、常见 `\cite` 变体、自定义命令、输入文件、文献文件及本地包、类、图片。
 - 查找引用：标签、文献键、自定义命令；支持包含或排除定义。
 - 文档高亮：区分当前文件中的定义和引用；选择范围可逐级扩展到词、参数、命令、章节和整篇文档。
@@ -61,6 +62,8 @@ vim.lsp.enable('latex_lsp')
 ```
 
 打开 `.tex` 后，可用 `vim.lsp.buf.hover()` 查看提示，`vim.lsp.buf.definition()` 跳转，`vim.lsp.buf.references()` 查找引用，`vim.lsp.buf.rename()` 跨文件重命名。补全可通过 `<C-x><C-o>` 或支持 Neovim LSP 的补全插件触发；snippet 需要客户端声明支持。
+
+输入命令参数时，可通过 `vim.lsp.buf.signature_help()` 查看签名；支持自动参数提示的插件也可使用标准 `textDocument/signatureHelp`。
 
 在语法错误处调用 `vim.lsp.buf.code_action()` 可选择快速修复；`vim.lsp.buf.document_highlight()` 高亮当前符号的定义和引用。Neovim 0.12 中可用 `vim.lsp.buf.selection_range(1)` 扩大语法选择范围。
 
@@ -184,19 +187,21 @@ end
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
-# 已安装 latexmk、pdflatex、TeX 发行版和 Neovim 0.10+ 时，执行真实编译及 snippet 展开测试：
+# 已安装 latexmk、pdfLaTeX、XeLaTeX、LuaLaTeX、BibTeX、SyncTeX 和 Neovim 0.10+ 时，执行真实编译及编辑器测试：
 cargo test --locked -- --include-ignored
 ```
 
 测试包含 UTF-16/增量编辑、语法容错、跨文件导航、文献补全、磁盘/未保存内容同步，以及启动真实进程验证的 stdio 协议流程。
 
-代码按职责拆分：`text.rs` 处理位置与编辑，`syntax.rs` 解析 LaTeX/BibTeX，`workspace.rs` 管理文件索引与根文档，`features.rs` 实现语言功能，`navigation.rs` 处理工作区搜索、折叠和链接，`editing.rs` 处理快速修复、高亮和选择范围，`file_operations.rs` 维护文件移动后的引用，`build.rs` 管理后台编译，`build_log.rs` 分析日志，`recorder.rs` 读取实际输入记录，`synctex.rs` 查询源码/PDF 映射，`config.rs` 校验配置，`dispatch.rs` 保留消息顺序并释放耗时查询的等待，`lib.rs` 对接 LSP，`main.rs` 启动服务。
+代码按职责拆分：`text.rs` 处理位置与编辑，`syntax.rs` 解析 LaTeX/BibTeX，`workspace.rs` 管理文件索引与根文档，`features.rs` 实现语言功能，`signature.rs` 提供命令参数提示，`navigation.rs` 处理工作区搜索、折叠和链接，`editing.rs` 处理快速修复、高亮和选择范围，`file_operations.rs` 维护文件移动后的引用，`build.rs` 管理后台编译，`build_log.rs` 分析日志，`recorder.rs` 读取实际输入记录，`synctex.rs` 查询源码/PDF 映射，`config.rs` 校验配置，`dispatch.rs` 保留消息顺序并释放耗时查询的等待，`lib.rs` 对接 LSP，`main.rs` 启动服务。
 
 ## 当前范围
 
 这是可运行的基础版本，使用静态解析，不执行 TeX 宏展开或读取 TeX 发行版的包数据库。自定义命令支持 `\newcommand`、`\renewcommand`、`\providecommand`、`\DeclareMathOperator`、`\DeclareRobustCommand` 和 xparse 的 `\NewDocumentCommand` 等声明，包含花括号与直接控制序列形式；也识别 `\def` / `\gdef` / `\edef` / `\xdef` 和 `\let`。BibTeX 支持常见 `{...}` / `(...)` 条目和嵌套字段。
 
 自定义环境支持 `\newenvironment` / `\renewenvironment`、xparse 的 `\NewDocumentEnvironment` 等声明、`\NewEnviron` / `\RenewEnviron` 和 `\newtheorem`，提供补全、定义跳转、引用、悬浮、符号及跨文件重命名。改名时同时检查环境生成的同名宏和 `\end...` 宏，避免与已有命令冲突。
+
+用户宏参数提示识别 `\newcommand` 系列和 `\DeclareRobustCommand` 的参数数量/首个可选参数默认值，xparse 的 `m` / `o` / `O{...}` / `s`，以及 `\def` 系列连续的 `#1#2...` 参数。调用按花括号或方括号分组匹配，支持星号、嵌套调用、转义和多行注释。复杂分隔参数、字符串求值或定义有歧义时暂不推断签名；不在注释和逐字文本中提示。
 
 文献条目间引用支持 `crossref`、`xref`、`xdata`、`related` 和 `entryset`，包含花括号或双引号形式，以及后三类字段的逗号分隔列表；可补全、跳转、查找引用、高亮和重命名父条目。字段名不区分大小写，补全也支持尚未闭合的值。字符串宏、`#` 拼接或含 TeX 命令的值需要求值，暂不自动修改；标题和注释中的同名文本会保留。文献键不能重命名为 `*`，以免改变 `\nocite{*}` 的全选含义。
 
