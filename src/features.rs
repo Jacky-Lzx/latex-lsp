@@ -394,10 +394,9 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
             .count();
     let range = doc.text.range(line_start + slash + 1, command_end);
     // A command already followed by arguments only needs its name replaced.
-    let use_snippets = workspace.snippets
-        && !doc.text.source[command_end..]
-            .trim_start()
-            .starts_with(['{', '[', '*']);
+    let after_command = syntax::skip_space(&doc.text.source, command_end);
+    let use_snippets =
+        workspace.snippets && !doc.text.source[after_command..].starts_with(['{', '[', '*']);
     let mut seen = BTreeSet::new();
     let mut result = Vec::new();
     // User definitions take precedence over built-in documentation and snippets.
@@ -407,13 +406,29 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
         .flat_map(|doc| &doc.syntax.definitions)
     {
         if entry.name.starts_with(prefix) && seen.insert(entry.name.clone()) {
+            let signature = crate::signature::completion(workspace, &entry.name);
+            let snippet = signature
+                .as_ref()
+                .and_then(|(_, snippet)| snippet.as_ref())
+                .filter(|_| use_snippets);
             result.push(CompletionItem {
                 label: entry.name.clone(),
                 kind: Some(CompletionItemKind::FUNCTION),
-                detail: Some(entry.detail.clone()),
+                detail: Some(
+                    signature
+                        .as_ref()
+                        .map(|(label, _)| label.clone())
+                        .unwrap_or_else(|| entry.detail.clone()),
+                ),
+                documentation: Some(Documentation::String(entry.detail.clone())),
+                insert_text_format: Some(if snippet.is_some() {
+                    InsertTextFormat::SNIPPET
+                } else {
+                    InsertTextFormat::PLAIN_TEXT
+                }),
                 text_edit: Some(CompletionTextEdit::Edit(TextEdit {
                     range,
-                    new_text: entry.name.clone(),
+                    new_text: snippet.cloned().unwrap_or_else(|| entry.name.clone()),
                 })),
                 ..CompletionItem::default()
             });

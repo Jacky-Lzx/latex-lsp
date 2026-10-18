@@ -26,15 +26,19 @@ struct Signature {
 }
 
 impl Signature {
-    fn information(self, active: usize) -> SignatureHelp {
-        let label = format!(
+    fn label(&self) -> String {
+        format!(
             "\\{}{}",
             self.name,
             self.parameters
                 .iter()
                 .map(|parameter| parameter.label.as_str())
                 .collect::<String>()
-        );
+        )
+    }
+
+    fn information(self, active: usize) -> SignatureHelp {
+        let label = self.label();
         SignatureHelp {
             signatures: vec![SignatureInformation {
                 label,
@@ -54,6 +58,21 @@ impl Signature {
             active_parameter: Some(active as u32),
         }
     }
+}
+
+/// Omit optional arguments and flags so accepting a completion preserves the
+/// macro's defaults. Tabstops follow the order of its required arguments.
+pub fn completion(workspace: &Workspace, name: &str) -> Option<(String, Option<String>)> {
+    let signature = signature(workspace, name)?;
+    let mut snippet = name.to_owned();
+    let mut tabstop = 0;
+    for (index, parameter) in signature.parameters.iter().enumerate() {
+        if matches!(parameter.kind, Kind::Required) {
+            tabstop += 1;
+            snippet.push_str(&format!("{{${{{tabstop}:arg{}}}}}", index + 1));
+        }
+    }
+    Some((signature.label(), (tabstop > 0).then_some(snippet)))
 }
 
 fn builtin(name: &str) -> Option<Signature> {

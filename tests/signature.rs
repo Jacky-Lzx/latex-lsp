@@ -72,6 +72,80 @@ fn builtin_signatures_select_nested_arguments_and_skip_omitted_optional_paramete
 }
 
 #[test]
+fn custom_macro_completions_insert_required_tabstops_and_preserve_existing_arguments() {
+    use latex_lsp::features;
+    let definitions = r"\newcommand{\pair}[2][\linewidth]{#2}\NewDocumentCommand{\render}{s O{blue} m m}{#3#4}\def\texpair#1#2{#1#2}\NewDocumentCommand{\optional}{O{blue}}{#1}";
+    for (source, name, snippets, expected, format) in [
+        (
+            r"\pa¦",
+            "pair",
+            true,
+            "pair{${1:arg2}}",
+            InsertTextFormat::SNIPPET,
+        ),
+        (
+            r"\ren¦",
+            "render",
+            true,
+            "render{${1:arg3}}{${2:arg4}}",
+            InsertTextFormat::SNIPPET,
+        ),
+        (
+            r"\texp¦",
+            "texpair",
+            true,
+            "texpair{${1:arg1}}{${2:arg2}}",
+            InsertTextFormat::SNIPPET,
+        ),
+        (r"\pa¦", "pair", false, "pair", InsertTextFormat::PLAIN_TEXT),
+        (
+            r"\pa¦ir[red]{value}",
+            "pair",
+            true,
+            "pair",
+            InsertTextFormat::PLAIN_TEXT,
+        ),
+        (
+            "\\pa¦ir % comment\n{value}",
+            "pair",
+            true,
+            "pair",
+            InsertTextFormat::PLAIN_TEXT,
+        ),
+        (
+            r"\opt¦",
+            "optional",
+            true,
+            "optional",
+            InsertTextFormat::PLAIN_TEXT,
+        ),
+    ] {
+        let (mut workspace, uri, position) = setup(definitions, source);
+        workspace.snippets = snippets;
+        let items = features::completion(&workspace, &uri, position);
+        let item = items.iter().find(|item| item.label == name).unwrap();
+        let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+            panic!("missing edit");
+        };
+        assert_eq!(edit.new_text, expected, "{source}");
+        assert_eq!(item.insert_text_format, Some(format));
+        assert!(item
+            .detail
+            .as_ref()
+            .unwrap()
+            .starts_with(&format!("\\{name}")));
+    }
+    let (mut workspace, uri, position) = setup(
+        r"\newcommand{\pair}[2]{#1#2}\newcommand{\pair}[1]{#1}",
+        r"\pa¦",
+    );
+    workspace.snippets = true;
+    let items = features::completion(&workspace, &uri, position);
+    let item = items.iter().find(|item| item.label == "pair").unwrap();
+    assert_eq!(item.insert_text_format, Some(InsertTextFormat::PLAIN_TEXT));
+}
+
+#[test]
 fn custom_newcommand_and_robust_command_signatures_follow_cross_file_declarations() {
     for declaration in [
         r"\newcommand{\pair}[2][blue]{#1:#2}",
