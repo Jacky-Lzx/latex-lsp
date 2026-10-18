@@ -474,25 +474,36 @@ pub fn parse(root: &Path, log: &str) -> BTreeMap<Url, Vec<Diagnostic>> {
 /// BibTeX and Biber write a separate log, often after TeX has already produced
 /// a PDF. Preserve those errors instead of hiding them behind latexmk's exit code.
 pub fn parse_bibliography(root: &Path, log: &str) -> BTreeMap<Url, Vec<Diagnostic>> {
+    parse_bibliography_log(root, &root.with_extension("blg"), log)
+}
+
+pub fn parse_bibliography_log(
+    root: &Path,
+    log_path: &Path,
+    log: &str,
+) -> BTreeMap<Url, Vec<Diagnostic>> {
+    let paths = crate::recorder::BibliographyPaths::new(root, log_path, log);
+    parse_bibliography_in(root, &paths, log)
+}
+
+pub(crate) fn parse_bibliography_in(
+    root: &Path,
+    paths: &crate::recorder::BibliographyPaths<'_>,
+    log: &str,
+) -> BTreeMap<Url, Vec<Diagnostic>> {
     let mut result = BTreeMap::new();
     let databases: Vec<_> = log
         .lines()
-        .filter_map(|line| {
-            let name = if line.starts_with("Database file #") {
-                line.split_once(": ")?.1.trim()
-            } else {
-                let tail = line.split_once("Found BibTeX data source '")?.1;
-                tail.split_once('\'')?.0
-            };
-            location(root, name)
-        })
+        .filter_map(crate::recorder::bibliography_source)
+        .filter(|name| name.trim_matches('"').ends_with(".bib"))
+        .filter_map(|name| paths.resolve(name))
         .collect();
     let mut previous = "";
     for line in log.lines() {
         if let Some((message, tail)) = line.split_once("---line ") {
             if let Some((number, name)) = tail.split_once(" of file ") {
                 if let Ok(number) = number.trim().parse::<u32>() {
-                    let location = location(root, name).filter(|path| {
+                    let location = paths.resolve(name).filter(|path| {
                         matches!(
                             path.extension().and_then(|ext| ext.to_str()),
                             Some("tex" | "bib" | "bst" | "sty" | "cls")
@@ -539,7 +550,7 @@ pub fn parse_bibliography(root: &Path, log: &str) -> BTreeMap<Url, Vec<Diagnosti
         } else {
             continue;
         };
-        let explicit_path = bibliography_path(root, message);
+        let explicit_path = bibliography_path(paths, message);
         let number = bibliography_line(message);
         let key = message
             .rsplit_once(" in ")
@@ -611,19 +622,25 @@ fn bibliography_line(message: &str) -> Option<u32> {
     None
 }
 
-fn bibliography_path(root: &Path, message: &str) -> Option<PathBuf> {
+fn bibliography_path(
+    paths: &crate::recorder::BibliographyPaths<'_>,
+    message: &str,
+) -> Option<PathBuf> {
     for (index, _) in message.match_indices(".bib") {
         let end = index + 4;
         let prefix = &message[..index];
-        let start = prefix
-            .rfind(['\'', '"'])
-            .map(|index| index + 1)
-            .unwrap_or_else(|| {
-                prefix
-                    .rfind(|ch: char| ch.is_whitespace() || ch == ':')
-                    .map_or(0, |index| index + 1)
-            });
-        if let Some(path) = location(root, &message[start..end]) {
+        let token_start = prefix
+            .rfind(|ch: char| ch.is_whitespace() || ch == ':')
+            .map_or(0, |index| index + 1);
+        let starts = prefix
+            .rmatch_indices(['\'', '"'])
+            .take(16)
+            .map(|(index, _)| index + 1)
+            .chain(std::iter::once(token_start));
+        if let Some(path) = starts
+            .into_iter()
+            .find_map(|start| paths.resolve(&message[start..end]))
+        {
             return Some(path);
         }
     }
@@ -633,6 +650,60 @@ fn bibliography_path(root: &Path, message: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bibliography_diagnostics_use_the_tool_working_directory_for_database_and_style_locations() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        std::fs::create_dir(root.join("build")).unwrap();
+        for name in ["refs.bib", "build/refs.bib"] {
+            std::fs::write(
+                root.join(name),
+                "% database\n@book{example,title={Example}}\n",
+            )
+            .unwrap();
+        }
+        for name in ["local.bst", "build/local.bst"] {
+            std::fs::write(
+                root.join(name),
+                "ENTRY {title} {} {}\nFUNCTION {bad} {unknown}\n",
+            )
+            .unwrap();
+        }
+        for (auxiliary, prefix) in [("main.aux", "build/"), ("build/main.aux", "")] {
+            let log = format!("The top-level auxiliary file: {auxiliary}\nDatabase file #1: refs.bib\nThe style file: local.bst\nWarning--empty author in example\nRepeated entry---line 2 of file refs.bib\nunknown is an unknown function---line 2 of file local.bst\n");
+            let diagnostics =
+                parse_bibliography_log(&root.join("main.tex"), &root.join("build/main.blg"), &log);
+            let bib = Url::from_file_path(root.join(format!("{prefix}refs.bib"))).unwrap();
+            let style = Url::from_file_path(root.join(format!("{prefix}local.bst"))).unwrap();
+            assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
+            assert_eq!(diagnostics[&bib].len(), 2);
+            assert!(diagnostics[&bib]
+                .iter()
+                .all(|diagnostic| diagnostic.range.start.line == 1));
+            assert_eq!(diagnostics[&style][0].range.start.line, 1);
+        }
+    }
+
+    #[test]
+    fn biber_databases_with_apostrophes_keep_entry_warning_locations() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let bib = root.join("author's refs.bib");
+        std::fs::write(&bib, "% database\n@book{example,title={Example}}\n").unwrap();
+        let diagnostics = parse_bibliography(&root.join("main.tex"), "INFO - Found BibTeX data source 'author's refs.bib'\nWARN - Missing field for entry 'example'\nERROR - Error in 'author's refs.bib' line 2\n");
+        let diagnostics = &diagnostics[&Url::from_file_path(bib).unwrap()];
+        assert_eq!(diagnostics.len(), 2);
+        assert!(diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.range.start.line == 1));
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.severity == Some(DiagnosticSeverity::WARNING))
+            .unwrap();
+        assert_eq!(diagnostic.range.start.line, 1);
+        assert_eq!(diagnostic.range.start.character, 6);
+    }
 
     #[test]
     fn missing_include_messages_locate_paths_without_reporting_normal_missing_auxiliary_files() {

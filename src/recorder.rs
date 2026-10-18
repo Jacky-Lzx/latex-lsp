@@ -1,5 +1,8 @@
 //! TeX's recorder names the files actually read, including expanded inputs.
-use std::{collections::BTreeSet, path::Path};
+use std::{
+    collections::BTreeSet,
+    path::{Path, PathBuf},
+};
 use tower_lsp::lsp_types::Url;
 
 pub fn inputs(root: &Path, contents: &str) -> BTreeSet<Url> {
@@ -37,49 +40,27 @@ pub fn inputs(root: &Path, contents: &str) -> BTreeSet<Url> {
 /// Bibliography tools read sources which TeX's recorder usually never sees.
 /// BibTeX's auxiliary filename identifies whether latexmk changed directory.
 pub fn bibliography_inputs(root: &Path, log_path: &Path, contents: &str) -> BTreeSet<Url> {
-    let source_directory = root.parent().unwrap_or_else(|| Path::new("."));
-    let log_directory = log_path.parent().unwrap_or(source_directory);
-    let directory = contents
-        .lines()
-        .take(32768)
-        .find_map(|line| line.strip_prefix("The top-level auxiliary file: "))
-        .map(|name| {
-            let auxiliary = crate::workspace::normalize_path(
-                &source_directory.join(name.trim().trim_matches('"')),
-            );
-            if auxiliary == crate::workspace::normalize_path(&log_path.with_extension("aux")) {
-                source_directory
-            } else {
-                log_directory
-            }
-        })
-        .unwrap_or(source_directory);
+    let paths = BibliographyPaths::new(root, log_path, contents);
+    bibliography_inputs_in(&paths, contents)
+}
+
+pub(crate) fn bibliography_inputs_in(
+    paths: &BibliographyPaths<'_>,
+    contents: &str,
+) -> BTreeSet<Url> {
     let mut result = BTreeSet::new();
-    for line in contents.lines().take(32768) {
-        let name = if line.starts_with("Database file #") {
-            line.split_once(": ").map(|(_, name)| name)
-        } else if let Some(name) = line.strip_prefix("The style file: ") {
-            Some(name)
-        } else {
-            line.split_once("Found BibTeX data source '")
-                .and_then(|(_, tail)| tail.strip_suffix('\''))
-        };
-        let Some(name) = name else { continue };
-        let name = name.trim().trim_matches('"');
+    for name in contents.lines().take(32768).filter_map(bibliography_source) {
         if !matches!(
-            Path::new(name).extension().and_then(|ext| ext.to_str()),
+            Path::new(name.trim_matches('"'))
+                .extension()
+                .and_then(|ext| ext.to_str()),
             Some("bib" | "bst")
         ) {
             continue;
         }
-        if let Some(uri) = [directory, source_directory, log_directory]
-            .into_iter()
-            .find_map(|directory| {
-                let path = directory.join(name).canonicalize().ok()?;
-                path.is_file()
-                    .then(|| Url::from_file_path(path).ok())
-                    .flatten()
-            })
+        if let Some(uri) = paths
+            .resolve(name)
+            .and_then(|path| Url::from_file_path(path).ok())
         {
             result.insert(uri);
         }
@@ -90,9 +71,128 @@ pub fn bibliography_inputs(root: &Path, log_path: &Path, contents: &str) -> BTre
     result
 }
 
+pub(crate) fn bibliography_source(line: &str) -> Option<&str> {
+    if line.starts_with("Database file #") {
+        line.split_once(": ").map(|(_, name)| name.trim())
+    } else if let Some(name) = line.strip_prefix("The style file: ") {
+        Some(name.trim())
+    } else {
+        line.split_once("Found BibTeX data source '")
+            .and_then(|(_, tail)| tail.strip_suffix('\''))
+    }
+}
+
+/// Keep dependency discovery and diagnostic locations in the same search order.
+pub(crate) struct BibliographyPaths<'a> {
+    directories: [&'a Path; 3],
+    bib_directories: Vec<PathBuf>,
+    bst_directories: Vec<PathBuf>,
+}
+
+impl<'a> BibliographyPaths<'a> {
+    pub(crate) fn new(root: &'a Path, log_path: &'a Path, contents: &str) -> Self {
+        let source_directory = root.parent().unwrap_or_else(|| Path::new("."));
+        let log_directory = log_path.parent().unwrap_or(source_directory);
+        let directory = contents
+            .lines()
+            .take(32768)
+            .find_map(|line| line.strip_prefix("The top-level auxiliary file: "))
+            .map(|name| {
+                let auxiliary = crate::workspace::normalize_path(
+                    &source_directory.join(name.trim().trim_matches('"')),
+                );
+                if auxiliary == crate::workspace::normalize_path(&log_path.with_extension("aux")) {
+                    source_directory
+                } else {
+                    log_directory
+                }
+            })
+            .unwrap_or(source_directory);
+        Self {
+            directories: [directory, source_directory, log_directory],
+            bib_directories: Vec::new(),
+            bst_directories: Vec::new(),
+        }
+    }
+
+    /// latexmk prepends source paths before invoking BibTeX in another cwd.
+    /// Its reported search paths take precedence over cwd-based fallbacks.
+    pub(crate) fn with_search_output(mut self, output: &str) -> Self {
+        for line in output.lines().take(32768) {
+            for (prefix, directories) in [
+                ("BIBINPUTS='", &mut self.bib_directories),
+                ("BSTINPUTS='", &mut self.bst_directories),
+            ] {
+                if let Some(tail) = line.trim().strip_prefix(prefix) {
+                    if let Some(value) = tail.strip_suffix("'.").or_else(|| tail.strip_suffix('\''))
+                    {
+                        *directories = std::env::split_paths(value)
+                            .take(256)
+                            .map(|path| self.directories[0].join(path))
+                            .collect();
+                    }
+                }
+            }
+        }
+        self
+    }
+
+    pub(crate) fn resolve(&self, name: &str) -> Option<PathBuf> {
+        let name = name.trim().trim_matches('"');
+        let search = if name.ends_with(".bst") {
+            &self.bst_directories
+        } else {
+            &self.bib_directories
+        };
+        search
+            .iter()
+            .map(PathBuf::as_path)
+            .chain(self.directories)
+            .find_map(|directory| {
+                let path = directory.join(name).canonicalize().ok()?;
+                path.is_file().then_some(path)
+            })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bibliography_search_paths_reported_by_latexmk_override_cwd_and_remain_tool_specific() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let output = root.join("build");
+        std::fs::create_dir(&output).unwrap();
+        for base in [root, &output] {
+            for name in ["refs.bib", "local.bst"] {
+                std::fs::write(base.join(name), "").unwrap();
+            }
+        }
+        let log = "The top-level auxiliary file: main.aux\nDatabase file #1: refs.bib\nThe style file: local.bst\n";
+        let main = root.join("main.tex");
+        let blg = output.join("main.blg");
+        let paths = BibliographyPaths::new(&main, &blg, log).with_search_output(&format!(
+            "BIBINPUTS='ignored'\n  BIBINPUTS='{}'\n  BSTINPUTS='{}'.\n",
+            std::env::join_paths([root, &output])
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            std::env::join_paths([Path::new("")])
+                .unwrap()
+                .to_str()
+                .unwrap(),
+        ));
+        assert_eq!(
+            bibliography_inputs_in(&paths, log),
+            [
+                Url::from_file_path(root.join("refs.bib")).unwrap(),
+                Url::from_file_path(output.join("local.bst")).unwrap()
+            ]
+            .into()
+        );
+    }
 
     #[test]
     fn bibliography_inputs_resolve_bibtex_and_biber_names_without_diagnostic_false_positives() {

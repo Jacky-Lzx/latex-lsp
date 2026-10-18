@@ -659,6 +659,47 @@ fn real_bibliography_supports_configured_hidden_and_external_output_directories(
 }
 
 #[test]
+#[ignore = "requires latexmk and BibTeX"]
+fn real_bibtex_directory_changes_resolve_shadowed_database_inputs_and_warning_locations() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = root.join("main.tex");
+    std::fs::write(&main, "\\documentclass{article}\n\\begin{document}\n\\cite{example}\n\\bibliographystyle{plain}\n\\bibliography{refs}\n\\end{document}\n").unwrap();
+    std::fs::write(
+        root.join("refs.bib"),
+        "@book{example,title={Root},year={2026},publisher={P}}\n",
+    )
+    .unwrap();
+    let output = root.join(".custom-output");
+    std::fs::create_dir(&output).unwrap();
+    let bib = output.join("refs.bib");
+    std::fs::write(
+        &bib,
+        "% selected in BibTeX cwd\n\n@book{example,title={Output},year={2026},publisher={P}}\n",
+    )
+    .unwrap();
+    let config = BuildConfig {
+        output_directory: ".custom-output".into(),
+        ..Default::default()
+    };
+    let outcome = build::run(&main, &config, &AtomicBool::new(false));
+    assert_eq!(outcome.status, "success", "{}", outcome.output);
+    assert!(std::fs::read_to_string(output.join("main.bbl"))
+        .unwrap()
+        .contains("Root"));
+    let bib = Url::from_file_path(root.join("refs.bib")).unwrap();
+    assert!(outcome.bibliography_inputs.unwrap().contains(&bib));
+    assert!(
+        outcome.diagnostics[&bib]
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("empty author")
+                && diagnostic.range.start.line == 0),
+        "{:?}",
+        outcome.diagnostics
+    );
+}
+
+#[test]
 #[ignore = "requires XeLaTeX and a TeX installation"]
 fn real_missing_glyphs_and_font_substitutions_are_warnings_even_with_a_valid_pdf() {
     let directory = tempfile::tempdir().unwrap();

@@ -812,11 +812,13 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool) -> Outcome 
             continue;
         }
         if let Some(log) = read_log(&path) {
+            let paths = crate::recorder::BibliographyPaths::new(root, &path, &log)
+                .with_search_output(&output);
             outcome
                 .bibliography_inputs
                 .get_or_insert_with(BTreeSet::new)
-                .extend(crate::recorder::bibliography_inputs(root, &path, &log));
-            for (uri, diagnostics) in build_log::parse_bibliography(root, &log) {
+                .extend(crate::recorder::bibliography_inputs_in(&paths, &log));
+            for (uri, diagnostics) in build_log::parse_bibliography_in(root, &paths, &log) {
                 outcome
                     .diagnostics
                     .entry(uri)
