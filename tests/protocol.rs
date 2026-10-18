@@ -16,6 +16,167 @@ struct Server {
     pending: RefCell<Vec<Value>>,
 }
 
+fn lowercase_uri_escapes(uri: &Url) -> String {
+    let mut bytes = uri.as_str().as_bytes().to_vec();
+    let mut i = 0;
+    while i + 2 < bytes.len() {
+        if bytes[i] == b'%' {
+            bytes[i + 1].make_ascii_lowercase();
+            bytes[i + 2].make_ascii_lowercase();
+            i += 3;
+        } else {
+            i += 1;
+        }
+    }
+    String::from_utf8(bytes).unwrap()
+}
+
+#[test]
+fn equivalent_file_uris_share_open_versions_navigation_rename_watch_and_close_state() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = Url::from_file_path(root.join("main.tex")).unwrap();
+    let main_encoded = main.as_str().replace("main.tex", "%6dain.tex");
+    let child = Url::from_file_path(root.join("章节.tex")).unwrap();
+    let child_lower = lowercase_uri_escapes(&child);
+    let main_source = "\\documentclass{article}\\input{章节}\\ref{draft}\n";
+    let disk_source = "\\label{saved}\\ref{saved}\n";
+    let open_source = "😀 \\label{draft}\\ref{draft}\n";
+    std::fs::write(root.join("main.tex"), main_source).unwrap();
+    std::fs::write(root.join("章节.tex"), disk_source).unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(root).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}}}}));
+    server.notify("initialized", json!({}));
+    server.notify("textDocument/didOpen", json!({"textDocument":{"uri":main_encoded,"languageId":"latex","version":4,"text":main_source}}));
+    server.notify("textDocument/didOpen", json!({"textDocument":{"uri":child_lower,"languageId":"latex","version":1,"text":open_source}}));
+    server.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({"changes":[{"uri":child,"type":2}]}),
+    );
+    let symbols = server.request(
+        2,
+        "textDocument/documentSymbol",
+        json!({"textDocument":{"uri":child}}),
+    );
+    assert_eq!(symbols[0]["name"], "draft", "{symbols}");
+    let main_position = latex_lsp::text::Text::new(main_source.into())
+        .position(main_source.find("draft").unwrap() + 1);
+    let definitions = server.request(
+        3,
+        "textDocument/definition",
+        json!({"textDocument":{"uri":main_encoded},"position":main_position}),
+    );
+    assert_eq!(definitions.as_array().unwrap().len(), 1, "{definitions}");
+    assert_eq!(definitions[0]["uri"], child.as_str());
+    let changed = "😀 \\label{draft}\\ref{draft}\\ref{draft}\n";
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":child,"version":2},"contentChanges":[{"text":changed}]}),
+    );
+    let position =
+        latex_lsp::text::Text::new(changed.into()).position(changed.find("draft").unwrap() + 1);
+    let references = server.request(4, "textDocument/references", json!({"textDocument":{"uri":child_lower},"position":position,"context":{"includeDeclaration":true}}));
+    assert_eq!(references.as_array().unwrap().len(), 4, "{references}");
+    let edit = server.request(
+        5,
+        "textDocument/rename",
+        json!({"textDocument":{"uri":child_lower},"position":position,"newName":"release"}),
+    );
+    let changes = edit["documentChanges"].as_array().unwrap();
+    assert_eq!(changes.len(), 2, "{edit}");
+    let child_change = changes
+        .iter()
+        .find(|change| change["textDocument"]["uri"] == child.as_str())
+        .unwrap();
+    assert_eq!(child_change["textDocument"]["version"], 2);
+    assert_eq!(child_change["edits"].as_array().unwrap().len(), 3);
+    let main_change = changes
+        .iter()
+        .find(|change| change["textDocument"]["uri"] == main.as_str())
+        .unwrap();
+    assert_eq!(main_change["textDocument"]["version"], 4);
+    let workspace_symbols = server.request(6, "workspace/symbol", json!({"query":"draft"}));
+    assert_eq!(
+        workspace_symbols.as_array().unwrap().len(),
+        1,
+        "{workspace_symbols}"
+    );
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":child_lower}}),
+    );
+    let symbols = server.request(
+        7,
+        "textDocument/documentSymbol",
+        json!({"textDocument":{"uri":child_lower}}),
+    );
+    assert_eq!(symbols[0]["name"], "saved", "{symbols}");
+    server.request(8, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[ignore = "requires pdflatex"]
+fn lowercase_unicode_uris_keep_root_detection_build_diagnostics_and_status() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = Url::from_file_path(root.join("main.tex")).unwrap();
+    let child = Url::from_file_path(root.join("章节.tex")).unwrap();
+    let child_lower = lowercase_uri_escapes(&child);
+    let main_source = "\\documentclass{article}\\begin{document}\\input{章节}\\end{document}\n";
+    let source = "\\firstbad and \\secondbad.\n";
+    std::fs::write(root.join("main.tex"), main_source).unwrap();
+    std::fs::write(root.join("章节.tex"), source).unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(root).unwrap(),"capabilities":{},"initializationOptions":{"build":{"executable":"pdflatex","arguments":["-interaction=nonstopmode","-file-line-error","-output-directory=%o","%f"]}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":child_lower,"languageId":"latex","version":1,"text":source}}),
+    );
+    let build = server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[child_lower]}),
+    );
+    assert_eq!(build["rootUri"], main.as_str(), "{build}");
+    let finished = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(finished["params"]["errorsCount"], 2, "{finished}");
+    assert_eq!(finished["params"]["stale"], false);
+    let published = server.until(|message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["uri"] == child.as_str()
+            && message["params"]["version"] == 1
+            && message["params"]["diagnostics"]
+                .as_array()
+                .is_some_and(|items| items.len() == 2)
+    });
+    assert_eq!(
+        published["params"]["diagnostics"][0]["code"],
+        "undefined-control-sequence"
+    );
+    let status = server.request(
+        3,
+        "workspace/executeCommand",
+        json!({"command":"latex.buildStatus","arguments":[{"uri":child_lower}]}),
+    );
+    assert_eq!(status["buildId"], finished["params"]["buildId"]);
+    server.notify("textDocument/didChange", json!({"textDocument":{"uri":child_lower,"version":2},"contentChanges":[{"text":"Corrected.\n"}]}));
+    server.until(|message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["uri"] == child.as_str()
+            && message["params"]["version"] == 2
+            && message["params"]["diagnostics"] == json!([])
+    });
+    server.send(json!({"jsonrpc":"2.0","id":4,"method":"workspace/executeCommand","params":{"command":"latex.build","arguments":[child_lower]}}));
+    let response = server.until(|message| message["id"] == 4);
+    assert_eq!(response["error"]["code"], -32602, "{response}");
+    server.request(5, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
 impl Server {
     fn start() -> Self {
         Self::start_with_env(&[])

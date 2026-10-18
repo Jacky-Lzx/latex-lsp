@@ -28,7 +28,7 @@ use std::sync::{
 };
 use tokio::sync::RwLock;
 use tower_lsp::{jsonrpc::Result, lsp_types::*, Client, LanguageServer};
-use workspace::{Document, Workspace};
+use workspace::{document_uri, Document, Workspace};
 
 fn file_operation_options() -> FileOperationRegistrationOptions {
     FileOperationRegistrationOptions {
@@ -277,7 +277,7 @@ impl LanguageServer for Backend {
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
-        let uri = params.text_document.uri;
+        let uri = document_uri(params.text_document.uri);
         let mut workspace = self.workspace.write().await;
         let Some(doc) = workspace.documents.get(&uri) else {
             return;
@@ -309,7 +309,7 @@ impl LanguageServer for Backend {
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
-        let uri = params.text_document.uri;
+        let uri = document_uri(params.text_document.uri);
         self.publish_open().await;
         let on_save = self.workspace.read().await.config.build.on_save;
         if on_save {
@@ -322,7 +322,7 @@ impl LanguageServer for Backend {
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
-        let uri = params.text_document.uri;
+        let uri = document_uri(params.text_document.uri);
         let mut workspace = self.workspace.write().await;
         workspace.documents.remove(&uri);
         workspace.reload(&uri);
@@ -334,9 +334,10 @@ impl LanguageServer for Backend {
     async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
         let mut workspace = self.workspace.write().await;
         for change in params.changes {
-            workspace.reload(&change.uri);
-            workspace.clear_build_diagnostics(&change.uri);
-            workspace.load_dependencies(&change.uri, 0);
+            let uri = document_uri(change.uri);
+            workspace.reload(&uri);
+            workspace.clear_build_diagnostics(&uri);
+            workspace.load_dependencies(&uri, 0);
         }
         drop(workspace);
         self.publish_open().await;
@@ -369,6 +370,7 @@ impl LanguageServer for Backend {
                     .or_else(|| value.get("uri").and_then(serde_json::Value::as_str))
             })
             .and_then(|value| Url::parse(value).ok())
+            .map(document_uri)
             .ok_or_else(|| {
                 tower_lsp::jsonrpc::Error::invalid_params(
                     "Expected a document URI as the first command argument",
@@ -376,10 +378,11 @@ impl LanguageServer for Backend {
             })?;
         match params.command.as_str() {
             "latex.applyQuickFix" => {
-                let request: editing::FixRequest =
+                let mut request: editing::FixRequest =
                     serde_json::from_value(argument.cloned().unwrap_or_default()).map_err(
                         |_| tower_lsp::jsonrpc::Error::invalid_params("Invalid quick fix request"),
                     )?;
+                request.uri = document_uri(request.uri);
                 let edit = editing::resolve_fix(&*self.workspace.read().await, request)
                     .ok_or_else(|| {
                         tower_lsp::jsonrpc::Error::invalid_params(
@@ -506,7 +509,7 @@ impl LanguageServer for Backend {
         let position = params.text_document_position;
         Ok(Some(CompletionResponse::Array(features::completion(
             &*self.workspace.read().await,
-            &position.text_document.uri,
+            &document_uri(position.text_document.uri),
             position.position,
         ))))
     }
@@ -515,7 +518,7 @@ impl LanguageServer for Backend {
         let position = params.text_document_position_params;
         Ok(features::hover(
             &*self.workspace.read().await,
-            &position.text_document.uri,
+            &document_uri(position.text_document.uri),
             position.position,
         ))
     }
@@ -524,7 +527,7 @@ impl LanguageServer for Backend {
         let params = params.text_document_position_params;
         Ok(signature::help(
             &*self.workspace.read().await,
-            &params.text_document.uri,
+            &document_uri(params.text_document.uri),
             params.position,
         ))
     }
@@ -536,7 +539,7 @@ impl LanguageServer for Backend {
         let position = params.text_document_position_params;
         let locations = features::definitions(
             &*self.workspace.read().await,
-            &position.text_document.uri,
+            &document_uri(position.text_document.uri),
             position.position,
         );
         Ok(Some(GotoDefinitionResponse::Array(locations)))
@@ -546,7 +549,7 @@ impl LanguageServer for Backend {
         let position = params.text_document_position;
         Ok(Some(features::references(
             &*self.workspace.read().await,
-            &position.text_document.uri,
+            &document_uri(position.text_document.uri),
             position.position,
             params.context.include_declaration,
         )))
@@ -558,7 +561,7 @@ impl LanguageServer for Backend {
     ) -> Result<Option<PrepareRenameResponse>> {
         features::prepare_rename(
             &*self.workspace.read().await,
-            &params.text_document.uri,
+            &document_uri(params.text_document.uri),
             params.position,
         )
     }
@@ -567,7 +570,7 @@ impl LanguageServer for Backend {
         let position = params.text_document_position;
         features::rename(
             &*self.workspace.read().await,
-            &position.text_document.uri,
+            &document_uri(position.text_document.uri),
             position.position,
             &params.new_name,
         )
@@ -580,7 +583,7 @@ impl LanguageServer for Backend {
         let params = params.text_document_position_params;
         Ok(Some(editing::highlights(
             &*self.workspace.read().await,
-            &params.text_document.uri,
+            &document_uri(params.text_document.uri),
             params.position,
         )))
     }
@@ -590,7 +593,10 @@ impl LanguageServer for Backend {
         params: SelectionRangeParams,
     ) -> Result<Option<Vec<SelectionRange>>> {
         let workspace = self.workspace.read().await;
-        let Some(doc) = workspace.documents.get(&params.text_document.uri) else {
+        let Some(doc) = workspace
+            .documents
+            .get(&document_uri(params.text_document.uri))
+        else {
             return Ok(None);
         };
         editing::selection_ranges(doc, &params.positions)
@@ -601,7 +607,7 @@ impl LanguageServer for Backend {
     async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
         Ok(Some(editing::code_actions(
             &*self.workspace.read().await,
-            &params.text_document.uri,
+            &document_uri(params.text_document.uri),
             params.range,
             &params.context,
         )))
@@ -612,7 +618,7 @@ impl LanguageServer for Backend {
         params: DocumentSymbolParams,
     ) -> Result<Option<DocumentSymbolResponse>> {
         let workspace = self.workspace.read().await;
-        let uri = params.text_document.uri;
+        let uri = document_uri(params.text_document.uri);
         Ok(workspace.documents.get(&uri).map(|doc| {
             if workspace.hierarchical_symbols {
                 DocumentSymbolResponse::Nested(features::symbols(doc))
@@ -636,14 +642,14 @@ impl LanguageServer for Backend {
         let workspace = self.workspace.read().await;
         Ok(workspace
             .documents
-            .get(&params.text_document.uri)
+            .get(&document_uri(params.text_document.uri))
             .map(|doc| navigation::folding_ranges(doc, workspace.folding_limit)))
     }
 
     async fn document_link(&self, params: DocumentLinkParams) -> Result<Option<Vec<DocumentLink>>> {
         Ok(Some(navigation::document_links(
             &*self.workspace.read().await,
-            &params.text_document.uri,
+            &document_uri(params.text_document.uri),
         )))
     }
 }

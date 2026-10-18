@@ -17,6 +17,52 @@ pub fn is_source(path: &Path) -> bool {
         .is_some_and(|extension| SOURCE_EXTENSIONS.contains(&extension))
 }
 
+/// Editors and filesystem URLs can spell the same percent-encoded path
+/// differently. Keep one document identity without resolving symlinks or
+/// changing the case of filesystem names.
+pub(crate) fn document_uri(uri: Url) -> Url {
+    let Ok(path) = uri.to_file_path() else {
+        return uri;
+    };
+    let Ok(mut normalized) = Url::from_file_path(path) else {
+        return uri;
+    };
+    normalized.set_query(uri.query());
+    normalized.set_fragment(uri.fragment());
+    normalized
+}
+
+#[cfg(test)]
+mod uri_tests {
+    use super::*;
+
+    #[test]
+    fn file_uri_identity_preserves_path_case_queries_fragments_and_non_file_schemes() {
+        let uri =
+            Url::parse("file:///tmp/%e7%ab%a0%e8%8a%82%20Draft.tex?mode=%2f#part%2f").unwrap();
+        let normalized = document_uri(uri);
+        assert_eq!(
+            normalized.as_str(),
+            "file:///tmp/%E7%AB%A0%E8%8A%82%20Draft.tex?mode=%2f#part%2f"
+        );
+        assert_eq!(document_uri(normalized.clone()), normalized);
+        for value in [
+            "untitled:Draft.tex",
+            "https://example.test/%e7%ab%a0.tex",
+            "file://remote-host/Chapter.tex",
+        ] {
+            let uri = Url::parse(value).unwrap();
+            if uri.to_file_path().is_err() {
+                assert_eq!(document_uri(uri.clone()), uri);
+            }
+        }
+        assert_ne!(
+            document_uri(Url::parse("file:///tmp/Draft.tex").unwrap()),
+            document_uri(Url::parse("file:///tmp/draft.tex").unwrap())
+        );
+    }
+}
+
 pub(crate) fn normalize_path(path: &Path) -> PathBuf {
     let mut result = PathBuf::new();
     for component in path.components() {
@@ -530,6 +576,7 @@ impl Workspace {
     }
 
     pub fn open(&mut self, uri: Url, source: String, version: i32) {
+        let uri = document_uri(uri);
         if self.roots.is_empty() {
             if let Ok(path) = uri.to_file_path() {
                 if let Some(parent) = path.parent() {
