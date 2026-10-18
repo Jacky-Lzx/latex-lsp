@@ -367,8 +367,7 @@ pub(crate) fn undefined_counter_name(message: &str) -> Option<&str> {
     let name = tail
         .strip_prefix('\'')
         .or_else(|| tail.strip_prefix('`'))?
-        .strip_suffix("' defined.")?
-        .trim();
+        .strip_suffix("' defined.")?;
     crate::syntax::is_static_key(name).then_some(name)
 }
 

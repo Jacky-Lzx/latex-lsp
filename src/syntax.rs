@@ -667,7 +667,7 @@ impl Syntax {
                             });
                         }
                         match name {
-                            "newcounter" | "newaliascnt" if is_static_key(arg.value.trim()) => {
+                            "newcounter" | "newaliascnt" if is_static_key(&arg.value) => {
                                 result.counters.push(Entry {
                                     is_variable: true,
                                     ..entry()

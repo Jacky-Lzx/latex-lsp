@@ -141,6 +141,11 @@ pub(crate) fn counters(doc: &Document) -> impl Iterator<Item = &str> {
     doc.syntax
         .commands
         .iter()
+        .filter(|command| {
+            command.argument.as_ref().is_some_and(|argument| {
+                syntax::is_static_key(&doc.text.source[argument.span.clone()])
+            })
+        })
         .filter_map(|command| declaration(doc, command))
         .filter(|declaration| {
             declaration.environment.kind == Kind::Environment

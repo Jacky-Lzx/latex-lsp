@@ -45,7 +45,7 @@ pub(crate) fn invocation(source: &str, command: &Command) -> Option<(Range<usize
         b'{',
         b'}',
     )?;
-    let span = syntax::trimmed_span(source, argument.span);
+    let span = argument.span;
     if !syntax::is_static_key(&source[span.clone()]) {
         return None;
     }

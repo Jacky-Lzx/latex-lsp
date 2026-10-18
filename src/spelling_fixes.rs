@@ -9,6 +9,7 @@ enum Kind {
     Citation,
     Command,
     Environment,
+    Counter,
 }
 
 fn target<'a>(
@@ -50,6 +51,23 @@ fn target<'a>(
                     })
             })
             .then_some((Kind::Environment, name));
+    }
+    if diagnostic.code == Some(NumberOrString::String("undefined-counter".into())) {
+        let name = diagnostic.data.as_ref()?.get("counter")?.as_str()?;
+        if build_log::undefined_counter_name(&diagnostic.message) != Some(name) {
+            return None;
+        }
+        return doc
+            .syntax
+            .commands
+            .iter()
+            .any(|command| {
+                crate::counters::invocation(&doc.text.source, command).is_some_and(|(span, _)| {
+                    doc.text.source[span.clone()] == *name
+                        && doc.text.range(span.start, span.end) == diagnostic.range
+                })
+            })
+            .then_some((Kind::Counter, name));
     }
     if diagnostic.message != "Undefined control sequence."
         || diagnostic.code != Some(NumberOrString::String("undefined-control-sequence".into()))
@@ -284,6 +302,7 @@ pub fn fixes(workspace: &Workspace, uri: &Url, range: Range) -> Vec<QuickFix> {
                     Kind::Label => &document.syntax.labels,
                     Kind::Command => &document.syntax.definitions,
                     Kind::Environment => &document.syntax.environments,
+                    Kind::Counter => &document.syntax.counters,
                 };
                 for entry in entries {
                     *candidates.entry(entry.name.clone()).or_default() += 1;
@@ -295,6 +314,15 @@ pub fn fixes(workspace: &Workspace, uri: &Url, range: Range) -> Vec<QuickFix> {
                 if kind == Kind::Command {
                     for name in crate::generated::commands(document).take(4096) {
                         *candidates.entry(name).or_default() += 1;
+                        total_entries += 1;
+                        if total_entries >= 4096 {
+                            break;
+                        }
+                    }
+                }
+                if kind == Kind::Counter {
+                    for name in crate::generated::counters(document).take(4096) {
+                        *candidates.entry(name.into()).or_default() += 1;
                         total_entries += 1;
                         if total_entries >= 4096 {
                             break;
@@ -316,6 +344,11 @@ pub fn fixes(workspace: &Workspace, uri: &Url, range: Range) -> Vec<QuickFix> {
             }
             if kind == Kind::Environment {
                 for name in crate::catalog::ENVIRONMENTS {
+                    candidates.entry((*name).into()).or_insert(1);
+                }
+            }
+            if kind == Kind::Counter {
+                for name in crate::counters::BUILTINS {
                     candidates.entry((*name).into()).or_insert(1);
                 }
             }
@@ -341,6 +374,7 @@ pub fn fixes(workspace: &Workspace, uri: &Url, range: Range) -> Vec<QuickFix> {
                     Kind::Citation => ("citation", name.clone()),
                     Kind::Command => ("command", format!("\\{name}")),
                     Kind::Environment => ("environment", name.clone()),
+                    Kind::Counter => ("counter", name.clone()),
                 };
                 if !seen.insert((diagnostic.range.start, diagnostic.range.end, name.clone())) {
                     continue;

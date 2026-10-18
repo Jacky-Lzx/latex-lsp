@@ -4,6 +4,25 @@ use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString, Url};
 const HELP: &str = "\nSee the LaTeX manual or LaTeX Companion for explanation.\nType  H <return>  for immediate help.\n ...                                              \n                                                  \n";
 
 #[test]
+fn counter_errors_do_not_normalize_significant_whitespace_inside_names() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    for name in [" missing", "missing ", " missing ", "mis sing"] {
+        let source = format!("\\setcounter{{{name}}}{{2}}\n");
+        std::fs::write(&main, &source).unwrap();
+        let log = format!("(./main.tex\n./main.tex:1: LaTeX Error: No counter '{name}' defined.\n{HELP}l.1 {}\n)\n", source.trim_end());
+        let diagnostics = build_log::parse(&main, &log);
+        let error = &diagnostics[&Url::from_file_path(&main).unwrap()][0];
+        assert!(error.code.is_none() && error.data.is_none(), "{error:?}");
+        assert_eq!(error.range.start.character, 0);
+        assert_eq!(
+            error.message,
+            format!("LaTeX Error: No counter '{name}' defined.")
+        );
+    }
+}
+
+#[test]
 fn counter_operation_errors_select_the_name_and_leave_value_expressions_out_of_the_range() {
     let directory = tempfile::tempdir().unwrap();
     let main = directory.path().join("main.tex");
@@ -14,7 +33,7 @@ fn counter_operation_errors_select_the_name_and_leave_value_expressions_out_of_t
         ("refstepcounter", ""),
         ("usecounter", ""),
     ] {
-        let prefix = format!("😀 \\{command}{{ missing }}{value}");
+        let prefix = format!("😀 \\{command}  {{missing}}{value}");
         let source = format!("{prefix} trailing text.\r\n");
         std::fs::write(&main, &source).unwrap();
         for (header, quote) in [("./main.tex:1:", "'"), ("!", "`")] {
@@ -60,7 +79,7 @@ fn repeated_counter_errors_on_one_line_have_separate_name_ranges() {
 fn counter_names_can_be_on_an_earlier_line_than_the_consumed_value_argument() {
     let directory = tempfile::tempdir().unwrap();
     let main = directory.path().join("main.tex");
-    let source = "\\setcounter{\r\n 计数模式\r\n}\r\n{2}\r\n";
+    let source = "\\setcounter\r\n{计数模式}\r\n\r\n{2}\r\n";
     std::fs::write(&main, source).unwrap();
     let log = format!("(./main.tex\n./main.tex:4: LaTeX Error: No counter '计数模式' defined.\n{HELP}l.4 {{2}}\n)\n");
     let diagnostics = build_log::parse(&main, &log);
@@ -79,6 +98,10 @@ fn uncertain_counter_errors_keep_line_ranges_without_machine_readable_name_data(
     let main = directory.path().join("main.tex");
     for (source, context) in [
         (r"\setcounter{missing}", "l.1 \\setcounter{missing}"),
+        (
+            r"\setcounter{ missing }{1}",
+            "l.1 \\setcounter{ missing }{1}",
+        ),
         (
             r"\setcounter{missing\suffix}{1}",
             "l.1 \\setcounter{missing\\suffix}{1}",
