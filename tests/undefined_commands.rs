@@ -73,11 +73,11 @@ fn shortened_tex_context_is_used_only_when_it_matches_a_unique_command() {
     let directory = tempfile::tempdir().unwrap();
     let main = directory.path().join("main.tex");
     let source = format!(
-        "{} unique \\badone and \\badagain repeated \\badagain.\n",
+        "{}😀 unique \\badone and \\badagain repeated \\badagain.\n",
         "prefix ".repeat(24)
     );
     std::fs::write(&main, &source).unwrap();
-    let log = "(./main.tex\n./main.tex:1: Undefined control sequence.\nl.1 ... unique \\badone\n./main.tex:1: Undefined control sequence.\nl.1 ...\\badagain\n)\n";
+    let log = "(./main.tex\n./main.tex:1: Undefined control sequence.\nl.1 ...�� unique \\badone\n./main.tex:1: Undefined control sequence.\nl.1 ...\\badagain\n)\n";
     let diagnostics = build_log::parse(&main, log);
     let errors = &diagnostics[&Url::from_file_path(&main).unwrap()];
     assert_eq!(errors.len(), 2);

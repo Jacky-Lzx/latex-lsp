@@ -329,14 +329,23 @@ fn emit(
 }
 
 /// A direct TeX error prints the consumed source prefix on its l.N line.
-/// Expansion frames precede that line, so accepting only an immediate source
-/// context avoids blaming a valid macro call for an error in its expansion.
+/// Expansion frames precede that line. Apart from LaTeX's exact standard help
+/// block, require immediate source context to avoid blaming a valid macro call.
 fn error_context<'a>(lines: &[&'a str], start: usize, number: u32) -> Option<&'a str> {
-    let line = lines
+    let mut context = lines
         .iter()
         .skip(start)
-        .take(8)
-        .find(|line| !line.trim().is_empty())?;
+        .take(16)
+        .filter(|line| !line.trim().is_empty());
+    let mut line = *context.next()?;
+    if line.trim() == "See the LaTeX manual or LaTeX Companion for explanation." {
+        if context.next()?.trim() != "Type  H <return>  for immediate help."
+            || context.next()?.trim() != "..."
+        {
+            return None;
+        }
+        line = context.next()?;
+    }
     let tail = line.trim_start().strip_prefix("l.")?;
     let digits = tail.bytes().take_while(u8::is_ascii_digit).count();
     if tail[..digits].parse::<u32>().ok()? != number {
@@ -345,9 +354,52 @@ fn error_context<'a>(lines: &[&'a str], start: usize, number: u32) -> Option<&'a
     tail[digits..].strip_prefix(' ')
 }
 
+fn undefined_environment_name(message: &str) -> Option<&str> {
+    let name = message
+        .strip_prefix("LaTeX Error: Environment ")?
+        .strip_suffix(" undefined.")?
+        .trim();
+    crate::syntax::is_static_key(name).then_some(name)
+}
+
+fn undefined_environment_range(text: &Text, line: u32, context: &str, name: &str) -> Option<Range> {
+    let prefix = context.trim_end();
+    let shortened = shortened_context(prefix);
+    let start = text.offset(Position::new(line, 0))?;
+    let syntax = crate::syntax::Syntax::latex(text);
+    let mut matches = syntax.commands.iter().filter_map(|command| {
+        if command.name != "begin" {
+            return None;
+        }
+        let argument = command.argument.as_ref()?;
+        let span = crate::syntax::trimmed_span(&text.source, argument.span.clone());
+        if text.source[span.clone()] != *name || text.position(argument.outer_span.end).line != line
+        {
+            return None;
+        }
+        let consumed = &text.source[start..argument.outer_span.end];
+        let matched = shortened.map_or(consumed == prefix, |suffix| {
+            suffix.ends_with(&text.source[argument.outer_span.clone()])
+                && consumed.ends_with(suffix)
+        });
+        matched.then(|| text.range(span.start, span.end))
+    });
+    let range = matches.next()?;
+    matches.next().is_none().then_some(range)
+}
+
+fn shortened_context(prefix: &str) -> Option<&str> {
+    // TeX may cut the leading scalar in half when shortening error context.
+    // Discard only its undecodable leading bytes; matching still requires a
+    // complete command/argument and exactly one source occurrence.
+    prefix
+        .strip_prefix("...")
+        .map(|suffix| suffix.trim_start_matches('\u{fffd}'))
+}
+
 fn undefined_command_range(text: &Text, line: u32, context: &str) -> Option<Range> {
     let prefix = context.trim_end();
-    let shortened = prefix.strip_prefix("...");
+    let shortened = shortened_context(prefix);
     let start = text.offset(Position::new(line, 0))?;
     let syntax = crate::syntax::Syntax::latex(text);
     let mut matches = syntax.commands.iter().filter(|command| {
@@ -418,6 +470,11 @@ fn emit_with_context(
     .then(|| context.and_then(|context| undefined_command_range(&text, line, context)))
     .flatten();
     ranges.extend(command_range);
+    let environment_name = undefined_environment_name(&message);
+    let environment_range = environment_name
+        .filter(|_| reported_line.checked_sub(1) == Some(line))
+        .and_then(|name| undefined_environment_range(&text, line, context?, name));
+    ranges.extend(environment_range);
     let command_name = command_range.and_then(|range| {
         let start = text.offset(range.start)?;
         let end = text.offset(range.end)?;
@@ -451,11 +508,17 @@ fn emit_with_context(
                 code: box_code(&message)
                     .or_else(|| missing_include_key(&message).map(|_| "missing-include"))
                     .or_else(|| command_range.map(|_| "undefined-control-sequence"))
+                    .or_else(|| environment_range.map(|_| "undefined-environment"))
                     .map(|code| NumberOrString::String(code.into())),
                 message: message.clone(),
                 data: rewritten
                     .then(|| serde_json::json!({"reportedLine":reported_line}))
-                    .or_else(|| command_name.map(|name| serde_json::json!({"command":name}))),
+                    .or_else(|| command_name.map(|name| serde_json::json!({"command":name})))
+                    .or_else(|| {
+                        environment_range
+                            .and(environment_name)
+                            .map(|name| serde_json::json!({"environment":name}))
+                    }),
                 ..Default::default()
             }
         }));
