@@ -43,7 +43,9 @@ struct Declaration<'a> {
 }
 
 fn declaration<'a>(doc: &'a Document, command: &Command) -> Option<Declaration<'a>> {
-    if let Some(span) = syntax::conditional_declaration(&doc.text.source, command) {
+    if let Some(span) =
+        syntax::conditional_declaration(&doc.text.source, &doc.syntax.commands, command)
+    {
         return Some(Declaration {
             name: &doc.text.source[span],
             environment: Generated {

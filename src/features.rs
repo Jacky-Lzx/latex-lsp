@@ -588,7 +588,12 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
             .into_iter()
             .enumerate()
         {
-            if name.starts_with(prefix) && seen.insert(name.clone()) {
+            if name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphabetic() || byte == b'@')
+                && name.starts_with(prefix)
+                && seen.insert(name.clone())
+            {
                 result.push(CompletionItem {
                     label: name.clone(),
                     kind: Some(if index == 0 {

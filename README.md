@@ -90,7 +90,7 @@ vim.lsp.enable('latex_lsp')
 
 `newlength`、`newsavebox`、`newcount` / `newdimen` / `newskip` / `newmuskip` / `newtoks` / `newbox` 等寄存器分配，以及 `chardef` / `mathchardef`、寄存器绑定和字体声明也进入符号索引，支持变量补全、导航、悬停和跨文件安全重命名；识别直接名称和经 `expandafter` 展开的字面 `csname` 声明。常用长度操作、保存盒命令提供片段及参数提示；重命名会检查已有宏、寄存器、计数器派生命令和常用内置长度/寄存器原语的冲突。
 
-直接 `\newif\ifdraft` 声明提供布尔符号、跳转、悬停和项目内的派生命令补全。从 `\ifdraft`、`\drafttrue`、`\draftfalse` 或对应字面 `csname` 引用发起重命名时，输入新的基础名称（例如 `release`），同步维护三种命令及声明；保留同名的独立 `\draft` 宏。新名称与宏、寄存器、环境、其他开关或内置条件原语冲突，以及共享文件在其他项目中指向独立开关时拒绝修改；不展开动态声明。
+直接 `\newif\ifdraft` 和字面 `\expandafter\newif\csname ifdraft\endcsname` 声明提供布尔符号、跳转、悬停和项目内的派生命令补全。从 `\ifdraft`、`\drafttrue`、`\draftfalse` 或对应字面 `csname` 引用发起重命名时，输入新的基础名称（例如 `release`），同步维护三种命令及声明；保留同名的独立 `\draft` 宏。只经字面 `csname` 使用的名称支持连字符和中文；存在直接控制序列时，新名称必须能组成 TeX 命令，不提供无法直接键入的补全。新名称与宏、寄存器、环境、其他开关或内置条件原语冲突，以及共享文件在其他项目中指向独立开关时拒绝修改；不展开动态声明。
 
 在语法错误处调用 `vim.lsp.buf.code_action()` 可选择快速修复；`vim.lsp.buf.document_highlight()` 高亮当前符号的定义和引用。Neovim 0.12 中可用 `vim.lsp.buf.selection_range(1)` 扩大语法选择范围。
 

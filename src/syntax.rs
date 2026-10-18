@@ -353,13 +353,32 @@ fn control_word(source: &str, start: usize) -> Option<Range<usize>> {
     (length > 0).then_some(start..start + 1 + length)
 }
 
-pub(crate) fn conditional_declaration(source: &str, command: &Command) -> Option<Range<usize>> {
+pub(crate) fn conditional_declaration(
+    source: &str,
+    commands: &[Command],
+    command: &Command,
+) -> Option<Range<usize>> {
     if command.name != "newif" {
         return None;
     }
     let span = control_word(source, skip_space(source, command.span.end))?;
-    let name = source[span.start + 1..span.end].strip_prefix("if")?;
-    (!name.is_empty()).then_some(span.start + 3..span.end)
+    if let Some(name) = source[span.start + 1..span.end].strip_prefix("if") {
+        return (!name.is_empty()).then_some(span.start + 3..span.end);
+    }
+    let index = commands
+        .binary_search_by_key(&command.span.start, |command| command.span.start)
+        .ok()?;
+    let previous = commands.get(index.checked_sub(1)?)?;
+    let target = commands.get(index + 1)?;
+    if previous.name != "expandafter"
+        || skip_space(source, previous.span.end) != command.span.start
+        || skip_space(source, command.span.end) != target.span.start
+    {
+        return None;
+    }
+    let span = literal_csname(source, commands, index + 1)?;
+    let name = source[span.clone()].strip_prefix("if")?;
+    (!name.is_empty()).then_some(span.start + 2..span.end)
 }
 
 pub fn is_citation(name: &str) -> bool {
@@ -504,14 +523,6 @@ impl Syntax {
                         span: start..command_end,
                         argument,
                     };
-                    if let Some(span) = conditional_declaration(source, &command) {
-                        result.conditionals.push(Entry {
-                            name: source[span.clone()].into(),
-                            span,
-                            detail: "Defined with \\newif".into(),
-                            is_variable: false,
-                        });
-                    }
                     let declaration = if declares_command(name) {
                         if let Some(argument) = &command.argument {
                             let span = trimmed_span(source, argument.span.clone());
@@ -680,6 +691,16 @@ impl Syntax {
                         is_variable: declares_register(&declaration.name),
                     });
                 }
+            }
+        }
+        for command in &result.commands {
+            if let Some(span) = conditional_declaration(source, &result.commands, command) {
+                result.conditionals.push(Entry {
+                    name: source[span.clone()].into(),
+                    span,
+                    detail: "Defined with \\newif".into(),
+                    is_variable: false,
+                });
             }
         }
         result.definitions.sort_by_key(|entry| entry.span.start);
