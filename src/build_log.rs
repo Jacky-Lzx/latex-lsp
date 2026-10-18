@@ -5,7 +5,7 @@ use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
 };
-use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range, Url};
+use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range, Url};
 
 fn location(root: &Path, name: &str) -> Option<PathBuf> {
     let path = root.parent()?.join(name.trim().trim_matches('"'));
@@ -49,9 +49,15 @@ pub(crate) fn undefined_reference_key(message: &str) -> Option<(bool, &str)> {
     if !message.contains("undefined") {
         return None;
     }
-    let (citation, tail) = if let Some((_, tail)) = message.split_once("Reference `") {
+    let (citation, tail) = if let Some((_, tail)) = message
+        .split_once("Reference `")
+        .or_else(|| message.split_once("Reference '"))
+    {
         (false, tail)
-    } else if let Some((_, tail)) = message.split_once("Citation `") {
+    } else if let Some((_, tail)) = message
+        .split_once("Citation `")
+        .or_else(|| message.split_once("Citation '"))
+    {
         (true, tail)
     } else {
         return None;
@@ -60,6 +66,48 @@ pub(crate) fn undefined_reference_key(message: &str) -> Option<(bool, &str)> {
         .rsplit_once("' on ")
         .or_else(|| tail.rsplit_once("' undefined"))?;
     Some((citation, key))
+}
+
+fn box_code(message: &str) -> Option<&'static str> {
+    let code = if message.starts_with("Overfull ") {
+        "overfull-box"
+    } else if message.starts_with("Underfull ") {
+        "underfull-box"
+    } else {
+        return None;
+    };
+    Some(code)
+}
+
+fn box_range(text: &Text, message: &str) -> Option<Range> {
+    box_code(message)?;
+    let tail = message.rsplit_once("at lines ")?.1;
+    let (start, end) = tail.split_once("--")?;
+    let start: u32 = start.parse().ok()?;
+    let end: u32 = end
+        .split(|ch: char| !ch.is_ascii_digit())
+        .next()?
+        .parse()
+        .ok()?;
+    if start == 0 || end < start {
+        return None;
+    }
+    let last = text.text_line_count().saturating_sub(1) as u32;
+    let start = (start - 1).min(last);
+    let end = (end - 1).min(last);
+    let first = text.source.lines().nth(start as usize).unwrap_or("");
+    let last = text.source.lines().nth(end as usize).unwrap_or("");
+    Some(Range::new(
+        Position::new(
+            start,
+            first
+                .chars()
+                .take_while(|ch| ch.is_whitespace())
+                .map(char::len_utf16)
+                .sum::<usize>() as u32,
+        ),
+        Position::new(end, last.encode_utf16().count() as u32),
+    ))
 }
 
 pub(crate) fn undefined_reference_ranges(text: &Text, line: u32, message: &str) -> Vec<Range> {
@@ -129,6 +177,9 @@ fn emit(
         .sum::<usize>() as u32;
     let end = value.encode_utf16().count() as u32;
     let mut ranges = undefined_reference_ranges(&text, line, &message);
+    if let Some(range) = box_range(&text, &message) {
+        ranges.push(range);
+    }
     if ranges.is_empty() {
         ranges.push(Range::new(
             Position::new(line, start.min(end)),
@@ -142,6 +193,7 @@ fn emit(
             range,
             severity: Some(severity),
             source: Some("latex-build".into()),
+            code: box_code(&message).map(|code| NumberOrString::String(code.into())),
             message: message.clone(),
             ..Default::default()
         }));
@@ -525,6 +577,71 @@ fn bibliography_path(root: &Path, message: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn box_diagnostics_span_reported_source_lines_and_keep_valid_utf16_ranges() {
+        let directory = tempfile::tempdir().unwrap();
+        let main = directory.path().join("main.tex");
+        std::fs::write(&main, "First\r\n  😀 second\r\n 中文 third\r\nLast\r\n").unwrap();
+        let log = "(./main.tex\nOverfull \\hbox (12pt too wide) in paragraph at lines 2--3\nUnderfull \\hbox (badness 10000) in paragraph at lines 3--200\nOverfull \\vbox (2pt too high) detected at line 4\nUnderfull \\hbox (badness 10000) in paragraph at lines 3--1\n)";
+        let result = parse(&main, log);
+        let diagnostics = &result[&Url::from_file_path(&main).unwrap()];
+        assert_eq!(diagnostics.len(), 4);
+        let find = |prefix: &str| {
+            diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.message.starts_with(prefix))
+                .unwrap()
+        };
+        let overfull = find("Overfull \\hbox");
+        assert_eq!(
+            overfull.range,
+            Range::new(Position::new(1, 2), Position::new(2, 9))
+        );
+        assert_eq!(
+            overfull.code,
+            Some(NumberOrString::String("overfull-box".into()))
+        );
+        let underfull = find("Underfull \\hbox (badness 10000) in paragraph at lines 3--200");
+        assert_eq!(
+            underfull.range,
+            Range::new(Position::new(2, 1), Position::new(4, 0))
+        );
+        assert_eq!(
+            underfull.code,
+            Some(NumberOrString::String("underfull-box".into()))
+        );
+        assert_eq!(
+            find("Overfull \\vbox").range,
+            Range::new(Position::new(3, 0), Position::new(3, 4))
+        );
+        assert_eq!(
+            find("Underfull \\hbox (badness 10000) in paragraph at lines 3--1").range,
+            Range::new(Position::new(2, 1), Position::new(2, 9))
+        );
+    }
+
+    #[test]
+    fn single_quoted_citation_warnings_highlight_keys_and_preserve_apostrophes() {
+        let directory = tempfile::tempdir().unwrap();
+        let main = directory.path().join("main.tex");
+        let source = "😀 \\autocite{first, O'Connor}\n\\ref{missing}\n";
+        std::fs::write(&main, source).unwrap();
+        let log = "(./main.tex\nPackage biblatex Warning: Citation 'O'Connor' on page 1 undefined on input line 1.\nPackage biblatex Warning: Citation 'first' undefined\n(biblatex) on input line 1.\nLaTeX Warning: Reference 'missing' on page 1 undefined on input line 2.\n)";
+        let result = parse(&main, log);
+        let diagnostics = &result[&Url::from_file_path(&main).unwrap()];
+        assert_eq!(diagnostics.len(), 3);
+        let text = Text::new(source.into());
+        let values: Vec<_> = diagnostics
+            .iter()
+            .map(|diagnostic| {
+                &source[text.offset(diagnostic.range.start).unwrap()
+                    ..text.offset(diagnostic.range.end).unwrap()]
+            })
+            .collect();
+        assert_eq!(values, vec!["first", "O'Connor", "missing"]);
+        assert_eq!(diagnostics[0].range.start.character, 13);
+    }
 
     #[test]
     fn bibliography_errors_and_entry_warnings_point_to_the_database() {

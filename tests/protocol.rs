@@ -264,6 +264,68 @@ fn builds_with_the_same_job_name_cannot_write_the_same_artifacts_concurrently() 
 }
 
 #[test]
+#[cfg(unix)]
+fn single_quoted_package_citation_warnings_offer_precise_spelling_fixes() {
+    let script = "printf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf \"Package biblatex Warning: Citation 'smoth2026' undefined on input line 3.\\n\" > \"$1/main.log\"\n";
+    let (mut server, directory, main) = fake_build_server_capabilities(
+        script,
+        false,
+        json!({"textDocument":{"codeAction":{"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix"]}}}}}),
+    );
+    let source = "\\documentclass{article}\n\\addbibresource{refs.bib}\n\\autocite{smoth2026}\n";
+    std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+    std::fs::write(
+        directory.path().join("refs.bib"),
+        "@book{smith2026,title={Example}}\n",
+    )
+    .unwrap();
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+    );
+    server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let finished = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(finished["params"]["status"], "success", "{finished}");
+    let message = server.until(|message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["diagnostics"]
+                .as_array()
+                .is_some_and(|items| {
+                    items
+                        .iter()
+                        .any(|diagnostic| diagnostic["source"] == "latex-build")
+                })
+    });
+    let diagnostic = message["params"]["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|diagnostic| diagnostic["source"] == "latex-build")
+        .unwrap();
+    assert_eq!(
+        diagnostic["range"],
+        json!({"start":{"line":2,"character":10},"end":{"line":2,"character":19}})
+    );
+    let actions = server.request(3,"textDocument/codeAction",json!({"textDocument":{"uri":main},"range":diagnostic["range"],"context":{"diagnostics":[diagnostic],"only":["quickfix"]}}));
+    assert_eq!(actions.as_array().unwrap().len(), 1, "{actions}");
+    assert_eq!(
+        actions[0]["edit"]["changes"][main.as_str()][0]["newText"],
+        "smith2026"
+    );
+    assert_eq!(
+        actions[0]["edit"]["changes"][main.as_str()][0]["range"],
+        diagnostic["range"]
+    );
+    server.request(4, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
 #[ignore = "requires pdflatex and synctex"]
 fn real_custom_job_names_preserve_build_analysis_recorded_dependencies_and_synctex_round_trips() {
     let directory = tempfile::tempdir().unwrap();

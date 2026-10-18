@@ -106,6 +106,52 @@ fn bibliography_builds_with_custom_job_names_still_resolve_and_analyze_the_datab
 }
 
 #[test]
+#[ignore = "requires pdflatex"]
+fn real_overfull_paragraph_diagnostics_cover_the_complete_reported_source_range() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = root.join("main.tex");
+    std::fs::write(
+        &main,
+        "\\documentclass{article}\n\\begin{document}\n\\input{chapter}\n\\end{document}\n",
+    )
+    .unwrap();
+    let source = "\\hsize=20pt\n  AReallyLongUnbreakableWord\n  AnotherUnbreakableWord\n\\par\n";
+    std::fs::write(root.join("chapter.tex"), source).unwrap();
+    let config = BuildConfig {
+        executable: "pdflatex".into(),
+        ..Default::default()
+    };
+    let outcome = build::run(&main, &config, &AtomicBool::new(false));
+    assert_eq!(outcome.status, "success", "{}", outcome.output);
+    let diagnostics = &outcome.diagnostics[&Url::from_file_path(root.join("chapter.tex")).unwrap()];
+    let overfull = diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.code
+                == Some(tower_lsp::lsp_types::NumberOrString::String(
+                    "overfull-box".into(),
+                ))
+        })
+        .collect::<Vec<_>>();
+    assert!(!overfull.is_empty(), "{diagnostics:?}");
+    for diagnostic in overfull {
+        assert!(
+            diagnostic.message.contains("at lines 2--4"),
+            "{diagnostic:?}"
+        );
+        assert_eq!(
+            diagnostic.range.start,
+            tower_lsp::lsp_types::Position::new(1, 2)
+        );
+        assert_eq!(
+            diagnostic.range.end,
+            tower_lsp::lsp_types::Position::new(3, 4)
+        );
+    }
+}
+
+#[test]
 fn engine_directives_use_the_root_comment_and_respect_explicit_configuration() {
     use latex_lsp::{config::Engine, workspace::Document};
     let directory = tempfile::tempdir().unwrap();
