@@ -171,21 +171,25 @@ pub(crate) fn undefined_reference_key(message: &str) -> Option<(bool, &str)> {
     Some((citation, key))
 }
 
-pub(crate) fn undefined_destination_name(message: &str) -> Option<&str> {
-    let name = if let Some(tail) = message.strip_prefix("pdfTeX warning (dest): name{") {
+fn destination_warning_name(message: &str) -> Option<&str> {
+    if let Some(tail) = message.strip_prefix("pdfTeX warning (dest): name{") {
         let (name, tail) = tail.split_once("} has been referenced")?;
         let tail: String = tail.chars().filter(|ch| !ch.is_whitespace()).collect();
         if tail != "butdoesnotexist,replacedbyafixedone" {
             return None;
         }
-        name
+        Some(name)
     } else {
         message
             .strip_prefix("warning")?
             .trim_start()
             .strip_prefix("(pdf backend): unreferenced destination with name '")?
-            .strip_suffix('\'')?
-    };
+            .strip_suffix('\'')
+    }
+}
+
+pub(crate) fn undefined_destination_name(message: &str) -> Option<&str> {
+    let name = destination_warning_name(message)?;
     crate::syntax::is_static_key(name).then_some(name)
 }
 
@@ -724,11 +728,55 @@ fn wrapped_message(
     separator_lines: &[usize],
     i: &mut usize,
 ) -> String {
+    let initial = lines[*i].trim_start();
+    let lua_destination = initial.strip_prefix("warning").is_some_and(|tail| {
+        tail.trim_start()
+            .starts_with("(pdf backend): unreferenced destination with name '")
+    });
+    if initial.starts_with("pdfTeX warning (dest): name{") || lua_destination {
+        // The engines break these messages at a byte count, even within a
+        // destination name or a word. Join the original bytes; adding spaces
+        // or trimming a continuation can change the destination's identity.
+        let mut message = initial.to_owned();
+        for _ in 0..64 {
+            let complete = destination_warning_name(&message).is_some();
+            // LuaTeX prints names without escaping apostrophes. An apostrophe
+            // exactly at the print width can belong to a continued name.
+            if (complete && (!lua_destination || lines[*i].len() < 79)) || message.len() >= 4096 {
+                break;
+            }
+            let Some(next) = lines.get(*i + 1) else { break };
+            if next.trim().is_empty()
+                || message_boundary(next)
+                || next.trim_start().starts_with(['<', '('])
+                || [
+                    "Output written on ",
+                    "Transcript written on ",
+                    "Here is how much",
+                ]
+                .iter()
+                .any(|prefix| next.trim_start().starts_with(prefix))
+            {
+                break;
+            }
+            let mut next_index = *i + 1;
+            if numbered_error(&continued_error_line(
+                root,
+                lines,
+                separator_lines,
+                &mut next_index,
+            ))
+            .is_some()
+            {
+                break;
+            }
+            message.push_str(next);
+            *i += 1;
+        }
+        return message;
+    }
     let mut message = lines[*i].trim().to_owned();
     while !message.ends_with(['.', '!']) && *i + 1 < lines.len() && message.len() < 4096 {
-        if undefined_destination_name(&message).is_some() {
-            break;
-        }
         let next = lines[*i + 1];
         if next.trim().is_empty() || message_boundary(next) {
             break;
@@ -1262,6 +1310,143 @@ fn bibliography_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn destination_warning_byte_wraps_preserve_names_and_stop_at_resource_output() {
+        let directory = tempfile::tempdir().unwrap();
+        let main = directory.path().join("main.tex");
+        let name = format!("section.{}.!{}", "long".repeat(25), "tail".repeat(15));
+        let source = format!("\\hyperlink{{{name}}}{{Text}}\n");
+        std::fs::write(&main, &source).unwrap();
+        for (prefix, suffix) in [
+            (
+                "pdfTeX warning (dest): name{",
+                "} has been referenced but does not exist, replaced by a fixed one",
+            ),
+            (
+                "warning  (pdf backend): unreferenced destination with name '",
+                "'",
+            ),
+        ] {
+            let message = format!("{prefix}{name}{suffix}");
+            // Include breaks immediately after punctuation and inside the
+            // explanatory words, not just at convenient token boundaries.
+            for split in prefix.len()..message.len() {
+                let log = format!(
+                    "{}\n{}\n</fonts/resource.otf>\nLaTeX Warning: Next warning.\n",
+                    &message[..split],
+                    &message[split..]
+                );
+                let diagnostics = parse(&main, &log);
+                let items = &diagnostics[&Url::from_file_path(&main).unwrap()];
+                assert_eq!(items.len(), 2, "split {split}: {items:?}");
+                let item = items
+                    .iter()
+                    .find(|item| item.message != "LaTeX Warning: Next warning.")
+                    .unwrap();
+                assert_eq!(item.message, message, "split {split}");
+                assert_eq!(
+                    item.data,
+                    Some(serde_json::json!({"destination":name})),
+                    "split {split}"
+                );
+                assert_eq!(
+                    item.range,
+                    Text::new(source.clone()).range(11, 11 + name.len())
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn destination_wraps_preserve_real_whitespace_and_incomplete_message_boundaries() {
+        let directory = tempfile::tempdir().unwrap();
+        let main = directory.path().join("main.tex");
+        std::fs::write(&main, "\\hyperlink{section.target}{Text}\n").unwrap();
+        for message in [
+            "pdfTeX warning (dest): name{section. target} has been referenced but does not exist, replaced by a fixed one",
+            "warning  (pdf backend): unreferenced destination with name 'section. target'",
+        ] {
+            let split = message.find(" target").unwrap();
+            let log = format!("{}\n{}\n</fonts/resource.otf>\n", &message[..split], &message[split..]);
+            let diagnostics = parse(&main, &log);
+            let items = &diagnostics[&Url::from_file_path(&main).unwrap()];
+            assert_eq!(items.len(), 1, "{items:?}");
+            assert_eq!(items[0].message, message);
+            assert!(items[0].code.is_none());
+            assert!(items[0].data.is_none());
+        }
+        for boundary in [
+            "</fonts/resource.otf>",
+            "LaTeX Warning: Next warning.",
+            "! Next error.",
+            crate::output::TRUNCATED,
+            "(./main.tex",
+        ] {
+            let log = format!("pdfTeX warning (dest): name{{section.\n{boundary}\n");
+            let diagnostics = parse(&main, &log);
+            let items = &diagnostics[&Url::from_file_path(&main).unwrap()];
+            let item = items
+                .iter()
+                .find(|item| item.message.starts_with("pdfTeX warning"))
+                .unwrap();
+            assert_eq!(item.message, "pdfTeX warning (dest): name{section.");
+            assert!(item.code.is_none());
+        }
+    }
+
+    #[test]
+    fn unicode_destinations_survive_log_breaks_inside_utf8_characters() {
+        let directory = tempfile::tempdir().unwrap();
+        let main = directory.path().join("main.tex");
+        let name = format!("section.{}终点", "章节".repeat(20));
+        std::fs::write(&main, format!("\\hyperlink{{{name}}}{{Text}}\n")).unwrap();
+        let message = format!("pdfTeX warning (dest): name{{{name}}} has been referenced but does not exist, replaced by a fixed one");
+        for split in "pdfTeX warning (dest): name{".len()..message.len() {
+            let log = [
+                &message.as_bytes()[..split],
+                b"\n",
+                &message.as_bytes()[split..],
+                b"\n</fonts/resource.pfb>\n",
+            ]
+            .concat();
+            let diagnostics = parse(&main, &decode_output(&log));
+            let items = &diagnostics[&Url::from_file_path(&main).unwrap()];
+            assert_eq!(items.len(), 1, "split {split}: {items:?}");
+            assert_eq!(
+                items[0].data,
+                Some(serde_json::json!({"destination":name})),
+                "split {split}: {items:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn lua_destination_apostrophes_at_print_width_do_not_target_a_different_shorter_name() {
+        let directory = tempfile::tempdir().unwrap();
+        let main = directory.path().join("main.tex");
+        let prefix = "warning  (pdf backend): unreferenced destination with name '";
+        for width in [79, 80] {
+            let shorter = "x".repeat(width - prefix.len() - 1);
+            let name = format!("{shorter}'suffix");
+            std::fs::write(
+                &main,
+                format!("\\hyperlink{{{name}}}{{Long}}\\hyperlink{{{shorter}}}{{Short}}\n"),
+            )
+            .unwrap();
+            let message = format!("{prefix}{name}'");
+            let log = format!(
+                "{}\n{}\n</fonts/resource.otf>\n",
+                &message[..width],
+                &message[width..]
+            );
+            let diagnostics = parse(&main, &log);
+            let items = &diagnostics[&Url::from_file_path(&main).unwrap()];
+            assert_eq!(items.len(), 1, "{items:?}");
+            assert_eq!(items[0].message, message);
+            assert_eq!(items[0].data, Some(serde_json::json!({"destination":name})));
+        }
+    }
 
     #[test]
     fn destination_warnings_locate_direct_and_compound_links_without_inventing_lines() {

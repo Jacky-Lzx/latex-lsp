@@ -11,6 +11,79 @@ use tower_lsp::lsp_types::{DiagnosticSeverity, Url};
 #[test]
 #[cfg(unix)]
 #[ignore = "requires pdflatex, lualatex and hyperref"]
+fn real_long_destination_warnings_recover_names_and_wrapped_explanatory_words() {
+    for engine in ["pdflatex", "lualatex"] {
+        let directory = tempfile::tempdir().unwrap();
+        let main = directory.path().join("main.tex");
+        let mut names: Vec<_> = [35, 90, 150]
+            .into_iter()
+            .map(|length| format!("section.{}", "x".repeat(length)))
+            .collect();
+        names.push(format!("{}'suffix", "x".repeat(19)));
+        let mut source =
+            "\\documentclass{article}\\usepackage{hyperref}\\begin{document}\n".to_owned();
+        for name in &names {
+            source.push_str(&format!("\\hyperlink{{{name}}}{{Link}}\n"));
+        }
+        source.push_str(&format!(
+            "\\hyperref{{}}{{section}}% keep\n{{{}}}{{Compound}}\\end{{document}}\n",
+            "x".repeat(150)
+        ));
+        std::fs::write(&main, &source).unwrap();
+        let executable = if engine == "lualatex" {
+            script(directory.path(), "TEXMFVAR=\"${0%/*}/tex-cache\"\nTEXMFCACHE=\"$TEXMFVAR\"\nexport TEXMFVAR TEXMFCACHE\nmkdir -p \"$TEXMFVAR\"\nexec lualatex \"$@\"")
+        } else {
+            engine.into()
+        };
+        let config = BuildConfig {
+            executable,
+            arguments: Some(vec![
+                "-interaction=nonstopmode".into(),
+                "-output-directory=%o".into(),
+                "%f".into(),
+            ]),
+            ..Default::default()
+        };
+        let outcome = build::run(&main, &config, &Default::default());
+        assert_eq!(outcome.status, "success", "{engine}: {}", outcome.output);
+        let doc =
+            latex_lsp::workspace::Document::new(&Url::from_file_path(&main).unwrap(), source, None);
+        let warnings: Vec<_> = outcome
+            .diagnostics
+            .values()
+            .flatten()
+            .filter(|diagnostic| {
+                diagnostic.code
+                    == Some(tower_lsp::lsp_types::NumberOrString::String(
+                        "undefined-pdf-destination".into(),
+                    ))
+            })
+            .collect();
+        assert_eq!(
+            warnings.len(),
+            5,
+            "{engine}: {:?}\n{}",
+            outcome.diagnostics,
+            outcome.output
+        );
+        for entry in &doc.syntax.anchor_references {
+            let range = doc.text.range(entry.span.start, entry.span.end);
+            let warning = warnings
+                .iter()
+                .find(|warning| warning.range == range)
+                .unwrap_or_else(|| panic!("{engine}: {entry:?}\n{warnings:?}"));
+            assert_eq!(
+                warning.data,
+                Some(serde_json::json!({"destination":entry.name}))
+            );
+            assert!(!warning.message.contains("</"), "{warning:?}");
+        }
+    }
+}
+
+#[test]
+#[cfg(unix)]
+#[ignore = "requires pdflatex, lualatex and hyperref"]
 fn real_destination_warnings_locate_links_and_clear_after_repair() {
     for engine in ["pdflatex", "lualatex"] {
         let directory = tempfile::tempdir().unwrap();
