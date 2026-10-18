@@ -9,6 +9,7 @@ pub mod features;
 pub mod file_operations;
 pub mod graphics;
 pub mod navigation;
+mod output;
 pub mod path_completion;
 mod project_diagnostics;
 pub mod recorder;

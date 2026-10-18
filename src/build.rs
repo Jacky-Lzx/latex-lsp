@@ -393,6 +393,7 @@ impl BuildManager {
                 "logUri":outcome.log.as_ref().and_then(|path| Url::from_file_path(path).ok()),
                 "diagnosticsCount":count, "stale":stale, "durationMs":started.elapsed().as_millis() as u64,
                 "errorsCount":errors, "warningsCount":warnings,
+                "diagnosticsTruncated":outcome.diagnostics_truncated,
                 "pages":outcome.pages, "pdfSize":pdf_size,
                 "dependenciesCount":project.len(),
                 "executable":executable, "engine":engine,
@@ -578,6 +579,7 @@ pub struct Outcome {
     pub pages: Option<u32>,
     pub log: Option<PathBuf>,
     pub diagnostics: BTreeMap<Url, Vec<Diagnostic>>,
+    pub diagnostics_truncated: bool,
     pub output: String,
     pub inputs: Option<BTreeSet<Url>>,
     pub bibliography_inputs: Option<BTreeSet<Url>>,
@@ -594,6 +596,7 @@ impl Outcome {
             pages: None,
             log: None,
             diagnostics: BTreeMap::new(),
+            diagnostics_truncated: false,
             output: String::new(),
             inputs: None,
             bibliography_inputs: None,
@@ -602,19 +605,8 @@ impl Outcome {
     }
 }
 
-pub(crate) fn capture(mut reader: impl Read) -> Vec<u8> {
-    let mut output = Vec::new();
-    let mut buffer = [0; 8192];
-    loop {
-        match reader.read(&mut buffer) {
-            Ok(0) | Err(_) => break,
-            Ok(count) => {
-                let keep = count.min(MAX_OUTPUT.saturating_sub(output.len()));
-                output.extend_from_slice(&buffer[..keep]);
-            }
-        }
-    }
-    output
+pub(crate) fn capture(reader: impl Read) -> Vec<u8> {
+    crate::output::capture(reader, MAX_OUTPUT)
 }
 
 pub(crate) fn kill_group(child: &mut Child) {
@@ -823,23 +815,34 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool) -> Outcome 
         .is_some_and(|pdf| fingerprint(pdf) != pdf_before);
     let recorder_after = fingerprint(&recorder_path);
     if recorder_after.is_some() && recorder_after != recorder_before {
-        outcome.inputs = read_log(&recorder_path).map(|log| crate::recorder::inputs(root, &log));
+        // Partial dependency lists must not replace the last complete recorder.
+        outcome.inputs = read_log(&recorder_path)
+            .filter(|log| !crate::output::truncated(log))
+            .map(|log| crate::recorder::inputs(root, &log));
     }
     // latexmk can run TeX several times. The final .log is authoritative;
     // earlier stdout passes may contain references that are already resolved.
-    outcome.diagnostics = build_log::parse(root, if log.is_empty() { &output } else { &log });
+    let diagnostic_log = if log.is_empty() { &output } else { &log };
+    outcome.diagnostics_truncated = crate::output::truncated(diagnostic_log);
+    outcome.diagnostics = build_log::parse(root, diagnostic_log);
+    let mut bibliography_complete = true;
     for (path, fingerprint) in bibliography_logs(&output_dir) {
         // An old .blg left by a previous failed build is not this build's result.
         if bibliography_before.get(&path) == Some(&fingerprint) {
             continue;
         }
         if let Some(log) = read_log(&path) {
+            let truncated = crate::output::truncated(&log);
+            bibliography_complete &= !truncated;
+            outcome.diagnostics_truncated |= truncated;
             let paths = crate::recorder::BibliographyPaths::new(root, &path, &log)
                 .with_search_output(&output);
-            outcome
-                .bibliography_inputs
-                .get_or_insert_with(BTreeSet::new)
-                .extend(crate::recorder::bibliography_inputs_in(&paths, &log));
+            if !truncated {
+                outcome
+                    .bibliography_inputs
+                    .get_or_insert_with(BTreeSet::new)
+                    .extend(crate::recorder::bibliography_inputs_in(&paths, &log));
+            }
             for (uri, diagnostics) in build_log::parse_bibliography_in(root, &paths, &log) {
                 outcome
                     .diagnostics
@@ -848,6 +851,9 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool) -> Outcome 
                     .extend(diagnostics);
             }
         }
+    }
+    if !bibliography_complete {
+        outcome.bibliography_inputs = None;
     }
     if outcome.status == "success"
         && outcome
@@ -943,11 +949,7 @@ fn prepare_include_directories(root: &Path, output: &Path) -> std::io::Result<()
 }
 
 fn read_log(path: &Path) -> Option<String> {
-    let file = std::fs::File::open(path).ok()?;
-    let mut text = Vec::new();
-    file.take((MAX_OUTPUT * 2) as u64)
-        .read_to_end(&mut text)
-        .ok()?;
+    let text = crate::output::read(path, MAX_OUTPUT * 2).ok()?;
     Some(build_log::decode_output(&text).into_owned())
 }
 

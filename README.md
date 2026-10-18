@@ -108,6 +108,8 @@ vim.lsp.enable('latex_lsp')
 
 服务器发出 `latex/buildStarted` 和 `latex/buildFinished` 通知，两者都包含实际 `executable` 和可推断的 `engine`（使用自定义参数或无法识别的工具时为 `null`）。完成通知还包含 `status`（`success` / `error` / `cancelled` / `timeout`）、`buildId`、`rootUri`、`pdfUri`、`logUri`、`exitCode`、`diagnosticsCount`、`errorsCount`、`warningsCount`、`dependenciesCount`（包含根文件的来源数量）、`durationMs`、`message` 和有长度限制的 `output` 摘要。成功结果的 `pages` 为最终 TeX 日志报告的页数（未知时为 `null`），`pdfSize` 为实际 PDF 的字节数；失败结果两者为 `null`。`latex.buildStatus` 保留相同摘要。若文档在编译中变化，`stale` 为 `true`，不会发布这次编译的旧诊断。失败编译不把可能不完整的 PDF 标记为成功结果。
 
+编译管道输出超过 4 MiB、日志超过 8 MiB 时，分析缓冲区保留开头和结尾，省略中间部分；完整日志仍保留在磁盘。省略后清除文件栈，显式文件位置和新出现的文件上下文仍可定位，其他诊断回退到主文档。完成通知的 `diagnosticsTruncated` 标明 TeX 或文献诊断使用了省略后的内容，此时诊断数量仅统计已分析部分。部分 recorder 或文献依赖列表不会替换上一次完整记录。
+
 工具返回成功但没有更新 PDF 时，服务器会检查已知输入的修改时间：来源比旧 PDF 新或已被删除则报告产物过期，并保留磁盘上的旧 PDF；产物仍有效的无操作编译可以成功。有 recorder 记录时优先按记录检查，并保留文献来源检查；未被记录的选章外文件不会导致过期产物误报。部分 TeX 版本也记录选章外文件的存在性检查，这些文件仍会保守参与检查。图片也参与编译期间变更、过期 PDF 和 SyncTeX 检查；二进制内容不进入文本索引。不生成 recorder 的工具使用当前能静态解析的图片路径。
 
 客户端声明 `window.workDoneProgress` 时，服务器还通过标准 `$/progress` 显示编译开始和完成，可通过编辑器的取消按钮中止编译。客户端拒绝或不响应进度创建请求时，编译仍会继续。

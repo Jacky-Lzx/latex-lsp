@@ -963,6 +963,7 @@ fn build_summaries_use_final_logs_actual_pdf_sizes_and_clear_artifacts_after_err
     assert_eq!(summary["diagnosticsCount"], 1);
     assert_eq!(summary["errorsCount"], 0);
     assert_eq!(summary["warningsCount"], 1);
+    assert_eq!(summary["diagnosticsTruncated"], false);
     let status = server.request(
         3,
         "workspace/executeCommand",
@@ -981,6 +982,57 @@ fn build_summaries_use_final_logs_actual_pdf_sizes_and_clear_artifacts_after_err
     assert!(failed["params"]["pdfSize"].is_null());
     assert_eq!(failed["params"]["errorsCount"], 1);
     assert_eq!(failed["params"]["warningsCount"], 0);
+    server.request(5, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+fn build_summaries_report_truncated_diagnostics_only_when_the_authoritative_log_is_partial() {
+    use std::io::{Seek, SeekFrom, Write};
+    let script =
+        "printf '%%PDF-1.4\\n' > \"$1/main.pdf\"\ncat \"${2%/*}/large.log\" > \"$1/main.log\"\n";
+    let (mut server, directory, main) = fake_build_server(script, false);
+    let mut log = std::fs::File::create(directory.path().join("large.log")).unwrap();
+    writeln!(log, "LaTeX Warning: Beginning on input line 1.").unwrap();
+    log.set_len(10 * 1024 * 1024).unwrap();
+    log.seek(SeekFrom::End(0)).unwrap();
+    writeln!(
+        log,
+        "\nLaTeX Warning: Ending on input line 2.\nOutput written on main.pdf (2 pages, 9 bytes)."
+    )
+    .unwrap();
+    drop(log);
+    server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let finished = server.until(|message| message["method"] == "latex/buildFinished");
+    let summary = &finished["params"];
+    assert_eq!(summary["status"], "success");
+    assert_eq!(summary["diagnosticsTruncated"], true);
+    assert_eq!(summary["warningsCount"], 2);
+    assert_eq!(summary["pages"], 2);
+    let status = server.request(
+        3,
+        "workspace/executeCommand",
+        json!({"command":"latex.buildStatus","arguments":[main]}),
+    );
+    assert_eq!(&status, summary);
+    // Large output from an earlier pass does not make a complete final log
+    // incomplete. Its final counts and diagnostics must take precedence.
+    std::fs::write(directory.path().join("compiler.sh"), "printf '%%PDF-1.4\\n' > \"$1/main.pdf\"\ncat \"${2%/*}/large.log\"\nprintf 'LaTeX Warning: Final pass on input line 2.\\nOutput written on main.pdf (3 pages, 9 bytes).\\n' > \"$1/main.log\"\n").unwrap();
+    server.request(
+        4,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let finished = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(finished["params"]["diagnosticsTruncated"], false);
+    assert_eq!(finished["params"]["pages"], 3);
+    assert_eq!(finished["params"]["warningsCount"], 1);
     server.request(5, "shutdown", Value::Null);
     server.notify("exit", Value::Null);
     server.wait_exit(0);

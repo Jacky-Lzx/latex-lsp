@@ -62,7 +62,7 @@ pub fn page_count(log: &str) -> Option<u32> {
         }
         let mut summary = String::new();
         for line in lines.iter().skip(index).take(16) {
-            if summary.len() + line.len() > 8192 {
+            if *line == crate::output::TRUNCATED || summary.len() + line.len() > 8192 {
                 break;
             }
             summary.push_str(line);
@@ -388,7 +388,8 @@ fn warning_start(line: &str) -> bool {
 
 fn message_boundary(line: &str) -> bool {
     let line = line.trim_start();
-    warning_start(line)
+    line == crate::output::TRUNCATED
+        || warning_start(line)
         || line.starts_with("! ")
         || line.starts_with("Missing character:")
         || line.starts_with("Overfull ")
@@ -484,6 +485,7 @@ fn continued_file_line<'a>(root: &Path, lines: &[&'a str], i: &mut usize) -> Cow
             let mut joined = line.to_owned();
             for (next_index, next) in lines.iter().enumerate().skip(*i + 1).take(64) {
                 if next.is_empty()
+                    || *next == crate::output::TRUNCATED
                     || warning_start(next)
                     || next.starts_with("! ")
                     || numbered_error(next).is_some()
@@ -512,6 +514,14 @@ pub fn parse(root: &Path, log: &str) -> BTreeMap<Url, Vec<Diagnostic>> {
     let mut i = 0;
     while i < lines.len() {
         let line = lines[i];
+        if line == crate::output::TRUNCATED {
+            if let Some((path, message)) = pending.take() {
+                emit(&mut result, &path, 1, message, DiagnosticSeverity::ERROR);
+            }
+            stack.clear();
+            i += 1;
+            continue;
+        }
         let current = || {
             stack
                 .iter()
@@ -630,6 +640,10 @@ pub(crate) fn parse_bibliography_in(
         .collect();
     let mut previous = "";
     for line in log.lines() {
+        if line == crate::output::TRUNCATED {
+            previous = "Error context omitted from a large bibliography log";
+            continue;
+        }
         if let Some((message, tail)) = line.split_once("---line ") {
             if let Some((number, name)) = tail.split_once(" of file ") {
                 if let Ok(number) = number.trim().parse::<u32>() {
