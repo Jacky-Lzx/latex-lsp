@@ -12,7 +12,9 @@ fn count(name: &str) -> usize {
     }
     match name {
         "csuse" | "csmeaning" | "ifcsdef" | "ifcsundef" | "ifcsvoid" | "ifcsmacro"
-        | "ifcsparam" | "ifcsprotected" | "ifcsltxprotect" | "ifcsstring" => 1,
+        | "ifcsparam" | "ifcsprotected" | "ifcsltxprotect" | "ifcsstring" | "csundef"
+        | "csgundef" | "csappto" | "cseappto" | "csgappto" | "csxappto" | "cspreto"
+        | "csepreto" | "csgpreto" | "csxpreto" => 1,
         "ifcsequal" | "ifcsstrequal" => 2,
         _ => 0,
     }

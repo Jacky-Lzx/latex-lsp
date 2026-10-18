@@ -589,6 +589,10 @@ fn named_command_completion_preserves_suffixes_and_skips_strings_dynamic_names_a
             r"\ifcsstrequal{hello}{other}{Yes}{No}",
         ),
         (r"\csmeaning{hel¦", r"\csmeaning{hello"),
+        (r"\csappto{ hel¦lo }{hello}", r"\csappto{ hello }{hello}"),
+        (r"\csepreto{hel¦lo}{hello}", r"\csepreto{hello}{hello}"),
+        (r"\csundef{hel¦", r"\csundef{hello"),
+        (r"\csgundef{hel¦lo}", r"\csgundef{hello}"),
     ] {
         let directory = tempfile::tempdir().unwrap();
         let source = marked.replace('¦', "");
@@ -624,6 +628,9 @@ fn named_command_completion_preserves_suffixes_and_skips_strings_dynamic_names_a
         r"\csuse{hel¦lo\suffix}",
         r"\verb|\csuse{hel¦lo}|",
         r"\ifcsequal{other}{hello}{hel¦lo}{No}",
+        r"\csappto{hello}{hel¦lo}",
+        r"\csepreto{hello}{hel¦lo}",
+        r"\csundef{hel¦lo\suffix}",
     ] {
         let directory = tempfile::tempdir().unwrap();
         let source = marked.replace('¦', "");
@@ -670,6 +677,141 @@ fn named_command_completion_preserves_suffixes_and_skips_strings_dynamic_names_a
 }
 
 #[test]
+fn named_mutations_navigate_and_rename_without_treating_code_as_names_or_declarations() {
+    for command in [
+        "csappto", "cseappto", "csgappto", "csxappto", "cspreto", "csepreto", "csgpreto",
+        "csxpreto", "csundef", "csgundef",
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let definitions = r"\csdef{hello}{A}";
+        let source = format!("\\documentclass{{article}}\\input{{definitions}}\n\\begin{{document}}😀 \\{command}{{ hello }}{{hello \\csuse{{hello}}}}\n\\{command}{{hello\\suffix}}{{hello}}\n% \\{command}{{hello}}\n\\verb|\\{command}{{hello}}|\\end{{document}}");
+        let workspace = project(
+            root,
+            &[("main.tex", &source), ("definitions.tex", definitions)],
+        );
+        let main = uri(root, "main.tex");
+        let text = &workspace.documents[&main].text;
+        let position = text.position(source.find("hello").unwrap());
+        assert!(workspace.documents[&main].syntax.definitions.is_empty());
+        let targets = features::definitions(&workspace, &main, position);
+        assert_eq!(targets.len(), 1, "{command}");
+        assert_eq!(targets[0].uri, uri(root, "definitions.tex"));
+        assert_eq!(
+            features::references(&workspace, &main, position, true).len(),
+            3,
+            "{command}"
+        );
+        let changed = renamed_to(&workspace, &main, position, "发布-模式");
+        assert_eq!(
+            changed[&main],
+            source.replacen("{ hello }", "{ 发布-模式 }", 1).replacen(
+                "csuse{hello}",
+                "csuse{发布-模式}",
+                1
+            )
+        );
+        assert_eq!(
+            changed[&uri(root, "definitions.tex")],
+            r"\csdef{发布-模式}{A}"
+        );
+    }
+}
+
+#[test]
+fn mutations_in_shared_sources_must_resolve_to_the_same_definition_in_all_projects() {
+    for command in ["csappto", "cspreto", "csundef", "csgundef"] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let shared = format!(r"\{command}{{hello}}{{Code}}");
+        let workspace = project(
+            root,
+            &[
+                (
+                    "a.tex",
+                    r"\documentclass{article}\csdef{hello}{A}\begin{document}\input{shared}\end{document}",
+                ),
+                (
+                    "b.tex",
+                    r"\documentclass{article}\csdef{hello}{B}\begin{document}\input{shared}\end{document}",
+                ),
+                ("shared.tex", &shared),
+            ],
+        );
+        for name in ["a.tex", "shared.tex"] {
+            let document = uri(root, name);
+            let text = &workspace.documents[&document].text;
+            let position = text.position(text.source.find("hello").unwrap());
+            assert!(
+                features::rename(&workspace, &document, position, "greeting").is_err(),
+                "{command}: {name}"
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex and etoolbox"]
+fn named_mutation_renames_preserve_scope_and_expansion_behavior() {
+    for (command, local, global) in [
+        ("csappto", "AC", "A"),
+        ("cseappto", "AB", "A"),
+        ("csgappto", "AC", "AD"),
+        ("csxappto", "AB", "AB"),
+        ("cspreto", "CA", "A"),
+        ("csepreto", "BA", "A"),
+        ("csgpreto", "CA", "DA"),
+        ("csxpreto", "BA", "BA"),
+        ("csundef", "missing", "A"),
+        ("csgundef", "missing", "missing"),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let definitions = r"\csdef{hello}{A}";
+        let code = if command.ends_with("undef") {
+            ""
+        } else {
+            r"{\suffix}"
+        };
+        let source = format!(
+            r"\documentclass{{article}}\usepackage{{etoolbox}}\input{{definitions}}
+\begin{{document}}Witness.\def\suffix{{B}}\begingroup\{command}{{hello}}{code}\def\suffix{{C}}
+\ifcsundef{{hello}}{{\typeout{{LOCAL:missing}}}}{{\typeout{{LOCAL:\csuse{{hello}}}}}}
+\endgroup\def\suffix{{D}}\ifcsundef{{hello}}{{\typeout{{GLOBAL:missing}}}}{{\typeout{{GLOBAL:\csuse{{hello}}}}}}\end{{document}}"
+        );
+        let workspace = project(
+            root,
+            &[("main.tex", &source), ("definitions.tex", definitions)],
+        );
+        let main = uri(root, "main.tex");
+        let config = latex_lsp::config::BuildConfig {
+            executable: "pdflatex".into(),
+            ..Default::default()
+        };
+        let before = build::run(&root.join("main.tex"), &config, &AtomicBool::new(false));
+        assert_eq!(before.status, "success", "{command}: {}", before.output);
+        let position = workspace.documents[&main]
+            .text
+            .position(source.find("hello").unwrap());
+        for (uri, source) in renamed_to(&workspace, &main, position, "发布-模式") {
+            std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+        }
+        let after = build::run(&root.join("main.tex"), &config, &AtomicBool::new(false));
+        assert_eq!(after.status, "success", "{command}: {}", after.output);
+        for output in [&before.output, &after.output] {
+            assert!(
+                output.contains(&format!("LOCAL:{local}")),
+                "{command}: {output}"
+            );
+            assert!(
+                output.contains(&format!("GLOBAL:{global}")),
+                "{command}: {output}"
+            );
+        }
+    }
+}
+
+#[test]
 fn generated_symbols_keep_their_ownership_through_named_command_apis() {
     for (declaration, names) in [
         (r"\newenvironment{hello}{}{}", vec!["hello", "endhello"]),
@@ -684,6 +826,9 @@ fn generated_symbols_keep_their_ownership_through_named_command_apis() {
         let mut source = String::new();
         for name in &names {
             source.push_str(&format!("\\ifcsdef{{{name}}}{{Yes}}{{No}}"));
+            source.push_str(&format!(
+                "\\csappto{{{name}}}{{Literal hello}}\\csundef{{{name}}}"
+            ));
         }
         let workspace = project(
             directory.path(),
@@ -699,7 +844,12 @@ fn generated_symbols_keep_their_ownership_through_named_command_apis() {
                 "{name}"
             );
             let changed = renamed(&workspace, &main, position);
-            assert_eq!(changed[&main], source.replace("hello", "greeting"));
+            assert_eq!(
+                changed[&main],
+                source
+                    .replace("hello", "greeting")
+                    .replace("Literal greeting", "Literal hello")
+            );
             assert_eq!(
                 changed[&uri(directory.path(), "definitions.tex")],
                 declaration.replace("hello", "greeting")

@@ -35,6 +35,34 @@ fn check(definitions: &str, marked: &str, label: &str, active: u32) {
 }
 
 #[test]
+fn named_macro_mutations_offer_their_own_signature_instead_of_the_modified_macro_signature() {
+    for command in [
+        "csappto", "cseappto", "csgappto", "csxappto", "cspreto", "csepreto", "csgpreto",
+        "csxpreto",
+    ] {
+        for (marked, active) in [
+            (format!(r"\{command}{{hel¦lo}}{{Code}}"), 0),
+            (format!(r"\{command}{{hello}}{{Co¦de}}"), 1),
+        ] {
+            check(
+                r"\csdef{hello}#1#2{#1#2}",
+                &marked,
+                &format!(r"\{command}{{command}}{{code}}"),
+                active,
+            );
+        }
+    }
+    for command in ["csundef", "csgundef"] {
+        check(
+            r"\csdef{hello}#1#2{#1#2}",
+            &format!(r"\{command}{{hel¦lo}}"),
+            &format!(r"\{command}{{command}}"),
+            0,
+        );
+    }
+}
+
+#[test]
 fn builtin_signatures_select_nested_arguments_and_skip_omitted_optional_parameters() {
     for (source, label, active) in [
         (r"\newtoggle{draft¦}", r"\newtoggle{toggle}", 0),

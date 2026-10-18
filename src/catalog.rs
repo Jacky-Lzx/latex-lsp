@@ -63,6 +63,16 @@ pub(crate) const PRIMITIVES: &[&str] = &[
 /// Command name, snippet template (without leading backslash), short documentation.
 /// Templates retain literal TeX backslashes; completion escapes them for the client.
 pub const COMMANDS: &[(&str, &str, &str)] = &[
+    ("csundef", "csundef{${1:command}}", "Undefine a control sequence by name in the current group. Requires etoolbox."),
+    ("csgundef", "csgundef{${1:command}}", "Globally undefine a control sequence by name. Requires etoolbox."),
+    ("csappto", "csappto{${1:command}}{${2:code}}", "Append unexpanded code to a named macro in the current group. Requires etoolbox."),
+    ("cseappto", "cseappto{${1:command}}{${2:code}}", "Append expanded code to a named macro in the current group. Requires etoolbox."),
+    ("csgappto", "csgappto{${1:command}}{${2:code}}", "Globally append unexpanded code to a named macro. Requires etoolbox."),
+    ("csxappto", "csxappto{${1:command}}{${2:code}}", "Globally append expanded code to a named macro. Requires etoolbox."),
+    ("cspreto", "cspreto{${1:command}}{${2:code}}", "Prepend unexpanded code to a named macro in the current group. Requires etoolbox."),
+    ("csepreto", "csepreto{${1:command}}{${2:code}}", "Prepend expanded code to a named macro in the current group. Requires etoolbox."),
+    ("csgpreto", "csgpreto{${1:command}}{${2:code}}", "Globally prepend unexpanded code to a named macro. Requires etoolbox."),
+    ("csxpreto", "csxpreto{${1:command}}{${2:code}}", "Globally prepend expanded code to a named macro. Requires etoolbox."),
     ("csdef", "csdef{${1:name}}{${2:definition}}", "Define a TeX macro by name in the current group. Requires etoolbox."),
     ("csgdef", "csgdef{${1:name}}{${2:definition}}", "Define a TeX macro globally by name. Requires etoolbox."),
     ("csedef", "csedef{${1:name}}{${2:definition}}", "Define a TeX macro by name after expanding its replacement text. Requires etoolbox."),

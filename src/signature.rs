@@ -96,7 +96,9 @@ fn builtin(name: &str) -> Option<Signature> {
             (&[("file", false)], false)
         }
         "includeonly" => (&[("files", false)], false),
-        "csuse" | "csmeaning" => (&[("command", false)], false),
+        "csuse" | "csmeaning" | "csundef" | "csgundef" => (&[("command", false)], false),
+        "csappto" | "cseappto" | "csgappto" | "csxappto" | "cspreto" | "csepreto" | "csgpreto"
+        | "csxpreto" => (&[("command", false), ("code", false)], false),
         "ifcsdef" | "ifcsundef" | "ifcsvoid" | "ifcsmacro" | "ifcsparam" | "ifcsprotected"
         | "ifcsltxprotect" => (
             &[("command", false), ("then", false), ("else", false)],

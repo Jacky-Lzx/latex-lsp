@@ -106,6 +106,8 @@ etoolbox 的静态 `csdef` / `csgdef` / `csedef` / `csxdef` 声明进入宏索�
 
 etoolbox 的 `csuse` / `csmeaning`、`ifcsdef` / `ifcsundef` / `ifcsvoid`、宏类型检测及名称比较命令中的静态控制序列名称支持补全、导航、引用与重命名；识别 `ifcsequal` / `ifcsstrequal` 的两个名称参数，保留 `ifcsstring` 的字符串和条件分支正文。派生的环境、计数器和布尔命令仍归属于原始声明。`csuse` 调用可显示被调用命令或环境的参数提示，包括可选参数默认值；动态名称不作推断。
 
+命名宏修改接口 `csappto` / `cspreto` 及其展开、全局变体（`cseappto`、`csgappto`、`csxappto`、`csepreto`、`csgpreto`、`csxpreto`），以及 `csundef` / `csgundef` 也支持片段、参数提示、名称补全、导航和跨文件重命名。只将名称参数关联到原始声明，保留追加或前插代码中的普通文本，并独立识别其中的宏调用；不将修改操作推断为新的声明。
+
 etoolbox 的 `newtoggle` / `providetoggle` 使用独立命名空间，支持 `settoggle`、`toggletrue` / `togglefalse`、`iftoggle` / `nottoggle` 和上述表达式中的 `togl {名称}` 操作数。提供名称和值补全、片段、参数提示、布尔符号、跨文件导航与安全重命名；同名 boolean 保持独立。重命名同时维护直接或字面的内部 `etb@tgl@名称` 控制序列，并检查生成命令冲突。
 
 在语法错误处调用 `vim.lsp.buf.code_action()` 可选择快速修复；`vim.lsp.buf.document_highlight()` 高亮当前符号的定义和引用。Neovim 0.12 中可用 `vim.lsp.buf.selection_range(1)` 扩大语法选择范围。
