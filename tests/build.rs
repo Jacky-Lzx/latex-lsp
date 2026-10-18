@@ -519,3 +519,54 @@ fn real_pdflatex_error_points_to_the_included_file_and_line() {
         "{diagnostics:?}"
     );
 }
+
+#[test]
+#[ignore = "requires latexmk and a TeX installation"]
+fn real_definition_file_warnings_with_spaces_and_parentheses_keep_their_source_context() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    let definition = directory.path().join("settings (old).def");
+    let options = directory.path().join("layout options.clo");
+    let long_name = format!("settings {}(old).def", "long-name-".repeat(12));
+    let long_definition = directory.path().join(&long_name);
+    std::fs::write(&main,format!("\\documentclass{{article}}\n\\begin{{document}}\n\\input{{settings (old).def}}\n\\input{{layout options.clo}}\n\\PackageWarning{{audit}}{{Root warning}}\n\\input{{{long_name}}}\nText.\n\\end{{document}}\n")).unwrap();
+    std::fs::write(&definition,"% configuration\n\\PackageWarning{audit}{Closing ) marker}\n\\PackageWarning{audit}{Still in definition}\n").unwrap();
+    std::fs::write(
+        &options,
+        "% class options\n\\PackageWarning{audit}{Class options warning}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &long_definition,
+        "\\PackageWarning{audit}{Wrapped filename warning}\n",
+    )
+    .unwrap();
+    let outcome = build::run(&main, &Default::default(), &Default::default());
+    assert_eq!(
+        outcome.status, "success",
+        "{}\n{}",
+        outcome.message, outcome.output
+    );
+    let definition_diagnostics = &outcome.diagnostics[&Url::from_file_path(&definition).unwrap()];
+    assert_eq!(definition_diagnostics.len(), 2, "{:?}", outcome.diagnostics);
+    assert!(definition_diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.range.start.line == 2
+            && diagnostic.message.contains("Still in definition")));
+    assert_eq!(
+        outcome.diagnostics[&Url::from_file_path(&options).unwrap()][0]
+            .range
+            .start
+            .line,
+        1
+    );
+    assert!(outcome.diagnostics[&Url::from_file_path(&main).unwrap()]
+        .iter()
+        .any(|diagnostic| diagnostic.range.start.line == 4
+            && diagnostic.message.contains("Root warning")));
+    assert!(
+        outcome.diagnostics[&Url::from_file_path(&long_definition).unwrap()][0]
+            .message
+            .contains("Wrapped filename warning")
+    );
+}

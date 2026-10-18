@@ -1,6 +1,7 @@
 //! Recover file/line diagnostics from TeX's file-line errors and traditional logs.
 use crate::text::Text;
 use std::{
+    borrow::Cow,
     collections::BTreeMap,
     path::{Path, PathBuf},
 };
@@ -133,34 +134,89 @@ fn wrapped_message(lines: &[&str], i: &mut usize) -> String {
     message
 }
 
-fn update_file_stack(line: &str, root: &Path, stack: &mut Vec<Option<PathBuf>>) {
-    for (i, ch) in line.char_indices() {
-        match ch {
-            '(' => {
-                let tail = &line[i + 1..];
-                let candidate = if let Some(quoted) = tail.strip_prefix('"') {
-                    quoted.find('"').map(|end| &quoted[..end])
-                } else {
-                    let end = tail
-                        .find(|ch: char| ch.is_whitespace() || matches!(ch, '(' | ')'))
-                        .unwrap_or(tail.len());
-                    Some(&tail[..end])
-                };
-                let file = candidate
-                    .filter(|name| {
-                        [".tex", ".sty", ".cls", ".ltx"]
-                            .iter()
-                            .any(|ext| name.ends_with(ext))
-                    })
-                    .and_then(|name| location(root, name));
-                stack.push(file);
+fn stack_file(root: &Path, tail: &str) -> Option<(PathBuf, usize)> {
+    if let Some(quoted) = tail.strip_prefix('"') {
+        let end = quoted.find('"')?;
+        let name = &quoted[..end];
+        return crate::workspace::is_source(Path::new(name))
+            .then(|| location(root, name))
+            .flatten()
+            .map(|path| (path, end + 2));
+    }
+    // TeX also emits unquoted names containing spaces or parentheses. Require
+    // an existing source file rather than splitting the name at whitespace.
+    let mut result = None;
+    for (dot, _) in tail
+        .match_indices('.')
+        .take_while(|(index, _)| *index < 4096)
+    {
+        for extension in crate::workspace::SOURCE_EXTENSIONS {
+            let end = dot + 1 + extension.len();
+            if tail.get(dot + 1..end) != Some(extension)
+                || tail[end..]
+                    .starts_with(|ch: char| !ch.is_whitespace() && !matches!(ch, '(' | ')' | '['))
+            {
+                continue;
             }
-            ')' => {
+            if let Some(path) = location(root, &tail[..end]) {
+                result = Some((path, end));
+            }
+        }
+    }
+    result
+}
+
+fn update_file_stack(line: &str, root: &Path, stack: &mut Vec<Option<PathBuf>>) {
+    let mut i = 0;
+    while i < line.len() {
+        match line.as_bytes()[i] {
+            b'(' => {
+                if let Some((file, length)) = stack_file(root, &line[i + 1..]) {
+                    stack.push(Some(file));
+                    i += length;
+                } else {
+                    stack.push(None);
+                }
+            }
+            b')' => {
                 stack.pop();
             }
             _ => {}
         }
+        i += 1;
     }
+}
+
+fn continued_file_line<'a>(root: &Path, lines: &[&'a str], i: &mut usize) -> Cow<'a, str> {
+    let line = lines[*i];
+    // TeX wraps file announcements at max_print_line (normally 79). Join only
+    // when the continuation completes an actual file, with bounded lookahead.
+    if line.len() >= 60 {
+        for (opening, _) in line.match_indices('(') {
+            if stack_file(root, &line[opening + 1..]).is_some() {
+                continue;
+            }
+            let mut joined = line.to_owned();
+            for (next_index, next) in lines.iter().enumerate().skip(*i + 1).take(64) {
+                if next.is_empty()
+                    || warning_start(next)
+                    || next.starts_with("! ")
+                    || numbered_error(next).is_some()
+                    || joined.len() + next.len() > 8192
+                {
+                    break;
+                }
+                joined.push_str(next);
+                if stack_file(root, &joined[opening + 1..])
+                    .is_some_and(|(_, length)| length > line.len() - opening - 1)
+                {
+                    *i = next_index;
+                    return Cow::Owned(joined);
+                }
+            }
+        }
+    }
+    Cow::Borrowed(line)
 }
 
 pub fn parse(root: &Path, log: &str) -> BTreeMap<Url, Vec<Diagnostic>> {
@@ -179,6 +235,7 @@ pub fn parse(root: &Path, log: &str) -> BTreeMap<Url, Vec<Diagnostic>> {
                 .cloned()
                 .unwrap_or_else(|| root.into())
         };
+        let mut structural = false;
         if let Some((name, number, message)) = numbered_error(line) {
             let path = location(root, name).unwrap_or_else(|| root.into());
             let severity = if message.contains("Warning:") {
@@ -227,8 +284,15 @@ pub fn parse(root: &Path, log: &str) -> BTreeMap<Url, Vec<Diagnostic>> {
                 line.into(),
                 DiagnosticSeverity::WARNING,
             );
+        } else {
+            structural = true;
         }
-        update_file_stack(line, root, &mut stack);
+        // User messages and echoed TeX source can contain unmatched parentheses.
+        // They describe diagnostics, rather than file entry/exit events.
+        if structural {
+            let line = continued_file_line(root, &lines, &mut i);
+            update_file_stack(&line, root, &mut stack);
+        }
         i += 1;
     }
     if let Some((path, message)) = pending {
@@ -514,5 +578,73 @@ mod tests {
                 .line,
             1
         );
+    }
+
+    #[test]
+    fn source_paths_and_diagnostic_parentheses_preserve_nested_file_context() {
+        let directory = tempfile::tempdir().unwrap();
+        let main = directory.path().join("main.tex");
+        let definition = directory.path().join("配置 (旧).def");
+        let options = directory.path().join("layout options.clo");
+        for path in [&main, &definition, &options] {
+            std::fs::write(path, "One\n😀 Two\nThree\nFour\nFive\n").unwrap();
+        }
+        let log = "(./main.tex\n(./配置 (旧).def\nPackage local Warning: Closing ) marker on input line 2.\nPackage local Warning: Still local on input line 3.\n! Error with a ( marker.\nl.4 \\bad)\nPackage local Warning: After error on input line 5.\n)\n(./layout options.clo\nLaTeX Warning: Options warning on input line 2.\n)\nLaTeX Warning: Back in main on input line 3.\n)";
+        let diagnostics = parse(&main, log);
+        let local = &diagnostics[&Url::from_file_path(&definition).unwrap()];
+        assert_eq!(local.len(), 4, "{diagnostics:?}");
+        assert_eq!(local[0].range.end.character, 6);
+        assert!(local
+            .iter()
+            .any(|diagnostic| diagnostic.range.start.line == 3
+                && diagnostic.severity == Some(DiagnosticSeverity::ERROR)));
+        assert_eq!(
+            diagnostics[&Url::from_file_path(&options).unwrap()][0]
+                .range
+                .start
+                .line,
+            1
+        );
+        assert_eq!(
+            diagnostics[&Url::from_file_path(&main).unwrap()][0]
+                .range
+                .start
+                .line,
+            2
+        );
+    }
+
+    #[test]
+    fn wrapped_file_announcements_rejoin_existing_names_without_swallowing_warnings() {
+        let directory = tempfile::tempdir().unwrap();
+        let main = directory.path().join("main.tex");
+        let name = format!("settings {}(old).def", "long-name-".repeat(12));
+        let definition = directory.path().join(&name);
+        std::fs::write(&main, "Main\n").unwrap();
+        std::fs::write(&definition, "First\nSecond\n").unwrap();
+        for quoted in [false, true] {
+            let opening = if quoted {
+                format!("(\"./{name}\"")
+            } else {
+                format!("(./{name}")
+            };
+            let wrapped = format!("{}\n{}", &opening[..79], &opening[79..]);
+            let log = format!("(./main.tex\n{wrapped}\nLaTeX Warning: Local warning on input line 2.\n)\nLaTeX Warning: Root warning on input line 1.\n)\n");
+            let diagnostics = parse(&main, &log);
+            assert_eq!(
+                diagnostics[&Url::from_file_path(&definition).unwrap()][0]
+                    .range
+                    .start
+                    .line,
+                1
+            );
+            assert_eq!(diagnostics[&Url::from_file_path(&main).unwrap()].len(), 1);
+        }
+        let log = format!(
+            "(./main.tex\n({}\nLaTeX Warning: Do not swallow this on input line 1.\n",
+            "not-a-file-".repeat(9)
+        );
+        let diagnostics = parse(&main, &log);
+        assert_eq!(diagnostics[&Url::from_file_path(&main).unwrap()].len(), 1);
     }
 }
