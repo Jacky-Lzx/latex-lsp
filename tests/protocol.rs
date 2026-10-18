@@ -298,6 +298,111 @@ fn background_build_keeps_requests_responsive_and_publishes_compiler_results() {
 
 #[test]
 #[cfg(unix)]
+fn repeated_saves_during_a_build_compile_the_latest_saved_content_once_more() {
+    let script = "count=0\n[ ! -f \"$1/count\" ] || count=$(cat \"$1/count\")\ncount=$((count + 1))\nprintf '%s' \"$count\" > \"$1/count\"\nif [ \"$count\" = 1 ]; then\n  touch \"$1/ready\"\n  while [ ! -f \"$1/release\" ]; do sleep 0.02; done\nfi\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf '%s:2: LaTeX Warning: build %s.\\n' \"$2\" \"$count\" > \"$1/main.log\"\n";
+    let (mut server, directory, uri) = fake_build_server(script, true);
+    let started = server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[uri]}),
+    );
+    let output = directory.path().join(".latex-lsp");
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while !output.join("ready").exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "compiler failed to start"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    for version in [2, 3] {
+        let source = format!("\\documentclass{{article}}\n\\section{{Saved {version}}}\n");
+        std::fs::write(uri.to_file_path().unwrap(), &source).unwrap();
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":version},"contentChanges":[{"text":source}]}));
+        server.notify("textDocument/didSave", json!({"textDocument":{"uri":uri}}));
+    }
+    let status = server.request(
+        3,
+        "workspace/executeCommand",
+        json!({"command":"latex.buildStatus","arguments":[uri]}),
+    );
+    assert_eq!(status["queued"], true);
+    std::fs::write(output.join("release"), "").unwrap();
+    let first = server.until(|message| {
+        message["method"] == "latex/buildFinished"
+            && message["params"]["buildId"] == started["buildId"]
+    });
+    assert_eq!(first["params"]["stale"], true);
+    let second = server.until(|message| {
+        message["method"] == "latex/buildFinished"
+            && message["params"]["buildId"] != started["buildId"]
+    });
+    assert_eq!(second["params"]["status"], "success");
+    assert_eq!(second["params"]["stale"], false);
+    assert_eq!(std::fs::read_to_string(output.join("count")).unwrap(), "2");
+    let diagnostics = server.until(|message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["diagnostics"]
+                .as_array()
+                .is_some_and(|diagnostics| {
+                    diagnostics.iter().any(|diagnostic| {
+                        diagnostic["message"]
+                            .as_str()
+                            .is_some_and(|message| message.contains("build 2"))
+                    })
+                })
+    });
+    assert_eq!(diagnostics["params"]["version"], 3);
+    server.request(4, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+fn cancelling_or_shutting_down_discards_the_queued_save() {
+    for shutdown in [false, true] {
+        let (mut server, _directory, uri) = fake_build_server("sleep 30\n", true);
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[uri]}),
+        );
+        server.notify("textDocument/didSave", json!({"textDocument":{"uri":uri}}));
+        let status = server.request(
+            3,
+            "workspace/executeCommand",
+            json!({"command":"latex.buildStatus","arguments":[uri]}),
+        );
+        assert_eq!(status["queued"], true);
+        if shutdown {
+            server.request(4, "shutdown", Value::Null);
+        } else {
+            let cancelled = server.request(
+                4,
+                "workspace/executeCommand",
+                json!({"command":"latex.cancelBuild","arguments":[uri]}),
+            );
+            assert_eq!(cancelled["cancelled"], 1);
+        }
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(finished["params"]["status"], "cancelled");
+        if !shutdown {
+            let status = server.request(
+                5,
+                "workspace/executeCommand",
+                json!({"command":"latex.buildStatus","arguments":[uri]}),
+            );
+            assert_eq!(status["status"], "cancelled");
+            server.request(6, "shutdown", Value::Null);
+        }
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
 fn builds_are_deduplicated_cancelled_and_reported_through_status() {
     let (mut server, _directory, uri) = fake_build_server("sleep 30\n", false);
     let started = server.request(

@@ -249,7 +249,7 @@ impl LanguageServer for Backend {
         self.publish(uri.clone()).await;
         let on_save = self.workspace.read().await.config.build.on_save;
         if on_save {
-            if let Err(error) = self.builds.start(uri).await {
+            if let Err(error) = self.builds.on_save(uri).await {
                 self.client
                     .log_message(MessageType::WARNING, error.message)
                     .await;

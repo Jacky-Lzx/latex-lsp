@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex,
     },
     time::{Duration, Instant},
@@ -36,14 +36,39 @@ impl notification::Notification for BuildFinished {
 struct Record {
     active: Option<(u64, Arc<AtomicBool>)>,
     result: Option<Value>,
+    queued: Option<Url>,
+    cancel_generation: u64,
 }
 
+#[derive(Clone)]
 pub struct BuildManager {
     client: Client,
     workspace: Arc<RwLock<Workspace>>,
     state: Arc<Mutex<BTreeMap<Url, Record>>>,
-    sequence: AtomicU64,
+    sequence: Arc<AtomicU64>,
     idle: Arc<Notify>,
+    closing: Arc<AtomicBool>,
+    tasks: Arc<AtomicUsize>,
+}
+
+struct BuildInput {
+    root: Url,
+    root_path: PathBuf,
+    snapshots: BTreeMap<Url, (Option<i32>, String)>,
+    config: BuildConfig,
+    progress_supported: bool,
+}
+
+struct TaskGuard {
+    tasks: Arc<AtomicUsize>,
+    idle: Arc<Notify>,
+}
+
+impl Drop for TaskGuard {
+    fn drop(&mut self) {
+        self.tasks.fetch_sub(1, Ordering::SeqCst);
+        self.idle.notify_one();
+    }
 }
 
 impl BuildManager {
@@ -52,12 +77,22 @@ impl BuildManager {
             client,
             workspace,
             state: Arc::default(),
-            sequence: AtomicU64::new(1),
+            sequence: Arc::new(AtomicU64::new(1)),
             idle: Arc::default(),
+            closing: Arc::default(),
+            tasks: Arc::default(),
         }
     }
 
     pub async fn start(&self, uri: Url) -> Result<Value> {
+        self.start_request(uri, None).await
+    }
+
+    async fn start_request(
+        &self,
+        uri: Url,
+        queued_generation: Option<(Url, u64)>,
+    ) -> Result<Value> {
         let mut workspace = self.workspace.write().await;
         let root = workspace
             .root_document(&uri)
@@ -94,18 +129,80 @@ impl BuildManager {
         let cancel = Arc::new(AtomicBool::new(false));
         {
             let mut state = self.state.lock().unwrap();
+            if self.closing.load(Ordering::SeqCst) {
+                return Err(Error::invalid_request());
+            }
+            if let Some((previous_root, generation)) = queued_generation {
+                if state
+                    .get(&previous_root)
+                    .is_none_or(|record| record.cancel_generation != generation)
+                {
+                    return Ok(json!({"status":"cancelled", "rootUri":root}));
+                }
+            }
             let record = state.entry(root.clone()).or_default();
             if let Some((id, _)) = &record.active {
-                return Ok(json!({"status":"running", "buildId":id, "rootUri":root}));
+                return Ok(
+                    json!({"status":"running", "buildId":id, "rootUri":root, "queued":record.queued.is_some()}),
+                );
             }
             record.active = Some((build_id, cancel.clone()));
+            self.tasks.fetch_add(1, Ordering::SeqCst);
         }
+        self.launch(
+            BuildInput {
+                root: root.clone(),
+                root_path,
+                snapshots,
+                config,
+                progress_supported,
+            },
+            build_id,
+            cancel,
+        );
+        Ok(json!({"status":"started", "buildId":build_id, "rootUri":root}))
+    }
+
+    /// Coalesce repeated saves into one follow-up build using the newest files.
+    pub async fn on_save(&self, uri: Url) -> Result<()> {
+        let root = self
+            .workspace
+            .read()
+            .await
+            .root_document(&uri)
+            .map_err(Error::invalid_params)?;
+        {
+            let mut state = self.state.lock().unwrap();
+            if let Some(record) = state.get_mut(&root) {
+                if let Some((_, cancel)) = &record.active {
+                    if !cancel.load(Ordering::Relaxed) {
+                        record.queued = Some(uri);
+                    }
+                    return Ok(());
+                }
+            }
+        }
+        self.start(uri).await.map(|_| ())
+    }
+
+    fn launch(&self, input: BuildInput, build_id: u64, cancel: Arc<AtomicBool>) {
+        let BuildInput {
+            root: root_uri,
+            root_path,
+            snapshots,
+            config,
+            progress_supported,
+        } = input;
+        let manager = self.clone();
+        let guard = TaskGuard {
+            tasks: self.tasks.clone(),
+            idle: self.idle.clone(),
+        };
         let client = self.client.clone();
         let workspace = self.workspace.clone();
         let state = self.state.clone();
-        let idle = self.idle.clone();
-        let root_uri = root.clone();
         tokio::spawn(async move {
+            let _guard = guard;
             client
                 .send_notification::<BuildStarted>(json!({"buildId":build_id, "rootUri":root_uri}))
                 .await;
@@ -199,7 +296,6 @@ impl BuildManager {
                 record.active = None;
                 record.result = Some(result.clone());
             }
-            idle.notify_one();
             for (uri, diagnostics, version) in notifications {
                 client.publish_diagnostics(uri, diagnostics, version).await;
             }
@@ -216,15 +312,44 @@ impl BuildManager {
                     .await;
             }
             client.send_notification::<BuildFinished>(result).await;
+            let queued = state.lock().unwrap().get_mut(&root_uri).and_then(|record| {
+                // A new manual build may already own the record. Its saves
+                // belong to that build and must remain in its queue.
+                if record.active.is_some() {
+                    return None;
+                }
+                record
+                    .queued
+                    .take()
+                    .map(|uri| (uri, record.cancel_generation))
+            });
+            if let Some((uri, generation)) = queued {
+                if !manager.closing.load(Ordering::SeqCst)
+                    && workspace.read().await.config.build.on_save
+                {
+                    if let Err(error) = manager
+                        .start_request(uri, Some((root_uri, generation)))
+                        .await
+                    {
+                        client
+                            .log_message(
+                                MessageType::WARNING,
+                                format!("Queued compilation skipped: {}", error.message),
+                            )
+                            .await;
+                    }
+                }
+            }
         });
-        Ok(json!({"status":"started", "buildId":build_id, "rootUri":root}))
     }
 
     pub fn cancel(&self, root: Option<&Url>) -> usize {
-        let state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap();
         let mut count = 0;
-        for (uri, record) in state.iter() {
+        for (uri, record) in state.iter_mut() {
             if root.is_none_or(|root| root == uri) {
+                record.queued = None;
+                record.cancel_generation = record.cancel_generation.wrapping_add(1);
                 if let Some((_, cancel)) = &record.active {
                     cancel.store(true, Ordering::Relaxed);
                     count += 1;
@@ -244,9 +369,11 @@ impl BuildManager {
         else {
             return;
         };
-        for record in self.state.lock().unwrap().values() {
+        for record in self.state.lock().unwrap().values_mut() {
             if let Some((active, cancel)) = &record.active {
                 if *active == id {
+                    record.queued = None;
+                    record.cancel_generation = record.cancel_generation.wrapping_add(1);
                     cancel.store(true, Ordering::Relaxed);
                 }
             }
@@ -258,8 +385,11 @@ impl BuildManager {
         match state.get(root) {
             Some(Record {
                 active: Some((id, _)),
+                queued,
                 ..
-            }) => json!({"status":"running", "buildId":id, "rootUri":root}),
+            }) => {
+                json!({"status":"running", "buildId":id, "rootUri":root, "queued":queued.is_some()})
+            }
             Some(Record {
                 result: Some(result),
                 ..
@@ -269,16 +399,11 @@ impl BuildManager {
     }
 
     pub async fn shutdown(&self) {
+        self.closing.store(true, Ordering::SeqCst);
         self.cancel(None);
         loop {
             let finished = self.idle.notified();
-            if self
-                .state
-                .lock()
-                .unwrap()
-                .values()
-                .all(|record| record.active.is_none())
-            {
+            if self.tasks.load(Ordering::SeqCst) == 0 {
                 break;
             }
             finished.await;
