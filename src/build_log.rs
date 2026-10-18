@@ -322,21 +322,72 @@ fn emit(
     result: &mut BTreeMap<Url, Vec<Diagnostic>>,
     path: &Path,
     line: u32,
+    message: String,
+    severity: DiagnosticSeverity,
+) {
+    emit_with_context(result, path, line, message, severity, None);
+}
+
+/// A direct TeX error prints the consumed source prefix on its l.N line.
+/// Expansion frames precede that line, so accepting only an immediate source
+/// context avoids blaming a valid macro call for an error in its expansion.
+fn error_context<'a>(lines: &[&'a str], start: usize, number: u32) -> Option<&'a str> {
+    let line = lines
+        .iter()
+        .skip(start)
+        .take(8)
+        .find(|line| !line.trim().is_empty())?;
+    let tail = line.trim_start().strip_prefix("l.")?;
+    let digits = tail.bytes().take_while(u8::is_ascii_digit).count();
+    if tail[..digits].parse::<u32>().ok()? != number {
+        return None;
+    }
+    tail[digits..].strip_prefix(' ')
+}
+
+fn undefined_command_range(text: &Text, line: u32, context: &str) -> Option<Range> {
+    let prefix = context.trim_end();
+    let shortened = prefix.strip_prefix("...");
+    let start = text.offset(Position::new(line, 0))?;
+    let syntax = crate::syntax::Syntax::latex(text);
+    let mut matches = syntax.commands.iter().filter(|command| {
+        if text.position(command.span.start).line != line {
+            return false;
+        }
+        let consumed = &text.source[start..command.span.end];
+        shortened.map_or(consumed == prefix, |suffix| {
+            suffix.ends_with(&text.source[command.span.clone()]) && consumed.ends_with(suffix)
+        })
+    });
+    let command = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+    Some(text.range(command.span.start, command.span.end))
+}
+
+fn emit_with_context(
+    result: &mut BTreeMap<Url, Vec<Diagnostic>>,
+    path: &Path,
+    line: u32,
     mut message: String,
     severity: DiagnosticSeverity,
+    context: Option<&str>,
 ) {
     let Ok(uri) = Url::from_file_path(path) else {
         return;
     };
     // Font/glyph diagnostics often repeat at shipout. Avoid reading and mapping
     // the same source file once for every repetition of an identical warning.
-    if result.get(&uri).is_some_and(|diagnostics| {
-        diagnostics.iter().any(|diagnostic| {
-            diagnostic.message == message
-                && diagnostic.severity == Some(severity)
-                && diagnostic.range.start.line == line.saturating_sub(1)
+    if context.is_none()
+        && result.get(&uri).is_some_and(|diagnostics| {
+            diagnostics.iter().any(|diagnostic| {
+                diagnostic.message == message
+                    && diagnostic.severity == Some(severity)
+                    && diagnostic.range.start.line == line.saturating_sub(1)
+            })
         })
-    }) {
+    {
         return;
     }
     let source = std::fs::read_to_string(path).unwrap_or_default();
@@ -362,6 +413,11 @@ fn emit(
         .sum::<usize>() as u32;
     let end = value.encode_utf16().count() as u32;
     let mut ranges = undefined_reference_ranges(&text, line, &message);
+    let command_range = (message == "Undefined control sequence."
+        && reported_line.checked_sub(1) == Some(line))
+    .then(|| context.and_then(|context| undefined_command_range(&text, line, context)))
+    .flatten();
+    ranges.extend(command_range);
     if let Some(name) = missing_include_key(&message) {
         ranges.extend(missing_include_ranges(&text, name));
         // Optional package inputs also print "No file". Report chapter
@@ -389,6 +445,7 @@ fn emit(
                 source: Some("latex-build".into()),
                 code: box_code(&message)
                     .or_else(|| missing_include_key(&message).map(|_| "missing-include"))
+                    .or_else(|| command_range.map(|_| "undefined-control-sequence"))
                     .map(|code| NumberOrString::String(code.into())),
                 message: message.clone(),
                 data: rewritten.then(|| serde_json::json!({"reportedLine":reported_line})),
@@ -657,7 +714,7 @@ fn continued_file_line<'a>(root: &Path, lines: &[&'a str], i: &mut usize) -> Cow
 pub fn parse(root: &Path, log: &str) -> BTreeMap<Url, Vec<Diagnostic>> {
     let mut result = BTreeMap::new();
     let mut stack: Vec<Option<PathBuf>> = Vec::new();
-    let mut pending: Option<(PathBuf, String)> = None;
+    let mut pending: Option<(PathBuf, String, usize)> = None;
     let lines = log.lines().collect::<Vec<_>>();
     let separator_lines: Vec<_> = lines
         .iter()
@@ -677,7 +734,7 @@ pub fn parse(root: &Path, log: &str) -> BTreeMap<Url, Vec<Diagnostic>> {
     while i < lines.len() {
         let line = lines[i];
         if line == crate::output::TRUNCATED {
-            if let Some((path, message)) = pending.take() {
+            if let Some((path, message, _)) = pending.take() {
                 emit(&mut result, &path, 1, message, DiagnosticSeverity::ERROR);
             }
             stack.clear();
@@ -702,26 +759,34 @@ pub fn parse(root: &Path, log: &str) -> BTreeMap<Url, Vec<Diagnostic>> {
             } else {
                 DiagnosticSeverity::ERROR
             };
-            emit(&mut result, &path, number, message, severity);
+            emit_with_context(
+                &mut result,
+                &path,
+                number,
+                message,
+                severity,
+                error_context(&lines, i + 1, number),
+            );
             pending = None;
         } else if let Some(message) = line.strip_prefix("! ") {
-            if let Some((path, message)) = pending.take() {
+            if let Some((path, message, _)) = pending.take() {
                 emit(&mut result, &path, 1, message, DiagnosticSeverity::ERROR);
             }
             let message = wrapped_error_message(root, &lines, &separator_lines, &mut i, message);
-            pending = Some((current(), message));
+            pending = Some((current(), message, i + 1));
         } else if let Some(tail) = line.trim_start().strip_prefix("l.") {
             let number = tail
                 .split(|ch: char| !ch.is_ascii_digit())
                 .next()
                 .and_then(|value| value.parse().ok());
-            if let (Some(number), Some((path, message))) = (number, pending.take()) {
-                emit(
+            if let (Some(number), Some((path, message, context_start))) = (number, pending.take()) {
+                emit_with_context(
                     &mut result,
                     &path,
                     number,
                     message,
                     DiagnosticSeverity::ERROR,
+                    error_context(&lines, context_start, number),
                 );
             }
         } else if warning_start(line) || line.starts_with("Missing character:") {
@@ -766,7 +831,7 @@ pub fn parse(root: &Path, log: &str) -> BTreeMap<Url, Vec<Diagnostic>> {
         }
         i += 1;
     }
-    if let Some((path, message)) = pending {
+    if let Some((path, message, _)) = pending {
         emit(&mut result, &path, 1, message, DiagnosticSeverity::ERROR);
     }
     for diagnostics in result.values_mut() {
