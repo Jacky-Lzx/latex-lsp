@@ -206,28 +206,28 @@ fn context(doc: &Document, command: &Command, cursor: usize) -> Option<Range<usi
     match command.name.as_str() {
         "setcounter" | "addtocounter" | "stepcounter" | "refstepcounter" | "usecounter"
         | "value" | "arabic" | "roman" | "Roman" | "alph" | "Alph" | "fnsymbol"
-        | "aliascntresetthe" => syntax::active_static_argument(source, at, b'{', cursor),
+        | "aliascntresetthe" => syntax::active_name_argument(source, at, b'{', cursor),
         "counterwithin" | "counterwithout" | "numberwithin" | "@addtoreset"
         | "@removefromreset" => {
             if source.as_bytes().get(at) == Some(&b'[') {
                 at = closed(source, at, b'[')?;
             }
-            syntax::active_static_argument(source, at, b'{', cursor).or_else(|| {
-                syntax::active_static_argument(source, closed(source, at, b'{')?, b'{', cursor)
+            syntax::active_name_argument(source, at, b'{', cursor).or_else(|| {
+                syntax::active_name_argument(source, closed(source, at, b'{')?, b'{', cursor)
             })
         }
         "newcounter" => {
-            syntax::active_static_argument(source, closed(source, at, b'{')?, b'[', cursor)
+            syntax::active_name_argument(source, closed(source, at, b'{')?, b'[', cursor)
         }
         "newaliascnt" => {
-            syntax::active_static_argument(source, closed(source, at, b'{')?, b'{', cursor)
+            syntax::active_name_argument(source, closed(source, at, b'{')?, b'{', cursor)
         }
         "newtheorem" if !starred => {
             at = closed(source, at, b'{')?;
             if source.as_bytes().get(at) == Some(&b'[') {
-                syntax::active_static_argument(source, at, b'[', cursor)
+                syntax::active_name_argument(source, at, b'[', cursor)
             } else {
-                syntax::active_static_argument(source, closed(source, at, b'{')?, b'[', cursor)
+                syntax::active_name_argument(source, closed(source, at, b'{')?, b'[', cursor)
             }
         }
         _ => None,
@@ -249,8 +249,8 @@ pub(crate) fn completion(
         .filter(|command| command.span.end <= cursor)
         .take(128)
         .find_map(|command| context(doc, command, cursor))?;
-    let prefix = &doc.text.source[span.start..cursor];
-    let range = doc.text.range(span.start, span.end);
+    let prefix = doc.text.source[span.start..cursor].trim_start();
+    let (range, additional_edits) = syntax::name_completion_ranges(&doc.text, span, cursor)?;
     Some(
         names(workspace, scope)
             .into_iter()
@@ -263,6 +263,8 @@ pub(crate) fn completion(
                     range,
                     new_text: name,
                 })),
+                additional_text_edits: (!additional_edits.is_empty())
+                    .then(|| additional_edits.clone()),
                 ..Default::default()
             })
             .collect(),

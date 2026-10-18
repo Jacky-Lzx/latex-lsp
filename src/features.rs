@@ -401,6 +401,16 @@ fn argument_context(doc: &Document, offset: usize) -> Option<(&Command, Span<usi
         .iter()
         .rev()
         .find(|cmd| cmd.span.end <= offset)?;
+    if matches!(command.name.as_str(), "begin" | "end") {
+        let span = syntax::active_name_argument(
+            source,
+            syntax::skip_space(source, command.span.end),
+            b'{',
+            offset,
+        )?;
+        let prefix = source[span.start..offset].trim_start();
+        return Some((command, offset - prefix.len()..offset));
+    }
     if command.name == "input" {
         if let Some(argument) = &command.argument {
             if argument.span.start <= offset && offset <= argument.span.end {
@@ -464,7 +474,23 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
             .take_while(|ch| !ch.is_whitespace() && !matches!(ch, '{' | '}' | ',' | '\\' | '%'))
             .map(char::len_utf8)
             .sum::<usize>();
-        let replacement_range = doc.text.range(span.start, offset + suffix_length);
+        let (replacement_range, additional_edits) =
+            if matches!(command.name.as_str(), "begin" | "end") {
+                let Some(name) = syntax::active_name_argument(
+                    &doc.text.source,
+                    syntax::skip_space(&doc.text.source, command.span.end),
+                    b'{',
+                    offset,
+                ) else {
+                    return vec![];
+                };
+                let Some(edits) = syntax::name_completion_ranges(&doc.text, name, offset) else {
+                    return vec![];
+                };
+                edits
+            } else {
+                (doc.text.range(span.start, offset + suffix_length), vec![])
+            };
         let kind = if syntax::is_reference(&command.name) {
             Some(TargetKind::Label)
         } else if syntax::is_citation(&command.name) {
@@ -499,6 +525,7 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
                     .flat_map(|(_, doc)| &doc.syntax.commands)
                     .filter(|cmd| cmd.name == "begin" || syntax::declares_environment(&cmd.name))
                     .filter_map(|cmd| cmd.argument.as_ref())
+                    .filter(|argument| syntax::is_static_key(&argument.value))
                     .map(|arg| (arg.value.clone(), "Document environment".into())),
             );
         } else {
@@ -516,6 +543,8 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
                     range: replacement_range,
                     new_text: name,
                 })),
+                additional_text_edits: (!additional_edits.is_empty())
+                    .then(|| additional_edits.clone()),
                 ..CompletionItem::default()
             })
             .collect();

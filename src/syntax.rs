@@ -412,6 +412,56 @@ pub(crate) fn active_static_argument(
     Some(start..end)
 }
 
+/// Selecting a name completion replaces the entire argument content. Outer
+/// whitespace in that content belongs to the old name, not the selected one.
+pub(crate) fn active_name_argument(
+    source: &str,
+    start: usize,
+    open: u8,
+    cursor: usize,
+) -> Option<Range<usize>> {
+    active_static_argument(source, start, open, cursor)?;
+    let close = if open == b'{' { b'}' } else { b']' };
+    let span = group(source, start, open, close).map_or_else(
+        || {
+            let end = source[cursor..]
+                .find(['\r', '\n'])
+                .map_or(source.len(), |length| cursor + length);
+            start + 1..end
+        },
+        |(argument, _)| argument.span,
+    );
+    let value = source[span.clone()].trim();
+    (value.is_empty() || is_static_key(value)).then_some(span)
+}
+
+/// LSP requires a completion's main edit to stay on the request line.
+pub(crate) fn name_completion_ranges(
+    text: &Text,
+    span: Range<usize>,
+    cursor: usize,
+) -> Option<(tower_lsp::lsp_types::Range, Vec<TextEdit>)> {
+    let line_start = text.source[..cursor].rfind('\n').map_or(0, |at| at + 1);
+    let line_end = text.source[cursor..]
+        .find(['\r', '\n'])
+        .map_or(text.source.len(), |length| cursor + length);
+    let main = span.start.max(line_start)..span.end.min(line_end);
+    // An empty request line between two deletion ranges cannot anchor a
+    // nonoverlapping main insertion. Keep that ambiguous completion unresolved.
+    if main.is_empty() && (span.start < main.start || main.end < span.end) {
+        return None;
+    }
+    let additional = [span.start..main.start, main.end..span.end]
+        .into_iter()
+        .filter(|range| !range.is_empty())
+        .map(|range| TextEdit {
+            range: text.range(range.start, range.end),
+            new_text: String::new(),
+        })
+        .collect();
+    Some((text.range(main.start, main.end), additional))
+}
+
 pub(crate) fn control_word(source: &str, start: usize) -> Option<Range<usize>> {
     if source.as_bytes().get(start) != Some(&b'\\') {
         return None;

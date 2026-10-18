@@ -107,6 +107,18 @@ fn completion_in_the_middle_replaces_the_remaining_word() {
             r"\cite{old, knuth1984}",
         ),
         (r"\begin{ali|gn}", "align", r"\begin{align}"),
+        (r"\begin{ ali|gn }", "align", r"\begin{align}"),
+        (r"\end{ ali|gn }", "align", r"\end{align}"),
+        (
+            "\\begin \r\n{\r\n ali|gn \r\n}x",
+            "align",
+            "\\begin \r\n{align}x",
+        ),
+        (
+            "\\begin{ ali|gn  \r\nBody",
+            "align",
+            "\\begin{align\r\nBody",
+        ),
     ] {
         let offset = marked.find('|').unwrap();
         let source = marked.replace('|', "");
@@ -117,15 +129,57 @@ fn completion_in_the_middle_replaces_the_remaining_word() {
         let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
             panic!("missing completion edit");
         };
+        assert_eq!(edit.range.start.line, edit.range.end.line);
+        assert!(
+            edit.range.start <= text.position(offset) && text.position(offset) <= edit.range.end
+        );
+        let mut edits = item.additional_text_edits.clone().unwrap_or_default();
+        edits.push(edit.clone());
+        edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
+        for pair in edits.windows(2) {
+            assert!(pair[1].range.end <= pair[0].range.start);
+        }
         let result = text
-            .changed(vec![TextDocumentContentChangeEvent {
-                range: Some(edit.range),
-                range_length: None,
-                text: edit.new_text.clone(),
-            }])
+            .changed(
+                edits
+                    .into_iter()
+                    .map(|edit| TextDocumentContentChangeEvent {
+                        range: Some(edit.range),
+                        range_length: None,
+                        text: edit.new_text,
+                    })
+                    .collect(),
+            )
             .unwrap();
         assert_eq!(result.source, expected);
     }
+}
+
+#[test]
+fn environment_name_completion_does_not_guess_computed_names_or_overlap_edits_on_empty_lines() {
+    let mut workspace = Workspace::default();
+    for marked in [
+        r"\begin{ali|\suffix}",
+        r"\begin{ali|gn,other}",
+        "\\begin{\r\n|\r\n}",
+    ] {
+        let at = marked.find('|').unwrap();
+        let source = marked.replace('|', "");
+        let main = insert(&mut workspace, "main.tex", &source);
+        assert!(
+            features::completion(&workspace, &main, Text::new(source).position(at)).is_empty(),
+            "{marked}"
+        );
+    }
+    insert(
+        &mut workspace,
+        "definitions.tex",
+        r"\newenvironment{ panel }{}{}",
+    );
+    let main = insert(&mut workspace, "main.tex", r"\begin{}");
+    let items = features::completion(&workspace, &main, Position::new(0, 7));
+    assert!(items.iter().any(|item| item.label == "align"));
+    assert!(!items.iter().any(|item| item.label.contains("panel")));
 }
 
 #[test]
