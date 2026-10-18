@@ -47,6 +47,46 @@ fn distinct_spaced_label_names_do_not_report_normalized_duplicate_definitions() 
 }
 
 #[test]
+fn hyperdef_labels_share_duplicate_checks_and_refresh_with_ordinary_label_declarations() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    write(
+        root,
+        "a/main.tex",
+        r"\documentclass{article}\label{shared}\input{target}",
+    );
+    write(
+        root,
+        "a/target.tex",
+        r"\hyperdef[{shared}]{category}{name}{Text}",
+    );
+    write(
+        root,
+        "b/main.tex",
+        r"\documentclass{article}\hyperdef[shared]{category}{name}{Other paper}",
+    );
+    let mut workspace = Workspace::default();
+    workspace.add_root(root.into());
+    let main = uri(root, "a/main.tex");
+    let target = uri(root, "a/target.tex");
+    assert_eq!(cross_file(&workspace, &main).len(), 1);
+    let duplicates = cross_file(&workspace, &target);
+    assert_eq!(duplicates.len(), 1);
+    assert_eq!(
+        duplicates[0].range,
+        Range::new(Position::new(0, 11), Position::new(0, 17))
+    );
+    assert!(cross_file(&workspace, &uri(root, "b/main.tex")).is_empty());
+    workspace.open(
+        target.clone(),
+        r"\hyperdef[{unique}]{category}{name}{Text}".into(),
+        1,
+    );
+    assert!(cross_file(&workspace, &main).is_empty());
+    assert!(cross_file(&workspace, &target).is_empty());
+}
+
+#[test]
 fn duplicate_labels_and_bibliography_keys_report_related_definitions_in_the_same_project() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();

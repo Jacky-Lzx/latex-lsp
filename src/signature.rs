@@ -134,6 +134,15 @@ fn builtin(name: &str) -> Option<Signature> {
         "begin" | "end" => (&[("environment", false)], false),
         "label" => (&[("key", false)], false),
         "hyperref" => (&[("key", true), ("text", false)], false),
+        "hyperdef" => (
+            &[
+                ("key", true),
+                ("category", false),
+                ("name", false),
+                ("text", false),
+            ],
+            false,
+        ),
         "newcounter" => (&[("name", false), ("within", true)], false),
         "newboolean" | "provideboolean" | "newbool" | "providebool" | "boolean" | "booltrue"
         | "boolfalse" => (&[("boolean", false)], false),

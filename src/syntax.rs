@@ -273,7 +273,7 @@ pub(crate) fn separate_label_argument_start(
     source: &str,
     command: &Command,
 ) -> Option<(usize, u8)> {
-    if command.name == "hyperref" {
+    if matches!(command.name.as_str(), "hyperref" | "hyperdef") {
         let start = skip_space(source, command.span.end);
         if source.as_bytes().get(start) != Some(&b'[') {
             return None;
@@ -294,7 +294,7 @@ pub(crate) fn separate_label_argument_start(
 }
 
 pub(crate) fn separate_label_argument(source: &str, command: &Command) -> Option<Argument> {
-    if command.name != "hyperref" {
+    if !matches!(command.name.as_str(), "hyperref" | "hyperdef") {
         return counter_reference_label(source, command);
     }
     let outer_start = skip_space(source, command.span.end);
@@ -309,7 +309,7 @@ pub(crate) fn separate_label_argument(source: &str, command: &Command) -> Option
 }
 
 pub(crate) fn label_name_text(source: &str, command: &Command, name: &str) -> String {
-    if command.name == "hyperref"
+    if matches!(command.name.as_str(), "hyperref" | "hyperdef")
         && name.contains(['[', ']'])
         && separate_label_argument_start(source, command).is_some_and(|(_, open)| open == b'[')
     {
@@ -331,7 +331,7 @@ pub(crate) fn label_replacement_text(
     commands
         .iter()
         .find(|command| {
-            command.name == "hyperref"
+            matches!(command.name.as_str(), "hyperref" | "hyperdef")
                 && separate_label_argument(&text.source, command).is_some_and(|argument| {
                     text.range(argument.span.start, argument.span.end) == range
                 })
@@ -801,6 +801,18 @@ impl Syntax {
                         span: start..command_end,
                         argument,
                     };
+                    if name == "hyperdef" {
+                        if let Some(argument) = separate_label_argument(source, &command)
+                            .filter(|argument| is_static_key(&argument.value))
+                        {
+                            result.labels.push(Entry {
+                                name: argument.value,
+                                span: argument.span,
+                                detail: "Defined with \\hyperdef".into(),
+                                is_variable: false,
+                            });
+                        }
+                    }
                     let declaration = if declares_command(name) {
                         if let Some(argument) = &command.argument {
                             let span = trimmed_span(source, argument.span.clone());

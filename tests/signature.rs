@@ -71,6 +71,29 @@ fn hyperref_signatures_distinguish_label_links_from_four_argument_urls() {
 }
 
 #[test]
+fn hyperdef_signatures_offer_optional_labels_and_separate_destination_fields() {
+    for (marked, active) in [
+        (r"\hyperdef[sec:¦intro]{section}{1}{Text}", 0),
+        (r"\hyperdef[sec:intro]{sec¦tion}{1}{Text}", 1),
+        (r"\hyperdef{section}{na¦me}{Text}", 2),
+        (r"\hyperdef[{sec:intro]}]{section}{1}{Te¦xt}", 3),
+    ] {
+        check("", marked, r"\hyperdef[key]{category}{name}{text}", active);
+    }
+    let (mut workspace, uri, position) = setup("", r"\hyperd¦");
+    workspace.snippets = true;
+    let items = latex_lsp::features::completion(&workspace, &uri, position);
+    let item = items.iter().find(|item| item.label == "hyperdef").unwrap();
+    let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+        panic!("missing edit")
+    };
+    assert_eq!(
+        edit.new_text,
+        "hyperdef[${1:key}]{${2:category}}{${3:name}}{${4:text}}"
+    );
+}
+
+#[test]
 fn refcount_queries_offer_label_field_default_and_branch_parameters() {
     for (marked, label, active) in [
         (r"\getrefnumber{key¦}", r"\getrefnumber{key}", 0),

@@ -268,6 +268,147 @@ fn real_hyperref_renames_wrap_delimiters_and_preserve_grouped_links_across_repea
 }
 
 #[test]
+fn hyperdef_labels_join_reference_navigation_and_rename_without_changing_destinations_or_text() {
+    for grouped in [false, true] {
+        let mut workspace = Workspace::default();
+        let source = format!(
+            "\\hyperdef[{}]{{sec:old}}{{sec:old}}{{sec:old}}",
+            if grouped { "{sec:old}" } else { "sec:old" }
+        );
+        let declaration = insert(&mut workspace, "targets.tex", &source, None);
+        let uses = r"\hyperref[sec:old]{sec:old}\ref{sec:old}\getrefnumber{sec:old}";
+        let main = insert(&mut workspace, "main.tex", uses, Some(3));
+        let declaration_position = workspace.documents[&declaration]
+            .text
+            .position(source.find("sec:old").unwrap() + 3);
+        let position = workspace.documents[&main]
+            .text
+            .position(uses.find("sec:old").unwrap() + 3);
+        let definitions = features::definitions(&workspace, &main, position);
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].uri, declaration);
+        assert!(features::hover(&workspace, &main, position).is_some());
+        assert!(features::completion(&workspace, &main, position)
+            .iter()
+            .any(|item| item.label == "sec:old"));
+        assert_eq!(
+            features::references(&workspace, &declaration, declaration_position, false).len(),
+            3
+        );
+        for (document, position) in [(&declaration, declaration_position), (&main, position)] {
+            let changes = features::rename(&workspace, document, position, "sec:new]")
+                .unwrap()
+                .unwrap()
+                .changes
+                .unwrap();
+            assert_eq!(
+                edits_result(&source, &changes[&declaration]),
+                r"\hyperdef[{sec:new]}]{sec:old}{sec:old}{sec:old}"
+            );
+            assert_eq!(
+                edits_result(uses, &changes[&main]),
+                r"\hyperref[{sec:new]}]{sec:old}\ref{sec:new]}\getrefnumber{sec:new]}"
+            );
+        }
+        let after_label = source.find(']').unwrap() + 1;
+        for (at, _) in source[after_label..].match_indices("sec:old") {
+            let at = after_label + at + 3;
+            assert!(features::prepare_rename(
+                &workspace,
+                &declaration,
+                workspace.documents[&declaration].text.position(at)
+            )
+            .unwrap()
+            .is_none());
+        }
+    }
+    for source in [
+        r"\hyperdef{sec:old}{name}{Text}",
+        r"\hyperdef*[sec:old]{category}{name}{Text}",
+        r"\hyperdef[ sec:old ]{category}{name}{Text}",
+        r"\hyperdef[\prefix sec:old]{category}{name}{Text}",
+        r"% \hyperdef[sec:old]{category}{name}{Text}",
+        r"\verb|\hyperdef[sec:old]{category}{name}{Text}|",
+    ] {
+        let mut workspace = Workspace::default();
+        let uri = insert(&mut workspace, "main.tex", source, None);
+        assert!(
+            workspace.documents[&uri].syntax.labels.is_empty(),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex and hyperref"]
+fn real_hyperdef_label_renames_keep_the_pdf_destination_and_resolve_custom_links() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = root.join("main.tex");
+    let definitions = root.join("targets.tex");
+    let child = root.join("chapter.tex");
+    std::fs::write(&main, "\\documentclass{article}\\usepackage{hyperref}\\begin{document}\\input{targets}\\input{chapter}\\end{document}\n").unwrap();
+    std::fs::write(&definitions, r"\hyperdef[sec:old]{section}{anchor}{Target}").unwrap();
+    std::fs::write(
+        &child,
+        r"\hyperref[sec:old]{Link}\hyperref[{sec:old}]{Grouped}",
+    )
+    .unwrap();
+    let config = latex_lsp::config::BuildConfig {
+        executable: "pdflatex".into(),
+        ..Default::default()
+    };
+    let mut old_name = "sec:old";
+    for (path, name) in [(&child, "sec:new]"), (&definitions, "sec:[中文")] {
+        let mut workspace = Workspace::default();
+        workspace.add_root(root.into());
+        let document = Url::from_file_path(path).unwrap();
+        let text = &workspace.documents[&document].text;
+        let position = text.position(text.source.find(old_name).unwrap() + 3);
+        let changes = features::rename(&workspace, &document, position, name)
+            .unwrap()
+            .unwrap()
+            .changes
+            .unwrap();
+        assert_eq!(changes.len(), 2);
+        for (uri, edits) in changes {
+            std::fs::write(
+                uri.to_file_path().unwrap(),
+                edits_result(&workspace.documents[&uri].text.source, &edits),
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            std::fs::read_to_string(&definitions).unwrap(),
+            format!("\\hyperdef[{{{name}}}]{{section}}{{anchor}}{{Target}}")
+        );
+        for _ in 0..2 {
+            let result = latex_lsp::build::run(&main, &config, &Default::default());
+            assert_eq!(result.status, "success", "{}", result.output);
+        }
+        let result = latex_lsp::build::run(&main, &config, &Default::default());
+        assert!(
+            !result
+                .diagnostics
+                .values()
+                .flatten()
+                .any(|diagnostic| diagnostic.message.contains("undefined")),
+            "{:?}",
+            result.diagnostics
+        );
+        let auxiliary =
+            std::fs::read_to_string(config.artifact_path(&main, "aux").unwrap()).unwrap();
+        assert!(
+            auxiliary.contains(&format!(
+                "\\newlabel{{{name}}}{{{{}}{{}}{{}}{{section.anchor}}{{}}}}"
+            )),
+            "{auxiliary}"
+        );
+        old_name = name;
+    }
+}
+
+#[test]
 fn refcount_queries_navigate_complete_and_rename_only_the_label_argument() {
     for (command, tail) in [
         ("getrefnumber", ""),
