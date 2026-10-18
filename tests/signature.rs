@@ -37,6 +37,21 @@ fn check(definitions: &str, marked: &str, label: &str, active: u32) {
 #[test]
 fn builtin_signatures_select_nested_arguments_and_skip_omitted_optional_parameters() {
     for (source, label, active) in [
+        (r"\newtoggle{draft¦}", r"\newtoggle{toggle}", 0),
+        (r"\providetoggle{draft¦}", r"\providetoggle{toggle}", 0),
+        (r"\toggletrue{draft¦}", r"\toggletrue{toggle}", 0),
+        (r"\togglefalse{draft¦}", r"\togglefalse{toggle}", 0),
+        (r"\settoggle{draft}{tr¦}", r"\settoggle{toggle}{value}", 1),
+        (
+            r"\iftoggle{draft}{Y¦}{N}",
+            r"\iftoggle{toggle}{then}{else}",
+            1,
+        ),
+        (
+            r"\nottoggle{draft}{N}{Y¦}",
+            r"\nottoggle{toggle}{then}{else}",
+            2,
+        ),
         (r"\frac{a}{b¦}", r"\frac{numerator}{denominator}", 1),
         (r"\includeonly{first, chap¦}", r"\includeonly{files}", 0),
         (r"😀 \frac{😀}{😀¦}", r"\frac{numerator}{denominator}", 1),

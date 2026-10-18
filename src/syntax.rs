@@ -61,6 +61,7 @@ pub struct Syntax {
     pub environments: Vec<Entry>,
     pub counters: Vec<Entry>,
     pub conditionals: Vec<Entry>,
+    pub toggles: Vec<Entry>,
     pub diagnostics: Vec<Diagnostic>,
     pub ignored: Vec<Range<usize>>,
     pub fixes: Vec<QuickFix>,
@@ -447,6 +448,17 @@ pub(crate) fn boolean_reference(name: &str) -> bool {
     )
 }
 
+pub(crate) fn declares_toggle(name: &str) -> bool {
+    matches!(name, "newtoggle" | "providetoggle")
+}
+
+pub(crate) fn toggle_reference(name: &str) -> bool {
+    matches!(
+        name,
+        "settoggle" | "toggletrue" | "togglefalse" | "iftoggle" | "nottoggle"
+    )
+}
+
 pub fn is_citation(name: &str) -> bool {
     matches!(
         name,
@@ -760,6 +772,19 @@ impl Syntax {
             }
         }
         for command in &result.commands {
+            if declares_toggle(&command.name) {
+                if let Some(argument) = &command.argument {
+                    let span = trimmed_span(source, argument.span.clone());
+                    if is_static_key(&source[span.clone()]) {
+                        result.toggles.push(Entry {
+                            name: source[span.clone()].into(),
+                            span,
+                            detail: format!("Defined with \\{}", command.name),
+                            is_variable: false,
+                        });
+                    }
+                }
+            }
             if let Some(span) = conditional_declaration(source, &result.commands, command) {
                 result.conditionals.push(Entry {
                     name: source[span.clone()].into(),
@@ -1121,6 +1146,7 @@ mod tests {
                             .chain(&syntax.environments)
                             .chain(&syntax.counters)
                             .chain(&syntax.conditionals)
+                            .chain(&syntax.toggles)
                             .map(|entry| entry.span.clone()),
                     )
                     .chain(syntax.ignored.iter().cloned());

@@ -17,6 +17,7 @@ enum TargetKind {
     Environment,
     Counter,
     Conditional,
+    Toggle,
 }
 
 impl TargetKind {
@@ -25,6 +26,7 @@ impl TargetKind {
             Self::Environment => Some(crate::generated::Kind::Environment),
             Self::Counter => Some(crate::generated::Kind::Counter),
             Self::Conditional => Some(crate::generated::Kind::Conditional),
+            Self::Toggle => Some(crate::generated::Kind::Toggle),
             _ => None,
         }
     }
@@ -120,6 +122,7 @@ fn target<'a>(workspace: &'a Workspace, uri: &Url, offset: usize) -> Option<Targ
         (TargetKind::Environment, crate::generated::Kind::Environment),
         (TargetKind::Counter, crate::generated::Kind::Counter),
         (TargetKind::Conditional, crate::generated::Kind::Conditional),
+        (TargetKind::Toggle, crate::generated::Kind::Toggle),
     ] {
         if let Some((name, span)) = crate::generated::target(
             workspace,
@@ -159,6 +162,7 @@ fn entries(doc: &Document, kind: TargetKind) -> &[Entry] {
         TargetKind::Environment => &doc.syntax.environments,
         TargetKind::Counter => &doc.syntax.counters,
         TargetKind::Conditional => &doc.syntax.conditionals,
+        TargetKind::Toggle => &doc.syntax.toggles,
     }
 }
 
@@ -797,10 +801,8 @@ fn all_references(
                 crate::generated::references(doc, target.name, model)
                     .into_iter()
                     .filter(|reference| {
-                        target.kind != TargetKind::Conditional
-                            || !doc
-                                .syntax
-                                .conditionals
+                        !matches!(target.kind, TargetKind::Conditional | TargetKind::Toggle)
+                            || !entries(doc, target.kind)
                                 .iter()
                                 .any(|entry| entry.span == reference.span)
                     })
@@ -874,7 +876,7 @@ fn all_references(
                 TargetKind::Label => syntax::is_reference(&command.name),
                 TargetKind::Citation => syntax::is_citation(&command.name),
                 TargetKind::Command => false,
-                TargetKind::Counter | TargetKind::Conditional => false,
+                TargetKind::Counter | TargetKind::Conditional | TargetKind::Toggle => false,
                 TargetKind::Environment => matches!(command.name.as_str(), "begin" | "end"),
             };
             if !matches {
@@ -1018,6 +1020,7 @@ pub fn symbols(doc: &Document) -> Vec<DocumentSymbol> {
         (&doc.syntax.environments, SymbolKind::CLASS),
         (&doc.syntax.counters, SymbolKind::VARIABLE),
         (&doc.syntax.conditionals, SymbolKind::BOOLEAN),
+        (&doc.syntax.toggles, SymbolKind::BOOLEAN),
     ] {
         result.extend(entries.iter().map(|entry| DocumentSymbol {
             name: entry.name.clone(),

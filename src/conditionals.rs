@@ -1,4 +1,4 @@
-//! Completion for the named boolean APIs of ifthen and etoolbox.
+//! Completion and expression operands for named booleans and etoolbox toggles.
 use crate::{syntax, workspace::Workspace};
 use std::collections::{BTreeMap, BTreeSet};
 use tower_lsp::lsp_types::*;
@@ -8,6 +8,7 @@ enum ArgumentKind {
     Assignable,
     Test,
     Value,
+    Toggle,
 }
 
 fn expression(name: &str) -> bool {
@@ -17,23 +18,24 @@ fn expression(name: &str) -> bool {
     )
 }
 
-fn boolean_token(mut token: &str) -> bool {
+fn operand_token(mut token: &str) -> Option<bool> {
     loop {
-        if token == "bool" {
-            return true;
+        if matches!(token, "bool" | "togl") {
+            return Some(token == "togl");
         }
-        let Some(rest) = token
+        let rest = token
             .strip_prefix("not")
             .or_else(|| token.strip_prefix("and"))
-            .or_else(|| token.strip_prefix("or"))
-        else {
-            return false;
-        };
+            .or_else(|| token.strip_prefix("or"))?;
         token = rest;
     }
 }
 
-fn operand_starts(source: &str, command: &syntax::Command, cursor: Option<usize>) -> Vec<usize> {
+fn operand_starts(
+    source: &str,
+    command: &syntax::Command,
+    cursor: Option<usize>,
+) -> Vec<(usize, bool)> {
     if !expression(&command.name) {
         return vec![];
     }
@@ -90,10 +92,10 @@ fn operand_starts(source: &str, command: &syntax::Command, cursor: Option<usize>
                     i += source[i..].chars().next().unwrap().len_utf8();
                     continue;
                 }
-                if boolean_token(&source[start..i]) {
+                if let Some(toggle) = operand_token(&source[start..i]) {
                     let argument = syntax::skip_space(source, i);
                     if source.as_bytes().get(argument) == Some(&b'{') && argument < end {
-                        result.push(argument);
+                        result.push((argument, toggle));
                         i = syntax::group(source, argument, b'{', b'}')
                             .map_or(end, |(_, after)| after.min(end));
                     }
@@ -107,10 +109,14 @@ fn operand_starts(source: &str, command: &syntax::Command, cursor: Option<usize>
 pub(crate) fn expression_arguments(
     source: &str,
     command: &syntax::Command,
+    toggle: bool,
 ) -> Vec<syntax::Argument> {
     operand_starts(source, command, None)
         .into_iter()
-        .filter_map(|start| syntax::group(source, start, b'{', b'}').map(|(argument, _)| argument))
+        .filter(|(_, operand_toggle)| *operand_toggle == toggle)
+        .filter_map(|(start, _)| {
+            syntax::group(source, start, b'{', b'}').map(|(argument, _)| argument)
+        })
         .collect()
 }
 
@@ -129,25 +135,44 @@ pub(crate) fn completion(
         .rev()
         .filter(|command| command.span.end <= cursor)
         .take(128)
-        .filter(|command| syntax::boolean_reference(&command.name) || expression(&command.name))
+        .filter(|command| {
+            syntax::boolean_reference(&command.name)
+                || syntax::toggle_reference(&command.name)
+                || expression(&command.name)
+        })
         .find_map(|command| {
             if expression(&command.name) {
                 return operand_starts(source, command, Some(cursor))
                     .into_iter()
                     .rev()
-                    .find_map(|start| syntax::active_static_argument(source, start, b'{', cursor))
-                    .map(|span| (span, ArgumentKind::Test));
+                    .find_map(|(start, toggle)| {
+                        syntax::active_static_argument(source, start, b'{', cursor).map(|span| {
+                            (
+                                span,
+                                if toggle {
+                                    ArgumentKind::Toggle
+                                } else {
+                                    ArgumentKind::Test
+                                },
+                            )
+                        })
+                    });
             }
             let start = syntax::skip_space(source, command.span.end);
             if let Some(span) = syntax::active_static_argument(source, start, b'{', cursor) {
-                let kind = if matches!(command.name.as_str(), "boolean" | "ifbool" | "notbool") {
+                let kind = if syntax::toggle_reference(&command.name) {
+                    ArgumentKind::Toggle
+                } else if matches!(command.name.as_str(), "boolean" | "ifbool" | "notbool") {
                     ArgumentKind::Test
                 } else {
                     ArgumentKind::Assignable
                 };
                 return Some((span, kind));
             }
-            if !matches!(command.name.as_str(), "setboolean" | "setbool") {
+            if !matches!(
+                command.name.as_str(),
+                "setboolean" | "setbool" | "settoggle"
+            ) {
                 return None;
             }
             let (_, end) = syntax::group(source, start, b'{', b'}')?;
@@ -157,7 +182,7 @@ pub(crate) fn completion(
     let mut candidates = BTreeMap::new();
     // Primitive iftrue/iffalse have no setters. Offer them for tests and
     // values, while assignments require an explicitly declared boolean.
-    if kind != ArgumentKind::Assignable {
+    if matches!(kind, ArgumentKind::Test | ArgumentKind::Value) {
         candidates.insert("true".to_owned(), "True boolean value".to_owned());
         candidates.insert("false".to_owned(), "False boolean value".to_owned());
     }
@@ -166,7 +191,12 @@ pub(crate) fn completion(
             if !scope.contains(uri) {
                 continue;
             }
-            for entry in &doc.syntax.conditionals {
+            let entries = if kind == ArgumentKind::Toggle {
+                &doc.syntax.toggles
+            } else {
+                &doc.syntax.conditionals
+            };
+            for entry in entries {
                 candidates.insert(
                     entry.name.clone(),
                     format!("{} — {}", entry.detail, uri.path()),

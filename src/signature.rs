@@ -109,6 +109,14 @@ fn builtin(name: &str) -> Option<Signature> {
         "newboolean" | "provideboolean" | "newbool" | "providebool" | "boolean" | "booltrue"
         | "boolfalse" => (&[("boolean", false)], false),
         "setboolean" | "setbool" => (&[("boolean", false), ("value", false)], false),
+        "newtoggle" | "providetoggle" | "toggletrue" | "togglefalse" => {
+            (&[("toggle", false)], false)
+        }
+        "settoggle" => (&[("toggle", false), ("value", false)], false),
+        "iftoggle" | "nottoggle" => (
+            &[("toggle", false), ("then", false), ("else", false)],
+            false,
+        ),
         "ifbool" | "notbool" => (
             &[("boolean", false), ("then", false), ("else", false)],
             false,

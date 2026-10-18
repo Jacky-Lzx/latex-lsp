@@ -14,6 +14,7 @@ pub(crate) enum Kind {
     Environment,
     Counter,
     Conditional,
+    Toggle,
 }
 
 #[derive(Clone, Copy)]
@@ -43,6 +44,23 @@ struct Declaration<'a> {
 }
 
 fn declaration<'a>(doc: &'a Document, command: &Command) -> Option<Declaration<'a>> {
+    if syntax::declares_toggle(&command.name) {
+        let name = doc.text.source[command.argument.as_ref()?.span.clone()].trim();
+        if !syntax::is_static_key(name) {
+            return None;
+        }
+        return Some(Declaration {
+            name,
+            environment: Generated {
+                kind: Kind::Toggle,
+                numbered: false,
+                owns_counter: false,
+                alias: false,
+            },
+            shared: None,
+            within: None,
+        });
+    }
     if let Some(span) =
         syntax::conditional_declaration(&doc.text.source, &doc.syntax.commands, command)
     {
@@ -155,6 +173,9 @@ pub(crate) fn in_scope(
 
 fn generated_names(name: &str, environment: Generated) -> Vec<(String, usize)> {
     let mut names = Vec::new();
+    if environment.kind == Kind::Toggle {
+        return vec![(format!("etb@tgl@{name}"), 8)];
+    }
     if environment.kind == Kind::Conditional {
         return conditional_names(name).into_iter().zip([2, 0, 0]).collect();
     }
@@ -219,18 +240,24 @@ pub(crate) fn references(doc: &Document, name: &str, environment: Generated) -> 
             }
         }
         let mut arguments = Vec::new();
-        if environment.kind == Kind::Conditional {
+        if matches!(environment.kind, Kind::Conditional | Kind::Toggle) {
             arguments.extend(crate::conditionals::expression_arguments(
                 &doc.text.source,
                 command,
+                environment.kind == Kind::Toggle,
             ));
+        }
+        if environment.kind == Kind::Toggle
+            && (syntax::declares_toggle(&command.name) || syntax::toggle_reference(&command.name))
+        {
+            arguments.extend(command.argument.iter().cloned());
         }
         if environment.kind == Kind::Conditional
             && (syntax::declares_boolean(&command.name) || syntax::boolean_reference(&command.name))
         {
             arguments.extend(command.argument.iter().cloned());
         }
-        if environment.kind != Kind::Conditional
+        if matches!(environment.kind, Kind::Environment | Kind::Counter)
             && matches!(command.name.as_str(), "crefname" | "Crefname")
         {
             arguments.extend(command.argument.iter().cloned());

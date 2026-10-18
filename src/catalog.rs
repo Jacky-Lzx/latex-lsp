@@ -50,6 +50,41 @@ pub(crate) const PRIMITIVES: &[&str] = &[
 /// Templates retain literal TeX backslashes; completion escapes them for the client.
 pub const COMMANDS: &[(&str, &str, &str)] = &[
     (
+        "newtoggle",
+        "newtoggle{${1:toggle}}",
+        "Declare an etoolbox toggle.",
+    ),
+    (
+        "providetoggle",
+        "providetoggle{${1:toggle}}",
+        "Declare an etoolbox toggle unless it exists.",
+    ),
+    (
+        "settoggle",
+        "settoggle{${1:toggle}}{${2:true}}",
+        "Set an etoolbox toggle to true or false.",
+    ),
+    (
+        "toggletrue",
+        "toggletrue{${1:toggle}}",
+        "Set an etoolbox toggle to true.",
+    ),
+    (
+        "togglefalse",
+        "togglefalse{${1:toggle}}",
+        "Set an etoolbox toggle to false.",
+    ),
+    (
+        "iftoggle",
+        "iftoggle{${1:toggle}}{${2:then}}{${3:else}}",
+        "Choose branches using an etoolbox toggle.",
+    ),
+    (
+        "nottoggle",
+        "nottoggle{${1:toggle}}{${2:then}}{${3:else}}",
+        "Choose branches using the negation of an etoolbox toggle.",
+    ),
+    (
         "ifboolexpr",
         "ifboolexpr{bool {${1:boolean}}}{${2:then}}{${3:else}}",
         "Choose branches using an etoolbox boolean expression.",
