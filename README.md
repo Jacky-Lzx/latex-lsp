@@ -167,7 +167,7 @@ end
 }
 ```
 
-反查也用源文件 `uri` 识别项目，返回 `{rootUri, pdfUri, locations: [Location, ...]}`，其中 `Location` 是可交给编辑器跳转的标准 LSP 位置，范围位于对应行首。查询可能返回多个候选或空列表，服务器不会自动启动 PDF 阅读器或编辑器。查询在后台执行，最多运行 5 秒、返回 256 项；要求输出目录内已有 PDF 和 `.synctex.gz` 或 `.synctex`。项目存在未保存内容、来源晚于同步记录，或者当前编译运行中/最近编译未成功时，会要求保存并重新编译。
+反查也用源文件 `uri` 识别项目，返回 `{rootUri, pdfUri, locations: [Location, ...]}`，其中 `Location` 是可交给编辑器跳转的标准 LSP 位置，范围位于对应行首。查询可能返回多个候选或空列表，服务器不会自动启动 PDF 阅读器或编辑器。查询在后台执行，最多同时运行 4 个，每次最多运行 5 秒、返回 256 项；期间仍可编辑和发送其他请求。标准 `$/cancelRequest`、超时和 shutdown 会终止查询进程及其子进程，返回前会再次检查来源和产物。要求输出目录内已有 PDF 和 `.synctex.gz` 或 `.synctex`。项目存在未保存内容、来源晚于同步记录，或者当前编译运行中/最近编译未成功时，会要求保存并重新编译。
 
 ## 开发
 
@@ -181,7 +181,7 @@ cargo test --locked -- --include-ignored
 
 测试包含 UTF-16/增量编辑、语法容错、跨文件导航、文献补全、磁盘/未保存内容同步，以及启动真实进程验证的 stdio 协议流程。
 
-代码按职责拆分：`text.rs` 处理位置与编辑，`syntax.rs` 解析 LaTeX/BibTeX，`workspace.rs` 管理文件索引与根文档，`features.rs` 实现语言功能，`navigation.rs` 处理工作区搜索、折叠和链接，`editing.rs` 处理快速修复、高亮和选择范围，`file_operations.rs` 维护文件移动后的引用，`build.rs` 管理后台编译，`build_log.rs` 分析日志，`recorder.rs` 读取实际输入记录，`synctex.rs` 查询源码/PDF 映射，`config.rs` 校验配置，`lib.rs` 对接 LSP，`main.rs` 启动服务。
+代码按职责拆分：`text.rs` 处理位置与编辑，`syntax.rs` 解析 LaTeX/BibTeX，`workspace.rs` 管理文件索引与根文档，`features.rs` 实现语言功能，`navigation.rs` 处理工作区搜索、折叠和链接，`editing.rs` 处理快速修复、高亮和选择范围，`file_operations.rs` 维护文件移动后的引用，`build.rs` 管理后台编译，`build_log.rs` 分析日志，`recorder.rs` 读取实际输入记录，`synctex.rs` 查询源码/PDF 映射，`config.rs` 校验配置，`dispatch.rs` 保留消息顺序并释放耗时查询的等待，`lib.rs` 对接 LSP，`main.rs` 启动服务。
 
 ## 当前范围
 

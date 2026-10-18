@@ -3,17 +3,138 @@ use std::{
     collections::BTreeMap,
     path::PathBuf,
     process::{Command, Stdio},
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc,
+    },
     time::{Duration, Instant, SystemTime},
 };
 
 use serde::Deserialize;
 use serde_json::{json, Value};
+use tokio::sync::{Notify, Semaphore};
 use tower_lsp::{
     jsonrpc::{Error, Result},
     lsp_types::*,
 };
 
 use crate::workspace::Workspace;
+
+pub struct Queries {
+    slots: Arc<Semaphore>,
+    closing: Arc<AtomicBool>,
+    active: Arc<AtomicUsize>,
+    idle: Arc<Notify>,
+}
+
+impl Default for Queries {
+    fn default() -> Self {
+        Self {
+            slots: Arc::new(Semaphore::new(4)),
+            closing: Arc::default(),
+            active: Arc::default(),
+            idle: Arc::default(),
+        }
+    }
+}
+
+struct Cancellation {
+    request: Arc<AtomicBool>,
+    closing: Arc<AtomicBool>,
+}
+
+impl Cancellation {
+    fn cancelled(&self) -> bool {
+        self.request.load(Ordering::SeqCst) || self.closing.load(Ordering::SeqCst)
+    }
+}
+
+pub struct QueryTask {
+    handle: tokio::task::JoinHandle<Result<Value>>,
+    cancel: Arc<AtomicBool>,
+}
+
+impl QueryTask {
+    pub async fn wait(&mut self) -> Result<Value> {
+        (&mut self.handle)
+            .await
+            .map_err(|error| Error::invalid_params(format!("SyncTeX task failed: {error}")))?
+    }
+}
+
+impl Drop for QueryTask {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::SeqCst);
+    }
+}
+
+struct ActiveQuery {
+    active: Arc<AtomicUsize>,
+    idle: Arc<Notify>,
+}
+
+impl Drop for ActiveQuery {
+    fn drop(&mut self) {
+        self.active.fetch_sub(1, Ordering::SeqCst);
+        self.idle.notify_one();
+    }
+}
+
+impl Queries {
+    pub fn start(&self, project: Project, value: Value, inverse_search: bool) -> Result<QueryTask> {
+        enum Request {
+            Forward(ForwardRequest),
+            Inverse(InverseRequest),
+        }
+        let request = if inverse_search {
+            Request::Inverse(serde_json::from_value(value).map_err(|error| {
+                Error::invalid_params(format!("Invalid inverse search request: {error}"))
+            })?)
+        } else {
+            Request::Forward(serde_json::from_value(value).map_err(|error| {
+                Error::invalid_params(format!("Invalid forward search request: {error}"))
+            })?)
+        };
+        let permit = self.slots.clone().try_acquire_owned().map_err(|_| {
+            Error::invalid_params("Too many concurrent SyncTeX queries; retry shortly")
+        })?;
+        if self.closing.load(Ordering::SeqCst) {
+            return Err(Error::invalid_request());
+        }
+        self.active.fetch_add(1, Ordering::SeqCst);
+        let guard = ActiveQuery {
+            active: self.active.clone(),
+            idle: self.idle.clone(),
+        };
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancellation = Cancellation {
+            request: cancel.clone(),
+            closing: self.closing.clone(),
+        };
+        let handle = tokio::task::spawn_blocking(move || {
+            let (_permit, _guard) = (permit, guard);
+            if cancellation.cancelled() {
+                return Err(Error::request_cancelled());
+            }
+            match request {
+                Request::Forward(request) => forward(&project, &request, &cancellation),
+                Request::Inverse(request) => inverse(&project, &request, &cancellation),
+            }
+        });
+        Ok(QueryTask { handle, cancel })
+    }
+
+    pub async fn shutdown(&self) {
+        self.closing.store(true, Ordering::SeqCst);
+        loop {
+            let idle = self.idle.notified();
+            if self.active.load(Ordering::SeqCst) == 0 {
+                break;
+            }
+            idle.await;
+        }
+    }
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -113,7 +234,7 @@ pub fn prepare(workspace: &Workspace, uri: &Url) -> Result<Project> {
     })
 }
 
-pub fn forward(project: &Project, request: &ForwardRequest) -> Result<Value> {
+fn forward(project: &Project, request: &ForwardRequest, cancel: &Cancellation) -> Result<Value> {
     let source = request
         .uri
         .to_file_path()
@@ -142,6 +263,7 @@ pub fn forward(project: &Project, request: &ForwardRequest) -> Result<Value> {
             "-o".into(),
             project.pdf.to_string_lossy().into_owned(),
         ],
+        cancel,
     )?;
     let locations = parse_forward(&output);
     Ok(
@@ -149,7 +271,7 @@ pub fn forward(project: &Project, request: &ForwardRequest) -> Result<Value> {
     )
 }
 
-pub fn inverse(project: &Project, request: &InverseRequest) -> Result<Value> {
+fn inverse(project: &Project, request: &InverseRequest, cancel: &Cancellation) -> Result<Value> {
     if request.page == 0
         || !request.x.is_finite()
         || !request.y.is_finite()
@@ -173,6 +295,7 @@ pub fn inverse(project: &Project, request: &InverseRequest) -> Result<Value> {
                 project.pdf.display()
             ),
         ],
+        cancel,
     )?;
     let locations = parse_inverse(project, &output);
     Ok(
@@ -180,7 +303,7 @@ pub fn inverse(project: &Project, request: &InverseRequest) -> Result<Value> {
     )
 }
 
-fn query(project: &Project, arguments: &[String]) -> Result<String> {
+fn query(project: &Project, arguments: &[String], cancel: &Cancellation) -> Result<String> {
     let mut command = Command::new("synctex");
     command
         .args(arguments)
@@ -207,11 +330,18 @@ fn query(project: &Project, arguments: &[String]) -> Result<String> {
     let stderr = std::thread::spawn(move || crate::build::capture(stderr));
     let started = Instant::now();
     let result = loop {
+        if cancel.cancelled() {
+            break Err(Error::request_cancelled());
+        }
         match child.try_wait() {
             Ok(Some(status)) => break Ok(status),
-            Err(error) => break Err(format!("Cannot wait for synctex: {error}")),
+            Err(error) => {
+                break Err(Error::invalid_params(format!(
+                    "Cannot wait for synctex: {error}"
+                )))
+            }
             _ if started.elapsed() > Duration::from_secs(5) => {
-                break Err("SyncTeX query timed out".into())
+                break Err(Error::invalid_params("SyncTeX query timed out"))
             }
             _ => std::thread::sleep(Duration::from_millis(10)),
         }
@@ -220,7 +350,7 @@ fn query(project: &Project, arguments: &[String]) -> Result<String> {
     let _ = child.wait();
     let output = stdout.join().unwrap_or_default();
     let errors = stderr.join().unwrap_or_default();
-    let status = result.map_err(Error::invalid_params)?;
+    let status = result?;
     if !status.success() {
         let message: String = String::from_utf8_lossy(&errors)
             .chars()

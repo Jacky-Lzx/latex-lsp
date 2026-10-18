@@ -158,6 +158,181 @@ fn fake_build_server_capabilities(
 
 #[test]
 #[cfg(unix)]
+fn slow_synctex_queries_do_not_block_edits_and_discard_results_after_source_changes() {
+    let script = "touch ready\nwhile [ ! -f release ]; do sleep 0.02; done\nprintf 'SyncTeX result begin\\nPage:1\\nx:10\\ny:20\\nSyncTeX result end\\n'\n";
+    let (mut server, directory, uri) = fake_synctex_server(script);
+    server.send(json!({"jsonrpc":"2.0","id":2,"method":"workspace/executeCommand","params":{"command":"latex.forwardSearch","arguments":[{"uri":uri,"position":{"line":1,"character":0}}]}}));
+    wait_for_file(&directory.path().join("ready"));
+    server.notify("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"text":"\\documentclass{article}\n\\section{Changed}\n"}]}));
+    let symbols = server.request(3, "workspace/symbol", json!({"query":"Changed"}));
+    assert_eq!(symbols.as_array().unwrap().len(), 1);
+    std::fs::write(directory.path().join("release"), "").unwrap();
+    let stale = server.until(|message| message["id"] == 2);
+    assert!(
+        stale["error"]["message"].as_str().unwrap().contains("Save"),
+        "{stale}"
+    );
+    server.request(4, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[cfg(unix)]
+fn fake_synctex_server(script: &str) -> (Server, tempfile::TempDir, Url) {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().unwrap();
+    let executable = directory.path().join("synctex");
+    std::fs::write(&executable, format!("#!/bin/sh\n{script}")).unwrap();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let source = "\\documentclass{article}\n\\section{Title}\n";
+    let main = directory.path().join("main.tex");
+    std::fs::write(&main, source).unwrap();
+    let output = directory.path().join("build/latex-lsp");
+    std::fs::create_dir_all(&output).unwrap();
+    std::fs::write(output.join("main.pdf"), "%PDF-1.4").unwrap();
+    std::fs::write(output.join("main.synctex"), "SyncTeX data").unwrap();
+    let path = format!(
+        "{}:{}",
+        directory.path().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let mut server = Server::start_with_env(&[("PATH", &path)]);
+    let uri = Url::from_file_path(main).unwrap();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(directory.path()).unwrap(),"capabilities":{}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"latex","version":1,"text":source}}),
+    );
+    server.until(|message| message["method"] == "textDocument/publishDiagnostics");
+    (server, directory, uri)
+}
+
+#[cfg(unix)]
+fn wait_for_file(path: &std::path::Path) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while !path.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "subprocess failed to create {}",
+            path.display()
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn synctex_request_cancellation_shutdown_and_timeouts_stop_the_process_group() {
+    for scenario in ["cancel", "shutdown", "timeout"] {
+        let (mut server, directory, uri) =
+            fake_synctex_server("sleep 30 &\nprintf '%s' \"$!\" > child-pid\ntouch ready\nwait\n");
+        server.send(json!({"jsonrpc":"2.0","id":2,"method":"workspace/executeCommand","params":{"command":"latex.forwardSearch","arguments":[{"uri":uri,"position":{"line":1,"character":0}}]}}));
+        wait_for_file(&directory.path().join("ready"));
+        let child: i32 = std::fs::read_to_string(directory.path().join("child-pid"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        let started = std::time::Instant::now();
+        match scenario {
+            "cancel" => server.notify("$/cancelRequest", json!({"id":2})),
+            "shutdown" => server.send(json!({"jsonrpc":"2.0","id":3,"method":"shutdown"})),
+            _ => {}
+        }
+        let mut shutdown_received = false;
+        let rejected = loop {
+            let response = server.until(|message| message["id"] == 2 || message["id"] == 3);
+            if response["id"] == 2 {
+                break response;
+            }
+            assert!(response.get("error").is_none(), "{response}");
+            shutdown_received = true;
+        };
+        if scenario == "timeout" {
+            assert!(
+                rejected["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("timed out"),
+                "{rejected}"
+            );
+        } else {
+            assert_eq!(rejected["error"]["code"], -32800, "{rejected}");
+            assert!(started.elapsed() < Duration::from_secs(3));
+        }
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            // An orphaned child can briefly remain a zombie before init reaps it.
+            let alive = unsafe { libc::kill(child, 0) } == 0;
+            let zombie = std::fs::read_to_string(format!("/proc/{child}/stat"))
+                .ok()
+                .is_some_and(|stat| {
+                    stat.rsplit_once(')')
+                        .is_some_and(|(_, state)| state.trim_start().starts_with('Z'))
+                });
+            if !alive || zombie {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "SyncTeX descendant survived {scenario}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if scenario != "shutdown" {
+            server.request(3, "shutdown", Value::Null);
+        } else if !shutdown_received {
+            server.until(|message| message["id"] == 3);
+        }
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn concurrent_synctex_queries_are_bounded_and_leave_normal_requests_responsive() {
+    let (mut server, directory, uri) = fake_synctex_server("touch \"ready-$$\"\nwhile [ ! -f release ]; do sleep 0.02; done\nprintf 'SyncTeX result begin\\nPage:1\\nx:10\\ny:20\\nSyncTeX result end\\n'\n");
+    for id in 2..6 {
+        server.send(json!({"jsonrpc":"2.0","id":id,"method":"workspace/executeCommand","params":{"command":"latex.forwardSearch","arguments":[{"uri":uri,"position":{"line":1,"character":0}}]}}));
+    }
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while std::fs::read_dir(directory.path())
+        .unwrap()
+        .flatten()
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with("ready-"))
+        .count()
+        < 4
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "queries failed to run concurrently"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    server.send(json!({"jsonrpc":"2.0","id":6,"method":"workspace/executeCommand","params":{"command":"latex.forwardSearch","arguments":[{"uri":uri,"position":{"line":1,"character":0}}]}}));
+    let rejected = server.until(|message| message["id"] == 6);
+    assert!(
+        rejected["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Too many"),
+        "{rejected}"
+    );
+    let symbols = server.request(7, "workspace/symbol", json!({"query":"Title"}));
+    assert_eq!(symbols.as_array().unwrap().len(), 1);
+    std::fs::write(directory.path().join("release"), "").unwrap();
+    for id in 2..6 {
+        let response = server.until(|message| message["id"] == id);
+        assert_eq!(response["result"]["locations"][0]["page"], 1, "{response}");
+    }
+    server.request(8, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
 fn standard_progress_completes_and_cancellation_uses_the_build_token() {
     for cancel in [false, true] {
         let script = if cancel {

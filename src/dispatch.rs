@@ -1,0 +1,73 @@
+//! Preserve wire order until a handler has captured its input snapshot.
+use std::{cell::RefCell, future::Future};
+use tokio::sync::oneshot;
+
+tokio::task_local! {
+    static TURN: RefCell<Option<oneshot::Sender<()>>>;
+}
+
+#[derive(Default)]
+pub struct RequestQueue {
+    tail: Option<oneshot::Receiver<()>>,
+}
+
+impl RequestQueue {
+    pub fn ordered<F: Future + Send + 'static>(
+        &mut self,
+        future: F,
+    ) -> impl Future<Output = F::Output> + Send {
+        let previous = self.tail.take();
+        let (done, next) = oneshot::channel();
+        self.tail = Some(next);
+        async move {
+            if let Some(previous) = previous {
+                let _ = previous.await;
+            }
+            // Dropping or cancelling an ordinary request also releases its turn.
+            TURN.scope(RefCell::new(Some(done)), future).await
+        }
+    }
+}
+
+/// Long-running handlers call this only after capturing and validating inputs.
+/// Their eventual result must be checked against the current workspace again.
+pub fn release() {
+    let _ = TURN.try_with(|turn| {
+        if let Some(done) = turn.borrow_mut().take() {
+            let _ = done.send(());
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    #[tokio::test]
+    async fn snapshots_release_the_next_request_while_external_work_remains_pending() {
+        let mut queue = RequestQueue::default();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let (finish, finished) = oneshot::channel();
+        let first_events = events.clone();
+        let first = queue.ordered(async move {
+            first_events.lock().unwrap().push(1);
+            release();
+            finished.await.unwrap();
+            first_events.lock().unwrap().push(3);
+        });
+        let second_events = events.clone();
+        let second = queue.ordered(async move {
+            second_events.lock().unwrap().push(2);
+        });
+        let first = tokio::spawn(first);
+        tokio::time::timeout(std::time::Duration::from_secs(1), second)
+            .await
+            .unwrap();
+        assert!(!first.is_finished());
+        assert_eq!(*events.lock().unwrap(), vec![1, 2]);
+        finish.send(()).unwrap();
+        first.await.unwrap();
+        assert_eq!(*events.lock().unwrap(), vec![1, 2, 3]);
+    }
+}

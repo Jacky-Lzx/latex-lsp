@@ -2,6 +2,7 @@ pub mod build;
 pub mod build_log;
 pub mod catalog;
 pub mod config;
+pub mod dispatch;
 pub mod editing;
 pub mod features;
 pub mod file_operations;
@@ -38,6 +39,7 @@ pub struct Backend {
     client: Client,
     workspace: Arc<RwLock<Workspace>>,
     builds: build::BuildManager,
+    sync_queries: synctex::Queries,
     shutdown_requested: AtomicBool,
 }
 
@@ -46,6 +48,7 @@ impl Backend {
         let workspace = Arc::new(RwLock::new(Workspace::default()));
         Self {
             builds: build::BuildManager::new(client.clone(), workspace.clone()),
+            sync_queries: synctex::Queries::default(),
             client,
             workspace,
             shutdown_requested: AtomicBool::new(false),
@@ -244,6 +247,7 @@ impl LanguageServer for Backend {
     }
 
     async fn shutdown(&self) -> Result<()> {
+        self.sync_queries.shutdown().await;
         self.builds.shutdown().await;
         self.shutdown_requested.store(true, Ordering::Relaxed);
         Ok(())
@@ -380,34 +384,11 @@ impl LanguageServer for Backend {
                         "Finish a successful build before querying SyncTeX",
                     ));
                 }
-                let worker_project = project.clone();
                 let value = argument.cloned().unwrap_or_default();
                 let inverse = params.command == "latex.inverseSearch";
-                let result = tokio::task::spawn_blocking(move || {
-                    if inverse {
-                        let request: synctex::InverseRequest = serde_json::from_value(value)
-                            .map_err(|error| {
-                                tower_lsp::jsonrpc::Error::invalid_params(format!(
-                                    "Invalid inverse search request: {error}"
-                                ))
-                            })?;
-                        synctex::inverse(&worker_project, &request)
-                    } else {
-                        let request: synctex::ForwardRequest = serde_json::from_value(value)
-                            .map_err(|error| {
-                                tower_lsp::jsonrpc::Error::invalid_params(format!(
-                                    "Invalid forward search request: {error}"
-                                ))
-                            })?;
-                        synctex::forward(&worker_project, &request)
-                    }
-                })
-                .await
-                .map_err(|error| {
-                    tower_lsp::jsonrpc::Error::invalid_params(format!(
-                        "SyncTeX task failed: {error}"
-                    ))
-                })??;
+                let mut task = self.sync_queries.start(project.clone(), value, inverse)?;
+                dispatch::release();
+                let result = task.wait().await?;
                 let current = synctex::prepare(&*self.workspace.read().await, &uri)?;
                 if current != project || !available(&current.root) {
                     return Err(tower_lsp::jsonrpc::Error::invalid_params(
