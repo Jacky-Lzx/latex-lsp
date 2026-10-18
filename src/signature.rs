@@ -150,6 +150,14 @@ fn definition(uri: &Url, doc: &Document, entry: &Entry, environment: bool) -> Op
     let source = &doc.text.source;
     let declaration = entry.detail.strip_prefix("Defined with \\")?;
     let mut i = syntax::skip_space(source, entry.span.end);
+    if !environment && source.as_bytes().get(entry.span.start) != Some(&b'\\') {
+        let end = doc
+            .syntax
+            .commands
+            .iter()
+            .find(|command| command.span.start == i && command.name == "endcsname")?;
+        i = syntax::skip_space(source, end.span.end);
+    }
     if source.as_bytes().get(i) == Some(&b'}') {
         i += 1;
     }

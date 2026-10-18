@@ -234,7 +234,7 @@ cargo test --locked -- --include-ignored
 
 自定义环境支持 `\newenvironment` / `\renewenvironment`、xparse 的 `\NewDocumentEnvironment` 等声明、`\NewEnviron` / `\RenewEnviron` 和 `\newtheorem`，提供补全、定义跳转、引用、悬浮、符号及跨文件重命名。改名时同步维护 `\begin{panel}` / `\end{panel}`、直接调用的 `\panel` / `\endpanel` 和字面 `\csname panel\endcsname`；可从这些调用处跳转或发起重命名。检查环境生成的同名宏和 `\end...` 宏，避免与已有命令冲突；存在直接控制序列调用时，新名称须只含 TeX 命令字母。
 
-普通自定义宏也支持字面 `\csname hello\endcsname` 的定义跳转、悬浮、引用、高亮和重命名，与直接调用的 `\hello` 统一处理；保留名称前后的空白及调用参数。宏展开、注释拼接、名称内部空白和未闭合的 `csname` 不作推断；共享调用在不同项目里指向不同宏时拒绝重命名。
+普通自定义宏也支持字面 `\csname hello\endcsname` 的定义跳转、悬浮、引用、高亮和重命名，与直接调用的 `\hello` 统一处理；保留名称前后的空白及调用参数。识别 `\expandafter\def\csname hello\endcsname#1{...}`、同样写法的 `gdef` / `edef` / `xdef`、`newcommand` / xparse 系列以及 `let` 别名定义；可从字面定义处发起重命名，参数提示与直接定义一致。名称中的宏展开、注释拼接、内部空白和未闭合的 `csname` 不作推断，也不会误记为重新定义 `csname` 原语；共享调用在不同项目里指向不同宏时拒绝重命名。
 
 用户宏参数提示识别 `\newcommand` 系列和 `\DeclareRobustCommand` 的参数数量/首个可选参数默认值，xparse 的 `m` / `o` / `O{...}` / `s`，以及 `\def` 系列连续的 `#1#2...` 参数。调用按花括号或方括号分组匹配，支持星号、嵌套调用、转义和多行注释。复杂分隔参数、字符串求值或定义有歧义时暂不推断签名；不在注释和逐字文本中提示。
 

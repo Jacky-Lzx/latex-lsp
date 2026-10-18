@@ -505,15 +505,15 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
                 .documents
                 .iter()
                 .filter(|(uri, _)| scope.contains(*uri))
-                .flat_map(|(_, doc)| {
-                    doc.syntax.environments.iter().filter(|entry| {
-                        entry
-                            .name
-                            .bytes()
-                            .all(|byte| byte.is_ascii_alphabetic() || byte == b'@')
-                    })
-                }),
+                .flat_map(|(_, doc)| &doc.syntax.environments),
         )
+        .filter(|entry| {
+            !entry.name.is_empty()
+                && entry
+                    .name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphabetic() || byte == b'@')
+        })
     {
         if entry.name.starts_with(prefix) && seen.insert(entry.name.clone()) {
             let signature = crate::signature::completion(workspace, &entry.name, &scope);
@@ -761,6 +761,12 @@ fn all_references(
                 if let Some(span) =
                     syntax::literal_csname(&doc.text.source, &doc.syntax.commands, index)
                         .filter(|span| doc.text.source[span.clone()] == *target.name)
+                        .filter(|span| {
+                            !doc.syntax
+                                .definitions
+                                .iter()
+                                .any(|entry| entry.span == *span)
+                        })
                 {
                     result.push(Location {
                         uri: uri.clone(),

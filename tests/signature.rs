@@ -508,3 +508,19 @@ fn direct_environment_completions_insert_required_arguments_and_omit_optional_de
         .iter()
         .any(|item| item.label == "panel-two"));
 }
+
+#[test]
+fn expanded_literal_macro_declarations_keep_optional_defaults_and_required_parameters() {
+    for declaration in [
+        r"\expandafter\newcommand\csname pair\endcsname[2][blue]{#1#2}",
+        r"\expandafter\NewDocumentCommand\csname pair\endcsname{O{blue}m}{#1#2}",
+    ] {
+        check(declaration, r"\pair{Value¦}", r"\pair[#1=blue]{#2}", 1);
+        check(declaration, r"\pair[Red¦]{Value}", r"\pair[#1=blue]{#2}", 0);
+        let (workspace, _, _) = setup(declaration, r"\pa¦");
+        let scope = workspace.documents.keys().cloned().collect();
+        let (label, snippet) = signature::completion(&workspace, "pair", &scope).unwrap();
+        assert_eq!(label, r"\pair[#1=blue]{#2}");
+        assert_eq!(snippet.as_deref(), Some("pair{${1:arg2}}"));
+    }
+}

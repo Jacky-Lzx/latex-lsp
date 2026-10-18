@@ -476,6 +476,16 @@ impl Syntax {
                     } else {
                         None
                     };
+                    let declaration = declaration.filter(|span| {
+                        // expandafter expands a csname target before the
+                        // declaration sees it; it does not define `csname`.
+                        !(source[span.clone()] == *"\\csname"
+                            && skip_space(source, command.span.end) == span.start
+                            && result.commands.last().is_some_and(|previous| {
+                                previous.name == "expandafter"
+                                    && skip_space(source, previous.span.end) == command.span.start
+                            }))
+                    });
                     if let Some(span) = declaration {
                         result.definitions.push(Entry {
                             name: source[span.start + 1..span.end].into(),
@@ -593,6 +603,29 @@ impl Syntax {
                 environment_end(text, &name),
             );
         }
+        for (index, commands) in result.commands.windows(3).enumerate() {
+            let [expand, declaration, target] = commands else {
+                unreachable!()
+            };
+            if expand.name == "expandafter"
+                && (declares_command(&declaration.name)
+                    || matches!(
+                        declaration.name.as_str(),
+                        "def" | "gdef" | "edef" | "xdef" | "let"
+                    ))
+                && skip_space(source, expand.span.end) == declaration.span.start
+                && skip_space(source, declaration.span.end) == target.span.start
+            {
+                if let Some(span) = literal_csname(source, &result.commands, index + 2) {
+                    result.definitions.push(Entry {
+                        name: source[span.clone()].into(),
+                        span,
+                        detail: format!("Defined with \\{}", declaration.name),
+                    });
+                }
+            }
+        }
+        result.definitions.sort_by_key(|entry| entry.span.start);
         result
     }
 
