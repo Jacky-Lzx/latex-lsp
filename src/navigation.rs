@@ -214,6 +214,57 @@ fn unescape(value: &str) -> String {
     value
 }
 
+fn external_url(value: &str) -> Option<Url> {
+    Url::parse(value)
+        .ok()
+        .filter(|uri| matches!(uri.scheme(), "http" | "https" | "mailto" | "file" | "ftp"))
+}
+
+/// The four-argument hyperref form appends its category and name as a destination.
+/// Bracketed label links have a different argument layout and are handled by navigation.
+fn hyperref_url_link(doc: &Document, command: &syntax::Command) -> Option<DocumentLink> {
+    let source = &doc.text.source;
+    let first = syntax::skip_space(source, command.span.end);
+    let argument = command.argument.as_ref()?;
+    if source.as_bytes().get(first) != Some(&b'{') || argument.outer_span.start != first {
+        return None;
+    }
+    let (category, after) = syntax::group(
+        source,
+        syntax::skip_space(source, argument.outer_span.end),
+        b'{',
+        b'}',
+    )?;
+    let (name, _) = syntax::group(source, syntax::skip_space(source, after), b'{', b'}')?;
+    let category = category.value;
+    let name = name.value;
+    if [&category, &name]
+        .iter()
+        .any(|value| !value.is_empty() && !syntax::is_static_key(value))
+    {
+        return None;
+    }
+    let mut value = unescape(argument.value.trim());
+    if value.contains(['\\', '{', '}']) {
+        return None;
+    }
+    if !category.is_empty() || !name.is_empty() {
+        value.push('#');
+        if !category.is_empty() {
+            value.push_str(&category);
+            value.push('.');
+        }
+        value.push_str(&name);
+    }
+    let span = syntax::trimmed_span(source, argument.span.clone());
+    Some(DocumentLink {
+        range: doc.text.range(span.start, span.end),
+        target: Some(external_url(&value)?),
+        tooltip: None,
+        data: None,
+    })
+}
+
 fn file_link(
     uri: &Url,
     name: &str,
@@ -292,6 +343,10 @@ pub(crate) fn document_links_in(workspace: &Workspace, uri: &Url, root: &Url) ->
         }
     }
     for command in &doc.syntax.commands {
+        if command.name == "hyperref" {
+            links.extend(hyperref_url_link(doc, command));
+            continue;
+        }
         let Some(argument) = &command.argument else {
             continue;
         };
@@ -310,9 +365,7 @@ pub(crate) fn document_links_in(workspace: &Workspace, uri: &Url, root: &Url) ->
             let span = syntax::trimmed_span(&doc.text.source, start..start + name.len());
             let value = unescape(name.trim());
             let target = if extensions.is_empty() {
-                Url::parse(&value).ok().filter(|uri| {
-                    matches!(uri.scheme(), "http" | "https" | "mailto" | "file" | "ftp")
-                })
+                external_url(&value)
             } else {
                 file_link(
                     uri,

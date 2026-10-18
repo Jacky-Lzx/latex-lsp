@@ -149,6 +149,113 @@ fn urls_accept_percent_escapes_and_keep_their_contents_out_of_latex_analysis() {
 }
 
 #[test]
+fn hyperref_external_links_include_static_destinations_and_keep_label_text_out_of_url_links() {
+    let uri = Url::parse("file:///navigation/hyperref.tex").unwrap();
+    let cases = [
+        (r"\hyperref{https://example.com/a%20b}{}{section.1}{One}", "https://example.com/a%20b#section.1"),
+        (r"\hyperref{https://example.com/}{section}{1}{Two}", "https://example.com/#section.1"),
+        (r"\hyperref{https://example.com/#old}{section}{2}{Three}", "https://example.com/#old#section.2"),
+        (r"\hyperref{https://example.com/}{}{}{Four}", "https://example.com/"),
+        (r"\hyperref{mailto:a@example.com}{section}{1}{Five}", "mailto:a@example.com#section.1"),
+        (r"\hyperref{ftp://example.com/a}{category}{label}{Six}", "ftp://example.com/a#category.label"),
+        ("😀 \\hyperref % link\r\n{https://example.com/a\\_b?q=1\\&x=2} % target\r\n{section}{intro_one}{Text}", "https://example.com/a_b?q=1&x=2#section.intro_one"),
+        (r"\hyperref{https://example.com/}{section}{}{Text}", "https://example.com/#section."),
+    ];
+    for (source, expected) in cases {
+        let mut workspace = Workspace::default();
+        insert(&mut workspace, &uri, source);
+        let doc = &workspace.documents[&uri];
+        assert!(features::diagnostics(doc).is_empty(), "{source}");
+        let links = navigation::document_links(&workspace, &uri);
+        assert_eq!(links.len(), 1, "{source}: {links:?}");
+        assert_eq!(
+            links[0].target.as_ref().unwrap().as_str(),
+            expected,
+            "{source}"
+        );
+        let start = doc.text.offset(links[0].range.start).unwrap();
+        let end = doc.text.offset(links[0].range.end).unwrap();
+        assert!(
+            source[start..end].starts_with("https://")
+                || source[start..end].starts_with("mailto:")
+                || source[start..end].starts_with("ftp://")
+        );
+        assert!(!source[start..end].contains('{'));
+    }
+    for source in [
+        r"\hyperref[sec:intro]{https://example.com/}",
+        r"\hyperref[{sec:intro}]{https://example.com/}",
+        r"\hyperref*{https://example.com/}{section}{1}{Text}",
+        r"\hyperref{https://example.com/}{\category}{1}{Text}",
+        r"\hyperref{https://example.com/}{section}{\name}{Text}",
+        r"\hyperref{https://example.com/}{section}{intro\_one}{Text}",
+        r"\hyperref{https://example.com/\suffix}{section}{1}{Text}",
+        r"\hyperref{https://example.com/}{section}",
+        r"\hyperref{https://example.com/}{section}{unclosed",
+        r"\hyperref{}{section}{1}{Internal link}",
+        r"\hyperref{javascript:alert(1)}{}{}{Text}",
+        r"% \hyperref{https://example.com/}{section}{1}{Text}",
+        r"\verb|\hyperref{https://example.com/}{section}{1}{Text}|",
+    ] {
+        let mut workspace = Workspace::default();
+        insert(&mut workspace, &uri, source);
+        assert!(
+            navigation::document_links(&workspace, &uri).is_empty(),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex and hyperref"]
+fn real_hyperref_document_links_match_the_external_uri_annotations_in_the_pdf() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    let source = concat!(
+        "\\pdfobjcompresslevel=0\\pdfcompresslevel=0\n\\documentclass{article}\\usepackage{hyperref}\\begin{document}\n",
+        "\\hyperref{https://example.com/a%20b}{}{section.1}{One}\n",
+        "\\hyperref{https://example.com/}{section}{1}{Two}\n",
+        "\\hyperref{https://example.com/#old}{section}{2}{Three}\n",
+        "\\hyperref{https://example.com/}{}{}{Four}\n",
+        "\\hyperref{mailto:a@example.com}{section}{1}{Five}\n",
+        "\\hyperref{ftp://example.com/a}{category}{label}{Six}\n",
+        "\\hyperref{https://example.com/a\\_b?q=1\\&x=2}{section}{intro_one}{Seven}\n",
+        "\\hyperref{https://example.com/}{section}{}{Eight}\n",
+        "\\end{document}\n",
+    );
+    std::fs::write(&main, source).unwrap();
+    let config = latex_lsp::config::BuildConfig {
+        executable: "pdflatex".into(),
+        ..Default::default()
+    };
+    let result = latex_lsp::build::run(&main, &config, &Default::default());
+    assert_eq!(result.status, "success", "{}", result.output);
+    let data = std::fs::read(config.artifact_path(&main, "pdf").unwrap()).unwrap();
+    let pdf = String::from_utf8_lossy(&data);
+    let targets: Vec<_> = pdf
+        .split("/URI")
+        .skip(1)
+        .filter_map(|tail| {
+            tail.trim_start()
+                .strip_prefix('(')?
+                .split_once(')')
+                .map(|(uri, _)| uri)
+        })
+        .collect();
+    assert_eq!(targets.len(), 8);
+    let mut workspace = Workspace::default();
+    workspace.add_root(directory.path().into());
+    let links = navigation::document_links(&workspace, &Url::from_file_path(&main).unwrap());
+    assert_eq!(
+        links
+            .iter()
+            .map(|link| link.target.as_ref().unwrap().as_str())
+            .collect::<Vec<_>>(),
+        targets
+    );
+}
+
+#[test]
 fn magic_root_links_select_the_real_directive_and_support_definition_jumps() {
     let directory = tempfile::tempdir().unwrap();
     std::fs::write(
