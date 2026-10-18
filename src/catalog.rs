@@ -50,6 +50,26 @@ pub(crate) const PRIMITIVES: &[&str] = &[
 /// Templates retain literal TeX backslashes; completion escapes them for the client.
 pub const COMMANDS: &[(&str, &str, &str)] = &[
     (
+        "ifboolexpr",
+        "ifboolexpr{bool {${1:boolean}}}{${2:then}}{${3:else}}",
+        "Choose branches using an etoolbox boolean expression.",
+    ),
+    (
+        "ifboolexpe",
+        "ifboolexpe{bool {${1:boolean}}}{${2:then}}{${3:else}}",
+        "Expand branches using an etoolbox boolean expression.",
+    ),
+    (
+        "whileboolexpr",
+        "whileboolexpr{bool {${1:boolean}}}{${2:body}}",
+        "Repeat while an etoolbox boolean expression is true.",
+    ),
+    (
+        "unlessboolexpr",
+        "unlessboolexpr{bool {${1:boolean}}}{${2:body}}",
+        "Repeat while an etoolbox boolean expression is false.",
+    ),
+    (
         "newboolean",
         "newboolean{${1:boolean}}",
         "Declare an ifthen boolean.",

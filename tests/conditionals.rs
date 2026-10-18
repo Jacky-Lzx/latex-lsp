@@ -420,6 +420,26 @@ fn boolean_operations_provide_signatures_without_confusing_expressions_with_name
         ),
         (r"\ifbool{draft}{Y¦}{N}", r"\ifbool{boolean}{then}{else}", 1),
         (
+            r"\ifboolexpr{bool {draft¦}}{Y}{N}",
+            r"\ifboolexpr{condition}{then}{else}",
+            0,
+        ),
+        (
+            r"\ifboolexpe{bool {draft}}{Y}{N¦}",
+            r"\ifboolexpe{condition}{then}{else}",
+            2,
+        ),
+        (
+            r"\whileboolexpr{bool {draft}}{Body¦}",
+            r"\whileboolexpr{condition}{body}",
+            1,
+        ),
+        (
+            r"\unlessboolexpr{not bool {draft¦}}{Body}",
+            r"\unlessboolexpr{condition}{body}",
+            0,
+        ),
+        (
             r"\notbool{draft}{Y}{N¦}",
             r"\notbool{boolean}{then}{else}",
             2,
@@ -472,5 +492,144 @@ fn real_ifthen_and_etoolbox_boolean_renames_preserve_values_and_group_scoping() 
         let states = |output: &str| output.lines().filter(|line| line.starts_with("BOOL:")).map(str::to_owned).collect::<Vec<_>>();
         assert_eq!(states(&before.output), states(&after.output));
         assert_eq!(states(&after.output).len(), 3);
+    }
+}
+
+#[test]
+fn boolean_expressions_navigate_and_rename_static_operands_without_touching_test_text_or_toggles() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let definitions = "\\newbool{draft}\\newbool{other}\\newcommand{\\draft}{Independent.}\n";
+    let source = "\\documentclass{article}\\input{definitions}\n\\begin{document}\n\\ifboolexpr{bool {draft} and not (bool {other})}{Yes}{No}\n\\ifboolexpe{notbool {draft}}{No}{Yes}\n\\whileboolexpr{bool{draft}}{\\boolfalse{draft}}\n\\unlessboolexpr{bool {draft}}{\\booltrue{draft}}\n\\ifboolexpr{test {\\ifstrequal{bool {draft}}{Text}} or togl {draft}}{body bool {draft}}{No}\n\\ifboolexpr{bool {other} % bool {draft}\n}{Yes}{No}\n\\draft\\end{document}\n";
+    let workspace = setup(
+        root,
+        &[("main.tex", source), ("definitions.tex", definitions)],
+    );
+    let uri = Url::from_file_path(root.join("main.tex")).unwrap();
+    let text = &workspace.documents[&uri].text;
+    let position = text.position(source.find("bool {draft}").unwrap() + 8);
+    assert_eq!(features::definitions(&workspace, &uri, position).len(), 1);
+    assert_eq!(
+        features::references(&workspace, &uri, position, true).len(),
+        7
+    );
+    let changed = renamed(&workspace, &uri, position);
+    let expected = source
+        .replace("bool {draft}", "bool {release}")
+        .replace("bool{draft}", "bool{release}")
+        .replace("\\boolfalse{draft}", "\\boolfalse{release}")
+        .replace("\\booltrue{draft}", "\\booltrue{release}")
+        .replace("\\ifstrequal{bool {release}}", "\\ifstrequal{bool {draft}}")
+        .replace("body bool {release}", "body bool {draft}")
+        .replace("% bool {release}", "% bool {draft}");
+    assert_eq!(changed[&uri], expected);
+    assert!(changed[&uri].contains("togl {draft}"));
+}
+
+#[test]
+fn boolean_expression_operand_completion_supports_nested_and_incomplete_expressions() {
+    for marked in [
+        r"\ifboolexpr{bool {dra¦ft}}{Yes}{No}",
+        r"\ifboolexpe{notbool{dra¦ft}}{No}{Yes}",
+        r"\ifboolexpr{not (bool { dra¦ft })}{No}{Yes}",
+        r"\whileboolexpr{bool {dra¦",
+        r"\unlessboolexpr{bool{dra¦ft}}{Body}",
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let source = marked.replace('¦', "");
+        let workspace = setup(
+            directory.path(),
+            &[
+                ("main.tex", &source),
+                ("definitions.tex", "\\newbool{draft}"),
+            ],
+        );
+        let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+        let items = features::completion(
+            &workspace,
+            &uri,
+            Text::new(source.clone()).position(marked.find('¦').unwrap()),
+        );
+        let item = items
+            .iter()
+            .find(|item| item.label == "draft")
+            .unwrap_or_else(|| panic!("{marked}: {items:?}"));
+        let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+            panic!("missing edit")
+        };
+        let changed = Text::new(source.clone())
+            .changed(vec![TextDocumentContentChangeEvent {
+                range: Some(edit.range),
+                range_length: None,
+                text: edit.new_text.clone(),
+            }])
+            .unwrap()
+            .source;
+        assert_eq!(
+            changed,
+            marked.replace("dra¦ft", "draft").replace("dra¦", "draft"),
+            "{marked}"
+        );
+        assert_eq!(edit.new_text, "draft");
+    }
+    for marked in [
+        r"\ifboolexpr{test {\ifstrequal{bool {dra¦ft}}{Text}}}{Yes}{No}",
+        r"\ifboolexpr{togl {dra¦ft}}{Yes}{No}",
+        r"\ifboolexpr{bool {dra¦\suffix}}{Yes}{No}",
+        r"\ifboolexpr{bool {other}}{bool {dra¦ft}}{No}",
+        r"\ifboolexpr{mybool {dra¦ft}}{Yes}{No}",
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let source = marked.replace('¦', "");
+        let workspace = setup(
+            directory.path(),
+            &[
+                ("main.tex", &source),
+                ("definitions.tex", "\\newbool{draft}"),
+            ],
+        );
+        let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+        assert!(
+            features::completion(
+                &workspace,
+                &uri,
+                Text::new(source).position(marked.find('¦').unwrap())
+            )
+            .is_empty(),
+            "{marked}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex and etoolbox"]
+fn real_boolean_expression_renames_preserve_nested_tests_expandable_tests_and_finite_loops() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let definitions = "\\newbool{draft}\\newbool{other}\\newcounter{iterations}\n";
+    let source = "\\documentclass{article}\\usepackage{etoolbox}\\input{definitions}\n\\begin{document}\n\\booltrue{draft}\\ifboolexpr{(bool {draft} and not bool {other})}{\\typeout{EXPR:true}}{Wrong.}\n\\boolfalse{draft}\\ifboolexpe{notbool {draft}}{\\typeout{EXPR:false}}{Wrong.}\n\\whileboolexpr{not bool {draft}}{\\booltrue{draft}\\stepcounter{iterations}}\n\\unlessboolexpr{not bool {draft}}{\\boolfalse{draft}\\stepcounter{iterations}}\n\\typeout{EXPR:iterations:\\arabic{iterations}}Text.\\end{document}\n";
+    let workspace = setup(
+        root,
+        &[("main.tex", source), ("definitions.tex", definitions)],
+    );
+    let main = root.join("main.tex");
+    let config = latex_lsp::config::BuildConfig {
+        executable: "pdflatex".into(),
+        timeout_seconds: 5,
+        ..Default::default()
+    };
+    let before = build::run(&main, &config, &AtomicBool::new(false));
+    assert_eq!(before.status, "success", "{}", before.output);
+    let uri = Url::from_file_path(&main).unwrap();
+    let position = Text::new(source.into()).position(source.find("bool {draft}").unwrap() + 8);
+    for (uri, changed) in renamed(&workspace, &uri, position) {
+        std::fs::write(uri.to_file_path().unwrap(), changed).unwrap();
+    }
+    let after = build::run(&main, &config, &AtomicBool::new(false));
+    assert_eq!(after.status, "success", "{}", after.output);
+    assert_eq!(after.pages, Some(1));
+    for state in ["EXPR:true", "EXPR:false", "EXPR:iterations:2"] {
+        assert!(before.output.contains(state));
+        assert!(after.output.contains(state));
     }
 }

@@ -92,7 +92,7 @@ vim.lsp.enable('latex_lsp')
 
 直接 `\newif\ifdraft` 和字面 `\expandafter\newif\csname ifdraft\endcsname` 声明提供布尔符号、跳转、悬停和项目内的派生命令补全。从 `\ifdraft`、`\drafttrue`、`\draftfalse` 或对应字面 `csname` 引用发起重命名时，输入新的基础名称（例如 `release`），同步维护三种命令及声明；保留同名的独立 `\draft` 宏。只经字面 `csname` 使用的名称支持连字符和中文；存在直接控制序列时，新名称必须能组成 TeX 命令，不提供无法直接键入的补全。新名称与宏、寄存器、环境、其他开关或内置条件原语冲突，以及共享文件在其他项目中指向独立开关时拒绝修改；不展开动态声明。
 
-ifthen 的 `newboolean` / `provideboolean` 与 etoolbox 的 `newbool` / `providebool` 复用同一布尔索引；重命名同时维护 `boolean`、`setboolean`、`setbool`、`booltrue` / `boolfalse`、`ifbool` / `notbool` 中的名称参数，以及直接或字面派生命令。名称和值参数提供补全、片段及参数提示，保留后缀、空白与其他实参；只读条件支持内置 `true` / `false`，赋值命令只建议已声明的开关。`ifboolexpr` / `ifboolexpe` 的表达式文本暂不分析，动态名称不作推断。
+ifthen 的 `newboolean` / `provideboolean` 与 etoolbox 的 `newbool` / `providebool` 复用同一布尔索引；重命名同时维护 `boolean`、`setboolean`、`setbool`、`booltrue` / `boolfalse`、`ifbool` / `notbool` 中的名称参数，以及直接或字面派生命令。名称和值参数提供补全、片段及参数提示，保留后缀、空白与其他实参；只读条件支持内置 `true` / `false`，赋值命令只建议已声明的开关。`ifboolexpr` / `ifboolexpe` 和 `whileboolexpr` / `unlessboolexpr` 支持静态 `bool {名称}` 操作数的补全、导航、引用和重命名，包括嵌套逻辑与未闭合表达式中的补全；跳过 `test {...}` 的普通文本、独立 toggle 名称及动态名称，不展开宏。
 
 在语法错误处调用 `vim.lsp.buf.code_action()` 可选择快速修复；`vim.lsp.buf.document_highlight()` 高亮当前符号的定义和引用。Neovim 0.12 中可用 `vim.lsp.buf.selection_range(1)` 扩大语法选择范围。
 

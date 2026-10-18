@@ -117,6 +117,11 @@ fn builtin(name: &str) -> Option<Signature> {
             &[("condition", false), ("then", false), ("else", false)],
             false,
         ),
+        "ifboolexpr" | "ifboolexpe" => (
+            &[("condition", false), ("then", false), ("else", false)],
+            false,
+        ),
+        "whileboolexpr" | "unlessboolexpr" => (&[("condition", false), ("body", false)], false),
         "newlength" => (&[("length", false)], false),
         "setlength" | "addtolength" => (&[("length", false), ("value", false)], false),
         "settowidth" | "settoheight" | "settodepth" => {
