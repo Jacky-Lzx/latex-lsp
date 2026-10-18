@@ -379,6 +379,16 @@ pub fn fixes(workspace: &Workspace, uri: &Url, range: Range) -> Vec<QuickFix> {
                 .collect();
             candidates.sort();
             for (_, name) in candidates.into_iter().take(5) {
+                if kind == Kind::Label
+                    && !crate::syntax::label_replacement_safe(
+                        &doc.text,
+                        &doc.syntax.commands,
+                        diagnostic.range,
+                        &name,
+                    )
+                {
+                    continue;
+                }
                 let (category, replacement) = match kind {
                     Kind::Label => ("label", name.clone()),
                     Kind::Citation => ("citation", name.clone()),

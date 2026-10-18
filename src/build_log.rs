@@ -153,6 +153,8 @@ pub(crate) fn undefined_reference_key(message: &str) -> Option<(bool, &str)> {
     let (citation, tail) = if let Some((_, tail)) = message
         .split_once("Reference `")
         .or_else(|| message.split_once("Reference '"))
+        .or_else(|| message.split_once("Hyper reference `"))
+        .or_else(|| message.split_once("Hyper reference '"))
     {
         (false, tail)
     } else if let Some((_, tail)) = message
@@ -289,33 +291,48 @@ pub(crate) fn undefined_reference_ranges(text: &Text, line: u32, message: &str) 
         return vec![];
     };
     let syntax = crate::syntax::Syntax::latex(text);
+    let hyper_link = message.contains("Hyper reference `") || message.contains("Hyper reference '");
     let mut ranges = Vec::new();
     for command in &syntax.commands {
         if !(if citation {
             crate::syntax::is_citation(&command.name)
+        } else if command.name == "hyperref" {
+            hyper_link
         } else {
-            crate::syntax::warns_on_undefined_reference(&command.name)
-                || crate::syntax::is_counter_reference(&command.name)
+            !hyper_link
+                && (crate::syntax::warns_on_undefined_reference(&command.name)
+                    || crate::syntax::is_counter_reference(&command.name))
         }) {
             continue;
         }
-        let counter_label = crate::syntax::counter_reference_label(&text.source, command);
-        let argument = if crate::syntax::is_counter_reference(&command.name) {
-            counter_label.as_ref()
+        let separate_label = crate::syntax::separate_label_argument(&text.source, command);
+        let argument = if crate::syntax::has_separate_label_argument(&command.name) {
+            separate_label.as_ref()
         } else {
             command.argument.as_ref()
         };
         let Some(argument) = argument else {
             continue;
         };
-        if text.position(command.span.start).line > line
-            || text.position(argument.span.end).line < line
-        {
+        // hyperref reads the display text before warning, so a multiline link
+        // reports the closing text line rather than the bracketed key's line.
+        let report_end = if command.name == "hyperref" {
+            crate::syntax::group(
+                &text.source,
+                crate::syntax::skip_space(&text.source, argument.outer_span.end),
+                b'{',
+                b'}',
+            )
+            .map_or(argument.span.end, |(text, _)| text.span.end)
+        } else {
+            argument.span.end
+        };
+        if text.position(command.span.start).line > line || text.position(report_end).line < line {
             continue;
         }
         if !citation
             && (crate::syntax::is_single_reference(&command.name)
-                || crate::syntax::is_counter_reference(&command.name))
+                || crate::syntax::has_separate_label_argument(&command.name))
         {
             if crate::syntax::is_static_key(key) && argument.value == key {
                 ranges.push(text.range(argument.span.start, argument.span.end));

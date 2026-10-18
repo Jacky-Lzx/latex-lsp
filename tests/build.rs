@@ -956,3 +956,109 @@ fn real_undefined_reference_and_citation_warnings_highlight_only_the_missing_key
         .collect();
     assert_eq!(values, vec!["missing", "lost"], "{:?}", outcome.diagnostics);
 }
+
+#[test]
+#[cfg(unix)]
+#[ignore = "requires pdflatex, xelatex, lualatex and hyperref"]
+fn real_hyperref_warnings_select_bracketed_labels_and_clear_after_repair() {
+    for engine in ["pdflatex", "xelatex", "lualatex"] {
+        for file_line in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let main = directory.path().join("main.tex");
+            let chapter = directory.path().join("chapter.tex");
+            std::fs::write(&main, "\\documentclass{article}\\usepackage{hyperref}\n\\begin{document}\\section{Title}\\label{sec:intro}\\input{chapter}\\end{document}\n").unwrap();
+            let source = concat!(
+                "\\hyperref[sec:itnro]{sec:itnro} \\ref{sec:itnro}\n",
+                "\\hyperref\n[sec:itnro]{\nLink text\n}\n",
+                "\\hyperref{https://example.com/a%20b?x=some_value#section}{sec:itnro}{sec:itnro}{URL}\n",
+            );
+            std::fs::write(&chapter, source).unwrap();
+            let document = latex_lsp::workspace::Document::new(
+                &Url::from_file_path(&chapter).unwrap(),
+                source.into(),
+                None,
+            );
+            assert!(
+                latex_lsp::features::diagnostics(&document).is_empty(),
+                "{:?}",
+                document.syntax.diagnostics
+            );
+            let mut arguments = vec![
+                "-interaction=nonstopmode".into(),
+                "-output-directory=%o".into(),
+                "%f".into(),
+            ];
+            if file_line {
+                arguments.insert(0, "-file-line-error".into());
+            }
+            let executable = if engine == "lualatex" {
+                script(directory.path(), "TEXMFVAR=\"${0%/*}/tex-cache\"\nTEXMFCACHE=\"$TEXMFVAR\"\nexport TEXMFVAR TEXMFCACHE\nmkdir -p \"$TEXMFVAR\"\nexec lualatex \"$@\"")
+            } else {
+                engine.into()
+            };
+            let config = latex_lsp::config::BuildConfig {
+                executable,
+                arguments: Some(arguments),
+                ..Default::default()
+            };
+            let outcome = build::run(&main, &config, &Default::default());
+            assert_eq!(outcome.status, "success", "{engine}: {}", outcome.output);
+            let uri = Url::from_file_path(&chapter).unwrap();
+            let warnings: Vec<_> = outcome
+                .diagnostics
+                .get(&uri)
+                .into_iter()
+                .flatten()
+                .filter(|diagnostic| diagnostic.message.contains("undefined"))
+                .collect();
+            assert_eq!(
+                warnings.len(),
+                3,
+                "{engine}: {:?}\n{}",
+                outcome.diagnostics,
+                outcome.output
+            );
+            let text = latex_lsp::text::Text::new(source.into());
+            for warning in warnings {
+                assert_eq!(
+                    &source[text.offset(warning.range.start).unwrap()
+                        ..text.offset(warning.range.end).unwrap()],
+                    "sec:itnro",
+                    "{engine}: {warning:?}"
+                );
+                if warning.range.start.line == 0 {
+                    assert_eq!(
+                        warning.range.start.character,
+                        if warning.message.contains("Hyper reference") {
+                            10
+                        } else {
+                            text.position(source.find("\\ref{").unwrap() + 5).character
+                        },
+                        "{warning:?}"
+                    );
+                }
+            }
+            std::fs::write(
+                &chapter,
+                source
+                    .replace("[sec:itnro]", "[sec:intro]")
+                    .replace("\\ref{sec:itnro}", "\\ref{sec:intro}"),
+            )
+            .unwrap();
+            for _ in 0..2 {
+                let repaired = build::run(&main, &config, &Default::default());
+                assert_eq!(repaired.status, "success", "{}", repaired.output);
+            }
+            let repaired = build::run(&main, &config, &Default::default());
+            assert!(
+                !repaired
+                    .diagnostics
+                    .values()
+                    .flatten()
+                    .any(|diagnostic| diagnostic.message.contains("undefined")),
+                "{engine}: {:?}",
+                repaired.diagnostics
+            );
+        }
+    }
+}

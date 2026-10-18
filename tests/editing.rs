@@ -46,6 +46,74 @@ fn action_edit(action: &CodeActionOrCommand, uri: &Url) -> TextEdit {
 }
 
 #[test]
+fn hyperref_label_fixes_preserve_link_text_and_reject_forged_text_ranges() {
+    for versioned in [false, true] {
+        let source = "\\label{sec:intro}\n\\hyperref[sec:itnro]{sec:itnro}\n";
+        let (mut workspace, uri) = setup(source, versioned);
+        let text = &workspace.documents[&uri].text;
+        let key = source.find("sec:itnro").unwrap();
+        let body = source.rfind("sec:itnro").unwrap();
+        let body_range = text.range(body, body + 9);
+        let mut diagnostic = Diagnostic {
+            range: text.range(key, key + 9),
+            source: Some("latex-build".into()),
+            message:
+                "LaTeX Warning: Hyper reference `sec:itnro' on page 1 undefined on input line 2."
+                    .into(),
+            ..Default::default()
+        };
+        // hyperref uses a distinct warning prefix, which must still identify a label.
+        workspace.build_diagnostics.insert(
+            uri.clone(),
+            [(uri.clone(), vec![diagnostic.clone()])].into(),
+        );
+        let actions = editing::code_actions(
+            &workspace,
+            &uri,
+            diagnostic.range,
+            &context(vec![diagnostic.clone()]),
+        );
+        assert_eq!(actions.len(), 1, "{actions:?}");
+        let edit = action_edit(&actions[0], &uri);
+        assert_eq!(edit.range, diagnostic.range);
+        assert_eq!(edit.new_text, "sec:intro");
+        diagnostic.range = body_range;
+        workspace.build_diagnostics.insert(
+            uri.clone(),
+            [(uri.clone(), vec![diagnostic.clone()])].into(),
+        );
+        assert!(editing::code_actions(
+            &workspace,
+            &uri,
+            diagnostic.range,
+            &context(vec![diagnostic])
+        )
+        .is_empty());
+    }
+    let source = "\\label{sec:intro]}\n\\hyperref[sec:intro]{Text}\n";
+    let (mut workspace, uri) = setup(source, false);
+    let at = source.rfind("sec:intro").unwrap();
+    let diagnostic = Diagnostic {
+        range: workspace.documents[&uri].text.range(at, at + 9),
+        source: Some("latex-build".into()),
+        message: "LaTeX Warning: Hyper reference `sec:intro' on page 1 undefined on input line 2."
+            .into(),
+        ..Default::default()
+    };
+    workspace.build_diagnostics.insert(
+        uri.clone(),
+        [(uri.clone(), vec![diagnostic.clone()])].into(),
+    );
+    assert!(editing::code_actions(
+        &workspace,
+        &uri,
+        diagnostic.range,
+        &context(vec![diagnostic])
+    )
+    .is_empty());
+}
+
+#[test]
 fn refcount_assignment_label_fixes_select_the_second_argument_and_reject_counter_ranges() {
     for command in [
         "setcounterref",

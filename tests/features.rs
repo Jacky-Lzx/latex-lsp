@@ -99,6 +99,22 @@ fn completion_in_the_middle_replaces_the_remaining_word() {
         "@book{knuth1984, title={The TeXbook}}",
     );
     for (marked, label, expected) in [
+        (
+            r"\hyperref[sec:|旧]{Link}",
+            "sec:中文",
+            r"\hyperref[sec:中文]{Link}",
+        ),
+        (
+            r"\hyperref[ sec:|旧 ]{Link}",
+            "sec:中文",
+            r"\hyperref[sec:中文]{Link}",
+        ),
+        (
+            "\\hyperref % note\r\n[\r\n sec:|旧 \r\n]{Link}",
+            "sec:中文",
+            "\\hyperref % note\r\n[sec:中文]{Link}",
+        ),
+        (r"\hyperref[sec:|", "sec:中文", r"\hyperref[sec:中文"),
         (r"\se|ction{Title}", "section", r"\section{Title}"),
         (r"\ref{sec:|旧}", "sec:中文", r"\ref{sec:中文}"),
         (r"\ref{ sec:|旧 }", "sec:中文", r"\ref{sec:中文}"),
@@ -176,6 +192,47 @@ fn completion_in_the_middle_replaces_the_remaining_word() {
             .unwrap();
         assert_eq!(result.source, expected);
     }
+}
+
+#[test]
+fn hyperref_label_completion_ignores_urls_text_stars_and_dynamic_names() {
+    for marked in [
+        r"\hyperref{sec:¦}{category}{name}{Text}",
+        r"\hyperref[key]{sec:¦}",
+        r"\hyperref*[sec:¦]{Text}",
+        r"\hyperref[sec:¦\suffix]{Text}",
+        r"\hyperref[sec:¦,other]{Text}",
+    ] {
+        let mut workspace = Workspace::default();
+        insert(&mut workspace, "chapter.tex", r"\label{sec:intro}");
+        let offset = marked.find('¦').unwrap();
+        let source = marked.replace('¦', "");
+        let main = insert(&mut workspace, "main.tex", &source);
+        assert!(
+            features::completion(&workspace, &main, Text::new(source).position(offset)).is_empty(),
+            "{marked}"
+        );
+    }
+    let mut workspace = Workspace::default();
+    insert(
+        &mut workspace,
+        "chapter.tex",
+        r"\label{sec:intro}\label{sec:[intro}\label{sec:intro]}",
+    );
+    let source = r"\hyperref[sec:";
+    let main = insert(&mut workspace, "main.tex", source);
+    let items = features::completion(
+        &workspace,
+        &main,
+        Text::new(source.into()).position(source.len()),
+    );
+    assert_eq!(
+        items
+            .iter()
+            .map(|item| item.label.as_str())
+            .collect::<Vec<_>>(),
+        ["sec:intro"]
+    );
 }
 
 #[test]

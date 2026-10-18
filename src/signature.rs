@@ -133,6 +133,7 @@ fn builtin(name: &str) -> Option<Signature> {
         }
         "begin" | "end" => (&[("environment", false)], false),
         "label" => (&[("key", false)], false),
+        "hyperref" => (&[("key", true), ("text", false)], false),
         "newcounter" => (&[("name", false), ("within", true)], false),
         "newboolean" | "provideboolean" | "newbool" | "providebool" | "boolean" | "booltrue"
         | "boolfalse" => (&[("boolean", false)], false),
@@ -620,7 +621,7 @@ pub fn help(workspace: &Workspace, uri: &Url, position: Position) -> Option<Sign
         span.start <= cursor.saturating_sub(1)
             && cursor.saturating_sub(1) < span.end
             && !doc.syntax.commands.iter().any(|command| {
-                matches!(command.name.as_str(), "url" | "href")
+                matches!(command.name.as_str(), "url" | "href" | "hyperref")
                     && command
                         .argument
                         .as_ref()
@@ -664,7 +665,35 @@ pub fn help(workspace: &Workspace, uri: &Url, position: Position) -> Option<Sign
             .map(|argument| argument.value.trim())
             .or_else(|| literal.as_ref().map(|span| &doc.text.source[span.clone()]))
             .unwrap_or(command.name.as_str());
-        let signature = if name == "begin" {
+        let signature = if name == "hyperref"
+            && doc
+                .text
+                .source
+                .as_bytes()
+                .get(syntax::skip_space(&doc.text.source, end))
+                == Some(&b'{')
+            && !workspace.documents.iter().any(|(uri, doc)| {
+                scope.contains(uri)
+                    && doc
+                        .syntax
+                        .definitions
+                        .iter()
+                        .any(|entry| entry.name == name)
+            }) {
+            Some(Signature {
+                name: name.into(),
+                starred: false,
+                documentation: "Link to a URL using a category and target name. Requires hyperref."
+                    .into(),
+                parameters: ["url", "category", "name", "text"]
+                    .into_iter()
+                    .map(|label| Parameter {
+                        kind: Kind::Required,
+                        label: format!("{{{label}}}"),
+                    })
+                    .collect(),
+            })
+        } else if name == "begin" {
             syntax::group(
                 &doc.text.source,
                 syntax::skip_space(&doc.text.source, end),

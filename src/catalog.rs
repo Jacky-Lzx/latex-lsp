@@ -3,6 +3,7 @@ pub(crate) use crate::primitives::PRIMITIVES;
 /// Command name, snippet template (without leading backslash), short documentation.
 /// Templates retain literal TeX backslashes; completion escapes them for the client.
 pub const COMMANDS: &[(&str, &str, &str)] = &[
+    ("hyperref", "hyperref[${1:key}]{${2:text}}", "Link custom text to a label. Requires hyperref. The four required argument form links a URL instead."),
     ("cslet", "cslet{${1:alias}}{\\${2:command}}", "Assign a control sequence's current meaning to a named alias in the current group. Requires etoolbox."),
     ("letcs", "letcs{\\${1:alias}}{${2:command}}", "Assign a named control sequence's current meaning to an alias token in the current group. Requires etoolbox."),
     ("csletcs", "csletcs{${1:alias}}{${2:command}}", "Assign a named control sequence's current meaning to a named alias in the current group. Requires etoolbox."),

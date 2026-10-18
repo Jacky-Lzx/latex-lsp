@@ -264,6 +264,46 @@ pub(crate) fn counter_reference_label(source: &str, command: &Command) -> Option
     .map(|(argument, _)| argument)
 }
 
+/// These commands keep their label outside the ordinary first required argument.
+pub(crate) fn has_separate_label_argument(name: &str) -> bool {
+    is_counter_reference(name) || name == "hyperref"
+}
+
+pub(crate) fn separate_label_argument_start(
+    source: &str,
+    command: &Command,
+) -> Option<(usize, u8)> {
+    if command.name == "hyperref" {
+        let start = skip_space(source, command.span.end);
+        (source.as_bytes().get(start) == Some(&b'[')).then_some((start, b'['))
+    } else {
+        counter_reference_label_start(source, command).map(|start| (start, b'{'))
+    }
+}
+
+pub(crate) fn separate_label_argument(source: &str, command: &Command) -> Option<Argument> {
+    if command.name != "hyperref" {
+        return counter_reference_label(source, command);
+    }
+    let (start, _) = separate_label_argument_start(source, command)?;
+    group(source, start, b'[', b']').map(|(argument, _)| argument)
+}
+
+pub(crate) fn label_replacement_safe(
+    text: &Text,
+    commands: &[Command],
+    range: tower_lsp::lsp_types::Range,
+    name: &str,
+) -> bool {
+    !name.contains(['[', ']'])
+        || !commands.iter().any(|command| {
+            command.name == "hyperref"
+                && separate_label_argument(&text.source, command).is_some_and(|argument| {
+                    text.range(argument.span.start, argument.span.end) == range
+                })
+        })
+}
+
 pub(crate) fn is_static_key(value: &str) -> bool {
     !value.is_empty()
         && !value.chars().any(|ch| {
@@ -708,7 +748,9 @@ impl Syntax {
                             arg_start = skip_space(source, end);
                         }
                     }
-                    let url_argument = matches!(name, "url" | "href");
+                    let url_argument = matches!(name, "url" | "href")
+                        || name == "hyperref"
+                            && bytes.get(skip_space(source, command_end)) == Some(&b'{');
                     let parsed =
                         group_mode(source, arg_start, b'{', b'}', !url_argument).or_else(|| {
                             (name == "input" && bytes.get(arg_start) != Some(&b'{'))

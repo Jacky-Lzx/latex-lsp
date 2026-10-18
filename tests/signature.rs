@@ -35,6 +35,42 @@ fn check(definitions: &str, marked: &str, label: &str, active: u32) {
 }
 
 #[test]
+fn hyperref_signatures_distinguish_label_links_from_four_argument_urls() {
+    for (marked, label, active) in [
+        (r"\hyperref[sec:¦intro]{Link}", r"\hyperref[key]{text}", 0),
+        (r"\hyperref[sec:intro]{Li¦nk}", r"\hyperref[key]{text}", 1),
+        (
+            r"\hyperref{https://example.com/a%20¦b}{category}{name}{Link}",
+            r"\hyperref{url}{category}{name}{text}",
+            0,
+        ),
+        (
+            r"\hyperref{url}{cat¦egory}{name}{Link}",
+            r"\hyperref{url}{category}{name}{text}",
+            1,
+        ),
+        (
+            r"\hyperref{url}{category}{na¦me}{Link}",
+            r"\hyperref{url}{category}{name}{text}",
+            2,
+        ),
+        (
+            r"\hyperref{url}{category}{name}{Li¦nk}",
+            r"\hyperref{url}{category}{name}{text}",
+            3,
+        ),
+    ] {
+        check("", marked, label, active);
+    }
+    check(
+        r"\newcommand{\hyperref}[2]{#1 #2}",
+        r"\hyperref{one}{tw¦o}",
+        r"\hyperref{#1}{#2}",
+        1,
+    );
+}
+
+#[test]
 fn refcount_queries_offer_label_field_default_and_branch_parameters() {
     for (marked, label, active) in [
         (r"\getrefnumber{key¦}", r"\getrefnumber{key}", 0),

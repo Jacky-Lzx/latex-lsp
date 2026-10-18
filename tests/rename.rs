@@ -107,6 +107,67 @@ fn label_rename_preserves_spaced_names_and_keeps_cref_list_separators() {
 }
 
 #[test]
+fn hyperref_links_rename_only_bracketed_labels_and_preserve_text_urls_and_spaced_keys() {
+    let mut workspace = Workspace::default();
+    let declaration = insert(&mut workspace, "chapter.tex", r"\label{sec:old}", None);
+    let source = concat!(
+        "😀 \\hyperref[sec:old]{sec:old and \\ref{sec:old}}\n",
+        "\\hyperref % comment\n[sec:old]{text}\n",
+        "\\hyperref[ sec:old ]{text}\n",
+        "\\hyperref{sec:old}{sec:old}{sec:old}{sec:old}\n",
+        "\\hyperref*[sec:old]{text}\n",
+        "% \\hyperref[sec:old]{text}\n\\verb|\\hyperref[sec:old]{text}|\n",
+    );
+    let main = insert(&mut workspace, "main.tex", source, Some(4));
+    let text = &workspace.documents[&main].text;
+    let position = text.position(source.find("sec:old").unwrap() + 3);
+    assert_eq!(
+        features::definitions(&workspace, &main, position)[0].uri,
+        declaration
+    );
+    assert!(features::hover(&workspace, &main, position).is_some());
+    assert_eq!(
+        features::references(&workspace, &main, position, true).len(),
+        4
+    );
+    let changes = features::rename(&workspace, &main, position, "sec:new")
+        .unwrap()
+        .unwrap()
+        .changes
+        .unwrap();
+    assert_eq!(
+        edits_result(source, &changes[&main]),
+        source
+            .replacen("[sec:old]", "[sec:new]", 2)
+            .replace("\\ref{sec:old}", "\\ref{sec:new}")
+    );
+    for marker in ["{sec:old and", "[ sec:old ]", "{sec:old}{", "*[sec:old]"] {
+        let at = source.find(marker).unwrap() + marker.find("sec:old").unwrap() + 3;
+        let position = text.position(at);
+        assert!(
+            features::definitions(&workspace, &main, position).is_empty(),
+            "{marker}"
+        );
+        assert!(
+            features::prepare_rename(&workspace, &main, position)
+                .unwrap()
+                .is_none(),
+            "{marker}"
+        );
+    }
+    for name in ["sec:[new", "sec:new]"] {
+        assert!(
+            features::rename(&workspace, &declaration, Position::new(0, 10), name).is_err(),
+            "{name}"
+        );
+        assert!(
+            features::rename(&workspace, &main, position, name).is_err(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn refcount_queries_navigate_complete_and_rename_only_the_label_argument() {
     for (command, tail) in [
         ("getrefnumber", ""),
