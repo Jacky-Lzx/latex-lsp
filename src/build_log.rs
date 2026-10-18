@@ -378,6 +378,16 @@ fn environment_error(message: &str) -> Option<EnvironmentError<'_>> {
             expected: None,
         });
     }
+    let (name, expected) = mismatched_environment_names(message)?;
+    Some(EnvironmentError {
+        command: "end",
+        name,
+        code: "mismatched-environment-end",
+        expected: Some(expected),
+    })
+}
+
+pub(crate) fn mismatched_environment_names(message: &str) -> Option<(&str, &str)> {
     let tail = message.strip_prefix("LaTeX Error: \\begin{")?;
     let (expected, tail) = tail.split_once('}')?;
     let tail = if let Some(tail) = tail.strip_prefix(" on input line ") {
@@ -394,14 +404,8 @@ fn environment_error(message: &str) -> Option<EnvironmentError<'_>> {
         .strip_suffix("}.")?
         .trim();
     let expected = expected.trim();
-    (crate::syntax::is_static_key(name) && crate::syntax::is_static_key(expected)).then_some(
-        EnvironmentError {
-            command: "end",
-            name,
-            code: "mismatched-environment-end",
-            expected: Some(expected),
-        },
-    )
+    (crate::syntax::is_static_key(name) && crate::syntax::is_static_key(expected))
+        .then_some((name, expected))
 }
 
 fn environment_name_range(

@@ -67,6 +67,26 @@ fn target<'a>(
         .then_some((Kind::Command, name))
 }
 
+fn opaque_environment(
+    doc: &crate::workspace::Document,
+    command: &crate::syntax::Command,
+    name: &str,
+) -> Option<bool> {
+    if command.name != "begin" || !crate::syntax::is_verbatim_environment(name) {
+        return Some(false);
+    }
+    let argument = command.argument.as_ref()?;
+    let ending = format!("\\end{{{name}}}");
+    doc.syntax
+        .ignored
+        .iter()
+        .any(|ignored| {
+            ignored.start == argument.outer_span.end
+                && doc.text.source[ignored.clone()].ends_with(&ending)
+        })
+        .then_some(true)
+}
+
 fn environment_end(doc: &crate::workspace::Document, begin: Range) -> Option<Range> {
     let mut started = false;
     let mut stack = Vec::new();
@@ -91,15 +111,8 @@ fn environment_end(doc: &crate::workspace::Document, begin: Range) -> Option<Ran
             return None;
         }
         if command.name == "begin" {
-            if crate::syntax::is_verbatim_environment(name) {
-                let ending = format!("\\end{{{name}}}");
-                if doc.syntax.ignored.iter().any(|ignored| {
-                    ignored.start == argument.outer_span.end
-                        && doc.text.source[ignored.clone()].ends_with(&ending)
-                }) {
-                    continue;
-                }
-                return None;
+            if opaque_environment(doc, command, name)? {
+                continue;
             }
             stack.push(name);
             if stack.len() > 256 {
@@ -112,6 +125,58 @@ fn environment_end(doc: &crate::workspace::Document, begin: Range) -> Option<Ran
             if stack.is_empty() {
                 return Some(doc.text.range(span.start, span.end));
             }
+        }
+    }
+    None
+}
+
+fn closing_environment_fix(
+    doc: &crate::workspace::Document,
+    diagnostic: &Diagnostic,
+) -> Option<QuickFix> {
+    let (name, expected) = build_log::mismatched_environment_names(&diagnostic.message)?;
+    let data = diagnostic.data.as_ref()?;
+    if name == expected
+        || data.get("environment")?.as_str()? != name
+        || data.get("expectedEnvironment")?.as_str()? != expected
+    {
+        return None;
+    }
+    let mut stack = Vec::new();
+    for command in &doc.syntax.commands {
+        if !matches!(command.name.as_str(), "begin" | "end") {
+            continue;
+        }
+        let argument = command.argument.as_ref()?;
+        let span = crate::syntax::trimmed_span(&doc.text.source, argument.span.clone());
+        let argument_name = &doc.text.source[span.clone()];
+        if !crate::syntax::is_static_key(argument_name) {
+            return None;
+        }
+        if command.name == "end" && doc.text.range(span.start, span.end) == diagnostic.range {
+            if argument_name != name || stack.last().copied() != Some(expected) {
+                return None;
+            }
+            return Some(QuickFix {
+                title: format!("Close environment `{expected}`"),
+                diagnostic: diagnostic.clone(),
+                edit: TextEdit {
+                    range: diagnostic.range,
+                    new_text: expected.into(),
+                },
+                additional_edits: vec![],
+            });
+        }
+        if opaque_environment(doc, command, argument_name)? {
+            continue;
+        }
+        if command.name == "begin" {
+            stack.push(argument_name);
+            if stack.len() > 256 {
+                return None;
+            }
+        } else if stack.pop() != Some(argument_name) {
+            return None;
         }
     }
     None
@@ -176,6 +241,22 @@ pub fn fixes(workspace: &Workspace, uri: &Url, range: Range) -> Vec<QuickFix> {
             examined += 1;
             if examined > 64 {
                 return result;
+            }
+            if diagnostic.code == Some(NumberOrString::String("mismatched-environment-end".into()))
+            {
+                if let Some(fix) = closing_environment_fix(doc, diagnostic) {
+                    if seen.insert((
+                        diagnostic.range.start,
+                        diagnostic.range.end,
+                        fix.edit.new_text.clone(),
+                    )) {
+                        result.push(fix);
+                        if result.len() >= 256 {
+                            return result;
+                        }
+                    }
+                }
+                continue;
             }
             let Some((kind, key)) = target(doc, diagnostic) else {
                 continue;

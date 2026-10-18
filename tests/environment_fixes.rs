@@ -76,6 +76,10 @@ fn action(response: &CodeActionResponse, replacement: &str) -> CodeAction {
 }
 
 fn apply(workspace: &Workspace, uri: &Url, edit: WorkspaceEdit) -> String {
+    apply_count(workspace, uri, edit, 2)
+}
+
+fn apply_count(workspace: &Workspace, uri: &Url, edit: WorkspaceEdit, count: usize) -> String {
     let mut edits = if let Some(changes) = edit.changes {
         changes[uri].clone()
     } else {
@@ -97,10 +101,12 @@ fn apply(workspace: &Workspace, uri: &Url, edit: WorkspaceEdit) -> String {
             })
             .collect()
     };
-    assert_eq!(edits.len(), 2, "both environment names must change");
-    assert_eq!(edits[0].new_text, edits[1].new_text);
+    assert_eq!(edits.len(), count);
     edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
-    assert!(edits[1].range.end < edits[0].range.start);
+    for pair in edits.windows(2) {
+        assert_eq!(pair[0].new_text, pair[1].new_text);
+        assert!(pair[1].range.end < pair[0].range.start);
+    }
     workspace.documents[uri]
         .text
         .changed(
@@ -115,6 +121,178 @@ fn apply(workspace: &Workspace, uri: &Url, edit: WorkspaceEdit) -> String {
         )
         .unwrap()
         .source
+}
+
+fn closing_diagnostic(
+    workspace: &mut Workspace,
+    uri: &Url,
+    name: &str,
+    expected: &str,
+) -> Diagnostic {
+    let text = &workspace.documents[uri].text;
+    let start = text.source.rfind(name).unwrap();
+    let diagnostic = Diagnostic {
+        range: text.range(start, start + name.len()),
+        source: Some("latex-build".into()),
+        message: format!(
+            "LaTeX Error: \\begin{{{expected}}} on input line 1 ended by \\end{{{name}}}."
+        ),
+        code: Some(NumberOrString::String("mismatched-environment-end".into())),
+        data: Some(serde_json::json!({"environment":name,"expectedEnvironment":expected})),
+        ..Default::default()
+    };
+    store(workspace, uri, diagnostic.clone());
+    diagnostic
+}
+
+#[test]
+fn closing_fixes_use_the_confirmed_environment_stack_and_change_only_the_end_name() {
+    let source = "😀 \\begin{equation}\r\n\\begin{aligned}x&=y\\end{aligned}\r\n\\begin{verbatim}\r\n\\end{algin}\r\n\\end{verbatim}\r\n\\end{ algin }\r\n";
+    for versioned in [false, true] {
+        let (mut workspace, uri, _) = setup(source, "");
+        workspace.versioned_edits = versioned;
+        let diagnostic = closing_diagnostic(&mut workspace, &uri, "algin", "equation");
+        let response = actions(&workspace, &uri, &diagnostic);
+        assert_eq!(response.len(), 1, "{response:?}");
+        let CodeActionOrCommand::CodeAction(action) = &response[0] else {
+            panic!("missing action")
+        };
+        assert_eq!(action.title, "Close environment `equation`");
+        assert_eq!(action.is_preferred, Some(false));
+        assert_eq!(
+            apply_count(&workspace, &uri, action.edit.clone().unwrap(), 1),
+            source.replace("end{ algin }", "end{ equation }")
+        );
+    }
+}
+
+#[test]
+fn closing_fixes_reject_cascading_undefined_environment_errors_dynamic_stacks_and_forged_metadata()
+{
+    for (source, expected, mode) in [
+        (
+            r"\begin{document}\begin{algin}Content\end{algin}\end{document}",
+            "document",
+            "precise",
+        ),
+        (r"\end{algin}", "equation", "precise"),
+        (r"\begin{\name}Content\end{algin}", "equation", "precise"),
+        (
+            r"\begin{equation}\begin{aligned}\end{other}\end{algin}",
+            "equation",
+            "precise",
+        ),
+        (
+            r"\begin{equation}\begin{verbatim}\end{algin}",
+            "equation",
+            "precise",
+        ),
+        (r"\begin{equation}\verb|\end{algin}|", "equation", "precise"),
+        (r"\begin{equation}\end{algin}", "equation", "data"),
+        (r"\begin{equation}\end{algin}", "equation", "code"),
+        (r"\begin{equation}\end{algin}", "equation", "range"),
+    ] {
+        let (mut workspace, uri, _) = setup(source, "");
+        let mut diagnostic = closing_diagnostic(&mut workspace, &uri, "algin", expected);
+        match mode {
+            "data" => {
+                diagnostic.data =
+                    Some(serde_json::json!({"environment":"algin","expectedEnvironment":"align"}))
+            }
+            "code" => diagnostic.code = None,
+            "range" => diagnostic.range.end.character += 1,
+            _ => {}
+        }
+        store(&mut workspace, &uri, diagnostic.clone());
+        assert!(
+            actions(&workspace, &uri, &diagnostic).is_empty(),
+            "{source}/{mode}"
+        );
+    }
+}
+
+#[test]
+fn legacy_closing_fixes_recheck_the_stack_and_document_version() {
+    let source = r"\begin{equation}Content\end{algin}";
+    let (mut workspace, uri, _) = setup(source, "");
+    workspace.code_action_literals = false;
+    workspace.apply_edits = true;
+    let diagnostic = closing_diagnostic(&mut workspace, &uri, "algin", "equation");
+    let response = actions(&workspace, &uri, &diagnostic);
+    let CodeActionOrCommand::Command(command) = &response[0] else {
+        panic!("missing command")
+    };
+    let value = command.arguments.as_ref().unwrap()[0].clone();
+    let edit =
+        editing::resolve_fix(&workspace, serde_json::from_value(value.clone()).unwrap()).unwrap();
+    assert_eq!(
+        apply_count(&workspace, &uri, edit, 1),
+        source.replace("end{algin}", "end{equation}")
+    );
+    let mut forged = value.clone();
+    forged["replacement"] = serde_json::json!("document");
+    assert!(editing::resolve_fix(&workspace, serde_json::from_value(forged).unwrap()).is_none());
+    workspace.documents.get_mut(&uri).unwrap().version = Some(10);
+    assert!(
+        editing::resolve_fix(&workspace, serde_json::from_value(value.clone()).unwrap()).is_none()
+    );
+    workspace.documents.insert(
+        uri.clone(),
+        Document::new(
+            &uri,
+            source.replace("begin{equation}", "begin{tabular*}"),
+            Some(9),
+        ),
+    );
+    assert!(editing::resolve_fix(&workspace, serde_json::from_value(value).unwrap()).is_none());
+}
+
+#[test]
+#[ignore = "requires pdflatex"]
+fn closing_name_fixes_repair_a_real_compiler_error() {
+    use latex_lsp::{build, config::BuildConfig};
+    use std::sync::atomic::AtomicBool;
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = root.join("main.tex");
+    let source = "\\documentclass{article}\n\\begin{document}\n\\begin{equation}x=1\\end{equatoin}\n\\end{document}\n";
+    std::fs::write(&main, source).unwrap();
+    let config = BuildConfig {
+        executable: "pdflatex".into(),
+        ..Default::default()
+    };
+    let before = build::run(&main, &config, &AtomicBool::new(false));
+    assert_eq!(before.status, "error", "{}", before.output);
+    let uri = Url::from_file_path(&main).unwrap();
+    let diagnostic = before.diagnostics[&uri]
+        .iter()
+        .find(|diagnostic| {
+            diagnostic.code == Some(NumberOrString::String("mismatched-environment-end".into()))
+        })
+        .unwrap()
+        .clone();
+    let mut workspace = Workspace {
+        versioned_edits: true,
+        code_action_literals: true,
+        ..Default::default()
+    };
+    workspace.add_root(root.into());
+    workspace.open(uri.clone(), source.into(), 9);
+    workspace
+        .build_diagnostics
+        .insert(uri.clone(), before.diagnostics);
+    let response = actions(&workspace, &uri, &diagnostic);
+    let CodeActionOrCommand::CodeAction(action) = &response[0] else {
+        panic!("missing closing action: {response:?}")
+    };
+    std::fs::write(
+        &main,
+        apply_count(&workspace, &uri, action.edit.clone().unwrap(), 1),
+    )
+    .unwrap();
+    let after = build::run(&main, &config, &AtomicBool::new(false));
+    assert_eq!(after.status, "success", "{}", after.output);
+    assert_eq!(after.pages, Some(1));
 }
 
 #[test]
