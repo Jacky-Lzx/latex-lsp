@@ -140,17 +140,23 @@ fn builtin(name: &str) -> Option<Signature> {
     })
 }
 
-fn definition(uri: &Url, doc: &Document, entry: &Entry) -> Option<Signature> {
+fn definition(uri: &Url, doc: &Document, entry: &Entry, environment: bool) -> Option<Signature> {
     let source = &doc.text.source;
     let declaration = entry.detail.strip_prefix("Defined with \\")?;
-    let mut i = entry.span.end;
+    let mut i = syntax::skip_space(source, entry.span.end);
     if source.as_bytes().get(i) == Some(&b'}') {
         i += 1;
     }
     i = syntax::skip_space(source, i);
     let mut parameters = Vec::new();
     match declaration {
-        "newcommand" | "renewcommand" | "providecommand" | "DeclareRobustCommand" => {
+        "newcommand"
+        | "renewcommand"
+        | "providecommand"
+        | "DeclareRobustCommand"
+        | "newenvironment"
+        | "renewenvironment"
+        | "provideenvironment" => {
             let (count, end) = syntax::group(source, i, b'[', b']')?;
             let count: usize = count.value.trim().parse().ok()?;
             if !(1..=9).contains(&count) {
@@ -178,7 +184,11 @@ fn definition(uri: &Url, doc: &Document, entry: &Entry) -> Option<Signature> {
         "NewDocumentCommand"
         | "RenewDocumentCommand"
         | "ProvideDocumentCommand"
-        | "DeclareDocumentCommand" => {
+        | "DeclareDocumentCommand"
+        | "NewDocumentEnvironment"
+        | "RenewDocumentEnvironment"
+        | "ProvideDocumentEnvironment"
+        | "DeclareDocumentEnvironment" => {
             let (arguments, _) = syntax::group(source, i, b'{', b'}')?;
             let source = &arguments.value;
             let mut i = 0;
@@ -234,8 +244,21 @@ fn definition(uri: &Url, doc: &Document, entry: &Entry) -> Option<Signature> {
     if parameters.is_empty() {
         return None;
     }
+    if environment {
+        parameters.insert(
+            0,
+            Parameter {
+                kind: Kind::Required,
+                label: format!("{{{}}}", entry.name),
+            },
+        );
+    }
     Some(Signature {
-        name: entry.name.clone(),
+        name: if environment {
+            "begin".into()
+        } else {
+            entry.name.clone()
+        },
         parameters,
         documentation: format!(
             "{}\n{}:{}",
@@ -258,21 +281,71 @@ fn short(value: &str) -> String {
 }
 
 fn signature(workspace: &Workspace, name: &str) -> Option<Signature> {
+    lookup(workspace, name, false)
+}
+
+fn lookup(workspace: &Workspace, name: &str, environment: bool) -> Option<Signature> {
     let mut definitions = workspace.documents.iter().flat_map(|(uri, doc)| {
-        doc.syntax
-            .definitions
-            .iter()
-            .filter(move |entry| entry.name == name)
-            .map(move |entry| (uri, doc, entry))
+        (if environment {
+            &doc.syntax.environments
+        } else {
+            &doc.syntax.definitions
+        })
+        .iter()
+        .filter(move |entry| entry.name == name)
+        .map(move |entry| (uri, doc, entry))
     });
     if let Some((uri, doc, entry)) = definitions.next() {
         if definitions.next().is_some() {
             return None;
         }
-        definition(uri, doc, entry)
+        definition(uri, doc, entry, environment)
+    } else if environment {
+        builtin_environment(name)
     } else {
         builtin(name)
     }
+}
+
+fn builtin_environment(name: &str) -> Option<Signature> {
+    let arguments: &[(&str, bool)] = match name {
+        "tabular" | "array" => &[("position", true), ("columns", false)],
+        "tabular*" => &[("width", false), ("position", true), ("columns", false)],
+        "minipage" => &[
+            ("position", true),
+            ("height", true),
+            ("inner position", true),
+            ("width", false),
+        ],
+        "figure" | "figure*" | "table" | "table*" => &[("placement", true)],
+        "thebibliography" => &[("widest label", false)],
+        "list" => &[("label", false), ("spacing", false)],
+        "alignat" | "alignat*" => &[("column pairs", false)],
+        "alignedat" => &[("position", true), ("column pairs", false)],
+        _ => return None,
+    };
+    let mut parameters = vec![Parameter {
+        kind: Kind::Required,
+        label: format!("{{{name}}}"),
+    }];
+    parameters.extend(arguments.iter().map(|(label, optional)| Parameter {
+        kind: if *optional {
+            Kind::Optional
+        } else {
+            Kind::Required
+        },
+        label: if *optional {
+            format!("[{label}]")
+        } else {
+            format!("{{{label}}}")
+        },
+    }));
+    Some(Signature {
+        name: "begin".into(),
+        parameters,
+        documentation: format!("Arguments of the {name} environment."),
+        starred: false,
+    })
 }
 
 fn group_end(doc: &Document, start: usize, cursor: usize, open: u8, close: u8) -> Option<usize> {
@@ -396,7 +469,17 @@ pub fn help(workspace: &Workspace, uri: &Url, position: Position) -> Option<Sign
         .filter(|command| command.span.end <= cursor)
         .take(128)
     {
-        if let Some(signature) = signature(workspace, &command.name) {
+        let signature = if command.name == "begin" {
+            command
+                .argument
+                .as_ref()
+                .filter(|argument| cursor > argument.span.end)
+                .and_then(|argument| lookup(workspace, argument.value.trim(), true))
+                .or_else(|| signature(workspace, &command.name))
+        } else {
+            signature(workspace, &command.name)
+        };
+        if let Some(signature) = signature {
             if let Some(active) = active_parameter(doc, command.span.end, cursor, &signature) {
                 return Some(signature.information(active));
             }

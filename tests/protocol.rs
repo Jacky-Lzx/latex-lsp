@@ -1410,7 +1410,27 @@ fn signature_help_tracks_incremental_edits_and_custom_macros_over_stdio() {
         "\\frac{numerator}{denominator}"
     );
     assert_eq!(help["activeParameter"], 1);
-    server.request(4, "shutdown", Value::Null);
+    server.notify("textDocument/didChange",json!({"textDocument":{"uri":macros,"version":2},"contentChanges":[{"text":"\\newenvironment{panel}[2][blue]{#1#2}{}"}]}));
+    server.notify("textDocument/didChange",json!({"textDocument":{"uri":main,"version":3},"contentChanges":[{"text":"\\begin{panel}{title}\\end{panel}"}]}));
+    let help = server.request(
+        4,
+        "textDocument/signatureHelp",
+        json!({"textDocument":{"uri":main},"position":{"line":0,"character":18}}),
+    );
+    assert_eq!(
+        help["signatures"][0]["label"],
+        "\\begin{panel}[#1=blue]{#2}"
+    );
+    assert_eq!(help["activeParameter"], 2);
+    server.notify("textDocument/didChange",json!({"textDocument":{"uri":macros,"version":3},"contentChanges":[{"text":"\\newenvironment{panel}[1]{#1}{}"}]}));
+    let help = server.request(
+        5,
+        "textDocument/signatureHelp",
+        json!({"textDocument":{"uri":main},"position":{"line":0,"character":18}}),
+    );
+    assert_eq!(help["signatures"][0]["label"], "\\begin{panel}{#1}");
+    assert_eq!(help["activeParameter"], 1);
+    server.request(6, "shutdown", Value::Null);
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }

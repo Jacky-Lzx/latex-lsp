@@ -11,7 +11,7 @@
 - 快速修复：补全缺失花括号、闭合环境、删除多余的闭合符号；支持版本化编辑和旧客户端的命令式操作，拒绝过期修复。
 - 补全：常用 LaTeX 命令、环境、用户命令、跨文件标签、BibTeX 文献键及输入文件/图片/本地包等路径。支持词中替换，根据客户端能力提供 snippet，并保留已有参数。
 - 悬浮提示：内置命令说明、标签/文献/自定义命令的定义位置。
-- 参数提示：常用命令及跨文件用户宏的签名，区分必选/可选参数，跟踪嵌套调用中的当前参数。
+- 参数提示：常用命令、环境及跨文件用户宏/环境的签名，区分必选/可选参数，跟踪嵌套调用中的当前参数。
 - 定义跳转：`\ref` / `\eqref` / `\cref` 等引用、常见 `\cite` 变体、自定义命令、输入文件、文献文件及本地包、类、图片。
 - 查找引用：标签、文献键、自定义命令；支持包含或排除定义。
 - 文档高亮：区分当前文件中的定义和引用；选择范围可逐级扩展到词、参数、命令、章节和整篇文档。
@@ -66,6 +66,8 @@ vim.lsp.enable('latex_lsp')
 打开 `.tex` 后，可用 `vim.lsp.buf.hover()` 查看提示，`vim.lsp.buf.definition()` 跳转，`vim.lsp.buf.references()` 查找引用，`vim.lsp.buf.rename()` 跨文件重命名。补全可通过 `<C-x><C-o>` 或支持 Neovim LSP 的补全插件触发；snippet 需要客户端声明支持。
 
 输入命令参数时，可通过 `vim.lsp.buf.signature_help()` 查看签名；支持自动参数提示的插件也可使用标准 `textDocument/signatureHelp`。
+
+环境参数提示支持 `\newenvironment` 系列和 xparse 的 `\NewDocumentEnvironment` 系列定义，以及 `tabular`、`minipage`、`figure` 等常用环境。自定义命令与环境识别常规参数数量/默认值，以及 xparse 的 `m`、`o`、`O`、`s` 参数；复杂分隔参数和存在多个定义的名称不推断签名。
 
 在语法错误处调用 `vim.lsp.buf.code_action()` 可选择快速修复；`vim.lsp.buf.document_highlight()` 高亮当前符号的定义和引用。Neovim 0.12 中可用 `vim.lsp.buf.selection_range(1)` 扩大语法选择范围。
 

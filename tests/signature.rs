@@ -233,3 +233,132 @@ fn signatures_suppress_comments_raw_text_completed_calls_and_unsupported_or_ambi
     let (workspace, uri, _) = setup("", r"\frac{😀¦}{b}");
     assert!(signature::help(&workspace, &uri, Position::new(0, 7)).is_none());
 }
+
+#[test]
+fn custom_environment_signatures_follow_latex_and_xparse_declarations() {
+    for declaration in ["newenvironment", "renewenvironment", "provideenvironment"] {
+        let definitions = format!("\\{declaration}{{panel }}[2][blue]{{#1#2}}{{}}");
+        check(
+            &definitions,
+            r"\begin{panel}{title¦}",
+            r"\begin{panel}[#1=blue]{#2}",
+            2,
+        );
+        check(
+            &definitions,
+            r"\begin{panel}[red¦]{title}",
+            r"\begin{panel}[#1=blue]{#2}",
+            1,
+        );
+        check(
+            &definitions,
+            "\\begin{panel} % comment\r\n {😀¦}",
+            r"\begin{panel}[#1=blue]{#2}",
+            2,
+        );
+        check(
+            &definitions,
+            r"\begin{panel}{\frac{a}{b¦}}",
+            r"\frac{numerator}{denominator}",
+            1,
+        );
+    }
+    for declaration in [
+        "NewDocumentEnvironment",
+        "RenewDocumentEnvironment",
+        "ProvideDocumentEnvironment",
+        "DeclareDocumentEnvironment",
+    ] {
+        let definitions = format!("\\{declaration}{{panel}}{{s O{{blue}} m}}{{#3}}{{}}");
+        check(
+            &definitions,
+            r"\begin{panel}*{title¦}",
+            r"\begin{panel}*[#2=blue]{#3}",
+            3,
+        );
+        check(
+            &definitions,
+            r"\begin{panel}[red¦]{title}",
+            r"\begin{panel}*[#2=blue]{#3}",
+            2,
+        );
+    }
+    check(
+        r"\newcommand{\panel}[1]{#1}\newenvironment{panel}[2]{#1#2}{}",
+        r"\begin{panel}{a}{b¦}",
+        r"\begin{panel}{#1}{#2}",
+        2,
+    );
+    check(
+        r"\newenvironment{panel}[1]{#1}{}",
+        r"\begin{pan¦el}{value}",
+        r"\begin{environment}",
+        0,
+    );
+    for definitions in [
+        r"\newenvironment{panel}[1]{#1}{}",
+        r"\NewDocumentEnvironment{panel}{d()m}{}{}",
+        r"\newenvironment{panel}[1]{#1}{}\newenvironment{panel}[1]{#1}{}",
+    ] {
+        let source = if definitions == r"\newenvironment{panel}[1]{#1}{}" {
+            r"\begin{panel}{value}¦ body"
+        } else {
+            r"\begin{panel}{value¦}"
+        };
+        let (workspace, uri, position) = setup(definitions, source);
+        assert!(
+            signature::help(&workspace, &uri, position).is_none(),
+            "{definitions}"
+        );
+    }
+}
+
+#[test]
+fn builtin_environment_signatures_track_required_and_optional_arguments() {
+    for (source, label, active) in [
+        (
+            r"\begin{tabular}{l¦c}",
+            r"\begin{tabular}[position]{columns}",
+            2,
+        ),
+        (
+            r"\begin{tabular}[t¦]{lc}",
+            r"\begin{tabular}[position]{columns}",
+            1,
+        ),
+        (
+            r"\begin{tabular*}{\linewidth¦}[t]{lc}",
+            r"\begin{tabular*}{width}[position]{columns}",
+            1,
+        ),
+        (
+            r"\begin{minipage}[t][3cm][b¦]{2cm}",
+            r"\begin{minipage}[position][height][inner position]{width}",
+            3,
+        ),
+        (
+            r"\begin{minipage}{2cm¦}",
+            r"\begin{minipage}[position][height][inner position]{width}",
+            4,
+        ),
+        (
+            r"\begin{figure}[ht¦]
+",
+            r"\begin{figure}[placement]",
+            1,
+        ),
+        (
+            r"\begin{thebibliography}{99¦}",
+            r"\begin{thebibliography}{widest label}",
+            1,
+        ),
+        (r"\begin{alignat}{2¦}", r"\begin{alignat}{column pairs}", 1),
+    ] {
+        check("", source, label, active);
+    }
+    let (workspace, uri, position) = setup(
+        r"\newenvironment{tabular}{custom}{}",
+        r"\begin{tabular}{lc¦}",
+    );
+    assert!(signature::help(&workspace, &uri, position).is_none());
+}
