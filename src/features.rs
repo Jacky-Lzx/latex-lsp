@@ -14,6 +14,7 @@ enum TargetKind {
     Label,
     Citation,
     Command,
+    Environment,
 }
 
 struct Target<'a> {
@@ -32,6 +33,10 @@ fn target(doc: &Document, offset: usize) -> Option<Target<'_>> {
                 Some(TargetKind::Label)
             } else if syntax::is_citation(&command.name) || command.name == "bibitem" {
                 Some(TargetKind::Citation)
+            } else if matches!(command.name.as_str(), "begin" | "end")
+                || syntax::declares_environment(&command.name)
+            {
+                Some(TargetKind::Environment)
             } else {
                 None
             };
@@ -80,6 +85,7 @@ fn entries(doc: &Document, kind: TargetKind) -> &[Entry] {
         TargetKind::Label => &doc.syntax.labels,
         TargetKind::Citation => &doc.syntax.citations,
         TargetKind::Command => &doc.syntax.definitions,
+        TargetKind::Environment => &doc.syntax.environments,
     }
 }
 
@@ -179,13 +185,29 @@ pub fn rename(
     if new_name == target.name {
         return Ok(Some(WorkspaceEdit::default()));
     }
-    let conflicts = workspace.documents.values().any(|doc| {
-        entries(doc, target.kind)
-            .iter()
-            .any(|entry| entry.name == new_name)
-    });
-    let builtin =
-        target.kind == TargetKind::Command && COMMANDS.iter().any(|(name, _, _)| *name == new_name);
+    let conflicts =
+        workspace.documents.values().any(|doc| {
+            entries(doc, target.kind)
+                .iter()
+                .any(|entry| entry.name == new_name)
+                || target.kind == TargetKind::Environment
+                    && doc.syntax.definitions.iter().any(|entry| {
+                        entry.name == new_name || entry.name == format!("end{new_name}")
+                    })
+                || target.kind == TargetKind::Command
+                    && doc.syntax.environments.iter().any(|entry| {
+                        entry.name == new_name || format!("end{}", entry.name) == new_name
+                    })
+        });
+    let builtin = match target.kind {
+        TargetKind::Command | TargetKind::Environment => {
+            COMMANDS.iter().any(|(name, _, _)| *name == new_name)
+                || ENVIRONMENTS
+                    .iter()
+                    .any(|name| *name == new_name || format!("end{name}") == new_name)
+        }
+        _ => false,
+    };
     if conflicts || builtin {
         return Err(tower_lsp::jsonrpc::Error::invalid_params(format!(
             "The name `{new_name}` is already defined"
@@ -312,12 +334,7 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
                     .documents
                     .values()
                     .flat_map(|doc| &doc.syntax.commands)
-                    .filter(|cmd| {
-                        matches!(
-                            cmd.name.as_str(),
-                            "begin" | "newenvironment" | "renewenvironment"
-                        )
-                    })
+                    .filter(|cmd| cmd.name == "begin" || syntax::declares_environment(&cmd.name))
                     .filter_map(|cmd| cmd.argument.as_ref())
                     .map(|arg| (arg.value.clone(), "Document environment".into())),
             );
@@ -515,6 +532,7 @@ pub fn references(
                 TargetKind::Label => syntax::is_reference(&command.name),
                 TargetKind::Citation => syntax::is_citation(&command.name),
                 TargetKind::Command => false,
+                TargetKind::Environment => matches!(command.name.as_str(), "begin" | "end"),
             };
             if !matches {
                 continue;
@@ -561,6 +579,15 @@ pub fn hover(workspace: &Workspace, uri: &Url, position: Position) -> Option<Hov
             .iter()
             .find(|(name, _, _)| *name == target.name)
             .map(|(name, _, docs)| format!("\\{name}\n\n{docs}"));
+    }
+    if value.is_none()
+        && target.kind == TargetKind::Environment
+        && ENVIRONMENTS.contains(&target.name)
+    {
+        value = Some(format!(
+            "\\begin{{{}}} ... \\end{{{}}}\n\nLaTeX environment",
+            target.name, target.name
+        ));
     }
     Some(Hover {
         contents: HoverContents::Markup(MarkupContent {
@@ -641,6 +668,7 @@ pub fn symbols(doc: &Document) -> Vec<DocumentSymbol> {
     for (entries, kind) in [
         (&doc.syntax.labels, SymbolKind::KEY),
         (&doc.syntax.definitions, SymbolKind::FUNCTION),
+        (&doc.syntax.environments, SymbolKind::CLASS),
     ] {
         result.extend(entries.iter().map(|entry| DocumentSymbol {
             name: entry.name.clone(),

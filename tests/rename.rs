@@ -121,6 +121,173 @@ fn macro_rename_preserves_backslashes_and_carries_document_versions() {
 }
 
 #[test]
+#[ignore = "requires pdflatex and a current LaTeX installation"]
+fn renamed_custom_environments_still_compile() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("main.tex");
+    let uri = Url::from_file_path(&path).unwrap();
+    let source = "\\documentclass{article}\n\\NewDocumentEnvironment{custombox}{m}{\\begin{quote}#1}{\\end{quote}}\n\\begin{document}\n\\begin{custombox}{Hello}\nWorld\n\\end{custombox}\n\\end{document}\n";
+    let mut workspace = Workspace::default();
+    workspace
+        .documents
+        .insert(uri.clone(), Document::new(&uri, source.into(), Some(1)));
+    let position = Text::new(source.into()).position(source.find("custombox").unwrap() + 2);
+    let edits = features::rename(&workspace, &uri, position, "remarkbox")
+        .unwrap()
+        .unwrap()
+        .changes
+        .unwrap();
+    assert_eq!(edits[&uri].len(), 3);
+    std::fs::write(&path, edits_result(source, &edits[&uri])).unwrap();
+    let config = latex_lsp::config::BuildConfig {
+        executable: "pdflatex".into(),
+        ..Default::default()
+    };
+    let outcome = latex_lsp::build::run(&path, &config, &std::sync::atomic::AtomicBool::new(false));
+    assert_eq!(
+        outcome.status, "success",
+        "{}\n{}",
+        outcome.message, outcome.output
+    );
+}
+
+#[test]
+fn custom_environment_rename_updates_declarations_begin_and_end_across_files() {
+    let mut workspace = Workspace::default();
+    let declaration = insert(
+        &mut workspace,
+        "environments.tex",
+        r"\NewDocumentEnvironment{custom}{O{x}}{}{}",
+        Some(2),
+    );
+    let source =
+        "😀 \\begin{custom}\nText\n\\end{custom}\n% \\begin{custom}\n\\verb|\\end{custom}|";
+    let main = insert(&mut workspace, "main.tex", source, Some(5));
+    let position = Text::new(source.into()).position(source.find("custom").unwrap() + 2);
+    let Some(PrepareRenameResponse::RangeWithPlaceholder { placeholder, .. }) =
+        features::prepare_rename(&workspace, &main, position).unwrap()
+    else {
+        panic!();
+    };
+    assert_eq!(placeholder, "custom");
+    assert_eq!(
+        features::definitions(&workspace, &main, position)[0].uri,
+        declaration
+    );
+    assert_eq!(
+        features::references(&workspace, &main, position, false).len(),
+        2
+    );
+    assert_eq!(
+        features::references(&workspace, &main, position, true).len(),
+        3
+    );
+    assert!(features::hover(&workspace, &main, position).is_some());
+    let symbols = features::symbols(&workspace.documents[&declaration]);
+    assert_eq!(symbols[0].name, "custom");
+    assert_eq!(symbols[0].kind, SymbolKind::CLASS);
+    let edits = features::rename(&workspace, &main, position, "renamed*")
+        .unwrap()
+        .unwrap()
+        .changes
+        .unwrap();
+    assert_eq!(
+        edits_result(
+            &workspace.documents[&declaration].text.source,
+            &edits[&declaration]
+        ),
+        r"\NewDocumentEnvironment{renamed*}{O{x}}{}{}"
+    );
+    assert_eq!(
+        edits_result(source, &edits[&main]),
+        "😀 \\begin{renamed*}\nText\n\\end{renamed*}\n% \\begin{custom}\n\\verb|\\end{custom}|"
+    );
+    for name in ["itemize", "section", "bad name"] {
+        assert!(features::rename(&workspace, &main, position, name).is_err());
+    }
+    let macros = insert(
+        &mut workspace,
+        "macros.tex",
+        r"\newcommand{\taken}{X}\newcommand{\endoccupied}{Y}",
+        None,
+    );
+    assert!(features::rename(&workspace, &main, position, "taken").is_err());
+    assert!(features::rename(&workspace, &main, position, "occupied").is_err());
+    let macro_position = Text::new(workspace.documents[&macros].text.source.clone()).position(15);
+    assert!(features::rename(&workspace, &macros, macro_position, "custom").is_err());
+    insert(
+        &mut workspace,
+        "duplicate.tex",
+        r"\newenvironment{custom}{}{}",
+        None,
+    );
+    assert!(features::prepare_rename(&workspace, &main, position).is_err());
+}
+
+#[test]
+fn environment_declaration_variants_are_indexed_and_complete() {
+    for command in [
+        "newenvironment",
+        "renewenvironment",
+        "provideenvironment",
+        "NewDocumentEnvironment",
+        "RenewDocumentEnvironment",
+        "ProvideDocumentEnvironment",
+        "DeclareDocumentEnvironment",
+        "NewEnviron",
+        "RenewEnviron",
+        "newtheorem",
+    ] {
+        let mut workspace = Workspace::default();
+        let declaration = insert(
+            &mut workspace,
+            "env.tex",
+            &format!("\\{command}{{special}}{{}}{{}}"),
+            Some(1),
+        );
+        let main = insert(&mut workspace, "main.tex", r"\begin{spe", Some(1));
+        assert_eq!(
+            workspace.documents[&declaration].syntax.environments.len(),
+            1,
+            "{command}"
+        );
+        assert!(
+            features::completion(&workspace, &main, Position::new(0, 10))
+                .iter()
+                .any(|item| item.label == "special"),
+            "{command}"
+        );
+        let edit = features::rename(
+            &workspace,
+            &declaration,
+            Position::new(0, command.len() as u32 + 3),
+            "different",
+        )
+        .unwrap()
+        .unwrap()
+        .changes
+        .unwrap();
+        assert!(edits_result(
+            &workspace.documents[&declaration].text.source,
+            &edit[&declaration]
+        )
+        .contains("{different}"));
+    }
+    let mut workspace = Workspace::default();
+    let uri = insert(
+        &mut workspace,
+        "main.tex",
+        r"\begin{itemize}\end{itemize}",
+        Some(1),
+    );
+    assert!(
+        features::prepare_rename(&workspace, &uri, Position::new(0, 9))
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
 fn modern_and_unbraced_macro_declarations_support_navigation_completion_and_rename() {
     for declaration in [
         r"\newcommand\hello[1]{Hello #1}",

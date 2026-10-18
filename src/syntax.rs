@@ -29,6 +29,7 @@ pub struct Syntax {
     pub labels: Vec<Entry>,
     pub citations: Vec<Entry>,
     pub definitions: Vec<Entry>,
+    pub environments: Vec<Entry>,
     pub diagnostics: Vec<Diagnostic>,
     pub ignored: Vec<Range<usize>>,
     pub fixes: Vec<QuickFix>,
@@ -154,6 +155,22 @@ fn declares_command(name: &str) -> bool {
             | "RenewDocumentCommand"
             | "ProvideDocumentCommand"
             | "DeclareDocumentCommand"
+    )
+}
+
+pub fn declares_environment(name: &str) -> bool {
+    matches!(
+        name,
+        "newenvironment"
+            | "renewenvironment"
+            | "provideenvironment"
+            | "NewDocumentEnvironment"
+            | "RenewDocumentEnvironment"
+            | "ProvideDocumentEnvironment"
+            | "DeclareDocumentEnvironment"
+            | "NewEnviron"
+            | "RenewEnviron"
+            | "newtheorem"
     )
 }
 
@@ -328,6 +345,12 @@ impl Syntax {
                             span: trimmed_span(source, arg.span.clone()),
                             detail: format!("\\{name}"),
                         };
+                        if declares_environment(name) && !arg.value.trim().is_empty() {
+                            result.environments.push(Entry {
+                                detail: format!("Defined with \\{name}"),
+                                ..entry()
+                            });
+                        }
                         match name {
                             "label" => result.labels.push(entry()),
                             "bibitem" => result.citations.push(entry()),

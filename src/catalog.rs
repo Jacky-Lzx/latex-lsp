@@ -217,6 +217,26 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
         "Define an environment.",
     ),
     (
+        "renewenvironment",
+        "renewenvironment{${1:name}}{${2:begin}}{${3:end}}",
+        "Redefine an existing environment.",
+    ),
+    (
+        "NewDocumentEnvironment",
+        "NewDocumentEnvironment{${1:name}}{${2:m}}{${3:begin}}{${4:end}}",
+        "Define an environment using an xparse argument specification.",
+    ),
+    (
+        "RenewDocumentEnvironment",
+        "RenewDocumentEnvironment{${1:name}}{${2:m}}{${3:begin}}{${4:end}}",
+        "Redefine an environment using an xparse argument specification.",
+    ),
+    (
+        "newtheorem",
+        "newtheorem{${1:name}}{${2:Title}}",
+        "Define a numbered theorem-like environment.",
+    ),
+    (
         "DeclareRobustCommand",
         "DeclareRobustCommand{\\${1:name}}{${2:definition}}",
         "Define a robust LaTeX command.",
