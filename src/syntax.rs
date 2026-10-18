@@ -232,6 +232,38 @@ pub(crate) fn is_single_reference(name: &str) -> bool {
     is_reference(name) && !matches!(name, "cref" | "Cref")
 }
 
+pub(crate) fn reference_accepts_star(name: &str) -> bool {
+    matches!(
+        name,
+        "ref" | "pageref" | "autoref" | "nameref" | "vref" | "cref" | "Cref"
+    )
+}
+
+pub(crate) fn is_counter_reference(name: &str) -> bool {
+    matches!(
+        name,
+        "setcounterref" | "addtocounterref" | "setcounterpageref" | "addtocounterpageref"
+    )
+}
+
+pub(crate) fn counter_reference_label_start(source: &str, command: &Command) -> Option<usize> {
+    if !is_counter_reference(&command.name) {
+        return None;
+    }
+    let (_, end) = group(source, skip_space(source, command.span.end), b'{', b'}')?;
+    Some(skip_space(source, end))
+}
+
+pub(crate) fn counter_reference_label(source: &str, command: &Command) -> Option<Argument> {
+    group(
+        source,
+        counter_reference_label_start(source, command)?,
+        b'{',
+        b'}',
+    )
+    .map(|(argument, _)| argument)
+}
+
 pub(crate) fn is_static_key(value: &str) -> bool {
     !value.is_empty()
         && !value.chars().any(|ch| {

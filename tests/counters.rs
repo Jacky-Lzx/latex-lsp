@@ -91,6 +91,9 @@ fn counter_completion_does_not_replace_declarations_values_formats_or_computed_n
         r"\value{ex¦\suffix",
         r"\value{ex¦% suffix",
         r"\value{\prefix ex¦}",
+        r"\setcounterref*{ex¦}{labelonly}",
+        r"\setcounterref{exercise}{sec:¦\suffix}",
+        r"\addtocounterpageref{exercise}{se¦c,other}",
         "\\value{\r\n ex¦\\suffix}",
         "\\value{\r\n¦\r\n}",
         "% \\value{ex¦}",
@@ -232,6 +235,40 @@ fn counter_name_completions_replace_semantic_whitespace_with_the_exact_selected_
             )
             .unwrap();
         assert_eq!(changed.source, expected);
+    }
+}
+
+#[test]
+fn refcount_assignment_arguments_complete_in_their_own_namespaces_and_offer_parameter_hints() {
+    for command in [
+        "setcounterref",
+        "addtocounterref",
+        "setcounterpageref",
+        "addtocounterpageref",
+    ] {
+        for (arguments, candidate, excluded, active) in [
+            ("{¦}{labelonly}", "counteronly", "labelonly", 0),
+            ("{counteronly}{¦}", "labelonly", "counteronly", 1),
+        ] {
+            let marked =
+                format!("\\newcounter{{counteronly}}\\label{{labelonly}}\n\\{command}{arguments}");
+            let (_directory, workspace, uri, position) = setup(&marked);
+            let items = features::completion(&workspace, &uri, position);
+            assert!(
+                items.iter().any(|item| item.label == candidate),
+                "{marked}: {items:?}"
+            );
+            assert!(
+                !items.iter().any(|item| item.label == excluded),
+                "{marked}: {items:?}"
+            );
+            let help = signature::help(&workspace, &uri, position).unwrap();
+            assert_eq!(
+                help.signatures[0].label,
+                format!("\\{command}{{counter}}{{key}}")
+            );
+            assert_eq!(help.active_parameter, Some(active));
+        }
     }
 }
 

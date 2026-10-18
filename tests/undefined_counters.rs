@@ -32,6 +32,10 @@ fn counter_operation_errors_select_the_name_and_leave_value_expressions_out_of_t
         ("stepcounter", ""),
         ("refstepcounter", ""),
         ("usecounter", ""),
+        ("setcounterref", "{anchor}"),
+        ("addtocounterref", "{anchor}"),
+        ("setcounterpageref", "{anchor}"),
+        ("addtocounterpageref", "{anchor}"),
     ] {
         let prefix = format!("😀 \\{command}  {{missing}}{value}");
         let source = format!("{prefix} trailing text.\r\n");
@@ -72,6 +76,38 @@ fn repeated_counter_errors_on_one_line_have_separate_name_ranges() {
     let text = Text::new(source.into());
     for (error, (start, _)) in errors.iter().zip(source.match_indices("missing")) {
         assert_eq!(error.range, text.range(start, start + 7));
+    }
+}
+
+#[test]
+fn refcount_assignment_warnings_and_errors_select_different_arguments_even_when_names_match() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    for command in [
+        "setcounterref",
+        "addtocounterref",
+        "setcounterpageref",
+        "addtocounterpageref",
+    ] {
+        let source = format!("\\{command}{{missing}}{{missing}}\n");
+        std::fs::write(&main, &source).unwrap();
+        let log = format!("(./main.tex\nLaTeX Warning: Reference `missing' on page 1 undefined on input line 1.\n./main.tex:1: LaTeX Error: No counter 'missing' defined.\n{HELP}l.1 {}\n)\n", source.trim_end());
+        let diagnostics = build_log::parse(&main, &log);
+        let errors = &diagnostics[&Url::from_file_path(&main).unwrap()];
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        let text = Text::new(source.clone());
+        let counter = errors
+            .iter()
+            .find(|error| error.code == Some(NumberOrString::String("undefined-counter".into())))
+            .unwrap();
+        let label = errors
+            .iter()
+            .find(|error| error.message.contains("Reference"))
+            .unwrap();
+        let first = source.find("missing").unwrap();
+        let second = source.rfind("missing").unwrap();
+        assert_eq!(counter.range, text.range(first, first + 7));
+        assert_eq!(label.range, text.range(second, second + 7));
     }
 }
 
@@ -325,7 +361,7 @@ fn counter_relation_names_can_precede_the_final_consumed_line_and_require_unique
 
 #[test]
 #[cfg(unix)]
-#[ignore = "requires pdflatex, xelatex, lualatex, amsmath, amsthm and aliascnt"]
+#[ignore = "requires pdflatex, xelatex, lualatex, amsmath, amsthm, aliascnt and refcount"]
 fn real_engines_pinpoint_parent_alias_theorem_and_reset_counter_errors() {
     use latex_lsp::{build, config::BuildConfig};
     use std::{os::unix::fs::PermissionsExt, sync::atomic::AtomicBool};
@@ -340,6 +376,10 @@ fn real_engines_pinpoint_parent_alias_theorem_and_reset_counter_errors() {
         "\\counterwithout*[\\Roman]{equation}{fourthmissing}\n",
         "\\numberwithin{fifthmissing}{section}\n",
         "\\numberwithin[\\Roman]{equation}{sixthmissing}\n",
+        "\\setcounterref{setrefmissing}{anchor}\n",
+        "\\addtocounterref{addrefmissing}{anchor}\n",
+        "\\setcounterpageref{setpagemissing}{anchor}\n",
+        "\\addtocounterpageref{addpagemissing}{anchor}\n",
     );
     let names = [
         "parentmissing",
@@ -352,6 +392,10 @@ fn real_engines_pinpoint_parent_alias_theorem_and_reset_counter_errors() {
         "fourthmissing",
         "fifthmissing",
         "sixthmissing",
+        "setrefmissing",
+        "addrefmissing",
+        "setpagemissing",
+        "addpagemissing",
     ];
     for engine in ["pdflatex", "xelatex", "lualatex"] {
         for numbered in [false, true] {
@@ -359,7 +403,7 @@ fn real_engines_pinpoint_parent_alias_theorem_and_reset_counter_errors() {
             let root = directory.path();
             let main = root.join("main.tex");
             let child = root.join("章节.tex");
-            std::fs::write(&main, "\\documentclass{article}\n\\usepackage{amsmath,amsthm,aliascnt}\n\\input{章节}\n\\begin{document}Witness.\\end{document}\n").unwrap();
+            std::fs::write(&main, "\\documentclass{article}\n\\usepackage{amsmath,amsthm,aliascnt,refcount}\n\\input{章节}\n\\begin{document}Witness.\\end{document}\n").unwrap();
             std::fs::write(&child, source).unwrap();
             let compiler = root.join(engine);
             std::fs::write(&compiler, format!("#!/bin/sh\nTEXMFVAR=\"${{0%/*}}/tex-cache\"\nTEXMFCACHE=\"$TEXMFVAR\"\nexport TEXMFVAR TEXMFCACHE\nmkdir -p \"$TEXMFVAR\"\nexec {engine} \"$@\"\n")).unwrap();

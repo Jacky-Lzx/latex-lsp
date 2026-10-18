@@ -78,6 +78,16 @@ fn refcount_queries_offer_label_field_default_and_branch_parameters() {
         "getrefbykeydefault{${1:key}}{${2:page}}{${3:0}}"
     );
     assert_eq!(item.insert_text_format, Some(InsertTextFormat::SNIPPET));
+    for name in [
+        "ref", "pageref", "autoref", "nameref", "vref", "cref", "Cref",
+    ] {
+        check(
+            "",
+            &format!("\\{name}*{{key¦}}"),
+            &format!("\\{name}{{keys}}"),
+            0,
+        );
+    }
 }
 
 #[test]

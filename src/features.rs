@@ -55,6 +55,19 @@ fn raw_target(doc: &Document, offset: usize) -> Option<Target<'_>> {
                 control_word: false,
             });
         }
+        if let Some(argument) = syntax::counter_reference_label(&doc.text.source, command) {
+            if argument.span.start <= offset && offset <= argument.span.end {
+                if !syntax::is_static_key(&argument.value) {
+                    return None;
+                }
+                return Some(Target {
+                    kind: TargetKind::Label,
+                    name: &doc.text.source[argument.span.clone()],
+                    span: argument.span,
+                    control_word: false,
+                });
+            }
+        }
         if let Some(arg) = &command.argument {
             let kind = if syntax::is_reference(&command.name) || command.name == "label" {
                 Some(TargetKind::Label)
@@ -396,6 +409,20 @@ pub fn workspace_edit(
 }
 
 /// Works for incomplete groups too, so typing `\ref{` can offer completions.
+fn completion_name_argument(source: &str, command: &Command, offset: usize) -> Option<Span<usize>> {
+    let start = if syntax::is_counter_reference(&command.name) {
+        syntax::counter_reference_label_start(source, command)?
+    } else {
+        let mut at = syntax::skip_space(source, command.span.end);
+        if syntax::reference_accepts_star(&command.name) && source.as_bytes().get(at) == Some(&b'*')
+        {
+            at = syntax::skip_space(source, at + 1);
+        }
+        at
+    };
+    syntax::active_name_argument(source, start, b'{', offset)
+}
+
 fn argument_context(doc: &Document, offset: usize) -> Option<(&Command, Span<usize>)> {
     let source = &doc.text.source;
     let command = doc
@@ -406,13 +433,9 @@ fn argument_context(doc: &Document, offset: usize) -> Option<(&Command, Span<usi
         .find(|cmd| cmd.span.end <= offset)?;
     if matches!(command.name.as_str(), "begin" | "end")
         || syntax::is_single_reference(&command.name)
+        || syntax::is_counter_reference(&command.name)
     {
-        let span = syntax::active_name_argument(
-            source,
-            syntax::skip_space(source, command.span.end),
-            b'{',
-            offset,
-        )?;
+        let span = completion_name_argument(source, command, offset)?;
         let prefix = source[span.start..offset].trim_start();
         return Some((command, offset - prefix.len()..offset));
     }
@@ -482,13 +505,9 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
         let (replacement_range, additional_edits) =
             if matches!(command.name.as_str(), "begin" | "end")
                 || syntax::is_single_reference(&command.name)
+                || syntax::is_counter_reference(&command.name)
             {
-                let Some(name) = syntax::active_name_argument(
-                    &doc.text.source,
-                    syntax::skip_space(&doc.text.source, command.span.end),
-                    b'{',
-                    offset,
-                ) else {
+                let Some(name) = completion_name_argument(&doc.text.source, command, offset) else {
                     return vec![];
                 };
                 let Some(edits) = syntax::name_completion_ranges(&doc.text, name, offset) else {
@@ -498,13 +517,14 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
             } else {
                 (doc.text.range(span.start, offset + suffix_length), vec![])
             };
-        let kind = if syntax::is_reference(&command.name) {
-            Some(TargetKind::Label)
-        } else if syntax::is_citation(&command.name) {
-            Some(TargetKind::Citation)
-        } else {
-            None
-        };
+        let kind =
+            if syntax::is_reference(&command.name) || syntax::is_counter_reference(&command.name) {
+                Some(TargetKind::Label)
+            } else if syntax::is_citation(&command.name) {
+                Some(TargetKind::Citation)
+            } else {
+                None
+            };
         let mut candidates = Vec::new();
         if let Some(kind) = kind {
             for (entry_uri, entry_doc) in &workspace.documents {
@@ -946,7 +966,10 @@ fn all_references(
                 continue;
             }
             let matches = match target.kind {
-                TargetKind::Label => syntax::is_reference(&command.name),
+                TargetKind::Label => {
+                    syntax::is_reference(&command.name)
+                        || syntax::is_counter_reference(&command.name)
+                }
                 TargetKind::Citation => syntax::is_citation(&command.name),
                 TargetKind::Command => false,
                 TargetKind::Counter | TargetKind::Conditional | TargetKind::Toggle => false,
@@ -955,10 +978,17 @@ fn all_references(
             if !matches {
                 continue;
             }
-            if let Some(arg) = &command.argument {
+            let counter_label = syntax::counter_reference_label(&doc.text.source, command);
+            let argument = if syntax::is_counter_reference(&command.name) {
+                counter_label.as_ref()
+            } else {
+                command.argument.as_ref()
+            };
+            if let Some(arg) = argument {
                 if target.kind == TargetKind::Environment
                     || target.kind == TargetKind::Label
-                        && syntax::is_single_reference(&command.name)
+                        && (syntax::is_single_reference(&command.name)
+                            || syntax::is_counter_reference(&command.name))
                 {
                     if arg.value == target.name {
                         result.push(Location {

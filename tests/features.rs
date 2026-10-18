@@ -102,6 +102,22 @@ fn completion_in_the_middle_replaces_the_remaining_word() {
         (r"\se|ction{Title}", "section", r"\section{Title}"),
         (r"\ref{sec:|旧}", "sec:中文", r"\ref{sec:中文}"),
         (r"\ref{ sec:|旧 }", "sec:中文", r"\ref{sec:中文}"),
+        (r"\ref*{ sec:|旧 }", "sec:中文", r"\ref*{sec:中文}"),
+        (
+            r"\pageref * { sec:|旧 }",
+            "sec:中文",
+            r"\pageref * {sec:中文}",
+        ),
+        (
+            r"\setcounterref{section}{ sec:|旧 }",
+            "sec:中文",
+            r"\setcounterref{section}{sec:中文}",
+        ),
+        (
+            "\\addtocounterpageref{section}{\r\n sec:|旧 \r\n}",
+            "sec:中文",
+            r"\addtocounterpageref{section}{sec:中文}",
+        ),
         (
             r"\getrefbykeydefault{ sec:|旧 }{page}{0}",
             "sec:中文",

@@ -300,7 +300,9 @@ pub(crate) fn references(doc: &Document, name: &str, environment: Generated) -> 
                     | "@addtoreset"
                     | "@removefromreset"
             );
-            if counter || pair {
+            let referenced_counter =
+                syntax::counter_reference_label_start(&doc.text.source, command).is_some();
+            if counter || pair || referenced_counter {
                 arguments.extend(command.argument.iter().cloned());
             }
             if pair {

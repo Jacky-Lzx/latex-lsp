@@ -416,6 +416,26 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
         "Mark a label as used and warn if it is undefined. Requires refcount.",
     ),
     (
+        "setcounterref",
+        "setcounterref{${1:counter}}{${2:key}}",
+        "Set a counter to a label's reference number. Requires refcount.",
+    ),
+    (
+        "addtocounterref",
+        "addtocounterref{${1:counter}}{${2:key}}",
+        "Add a label's reference number to a counter. Requires refcount.",
+    ),
+    (
+        "setcounterpageref",
+        "setcounterpageref{${1:counter}}{${2:key}}",
+        "Set a counter to a label's page number. Requires refcount.",
+    ),
+    (
+        "addtocounterpageref",
+        "addtocounterpageref{${1:counter}}{${2:key}}",
+        "Add a label's page number to a counter. Requires refcount.",
+    ),
+    (
         "autoref",
         "autoref{${1:key}}",
         "Print a reference with its object type. Requires hyperref.",

@@ -176,6 +176,9 @@ fn builtin(name: &str) -> Option<Signature> {
         ),
         "newfont" => (&[("command", false), ("font", false)], false),
         "newaliascnt" => (&[("alias", false), ("counter", false)], false),
+        "setcounterref" | "addtocounterref" | "setcounterpageref" | "addtocounterpageref" => {
+            (&[("counter", false), ("key", false)], false)
+        }
         "setcounter" | "addtocounter" => (&[("counter", false), ("value", false)], false),
         "stepcounter" | "refstepcounter" | "usecounter" | "value" | "arabic" | "roman"
         | "Roman" | "alph" | "Alph" | "fnsymbol" | "aliascntresetthe" => {
@@ -198,7 +201,9 @@ fn builtin(name: &str) -> Option<Signature> {
             &[("key", false), ("undefined", false), ("defined", false)],
             false,
         ),
-        name if syntax::is_reference(name) => (&[("keys", false)], false),
+        name if syntax::is_reference(name) => {
+            (&[("keys", false)], syntax::reference_accepts_star(name))
+        }
         name if syntax::is_citation(name) && name != "nocite" => (
             &[
                 ("note / prenote", true),

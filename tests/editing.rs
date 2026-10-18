@@ -46,6 +46,72 @@ fn action_edit(action: &CodeActionOrCommand, uri: &Url) -> TextEdit {
 }
 
 #[test]
+fn refcount_assignment_label_fixes_select_the_second_argument_and_reject_counter_ranges() {
+    for command in [
+        "setcounterref",
+        "addtocounterref",
+        "setcounterpageref",
+        "addtocounterpageref",
+    ] {
+        for versioned in [false, true] {
+            let source = format!("\\label{{sec:intro}}\n\\{command}{{sec:itnro}}{{sec:itnro}}\n");
+            let (mut workspace, uri) = setup(&source, versioned);
+            let text = &workspace.documents[&uri].text;
+            let second = source.rfind("sec:itnro").unwrap();
+            let first = source.find("sec:itnro").unwrap();
+            let first_range = text.range(first, first + 9);
+            let mut diagnostic = Diagnostic {
+                range: text.range(second, second + 9),
+                source: Some("latex-build".into()),
+                message:
+                    "LaTeX Warning: Reference `sec:itnro' on page 1 undefined on input line 2."
+                        .into(),
+                ..Default::default()
+            };
+            workspace.build_diagnostics.insert(
+                uri.clone(),
+                [(uri.clone(), vec![diagnostic.clone()])].into(),
+            );
+            let actions = editing::code_actions(
+                &workspace,
+                &uri,
+                diagnostic.range,
+                &context(vec![diagnostic.clone()]),
+            );
+            assert_eq!(actions.len(), 1, "{actions:?}");
+            let edit = action_edit(&actions[0], &uri);
+            assert_eq!(edit.range, diagnostic.range);
+            assert_eq!(edit.new_text, "sec:intro");
+            let changed = workspace.documents[&uri]
+                .text
+                .changed(vec![TextDocumentContentChangeEvent {
+                    range: Some(edit.range),
+                    range_length: None,
+                    text: edit.new_text,
+                }])
+                .unwrap()
+                .source;
+            assert_eq!(
+                changed,
+                format!("\\label{{sec:intro}}\n\\{command}{{sec:itnro}}{{sec:intro}}\n")
+            );
+            diagnostic.range = first_range;
+            workspace.build_diagnostics.insert(
+                uri.clone(),
+                [(uri.clone(), vec![diagnostic.clone()])].into(),
+            );
+            assert!(editing::code_actions(
+                &workspace,
+                &uri,
+                diagnostic.range,
+                &context(vec![diagnostic])
+            )
+            .is_empty());
+        }
+    }
+}
+
+#[test]
 fn quick_fixes_repair_braces_and_environments_including_comments_raw_text_and_crlf() {
     for source in [
         "😀 }",

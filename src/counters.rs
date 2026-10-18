@@ -80,6 +80,10 @@ fn invocation_arguments(
                 | "newcounter"
                 | "newaliascnt"
                 | "newtheorem"
+                | "setcounterref"
+                | "addtocounterref"
+                | "setcounterpageref"
+                | "addtocounterpageref"
         )
     {
         return None;
@@ -87,7 +91,12 @@ fn invocation_arguments(
     let (first, mut end) = syntax::group(source, at, b'{', b'}')?;
     let mut names = Vec::new();
     match command.name.as_str() {
-        "setcounter" | "addtocounter" => {
+        "setcounter"
+        | "addtocounter"
+        | "setcounterref"
+        | "addtocounterref"
+        | "setcounterpageref"
+        | "addtocounterpageref" => {
             end = syntax::group(source, syntax::skip_space(source, end), b'{', b'}')?.1;
             names.push(first);
         }
@@ -199,13 +208,30 @@ fn context(doc: &Document, command: &Command, cursor: usize) -> Option<Range<usi
     let source = &doc.text.source;
     let mut at = command.span.end;
     let starred = source.as_bytes().get(at) == Some(&b'*');
+    if starred && syntax::is_counter_reference(&command.name) {
+        return None;
+    }
     if starred {
         at += 1;
     }
     at = syntax::skip_space(source, at);
     match command.name.as_str() {
-        "setcounter" | "addtocounter" | "stepcounter" | "refstepcounter" | "usecounter"
-        | "value" | "arabic" | "roman" | "Roman" | "alph" | "Alph" | "fnsymbol"
+        "setcounter"
+        | "addtocounter"
+        | "setcounterref"
+        | "addtocounterref"
+        | "setcounterpageref"
+        | "addtocounterpageref"
+        | "stepcounter"
+        | "refstepcounter"
+        | "usecounter"
+        | "value"
+        | "arabic"
+        | "roman"
+        | "Roman"
+        | "alph"
+        | "Alph"
+        | "fnsymbol"
         | "aliascntresetthe" => syntax::active_name_argument(source, at, b'{', cursor),
         "counterwithin" | "counterwithout" | "numberwithin" | "@addtoreset"
         | "@removefromreset" => {

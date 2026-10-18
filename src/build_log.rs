@@ -295,10 +295,17 @@ pub(crate) fn undefined_reference_ranges(text: &Text, line: u32, message: &str) 
             crate::syntax::is_citation(&command.name)
         } else {
             crate::syntax::warns_on_undefined_reference(&command.name)
+                || crate::syntax::is_counter_reference(&command.name)
         }) {
             continue;
         }
-        let Some(argument) = &command.argument else {
+        let counter_label = crate::syntax::counter_reference_label(&text.source, command);
+        let argument = if crate::syntax::is_counter_reference(&command.name) {
+            counter_label.as_ref()
+        } else {
+            command.argument.as_ref()
+        };
+        let Some(argument) = argument else {
             continue;
         };
         if text.position(command.span.start).line > line
@@ -306,7 +313,10 @@ pub(crate) fn undefined_reference_ranges(text: &Text, line: u32, message: &str) 
         {
             continue;
         }
-        if !citation && crate::syntax::is_single_reference(&command.name) {
+        if !citation
+            && (crate::syntax::is_single_reference(&command.name)
+                || crate::syntax::is_counter_reference(&command.name))
+        {
             if crate::syntax::is_static_key(key) && argument.value == key {
                 ranges.push(text.range(argument.span.start, argument.span.end));
             }

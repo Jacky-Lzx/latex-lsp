@@ -16,7 +16,16 @@ fn project(root: &Path, files: &[(&str, &str)]) -> Workspace {
 }
 
 fn renamed(workspace: &Workspace, document: &Url, position: Position) -> BTreeMap<Url, String> {
-    features::rename(workspace, document, position, "problem")
+    renamed_to(workspace, document, position, "problem")
+}
+
+fn renamed_to(
+    workspace: &Workspace,
+    document: &Url,
+    position: Position,
+    new_name: &str,
+) -> BTreeMap<Url, String> {
+    features::rename(workspace, document, position, new_name)
         .unwrap()
         .unwrap()
         .changes
@@ -41,6 +50,117 @@ fn renamed(workspace: &Workspace, document: &Url, position: Position) -> BTreeMa
             (uri, source)
         })
         .collect()
+}
+
+#[test]
+fn refcount_assignments_keep_counter_and_label_namespaces_separate_during_navigation_and_rename() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let definitions = "\\newcounter{shared}\n\\label{shared}\n";
+    let source = concat!(
+        "\\documentclass{article}\\input{definitions}\\begin{document}\n",
+        "\\setcounterref{shared}{shared}\n",
+        "\\addtocounterref{shared}{shared}\n",
+        "\\setcounterpageref{shared}{shared}\n",
+        "\\addtocounterpageref{shared}{shared}\n",
+        "\\end{document}\n",
+    );
+    let workspace = project(
+        root,
+        &[("main.tex", source), ("definitions.tex", definitions)],
+    );
+    let main = uri(root, "main.tex");
+    let declaration = uri(root, "definitions.tex");
+    let text = &workspace.documents[&main].text;
+    let start = source.find("{shared}{shared}").unwrap();
+    for (offset, counter) in [(start + 2, true), (start + "{shared}{".len() + 1, false)] {
+        let position = text.position(offset);
+        let definitions_found = features::definitions(&workspace, &main, position);
+        assert_eq!(definitions_found.len(), 1);
+        assert_eq!(definitions_found[0].uri, declaration);
+        assert_eq!(
+            definitions_found[0].range.start.line,
+            if counter { 0 } else { 1 }
+        );
+        assert_eq!(
+            features::references(&workspace, &main, position, false).len(),
+            4
+        );
+        let changed = renamed(&workspace, &main, position);
+        assert_eq!(
+            changed[&main],
+            source.replace(
+                "{shared}{shared}",
+                if counter {
+                    "{problem}{shared}"
+                } else {
+                    "{shared}{problem}"
+                }
+            )
+        );
+        assert_eq!(
+            changed[&declaration],
+            if counter {
+                "\\newcounter{problem}\n\\label{shared}\n"
+            } else {
+                "\\newcounter{shared}\n\\label{problem}\n"
+            }
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex and refcount"]
+fn real_refcount_assignments_preserve_reference_and_page_arithmetic_after_both_renames() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let mut source = concat!(
+        "\\documentclass{article}\\usepackage{refcount}\\newcounter{bucket}\n",
+        "\\begin{document}\\refstepcounter{section}\\label{anchor}\n",
+        "\\setcounterref{bucket}{anchor}\\typeout{SETREF=\\arabic{bucket}}\n",
+        "\\addtocounterref{bucket}{anchor}\\typeout{ADDREF=\\arabic{bucket}}\n",
+        "\\setcounterpageref{bucket}{anchor}\\typeout{SETPAGE=\\arabic{bucket}}\n",
+        "\\addtocounterpageref{bucket}{anchor}\\typeout{ADDPAGE=\\arabic{bucket}}\n",
+        "Witness.\\end{document}\n",
+    )
+    .to_owned();
+    for (marker, offset, replacement) in [
+        ("{bucket}{anchor}", 2, "problem"),
+        (
+            "{problem}{anchor}",
+            "{problem}{".len() + 1,
+            "renamed-anchor",
+        ),
+    ] {
+        let workspace = project(root, &[("main.tex", &source)]);
+        let main = uri(root, "main.tex");
+        let position = workspace.documents[&main]
+            .text
+            .position(source.find(marker).unwrap() + offset);
+        source = renamed_to(&workspace, &main, position, replacement)[&main].clone();
+    }
+    assert!(source.contains("\\setcounterref{problem}{renamed-anchor}"));
+    std::fs::write(root.join("main.tex"), &source).unwrap();
+    let config = latex_lsp::config::BuildConfig {
+        executable: "pdflatex".into(),
+        ..Default::default()
+    };
+    let first = build::run(&root.join("main.tex"), &config, &AtomicBool::new(false));
+    assert_eq!(first.status, "success", "{}", first.output);
+    let second = build::run(&root.join("main.tex"), &config, &AtomicBool::new(false));
+    assert_eq!(second.status, "success", "{}", second.output);
+    for witness in ["SETREF=1", "ADDREF=2", "SETPAGE=1", "ADDPAGE=2"] {
+        assert!(second.output.contains(witness), "{}", second.output);
+    }
+    assert!(
+        second
+            .diagnostics
+            .values()
+            .flatten()
+            .all(|diagnostic| !diagnostic.message.contains("undefined")),
+        "{:?}",
+        second.diagnostics
+    );
 }
 
 #[test]

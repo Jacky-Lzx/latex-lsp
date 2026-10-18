@@ -127,10 +127,16 @@ fn counter_fixes_preserve_values_whitespace_utf16_and_other_calls() {
         "stepcounter",
         "refstepcounter",
         "usecounter",
+        "setcounterref",
+        "addtocounterref",
+        "setcounterpageref",
+        "addtocounterpageref",
     ] {
         for versioned in [false, true] {
             let value = if matches!(command, "setcounter" | "addtocounter") {
                 r"{\value{section}+1}"
+            } else if command.ends_with("ref") {
+                "{equatoin}"
             } else {
                 ""
             };
