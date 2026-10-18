@@ -27,6 +27,8 @@ fn snippets_expand_in_a_real_editor_without_consuming_tex_backslashes() {
         ("date", r"date{\today}"),
         ("def", r"def\name{definition}"),
         ("let", r"let\alias=\command"),
+        ("setcounter", "setcounter{counter}{0}"),
+        ("counterwithin", "counterwithin{counter}{parent}"),
         ("lim", r"lim_{x \to \infty} "),
         ("left", r"left(  \right)"),
     ] {

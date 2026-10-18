@@ -67,6 +67,15 @@ fn declaration<'a>(doc: &'a Document, command: &Command) -> Option<Declaration<'
     })
 }
 
+pub(crate) fn counters(doc: &Document) -> impl Iterator<Item = &str> {
+    doc.syntax
+        .commands
+        .iter()
+        .filter_map(|command| declaration(doc, command))
+        .filter(|declaration| declaration.environment.owns_counter)
+        .map(|declaration| declaration.name)
+}
+
 pub(crate) fn in_scope(
     workspace: &Workspace,
     scope: &BTreeSet<Url>,
@@ -275,28 +284,7 @@ pub(crate) fn validate(
             "Environment renames require a static name",
         ));
     }
-    const BUILTIN_COUNTERS: &[&str] = &[
-        "page",
-        "part",
-        "chapter",
-        "section",
-        "subsection",
-        "subsubsection",
-        "paragraph",
-        "subparagraph",
-        "equation",
-        "figure",
-        "table",
-        "footnote",
-        "mpfootnote",
-        "enumi",
-        "enumii",
-        "enumiii",
-        "enumiv",
-        "secnumdepth",
-        "tocdepth",
-    ];
-    if environment.numbered && BUILTIN_COUNTERS.contains(&new) {
+    if environment.numbered && crate::counters::BUILTINS.contains(&new) {
         return Err(Error::invalid_params(format!(
             "The counter `{new}` is already defined"
         )));

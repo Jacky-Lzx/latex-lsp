@@ -242,6 +242,96 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
         "Define a numbered theorem-like environment.",
     ),
     (
+        "newcounter",
+        "newcounter{${1:name}}",
+        "Define a counter; an optional [parent] resets it with another counter.",
+    ),
+    (
+        "newaliascnt",
+        "newaliascnt{${1:alias}}{${2:counter}}",
+        "Define a counter alias. Requires aliascnt.",
+    ),
+    (
+        "setcounter",
+        "setcounter{${1:counter}}{${2:0}}",
+        "Set a LaTeX counter to an integer value.",
+    ),
+    (
+        "addtocounter",
+        "addtocounter{${1:counter}}{${2:1}}",
+        "Add an integer to a LaTeX counter.",
+    ),
+    (
+        "stepcounter",
+        "stepcounter{${1:counter}}",
+        "Increment a counter and reset its dependent counters.",
+    ),
+    (
+        "refstepcounter",
+        "refstepcounter{${1:counter}}",
+        "Increment a counter and make its value available to labels.",
+    ),
+    (
+        "usecounter",
+        "usecounter{${1:counter}}",
+        "Use a counter to number list items.",
+    ),
+    (
+        "value",
+        "value{${1:counter}}",
+        "Access a counter's integer value.",
+    ),
+    (
+        "arabic",
+        "arabic{${1:counter}}",
+        "Print a counter using Arabic numerals.",
+    ),
+    (
+        "roman",
+        "roman{${1:counter}}",
+        "Print a counter using lowercase Roman numerals.",
+    ),
+    (
+        "Roman",
+        "Roman{${1:counter}}",
+        "Print a counter using uppercase Roman numerals.",
+    ),
+    (
+        "alph",
+        "alph{${1:counter}}",
+        "Print a counter using lowercase letters.",
+    ),
+    (
+        "Alph",
+        "Alph{${1:counter}}",
+        "Print a counter using uppercase letters.",
+    ),
+    (
+        "fnsymbol",
+        "fnsymbol{${1:counter}}",
+        "Print a counter using footnote symbols.",
+    ),
+    (
+        "counterwithin",
+        "counterwithin{${1:counter}}{${2:parent}}",
+        "Reset a counter within its parent and update its printed format; * preserves the format.",
+    ),
+    (
+        "counterwithout",
+        "counterwithout{${1:counter}}{${2:parent}}",
+        "Remove a counter's parent relationship; * preserves the printed format.",
+    ),
+    (
+        "numberwithin",
+        "numberwithin{${1:counter}}{${2:parent}}",
+        "Number a counter within another counter. Requires amsmath.",
+    ),
+    (
+        "aliascntresetthe",
+        "aliascntresetthe{${1:alias}}",
+        "Restore the formatter of a counter alias. Requires aliascnt.",
+    ),
+    (
         "DeclareRobustCommand",
         "DeclareRobustCommand{\\${1:name}}{${2:definition}}",
         "Define a robust LaTeX command.",

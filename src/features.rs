@@ -393,6 +393,9 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
     if doc.syntax.is_ignored(offset.saturating_sub(1)) {
         return vec![];
     }
+    if let Some(items) = crate::counters::completion(workspace, uri, offset, &scope) {
+        return items;
+    }
     if let Some((command, span)) = argument_context(doc, offset) {
         if syntax::file_extensions(&command.name).is_some() {
             return crate::path_completion::complete(workspace, uri, &command.name, span);

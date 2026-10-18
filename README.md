@@ -82,6 +82,8 @@ vim.lsp.enable('latex_lsp')
 
 环境参数提示支持 `\newenvironment`、`\NewEnviron` 和 xparse 的 `\NewDocumentEnvironment` 系列定义，以及 `tabular`、`minipage`、`figure` 等常用环境；`\newtheorem` 定理提示可选标题 `[note]`。通过 `\begin{panel}` 或直接调用 `\panel` 均可查看参数，自定义环境的直接命令补全会插入必选参数的占位符并保留可选参数默认值。自定义命令与环境识别常规参数数量/默认值，以及 xparse 的 `m`、`o`、`O`、`s` 参数；复杂分隔参数和存在多个定义的名称不推断签名。
 
+计数器操作支持命令片段、参数提示和名称补全，包括 `setcounter` / `addtocounter`、`stepcounter` / `refstepcounter`、`value` / `arabic` 等格式化命令、`counterwithin` / `counterwithout` / `numberwithin`。名称候选来自内置计数器、当前项目的 `newcounter` / `newaliascnt` 和拥有计数器的定理声明；支持新计数器、别名及定理的共享/重置参数，保留已有名称后缀、空白和其他实参。不同论文之间的候选按依赖隔离，宏生成的名称不作推断。
+
 在语法错误处调用 `vim.lsp.buf.code_action()` 可选择快速修复；`vim.lsp.buf.document_highlight()` 高亮当前符号的定义和引用。Neovim 0.12 中可用 `vim.lsp.buf.selection_range(1)` 扩大语法选择范围。
 
 其他编辑器可将 `latex-lsp --stdio` 配置为 `tex` / `latex` / `bib` / `bst` 文件的语言服务器。建议将根目录设为当前 LaTeX 项目，避免把多个无关项目混在同一个工作区。

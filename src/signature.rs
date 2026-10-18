@@ -105,6 +105,21 @@ fn builtin(name: &str) -> Option<Signature> {
         }
         "begin" | "end" => (&[("environment", false)], false),
         "label" => (&[("key", false)], false),
+        "newcounter" => (&[("name", false), ("within", true)], false),
+        "newaliascnt" => (&[("alias", false), ("counter", false)], false),
+        "setcounter" | "addtocounter" => (&[("counter", false), ("value", false)], false),
+        "stepcounter" | "refstepcounter" | "usecounter" | "value" | "arabic" | "roman"
+        | "Roman" | "alph" | "Alph" | "fnsymbol" | "aliascntresetthe" => {
+            (&[("counter", false)], false)
+        }
+        "counterwithin" | "counterwithout" => (
+            &[("format", true), ("counter", false), ("within", false)],
+            true,
+        ),
+        "numberwithin" => (
+            &[("format", true), ("counter", false), ("within", false)],
+            false,
+        ),
         name if syntax::is_reference(name) => (&[("keys", false)], false),
         name if syntax::is_citation(name) && name != "nocite" => (
             &[

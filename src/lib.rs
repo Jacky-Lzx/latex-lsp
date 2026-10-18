@@ -2,6 +2,7 @@ pub mod build;
 pub mod build_log;
 pub mod catalog;
 pub mod config;
+mod counters;
 pub mod dispatch;
 pub mod editing;
 mod environment;
