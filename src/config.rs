@@ -67,6 +67,7 @@ impl BuildConfig {
                 "%f",
             ],
             "pdflatex" | "xelatex" | "lualatex" => &[
+                "-recorder",
                 "-interaction=nonstopmode",
                 "-file-line-error",
                 "-synctex=1",

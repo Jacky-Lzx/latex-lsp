@@ -72,6 +72,35 @@ fn project(root: &Path) -> Workspace {
 }
 
 #[test]
+fn recorded_dependencies_follow_file_and_directory_moves() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let mut workspace = project(root);
+    let main = uri(root, "main.tex");
+    let chapter = uri(root, "chapters/old.tex");
+    workspace
+        .recorded_inputs
+        .insert(main.clone(), [main, chapter].into());
+    std::fs::rename(root.join("main.tex"), root.join("paper.tex")).unwrap();
+    std::fs::rename(root.join("chapters"), root.join("sections")).unwrap();
+    file_operations::did_rename(
+        &mut workspace,
+        &[
+            rename(root, "main.tex", "paper.tex"),
+            rename(root, "chapters", "sections"),
+        ],
+    )
+    .unwrap();
+    let paper = uri(root, "paper.tex");
+    let chapter = uri(root, "sections/old.tex");
+    assert_eq!(
+        workspace.recorded_inputs[&paper],
+        [paper.clone(), chapter.clone()].into()
+    );
+    assert!(workspace.project_documents(&paper).contains(&chapter));
+}
+
+#[test]
 fn batched_file_renames_update_tex_bib_packages_images_and_magic_root_comments() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();

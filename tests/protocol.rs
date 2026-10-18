@@ -617,6 +617,173 @@ fn real_build_command_compiles_the_root_from_an_included_document() {
     server.wait_exit(0);
 }
 
+#[test]
+#[cfg(unix)]
+fn recorder_indexes_dynamic_inputs_and_uses_them_for_later_builds() {
+    let script = "printf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf 'PWD %s\\nINPUT main.tex\\nINPUT .inputs/dynamic.ltx\\n' \"$PWD\" > \"$1/main.fls\"\n";
+    let (mut server, directory, main) = fake_build_server(script, false);
+    std::fs::create_dir(directory.path().join(".inputs")).unwrap();
+    let dynamic = Url::from_file_path(directory.path().join(".inputs/dynamic.ltx")).unwrap();
+    let source = "\\label{dynamic:discovered}\n";
+    std::fs::write(dynamic.to_file_path().unwrap(), source).unwrap();
+    assert_eq!(
+        server.request(2, "workspace/symbol", json!({"query":"dynamic:discovered"})),
+        json!([])
+    );
+    server.request(
+        3,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let finished = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(finished["params"]["stale"], false, "{finished}");
+    assert_eq!(finished["params"]["dependenciesCount"], 2);
+    let symbols = server.request(4, "workspace/symbol", json!({"query":"dynamic:discovered"}));
+    assert_eq!(symbols[0]["location"]["uri"], dynamic.as_str());
+    let started = server.request(
+        5,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[dynamic]}),
+    );
+    assert_eq!(started["rootUri"], main.as_str());
+    server.until(|message| message["method"] == "latex/buildFinished");
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":dynamic,"languageId":"latex","version":1,"text":"Unsaved"}}),
+    );
+    server.send(json!({"jsonrpc":"2.0","id":6,"method":"workspace/executeCommand","params":{"command":"latex.build","arguments":[main]}}));
+    let rejected = server.until(|message| message["id"] == 6);
+    assert!(rejected["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("dynamic.ltx"));
+    server.request(7, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+fn newly_recorded_inputs_discard_stale_diagnostics_but_unrelated_buffers_do_not() {
+    for scenario in ["unsaved", "changed", "unrelated"] {
+        let script = "touch \"$1/ready\"\nwhile [ ! -f \"$1/release\" ]; do sleep 0.02; done\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf 'PWD %s\\nINPUT main.tex\\nINPUT dynamic.tex\\n' \"$PWD\" > \"$1/main.fls\"\nprintf '%s:2: LaTeX Warning: recorder warning.\\n' \"$2\" > \"$1/main.log\"\n";
+        let (mut server, directory, main) = fake_build_server(script, false);
+        let dynamic_path = directory.path().join("dynamic.tex");
+        std::fs::write(&dynamic_path, "Saved\n").unwrap();
+        let opened = directory.path().join(if scenario == "unrelated" {
+            "other.tex"
+        } else {
+            "dynamic.tex"
+        });
+        if scenario != "changed" {
+            server.notify("textDocument/didOpen", json!({"textDocument":{"uri":Url::from_file_path(opened).unwrap(),"languageId":"latex","version":1,"text":"Unsaved\n"}}));
+        }
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let output = directory.path().join("build/latex-lsp");
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while !output.join("ready").exists() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "compiler failed to start"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if scenario == "changed" {
+            std::fs::write(&dynamic_path, "Changed during compilation\n").unwrap();
+        }
+        std::fs::write(output.join("release"), "").unwrap();
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(
+            finished["params"]["stale"],
+            scenario != "unrelated",
+            "{scenario}: {finished}"
+        );
+        if scenario != "unrelated" {
+            assert!(!server.pending.borrow().iter().any(|message| {
+                message["method"] == "textDocument/publishDiagnostics"
+                    && message["params"]["diagnostics"]
+                        .as_array()
+                        .is_some_and(|items| {
+                            items.iter().any(|item| item["source"] == "latex-build")
+                        })
+            }));
+        }
+        server.request(3, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn unchanged_recorder_files_are_not_treated_as_current_inputs() {
+    let (mut server, directory, main) =
+        fake_build_server("printf '%%PDF-1.4\\n' > \"$1/main.pdf\"\n", false);
+    let output = directory.path().join("build/latex-lsp");
+    std::fs::create_dir_all(&output).unwrap();
+    std::fs::write(directory.path().join("old.tex"), "Old\n").unwrap();
+    std::fs::write(output.join("main.fls"), "INPUT main.tex\nINPUT old.tex\n").unwrap();
+    server.notify("textDocument/didOpen", json!({"textDocument":{"uri":Url::from_file_path(directory.path().join("old.tex")).unwrap(),"languageId":"latex","version":1,"text":"Unsaved\n"}}));
+    server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let finished = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(finished["params"]["stale"], false);
+    assert_eq!(finished["params"]["dependenciesCount"], 1);
+    server.request(3, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[ignore = "requires latexmk and a TeX installation"]
+fn real_recorder_discovers_macro_expanded_input_without_indexing_tex_distribution() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = Url::from_directory_path(directory.path()).unwrap();
+    let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+    let dynamic = Url::from_file_path(directory.path().join("dynamic.ltx")).unwrap();
+    std::fs::write(main.to_file_path().unwrap(), "\\documentclass{article}\n\\def\\chapterfile{dynamic.ltx}\n\\begin{document}\n\\input{\\chapterfile}\n\\end{document}\n").unwrap();
+    std::fs::write(
+        dynamic.to_file_path().unwrap(),
+        "\\section{Discovered chapter}\\label{dynamic:real}\nHello.\n",
+    )
+    .unwrap();
+    let mut server = Server::start();
+    server.request(
+        1,
+        "initialize",
+        json!({"processId":null,"rootUri":root,"capabilities":{}}),
+    );
+    server.notify("initialized", json!({}));
+    server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let finished = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(finished["params"]["status"], "success", "{finished}");
+    assert_eq!(finished["params"]["stale"], false, "{finished}");
+    assert_eq!(finished["params"]["dependenciesCount"], 2, "{finished}");
+    let symbols = server.request(3, "workspace/symbol", json!({"query":"dynamic:real"}));
+    assert_eq!(symbols[0]["location"]["uri"], dynamic.as_str());
+    let started = server.request(
+        4,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[dynamic]}),
+    );
+    assert_eq!(started["rootUri"], main.as_str());
+    server.until(|message| message["method"] == "latex/buildFinished");
+    server.request(5, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
 impl Drop for Server {
     fn drop(&mut self) {
         let _ = self.child.kill();

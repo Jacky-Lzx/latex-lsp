@@ -58,6 +58,7 @@ struct BuildInput {
     snapshots: BTreeMap<Url, (Option<i32>, String)>,
     config: BuildConfig,
     progress_supported: bool,
+    project: BTreeSet<Url>,
 }
 
 struct TaskGuard {
@@ -101,8 +102,8 @@ impl BuildManager {
         workspace.refresh_project(&root);
         let project = workspace.project_documents(&root);
         let mut snapshots = BTreeMap::new();
-        for uri in project {
-            if let Some(doc) = workspace.documents.get(&uri) {
+        for uri in &project {
+            if let Some(doc) = workspace.documents.get(uri) {
                 let saved = uri
                     .to_file_path()
                     .ok()
@@ -113,7 +114,16 @@ impl BuildManager {
                         uri.path()
                     )));
                 }
-                snapshots.insert(uri, (doc.version, doc.text.source.clone()));
+                snapshots.insert(uri.clone(), (doc.version, doc.text.source.clone()));
+            }
+        }
+        // Dynamic dependencies may only be known after TeX writes its recorder.
+        // Capture other open buffers without requiring unrelated files be saved.
+        for (uri, doc) in &workspace.documents {
+            if doc.version.is_some() {
+                snapshots
+                    .entry(uri.clone())
+                    .or_insert_with(|| (doc.version, doc.text.source.clone()));
             }
         }
         let config = workspace.config.build.clone();
@@ -144,7 +154,7 @@ impl BuildManager {
                 );
             }
             record.active = Some((build_id, cancel.clone()));
-            record.inputs = snapshots.keys().cloned().collect();
+            record.inputs = project.clone();
             self.tasks.fetch_add(1, Ordering::SeqCst);
         }
         self.launch(
@@ -154,6 +164,7 @@ impl BuildManager {
                 snapshots,
                 config,
                 progress_supported,
+                project,
             },
             build_id,
             cancel,
@@ -190,6 +201,7 @@ impl BuildManager {
             snapshots,
             config,
             progress_supported,
+            mut project,
         } = input;
         let manager = self.clone();
         let guard = TaskGuard {
@@ -240,30 +252,58 @@ impl BuildManager {
                     .await;
             }
             let worker_root = root_path.clone();
+            let wall_started = std::time::SystemTime::now();
             let outcome =
                 tokio::task::spawn_blocking(move || run(&worker_root, &config, &cancel)).await;
             let outcome = outcome
                 .unwrap_or_else(|error| Outcome::error(format!("Compiler task failed: {error}")));
             let mut current = workspace.write().await;
-            let stale = snapshots.iter().any(|(uri, (version, text))| {
-                current
-                    .documents
-                    .get(uri)
-                    .is_none_or(|doc| doc.version != *version || doc.text.source != *text)
-                    || uri
-                        .to_file_path()
+            if let Some(inputs) = &outcome.inputs {
+                let recorded = current.project_inputs(&root_uri, inputs);
+                project.extend(recorded.iter().cloned());
+                if matches!(outcome.status, "success" | "error") {
+                    current
+                        .recorded_inputs
+                        .insert(root_uri.clone(), recorded.clone());
+                    for uri in &recorded {
+                        current.reload(uri);
+                    }
+                }
+            }
+            let stale = project.iter().any(|uri| {
+                if let Some((version, text)) = snapshots.get(uri) {
+                    current
+                        .documents
+                        .get(uri)
+                        .is_none_or(|doc| doc.version != *version || doc.text.source != *text)
+                        || uri
+                            .to_file_path()
+                            .ok()
+                            .and_then(|path| std::fs::read_to_string(path).ok())
+                            .as_ref()
+                            != Some(text)
+                } else {
+                    let Ok(path) = uri.to_file_path() else {
+                        return true;
+                    };
+                    current.documents.get(uri).is_some_and(|doc| {
+                        doc.version.is_some()
+                            && std::fs::read_to_string(&path).ok().as_ref()
+                                != Some(&doc.text.source)
+                    }) || std::fs::metadata(path)
                         .ok()
-                        .and_then(|path| std::fs::read_to_string(path).ok())
-                        .as_ref()
-                        != Some(text)
+                        .and_then(|metadata| metadata.modified().ok())
+                        .is_none_or(|modified| modified > wall_started)
+                }
             });
             let count = outcome.diagnostics.values().map(Vec::len).sum::<usize>();
             let result = json!({
                 "buildId":build_id, "rootUri":root_uri, "status":outcome.status,
-                "exitCode":outcome.exit_code, "message":outcome.message,
+                "exitCode":outcome.exit_code, "message":if stale { format!("{} (sources changed; diagnostics discarded)",outcome.message) } else { outcome.message },
                 "pdfUri":outcome.pdf.as_ref().and_then(|path| Url::from_file_path(path).ok()),
                 "logUri":outcome.log.as_ref().and_then(|path| Url::from_file_path(path).ok()),
                 "diagnosticsCount":count, "stale":stale, "durationMs":started.elapsed().as_millis() as u64,
+                "dependenciesCount":project.len(),
                 "output":outcome.output,
             });
             let mut affected = BTreeSet::new();
@@ -446,6 +486,7 @@ pub struct Outcome {
     pub log: Option<PathBuf>,
     pub diagnostics: BTreeMap<Url, Vec<Diagnostic>>,
     pub output: String,
+    pub inputs: Option<BTreeSet<Url>>,
 }
 
 impl Outcome {
@@ -458,6 +499,7 @@ impl Outcome {
             log: None,
             diagnostics: BTreeMap::new(),
             output: String::new(),
+            inputs: None,
         }
     }
 }
@@ -526,6 +568,8 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool) -> Outcome 
     };
     let log_path = output_dir.join(format!("{}.log", stem.to_string_lossy()));
     let pdf_path = output_dir.join(format!("{}.pdf", stem.to_string_lossy()));
+    let recorder_path = output_dir.join(format!("{}.fls", stem.to_string_lossy()));
+    let recorder_before = fingerprint(&recorder_path);
     let bibliography_before = bibliography_logs(&output_dir);
     // A previous log must never be interpreted as the result of a failed spawn.
     if log_path.exists() {
@@ -628,6 +672,10 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool) -> Outcome 
         String::from_utf8_lossy(&stderr)
     );
     let log = read_log(&log_path).unwrap_or_default();
+    let recorder_after = fingerprint(&recorder_path);
+    if recorder_after.is_some() && recorder_after != recorder_before {
+        outcome.inputs = read_log(&recorder_path).map(|log| crate::recorder::inputs(root, &log));
+    }
     // latexmk can run TeX several times. The final .log is authoritative;
     // earlier stdout passes may contain references that are already resolved.
     outcome.diagnostics = build_log::parse(root, if log.is_empty() { &output } else { &log });
@@ -689,6 +737,13 @@ fn read_log(path: &Path) -> Option<String> {
         .read_to_end(&mut text)
         .ok()?;
     Some(String::from_utf8_lossy(&text).into_owned())
+}
+
+fn fingerprint(path: &Path) -> Option<(u64, Option<std::time::SystemTime>)> {
+    let metadata = std::fs::metadata(path).ok()?;
+    metadata
+        .is_file()
+        .then_some((metadata.len(), metadata.modified().ok()))
 }
 
 fn bibliography_logs(directory: &Path) -> BTreeMap<PathBuf, (u64, Option<std::time::SystemTime>)> {

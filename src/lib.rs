@@ -7,6 +7,7 @@ pub mod features;
 pub mod file_operations;
 pub mod navigation;
 pub mod path_completion;
+pub mod recorder;
 pub mod syntax;
 pub mod text;
 pub mod workspace;

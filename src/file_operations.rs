@@ -51,7 +51,7 @@ impl Renames {
         path.into()
     }
 
-    fn uri(&self, uri: &Url) -> Url {
+    pub fn uri(&self, uri: &Url) -> Url {
         uri.to_file_path()
             .ok()
             .and_then(|path| Url::from_file_path(self.path(&path)).ok())
@@ -212,6 +212,15 @@ pub fn did_rename(workspace: &mut Workspace, files: &[FileRename]) -> Result<BTr
         affected.extend(project.keys().cloned());
     }
     workspace.build_diagnostics.clear();
+    workspace.recorded_inputs = std::mem::take(&mut workspace.recorded_inputs)
+        .into_iter()
+        .map(|(root, inputs)| {
+            (
+                renames.uri(&root),
+                inputs.iter().map(|uri| renames.uri(uri)).collect(),
+            )
+        })
+        .collect();
     workspace.roots = workspace
         .roots
         .iter()

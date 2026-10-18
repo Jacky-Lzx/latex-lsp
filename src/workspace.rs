@@ -81,6 +81,7 @@ pub struct Workspace {
     pub apply_edits: bool,
     pub config: crate::config::Config,
     pub build_diagnostics: BTreeMap<Url, BTreeMap<Url, Vec<tower_lsp::lsp_types::Diagnostic>>>,
+    pub recorded_inputs: BTreeMap<Url, BTreeSet<Url>>,
 }
 
 impl Workspace {
@@ -115,7 +116,8 @@ impl Workspace {
         let Some(doc) = self.documents.get(uri) else {
             return vec![];
         };
-        doc.syntax
+        let mut dependencies: Vec<Url> = doc
+            .syntax
             .commands
             .iter()
             .flat_map(|command| {
@@ -146,6 +148,35 @@ impl Workspace {
                     })
                     .unwrap_or_default()
             })
+            .collect();
+        if uri == root {
+            if let Some(recorded) = self.recorded_inputs.get(root) {
+                dependencies.extend(recorded.iter().cloned());
+            }
+        }
+        dependencies
+    }
+
+    /// Do not index TeX's distribution packages outside the project. Explicitly
+    /// opened or already indexed external documents remain part of the project.
+    pub fn project_inputs(&self, root: &Url, inputs: &BTreeSet<Url>) -> BTreeSet<Url> {
+        let parent = root
+            .to_file_path()
+            .ok()
+            .and_then(|path| path.parent().map(Path::to_path_buf));
+        inputs
+            .iter()
+            .filter(|uri| {
+                self.documents.contains_key(*uri)
+                    || uri.to_file_path().ok().is_some_and(|path| {
+                        parent
+                            .as_ref()
+                            .is_some_and(|parent| path.starts_with(parent))
+                            || self.roots.iter().any(|root| path.starts_with(root))
+                    })
+            })
+            .take(MAX_FILES)
+            .cloned()
             .collect()
     }
 
