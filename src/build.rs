@@ -368,10 +368,14 @@ impl BuildManager {
                         .is_none_or(|modified| modified > wall_started)
                 }
             });
+            let diagnostic_sources = artifact_inputs
+                .intersection(&outcome.diagnostic_sources)
+                .cloned()
+                .collect();
             if !stale {
                 crate::anchors::resolve_diagnostics(
                     &current,
-                    &artifact_inputs,
+                    &diagnostic_sources,
                     &mut outcome.diagnostics,
                 );
             }
@@ -409,6 +413,9 @@ impl BuildManager {
             });
             let mut affected = BTreeSet::new();
             if !stale && matches!(outcome.status, "success" | "error") {
+                current
+                    .build_diagnostic_sources
+                    .insert(root_uri.clone(), diagnostic_sources);
                 if let Some(old) = current
                     .build_diagnostics
                     .insert(root_uri.clone(), outcome.diagnostics)
@@ -587,6 +594,8 @@ pub struct Outcome {
     pub log: Option<PathBuf>,
     pub diagnostics: BTreeMap<Url, Vec<Diagnostic>>,
     pub diagnostics_truncated: bool,
+    /// Sources whose file-entry events were present in the final TeX log.
+    pub diagnostic_sources: BTreeSet<Url>,
     pub output: String,
     pub inputs: Option<BTreeSet<Url>>,
     pub bibliography_inputs: Option<BTreeSet<Url>>,
@@ -604,6 +613,7 @@ impl Outcome {
             log: None,
             diagnostics: BTreeMap::new(),
             diagnostics_truncated: false,
+            diagnostic_sources: BTreeSet::new(),
             output: String::new(),
             inputs: None,
             bibliography_inputs: None,
@@ -831,7 +841,8 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool) -> Outcome 
     // earlier stdout passes may contain references that are already resolved.
     let diagnostic_log = if log.is_empty() { &output } else { &log };
     outcome.diagnostics_truncated = crate::output::truncated(diagnostic_log);
-    outcome.diagnostics = build_log::parse(root, diagnostic_log);
+    (outcome.diagnostics, outcome.diagnostic_sources) =
+        build_log::parse_with_sources(root, diagnostic_log);
     let mut bibliography_complete = true;
     for (path, fingerprint) in bibliography_logs(&output_dir) {
         // An old .blg left by a previous failed build is not this build's result.

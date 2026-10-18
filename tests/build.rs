@@ -9,6 +9,32 @@ use std::{
 use tower_lsp::lsp_types::{DiagnosticSeverity, Url};
 
 #[test]
+#[ignore = "requires pdflatex and hyperref"]
+fn final_log_sources_distinguish_read_chapters_from_includeonly_recorder_probes() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = root.join("main.tex");
+    std::fs::write(&main, "\\documentclass{article}\\usepackage{hyperref}\\includeonly{active}\\begin{document}\\include{active}\\include{excluded}\\end{document}\n").unwrap();
+    for name in ["active.tex", "excluded.tex"] {
+        std::fs::write(root.join(name), "\\hyperlink{lost}{Text}\n").unwrap();
+    }
+    let config = BuildConfig {
+        executable: "pdflatex".into(),
+        ..Default::default()
+    };
+    let outcome = build::run(&main, &config, &Default::default());
+    assert_eq!(outcome.status, "success", "{}", outcome.output);
+    let active = Url::from_file_path(root.join("active.tex")).unwrap();
+    let excluded = Url::from_file_path(root.join("excluded.tex")).unwrap();
+    assert!(outcome.inputs.as_ref().unwrap().contains(&active));
+    assert!(outcome
+        .diagnostic_sources
+        .contains(&Url::from_file_path(&main).unwrap()));
+    assert!(outcome.diagnostic_sources.contains(&active));
+    assert!(!outcome.diagnostic_sources.contains(&excluded));
+}
+
+#[test]
 #[cfg(unix)]
 #[ignore = "requires pdflatex, lualatex and hyperref"]
 fn real_duplicate_destinations_include_automatic_collisions_and_long_compound_declarations() {

@@ -181,6 +181,8 @@ pub struct Workspace {
     pub apply_edits: bool,
     pub config: crate::config::Config,
     pub build_diagnostics: BTreeMap<Url, BTreeMap<Url, Vec<tower_lsp::lsp_types::Diagnostic>>>,
+    /// Sources confirmed read for each root's latest published build diagnostics.
+    pub build_diagnostic_sources: BTreeMap<Url, BTreeSet<Url>>,
     pub recorded_inputs: BTreeMap<Url, BTreeSet<Url>>,
     pub bibliography_inputs: BTreeMap<Url, BTreeSet<Url>>,
 }

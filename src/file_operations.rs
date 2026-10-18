@@ -376,6 +376,7 @@ pub fn did_rename(workspace: &mut Workspace, files: &[FileRename]) -> Result<BTr
         affected.extend(project.keys().cloned());
     }
     workspace.build_diagnostics.clear();
+    workspace.build_diagnostic_sources.clear();
     for inputs_by_root in [
         &mut workspace.recorded_inputs,
         &mut workspace.bibliography_inputs,

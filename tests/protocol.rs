@@ -18,6 +18,138 @@ struct Server {
 
 #[test]
 #[ignore = "requires pdflatex and hyperref"]
+fn destination_diagnostics_exclude_chapters_only_probed_by_the_tex_recorder() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = Url::from_file_path(root.join("main.tex")).unwrap();
+    let active = Url::from_file_path(root.join("active.tex")).unwrap();
+    let excluded = Url::from_file_path(root.join("excluded.tex")).unwrap();
+    let main_source = "\\documentclass{article}\\usepackage{hyperref}\\includeonly{active}\n\\begin{document}\\hypertarget{last}{Candidate}\\hypertarget{section.1}{Explicit}\\section{Automatic}\\include{active}\\include{excluded}\\end{document}\n";
+    let active_source = "\\hyperlink{lost}{Active}\\hyperdef{}{section.1}{Active target}\n";
+    let excluded_source = "\\hyperlink{lost}{Excluded}\\hyperdef{}{section.1}{Excluded target}\\hypertarget{loft}{Excluded candidate}\n";
+    for (uri, source) in [
+        (&main, main_source),
+        (&active, active_source),
+        (&excluded, excluded_source),
+    ] {
+        std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+    }
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(root).unwrap(),"capabilities":{"textDocument":{"publishDiagnostics":{"relatedInformation":true},"codeAction":{"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix"]}}}}},"initializationOptions":{"build":{"executable":"pdflatex","arguments":["-interaction=nonstopmode","-recorder","-output-directory=%o","%f"]}}}));
+    server.notify("initialized", json!({}));
+    for (uri, text) in [
+        (&main, main_source),
+        (&active, active_source),
+        (&excluded, excluded_source),
+    ] {
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"languageId":"latex","version":1,"text":text}}),
+        );
+    }
+    server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let finished = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(finished["params"]["status"], "success", "{finished}");
+    assert_eq!(finished["params"]["stale"], false, "{finished}");
+    for (uri, other) in [(&main, &active), (&active, &main)] {
+        let published = server.until(|message| {
+            message["method"] == "textDocument/publishDiagnostics"
+                && message["params"]["uri"] == uri.as_str()
+                && message["params"]["diagnostics"]
+                    .as_array()
+                    .is_some_and(|items| {
+                        items
+                            .iter()
+                            .any(|item| item["code"] == "duplicate-pdf-destination")
+                    })
+        });
+        let duplicate = published["params"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["code"] == "duplicate-pdf-destination")
+            .unwrap();
+        let related = duplicate["relatedInformation"].as_array().unwrap();
+        assert_eq!(related.len(), 1, "{duplicate}");
+        assert_eq!(related[0]["location"]["uri"], other.as_str());
+        if uri == &active {
+            assert!(
+                published["params"]["diagnostics"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|item| item["code"] == "undefined-pdf-destination"),
+                "{published}"
+            );
+        }
+    }
+    let range = latex_lsp::text::Text::new(excluded_source.into()).range(11, 15);
+    let actions = server.request(
+        3,
+        "textDocument/codeAction",
+        json!({"textDocument":{"uri":excluded},"range":range,"context":{"diagnostics":[]}}),
+    );
+    assert!(actions.as_array().unwrap().is_empty(), "{actions}");
+    let range = latex_lsp::text::Text::new(active_source.into()).range(11, 15);
+    let actions = server.request(
+        4,
+        "textDocument/codeAction",
+        json!({"textDocument":{"uri":active},"range":range,"context":{"diagnostics":[]}}),
+    );
+    assert_eq!(actions.as_array().unwrap().len(), 1, "{actions}");
+    assert_eq!(
+        actions[0]["edit"]["changes"][active.as_str()][0]["newText"],
+        "last"
+    );
+    let all_chapters =
+        main_source.replace("\\includeonly{active}", "\\includeonly{active,excluded}");
+    std::fs::write(root.join("main.tex"), &all_chapters).unwrap();
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":all_chapters}]}),
+    );
+    server.request(
+        5,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let finished = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(finished["params"]["status"], "success", "{finished}");
+    let published = server.until(|message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["uri"] == excluded.as_str()
+            && message["params"]["diagnostics"]
+                .as_array()
+                .is_some_and(|items| {
+                    items
+                        .iter()
+                        .any(|item| item["code"] == "duplicate-pdf-destination")
+                })
+    });
+    let duplicate = published["params"]["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["code"] == "duplicate-pdf-destination")
+        .unwrap();
+    assert_eq!(duplicate["relatedInformation"].as_array().unwrap().len(), 2);
+    let actions = server.request(
+        6,
+        "textDocument/codeAction",
+        json!({"textDocument":{"uri":excluded},"range":range,"context":{"diagnostics":[]}}),
+    );
+    assert_eq!(actions.as_array().unwrap().len(), 2, "{actions}");
+    server.request(7, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[ignore = "requires pdflatex and hyperref"]
 fn duplicate_compiler_destinations_link_declarations_and_clear_after_resolving_then_renaming() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();

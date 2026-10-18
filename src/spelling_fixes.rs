@@ -317,6 +317,13 @@ pub fn fixes(workspace: &Workspace, uri: &Url, range: Range) -> Vec<QuickFix> {
             let mut total_entries = 0;
             for document in project
                 .iter()
+                .filter(|uri| {
+                    kind != Kind::Anchor
+                        || workspace
+                            .build_diagnostic_sources
+                            .get(root)
+                            .is_none_or(|sources| sources.contains(*uri))
+                })
                 .filter_map(|uri| workspace.documents.get(uri))
             {
                 let entries = match kind {

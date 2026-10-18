@@ -67,6 +67,49 @@ fn destination_diagnostic(workspace: &mut Workspace, uri: &Url) -> Diagnostic {
 }
 
 #[test]
+fn destination_candidates_use_the_diagnostic_builds_read_sources_before_counting_duplicates() {
+    let (mut workspace, uri) = setup(
+        "\\hypertarget{last}{Candidate}\\hyperlink{lost}{Text}\n",
+        true,
+    );
+    let excluded = Url::parse("file:///editing/excluded.tex").unwrap();
+    workspace.documents.insert(
+        excluded.clone(),
+        Document::new(
+            &excluded,
+            "\\hypertarget{last}{Other}\\hypertarget{loft}{Other}\n".into(),
+            None,
+        ),
+    );
+    workspace
+        .recorded_inputs
+        .insert(uri.clone(), [uri.clone(), excluded.clone()].into());
+    let diagnostic = destination_diagnostic(&mut workspace, &uri);
+    workspace
+        .build_diagnostic_sources
+        .insert(uri.clone(), [uri.clone()].into());
+    let actions = editing::code_actions(
+        &workspace,
+        &uri,
+        diagnostic.range,
+        &context(vec![diagnostic.clone()]),
+    );
+    assert_eq!(actions.len(), 1, "{actions:?}");
+    assert_eq!(action_edit(&actions[0], &uri).new_text, "last");
+    workspace
+        .build_diagnostic_sources
+        .insert(uri.clone(), [uri.clone(), excluded].into());
+    let actions = editing::code_actions(
+        &workspace,
+        &uri,
+        diagnostic.range,
+        &context(vec![diagnostic]),
+    );
+    assert_eq!(actions.len(), 1, "{actions:?}");
+    assert_eq!(action_edit(&actions[0], &uri).new_text, "loft");
+}
+
+#[test]
 fn destination_spelling_fixes_preserve_compound_comments_and_independent_labels() {
     for versioned in [false, true] {
         for (link, declaration, expected) in [

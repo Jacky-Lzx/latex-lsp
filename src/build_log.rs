@@ -2,7 +2,7 @@
 use crate::text::Text;
 use std::{
     borrow::Cow,
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
 };
 use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range, Url};
@@ -1001,12 +1001,22 @@ fn stack_file(root: &Path, tail: &str) -> Option<(PathBuf, usize)> {
     result
 }
 
-fn update_file_stack(line: &str, root: &Path, stack: &mut Vec<Option<PathBuf>>) {
+fn update_file_stack(
+    line: &str,
+    root: &Path,
+    stack: &mut Vec<Option<PathBuf>>,
+    sources: &mut BTreeSet<Url>,
+) {
     let mut i = 0;
     while i < line.len() {
         match line.as_bytes()[i] {
             b'(' => {
                 if let Some((file, length)) = stack_file(root, &line[i + 1..]) {
+                    if sources.len() < 4096 && crate::workspace::is_source(&file) {
+                        if let Ok(uri) = Url::from_file_path(&file) {
+                            sources.insert(uri);
+                        }
+                    }
                     stack.push(Some(file));
                     i += length;
                 } else {
@@ -1056,7 +1066,21 @@ fn continued_file_line<'a>(root: &Path, lines: &[&'a str], i: &mut usize) -> Cow
 }
 
 pub fn parse(root: &Path, log: &str) -> BTreeMap<Url, Vec<Diagnostic>> {
+    parse_with_sources(root, log).0
+}
+
+/// The recorder also lists existence probes. File-entry events in the final
+/// log provide narrower evidence for diagnostics with no source line.
+pub(crate) fn parse_with_sources(
+    root: &Path,
+    log: &str,
+) -> (BTreeMap<Url, Vec<Diagnostic>>, BTreeSet<Url>) {
     let mut result = BTreeMap::new();
+    let mut sources = BTreeSet::new();
+    let root_path = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    if let Ok(uri) = Url::from_file_path(root_path) {
+        sources.insert(uri);
+    }
     let mut stack: Vec<Option<PathBuf>> = Vec::new();
     let mut pending: Option<(PathBuf, String, usize)> = None;
     let lines = log.lines().collect::<Vec<_>>();
@@ -1171,7 +1195,7 @@ pub fn parse(root: &Path, log: &str) -> BTreeMap<Url, Vec<Diagnostic>> {
         // They describe diagnostics, rather than file entry/exit events.
         if structural {
             let line = continued_file_line(root, &lines, &mut i);
-            update_file_stack(&line, root, &mut stack);
+            update_file_stack(&line, root, &mut stack, &mut sources);
         }
         i += 1;
     }
@@ -1182,7 +1206,7 @@ pub fn parse(root: &Path, log: &str) -> BTreeMap<Url, Vec<Diagnostic>> {
         diagnostics.sort_by_key(|diagnostic| (diagnostic.range.start, diagnostic.message.clone()));
         diagnostics.dedup_by(|a, b| a.range == b.range && a.message == b.message);
     }
-    result
+    (result, sources)
 }
 
 /// BibTeX and Biber write a separate log, often after TeX has already produced
@@ -1368,6 +1392,67 @@ fn bibliography_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn diagnostic_sources_track_closed_nested_and_wrapped_file_entries_not_echoed_messages() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let main = root.join("main.tex");
+        let long = format!("章节-{}.tex", "segment".repeat(20));
+        for name in [
+            "main.tex",
+            "one.tex",
+            "two.tex",
+            "ignored.tex",
+            "package.sty",
+            "main.aux",
+            long.as_str(),
+        ] {
+            std::fs::write(root.join(name), "Text\n").unwrap();
+        }
+        let entry = format!("(\"./{long}\")");
+        let split = entry
+            .char_indices()
+            .map(|(at, _)| at)
+            .find(|at| *at >= 79)
+            .unwrap();
+        let log = format!("(./main.tex\n(./one.tex)(./two.tex)\n(./package.sty) (./main.aux)\n{}\n{}\nLaTeX Warning: Do not read (./ignored.tex).\nl.3 (./ignored.tex)\n)\n", &entry[..split], &entry[split..]);
+        let (_, sources) = parse_with_sources(&main, &log);
+        let expected: BTreeSet<_> = [
+            "main.tex",
+            "one.tex",
+            "two.tex",
+            "package.sty",
+            long.as_str(),
+        ]
+        .into_iter()
+        .map(|name| Url::from_file_path(root.join(name)).unwrap())
+        .collect();
+        assert_eq!(sources, expected);
+    }
+
+    #[test]
+    fn truncated_logs_keep_only_the_root_and_source_entries_actually_observed() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let main = root.join("main.tex");
+        for name in ["main.tex", "observed.tex", "not-seen.tex"] {
+            std::fs::write(root.join(name), "Text\n").unwrap();
+        }
+        let log = format!(
+            "(./not-se\n{}\n(./observed.tex)\n",
+            crate::output::TRUNCATED
+        );
+        let (_, sources) = parse_with_sources(&main, &log);
+        assert_eq!(
+            sources,
+            [
+                Url::from_file_path(&main).unwrap(),
+                Url::from_file_path(root.join("observed.tex")).unwrap()
+            ]
+            .into()
+        );
+    }
 
     #[test]
     fn duplicate_destination_warnings_select_declarations_and_preserve_shipout_boundaries() {
