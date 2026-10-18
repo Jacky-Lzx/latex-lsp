@@ -132,7 +132,7 @@ fn real_tex_logs_exceeding_eight_megabytes_keep_final_warnings_errors_and_page_c
         executable: "pdflatex".into(),
         ..Default::default()
     };
-    let preamble = "\\documentclass{article}\n\\newcount\\noise\\noise=0\n\\loop\\ifnum\\noise<140000\\typeout{abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuv}\\advance\\noise by 1\\repeat\n\\begin{document}\n";
+    let preamble = "\\documentclass{article}\n\\newcount\\noise\\noise=0\n\\loop\\ifnum\\noise<140000\\typeout{progress:abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuv}\\advance\\noise by 1\\repeat\n\\begin{document}\n";
     for failure in [false, true] {
         let body = if failure {
             "\\missingFinalCommand"

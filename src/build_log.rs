@@ -126,7 +126,7 @@ fn numbered_error(line: &str) -> Option<(&str, u32, &str)> {
         if let Ok(number) = number.parse::<u32>() {
             let path = line[..colon].trim();
             if log_source(Path::new(path.trim_matches('"'))) {
-                return Some((path, number, message.trim()));
+                return Some((path, number, message.trim_start()));
             }
         }
     }
@@ -426,11 +426,27 @@ fn message_boundary(line: &str) -> bool {
         || line.starts_with(')')
 }
 
-fn wrapped_message(root: &Path, lines: &[&str], i: &mut usize) -> String {
+fn wrapped_message(
+    root: &Path,
+    lines: &[&str],
+    separator_lines: &[usize],
+    i: &mut usize,
+) -> String {
     let mut message = lines[*i].trim().to_owned();
     while !message.ends_with(['.', '!']) && *i + 1 < lines.len() && message.len() < 4096 {
         let next = lines[*i + 1];
         if next.trim().is_empty() || message_boundary(next) {
+            break;
+        }
+        let mut next_index = *i + 1;
+        if numbered_error(&continued_error_line(
+            root,
+            lines,
+            separator_lines,
+            &mut next_index,
+        ))
+        .is_some()
+        {
             break;
         }
         if next.trim_start().starts_with('(') {
@@ -450,6 +466,106 @@ fn wrapped_message(root: &Path, lines: &[&str], i: &mut usize) -> String {
         message.push_str(next.trim());
     }
     message
+}
+
+fn continued_error_line<'a>(
+    root: &Path,
+    lines: &[&'a str],
+    separator_lines: &[usize],
+    i: &mut usize,
+) -> Cow<'a, str> {
+    let line = lines[*i];
+    if line.len() < 60 || numbered_error(line).is_some() || message_boundary(line) {
+        return Cow::Borrowed(line);
+    }
+    // Most long lines are ordinary compiler output. Look ahead only when a
+    // possible file-line suffix exists nearby, avoiding repeated scans of
+    // large typeout logs that contain no diagnostics.
+    let next = separator_lines.partition_point(|index| *index <= *i);
+    if separator_lines
+        .get(next)
+        .is_none_or(|index| index - *i > 64)
+    {
+        return Cow::Borrowed(line);
+    }
+    let mut joined = line.to_owned();
+    for (index, next) in lines.iter().enumerate().skip(*i + 1).take(64) {
+        // A suffix of a wrapped filename can itself look like a file-line
+        // error. Only treat it as an independent diagnostic if it resolves.
+        let numbered = numbered_error(next);
+        if next.trim().is_empty()
+            || numbered.is_some_and(|(name, _, _)| location(root, name).is_some())
+            || numbered.is_none() && message_boundary(next)
+            || joined.len() + next.len() > 8192
+        {
+            break;
+        }
+        joined.push_str(next);
+        if numbered_error(&joined).is_some_and(|(name, _, _)| location(root, name).is_some()) {
+            *i = index;
+            return Cow::Owned(joined);
+        }
+    }
+    Cow::Borrowed(line)
+}
+
+fn wrapped_error_message(
+    root: &Path,
+    lines: &[&str],
+    separator_lines: &[usize],
+    i: &mut usize,
+    initial: &str,
+) -> String {
+    let mut message = initial.to_owned();
+    for _ in 0..64 {
+        if message.trim_end().ends_with(['.', '!']) || message.len() >= 4096 {
+            break;
+        }
+        let Some(next) = lines.get(*i + 1) else { break };
+        if next.trim().is_empty()
+            || message_boundary(next)
+            || [
+                "<inserted text>",
+                "<recently read>",
+                "<to be read again>",
+                "<argument>",
+                "<*>",
+                "See the LaTeX manual",
+                "Type  H <return>",
+            ]
+            .iter()
+            .any(|prefix| next.trim_start().starts_with(prefix))
+        {
+            break;
+        }
+        let mut next_index = *i + 1;
+        if numbered_error(&continued_error_line(
+            root,
+            lines,
+            separator_lines,
+            &mut next_index,
+        ))
+        .is_some()
+        {
+            break;
+        }
+        if next.trim_start().starts_with('(') {
+            let announcement = continued_file_line(root, lines, &mut next_index);
+            if announcement
+                .trim_start()
+                .strip_prefix('(')
+                .and_then(|tail| stack_file(root, tail))
+                .is_some()
+            {
+                break;
+            }
+        }
+        // TeX wraps at a byte count, including inside words and filenames.
+        // Preserve the spaces it actually printed when removing the break.
+        message.push_str(next);
+        *i += 1;
+    }
+    message.trim().to_owned()
 }
 
 fn stack_file(root: &Path, tail: &str) -> Option<(PathBuf, usize)> {
@@ -543,6 +659,20 @@ pub fn parse(root: &Path, log: &str) -> BTreeMap<Url, Vec<Diagnostic>> {
     let mut stack: Vec<Option<PathBuf>> = Vec::new();
     let mut pending: Option<(PathBuf, String)> = None;
     let lines = log.lines().collect::<Vec<_>>();
+    let separator_lines: Vec<_> = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            let bytes = line.as_bytes();
+            line.match_indices(':')
+                .any(|(offset, _)| {
+                    offset == 0
+                        || bytes[offset - 1].is_ascii_digit()
+                        || bytes.get(offset + 1).is_some_and(u8::is_ascii_digit)
+                })
+                .then_some(index)
+        })
+        .collect();
     let mut i = 0;
     while i < lines.len() {
         let line = lines[i];
@@ -563,20 +693,23 @@ pub fn parse(root: &Path, log: &str) -> BTreeMap<Url, Vec<Diagnostic>> {
                 .unwrap_or_else(|| root.into())
         };
         let mut structural = false;
-        if let Some((name, number, message)) = numbered_error(line) {
+        let error_line = continued_error_line(root, &lines, &separator_lines, &mut i);
+        if let Some((name, number, message)) = numbered_error(&error_line) {
             let path = location(root, name).unwrap_or_else(|| root.into());
+            let message = wrapped_error_message(root, &lines, &separator_lines, &mut i, message);
             let severity = if message.contains("Warning:") {
                 DiagnosticSeverity::WARNING
             } else {
                 DiagnosticSeverity::ERROR
             };
-            emit(&mut result, &path, number, message.into(), severity);
+            emit(&mut result, &path, number, message, severity);
             pending = None;
         } else if let Some(message) = line.strip_prefix("! ") {
             if let Some((path, message)) = pending.take() {
                 emit(&mut result, &path, 1, message, DiagnosticSeverity::ERROR);
             }
-            pending = Some((current(), message.into()));
+            let message = wrapped_error_message(root, &lines, &separator_lines, &mut i, message);
+            pending = Some((current(), message));
         } else if let Some(tail) = line.trim_start().strip_prefix("l.") {
             let number = tail
                 .split(|ch: char| !ch.is_ascii_digit())
@@ -594,7 +727,7 @@ pub fn parse(root: &Path, log: &str) -> BTreeMap<Url, Vec<Diagnostic>> {
         } else if warning_start(line) || line.starts_with("Missing character:") {
             let path = current();
             // TeX wraps warnings at its configured print width.
-            let message = wrapped_message(root, &lines, &mut i);
+            let message = wrapped_message(root, &lines, &separator_lines, &mut i);
             let number = input_line(&message).unwrap_or(1);
             emit(
                 &mut result,
