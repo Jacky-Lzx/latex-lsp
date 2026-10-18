@@ -138,7 +138,8 @@ pub fn is_reference(name: &str) -> bool {
 
 pub fn file_extensions(name: &str) -> Option<&'static [&'static str]> {
     Some(match name {
-        "input" | "include" | "subfile" => &["tex"],
+        "input" => &["tex", "ltx", "sty", "cls", "def", "clo"],
+        "include" | "subfile" => &["tex"],
         "bibliography" | "addbibresource" => &["bib"],
         "usepackage" | "RequirePackage" => &["sty"],
         "documentclass" | "LoadClass" => &["cls"],

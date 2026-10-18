@@ -30,6 +30,51 @@ fn apply_completion(workspace: &mut Workspace, uri: &Url, marked: &str, label: &
 }
 
 #[test]
+fn input_completions_keep_non_tex_extensions_and_links_do_not_infer_them() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    for name in [
+        "main.tex",
+        "commands.def",
+        "defaults.clo",
+        "chapter.ltx",
+        "local.sty",
+    ] {
+        std::fs::write(root.join(name), "").unwrap();
+    }
+    let uri = Url::from_file_path(root.join("main.tex")).unwrap();
+    let mut workspace = Workspace::default();
+    for (marked, label, expected) in [
+        (
+            r"\input{comm|ands}",
+            "commands.def",
+            r"\input{commands.def}",
+        ),
+        (
+            r"\input{defa|ults}",
+            "defaults.clo",
+            r"\input{defaults.clo}",
+        ),
+        (r"\input{chap|ter}", "chapter.ltx", r"\input{chapter.ltx}"),
+        (r"\input{lo|cal}", "local.sty", r"\input{local.sty}"),
+    ] {
+        assert_eq!(
+            apply_completion(&mut workspace, &uri, marked, label),
+            expected
+        );
+    }
+    let source =
+        "\\input{commands}\n\\input{commands.def}\n\\input{chapter}\n\\input{chapter.ltx}\n";
+    workspace
+        .documents
+        .insert(uri.clone(), Document::new(&uri, source.into(), Some(1)));
+    let links = latex_lsp::navigation::document_links(&workspace, &uri);
+    assert_eq!(links.len(), 2);
+    assert_eq!(links[0].range.start.line, 1);
+    assert_eq!(links[1].range.start.line, 3);
+}
+
+#[test]
 fn file_completions_replace_partial_names_preserve_lists_and_reuse_existing_slashes() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();

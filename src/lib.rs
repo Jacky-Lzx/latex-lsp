@@ -229,7 +229,7 @@ impl LanguageServer for Backend {
                 id: "latex-lsp-watch-files".into(),
                 method: "workspace/didChangeWatchedFiles".into(),
                 register_options: Some(serde_json::json!({
-                    "watchers": [{"globPattern": "**/*.{tex,bib,sty,cls}", "kind": 7}]
+                    "watchers": [{"globPattern": format!("**/*.{{{}}}",workspace::SOURCE_EXTENSIONS.join(",")), "kind": 7}]
                 })),
             };
             if let Err(error) = self.client.register_capability(vec![registration]).await {

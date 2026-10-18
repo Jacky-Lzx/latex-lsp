@@ -16,10 +16,7 @@ pub fn inputs(root: &Path, contents: &str) -> BTreeSet<Url> {
             }
         } else if let Some(value) = line.strip_prefix("INPUT ") {
             let path = directory.join(value.trim_matches('"'));
-            if !matches!(
-                path.extension().and_then(|ext| ext.to_str()),
-                Some("tex" | "sty" | "cls" | "bib" | "ltx")
-            ) {
+            if !crate::workspace::is_source(&path) {
                 continue;
             }
             if let Ok(path) = path.canonicalize() {

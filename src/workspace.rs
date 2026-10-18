@@ -9,6 +9,13 @@ use crate::{syntax::Syntax, text::Text};
 
 const MAX_FILES: usize = 1024;
 const MAX_FILE_SIZE: u64 = 2 * 1024 * 1024;
+pub const SOURCE_EXTENSIONS: &[&str] = &["tex", "ltx", "bib", "sty", "cls", "def", "clo"];
+
+pub fn is_source(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|extension| SOURCE_EXTENSIONS.contains(&extension))
+}
 
 #[derive(Clone, Debug)]
 pub struct Document {
@@ -327,12 +334,7 @@ impl Workspace {
                 {
                     self.scan(&path, depth + 1);
                 }
-            } else if kind.is_file()
-                && matches!(
-                    path.extension().and_then(|ext| ext.to_str()),
-                    Some("tex" | "bib" | "sty" | "cls")
-                )
-            {
+            } else if kind.is_file() && is_source(&path) {
                 if let Ok(uri) = Url::from_file_path(&path) {
                     self.reload(&uri);
                 }
@@ -418,8 +420,13 @@ fn file_uri(path: &Path) -> Result<Url, String> {
     let path = path
         .canonicalize()
         .map_err(|error| format!("Cannot read root document {}: {error}", path.display()))?;
-    if !path.is_file() || path.extension().and_then(|ext| ext.to_str()) != Some("tex") {
-        return Err("Root document must be a saved .tex file".into());
+    if !path.is_file()
+        || !matches!(
+            path.extension().and_then(|ext| ext.to_str()),
+            Some("tex" | "ltx")
+        )
+    {
+        return Err("Root document must be a saved .tex or .ltx file".into());
     }
     Url::from_file_path(path).map_err(|_| "Cannot convert root document path to URI".into())
 }

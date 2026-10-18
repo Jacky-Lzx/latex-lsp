@@ -1288,6 +1288,95 @@ fn real_engine_directives_select_the_root_engine_and_explicit_configuration_over
     }
 }
 
+#[test]
+fn ltx_def_and_clo_sources_are_indexed_and_included_in_dynamic_watch_registration() {
+    let directory = tempfile::tempdir().unwrap();
+    for extension in ["ltx", "def", "clo"] {
+        std::fs::write(
+            directory.path().join(format!("source.{extension}")),
+            format!("\\label{{source:{extension}}}"),
+        )
+        .unwrap();
+    }
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(directory.path()).unwrap(),"capabilities":{"workspace":{"didChangeWatchedFiles":{"dynamicRegistration":true}}}}));
+    server.notify("initialized", json!({}));
+    let registration = server.until(|message| message["method"] == "client/registerCapability");
+    let pattern = registration["params"]["registrations"][0]["registerOptions"]["watchers"][0]
+        ["globPattern"]
+        .as_str()
+        .unwrap();
+    for extension in ["tex", "ltx", "bib", "sty", "cls", "def", "clo"] {
+        assert!(pattern.contains(extension));
+    }
+    server.send(json!({"jsonrpc":"2.0","id":registration["id"],"result":null}));
+    let symbols = server.request(2, "workspace/symbol", json!({"query":"source:"}));
+    assert_eq!(symbols.as_array().unwrap().len(), 3);
+    let definitions = directory.path().join("source.def");
+    std::fs::write(&definitions, "\\label{updated:definitions}").unwrap();
+    server.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({"changes":[{"uri":Url::from_file_path(&definitions).unwrap(),"type":2}]}),
+    );
+    assert!(server
+        .request(3, "workspace/symbol", json!({"query":"source:def"}))
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        server
+            .request(
+                4,
+                "workspace/symbol",
+                json!({"query":"updated:definitions"})
+            )
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    server.request(5, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[ignore = "requires latexmk and a TeX installation"]
+fn real_ltx_root_and_dynamically_input_definition_files_compile_and_keep_root_detection() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(directory.path().join("main.ltx")).unwrap();
+    let definitions = Url::from_file_path(directory.path().join("commands.def")).unwrap();
+    std::fs::write(main.to_file_path().unwrap(), "\\documentclass{article}\n\\def\\definitionsfile{commands.def}\n\\input{\\definitionsfile}\n\\begin{document}\n\\hellocommand\n\\end{document}\n").unwrap();
+    std::fs::write(
+        definitions.to_file_path().unwrap(),
+        "\\newcommand{\\hellocommand}{Hello source files}\n",
+    )
+    .unwrap();
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(directory.path()).unwrap(),"capabilities":{}}));
+    server.notify("initialized", json!({}));
+    server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let finished = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(finished["params"]["status"], "success", "{finished}");
+    assert_eq!(finished["params"]["stale"], false);
+    assert_eq!(finished["params"]["dependenciesCount"], 2);
+    let next = server.request(
+        3,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[definitions]}),
+    );
+    assert_eq!(next["rootUri"], main.as_str());
+    let finished = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(finished["params"]["status"], "success", "{finished}");
+    server.request(4, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
 impl Drop for Server {
     fn drop(&mut self) {
         let _ = self.child.kill();

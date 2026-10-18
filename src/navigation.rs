@@ -242,6 +242,8 @@ pub fn document_links(workspace: &Workspace, uri: &Url) -> Vec<DocumentLink> {
             continue;
         };
         let extensions = match syntax::file_extensions(&command.name) {
+            // \input accepts explicit source extensions, but only infers .tex.
+            Some(extensions) if command.name == "input" => &extensions[..1],
             Some(extensions) => extensions,
             None if matches!(command.name.as_str(), "url" | "href") => &[],
             None => continue,
