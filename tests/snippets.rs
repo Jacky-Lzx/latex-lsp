@@ -29,6 +29,10 @@ fn snippets_expand_in_a_real_editor_without_consuming_tex_backslashes() {
         ("let", r"let\alias=\command"),
         ("setcounter", "setcounter{counter}{0}"),
         ("counterwithin", "counterwithin{counter}{parent}"),
+        ("newlength", r"newlength{\length}"),
+        ("setlength", r"setlength{\length}{0pt}"),
+        ("newcount", r"newcount\count"),
+        ("savebox", r"savebox{\box}[width][c]{text}"),
         ("lim", r"lim_{x \to \infty} "),
         ("left", r"left(  \right)"),
     ] {

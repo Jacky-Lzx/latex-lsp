@@ -1,6 +1,148 @@
+/// Register primitives whose names must remain reserved during rename.
+pub(crate) const REGISTER_PRIMITIVES: &[&str] = &[
+    "count",
+    "dimen",
+    "skip",
+    "muskip",
+    "toks",
+    "box",
+    "copy",
+    "wd",
+    "ht",
+    "dp",
+    "the",
+    "number",
+    "advance",
+    "multiply",
+    "divide",
+    "font",
+    "fontdimen",
+    "textfont",
+    "scriptfont",
+    "scriptscriptfont",
+];
+
 /// Command name, snippet template (without leading backslash), short documentation.
 /// Templates retain literal TeX backslashes; completion escapes them for the client.
 pub const COMMANDS: &[(&str, &str, &str)] = &[
+    (
+        "newlength",
+        "newlength{\\${1:length}}",
+        "Allocate a LaTeX length.",
+    ),
+    (
+        "setlength",
+        "setlength{\\${1:length}}{${2:0pt}}",
+        "Set a length.",
+    ),
+    (
+        "addtolength",
+        "addtolength{\\${1:length}}{${2:1pt}}",
+        "Add to a length.",
+    ),
+    (
+        "settowidth",
+        "settowidth{\\${1:length}}{${2:text}}",
+        "Measure the width of text into a length.",
+    ),
+    (
+        "settoheight",
+        "settoheight{\\${1:length}}{${2:text}}",
+        "Measure the height of text into a length.",
+    ),
+    (
+        "settodepth",
+        "settodepth{\\${1:length}}{${2:text}}",
+        "Measure the depth of text into a length.",
+    ),
+    (
+        "newsavebox",
+        "newsavebox{\\${1:box}}",
+        "Allocate a LaTeX savebox.",
+    ),
+    ("sbox", "sbox{\\${1:box}}{${2:text}}", "Save text in a box."),
+    (
+        "savebox",
+        "savebox{\\${1:box}}[${2:width}][${3:c}]{${4:text}}",
+        "Save text in a box with optional width and alignment.",
+    ),
+    ("usebox", "usebox{\\${1:box}}", "Typeset a saved box."),
+    (
+        "newcount",
+        "newcount\\${1:count}",
+        "Allocate a TeX integer register.",
+    ),
+    (
+        "newdimen",
+        "newdimen\\${1:dimension}",
+        "Allocate a TeX dimension register.",
+    ),
+    (
+        "newskip",
+        "newskip\\${1:glue}",
+        "Allocate a TeX glue register.",
+    ),
+    (
+        "newmuskip",
+        "newmuskip\\${1:glue}",
+        "Allocate a TeX math glue register.",
+    ),
+    (
+        "newtoks",
+        "newtoks\\${1:tokens}",
+        "Allocate a TeX token register.",
+    ),
+    ("newbox", "newbox\\${1:box}", "Allocate a TeX box register."),
+    (
+        "newfont",
+        "newfont{\\${1:command}}{${2:cmr10}}",
+        "Define a font command.",
+    ),
+    (
+        "chardef",
+        "chardef\\${1:command}=${2:65}",
+        "Define a character constant.",
+    ),
+    (
+        "mathchardef",
+        "mathchardef\\${1:command}=${2:0}",
+        "Define a math character constant.",
+    ),
+    ("textwidth", "textwidth", "Width of the text area."),
+    ("textheight", "textheight", "Height of the text area."),
+    ("linewidth", "linewidth", "Width of the current line."),
+    ("columnwidth", "columnwidth", "Width of the current column."),
+    ("columnsep", "columnsep", "Separation between columns."),
+    (
+        "parindent",
+        "parindent",
+        "Indentation at the start of a paragraph.",
+    ),
+    ("parskip", "parskip", "Glue between paragraphs."),
+    (
+        "baselineskip",
+        "baselineskip",
+        "Glue between text baselines.",
+    ),
+    (
+        "lineskip",
+        "lineskip",
+        "Minimum glue between adjacent lines.",
+    ),
+    (
+        "lineskiplimit",
+        "lineskiplimit",
+        "Threshold for using lineskip.",
+    ),
+    (
+        "topskip",
+        "topskip",
+        "Glue above the first baseline on a page.",
+    ),
+    ("hsize", "hsize", "TeX paragraph width."),
+    ("vsize", "vsize", "TeX page height."),
+    ("hoffset", "hoffset", "Horizontal page offset."),
+    ("voffset", "voffset", "Vertical page offset."),
     (
         "documentclass",
         "documentclass{${1:article}}",

@@ -41,6 +41,7 @@ pub struct Entry {
     pub name: String,
     pub span: Range<usize>,
     pub detail: String,
+    pub is_variable: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -282,17 +283,45 @@ pub(crate) fn file_lookup_names<'a>(
 }
 
 fn declares_command(name: &str) -> bool {
+    declares_register(name)
+        || matches!(
+            name,
+            "newcommand"
+                | "renewcommand"
+                | "providecommand"
+                | "DeclareMathOperator"
+                | "DeclareRobustCommand"
+                | "NewDocumentCommand"
+                | "RenewDocumentCommand"
+                | "ProvideDocumentCommand"
+                | "DeclareDocumentCommand"
+        )
+}
+
+pub(crate) fn declares_register(name: &str) -> bool {
     matches!(
         name,
-        "newcommand"
-            | "renewcommand"
-            | "providecommand"
-            | "DeclareMathOperator"
-            | "DeclareRobustCommand"
-            | "NewDocumentCommand"
-            | "RenewDocumentCommand"
-            | "ProvideDocumentCommand"
-            | "DeclareDocumentCommand"
+        "newlength"
+            | "newsavebox"
+            | "newfont"
+            | "newcount"
+            | "newdimen"
+            | "newskip"
+            | "newmuskip"
+            | "newtoks"
+            | "newbox"
+            | "newread"
+            | "newwrite"
+            | "newinsert"
+            | "newfam"
+            | "chardef"
+            | "mathchardef"
+            | "countdef"
+            | "dimendef"
+            | "skipdef"
+            | "muskipdef"
+            | "toksdef"
+            | "font"
     )
 }
 
@@ -492,6 +521,7 @@ impl Syntax {
                             name: source[span.start + 1..span.end].into(),
                             span,
                             detail: format!("Defined with \\{name}"),
+                            is_variable: declares_register(name),
                         });
                     }
                     if let Some(arg) = &command.argument {
@@ -499,6 +529,7 @@ impl Syntax {
                             name: arg.value.trim().into(),
                             span: trimmed_span(source, arg.span.clone()),
                             detail: format!("\\{name}"),
+                            is_variable: false,
                         };
                         if declares_environment(name) && !arg.value.trim().is_empty() {
                             result.environments.push(Entry {
@@ -508,7 +539,10 @@ impl Syntax {
                         }
                         match name {
                             "newcounter" | "newaliascnt" if is_static_key(arg.value.trim()) => {
-                                result.counters.push(entry());
+                                result.counters.push(Entry {
+                                    is_variable: true,
+                                    ..entry()
+                                });
                             }
                             "label" => result.labels.push(entry()),
                             "bibitem" => result.citations.push(entry()),
@@ -625,6 +659,7 @@ impl Syntax {
                         name: source[span.clone()].into(),
                         span,
                         detail: format!("Defined with \\{}", declaration.name),
+                        is_variable: declares_register(&declaration.name),
                     });
                 }
             }
@@ -678,6 +713,7 @@ impl Syntax {
                         name: source[span.clone()].into(),
                         span,
                         detail: format!("BibTeX {kind}"),
+                        is_variable: false,
                     });
                     let body_end = if closed { end - 1 } else { end };
                     result.bibliography_fields(source, key_end + 1, body_end);
@@ -738,6 +774,7 @@ impl Syntax {
                         name: source[span.clone()].into(),
                         span,
                         detail: format!("BibTeX {name} reference"),
+                        is_variable: false,
                     });
                 }
                 offset += key.len() + 1;

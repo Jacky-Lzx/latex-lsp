@@ -88,6 +88,8 @@ vim.lsp.enable('latex_lsp')
 
 静态 `newcounter` / `newaliascnt` 声明支持跳转、悬停、引用、文档/工作区符号及跨文件重命名。重命名联动维护计数器操作、子计数器重置、定理共享编号、别名和格式化命令，包括字面 `csname`、`aliascntresetthe` 及别名元数据；同名的独立宏和 cleveref 的显示文字保持原样。名称冲突、共享引用在其他论文中指向独立声明、或同名定理与计数器对格式化命令的所有权有歧义时拒绝改动。
 
+`newlength`、`newsavebox`、`newcount` / `newdimen` / `newskip` / `newmuskip` / `newtoks` / `newbox` 等寄存器分配，以及 `chardef` / `mathchardef`、寄存器绑定和字体声明也进入符号索引，支持变量补全、导航、悬停和跨文件安全重命名；识别直接名称和经 `expandafter` 展开的字面 `csname` 声明。常用长度操作、保存盒命令提供片段及参数提示；重命名会检查已有宏、寄存器、计数器派生命令和常用内置长度/寄存器原语的冲突。
+
 在语法错误处调用 `vim.lsp.buf.code_action()` 可选择快速修复；`vim.lsp.buf.document_highlight()` 高亮当前符号的定义和引用。Neovim 0.12 中可用 `vim.lsp.buf.selection_range(1)` 扩大语法选择范围。
 
 其他编辑器可将 `latex-lsp --stdio` 配置为 `tex` / `latex` / `bib` / `bst` 文件的语言服务器。建议将根目录设为当前 LaTeX 项目，避免把多个无关项目混在同一个工作区。

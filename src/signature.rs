@@ -106,6 +106,23 @@ fn builtin(name: &str) -> Option<Signature> {
         "begin" | "end" => (&[("environment", false)], false),
         "label" => (&[("key", false)], false),
         "newcounter" => (&[("name", false), ("within", true)], false),
+        "newlength" => (&[("length", false)], false),
+        "setlength" | "addtolength" => (&[("length", false), ("value", false)], false),
+        "settowidth" | "settoheight" | "settodepth" => {
+            (&[("length", false), ("text", false)], false)
+        }
+        "newsavebox" | "usebox" => (&[("box", false)], false),
+        "sbox" => (&[("box", false), ("text", false)], false),
+        "savebox" => (
+            &[
+                ("box", false),
+                ("width", true),
+                ("position", true),
+                ("text", false),
+            ],
+            false,
+        ),
+        "newfont" => (&[("command", false), ("font", false)], false),
         "newaliascnt" => (&[("alias", false), ("counter", false)], false),
         "setcounter" | "addtocounter" => (&[("counter", false), ("value", false)], false),
         "stepcounter" | "refstepcounter" | "usecounter" | "value" | "arabic" | "roman"

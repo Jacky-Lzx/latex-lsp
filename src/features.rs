@@ -283,6 +283,8 @@ pub fn rename(
     let builtin = match target.kind {
         TargetKind::Command | TargetKind::Environment => {
             COMMANDS.iter().any(|(name, _, _)| *name == new_name)
+                || syntax::declares_register(new_name)
+                || crate::catalog::REGISTER_PRIMITIVES.contains(&new_name)
                 || ENVIRONMENTS
                     .iter()
                     .any(|name| *name == new_name || format!("end{name}") == new_name)
@@ -543,7 +545,11 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
                 .filter(|_| use_snippets);
             result.push(CompletionItem {
                 label: entry.name.clone(),
-                kind: Some(CompletionItemKind::FUNCTION),
+                kind: Some(if entry.is_variable {
+                    CompletionItemKind::VARIABLE
+                } else {
+                    CompletionItemKind::FUNCTION
+                }),
                 detail: Some(
                     signature
                         .as_ref()
@@ -966,7 +972,11 @@ pub fn symbols(doc: &Document) -> Vec<DocumentSymbol> {
         result.extend(entries.iter().map(|entry| DocumentSymbol {
             name: entry.name.clone(),
             detail: Some(entry.detail.clone()),
-            kind,
+            kind: if entry.is_variable {
+                SymbolKind::VARIABLE
+            } else {
+                kind
+            },
             tags: None,
             deprecated: None,
             range: doc.text.range(entry.span.start, entry.span.end),
