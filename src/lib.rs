@@ -3,6 +3,7 @@ pub mod build_log;
 pub mod catalog;
 pub mod config;
 pub mod features;
+pub mod navigation;
 pub mod syntax;
 pub mod text;
 pub mod workspace;
@@ -90,6 +91,12 @@ impl LanguageServer for Backend {
             .and_then(|doc| doc.document_symbol.as_ref())
             .and_then(|symbols| symbols.hierarchical_document_symbol_support)
             .unwrap_or(false);
+        workspace.folding_limit = params
+            .capabilities
+            .text_document
+            .as_ref()
+            .and_then(|doc| doc.folding_range.as_ref())
+            .and_then(|folding| folding.range_limit);
         if let Some(folders) = params.workspace_folders {
             for folder in folders {
                 if let Ok(root) = folder.uri.to_file_path() {
@@ -135,6 +142,12 @@ impl LanguageServer for Backend {
                     ..Default::default()
                 }),
                 document_symbol_provider: Some(OneOf::Left(true)),
+                workspace_symbol_provider: Some(OneOf::Left(true)),
+                folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
+                document_link_provider: Some(DocumentLinkOptions {
+                    resolve_provider: Some(false),
+                    work_done_progress_options: WorkDoneProgressOptions::default(),
+                }),
                 workspace: Some(WorkspaceServerCapabilities {
                     workspace_folders: Some(WorkspaceFoldersServerCapabilities {
                         supported: Some(true),
@@ -404,5 +417,30 @@ impl LanguageServer for Backend {
                 DocumentSymbolResponse::Flat(features::flat_symbols(doc, &uri))
             }
         }))
+    }
+
+    async fn symbol(
+        &self,
+        params: WorkspaceSymbolParams,
+    ) -> Result<Option<Vec<SymbolInformation>>> {
+        Ok(Some(navigation::workspace_symbols(
+            &*self.workspace.read().await,
+            &params.query,
+        )))
+    }
+
+    async fn folding_range(&self, params: FoldingRangeParams) -> Result<Option<Vec<FoldingRange>>> {
+        let workspace = self.workspace.read().await;
+        Ok(workspace
+            .documents
+            .get(&params.text_document.uri)
+            .map(|doc| navigation::folding_ranges(doc, workspace.folding_limit)))
+    }
+
+    async fn document_link(&self, params: DocumentLinkParams) -> Result<Option<Vec<DocumentLink>>> {
+        Ok(Some(navigation::document_links(
+            &*self.workspace.read().await,
+            &params.text_document.uri,
+        )))
     }
 }

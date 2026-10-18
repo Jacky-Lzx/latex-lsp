@@ -44,6 +44,7 @@ pub struct Workspace {
     pub watch_files: bool,
     pub hierarchical_symbols: bool,
     pub versioned_edits: bool,
+    pub folding_limit: Option<u32>,
     pub config: crate::config::Config,
     pub build_diagnostics: BTreeMap<Url, BTreeMap<Url, Vec<tower_lsp::lsp_types::Diagnostic>>>,
 }

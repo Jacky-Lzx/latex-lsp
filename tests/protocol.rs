@@ -469,6 +469,45 @@ fn rename_prepares_ranges_and_returns_versioned_cross_file_edits() {
 }
 
 #[test]
+fn navigation_capabilities_and_requests_work_over_stdio() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = Url::from_directory_path(directory.path()).unwrap();
+    let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+    std::fs::write(directory.path().join("child.tex"), "\\label{sec:child}").unwrap();
+    let source = "\\section{Main}\n\\input{child}\n\\begin{itemize}\n\\item text\n\\end{itemize}\n";
+    std::fs::write(directory.path().join("main.tex"), source).unwrap();
+    let mut server = Server::start();
+    let init = server.request(1, "initialize", json!({"processId":null,"rootUri":root,"capabilities":{"textDocument":{"foldingRange":{"rangeLimit":1,"lineFoldingOnly":true}}}}));
+    assert_eq!(init["capabilities"]["workspaceSymbolProvider"], true);
+    assert_eq!(init["capabilities"]["foldingRangeProvider"], true);
+    assert!(init["capabilities"]["documentLinkProvider"].is_object());
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"latex","version":1,"text":source}}),
+    );
+    server.until(|message| message["method"] == "textDocument/publishDiagnostics");
+    let symbols = server.request(2, "workspace/symbol", json!({"query":"sch"}));
+    assert_eq!(symbols[0]["name"], "sec:child");
+    let folds = server.request(
+        3,
+        "textDocument/foldingRange",
+        json!({"textDocument":{"uri":uri}}),
+    );
+    assert_eq!(folds.as_array().unwrap().len(), 1);
+    assert_eq!(folds[0]["startLine"], 0);
+    let links = server.request(
+        4,
+        "textDocument/documentLink",
+        json!({"textDocument":{"uri":uri}}),
+    );
+    assert!(links[0]["target"].as_str().unwrap().ends_with("child.tex"));
+    server.request(5, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
 fn document_symbols_follow_the_clients_hierarchy_capability() {
     let directory = tempfile::tempdir().unwrap();
     let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();

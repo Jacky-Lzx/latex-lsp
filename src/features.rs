@@ -6,7 +6,7 @@ use tower_lsp::lsp_types::*;
 use crate::{
     catalog::{COMMANDS, ENVIRONMENTS},
     syntax::{self, Command, Entry},
-    workspace::{resolve_path, Document, Workspace},
+    workspace::{Document, Workspace},
 };
 
 #[derive(Clone, Copy, PartialEq)]
@@ -416,24 +416,13 @@ pub fn definitions(workspace: &Workspace, uri: &Url, position: Position) -> Vec<
     if doc.syntax.is_ignored(offset) {
         return vec![];
     }
-    // File inclusion commands jump to the file even when it is outside the index.
-    for command in &doc.syntax.commands {
-        if let Some(arg) = &command.argument {
-            if arg.span.start <= offset && offset <= arg.span.end {
-                let extension = match command.name.as_str() {
-                    "input" | "include" | "subfile" => "tex",
-                    "bibliography" | "addbibresource" => "bib",
-                    _ => continue,
-                };
-                return arg
-                    .value
-                    .split(',')
-                    .filter_map(|value| resolve_path(uri, value.trim(), extension))
-                    .map(|uri| Location {
-                        uri,
-                        range: Range::default(),
-                    })
-                    .collect();
+    for link in crate::navigation::document_links(workspace, uri) {
+        if link.range.start <= position && position <= link.range.end {
+            if let Some(uri) = link.target.filter(|uri| uri.scheme() == "file") {
+                return vec![Location {
+                    uri,
+                    range: Range::default(),
+                }];
             }
         }
     }
