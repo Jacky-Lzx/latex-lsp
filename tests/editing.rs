@@ -355,6 +355,8 @@ fn undefined_command_fixes_use_builtin_and_project_commands_preserving_arguments
         ("ifdrafft", "ifdraft"),
         ("thecliam", "theclaim"),
         ("endpanle", "endpanel"),
+        ("wriet", "write"),
+        ("escapcehar", "escapechar"),
     ] {
         let source = format!("😀 \\{name}{{Existing}} trailing text.\n");
         let (mut workspace, uri) = setup(&source, true);
@@ -406,6 +408,7 @@ fn undefined_command_fixes_use_builtin_and_project_commands_preserving_arguments
 fn command_spelling_fixes_reject_known_ambiguous_ignored_and_unproven_names() {
     for (source, name, definitions, mode) in [
         (r"\section{Title}", "section", "", "precise"),
+        (r"\write{Known primitive}", "write", "", "precise"),
         (
             r"\reporttitle{Title}",
             "reporttitle",

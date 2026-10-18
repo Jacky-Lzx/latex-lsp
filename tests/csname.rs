@@ -129,6 +129,38 @@ fn direct_declarations_and_calls_restrict_new_names_in_every_consumer_project() 
 }
 
 #[test]
+fn named_completion_includes_tex_io_and_expression_primitives_and_preserves_existing_arguments() {
+    for (marked, name) in [
+        (r"😀 \csuse{esc¦apechar}{Keep}", "escapechar"),
+        (r"\ifcsequal{write}{op¦enin}{Yes}{No}", "openin"),
+        (r"\csletcs{alias}{num¦expr}", "numexpr"),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let source = marked.replace('¦', "");
+        let workspace = project(directory.path(), &[("main.tex", &source)]);
+        let main = uri(directory.path(), "main.tex");
+        let text = &workspace.documents[&main].text;
+        let items =
+            features::completion(&workspace, &main, text.position(marked.find('¦').unwrap()));
+        let item = items.iter().find(|item| item.label == name).unwrap();
+        assert_eq!(item.detail.as_deref(), Some("TeX primitive"));
+        let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+            panic!("missing edit")
+        };
+        assert_eq!(
+            text.changed(vec![TextDocumentContentChangeEvent {
+                range: Some(edit.range),
+                range_length: None,
+                text: edit.new_text.clone()
+            }])
+            .unwrap()
+            .source,
+            source
+        );
+    }
+}
+
+#[test]
 fn named_macro_rename_cannot_overwrite_core_expansion_and_grouping_primitives() {
     let directory = tempfile::tempdir().unwrap();
     let source = r"\csdef{hello}{Hello}\csuse{hello}";

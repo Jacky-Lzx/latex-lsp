@@ -387,6 +387,69 @@ fn rejects_conflicts_ambiguous_definitions_invalid_names_and_builtins() {
 }
 
 #[test]
+fn macros_and_environments_cannot_be_renamed_over_io_catcode_box_or_expression_primitives() {
+    let mut workspace = Workspace::default();
+    let source =
+        r"\newcommand{\localmacro}{Value}\newenvironment{localenv}{}{}\csdef{namedmacro}{Value}";
+    let uri = insert(&mut workspace, "main.tex", source, Some(1));
+    for target in ["localmacro", "localenv", "namedmacro"] {
+        let position = workspace.documents[&uri]
+            .text
+            .position(source.find(target).unwrap());
+        for name in [
+            "write",
+            "read",
+            "openin",
+            "closein",
+            "openout",
+            "closeout",
+            "immediate",
+            "catcode",
+            "lccode",
+            "uccode",
+            "mathcode",
+            "delcode",
+            "sfcode",
+            "escapechar",
+            "endlinechar",
+            "newlinechar",
+            "afterassignment",
+            "aftergroup",
+            "globaldefs",
+            "shipout",
+            "setbox",
+            "lastbox",
+            "everyjob",
+            "everyeof",
+            "output",
+            "char",
+            "mathchar",
+            "hskip",
+            "vskip",
+            "kern",
+            "mkern",
+            "penalty",
+            "unpenalty",
+            "detokenize",
+            "scantokens",
+            "readline",
+            "numexpr",
+            "dimexpr",
+            "glueexpr",
+            "muexpr",
+            "-",
+            "/",
+        ] {
+            let error = features::rename(&workspace, &uri, position, name).unwrap_err();
+            assert!(
+                error.message.contains("already defined"),
+                "{target} -> {name}: {error}"
+            );
+        }
+    }
+}
+
+#[test]
 fn independent_projects_rename_their_own_labels_citations_macros_and_environments() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();

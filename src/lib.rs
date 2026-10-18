@@ -14,6 +14,7 @@ mod named_commands;
 pub mod navigation;
 mod output;
 pub mod path_completion;
+mod primitives;
 mod project_diagnostics;
 pub mod recorder;
 pub mod signature;

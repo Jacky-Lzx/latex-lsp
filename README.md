@@ -112,6 +112,8 @@ etoolbox 的静态 `csdef` / `csgdef` / `csedef` / `csxdef` 声明进入宏索�
 
 仅通过静态名称声明和调用的宏可以重命名为中文、连字符或数字名称，例如 `发布-模式`；同样适用于经 `expandafter` 展开的字面 `csname` 声明。任一使用该定义的项目中存在直接声明或直接调用时，新名称仍须仅包含 ASCII 字母或 `@`，避免破坏 TeX 控制序列。重命名保留普通字符串、注释和逐字文本，并检查内置原语与现有定义的冲突。
 
+宏和环境的重命名会保护 TeX/e-TeX 的核心原语，包括输入输出、字符类别与字符码、盒子、自动执行 token 列表及表达式运算，例如 `write`、`catcode`、`shipout`、`numexpr`。这些名称也用于静态名称补全和命令拼写建议；保留已有的引擎专用原语保护。
+
 etoolbox 的 `csuse` / `csmeaning`、`ifcsdef` / `ifcsundef` / `ifcsvoid`、宏类型检测及名称比较命令中的静态控制序列名称支持补全、导航、引用与重命名；识别 `ifcsequal` / `ifcsstrequal` 的两个名称参数，保留 `ifcsstring` 的字符串和条件分支正文。派生的环境、计数器和布尔命令仍归属于原始声明。`csuse` 调用可显示被调用命令或环境的参数提示，包括可选参数默认值；动态名称不作推断。
 
 命名宏修改接口 `csappto` / `cspreto` 及其展开、全局变体（`cseappto`、`csgappto`、`csxappto`、`csepreto`、`csgpreto`、`csxpreto`），以及 `csundef` / `csgundef` 也支持片段、参数提示、名称补全、导航和跨文件重命名。只将名称参数关联到原始声明，保留追加或前插代码中的普通文本，并独立识别其中的宏调用；不将修改操作推断为新的声明。
