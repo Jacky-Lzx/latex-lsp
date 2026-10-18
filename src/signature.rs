@@ -230,7 +230,10 @@ fn definition(uri: &Url, doc: &Document, entry: &Entry, environment: bool) -> Op
     let source = &doc.text.source;
     let declaration = entry.detail.strip_prefix("Defined with \\")?;
     let mut i = syntax::skip_space(source, entry.span.end);
-    if !environment && source.as_bytes().get(entry.span.start) != Some(&b'\\') {
+    if !environment
+        && !crate::named_commands::declares(declaration)
+        && source.as_bytes().get(entry.span.start) != Some(&b'\\')
+    {
         let end = doc
             .syntax
             .commands
@@ -328,7 +331,7 @@ fn definition(uri: &Url, doc: &Document, entry: &Entry, environment: bool) -> Op
                 label: "[note]".into(),
             });
         }
-        "def" | "gdef" | "edef" | "xdef" => {
+        "def" | "gdef" | "edef" | "xdef" | "csdef" | "csgdef" | "csedef" | "csxdef" => {
             while source.as_bytes().get(i) == Some(&b'#') {
                 let number = parameters.len() + 1;
                 if number > 9 || source.as_bytes().get(i + 1) != Some(&(b'0' + number as u8)) {

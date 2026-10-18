@@ -855,6 +855,12 @@ fn all_references(
                     crate::named_commands::spans(&doc.text.source, command)
                         .into_iter()
                         .filter(|span| doc.text.source[span.clone()] == *target.name)
+                        .filter(|span| {
+                            !doc.syntax
+                                .definitions
+                                .iter()
+                                .any(|entry| entry.span == *span)
+                        })
                         .map(|span| Location {
                             uri: uri.clone(),
                             range: doc.text.range(span.start, span.end),

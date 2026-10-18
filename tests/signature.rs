@@ -226,6 +226,16 @@ fn xparse_and_undelimited_tex_macros_report_the_correct_parameter() {
             1,
         );
     }
+    for command in ["csdef", "csgdef", "csedef", "csxdef"] {
+        let declaration = format!("\\{command}{{pair}}#1#2{{#1:#2}}");
+        check(&declaration, r"\pair{one}{two¦}", r"\pair{#1}{#2}", 1);
+        check(
+            &declaration,
+            r"\csuse{pair}{one}{two¦}",
+            r"\csuse{pair}{#1}{#2}",
+            1,
+        );
+    }
 }
 
 #[test]
@@ -241,6 +251,7 @@ fn signatures_suppress_comments_raw_text_completed_calls_and_unsupported_or_ambi
             r"\pair{a}{b¦}",
         ),
         (r"\def\pair#1,#2{#1#2}", r"\pair{a}{b¦}"),
+        (r"\csdef{pair}#1,#2{#1#2}", r"\csuse{pair}{a}{b¦}"),
         (r"\NewDocumentCommand{\pair}{d()m}{#2}", r"\pair{a}{b¦}"),
     ] {
         let (workspace, uri, position) = setup(definitions, source);
@@ -554,6 +565,12 @@ fn literal_control_sequence_calls_offer_builtin_macro_and_environment_signatures
             r"\csuse{frac}{a}{b¦}",
             r"\csuse{frac}{numerator}{denominator}",
             1,
+        ),
+        (
+            r"\csdef{模式}#1{#1}",
+            r"\csuse{模式}{Text¦}",
+            r"\csuse{模式}{#1}",
+            0,
         ),
         ("", r"\csuse{fr¦ac}", r"\csuse{command}", 0),
         (

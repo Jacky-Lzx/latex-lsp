@@ -7,12 +7,19 @@ use std::{
 use tower_lsp::lsp_types::*;
 
 fn count(name: &str) -> usize {
+    if declares(name) {
+        return 1;
+    }
     match name {
         "csuse" | "csmeaning" | "ifcsdef" | "ifcsundef" | "ifcsvoid" | "ifcsmacro"
         | "ifcsparam" | "ifcsprotected" | "ifcsltxprotect" | "ifcsstring" => 1,
         "ifcsequal" | "ifcsstrequal" => 2,
         _ => 0,
     }
+}
+
+pub(crate) fn declares(name: &str) -> bool {
+    matches!(name, "csdef" | "csgdef" | "csedef" | "csxdef")
 }
 
 pub(crate) fn spans(source: &str, command: &syntax::Command) -> Vec<Range<usize>> {
@@ -46,6 +53,7 @@ pub(crate) fn completion(
         .rev()
         .filter(|command| command.span.end <= cursor)
         .take(128)
+        .filter(|command| !declares(&command.name))
         .find_map(|command| {
             let mut start = syntax::skip_space(source, command.span.end);
             for _ in 0..count(&command.name) {

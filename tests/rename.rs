@@ -296,6 +296,10 @@ fn modern_and_unbraced_macro_declarations_support_navigation_completion_and_rena
         r"\DeclareMathOperator*{\hello}{hello}",
         r"\DeclareRobustCommand\hello[1]{#1}",
         r"\newrobustcmd{\hello}[1]{Hello #1}",
+        r"\csdef{hello}#1{Hello #1}",
+        r"\csgdef{ hello }#1{Hello #1}",
+        r"\csedef{hello}#1{Hello #1}",
+        r"\csxdef{hello}#1{Hello #1}",
         r"\renewrobustcmd* \hello [1] {Hello #1}",
         "\\providerobustcmd % declaration\n\\hello[1]{Hello #1}",
         r"\NewDocumentCommand{\hello}{m}{#1}",
@@ -344,8 +348,9 @@ fn modern_and_unbraced_macro_declarations_support_navigation_completion_and_rena
             .unwrap()
             .changes
             .unwrap();
-        assert!(
-            edits_result(declaration, &edits[&macros]).contains("\\greeting"),
+        assert_eq!(
+            edits_result(declaration, &edits[&macros]),
+            declaration.replacen("hello", "greeting", 1),
             "{declaration}"
         );
         assert_eq!(

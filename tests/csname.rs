@@ -599,3 +599,167 @@ fn named_calls_and_predicates_still_compile_after_cross_file_macro_rename() {
         );
     }
 }
+
+#[test]
+fn static_named_declarations_share_navigation_references_and_rename_with_direct_calls() {
+    for command in ["csdef", "csgdef", "csedef", "csxdef"] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let definitions = format!("\\{command}{{ hello }}#1{{Hello #1}}\\csdef{{hello-two}}#1{{#1}}\\csdef{{模式}}#1{{#1}}\n");
+        let source = "\\documentclass{article}\\input{definitions}\n\\begin{document}\n\\hello{Direct}\\csuse{hello}{Named}\\csname hello\\endcsname{Literal}\\ifcsdef{hello}{Yes}{No}\n\\csuse{hello-two}{Other}\\csuse{模式}{Unicode}\\end{document}\n";
+        let workspace = project(
+            root,
+            &[("main.tex", source), ("definitions.tex", &definitions)],
+        );
+        let main = uri(root, "main.tex");
+        let declaration = uri(root, "definitions.tex");
+        assert_eq!(
+            workspace.documents[&declaration].syntax.definitions.len(),
+            3
+        );
+        for (document, marker) in [(&main, "hello"), (&declaration, "hello")] {
+            let cursor = workspace.documents[&main]
+                .text
+                .position(source.find("模式").unwrap() + "模".len());
+            let items = features::completion(&workspace, &main, cursor);
+            assert!(items.iter().any(|item| item.label == "模式"));
+            let declaration_cursor = workspace.documents[&declaration]
+                .text
+                .position(definitions.find("hello").unwrap() + 2);
+            assert!(features::completion(&workspace, &declaration, declaration_cursor).is_empty());
+            let text = &workspace.documents[document].text;
+            let position = text.position(text.source.find(marker).unwrap() + 2);
+            assert_eq!(
+                features::definitions(&workspace, document, position).len(),
+                1
+            );
+            assert_eq!(
+                features::references(&workspace, document, position, true).len(),
+                5
+            );
+            assert_eq!(
+                features::references(&workspace, document, position, false).len(),
+                4
+            );
+            let changed = renamed(&workspace, document, position);
+            assert!(
+                changed[&declaration].contains(&format!("\\{command}{{ greeting }}#1{{Hello #1}}"))
+            );
+            assert!(changed[&main].contains("\\greeting{Direct}\\csuse{greeting}{Named}\\csname greeting\\endcsname{Literal}\\ifcsdef{greeting}"));
+            assert!(changed[&main].contains("csuse{hello-two}"));
+        }
+        for name in ["hello-two", "模式"] {
+            let text = &workspace.documents[&declaration].text;
+            let position = text.position(definitions.find(name).unwrap());
+            assert_eq!(
+                features::references(&workspace, &declaration, position, true).len(),
+                2
+            );
+            let changed = renamed(&workspace, &declaration, position);
+            assert!(changed[&declaration].contains("csdef{greeting}"));
+            assert!(changed[&main].contains("csuse{greeting}"));
+        }
+    }
+}
+
+#[test]
+fn named_declarations_reject_computed_names_ambiguous_definitions_and_shared_project_conflicts() {
+    for source in [
+        r"\csdef{hello\suffix}#1{#1}",
+        r"\csdef{hello world}{Value}",
+        r"\csdef{hello",
+        r"% \csdef{hello}{Value}",
+        r"\verb|\csdef{hello}{Value}|",
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let workspace = project(directory.path(), &[("main.tex", source)]);
+        let main = uri(directory.path(), "main.tex");
+        assert!(
+            workspace.documents[&main].syntax.definitions.is_empty(),
+            "{source}"
+        );
+        let position = workspace.documents[&main]
+            .text
+            .position(source.find("hello").unwrap() + 1);
+        assert!(features::prepare_rename(&workspace, &main, position)
+            .unwrap()
+            .is_none());
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let workspace = project(
+        directory.path(),
+        &[
+            (
+                "a.tex",
+                r"\documentclass{article}\csdef{hello}{A}\begin{document}\input{shared}\end{document}",
+            ),
+            (
+                "b.tex",
+                r"\documentclass{article}\csdef{hello}{B}\begin{document}\input{shared}\end{document}",
+            ),
+            ("shared.tex", r"\csuse{hello}"),
+        ],
+    );
+    let main = uri(directory.path(), "a.tex");
+    let text = &workspace.documents[&main].text;
+    assert!(features::rename(
+        &workspace,
+        &main,
+        text.position(text.source.find("hello").unwrap()),
+        "greeting"
+    )
+    .is_err());
+    let duplicate = r"\csdef{hello}{A}\csgdef{hello}{B}\csuse{hello}";
+    let directory = tempfile::tempdir().unwrap();
+    let workspace = project(directory.path(), &[("main.tex", duplicate)]);
+    let main = uri(directory.path(), "main.tex");
+    assert!(features::rename(
+        &workspace,
+        &main,
+        workspace.documents[&main]
+            .text
+            .position(duplicate.find("hello").unwrap()),
+        "greeting"
+    )
+    .is_err());
+}
+
+#[test]
+#[ignore = "requires pdflatex and etoolbox"]
+fn named_declaration_renames_preserve_local_global_and_expanded_definition_behavior() {
+    for command in ["csdef", "csgdef", "csedef", "csxdef"] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let definitions = format!("\\{command}{{hello}}#1{{\\prefix#1}}\n");
+        let source = "\\documentclass{article}\\usepackage{etoolbox}\n\\begin{document}\\def\\prefix{Alpha-}\\begingroup\\input{definitions}\n\\hello{Direct}\\csuse{hello}{Named}\\csname hello\\endcsname{Literal}\\typeout{NAMED:\\csuse{hello}{Value}}\n\\endgroup\\def\\prefix{Later-}\\ifcsdef{hello}{\\typeout{GLOBAL:\\csuse{hello}{Value}}}{\\typeout{NAMED:local}}\\end{document}\n";
+        let workspace = project(
+            root,
+            &[("main.tex", source), ("definitions.tex", &definitions)],
+        );
+        let main = root.join("main.tex");
+        let config = latex_lsp::config::BuildConfig {
+            executable: "pdflatex".into(),
+            ..Default::default()
+        };
+        let before = build::run(&main, &config, &AtomicBool::new(false));
+        assert_eq!(before.status, "success", "{command}: {}", before.output);
+        let declaration = uri(root, "definitions.tex");
+        let position = workspace.documents[&declaration]
+            .text
+            .position(definitions.find("hello").unwrap());
+        for (uri, changed) in renamed(&workspace, &declaration, position) {
+            std::fs::write(uri.to_file_path().unwrap(), changed).unwrap();
+        }
+        let after = build::run(&main, &config, &AtomicBool::new(false));
+        assert_eq!(after.status, "success", "{command}: {}", after.output);
+        let expected = match command {
+            "csgdef" => "GLOBAL:Later-Value",
+            "csxdef" => "GLOBAL:Alpha-Value",
+            _ => "NAMED:local",
+        };
+        for output in [&before.output, &after.output] {
+            assert!(output.contains("NAMED:Alpha-Value"), "{command}: {output}");
+            assert!(output.contains(expected), "{command}: {output}");
+        }
+    }
+}

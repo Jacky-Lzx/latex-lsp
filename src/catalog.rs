@@ -49,6 +49,10 @@ pub(crate) const PRIMITIVES: &[&str] = &[
 /// Command name, snippet template (without leading backslash), short documentation.
 /// Templates retain literal TeX backslashes; completion escapes them for the client.
 pub const COMMANDS: &[(&str, &str, &str)] = &[
+    ("csdef", "csdef{${1:name}}{${2:definition}}", "Define a TeX macro by name in the current group. Requires etoolbox."),
+    ("csgdef", "csgdef{${1:name}}{${2:definition}}", "Define a TeX macro globally by name. Requires etoolbox."),
+    ("csedef", "csedef{${1:name}}{${2:definition}}", "Define a TeX macro by name after expanding its replacement text. Requires etoolbox."),
+    ("csxdef", "csxdef{${1:name}}{${2:definition}}", "Globally define a TeX macro by name after expanding its replacement text. Requires etoolbox."),
     (
         "csuse",
         "csuse{${1:command}}",
