@@ -8,6 +8,9 @@ pub struct Text {
 }
 
 impl Text {
+    pub fn text_line_count(&self) -> usize {
+        self.lines.len()
+    }
     pub fn new(source: String) -> Self {
         let mut lines = vec![0];
         lines.extend(source.match_indices('\n').map(|(i, _)| i + 1));

@@ -44,9 +44,163 @@ pub struct Workspace {
     pub watch_files: bool,
     pub hierarchical_symbols: bool,
     pub versioned_edits: bool,
+    pub config: crate::config::Config,
+    pub build_diagnostics: BTreeMap<Url, BTreeMap<Url, Vec<tower_lsp::lsp_types::Diagnostic>>>,
 }
 
 impl Workspace {
+    pub fn diagnostics(&self, uri: &Url) -> Vec<tower_lsp::lsp_types::Diagnostic> {
+        let mut diagnostics = self
+            .documents
+            .get(uri)
+            .map(crate::features::diagnostics)
+            .unwrap_or_default();
+        for project in self.build_diagnostics.values() {
+            if let Some(build) = project.get(uri) {
+                diagnostics.extend(build.iter().cloned());
+            }
+        }
+        diagnostics.sort_by_key(|diagnostic| (diagnostic.range.start, diagnostic.message.clone()));
+        diagnostics
+            .dedup_by(|a, b| a.range == b.range && a.message == b.message && a.source == b.source);
+        diagnostics
+    }
+
+    pub fn clear_build_diagnostics(&mut self, uri: &Url) {
+        for project in self.build_diagnostics.values_mut() {
+            project.remove(uri);
+        }
+    }
+
+    pub fn dependencies(&self, uri: &Url) -> Vec<Url> {
+        let Some(doc) = self.documents.get(uri) else {
+            return vec![];
+        };
+        doc.syntax
+            .commands
+            .iter()
+            .flat_map(|command| {
+                let extension = match command.name.as_str() {
+                    "input" | "include" | "subfile" => "tex",
+                    "bibliography" | "addbibresource" => "bib",
+                    _ => return vec![],
+                };
+                command
+                    .argument
+                    .as_ref()
+                    .map(|arg| {
+                        arg.value
+                            .split(',')
+                            .filter_map(|value| resolve_path(uri, value.trim(), extension))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            })
+            .collect()
+    }
+
+    pub fn project_documents(&self, root: &Url) -> BTreeSet<Url> {
+        let mut visited = BTreeSet::new();
+        let mut pending = vec![root.clone()];
+        while let Some(uri) = pending.pop() {
+            if visited.insert(uri.clone()) {
+                pending.extend(self.dependencies(&uri));
+            }
+        }
+        visited
+    }
+
+    /// Explicit root, then TeX magic comments, then the unique containing document.
+    pub fn root_document(&self, uri: &Url) -> Result<Url, String> {
+        let path = uri
+            .to_file_path()
+            .map_err(|_| "Compilation requires a local file URI")?;
+        if let Some(root_file) = &self.config.build.root_file {
+            let folder = self
+                .roots
+                .iter()
+                .filter(|root| path.starts_with(root))
+                .max_by_key(|root| root.components().count())
+                .map(PathBuf::as_path)
+                .or_else(|| path.parent())
+                .ok_or("Cannot determine workspace directory")?;
+            return file_uri(&folder.join(root_file));
+        }
+        let mut root = uri.clone();
+        let mut visited = BTreeSet::new();
+        loop {
+            if !visited.insert(root.clone()) {
+                return Err("Cyclic TeX root directives".into());
+            }
+            let text = self
+                .documents
+                .get(&root)
+                .map(|doc| doc.text.source.clone())
+                .or_else(|| {
+                    root.to_file_path()
+                        .ok()
+                        .and_then(|path| std::fs::read_to_string(path).ok())
+                });
+            let Some(text) = text else {
+                return Err("Save the document before compiling".into());
+            };
+            let magic = text
+                .lines()
+                .take(20)
+                .filter_map(|line| {
+                    let (name, value) = line
+                        .trim_start()
+                        .strip_prefix('%')?
+                        .trim()
+                        .split_once('=')?;
+                    name.trim()
+                        .eq_ignore_ascii_case("!tex root")
+                        .then(|| value.trim().trim_matches('"'))
+                })
+                .next();
+            if let Some(magic) = magic {
+                let parent = root
+                    .to_file_path()
+                    .map_err(|_| "Invalid root URI")?
+                    .parent()
+                    .ok_or("Invalid root path")?
+                    .to_path_buf();
+                root = file_uri(&parent.join(magic))?;
+            } else {
+                if root != *uri {
+                    return Ok(root);
+                }
+                break;
+            }
+        }
+        let is_root = |doc: &Document| {
+            doc.syntax.commands.iter().any(|cmd| {
+                cmd.name == "documentclass"
+                    || cmd.name == "begin"
+                        && cmd
+                            .argument
+                            .as_ref()
+                            .is_some_and(|arg| arg.value == "document")
+            })
+        };
+        if self.documents.get(uri).is_some_and(is_root) {
+            return file_uri(&path);
+        }
+        let candidates = self
+            .documents
+            .iter()
+            .filter(|(candidate, doc)| {
+                *candidate != uri && is_root(doc) && self.project_documents(candidate).contains(uri)
+            })
+            .map(|(uri, _)| uri.clone())
+            .collect::<Vec<_>>();
+        match candidates.as_slice() {
+            [root] => Ok(root.clone()),
+            [] => file_uri(&path),
+            _ => Err("Multiple root documents include this file; set build.rootFile or a % !TeX root directive".into()),
+        }
+    }
+
     pub fn add_root(&mut self, root: PathBuf) {
         if self.roots.insert(root.clone()) {
             self.scan(&root, 0);
@@ -142,30 +296,7 @@ impl Workspace {
         if depth >= 16 || !visited.insert(uri.clone()) {
             return;
         }
-        let Some(doc) = self.documents.get(uri) else {
-            return;
-        };
-        let dependencies: Vec<_> = doc
-            .syntax
-            .commands
-            .iter()
-            .filter_map(|command| {
-                let extension = match command.name.as_str() {
-                    "input" | "include" | "subfile" => "tex",
-                    "bibliography" | "addbibresource" => "bib",
-                    _ => return None,
-                };
-                let argument = command.argument.as_ref()?;
-                Some(
-                    argument
-                        .value
-                        .split(',')
-                        .filter_map(|value| resolve_path(uri, value.trim(), extension))
-                        .collect::<Vec<_>>(),
-                )
-            })
-            .flatten()
-            .collect();
+        let dependencies = self.dependencies(uri);
         for dependency in dependencies {
             if !self.documents.contains_key(&dependency) {
                 self.reload(&dependency);
@@ -173,6 +304,16 @@ impl Workspace {
             self.load_dependencies_inner(&dependency, depth + 1, visited);
         }
     }
+}
+
+fn file_uri(path: &Path) -> Result<Url, String> {
+    let path = path
+        .canonicalize()
+        .map_err(|error| format!("Cannot read root document {}: {error}", path.display()))?;
+    if !path.is_file() || path.extension().and_then(|ext| ext.to_str()) != Some("tex") {
+        return Err("Root document must be a saved .tex file".into());
+    }
+    Url::from_file_path(path).map_err(|_| "Cannot convert root document path to URI".into())
 }
 
 pub fn resolve_path(uri: &Url, value: &str, extension: &str) -> Option<Url> {

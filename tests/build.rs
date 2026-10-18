@@ -1,0 +1,228 @@
+use latex_lsp::{build, config::BuildConfig, workspace::Workspace};
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::{Duration, Instant},
+};
+use tower_lsp::lsp_types::{DiagnosticSeverity, Url};
+
+#[test]
+fn root_detection_follows_includes_magic_comments_and_explicit_configuration() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::write(
+        root.join("main.tex"),
+        r"\documentclass{article}\input{chapter}",
+    )
+    .unwrap();
+    std::fs::write(root.join("chapter.tex"), "Chapter").unwrap();
+    let main = Url::from_file_path(root.join("main.tex")).unwrap();
+    let chapter = Url::from_file_path(root.join("chapter.tex")).unwrap();
+    let mut workspace = Workspace::default();
+    workspace.add_root(root.into());
+    assert_eq!(workspace.root_document(&chapter).unwrap(), main);
+    std::fs::write(
+        root.join("other.tex"),
+        r"\documentclass{article}\input{chapter}",
+    )
+    .unwrap();
+    let other = Url::from_file_path(root.join("other.tex")).unwrap();
+    workspace.reload(&other);
+    assert!(workspace.root_document(&chapter).is_err());
+    std::fs::write(root.join("chapter.tex"), "% !TeX root = main.tex\nChapter").unwrap();
+    workspace.reload(&chapter);
+    assert_eq!(workspace.root_document(&chapter).unwrap(), main);
+    workspace.config.build.root_file = Some("other.tex".into());
+    assert_eq!(workspace.root_document(&chapter).unwrap(), other);
+    workspace.config.build.root_file = None;
+    std::fs::write(root.join("main.tex"), "% !TeX root = chapter.tex\n").unwrap();
+    workspace.reload(&main);
+    assert!(workspace
+        .root_document(&chapter)
+        .unwrap_err()
+        .contains("Cyclic"));
+}
+
+#[test]
+fn missing_compiler_produces_an_actionable_error_diagnostic() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    std::fs::write(&main, r"\documentclass{article}").unwrap();
+    let config = BuildConfig {
+        executable: directory
+            .path()
+            .join("missing-compiler")
+            .to_string_lossy()
+            .into(),
+        ..Default::default()
+    };
+    let outcome = build::run(&main, &config, &AtomicBool::new(false));
+    assert_eq!(outcome.status, "error");
+    assert!(outcome.message.contains("Cannot start"));
+    assert_eq!(
+        outcome.diagnostics[&Url::from_file_path(main).unwrap()][0].severity,
+        Some(DiagnosticSeverity::ERROR)
+    );
+}
+
+#[cfg(unix)]
+fn script(directory: &std::path::Path, body: &str) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let path = directory.join("fake compiler");
+    std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    path.to_string_lossy().into()
+}
+
+#[test]
+#[cfg(unix)]
+fn arguments_are_passed_without_shell_interpolation_and_dotted_names_work() {
+    let directory = tempfile::Builder::new()
+        .prefix("latex lsp 中文 ")
+        .tempdir()
+        .unwrap();
+    let main = directory.path().join("main.v1.tex");
+    std::fs::write(&main, "source\nsource\n").unwrap();
+    let executable = script(directory.path(), "[ \"$1\" = 'literal;$(false)' ] || exit 99\nprintf '%%PDF-1.4\n' > \"$2/main.v1.pdf\"\nprintf '%s:2: LaTeX Warning: example warning.\n' \"$3\"");
+    let config = BuildConfig {
+        executable,
+        arguments: Some(vec!["literal;$(false)".into(), "%o".into(), "%f".into()]),
+        ..Default::default()
+    };
+    let outcome = build::run(&main, &config, &AtomicBool::new(false));
+    assert_eq!(
+        outcome.status, "success",
+        "{}\n{}",
+        outcome.message, outcome.output
+    );
+    assert!(outcome.pdf.unwrap().ends_with("main.v1.pdf"));
+    assert_eq!(
+        outcome.diagnostics[&Url::from_file_path(main).unwrap()][0]
+            .range
+            .start
+            .line,
+        1
+    );
+    assert!(!directory.path().join("false").exists());
+}
+
+#[test]
+#[cfg(unix)]
+fn cancellation_and_timeout_terminate_the_compiler_process_group() {
+    for cancelled in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let main = directory.path().join("main.tex");
+        std::fs::write(&main, "source").unwrap();
+        let executable = script(
+            directory.path(),
+            "sleep 30 &\necho $! > \"$1/child.pid\"\nwait",
+        );
+        let config = BuildConfig {
+            executable,
+            arguments: Some(vec!["%o".into()]),
+            timeout_seconds: 1,
+            ..Default::default()
+        };
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker_cancel = cancel.clone();
+        let started = Instant::now();
+        let worker = std::thread::spawn(move || build::run(&main, &config, &worker_cancel));
+        let pid_file = directory.path().join(".latex-lsp/child.pid");
+        while !pid_file.is_file() {
+            assert!(started.elapsed() < Duration::from_secs(5));
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if cancelled {
+            cancel.store(true, Ordering::Relaxed);
+        }
+        let outcome = worker.join().unwrap();
+        assert_eq!(
+            outcome.status,
+            if cancelled { "cancelled" } else { "timeout" }
+        );
+        assert!(started.elapsed() < Duration::from_secs(5));
+        #[cfg(target_os = "linux")]
+        {
+            let pid = std::fs::read_to_string(pid_file).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(1);
+            // SIGKILL delivery and the kernel's final process-state update are
+            // asynchronous even after the parent has been reaped.
+            while let Ok(state) = std::fs::read_to_string(format!("/proc/{}/stat", pid.trim())) {
+                if state
+                    .split(')')
+                    .nth(1)
+                    .unwrap()
+                    .trim_start()
+                    .starts_with('Z')
+                {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "compiler descendant was not terminated: {state}"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires latexmk and a TeX installation"]
+fn real_latexmk_produces_pdf_and_uses_only_the_final_pass_diagnostics() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.v1.tex");
+    std::fs::write(&main, "\\documentclass{article}\n\\begin{document}\n\\input{chapter}\nSee~\\ref{sec:x}.\n\\end{document}\n").unwrap();
+    std::fs::write(
+        directory.path().join("chapter.tex"),
+        r"\section{Hello}\label{sec:x}",
+    )
+    .unwrap();
+    let outcome = build::run(&main, &BuildConfig::default(), &AtomicBool::new(false));
+    assert_eq!(
+        outcome.status, "success",
+        "{}\n{}",
+        outcome.message, outcome.output
+    );
+    assert!(outcome.pdf.unwrap().is_file());
+    assert!(outcome.log.unwrap().is_file());
+    assert!(
+        outcome
+            .diagnostics
+            .values()
+            .flatten()
+            .all(|diagnostic| !diagnostic.message.contains("undefined")),
+        "{:?}",
+        outcome.diagnostics
+    );
+}
+
+#[test]
+#[ignore = "requires pdflatex and a TeX installation"]
+fn real_pdflatex_error_points_to_the_included_file_and_line() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    let chapter = directory.path().join("chapter.tex");
+    std::fs::write(
+        &main,
+        "\\documentclass{article}\n\\begin{document}\n\\input{chapter}\n\\end{document}\n",
+    )
+    .unwrap();
+    std::fs::write(&chapter, "Hello\n\\unknownLspCommand\n").unwrap();
+    let config = BuildConfig {
+        executable: "pdflatex".into(),
+        ..Default::default()
+    };
+    let outcome = build::run(&main, &config, &AtomicBool::new(false));
+    assert_eq!(outcome.status, "error", "{}", outcome.output);
+    let diagnostics = &outcome.diagnostics[&Url::from_file_path(chapter).unwrap()];
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.range.start.line == 1
+                && diagnostic.message.contains("Undefined control sequence")),
+        "{diagnostics:?}"
+    );
+}

@@ -1,25 +1,34 @@
+pub mod build;
+pub mod build_log;
 pub mod catalog;
+pub mod config;
 pub mod features;
 pub mod syntax;
 pub mod text;
 pub mod workspace;
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use tokio::sync::RwLock;
 use tower_lsp::{jsonrpc::Result, lsp_types::*, Client, LanguageServer};
 use workspace::{Document, Workspace};
 
 pub struct Backend {
     client: Client,
-    workspace: RwLock<Workspace>,
+    workspace: Arc<RwLock<Workspace>>,
+    builds: build::BuildManager,
     shutdown_requested: AtomicBool,
 }
 
 impl Backend {
     pub fn new(client: Client) -> Self {
+        let workspace = Arc::new(RwLock::new(Workspace::default()));
         Self {
+            builds: build::BuildManager::new(client.clone(), workspace.clone()),
             client,
-            workspace: RwLock::new(Workspace::default()),
+            workspace,
             shutdown_requested: AtomicBool::new(false),
         }
     }
@@ -29,14 +38,13 @@ impl Backend {
     }
 
     async fn publish(&self, uri: Url) {
-        let snapshot = self
-            .workspace
-            .read()
-            .await
+        let workspace = self.workspace.read().await;
+        let snapshot = workspace
             .documents
             .get(&uri)
             .filter(|doc| doc.version.is_some())
-            .map(|doc| (features::diagnostics(doc), doc.version));
+            .map(|doc| (workspace.diagnostics(&uri), doc.version));
+        drop(workspace);
         if let Some((diagnostics, version)) = snapshot {
             self.client
                 .publish_diagnostics(uri, diagnostics, version)
@@ -49,6 +57,10 @@ impl Backend {
 impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
         let mut workspace = self.workspace.write().await;
+        if let Some(options) = params.initialization_options {
+            workspace.config = config::Config::parse(options)
+                .map_err(tower_lsp::jsonrpc::Error::invalid_params)?;
+        }
         workspace.versioned_edits = params
             .capabilities
             .workspace
@@ -114,6 +126,14 @@ impl LanguageServer for Backend {
                     prepare_provider: Some(true),
                     work_done_progress_options: WorkDoneProgressOptions::default(),
                 })),
+                execute_command_provider: Some(ExecuteCommandOptions {
+                    commands: vec![
+                        "latex.build".into(),
+                        "latex.cancelBuild".into(),
+                        "latex.buildStatus".into(),
+                    ],
+                    ..Default::default()
+                }),
                 document_symbol_provider: Some(OneOf::Left(true)),
                 workspace: Some(WorkspaceServerCapabilities {
                     workspace_folders: Some(WorkspaceFoldersServerCapabilities {
@@ -155,6 +175,7 @@ impl LanguageServer for Backend {
     }
 
     async fn shutdown(&self) -> Result<()> {
+        self.builds.shutdown().await;
         self.shutdown_requested.store(true, Ordering::Relaxed);
         Ok(())
     }
@@ -194,13 +215,23 @@ impl LanguageServer for Backend {
             uri.clone(),
             Document::new(&uri, text.source, Some(params.text_document.version)),
         );
+        workspace.clear_build_diagnostics(&uri);
         workspace.load_dependencies(&uri, 0);
         drop(workspace);
         self.publish(uri).await;
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
-        self.publish(params.text_document.uri).await;
+        let uri = params.text_document.uri;
+        self.publish(uri.clone()).await;
+        let on_save = self.workspace.read().await.config.build.on_save;
+        if on_save {
+            if let Err(error) = self.builds.start(uri).await {
+                self.client
+                    .log_message(MessageType::WARNING, error.message)
+                    .await;
+            }
+        }
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
@@ -216,7 +247,63 @@ impl LanguageServer for Backend {
         let mut workspace = self.workspace.write().await;
         for change in params.changes {
             workspace.reload(&change.uri);
+            workspace.clear_build_diagnostics(&change.uri);
             workspace.load_dependencies(&change.uri, 0);
+        }
+    }
+
+    async fn did_change_configuration(&self, params: DidChangeConfigurationParams) {
+        match config::Config::parse(params.settings) {
+            Ok(config) => {
+                self.workspace.write().await.config = config;
+            }
+            Err(error) => self.client.log_message(MessageType::WARNING, error).await,
+        }
+    }
+
+    async fn execute_command(
+        &self,
+        params: ExecuteCommandParams,
+    ) -> Result<Option<serde_json::Value>> {
+        let argument = params.arguments.first();
+        if params.command == "latex.cancelBuild" && argument.is_none() {
+            return Ok(Some(
+                serde_json::json!({"cancelled":self.builds.cancel(None)}),
+            ));
+        }
+        let uri = argument
+            .and_then(|value| {
+                value
+                    .as_str()
+                    .or_else(|| value.get("uri").and_then(serde_json::Value::as_str))
+            })
+            .and_then(|value| Url::parse(value).ok())
+            .ok_or_else(|| {
+                tower_lsp::jsonrpc::Error::invalid_params(
+                    "Expected a document URI as the first command argument",
+                )
+            })?;
+        match params.command.as_str() {
+            "latex.build" => self.builds.start(uri).await.map(Some),
+            "latex.cancelBuild" | "latex.buildStatus" => {
+                let root = self
+                    .workspace
+                    .read()
+                    .await
+                    .root_document(&uri)
+                    .map_err(tower_lsp::jsonrpc::Error::invalid_params)?;
+                if params.command == "latex.cancelBuild" {
+                    Ok(Some(
+                        serde_json::json!({"cancelled":self.builds.cancel(Some(&root))}),
+                    ))
+                } else {
+                    Ok(Some(self.builds.status(&root)))
+                }
+            }
+            _ => Err(tower_lsp::jsonrpc::Error::invalid_params(format!(
+                "Unknown command: {}",
+                params.command
+            ))),
         }
     }
 

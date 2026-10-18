@@ -1,4 +1,5 @@
 use std::{
+    cell::RefCell,
     io::{BufRead, BufReader, Read, Write},
     process::{Child, ChildStdin, Command, Stdio},
     sync::mpsc,
@@ -12,6 +13,7 @@ struct Server {
     child: Child,
     stdin: ChildStdin,
     messages: mpsc::Receiver<Value>,
+    pending: RefCell<Vec<Value>>,
 }
 
 impl Server {
@@ -58,6 +60,7 @@ impl Server {
             child,
             stdin,
             messages,
+            pending: RefCell::new(Vec::new()),
         }
     }
 
@@ -74,22 +77,29 @@ impl Server {
     }
 
     fn until(&self, matches: impl Fn(&Value) -> bool) -> Value {
+        let existing = self.pending.borrow().iter().position(&matches);
+        if let Some(index) = existing {
+            return self.pending.borrow_mut().remove(index);
+        }
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         loop {
             let message = self
                 .messages
                 .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
                 .expect("LSP server timed out or closed stdout");
-            assert!(message.get("error").is_none(), "LSP error: {message}");
             if matches(&message) {
                 return message;
             }
+            assert!(message.get("error").is_none(), "LSP error: {message}");
+            self.pending.borrow_mut().push(message);
         }
     }
 
     fn request(&mut self, id: u64, method: &str, params: Value) -> Value {
         self.send(json!({"jsonrpc":"2.0", "id":id, "method":method, "params":params}));
-        self.until(|message| message["id"] == id)["result"].clone()
+        let message = self.until(|message| message["id"] == id);
+        assert!(message.get("error").is_none(), "LSP error: {message}");
+        message["result"].clone()
     }
 
     fn notify(&mut self, method: &str, params: Value) {
@@ -110,6 +120,244 @@ impl Server {
             std::thread::sleep(Duration::from_millis(10));
         }
     }
+}
+
+#[cfg(unix)]
+fn fake_build_server(script: &str, on_save: bool) -> (Server, tempfile::TempDir, Url) {
+    let directory = tempfile::tempdir().unwrap();
+    let root = Url::from_directory_path(directory.path()).unwrap();
+    let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+    let source = "\\documentclass{article}\n\\section{Title}\n";
+    std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+    let executable = directory.path().join("compiler.sh");
+    std::fs::write(&executable, script).unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":root,"capabilities":{},"initializationOptions":{"build":{"executable":"/bin/sh","arguments":[executable,"%o","%f"],"onSave":on_save,"timeoutSeconds":5}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"latex","version":1,"text":source}}),
+    );
+    server.until(|message| message["method"] == "textDocument/publishDiagnostics");
+    (server, directory, uri)
+}
+
+#[test]
+#[cfg(unix)]
+fn background_build_keeps_requests_responsive_and_publishes_compiler_results() {
+    let (mut server, directory, uri) = fake_build_server("sleep 0.3\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf '%s:2: LaTeX Warning: example warning.\\n' \"$2\" > \"$1/main.log\"\n", false);
+    let started = server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[uri]}),
+    );
+    assert_eq!(started["status"], "started");
+    let hover = server.request(
+        3,
+        "textDocument/hover",
+        json!({"textDocument":{"uri":uri},"position":{"line":1,"character":3}}),
+    );
+    assert!(hover["contents"]["value"]
+        .as_str()
+        .unwrap()
+        .contains("section"));
+    let finished = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(finished["params"]["status"], "success");
+    assert_eq!(finished["params"]["buildId"], started["buildId"]);
+    assert!(finished["params"]["pdfUri"]
+        .as_str()
+        .unwrap()
+        .ends_with("main.pdf"));
+    let diagnostics = server.until(|message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["diagnostics"]
+                .as_array()
+                .is_some_and(|diagnostics| {
+                    diagnostics
+                        .iter()
+                        .any(|diagnostic| diagnostic["source"] == "latex-build")
+                })
+    });
+    assert_eq!(
+        diagnostics["params"]["diagnostics"][0]["range"]["start"]["line"],
+        1
+    );
+    std::fs::write(
+        directory.path().join("compiler.sh"),
+        "printf '%%PDF-1.4\\n' > \"$1/main.pdf\"\n",
+    )
+    .unwrap();
+    let next = server.request(
+        4,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[uri]}),
+    );
+    let finished = server.until(|message| {
+        message["method"] == "latex/buildFinished"
+            && message["params"]["buildId"] == next["buildId"]
+    });
+    assert_eq!(finished["params"]["status"], "success");
+    assert_eq!(finished["params"]["diagnosticsCount"], 0);
+    server.until(|message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["diagnostics"]
+                .as_array()
+                .is_some_and(Vec::is_empty)
+    });
+    server.request(5, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+fn builds_are_deduplicated_cancelled_and_reported_through_status() {
+    let (mut server, _directory, uri) = fake_build_server("sleep 30\n", false);
+    let started = server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[{"uri":uri}]}),
+    );
+    let again = server.request(
+        3,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[uri]}),
+    );
+    assert_eq!(again["status"], "running");
+    assert_eq!(again["buildId"], started["buildId"]);
+    let cancelled = server.request(
+        4,
+        "workspace/executeCommand",
+        json!({"command":"latex.cancelBuild","arguments":[]}),
+    );
+    assert_eq!(cancelled["cancelled"], 1);
+    let finished = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(finished["params"]["status"], "cancelled");
+    let status = server.request(
+        5,
+        "workspace/executeCommand",
+        json!({"command":"latex.buildStatus","arguments":[uri]}),
+    );
+    assert_eq!(status["status"], "cancelled");
+    server.request(6, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+fn configuration_updates_enable_build_on_save_and_invalid_updates_preserve_settings() {
+    let (mut server, directory, uri) =
+        fake_build_server("printf '%%PDF-1.4\\n' > \"$1/main.pdf\"\n", false);
+    server.notify("workspace/didChangeConfiguration", json!({"settings":{"latex":{"build":{"executable":"/bin/sh","arguments":[directory.path().join("compiler.sh"),"%o","%f"],"onSave":true}}}}));
+    server.notify("textDocument/didSave", json!({"textDocument":{"uri":uri}}));
+    let finished = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(finished["params"]["status"], "success");
+    server.notify(
+        "workspace/didChangeConfiguration",
+        json!({"settings":{"latex":{"build":{"timeoutSeconds":0}}}}),
+    );
+    server.notify("textDocument/didSave", json!({"textDocument":{"uri":uri}}));
+    let again = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(again["params"]["status"], "success");
+    assert_ne!(again["params"]["buildId"], finished["params"]["buildId"]);
+    server.request(2, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+fn automatic_build_on_save_does_not_deadlock_and_stale_results_are_discarded() {
+    let (mut server, _directory, uri) = fake_build_server("sleep 0.2\nprintf '%s:2: Undefined control sequence.\\n' \"$2\" > \"$1/main.log\"\nexit 1\n", true);
+    server.notify("textDocument/didSave", json!({"textDocument":{"uri":uri}}));
+    server.until(|message| message["method"] == "latex/buildStarted");
+    server.notify("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"text":"\\documentclass{article}\n\\section{New title}\n"}]}));
+    server.until(|message| {
+        message["method"] == "textDocument/publishDiagnostics" && message["params"]["version"] == 2
+    });
+    let finished = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(finished["params"]["stale"], true);
+    assert_eq!(finished["params"]["status"], "error");
+    assert!(!server
+        .pending
+        .borrow()
+        .iter()
+        .any(
+            |message| message["method"] == "textDocument/publishDiagnostics"
+                && message["params"]["diagnostics"]
+                    .as_array()
+                    .is_some_and(|diagnostics| diagnostics
+                        .iter()
+                        .any(|diagnostic| diagnostic["source"] == "latex-build"))
+        ));
+    server.request(2, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+fn unsaved_documents_are_rejected_and_shutdown_cancels_active_builds() {
+    let (mut server, _directory, uri) = fake_build_server("sleep 30\n", false);
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"text":"unsaved"}]}),
+    );
+    server.send(json!({"jsonrpc":"2.0","id":2,"method":"workspace/executeCommand","params":{"command":"latex.build","arguments":[uri]}}));
+    let rejected = server.until(|message| message["id"] == 2);
+    assert_eq!(rejected["error"]["code"], -32602);
+    assert!(rejected["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("Save"));
+    server.notify("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":3},"contentChanges":[{"text":"\\documentclass{article}\n\\section{Title}\n"}]}));
+    server.request(
+        3,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[uri]}),
+    );
+    server.request(4, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[ignore = "requires latexmk and a TeX installation"]
+fn real_build_command_compiles_the_root_from_an_included_document() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = Url::from_directory_path(directory.path()).unwrap();
+    let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+    let chapter = Url::from_file_path(directory.path().join("chapter.tex")).unwrap();
+    std::fs::write(
+        main.to_file_path().unwrap(),
+        "\\documentclass{article}\n\\begin{document}\n\\input{chapter}\n\\end{document}\n",
+    )
+    .unwrap();
+    std::fs::write(chapter.to_file_path().unwrap(), "Hello, world.\n").unwrap();
+    let mut server = Server::start();
+    server.request(
+        1,
+        "initialize",
+        json!({"processId":null,"rootUri":root,"capabilities":{}}),
+    );
+    server.notify("initialized", json!({}));
+    let started = server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[chapter]}),
+    );
+    assert_eq!(started["rootUri"], main.as_str());
+    let finished = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(finished["params"]["status"], "success", "{finished}");
+    let pdf = Url::parse(finished["params"]["pdfUri"].as_str().unwrap())
+        .unwrap()
+        .to_file_path()
+        .unwrap();
+    assert!(std::fs::read(pdf).unwrap().starts_with(b"%PDF"));
+    server.request(3, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
 }
 
 impl Drop for Server {
