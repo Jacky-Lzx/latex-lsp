@@ -18,8 +18,8 @@
 - 文档折叠：章节、嵌套环境、多行花括号、连续注释和逐字环境，遵守客户端折叠数量限制。
 - 文档链接：输入文件、文献库、本地包/文档类、图片及 `\url` / `\href`；文件先在当前目录查找，再尝试主文档目录。
 - 工作区索引：扫描 `.tex`、`.bib`、`.sty`、`.cls`；跟踪文件变更，优先使用编辑器中未保存的内容。
-- 后台编译：支持 latexmk、pdfLaTeX、XeLaTeX、LuaLaTeX、Tectonic 和自定义工具；根文件识别、取消、超时、状态查询和可选的保存后编译。
-- 编译结果分析：错误、LaTeX/包警告、Overfull/Underfull 提示，定位到子文件和行号；结果提供 PDF、日志路径和输出摘要。只采用 latexmk 最后一遍 TeX 日志，避免保留已解决的引用警告。
+- 后台编译：支持 latexmk、pdfLaTeX、XeLaTeX、LuaLaTeX、Tectonic 和自定义工具；根文件识别、取消、超时、状态查询、编辑器原生进度显示和可选的保存后编译。
+- 编译结果分析：错误、LaTeX/包警告、Overfull/Underfull 提示，以及 BibTeX/Biber 文献错误和警告，定位到子文件、文献条目和行号；结果提供 PDF、日志路径和输出摘要。只采用 latexmk 最后一遍 TeX 日志，避免保留已解决的引用警告。
 
 解析时跳过 `%` 注释、`\verb`、`\lstinline` 和常见逐字环境（`verbatim`、`lstlisting`、`minted`、`comment`、`Verbatim`）。
 
@@ -77,6 +77,10 @@ vim.lsp.enable('latex_lsp')
 - `latex.buildStatus`：查询当前任务或最近一次编译结果，未编译时返回 `idle`。
 
 服务器发出 `latex/buildStarted` 和 `latex/buildFinished` 通知。完成通知包含 `status`（`success` / `error` / `cancelled` / `timeout`）、`buildId`、`rootUri`、`pdfUri`、`logUri`、`exitCode`、`diagnosticsCount`、`durationMs`、`message` 和有长度限制的 `output` 摘要。若文档在编译中变化，`stale` 为 `true`，不会发布这次编译的旧诊断。失败编译不把可能不完整的 PDF 标记为成功结果。
+
+客户端声明 `window.workDoneProgress` 时，服务器还通过标准 `$/progress` 显示编译开始和完成，可通过编辑器的取消按钮中止编译。客户端拒绝或不响应进度创建请求时，编译仍会继续。
+
+服务器读取本次编译新增或更新的 `.blg` 文件，分析 BibTeX 的重复条目、语法错误和字段警告，以及 Biber 的错误/警告；能识别数据库和文献键时定位到 `.bib` 文件。未能定位的消息显示在主文档。旧 `.blg` 不会被当成本次编译错误。
 
 Neovim 中可这样触发编译：
 

@@ -85,6 +85,7 @@ impl BuildManager {
             }
         }
         let config = workspace.config.build.clone();
+        let progress_supported = workspace.build_progress;
         let root_path = root
             .to_file_path()
             .map_err(|_| Error::invalid_params("Compilation requires a local file"))?;
@@ -109,6 +110,40 @@ impl BuildManager {
                 .send_notification::<BuildStarted>(json!({"buildId":build_id, "rootUri":root_uri}))
                 .await;
             let started = Instant::now();
+            let token = NumberOrString::String(format!("latex-build-{build_id}"));
+            // Some clients advertise progress but never answer create requests.
+            // A bounded wait keeps compilation and shutdown responsive.
+            let progress = progress_supported
+                && matches!(
+                    tokio::time::timeout(
+                        Duration::from_secs(1),
+                        client.send_request::<request::WorkDoneProgressCreate>(
+                            WorkDoneProgressCreateParams {
+                                token: token.clone()
+                            }
+                        )
+                    )
+                    .await,
+                    Ok(Ok(()))
+                );
+            if progress {
+                client
+                    .send_notification::<notification::Progress>(ProgressParams {
+                        token: token.clone(),
+                        value: ProgressParamsValue::WorkDone(WorkDoneProgress::Begin(
+                            WorkDoneProgressBegin {
+                                title: format!(
+                                    "LaTeX: {}",
+                                    root_path.file_name().unwrap_or_default().to_string_lossy()
+                                ),
+                                cancellable: Some(true),
+                                message: Some(format!("Running {}", config.executable)),
+                                percentage: None,
+                            },
+                        )),
+                    })
+                    .await;
+            }
             let worker_root = root_path.clone();
             let outcome =
                 tokio::task::spawn_blocking(move || run(&worker_root, &config, &cancel)).await;
@@ -168,6 +203,18 @@ impl BuildManager {
             for (uri, diagnostics, version) in notifications {
                 client.publish_diagnostics(uri, diagnostics, version).await;
             }
+            if progress {
+                client
+                    .send_notification::<notification::Progress>(ProgressParams {
+                        token,
+                        value: ProgressParamsValue::WorkDone(WorkDoneProgress::End(
+                            WorkDoneProgressEnd {
+                                message: result["message"].as_str().map(str::to_owned),
+                            },
+                        )),
+                    })
+                    .await;
+            }
             client.send_notification::<BuildFinished>(result).await;
         });
         Ok(json!({"status":"started", "buildId":build_id, "rootUri":root}))
@@ -185,6 +232,25 @@ impl BuildManager {
             }
         }
         count
+    }
+
+    pub fn cancel_progress(&self, token: &ProgressToken) {
+        let NumberOrString::String(token) = token else {
+            return;
+        };
+        let Some(id) = token
+            .strip_prefix("latex-build-")
+            .and_then(|id| id.parse::<u64>().ok())
+        else {
+            return;
+        };
+        for record in self.state.lock().unwrap().values() {
+            if let Some((active, cancel)) = &record.active {
+                if *active == id {
+                    cancel.store(true, Ordering::Relaxed);
+                }
+            }
+        }
     }
 
     pub fn status(&self, root: &Url) -> Value {
@@ -308,6 +374,7 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool) -> Outcome 
     };
     let log_path = output_dir.join(format!("{}.log", stem.to_string_lossy()));
     let pdf_path = output_dir.join(format!("{}.pdf", stem.to_string_lossy()));
+    let bibliography_before = bibliography_logs(&output_dir);
     // A previous log must never be interpreted as the result of a failed spawn.
     if log_path.exists() {
         if let Err(error) = std::fs::remove_file(&log_path) {
@@ -408,19 +475,25 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool) -> Outcome 
         String::from_utf8_lossy(&stdout),
         String::from_utf8_lossy(&stderr)
     );
-    let log = std::fs::File::open(&log_path)
-        .ok()
-        .and_then(|file| {
-            let mut text = String::new();
-            file.take((MAX_OUTPUT * 2) as u64)
-                .read_to_string(&mut text)
-                .ok()?;
-            Some(text)
-        })
-        .unwrap_or_default();
+    let log = read_log(&log_path).unwrap_or_default();
     // latexmk can run TeX several times. The final .log is authoritative;
     // earlier stdout passes may contain references that are already resolved.
     outcome.diagnostics = build_log::parse(root, if log.is_empty() { &output } else { &log });
+    for (path, fingerprint) in bibliography_logs(&output_dir) {
+        // An old .blg left by a previous failed build is not this build's result.
+        if bibliography_before.get(&path) == Some(&fingerprint) {
+            continue;
+        }
+        if let Some(log) = read_log(&path) {
+            for (uri, diagnostics) in build_log::parse_bibliography(root, &log) {
+                outcome
+                    .diagnostics
+                    .entry(uri)
+                    .or_default()
+                    .extend(diagnostics);
+            }
+        }
+    }
     if outcome.status == "success"
         && outcome
             .diagnostics
@@ -455,4 +528,32 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool) -> Outcome 
         .rev()
         .collect();
     outcome
+}
+
+fn read_log(path: &Path) -> Option<String> {
+    let file = std::fs::File::open(path).ok()?;
+    let mut text = Vec::new();
+    file.take((MAX_OUTPUT * 2) as u64)
+        .read_to_end(&mut text)
+        .ok()?;
+    Some(String::from_utf8_lossy(&text).into_owned())
+}
+
+fn bibliography_logs(directory: &Path) -> BTreeMap<PathBuf, (u64, Option<std::time::SystemTime>)> {
+    std::fs::read_dir(directory)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let path = entry.path();
+            if path.extension()? != "blg" {
+                return None;
+            }
+            let metadata = entry.metadata().ok()?;
+            metadata
+                .is_file()
+                .then_some((path, (metadata.len(), metadata.modified().ok())))
+        })
+        .take(64)
+        .collect()
 }

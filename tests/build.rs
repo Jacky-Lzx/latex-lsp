@@ -78,6 +78,43 @@ fn script(directory: &std::path::Path, body: &str) -> String {
 
 #[test]
 #[cfg(unix)]
+fn bibliography_log_errors_are_reported_even_when_tex_produced_a_pdf() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    let bib = directory.path().join("references.bib");
+    std::fs::write(&main, "\\bibliography{references}\n").unwrap();
+    std::fs::write(
+        &bib,
+        "@book{example, title={One}}\n@book{example, title={Two}}\n",
+    )
+    .unwrap();
+    let executable = script(directory.path(), "printf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf 'Repeated entry---line 2 of file references.bib\\n' > \"$1/main.blg\"\n");
+    let mut config = BuildConfig {
+        executable,
+        arguments: Some(vec!["%o".into()]),
+        ..Default::default()
+    };
+    let outcome = build::run(&main, &config, &AtomicBool::new(false));
+    assert_eq!(outcome.status, "error");
+    assert!(outcome.pdf.is_none());
+    assert!(outcome.message.contains("Repeated entry"));
+    assert_eq!(
+        outcome.diagnostics[&Url::from_file_path(bib).unwrap()][0]
+            .range
+            .start
+            .line,
+        1
+    );
+    // A later compiler invocation that does not touch the old .blg must ignore it.
+    config.executable = "/bin/sh".into();
+    config.arguments = Some(vec!["-c".into(), "exit 0".into()]);
+    let outcome = build::run(&main, &config, &AtomicBool::new(false));
+    assert_eq!(outcome.status, "success");
+    assert!(outcome.diagnostics.is_empty());
+}
+
+#[test]
+#[cfg(unix)]
 fn arguments_are_passed_without_shell_interpolation_and_dotted_names_work() {
     let directory = tempfile::Builder::new()
         .prefix("latex lsp 中文 ")
@@ -167,6 +204,31 @@ fn cancellation_and_timeout_terminate_the_compiler_process_group() {
             }
         }
     }
+}
+
+#[test]
+#[ignore = "requires latexmk, BibTeX and a TeX installation"]
+fn real_bibtex_failure_points_to_the_bib_file() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    let bib = directory.path().join("references.bib");
+    std::fs::write(&main, "\\documentclass{article}\n\\begin{document}\n\\cite{example}\n\\bibliographystyle{plain}\n\\bibliography{references}\n\\end{document}\n").unwrap();
+    std::fs::write(&bib, "@book{example, author={A}, title={One}, year={2025}, publisher={P}}\n@book{example, title={Two}}\n").unwrap();
+    let outcome = build::run(&main, &BuildConfig::default(), &AtomicBool::new(false));
+    assert_eq!(
+        outcome.status, "error",
+        "{}\n{}",
+        outcome.message, outcome.output
+    );
+    assert!(outcome.pdf.is_none());
+    let diagnostics = &outcome.diagnostics[&Url::from_file_path(bib).unwrap()];
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.range.start.line == 1
+                && diagnostic.message.contains("Repeated entry")),
+        "{diagnostics:?}"
+    );
 }
 
 #[test]

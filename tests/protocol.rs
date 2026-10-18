@@ -124,6 +124,15 @@ impl Server {
 
 #[cfg(unix)]
 fn fake_build_server(script: &str, on_save: bool) -> (Server, tempfile::TempDir, Url) {
+    fake_build_server_capabilities(script, on_save, json!({}))
+}
+
+#[cfg(unix)]
+fn fake_build_server_capabilities(
+    script: &str,
+    on_save: bool,
+    capabilities: Value,
+) -> (Server, tempfile::TempDir, Url) {
     let directory = tempfile::tempdir().unwrap();
     let root = Url::from_directory_path(directory.path()).unwrap();
     let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
@@ -132,7 +141,7 @@ fn fake_build_server(script: &str, on_save: bool) -> (Server, tempfile::TempDir,
     let executable = directory.path().join("compiler.sh");
     std::fs::write(&executable, script).unwrap();
     let mut server = Server::start();
-    server.request(1, "initialize", json!({"processId":null,"rootUri":root,"capabilities":{},"initializationOptions":{"build":{"executable":"/bin/sh","arguments":[executable,"%o","%f"],"onSave":on_save,"timeoutSeconds":5}}}));
+    server.request(1, "initialize", json!({"processId":null,"rootUri":root,"capabilities":capabilities,"initializationOptions":{"build":{"executable":"/bin/sh","arguments":[executable,"%o","%f"],"onSave":on_save,"timeoutSeconds":5}}}));
     server.notify("initialized", json!({}));
     server.notify(
         "textDocument/didOpen",
@@ -140,6 +149,84 @@ fn fake_build_server(script: &str, on_save: bool) -> (Server, tempfile::TempDir,
     );
     server.until(|message| message["method"] == "textDocument/publishDiagnostics");
     (server, directory, uri)
+}
+
+#[test]
+#[cfg(unix)]
+fn standard_progress_completes_and_cancellation_uses_the_build_token() {
+    for cancel in [false, true] {
+        let script = if cancel {
+            "sleep 30\n"
+        } else {
+            "printf '%%PDF-1.4\\n' > \"$1/main.pdf\"\n"
+        };
+        let (mut server, _directory, uri) = fake_build_server_capabilities(
+            script,
+            false,
+            json!({"window":{"workDoneProgress":true}}),
+        );
+        let started = server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[uri]}),
+        );
+        let create = server.until(|message| message["method"] == "window/workDoneProgress/create");
+        let token = create["params"]["token"].clone();
+        assert_eq!(token, format!("latex-build-{}", started["buildId"]));
+        server.send(json!({"jsonrpc":"2.0","id":create["id"],"result":null}));
+        let begin = server.until(|message| {
+            message["method"] == "$/progress" && message["params"]["value"]["kind"] == "begin"
+        });
+        assert_eq!(begin["params"]["token"], token);
+        assert_eq!(begin["params"]["value"]["cancellable"], true);
+        if cancel {
+            server.notify("window/workDoneProgress/cancel", json!({"token":token}));
+        }
+        let end = server.until(|message| {
+            message["method"] == "$/progress" && message["params"]["value"]["kind"] == "end"
+        });
+        assert_eq!(end["params"]["token"], token);
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(
+            finished["params"]["status"],
+            if cancel { "cancelled" } else { "success" }
+        );
+        server.request(3, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn rejected_or_unanswered_progress_requests_do_not_prevent_compilation() {
+    for reply in [false, true] {
+        let (mut server, _directory, uri) = fake_build_server_capabilities(
+            "printf '%%PDF-1.4\\n' > \"$1/main.pdf\"\n",
+            false,
+            json!({"window":{"workDoneProgress":true}}),
+        );
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[uri]}),
+        );
+        let create = server.until(|message| message["method"] == "window/workDoneProgress/create");
+        if reply {
+            server.send(json!({"jsonrpc":"2.0","id":create["id"],"error":{"code":-32601,"message":"unsupported"}}));
+        }
+        let hover = server.request(
+            3,
+            "textDocument/hover",
+            json!({"textDocument":{"uri":uri},"position":{"line":1,"character":3}}),
+        );
+        assert!(hover["contents"].is_object());
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(finished["params"]["status"], "success");
+        server.request(4, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
 }
 
 #[test]

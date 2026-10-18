@@ -38,6 +38,10 @@ impl Backend {
         self.shutdown_requested.load(Ordering::Relaxed)
     }
 
+    pub async fn cancel_progress(&self, params: WorkDoneProgressCancelParams) {
+        self.builds.cancel_progress(&params.token);
+    }
+
     async fn publish(&self, uri: Url) {
         let workspace = self.workspace.read().await;
         let snapshot = workspace
@@ -58,6 +62,12 @@ impl Backend {
 impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
         let mut workspace = self.workspace.write().await;
+        workspace.build_progress = params
+            .capabilities
+            .window
+            .as_ref()
+            .and_then(|window| window.work_done_progress)
+            .unwrap_or(false);
         if let Some(options) = params.initialization_options {
             workspace.config = config::Config::parse(options)
                 .map_err(tower_lsp::jsonrpc::Error::invalid_params)?;

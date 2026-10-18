@@ -36,7 +36,9 @@ async fn main() {
         println!("latex-lsp {}\n\nLaTeX language server over stdio.\n\nUsage: latex-lsp [--stdio]\n       latex-lsp --version", env!("CARGO_PKG_VERSION"));
         return;
     }
-    let (service, socket) = LspService::new(Backend::new);
+    let (service, socket) = LspService::build(Backend::new)
+        .custom_method("window/workDoneProgress/cancel", Backend::cancel_progress)
+        .finish();
     // Preserve wire order for changes and requests; analysis uses in-memory snapshots.
     Server::new(tokio::io::stdin(), tokio::io::stdout(), socket)
         .concurrency_level(1)

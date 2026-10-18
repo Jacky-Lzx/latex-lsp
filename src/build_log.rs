@@ -193,9 +193,169 @@ pub fn parse(root: &Path, log: &str) -> BTreeMap<Url, Vec<Diagnostic>> {
     result
 }
 
+/// BibTeX and Biber write a separate log, often after TeX has already produced
+/// a PDF. Preserve those errors instead of hiding them behind latexmk's exit code.
+pub fn parse_bibliography(root: &Path, log: &str) -> BTreeMap<Url, Vec<Diagnostic>> {
+    let mut result = BTreeMap::new();
+    let databases: Vec<_> = log
+        .lines()
+        .filter_map(|line| {
+            let name = if line.starts_with("Database file #") {
+                line.split_once(": ")?.1.trim()
+            } else {
+                let tail = line.split_once("Found BibTeX data source '")?.1;
+                tail.split_once('\'')?.0
+            };
+            location(root, name)
+        })
+        .collect();
+    for line in log.lines() {
+        if let Some((message, tail)) = line.split_once("---line ") {
+            if let Some((number, name)) = tail.split_once(" of file ") {
+                if let Ok(number) = number.trim().parse::<u32>() {
+                    let path = location(root, name).unwrap_or_else(|| root.into());
+                    emit(
+                        &mut result,
+                        &path,
+                        number,
+                        format!("BibTeX: {}", message.trim()),
+                        DiagnosticSeverity::ERROR,
+                    );
+                    continue;
+                }
+            }
+        }
+        let (message, severity, tool) = if let Some(message) = line.strip_prefix("Warning--") {
+            (message, DiagnosticSeverity::WARNING, "BibTeX")
+        } else if let Some((_, message)) = line.split_once("ERROR - ") {
+            (message, DiagnosticSeverity::ERROR, "Biber")
+        } else if let Some((_, message)) = line.split_once("WARN - ") {
+            (message, DiagnosticSeverity::WARNING, "Biber")
+        } else {
+            continue;
+        };
+        let explicit_path = bibliography_path(root, message);
+        let number = bibliography_line(message);
+        let key = message
+            .rsplit_once(" in ")
+            .map(|(_, key)| key.trim())
+            .or_else(|| {
+                message
+                    .split_once("entry '")
+                    .and_then(|(_, tail)| tail.split_once('\'').map(|(key, _)| key))
+            });
+        let mut entry = None;
+        if let Some(key) = key {
+            let candidates: Vec<_> = explicit_path
+                .iter()
+                .chain(databases.iter())
+                .filter_map(|path| {
+                    let text = Text::new(std::fs::read_to_string(path).ok()?);
+                    let syntax = crate::syntax::Syntax::bibtex(&text);
+                    let declaration = syntax.citations.iter().find(|entry| entry.name == key)?;
+                    Some((
+                        path.clone(),
+                        text.range(declaration.span.start, declaration.span.end),
+                    ))
+                })
+                .collect();
+            if let Some(first) = candidates
+                .first()
+                .filter(|first| candidates.iter().all(|candidate| candidate == *first))
+            {
+                entry = Some(first.clone());
+            }
+        }
+        let path = explicit_path
+            .as_deref()
+            .or_else(|| entry.as_ref().map(|(path, _)| path.as_path()))
+            .unwrap_or(root);
+        let diagnostic_message = format!("{tool}: {}", message.trim());
+        emit(
+            &mut result,
+            path,
+            number.unwrap_or(1),
+            diagnostic_message,
+            severity,
+        );
+        if number.is_none() {
+            if let Some((_, range)) = &entry {
+                if let Ok(uri) = Url::from_file_path(path) {
+                    result.get_mut(&uri).unwrap().last_mut().unwrap().range = *range;
+                }
+            }
+        }
+    }
+    for diagnostics in result.values_mut() {
+        diagnostics.sort_by_key(|diagnostic| (diagnostic.range.start, diagnostic.message.clone()));
+        diagnostics.dedup_by(|a, b| a.range == b.range && a.message == b.message);
+    }
+    result
+}
+
+fn bibliography_line(message: &str) -> Option<u32> {
+    for (index, _) in message.match_indices("line ") {
+        if let Some(number) = message[index + 5..]
+            .split(|ch: char| !ch.is_ascii_digit())
+            .next()
+            .and_then(|value| value.parse().ok())
+        {
+            return Some(number);
+        }
+    }
+    None
+}
+
+fn bibliography_path(root: &Path, message: &str) -> Option<PathBuf> {
+    for (index, _) in message.match_indices(".bib") {
+        let end = index + 4;
+        let prefix = &message[..index];
+        let start = prefix
+            .rfind(['\'', '"'])
+            .map(|index| index + 1)
+            .unwrap_or_else(|| {
+                prefix
+                    .rfind(|ch: char| ch.is_whitespace() || ch == ':')
+                    .map_or(0, |index| index + 1)
+            });
+        if let Some(path) = location(root, &message[start..end]) {
+            return Some(path);
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bibliography_errors_and_entry_warnings_point_to_the_database() {
+        let directory = tempfile::tempdir().unwrap();
+        let main = directory.path().join("main.tex");
+        let bib = directory.path().join("with spaces.bib");
+        std::fs::write(&main, "\\cite{example}\n").unwrap();
+        std::fs::write(
+            &bib,
+            "\n@book{example,\n title={Example}\n}\n@book{example, title={Duplicate}}\n",
+        )
+        .unwrap();
+        let log = "Database file #1: with spaces.bib\nRepeated entry---line 5 of file with spaces.bib\nI was expecting a `,' or a `}'---line 3 of file with spaces.bib\nWarning--empty author in example\n";
+        let diagnostics = parse_bibliography(&main, log);
+        let diagnostics = &diagnostics[&Url::from_file_path(&bib).unwrap()];
+        assert_eq!(diagnostics.len(), 3);
+        assert_eq!(diagnostics[0].range.start, Position::new(1, 6));
+        assert_eq!(diagnostics[0].severity, Some(DiagnosticSeverity::WARNING));
+        assert_eq!(diagnostics[1].range.start.line, 2);
+        assert_eq!(diagnostics[2].range.start.line, 4);
+        let log = "[0] INFO - Found BibTeX data source 'with spaces.bib'\n[1] ERROR - syntax error in file 'with spaces.bib', line 3\n[2] WARN - Missing required field for entry 'example'\n";
+        let diagnostics = parse_bibliography(&main, log);
+        let diagnostics = &diagnostics[&Url::from_file_path(&bib).unwrap()];
+        assert_eq!(diagnostics.len(), 2);
+        assert_eq!(diagnostics[0].range.start.line, 1);
+        assert_eq!(diagnostics[1].range.start.line, 2);
+        assert!(diagnostics[1].message.starts_with("Biber:"));
+    }
 
     #[test]
     fn file_line_errors_and_multiline_warnings_use_the_right_file() {
