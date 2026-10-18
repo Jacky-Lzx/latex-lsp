@@ -4,6 +4,7 @@ pub mod catalog;
 pub mod config;
 pub mod dispatch;
 pub mod editing;
+mod environment;
 pub mod features;
 pub mod file_operations;
 pub mod graphics;
@@ -16,7 +17,6 @@ pub mod signature;
 pub mod synctex;
 pub mod syntax;
 pub mod text;
-mod theorem;
 pub mod workspace;
 
 use std::sync::{

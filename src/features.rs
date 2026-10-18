@@ -98,7 +98,7 @@ fn target<'a>(workspace: &'a Workspace, uri: &Url, offset: usize) -> Option<Targ
         return raw;
     }
     if let Some((name, span)) =
-        crate::theorem::target(workspace, &workspace.symbol_scope(uri), doc, offset)
+        crate::environment::target(workspace, &workspace.symbol_scope(uri), doc, offset)
     {
         return Some(Target {
             kind: TargetKind::Environment,
@@ -266,8 +266,8 @@ pub fn rename(
         )));
     }
     if target.kind == TargetKind::Environment {
-        if let Some(theorem) = crate::theorem::in_scope(workspace, &scope, target.name) {
-            crate::theorem::validate(workspace, &scope, target.name, new_name, theorem)?;
+        if let Some(environment) = crate::environment::in_scope(workspace, &scope, target.name) {
+            crate::environment::validate(workspace, &scope, target.name, new_name, environment)?;
         }
     }
     let replacement = if target.kind == TargetKind::Command {
@@ -681,16 +681,16 @@ fn all_references(
     else {
         return vec![];
     };
-    let theorem = if target.kind == TargetKind::Environment {
-        crate::theorem::in_scope(workspace, &workspace.symbol_scope(uri), target.name)
+    let environment = if target.kind == TargetKind::Environment {
+        crate::environment::in_scope(workspace, &workspace.symbol_scope(uri), target.name)
     } else {
         None
     };
     let mut result = Vec::new();
     for (uri, doc) in &workspace.documents {
-        if let Some(theorem) = theorem {
+        if let Some(environment) = environment {
             result.extend(
-                crate::theorem::references(doc, target.name, theorem)
+                crate::environment::references(doc, target.name, environment)
                     .into_iter()
                     .map(|reference| Location {
                         uri: uri.clone(),

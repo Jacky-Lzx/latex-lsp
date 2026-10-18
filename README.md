@@ -230,7 +230,7 @@ cargo test --locked -- --include-ignored
 
 这是可运行的基础版本，使用静态解析，不执行 TeX 宏展开或读取 TeX 发行版的包数据库。自定义命令支持 `\newcommand`、`\renewcommand`、`\providecommand`、`\DeclareMathOperator`、`\DeclareRobustCommand` 和 xparse 的 `\NewDocumentCommand` 等声明，包含花括号与直接控制序列形式；也识别 `\def` / `\gdef` / `\edef` / `\xdef` 和 `\let`。BibTeX 支持常见 `{...}` / `(...)` 条目和嵌套字段。
 
-自定义环境支持 `\newenvironment` / `\renewenvironment`、xparse 的 `\NewDocumentEnvironment` 等声明、`\NewEnviron` / `\RenewEnviron` 和 `\newtheorem`，提供补全、定义跳转、引用、悬浮、符号及跨文件重命名。改名时同时检查环境生成的同名宏和 `\end...` 宏，避免与已有命令冲突。
+自定义环境支持 `\newenvironment` / `\renewenvironment`、xparse 的 `\NewDocumentEnvironment` 等声明、`\NewEnviron` / `\RenewEnviron` 和 `\newtheorem`，提供补全、定义跳转、引用、悬浮、符号及跨文件重命名。改名时同步维护 `\begin{panel}` / `\end{panel}`、直接调用的 `\panel` / `\endpanel` 和字面 `\csname panel\endcsname`；可从这些调用处跳转或发起重命名。检查环境生成的同名宏和 `\end...` 宏，避免与已有命令冲突；存在直接控制序列调用时，新名称须只含 TeX 命令字母。
 
 用户宏参数提示识别 `\newcommand` 系列和 `\DeclareRobustCommand` 的参数数量/首个可选参数默认值，xparse 的 `m` / `o` / `O{...}` / `s`，以及 `\def` 系列连续的 `#1#2...` 参数。调用按花括号或方括号分组匹配，支持星号、嵌套调用、转义和多行注释。复杂分隔参数、字符串求值或定义有歧义时暂不推断签名；不在注释和逐字文本中提示。
 
