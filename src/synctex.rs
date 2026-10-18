@@ -169,14 +169,15 @@ pub fn prepare(workspace: &Workspace, uri: &Url) -> Result<Project> {
         .to_file_path()
         .map_err(|_| Error::invalid_params("SyncTeX requires local files"))?;
     let directory = path.parent().unwrap().to_path_buf();
-    let output = directory.join(&workspace.config.build.output_directory);
-    let stem = path.file_stem().unwrap().to_string_lossy();
-    let pdf = output.join(format!("{stem}.pdf"));
+    let config = workspace.build_config(&root);
+    let pdf = config
+        .artifact_path(&path, "pdf")
+        .ok_or_else(|| Error::invalid_params("Invalid root filename"))?;
     let mut artifacts = Vec::new();
     for path in [
         pdf.clone(),
-        output.join(format!("{stem}.synctex.gz")),
-        output.join(format!("{stem}.synctex")),
+        config.artifact_path(&path, "synctex.gz").unwrap(),
+        config.artifact_path(&path, "synctex").unwrap(),
     ] {
         if let Ok(metadata) = std::fs::metadata(&path) {
             if metadata.is_file() && metadata.len() > 0 {

@@ -9,6 +9,103 @@ use std::{
 use tower_lsp::lsp_types::{DiagnosticSeverity, Url};
 
 #[test]
+#[cfg(unix)]
+#[ignore = "requires latexmk, pdflatex, xelatex and lualatex"]
+fn custom_job_names_locate_pdf_logs_recorder_inputs_and_synctex_for_all_tex_engines() {
+    for executable in ["latexmk", "pdflatex", "xelatex", "lualatex"] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let main = root.join("main.tex");
+        std::fs::write(
+            &main,
+            "\\documentclass{article}\n\\begin{document}\n\\input{chapter}\n\\end{document}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("chapter.tex"),
+            "\\PackageWarning{example}{Job name warning}Chapter.",
+        )
+        .unwrap();
+        let compiler = if executable == "lualatex" {
+            let wrapper = script(root, "TEXMFVAR=\"${0%/*}/tex-cache\"\nTEXMFCACHE=\"$TEXMFVAR\"\nexport TEXMFVAR TEXMFCACHE\nmkdir -p \"$TEXMFVAR\"\nexec lualatex \"$@\"");
+            let named = root.join("lualatex");
+            std::fs::rename(wrapper, &named).unwrap();
+            named.to_string_lossy().into_owned()
+        } else {
+            executable.into()
+        };
+        let config = BuildConfig {
+            executable: compiler,
+            job_name: Some("论文 draft.v2".into()),
+            ..Default::default()
+        };
+        let outcome = build::run(&main, &config, &AtomicBool::new(false));
+        assert_eq!(
+            outcome.status, "success",
+            "{executable}: {}",
+            outcome.output
+        );
+        assert_eq!(outcome.pdf, config.artifact_path(&main, "pdf"));
+        assert_eq!(outcome.log, config.artifact_path(&main, "log"));
+        let child = Url::from_file_path(root.join("chapter.tex")).unwrap();
+        assert!(outcome.inputs.unwrap().contains(&child));
+        assert!(
+            outcome.diagnostics[&child]
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("Job name warning")),
+            "{:?}",
+            outcome.diagnostics
+        );
+        let mut workspace = Workspace::default();
+        workspace.config.build = config;
+        workspace.add_root(root.into());
+        assert!(
+            latex_lsp::synctex::prepare(&workspace, &Url::from_file_path(&main).unwrap()).is_ok(),
+            "{executable}"
+        );
+        assert!(!root.join("build/latex-lsp/main.pdf").exists());
+    }
+}
+
+#[test]
+#[ignore = "requires latexmk and BibTeX"]
+fn bibliography_builds_with_custom_job_names_still_resolve_and_analyze_the_database() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = root.join("main.tex");
+    std::fs::write(&main, "\\documentclass{article}\n\\begin{document}\n\\cite{example}\n\\bibliographystyle{plain}\n\\bibliography{references}\n\\end{document}\n").unwrap();
+    std::fs::write(
+        root.join("references.bib"),
+        "@book{example, title={Example}, year={2026}, publisher={P}}\n",
+    )
+    .unwrap();
+    let config = BuildConfig {
+        job_name: Some("论文 draft.v2".into()),
+        ..Default::default()
+    };
+    let outcome = build::run(&main, &config, &AtomicBool::new(false));
+    assert_eq!(outcome.status, "success", "{}", outcome.output);
+    assert!(outcome.pdf.unwrap().is_file());
+    let bib = Url::from_file_path(root.join("references.bib")).unwrap();
+    assert!(
+        outcome.diagnostics[&bib]
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("empty author")),
+        "{:?}",
+        outcome.diagnostics
+    );
+    assert!(
+        !outcome
+            .diagnostics
+            .values()
+            .flatten()
+            .any(|diagnostic| diagnostic.message.contains("undefined")),
+        "{:?}",
+        outcome.diagnostics
+    );
+}
+
+#[test]
 fn engine_directives_use_the_root_comment_and_respect_explicit_configuration() {
     use latex_lsp::{config::Engine, workspace::Document};
     let directory = tempfile::tempdir().unwrap();

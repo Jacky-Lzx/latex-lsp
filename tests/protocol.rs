@@ -206,6 +206,125 @@ fn duplicate_project_diagnostics_refresh_related_open_documents_after_edits_and_
     server.wait_exit(0);
 }
 
+#[test]
+#[cfg(unix)]
+fn builds_with_the_same_job_name_cannot_write_the_same_artifacts_concurrently() {
+    let (mut server, directory, main) = fake_build_server("touch \"$1/ready\"\nwhile [ ! -f \"$1/release\" ]; do sleep 0.02; done\nprintf '%%PDF-1.4\\n' > \"$1/$3.pdf\"\n", false);
+    let root = directory.path();
+    let other = Url::from_file_path(root.join("other.tex")).unwrap();
+    std::fs::write(root.join("other.tex"), "\\documentclass{article}Other.").unwrap();
+    server.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({"changes":[{"uri":other,"type":1}]}),
+    );
+    server.notify("workspace/didChangeConfiguration",json!({"settings":{"build":{"executable":"/bin/sh","jobName":"draft","arguments":[root.join("compiler.sh"),"%o","%f","%j"]}}}));
+    server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let started = server.until(|message| message["method"] == "latex/buildStarted");
+    assert_eq!(started["params"]["jobName"], "draft");
+    let ready = root.join("build/latex-lsp/ready");
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !ready.exists() {
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    server.send(json!({"jsonrpc":"2.0","id":3,"method":"workspace/executeCommand","params":{"command":"latex.build","arguments":[other]}}));
+    let rejected = server.until(|message| message["id"] == 3);
+    assert!(
+        rejected["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("same output file"),
+        "{rejected}"
+    );
+    std::fs::write(root.join("build/latex-lsp/release"), "").unwrap();
+    let first = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(first["params"]["status"], "success", "{first}");
+    server.request(
+        4,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[other]}),
+    );
+    let second = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(second["params"]["status"], "success", "{second}");
+    assert_eq!(second["params"]["rootUri"], other.as_str());
+    assert_eq!(second["params"]["jobName"], "draft");
+    assert_eq!(
+        second["params"]["pdfUri"],
+        Url::from_file_path(root.join("build/latex-lsp/draft.pdf"))
+            .unwrap()
+            .as_str()
+    );
+    server.request(5, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[ignore = "requires pdflatex and synctex"]
+fn real_custom_job_names_preserve_build_analysis_recorded_dependencies_and_synctex_round_trips() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = Url::from_file_path(root.join("main.tex")).unwrap();
+    let child = Url::from_file_path(root.join("chapter.tex")).unwrap();
+    std::fs::write(root.join("main.tex"), "\\documentclass{article}\n\\newcommand{\\chapterfile}{chapter}\n\\begin{document}\n\\input{\\chapterfile}\n\\end{document}\n").unwrap();
+    std::fs::write(
+        root.join("chapter.tex"),
+        "Chapter text.\\PackageWarning{example}{Named job warning}\n",
+    )
+    .unwrap();
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(root).unwrap(),"capabilities":{},"initializationOptions":{"build":{"executable":"pdflatex","jobName":"论文 draft.v2"}}}));
+    server.notify("initialized", json!({}));
+    server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let finished = server.until(|message| message["method"] == "latex/buildFinished");
+    let result = &finished["params"];
+    assert_eq!(result["status"], "success", "{result}");
+    assert_eq!(result["stale"], false);
+    assert_eq!(result["jobName"], "论文 draft.v2");
+    assert_eq!(result["dependenciesCount"], 2);
+    let pdf = Url::from_file_path(root.join("build/latex-lsp/论文 draft.v2.pdf")).unwrap();
+    assert_eq!(result["pdfUri"], pdf.as_str());
+    assert_eq!(
+        result["logUri"],
+        Url::from_file_path(root.join("build/latex-lsp/论文 draft.v2.log"))
+            .unwrap()
+            .as_str()
+    );
+    let diagnostics = server.until(|message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["uri"] == child.as_str()
+    });
+    assert!(diagnostics["params"]["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|diagnostic| diagnostic["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("Named job warning"))));
+    let forward = server.request(3,"workspace/executeCommand",json!({"command":"latex.forwardSearch","arguments":[{"uri":child,"position":{"line":0,"character":4}}]}));
+    assert_eq!(forward["pdfUri"], pdf.as_str());
+    let hit = &forward["locations"][0];
+    assert!(hit["page"].as_u64().unwrap() > 0);
+    let inverse = server.request(4,"workspace/executeCommand",json!({"command":"latex.inverseSearch","arguments":[{"uri":main,"page":hit["page"],"x":hit["x"],"y":hit["y"]}]}));
+    assert_eq!(inverse["pdfUri"], pdf.as_str());
+    assert!(inverse["locations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|location| location["uri"] == child.as_str()));
+    server.request(5, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
 #[cfg(unix)]
 fn fake_build_server(script: &str, on_save: bool) -> (Server, tempfile::TempDir, Url) {
     fake_build_server_capabilities(script, on_save, json!({}))

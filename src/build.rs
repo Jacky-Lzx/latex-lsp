@@ -39,6 +39,7 @@ struct Record {
     queued: Option<Url>,
     cancel_generation: u64,
     inputs: BTreeSet<Url>,
+    artifact: Option<PathBuf>,
 }
 
 #[derive(Clone)]
@@ -138,6 +139,13 @@ impl BuildManager {
         drop(workspace);
         let build_id = self.sequence.fetch_add(1, Ordering::Relaxed);
         let cancel = Arc::new(AtomicBool::new(false));
+        let artifact = config.artifact_path(&root_path, "pdf").map(|path| {
+            let path = crate::workspace::normalize_path(&path);
+            path.parent()
+                .and_then(|parent| parent.canonicalize().ok())
+                .zip(path.file_name())
+                .map_or_else(|| path.clone(), |(parent, name)| parent.join(name))
+        });
         {
             let mut state = self.state.lock().unwrap();
             if self.closing.load(Ordering::SeqCst) {
@@ -151,6 +159,17 @@ impl BuildManager {
                     return Ok(json!({"status":"cancelled", "rootUri":root}));
                 }
             }
+            if let Some((owner, _)) = state.iter().find(|(owner, record)| {
+                *owner != &root
+                    && record.active.is_some()
+                    && artifact.is_some()
+                    && record.artifact == artifact
+            }) {
+                return Err(Error::invalid_params(format!(
+                    "Another active build writes the same output file: {}; wait for {} to finish or choose a different jobName or outputDirectory",
+                    artifact.as_ref().unwrap().display(), owner
+                )));
+            }
             let record = state.entry(root.clone()).or_default();
             if let Some((id, _)) = &record.active {
                 return Ok(
@@ -159,6 +178,7 @@ impl BuildManager {
             }
             record.active = Some((build_id, cancel.clone()));
             record.inputs = project.clone();
+            record.artifact = artifact;
             self.tasks.fetch_add(1, Ordering::SeqCst);
         }
         self.launch(
@@ -221,8 +241,11 @@ impl BuildManager {
             let _guard = guard;
             let executable = config.executable.clone();
             let engine = config.effective_engine();
+            let job_name = config
+                .job_name(&root_path)
+                .map(|name| name.to_string_lossy().into_owned());
             client
-                .send_notification::<BuildStarted>(json!({"buildId":build_id, "rootUri":root_uri, "executable":executable, "engine":engine}))
+                .send_notification::<BuildStarted>(json!({"buildId":build_id, "rootUri":root_uri, "executable":executable, "engine":engine, "jobName":job_name}))
                 .await;
             let started = Instant::now();
             let token = NumberOrString::String(format!("latex-build-{build_id}"));
@@ -339,6 +362,7 @@ impl BuildManager {
                 "diagnosticsCount":count, "stale":stale, "durationMs":started.elapsed().as_millis() as u64,
                 "dependenciesCount":project.len(),
                 "executable":executable, "engine":engine,
+                "jobName":job_name,
                 "output":outcome.output,
             });
             let mut affected = BTreeSet::new();
@@ -641,13 +665,12 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool) -> Outcome 
     if let Err(error) = std::fs::create_dir_all(&output_dir) {
         return Outcome::error(format!("Cannot create build directory: {error}"));
     }
-    let Some(stem) = root.file_stem() else {
+    let Some(log_path) = config.artifact_path(root, "log") else {
         return Outcome::error("Invalid root filename".into());
     };
-    let log_path = output_dir.join(format!("{}.log", stem.to_string_lossy()));
-    let pdf_path = output_dir.join(format!("{}.pdf", stem.to_string_lossy()));
+    let pdf_path = config.artifact_path(root, "pdf").unwrap();
     let pdf_before = fingerprint(&pdf_path);
-    let recorder_path = output_dir.join(format!("{}.fls", stem.to_string_lossy()));
+    let recorder_path = config.artifact_path(root, "fls").unwrap();
     let recorder_before = fingerprint(&recorder_path);
     let bibliography_before = bibliography_logs(&output_dir);
     // A previous log must never be interpreted as the result of a failed spawn.
@@ -656,15 +679,7 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool) -> Outcome 
             return Outcome::error(format!("Cannot replace compiler log: {error}"));
         }
     }
-    let arguments = config
-        .arguments()
-        .into_iter()
-        .map(|argument| {
-            argument
-                .replace("%f", &root.to_string_lossy())
-                .replace("%o", &output_dir.to_string_lossy())
-        })
-        .collect::<Vec<_>>();
+    let arguments = config.expanded_arguments(root).unwrap();
     let mut command = Command::new(&config.executable);
     command
         .args(arguments)

@@ -1,4 +1,8 @@
 use serde::{Deserialize, Serialize};
+use std::{
+    ffi::OsStr,
+    path::{Path, PathBuf},
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -41,6 +45,7 @@ pub struct BuildConfig {
     pub engine: Option<Engine>,
     pub output_directory: String,
     pub root_file: Option<String>,
+    pub job_name: Option<String>,
     pub on_save: bool,
     pub timeout_seconds: u64,
 }
@@ -53,6 +58,7 @@ impl Default for BuildConfig {
             engine: None,
             output_directory: "build/latex-lsp".into(),
             root_file: None,
+            job_name: None,
             on_save: false,
             timeout_seconds: 120,
         }
@@ -72,11 +78,77 @@ impl Config {
         if !(1..=3600).contains(&config.build.timeout_seconds) {
             return Err("Build timeoutSeconds must be between 1 and 3600".into());
         }
+        if let Some(name) = &config.build.job_name {
+            if name.trim().is_empty()
+                || name.trim() != name
+                || matches!(name.as_str(), "." | "..")
+                || name
+                    .chars()
+                    .any(|ch| !ch.is_alphanumeric() && !matches!(ch, ' ' | '-' | '_' | '.'))
+            {
+                return Err("Build jobName must use letters, digits, spaces, '.', '_' or '-', without leading or trailing spaces or a directory path".into());
+            }
+            if config.build.arguments.is_none()
+                && Path::new(&config.build.executable).file_stem() == Some(OsStr::new("tectonic"))
+            {
+                return Err("Tectonic does not support jobName with its default arguments".into());
+            }
+        }
         Ok(config)
     }
 }
 
 impl BuildConfig {
+    pub fn job_name<'a>(&'a self, root: &'a Path) -> Option<&'a OsStr> {
+        self.job_name
+            .as_deref()
+            .map(OsStr::new)
+            .or_else(|| root.file_stem())
+    }
+
+    pub fn artifact_path(&self, root: &Path, extension: &str) -> Option<PathBuf> {
+        let mut name = self.job_name(root)?.to_os_string();
+        name.push(".");
+        name.push(extension);
+        Some(root.parent()?.join(&self.output_directory).join(name))
+    }
+
+    /// Substitute only template placeholders, never text inserted by another
+    /// placeholder (a real source directory can itself contain `%o` or `%j`).
+    pub fn expanded_arguments(&self, root: &Path) -> Option<Vec<String>> {
+        let output = root.parent()?.join(&self.output_directory);
+        let root_name = root.to_string_lossy();
+        let output_name = output.to_string_lossy();
+        let job_name = self.job_name(root)?.to_string_lossy();
+        Some(
+            self.arguments()
+                .into_iter()
+                .map(|argument| {
+                    let mut expanded = String::new();
+                    let mut tail = argument.as_str();
+                    while let Some(index) = tail.find('%') {
+                        expanded.push_str(&tail[..index]);
+                        let value = match tail.as_bytes().get(index + 1) {
+                            Some(b'f') => Some(root_name.as_ref()),
+                            Some(b'o') => Some(output_name.as_ref()),
+                            Some(b'j') => Some(job_name.as_ref()),
+                            _ => None,
+                        };
+                        if let Some(value) = value {
+                            expanded.push_str(value);
+                            tail = &tail[index + 2..];
+                        } else {
+                            expanded.push('%');
+                            tail = &tail[index + 1..];
+                        }
+                    }
+                    expanded.push_str(tail);
+                    expanded
+                })
+                .collect(),
+        )
+    }
+
     pub fn effective_engine(&self) -> Option<Engine> {
         if self.arguments.is_some() {
             return None;
@@ -133,6 +205,9 @@ impl BuildConfig {
             .iter()
             .map(|argument| (*argument).into())
             .collect();
+        if self.job_name.is_some() && engine != "tectonic" {
+            arguments.insert(0, "-jobname=%j".into());
+        }
         if let Some(engine) = self.engine {
             if let Some(argument) = arguments.iter_mut().find(|argument| *argument == "-pdf") {
                 *argument = engine.latexmk_argument().into();
@@ -161,6 +236,86 @@ impl BuildConfig {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn job_names_use_consistent_artifact_paths_and_validate_supported_tool_arguments() {
+        let root = Path::new("/tmp/project/main.tex");
+        for executable in ["latexmk", "pdflatex", "xelatex", "lualatex"] {
+            let config =
+                Config::parse(json!({"build":{"executable":executable,"jobName":"论文 draft.v2"}}))
+                    .unwrap()
+                    .build;
+            assert!(config
+                .expanded_arguments(root)
+                .unwrap()
+                .contains(&"-jobname=论文 draft.v2".into()));
+            assert_eq!(
+                config.artifact_path(root, "pdf").unwrap(),
+                Path::new("/tmp/project/build/latex-lsp/论文 draft.v2.pdf")
+            );
+            assert_eq!(
+                config.artifact_path(root, "synctex.gz").unwrap(),
+                Path::new("/tmp/project/build/latex-lsp/论文 draft.v2.synctex.gz")
+            );
+        }
+        for name in [
+            "",
+            " ",
+            ".",
+            "..",
+            "draft ",
+            "../draft",
+            "a/b",
+            "a\\b",
+            "a\nb",
+            "a%o",
+            "a;command",
+            "`command`",
+            "a'b",
+            "a\"b",
+        ] {
+            assert!(
+                Config::parse(json!({"build":{"jobName":name}})).is_err(),
+                "{name}"
+            );
+        }
+        assert!(
+            Config::parse(json!({"build":{"executable":"tectonic","jobName":"draft"}})).is_err()
+        );
+        let custom = Config::parse(json!({"build":{"executable":"custom","jobName":"draft","arguments":["--output=%o/%j.pdf", "%f"]}})).unwrap().build;
+        assert_eq!(custom.arguments(), vec!["--output=%o/%j.pdf", "%f"]);
+        assert_eq!(
+            custom.expanded_arguments(root).unwrap(),
+            vec![
+                "--output=/tmp/project/build/latex-lsp/draft.pdf",
+                "/tmp/project/main.tex"
+            ]
+        );
+    }
+
+    #[test]
+    fn argument_placeholders_do_not_expand_percent_sequences_inside_source_paths() {
+        let root = Path::new("/tmp/%o project/main%j.tex");
+        let config = BuildConfig {
+            output_directory: "out%f".into(),
+            arguments: Some(vec![
+                "%f".into(),
+                "%o".into(),
+                "%j".into(),
+                "%unknown%%".into(),
+            ]),
+            ..Default::default()
+        };
+        assert_eq!(
+            config.expanded_arguments(root).unwrap(),
+            vec![
+                "/tmp/%o project/main%j.tex",
+                "/tmp/%o project/out%f",
+                "main%j",
+                "%unknown%%"
+            ]
+        );
+    }
 
     #[test]
     fn validates_configuration_and_engine_defaults() {
