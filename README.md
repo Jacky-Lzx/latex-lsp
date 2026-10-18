@@ -142,7 +142,7 @@ end
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
-# 已安装 latexmk、pdflatex 和 TeX 发行版时，也执行真实编译测试：
+# 已安装 latexmk、pdflatex、TeX 发行版和 Neovim 0.10+ 时，执行真实编译及 snippet 展开测试：
 cargo test --locked -- --include-ignored
 ```
 
@@ -152,7 +152,7 @@ cargo test --locked -- --include-ignored
 
 ## 当前范围
 
-这是可运行的基础版本，使用静态解析，不执行 TeX 宏展开或读取 TeX 发行版的包数据库。自定义命令支持 `\newcommand`、`\renewcommand`、`\providecommand` 和 `\DeclareMathOperator` 的花括号形式；BibTeX 支持常见 `{...}` / `(...)` 条目和嵌套字段。
+这是可运行的基础版本，使用静态解析，不执行 TeX 宏展开或读取 TeX 发行版的包数据库。自定义命令支持 `\newcommand`、`\renewcommand`、`\providecommand`、`\DeclareMathOperator`、`\DeclareRobustCommand` 和 xparse 的 `\NewDocumentCommand` 等声明，包含花括号与直接控制序列形式；也识别 `\def` / `\gdef` / `\edef` / `\xdef` 和 `\let`。BibTeX 支持常见 `{...}` / `(...)` 条目和嵌套字段。
 
 目前不提供 PDF 预览、SyncTeX 跳转、格式化或数学语义检查；默认编译会生成 SyncTeX 数据。未定义引用的即时静态检查暂不报错，编译器提供的相关警告会显示在诊断中。定义和引用在整个工作区索引中查找；重命名要求该名字在索引中只有一个定义，存在歧义时会拒绝操作。内置命令不支持重命名。
 

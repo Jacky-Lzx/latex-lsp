@@ -1,4 +1,5 @@
-/// Command name, completion snippet (without leading backslash), short documentation.
+/// Command name, snippet template (without leading backslash), short documentation.
+/// Templates retain literal TeX backslashes; completion escapes them for the client.
 pub const COMMANDS: &[(&str, &str, &str)] = &[
     (
         "documentclass",
@@ -214,6 +215,56 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
         "newenvironment",
         "newenvironment{${1:name}}{${2:begin}}{${3:end}}",
         "Define an environment.",
+    ),
+    (
+        "DeclareRobustCommand",
+        "DeclareRobustCommand{\\${1:name}}{${2:definition}}",
+        "Define a robust LaTeX command.",
+    ),
+    (
+        "def",
+        "def\\${1:name}{${2:definition}}",
+        "Define a TeX macro in the current group.",
+    ),
+    (
+        "gdef",
+        "gdef\\${1:name}{${2:definition}}",
+        "Define a TeX macro globally.",
+    ),
+    (
+        "edef",
+        "edef\\${1:name}{${2:definition}}",
+        "Define a TeX macro after expanding its replacement text.",
+    ),
+    (
+        "xdef",
+        "xdef\\${1:name}{${2:definition}}",
+        "Globally define a TeX macro after expanding its replacement text.",
+    ),
+    (
+        "let",
+        "let\\${1:alias}=\\${2:command}",
+        "Give a control sequence the current meaning of another token.",
+    ),
+    (
+        "NewDocumentCommand",
+        "NewDocumentCommand{\\${1:name}}{${2:m}}{${3:definition}}",
+        "Define a command using an xparse argument specification.",
+    ),
+    (
+        "RenewDocumentCommand",
+        "RenewDocumentCommand{\\${1:name}}{${2:m}}{${3:definition}}",
+        "Redefine a command using an xparse argument specification.",
+    ),
+    (
+        "ProvideDocumentCommand",
+        "ProvideDocumentCommand{\\${1:name}}{${2:m}}{${3:definition}}",
+        "Define a command with xparse syntax if it does not exist.",
+    ),
+    (
+        "DeclareDocumentCommand",
+        "DeclareDocumentCommand{\\${1:name}}{${2:m}}{${3:definition}}",
+        "Declare a command using an xparse argument specification.",
     ),
     (
         "DeclareMathOperator",

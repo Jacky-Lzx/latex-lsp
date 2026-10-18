@@ -407,7 +407,13 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
                 }),
                 text_edit: Some(CompletionTextEdit::Edit(TextEdit {
                     range,
-                    new_text: if use_snippets { snippet } else { name }.into(),
+                    // Literal TeX backslashes must survive the snippet parser,
+                    // including the one immediately before a placeholder.
+                    new_text: if use_snippets {
+                        snippet.replace('\\', "\\\\")
+                    } else {
+                        name.into()
+                    },
                 })),
                 ..CompletionItem::default()
             });

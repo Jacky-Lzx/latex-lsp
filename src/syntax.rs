@@ -142,6 +142,32 @@ pub fn file_list(name: &str) -> bool {
     matches!(name, "bibliography" | "usepackage" | "RequirePackage")
 }
 
+fn declares_command(name: &str) -> bool {
+    matches!(
+        name,
+        "newcommand"
+            | "renewcommand"
+            | "providecommand"
+            | "DeclareMathOperator"
+            | "DeclareRobustCommand"
+            | "NewDocumentCommand"
+            | "RenewDocumentCommand"
+            | "ProvideDocumentCommand"
+            | "DeclareDocumentCommand"
+    )
+}
+
+fn control_word(source: &str, start: usize) -> Option<Range<usize>> {
+    if source.as_bytes().get(start) != Some(&b'\\') {
+        return None;
+    }
+    let length = source[start + 1..]
+        .bytes()
+        .take_while(|byte| byte.is_ascii_alphabetic() || *byte == b'@')
+        .count();
+    (length > 0).then_some(start..start + 1 + length)
+}
+
 pub fn is_citation(name: &str) -> bool {
     matches!(
         name,
@@ -277,6 +303,25 @@ impl Syntax {
                         span: start..command_end,
                         argument,
                     };
+                    let declaration = if declares_command(name) {
+                        if let Some(argument) = &command.argument {
+                            let span = trimmed_span(source, argument.span.clone());
+                            control_word(source, span.start).filter(|word| *word == span)
+                        } else {
+                            control_word(source, arg_start)
+                        }
+                    } else if matches!(name, "def" | "gdef" | "edef" | "xdef" | "let") {
+                        control_word(source, arg_start)
+                    } else {
+                        None
+                    };
+                    if let Some(span) = declaration {
+                        result.definitions.push(Entry {
+                            name: source[span.start + 1..span.end].into(),
+                            span,
+                            detail: format!("Defined with \\{name}"),
+                        });
+                    }
                     if let Some(arg) = &command.argument {
                         let entry = || Entry {
                             name: arg.value.trim().into(),
@@ -286,18 +331,6 @@ impl Syntax {
                         match name {
                             "label" => result.labels.push(entry()),
                             "bibitem" => result.citations.push(entry()),
-                            "newcommand"
-                            | "renewcommand"
-                            | "providecommand"
-                            | "DeclareMathOperator" => {
-                                if let Some(value) = arg.value.trim().strip_prefix('\\') {
-                                    result.definitions.push(Entry {
-                                        name: value.into(),
-                                        span: trimmed_span(source, arg.span.clone()),
-                                        detail: format!("Defined with \\{name}"),
-                                    });
-                                }
-                            }
                             "begin" => {
                                 let env = arg.value.trim();
                                 if matches!(

@@ -121,6 +121,71 @@ fn macro_rename_preserves_backslashes_and_carries_document_versions() {
 }
 
 #[test]
+fn modern_and_unbraced_macro_declarations_support_navigation_completion_and_rename() {
+    for declaration in [
+        r"\newcommand\hello[1]{Hello #1}",
+        r"\renewcommand* \hello [1] {Hello #1}",
+        "\\providecommand % declaration\n\\hello[1]{Hello #1}",
+        r"\DeclareMathOperator*{\hello}{hello}",
+        r"\DeclareRobustCommand\hello[1]{#1}",
+        r"\NewDocumentCommand{\hello}{m}{#1}",
+        r"\RenewDocumentCommand\hello{m}{#1}",
+        r"\ProvideDocumentCommand{\hello}{O{x}}{#1}",
+        r"\DeclareDocumentCommand{\hello}{m}{#1}",
+        r"\def\hello#1{Hello #1}",
+        r"\gdef\hello#1{Hello #1}",
+        r"\edef\hello{Hello}",
+        r"\xdef\hello{Hello}",
+        r"\let\hello=\textbf",
+        r"\long\def\hello#1{Hello #1}",
+    ] {
+        let mut workspace = Workspace::default();
+        let macros = insert(&mut workspace, "macros.tex", declaration, Some(1));
+        let main = insert(&mut workspace, "main.tex", "\\hello{World}\n\\hel", Some(3));
+        let definitions = &workspace.documents[&macros].syntax.definitions;
+        assert_eq!(definitions.len(), 1, "{declaration}");
+        assert_eq!(definitions[0].name, "hello");
+        assert!(
+            features::diagnostics(&workspace.documents[&macros]).is_empty(),
+            "{declaration}"
+        );
+        assert_eq!(
+            features::definitions(&workspace, &main, Position::new(0, 3))[0].uri,
+            macros
+        );
+        assert_eq!(
+            features::references(&workspace, &main, Position::new(0, 3), false).len(),
+            1,
+            "{declaration}"
+        );
+        assert_eq!(
+            features::references(&workspace, &main, Position::new(0, 3), true).len(),
+            2,
+            "{declaration}"
+        );
+        assert!(features::completion(&workspace, &main, Position::new(1, 4))
+            .iter()
+            .any(|item| item.label == "hello"));
+        let declaration_position = workspace.documents[&macros]
+            .text
+            .position(definitions[0].span.start + 2);
+        let edits = features::rename(&workspace, &macros, declaration_position, "greeting")
+            .unwrap()
+            .unwrap()
+            .changes
+            .unwrap();
+        assert!(
+            edits_result(declaration, &edits[&macros]).contains("\\greeting"),
+            "{declaration}"
+        );
+        assert_eq!(
+            edits_result(&workspace.documents[&main].text.source, &edits[&main]),
+            "\\greeting{World}\n\\hel"
+        );
+    }
+}
+
+#[test]
 fn rejects_conflicts_ambiguous_definitions_invalid_names_and_builtins() {
     let mut workspace = Workspace::default();
     let uri = insert(
