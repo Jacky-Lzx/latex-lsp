@@ -18,8 +18,13 @@ struct Server {
 
 impl Server {
     fn start() -> Self {
+        Self::start_with_env(&[])
+    }
+
+    fn start_with_env(environment: &[(&str, &str)]) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_latex-lsp"))
             .arg("--stdio")
+            .envs(environment.iter().copied())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -780,6 +785,123 @@ fn real_recorder_discovers_macro_expanded_input_without_indexing_tex_distributio
     assert_eq!(started["rootUri"], main.as_str());
     server.until(|message| message["method"] == "latex/buildFinished");
     server.request(5, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[ignore = "requires latexmk, SyncTeX and a TeX installation"]
+fn real_synctex_round_trip_handles_spaces_and_rejects_unsaved_or_stale_sources() {
+    let directory = tempfile::tempdir().unwrap();
+    let folder = directory.path().join("project with spaces");
+    std::fs::create_dir(&folder).unwrap();
+    let root = Url::from_directory_path(&folder).unwrap();
+    let main = Url::from_file_path(folder.join("main.tex")).unwrap();
+    let chapter = Url::from_file_path(folder.join("chapter file.tex")).unwrap();
+    let source = "Hello SyncTeX.\nSecond line.\n% 😀\n";
+    std::fs::write(
+        main.to_file_path().unwrap(),
+        "\\documentclass{article}\n\\begin{document}\n\\input{chapter file}\n\\end{document}\n",
+    )
+    .unwrap();
+    std::fs::write(chapter.to_file_path().unwrap(), source).unwrap();
+    let marker = directory.path().join("unexpected-launch");
+    let external = format!("touch {}", marker.display());
+    let mut server =
+        Server::start_with_env(&[("SYNCTEX_VIEWER", &external), ("SYNCTEX_EDITOR", &external)]);
+    let initialized = server.request(
+        1,
+        "initialize",
+        json!({"processId":null,"rootUri":root,"capabilities":{}}),
+    );
+    let commands = initialized["capabilities"]["executeCommandProvider"]["commands"]
+        .as_array()
+        .unwrap();
+    assert!(commands.contains(&json!("latex.forwardSearch")));
+    assert!(commands.contains(&json!("latex.inverseSearch")));
+    server.notify("initialized", json!({}));
+    server.send(json!({"jsonrpc":"2.0","id":2,"method":"workspace/executeCommand","params":{"command":"latex.forwardSearch","arguments":[{"uri":chapter,"position":{"line":0,"character":6}}]}}));
+    let missing = server.until(|message| message["id"] == 2);
+    assert!(missing["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("missing"));
+    server.request(
+        3,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let finished = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(finished["params"]["status"], "success", "{finished}");
+    let forward = server.request(4, "workspace/executeCommand", json!({"command":"latex.forwardSearch","arguments":[{"uri":chapter,"position":{"line":0,"character":6}}]}));
+    assert_eq!(forward["rootUri"], main.as_str());
+    assert_eq!(forward["pdfUri"], finished["params"]["pdfUri"]);
+    let hit = &forward["locations"][0];
+    assert_eq!(hit["page"], 1, "{forward}");
+    assert!(hit["x"].as_f64().unwrap().is_finite());
+    let inverse = server.request(5, "workspace/executeCommand", json!({"command":"latex.inverseSearch","arguments":[{"uri":main,"page":hit["page"],"x":hit["x"],"y":hit["y"]}]}));
+    assert!(
+        inverse["locations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|location| location["uri"] == chapter.as_str()
+                && location["range"]["start"]["line"] == 0),
+        "{inverse}"
+    );
+    assert!(!marker.exists(), "SyncTeX launched an external command");
+    for (id, command, argument, expected) in [
+        (
+            6,
+            "latex.forwardSearch",
+            json!({"uri":chapter,"position":{"line":2,"character":3}}),
+            "UTF-16",
+        ),
+        (
+            7,
+            "latex.inverseSearch",
+            json!({"uri":main,"page":0,"x":0,"y":0}),
+            "one-based",
+        ),
+        (
+            8,
+            "latex.inverseSearch",
+            json!({"uri":main,"page":1,"x":-1,"y":0}),
+            "nonnegative",
+        ),
+    ] {
+        server.send(json!({"jsonrpc":"2.0","id":id,"method":"workspace/executeCommand","params":{"command":command,"arguments":[argument]}}));
+        let rejected = server.until(|message| message["id"] == id);
+        assert!(
+            rejected["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains(expected),
+            "{rejected}"
+        );
+    }
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":chapter,"languageId":"latex","version":1,"text":"Unsaved\n"}}),
+    );
+    server.send(json!({"jsonrpc":"2.0","id":9,"method":"workspace/executeCommand","params":{"command":"latex.forwardSearch","arguments":[{"uri":chapter,"position":{"line":0,"character":1}}]}}));
+    let unsaved = server.until(|message| message["id"] == 9);
+    assert!(unsaved["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("Save"));
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":chapter}}),
+    );
+    std::fs::write(chapter.to_file_path().unwrap(), "Changed\n").unwrap();
+    server.send(json!({"jsonrpc":"2.0","id":10,"method":"workspace/executeCommand","params":{"command":"latex.inverseSearch","arguments":[{"uri":main,"page":1,"x":0,"y":0}]}}));
+    let stale = server.until(|message| message["id"] == 10);
+    assert!(stale["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("changed"));
+    server.request(11, "shutdown", Value::Null);
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }

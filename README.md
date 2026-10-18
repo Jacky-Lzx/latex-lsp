@@ -23,6 +23,7 @@
 - 工作区索引：扫描 `.tex`、`.bib`、`.sty`、`.cls`；跟踪文件变更，优先使用编辑器中未保存的内容。
 - 后台编译：支持 latexmk、pdfLaTeX、XeLaTeX、LuaLaTeX、Tectonic 和自定义工具；根文件识别、取消、超时、状态查询、编辑器原生进度显示和可选的保存后编译。
 - 编译结果分析：错误、LaTeX/包警告、Overfull/Underfull 提示，以及 BibTeX/Biber 文献错误和警告，定位到子文件、文献条目和行号；结果提供 PDF、日志路径和输出摘要。只采用 latexmk 最后一遍 TeX 日志，避免保留已解决的引用警告。
+- SyncTeX 查询：源码行定位 PDF 页码/坐标，以及 PDF 坐标反查源码行；返回数据供编辑器或 PDF 预览插件使用，检查未保存来源和过期产物。
 
 解析时跳过 `%` 注释、`\verb`、`\lstinline` 和常见逐字环境（`verbatim`、`lstlisting`、`minted`、`comment`、`Verbatim`）。
 
@@ -138,6 +139,36 @@ end
 
 例如 Neovim 配置中可加入 `init_options = { build = { executable = 'xelatex', onSave = true } }`。手动使用 XeLaTeX/pdfLaTeX 时只运行一遍，需要多遍处理文献和交叉引用的项目建议使用 latexmk，并自行配置对应引擎参数。
 
+### SyncTeX 双向查询
+
+成功编译后，安装的 `synctex` 命令行工具可提供源码与 PDF 之间的映射。通过 `workspace/executeCommand` 调用：
+
+```json
+{
+  "command": "latex.forwardSearch",
+  "arguments": [{
+    "uri": "file:///project/chapter.tex",
+    "position": { "line": 12, "character": 4 }
+  }]
+}
+```
+
+返回 `{rootUri, pdfUri, locations: [{page, x, y, h, v, width, height}, ...]}`。源码 `position` 遵守 LSP 的零起始 UTF-16 约定，查询采用行级映射；PDF `page` 从 1 开始，`x` / `y` 从页面左上角计量，单位为 1/72 英寸。可选的 `h` / `v` / `width` / `height` 描述所在排版框。
+
+```json
+{
+  "command": "latex.inverseSearch",
+  "arguments": [{
+    "uri": "file:///project/main.tex",
+    "page": 1,
+    "x": 150.0,
+    "y": 135.0
+  }]
+}
+```
+
+反查也用源文件 `uri` 识别项目，返回 `{rootUri, pdfUri, locations: [Location, ...]}`，其中 `Location` 是可交给编辑器跳转的标准 LSP 位置，范围位于对应行首。查询可能返回多个候选或空列表，服务器不会自动启动 PDF 阅读器或编辑器。查询在后台执行，最多运行 5 秒、返回 256 项；要求输出目录内已有 PDF 和 `.synctex.gz` 或 `.synctex`。项目存在未保存内容、来源晚于同步记录，或者当前编译运行中/最近编译未成功时，会要求保存并重新编译。
+
 ## 开发
 
 ```sh
@@ -150,7 +181,7 @@ cargo test --locked -- --include-ignored
 
 测试包含 UTF-16/增量编辑、语法容错、跨文件导航、文献补全、磁盘/未保存内容同步，以及启动真实进程验证的 stdio 协议流程。
 
-代码按职责拆分：`text.rs` 处理位置与编辑，`syntax.rs` 解析 LaTeX/BibTeX，`workspace.rs` 管理文件索引与根文档，`features.rs` 实现语言功能，`navigation.rs` 处理工作区搜索、折叠和链接，`editing.rs` 处理快速修复、高亮和选择范围，`file_operations.rs` 维护文件移动后的引用，`build.rs` 管理后台编译，`build_log.rs` 分析日志，`recorder.rs` 读取实际输入记录，`config.rs` 校验配置，`lib.rs` 对接 LSP，`main.rs` 启动服务。
+代码按职责拆分：`text.rs` 处理位置与编辑，`syntax.rs` 解析 LaTeX/BibTeX，`workspace.rs` 管理文件索引与根文档，`features.rs` 实现语言功能，`navigation.rs` 处理工作区搜索、折叠和链接，`editing.rs` 处理快速修复、高亮和选择范围，`file_operations.rs` 维护文件移动后的引用，`build.rs` 管理后台编译，`build_log.rs` 分析日志，`recorder.rs` 读取实际输入记录，`synctex.rs` 查询源码/PDF 映射，`config.rs` 校验配置，`lib.rs` 对接 LSP，`main.rs` 启动服务。
 
 ## 当前范围
 
@@ -158,7 +189,7 @@ cargo test --locked -- --include-ignored
 
 自定义环境支持 `\newenvironment` / `\renewenvironment`、xparse 的 `\NewDocumentEnvironment` 等声明、`\NewEnviron` / `\RenewEnviron` 和 `\newtheorem`，提供补全、定义跳转、引用、悬浮、符号及跨文件重命名。改名时同时检查环境生成的同名宏和 `\end...` 宏，避免与已有命令冲突。
 
-目前不提供 PDF 预览、SyncTeX 跳转、格式化或数学语义检查；默认编译会生成 SyncTeX 数据。未定义引用的即时静态检查暂不报错，编译器提供的相关警告会显示在诊断中。定义和引用在整个工作区索引中查找；重命名要求该名字在索引中只有一个定义，存在歧义时会拒绝操作。内置命令不支持重命名。
+目前不内置 PDF 预览、格式化或数学语义检查；默认编译生成 SyncTeX 数据，可由预览插件接入双向查询。未定义引用的即时静态检查暂不报错，编译器提供的相关警告会显示在诊断中。定义和引用在整个工作区索引中查找；重命名要求该名字在索引中只有一个定义，存在歧义时会拒绝操作。内置命令不支持重命名。
 
 文件/目录重命名需要编辑器或文件管理插件发送 `workspace/willRenameFiles` 并应用返回的编辑，然后移动文件并发送 `workspace/didRenameFiles`。服务器会保留打开文档的版本、刷新磁盘索引，并停止使用旧输入路径的编译；不会自行移动文件。含 TeX 宏的路径无法静态解析，新路径含无法安全表达的特殊字符时会拒绝引用更新；显式配置的 `build.rootFile` 需在主文件改名后同步修改。
 

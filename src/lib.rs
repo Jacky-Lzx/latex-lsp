@@ -8,6 +8,7 @@ pub mod file_operations;
 pub mod navigation;
 pub mod path_completion;
 pub mod recorder;
+pub mod synctex;
 pub mod syntax;
 pub mod text;
 pub mod workspace;
@@ -186,6 +187,8 @@ impl LanguageServer for Backend {
                         "latex.build".into(),
                         "latex.cancelBuild".into(),
                         "latex.buildStatus".into(),
+                        "latex.forwardSearch".into(),
+                        "latex.inverseSearch".into(),
                         "latex.applyQuickFix".into(),
                     ],
                     ..Default::default()
@@ -365,6 +368,54 @@ impl LanguageServer for Backend {
                 Ok(Some(serde_json::to_value(response).unwrap()))
             }
             "latex.build" => self.builds.start(uri).await.map(Some),
+            "latex.forwardSearch" | "latex.inverseSearch" => {
+                let project = synctex::prepare(&*self.workspace.read().await, &uri)?;
+                let available = |root: &Url| {
+                    let status = self.builds.status(root);
+                    status["status"] == "idle"
+                        || (status["status"] == "success" && status["stale"] != true)
+                };
+                if !available(&project.root) {
+                    return Err(tower_lsp::jsonrpc::Error::invalid_params(
+                        "Finish a successful build before querying SyncTeX",
+                    ));
+                }
+                let worker_project = project.clone();
+                let value = argument.cloned().unwrap_or_default();
+                let inverse = params.command == "latex.inverseSearch";
+                let result = tokio::task::spawn_blocking(move || {
+                    if inverse {
+                        let request: synctex::InverseRequest = serde_json::from_value(value)
+                            .map_err(|error| {
+                                tower_lsp::jsonrpc::Error::invalid_params(format!(
+                                    "Invalid inverse search request: {error}"
+                                ))
+                            })?;
+                        synctex::inverse(&worker_project, &request)
+                    } else {
+                        let request: synctex::ForwardRequest = serde_json::from_value(value)
+                            .map_err(|error| {
+                                tower_lsp::jsonrpc::Error::invalid_params(format!(
+                                    "Invalid forward search request: {error}"
+                                ))
+                            })?;
+                        synctex::forward(&worker_project, &request)
+                    }
+                })
+                .await
+                .map_err(|error| {
+                    tower_lsp::jsonrpc::Error::invalid_params(format!(
+                        "SyncTeX task failed: {error}"
+                    ))
+                })??;
+                let current = synctex::prepare(&*self.workspace.read().await, &uri)?;
+                if current != project || !available(&current.root) {
+                    return Err(tower_lsp::jsonrpc::Error::invalid_params(
+                        "Build artifacts changed during the SyncTeX query; retry after compiling",
+                    ));
+                }
+                Ok(Some(result))
+            }
             "latex.cancelBuild" | "latex.buildStatus" => {
                 let root = self
                     .workspace

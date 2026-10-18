@@ -504,7 +504,7 @@ impl Outcome {
     }
 }
 
-fn capture(mut reader: impl Read) -> Vec<u8> {
+pub(crate) fn capture(mut reader: impl Read) -> Vec<u8> {
     let mut output = Vec::new();
     let mut buffer = [0; 8192];
     loop {
@@ -519,7 +519,7 @@ fn capture(mut reader: impl Read) -> Vec<u8> {
     output
 }
 
-fn kill_group(child: &mut Child) {
+pub(crate) fn kill_group(child: &mut Child) {
     #[cfg(unix)]
     // The compiler owns a new process group. Kill its descendants too, so TeX
     // engines spawned by latexmk cannot outlive a cancelled build.
