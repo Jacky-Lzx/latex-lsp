@@ -53,6 +53,111 @@ fn renames_labels_in_multiple_files_but_not_comments_or_verbatim() {
 }
 
 #[test]
+fn label_rename_preserves_spaced_names_and_keeps_cref_list_separators() {
+    let mut workspace = Workspace::default();
+    let declarations = r"\label{sec:old}\label{ sec:old }";
+    let declaration = insert(&mut workspace, "chapter.tex", declarations, None);
+    let mut source = "😀 ".to_owned();
+    for command in ["ref", "eqref", "pageref", "autoref", "vref", "nameref"] {
+        source.push_str(&format!(
+            "\\{command}{{sec:old}} \\{command}{{ sec:old }}\n"
+        ));
+    }
+    source.push_str(r"\cref{other, sec:old }\Cref{sec:old,other}");
+    let main = insert(&mut workspace, "main.tex", &source, Some(7));
+    assert!(workspace.documents[&declaration]
+        .syntax
+        .diagnostics
+        .is_empty());
+    let text = &workspace.documents[&main].text;
+    let position = text.position(source.find("sec:old").unwrap() + 2);
+    assert_eq!(features::definitions(&workspace, &main, position).len(), 1);
+    assert_eq!(
+        features::references(&workspace, &main, position, true).len(),
+        9
+    );
+    let edit = features::rename(&workspace, &main, position, "sec:new")
+        .unwrap()
+        .unwrap()
+        .changes
+        .unwrap();
+    assert_eq!(
+        edits_result(declarations, &edit[&declaration]),
+        r"\label{sec:new}\label{ sec:old }"
+    );
+    let expected = source
+        .replace("{sec:old}", "{sec:new}")
+        .replace("other, sec:old }", "other, sec:new }")
+        .replace("{sec:old,other}", "{sec:new,other}");
+    assert_eq!(edits_result(&source, &edit[&main]), expected);
+    for command in ["ref", "eqref", "pageref", "autoref", "vref", "nameref"] {
+        let start = source.find(&format!("\\{command}{{ sec:old }}")).unwrap();
+        let position = text.position(start + command.len() + 4);
+        assert!(
+            features::definitions(&workspace, &main, position).is_empty(),
+            "{command}"
+        );
+        assert!(
+            features::prepare_rename(&workspace, &main, position)
+                .unwrap()
+                .is_none(),
+            "{command}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex and refcount"]
+fn real_label_rename_preserves_independent_spaced_keys_and_reference_values() {
+    use latex_lsp::{build, config::BuildConfig};
+    use std::sync::atomic::AtomicBool;
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = root.join("main.tex");
+    let source = concat!(
+        "\\documentclass{article}\\usepackage{refcount}\n\\begin{document}\n",
+        "\\refstepcounter{section}\\label{plain}\n",
+        "\\refstepcounter{section}\\label{ plain }\n",
+        "\\ref{plain}\\ref{ plain }\n",
+        "\\typeout{WITNESS=\\getrefnumber{changed};\\getrefnumber{ plain }}\n",
+        "\\end{document}\n",
+    );
+    std::fs::write(&main, source).unwrap();
+    let uri = Url::from_file_path(&main).unwrap();
+    let mut workspace = Workspace::default();
+    workspace.add_root(root.into());
+    let position = workspace.documents[&uri]
+        .text
+        .position(source.find("plain").unwrap());
+    let changes = features::rename(&workspace, &uri, position, "changed")
+        .unwrap()
+        .unwrap()
+        .changes
+        .unwrap();
+    let changed = edits_result(source, &changes[&uri]);
+    assert_eq!(changed, source.replace("{plain}", "{changed}"));
+    std::fs::write(&main, changed).unwrap();
+    let config = BuildConfig {
+        executable: "pdflatex".into(),
+        ..Default::default()
+    };
+    let first = build::run(&main, &config, &AtomicBool::new(false));
+    assert_eq!(first.status, "success", "{}", first.output);
+    let outcome = build::run(&main, &config, &AtomicBool::new(false));
+    assert_eq!(outcome.status, "success", "{}", outcome.output);
+    assert!(outcome.output.contains("WITNESS=1;2"), "{}", outcome.output);
+    assert!(
+        outcome
+            .diagnostics
+            .values()
+            .flatten()
+            .all(|diagnostic| !diagnostic.message.contains("undefined")),
+        "{:?}",
+        outcome.diagnostics
+    );
+}
+
+#[test]
 fn citation_rename_updates_bibtex_keys_and_only_matching_citations() {
     let mut workspace = Workspace::default();
     let bib = insert(

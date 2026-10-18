@@ -23,6 +23,30 @@ fn write(root: &Path, name: &str, source: &str) {
 }
 
 #[test]
+fn distinct_spaced_label_names_do_not_report_normalized_duplicate_definitions() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    write(
+        root,
+        "main.tex",
+        "\\documentclass{article}\\label{key}\\input{chapter}",
+    );
+    write(root, "chapter.tex", r"\label{ key }");
+    let mut workspace = Workspace::default();
+    workspace.add_root(root.into());
+    let main = uri(root, "main.tex");
+    let child = uri(root, "chapter.tex");
+    assert!(workspace.diagnostics(&main).is_empty());
+    assert!(workspace.diagnostics(&child).is_empty());
+    workspace.documents.insert(
+        child.clone(),
+        Document::new(&child, r"\label{key}".into(), Some(1)),
+    );
+    assert_eq!(cross_file(&workspace, &main).len(), 1);
+    assert_eq!(cross_file(&workspace, &child).len(), 1);
+}
+
+#[test]
 fn duplicate_labels_and_bibliography_keys_report_related_definitions_in_the_same_project() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();

@@ -101,6 +101,8 @@ fn completion_in_the_middle_replaces_the_remaining_word() {
     for (marked, label, expected) in [
         (r"\se|ction{Title}", "section", r"\section{Title}"),
         (r"\ref{sec:|旧}", "sec:中文", r"\ref{sec:中文}"),
+        (r"\ref{ sec:|旧 }", "sec:中文", r"\ref{sec:中文}"),
+        ("\\ref{\r\n sec:|旧 \r\n}", "sec:中文", r"\ref{sec:中文}"),
         (
             r"\cite{old, kn|uth1984}",
             "knuth1984",

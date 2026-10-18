@@ -216,6 +216,10 @@ pub fn is_reference(name: &str) -> bool {
     )
 }
 
+pub(crate) fn is_single_reference(name: &str) -> bool {
+    is_reference(name) && !matches!(name, "cref" | "Cref")
+}
+
 pub(crate) fn is_static_key(value: &str) -> bool {
     !value.is_empty()
         && !value.chars().any(|ch| {
@@ -723,7 +727,7 @@ impl Syntax {
                                     ..entry()
                                 });
                             }
-                            "label" => result.labels.push(entry()),
+                            "label" if is_static_key(&arg.value) => result.labels.push(entry()),
                             "bibitem" => result.citations.push(entry()),
                             "begin" => {
                                 let env = arg.value.as_str();

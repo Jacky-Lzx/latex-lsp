@@ -306,6 +306,12 @@ pub(crate) fn undefined_reference_ranges(text: &Text, line: u32, message: &str) 
         {
             continue;
         }
+        if !citation && crate::syntax::is_single_reference(&command.name) {
+            if crate::syntax::is_static_key(key) && argument.value == key {
+                ranges.push(text.range(argument.span.start, argument.span.end));
+            }
+            continue;
+        }
         let mut start = argument.span.start;
         for value in argument.value.split(',') {
             let span = crate::syntax::trimmed_span(&text.source, start..start + value.len());
@@ -1591,7 +1597,7 @@ mod tests {
     fn undefined_references_highlight_keys_in_lists_multiline_calls_and_utf16_text() {
         let directory = tempfile::tempdir().unwrap();
         let main = directory.path().join("main.tex");
-        let source = "😀 \\ref{missing} \\cref{found, missing} \\cite{lost}\n% \\ref{missing}\n\\verb|\\ref{missing}|\n\\ref{\nmissing}\n\\ref{O'Connor}\n";
+        let source = "😀 \\ref{missing} \\cref{found, missing} \\cite{lost}\n% \\ref{missing}\n\\verb|\\ref{missing}|\n\\ref\n{missing}\n\\ref{O'Connor}\n";
         std::fs::write(&main, source).unwrap();
         let log = "(./main.tex\nLaTeX Warning: Reference `missing' on page 1 undefined on input line 1.\nPackage natbib Warning: Citation `lost' on page 1 undefined on input line 1.\nLaTeX Warning: Reference `missing' on page 1 undefined on input line 2.\nLaTeX Warning: Reference `missing' on page 1 undefined on input line 3.\nLaTeX Warning: Reference `missing' on page 1 undefined on input line 5.\nLaTeX Warning: Reference `O'Connor' undefined on input line 6.\n)";
         let diagnostics = parse(&main, log);
@@ -1618,6 +1624,35 @@ mod tests {
         assert_eq!(value(diagnostics[4].range), "\\verb|\\ref{missing}|");
         assert_eq!(value(diagnostics[5].range), "missing");
         assert_eq!(value(diagnostics[6].range), "O'Connor");
+    }
+
+    #[test]
+    fn single_reference_ranges_do_not_normalize_whitespace_but_cref_lists_keep_key_ranges() {
+        let directory = tempfile::tempdir().unwrap();
+        let main = directory.path().join("main.tex");
+        let source = "😀 \\ref{missing} \\ref{ missing } \\cref{found, missing }\n";
+        std::fs::write(&main, source).unwrap();
+        let log = "(./main.tex\nLaTeX Warning: Reference `missing' on page 1 undefined on input line 1.\nLaTeX Warning: Reference ` missing ' on page 1 undefined on input line 1.\n)\n";
+        let diagnostics = parse(&main, log);
+        let errors = &diagnostics[&Url::from_file_path(&main).unwrap()];
+        assert_eq!(errors.len(), 3, "{errors:?}");
+        let text = Text::new(source.into());
+        let precise: Vec<_> = errors
+            .iter()
+            .filter(|error| !error.message.contains("` missing '"))
+            .collect();
+        assert_eq!(precise.len(), 2);
+        for (error, start) in precise.iter().zip([
+            source.find("missing").unwrap(),
+            source.rfind("missing").unwrap(),
+        ]) {
+            assert_eq!(error.range, text.range(start, start + 7));
+        }
+        let fallback = errors
+            .iter()
+            .find(|error| error.message.contains("` missing '"))
+            .unwrap();
+        assert_eq!(fallback.range, text.range(0, source.len() - 1));
     }
 
     #[test]

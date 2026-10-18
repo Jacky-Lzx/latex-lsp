@@ -71,7 +71,10 @@ fn raw_target(doc: &Document, offset: usize) -> Option<Target<'_>> {
             };
             if let Some(kind) = kind {
                 if arg.span.start <= offset && offset <= arg.span.end {
-                    if matches!(kind, TargetKind::Environment | TargetKind::Counter)
+                    if (matches!(kind, TargetKind::Environment | TargetKind::Counter)
+                        || kind == TargetKind::Label
+                            && (command.name == "label"
+                                || syntax::is_single_reference(&command.name)))
                         && !syntax::is_static_key(&arg.value)
                     {
                         return None;
@@ -401,7 +404,9 @@ fn argument_context(doc: &Document, offset: usize) -> Option<(&Command, Span<usi
         .iter()
         .rev()
         .find(|cmd| cmd.span.end <= offset)?;
-    if matches!(command.name.as_str(), "begin" | "end") {
+    if matches!(command.name.as_str(), "begin" | "end")
+        || syntax::is_single_reference(&command.name)
+    {
         let span = syntax::active_name_argument(
             source,
             syntax::skip_space(source, command.span.end),
@@ -475,7 +480,9 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
             .map(char::len_utf8)
             .sum::<usize>();
         let (replacement_range, additional_edits) =
-            if matches!(command.name.as_str(), "begin" | "end") {
+            if matches!(command.name.as_str(), "begin" | "end")
+                || syntax::is_single_reference(&command.name)
+            {
                 let Some(name) = syntax::active_name_argument(
                     &doc.text.source,
                     syntax::skip_space(&doc.text.source, command.span.end),
@@ -949,7 +956,10 @@ fn all_references(
                 continue;
             }
             if let Some(arg) = &command.argument {
-                if target.kind == TargetKind::Environment {
+                if target.kind == TargetKind::Environment
+                    || target.kind == TargetKind::Label
+                        && syntax::is_single_reference(&command.name)
+                {
                     if arg.value == target.name {
                         result.push(Location {
                             uri: uri.clone(),
