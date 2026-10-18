@@ -91,6 +91,78 @@ fn dependencies_links_and_completion_prefer_the_compilers_working_directory() {
 }
 
 #[test]
+fn include_appends_tex_instead_of_resolving_existing_files_with_other_or_missing_extensions() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    for (name,source) in [
+        ("main.tex", "\\documentclass{article}\\input{chapter.ltx}\\include{chapter.ltx}\\include{chapter}\\includeonly{chapter.ltx, chapter}"),
+        ("chapter.ltx", "\\typeout{INPUT LTX SOURCE}Ltx source."),
+        ("chapter.ltx.tex", "\\typeout{INCLUDE LTX TEX SOURCE}Ltx Tex source."),
+        ("chapter.tex", "\\typeout{INCLUDE TEX SOURCE}Tex source."),
+        ("chapter", "\\typeout{WRONG EXTENSIONLESS SOURCE}Wrong source."),
+    ] { std::fs::write(root.join(name),source).unwrap(); }
+    let mut workspace = Workspace::default();
+    workspace.add_root(root.into());
+    let main = uri(root, "main.tex");
+    assert_eq!(
+        workspace.project_documents(&main),
+        [
+            main.clone(),
+            uri(root, "chapter.ltx.tex"),
+            uri(root, "chapter.tex")
+        ]
+        .into()
+    );
+    let links = navigation::document_links(&workspace, &main);
+    assert_eq!(
+        links
+            .iter()
+            .map(|link| link.target.clone().unwrap())
+            .collect::<Vec<_>>(),
+        vec![
+            uri(root, "chapter.ltx.tex"),
+            uri(root, "chapter.ltx.tex"),
+            uri(root, "chapter.tex"),
+            uri(root, "chapter.ltx.tex"),
+            uri(root, "chapter.tex")
+        ]
+    );
+    std::fs::remove_file(root.join("chapter.ltx.tex")).unwrap();
+    let links = navigation::document_links(&workspace, &main);
+    assert_eq!(links.len(), 3);
+    assert_eq!(links[0].target, Some(uri(root, "chapter.ltx")));
+}
+
+#[test]
+#[ignore = "requires latexmk"]
+fn actual_include_filename_selection_matches_explicit_tex_suffix_resolution() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    for (name,source) in [
+        ("main.tex", "\\documentclass{article}\\begin{document}\\input{chapter.ltx}\\include{chapter.ltx}\\include{chapter}\\end{document}"),
+        ("chapter.ltx", "\\typeout{INPUT LTX SOURCE}Ltx source."),
+        ("chapter.ltx.tex", "\\typeout{INCLUDE LTX TEX SOURCE}Ltx Tex source."),
+        ("chapter.tex", "\\typeout{INCLUDE TEX SOURCE}Tex source."),
+        ("chapter", "\\typeout{WRONG EXTENSIONLESS SOURCE}Wrong source."),
+    ] { std::fs::write(root.join(name),source).unwrap(); }
+    let outcome = build::run(
+        &root.join("main.tex"),
+        &Default::default(),
+        &Default::default(),
+    );
+    assert_eq!(outcome.status, "success", "{}", outcome.output);
+    for marker in ["INCLUDE LTX TEX SOURCE", "INCLUDE TEX SOURCE"] {
+        assert!(
+            outcome.output.contains(marker),
+            "{marker}: {}",
+            outcome.output
+        );
+    }
+    assert!(!outcome.output.contains("WRONG EXTENSIONLESS SOURCE"));
+    assert!(!outcome.output.contains("INPUT LTX SOURCE"));
+}
+
+#[test]
 fn renames_update_the_selected_file_and_preserve_root_relative_child_inputs() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();

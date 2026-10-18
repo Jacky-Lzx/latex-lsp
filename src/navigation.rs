@@ -1,6 +1,6 @@
 use crate::{
     features, syntax,
-    workspace::{resolve_path, root_directive, Document, Workspace},
+    workspace::{resolve_file_path, resolve_path, root_directive, Document, Workspace},
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -220,12 +220,11 @@ fn file_link(
     extensions: &[&str],
     graphics: &[PathBuf],
     root: &Url,
+    command: &str,
 ) -> Option<Url> {
     for origin in std::iter::once(root).chain(std::iter::once(uri).filter(|uri| *uri != root)) {
-        for extension in extensions {
-            if let Some(target) = resolve_path(origin, name, extension) {
-                return Some(target);
-            }
+        if let Some(target) = resolve_file_path(origin, command, name, extensions) {
+            return Some(target);
         }
     }
     for directory in graphics {
@@ -296,9 +295,7 @@ pub(crate) fn document_links_in(workspace: &Workspace, uri: &Url, root: &Url) ->
         let Some(argument) = &command.argument else {
             continue;
         };
-        let extensions = match syntax::file_extensions(&command.name) {
-            // \input accepts explicit source extensions, but only infers .tex.
-            Some(extensions) if command.name == "input" => &extensions[..1],
+        let extensions = match syntax::inferred_file_extensions(&command.name) {
             Some(extensions) => extensions,
             None if matches!(command.name.as_str(), "url" | "href") => &[],
             None => continue,
@@ -327,6 +324,7 @@ pub(crate) fn document_links_in(workspace: &Workspace, uri: &Url, root: &Url) ->
                         &[]
                     },
                     root,
+                    &command.name,
                 )
             };
             if let Some(target) = target {

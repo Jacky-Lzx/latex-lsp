@@ -181,6 +181,41 @@ pub fn file_list(name: &str) -> bool {
     )
 }
 
+/// Completion can offer explicit source extensions that TeX does not infer.
+pub(crate) fn inferred_file_extensions(name: &str) -> Option<&'static [&'static str]> {
+    let extensions = file_extensions(name)?;
+    Some(if name == "input" {
+        &extensions[..1]
+    } else {
+        extensions
+    })
+}
+
+pub(crate) fn file_lookup_names<'a>(
+    command: &str,
+    value: &'a str,
+) -> impl Iterator<Item = std::borrow::Cow<'a, str>> {
+    let recognized = std::path::Path::new(value)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            ["tex", "sty", "cls", "def", "clo", "fd", "aux", "bbl", "ldf"].contains(&extension)
+        });
+    let append = !value.is_empty()
+        && match command {
+            "include" | "includeonly" => !value.ends_with(".tex"),
+            "input" => !recognized,
+            _ => false,
+        };
+    let preferred = if append {
+        std::borrow::Cow::Owned(format!("{value}.tex"))
+    } else {
+        std::borrow::Cow::Borrowed(value)
+    };
+    std::iter::once(preferred)
+        .chain((command == "input" && append).then_some(std::borrow::Cow::Borrowed(value)))
+}
+
 fn declares_command(name: &str) -> bool {
     matches!(
         name,

@@ -1,6 +1,6 @@
 use crate::{
-    features, graphics, navigation,
-    workspace::{normalize_path, resolve_path, Document, Workspace},
+    features, graphics, navigation, syntax,
+    workspace::{normalize_path, resolve_file_path, resolve_path, Document, Workspace},
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -87,6 +87,7 @@ fn replacement(
     original: &str,
     graphics: &[PathBuf],
     root: &Url,
+    command: Option<&str>,
 ) -> Result<String> {
     let target_path = target
         .to_file_path()
@@ -101,14 +102,21 @@ fn replacement(
         .extension()
         .and_then(|ext| ext.to_str())
         .unwrap_or_default();
-    let origin = if resolve_path(root, original, extension).as_ref() == Some(target) {
+    let inferred = command
+        .and_then(syntax::inferred_file_extensions)
+        .unwrap_or(&["tex"]);
+    let resolve = |origin| match command {
+        Some(command) => resolve_file_path(origin, command, original, inferred),
+        None => resolve_path(origin, original, extension),
+    };
+    let origin = if resolve(root).as_ref() == Some(target) {
         root.clone()
-    } else if resolve_path(uri, original, extension).as_ref() == Some(target) {
+    } else if resolve(uri).as_ref() == Some(target) {
         uri.clone()
     } else {
         root.clone()
     };
-    let graphic_origin = if resolve_path(&origin, original, extension).as_ref() != Some(target) {
+    let graphic_origin = if resolve(&origin).as_ref() != Some(target) {
         graphics.iter().find(|directory| {
             graphics::resolve(directory, original, extension).as_ref() == Some(target)
         })
@@ -136,7 +144,11 @@ fn replacement(
     };
     let mut value = safe_path(&path)?;
     if !original.ends_with(&format!(".{extension}")) {
-        if let Some(extension) = path.extension().and_then(|ext| ext.to_str()) {
+        if let Some(extension) = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .filter(|extension| inferred.contains(extension))
+        {
             value.truncate(value.len() - extension.len() - 1);
         }
     }
@@ -253,23 +265,59 @@ pub fn will_rename(workspace: &Workspace, files: &[FileRename]) -> Result<Option
                 // Retain spelling in contexts that do not require a change too:
                 // every consumer of a shared parameter must agree on its edit.
                 let new_text = if target_changed || document_changed || root_changed {
-                    let image = doc.syntax.commands.iter().any(|command| {
-                        command.name == "includegraphics"
+                    let command = doc.syntax.commands.iter().find(|command| {
+                        syntax::file_extensions(&command.name).is_some()
                             && command.argument.as_ref().is_some_and(|argument| {
                                 argument.span.start <= start && argument.span.end >= end
                             })
                     });
+                    let required_extension = command.and_then(|command| {
+                        let extension = match command.name.as_str() {
+                            "usepackage" | "RequirePackage" => "sty",
+                            "documentclass" | "LoadClass" => "cls",
+                            "include" | "includeonly" => "tex",
+                            _ => return None,
+                        };
+                        Some((command, extension))
+                    });
+                    if let Some((command, extension)) =
+                        required_extension.filter(|_| target_changed)
+                    {
+                        let renamed = renames
+                            .uri(&target)
+                            .to_file_path()
+                            .map_err(|_| Error::invalid_params("Invalid renamed file URI"))?;
+                        if target
+                            .to_file_path()
+                            .ok()
+                            .as_ref()
+                            .and_then(|path| path.extension())
+                            != renamed.extension()
+                            && renamed.extension().and_then(|extension| extension.to_str())
+                                != Some(extension)
+                        {
+                            return Err(Error::invalid_params(format!(
+                                "File loaded by \\{} must retain the .{extension} extension",
+                                command.name
+                            )));
+                        }
+                    }
                     replacement(
                         &renames,
                         uri,
                         &target,
                         original,
-                        if image { &graphics } else { &[] },
+                        if command.is_some_and(|command| command.name == "includegraphics") {
+                            &graphics
+                        } else {
+                            &[]
+                        },
                         if link.tooltip.as_deref() == Some("TeX root document") {
                             uri
                         } else {
                             root
                         },
+                        command.map(|command| command.name.as_str()),
                     )?
                 } else {
                     original.into()

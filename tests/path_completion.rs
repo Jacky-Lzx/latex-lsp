@@ -197,6 +197,50 @@ fn completions_find_project_root_files_parent_paths_and_prefer_build_root_files(
 }
 
 #[test]
+fn input_completion_omits_shadowed_files_and_deduplicates_identical_insertions() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::create_dir(root.join("sections")).unwrap();
+    for (name, source) in [
+        (
+            "main.tex",
+            "\\documentclass{article}\\input{sections/child}",
+        ),
+        ("chapter.ltx", "Shadowed."),
+        ("chapter.ltx.tex", "Selected."),
+        ("sections/child.tex", ""),
+        (
+            "sections/chapter.ltx",
+            "Shadowed from the child directory too.",
+        ),
+    ] {
+        std::fs::write(root.join(name), source).unwrap();
+    }
+    let mut workspace = Workspace::default();
+    workspace.add_root(root.into());
+    let child = Url::from_file_path(root.join("sections/child.tex")).unwrap();
+    assert_eq!(
+        apply_completion(&mut workspace, &child, "\\input{chap|}", "chapter.ltx.tex"),
+        "\\input{chapter.ltx}"
+    );
+    let source = "\\input{chap";
+    workspace
+        .documents
+        .insert(child.clone(), Document::new(&child, source.into(), Some(2)));
+    let items = features::completion(
+        &workspace,
+        &child,
+        Text::new(source.into()).position(source.len()),
+    );
+    assert_eq!(items.len(), 1, "{items:?}");
+    assert_eq!(items[0].label, "chapter.ltx.tex");
+    assert_eq!(
+        items[0].detail.as_deref(),
+        root.join("chapter.ltx.tex").to_str()
+    );
+}
+
+#[test]
 fn file_completions_filter_types_hidden_files_and_ignored_regions_and_bound_results() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();

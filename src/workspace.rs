@@ -226,8 +226,15 @@ impl Workspace {
                         values
                             .into_iter()
                             .filter_map(|value| {
-                                resolve_path(root, value.trim(), extension)
-                                    .or_else(|| resolve_path(uri, value.trim(), extension))
+                                resolve_file_path(root, &command.name, value.trim(), &[extension])
+                                    .or_else(|| {
+                                        resolve_file_path(
+                                            uri,
+                                            &command.name,
+                                            value.trim(),
+                                            &[extension],
+                                        )
+                                    })
                             })
                             .collect()
                     })
@@ -562,6 +569,19 @@ fn file_uri(path: &Path) -> Result<Url, String> {
         return Err("Root document must be a saved .tex or .ltx file".into());
     }
     Url::from_file_path(path).map_err(|_| "Cannot convert root document path to URI".into())
+}
+
+pub(crate) fn resolve_file_path(
+    uri: &Url,
+    command: &str,
+    value: &str,
+    extensions: &[&str],
+) -> Option<Url> {
+    crate::syntax::file_lookup_names(command, value).find_map(|name| {
+        extensions
+            .iter()
+            .find_map(|extension| resolve_path(uri, &name, extension))
+    })
 }
 
 pub fn resolve_path(uri: &Url, value: &str, extension: &str) -> Option<Url> {

@@ -104,6 +104,117 @@ fn includeonly_paths_are_linked_and_renamed_without_becoming_input_dependencies(
     assert!(changed.contains("% \\includeonly{chapters/old}"));
 }
 
+fn extension_project(root: &Path) -> Workspace {
+    std::fs::create_dir(root.join("chapters")).unwrap();
+    for (name,source) in [
+        ("main.tex", "\\documentclass{article}\n\\includeonly{chapters/selected}\n\\begin{document}\n\\input{chapters/input}\n\\include{chapters/selected}\n\\end{document}\n"),
+        ("chapters/input.tex", "% !TeX root = ../main\n\\typeout{INPUT SOURCE}Input text.\n"),
+        ("chapters/selected.tex", "\\typeout{INCLUDED SOURCE}Included text.\n"),
+    ] { std::fs::write(root.join(name),source).unwrap(); }
+    let mut workspace = Workspace::default();
+    workspace.add_root(root.into());
+    workspace
+}
+
+fn extension_renames(root: &Path) -> [FileRename; 3] {
+    [
+        rename(root, "main.tex", "paper.ltx"),
+        rename(root, "chapters/input.tex", "chapters/input.ltx"),
+        rename(root, "chapters/selected.tex", "chapters/renamed.tex"),
+    ]
+}
+
+#[test]
+fn changed_extensions_are_retained_when_tex_cannot_infer_them_and_packages_keep_required_extensions(
+) {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let workspace = extension_project(root);
+    let changes = edits(
+        file_operations::will_rename(&workspace, &extension_renames(root))
+            .unwrap()
+            .unwrap(),
+    );
+    let main = uri(root, "main.tex");
+    let changed = apply(
+        &workspace.documents[&main].text.source,
+        changes[&main].clone(),
+    );
+    assert!(changed.contains("\\input{chapters/input.ltx}"));
+    assert!(changed.contains("\\include{chapters/renamed}"));
+    assert!(changed.contains("\\includeonly{chapters/renamed}"));
+    let child = uri(root, "chapters/input.tex");
+    assert!(apply(
+        &workspace.documents[&child].text.source,
+        changes[&child].clone()
+    )
+    .contains("% !TeX root = ../paper.ltx"));
+    let error = file_operations::will_rename(
+        &workspace,
+        &[rename(
+            root,
+            "chapters/selected.tex",
+            "chapters/selected.ltx",
+        )],
+    )
+    .unwrap_err();
+    assert!(error.message.contains(".tex"));
+
+    let directory = tempfile::tempdir().unwrap();
+    let workspace = project(directory.path());
+    for (old, new, extension) in [
+        ("pkg.sty", "pkg.cls", ".sty"),
+        ("local.cls", "local.sty", ".cls"),
+    ] {
+        let error = file_operations::will_rename(&workspace, &[rename(directory.path(), old, new)])
+            .unwrap_err();
+        assert!(error.message.contains(extension), "{error:?}");
+    }
+}
+
+#[test]
+#[ignore = "requires latexmk"]
+fn changing_source_extensions_preserves_input_includeonly_and_magic_root_compilation() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let mut workspace = extension_project(root);
+    let files = extension_renames(root);
+    let edit = file_operations::will_rename(&workspace, &files)
+        .unwrap()
+        .unwrap();
+    for (uri, changes) in edits(edit) {
+        std::fs::write(
+            uri.to_file_path().unwrap(),
+            apply(&workspace.documents[&uri].text.source, changes),
+        )
+        .unwrap();
+    }
+    for file in &files {
+        std::fs::rename(
+            Url::parse(&file.old_uri).unwrap().to_file_path().unwrap(),
+            Url::parse(&file.new_uri).unwrap().to_file_path().unwrap(),
+        )
+        .unwrap();
+    }
+    file_operations::did_rename(&mut workspace, &files).unwrap();
+    let paper = uri(root, "paper.ltx");
+    assert_eq!(
+        workspace
+            .root_document(&uri(root, "chapters/input.ltx"))
+            .unwrap(),
+        paper
+    );
+    let outcome = latex_lsp::build::run(
+        &root.join("paper.ltx"),
+        &Default::default(),
+        &Default::default(),
+    );
+    assert_eq!(outcome.status, "success", "{}", outcome.output);
+    assert!(outcome.output.contains("INPUT SOURCE"));
+    assert!(outcome.output.contains("INCLUDED SOURCE"));
+    assert!(outcome.pdf.unwrap().ends_with("paper.pdf"));
+}
+
 #[test]
 #[ignore = "requires latexmk"]
 fn selected_chapters_still_compile_after_includeonly_references_are_renamed() {

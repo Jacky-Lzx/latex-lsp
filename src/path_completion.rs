@@ -1,5 +1,9 @@
 use crate::{syntax, workspace::Workspace};
-use std::{collections::BTreeMap, ops::Range, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ops::Range,
+    path::Path,
+};
 use tower_lsp::lsp_types::*;
 
 pub fn complete(
@@ -34,6 +38,7 @@ pub fn complete(
         .map(|root| vec![root])
         .unwrap_or_else(|_| workspace.source_roots(uri));
     let mut candidates = BTreeMap::new();
+    let mut insertions = BTreeSet::new();
     let mut directories = roots
         .iter()
         .chain(std::iter::once(uri).filter(|uri| !roots.contains(uri)))
@@ -49,6 +54,9 @@ pub fn complete(
         directories.extend(crate::graphics::directories(workspace, uri));
     }
     for parent in directories {
+        let Ok(origin) = Url::from_file_path(parent.join("__latex_lsp_completion__.tex")) else {
+            continue;
+        };
         let Ok(entries) = std::fs::read_dir(parent.join(directory)) else {
             continue;
         };
@@ -97,6 +105,25 @@ pub fn complete(
                 if !explicit_extension && extensions.first() == Some(&extension) {
                     new_text.truncate(new_text.len() - extension.len() - 1);
                 }
+            }
+            if !folder {
+                let resolved = crate::workspace::resolve_file_path(
+                    &origin,
+                    command,
+                    &new_text,
+                    syntax::inferred_file_extensions(command).unwrap(),
+                );
+                let candidate = entry
+                    .path()
+                    .canonicalize()
+                    .ok()
+                    .and_then(|path| Url::from_file_path(path).ok());
+                if resolved != candidate {
+                    continue;
+                }
+            }
+            if !insertions.insert(new_text.clone()) {
+                continue;
             }
             candidates.insert(
                 label.clone(),
