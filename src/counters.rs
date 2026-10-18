@@ -69,49 +69,6 @@ fn closed(source: &str, start: usize, open: u8) -> Option<usize> {
         .map(|(_, end)| syntax::skip_space(source, end))
 }
 
-fn active(source: &str, start: usize, open: u8, cursor: usize) -> Option<Range<usize>> {
-    if source.as_bytes().get(start) != Some(&open) || cursor <= start {
-        return None;
-    }
-    let close = if open == b'{' { b'}' } else { b']' };
-    let span = if let Some((argument, _)) = syntax::group(source, start, open, close) {
-        argument.span
-    } else {
-        start + 1..source.len()
-    };
-    if cursor > span.end {
-        return None;
-    }
-    let prefix = source[span.start..cursor].trim_start();
-    if !prefix.is_empty() && !syntax::is_static_key(prefix) {
-        return None;
-    }
-    let value = &source[span.clone()];
-    let value = if source.as_bytes().get(span.end) == Some(&close) {
-        value
-    } else {
-        value.split(['\r', '\n']).next().unwrap_or_default()
-    }
-    .trim();
-    if !value.is_empty() && !syntax::is_static_key(value) {
-        return None;
-    }
-    let start = cursor - prefix.len();
-    let end = cursor
-        + source[cursor..span.end]
-            .chars()
-            .take_while(|ch| {
-                !ch.is_whitespace()
-                    && !matches!(
-                        ch,
-                        '{' | '}' | '[' | ']' | '\\' | '%' | ',' | '#' | '$' | '&' | '^' | '~'
-                    )
-            })
-            .map(char::len_utf8)
-            .sum::<usize>();
-    Some(start..end)
-}
-
 fn context(doc: &Document, command: &Command, cursor: usize) -> Option<Range<usize>> {
     let source = &doc.text.source;
     let mut at = command.span.end;
@@ -123,23 +80,28 @@ fn context(doc: &Document, command: &Command, cursor: usize) -> Option<Range<usi
     match command.name.as_str() {
         "setcounter" | "addtocounter" | "stepcounter" | "refstepcounter" | "usecounter"
         | "value" | "arabic" | "roman" | "Roman" | "alph" | "Alph" | "fnsymbol"
-        | "aliascntresetthe" => active(source, at, b'{', cursor),
+        | "aliascntresetthe" => syntax::active_static_argument(source, at, b'{', cursor),
         "counterwithin" | "counterwithout" | "numberwithin" | "@addtoreset"
         | "@removefromreset" => {
             if source.as_bytes().get(at) == Some(&b'[') {
                 at = closed(source, at, b'[')?;
             }
-            active(source, at, b'{', cursor)
-                .or_else(|| active(source, closed(source, at, b'{')?, b'{', cursor))
+            syntax::active_static_argument(source, at, b'{', cursor).or_else(|| {
+                syntax::active_static_argument(source, closed(source, at, b'{')?, b'{', cursor)
+            })
         }
-        "newcounter" => active(source, closed(source, at, b'{')?, b'[', cursor),
-        "newaliascnt" => active(source, closed(source, at, b'{')?, b'{', cursor),
+        "newcounter" => {
+            syntax::active_static_argument(source, closed(source, at, b'{')?, b'[', cursor)
+        }
+        "newaliascnt" => {
+            syntax::active_static_argument(source, closed(source, at, b'{')?, b'{', cursor)
+        }
         "newtheorem" if !starred => {
             at = closed(source, at, b'{')?;
             if source.as_bytes().get(at) == Some(&b'[') {
-                active(source, at, b'[', cursor)
+                syntax::active_static_argument(source, at, b'[', cursor)
             } else {
-                active(source, closed(source, at, b'{')?, b'[', cursor)
+                syntax::active_static_argument(source, closed(source, at, b'{')?, b'[', cursor)
             }
         }
         _ => None,

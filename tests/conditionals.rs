@@ -238,3 +238,239 @@ fn real_conditional_renames_preserve_true_false_and_local_group_behavior() {
     assert_eq!(states(&first.output), states(&second.output));
     assert_eq!(states(&second.output).len(), 5);
 }
+
+#[test]
+fn ifthen_and_etoolbox_boolean_declarations_track_names_operations_and_generated_commands() {
+    for declaration in ["newboolean", "provideboolean", "newbool", "providebool"] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let definitions =
+            format!("\\{declaration}{{draft}}\n\\newcommand{{\\draft}}{{Independent.}}\n");
+        let source = "\\documentclass{article}\n\\input{definitions}\n\\begin{document}\n\\setboolean{draft}{true}\\boolean{draft}\\setbool{draft}{false}\\booltrue{draft}\\boolfalse{draft}\\ifbool{draft}{Yes}{No}\\notbool{draft}{No}{Yes}\n\\drafttrue\\ifdraft Yes.\\fi\\csname draftfalse\\endcsname\n\\draft\n% \\booltrue{draft}\n\\verb|\\boolean{draft}|\n\\end{document}\n";
+        let workspace = setup(
+            root,
+            &[("main.tex", source), ("definitions.tex", &definitions)],
+        );
+        let main = Url::from_file_path(root.join("main.tex")).unwrap();
+        let definition = Url::from_file_path(root.join("definitions.tex")).unwrap();
+        for (uri, marker, local) in [
+            (&definition, "{draft}", 2),
+            (&main, "\\setboolean{draft}", 14),
+            (&main, "\\ifbool{draft}", 10),
+            (&main, "\\drafttrue", 7),
+        ] {
+            let text = &workspace.documents[uri].text;
+            let position = text.position(text.source.find(marker).unwrap() + local);
+            assert_eq!(
+                features::definitions(&workspace, uri, position).len(),
+                1,
+                "{declaration}: {marker}"
+            );
+            assert_eq!(
+                features::references(&workspace, uri, position, true).len(),
+                11
+            );
+            let changed = renamed(&workspace, uri, position);
+            assert_eq!(
+                changed[&definition],
+                definitions.replacen("{draft}", "{release}", 1)
+            );
+            assert_eq!(
+                changed[&main],
+                source
+                    .replace("draft", "release")
+                    .replace("\\release\n", "\\draft\n")
+                    .replace("% \\booltrue{release}", "% \\booltrue{draft}")
+                    .replace("\\verb|\\boolean{release}|", "\\verb|\\boolean{draft}|")
+            );
+        }
+    }
+}
+
+#[test]
+fn boolean_argument_completions_preserve_names_suffixes_spaces_values_and_utf16_ranges() {
+    for (marked, target, expected) in [
+        (
+            r"😀 \setboolean{dra¦ft}{true}",
+            "draft",
+            r"😀 \setboolean{draft}{true}",
+        ),
+        (r"\boolean{  dra¦ft  }", "draft", r"\boolean{  draft  }"),
+        (
+            r"\ifbool{dra¦}{Yes}{No}",
+            "draft",
+            r"\ifbool{draft}{Yes}{No}",
+        ),
+        (
+            r"\notbool{dra¦ft}{No}{Yes}",
+            "draft",
+            r"\notbool{draft}{No}{Yes}",
+        ),
+        (r"\booltrue{dra¦", "draft", r"\booltrue{draft"),
+        (r"\boolfalse{模¦式}", "模式", r"\boolfalse{模式}"),
+        (
+            r"\setboolean{draft}{tr¦ue}",
+            "true",
+            r"\setboolean{draft}{true}",
+        ),
+        (r"\setbool{draft}{fa¦}", "false", r"\setbool{draft}{false}"),
+        (r"\ifbool{tr¦}{Yes}{No}", "true", r"\ifbool{true}{Yes}{No}"),
+        (r"\boolean{fa¦}", "false", r"\boolean{false}"),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let offset = marked.find('¦').unwrap();
+        let source = marked.replace('¦', "");
+        let workspace = setup(
+            root,
+            &[
+                ("main.tex", &source),
+                ("definitions.tex", "\\newboolean{draft}\\newbool{模式}"),
+            ],
+        );
+        let uri = Url::from_file_path(root.join("main.tex")).unwrap();
+        let text = &workspace.documents[&uri].text;
+        let items = features::completion(&workspace, &uri, text.position(offset));
+        let item = items
+            .iter()
+            .find(|item| item.label == target)
+            .unwrap_or_else(|| panic!("{marked}: {items:?}"));
+        let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+            panic!("missing edit")
+        };
+        assert_eq!(
+            text.changed(vec![TextDocumentContentChangeEvent {
+                range: Some(edit.range),
+                range_length: None,
+                text: edit.new_text.clone()
+            }])
+            .unwrap()
+            .source,
+            expected
+        );
+    }
+}
+
+#[test]
+fn boolean_name_completion_skips_declarations_expressions_computed_names_and_other_projects() {
+    for marked in [
+        r"\newboolean{dra¦}",
+        r"\providebool{dra¦}",
+        r"\boolean{dra¦\suffix}",
+        r"\boolean{dra¦% rest",
+        r"\setboolean{draft}{tr¦\suffix}",
+        r"\ifthenelse{dra¦}{Yes}{No}",
+        r"\verb|\boolean{dra¦}|",
+        r"\setboolean{tr¦}{true}",
+        r"\boolfalse{fa¦}",
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let source = marked.replace('¦', "");
+        let workspace = setup(
+            directory.path(),
+            &[
+                ("main.tex", &source),
+                ("definitions.tex", "\\newboolean{draft}"),
+            ],
+        );
+        let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+        assert!(
+            features::completion(
+                &workspace,
+                &uri,
+                Text::new(source).position(marked.find('¦').unwrap())
+            )
+            .is_empty(),
+            "{marked}"
+        );
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let source =
+        "\\documentclass{article}\\newboolean{draft}\\begin{document}\\booltrue{}\\end{document}";
+    let workspace = setup(
+        root,
+        &[
+            ("a.tex", source),
+            (
+                "b.tex",
+                "\\documentclass{article}\\newbool{other}\\begin{document}Text.\\end{document}",
+            ),
+        ],
+    );
+    let uri = Url::from_file_path(root.join("a.tex")).unwrap();
+    let items = features::completion(
+        &workspace,
+        &uri,
+        Text::new(source.into()).position(source.find("\\booltrue{}").unwrap() + 10),
+    );
+    assert!(items.iter().any(|item| item.label == "draft"));
+    assert!(!items.iter().any(|item| item.label == "other"));
+}
+
+#[test]
+fn boolean_operations_provide_signatures_without_confusing_expressions_with_names() {
+    for (marked, expected, active) in [
+        (r"\newboolean{dra¦}", r"\newboolean{boolean}", 0),
+        (r"\newbool{dra¦}", r"\newbool{boolean}", 0),
+        (
+            r"\setboolean{draft}{tr¦}",
+            r"\setboolean{boolean}{value}",
+            1,
+        ),
+        (r"\ifbool{draft}{Y¦}{N}", r"\ifbool{boolean}{then}{else}", 1),
+        (
+            r"\notbool{draft}{Y}{N¦}",
+            r"\notbool{boolean}{then}{else}",
+            2,
+        ),
+        (
+            r"\ifthenelse{\boolean{draft}}{Y¦}{N}",
+            r"\ifthenelse{condition}{then}{else}",
+            1,
+        ),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let source = marked.replace('¦', "");
+        let workspace = setup(directory.path(), &[("main.tex", &source)]);
+        let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+        let help = latex_lsp::signature::help(
+            &workspace,
+            &uri,
+            Text::new(source).position(marked.find('¦').unwrap()),
+        )
+        .unwrap_or_else(|| panic!("{marked}"));
+        assert_eq!(help.signatures[0].label, expected);
+        assert_eq!(help.active_parameter, Some(active));
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex, ifthen and etoolbox"]
+fn real_ifthen_and_etoolbox_boolean_renames_preserve_values_and_group_scoping() {
+    for (package, declaration, operations) in [
+        ("ifthen", "newboolean", "\\setboolean{draft}{true}\\ifthenelse{\\boolean{draft}}{\\typeout{BOOL:true}}{Wrong.}\n{\\setboolean{draft}{false}\\ifthenelse{\\boolean{draft}}{Wrong.}{\\typeout{BOOL:local-false}}}\n\\ifthenelse{\\boolean{draft}}{\\typeout{BOOL:restored}}{Wrong.}\n"),
+        ("ifthen", "provideboolean", "\\setboolean{draft}{true}\\ifthenelse{\\boolean{draft}}{\\typeout{BOOL:true}}{Wrong.}\n{\\setboolean{draft}{false}\\ifthenelse{\\boolean{draft}}{Wrong.}{\\typeout{BOOL:local-false}}}\n\\ifthenelse{\\boolean{draft}}{\\typeout{BOOL:restored}}{Wrong.}\n"),
+        ("etoolbox", "newbool", "\\booltrue{draft}\\ifbool{draft}{\\typeout{BOOL:true}}{Wrong.}\n{\\setbool{draft}{false}\\notbool{draft}{\\typeout{BOOL:local-false}}{Wrong.}}\n\\ifbool{draft}{\\typeout{BOOL:restored}}{Wrong.}\n"),
+        ("etoolbox", "providebool", "\\booltrue{draft}\\ifbool{draft}{\\typeout{BOOL:true}}{Wrong.}\n{\\setbool{draft}{false}\\notbool{draft}{\\typeout{BOOL:local-false}}{Wrong.}}\n\\ifbool{draft}{\\typeout{BOOL:restored}}{Wrong.}\n"),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let definitions = format!("\\{declaration}{{draft}}\n");
+        let source = format!("\\documentclass{{article}}\\usepackage{{{package}}}\\input{{definitions}}\n\\begin{{document}}\n{operations}Text.\\end{{document}}\n");
+        let workspace = setup(root, &[("main.tex", &source), ("definitions.tex", &definitions)]);
+        let main = root.join("main.tex");
+        let config = latex_lsp::config::BuildConfig { executable: "pdflatex".into(), ..Default::default() };
+        let before = build::run(&main, &config, &AtomicBool::new(false));
+        assert_eq!(before.status, "success", "{}", before.output);
+        let uri = Url::from_file_path(root.join("definitions.tex")).unwrap();
+        let position = Text::new(definitions.clone()).position(definitions.find("draft").unwrap());
+        for (uri, changed) in renamed(&workspace, &uri, position) { std::fs::write(uri.to_file_path().unwrap(), changed).unwrap(); }
+        let after = build::run(&main, &config, &AtomicBool::new(false));
+        assert_eq!(after.status, "success", "{}", after.output);
+        assert_eq!(after.pages, Some(1));
+        let states = |output: &str| output.lines().filter(|line| line.starts_with("BOOL:")).map(str::to_owned).collect::<Vec<_>>();
+        assert_eq!(states(&before.output), states(&after.output));
+        assert_eq!(states(&after.output).len(), 3);
+    }
+}

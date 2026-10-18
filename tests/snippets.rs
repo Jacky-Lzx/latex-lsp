@@ -31,6 +31,8 @@ fn snippets_expand_in_a_real_editor_without_consuming_tex_backslashes() {
         ("counterwithin", "counterwithin{counter}{parent}"),
         ("newlength", r"newlength{\length}"),
         ("newif", r"newif\ifcondition"),
+        ("setbool", "setbool{boolean}{true}"),
+        ("ifbool", "ifbool{boolean}{then}{else}"),
         ("setlength", r"setlength{\length}{0pt}"),
         ("newcount", r"newcount\count"),
         ("savebox", r"savebox{\box}[width][c]{text}"),

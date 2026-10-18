@@ -219,6 +219,11 @@ pub(crate) fn references(doc: &Document, name: &str, environment: Generated) -> 
             }
         }
         let mut arguments = Vec::new();
+        if environment.kind == Kind::Conditional
+            && (syntax::declares_boolean(&command.name) || syntax::boolean_reference(&command.name))
+        {
+            arguments.extend(command.argument.iter().cloned());
+        }
         if environment.kind != Kind::Conditional
             && matches!(command.name.as_str(), "crefname" | "Crefname")
         {

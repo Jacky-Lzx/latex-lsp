@@ -106,6 +106,17 @@ fn builtin(name: &str) -> Option<Signature> {
         "begin" | "end" => (&[("environment", false)], false),
         "label" => (&[("key", false)], false),
         "newcounter" => (&[("name", false), ("within", true)], false),
+        "newboolean" | "provideboolean" | "newbool" | "providebool" | "boolean" | "booltrue"
+        | "boolfalse" => (&[("boolean", false)], false),
+        "setboolean" | "setbool" => (&[("boolean", false), ("value", false)], false),
+        "ifbool" | "notbool" => (
+            &[("boolean", false), ("then", false), ("else", false)],
+            false,
+        ),
+        "ifthenelse" => (
+            &[("condition", false), ("then", false), ("else", false)],
+            false,
+        ),
         "newlength" => (&[("length", false)], false),
         "setlength" | "addtolength" => (&[("length", false), ("value", false)], false),
         "settowidth" | "settoheight" | "settodepth" => {

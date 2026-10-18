@@ -1,6 +1,7 @@
 pub mod build;
 pub mod build_log;
 pub mod catalog;
+mod conditionals;
 pub mod config;
 mod counters;
 pub mod dispatch;

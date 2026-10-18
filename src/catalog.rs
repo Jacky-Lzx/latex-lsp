@@ -50,6 +50,66 @@ pub(crate) const PRIMITIVES: &[&str] = &[
 /// Templates retain literal TeX backslashes; completion escapes them for the client.
 pub const COMMANDS: &[(&str, &str, &str)] = &[
     (
+        "newboolean",
+        "newboolean{${1:boolean}}",
+        "Declare an ifthen boolean.",
+    ),
+    (
+        "provideboolean",
+        "provideboolean{${1:boolean}}",
+        "Declare an ifthen boolean if absent.",
+    ),
+    (
+        "setboolean",
+        "setboolean{${1:boolean}}{${2:true}}",
+        "Set an ifthen boolean to true or false.",
+    ),
+    (
+        "boolean",
+        "boolean{${1:boolean}}",
+        "Test a boolean inside an ifthen condition.",
+    ),
+    (
+        "ifthenelse",
+        "ifthenelse{${1:condition}}{${2:then}}{${3:else}}",
+        "Choose between two branches using ifthen.",
+    ),
+    (
+        "newbool",
+        "newbool{${1:boolean}}",
+        "Declare an etoolbox boolean.",
+    ),
+    (
+        "providebool",
+        "providebool{${1:boolean}}",
+        "Declare an etoolbox boolean if absent.",
+    ),
+    (
+        "setbool",
+        "setbool{${1:boolean}}{${2:true}}",
+        "Set an etoolbox boolean to true or false.",
+    ),
+    (
+        "booltrue",
+        "booltrue{${1:boolean}}",
+        "Set an etoolbox boolean to true.",
+    ),
+    (
+        "boolfalse",
+        "boolfalse{${1:boolean}}",
+        "Set an etoolbox boolean to false.",
+    ),
+    (
+        "ifbool",
+        "ifbool{${1:boolean}}{${2:then}}{${3:else}}",
+        "Choose branches using an etoolbox boolean.",
+    ),
+    (
+        "notbool",
+        "notbool{${1:boolean}}{${2:then}}{${3:else}}",
+        "Choose branches using a negated etoolbox boolean.",
+    ),
+    (
         "newif",
         "newif\\if${1:condition}",
         "Declare a conditional and its true/false setter commands.",

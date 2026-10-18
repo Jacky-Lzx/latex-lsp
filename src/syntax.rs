@@ -342,6 +342,54 @@ pub fn declares_environment(name: &str) -> bool {
     )
 }
 
+pub(crate) fn active_static_argument(
+    source: &str,
+    start: usize,
+    open: u8,
+    cursor: usize,
+) -> Option<Range<usize>> {
+    if source.as_bytes().get(start) != Some(&open) || cursor <= start {
+        return None;
+    }
+    let close = if open == b'{' { b'}' } else { b']' };
+    let span = if let Some((argument, _)) = group(source, start, open, close) {
+        argument.span
+    } else {
+        start + 1..source.len()
+    };
+    if cursor > span.end {
+        return None;
+    }
+    let prefix = source[span.start..cursor].trim_start();
+    if !prefix.is_empty() && !is_static_key(prefix) {
+        return None;
+    }
+    let value = &source[span.clone()];
+    let value = if source.as_bytes().get(span.end) == Some(&close) {
+        value
+    } else {
+        value.split(['\r', '\n']).next().unwrap_or_default()
+    }
+    .trim();
+    if !value.is_empty() && !is_static_key(value) {
+        return None;
+    }
+    let start = cursor - prefix.len();
+    let end = cursor
+        + source[cursor..span.end]
+            .chars()
+            .take_while(|ch| {
+                !ch.is_whitespace()
+                    && !matches!(
+                        ch,
+                        '{' | '}' | '[' | ']' | '\\' | '%' | ',' | '#' | '$' | '&' | '^' | '~'
+                    )
+            })
+            .map(char::len_utf8)
+            .sum::<usize>();
+    Some(start..end)
+}
+
 fn control_word(source: &str, start: usize) -> Option<Range<usize>> {
     if source.as_bytes().get(start) != Some(&b'\\') {
         return None;
@@ -358,6 +406,10 @@ pub(crate) fn conditional_declaration(
     commands: &[Command],
     command: &Command,
 ) -> Option<Range<usize>> {
+    if declares_boolean(&command.name) {
+        let span = trimmed_span(source, command.argument.as_ref()?.span.clone());
+        return is_static_key(&source[span.clone()]).then_some(span);
+    }
     if command.name != "newif" {
         return None;
     }
@@ -379,6 +431,20 @@ pub(crate) fn conditional_declaration(
     let span = literal_csname(source, commands, index + 1)?;
     let name = source[span.clone()].strip_prefix("if")?;
     (!name.is_empty()).then_some(span.start + 2..span.end)
+}
+
+pub(crate) fn declares_boolean(name: &str) -> bool {
+    matches!(
+        name,
+        "newboolean" | "provideboolean" | "newbool" | "providebool"
+    )
+}
+
+pub(crate) fn boolean_reference(name: &str) -> bool {
+    matches!(
+        name,
+        "boolean" | "setboolean" | "setbool" | "booltrue" | "boolfalse" | "ifbool" | "notbool"
+    )
 }
 
 pub fn is_citation(name: &str) -> bool {
@@ -698,7 +764,7 @@ impl Syntax {
                 result.conditionals.push(Entry {
                     name: source[span.clone()].into(),
                     span,
-                    detail: "Defined with \\newif".into(),
+                    detail: format!("Defined with \\{}", command.name),
                     is_variable: false,
                 });
             }
