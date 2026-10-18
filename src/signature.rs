@@ -659,7 +659,7 @@ pub fn help(workspace: &Workspace, uri: &Url, position: Position) -> Option<Sign
             )
             .map(|(argument, _)| argument)
             .filter(|argument| cursor > argument.span.end)
-            .and_then(|argument| lookup(workspace, argument.value.trim(), true, &scope))
+            .and_then(|argument| lookup(workspace, &argument.value, true, &scope))
             .or_else(|| signature(workspace, name, &scope))
         } else {
             signature(workspace, name, &scope)

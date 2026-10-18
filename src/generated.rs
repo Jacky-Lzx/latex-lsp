@@ -82,12 +82,12 @@ fn declaration<'a>(doc: &'a Document, command: &Command) -> Option<Declaration<'
         return None;
     }
     let argument = command.argument.as_ref()?;
-    let name = doc.text.source[argument.span.clone()].trim();
+    let name = &doc.text.source[argument.span.clone()];
+    if !syntax::is_static_key(name) {
+        return None;
+    }
     let source = &doc.text.source;
     if matches!(command.name.as_str(), "newcounter" | "newaliascnt") {
-        if !syntax::is_static_key(name) {
-            return None;
-        }
         return Some(Declaration {
             name,
             environment: Generated::counter(command.name == "newaliascnt"),
@@ -141,11 +141,6 @@ pub(crate) fn counters(doc: &Document) -> impl Iterator<Item = &str> {
     doc.syntax
         .commands
         .iter()
-        .filter(|command| {
-            command.argument.as_ref().is_some_and(|argument| {
-                syntax::is_static_key(&doc.text.source[argument.span.clone()])
-            })
-        })
         .filter_map(|command| declaration(doc, command))
         .filter(|declaration| {
             declaration.environment.kind == Kind::Environment
@@ -355,9 +350,19 @@ pub(crate) fn references(doc: &Document, name: &str, environment: Generated) -> 
         result.extend(
             arguments
                 .into_iter()
-                .filter(|argument| argument.value.trim() == name)
+                .filter(|argument| {
+                    if matches!(environment.kind, Kind::Environment | Kind::Counter) {
+                        argument.value == name
+                    } else {
+                        argument.value.trim() == name
+                    }
+                })
                 .map(|argument| {
-                    let span = syntax::trimmed_span(&doc.text.source, argument.span);
+                    let span = if matches!(environment.kind, Kind::Environment | Kind::Counter) {
+                        argument.span
+                    } else {
+                        syntax::trimmed_span(&doc.text.source, argument.span)
+                    };
                     Reference {
                         span: span.clone(),
                         selection_span: span,
@@ -442,7 +447,7 @@ pub(crate) fn validate(
                     && command
                         .argument
                         .as_ref()
-                        .is_some_and(|argument| argument.value.trim() == new)
+                        .is_some_and(|argument| argument.value == new)
             });
         let macro_conflict = generated.iter().any(|(name, _)| {
             doc.syntax

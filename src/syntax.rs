@@ -660,7 +660,7 @@ impl Syntax {
                             detail: format!("\\{name}"),
                             is_variable: false,
                         };
-                        if declares_environment(name) && !arg.value.trim().is_empty() {
+                        if declares_environment(name) && is_static_key(&arg.value) {
                             result.environments.push(Entry {
                                 detail: format!("Defined with \\{name}"),
                                 ..entry()
@@ -676,7 +676,7 @@ impl Syntax {
                             "label" => result.labels.push(entry()),
                             "bibitem" => result.citations.push(entry()),
                             "begin" => {
-                                let env = arg.value.trim();
+                                let env = arg.value.as_str();
                                 if is_verbatim_environment(env) {
                                     let body_start = parsed.as_ref().unwrap().1;
                                     let ending = format!("\\end{{{env}}}");
@@ -698,7 +698,7 @@ impl Syntax {
                                 }
                             }
                             "end" => {
-                                let env = arg.value.trim();
+                                let env = arg.value.as_str();
                                 if let Some(index) =
                                     environments.iter().rposition(|(name, _)| name == env)
                                 {

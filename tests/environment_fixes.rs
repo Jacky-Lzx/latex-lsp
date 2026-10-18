@@ -147,7 +147,7 @@ fn closing_diagnostic(
 
 #[test]
 fn closing_fixes_use_the_confirmed_environment_stack_and_change_only_the_end_name() {
-    let source = "😀 \\begin{equation}\r\n\\begin{aligned}x&=y\\end{aligned}\r\n\\begin{verbatim}\r\n\\end{algin}\r\n\\end{verbatim}\r\n\\end{ algin }\r\n";
+    let source = "😀 \\begin{equation}\r\n\\begin{aligned}x&=y\\end{aligned}\r\n\\begin{verbatim}\r\n\\end{algin}\r\n\\end{verbatim}\r\n\\end  {algin}\r\n";
     for versioned in [false, true] {
         let (mut workspace, uri, _) = setup(source, "");
         workspace.versioned_edits = versioned;
@@ -161,7 +161,7 @@ fn closing_fixes_use_the_confirmed_environment_stack_and_change_only_the_end_nam
         assert_eq!(action.is_preferred, Some(false));
         assert_eq!(
             apply_count(&workspace, &uri, action.edit.clone().unwrap(), 1),
-            source.replace("end{ algin }", "end{ equation }")
+            source.replace("end  {algin}", "end  {equation}")
         );
     }
 }
@@ -176,6 +176,8 @@ fn closing_fixes_reject_cascading_undefined_environment_errors_dynamic_stacks_an
             "precise",
         ),
         (r"\end{algin}", "equation", "precise"),
+        (r"\begin{ equation }\end{algin}", "equation", "precise"),
+        (r"\begin{equation}\end{ algin }", "equation", "precise"),
         (r"\begin{\name}Content\end{algin}", "equation", "precise"),
         (
             r"\begin{equation}\begin{aligned}\end{other}\end{algin}",
@@ -297,7 +299,7 @@ fn closing_name_fixes_repair_a_real_compiler_error() {
 
 #[test]
 fn environment_fixes_update_only_the_selected_pair_and_preserve_nested_and_opaque_text() {
-    let source = "😀 \\begin{ algin }\r\n\\begin{aligned}x&=y\\end{aligned}\r\n\\begin{algin}Nested\\end{algin}\r\n\\begin{verbatim}\r\n\\end{algin}\r\n\\begin{fake}\r\n\\end{verbatim}\r\n\\verb|\\end{algin}|\r\n% \\end{algin}\r\n\\end{ algin }\r\n\\begin{algin}Other\\end{algin}\r\n";
+    let source = "😀 \\begin  {algin}\r\n\\begin{aligned}x&=y\\end{aligned}\r\n\\begin{algin}Nested\\end{algin}\r\n\\begin{verbatim}\r\n\\end{algin}\r\n\\begin{fake}\r\n\\end{verbatim}\r\n\\verb|\\end{algin}|\r\n% \\end{algin}\r\n\\end  {algin}\r\n\\begin{algin}Other\\end{algin}\r\n";
     for versioned in [false, true] {
         let (mut workspace, uri, _) = setup(source, "");
         workspace.versioned_edits = versioned;
@@ -311,8 +313,8 @@ fn environment_fixes_update_only_the_selected_pair_and_preserve_nested_and_opaqu
         assert_eq!(
             changed,
             source
-                .replacen("begin{ algin }", "begin{ align }", 1)
-                .replacen("end{ algin }", "end{ align }", 1)
+                .replacen("begin  {algin}", "begin  {align}", 1)
+                .replacen("end  {algin}", "end  {align}", 1)
         );
     }
 }
@@ -345,6 +347,21 @@ fn environment_candidates_follow_the_compiled_project_and_support_unicode() {
 #[test]
 fn unsafe_unproven_known_and_ambiguous_environment_fixes_are_not_offered() {
     for (source, definitions, mode) in [
+        (
+            r"\begin{ panle }Content\end{ panle }",
+            r"\newenvironment{panel}{}{}",
+            "precise",
+        ),
+        (
+            r"\begin{panle}Content\end{ panle }",
+            r"\newenvironment{panel}{}{}",
+            "precise",
+        ),
+        (
+            r"\begin{panle}Content\end{panle}",
+            r"\newenvironment{ panel }{}{}",
+            "precise",
+        ),
         (
             r"\begin{panle}Content",
             r"\newenvironment{panel}{}{}",

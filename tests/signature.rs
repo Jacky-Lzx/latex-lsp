@@ -316,7 +316,7 @@ fn signatures_suppress_comments_raw_text_completed_calls_and_unsupported_or_ambi
 #[test]
 fn custom_environment_signatures_follow_latex_and_xparse_declarations() {
     for declaration in ["newenvironment", "renewenvironment", "provideenvironment"] {
-        let definitions = format!("\\{declaration}{{panel }}[2][blue]{{#1#2}}{{}}");
+        let definitions = format!("\\{declaration}  {{panel}} [2][blue]{{#1#2}}{{}}");
         check(
             &definitions,
             r"\begin{panel}{title¦}",
@@ -378,6 +378,7 @@ fn custom_environment_signatures_follow_latex_and_xparse_declarations() {
         r"\newenvironment{panel}[1]{#1}{}",
         r"\NewDocumentEnvironment{panel}{d()m}{}{}",
         r"\newenvironment{panel}[1]{#1}{}\newenvironment{panel}[1]{#1}{}",
+        r"\newenvironment{ panel }[1]{#1}{}",
     ] {
         let source = if definitions == r"\newenvironment{panel}[1]{#1}{}" {
             r"\begin{panel}{value}¦ body"
@@ -390,6 +391,11 @@ fn custom_environment_signatures_follow_latex_and_xparse_declarations() {
             "{definitions}"
         );
     }
+    let (workspace, uri, position) = setup(
+        r"\newenvironment{panel}[1]{#1}{}",
+        r"\begin{ panel }{value¦}",
+    );
+    assert!(signature::help(&workspace, &uri, position).is_none());
 }
 
 #[test]

@@ -4,6 +4,49 @@ use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString, Url};
 const HELP: &str = "\nSee the LaTeX manual or LaTeX Companion for explanation.\nType  H <return>  for immediate help.\n ...                                              \n                                                  \n";
 
 #[test]
+fn environment_error_names_preserve_semantic_whitespace_and_reject_normalized_source_matches() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    for (source, message) in [
+        (
+            r"\begin{ algin }",
+            "LaTeX Error: Environment  algin  undefined.",
+        ),
+        (
+            r"\begin{ algin }",
+            "LaTeX Error: Environment algin undefined.",
+        ),
+        (
+            r"\begin{algin}",
+            "LaTeX Error: Environment  algin  undefined.",
+        ),
+        (
+            r"\end{ algin }",
+            r"LaTeX Error: \begin{equation} ended by \end{ algin }.",
+        ),
+        (
+            r"\end{algin}",
+            r"LaTeX Error: \begin{ equation } ended by \end{algin}.",
+        ),
+        (
+            r"\end{ algin }",
+            r"LaTeX Error: \begin{equation} ended by \end{algin}.",
+        ),
+    ] {
+        std::fs::write(&main, source).unwrap();
+        let log = format!("(./main.tex\n./main.tex:1: {message}\n{HELP}l.1 {source}\n)\n");
+        let diagnostics = build_log::parse(&main, &log);
+        let error = &diagnostics[&Url::from_file_path(&main).unwrap()][0];
+        assert!(
+            error.code.is_none() && error.data.is_none(),
+            "{source}: {error:?}"
+        );
+        assert_eq!(error.range.start.character, 0);
+        assert_eq!(error.message, message);
+    }
+}
+
+#[test]
 fn repeated_undefined_environments_on_one_line_keep_separate_utf16_name_ranges() {
     let directory = tempfile::tempdir().unwrap();
     let main = directory.path().join("main.tex");
@@ -106,13 +149,13 @@ fn mismatched_end_ranges_require_valid_messages_matching_source_and_direct_conte
 }
 
 #[test]
-fn multiline_environment_arguments_can_point_back_to_the_unicode_name() {
+fn multiline_environment_calls_locate_static_unicode_names_after_command_newlines() {
     let directory = tempfile::tempdir().unwrap();
     let main = directory.path().join("main.tex");
-    let source = "😀 \\begin\r\n{\r\n 模式*\r\n }\r\n";
+    let source = "😀 \\begin\r\n{模式*}\r\n";
     std::fs::write(&main, source).unwrap();
     let log = format!(
-        "(./main.tex\n./main.tex:4: LaTeX Error: Environment 模式* undefined.\n{HELP}l.4  }}\n)\n"
+        "(./main.tex\n./main.tex:2: LaTeX Error: Environment 模式* undefined.\n{HELP}l.2 {{模式*}}\n)\n"
     );
     let diagnostics = build_log::parse(&main, &log);
     let error = &diagnostics[&Url::from_file_path(&main).unwrap()][0];
@@ -210,7 +253,7 @@ fn real_engines_pinpoint_environment_names_and_keep_macro_expansion_errors_on_th
             let main = root.join("main.tex");
             let child = root.join("章节.tex");
             let source =
-                "\\typeout{😀} \\begin{algin}A\\end{algin} \\begin{algin}B\\end{algin}\n\\broken\n";
+                "\\typeout{😀} \\begin{algin}A\\end{algin} \\begin{algin}B\\end{algin}\n\\begin{ algin }Spaced\\end{ algin }\n\\broken\n";
             std::fs::write(&main, "\\documentclass{article}\n\\newcommand{\\broken}{\\begin{hidden}\\end{hidden}}\n\\begin{document}\\input{章节}\\end{document}\n").unwrap();
             std::fs::write(&child, source).unwrap();
             let compiler = root.join(engine);
@@ -239,7 +282,7 @@ fn real_engines_pinpoint_environment_names_and_keep_macro_expansion_errors_on_th
                     .iter()
                     .filter(|error| error.message.starts_with("LaTeX Error: Environment "))
                     .collect();
-                assert_eq!(errors.len(), 3, "{engine}/{numbered}: {errors:?}\n{log}");
+                assert_eq!(errors.len(), 4, "{engine}/{numbered}: {errors:?}\n{log}");
                 let text = Text::new(source.into());
                 for (error, (start, _)) in errors[..2]
                     .iter()
@@ -254,15 +297,18 @@ fn real_engines_pinpoint_environment_names_and_keep_macro_expansion_errors_on_th
                     assert_eq!(error.data.as_ref().unwrap()["environment"], "algin");
                 }
                 assert_eq!(
-                    errors[2].range,
+                    errors[3].range,
                     text.range(source.find("\\broken").unwrap(), source.len() - 1)
                 );
-                assert!(errors[2].code.is_none() && errors[2].data.is_none());
+                for error in &errors[2..] {
+                    assert!(error.code.is_none() && error.data.is_none(), "{error:?}");
+                    assert_eq!(error.range.start.character, 0);
+                }
                 let ends: Vec<_> = diagnostics[&Url::from_file_path(&child).unwrap()]
                     .iter()
                     .filter(|error| error.message.starts_with("LaTeX Error: \\begin{"))
                     .collect();
-                assert_eq!(ends.len(), 3, "{engine}/{numbered}: {ends:?}\n{log}");
+                assert_eq!(ends.len(), 4, "{engine}/{numbered}: {ends:?}\n{log}");
                 for (error, (start, _)) in
                     ends[..2].iter().zip(source.match_indices("\\end{algin}"))
                 {
@@ -281,8 +327,10 @@ fn real_engines_pinpoint_environment_names_and_keep_macro_expansion_errors_on_th
                         "document"
                     );
                 }
-                assert_eq!(ends[2].range, errors[2].range);
-                assert!(ends[2].code.is_none() && ends[2].data.is_none());
+                for (end, error) in ends[2..].iter().zip(&errors[2..]) {
+                    assert_eq!(end.range, error.range);
+                    assert!(end.code.is_none() && end.data.is_none(), "{end:?}");
+                }
             }
         }
     }

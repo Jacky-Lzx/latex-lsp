@@ -71,6 +71,11 @@ fn raw_target(doc: &Document, offset: usize) -> Option<Target<'_>> {
             };
             if let Some(kind) = kind {
                 if arg.span.start <= offset && offset <= arg.span.end {
+                    if matches!(kind, TargetKind::Environment | TargetKind::Counter)
+                        && !syntax::is_static_key(&arg.value)
+                    {
+                        return None;
+                    }
                     let local = offset - arg.span.start;
                     let start = arg.value[..local].rfind(',').map(|i| i + 1).unwrap_or(0);
                     let end = arg.value[local..]
@@ -915,6 +920,15 @@ fn all_references(
                 continue;
             }
             if let Some(arg) = &command.argument {
+                if target.kind == TargetKind::Environment {
+                    if arg.value == target.name {
+                        result.push(Location {
+                            uri: uri.clone(),
+                            range: doc.text.range(arg.span.start, arg.span.end),
+                        });
+                    }
+                    continue;
+                }
                 let mut start = arg.span.start;
                 for key in arg.value.split(',') {
                     if key.trim() == target.name {

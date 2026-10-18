@@ -32,6 +32,31 @@ fn edited(text: &Text, mut edits: Vec<TextEdit>) -> String {
 }
 
 #[test]
+fn verbatim_environment_detection_requires_the_actual_name_including_spaces() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let source = "\\begin{ verbatim }\n\\newcommand{\\visible}{Text}\n\\end{ verbatim }\n\\begin{verbatim}\n\\newcommand{\\hidden}{Text}\n\\end{verbatim}\n";
+    let workspace = project(root, &[("main.tex", source)]);
+    let main = uri(root, "main.tex");
+    let doc = &workspace.documents[&main];
+    assert!(doc
+        .syntax
+        .definitions
+        .iter()
+        .any(|entry| entry.name == "visible"));
+    assert!(!doc
+        .syntax
+        .definitions
+        .iter()
+        .any(|entry| entry.name == "hidden"));
+    assert!(
+        doc.syntax.diagnostics.is_empty(),
+        "{:?}",
+        doc.syntax.diagnostics
+    );
+}
+
+#[test]
 fn generated_environment_commands_resolve_and_rename_from_every_spelling() {
     for declaration in ["newenvironment", "NewDocumentEnvironment", "NewEnviron"] {
         let directory = tempfile::tempdir().unwrap();

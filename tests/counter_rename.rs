@@ -44,6 +44,144 @@ fn renamed(workspace: &Workspace, document: &Url, position: Position) -> BTreeMa
 }
 
 #[test]
+fn environment_and_counter_renames_preserve_distinct_names_with_semantic_whitespace() {
+    for (source, name) in [
+        (
+            concat!(
+                "\\newcounter{exercise}\n\\newcounter{ exercise }\n",
+                "\\setcounter{exercise}{2}\\setcounter{ exercise }{7}\n",
+                "\\value{exercise}\\value{ exercise }\\theexercise\n",
+                "\\newcounter{inner}[ exercise ]\n",
+                "\\newtheorem{lemma}[ exercise ]{Lemma}\n",
+                "\\newtheorem{fact}{Fact}[ exercise ]\n",
+                "\\newaliascnt{alias}{ exercise }\n",
+                "\\counterwithin{inner}{ exercise }\n",
+            ),
+            "exercise",
+        ),
+        (
+            concat!(
+                "\\newenvironment{panel}{}{}\n\\newenvironment{ panel }{}{}\n",
+                "\\begin{panel}Plain\\end{panel}\n",
+                "\\begin{ panel }Spaced\\end{ panel }\n",
+            ),
+            "panel",
+        ),
+        (
+            concat!(
+                "\\newtheorem{claim}{Claim}\n\\newtheorem{ claim }{Spaced}\n",
+                "\\begin{claim}Plain\\end{claim}\n",
+                "\\begin{ claim }Spaced\\end{ claim }\n",
+                "\\stepcounter{claim}\\stepcounter{ claim }\\theclaim\n",
+            ),
+            "claim",
+        ),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let workspace = project(root, &[("main.tex", source)]);
+        let main = uri(root, "main.tex");
+        let text = &workspace.documents[&main].text;
+        let position = text.position(source.find(name).unwrap() + 1);
+        let locations = features::definitions(&workspace, &main, position);
+        assert_eq!(locations.len(), 1, "{name}: {locations:?}");
+        assert_eq!(
+            renamed(&workspace, &main, position)[&main],
+            source
+                .replace(&format!("{{{name}}}"), "{problem}")
+                .replace(&format!("\\the{name}"), "\\theproblem")
+        );
+        for (start, _) in source.match_indices(&format!(" {name} ")) {
+            let position = text.position(start + 2);
+            assert!(
+                features::definitions(&workspace, &main, position).is_empty(),
+                "{name}: {start}"
+            );
+            assert!(
+                features::prepare_rename(&workspace, &main, position)
+                    .unwrap()
+                    .is_none(),
+                "{name}: {start}"
+            );
+            assert!(
+                features::rename(&workspace, &main, position, "problem")
+                    .unwrap()
+                    .is_none(),
+                "{name}: {start}"
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex"]
+fn real_counter_and_environment_renames_keep_spaced_names_independent() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let mut source = concat!(
+        "\\documentclass{article}\n",
+        "\\newcounter{exercise}\n\\newcounter{ exercise }\n",
+        "\\newenvironment{panel}{\\typeout{PLAIN-PANEL}}{}\n",
+        "\\newenvironment{ panel }{\\typeout{SPACED-PANEL}}{}\n",
+        "\\begin{document}\n",
+        "\\setcounter{exercise}{2}\\setcounter{ exercise }{7}\n",
+        "\\typeout{COUNTERS=\\arabic{exercise};\\arabic{ exercise }}\n",
+        "\\begin{panel}Plain\\end{panel}\n",
+        "\\begin{ panel }Spaced\\end{ panel }\n",
+        "\\end{document}\n",
+    )
+    .to_owned();
+    let config = latex_lsp::config::BuildConfig {
+        executable: "pdflatex".into(),
+        ..Default::default()
+    };
+    std::fs::write(root.join("main.tex"), &source).unwrap();
+    let before = build::run(&root.join("main.tex"), &config, &AtomicBool::new(false));
+    assert_eq!(before.status, "success", "{}", before.output);
+    for name in ["exercise", "panel"] {
+        let workspace = project(root, &[("main.tex", &source)]);
+        let main = uri(root, "main.tex");
+        let position = workspace.documents[&main]
+            .text
+            .position(source.find(name).unwrap());
+        let edit = features::rename(
+            &workspace,
+            &main,
+            position,
+            if name == "exercise" {
+                "problem"
+            } else {
+                "card"
+            },
+        )
+        .unwrap()
+        .unwrap();
+        let mut edits = edit.changes.unwrap()[&main].clone();
+        edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
+        source = workspace.documents[&main]
+            .text
+            .changed(
+                edits
+                    .into_iter()
+                    .map(|edit| TextDocumentContentChangeEvent {
+                        range: Some(edit.range),
+                        range_length: None,
+                        text: edit.new_text,
+                    })
+                    .collect(),
+            )
+            .unwrap()
+            .source;
+        std::fs::write(root.join("main.tex"), &source).unwrap();
+        let outcome = build::run(&root.join("main.tex"), &config, &AtomicBool::new(false));
+        assert_eq!(outcome.status, "success", "{}", outcome.output);
+        for witness in ["COUNTERS=2;7", "PLAIN-PANEL", "SPACED-PANEL"] {
+            assert!(outcome.output.contains(witness), "{}", outcome.output);
+        }
+    }
+}
+
+#[test]
 fn independent_counters_navigate_and_rename_relationships_operations_and_generated_macros() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
@@ -191,12 +329,12 @@ fn counter_alias_renames_track_metadata_and_formatter_resets() {
 fn unicode_counter_names_keep_utf16_ranges_and_project_boundaries() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
-    let source = "\\documentclass{article}\n\\newcounter{练习-一}\n\\begin{document}😀 \\value{ 练习-一 }\\csname the练习-一\\endcsname\\end{document}\n";
+    let source = "\\documentclass{article}\n\\newcounter{练习-一}\n\\begin{document}😀 \\value  {练习-一}\\csname the练习-一\\endcsname\\end{document}\n";
     let unrelated = "\\documentclass{article}\n\\newcounter{练习-一}\n\\begin{document}\\value{练习-一}\\end{document}\n";
     let workspace = project(root, &[("main.tex", source), ("other.tex", unrelated)]);
     let main = uri(root, "main.tex");
     let text = &workspace.documents[&main].text;
-    let position = text.position(source.find("value{ ").unwrap() + 7);
+    let position = text.position(source.find("value  {").unwrap() + "value  {".len());
     let references = features::references(&workspace, &main, position, false);
     assert_eq!(references.len(), 2);
     assert!(references.iter().all(|location| location.uri == main));

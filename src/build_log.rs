@@ -357,8 +357,7 @@ fn error_context<'a>(lines: &[&'a str], start: usize, number: u32) -> Option<&'a
 pub(crate) fn undefined_environment_name(message: &str) -> Option<&str> {
     let name = message
         .strip_prefix("LaTeX Error: Environment ")?
-        .strip_suffix(" undefined.")?
-        .trim();
+        .strip_suffix(" undefined.")?;
     crate::syntax::is_static_key(name).then_some(name)
 }
 
@@ -431,11 +430,7 @@ pub(crate) fn mismatched_environment_names(message: &str) -> Option<(&str, &str)
     } else {
         tail
     };
-    let name = tail
-        .strip_prefix(" ended by \\end{")?
-        .strip_suffix("}.")?
-        .trim();
-    let expected = expected.trim();
+    let name = tail.strip_prefix(" ended by \\end{")?.strip_suffix("}.")?;
     (crate::syntax::is_static_key(name) && crate::syntax::is_static_key(expected))
         .then_some((name, expected))
 }
@@ -455,7 +450,7 @@ fn environment_name_range(
             return None;
         }
         let argument = command.argument.as_ref()?;
-        let span = crate::syntax::trimmed_span(&text.source, argument.span.clone());
+        let span = argument.span.clone();
         if text.source[span.clone()] != *error.name
             || text.position(argument.outer_span.end).line != line
         {

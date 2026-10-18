@@ -44,8 +44,7 @@ fn target<'a>(
             .any(|command| {
                 command.name == "begin"
                     && command.argument.as_ref().is_some_and(|argument| {
-                        let span =
-                            crate::syntax::trimmed_span(&doc.text.source, argument.span.clone());
+                        let span = argument.span.clone();
                         doc.text.source[span.clone()] == *name
                             && doc.text.range(span.start, span.end) == diagnostic.range
                     })
@@ -117,7 +116,7 @@ fn environment_end(doc: &crate::workspace::Document, begin: Range) -> Option<Ran
         if !started {
             started = command.name == "begin"
                 && command.argument.as_ref().is_some_and(|argument| {
-                    let span = crate::syntax::trimmed_span(&doc.text.source, argument.span.clone());
+                    let span = argument.span.clone();
                     doc.text.range(span.start, span.end) == begin
                 });
             if !started {
@@ -125,7 +124,7 @@ fn environment_end(doc: &crate::workspace::Document, begin: Range) -> Option<Ran
             }
         }
         let argument = command.argument.as_ref()?;
-        let span = crate::syntax::trimmed_span(&doc.text.source, argument.span.clone());
+        let span = argument.span.clone();
         let name = &doc.text.source[span.clone()];
         if !crate::syntax::is_static_key(name) {
             return None;
@@ -168,7 +167,7 @@ fn closing_environment_fix(
             continue;
         }
         let argument = command.argument.as_ref()?;
-        let span = crate::syntax::trimmed_span(&doc.text.source, argument.span.clone());
+        let span = argument.span.clone();
         let argument_name = &doc.text.source[span.clone()];
         if !crate::syntax::is_static_key(argument_name) {
             return None;
