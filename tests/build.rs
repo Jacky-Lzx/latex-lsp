@@ -10,6 +10,96 @@ use tower_lsp::lsp_types::{DiagnosticSeverity, Url};
 
 #[test]
 #[cfg(unix)]
+#[ignore = "requires pdflatex, lualatex and hyperref"]
+fn real_destination_warnings_locate_links_and_clear_after_repair() {
+    for engine in ["pdflatex", "lualatex"] {
+        let directory = tempfile::tempdir().unwrap();
+        let main = directory.path().join("main.tex");
+        let source = concat!(
+            "\\documentclass{article}\\usepackage{hyperref}\n",
+            "\\begin{document}\\section{Title}\\hyperdef{section}{intro}{Point}\\label{section.itnro}\n",
+            "\\hyperlink{section.itnro}{Direct}\\hyperref{}{section}% keep\n{itnro}{Compound}\n",
+            "\\hyperlink{section.1}{Automatic destination}\\end{document}\n",
+        );
+        std::fs::write(&main, source).unwrap();
+        let executable = if engine == "lualatex" {
+            script(directory.path(), "TEXMFVAR=\"${0%/*}/tex-cache\"\nTEXMFCACHE=\"$TEXMFVAR\"\nexport TEXMFVAR TEXMFCACHE\nmkdir -p \"$TEXMFVAR\"\nexec lualatex \"$@\"")
+        } else {
+            engine.into()
+        };
+        let config = BuildConfig {
+            executable,
+            arguments: Some(vec![
+                "-interaction=nonstopmode".into(),
+                "-output-directory=%o".into(),
+                "%f".into(),
+            ]),
+            ..Default::default()
+        };
+        let outcome = build::run(&main, &config, &Default::default());
+        assert_eq!(outcome.status, "success", "{engine}: {}", outcome.output);
+        let document = latex_lsp::workspace::Document::new(
+            &Url::from_file_path(&main).unwrap(),
+            source.into(),
+            None,
+        );
+        let warnings: Vec<_> = outcome
+            .diagnostics
+            .values()
+            .flatten()
+            .filter(|diagnostic| {
+                diagnostic.code
+                    == Some(tower_lsp::lsp_types::NumberOrString::String(
+                        "undefined-pdf-destination".into(),
+                    ))
+            })
+            .collect();
+        assert_eq!(
+            warnings.len(),
+            2,
+            "{engine}: {:?}\n{}",
+            outcome.diagnostics,
+            outcome.output
+        );
+        for (warning, entry) in warnings.iter().zip(&document.syntax.anchor_references) {
+            assert_eq!(
+                warning.range,
+                document.text.range(entry.span.start, entry.span.end)
+            );
+            assert_eq!(warning.severity, Some(DiagnosticSeverity::WARNING));
+            assert_eq!(
+                warning.data,
+                Some(serde_json::json!({"destination":"section.itnro"}))
+            );
+        }
+        std::fs::write(
+            &main,
+            source
+                .replace("\\hyperlink{section.itnro}", "\\hyperlink{section.intro}")
+                .replace("{itnro}{Compound}", "{intro}{Compound}"),
+        )
+        .unwrap();
+        for _ in 0..2 {
+            let outcome = build::run(&main, &config, &Default::default());
+            assert_eq!(outcome.status, "success", "{engine}: {}", outcome.output);
+            assert!(
+                !outcome
+                    .diagnostics
+                    .values()
+                    .flatten()
+                    .any(
+                        |diagnostic| diagnostic.message.contains("unreferenced destination")
+                            || diagnostic.message.contains("has been referenced")
+                    ),
+                "{engine}: {:?}",
+                outcome.diagnostics
+            );
+        }
+    }
+}
+
+#[test]
+#[cfg(unix)]
 #[ignore = "requires latexmk, pdflatex, xelatex and lualatex"]
 fn custom_job_names_locate_pdf_logs_recorder_inputs_and_synctex_for_all_tex_engines() {
     for executable in ["latexmk", "pdflatex", "xelatex", "lualatex"] {

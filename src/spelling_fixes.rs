@@ -10,12 +10,28 @@ enum Kind {
     Command,
     Environment,
     Counter,
+    Anchor,
 }
 
 fn target<'a>(
     doc: &'a crate::workspace::Document,
     diagnostic: &'a Diagnostic,
 ) -> Option<(Kind, &'a str)> {
+    if diagnostic.code == Some(NumberOrString::String("undefined-pdf-destination".into())) {
+        let name = diagnostic.data.as_ref()?.get("destination")?.as_str()?;
+        if build_log::undefined_destination_name(&diagnostic.message) != Some(name) {
+            return None;
+        }
+        return doc
+            .syntax
+            .anchor_references
+            .iter()
+            .any(|entry| {
+                entry.name == name
+                    && doc.text.range(entry.span.start, entry.span.end) == diagnostic.range
+            })
+            .then_some((Kind::Anchor, name));
+    }
     if let Some((citation, key)) = build_log::undefined_reference_key(&diagnostic.message) {
         return build_log::undefined_reference_ranges(
             &doc.text,
@@ -309,6 +325,7 @@ pub fn fixes(workspace: &Workspace, uri: &Url, range: Range) -> Vec<QuickFix> {
                     Kind::Command => &document.syntax.definitions,
                     Kind::Environment => &document.syntax.environments,
                     Kind::Counter => &document.syntax.counters,
+                    Kind::Anchor => &document.syntax.anchors,
                 };
                 for entry in entries {
                     *candidates.entry(entry.name.clone()).or_default() += 1;
@@ -393,6 +410,14 @@ pub fn fixes(workspace: &Workspace, uri: &Url, range: Range) -> Vec<QuickFix> {
                     Kind::Command => ("command", format!("\\{name}")),
                     Kind::Environment => ("environment", name.clone()),
                     Kind::Counter => ("counter", name.clone()),
+                    Kind::Anchor => {
+                        let Some(replacement) =
+                            crate::anchors::replacement_text(doc, diagnostic.range, &name)
+                        else {
+                            continue;
+                        };
+                        ("PDF destination", replacement)
+                    }
                 };
                 if !seen.insert((diagnostic.range.start, diagnostic.range.end, name.clone())) {
                     continue;
@@ -400,7 +425,7 @@ pub fn fixes(workspace: &Workspace, uri: &Url, range: Range) -> Vec<QuickFix> {
                 result.push(QuickFix {
                     title: format!(
                         "Replace with {category} `{}`",
-                        if kind == Kind::Label {
+                        if matches!(kind, Kind::Label | Kind::Anchor) {
                             &name
                         } else {
                             &replacement

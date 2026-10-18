@@ -368,6 +368,13 @@ impl BuildManager {
                         .is_none_or(|modified| modified > wall_started)
                 }
             });
+            if !stale {
+                crate::anchors::resolve_diagnostics(
+                    &current,
+                    &artifact_inputs,
+                    &mut outcome.diagnostics,
+                );
+            }
             let count = outcome.diagnostics.values().map(Vec::len).sum::<usize>();
             let errors = outcome
                 .diagnostics

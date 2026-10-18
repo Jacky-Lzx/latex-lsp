@@ -171,6 +171,24 @@ pub(crate) fn undefined_reference_key(message: &str) -> Option<(bool, &str)> {
     Some((citation, key))
 }
 
+pub(crate) fn undefined_destination_name(message: &str) -> Option<&str> {
+    let name = if let Some(tail) = message.strip_prefix("pdfTeX warning (dest): name{") {
+        let (name, tail) = tail.split_once("} has been referenced")?;
+        let tail: String = tail.chars().filter(|ch| !ch.is_whitespace()).collect();
+        if tail != "butdoesnotexist,replacedbyafixedone" {
+            return None;
+        }
+        name
+    } else {
+        message
+            .strip_prefix("warning")?
+            .trim_start()
+            .strip_prefix("(pdf backend): unreferenced destination with name '")?
+            .strip_suffix('\'')?
+    };
+    crate::syntax::is_static_key(name).then_some(name)
+}
+
 fn box_code(message: &str) -> Option<&'static str> {
     let code = if message.starts_with("Overfull ") {
         "overfull-box"
@@ -583,6 +601,19 @@ fn emit_with_context(
         .sum::<usize>() as u32;
     let end = value.encode_utf16().count() as u32;
     let mut ranges = undefined_reference_ranges(&text, line, &message);
+    let destination_name = undefined_destination_name(&message);
+    let destination_ranges: Vec<_> = destination_name
+        .into_iter()
+        .flat_map(|name| {
+            crate::syntax::Syntax::latex(&text)
+                .anchor_references
+                .into_iter()
+                .filter(move |entry| entry.name == name)
+                .map(|entry| text.range(entry.span.start, entry.span.end))
+        })
+        .collect();
+    let precise_destination = !destination_ranges.is_empty();
+    ranges.extend(destination_ranges);
     let command_range = (message == "Undefined control sequence."
         && reported_line.checked_sub(1) == Some(line))
     .then(|| context.and_then(|context| undefined_command_range(&text, line, context)))
@@ -630,6 +661,7 @@ fn emit_with_context(
                 severity: Some(severity),
                 source: Some("latex-build".into()),
                 code: box_code(&message)
+                    .or_else(|| precise_destination.then_some("undefined-pdf-destination"))
                     .or_else(|| missing_include_key(&message).map(|_| "missing-include"))
                     .or_else(|| command_range.map(|_| "undefined-control-sequence"))
                     .or_else(|| environment_range.and(environment.as_ref()).map(|error| error.code))
@@ -638,6 +670,7 @@ fn emit_with_context(
                 message: message.clone(),
                 data: rewritten
                     .then(|| serde_json::json!({"reportedLine":reported_line}))
+                    .or_else(|| precise_destination.then(|| serde_json::json!({"destination":destination_name})))
                     .or_else(|| command_name.map(|name| serde_json::json!({"command":name})))
                     .or_else(|| {
                         environment_range
@@ -664,6 +697,9 @@ fn warning_start(line: &str) -> bool {
         ]
         .iter()
         .any(|prefix| line.starts_with(prefix))
+        || line
+            .strip_prefix("warning")
+            .is_some_and(|tail| tail.trim_start().starts_with("(pdf backend):"))
 }
 
 fn message_boundary(line: &str) -> bool {
@@ -690,6 +726,9 @@ fn wrapped_message(
 ) -> String {
     let mut message = lines[*i].trim().to_owned();
     while !message.ends_with(['.', '!']) && *i + 1 < lines.len() && message.len() < 4096 {
+        if undefined_destination_name(&message).is_some() {
+            break;
+        }
         let next = lines[*i + 1];
         if next.trim().is_empty() || message_boundary(next) {
             break;
@@ -1223,6 +1262,60 @@ fn bibliography_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn destination_warnings_locate_direct_and_compound_links_without_inventing_lines() {
+        let directory = tempfile::tempdir().unwrap();
+        let main = directory.path().join("main.tex");
+        let source = "😀 \\hyperlink{section.lost}{Text}\\label{section.lost}\r\n\\hyperref{}{section}% keep\r\n{lost}{Link}\r\n\\hyperref{remote}{section}{lost}{Remote}\n\\verb|\\hyperlink{section.lost}{Ignored}|\n";
+        std::fs::write(&main, source).unwrap();
+        let text = Text::new(source.into());
+        let first = source.find("section.lost").unwrap();
+        let second = source.find("{section}").unwrap() + 1;
+        let last = source.find("{lost}").unwrap() + 5;
+        for warning in [
+            "pdfTeX warning (dest): name{section.lost} has been referenced but does not exis\nt, replaced by a fixed one",
+            "warning  (pdf backend): unreferenced destination with name 'section.lost'",
+        ] {
+            let log = format!("(./main.tex\n{warning}\n<font/resource.otf>\n! Other error.\nl.1 bad\n)\n");
+            let diagnostics = parse(&main, &log);
+            let items = &diagnostics[&Url::from_file_path(&main).unwrap()];
+            assert_eq!(items.len(), 3, "{items:?}");
+            let references: Vec<_> = items.iter().filter(|item| item.code == Some(NumberOrString::String("undefined-pdf-destination".into()))).collect();
+            assert_eq!(references.len(), 2, "{items:?}");
+            assert_eq!(references[0].range, text.range(first, first + 12));
+            assert_eq!(references[1].range, text.range(second, last));
+            assert!(references.iter().all(|item| item.data == Some(serde_json::json!({"destination":"section.lost"})) && !item.message.contains("font/")));
+        }
+    }
+
+    #[test]
+    fn destination_warning_names_preserve_semantic_spaces_and_reject_uncertain_messages() {
+        for name in ["lost", "section.foo", "章节.目标"] {
+            for message in [format!("pdfTeX warning (dest): name{{{name}}} has been referenced but does not exist , replaced by a fixed one"), format!("warning  (pdf backend): unreferenced destination with name '{name}'")] {
+                assert_eq!(undefined_destination_name(&message), Some(name));
+            }
+        }
+        for message in [
+            "pdfTeX warning (dest): name{a b} has been referenced but does not exist, replaced by a fixed one",
+            "warning  (pdf backend): unreferenced destination with name ' lost'",
+            "warning  (pdf backend): unreferenced destination with name 'lost ' ",
+            "pdfTeX warning (dest): name{lost} has been referenced",
+            "warning  (pdf backend): unreferenced destination with name '\\dynamic'",
+            "pdfTeX warning (dest): name{lost} has been referenced but was found",
+        ] {
+            assert_eq!(undefined_destination_name(message), None, "{message}");
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let main = directory.path().join("main.tex");
+        std::fs::write(&main, "First line\n\\hyperlink{\\dynamic}{Text}\n").unwrap();
+        let diagnostics = parse(&main, "warning  (pdf backend): unreferenced destination with name 'unknown'\n<font/resource.otf>\n");
+        let items = &diagnostics[&Url::from_file_path(main).unwrap()];
+        assert_eq!(items.len(), 1);
+        assert!(items[0].code.is_none());
+        assert!(items[0].data.is_none());
+        assert!(!items[0].message.contains("font/"));
+    }
 
     #[test]
     fn final_pdf_page_counts_support_engine_variants_and_wrapped_summaries() {

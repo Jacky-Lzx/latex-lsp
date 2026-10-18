@@ -45,6 +45,208 @@ fn action_edit(action: &CodeActionOrCommand, uri: &Url) -> TextEdit {
     edit.clone()
 }
 
+fn destination_diagnostic(workspace: &mut Workspace, uri: &Url) -> Diagnostic {
+    let doc = &workspace.documents[uri];
+    let entry = &doc.syntax.anchor_references[0];
+    let diagnostic = Diagnostic {
+        range: doc.text.range(entry.span.start, entry.span.end),
+        source: Some("latex-build".into()),
+        code: Some(NumberOrString::String("undefined-pdf-destination".into())),
+        data: Some(serde_json::json!({"destination":entry.name})),
+        message: format!(
+            "warning  (pdf backend): unreferenced destination with name '{}'",
+            entry.name
+        ),
+        ..Default::default()
+    };
+    workspace.build_diagnostics.insert(
+        uri.clone(),
+        [(uri.clone(), vec![diagnostic.clone()])].into(),
+    );
+    diagnostic
+}
+
+#[test]
+fn destination_spelling_fixes_preserve_compound_comments_and_independent_labels() {
+    for versioned in [false, true] {
+        for (link, declaration, expected) in [
+            (
+                "\\hyperlink{section.itnro}{Text}",
+                "\\hyperdef{section}{intro}{Point}",
+                "\\hyperlink{section.intro}{Text}",
+            ),
+            (
+                "\\hyperref{}{section}% keep\r\n{itnro}{Text}",
+                "\\hypertarget{section.intro}{Point}",
+                "\\hyperref{}{section}% keep\r\n{intro}{Text}",
+            ),
+            (
+                "\\hyperref{}{sectoin}% keep\r\n{intro}{Text}",
+                "\\hyperdef{section}{intro}{Point}",
+                "\\hyperref{}{}% keep\r\n{section.intro}{Text}",
+            ),
+        ] {
+            let source = format!("😀 {link}\\label{{section.itnro}}\r\n");
+            let (mut workspace, uri) = setup(&source, versioned);
+            let declarations = Url::parse("file:///editing/destinations.tex").unwrap();
+            let unrelated = Url::parse("file:///other/main.tex").unwrap();
+            for (target, text) in [
+                (&declarations, declaration),
+                (&unrelated, "\\hypertarget{section.itnro}{Other}"),
+            ] {
+                workspace
+                    .documents
+                    .insert(target.clone(), Document::new(target, text.into(), None));
+            }
+            workspace
+                .recorded_inputs
+                .insert(uri.clone(), [uri.clone(), declarations].into());
+            let diagnostic = destination_diagnostic(&mut workspace, &uri);
+            let actions = editing::code_actions(
+                &workspace,
+                &uri,
+                diagnostic.range,
+                &context(vec![diagnostic]),
+            );
+            assert_eq!(actions.len(), 1, "{actions:?}");
+            let edit = action_edit(&actions[0], &uri);
+            let changed = workspace.documents[&uri]
+                .text
+                .changed(vec![TextDocumentContentChangeEvent {
+                    range: Some(edit.range),
+                    range_length: None,
+                    text: edit.new_text,
+                }])
+                .unwrap();
+            assert_eq!(
+                changed.source,
+                format!("😀 {expected}\\label{{section.itnro}}\r\n")
+            );
+            let CodeActionOrCommand::CodeAction(action) = &actions[0] else {
+                panic!()
+            };
+            assert_eq!(action.title, "Replace with PDF destination `section.intro`");
+            assert_eq!(action.is_preferred, Some(false));
+        }
+    }
+}
+
+#[test]
+fn destination_fixes_reject_ambiguous_known_stale_and_forged_evidence() {
+    for (declarations, mode) in [
+        (
+            "\\hypertarget{section.intro}{Text}\\hyperdef{section}{intro}{Duplicate}",
+            "valid",
+        ),
+        (
+            "\\hypertarget{section.itnro}{Known}\\hypertarget{section.intro}{Other}",
+            "valid",
+        ),
+        ("\\label{section.intro}", "valid"),
+        ("\\hypertarget{section.\\intro}{Dynamic}", "valid"),
+        ("\\hypertarget{section.intro}{Text}", "range"),
+        ("\\hypertarget{section.intro}{Text}", "data"),
+        ("\\hypertarget{section.intro}{Text}", "message"),
+        ("\\hypertarget{section.intro}{Text}", "code"),
+        ("\\hypertarget{section.intro}{Text}", "stale"),
+    ] {
+        let source = format!("{declarations}\n\\hyperlink{{section.itnro}}{{section.itnro}}\n");
+        let (mut workspace, uri) = setup(&source, false);
+        let mut diagnostic = destination_diagnostic(&mut workspace, &uri);
+        match mode {
+            "range" => {
+                let start = source.rfind("section.itnro").unwrap();
+                diagnostic.range = workspace.documents[&uri].text.range(start, start + 13);
+            }
+            "data" => diagnostic.data = Some(serde_json::json!({"destination":"forged"})),
+            "message" => {
+                diagnostic.message =
+                    "warning  (pdf backend): unreferenced destination with name 'forged'".into()
+            }
+            "code" => diagnostic.code = None,
+            "stale" => {
+                workspace.documents.insert(
+                    uri.clone(),
+                    Document::new(&uri, source.replace("section.itnro", "changed"), Some(9)),
+                );
+            }
+            _ => {}
+        }
+        workspace.build_diagnostics.insert(
+            uri.clone(),
+            [(uri.clone(), vec![diagnostic.clone()])].into(),
+        );
+        assert!(
+            editing::code_actions(
+                &workspace,
+                &uri,
+                diagnostic.range,
+                &context(vec![diagnostic])
+            )
+            .is_empty(),
+            "{mode}: {declarations}"
+        );
+    }
+}
+
+#[test]
+fn legacy_destination_commands_distinguish_compound_replacements_and_revalidate_candidates() {
+    let source = "\\hypertarget{sectionx.foo}{X}\\hypertarget{sectiony.foo}{Y}\n\\hyperref{}{sectionz}% keep\r\n{foo}{Text}";
+    let (mut workspace, uri) = setup(source, false);
+    workspace.code_action_literals = false;
+    workspace.apply_edits = true;
+    let diagnostic = destination_diagnostic(&mut workspace, &uri);
+    let actions = editing::code_actions(
+        &workspace,
+        &uri,
+        diagnostic.range,
+        &context(vec![diagnostic.clone()]),
+    );
+    assert_eq!(actions.len(), 2, "{actions:?}");
+    let mut replacements = std::collections::BTreeSet::new();
+    for action in actions {
+        let CodeActionOrCommand::Command(command) = action else {
+            panic!()
+        };
+        let value = command.arguments.unwrap()[0].clone();
+        replacements.insert(value["replacement"].as_str().unwrap().to_owned());
+        let resolved =
+            editing::resolve_fix(&workspace, serde_json::from_value(value.clone()).unwrap())
+                .unwrap();
+        assert_eq!(
+            resolved.changes.unwrap()[&uri][0].new_text,
+            value["replacement"]
+        );
+        workspace.documents.get_mut(&uri).unwrap().version = Some(10);
+        assert!(
+            editing::resolve_fix(&workspace, serde_json::from_value(value.clone()).unwrap())
+                .is_none()
+        );
+        workspace.documents.get_mut(&uri).unwrap().version = Some(9);
+        let mut forged = value;
+        forged["replacement"] = serde_json::json!("}% keep\r\n{forged");
+        assert!(
+            editing::resolve_fix(&workspace, serde_json::from_value(forged).unwrap()).is_none()
+        );
+    }
+    assert_eq!(
+        replacements,
+        [
+            "}% keep\r\n{sectionx.foo".into(),
+            "}% keep\r\n{sectiony.foo".into()
+        ]
+        .into()
+    );
+    workspace.clear_build_diagnostics(&uri);
+    assert!(editing::code_actions(
+        &workspace,
+        &uri,
+        diagnostic.range,
+        &context(vec![diagnostic])
+    )
+    .is_empty());
+}
+
 #[test]
 fn hyperref_label_fixes_preserve_link_text_and_reject_forged_text_ranges() {
     for versioned in [false, true] {
