@@ -970,6 +970,7 @@ fn real_hyperref_warnings_select_bracketed_labels_and_clear_after_repair() {
             let source = concat!(
                 "\\hyperref[sec:itnro]{sec:itnro} \\ref{sec:itnro}\n",
                 "\\hyperref\n[sec:itnro]{\nLink text\n}\n",
+                "\\hyperref[{sec:itnro}]{Grouped link}\n",
                 "\\hyperref{https://example.com/a%20b?x=some_value#section}{sec:itnro}{sec:itnro}{URL}\n",
             );
             std::fs::write(&chapter, source).unwrap();
@@ -1013,7 +1014,7 @@ fn real_hyperref_warnings_select_bracketed_labels_and_clear_after_repair() {
                 .collect();
             assert_eq!(
                 warnings.len(),
-                3,
+                4,
                 "{engine}: {:?}\n{}",
                 outcome.diagnostics,
                 outcome.output
@@ -1042,6 +1043,7 @@ fn real_hyperref_warnings_select_bracketed_labels_and_clear_after_repair() {
                 &chapter,
                 source
                     .replace("[sec:itnro]", "[sec:intro]")
+                    .replace("[{sec:itnro}]", "[{sec:intro}]")
                     .replace("\\ref{sec:itnro}", "\\ref{sec:intro}"),
             )
             .unwrap();

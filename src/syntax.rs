@@ -275,7 +275,19 @@ pub(crate) fn separate_label_argument_start(
 ) -> Option<(usize, u8)> {
     if command.name == "hyperref" {
         let start = skip_space(source, command.span.end);
-        (source.as_bytes().get(start) == Some(&b'[')).then_some((start, b'['))
+        if source.as_bytes().get(start) != Some(&b'[') {
+            return None;
+        }
+        if source.as_bytes().get(start + 1) == Some(&b'{') {
+            if group(source, start + 1, b'{', b'}').is_some_and(|(_, end)| {
+                end < source.len() && source.as_bytes().get(end) != Some(&b']')
+            }) {
+                return None;
+            }
+            Some((start + 1, b'{'))
+        } else {
+            Some((start, b'['))
+        }
     } else {
         counter_reference_label_start(source, command).map(|start| (start, b'{'))
     }
@@ -285,23 +297,49 @@ pub(crate) fn separate_label_argument(source: &str, command: &Command) -> Option
     if command.name != "hyperref" {
         return counter_reference_label(source, command);
     }
-    let (start, _) = separate_label_argument_start(source, command)?;
-    group(source, start, b'[', b']').map(|(argument, _)| argument)
+    let outer_start = skip_space(source, command.span.end);
+    let (outer, _) = group(source, outer_start, b'[', b']')?;
+    if let Some((mut inner, end)) = group(source, outer.span.start, b'{', b'}') {
+        if end == outer.span.end {
+            inner.outer_span = outer.outer_span;
+            return Some(inner);
+        }
+    }
+    Some(outer)
 }
 
-pub(crate) fn label_replacement_safe(
+pub(crate) fn label_name_text(source: &str, command: &Command, name: &str) -> String {
+    if command.name == "hyperref"
+        && name.contains(['[', ']'])
+        && separate_label_argument_start(source, command).is_some_and(|(_, open)| open == b'[')
+    {
+        format!("{{{name}}}")
+    } else {
+        name.into()
+    }
+}
+
+pub(crate) fn label_replacement_text(
     text: &Text,
     commands: &[Command],
     range: tower_lsp::lsp_types::Range,
     name: &str,
-) -> bool {
-    !name.contains(['[', ']'])
-        || !commands.iter().any(|command| {
+) -> String {
+    if !name.contains(['[', ']']) {
+        return name.into();
+    }
+    commands
+        .iter()
+        .find(|command| {
             command.name == "hyperref"
                 && separate_label_argument(&text.source, command).is_some_and(|argument| {
                     text.range(argument.span.start, argument.span.end) == range
                 })
         })
+        .map_or_else(
+            || name.into(),
+            |command| label_name_text(&text.source, command, name),
+        )
 }
 
 pub(crate) fn is_static_key(value: &str) -> bool {

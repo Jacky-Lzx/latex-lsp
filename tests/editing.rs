@@ -104,13 +104,32 @@ fn hyperref_label_fixes_preserve_link_text_and_reject_forged_text_ranges() {
         uri.clone(),
         [(uri.clone(), vec![diagnostic.clone()])].into(),
     );
-    assert!(editing::code_actions(
+    let actions = editing::code_actions(
         &workspace,
         &uri,
         diagnostic.range,
-        &context(vec![diagnostic])
-    )
-    .is_empty());
+        &context(vec![diagnostic]),
+    );
+    assert_eq!(actions.len(), 1, "{actions:?}");
+    let edit = action_edit(&actions[0], &uri);
+    assert_eq!(edit.new_text, "{sec:intro]}");
+    let changed = workspace.documents[&uri]
+        .text
+        .changed(vec![TextDocumentContentChangeEvent {
+            range: Some(edit.range),
+            range_length: None,
+            text: edit.new_text,
+        }])
+        .unwrap();
+    assert_eq!(
+        changed.source,
+        "\\label{sec:intro]}\n\\hyperref[{sec:intro]}]{Text}\n"
+    );
+    let position = changed.position(changed.source.rfind("sec:intro]").unwrap() + 3);
+    workspace
+        .documents
+        .insert(uri.clone(), Document::new(&uri, changed.source, Some(10)));
+    assert_eq!(features::definitions(&workspace, &uri, position).len(), 1);
 }
 
 #[test]

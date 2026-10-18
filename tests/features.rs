@@ -100,6 +100,17 @@ fn completion_in_the_middle_replaces_the_remaining_word() {
     );
     for (marked, label, expected) in [
         (
+            r"\hyperref[{sec:|旧}]{Link}",
+            "sec:中文",
+            r"\hyperref[{sec:中文}]{Link}",
+        ),
+        (
+            "\\hyperref[{\r\n sec:|旧 \r\n}]{Link}",
+            "sec:中文",
+            "\\hyperref[{sec:中文}]{Link}",
+        ),
+        (r"\hyperref[{sec:|", "sec:中文", r"\hyperref[{sec:中文"),
+        (
             r"\hyperref[sec:|旧]{Link}",
             "sec:中文",
             r"\hyperref[sec:中文]{Link}",
@@ -202,6 +213,8 @@ fn hyperref_label_completion_ignores_urls_text_stars_and_dynamic_names() {
         r"\hyperref*[sec:¦]{Text}",
         r"\hyperref[sec:¦\suffix]{Text}",
         r"\hyperref[sec:¦,other]{Text}",
+        r"\hyperref[{sec:¦}suffix]{Text}",
+        r"\hyperref[ {sec:¦} ]{Text}",
     ] {
         let mut workspace = Workspace::default();
         insert(&mut workspace, "chapter.tex", r"\label{sec:intro}");
@@ -226,13 +239,34 @@ fn hyperref_label_completion_ignores_urls_text_stars_and_dynamic_names() {
         &main,
         Text::new(source.into()).position(source.len()),
     );
-    assert_eq!(
-        items
-            .iter()
-            .map(|item| item.label.as_str())
-            .collect::<Vec<_>>(),
-        ["sec:intro"]
+    assert_eq!(items.len(), 3);
+    for item in items {
+        let Some(CompletionTextEdit::Edit(edit)) = item.text_edit else {
+            panic!("missing edit")
+        };
+        assert_eq!(
+            edit.new_text,
+            if item.label == "sec:intro" {
+                item.label.clone()
+            } else {
+                format!("{{{}}}", item.label)
+            }
+        );
+    }
+    let source = r"\hyperref[{sec:";
+    let main = insert(&mut workspace, "main.tex", source);
+    let items = features::completion(
+        &workspace,
+        &main,
+        Text::new(source.into()).position(source.len()),
     );
+    assert_eq!(items.len(), 3);
+    for item in items {
+        let Some(CompletionTextEdit::Edit(edit)) = item.text_edit else {
+            panic!("missing edit")
+        };
+        assert_eq!(edit.new_text, item.label);
+    }
 }
 
 #[test]

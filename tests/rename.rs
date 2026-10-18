@@ -113,6 +113,7 @@ fn hyperref_links_rename_only_bracketed_labels_and_preserve_text_urls_and_spaced
     let source = concat!(
         "😀 \\hyperref[sec:old]{sec:old and \\ref{sec:old}}\n",
         "\\hyperref % comment\n[sec:old]{text}\n",
+        "\\hyperref[{sec:old}]{sec:old}\n",
         "\\hyperref[ sec:old ]{text}\n",
         "\\hyperref{sec:old}{sec:old}{sec:old}{sec:old}\n",
         "\\hyperref*[sec:old]{text}\n",
@@ -128,7 +129,7 @@ fn hyperref_links_rename_only_bracketed_labels_and_preserve_text_urls_and_spaced
     assert!(features::hover(&workspace, &main, position).is_some());
     assert_eq!(
         features::references(&workspace, &main, position, true).len(),
-        4
+        5
     );
     let changes = features::rename(&workspace, &main, position, "sec:new")
         .unwrap()
@@ -139,6 +140,7 @@ fn hyperref_links_rename_only_bracketed_labels_and_preserve_text_urls_and_spaced
         edits_result(source, &changes[&main]),
         source
             .replacen("[sec:old]", "[sec:new]", 2)
+            .replace("[{sec:old}]", "[{sec:new}]")
             .replace("\\ref{sec:old}", "\\ref{sec:new}")
     );
     for marker in ["{sec:old and", "[ sec:old ]", "{sec:old}{", "*[sec:old]"] {
@@ -156,14 +158,112 @@ fn hyperref_links_rename_only_bracketed_labels_and_preserve_text_urls_and_spaced
         );
     }
     for name in ["sec:[new", "sec:new]"] {
+        for (document, position) in [(&declaration, Position::new(0, 10)), (&main, position)] {
+            let changes = features::rename(&workspace, document, position, name)
+                .unwrap()
+                .unwrap()
+                .changes
+                .unwrap();
+            let changed = edits_result(source, &changes[&main]);
+            assert!(
+                changed.contains(&format!(
+                    "\\hyperref[{{{name}}}]{{sec:old and \\ref{{{name}}}}}"
+                )),
+                "{changed}"
+            );
+            assert!(
+                changed.contains(&format!("\\hyperref[{{{name}}}]{{sec:old}}")),
+                "{changed}"
+            );
+            let mut updated = Workspace::default();
+            let label = insert(
+                &mut updated,
+                "chapter.tex",
+                &edits_result(
+                    &workspace.documents[&declaration].text.source,
+                    &changes[&declaration],
+                ),
+                None,
+            );
+            let document = insert(&mut updated, "main.tex", &changed, None);
+            let position = updated.documents[&document]
+                .text
+                .position(changed.find(name).unwrap() + 3);
+            assert_eq!(
+                features::definitions(&updated, &document, position)[0].uri,
+                label
+            );
+            assert_eq!(
+                features::references(&updated, &document, position, true).len(),
+                5
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex and hyperref"]
+fn real_hyperref_renames_wrap_delimiters_and_preserve_grouped_links_across_repeated_renames() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = root.join("main.tex");
+    let chapter = root.join("chapter.tex");
+    std::fs::write(&main, "\\documentclass{article}\\usepackage{hyperref}\n\\begin{document}\\section{Title}\\label{sec:old}\\input{chapter}\\end{document}\n").unwrap();
+    std::fs::write(
+        &chapter,
+        "\\hyperref[sec:old]{sec:old}\n\\hyperref[{sec:old}]{Grouped}\\ref*{sec:old}\n",
+    )
+    .unwrap();
+    let config = latex_lsp::config::BuildConfig {
+        executable: "pdflatex".into(),
+        ..Default::default()
+    };
+    let document = Url::from_file_path(&chapter).unwrap();
+    let mut old_name = "sec:old";
+    for name in ["sec:new]", "sec:[中文"] {
+        let mut workspace = Workspace::default();
+        workspace.add_root(root.into());
+        let doc = &workspace.documents[&document];
+        let position = doc
+            .text
+            .position(doc.text.source.find(old_name).unwrap() + 3);
+        let changes = features::rename(&workspace, &document, position, name)
+            .unwrap()
+            .unwrap()
+            .changes
+            .unwrap();
+        assert_eq!(changes.len(), 2);
+        for (uri, edits) in changes {
+            std::fs::write(
+                uri.to_file_path().unwrap(),
+                edits_result(&workspace.documents[&uri].text.source, &edits),
+            )
+            .unwrap();
+        }
+        let source = std::fs::read_to_string(&chapter).unwrap();
         assert!(
-            features::rename(&workspace, &declaration, Position::new(0, 10), name).is_err(),
-            "{name}"
+            source.contains(&format!("\\hyperref[{{{name}}}]{{sec:old}}")),
+            "{source}"
         );
         assert!(
-            features::rename(&workspace, &main, position, name).is_err(),
-            "{name}"
+            source.contains(&format!("\\hyperref[{{{name}}}]{{Grouped}}")),
+            "{source}"
         );
+        for _ in 0..2 {
+            let result = latex_lsp::build::run(&main, &config, &Default::default());
+            assert_eq!(result.status, "success", "{}", result.output);
+        }
+        let result = latex_lsp::build::run(&main, &config, &Default::default());
+        assert!(
+            !result
+                .diagnostics
+                .values()
+                .flatten()
+                .any(|diagnostic| diagnostic.message.contains("undefined")),
+            "{:?}",
+            result.diagnostics
+        );
+        old_name = name;
     }
 }
 

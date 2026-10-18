@@ -352,18 +352,6 @@ pub fn rename(
     {
         let document = &workspace.documents[&location.uri];
         let text = &document.text;
-        if target.kind == TargetKind::Label
-            && !syntax::label_replacement_safe(
-                text,
-                &document.syntax.commands,
-                location.range,
-                new_name,
-            )
-        {
-            return Err(tower_lsp::jsonrpc::Error::invalid_params(
-                "Labels used in bracketed hyperref links cannot contain '[' or ']'",
-            ));
-        }
         let control_word = target.kind == TargetKind::Command
             && text
                 .offset(location.range.start)
@@ -381,6 +369,13 @@ pub fn rename(
             range: location.range,
             new_text: if control_word {
                 format!("\\{new_name}")
+            } else if target.kind == TargetKind::Label {
+                syntax::label_replacement_text(
+                    text,
+                    &document.syntax.commands,
+                    location.range,
+                    new_name,
+                )
             } else {
                 new_name.into()
             },
@@ -575,18 +570,14 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
         let mut seen = BTreeSet::new();
         return candidates
             .into_iter()
-            .filter(|(name, _)| {
-                name.starts_with(prefix)
-                    && (command.name != "hyperref" || !name.contains(['[', ']']))
-                    && seen.insert(name.clone())
-            })
+            .filter(|(name, _)| name.starts_with(prefix) && seen.insert(name.clone()))
             .map(|(name, detail)| CompletionItem {
                 label: name.clone(),
                 detail: Some(detail),
                 kind: Some(CompletionItemKind::REFERENCE),
                 text_edit: Some(CompletionTextEdit::Edit(TextEdit {
                     range: replacement_range,
-                    new_text: name,
+                    new_text: syntax::label_name_text(&doc.text.source, command, &name),
                 })),
                 additional_text_edits: (!additional_edits.is_empty())
                     .then(|| additional_edits.clone()),
