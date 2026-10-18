@@ -376,17 +376,20 @@ fn undefined_counter_range(text: &Text, line: u32, context: &str, name: &str) ->
     let shortened = shortened_context(prefix);
     let start = text.offset(Position::new(line, 0))?;
     let syntax = crate::syntax::Syntax::latex(text);
-    let mut matches = syntax.commands.iter().filter_map(|command| {
-        let (span, tail) = crate::counters::invocation(&text.source, command)?;
-        if text.source[span.clone()] != *name || text.position(tail.end).line != line {
-            return None;
-        }
-        let consumed = &text.source[start..tail.end];
-        let matched = shortened.map_or(consumed == prefix, |suffix| {
-            suffix.ends_with(&text.source[tail]) && consumed.ends_with(suffix)
+    let mut matches = syntax
+        .commands
+        .iter()
+        .flat_map(|command| crate::counters::invocations(&text.source, command))
+        .filter_map(|(span, tail)| {
+            if text.source[span.clone()] != *name || text.position(tail.end).line != line {
+                return None;
+            }
+            let consumed = &text.source[start..tail.end];
+            let matched = shortened.map_or(consumed == prefix, |suffix| {
+                suffix.ends_with(&text.source[tail]) && consumed.ends_with(suffix)
+            });
+            matched.then(|| text.range(span.start, span.end))
         });
-        matched.then(|| text.range(span.start, span.end))
-    });
     let range = matches.next()?;
     matches.next().is_none().then_some(range)
 }

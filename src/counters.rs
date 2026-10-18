@@ -31,28 +31,130 @@ pub(crate) const BUILTINS: &[&str] = &[
     "tocdepth",
 ];
 
-/// Name selection and the complete argument tail of a direct counter operation.
-/// Keep value expressions intact and leave unbraced or computed names unresolved.
-pub(crate) fn invocation(source: &str, command: &Command) -> Option<(Range<usize>, Range<usize>)> {
-    let value = match command.name.as_str() {
-        "setcounter" | "addtocounter" => true,
-        "stepcounter" | "refstepcounter" | "usecounter" => false,
-        _ => return None,
+/// Static name selections and the complete argument tail of direct counter operations.
+/// Names must be literal; values, format expressions and theorem titles stay intact.
+pub(crate) fn invocations(source: &str, command: &Command) -> Vec<(Range<usize>, Range<usize>)> {
+    let Some((arguments, tail)) = invocation_arguments(source, command) else {
+        return vec![];
     };
-    let (argument, mut end) = syntax::group(
-        source,
-        syntax::skip_space(source, command.span.end),
-        b'{',
-        b'}',
-    )?;
-    let span = argument.span;
-    if !syntax::is_static_key(&source[span.clone()]) {
+    let names: Option<Vec<_>> = arguments
+        .into_iter()
+        .map(|argument| {
+            let span = argument.span;
+            syntax::is_static_key(&source[span.clone()]).then_some(span)
+        })
+        .collect();
+    names
+        .unwrap_or_default()
+        .into_iter()
+        .map(|span| (span, tail.clone()))
+        .collect()
+}
+
+fn invocation_arguments(
+    source: &str,
+    command: &Command,
+) -> Option<(Vec<syntax::Argument>, Range<usize>)> {
+    let start = syntax::skip_space(source, command.span.end);
+    let mut at = start;
+    let resetting = matches!(
+        command.name.as_str(),
+        "counterwithin" | "counterwithout" | "numberwithin"
+    );
+    if resetting {
+        if command.name != "numberwithin" && source.as_bytes().get(at) == Some(&b'*') {
+            at = syntax::skip_space(source, at + 1);
+        }
+        if source.as_bytes().get(at) == Some(&b'[') {
+            at = syntax::skip_space(source, syntax::group(source, at, b'[', b']')?.1);
+        }
+    }
+    if !resetting
+        && !matches!(
+            command.name.as_str(),
+            "setcounter"
+                | "addtocounter"
+                | "stepcounter"
+                | "refstepcounter"
+                | "usecounter"
+                | "newcounter"
+                | "newaliascnt"
+                | "newtheorem"
+        )
+    {
         return None;
     }
-    if value {
-        end = syntax::group(source, syntax::skip_space(source, end), b'{', b'}')?.1;
+    let (first, mut end) = syntax::group(source, at, b'{', b'}')?;
+    let mut names = Vec::new();
+    match command.name.as_str() {
+        "setcounter" | "addtocounter" => {
+            end = syntax::group(source, syntax::skip_space(source, end), b'{', b'}')?.1;
+            names.push(first);
+        }
+        "stepcounter" | "refstepcounter" | "usecounter" => names.push(first),
+        "counterwithin" | "counterwithout" | "numberwithin" => {
+            let (second, after) =
+                syntax::group(source, syntax::skip_space(source, end), b'{', b'}')?;
+            end = after;
+            names.extend([first, second]);
+        }
+        "newcounter" | "newaliascnt" | "newtheorem" => {
+            if !syntax::is_static_key(&source[first.span]) {
+                return None;
+            }
+            at = syntax::skip_space(source, end);
+            let (name, after) = match command.name.as_str() {
+                "newcounter" => syntax::group(source, at, b'[', b']')?,
+                "newaliascnt" => syntax::group(source, at, b'{', b'}')?,
+                _ if source.as_bytes().get(at) == Some(&b'[') => {
+                    let (shared, after) = syntax::group(source, at, b'[', b']')?;
+                    let (_, end) =
+                        syntax::group(source, syntax::skip_space(source, after), b'{', b'}')?;
+                    (shared, end)
+                }
+                _ => {
+                    let (_, after) = syntax::group(source, at, b'{', b'}')?;
+                    syntax::group(source, syntax::skip_space(source, after), b'[', b']')?
+                }
+            };
+            names.push(name);
+            end = after;
+        }
+        _ => return None,
     }
-    Some((span, argument.outer_span.start..end))
+    Some((names, start..end))
+}
+
+/// A spelling repair must not create a self alias or reset relationship.
+pub(crate) fn replacement_conflicts(
+    doc: &Document,
+    range: tower_lsp::lsp_types::Range,
+) -> BTreeSet<&str> {
+    let source = &doc.text.source;
+    let mut result = BTreeSet::new();
+    for command in &doc.syntax.commands {
+        let names = invocations(source, command);
+        if !names
+            .iter()
+            .any(|(span, _)| doc.text.range(span.start, span.end) == range)
+        {
+            continue;
+        }
+        for (span, _) in names {
+            if doc.text.range(span.start, span.end) != range {
+                result.insert(&source[span]);
+            }
+        }
+        if matches!(
+            command.name.as_str(),
+            "newcounter" | "newaliascnt" | "newtheorem"
+        ) {
+            if let Some(argument) = &command.argument {
+                result.insert(&source[argument.span.clone()]);
+            }
+        }
+    }
+    result
 }
 
 fn names(workspace: &Workspace, scope: &BTreeSet<Url>) -> BTreeMap<String, String> {
@@ -69,7 +171,7 @@ fn names(workspace: &Workspace, scope: &BTreeSet<Url>) -> BTreeMap<String, Strin
                 if let Some(name) = command
                     .argument
                     .as_ref()
-                    .map(|argument| argument.value.trim())
+                    .map(|argument| argument.value.as_str())
                     .filter(|name| syntax::is_static_key(name))
                 {
                     names.insert(

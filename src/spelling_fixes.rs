@@ -62,10 +62,12 @@ fn target<'a>(
             .commands
             .iter()
             .any(|command| {
-                crate::counters::invocation(&doc.text.source, command).is_some_and(|(span, _)| {
-                    doc.text.source[span.clone()] == *name
-                        && doc.text.range(span.start, span.end) == diagnostic.range
-                })
+                crate::counters::invocations(&doc.text.source, command)
+                    .into_iter()
+                    .any(|(span, _)| {
+                        doc.text.source[span.clone()] == *name
+                            && doc.text.range(span.start, span.end) == diagnostic.range
+                    })
             })
             .then_some((Kind::Counter, name));
     }
@@ -279,6 +281,11 @@ pub fn fixes(workspace: &Workspace, uri: &Url, range: Range) -> Vec<QuickFix> {
             let Some((kind, key)) = target(doc, diagnostic) else {
                 continue;
             };
+            let counter_conflicts = if kind == Kind::Counter {
+                crate::counters::replacement_conflicts(doc, diagnostic.range)
+            } else {
+                BTreeSet::new()
+            };
             let paired_end = if kind == Kind::Environment {
                 let Some(end) = environment_end(doc, diagnostic.range) else {
                     continue;
@@ -358,7 +365,11 @@ pub fn fixes(workspace: &Workspace, uri: &Url, range: Range) -> Vec<QuickFix> {
             }
             let mut candidates: Vec<_> = candidates
                 .into_iter()
-                .filter(|(name, count)| *count == 1 && valid_name(kind, name))
+                .filter(|(name, count)| {
+                    *count == 1
+                        && valid_name(kind, name)
+                        && !counter_conflicts.contains(name.as_str())
+                })
                 .filter_map(|(name, _)| {
                     comparisons += 1;
                     if comparisons > 16384 {

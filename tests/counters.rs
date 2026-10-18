@@ -4,7 +4,7 @@ use tower_lsp::lsp_types::*;
 fn setup(marked: &str) -> (tempfile::TempDir, Workspace, Url, Position) {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
-    let definitions = "\\newcounter{exercise}[section]\n\\newaliascnt{exercisealias}{exercise}\n\\newtheorem{claim}{Claim}\n\\newtheorem{shared}[claim]{Shared}\n\\newtheorem*{remark}{Remark}\n% \\newcounter{ignored}\n\\verb|\\newcounter{ignoredtoo}|\n";
+    let definitions = "\\newcounter{exercise}[section]\n\\newaliascnt{exercisealias}{exercise}\n\\newtheorem{claim}{Claim}\n\\newtheorem{shared}[claim]{Shared}\n\\newtheorem*{remark}{Remark}\n\\newcounter{ spacedcounter }\n\\newaliascnt{ spacedalias }{exercise}\n\\newtheorem{ spacedtheorem }{Spaced}\n% \\newcounter{ignored}\n\\verb|\\newcounter{ignoredtoo}|\n";
     std::fs::write(root.join("definitions.tex"), definitions).unwrap();
     let offset = marked.find('¦').unwrap();
     let source = marked.replace('¦', "");
@@ -66,7 +66,15 @@ fn counter_names_complete_in_operations_reset_relationships_and_theorem_dependen
     for name in ["page", "section", "exercise", "exercisealias", "claim"] {
         assert!(items.iter().any(|item| item.label == name), "{name}");
     }
-    for name in ["shared", "remark", "ignored", "ignoredtoo"] {
+    for name in [
+        "shared",
+        "remark",
+        "ignored",
+        "ignoredtoo",
+        "spacedcounter",
+        "spacedalias",
+        "spacedtheorem",
+    ] {
         assert!(!items.iter().any(|item| item.label == name), "{name}");
     }
 }

@@ -153,6 +153,54 @@ fn counter_fixes_preserve_values_whitespace_utf16_and_other_calls() {
 }
 
 #[test]
+fn counter_relation_fixes_preserve_other_names_titles_formatting_and_optional_delimiters() {
+    for source in [
+        r"\newcounter{inner}[equatoin]",
+        r"\newaliascnt{mirror}{equatoin}",
+        r"\newtheorem{claim}[equatoin]{Claim \textbf{Title}}",
+        r"\newtheorem{claim}{Claim \textbf{Title}}[equatoin]",
+        r"\counterwithin{equatoin}{section}",
+        r"\counterwithin*[\Roman]{section}{equatoin}",
+        r"\counterwithout{equatoin}{section}",
+        r"\counterwithout*[\Roman]{section}{equatoin}",
+        r"\numberwithin[\Roman]{equatoin}{section}",
+        r"\numberwithin{section}{equatoin}",
+    ] {
+        let (mut workspace, uri, _) = setup(source, "");
+        let diagnostic = diagnostic(&mut workspace, &uri, "equatoin");
+        let response = actions(&workspace, &uri, &diagnostic);
+        assert_eq!(
+            apply(
+                &workspace,
+                &uri,
+                action(&response, "equation").edit.unwrap()
+            ),
+            source.replace("equatoin", "equation")
+        );
+    }
+}
+
+#[test]
+fn counter_relation_fixes_do_not_create_self_aliases_or_reset_relationships() {
+    for (source, name) in [
+        (r"\newcounter{inner}[innre]", "innre"),
+        (r"\newaliascnt{mirror}{miroor}", "miroor"),
+        (r"\newtheorem{claim}{Claim}[cliam]", "cliam"),
+        (r"\counterwithin{equatoin}{equation}", "equatoin"),
+        (r"\counterwithin{equation}{equatoin}", "equatoin"),
+        (r"\counterwithout*{equatoin}{equation}", "equatoin"),
+        (r"\numberwithin[\Roman]{equation}{equatoin}", "equatoin"),
+    ] {
+        let (mut workspace, uri, _) = setup(source, "");
+        let diagnostic = diagnostic(&mut workspace, &uri, name);
+        assert!(
+            actions(&workspace, &uri, &diagnostic).is_empty(),
+            "{source}"
+        );
+    }
+}
+
+#[test]
 fn counter_candidates_follow_the_build_project_and_include_aliases_and_owned_theorems() {
     for (misspelled, correct, definitions) in [
         ("seqeunce", "sequence", r"\newcounter{sequence}"),

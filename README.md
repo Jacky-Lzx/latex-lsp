@@ -41,6 +41,8 @@
 
 `LaTeX Error: No counter '...' defined.` 可精确标出 `setcounter` / `addtocounter`、`stepcounter` / `refstepcounter` / `usecounter` 的静态计数器名称，保留数值表达式；兼容传统引号、多行参数和同一行的多处调用。宏展开、动态或残缺实参以及无法唯一核对的日志上下文保留整行位置，精确诊断附带 `undefined-counter` 代码及计数器名称数据。
 
+父计数器、计数器别名及定理的共享/重置编号参数也使用精确计数器诊断，包括 `newcounter`、`newaliascnt`、`newtheorem` 和 `counterwithin` / `counterwithout` / `numberwithin` 的两个名称参数；识别星号和可选格式参数。修复只改动日志确认的名称，保留声明名称、标题、格式和参数分隔符；不建议形成自身别名或自身编号重置关系。两个实参同名、动态名称或不完整调用无法确认具体位置时保留整行诊断。
+
 `begin` 被不同名称的 `end` 闭合时，编译诊断会精确标出当前闭合名称，并以 `mismatched-environment-end` 代码附带实际名称与期望环境；识别带起始行号的 LaTeX 消息。同一行的多处闭合错误分别保留，宏展开或上下文不确定时保留整行位置。
 
 此类精确诊断可提供“闭合期望环境”的快速修复，只修改当前 `end` 名称。日志中的期望环境必须与同一文档的静态嵌套栈一致；未定义环境造成的连带错误、动态栈、先前交叉闭合、忽略区域及过期请求均不提供该修复。
