@@ -6,6 +6,7 @@ pub mod dispatch;
 pub mod editing;
 pub mod features;
 pub mod file_operations;
+pub mod graphics;
 pub mod navigation;
 pub mod path_completion;
 pub mod recorder;

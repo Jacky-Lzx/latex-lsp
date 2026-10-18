@@ -1,5 +1,5 @@
 use crate::{
-    features, navigation,
+    features, graphics, navigation,
     workspace::{resolve_path, Document, Workspace},
 };
 use std::{
@@ -100,6 +100,7 @@ fn replacement(
     uri: &Url,
     target: &Url,
     original: &str,
+    graphics: &[PathBuf],
 ) -> Result<String> {
     let target_path = target
         .to_file_path()
@@ -119,12 +120,24 @@ fn replacement(
     } else {
         workspace.root_document(uri).unwrap_or_else(|_| uri.clone())
     };
+    let graphic_origin = if resolve_path(&origin, original, extension).as_ref() != Some(target) {
+        graphics.iter().find(|directory| {
+            graphics::resolve(directory, original, extension).as_ref() == Some(target)
+        })
+    } else {
+        None
+    };
     let origin = renames
         .uri(&origin)
         .to_file_path()
         .map_err(|_| Error::invalid_params("Invalid document URI"))?;
     let path = if Path::new(original).is_absolute() {
         new_target
+    } else if let Some(directory) = graphic_origin
+        .map(|directory| renames.path(directory))
+        .filter(|directory| new_target.starts_with(directory))
+    {
+        relative_path(&directory, &new_target)
     } else {
         relative_path(
             origin
@@ -133,17 +146,7 @@ fn replacement(
             &new_target,
         )
     };
-    let mut value = path
-        .to_str()
-        .ok_or_else(|| Error::invalid_params("File name is not valid UTF-8"))?
-        .to_owned();
-    #[cfg(windows)]
-    {
-        value = value.replace('\\', "/");
-    }
-    if value.contains(['\\', '%', '#', '&', '$', '{', '}', '^', '~', '\r', '\n']) {
-        return Err(Error::invalid_params("Renamed path contains characters that cannot be represented safely in a LaTeX file reference"));
-    }
+    let mut value = safe_path(&path)?;
     if !original.ends_with(&format!(".{extension}")) {
         if let Some(extension) = path.extension().and_then(|ext| ext.to_str()) {
             value.truncate(value.len() - extension.len() - 1);
@@ -151,6 +154,19 @@ fn replacement(
     }
     if original.starts_with("./") && !value.starts_with('.') {
         value.insert_str(0, "./");
+    }
+    Ok(value)
+}
+
+fn safe_path(path: &Path) -> Result<String> {
+    let value = path
+        .to_str()
+        .ok_or_else(|| Error::invalid_params("File name is not valid UTF-8"))?
+        .to_owned();
+    #[cfg(windows)]
+    let value = value.replace('\\', "/");
+    if value.contains(['\\', '%', '#', '&', '$', '{', '}', '^', '~', '\r', '\n']) {
+        return Err(Error::invalid_params("Renamed path contains characters that cannot be represented safely in a LaTeX file reference"));
     }
     Ok(value)
 }
@@ -163,6 +179,46 @@ pub fn will_rename(workspace: &Workspace, files: &[FileRename]) -> Result<Option
     let renames = Renames::new(files)?;
     let mut changes = BTreeMap::new();
     for (uri, doc) in &workspace.documents {
+        for directory in graphics::declarations(workspace, uri) {
+            if renames.path(&directory.path) == directory.path
+                && !renames.affects(&directory.origin)
+            {
+                continue;
+            }
+            let original = &doc.text.source[directory.span.clone()];
+            let origin = renames
+                .uri(&directory.origin)
+                .to_file_path()
+                .map_err(|_| Error::invalid_params("Invalid graphics search directory origin"))?;
+            let target = renames.path(&directory.path);
+            let path = if Path::new(original).is_absolute() {
+                target
+            } else {
+                relative_path(
+                    origin
+                        .parent()
+                        .ok_or_else(|| Error::invalid_params("Invalid root path"))?,
+                    &target,
+                )
+            };
+            let mut new_text = safe_path(&path)?;
+            if new_text.is_empty() {
+                new_text.push('.');
+            } else if original.starts_with("./") && !new_text.starts_with('.') {
+                new_text.insert_str(0, "./");
+            }
+            new_text.push('/');
+            if new_text != original {
+                changes
+                    .entry(uri.clone())
+                    .or_insert_with(Vec::new)
+                    .push(TextEdit {
+                        range: doc.text.range(directory.span.start, directory.span.end),
+                        new_text,
+                    });
+            }
+        }
+        let graphics = graphics::directories(workspace, uri);
         for link in navigation::document_links(workspace, uri) {
             let Some(target) = link.target.filter(|target| target.scheme() == "file") else {
                 continue;
@@ -187,7 +243,20 @@ pub fn will_rename(workspace: &Workspace, files: &[FileRename]) -> Result<Option
             if !target_changed && !document_changed && !root_changed {
                 continue;
             }
-            let new_text = replacement(workspace, &renames, uri, &target, original)?;
+            let image = doc.syntax.commands.iter().any(|command| {
+                command.name == "includegraphics"
+                    && command.argument.as_ref().is_some_and(|argument| {
+                        argument.span.start <= start && argument.span.end >= end
+                    })
+            });
+            let new_text = replacement(
+                workspace,
+                &renames,
+                uri,
+                &target,
+                original,
+                if image { &graphics } else { &[] },
+            )?;
             if new_text != original {
                 changes
                     .entry(uri.clone())

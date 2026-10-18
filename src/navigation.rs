@@ -2,7 +2,7 @@ use crate::{
     features, syntax,
     workspace::{resolve_path, root_directive, Document, Workspace},
 };
-use std::{collections::BTreeSet, ops::Range as Span};
+use std::{collections::BTreeSet, ops::Range as Span, path::PathBuf};
 use tower_lsp::lsp_types::*;
 
 pub fn workspace_symbols(workspace: &Workspace, query: &str) -> Vec<SymbolInformation> {
@@ -210,11 +210,24 @@ fn unescape(value: &str) -> String {
     value
 }
 
-fn file_link(workspace: &Workspace, uri: &Url, name: &str, extensions: &[&str]) -> Option<Url> {
+fn file_link(
+    workspace: &Workspace,
+    uri: &Url,
+    name: &str,
+    extensions: &[&str],
+    graphics: &[PathBuf],
+) -> Option<Url> {
     let root = workspace.root_document(uri).ok();
     for origin in std::iter::once(uri).chain(root.as_ref().filter(|root| *root != uri)) {
         for extension in extensions {
             if let Some(target) = resolve_path(origin, name, extension) {
+                return Some(target);
+            }
+        }
+    }
+    for directory in graphics {
+        for extension in extensions {
+            if let Some(target) = crate::graphics::resolve(directory, name, extension) {
                 return Some(target);
             }
         }
@@ -227,6 +240,16 @@ pub fn document_links(workspace: &Workspace, uri: &Url) -> Vec<DocumentLink> {
         return vec![];
     };
     let mut links = Vec::new();
+    let graphics = if doc
+        .syntax
+        .commands
+        .iter()
+        .any(|command| command.name == "includegraphics")
+    {
+        crate::graphics::directories(workspace, uri)
+    } else {
+        vec![]
+    };
     if let Some(directive) = root_directive(doc) {
         if let Some(target) = resolve_path(uri, &directive.value, "tex") {
             links.push(DocumentLink {
@@ -262,7 +285,17 @@ pub fn document_links(workspace: &Workspace, uri: &Url) -> Vec<DocumentLink> {
                     matches!(uri.scheme(), "http" | "https" | "mailto" | "file" | "ftp")
                 })
             } else {
-                file_link(workspace, uri, &value, extensions)
+                file_link(
+                    workspace,
+                    uri,
+                    &value,
+                    extensions,
+                    if command.name == "includegraphics" {
+                        &graphics
+                    } else {
+                        &[]
+                    },
+                )
             };
             if let Some(target) = target {
                 links.push(DocumentLink {

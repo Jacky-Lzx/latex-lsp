@@ -31,13 +31,20 @@ pub fn complete(
     let range = doc.text.range(span.start, span.end + suffix_length);
     let root = workspace.root_document(uri).ok();
     let mut candidates = BTreeMap::new();
-    for origin in std::iter::once(uri).chain(root.as_ref().filter(|root| *root != uri)) {
-        let Ok(path) = origin.to_file_path() else {
-            continue;
-        };
-        let Some(parent) = path.parent() else {
-            continue;
-        };
+    let mut directories = std::iter::once(uri)
+        .chain(root.as_ref().filter(|root| *root != uri))
+        .filter_map(|origin| {
+            origin
+                .to_file_path()
+                .ok()?
+                .parent()
+                .map(|path| path.to_path_buf())
+        })
+        .collect::<Vec<_>>();
+    if command == "includegraphics" {
+        directories.extend(crate::graphics::directories(workspace, uri));
+    }
+    for parent in directories {
         let Ok(entries) = std::fs::read_dir(parent.join(directory)) else {
             continue;
         };
