@@ -313,7 +313,7 @@ impl BuildManager {
             artifact_inputs.extend(
                 project
                     .iter()
-                    .filter(|uri| uri.path().ends_with(".bib"))
+                    .filter(|uri| uri.path().ends_with(".bib") || uri.path().ends_with(".bst"))
                     .cloned(),
             );
             reject_outdated_pdf(

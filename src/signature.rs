@@ -2,7 +2,7 @@
 use crate::{
     catalog::COMMANDS,
     syntax::{self, Entry},
-    workspace::{Document, Workspace},
+    workspace::{Document, DocumentKind, Workspace},
 };
 use std::collections::BTreeSet;
 use tower_lsp::lsp_types::*;
@@ -459,7 +459,7 @@ fn active_parameter(
 
 pub fn help(workspace: &Workspace, uri: &Url, position: Position) -> Option<SignatureHelp> {
     let doc = workspace.documents.get(uri)?;
-    if doc.bibtex {
+    if doc.kind != DocumentKind::Latex {
         return None;
     }
     let cursor = doc.text.offset(position)?;

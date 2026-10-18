@@ -9,7 +9,7 @@ use crate::{syntax::Syntax, text::Text};
 
 const MAX_FILES: usize = 1024;
 const MAX_FILE_SIZE: u64 = 2 * 1024 * 1024;
-pub const SOURCE_EXTENSIONS: &[&str] = &["tex", "ltx", "bib", "sty", "cls", "def", "clo"];
+pub const SOURCE_EXTENSIONS: &[&str] = &["tex", "ltx", "bib", "bst", "sty", "cls", "def", "clo"];
 
 pub fn is_source(path: &Path) -> bool {
     path.extension()
@@ -36,23 +36,37 @@ pub struct Document {
     pub text: Text,
     pub syntax: Syntax,
     pub version: Option<i32>,
-    pub bibtex: bool,
+    pub kind: DocumentKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DocumentKind {
+    Latex,
+    Bibtex,
+    BibtexStyle,
 }
 
 impl Document {
     pub fn new(uri: &Url, source: String, version: Option<i32>) -> Self {
         let text = Text::new(source);
-        let bibtex = uri.path().ends_with(".bib");
-        let syntax = if bibtex {
-            Syntax::bibtex(&text)
+        let kind = if uri.path().ends_with(".bib") {
+            DocumentKind::Bibtex
+        } else if uri.path().ends_with(".bst") {
+            DocumentKind::BibtexStyle
         } else {
-            Syntax::latex(&text)
+            DocumentKind::Latex
+        };
+        let syntax = match kind {
+            DocumentKind::Bibtex => Syntax::bibtex(&text),
+            DocumentKind::Latex => Syntax::latex(&text),
+            // BibTeX styles use a stack language, not LaTeX commands/braces.
+            DocumentKind::BibtexStyle => Syntax::default(),
         };
         Self {
             text,
             syntax,
             version,
-            bibtex,
+            kind,
         }
     }
 }
@@ -78,7 +92,7 @@ fn magic_directive(doc: &Document, fields: &[&str]) -> Option<crate::syntax::Arg
     for line in doc.text.source.split_inclusive('\n').take(20) {
         let trimmed = line.trim_start();
         let comment_start = offset + line.len() - trimmed.len();
-        if (doc.bibtex
+        if (doc.kind != DocumentKind::Latex
             || doc
                 .syntax
                 .ignored
@@ -209,6 +223,7 @@ impl Workspace {
                 let extension = match command.name.as_str() {
                     "input" | "include" | "subfile" => "tex",
                     "bibliography" | "addbibresource" => "bib",
+                    "bibliographystyle" => "bst",
                     "usepackage" | "RequirePackage" => "sty",
                     "documentclass" | "LoadClass" => "cls",
                     _ => return vec![],

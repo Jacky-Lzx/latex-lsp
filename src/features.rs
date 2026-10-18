@@ -6,7 +6,7 @@ use tower_lsp::lsp_types::*;
 use crate::{
     catalog::{COMMANDS, ENVIRONMENTS},
     syntax::{self, Command, Entry},
-    workspace::{Document, Workspace},
+    workspace::{Document, DocumentKind, Workspace},
 };
 
 #[derive(Clone, Copy, PartialEq)]
@@ -322,7 +322,10 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
         return vec![];
     };
     let scope = workspace.symbol_scope(uri);
-    if doc.bibtex {
+    if doc.kind == DocumentKind::BibtexStyle {
+        return vec![];
+    }
+    if doc.kind == DocumentKind::Bibtex {
         return bibliography_completion(workspace, doc, offset, &scope);
     }
     if doc.syntax.is_ignored(offset.saturating_sub(1)) {
@@ -778,7 +781,7 @@ pub fn diagnostics(doc: &Document) -> Vec<Diagnostic> {
 
 #[allow(deprecated)]
 pub fn symbols(doc: &Document) -> Vec<DocumentSymbol> {
-    if doc.bibtex {
+    if doc.kind == DocumentKind::Bibtex {
         return doc
             .syntax
             .citations

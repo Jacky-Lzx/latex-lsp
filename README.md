@@ -16,12 +16,12 @@
 - 查找引用：标签、文献键、自定义命令；支持包含或排除定义。
 - 文档高亮：区分当前文件中的定义和引用；选择范围可逐级扩展到词、参数、命令、章节和整篇文档。
 - 跨文件重命名：标签、BibTeX 文献键、自定义命令和环境；环境同步修改声明与 `\begin` / `\end`，文献键同步更新条目间引用。支持准备重命名、定义歧义/重名检查及版本化工作区编辑，跳过注释和逐字文本。
-- 文件/目录重命名：通过 `workspace/willRenameFiles` 更新输入文件、文献库、本地包/类、图片及 `% !TeX root` 路径；目录移动会重算内部相对路径，保留省略扩展名的写法。
+- 文件/目录重命名：通过 `workspace/willRenameFiles` 更新输入文件、文献库、BibTeX 样式、本地包/类、图片及 `% !TeX root` 路径；目录移动会重算内部相对路径，保留省略扩展名的写法。
 - 文档符号：章节标题、标签、自定义命令和 BibTeX 条目；根据客户端能力返回层级结构或平铺列表。
 - 工作区符号搜索：跨文件搜索章节、标签、宏和文献键，支持中文、不区分大小写及子序列匹配，按相关性返回最多 256 项。
 - 文档折叠：章节、嵌套环境、多行花括号、连续注释和逐字环境，遵守客户端折叠数量限制。
 - 文档链接：输入文件、文献库、本地包/文档类、图片及 `\url` / `\href`；文件先在编译主文档目录查找，再尝试当前文档目录。`% !TeX root` 始终相对于声明所在文档。
-- 工作区索引：扫描 `.tex`、`.ltx`、`.bib`、`.sty`、`.cls`、`.def`、`.clo`；跟踪文件变更，优先使用编辑器中未保存的内容。
+- 工作区索引：扫描 `.tex`、`.ltx`、`.bib`、`.bst`、`.sty`、`.cls`、`.def`、`.clo`；跟踪文件变更，优先使用编辑器中未保存的内容。
 - 后台编译：支持 latexmk、pdfLaTeX、XeLaTeX、LuaLaTeX、Tectonic 和自定义工具；根文件识别、取消、超时、状态查询、编辑器原生进度显示和可选的保存后编译。
 - 编译结果分析：错误、LaTeX/包/文档类/字体警告、缺字、引擎警告、Overfull/Underfull 提示，以及 BibTeX/Biber 文献错误和警告，定位到子文件、文献条目和行号；结果提供 PDF、日志路径和输出摘要。只采用 latexmk 最后一遍 TeX 日志，避免保留已解决的引用警告。
 - SyncTeX 查询：源码行定位 PDF 页码/坐标，以及 PDF 坐标反查源码行；返回数据供编辑器或 PDF 预览插件使用，检查未保存来源和过期产物。
@@ -69,7 +69,7 @@ latex-lsp --version
 ```lua
 vim.lsp.config('latex_lsp', {
   cmd = { 'latex-lsp', '--stdio' },
-  filetypes = { 'tex', 'plaintex', 'bib' },
+  filetypes = { 'tex', 'plaintex', 'bib', 'bst' },
   root_markers = { '.latexmkrc', 'latexmkrc', '.git' },
 })
 vim.lsp.enable('latex_lsp')
@@ -83,7 +83,7 @@ vim.lsp.enable('latex_lsp')
 
 在语法错误处调用 `vim.lsp.buf.code_action()` 可选择快速修复；`vim.lsp.buf.document_highlight()` 高亮当前符号的定义和引用。Neovim 0.12 中可用 `vim.lsp.buf.selection_range(1)` 扩大语法选择范围。
 
-其他编辑器可将 `latex-lsp --stdio` 配置为 `tex` / `latex` / `bib` 文件的语言服务器。建议将根目录设为当前 LaTeX 项目，避免把多个无关项目混在同一个工作区。
+其他编辑器可将 `latex-lsp --stdio` 配置为 `tex` / `latex` / `bib` / `bst` 文件的语言服务器。建议将根目录设为当前 LaTeX 项目，避免把多个无关项目混在同一个工作区。
 
 ## 试用
 
@@ -120,6 +120,8 @@ latexmk 和直接 TeX 引擎编译前会为静态 `\include{chapters/name}` 预�
 编译后读取本次更新的 `.fls` recorder，发现 TeX 宏展开后实际读取的 `.tex`、`.ltx`、`.sty`、`.cls`、`.def`、`.clo` 和 `.bib` 文件，以及 PDF、PNG、JPEG、EPS、SVG 图片。项目目录内的来源会进入索引，参与之后的根文件识别、保存编译和未保存检查；系统 TeX 包不会批量进入索引。首次发现的来源已有未保存内容或在编译期间发生磁盘变化时，本次诊断也会被丢弃，无关的未保存缓冲区不受影响。上次记录的依赖会保守保留到新的 recorder 替换，因此刚移除的依赖可能仍需先保存。默认 latexmk 和 TeX 引擎参数启用 recorder；自定义参数需自行启用 `-recorder`，不生成 `.fls` 的工具仍使用静态依赖。
 
 默认输出目录使用 `build/latex-lsp`，默认 latexmk 参数让 BibTeX 保持在主文档目录运行，以正确处理 `../library.bib` 等相对路径。显式配置隐藏目录、绝对路径或包含 `..` 的输出目录时，会保留 latexmk 切换目录运行 BibTeX 的方式，以适应 BibTeX 的文件写入限制；这类配置中，父目录文献路径可能需要额外的工具配置。
+
+本地 `.bst` 样式通过 `bibliographystyle` 参与路径补全、跳转、文件移动及编译输入检查；修改时需要先保存，编译期间变化会使结果过期。BibTeX 报告的样式错误会定位到 `.bst` 对应行；编辑时不把它作为 LaTeX 语法解析。
 
 服务器读取本次编译新增或更新的 `.blg` 文件，分析 BibTeX 的重复条目、语法错误和字段警告，以及 Biber 的错误/警告；能识别数据库和文献键时定位到 `.bib` 文件。未能定位的消息显示在主文档。旧 `.blg` 不会被当成本次编译错误。
 
@@ -233,7 +235,7 @@ cargo test --locked -- --include-ignored
 
 目前不内置 PDF 预览、格式化或数学语义检查；默认编译生成 SyncTeX 数据，可由预览插件接入双向查询。未定义引用的即时静态检查暂不报错，编译器提供的相关警告会显示在诊断中。定义和引用在整个工作区索引中查找；重命名要求该名字在索引中只有一个定义，存在歧义时会拒绝操作。内置命令不支持重命名。
 
-文件/目录重命名需要编辑器或文件管理插件发送 `workspace/willRenameFiles` 并应用返回的编辑，然后移动文件并发送 `workspace/didRenameFiles`。服务器会保留打开文档的版本、刷新磁盘索引，并停止使用旧输入路径的编译；不会自行移动文件。含 TeX 宏的路径无法静态解析，新路径含无法安全表达的特殊字符时会拒绝引用更新；显式配置的 `build.rootFile` 需在主文件改名后同步修改。 输入源码改为其他扩展名时会保留新后缀，例如 `\input{chapter}` 在 `.tex` 改为 `.ltx` 后更新为 `\input{chapter.ltx}`，根指令同步更新；`\include` / `\includeonly` 章节需要保留 `.tex`，通过包/文档类加载命令使用的文件需要保留 `.sty` / `.cls` 后缀。
+文件/目录重命名需要编辑器或文件管理插件发送 `workspace/willRenameFiles` 并应用返回的编辑，然后移动文件并发送 `workspace/didRenameFiles`。服务器会保留打开文档的版本、刷新磁盘索引，并停止使用旧输入路径的编译；不会自行移动文件。含 TeX 宏的路径无法静态解析，新路径含无法安全表达的特殊字符时会拒绝引用更新；显式配置的 `build.rootFile` 需在主文件改名后同步修改。 输入源码改为其他扩展名时会保留新后缀，例如 `\input{chapter}` 在 `.tex` 改为 `.ltx` 后更新为 `\input{chapter.ltx}`，根指令同步更新；`\include` / `\includeonly` 章节需要保留 `.tex`，通过包/文档类加载命令使用的文件需要保留 `.sty` / `.cls` 后缀，本地 BibTeX 样式需要保留 `.bst`。
 
 磁盘索引最多 1024 个文件、单文件 2 MiB、目录深度 16，跳过隐藏目录、构建目录和目录符号链接；编辑器主动打开的文件不受磁盘文件大小限制。相对路径的文件引用还会按最多 16 层递归载入根目录外的依赖。支持动态文件监听的客户端会自动注册监听；其他客户端需发送 `workspace/didChangeWatchedFiles` 才能更新未打开文件的磁盘变化。
 

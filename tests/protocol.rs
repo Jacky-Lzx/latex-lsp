@@ -392,6 +392,67 @@ fn missing_included_sources_publish_path_warnings_and_clear_after_the_next_succe
 }
 
 #[test]
+#[cfg(unix)]
+fn local_bibtex_styles_require_saving_and_edits_during_compilation_make_results_stale() {
+    let (mut server,directory,main) = fake_build_server("touch \"$1/ready\"\nwhile [ ! -f \"$1/release\" ]; do sleep 0.02; done\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\n",false);
+    let root = directory.path();
+    let style = Url::from_file_path(root.join("local.bst")).unwrap();
+    let source = "\\documentclass{article}\n\\bibliographystyle{local}\n";
+    std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+    std::fs::write(style.to_file_path().unwrap(), "Original style\n").unwrap();
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+    );
+    server.notify("textDocument/didOpen",json!({"textDocument":{"uri":style,"languageId":"bst","version":1,"text":"Unsaved style with }\n"}}));
+    let diagnostics = server.until(|message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["uri"] == style.as_str()
+    });
+    assert_eq!(diagnostics["params"]["diagnostics"], json!([]));
+    server.send(json!({"jsonrpc":"2.0","id":2,"method":"workspace/executeCommand","params":{"command":"latex.build","arguments":[main]}}));
+    let rejected = server.until(|message| message["id"] == 2);
+    assert!(
+        rejected["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("local.bst"),
+        "{rejected}"
+    );
+    std::fs::write(style.to_file_path().unwrap(), "Unsaved style with }\n").unwrap();
+    server.notify(
+        "textDocument/didSave",
+        json!({"textDocument":{"uri":style}}),
+    );
+    server.request(
+        3,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[style]}),
+    );
+    let ready = root.join("build/latex-lsp/ready");
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !ready.exists() {
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    server.notify("textDocument/didChange",json!({"textDocument":{"uri":style,"version":2},"contentChanges":[{"text":"Changed during compilation\n"}]}));
+    // Wait for the edit to be applied before releasing the fake compiler.
+    server.request(
+        4,
+        "textDocument/documentSymbol",
+        json!({"textDocument":{"uri":style}}),
+    );
+    std::fs::write(root.join("build/latex-lsp/release"), "").unwrap();
+    let finished = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(finished["params"]["rootUri"], main.as_str());
+    assert_eq!(finished["params"]["stale"], true, "{finished}");
+    assert_eq!(finished["params"]["dependenciesCount"], 2);
+    server.request(5, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
 #[ignore = "requires pdflatex and synctex"]
 fn real_custom_job_names_preserve_build_analysis_recorded_dependencies_and_synctex_round_trips() {
     let directory = tempfile::tempdir().unwrap();
@@ -542,6 +603,51 @@ fn unchanged_pdf_older_than_an_included_source_is_rejected_but_fresh_noop_builds
     assert_eq!(fresh["params"]["status"], "success", "{fresh}");
     assert_eq!(fresh["params"]["stale"], false);
     assert_eq!(fresh["params"]["diagnosticsCount"], 0);
+    server.request(4, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+fn bibliography_styles_invalidate_old_pdfs_even_when_missing_from_tex_recorder() {
+    let script = "if [ ! -f \"$1/main.pdf\" ]; then\n printf '%%PDF-1.4\\n' > \"$1/main.pdf\"\n printf 'INPUT main.tex\\n' > \"$1/main.fls\"\nfi\n";
+    let (mut server, directory, main) = fake_build_server(script, false);
+    let source = "\\documentclass{article}\n\\bibliographystyle{local}\n";
+    std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+    let style = directory.path().join("local.bst");
+    std::fs::write(&style, "Original style\n").unwrap();
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+    );
+    server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let first = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(first["params"]["status"], "success", "{first}");
+    let pdf = directory.path().join("build/latex-lsp/main.pdf");
+    let pdf_time = std::fs::metadata(&pdf).unwrap().modified().unwrap();
+    std::fs::write(&style, "Changed style\n").unwrap();
+    std::fs::File::open(&style)
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(pdf_time + Duration::from_secs(1)))
+        .unwrap();
+    server.request(
+        3,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let outdated = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(outdated["params"]["status"], "error", "{outdated}");
+    assert_eq!(outdated["params"]["stale"], false);
+    assert!(outdated["params"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("local.bst"));
+    assert!(outdated["params"]["pdfUri"].is_null());
     server.request(4, "shutdown", Value::Null);
     server.notify("exit", Value::Null);
     server.wait_exit(0);

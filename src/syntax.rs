@@ -167,6 +167,7 @@ pub fn file_extensions(name: &str) -> Option<&'static [&'static str]> {
         "input" => &["tex", "ltx", "sty", "cls", "def", "clo"],
         "include" | "includeonly" | "subfile" => &["tex"],
         "bibliography" | "addbibresource" => &["bib"],
+        "bibliographystyle" => &["bst"],
         "usepackage" | "RequirePackage" => &["sty"],
         "documentclass" | "LoadClass" => &["cls"],
         "includegraphics" => &["pdf", "png", "jpg", "jpeg", "eps", "svg"],

@@ -21,9 +21,11 @@ fn numbered_error(line: &str) -> Option<(&str, u32, &str)> {
         let (number, message) = tail.split_once(':')?;
         if let Ok(number) = number.parse::<u32>() {
             let path = line[..colon].trim();
-            if [".tex", ".sty", ".cls", ".clo", ".def", ".bib", ".ltx"]
-                .iter()
-                .any(|ext| path.trim_matches('"').ends_with(ext))
+            if [
+                ".tex", ".sty", ".cls", ".clo", ".def", ".bib", ".bst", ".ltx",
+            ]
+            .iter()
+            .any(|ext| path.trim_matches('"').ends_with(ext))
             {
                 return Some((path, number, message.trim()));
             }
@@ -493,7 +495,7 @@ pub fn parse_bibliography(root: &Path, log: &str) -> BTreeMap<Url, Vec<Diagnosti
                     let location = location(root, name).filter(|path| {
                         matches!(
                             path.extension().and_then(|ext| ext.to_str()),
-                            Some("tex" | "bib" | "sty" | "cls")
+                            Some("tex" | "bib" | "bst" | "sty" | "cls")
                         )
                     });
                     let (path, number) = location

@@ -276,6 +276,7 @@ pub fn will_rename(workspace: &Workspace, files: &[FileRename]) -> Result<Option
                             "usepackage" | "RequirePackage" => "sty",
                             "documentclass" | "LoadClass" => "cls",
                             "include" | "includeonly" => "tex",
+                            "bibliographystyle" => "bst",
                             _ => return None,
                         };
                         Some((command, extension))
