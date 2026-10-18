@@ -96,6 +96,11 @@ fn file_completions_replace_partial_names_preserve_lists_and_reuse_existing_slas
     for (marked, label, expected) in [
         (r"\input{cha|pter}", "chapter.tex", r"\input{chapter}"),
         (
+            r"\includeonly{other, cha|pter, last}",
+            "chapter.tex",
+            r"\includeonly{other, chapter, last}",
+        ),
+        (
             r"\input{cha|pter.tex}",
             "chapter.tex",
             r"\input{chapter.tex}",

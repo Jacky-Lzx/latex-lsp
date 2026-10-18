@@ -72,6 +72,91 @@ fn project(root: &Path) -> Workspace {
 }
 
 #[test]
+fn includeonly_paths_are_linked_and_renamed_without_becoming_input_dependencies() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::create_dir(root.join("chapters")).unwrap();
+    let source = "\\documentclass{article}\n\\includeonly{chapters/old, chapters/second}\n% \\includeonly{chapters/old}\n";
+    for (name, source) in [
+        ("main.tex", source),
+        ("chapters/old.tex", "Selected."),
+        ("chapters/second.tex", "Other."),
+    ] {
+        std::fs::write(root.join(name), source).unwrap();
+    }
+    let mut workspace = Workspace::default();
+    workspace.add_root(root.into());
+    let main = uri(root, "main.tex");
+    assert_eq!(workspace.project_documents(&main), [main.clone()].into());
+    let links = latex_lsp::navigation::document_links(&workspace, &main);
+    assert_eq!(links.len(), 2);
+    assert_eq!(links[0].target, Some(uri(root, "chapters/old.tex")));
+    let edits = edits(
+        file_operations::will_rename(
+            &workspace,
+            &[rename(root, "chapters/old.tex", "chapters/new.tex")],
+        )
+        .unwrap()
+        .unwrap(),
+    );
+    let changed = apply(source, edits[&main].clone());
+    assert!(changed.contains("\\includeonly{chapters/new, chapters/second}"));
+    assert!(changed.contains("% \\includeonly{chapters/old}"));
+}
+
+#[test]
+#[ignore = "requires latexmk"]
+fn selected_chapters_still_compile_after_includeonly_references_are_renamed() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::create_dir(root.join("chapters")).unwrap();
+    for (name,source) in [
+        ("main.tex", "\\documentclass{article}\n\\includeonly{chapters/old}\n\\begin{document}\n\\include{chapters/old}\n\\include{chapters/excluded}\n\\end{document}\n"),
+        ("chapters/old.tex", "\\typeout{SELECTED CHAPTER}Selected."),
+        ("chapters/excluded.tex", "\\typeout{EXCLUDED CHAPTER}Excluded."),
+    ] { std::fs::write(root.join(name),source).unwrap(); }
+    let mut workspace = Workspace::default();
+    workspace.add_root(root.into());
+    for renamed in [false, true] {
+        let outcome = latex_lsp::build::run(
+            &root.join("main.tex"),
+            &Default::default(),
+            &Default::default(),
+        );
+        assert_eq!(outcome.status, "success", "{}", outcome.output);
+        assert!(outcome.output.contains("SELECTED CHAPTER"));
+        assert!(!outcome.output.contains("EXCLUDED CHAPTER"));
+        let inputs = outcome.inputs.unwrap();
+        assert!(inputs.contains(&uri(
+            root,
+            if renamed {
+                "chapters/new.tex"
+            } else {
+                "chapters/old.tex"
+            }
+        )));
+        // Modern LaTeX may record existence checks for excluded chapters too;
+        // the typeout marker above verifies that their contents did not run.
+        if renamed {
+            break;
+        }
+        let files = [rename(root, "chapters/old.tex", "chapters/new.tex")];
+        let edit = file_operations::will_rename(&workspace, &files)
+            .unwrap()
+            .unwrap();
+        for (uri, edits) in edits(edit) {
+            std::fs::write(
+                uri.to_file_path().unwrap(),
+                apply(&workspace.documents[&uri].text.source, edits),
+            )
+            .unwrap();
+        }
+        std::fs::rename(root.join("chapters/old.tex"), root.join("chapters/new.tex")).unwrap();
+        file_operations::did_rename(&mut workspace, &files).unwrap();
+    }
+}
+
+#[test]
 fn recorded_dependencies_follow_file_and_directory_moves() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();

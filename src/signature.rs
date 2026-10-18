@@ -95,6 +95,7 @@ fn builtin(name: &str) -> Option<Signature> {
         "input" | "include" | "subfile" | "bibliography" | "bibliographystyle" => {
             (&[("file", false)], false)
         }
+        "includeonly" => (&[("files", false)], false),
         "addbibresource" => (&[("options", true), ("file", false)], false),
         "part" | "chapter" | "section" | "subsection" | "subsubsection" | "paragraph"
         | "subparagraph" | "caption" => (&[("short title", true), ("title", false)], true),

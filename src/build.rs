@@ -665,6 +665,18 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool) -> Outcome 
     if let Err(error) = std::fs::create_dir_all(&output_dir) {
         return Outcome::error(format!("Cannot create build directory: {error}"));
     }
+    if matches!(
+        Path::new(&config.executable)
+            .file_stem()
+            .and_then(|name| name.to_str()),
+        Some("latexmk" | "pdflatex" | "xelatex" | "lualatex")
+    ) {
+        if let Err(error) = prepare_include_directories(root, &output_dir) {
+            return Outcome::error(format!(
+                "Cannot prepare chapter auxiliary directories: {error}"
+            ));
+        }
+    }
     let Some(log_path) = config.artifact_path(root, "log") else {
         return Outcome::error("Invalid root filename".into());
     };
@@ -826,6 +838,60 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool) -> Outcome 
         .rev()
         .collect();
     outcome
+}
+
+/// TeX writes `chapters/name.aux` below the output directory, but does not
+/// create `chapters/`. latexmk's recovery is not reliable with file-line errors.
+/// Prepare only static paths contained in that output directory.
+fn prepare_include_directories(root: &Path, output: &Path) -> std::io::Result<()> {
+    let Ok(uri) = Url::from_file_path(root) else {
+        return Ok(());
+    };
+    let mut workspace = Workspace::default();
+    workspace.refresh_project(&uri);
+    let mut directories = BTreeSet::new();
+    for doc in workspace.documents.values() {
+        for command in doc
+            .syntax
+            .commands
+            .iter()
+            .filter(|command| command.name == "include")
+            .take(4096)
+        {
+            let Some(argument) = &command.argument else {
+                continue;
+            };
+            let name = argument.value.trim();
+            if name.is_empty() || name.contains(['\\', '%', '#', '$', '{', '}', '\n', '\r', '\0']) {
+                continue;
+            }
+            let path = Path::new(name);
+            if path.components().any(|component| {
+                !matches!(
+                    component,
+                    std::path::Component::Normal(_) | std::path::Component::CurDir
+                )
+            }) {
+                continue;
+            }
+            if let Some(parent) = path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+            {
+                directories.insert(output.join(parent));
+                if directories.len() >= 1024 {
+                    break;
+                }
+            }
+        }
+        if directories.len() >= 1024 {
+            break;
+        }
+    }
+    for directory in directories {
+        std::fs::create_dir_all(directory)?;
+    }
+    Ok(())
 }
 
 fn read_log(path: &Path) -> Option<String> {

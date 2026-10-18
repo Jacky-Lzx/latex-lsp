@@ -165,7 +165,7 @@ pub(crate) fn is_static_key(value: &str) -> bool {
 pub fn file_extensions(name: &str) -> Option<&'static [&'static str]> {
     Some(match name {
         "input" => &["tex", "ltx", "sty", "cls", "def", "clo"],
-        "include" | "subfile" => &["tex"],
+        "include" | "includeonly" | "subfile" => &["tex"],
         "bibliography" | "addbibresource" => &["bib"],
         "usepackage" | "RequirePackage" => &["sty"],
         "documentclass" | "LoadClass" => &["cls"],
@@ -175,7 +175,10 @@ pub fn file_extensions(name: &str) -> Option<&'static [&'static str]> {
 }
 
 pub fn file_list(name: &str) -> bool {
-    matches!(name, "bibliography" | "usepackage" | "RequirePackage")
+    matches!(
+        name,
+        "bibliography" | "usepackage" | "RequirePackage" | "includeonly"
+    )
 }
 
 fn declares_command(name: &str) -> bool {

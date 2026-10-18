@@ -152,6 +152,73 @@ fn real_overfull_paragraph_diagnostics_cover_the_complete_reported_source_range(
 }
 
 #[test]
+#[ignore = "requires latexmk and pdflatex"]
+fn nested_chapter_includes_prepare_auxiliary_directories_with_default_and_direct_compilers() {
+    for executable in ["latexmk", "pdflatex"] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        std::fs::create_dir_all(root.join("chapters/deep")).unwrap();
+        std::fs::write(root.join("main.tex"),"\\documentclass{article}\n\\begin{document}\n\\input{chapters/plan}\n\\end{document}\n").unwrap();
+        std::fs::write(
+            root.join("chapters/plan.tex"),
+            "\\include{chapters/deep/part}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("chapters/deep/part.tex"),
+            "\\typeout{NESTED INCLUDE OK}Chapter.\n",
+        )
+        .unwrap();
+        let config = BuildConfig {
+            executable: executable.into(),
+            job_name: Some("paper.v2".into()),
+            ..Default::default()
+        };
+        let outcome = build::run(&root.join("main.tex"), &config, &AtomicBool::new(false));
+        assert_eq!(
+            outcome.status, "success",
+            "{executable}: {}",
+            outcome.output
+        );
+        assert!(outcome.output.contains("NESTED INCLUDE OK"));
+        assert!(root
+            .join("build/latex-lsp/chapters/deep/part.aux")
+            .is_file());
+        assert!(!root.join("chapters/deep/part.aux").exists());
+        assert!(outcome.pdf.unwrap().ends_with("paper.v2.pdf"));
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn auxiliary_directory_preparation_skips_comments_macros_and_paths_outside_the_output_directory() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::write(root.join("main.tex"),"\\documentclass{article}\n\\include{chapters/deep/part}\n\\include{../escape/part}\n\\include{generated/\\unknown}\n% \\include{commented/part}\n\\verb|\\include{raw/part}|\n").unwrap();
+    let wrapper = script(
+        root,
+        "[ -d \"$1/chapters/deep\" ] || exit 13\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"",
+    );
+    let compiler = root.join("pdflatex");
+    std::fs::rename(wrapper, &compiler).unwrap();
+    let config = BuildConfig {
+        executable: compiler.to_string_lossy().into_owned(),
+        arguments: Some(vec!["%o".into()]),
+        ..Default::default()
+    };
+    let outcome = build::run(&root.join("main.tex"), &config, &AtomicBool::new(false));
+    assert_eq!(outcome.status, "success", "{}", outcome.output);
+    for name in [
+        "build/escape",
+        "build/latex-lsp/generated",
+        "build/latex-lsp/commented",
+        "build/latex-lsp/raw",
+    ] {
+        assert!(!root.join(name).exists(), "{name}");
+    }
+}
+
+#[test]
 fn engine_directives_use_the_root_comment_and_respect_explicit_configuration() {
     use latex_lsp::{config::Engine, workspace::Document};
     let directory = tempfile::tempdir().unwrap();

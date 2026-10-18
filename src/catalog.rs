@@ -159,6 +159,11 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
         "Insert an image. Requires graphicx.",
     ),
     (
+        "includeonly",
+        "includeonly{${1:chapter}}",
+        "Compile only these comma-separated files from \\include commands. Use in the preamble.",
+    ),
+    (
         "caption",
         "caption{${1:Caption}}",
         "Add a caption to a figure or table.",

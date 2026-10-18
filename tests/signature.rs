@@ -38,6 +38,7 @@ fn check(definitions: &str, marked: &str, label: &str, active: u32) {
 fn builtin_signatures_select_nested_arguments_and_skip_omitted_optional_parameters() {
     for (source, label, active) in [
         (r"\frac{a}{b¦}", r"\frac{numerator}{denominator}", 1),
+        (r"\includeonly{first, chap¦}", r"\includeonly{files}", 0),
         (r"😀 \frac{😀}{😀¦}", r"\frac{numerator}{denominator}", 1),
         (r"\frac{a}{\sqrt[3]{b¦}}", r"\sqrt[degree]{expression}", 1),
         (r"\sqrt{b¦}", r"\sqrt[degree]{expression}", 1),
