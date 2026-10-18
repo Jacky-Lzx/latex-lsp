@@ -479,6 +479,20 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
         .iter()
         .filter(|(uri, _)| scope.contains(*uri))
         .flat_map(|(_, doc)| &doc.syntax.definitions)
+        .chain(
+            workspace
+                .documents
+                .iter()
+                .filter(|(uri, _)| scope.contains(*uri))
+                .flat_map(|(_, doc)| {
+                    doc.syntax.environments.iter().filter(|entry| {
+                        entry
+                            .name
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphabetic() || byte == b'@')
+                    })
+                }),
+        )
     {
         if entry.name.starts_with(prefix) && seen.insert(entry.name.clone()) {
             let signature = crate::signature::completion(workspace, &entry.name, &scope);

@@ -162,7 +162,9 @@ fn definition(uri: &Url, doc: &Document, entry: &Entry, environment: bool) -> Op
         | "DeclareRobustCommand"
         | "newenvironment"
         | "renewenvironment"
-        | "provideenvironment" => {
+        | "provideenvironment"
+        | "NewEnviron"
+        | "RenewEnviron" => {
             let (count, end) = syntax::group(source, i, b'[', b']')?;
             let count: usize = count.value.trim().parse().ok()?;
             if !(1..=9).contains(&count) {
@@ -228,6 +230,12 @@ fn definition(uri: &Url, doc: &Document, entry: &Entry, environment: bool) -> Op
                     return None;
                 }
             }
+        }
+        "newtheorem" => {
+            parameters.push(Parameter {
+                kind: Kind::Optional,
+                label: "[note]".into(),
+            });
         }
         "def" | "gdef" | "edef" | "xdef" => {
             while source.as_bytes().get(i) == Some(&b'#') {
@@ -318,7 +326,28 @@ fn lookup(
     } else if environment {
         builtin_environment(name)
     } else {
-        builtin(name)
+        let mut environments = workspace
+            .documents
+            .iter()
+            .filter(|(uri, _)| scope.contains(*uri))
+            .flat_map(|(uri, doc)| {
+                doc.syntax
+                    .environments
+                    .iter()
+                    .filter(move |entry| entry.name == name)
+                    .map(move |entry| (uri, doc, entry))
+            });
+        if let Some((uri, doc, entry)) = environments.next() {
+            if environments.next().is_some() {
+                return None;
+            }
+            let mut signature = definition(uri, doc, entry, true)?;
+            signature.name = name.into();
+            signature.parameters.remove(0);
+            Some(signature)
+        } else {
+            builtin(name)
+        }
     }
 }
 

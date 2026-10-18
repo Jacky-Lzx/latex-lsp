@@ -363,3 +363,148 @@ fn builtin_environment_signatures_track_required_and_optional_arguments() {
     );
     assert!(signature::help(&workspace, &uri, position).is_none());
 }
+
+#[test]
+fn direct_environment_calls_use_declared_arguments_and_respect_macro_overrides() {
+    for declaration in [
+        r"\newenvironment{panel}[2][blue]{#1#2}{}",
+        r"\NewEnviron{panel}[2][blue]{#1#2}",
+        r"\RenewEnviron{panel}[2][blue]{#1#2}",
+        r"\NewDocumentEnvironment{panel}{O{blue}m}{#1#2}{}",
+    ] {
+        check(
+            declaration,
+            r"\panel[red¦]{title}",
+            r"\panel[#1=blue]{#2}",
+            0,
+        );
+        check(declaration, r"\panel{😀¦}", r"\panel[#1=blue]{#2}", 1);
+        check(
+            declaration,
+            r"\begin{panel}[red¦]{title}",
+            r"\begin{panel}[#1=blue]{#2}",
+            1,
+        );
+        let (workspace, uri, position) = setup(declaration, r"\panel{title} body¦");
+        assert!(signature::help(&workspace, &uri, position).is_none());
+    }
+    check(
+        r"\NewDocumentEnvironment{panel}{s O{blue} m}{}{}",
+        r"\panel*[red]{title¦}",
+        r"\panel*[#2=blue]{#3}",
+        2,
+    );
+    check(
+        r"\newenvironment{panel}[2]{#1#2}{}\renewcommand{\panel}[1]{#1}",
+        r"\panel{title¦}",
+        r"\panel{#1}",
+        0,
+    );
+    for definitions in [
+        r"\newenvironment{panel}[1]{#1}{}\newenvironment{panel}[2]{#1#2}{}",
+        r"\NewDocumentEnvironment{panel}{d()m}{}{}",
+        r"\newenvironment{panel}[1]{#1}{}\renewcommand{\panel}{No arguments}",
+    ] {
+        let (workspace, uri, position) = setup(definitions, r"\panel{title¦}");
+        assert!(
+            signature::help(&workspace, &uri, position).is_none(),
+            "{definitions}"
+        );
+    }
+}
+
+#[test]
+fn theorem_signatures_offer_optional_notes_for_numbered_shared_and_starred_declarations() {
+    for declaration in [
+        r"\newtheorem{claim}{Claim}",
+        r"\newtheorem{claim}{Claim}[section]",
+        r"\newtheorem{claim}[lemma]{Claim}",
+        r"\newtheorem*{claim}{Claim}",
+    ] {
+        check(
+            declaration,
+            r"\begin{claim}[中文¦]",
+            r"\begin{claim}[note]",
+            1,
+        );
+        check(declaration, r"\begin{claim}¦", r"\begin{claim}[note]", 1);
+        check(declaration, r"\claim[Title¦]", r"\claim[note]", 0);
+        check(declaration, r"\claim[\textbf{Title¦}]", r"\textbf{text}", 0);
+        for call in [r"\begin{claim}Body¦", r"\claim[Title]Body¦", r"\endclaim¦"] {
+            let (workspace, uri, position) = setup(declaration, call);
+            assert!(
+                signature::help(&workspace, &uri, position).is_none(),
+                "{call}"
+            );
+        }
+    }
+}
+
+#[test]
+fn direct_environment_completions_insert_required_arguments_and_omit_optional_defaults() {
+    use latex_lsp::features;
+    for (definitions, marked, name, snippets, expected, label) in [
+        (
+            r"\newenvironment{panel}[2][blue]{}{}",
+            r"\pa¦",
+            "panel",
+            true,
+            "panel{${1:arg2}}",
+            r"\panel[#1=blue]{#2}",
+        ),
+        (
+            r"\NewDocumentEnvironment{panel}{s O{blue}mm}{}{}",
+            r"\pa¦",
+            "panel",
+            true,
+            "panel{${1:arg3}}{${2:arg4}}",
+            r"\panel*[#2=blue]{#3}{#4}",
+        ),
+        (
+            r"\newtheorem{claim}{Claim}",
+            r"\cla¦",
+            "claim",
+            true,
+            "claim",
+            r"\claim[note]",
+        ),
+        (
+            r"\newenvironment{panel}[1]{}{}",
+            r"\pa¦nel{Existing}",
+            "panel",
+            true,
+            "panel",
+            r"\panel{#1}",
+        ),
+        (
+            r"\newenvironment{panel}[1]{}{}",
+            r"\pa¦",
+            "panel",
+            false,
+            "panel",
+            r"\panel{#1}",
+        ),
+    ] {
+        let (mut workspace, uri, position) = setup(definitions, marked);
+        workspace.snippets = snippets;
+        let items = features::completion(&workspace, &uri, position);
+        let item = items.iter().find(|item| item.label == name).unwrap();
+        assert_eq!(item.detail.as_deref(), Some(label));
+        let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+            panic!("missing edit");
+        };
+        assert_eq!(edit.new_text, expected);
+        assert_eq!(
+            item.insert_text_format,
+            Some(if expected.contains("${") {
+                InsertTextFormat::SNIPPET
+            } else {
+                InsertTextFormat::PLAIN_TEXT
+            })
+        );
+    }
+    let (workspace, uri, position) = setup(r"\newenvironment{panel-two}[1]{}{}", r"\pan¦");
+    assert!(!features::completion(&workspace, &uri, position)
+        .iter()
+        .any(|item| item.label == "panel-two"));
+}

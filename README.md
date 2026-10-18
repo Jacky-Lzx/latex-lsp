@@ -80,7 +80,7 @@ vim.lsp.enable('latex_lsp')
 
 输入命令参数时，可通过 `vim.lsp.buf.signature_help()` 查看签名；支持自动参数提示的插件也可使用标准 `textDocument/signatureHelp`。
 
-环境参数提示支持 `\newenvironment` 系列和 xparse 的 `\NewDocumentEnvironment` 系列定义，以及 `tabular`、`minipage`、`figure` 等常用环境。自定义命令与环境识别常规参数数量/默认值，以及 xparse 的 `m`、`o`、`O`、`s` 参数；复杂分隔参数和存在多个定义的名称不推断签名。
+环境参数提示支持 `\newenvironment`、`\NewEnviron` 和 xparse 的 `\NewDocumentEnvironment` 系列定义，以及 `tabular`、`minipage`、`figure` 等常用环境；`\newtheorem` 定理提示可选标题 `[note]`。通过 `\begin{panel}` 或直接调用 `\panel` 均可查看参数，自定义环境的直接命令补全会插入必选参数的占位符并保留可选参数默认值。自定义命令与环境识别常规参数数量/默认值，以及 xparse 的 `m`、`o`、`O`、`s` 参数；复杂分隔参数和存在多个定义的名称不推断签名。
 
 在语法错误处调用 `vim.lsp.buf.code_action()` 可选择快速修复；`vim.lsp.buf.document_highlight()` 高亮当前符号的定义和引用。Neovim 0.12 中可用 `vim.lsp.buf.selection_range(1)` 扩大语法选择范围。
 

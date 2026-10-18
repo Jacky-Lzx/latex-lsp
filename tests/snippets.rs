@@ -43,11 +43,12 @@ fn snippets_expand_in_a_real_editor_without_consuming_tex_backslashes() {
         cases.push(serde_json::json!({"snippet":edit.new_text,"expected":expected}));
     }
     let macros = Url::parse("file:///snippets/macros.sty").unwrap();
-    workspace.documents.insert(macros.clone(),Document::new(&macros,r"\newcommand{\pair}[2][\linewidth]{#2}\NewDocumentCommand{\render}{s O{blue} m m}{#3#4}\def\texpair#1#2{#1#2}".into(),None));
+    workspace.documents.insert(macros.clone(),Document::new(&macros,r"\newcommand{\pair}[2][\linewidth]{#2}\NewDocumentCommand{\render}{s O{blue} m m}{#3#4}\def\texpair#1#2{#1#2}\NewDocumentEnvironment{panel}{s O{blue} m m}{#3#4}{}".into(),None));
     for (name, expected) in [
         ("pair", "pair{arg2}"),
         ("render", "render{arg3}{arg4}"),
         ("texpair", "texpair{arg1}{arg2}"),
+        ("panel", "panel{arg3}{arg4}"),
     ] {
         let source = format!("\\{name}");
         workspace
