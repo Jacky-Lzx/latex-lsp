@@ -514,25 +514,47 @@ pub fn help(workspace: &Workspace, uri: &Url, position: Position) -> Option<Sign
         return None;
     }
     let scope = workspace.symbol_scope(uri);
-    for command in doc
+    for (index, command) in doc
         .syntax
         .commands
         .iter()
+        .enumerate()
         .rev()
-        .filter(|command| command.span.end <= cursor)
+        .filter(|(_, command)| command.span.end <= cursor)
         .take(128)
     {
-        let signature = if command.name == "begin" {
+        let literal = if command.name == "endcsname" {
+            index.checked_sub(1).and_then(|index| {
+                syntax::literal_csname(&doc.text.source, &doc.syntax.commands, index)
+            })
+        } else {
+            None
+        };
+        if literal.as_ref().is_some_and(|span| {
+            doc.syntax
+                .definitions
+                .iter()
+                .any(|entry| entry.span == *span)
+        }) {
+            continue;
+        }
+        let name = literal
+            .as_ref()
+            .map_or(command.name.as_str(), |span| &doc.text.source[span.clone()]);
+        let signature = if name == "begin" {
             command
                 .argument
                 .as_ref()
                 .filter(|argument| cursor > argument.span.end)
                 .and_then(|argument| lookup(workspace, argument.value.trim(), true, &scope))
-                .or_else(|| signature(workspace, &command.name, &scope))
+                .or_else(|| signature(workspace, name, &scope))
         } else {
-            signature(workspace, &command.name, &scope)
+            signature(workspace, name, &scope)
         };
-        if let Some(signature) = signature {
+        if let Some(mut signature) = signature {
+            if literal.is_some() {
+                signature.name = format!("csname {name}\\endcsname");
+            }
             if let Some(active) = active_parameter(doc, command.span.end, cursor, &signature) {
                 return Some(signature.information(active));
             }

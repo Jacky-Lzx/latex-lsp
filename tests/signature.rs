@@ -524,3 +524,84 @@ fn expanded_literal_macro_declarations_keep_optional_defaults_and_required_param
         assert_eq!(snippet.as_deref(), Some("pair{${1:arg2}}"));
     }
 }
+
+#[test]
+fn literal_control_sequence_calls_offer_builtin_macro_and_environment_signatures() {
+    for (definitions, marked, label, active) in [
+        (
+            "",
+            r"\csname frac\endcsname{a}{b¦}",
+            r"\csname frac\endcsname{numerator}{denominator}",
+            1,
+        ),
+        (
+            "",
+            r"\csname sqrt\endcsname[3¦]{b}",
+            r"\csname sqrt\endcsname[degree]{expression}",
+            0,
+        ),
+        (
+            r"\newcommand{\pair}[2][blue]{#1#2}",
+            r"\csname pair\endcsname{😀¦}",
+            r"\csname pair\endcsname[#1=blue]{#2}",
+            1,
+        ),
+        (
+            r"\expandafter\def\csname pair-two\endcsname#1#2{#1#2}",
+            r"\csname pair-two\endcsname{a}{b¦}",
+            r"\csname pair-two\endcsname{#1}{#2}",
+            1,
+        ),
+        (
+            r"\NewDocumentEnvironment{panel}{O{blue}m}{}{}",
+            r"\csname panel\endcsname[red¦]{title}",
+            r"\csname panel\endcsname[#1=blue]{#2}",
+            0,
+        ),
+        (
+            r"\newtheorem{claim}{Claim}",
+            r"\csname claim\endcsname[Title¦]",
+            r"\csname claim\endcsname[note]",
+            0,
+        ),
+        (
+            r"\newenvironment{panel}[1]{}{}",
+            r"\csname begin\endcsname{panel}{Text¦}",
+            r"\csname begin\endcsname{panel}{#1}",
+            1,
+        ),
+        (
+            r"\newcommand{\pair}[2]{#1#2}",
+            r"\csname pair\endcsname{a}{\sqrt{b¦}}",
+            r"\sqrt[degree]{expression}",
+            1,
+        ),
+    ] {
+        check(definitions, marked, label, active);
+    }
+    for (definitions, marked) in [
+        (
+            r"\newcommand{\pair}[1]{#1}",
+            r"\csname pair\suffix\endcsname{Text¦}",
+        ),
+        (
+            r"\newcommand{\pair}[1]{#1}",
+            r"\csname pair\endcsname{Text}Body¦",
+        ),
+        (r"\newcommand{\pair}[1]{#1}", r"\csname pair{Text¦}"),
+        (
+            r"\newcommand{\pair}[1]{#1}\newcommand{\pair}[2]{#1#2}",
+            r"\csname pair\endcsname{Text¦}",
+        ),
+        (
+            "",
+            r"\expandafter\newcommand\csname pair\endcsname[2¦][blue]{#1#2}",
+        ),
+    ] {
+        let (workspace, uri, position) = setup(definitions, marked);
+        assert!(
+            signature::help(&workspace, &uri, position).is_none(),
+            "{marked}"
+        );
+    }
+}
