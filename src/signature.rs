@@ -189,6 +189,15 @@ fn builtin(name: &str) -> Option<Signature> {
             &[("format", true), ("counter", false), ("within", false)],
             false,
         ),
+        "getrefnumber" | "getpagerefnumber" | "refused" => (&[("key", false)], false),
+        "getrefbykeydefault" => (
+            &[("key", false), ("field", false), ("default", false)],
+            false,
+        ),
+        "IfRefUndefinedExpandable" | "IfRefUndefinedBabel" => (
+            &[("key", false), ("undefined", false), ("defined", false)],
+            false,
+        ),
         name if syntax::is_reference(name) => (&[("keys", false)], false),
         name if syntax::is_citation(name) && name != "nocite" => (
             &[

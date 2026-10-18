@@ -294,7 +294,7 @@ pub(crate) fn undefined_reference_ranges(text: &Text, line: u32, message: &str) 
         if !(if citation {
             crate::syntax::is_citation(&command.name)
         } else {
-            crate::syntax::is_reference(&command.name)
+            crate::syntax::warns_on_undefined_reference(&command.name)
         }) {
             continue;
         }
@@ -1653,6 +1653,27 @@ mod tests {
             .find(|error| error.message.contains("` missing '"))
             .unwrap();
         assert_eq!(fallback.range, text.range(0, source.len() - 1));
+    }
+
+    #[test]
+    fn silent_refcount_queries_do_not_inherit_warnings_from_another_call_on_the_line() {
+        let directory = tempfile::tempdir().unwrap();
+        let main = directory.path().join("main.tex");
+        let source = concat!(
+            "\\refused{missing} \\getrefnumber{missing} \\getpagerefnumber{missing} ",
+            "\\getrefbykeydefault{missing}{page}{0} ",
+            "\\IfRefUndefinedExpandable{missing}{A}{B} \\IfRefUndefinedBabel{missing}{A}{B}\n",
+        );
+        std::fs::write(&main, source).unwrap();
+        let log = "(./main.tex\nLaTeX Warning: Reference `missing' on page 1 undefined on input line 1.\n)\n";
+        let diagnostics = parse(&main, log);
+        let errors = &diagnostics[&Url::from_file_path(&main).unwrap()];
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        let start = source.find("missing").unwrap();
+        assert_eq!(
+            errors[0].range,
+            Text::new(source.into()).range(start, start + 7)
+        );
     }
 
     #[test]

@@ -107,6 +107,65 @@ fn label_rename_preserves_spaced_names_and_keeps_cref_list_separators() {
 }
 
 #[test]
+fn refcount_queries_navigate_complete_and_rename_only_the_label_argument() {
+    for (command, tail) in [
+        ("getrefnumber", ""),
+        ("getpagerefnumber", ""),
+        ("getrefbykeydefault", "{sec:old}{sec:old}"),
+        ("IfRefUndefinedExpandable", "{sec:old}{sec:old}"),
+        ("IfRefUndefinedBabel", "{sec:old}{sec:old}"),
+        ("refused", ""),
+    ] {
+        let mut workspace = Workspace::default();
+        let declaration = insert(&mut workspace, "chapter.tex", r"\label{sec:old}", None);
+        let normal = format!("\\{command}{{sec:old}}{tail}");
+        let spaced = format!("\\{command}{{ sec:old }}{tail}");
+        let source = format!("😀 {normal}\n{spaced}");
+        let main = insert(&mut workspace, "main.tex", &source, Some(7));
+        let text = &workspace.documents[&main].text;
+        let position = text.position(source.find("sec:old").unwrap() + 4);
+        let locations = features::definitions(&workspace, &main, position);
+        assert_eq!(locations.len(), 1, "{command}: {locations:?}");
+        assert_eq!(locations[0].uri, declaration);
+        assert!(features::hover(&workspace, &main, position).is_some());
+        assert_eq!(
+            features::references(&workspace, &main, position, false).len(),
+            1,
+            "{command}"
+        );
+        let candidates = features::completion(&workspace, &main, position);
+        assert!(
+            candidates.iter().any(|item| item.label == "sec:old"),
+            "{command}: {candidates:?}"
+        );
+        let changes = features::rename(&workspace, &main, position, "sec:new")
+            .unwrap()
+            .unwrap()
+            .changes
+            .unwrap();
+        assert_eq!(
+            edits_result(&source, &changes[&main]),
+            format!(
+                "😀 {}\n{spaced}",
+                normal.replacen("{sec:old}", "{sec:new}", 1)
+            )
+        );
+        if !tail.is_empty() {
+            let field =
+                text.position(source.find(&normal).unwrap() + normal.len() - tail.len() + 3);
+            assert!(
+                features::definitions(&workspace, &main, field).is_empty(),
+                "{command}"
+            );
+            assert!(
+                features::completion(&workspace, &main, field).is_empty(),
+                "{command}"
+            );
+        }
+    }
+}
+
+#[test]
 #[ignore = "requires pdflatex and refcount"]
 fn real_label_rename_preserves_independent_spaced_keys_and_reference_values() {
     use latex_lsp::{build, config::BuildConfig};
@@ -119,7 +178,11 @@ fn real_label_rename_preserves_independent_spaced_keys_and_reference_values() {
         "\\refstepcounter{section}\\label{plain}\n",
         "\\refstepcounter{section}\\label{ plain }\n",
         "\\ref{plain}\\ref{ plain }\n",
-        "\\typeout{WITNESS=\\getrefnumber{changed};\\getrefnumber{ plain }}\n",
+        "\\typeout{WITNESS=\\getrefnumber{plain};\\getrefnumber{ plain }}\n",
+        "\\typeout{PAGE=\\getpagerefnumber{plain};FIELD=\\getrefbykeydefault{plain}{page}{0}}\n",
+        "\\IfRefUndefinedExpandable{plain}{\\typeout{EXPANDABLE=missing}}{\\typeout{EXPANDABLE=found}}\n",
+        "\\IfRefUndefinedBabel{plain}{\\typeout{BABEL=missing}}{\\typeout{BABEL=found}}\n",
+        "\\refused{plain}\n",
         "\\end{document}\n",
     );
     std::fs::write(&main, source).unwrap();
@@ -146,6 +209,9 @@ fn real_label_rename_preserves_independent_spaced_keys_and_reference_values() {
     let outcome = build::run(&main, &config, &AtomicBool::new(false));
     assert_eq!(outcome.status, "success", "{}", outcome.output);
     assert!(outcome.output.contains("WITNESS=1;2"), "{}", outcome.output);
+    for witness in ["PAGE=1;FIELD=1", "EXPANDABLE=found", "BABEL=found"] {
+        assert!(outcome.output.contains(witness), "{}", outcome.output);
+    }
     assert!(
         outcome
             .diagnostics

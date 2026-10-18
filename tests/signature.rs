@@ -35,6 +35,52 @@ fn check(definitions: &str, marked: &str, label: &str, active: u32) {
 }
 
 #[test]
+fn refcount_queries_offer_label_field_default_and_branch_parameters() {
+    for (marked, label, active) in [
+        (r"\getrefnumber{key¦}", r"\getrefnumber{key}", 0),
+        (r"\getpagerefnumber{key¦}", r"\getpagerefnumber{key}", 0),
+        (r"\refused{key¦}", r"\refused{key}", 0),
+        (
+            r"\getrefbykeydefault{key}{pa¦ge}{0}",
+            r"\getrefbykeydefault{key}{field}{default}",
+            1,
+        ),
+        (
+            r"\getrefbykeydefault{key}{page}{0¦}",
+            r"\getrefbykeydefault{key}{field}{default}",
+            2,
+        ),
+        (
+            r"\IfRefUndefinedExpandable{key}{missing¦}{found}",
+            r"\IfRefUndefinedExpandable{key}{undefined}{defined}",
+            1,
+        ),
+        (
+            r"\IfRefUndefinedBabel{key}{missing}{found¦}",
+            r"\IfRefUndefinedBabel{key}{undefined}{defined}",
+            2,
+        ),
+    ] {
+        check("", marked, label, active);
+    }
+    let (mut workspace, uri, position) = setup("", r"\getrefb¦");
+    workspace.snippets = true;
+    let items = latex_lsp::features::completion(&workspace, &uri, position);
+    let item = items
+        .iter()
+        .find(|item| item.label == "getrefbykeydefault")
+        .unwrap();
+    let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+        panic!("missing edit")
+    };
+    assert_eq!(
+        edit.new_text,
+        "getrefbykeydefault{${1:key}}{${2:page}}{${3:0}}"
+    );
+    assert_eq!(item.insert_text_format, Some(InsertTextFormat::SNIPPET));
+}
+
+#[test]
 fn named_alias_signatures_accept_grouped_and_bare_control_sequence_tokens() {
     for (marked, label, active) in [
         (r"\cslet{mir¦ror}{\hello}", r"\cslet{alias}{command}", 0),

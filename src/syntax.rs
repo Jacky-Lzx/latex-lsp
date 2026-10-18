@@ -210,9 +210,21 @@ fn input_argument(source: &str, start: usize) -> Option<(Argument, usize)> {
 }
 
 pub fn is_reference(name: &str) -> bool {
+    warns_on_undefined_reference(name)
+        || matches!(
+            name,
+            "getrefnumber"
+                | "getpagerefnumber"
+                | "getrefbykeydefault"
+                | "IfRefUndefinedExpandable"
+                | "IfRefUndefinedBabel"
+        )
+}
+
+pub(crate) fn warns_on_undefined_reference(name: &str) -> bool {
     matches!(
         name,
-        "ref" | "eqref" | "pageref" | "autoref" | "cref" | "Cref" | "vref" | "nameref"
+        "ref" | "eqref" | "pageref" | "autoref" | "cref" | "Cref" | "vref" | "nameref" | "refused"
     )
 }
 

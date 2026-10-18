@@ -386,6 +386,36 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
         "Print the page number associated with a label.",
     ),
     (
+        "getrefnumber",
+        "getrefnumber{${1:key}}",
+        "Expand to a label's reference number. Requires refcount.",
+    ),
+    (
+        "getpagerefnumber",
+        "getpagerefnumber{${1:key}}",
+        "Expand to a label's page number. Requires refcount.",
+    ),
+    (
+        "getrefbykeydefault",
+        "getrefbykeydefault{${1:key}}{${2:page}}{${3:0}}",
+        "Read a label field, using a default when it is unavailable. Requires refcount.",
+    ),
+    (
+        "IfRefUndefinedExpandable",
+        "IfRefUndefinedExpandable{${1:key}}{${2:undefined}}{${3:defined}}",
+        "Choose a branch according to whether a label is undefined. Expandable; requires refcount.",
+    ),
+    (
+        "IfRefUndefinedBabel",
+        "IfRefUndefinedBabel{${1:key}}{${2:undefined}}{${3:defined}}",
+        "Test whether a label is undefined while protecting Babel active characters. Requires refcount.",
+    ),
+    (
+        "refused",
+        "refused{${1:key}}",
+        "Mark a label as used and warn if it is undefined. Requires refcount.",
+    ),
+    (
         "autoref",
         "autoref{${1:key}}",
         "Print a reference with its object type. Requires hyperref.",
