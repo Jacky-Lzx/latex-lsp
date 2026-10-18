@@ -16,7 +16,7 @@ pub fn inputs(root: &Path, contents: &str) -> BTreeSet<Url> {
             }
         } else if let Some(value) = line.strip_prefix("INPUT ") {
             let path = directory.join(value.trim_matches('"'));
-            if !crate::workspace::is_source(&path) {
+            if !crate::workspace::is_source(&path) && !crate::graphics::is_image(&path) {
                 continue;
             }
             if let Ok(path) = path.canonicalize() {
@@ -47,13 +47,14 @@ mod tests {
             "chapters/中文 file.tex",
             "local.sty",
             "main.aux",
+            "figure.PNG",
         ] {
             std::fs::write(directory.path().join(name), "").unwrap();
         }
         let root = directory.path().join("main.tex");
-        let contents = format!("PWD {}\nINPUT main.tex\nINPUT ./main.tex\nOUTPUT local.sty\nINPUT local.sty\nINPUT main.aux\nINPUT missing.tex\nPWD {}\nINPUT 中文 file.tex\n",directory.path().display(),directory.path().join("chapters").display());
+        let contents = format!("PWD {}\nINPUT main.tex\nINPUT ./main.tex\nOUTPUT local.sty\nINPUT local.sty\nINPUT main.aux\nINPUT figure.PNG\nINPUT missing.tex\nPWD {}\nINPUT 中文 file.tex\n",directory.path().display(),directory.path().join("chapters").display());
         let inputs = inputs(&root, &contents);
-        assert_eq!(inputs.len(), 3);
+        assert_eq!(inputs.len(), 4);
         assert!(inputs.contains(
             &Url::from_file_path(directory.path().join("chapters/中文 file.tex")).unwrap()
         ));

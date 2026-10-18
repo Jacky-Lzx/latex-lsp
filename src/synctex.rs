@@ -197,7 +197,7 @@ pub fn prepare(workspace: &Workspace, uri: &Url) -> Result<Project> {
         .map(|(_, _, modified)| *modified)
         .max()
         .unwrap();
-    let mut inputs = workspace.project_documents(&root);
+    let mut inputs = workspace.project_files(&root);
     inputs.insert(uri.clone());
     for input in inputs {
         let path = input
@@ -532,5 +532,59 @@ mod tests {
             .unwrap_err()
             .message
             .contains("changed"));
+    }
+
+    #[test]
+    fn prepare_checks_static_and_recorded_images_without_indexing_binary_data() {
+        for recorded_image in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let uri = Url::from_file_path(root.join("main.tex")).unwrap();
+            let image = root.join("plot.png");
+            std::fs::write(&image, [0, 255, 1]).unwrap();
+            let source = if recorded_image {
+                "\\documentclass{article}\n"
+            } else {
+                "\\documentclass{article}\n\\includegraphics{plot}\n"
+            };
+            std::fs::write(root.join("main.tex"), source).unwrap();
+            let mut workspace = Workspace::default();
+            workspace.add_root(root.into());
+            let image_uri = Url::from_file_path(&image).unwrap();
+            if recorded_image {
+                workspace
+                    .recorded_inputs
+                    .insert(uri.clone(), [uri.clone(), image_uri.clone()].into());
+                workspace.refresh_project(&uri);
+            }
+            assert!(!workspace.documents.contains_key(&image_uri));
+            let output = root.join("build/latex-lsp");
+            std::fs::create_dir_all(&output).unwrap();
+            std::fs::write(output.join("main.pdf"), "%PDF").unwrap();
+            std::fs::write(output.join("main.synctex.gz"), "SyncTeX data").unwrap();
+            let recorded = SystemTime::now() + Duration::from_secs(10);
+            std::fs::File::open(output.join("main.synctex.gz"))
+                .unwrap()
+                .set_times(std::fs::FileTimes::new().set_modified(recorded))
+                .unwrap();
+            assert!(prepare(&workspace, &uri).is_ok());
+            std::fs::File::open(&image)
+                .unwrap()
+                .set_times(
+                    std::fs::FileTimes::new().set_modified(recorded + Duration::from_secs(1)),
+                )
+                .unwrap();
+            assert!(prepare(&workspace, &uri)
+                .unwrap_err()
+                .message
+                .contains("changed"));
+            if recorded_image {
+                std::fs::remove_file(&image).unwrap();
+                assert!(prepare(&workspace, &uri)
+                    .unwrap_err()
+                    .message
+                    .contains("changed"));
+            }
+        }
     }
 }

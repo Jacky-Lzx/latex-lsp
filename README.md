@@ -95,7 +95,7 @@ vim.lsp.enable('latex_lsp')
 
 服务器发出 `latex/buildStarted` 和 `latex/buildFinished` 通知，两者都包含实际 `executable` 和可推断的 `engine`（使用自定义参数或无法识别的工具时为 `null`）。完成通知还包含 `status`（`success` / `error` / `cancelled` / `timeout`）、`buildId`、`rootUri`、`pdfUri`、`logUri`、`exitCode`、`diagnosticsCount`、`dependenciesCount`（包含根文件的来源数量）、`durationMs`、`message` 和有长度限制的 `output` 摘要。若文档在编译中变化，`stale` 为 `true`，不会发布这次编译的旧诊断。失败编译不把可能不完整的 PDF 标记为成功结果。
 
-工具返回成功但没有更新 PDF 时，服务器会检查已知输入的修改时间：来源比旧 PDF 新则报告产物过期，并保留磁盘上的旧 PDF；产物仍有效的无操作编译可以成功。有 recorder 记录时优先按实际输入检查，并保留文献来源检查，避免把 `\includeonly` 排除的章节变动误判为过期产物。
+工具返回成功但没有更新 PDF 时，服务器会检查已知输入的修改时间：来源比旧 PDF 新或已被删除则报告产物过期，并保留磁盘上的旧 PDF；产物仍有效的无操作编译可以成功。有 recorder 记录时优先按实际输入检查，并保留文献来源检查，避免把 `\includeonly` 排除的章节变动误判为过期产物。图片也参与编译期间变更、过期 PDF 和 SyncTeX 检查；二进制内容不进入文本索引。不生成 recorder 的工具使用当前能静态解析的图片路径。
 
 客户端声明 `window.workDoneProgress` 时，服务器还通过标准 `$/progress` 显示编译开始和完成，可通过编辑器的取消按钮中止编译。客户端拒绝或不响应进度创建请求时，编译仍会继续。
 
@@ -103,7 +103,7 @@ vim.lsp.enable('latex_lsp')
 
 编译前会重新遍历已保存文件中的依赖，包含本地 `.sty`、`.cls` 及其输入文件；子文件路径也会尝试相对于主文档目录解析。这样，磁盘上的子文件新增依赖或本地包在编译期间变化时，也会参与保存检查和过期结果检查。
 
-编译后读取本次更新的 `.fls` recorder，发现 TeX 宏展开后实际读取的 `.tex`、`.ltx`、`.sty`、`.cls`、`.def`、`.clo` 和 `.bib` 文件。项目目录内的来源会进入索引，参与之后的根文件识别、保存编译和未保存检查；系统 TeX 包不会批量进入索引。首次发现的来源已有未保存内容或在编译期间发生磁盘变化时，本次诊断也会被丢弃，无关的未保存缓冲区不受影响。上次记录的依赖会保守保留到新的 recorder 替换，因此刚移除的依赖可能仍需先保存。默认 latexmk 和 TeX 引擎参数启用 recorder；自定义参数需自行启用 `-recorder`，不生成 `.fls` 的工具仍使用静态依赖。
+编译后读取本次更新的 `.fls` recorder，发现 TeX 宏展开后实际读取的 `.tex`、`.ltx`、`.sty`、`.cls`、`.def`、`.clo` 和 `.bib` 文件，以及 PDF、PNG、JPEG、EPS、SVG 图片。项目目录内的来源会进入索引，参与之后的根文件识别、保存编译和未保存检查；系统 TeX 包不会批量进入索引。首次发现的来源已有未保存内容或在编译期间发生磁盘变化时，本次诊断也会被丢弃，无关的未保存缓冲区不受影响。上次记录的依赖会保守保留到新的 recorder 替换，因此刚移除的依赖可能仍需先保存。默认 latexmk 和 TeX 引擎参数启用 recorder；自定义参数需自行启用 `-recorder`，不生成 `.fls` 的工具仍使用静态依赖。
 
 默认输出目录使用 `build/latex-lsp`，默认 latexmk 参数让 BibTeX 保持在主文档目录运行，以正确处理 `../library.bib` 等相对路径。显式配置隐藏目录、绝对路径或包含 `..` 的输出目录时，会保留 latexmk 切换目录运行 BibTeX 的方式，以适应 BibTeX 的文件写入限制；这类配置中，父目录文献路径可能需要额外的工具配置。
 

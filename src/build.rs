@@ -56,6 +56,7 @@ struct BuildInput {
     root: Url,
     root_path: PathBuf,
     snapshots: BTreeMap<Url, (Option<i32>, String)>,
+    file_snapshots: BTreeMap<Url, Option<(u64, Option<std::time::SystemTime>)>>,
     config: BuildConfig,
     progress_supported: bool,
     project: BTreeSet<Url>,
@@ -100,8 +101,9 @@ impl BuildManager {
             .root_document(&uri)
             .map_err(Error::invalid_params)?;
         workspace.refresh_project(&root);
-        let project = workspace.project_documents(&root);
+        let project = workspace.project_files(&root);
         let mut snapshots = BTreeMap::new();
+        let mut file_snapshots = BTreeMap::new();
         for uri in &project {
             if let Some(doc) = workspace.documents.get(uri) {
                 let saved = uri
@@ -115,6 +117,8 @@ impl BuildManager {
                     )));
                 }
                 snapshots.insert(uri.clone(), (doc.version, doc.text.source.clone()));
+            } else if let Ok(path) = uri.to_file_path() {
+                file_snapshots.insert(uri.clone(), fingerprint(&path));
             }
         }
         // Dynamic dependencies may only be known after TeX writes its recorder.
@@ -162,6 +166,7 @@ impl BuildManager {
                 root: root.clone(),
                 root_path,
                 snapshots,
+                file_snapshots,
                 config,
                 progress_supported,
                 project,
@@ -199,6 +204,7 @@ impl BuildManager {
             root: root_uri,
             root_path,
             snapshots,
+            file_snapshots,
             config,
             progress_supported,
             mut project,
@@ -306,6 +312,10 @@ impl BuildManager {
                             .and_then(|path| std::fs::read_to_string(path).ok())
                             .as_ref()
                             != Some(text)
+                } else if let Some(before) = file_snapshots.get(uri) {
+                    uri.to_file_path()
+                        .ok()
+                        .is_none_or(|path| fingerprint(&path) != *before)
                 } else {
                     let Ok(path) = uri.to_file_path() else {
                         return true;
@@ -599,7 +609,7 @@ fn reject_outdated_pdf(root: &Path, outcome: &mut Outcome, sources: impl Iterato
         std::fs::metadata(source)
             .ok()
             .and_then(|metadata| metadata.modified().ok())
-            .is_some_and(|modified| modified > pdf)
+            .is_none_or(|modified| modified > pdf)
     });
     if let Some(source) = outdated {
         outcome.status = "error";

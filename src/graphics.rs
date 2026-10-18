@@ -6,6 +6,44 @@ use crate::{
 use std::{collections::BTreeSet, ops::Range, path::PathBuf};
 use tower_lsp::lsp_types::Url;
 
+pub fn is_image(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            syntax::file_extensions("includegraphics")
+                .unwrap()
+                .iter()
+                .any(|supported| extension.eq_ignore_ascii_case(supported))
+        })
+}
+
+/// Keep binary dependencies out of the text index while sharing link resolution.
+pub fn images(workspace: &Workspace, uri: &Url) -> BTreeSet<Url> {
+    let Some(doc) = workspace.documents.get(uri) else {
+        return BTreeSet::new();
+    };
+    let ranges: Vec<_> = doc
+        .syntax
+        .commands
+        .iter()
+        .filter(|command| command.name == "includegraphics")
+        .filter_map(|command| command.argument.as_ref())
+        .map(|argument| doc.text.range(argument.span.start, argument.span.end))
+        .collect();
+    if ranges.is_empty() {
+        return BTreeSet::new();
+    }
+    crate::navigation::document_links(workspace, uri)
+        .into_iter()
+        .filter(|link| {
+            ranges
+                .iter()
+                .any(|range| range.start <= link.range.start && range.end >= link.range.end)
+        })
+        .filter_map(|link| link.target)
+        .collect()
+}
+
 pub struct Directory {
     pub path: PathBuf,
     pub span: Range<usize>,

@@ -221,6 +221,17 @@ impl Workspace {
         visited
     }
 
+    /// Saved sources and image dependencies used by builds and artifact checks.
+    pub fn project_files(&self, root: &Url) -> BTreeSet<Url> {
+        let mut files = self.project_documents(root);
+        let images: BTreeSet<_> = files
+            .iter()
+            .flat_map(|uri| crate::graphics::images(self, uri))
+            .collect();
+        files.extend(images);
+        files
+    }
+
     /// Explicit root, then TeX magic comments, then the unique containing document.
     pub fn root_document(&self, uri: &Url) -> Result<Url, String> {
         let path = uri
@@ -355,6 +366,9 @@ impl Workspace {
             return;
         }
         let source = uri.to_file_path().ok().and_then(|path| {
+            if crate::graphics::is_image(&path) {
+                return None;
+            }
             let metadata = std::fs::metadata(&path).ok()?;
             if !metadata.is_file() || metadata.len() > MAX_FILE_SIZE {
                 return None;

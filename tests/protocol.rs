@@ -1071,6 +1071,16 @@ fn real_recorder_discovers_macro_expanded_input_without_indexing_tex_distributio
 #[test]
 #[ignore = "requires latexmk, SyncTeX and a TeX installation"]
 fn real_synctex_round_trip_handles_spaces_and_rejects_unsaved_or_stale_sources() {
+    let image_directory = tempfile::tempdir().unwrap();
+    let image_source = image_directory.path().join("figure.tex");
+    std::fs::write(
+        &image_source,
+        "\\documentclass{article}\\begin{document}Image\\end{document}",
+    )
+    .unwrap();
+    let image_build =
+        latex_lsp::build::run(&image_source, &Default::default(), &Default::default());
+    assert_eq!(image_build.status, "success", "{}", image_build.output);
     let directory = tempfile::tempdir().unwrap();
     let folder = directory.path().join("project with spaces");
     std::fs::create_dir(&folder).unwrap();
@@ -1078,9 +1088,12 @@ fn real_synctex_round_trip_handles_spaces_and_rejects_unsaved_or_stale_sources()
     let main = Url::from_file_path(folder.join("main.tex")).unwrap();
     let chapter = Url::from_file_path(folder.join("chapter file.tex")).unwrap();
     let source = "Hello SyncTeX.\nSecond line.\n% 😀\n";
+    std::fs::create_dir(folder.join("assets")).unwrap();
+    let image = folder.join("assets/plot.pdf");
+    std::fs::copy(image_build.pdf.unwrap(), &image).unwrap();
     std::fs::write(
         main.to_file_path().unwrap(),
-        "\\documentclass{article}\n\\begin{document}\n\\input{chapter file}\n\\end{document}\n",
+        "\\documentclass{article}\n\\usepackage{graphicx}\n\\graphicspath{{assets/}}\n\\begin{document}\n\\input{chapter file}\n\\includegraphics[width=1cm]{plot}\n\\end{document}\n",
     )
     .unwrap();
     std::fs::write(chapter.to_file_path().unwrap(), source).unwrap();
@@ -1112,6 +1125,7 @@ fn real_synctex_round_trip_handles_spaces_and_rejects_unsaved_or_stale_sources()
     );
     let finished = server.until(|message| message["method"] == "latex/buildFinished");
     assert_eq!(finished["params"]["status"], "success", "{finished}");
+    assert_eq!(finished["params"]["dependenciesCount"], 3, "{finished}");
     let forward = server.request(4, "workspace/executeCommand", json!({"command":"latex.forwardSearch","arguments":[{"uri":chapter,"position":{"line":0,"character":6}}]}));
     assert_eq!(forward["rootUri"], main.as_str());
     assert_eq!(forward["pdfUri"], finished["params"]["pdfUri"]);
@@ -1173,14 +1187,36 @@ fn real_synctex_round_trip_handles_spaces_and_rejects_unsaved_or_stale_sources()
         "textDocument/didClose",
         json!({"textDocument":{"uri":chapter}}),
     );
-    std::fs::write(chapter.to_file_path().unwrap(), "Changed\n").unwrap();
+    let original_time = std::fs::metadata(&image).unwrap().modified().unwrap();
+    let recorded_time = std::fs::metadata(folder.join("build/latex-lsp/main.synctex.gz"))
+        .unwrap()
+        .modified()
+        .unwrap();
+    std::fs::File::open(&image)
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(recorded_time + Duration::from_secs(1)))
+        .unwrap();
     server.send(json!({"jsonrpc":"2.0","id":10,"method":"workspace/executeCommand","params":{"command":"latex.inverseSearch","arguments":[{"uri":main,"page":1,"x":0,"y":0}]}}));
-    let stale = server.until(|message| message["id"] == 10);
+    let image_stale = server.until(|message| message["id"] == 10);
+    assert!(
+        image_stale["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("changed"),
+        "{image_stale}"
+    );
+    std::fs::File::open(&image)
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(original_time))
+        .unwrap();
+    std::fs::write(chapter.to_file_path().unwrap(), "Changed\n").unwrap();
+    server.send(json!({"jsonrpc":"2.0","id":11,"method":"workspace/executeCommand","params":{"command":"latex.inverseSearch","arguments":[{"uri":main,"page":1,"x":0,"y":0}]}}));
+    let stale = server.until(|message| message["id"] == 11);
     assert!(stale["error"]["message"]
         .as_str()
         .unwrap()
         .contains("changed"));
-    server.request(11, "shutdown", Value::Null);
+    server.request(12, "shutdown", Value::Null);
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
@@ -1875,6 +1911,109 @@ fn stdio_lifecycle_incremental_edits_navigation_and_diagnostics() {
         .unwrap()
         .is_empty());
     assert!(server.request(6, "shutdown", Value::Null).is_null());
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+fn recorded_images_remain_binary_and_invalidate_unchanged_pdf_artifacts() {
+    let script = "if [ ! -f \"$1/main.pdf\" ]; then\n printf '%%PDF-1.4\\n' > \"$1/main.pdf\"\n printf 'PWD %s\\nINPUT main.tex\\nINPUT assets/plot.png\\n' \"$PWD\" > \"$1/main.fls\"\nfi\n";
+    let (mut server, directory, main) = fake_build_server(script, false);
+    std::fs::create_dir(directory.path().join("assets")).unwrap();
+    let image = directory.path().join("assets/plot.png");
+    // Even an ASCII image containing TeX-looking text must stay outside the index.
+    std::fs::write(&image, "\\label{image:should-not-be-indexed}").unwrap();
+    server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let first = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(first["params"]["status"], "success", "{first}");
+    assert_eq!(first["params"]["dependenciesCount"], 2);
+    assert_eq!(
+        server.request(
+            3,
+            "workspace/symbol",
+            json!({"query":"image:should-not-be-indexed"})
+        ),
+        json!([])
+    );
+    let pdf = directory.path().join("build/latex-lsp/main.pdf");
+    let old_pdf = std::fs::read(&pdf).unwrap();
+    let newer = std::fs::metadata(&pdf).unwrap().modified().unwrap() + Duration::from_secs(1);
+    std::fs::File::open(&image)
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(newer))
+        .unwrap();
+    server.request(
+        4,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let changed = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(changed["params"]["status"], "error", "{changed}");
+    assert_eq!(changed["params"]["stale"], false);
+    assert!(changed["params"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("plot.png"));
+    assert!(changed["params"]["pdfUri"].is_null());
+    assert_eq!(std::fs::read(&pdf).unwrap(), old_pdf);
+    std::fs::remove_file(&image).unwrap();
+    server.request(
+        5,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let deleted = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(deleted["params"]["status"], "error", "{deleted}");
+    assert_eq!(deleted["params"]["stale"], false);
+    assert!(deleted["params"]["pdfUri"].is_null());
+    server.request(6, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+fn static_graphicspath_images_changed_during_build_discard_diagnostics_without_a_recorder() {
+    let script = "touch \"$1/ready\"\nwhile [ ! -f \"$1/release\" ]; do sleep 0.02; done\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf '%s:2: LaTeX Warning: old image.\\n' \"$2\" > \"$1/main.log\"\n";
+    let (mut server, directory, main) = fake_build_server(script, false);
+    std::fs::create_dir(directory.path().join("assets")).unwrap();
+    let image = directory.path().join("assets/plot.png");
+    std::fs::write(&image, [0, 255, 1]).unwrap();
+    let source = "\\documentclass{article}\n\\graphicspath{{assets/}}\n\\includegraphics{plot}\n";
+    std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+    );
+    server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let output = directory.path().join("build/latex-lsp");
+    wait_for_file(&output.join("ready"));
+    let modified = std::fs::metadata(&image).unwrap().modified().unwrap();
+    std::fs::write(&image, [0, 255, 1, 2, 3, 4]).unwrap();
+    // Fingerprints detect length changes even when a tool preserves timestamps.
+    std::fs::File::open(&image)
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(modified))
+        .unwrap();
+    std::fs::write(output.join("release"), "").unwrap();
+    let finished = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(finished["params"]["status"], "success", "{finished}");
+    assert_eq!(finished["params"]["stale"], true, "{finished}");
+    assert_eq!(finished["params"]["dependenciesCount"], 2);
+    assert!(finished["params"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("diagnostics discarded"));
+    server.request(3, "shutdown", Value::Null);
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }

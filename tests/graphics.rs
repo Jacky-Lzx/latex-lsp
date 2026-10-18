@@ -238,4 +238,8 @@ fn graphics_directory_and_root_moves_still_compile() {
         outcome.message, outcome.output
     );
     assert!(outcome.pdf.unwrap().is_file());
+    assert!(outcome
+        .inputs
+        .unwrap()
+        .contains(&uri(root, "new.images/plot.pdf")));
 }
