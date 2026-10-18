@@ -38,6 +38,10 @@ impl Document {
 
 /// The first real magic comment in the first 20 lines, excluding raw content.
 pub fn root_directive(doc: &Document) -> Option<crate::syntax::Argument> {
+    magic_directive(doc, &["root"])
+}
+
+fn magic_directive(doc: &Document, fields: &[&str]) -> Option<crate::syntax::Argument> {
     let mut offset = 0;
     for line in doc.text.source.split_inclusive('\n').take(20) {
         let trimmed = line.trim_start();
@@ -51,7 +55,10 @@ pub fn root_directive(doc: &Document) -> Option<crate::syntax::Argument> {
             && trimmed.starts_with('%')
         {
             if let Some((name, value)) = trimmed[1..].trim().split_once('=') {
-                if name.trim().eq_ignore_ascii_case("!tex root") {
+                if fields
+                    .iter()
+                    .any(|field| name.trim().eq_ignore_ascii_case(&format!("!tex {field}")))
+                {
                     let value = value.trim().trim_matches('"');
                     let start = offset + line.find('=').unwrap() + 1;
                     let start = start + line[start - offset..].find(value).unwrap();
@@ -85,6 +92,22 @@ pub struct Workspace {
 }
 
 impl Workspace {
+    pub fn build_config(&self, root: &Url) -> crate::config::BuildConfig {
+        let mut config = self.config.build.clone();
+        let latexmk = Path::new(&config.executable)
+            .file_stem()
+            .and_then(|name| name.to_str())
+            == Some("latexmk");
+        if latexmk && config.engine.is_none() && config.arguments.is_none() {
+            config.engine = self
+                .documents
+                .get(root)
+                .and_then(|doc| magic_directive(doc, &["program", "ts-program"]))
+                .and_then(|argument| crate::config::Engine::from_program(&argument.value));
+        }
+        config
+    }
+
     pub fn diagnostics(&self, uri: &Url) -> Vec<tower_lsp::lsp_types::Diagnostic> {
         let mut diagnostics = self
             .documents

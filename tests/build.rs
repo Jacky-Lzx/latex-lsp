@@ -9,6 +9,45 @@ use std::{
 use tower_lsp::lsp_types::{DiagnosticSeverity, Url};
 
 #[test]
+fn engine_directives_use_the_root_comment_and_respect_explicit_configuration() {
+    use latex_lsp::{config::Engine, workspace::Document};
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    let uri = Url::from_file_path(&main).unwrap();
+    std::fs::write(
+        &main,
+        "% !TeX program = xelatex\n\\documentclass{article}\n",
+    )
+    .unwrap();
+    let mut workspace = Workspace::default();
+    workspace.add_root(directory.path().into());
+    assert_eq!(
+        workspace.build_config(&uri).effective_engine(),
+        Some(Engine::XeLatex)
+    );
+    workspace.config.build.engine = Some(Engine::LuaLatex);
+    assert_eq!(
+        workspace.build_config(&uri).effective_engine(),
+        Some(Engine::LuaLatex)
+    );
+    workspace.config.build.engine = None;
+    workspace.config.build.executable = "pdflatex".into();
+    assert_eq!(
+        workspace.build_config(&uri).effective_engine(),
+        Some(Engine::PdfLatex)
+    );
+    workspace.config.build.executable = "latexmk".into();
+    for (source, expected) in [
+        ("% !TeX TS-program = \"LuaLaTeX\"\n\\documentclass{article}", Engine::LuaLatex),
+        ("\\begin{verbatim}\n% !TeX program = xelatex\n\\end{verbatim}\n\\documentclass{article}", Engine::PdfLatex),
+        ("% !TeX program = sh -c anything\n\\documentclass{article}", Engine::PdfLatex),
+    ] {
+        workspace.documents.insert(uri.clone(), Document::new(&uri, source.into(), Some(1)));
+        assert_eq!(workspace.build_config(&uri).effective_engine(), Some(expected));
+    }
+}
+
+#[test]
 fn root_detection_follows_includes_magic_comments_and_explicit_configuration() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();

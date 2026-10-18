@@ -1127,6 +1127,63 @@ fn bibliography_relations_support_navigation_completion_and_versioned_rename_ove
     server.wait_exit(0);
 }
 
+#[test]
+#[ignore = "requires latexmk, XeLaTeX, LuaLaTeX and a TeX installation"]
+fn real_engine_directives_select_the_root_engine_and_explicit_configuration_overrides_them() {
+    for (program, engine, guard) in [
+        ("xelatex", "xelatex", "ifXeTeX"),
+        ("lualatex", "lualatex", "ifLuaTeX"),
+        ("xelatex", "pdflatex", "ifPDFTeX"),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = Url::from_directory_path(directory.path()).unwrap();
+        let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+        let chapter = Url::from_file_path(directory.path().join("chapter.tex")).unwrap();
+        let source = format!("% !TeX program = {program}\n\\documentclass{{article}}\n\\usepackage{{iftex}}\n\\{guard}\\else\\errmessage{{Wrong engine}}\\fi\n\\begin{{document}}\n\\input{{chapter}}\n\\end{{document}}\n");
+        std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+        std::fs::write(
+            chapter.to_file_path().unwrap(),
+            "% !TeX program = ignored\nEngine selected.\n",
+        )
+        .unwrap();
+        let cache = directory.path().join(".tex-cache");
+        std::fs::create_dir(&cache).unwrap();
+        let cache = cache.to_str().unwrap();
+        let mut server = Server::start_with_env(&[("TEXMFVAR", cache), ("TEXMFCACHE", cache)]);
+        let options = if engine == "pdflatex" {
+            json!({"build":{"engine":engine}})
+        } else {
+            json!({})
+        };
+        server.request(1, "initialize", json!({"processId":null,"rootUri":root,"capabilities":{},"initializationOptions":options}));
+        server.notify("initialized", json!({}));
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[chapter]}),
+        );
+        let started = server.until(|message| message["method"] == "latex/buildStarted");
+        assert_eq!(started["params"]["engine"], engine);
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(
+            finished["params"]["status"], "success",
+            "{engine}: {finished}"
+        );
+        assert_eq!(finished["params"]["engine"], engine);
+        assert_eq!(finished["params"]["executable"], "latexmk");
+        assert_eq!(finished["params"]["stale"], false, "{finished}");
+        assert_eq!(finished["params"]["dependenciesCount"], 2, "{finished}");
+        let pdf = Url::parse(finished["params"]["pdfUri"].as_str().unwrap())
+            .unwrap()
+            .to_file_path()
+            .unwrap();
+        assert!(std::fs::read(pdf).unwrap().starts_with(b"%PDF"));
+        server.request(3, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
 impl Drop for Server {
     fn drop(&mut self) {
         let _ = self.child.kill();

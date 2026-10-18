@@ -1,5 +1,32 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Engine {
+    PdfLatex,
+    XeLatex,
+    LuaLatex,
+}
+
+impl Engine {
+    pub fn from_program(program: &str) -> Option<Self> {
+        Some(match program.to_ascii_lowercase().as_str() {
+            "pdflatex" => Self::PdfLatex,
+            "xelatex" => Self::XeLatex,
+            "lualatex" => Self::LuaLatex,
+            _ => return None,
+        })
+    }
+
+    fn latexmk_argument(self) -> &'static str {
+        match self {
+            Self::PdfLatex => "-pdf",
+            Self::XeLatex => "-xelatex",
+            Self::LuaLatex => "-lualatex",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct Config {
@@ -11,6 +38,7 @@ pub struct Config {
 pub struct BuildConfig {
     pub executable: String,
     pub arguments: Option<Vec<String>>,
+    pub engine: Option<Engine>,
     pub output_directory: String,
     pub root_file: Option<String>,
     pub on_save: bool,
@@ -22,6 +50,7 @@ impl Default for BuildConfig {
         Self {
             executable: "latexmk".into(),
             arguments: None,
+            engine: None,
             output_directory: "build/latex-lsp".into(),
             root_file: None,
             on_save: false,
@@ -48,6 +77,20 @@ impl Config {
 }
 
 impl BuildConfig {
+    pub fn effective_engine(&self) -> Option<Engine> {
+        if self.arguments.is_some() {
+            return None;
+        }
+        let executable = std::path::Path::new(&self.executable)
+            .file_stem()?
+            .to_str()?;
+        if executable == "latexmk" {
+            Some(self.engine.unwrap_or(Engine::PdfLatex))
+        } else {
+            Engine::from_program(executable)
+        }
+    }
+
     pub fn arguments(&self) -> Vec<String> {
         if let Some(arguments) = &self.arguments {
             return arguments.clone();
@@ -90,6 +133,11 @@ impl BuildConfig {
             .iter()
             .map(|argument| (*argument).into())
             .collect();
+        if let Some(engine) = self.engine {
+            if let Some(argument) = arguments.iter_mut().find(|argument| *argument == "-pdf") {
+                *argument = engine.latexmk_argument().into();
+            }
+        }
         // BibTeX's default file policy rejects hidden or parent-relative output
         // paths. Keep latexmk's directory workaround for explicitly configured
         // paths that need it; ordinary in-project paths can preserve source cwd.
@@ -141,5 +189,31 @@ mod tests {
             ..Default::default()
         };
         assert!(config.arguments().contains(&"-bibfudge".into()));
+    }
+
+    #[test]
+    fn latexmk_engine_configuration_preserves_explicit_executables_and_arguments() {
+        for (engine, flag) in [
+            ("pdflatex", "-pdf"),
+            ("xelatex", "-xelatex"),
+            ("lualatex", "-lualatex"),
+        ] {
+            let config = Config::parse(json!({"build":{"engine":engine}})).unwrap();
+            assert!(config.build.arguments().contains(&flag.into()));
+            assert_eq!(
+                serde_json::to_value(config.build.effective_engine()).unwrap(),
+                json!(engine)
+            );
+        }
+        let config =
+            Config::parse(json!({"build":{"executable":"pdflatex","engine":"xelatex"}})).unwrap();
+        assert_eq!(config.build.effective_engine(), Some(Engine::PdfLatex));
+        assert!(!config.build.arguments().contains(&"-xelatex".into()));
+        let config =
+            Config::parse(json!({"build":{"engine":"xelatex","arguments":["custom", "%f"]}}))
+                .unwrap();
+        assert_eq!(config.build.arguments(), vec!["custom", "%f"]);
+        assert_eq!(config.build.effective_engine(), None);
+        assert!(Config::parse(json!({"build":{"engine":"bash"}})).is_err());
     }
 }

@@ -126,7 +126,7 @@ impl BuildManager {
                     .or_insert_with(|| (doc.version, doc.text.source.clone()));
             }
         }
-        let config = workspace.config.build.clone();
+        let config = workspace.build_config(&root);
         let progress_supported = workspace.build_progress;
         let root_path = root
             .to_file_path()
@@ -213,8 +213,10 @@ impl BuildManager {
         let state = self.state.clone();
         tokio::spawn(async move {
             let _guard = guard;
+            let executable = config.executable.clone();
+            let engine = config.effective_engine();
             client
-                .send_notification::<BuildStarted>(json!({"buildId":build_id, "rootUri":root_uri}))
+                .send_notification::<BuildStarted>(json!({"buildId":build_id, "rootUri":root_uri, "executable":executable, "engine":engine}))
                 .await;
             let started = Instant::now();
             let token = NumberOrString::String(format!("latex-build-{build_id}"));
@@ -304,6 +306,7 @@ impl BuildManager {
                 "logUri":outcome.log.as_ref().and_then(|path| Url::from_file_path(path).ok()),
                 "diagnosticsCount":count, "stale":stale, "durationMs":started.elapsed().as_millis() as u64,
                 "dependenciesCount":project.len(),
+                "executable":executable, "engine":engine,
                 "output":outcome.output,
             });
             let mut affected = BTreeSet::new();
