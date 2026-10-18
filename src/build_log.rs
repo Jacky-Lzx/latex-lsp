@@ -354,7 +354,7 @@ fn error_context<'a>(lines: &[&'a str], start: usize, number: u32) -> Option<&'a
     tail[digits..].strip_prefix(' ')
 }
 
-fn undefined_environment_name(message: &str) -> Option<&str> {
+pub(crate) fn undefined_environment_name(message: &str) -> Option<&str> {
     let name = message
         .strip_prefix("LaTeX Error: Environment ")?
         .strip_suffix(" undefined.")?

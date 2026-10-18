@@ -72,6 +72,16 @@ pub struct QuickFix {
     pub title: String,
     pub diagnostic: Diagnostic,
     pub edit: TextEdit,
+    pub additional_edits: Vec<TextEdit>,
+}
+
+impl QuickFix {
+    pub fn edits(&self) -> Vec<TextEdit> {
+        std::iter::once(&self.edit)
+            .chain(&self.additional_edits)
+            .cloned()
+            .collect()
+    }
 }
 
 pub fn diagnostic(text: &Text, span: Range<usize>, message: String) -> Diagnostic {
@@ -347,6 +357,13 @@ pub fn declares_environment(name: &str) -> bool {
     )
 }
 
+pub(crate) fn is_verbatim_environment(name: &str) -> bool {
+    matches!(
+        name,
+        "verbatim" | "verbatim*" | "lstlisting" | "minted" | "comment" | "Verbatim"
+    )
+}
+
 pub(crate) fn active_static_argument(
     source: &str,
     start: usize,
@@ -508,6 +525,7 @@ impl Syntax {
             title,
             diagnostic,
             edit,
+            additional_edits: vec![],
         });
     }
 
@@ -659,15 +677,7 @@ impl Syntax {
                             "bibitem" => result.citations.push(entry()),
                             "begin" => {
                                 let env = arg.value.trim();
-                                if matches!(
-                                    env,
-                                    "verbatim"
-                                        | "verbatim*"
-                                        | "lstlisting"
-                                        | "minted"
-                                        | "comment"
-                                        | "Verbatim"
-                                ) {
+                                if is_verbatim_environment(env) {
                                     let body_start = parsed.as_ref().unwrap().1;
                                     let ending = format!("\\end{{{env}}}");
                                     if let Some(relative) = source[body_start..].find(&ending) {

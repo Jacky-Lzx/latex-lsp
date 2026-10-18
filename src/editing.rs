@@ -54,7 +54,7 @@ pub fn code_actions(
                 is_preferred: Some(fix.diagnostic.source.as_deref() == Some("latex-lsp")),
                 edit: Some(features::workspace_edit(
                     workspace,
-                    std::collections::BTreeMap::from([(uri.clone(), vec![fix.edit.clone()])]),
+                    std::collections::BTreeMap::from([(uri.clone(), fix.edits())]),
                 )),
                 ..Default::default()
             })
@@ -92,7 +92,7 @@ pub fn resolve_fix(workspace: &Workspace, request: FixRequest) -> Option<Workspa
     })?;
     Some(features::workspace_edit(
         workspace,
-        std::collections::BTreeMap::from([(request.uri, vec![fix.edit.clone()])]),
+        std::collections::BTreeMap::from([(request.uri, fix.edits())]),
     ))
 }
 

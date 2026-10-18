@@ -8,6 +8,7 @@ enum Kind {
     Label,
     Citation,
     Command,
+    Environment,
 }
 
 fn target<'a>(
@@ -30,6 +31,26 @@ fn target<'a>(
             key,
         ));
     }
+    if diagnostic.code == Some(NumberOrString::String("undefined-environment".into())) {
+        let name = diagnostic.data.as_ref()?.get("environment")?.as_str()?;
+        if build_log::undefined_environment_name(&diagnostic.message) != Some(name) {
+            return None;
+        }
+        return doc
+            .syntax
+            .commands
+            .iter()
+            .any(|command| {
+                command.name == "begin"
+                    && command.argument.as_ref().is_some_and(|argument| {
+                        let span =
+                            crate::syntax::trimmed_span(&doc.text.source, argument.span.clone());
+                        doc.text.source[span.clone()] == *name
+                            && doc.text.range(span.start, span.end) == diagnostic.range
+                    })
+            })
+            .then_some((Kind::Environment, name));
+    }
     if diagnostic.message != "Undefined control sequence."
         || diagnostic.code != Some(NumberOrString::String("undefined-control-sequence".into()))
     {
@@ -44,6 +65,56 @@ fn target<'a>(
                 && doc.text.range(command.span.start, command.span.end) == diagnostic.range
         })
         .then_some((Kind::Command, name))
+}
+
+fn environment_end(doc: &crate::workspace::Document, begin: Range) -> Option<Range> {
+    let mut started = false;
+    let mut stack = Vec::new();
+    for command in &doc.syntax.commands {
+        if !matches!(command.name.as_str(), "begin" | "end") {
+            continue;
+        }
+        if !started {
+            started = command.name == "begin"
+                && command.argument.as_ref().is_some_and(|argument| {
+                    let span = crate::syntax::trimmed_span(&doc.text.source, argument.span.clone());
+                    doc.text.range(span.start, span.end) == begin
+                });
+            if !started {
+                continue;
+            }
+        }
+        let argument = command.argument.as_ref()?;
+        let span = crate::syntax::trimmed_span(&doc.text.source, argument.span.clone());
+        let name = &doc.text.source[span.clone()];
+        if !crate::syntax::is_static_key(name) {
+            return None;
+        }
+        if command.name == "begin" {
+            if crate::syntax::is_verbatim_environment(name) {
+                let ending = format!("\\end{{{name}}}");
+                if doc.syntax.ignored.iter().any(|ignored| {
+                    ignored.start == argument.outer_span.end
+                        && doc.text.source[ignored.clone()].ends_with(&ending)
+                }) {
+                    continue;
+                }
+                return None;
+            }
+            stack.push(name);
+            if stack.len() > 256 {
+                return None;
+            }
+        } else {
+            if stack.pop() != Some(name) {
+                return None;
+            }
+            if stack.is_empty() {
+                return Some(doc.text.range(span.start, span.end));
+            }
+        }
+    }
+    None
 }
 
 fn valid_name(kind: Kind, name: &str) -> bool {
@@ -109,6 +180,14 @@ pub fn fixes(workspace: &Workspace, uri: &Url, range: Range) -> Vec<QuickFix> {
             let Some((kind, key)) = target(doc, diagnostic) else {
                 continue;
             };
+            let paired_end = if kind == Kind::Environment {
+                let Some(end) = environment_end(doc, diagnostic.range) else {
+                    continue;
+                };
+                Some(end)
+            } else {
+                None
+            };
             let length = key.chars().count();
             if !(3..=128).contains(&length) || !valid_name(kind, key) {
                 continue;
@@ -123,6 +202,7 @@ pub fn fixes(workspace: &Workspace, uri: &Url, range: Range) -> Vec<QuickFix> {
                     Kind::Citation => &document.syntax.citations,
                     Kind::Label => &document.syntax.labels,
                     Kind::Command => &document.syntax.definitions,
+                    Kind::Environment => &document.syntax.environments,
                 };
                 for entry in entries {
                     *candidates.entry(entry.name.clone()).or_default() += 1;
@@ -153,6 +233,11 @@ pub fn fixes(workspace: &Workspace, uri: &Url, range: Range) -> Vec<QuickFix> {
                     candidates.entry(name.into()).or_insert(1);
                 }
             }
+            if kind == Kind::Environment {
+                for name in crate::catalog::ENVIRONMENTS {
+                    candidates.entry((*name).into()).or_insert(1);
+                }
+            }
             // A known key can be unresolved because of build order or macros.
             if total_entries >= 4096 || candidates.contains_key(key) {
                 continue;
@@ -174,6 +259,7 @@ pub fn fixes(workspace: &Workspace, uri: &Url, range: Range) -> Vec<QuickFix> {
                     Kind::Label => ("label", name.clone()),
                     Kind::Citation => ("citation", name.clone()),
                     Kind::Command => ("command", format!("\\{name}")),
+                    Kind::Environment => ("environment", name.clone()),
                 };
                 if !seen.insert((diagnostic.range.start, diagnostic.range.end, name.clone())) {
                     continue;
@@ -183,8 +269,15 @@ pub fn fixes(workspace: &Workspace, uri: &Url, range: Range) -> Vec<QuickFix> {
                     diagnostic: diagnostic.clone(),
                     edit: TextEdit {
                         range: diagnostic.range,
-                        new_text: replacement,
+                        new_text: replacement.clone(),
                     },
+                    additional_edits: paired_end
+                        .into_iter()
+                        .map(|range| TextEdit {
+                            range,
+                            new_text: replacement.clone(),
+                        })
+                        .collect(),
                 });
                 if result.len() >= 256 {
                     return result;
