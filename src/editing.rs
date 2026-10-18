@@ -1,5 +1,5 @@
 use crate::{
-    features, navigation,
+    features, navigation, reference_fixes,
     workspace::{Document, Workspace},
 };
 use tower_lsp::lsp_types::*;
@@ -24,8 +24,9 @@ pub fn code_actions(
     let Some(doc) = workspace.documents.get(uri) else {
         return vec![];
     };
-    doc.syntax
-        .fixes
+    let mut fixes = doc.syntax.fixes.clone();
+    fixes.extend(reference_fixes::fixes(workspace, uri, range));
+    fixes
         .iter()
         .filter(|fix| {
             let diagnostic = &fix.diagnostic;
@@ -35,7 +36,7 @@ pub fn code_actions(
                     || context.diagnostics.iter().any(|reported| {
                         reported.range == diagnostic.range
                             && reported.message == diagnostic.message
-                            && reported.source.as_deref() == Some("latex-lsp")
+                            && reported.source == diagnostic.source
                     }))
         })
         .map(|fix| {
@@ -43,14 +44,14 @@ pub fn code_actions(
                 return CodeActionOrCommand::Command(Command {
                     title: fix.title.clone(),
                     command: "latex.applyQuickFix".into(),
-                    arguments: Some(vec![serde_json::json!({"uri":uri,"version":doc.version,"diagnostic":fix.diagnostic})]),
+                    arguments: Some(vec![serde_json::json!({"uri":uri,"version":doc.version,"diagnostic":fix.diagnostic,"replacement":fix.edit.new_text})]),
                 });
             }
             CodeActionOrCommand::CodeAction(CodeAction {
                 title: fix.title.clone(),
                 kind: Some(CodeActionKind::QUICKFIX),
                 diagnostics: Some(vec![fix.diagnostic.clone()]),
-                is_preferred: Some(true),
+                is_preferred: Some(fix.diagnostic.source.as_deref() == Some("latex-lsp")),
                 edit: Some(features::workspace_edit(
                     workspace,
                     std::collections::BTreeMap::from([(uri.clone(), vec![fix.edit.clone()])]),
@@ -66,6 +67,7 @@ pub struct FixRequest {
     pub uri: Url,
     pub version: Option<i32>,
     pub diagnostic: Diagnostic,
+    pub replacement: Option<String>,
 }
 
 pub fn resolve_fix(workspace: &Workspace, request: FixRequest) -> Option<WorkspaceEdit> {
@@ -73,10 +75,20 @@ pub fn resolve_fix(workspace: &Workspace, request: FixRequest) -> Option<Workspa
     if doc.version != request.version {
         return None;
     }
-    let fix = doc.syntax.fixes.iter().find(|fix| {
+    let mut fixes = doc.syntax.fixes.clone();
+    fixes.extend(reference_fixes::fixes(
+        workspace,
+        &request.uri,
+        request.diagnostic.range,
+    ));
+    let fix = fixes.iter().find(|fix| {
         fix.diagnostic.range == request.diagnostic.range
             && fix.diagnostic.message == request.diagnostic.message
-            && request.diagnostic.source.as_deref() == Some("latex-lsp")
+            && request.diagnostic.source == fix.diagnostic.source
+            && request.replacement.as_ref().map_or(
+                fix.diagnostic.source.as_deref() == Some("latex-lsp"),
+                |replacement| *replacement == fix.edit.new_text,
+            )
     })?;
     Some(features::workspace_edit(
         workspace,

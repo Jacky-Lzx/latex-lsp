@@ -139,6 +139,29 @@ pub fn is_reference(name: &str) -> bool {
     )
 }
 
+pub(crate) fn is_static_key(value: &str) -> bool {
+    !value.is_empty()
+        && !value.chars().any(|ch| {
+            ch.is_whitespace()
+                || matches!(
+                    ch,
+                    '\\' | '{'
+                        | '}'
+                        | ','
+                        | '%'
+                        | '#'
+                        | '$'
+                        | '&'
+                        | '^'
+                        | '~'
+                        | '"'
+                        | '('
+                        | ')'
+                        | '='
+                )
+        })
+}
+
 pub fn file_extensions(name: &str) -> Option<&'static [&'static str]> {
     Some(match name {
         "input" => &["tex", "ltx", "sty", "cls", "def", "clo"],

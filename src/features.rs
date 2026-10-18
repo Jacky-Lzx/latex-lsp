@@ -163,25 +163,7 @@ pub fn rename(
                 .bytes()
                 .all(|b| b.is_ascii_alphabetic() || b == b'@')
         } else {
-            !new_name.chars().any(|ch| {
-                ch.is_whitespace()
-                    || matches!(
-                        ch,
-                        '\\' | '{'
-                            | '}'
-                            | ','
-                            | '%'
-                            | '#'
-                            | '$'
-                            | '&'
-                            | '^'
-                            | '~'
-                            | '"'
-                            | '('
-                            | ')'
-                            | '='
-                    )
-            })
+            syntax::is_static_key(new_name)
         };
     if !valid {
         return Err(tower_lsp::jsonrpc::Error::invalid_params(

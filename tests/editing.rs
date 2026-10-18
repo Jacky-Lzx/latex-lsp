@@ -182,3 +182,148 @@ fn selection_ranges_expand_through_nested_groups_sections_and_the_document() {
         Range::default()
     );
 }
+
+#[test]
+fn compiler_reference_fixes_use_current_project_keys_and_revalidate_command_requests() {
+    let source = "😀 \\cref{sec:itnro, sec:other} \\cite{smith2025}\n";
+    let (mut workspace, uri) = setup(source, true);
+    let labels = Url::parse("file:///editing/chapter.tex").unwrap();
+    let bibliography = Url::parse("file:///editing/refs.bib").unwrap();
+    let unrelated = Url::parse("file:///unrelated/main.tex").unwrap();
+    for (uri, source) in [
+        (&labels, r"\label{sec:intro}\label{sec:other}"),
+        (&bibliography, "@book{smith2026,title={Example}}"),
+        (&unrelated, r"\label{sec:itnro}\label{sec:itnor}"),
+    ] {
+        workspace
+            .documents
+            .insert(uri.clone(), Document::new(uri, source.into(), None));
+    }
+    workspace.recorded_inputs.insert(
+        uri.clone(),
+        [uri.clone(), labels.clone(), bibliography].into(),
+    );
+    let text = &workspace.documents[&uri].text;
+    let label_start = source.find("sec:itnro").unwrap();
+    let citation_start = source.find("smith2025").unwrap();
+    let label = Diagnostic {
+        range: text.range(label_start, label_start + 9),
+        source: Some("latex-build".into()),
+        message: "LaTeX Warning: Reference `sec:itnro' on page 1 undefined on input line 1.".into(),
+        ..Default::default()
+    };
+    let citation = Diagnostic {
+        range: text.range(citation_start, citation_start + 9),
+        source: Some("latex-build".into()),
+        message: "LaTeX Warning: Citation `smith2025' on page 1 undefined on input line 1.".into(),
+        ..Default::default()
+    };
+    workspace.build_diagnostics.insert(
+        uri.clone(),
+        std::collections::BTreeMap::from([(uri.clone(), vec![label.clone(), citation.clone()])]),
+    );
+    let actions =
+        editing::code_actions(&workspace, &uri, label.range, &context(vec![label.clone()]));
+    assert_eq!(actions.len(), 1, "{actions:?}");
+    assert_eq!(action_edit(&actions[0], &uri).new_text, "sec:intro");
+    let CodeActionOrCommand::CodeAction(action) = &actions[0] else {
+        panic!();
+    };
+    assert_eq!(action.is_preferred, Some(false));
+    let actions = editing::code_actions(
+        &workspace,
+        &uri,
+        citation.range,
+        &context(vec![citation.clone()]),
+    );
+    assert_eq!(actions.len(), 1);
+    assert_eq!(action_edit(&actions[0], &uri).new_text, "smith2026");
+    let mut forged = label.clone();
+    forged.message =
+        "LaTeX Warning: Reference `forged' on page 1 undefined on input line 1.".into();
+    assert!(
+        editing::code_actions(&workspace, &uri, label.range, &context(vec![forged])).is_empty()
+    );
+    workspace.code_action_literals = false;
+    workspace.apply_edits = true;
+    let actions =
+        editing::code_actions(&workspace, &uri, label.range, &context(vec![label.clone()]));
+    let CodeActionOrCommand::Command(command) = &actions[0] else {
+        panic!();
+    };
+    let value = command.arguments.as_ref().unwrap()[0].clone();
+    let request = serde_json::from_value(value.clone()).unwrap();
+    assert!(editing::resolve_fix(&workspace, request).is_some());
+    let mut forged = value.clone();
+    forged["replacement"] = serde_json::json!("sec:itnor");
+    assert!(editing::resolve_fix(&workspace, serde_json::from_value(forged).unwrap()).is_none());
+    workspace.documents.get_mut(&uri).unwrap().version = Some(10);
+    assert!(
+        editing::resolve_fix(&workspace, serde_json::from_value(value.clone()).unwrap()).is_none()
+    );
+    workspace.documents.get_mut(&uri).unwrap().version = Some(9);
+    workspace.documents.remove(&labels);
+    assert!(
+        editing::resolve_fix(&workspace, serde_json::from_value(value.clone()).unwrap()).is_none()
+    );
+    workspace.clear_build_diagnostics(&uri);
+    assert!(editing::resolve_fix(&workspace, serde_json::from_value(value).unwrap()).is_none());
+}
+
+#[test]
+fn compiler_reference_suggestions_reject_ambiguous_dynamic_known_and_inexact_keys() {
+    for (key, definitions, expected, precise) in [
+        (
+            "sec:valve",
+            r"\label{sec:value}\label{sec:value}",
+            None,
+            true,
+        ),
+        (
+            "sec:value",
+            r"\label{sec:value}\label{sec:valve}",
+            None,
+            true,
+        ),
+        ("sec:value", r"\label{sec:\value}", None, true),
+        (r"sec:\value", r"\label{sec:value}", None, true),
+        ("ab", r"\label{ac}", None, true),
+        ("章节序眼", r"\label{章节序言}", Some("章节序言"), true),
+        ("sec:valve", r"\label{sec:value}", None, false),
+    ] {
+        let source = format!("\\ref{{{key}}}");
+        let (mut workspace, uri) = setup(&source, false);
+        let definitions_uri = Url::parse("file:///editing/definitions.tex").unwrap();
+        workspace.documents.insert(
+            definitions_uri.clone(),
+            Document::new(&definitions_uri, definitions.into(), None),
+        );
+        workspace
+            .recorded_inputs
+            .insert(uri.clone(), [uri.clone(), definitions_uri].into());
+        let range = if precise {
+            workspace.documents[&uri].text.range(5, 5 + key.len())
+        } else {
+            workspace.documents[&uri].text.range(0, source.len())
+        };
+        let diagnostic = Diagnostic {
+            range,
+            source: Some("latex-build".into()),
+            message: format!(
+                "LaTeX Warning: Reference `{key}' on page 1 undefined on input line 1."
+            ),
+            ..Default::default()
+        };
+        workspace.build_diagnostics.insert(
+            uri.clone(),
+            std::collections::BTreeMap::from([(uri.clone(), vec![diagnostic.clone()])]),
+        );
+        let actions = editing::code_actions(&workspace, &uri, range, &context(vec![diagnostic]));
+        if let Some(expected) = expected {
+            assert_eq!(actions.len(), 1);
+            assert_eq!(action_edit(&actions[0], &uri).new_text, expected);
+        } else {
+            assert!(actions.is_empty(), "{key}: {actions:?}");
+        }
+    }
+}

@@ -45,21 +45,25 @@ fn input_line(message: &str) -> Option<u32> {
         .ok()
 }
 
-fn undefined_reference_ranges(text: &Text, line: u32, message: &str) -> Vec<Range> {
+pub(crate) fn undefined_reference_key(message: &str) -> Option<(bool, &str)> {
     if !message.contains("undefined") {
-        return vec![];
+        return None;
     }
     let (citation, tail) = if let Some((_, tail)) = message.split_once("Reference `") {
         (false, tail)
     } else if let Some((_, tail)) = message.split_once("Citation `") {
         (true, tail)
     } else {
-        return vec![];
+        return None;
     };
-    let Some((key, _)) = tail
+    let (key, _) = tail
         .rsplit_once("' on ")
-        .or_else(|| tail.rsplit_once("' undefined"))
-    else {
+        .or_else(|| tail.rsplit_once("' undefined"))?;
+    Some((citation, key))
+}
+
+pub(crate) fn undefined_reference_ranges(text: &Text, line: u32, message: &str) -> Vec<Range> {
+    let Some((citation, key)) = undefined_reference_key(message) else {
         return vec![];
     };
     let syntax = crate::syntax::Syntax::latex(text);

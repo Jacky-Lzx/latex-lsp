@@ -10,6 +10,7 @@ pub mod graphics;
 pub mod navigation;
 pub mod path_completion;
 pub mod recorder;
+mod reference_fixes;
 pub mod signature;
 pub mod synctex;
 pub mod syntax;

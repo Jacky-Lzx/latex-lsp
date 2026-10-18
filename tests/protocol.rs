@@ -2017,3 +2017,109 @@ fn static_graphicspath_images_changed_during_build_discard_diagnostics_without_a
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+#[ignore = "requires latexmk, BibTeX and a TeX installation"]
+fn real_compiler_reference_quick_fixes_remove_label_and_citation_typos_after_rebuilding() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let uri = Url::from_file_path(root.join("main.tex")).unwrap();
+    let source = "\\documentclass{article}\n\\begin{document}\n\\input{chapter}\nSee \\ref{sec:itnro} and \\cite{smith2025}.\n\\bibliographystyle{plain}\n\\bibliography{refs}\n\\end{document}\n";
+    std::fs::write(root.join("main.tex"), source).unwrap();
+    std::fs::write(
+        root.join("chapter.tex"),
+        "\\section{Intro}\\label{sec:intro}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("refs.bib"),
+        "@book{smith2026,author={Smith},title={Example},year={2026},publisher={P}}\n",
+    )
+    .unwrap();
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(root).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}},"textDocument":{"codeAction":{"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix"]}}}}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"version":1,"languageId":"latex","text":source}}),
+    );
+    server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[uri]}),
+    );
+    let first = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(first["params"]["status"], "success", "{first}");
+    let diagnostics = server.until(|message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["uri"] == uri.as_str()
+            && message["params"]["diagnostics"]
+                .as_array()
+                .is_some_and(|diagnostics| {
+                    diagnostics.iter().any(|diagnostic| {
+                        diagnostic["message"]
+                            .as_str()
+                            .is_some_and(|message| message.contains("Reference `sec:itnro'"))
+                    })
+                })
+    });
+    let diagnostics: Vec<_> = diagnostics["params"]["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic["message"].as_str().is_some_and(|message| {
+                message.contains("undefined")
+                    && (message.contains("Reference `sec:itnro'")
+                        || message.contains("Citation `smith2025'"))
+            })
+        })
+        .cloned()
+        .collect();
+    assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
+    let mut edits = Vec::new();
+    for (index, diagnostic) in diagnostics.into_iter().enumerate() {
+        let actions = server.request(3 + index as u64,"textDocument/codeAction",json!({"textDocument":{"uri":uri},"range":diagnostic["range"],"context":{"diagnostics":[diagnostic],"only":["quickfix"]}}));
+        assert_eq!(actions.as_array().unwrap().len(), 1, "{actions}");
+        let edit = &actions[0]["edit"]["documentChanges"][0];
+        assert_eq!(edit["textDocument"]["version"], 1);
+        edits.push(
+            serde_json::from_value::<tower_lsp::lsp_types::TextEdit>(edit["edits"][0].clone())
+                .unwrap(),
+        );
+    }
+    edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
+    let repaired = latex_lsp::text::Text::new(source.into())
+        .changed(
+            edits
+                .into_iter()
+                .map(
+                    |edit| tower_lsp::lsp_types::TextDocumentContentChangeEvent {
+                        range: Some(edit.range),
+                        range_length: None,
+                        text: edit.new_text,
+                    },
+                )
+                .collect(),
+        )
+        .unwrap()
+        .source;
+    assert!(repaired.contains("\\ref{sec:intro} and \\cite{smith2026}"));
+    std::fs::write(root.join("main.tex"), &repaired).unwrap();
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"text":repaired}]}),
+    );
+    server.request(
+        5,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[uri]}),
+    );
+    let second = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(second["params"]["status"], "success", "{second}");
+    assert_eq!(second["params"]["stale"], false);
+    assert_eq!(second["params"]["diagnosticsCount"], 0, "{second}");
+    server.request(6, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
