@@ -1,7 +1,7 @@
 //! Statically declared graphicx search directories, relative to the TeX root.
 use crate::{
     syntax,
-    workspace::{resolve_path, Workspace},
+    workspace::{normalize_path, resolve_path, Workspace},
 };
 use std::{collections::BTreeSet, ops::Range, path::PathBuf};
 use tower_lsp::lsp_types::Url;
@@ -51,10 +51,36 @@ pub struct Directory {
 }
 
 pub fn declarations(workspace: &Workspace, uri: &Url) -> Vec<Directory> {
+    if !workspace.documents.get(uri).is_some_and(|doc| {
+        doc.syntax
+            .commands
+            .iter()
+            .any(|command| command.name == "graphicspath")
+    }) {
+        return vec![];
+    }
+    let origins: Vec<_> = workspace
+        .symbol_projects(uri)
+        .regions
+        .into_iter()
+        .filter(|(_, project)| project.contains(uri))
+        .map(|(root, _)| root)
+        .collect();
+    let origins = if origins.is_empty() {
+        vec![workspace.root_document(uri).unwrap_or_else(|_| uri.clone())]
+    } else {
+        origins
+    };
+    origins
+        .iter()
+        .flat_map(|origin| declarations_in(workspace, uri, origin))
+        .collect()
+}
+
+fn declarations_in(workspace: &Workspace, uri: &Url, origin: &Url) -> Vec<Directory> {
     let Some(doc) = workspace.documents.get(uri) else {
         return vec![];
     };
-    let origin = workspace.root_document(uri).unwrap_or_else(|_| uri.clone());
     let Some(parent) = origin
         .to_file_path()
         .ok()
@@ -90,18 +116,17 @@ pub fn declarations(workspace: &Workspace, uri: &Url) -> Vec<Directory> {
             {
                 continue;
             }
-            let Ok(path) = parent.join(value).canonicalize() else {
-                continue;
-            };
-            if path.is_dir() {
-                directories.push(Directory {
-                    path,
-                    span,
-                    origin: origin.clone(),
-                });
-                if directories.len() >= 256 {
-                    return directories;
-                }
+            let path = parent.join(value);
+            let path = path
+                .canonicalize()
+                .unwrap_or_else(|_| normalize_path(&path));
+            directories.push(Directory {
+                path,
+                span,
+                origin: origin.clone(),
+            });
+            if directories.len() >= 256 {
+                return directories;
             }
         }
     }
@@ -120,8 +145,8 @@ pub fn directories(workspace: &Workspace, uri: &Url) -> Vec<PathBuf> {
         if !seen.insert(document.clone()) {
             continue;
         }
-        for directory in declarations(workspace, document) {
-            if !result.contains(&directory.path) {
+        for directory in declarations_in(workspace, document, &root) {
+            if directory.path.is_dir() && !result.contains(&directory.path) {
                 result.push(directory.path);
             }
             if result.len() >= 256 {

@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 
 use tower_lsp::lsp_types::Url;
@@ -15,6 +15,20 @@ pub fn is_source(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
         .is_some_and(|extension| SOURCE_EXTENSIONS.contains(&extension))
+}
+
+pub(crate) fn normalize_path(path: &Path) -> PathBuf {
+    let mut result = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::ParentDir => {
+                result.pop();
+            }
+            Component::CurDir => {}
+            _ => result.push(component.as_os_str()),
+        }
+    }
+    result
 }
 
 #[derive(Clone, Debug)]

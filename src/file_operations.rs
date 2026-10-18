@@ -1,10 +1,10 @@
 use crate::{
     features, graphics, navigation,
-    workspace::{resolve_path, Document, Workspace},
+    workspace::{normalize_path, resolve_path, Document, Workspace},
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
 };
 use tower_lsp::{
     jsonrpc::{Error, Result},
@@ -25,8 +25,8 @@ impl Renames {
                     .ok_or_else(|| Error::invalid_params("File renames require local file URIs"))
             };
             let old = local(&file.old_uri)?;
-            let old = old.canonicalize().unwrap_or_else(|_| normalize(&old));
-            let new = normalize(&local(&file.new_uri)?);
+            let old = old.canonicalize().unwrap_or_else(|_| normalize_path(&old));
+            let new = normalize_path(&local(&file.new_uri)?);
             if paths.insert(old, new.clone()).is_some() || !destinations.insert(new) {
                 return Err(Error::invalid_params(
                     "Ambiguous file rename: duplicate source or destination",
@@ -61,20 +61,6 @@ impl Renames {
     pub fn affects(&self, uri: &Url) -> bool {
         self.uri(uri) != *uri
     }
-}
-
-fn normalize(path: &Path) -> PathBuf {
-    let mut result = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::ParentDir => {
-                result.pop();
-            }
-            Component::CurDir => {}
-            _ => result.push(component.as_os_str()),
-        }
-    }
-    result
 }
 
 fn relative_path(parent: &Path, target: &Path) -> PathBuf {
@@ -171,6 +157,41 @@ fn safe_path(path: &Path) -> Result<String> {
     Ok(value)
 }
 
+fn directory_replacement(
+    renames: &Renames,
+    directory: &graphics::Directory,
+    original: &str,
+) -> Result<String> {
+    if renames.path(&directory.path) == directory.path && !renames.affects(&directory.origin) {
+        return Ok(original.into());
+    }
+    let origin = renames
+        .uri(&directory.origin)
+        .to_file_path()
+        .map_err(|_| Error::invalid_params("Invalid graphics search directory origin"))?;
+    let target = renames.path(&directory.path);
+    let path = if Path::new(original).is_absolute() {
+        target
+    } else {
+        relative_path(
+            origin
+                .parent()
+                .ok_or_else(|| Error::invalid_params("Invalid root path"))?,
+            &target,
+        )
+    };
+    let mut new_text = safe_path(&path)?;
+    if new_text.is_empty() {
+        new_text.push('.');
+    } else if original.starts_with("./") && !new_text.starts_with('.') {
+        new_text.insert_str(0, "./");
+    }
+    if !new_text.ends_with('/') {
+        new_text.push('/');
+    }
+    Ok(new_text)
+}
+
 /// Edits target the old URIs: the client applies them before moving the files.
 pub fn will_rename(workspace: &Workspace, files: &[FileRename]) -> Result<Option<WorkspaceEdit>> {
     if files.is_empty() {
@@ -179,41 +200,26 @@ pub fn will_rename(workspace: &Workspace, files: &[FileRename]) -> Result<Option
     let renames = Renames::new(files)?;
     let mut changes = BTreeMap::new();
     for (uri, doc) in &workspace.documents {
+        let mut directories = BTreeMap::new();
         for directory in graphics::declarations(workspace, uri) {
-            if renames.path(&directory.path) == directory.path
-                && !renames.affects(&directory.origin)
-            {
-                continue;
-            }
             let original = &doc.text.source[directory.span.clone()];
-            let origin = renames
-                .uri(&directory.origin)
-                .to_file_path()
-                .map_err(|_| Error::invalid_params("Invalid graphics search directory origin"))?;
-            let target = renames.path(&directory.path);
-            let path = if Path::new(original).is_absolute() {
-                target
-            } else {
-                relative_path(
-                    origin
-                        .parent()
-                        .ok_or_else(|| Error::invalid_params("Invalid root path"))?,
-                    &target,
-                )
-            };
-            let mut new_text = safe_path(&path)?;
-            if new_text.is_empty() {
-                new_text.push('.');
-            } else if original.starts_with("./") && !new_text.starts_with('.') {
-                new_text.insert_str(0, "./");
+            let new_text = directory_replacement(&renames, &directory, original)?;
+            let span = (directory.span.start, directory.span.end);
+            if directories
+                .get(&span)
+                .is_some_and(|value| *value != new_text)
+            {
+                return Err(Error::invalid_params("Shared graphics search path would require different replacements in different projects"));
             }
-            new_text.push('/');
-            if new_text != original {
+            directories.insert(span, new_text);
+        }
+        for ((start, end), new_text) in directories {
+            if new_text != doc.text.source[start..end] {
                 changes
                     .entry(uri.clone())
                     .or_insert_with(Vec::new)
                     .push(TextEdit {
-                        range: doc.text.range(directory.span.start, directory.span.end),
+                        range: doc.text.range(start, end),
                         new_text,
                     });
             }
