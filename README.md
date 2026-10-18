@@ -102,6 +102,8 @@ ifthen 的 `newboolean` / `provideboolean` 与 etoolbox 的 `newbool` / `provide
 
 etoolbox 的静态 `csdef` / `csgdef` / `csedef` / `csxdef` 声明进入宏索引，支持导航、符号、参数提示、补全和跨文件重命名，维护直接调用、`csuse` 及字面 `csname` 引用。识别连续的 `#1#2...` 参数和仅通过名称调用的中文或带连字符名称；不展开动态名称，不推断复杂分隔参数，不模拟局部作用域或重复定义的覆盖顺序。
 
+仅通过静态名称声明和调用的宏可以重命名为中文、连字符或数字名称，例如 `发布-模式`；同样适用于经 `expandafter` 展开的字面 `csname` 声明。任一使用该定义的项目中存在直接声明或直接调用时，新名称仍须仅包含 ASCII 字母或 `@`，避免破坏 TeX 控制序列。重命名保留普通字符串、注释和逐字文本，并检查内置原语与现有定义的冲突。
+
 etoolbox 的 `csuse` / `csmeaning`、`ifcsdef` / `ifcsundef` / `ifcsvoid`、宏类型检测及名称比较命令中的静态控制序列名称支持补全、导航、引用与重命名；识别 `ifcsequal` / `ifcsstrequal` 的两个名称参数，保留 `ifcsstring` 的字符串和条件分支正文。派生的环境、计数器和布尔命令仍归属于原始声明。`csuse` 调用可显示被调用命令或环境的参数提示，包括可选参数默认值；动态名称不作推断。
 
 etoolbox 的 `newtoggle` / `providetoggle` 使用独立命名空间，支持 `settoggle`、`toggletrue` / `togglefalse`、`iftoggle` / `nottoggle` 和上述表达式中的 `togl {名称}` 操作数。提供名称和值补全、片段、参数提示、布尔符号、跨文件导航与安全重命名；同名 boolean 保持独立。重命名同时维护直接或字面的内部 `etb@tgl@名称` 控制序列，并检查生成命令冲突。

@@ -16,7 +16,16 @@ fn project(root: &Path, files: &[(&str, &str)]) -> Workspace {
 }
 
 fn renamed(workspace: &Workspace, document: &Url, position: Position) -> BTreeMap<Url, String> {
-    features::rename(workspace, document, position, "greeting")
+    renamed_to(workspace, document, position, "greeting")
+}
+
+fn renamed_to(
+    workspace: &Workspace,
+    document: &Url,
+    position: Position,
+    name: &str,
+) -> BTreeMap<Url, String> {
+    features::rename(workspace, document, position, name)
         .unwrap()
         .unwrap()
         .changes
@@ -41,6 +50,161 @@ fn renamed(workspace: &Workspace, document: &Url, position: Position) -> BTreeMa
             (uri, source)
         })
         .collect()
+}
+
+#[test]
+fn names_used_only_as_strings_can_be_renamed_to_unicode_and_nonletters() {
+    for declaration in [
+        r"\csdef{hello}#1{Hello #1}",
+        r"\csgdef{hello}#1{Hello #1}",
+        r"\expandafter\def\csname hello\endcsname#1{Hello #1}",
+        r"\expandafter\newcommand\csname hello\endcsname[1]{Hello #1}",
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let source = "\\documentclass{article}\\input{definitions}\n\\begin{document}😀 \\csuse{hello}{hello}\\csname hello\\endcsname{Literal}\\ifcsdef{hello}{hello}{No}\n% \\hello \\csuse{hello}\n\\verb|\\hello|\\end{document}";
+        let workspace = project(
+            root,
+            &[("main.tex", source), ("definitions.tex", declaration)],
+        );
+        let main = uri(root, "main.tex");
+        let definitions = uri(root, "definitions.tex");
+        let position = workspace.documents[&main]
+            .text
+            .position(source.find("hello").unwrap());
+        for name in ["发布-模式", "hello-two", "hello.2"] {
+            let changed = renamed_to(&workspace, &main, position, name);
+            assert_eq!(changed[&definitions], declaration.replace("hello", name));
+            assert_eq!(
+                changed[&main],
+                format!("\\documentclass{{article}}\\input{{definitions}}\n\\begin{{document}}😀 \\csuse{{{name}}}{{hello}}\\csname {name}\\endcsname{{Literal}}\\ifcsdef{{{name}}}{{hello}}{{No}}\n% \\hello \\csuse{{hello}}\n\\verb|\\hello|\\end{{document}}")
+            );
+        }
+        for name in ["hello world", "hello\\suffix", "hello#1", "hello,other", ""] {
+            assert!(
+                features::rename(&workspace, &main, position, name).is_err(),
+                "{name}"
+            );
+        }
+    }
+}
+
+#[test]
+fn direct_declarations_and_calls_restrict_new_names_in_every_consumer_project() {
+    for (declaration, direct) in [
+        (r"\newcommand{\hello}{Hello}", ""),
+        (r"\csdef{hello}{Hello}", r"\hello"),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let workspace = project(
+            root,
+            &[
+                (
+                    "a.tex",
+                    r"\documentclass{article}\input{definitions}\begin{document}\csuse{hello}\end{document}",
+                ),
+                (
+                    "b.tex",
+                    &format!(
+                        r"\documentclass{{article}}\input{{definitions}}\begin{{document}}{direct}\end{{document}}"
+                    ),
+                ),
+                ("definitions.tex", declaration),
+            ],
+        );
+        let main = uri(root, "a.tex");
+        let text = &workspace.documents[&main].text;
+        let position = text.position(text.source.find("hello").unwrap());
+        for name in ["发布-模式", "hello-two", "hello.2"] {
+            assert!(
+                features::rename(&workspace, &main, position, name).is_err(),
+                "{declaration}: {direct}: {name}"
+            );
+        }
+        assert!(features::rename(&workspace, &main, position, "greeting")
+            .unwrap()
+            .is_some());
+    }
+}
+
+#[test]
+fn named_macro_rename_cannot_overwrite_core_expansion_and_grouping_primitives() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = r"\csdef{hello}{Hello}\csuse{hello}";
+    let workspace = project(directory.path(), &[("main.tex", source)]);
+    let main = uri(directory.path(), "main.tex");
+    let position = workspace.documents[&main]
+        .text
+        .position(source.find("hello").unwrap());
+    for name in [
+        "relax",
+        "csname",
+        "endcsname",
+        "expandafter",
+        "noexpand",
+        "unexpanded",
+        "expanded",
+        "protected",
+        "long",
+        "outer",
+        "global",
+        "begingroup",
+        "endgroup",
+        "futurelet",
+    ] {
+        assert!(
+            features::rename(&workspace, &main, position, name).is_err(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+#[cfg(unix)]
+#[ignore = "requires pdflatex, xelatex, lualatex and etoolbox"]
+fn unicode_named_macro_renames_preserve_behavior_in_all_supported_engines() {
+    use std::os::unix::fs::PermissionsExt;
+    for executable in ["pdflatex", "xelatex", "lualatex"] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let declaration = r"\csdef{hello}#1{\typeout{VALUE:#1}#1}";
+        let source = r"\documentclass{article}\usepackage{etoolbox}\input{definitions}
+\begin{document}\csuse{hello}{Named}\csname hello\endcsname{Literal}\ifcsdef{hello}{\typeout{VALUE:defined}}{Wrong}\end{document}";
+        let workspace = project(
+            root,
+            &[("main.tex", source), ("definitions.tex", declaration)],
+        );
+        let main = uri(root, "main.tex");
+        let compiler = if executable == "lualatex" {
+            let wrapper = root.join("lualatex");
+            std::fs::write(&wrapper, "#!/bin/sh\nTEXMFVAR=\"${0%/*}/tex-cache\"\nTEXMFCACHE=\"$TEXMFVAR\"\nexport TEXMFVAR TEXMFCACHE\nmkdir -p \"$TEXMFVAR\"\nexec lualatex \"$@\"\n").unwrap();
+            std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+            wrapper.to_string_lossy().into_owned()
+        } else {
+            executable.into()
+        };
+        let config = latex_lsp::config::BuildConfig {
+            executable: compiler,
+            ..Default::default()
+        };
+        let before = build::run(&root.join("main.tex"), &config, &AtomicBool::new(false));
+        assert_eq!(before.status, "success", "{executable}: {}", before.output);
+        let position = workspace.documents[&main]
+            .text
+            .position(source.find("hello").unwrap());
+        for (uri, source) in renamed_to(&workspace, &main, position, "发布-模式") {
+            std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+        }
+        let after = build::run(&root.join("main.tex"), &config, &AtomicBool::new(false));
+        assert_eq!(after.status, "success", "{executable}: {}", after.output);
+        assert_eq!(before.pages, after.pages);
+        for output in [&before.output, &after.output] {
+            for expected in ["VALUE:Named", "VALUE:Literal", "VALUE:defined"] {
+                assert!(output.contains(expected), "{executable}: {output}");
+            }
+        }
+    }
 }
 
 #[test]

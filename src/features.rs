@@ -278,13 +278,7 @@ pub fn rename(
     };
     let valid = !new_name.is_empty()
         && !(target.kind == TargetKind::Citation && new_name == "*")
-        && if target.kind == TargetKind::Command {
-            new_name
-                .bytes()
-                .all(|b| b.is_ascii_alphabetic() || b == b'@')
-        } else {
-            syntax::is_static_key(new_name)
-        };
+        && syntax::is_static_key(new_name);
     if !valid {
         return Err(tower_lsp::jsonrpc::Error::invalid_params(
             "Invalid name: use a single TeX command name or a reference key without separators",
@@ -340,6 +334,15 @@ pub fn rename(
             && text
                 .offset(location.range.start)
                 .is_some_and(|offset| text.source[offset..].starts_with('\\'));
+        if control_word
+            && !new_name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphabetic() || byte == b'@')
+        {
+            return Err(tower_lsp::jsonrpc::Error::invalid_params(
+                "Names used in direct TeX commands must contain only command letters or @",
+            ));
+        }
         changes.entry(location.uri).or_default().push(TextEdit {
             range: location.range,
             new_text: if control_word {
