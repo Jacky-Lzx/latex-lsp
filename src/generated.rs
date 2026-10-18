@@ -239,7 +239,7 @@ pub(crate) fn references(doc: &Document, name: &str, environment: Generated) -> 
                 });
             }
         }
-        for span in crate::named_commands::spans(&doc.text.source, command) {
+        for span in crate::named_commands::spans(doc, command) {
             if let Some((_, prefix)) = generated
                 .iter()
                 .find(|(name, _)| *name == doc.text.source[span.clone()])

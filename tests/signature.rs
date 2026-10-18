@@ -45,6 +45,11 @@ fn named_alias_signatures_accept_grouped_and_bare_control_sequence_tokens() {
         (r"\letcs\mirror{hel¦lo}", r"\letcs{alias}{command}", 1),
         (r"\csletcs{mir¦ror}{hello}", r"\csletcs{alias}{command}", 0),
         (r"\csletcs{mirror}{hel¦lo}", r"\csletcs{alias}{command}", 1),
+        (
+            r"\expandafter\letcs\csname mirror\endcsname{hel¦lo}",
+            r"\letcs{alias}{command}",
+            1,
+        ),
     ] {
         check(r"\csdef{hello}#1#2{#1#2}", marked, label, active);
     }

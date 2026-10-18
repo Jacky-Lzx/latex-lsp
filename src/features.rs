@@ -44,7 +44,7 @@ fn raw_target(doc: &Document, offset: usize) -> Option<Target<'_>> {
         return None;
     }
     for command in &doc.syntax.commands {
-        if let Some(span) = crate::named_commands::spans(&doc.text.source, command)
+        if let Some(span) = crate::named_commands::spans(doc, command)
             .into_iter()
             .find(|span| span.start <= offset && offset <= span.end)
         {
@@ -855,7 +855,7 @@ fn all_references(
         for (index, command) in doc.syntax.commands.iter().enumerate() {
             if target.kind == TargetKind::Command {
                 result.extend(
-                    crate::named_commands::spans(&doc.text.source, command)
+                    crate::named_commands::spans(doc, command)
                         .into_iter()
                         .filter(|span| doc.text.source[span.clone()] == *target.name)
                         .filter(|span| {

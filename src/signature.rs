@@ -542,6 +542,7 @@ fn group_end(doc: &Document, start: usize, cursor: usize, open: u8, close: u8) -
 
 fn active_parameter(
     doc: &Document,
+    command: &syntax::Command,
     end: usize,
     cursor: usize,
     signature: &Signature,
@@ -569,11 +570,11 @@ fn active_parameter(
         }
         let (open, close) = match parameter.kind {
             Kind::CommandToken if source.as_bytes().get(i) != Some(&b'{') => {
-                let token = syntax::control_word(source, i)?;
-                if cursor <= token.end {
+                let end = crate::named_commands::control_argument_end(doc, command, i)?;
+                if cursor <= end {
                     return Some(index);
                 }
-                i = token.end;
+                i = end;
                 continue;
             }
             Kind::Star => {
@@ -669,7 +670,7 @@ pub fn help(workspace: &Workspace, uri: &Url, position: Position) -> Option<Sign
             } else if named.is_some() {
                 signature.name = format!("csuse{{{name}}}");
             }
-            if let Some(active) = active_parameter(doc, end, cursor, &signature) {
+            if let Some(active) = active_parameter(doc, command, end, cursor, &signature) {
                 return Some(signature.information(active));
             }
         }

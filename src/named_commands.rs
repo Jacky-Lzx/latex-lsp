@@ -1,5 +1,8 @@
 //! Static control sequence names consumed by etoolbox's named interfaces.
-use crate::{syntax, workspace::Workspace};
+use crate::{
+    syntax,
+    workspace::{Document, Workspace},
+};
 use std::{
     collections::{BTreeMap, BTreeSet},
     ops::Range,
@@ -34,10 +37,51 @@ pub(crate) fn declaration(source: &str, command: &syntax::Command) -> Option<Ran
     // Inspect the destination itself. A dynamic destination must never make
     // csletcs's static source appear to be a declaration instead.
     let start = syntax::skip_space(source, command.span.end);
-    argument(source, start, true)?.0
+    let (argument, _) = syntax::group(source, start, b'{', b'}')?;
+    let span = syntax::trimmed_span(source, argument.span);
+    syntax::is_static_key(&source[span.clone()]).then_some(span)
 }
 
-fn argument(source: &str, start: usize, named: bool) -> Option<(Option<Range<usize>>, usize)> {
+/// Respect the explicit expansion before letcs's destination. Without it,
+/// csname itself is the token argument; never scan ahead to guess a name.
+pub(crate) fn control_argument_end(
+    doc: &Document,
+    command: &syntax::Command,
+    start: usize,
+) -> Option<usize> {
+    let source = &doc.text.source;
+    let word = syntax::control_word(source, start)?;
+    if command.name != "letcs" || source[word.clone()] != *"\\csname" {
+        return Some(word.end);
+    }
+    let commands = &doc.syntax.commands;
+    let index = commands
+        .binary_search_by_key(&command.span.start, |item| item.span.start)
+        .ok()?;
+    let expanded = index
+        .checked_sub(1)
+        .and_then(|index| commands.get(index))
+        .is_some_and(|previous| {
+            previous.name == "expandafter"
+                && syntax::skip_space(source, previous.span.end) == command.span.start
+        });
+    if !expanded {
+        return Some(word.end);
+    }
+    if syntax::skip_space(source, command.span.end) != start {
+        return None;
+    }
+    syntax::literal_csname(source, commands, index + 1)?;
+    Some(commands.get(index + 2)?.span.end)
+}
+
+fn argument(
+    doc: &Document,
+    command: &syntax::Command,
+    start: usize,
+    named: bool,
+) -> Option<(Option<Range<usize>>, usize)> {
+    let source = &doc.text.source;
     if let Some((argument, end)) = syntax::group(source, start, b'{', b'}') {
         let span = syntax::trimmed_span(source, argument.span);
         if named {
@@ -47,17 +91,18 @@ fn argument(source: &str, start: usize, named: bool) -> Option<(Option<Range<usi
             (syntax::control_word(source, span.start)? == span).then_some((None, end))
         }
     } else if !named {
-        Some((None, syntax::control_word(source, start)?.end))
+        Some((None, control_argument_end(doc, command, start)?))
     } else {
         None
     }
 }
 
-pub(crate) fn spans(source: &str, command: &syntax::Command) -> Vec<Range<usize>> {
+pub(crate) fn spans(doc: &Document, command: &syntax::Command) -> Vec<Range<usize>> {
+    let source = &doc.text.source;
     let mut result = Vec::new();
     let mut start = syntax::skip_space(source, command.span.end);
     for &named in arguments(&command.name) {
-        let Some((span, end)) = argument(source, start, named) else {
+        let Some((span, end)) = argument(doc, command, start, named) else {
             break;
         };
         if let Some(span) = span {
@@ -92,7 +137,7 @@ pub(crate) fn completion(
                         return Some(span);
                     }
                 }
-                let (_, end) = argument(source, start, named)?;
+                let (_, end) = argument(doc, command, start, named)?;
                 start = syntax::skip_space(source, end);
             }
             None

@@ -596,6 +596,10 @@ fn named_command_completion_preserves_suffixes_and_skips_strings_dynamic_names_a
         (r"\csletcs{mirror}{hel¦lo}", r"\csletcs{mirror}{hello}"),
         (r"\letcs{\mirror}{hel¦lo}", r"\letcs{\mirror}{hello}"),
         (r"\letcs\mirror{hel¦", r"\letcs\mirror{hello"),
+        (
+            r"\expandafter\letcs\csname mirror\endcsname{hel¦lo}",
+            r"\expandafter\letcs\csname mirror\endcsname{hello}",
+        ),
     ] {
         let directory = tempfile::tempdir().unwrap();
         let source = marked.replace('¦', "");
@@ -638,6 +642,7 @@ fn named_command_completion_preserves_suffixes_and_skips_strings_dynamic_names_a
         r"\cslet{hel¦lo}{\other}",
         r"\letcs{\mirror\other}{hel¦lo}",
         r"\csletcs{mirror}{hel¦lo\suffix}",
+        r"\expandafter\letcs\csname mirror\suffix\endcsname{hel¦lo}",
     ] {
         let directory = tempfile::tempdir().unwrap();
         let source = marked.replace('¦', "");
@@ -765,6 +770,8 @@ fn named_alias_declarations_keep_destination_and_source_symbol_identities_separa
         r"\letcs{\mirror}{hello}",
         r"\letcs\mirror{hello}",
         r"\csletcs{mirror}{hello}",
+        r"\expandafter\letcs\csname mirror\endcsname{hello}",
+        "\\global\\expandafter % expanded target\n\\letcs % comment\n\\csname mirror\\endcsname{hello}",
     ] {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();
@@ -863,6 +870,7 @@ fn shared_aliases_can_be_renamed_while_their_project_specific_sources_remain_amb
         r"\cslet{mirror}\hello",
         r"\letcs\mirror{hello}",
         r"\csletcs{mirror}{hello}",
+        r"\expandafter\letcs\csname mirror\endcsname{hello}",
     ] {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();
@@ -913,6 +921,42 @@ fn shared_aliases_can_be_renamed_while_their_project_specific_sources_remain_amb
 }
 
 #[test]
+fn computed_or_unexpanded_alias_targets_do_not_claim_literal_names_or_source_arguments() {
+    for alias in [
+        r"\expandafter\letcs\csname mirror\suffix\endcsname{hello}",
+        "\\expandafter\\letcs\\csname mirror% comment\n\\endcsname{hello}",
+        r"\expandafter\letcs\csname mirror",
+        r"\letcs\csname mirror\endcsname{hello}",
+        r"\expandafter\relax\letcs\csname mirror\endcsname{hello}",
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let workspace = project(
+            root,
+            &[
+                ("main.tex", alias),
+                ("definitions.tex", r"\csdef{hello}{A}"),
+            ],
+        );
+        let main = uri(root, "main.tex");
+        let doc = &workspace.documents[&main];
+        assert!(
+            !doc.syntax
+                .definitions
+                .iter()
+                .any(|entry| entry.name == "mirror" || entry.name == "hello"),
+            "{alias}"
+        );
+        let declaration = uri(root, "definitions.tex");
+        let position = workspace.documents[&declaration].text.position(7);
+        assert!(
+            features::references(&workspace, &declaration, position, false).is_empty(),
+            "{alias}"
+        );
+    }
+}
+
+#[test]
 #[ignore = "requires pdflatex and etoolbox"]
 fn named_alias_renames_preserve_the_copied_meaning_when_the_original_is_redefined() {
     for alias in [
@@ -921,6 +965,8 @@ fn named_alias_renames_preserve_the_copied_meaning_when_the_original_is_redefine
         r"\letcs{\mirror}{hello}",
         r"\letcs\mirror{hello}",
         r"\csletcs{mirror}{hello}",
+        r"\expandafter\letcs\csname mirror\endcsname{hello}",
+        "\\global\\expandafter % expanded target\n\\letcs % comment\n\\csname mirror\\endcsname{hello}",
     ] {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();
@@ -1040,10 +1086,13 @@ fn generated_symbols_keep_their_ownership_through_named_command_apis() {
     ] {
         let directory = tempfile::tempdir().unwrap();
         let mut source = String::new();
-        for name in &names {
+        for (index, name) in names.iter().enumerate() {
             source.push_str(&format!("\\ifcsdef{{{name}}}{{Yes}}{{No}}"));
             source.push_str(&format!(
                 "\\csappto{{{name}}}{{Literal hello}}\\csundef{{{name}}}"
+            ));
+            source.push_str(&format!(
+                "\\expandafter\\letcs\\csname cached-{index}\\endcsname{{{name}}}"
             ));
         }
         let workspace = project(

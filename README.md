@@ -110,6 +110,8 @@ etoolbox 的 `csuse` / `csmeaning`、`ifcsdef` / `ifcsundef` / `ifcsvoid`、宏�
 
 `cslet`、`letcs`、`csletcs` 的静态别名声明区分目标与来源：别名有独立的符号、导航和重命名，来源参数关联原宏；重命名原宏会维护这些引用。支持有花括号和无花括号的控制序列参数、名称补全、片段与声明参数提示。纯名称别名可改为中文名称；动态目标不会把来源误记为声明，不展开动态名称，也不根据来源推断别名调用的参数签名或模拟后续重新赋值。
 
+`\expandafter\letcs\csname alias\endcsname{source}` 同时识别字面别名目标和展开后的来源名称，支持名称补全、参数提示、跨文件与共享项目重命名，以及环境、计数器、开关等派生命令作为来源的情况。只有相邻的显式 `expandafter` 和完整静态 `csname` 才沿用此规则；动态目标不推断来源参数的位置。
+
 etoolbox 的 `newtoggle` / `providetoggle` 使用独立命名空间，支持 `settoggle`、`toggletrue` / `togglefalse`、`iftoggle` / `nottoggle` 和上述表达式中的 `togl {名称}` 操作数。提供名称和值补全、片段、参数提示、布尔符号、跨文件导航与安全重命名；同名 boolean 保持独立。重命名同时维护直接或字面的内部 `etb@tgl@名称` 控制序列，并检查生成命令冲突。
 
 在语法错误处调用 `vim.lsp.buf.code_action()` 可选择快速修复；`vim.lsp.buf.document_highlight()` 高亮当前符号的定义和引用。Neovim 0.12 中可用 `vim.lsp.buf.selection_range(1)` 扩大语法选择范围。
