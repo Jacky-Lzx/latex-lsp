@@ -7,6 +7,8 @@ use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, TextE
 pub struct Argument {
     pub value: String,
     pub span: Range<usize>,
+    /// Includes delimiters when present; equals `span` for bare arguments.
+    pub outer_span: Range<usize>,
 }
 
 #[derive(Clone, Debug)]
@@ -120,6 +122,7 @@ fn group_mode(
                         Argument {
                             value: source[start..i].into(),
                             span: start..i,
+                            outer_span: start - 1..i + 1,
                         },
                         i + 1,
                     ));
@@ -130,6 +133,48 @@ fn group_mode(
         i += 1;
     }
     None
+}
+
+/// Literal TeX filename forms: `\input chapter.tex` and `\input "my file"`.
+/// Stop at token boundaries and leave macro-expanded names to the recorder.
+fn input_argument(source: &str, start: usize) -> Option<(Argument, usize)> {
+    let bytes = source.as_bytes();
+    let quoted = bytes.get(start) == Some(&b'"');
+    let content = start + usize::from(quoted);
+    let mut end = content;
+    while end < bytes.len() {
+        let byte = bytes[end];
+        if quoted && byte == b'"'
+            || matches!(byte, b'\n' | b'\r')
+            || !quoted && byte.is_ascii_whitespace()
+        {
+            break;
+        }
+        if matches!(
+            byte,
+            b'\\' | b'{' | b'}' | b'%' | b'#' | b'$' | b'&' | b'^' | b'~'
+        ) || !quoted && byte == b'"'
+        {
+            return None;
+        }
+        end += 1;
+    }
+    let after = end + usize::from(quoted && bytes.get(end) == Some(&b'"'));
+    if quoted
+        && bytes
+            .get(after)
+            .is_some_and(|byte| !byte.is_ascii_whitespace())
+    {
+        return None;
+    }
+    Some((
+        Argument {
+            value: source[content..end].into(),
+            span: content..end,
+            outer_span: start..after,
+        },
+        after,
+    ))
 }
 
 pub fn is_reference(name: &str) -> bool {
@@ -357,7 +402,7 @@ impl Syntax {
                     }
                     let name = &source[name_start..i];
                     let command_end = i;
-                    if bytes.get(i) == Some(&b'*') {
+                    if name != "input" && bytes.get(i) == Some(&b'*') {
                         i += 1;
                     }
                     if matches!(name, "verb" | "lstinline") {
@@ -383,11 +428,18 @@ impl Syntax {
                         continue;
                     }
                     let mut arg_start = skip_space(source, i);
-                    while let Some((_, end)) = group(source, arg_start, b'[', b']') {
-                        arg_start = skip_space(source, end);
+                    if name != "input" {
+                        while let Some((_, end)) = group(source, arg_start, b'[', b']') {
+                            arg_start = skip_space(source, end);
+                        }
                     }
                     let url_argument = matches!(name, "url" | "href");
-                    let parsed = group_mode(source, arg_start, b'{', b'}', !url_argument);
+                    let parsed =
+                        group_mode(source, arg_start, b'{', b'}', !url_argument).or_else(|| {
+                            (name == "input" && bytes.get(arg_start) != Some(&b'{'))
+                                .then(|| input_argument(source, arg_start))
+                                .flatten()
+                        });
                     let argument = parsed.as_ref().map(|(a, _)| a.clone());
                     let command = Command {
                         name: name.into(),
@@ -721,6 +773,7 @@ fn bib_literal(source: &str, start: usize, end: usize) -> Option<Argument> {
                     Argument {
                         value: source[start + 1..end].into(),
                         span: start + 1..end,
+                        outer_span: start..end,
                     },
                     end,
                 )
@@ -749,6 +802,7 @@ fn bib_literal(source: &str, start: usize, end: usize) -> Option<Argument> {
                 Argument {
                     value: source[start + 1..i].into(),
                     span: start + 1..i,
+                    outer_span: start..(i + 1).min(end),
                 },
                 (i + 1).min(end),
             )
@@ -838,7 +892,7 @@ mod tests {
     fn incomplete_unicode_inputs_keep_valid_spans() {
         let fragments = [
             "中", "😀", "é", "\\", "{", "}", "%", "\n", "[", "]", "@", "(", ")", ",", "\"", " ",
-            "label", "begin", "end", "verb", "article",
+            "label", "begin", "end", "verb", "article", "input", "\\input ",
         ];
         let mut seed = 12345u32;
         for _ in 0..512 {
@@ -857,7 +911,8 @@ mod tests {
                         syntax
                             .commands
                             .iter()
-                            .filter_map(|cmd| cmd.argument.as_ref().map(|arg| arg.span.clone())),
+                            .filter_map(|cmd| cmd.argument.as_ref())
+                            .flat_map(|arg| [arg.span.clone(), arg.outer_span.clone()]),
                     )
                     .chain(
                         syntax

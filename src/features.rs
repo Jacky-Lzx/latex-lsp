@@ -301,6 +301,18 @@ fn argument_context(doc: &Document, offset: usize) -> Option<(&Command, Span<usi
         .iter()
         .rev()
         .find(|cmd| cmd.span.end <= offset)?;
+    if command.name == "input" {
+        if let Some(argument) = &command.argument {
+            if argument.span.start <= offset && offset <= argument.span.end {
+                let start = if source.as_bytes().get(argument.outer_span.start) == Some(&b'{') {
+                    offset - source[argument.span.start..offset].trim_start().len()
+                } else {
+                    argument.span.start
+                };
+                return Some((command, start..offset));
+            }
+        }
+    }
     let mut tail = &source[command.span.end..offset];
     tail = tail.strip_prefix('*').unwrap_or(tail).trim_start();
     while tail.starts_with('[') {

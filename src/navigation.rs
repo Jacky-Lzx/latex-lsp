@@ -101,7 +101,7 @@ pub fn folding_ranges(doc: &Document, limit: Option<u32>) -> Vec<FoldingRange> {
                 .syntax
                 .ignored
                 .iter()
-                .find(|span| span.start == argument.span.end + 1)
+                .find(|span| span.start == argument.outer_span.end)
             {
                 result.extend(fold(
                     doc,
@@ -118,7 +118,7 @@ pub fn folding_ranges(doc: &Document, limit: Option<u32>) -> Vec<FoldingRange> {
             {
                 result.extend(fold(
                     doc,
-                    environments[index].1..argument.span.end + 1,
+                    environments[index].1..argument.outer_span.end,
                     FoldingRangeKind::Region,
                 ));
                 environments.truncate(index);

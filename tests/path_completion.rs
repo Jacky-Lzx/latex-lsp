@@ -91,9 +91,28 @@ fn file_completions_replace_partial_names_preserve_lists_and_reuse_existing_slas
     ] {
         std::fs::write(root.join(name), "").unwrap();
     }
+    std::fs::create_dir(root.join("my dir")).unwrap();
     let uri = Url::from_file_path(root.join("main.tex")).unwrap();
     let mut workspace = Workspace::default();
     for (marked, label, expected) in [
+        (
+            r"\input cha|pter trailing",
+            "chapter.tex",
+            r"\input chapter trailing",
+        ),
+        (r"\input my| next", "my file.tex", r"\input {my file} next"),
+        (
+            r#"\input"my f|ile" next"#,
+            "my file.tex",
+            r#"\input"my file" next"#,
+        ),
+        (
+            r"\input my|/chapter next",
+            "my dir/",
+            r"\input {my dir/chapter} next",
+        ),
+        (r"\input |", "chapter.tex", r"\input chapter"),
+        (r"\input{ cha|pter }", "chapter.tex", r"\input{ chapter }"),
         (r"\input{cha|pter}", "chapter.tex", r"\input{chapter}"),
         (
             r"\includeonly{other, cha|pter, last}",

@@ -140,8 +140,8 @@ pub fn selection_ranges(doc: &Document, positions: &[Position]) -> Option<Vec<Se
         spans.push(command.span.clone());
         if let Some(argument) = &command.argument {
             spans.push(argument.span.clone());
-            spans.push(argument.span.start - 1..argument.span.end + 1);
-            spans.push(command.span.start..argument.span.end + 1);
+            spans.push(argument.outer_span.clone());
+            spans.push(command.span.start..argument.outer_span.end);
         }
     }
     spans.extend(doc.syntax.ignored.iter().cloned());

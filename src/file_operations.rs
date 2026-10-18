@@ -165,7 +165,9 @@ fn safe_path(path: &Path) -> Result<String> {
         .to_owned();
     #[cfg(windows)]
     let value = value.replace('\\', "/");
-    if value.contains(['\\', '%', '#', '&', '$', '{', '}', '^', '~', '\r', '\n']) {
+    if value.contains([
+        '\\', '%', '#', '&', '$', '{', '}', '^', '~', '"', '\r', '\n',
+    ]) {
         return Err(Error::invalid_params("Renamed path contains characters that cannot be represented safely in a LaTeX file reference"));
     }
     Ok(value)
@@ -333,12 +335,23 @@ pub fn will_rename(workspace: &Workspace, files: &[FileRename]) -> Result<Option
                 }
             }
         }
-        for ((start, end), (new_text, count)) in links {
+        for ((start, end), (mut new_text, count)) in links {
             if new_text != doc.text.source[start..end] {
                 if count != roots.len() {
                     return Err(Error::invalid_params(
                         "Shared file reference cannot be updated consistently across build roots",
                     ));
+                }
+                if new_text.chars().any(char::is_whitespace)
+                    && doc.syntax.commands.iter().any(|command| {
+                        command.name == "input"
+                            && command.argument.as_ref().is_some_and(|argument| {
+                                argument.span == (start..end)
+                                    && argument.outer_span == argument.span
+                            })
+                    })
+                {
+                    new_text = format!("{{{new_text}}}");
                 }
                 changes
                     .entry(uri.clone())

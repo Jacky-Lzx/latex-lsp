@@ -111,6 +111,7 @@ fn magic_directive(doc: &Document, fields: &[&str]) -> Option<crate::syntax::Arg
                     return Some(crate::syntax::Argument {
                         value: value.into(),
                         span: start..start + value.len(),
+                        outer_span: start..start + value.len(),
                     });
                 }
             }

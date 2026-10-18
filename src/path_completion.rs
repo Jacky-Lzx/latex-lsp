@@ -25,7 +25,18 @@ pub fn complete(
     let separator = prefix.rfind('/').map_or(0, |index| index + 1);
     let directory = &prefix[..separator];
     let name_prefix = &prefix[separator..];
-    let suffix = &doc.text.source[span.end..];
+    let input_argument = (command == "input")
+        .then(|| {
+            doc.syntax
+                .commands
+                .iter()
+                .filter(|command| command.name == "input")
+                .filter_map(|command| command.argument.as_ref())
+                .find(|argument| argument.span.start == span.start && span.end <= argument.span.end)
+        })
+        .flatten();
+    let argument_end = input_argument.map_or(doc.text.source.len(), |argument| argument.span.end);
+    let suffix = &doc.text.source[span.end..argument_end];
     let suffix_length = suffix
         .find(['/', '{', '}', ',', '\\', '%', '\n', '\r'])
         .unwrap_or(suffix.len());
@@ -66,7 +77,9 @@ pub fn complete(
             };
             if !name.starts_with(name_prefix)
                 || name.starts_with('.') && !name_prefix.starts_with('.')
-                || name.contains(['\\', '%', '#', '$', '&', '{', '}', '^', '~', '\n', '\r'])
+                || name.contains([
+                    '\\', '%', '#', '$', '&', '{', '}', '^', '~', '"', '\n', '\r',
+                ])
             {
                 continue;
             }
@@ -125,6 +138,14 @@ pub fn complete(
             if !insertions.insert(new_text.clone()) {
                 continue;
             }
+            let mut edit_range = range;
+            if input_argument.is_some_and(|argument| argument.outer_span == argument.span)
+                && new_text.chars().any(char::is_whitespace)
+            {
+                new_text.push_str(&doc.text.source[span.end + suffix_length..argument_end]);
+                new_text = format!("{{{new_text}}}");
+                edit_range = doc.text.range(span.start, argument_end);
+            }
             candidates.insert(
                 label.clone(),
                 CompletionItem {
@@ -137,7 +158,10 @@ pub fn complete(
                     } else {
                         CompletionItemKind::FILE
                     }),
-                    text_edit: Some(CompletionTextEdit::Edit(TextEdit { range, new_text })),
+                    text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                        range: edit_range,
+                        new_text,
+                    })),
                     ..Default::default()
                 },
             );
