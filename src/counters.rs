@@ -55,7 +55,7 @@ fn names(workspace: &Workspace, scope: &BTreeSet<Url>) -> BTreeMap<String, Strin
                 }
             }
         }
-        for name in crate::environment::counters(doc) {
+        for name in crate::generated::counters(doc) {
             if syntax::is_static_key(name) {
                 names.insert(name.into(), format!("Theorem counter — {}", uri.path()));
             }

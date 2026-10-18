@@ -15,6 +15,7 @@ enum TargetKind {
     Citation,
     Command,
     Environment,
+    Counter,
 }
 
 struct Target<'a> {
@@ -38,6 +39,8 @@ fn raw_target(doc: &Document, offset: usize) -> Option<Target<'_>> {
                 || syntax::declares_environment(&command.name)
             {
                 Some(TargetKind::Environment)
+            } else if matches!(command.name.as_str(), "newcounter" | "newaliascnt") {
+                Some(TargetKind::Counter)
             } else {
                 None
             };
@@ -102,10 +105,20 @@ fn target<'a>(workspace: &'a Workspace, uri: &Url, offset: usize) -> Option<Targ
         return raw;
     }
     if let Some((name, span)) =
-        crate::environment::target(workspace, &workspace.symbol_scope(uri), doc, offset)
+        crate::generated::target(workspace, &workspace.symbol_scope(uri), doc, offset, true)
     {
         return Some(Target {
             kind: TargetKind::Environment,
+            name,
+            span,
+            control_word: false,
+        });
+    }
+    if let Some((name, span)) =
+        crate::generated::target(workspace, &workspace.symbol_scope(uri), doc, offset, false)
+    {
+        return Some(Target {
+            kind: TargetKind::Counter,
             name,
             span,
             control_word: false,
@@ -132,6 +145,7 @@ fn entries(doc: &Document, kind: TargetKind) -> &[Entry] {
         TargetKind::Citation => &doc.syntax.citations,
         TargetKind::Command => &doc.syntax.definitions,
         TargetKind::Environment => &doc.syntax.environments,
+        TargetKind::Counter => &doc.syntax.counters,
     }
 }
 
@@ -264,9 +278,7 @@ pub fn rename(
                         entry.name == new_name || entry.name == format!("end{new_name}")
                     })
                 || target.kind == TargetKind::Command
-                    && doc.syntax.environments.iter().any(|entry| {
-                        entry.name == new_name || format!("end{}", entry.name) == new_name
-                    })
+                    && crate::generated::generated_command_exists(doc, new_name)
         });
     let builtin = match target.kind {
         TargetKind::Command | TargetKind::Environment => {
@@ -283,8 +295,13 @@ pub fn rename(
         )));
     }
     if target.kind == TargetKind::Environment {
-        if let Some(environment) = crate::environment::in_scope(workspace, &scope, target.name) {
-            crate::environment::validate(workspace, &scope, target.name, new_name, environment)?;
+        if let Some(environment) = crate::generated::in_scope(workspace, &scope, target.name, true)
+        {
+            crate::generated::validate(workspace, &scope, target.name, new_name, environment)?;
+        }
+    } else if target.kind == TargetKind::Counter {
+        if let Some(counter) = crate::generated::in_scope(workspace, &scope, target.name, false) {
+            crate::generated::validate(workspace, &scope, target.name, new_name, counter)?;
         }
     }
     let mut changes: std::collections::BTreeMap<Url, Vec<TextEdit>> =
@@ -720,7 +737,9 @@ fn all_references(
         return vec![];
     };
     let environment = if target.kind == TargetKind::Environment {
-        crate::environment::in_scope(workspace, &workspace.symbol_scope(uri), target.name)
+        crate::generated::in_scope(workspace, &workspace.symbol_scope(uri), target.name, true)
+    } else if target.kind == TargetKind::Counter {
+        crate::generated::in_scope(workspace, &workspace.symbol_scope(uri), target.name, false)
     } else {
         None
     };
@@ -728,7 +747,7 @@ fn all_references(
     for (uri, doc) in &workspace.documents {
         if let Some(environment) = environment {
             result.extend(
-                crate::environment::references(doc, target.name, environment)
+                crate::generated::references(doc, target.name, environment)
                     .into_iter()
                     .map(|reference| Location {
                         uri: uri.clone(),
@@ -800,6 +819,7 @@ fn all_references(
                 TargetKind::Label => syntax::is_reference(&command.name),
                 TargetKind::Citation => syntax::is_citation(&command.name),
                 TargetKind::Command => false,
+                TargetKind::Counter => false,
                 TargetKind::Environment => matches!(command.name.as_str(), "begin" | "end"),
             };
             if !matches {
@@ -941,6 +961,7 @@ pub fn symbols(doc: &Document) -> Vec<DocumentSymbol> {
         (&doc.syntax.labels, SymbolKind::KEY),
         (&doc.syntax.definitions, SymbolKind::FUNCTION),
         (&doc.syntax.environments, SymbolKind::CLASS),
+        (&doc.syntax.counters, SymbolKind::VARIABLE),
     ] {
         result.extend(entries.iter().map(|entry| DocumentSymbol {
             name: entry.name.clone(),

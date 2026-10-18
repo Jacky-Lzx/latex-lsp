@@ -58,6 +58,7 @@ pub struct Syntax {
     pub citation_references: Vec<Entry>,
     pub definitions: Vec<Entry>,
     pub environments: Vec<Entry>,
+    pub counters: Vec<Entry>,
     pub diagnostics: Vec<Diagnostic>,
     pub ignored: Vec<Range<usize>>,
     pub fixes: Vec<QuickFix>,
@@ -506,6 +507,9 @@ impl Syntax {
                             });
                         }
                         match name {
+                            "newcounter" | "newaliascnt" if is_static_key(arg.value.trim()) => {
+                                result.counters.push(entry());
+                            }
                             "label" => result.labels.push(entry()),
                             "bibitem" => result.citations.push(entry()),
                             "begin" => {
@@ -972,6 +976,8 @@ mod tests {
                             .chain(&syntax.citations)
                             .chain(&syntax.citation_references)
                             .chain(&syntax.definitions)
+                            .chain(&syntax.environments)
+                            .chain(&syntax.counters)
                             .map(|entry| entry.span.clone()),
                     )
                     .chain(syntax.ignored.iter().cloned());

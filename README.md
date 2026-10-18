@@ -84,6 +84,8 @@ vim.lsp.enable('latex_lsp')
 
 计数器操作支持命令片段、参数提示和名称补全，包括 `setcounter` / `addtocounter`、`stepcounter` / `refstepcounter`、`value` / `arabic` 等格式化命令、`counterwithin` / `counterwithout` / `numberwithin`。名称候选来自内置计数器、当前项目的 `newcounter` / `newaliascnt` 和拥有计数器的定理声明；支持新计数器、别名及定理的共享/重置参数，保留已有名称后缀、空白和其他实参。不同论文之间的候选按依赖隔离，宏生成的名称不作推断。
 
+静态 `newcounter` / `newaliascnt` 声明支持跳转、悬停、引用、文档/工作区符号及跨文件重命名。重命名联动维护计数器操作、子计数器重置、定理共享编号、别名和格式化命令，包括字面 `csname`、`aliascntresetthe` 及别名元数据；同名的独立宏和 cleveref 的显示文字保持原样。名称冲突、共享引用在其他论文中指向独立声明、或同名定理与计数器对格式化命令的所有权有歧义时拒绝改动。
+
 在语法错误处调用 `vim.lsp.buf.code_action()` 可选择快速修复；`vim.lsp.buf.document_highlight()` 高亮当前符号的定义和引用。Neovim 0.12 中可用 `vim.lsp.buf.selection_range(1)` 扩大语法选择范围。
 
 其他编辑器可将 `latex-lsp --stdio` 配置为 `tex` / `latex` / `bib` / `bst` 文件的语言服务器。建议将根目录设为当前 LaTeX 项目，避免把多个无关项目混在同一个工作区。
