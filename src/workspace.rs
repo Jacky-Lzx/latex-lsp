@@ -109,6 +109,11 @@ pub struct Workspace {
     pub recorded_inputs: BTreeMap<Url, BTreeSet<Url>>,
 }
 
+pub(crate) struct SymbolProjects {
+    pub scope: BTreeSet<Url>,
+    pub regions: BTreeMap<Url, BTreeSet<Url>>,
+}
+
 impl Workspace {
     pub fn build_config(&self, root: &Url) -> crate::config::BuildConfig {
         let mut config = self.config.build.clone();
@@ -230,6 +235,56 @@ impl Workspace {
             }
         }
         visited
+    }
+
+    pub(crate) fn symbol_projects(&self, uri: &Url) -> SymbolProjects {
+        let regions: BTreeMap<_, _> = self
+            .documents
+            .iter()
+            .filter(|(uri, doc)| {
+                is_root(doc)
+                    && uri.to_file_path().is_ok_and(|path| {
+                        path.is_file()
+                            && matches!(
+                                path.extension().and_then(|extension| extension.to_str()),
+                                Some("tex" | "ltx")
+                            )
+                    })
+            })
+            .map(|(root, _)| (root.clone(), self.project_documents(root)))
+            .collect();
+        let selected = self.root_document(uri).ok().filter(|root| {
+            regions.contains_key(root) || *root != *uri || self.config.build.root_file.is_some()
+        });
+        let mut scope: BTreeSet<_> = if let Some(root) = selected {
+            self.project_documents(&root)
+        } else {
+            regions
+                .values()
+                .filter(|project| project.contains(uri))
+                .flat_map(|project| project.iter().cloned())
+                .collect()
+        };
+        if scope.is_empty() {
+            // Unassociated buffers retain workspace-wide editing before saving.
+            scope.extend(self.documents.keys().cloned());
+        }
+        scope.insert(uri.clone());
+        SymbolProjects { scope, regions }
+    }
+
+    pub(crate) fn symbol_scope(&self, uri: &Url) -> BTreeSet<Url> {
+        if let Ok(root) = self.root_document(uri) {
+            if root != *uri
+                || self.config.build.root_file.is_some()
+                || self.documents.get(&root).is_some_and(is_root)
+            {
+                let mut scope = self.project_documents(&root);
+                scope.insert(uri.clone());
+                return scope;
+            }
+        }
+        self.symbol_projects(uri).scope
     }
 
     /// Saved sources and image dependencies used by builds and artifact checks.

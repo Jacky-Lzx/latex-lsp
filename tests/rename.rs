@@ -485,6 +485,14 @@ fn shared_declarations_rename_every_dependent_project_and_check_all_conflicts() 
             .collect::<std::collections::BTreeSet<_>>(),
         [main.clone(), b.clone(), shared.clone()].into()
     );
+    let references = features::references(&workspace, &main, position, true);
+    assert_eq!(
+        references
+            .iter()
+            .map(|location| location.uri.clone())
+            .collect::<std::collections::BTreeSet<_>>(),
+        [main.clone(), b.clone(), shared.clone()].into()
+    );
     // Starting at the shared definition works even though its root is ambiguous.
     assert!(workspace.root_document(&shared).is_err());
     let definition = workspace.documents[&shared].text.position(

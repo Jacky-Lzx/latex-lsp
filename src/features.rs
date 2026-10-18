@@ -109,38 +109,7 @@ fn rename_target<'a>(
     else {
         return Ok(None);
     };
-    let regions: std::collections::BTreeMap<_, _> = workspace
-        .documents
-        .iter()
-        .filter(|(uri, doc)| {
-            crate::workspace::is_root(doc)
-                && uri.to_file_path().is_ok_and(|path| {
-                    path.is_file()
-                        && matches!(
-                            path.extension().and_then(|extension| extension.to_str()),
-                            Some("tex" | "ltx")
-                        )
-                })
-        })
-        .map(|(root, _)| (root.clone(), workspace.project_documents(root)))
-        .collect();
-    let selected = workspace.root_document(uri).ok().filter(|root| {
-        regions.contains_key(root) || *root != *uri || workspace.config.build.root_file.is_some()
-    });
-    let mut scope: BTreeSet<_> = if let Some(root) = selected {
-        workspace.project_documents(&root)
-    } else {
-        regions
-            .values()
-            .filter(|project| project.contains(uri))
-            .flat_map(|project| project.iter().cloned())
-            .collect()
-    };
-    if scope.is_empty() {
-        // Unassociated buffers still support editing without a saved TeX root.
-        scope.extend(workspace.documents.keys().cloned());
-    }
-    scope.insert(uri.clone());
+    let crate::workspace::SymbolProjects { mut scope, regions } = workspace.symbol_projects(uri);
     let declarations = |scope: &BTreeSet<Url>| -> Vec<Url> {
         workspace
             .documents
@@ -165,7 +134,7 @@ fn rename_target<'a>(
     }
     // Shared occurrences must resolve to this declaration in every consumer.
     // Otherwise changing the shared file would silently break another paper.
-    let occurrences = references(workspace, uri, position, true);
+    let occurrences = all_references(workspace, uri, position, true);
     loop {
         let used: BTreeSet<_> = occurrences
             .iter()
@@ -279,7 +248,7 @@ pub fn rename(
     };
     let mut changes: std::collections::BTreeMap<Url, Vec<TextEdit>> =
         std::collections::BTreeMap::new();
-    for location in references(workspace, uri, position, true)
+    for location in all_references(workspace, uri, position, true)
         .into_iter()
         .filter(|location| scope.contains(&location.uri))
     {
@@ -352,8 +321,9 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
     let Some(offset) = doc.text.offset(position) else {
         return vec![];
     };
+    let scope = workspace.symbol_scope(uri);
     if doc.bibtex {
-        return bibliography_completion(workspace, doc, offset);
+        return bibliography_completion(workspace, doc, offset, &scope);
     }
     if doc.syntax.is_ignored(offset.saturating_sub(1)) {
         return vec![];
@@ -381,6 +351,9 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
         let mut candidates = Vec::new();
         if let Some(kind) = kind {
             for (entry_uri, entry_doc) in &workspace.documents {
+                if !scope.contains(entry_uri) {
+                    continue;
+                }
                 for entry in entries(entry_doc, kind) {
                     candidates.push((
                         entry.name.clone(),
@@ -397,8 +370,9 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
             candidates.extend(
                 workspace
                     .documents
-                    .values()
-                    .flat_map(|doc| &doc.syntax.commands)
+                    .iter()
+                    .filter(|(uri, _)| scope.contains(*uri))
+                    .flat_map(|(_, doc)| &doc.syntax.commands)
                     .filter(|cmd| cmd.name == "begin" || syntax::declares_environment(&cmd.name))
                     .filter_map(|cmd| cmd.argument.as_ref())
                     .map(|arg| (arg.value.clone(), "Document environment".into())),
@@ -458,11 +432,12 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
     // User definitions take precedence over built-in documentation and snippets.
     for entry in workspace
         .documents
-        .values()
-        .flat_map(|doc| &doc.syntax.definitions)
+        .iter()
+        .filter(|(uri, _)| scope.contains(*uri))
+        .flat_map(|(_, doc)| &doc.syntax.definitions)
     {
         if entry.name.starts_with(prefix) && seen.insert(entry.name.clone()) {
-            let signature = crate::signature::completion(workspace, &entry.name);
+            let signature = crate::signature::completion(workspace, &entry.name, &scope);
             let snippet = signature
                 .as_ref()
                 .and_then(|(_, snippet)| snippet.as_ref())
@@ -523,6 +498,7 @@ fn bibliography_completion(
     workspace: &Workspace,
     doc: &Document,
     offset: usize,
+    scope: &BTreeSet<Url>,
 ) -> Vec<CompletionItem> {
     let Some(field) = doc
         .syntax
@@ -547,6 +523,7 @@ fn bibliography_completion(
     workspace
         .documents
         .iter()
+        .filter(|(uri, _)| scope.contains(*uri))
         .flat_map(|(uri, doc)| doc.syntax.citations.iter().map(move |entry| (uri, entry)))
         .filter(|(_, entry)| entry.name.starts_with(key) && seen.insert(entry.name.clone()))
         .map(|(uri, entry)| CompletionItem {
@@ -585,9 +562,11 @@ pub fn definitions(workspace: &Workspace, uri: &Url, position: Position) -> Vec<
     let Some(target) = target(doc, offset) else {
         return vec![];
     };
+    let scope = workspace.symbol_scope(uri);
     workspace
         .documents
         .iter()
+        .filter(|(uri, _)| scope.contains(*uri))
         .flat_map(|(uri, doc)| {
             entries(doc, target.kind)
                 .iter()
@@ -601,6 +580,48 @@ pub fn definitions(workspace: &Workspace, uri: &Url, position: Position) -> Vec<
 }
 
 pub fn references(
+    workspace: &Workspace,
+    uri: &Url,
+    position: Position,
+    include_declaration: bool,
+) -> Vec<Location> {
+    let Some(doc) = workspace.documents.get(uri) else {
+        return vec![];
+    };
+    let Some(target) = doc
+        .text
+        .offset(position)
+        .and_then(|offset| target(doc, offset))
+    else {
+        return vec![];
+    };
+    let crate::workspace::SymbolProjects { mut scope, regions } = workspace.symbol_projects(uri);
+    let definitions: Vec<_> = workspace
+        .documents
+        .iter()
+        .filter(|(uri, _)| scope.contains(*uri))
+        .flat_map(|(uri, doc)| {
+            entries(doc, target.kind)
+                .iter()
+                .filter(|entry| entry.name == target.name)
+                .map(move |_| uri)
+        })
+        .collect();
+    if definitions.len() == 1 {
+        for project in regions
+            .values()
+            .filter(|project| project.contains(definitions[0]))
+        {
+            scope.extend(project.iter().cloned());
+        }
+    }
+    all_references(workspace, uri, position, include_declaration)
+        .into_iter()
+        .filter(|location| scope.contains(&location.uri))
+        .collect()
+}
+
+fn all_references(
     workspace: &Workspace,
     uri: &Url,
     position: Position,
@@ -693,8 +714,12 @@ pub fn references(
 pub fn hover(workspace: &Workspace, uri: &Url, position: Position) -> Option<Hover> {
     let doc = workspace.documents.get(uri)?;
     let target = target(doc, doc.text.offset(position)?)?;
+    let scope = workspace.symbol_scope(uri);
     let mut value = None;
     for (entry_uri, entry_doc) in &workspace.documents {
+        if !scope.contains(entry_uri) {
+            continue;
+        }
         if let Some(entry) = entries(entry_doc, target.kind)
             .iter()
             .find(|entry| entry.name == target.name)

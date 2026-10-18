@@ -4,6 +4,7 @@ use crate::{
     syntax::{self, Entry},
     workspace::{Document, Workspace},
 };
+use std::collections::BTreeSet;
 use tower_lsp::lsp_types::*;
 
 #[derive(Clone)]
@@ -62,8 +63,12 @@ impl Signature {
 
 /// Omit optional arguments and flags so accepting a completion preserves the
 /// macro's defaults. Tabstops follow the order of its required arguments.
-pub fn completion(workspace: &Workspace, name: &str) -> Option<(String, Option<String>)> {
-    let signature = signature(workspace, name)?;
+pub fn completion(
+    workspace: &Workspace,
+    name: &str,
+    scope: &BTreeSet<Url>,
+) -> Option<(String, Option<String>)> {
+    let signature = signature(workspace, name, scope)?;
     let mut snippet = name.to_owned();
     let mut tabstop = 0;
     for (index, parameter) in signature.parameters.iter().enumerate() {
@@ -280,21 +285,30 @@ fn short(value: &str) -> String {
         .collect()
 }
 
-fn signature(workspace: &Workspace, name: &str) -> Option<Signature> {
-    lookup(workspace, name, false)
+fn signature(workspace: &Workspace, name: &str, scope: &BTreeSet<Url>) -> Option<Signature> {
+    lookup(workspace, name, false, scope)
 }
 
-fn lookup(workspace: &Workspace, name: &str, environment: bool) -> Option<Signature> {
-    let mut definitions = workspace.documents.iter().flat_map(|(uri, doc)| {
-        (if environment {
-            &doc.syntax.environments
-        } else {
-            &doc.syntax.definitions
-        })
+fn lookup(
+    workspace: &Workspace,
+    name: &str,
+    environment: bool,
+    scope: &BTreeSet<Url>,
+) -> Option<Signature> {
+    let mut definitions = workspace
+        .documents
         .iter()
-        .filter(move |entry| entry.name == name)
-        .map(move |entry| (uri, doc, entry))
-    });
+        .filter(|(uri, _)| scope.contains(*uri))
+        .flat_map(|(uri, doc)| {
+            (if environment {
+                &doc.syntax.environments
+            } else {
+                &doc.syntax.definitions
+            })
+            .iter()
+            .filter(move |entry| entry.name == name)
+            .map(move |entry| (uri, doc, entry))
+        });
     if let Some((uri, doc, entry)) = definitions.next() {
         if definitions.next().is_some() {
             return None;
@@ -461,6 +475,7 @@ pub fn help(workspace: &Workspace, uri: &Url, position: Position) -> Option<Sign
     }) {
         return None;
     }
+    let scope = workspace.symbol_scope(uri);
     for command in doc
         .syntax
         .commands
@@ -474,10 +489,10 @@ pub fn help(workspace: &Workspace, uri: &Url, position: Position) -> Option<Sign
                 .argument
                 .as_ref()
                 .filter(|argument| cursor > argument.span.end)
-                .and_then(|argument| lookup(workspace, argument.value.trim(), true))
-                .or_else(|| signature(workspace, &command.name))
+                .and_then(|argument| lookup(workspace, argument.value.trim(), true, &scope))
+                .or_else(|| signature(workspace, &command.name, &scope))
         } else {
-            signature(workspace, &command.name)
+            signature(workspace, &command.name, &scope)
         };
         if let Some(signature) = signature {
             if let Some(active) = active_parameter(doc, command.span.end, cursor, &signature) {
