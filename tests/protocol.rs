@@ -326,6 +326,72 @@ fn single_quoted_package_citation_warnings_offer_precise_spelling_fixes() {
 }
 
 #[test]
+#[cfg(unix)]
+fn missing_included_sources_publish_path_warnings_and_clear_after_the_next_successful_build() {
+    let script = "printf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nif [ ! -f 'missing chapter.tex' ]; then\n printf 'No file main.aux.\\nNo file missing chapter.tex.\\n' > \"$1/main.log\"\nelse\n : > \"$1/main.log\"\nfi\n";
+    let (mut server, directory, main) = fake_build_server(script, false);
+    let source = "\\documentclass{article}\n\\include{missing chapter}\n";
+    std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+    );
+    server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let first = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(first["params"]["status"], "success");
+    assert_eq!(first["params"]["diagnosticsCount"], 1);
+    let diagnostics = server.until(|message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["uri"] == main.as_str()
+            && message["params"]["diagnostics"]
+                .as_array()
+                .is_some_and(|diagnostics| {
+                    diagnostics
+                        .iter()
+                        .any(|diagnostic| diagnostic["code"] == "missing-include")
+                })
+    });
+    assert_eq!(diagnostics["params"]["version"], 2);
+    assert_eq!(
+        diagnostics["params"]["diagnostics"][0]["range"],
+        json!({"start":{"line":1,"character":9},"end":{"line":1,"character":24}})
+    );
+    server.request(
+        3,
+        "textDocument/documentSymbol",
+        json!({"textDocument":{"uri":main}}),
+    );
+    server.pending.borrow_mut().clear();
+    let restored = Url::from_file_path(directory.path().join("missing chapter.tex")).unwrap();
+    std::fs::write(restored.to_file_path().unwrap(), "Restored chapter.\n").unwrap();
+    server.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({"changes":[{"uri":restored,"type":1}]}),
+    );
+    server.request(
+        4,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let repaired = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(repaired["params"]["status"], "success");
+    assert_eq!(repaired["params"]["diagnosticsCount"], 0);
+    assert_eq!(repaired["params"]["dependenciesCount"], 2);
+    server.until(|message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["uri"] == main.as_str()
+            && message["params"]["diagnostics"] == json!([])
+    });
+    server.request(5, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
 #[ignore = "requires pdflatex and synctex"]
 fn real_custom_job_names_preserve_build_analysis_recorded_dependencies_and_synctex_round_trips() {
     let directory = tempfile::tempdir().unwrap();

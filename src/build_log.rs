@@ -110,6 +110,39 @@ fn box_range(text: &Text, message: &str) -> Option<Range> {
     ))
 }
 
+fn missing_include_file(line: &str) -> Option<&str> {
+    let name = line
+        .strip_prefix("No file ")?
+        .strip_suffix('.')?
+        .trim_matches('"');
+    (Path::new(name)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        == Some("tex"))
+    .then_some(name)
+}
+
+fn missing_include_key(message: &str) -> Option<&str> {
+    message
+        .strip_prefix("Included file `")?
+        .strip_suffix("` not found")
+}
+
+fn missing_include_ranges(text: &Text, name: &str) -> Vec<Range> {
+    crate::syntax::Syntax::latex(text)
+        .commands
+        .iter()
+        .filter(|command| command.name == "include")
+        .filter_map(|command| {
+            let argument = command.argument.as_ref()?;
+            let span = crate::syntax::trimmed_span(&text.source, argument.span.clone());
+            crate::syntax::file_lookup_names("include", argument.value.trim())
+                .any(|candidate| candidate == name)
+                .then(|| text.range(span.start, span.end))
+        })
+        .collect()
+}
+
 pub(crate) fn undefined_reference_ranges(text: &Text, line: u32, message: &str) -> Vec<Range> {
     let Some((citation, key)) = undefined_reference_key(message) else {
         return vec![];
@@ -177,6 +210,14 @@ fn emit(
         .sum::<usize>() as u32;
     let end = value.encode_utf16().count() as u32;
     let mut ranges = undefined_reference_ranges(&text, line, &message);
+    if let Some(name) = missing_include_key(&message) {
+        ranges.extend(missing_include_ranges(&text, name));
+        // Optional package inputs also print "No file". Report chapter
+        // omissions only when the source identifies the corresponding include.
+        if ranges.is_empty() {
+            return;
+        }
+    }
     if let Some(range) = box_range(&text, &message) {
         ranges.push(range);
     }
@@ -189,13 +230,17 @@ fn emit(
     result
         .entry(uri)
         .or_default()
-        .extend(ranges.into_iter().map(|range| Diagnostic {
-            range,
-            severity: Some(severity),
-            source: Some("latex-build".into()),
-            code: box_code(&message).map(|code| NumberOrString::String(code.into())),
-            message: message.clone(),
-            ..Default::default()
+        .extend(ranges.into_iter().map(|range| {
+            Diagnostic {
+                range,
+                severity: Some(severity),
+                source: Some("latex-build".into()),
+                code: box_code(&message)
+                    .or_else(|| missing_include_key(&message).map(|_| "missing-include"))
+                    .map(|code| NumberOrString::String(code.into())),
+                message: message.clone(),
+                ..Default::default()
+            }
         }));
 }
 
@@ -219,6 +264,7 @@ fn message_boundary(line: &str) -> bool {
         || line.starts_with("Missing character:")
         || line.starts_with("Overfull ")
         || line.starts_with("Underfull ")
+        || line.starts_with("No file ")
         || numbered_error(line).is_some()
         || line
             .strip_prefix("l.")
@@ -384,6 +430,14 @@ pub fn parse(root: &Path, log: &str) -> BTreeMap<Url, Vec<Diagnostic>> {
                 &path,
                 number,
                 message,
+                DiagnosticSeverity::WARNING,
+            );
+        } else if let Some(name) = missing_include_file(line) {
+            emit(
+                &mut result,
+                &current(),
+                1,
+                format!("Included file `{name}` not found"),
                 DiagnosticSeverity::WARNING,
             );
         } else if line.starts_with("Overfull ") || line.starts_with("Underfull ") {
@@ -577,6 +631,45 @@ fn bibliography_path(root: &Path, message: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_include_messages_locate_paths_without_reporting_normal_missing_auxiliary_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let main = directory.path().join("main.tex");
+        let child = directory.path().join("child.tex");
+        std::fs::write(&main, "\\input{child}\n").unwrap();
+        let source = "😀 \\include{missing chapter}\n% \\include{missing chapter}\n\\verb|\\include{missing chapter}|\n\\include{other}\n\\include{ missing chapter }\n";
+        std::fs::write(&child, source).unwrap();
+        let log = "(./main.tex\n(./child.tex\nNo file main.aux.\nNo file main.bbl.\nNo file optional.tex.\nNo file \"missing chapter.tex\".\nPackage local Warning: Unfinished message (\nNo file other.tex.\nNo file missing chapter.tex.\n)\nNo file optional.tex.\n)";
+        let result = parse(&main, log);
+        assert!(!result.contains_key(&Url::from_file_path(&main).unwrap()));
+        let diagnostics = &result[&Url::from_file_path(&child).unwrap()];
+        let missing: Vec<_> = diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic.code == Some(NumberOrString::String("missing-include".into()))
+            })
+            .collect();
+        assert_eq!(missing.len(), 3, "{diagnostics:?}");
+        assert_eq!(missing[0].range.start.character, 12);
+        let text = Text::new(source.into());
+        assert_eq!(
+            missing
+                .iter()
+                .map(
+                    |diagnostic| &source[text.offset(diagnostic.range.start).unwrap()
+                        ..text.offset(diagnostic.range.end).unwrap()]
+                )
+                .collect::<Vec<_>>(),
+            vec!["missing chapter", "other", "missing chapter"]
+        );
+        assert!(diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message == "Package local Warning: Unfinished message ("));
+        assert!(missing
+            .iter()
+            .all(|diagnostic| diagnostic.severity == Some(DiagnosticSeverity::WARNING)));
+    }
 
     #[test]
     fn box_diagnostics_span_reported_source_lines_and_keep_valid_utf16_ranges() {

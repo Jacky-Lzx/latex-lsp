@@ -152,6 +152,56 @@ fn real_overfull_paragraph_diagnostics_cover_the_complete_reported_source_range(
 }
 
 #[test]
+#[ignore = "requires pdflatex"]
+fn missing_included_chapters_warn_even_when_tex_successfully_generates_a_pdf() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = root.join("main.tex");
+    let child = root.join("child.tex");
+    std::fs::write(
+        &main,
+        "\\documentclass{article}\n\\begin{document}\n\\input{child}\nContent.\n\\end{document}\n",
+    )
+    .unwrap();
+    let source = "\\include{missing chapter}\n";
+    std::fs::write(&child, source).unwrap();
+    let config = BuildConfig {
+        executable: "pdflatex".into(),
+        ..Default::default()
+    };
+    let outcome = build::run(&main, &config, &AtomicBool::new(false));
+    assert_eq!(outcome.status, "success", "{}", outcome.output);
+    assert!(outcome.pdf.unwrap().is_file());
+    let diagnostics = &outcome.diagnostics[&Url::from_file_path(&child).unwrap()];
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert_eq!(
+        diagnostics[0].code,
+        Some(tower_lsp::lsp_types::NumberOrString::String(
+            "missing-include".into()
+        ))
+    );
+    assert_eq!(
+        diagnostics[0].range,
+        tower_lsp::lsp_types::Range::new(
+            tower_lsp::lsp_types::Position::new(0, 9),
+            tower_lsp::lsp_types::Position::new(0, 24)
+        )
+    );
+    assert!(diagnostics[0].message.contains("missing chapter.tex"));
+    std::fs::write(root.join("missing chapter.tex"), "Restored chapter.\n").unwrap();
+    let repaired = build::run(&main, &config, &AtomicBool::new(false));
+    assert_eq!(repaired.status, "success", "{}", repaired.output);
+    assert!(!repaired
+        .diagnostics
+        .values()
+        .flatten()
+        .any(|diagnostic| diagnostic.code
+            == Some(tower_lsp::lsp_types::NumberOrString::String(
+                "missing-include".into()
+            ))));
+}
+
+#[test]
 #[ignore = "requires latexmk and pdflatex"]
 fn nested_chapter_includes_prepare_auxiliary_directories_with_default_and_direct_compilers() {
     for executable in ["latexmk", "pdflatex"] {
