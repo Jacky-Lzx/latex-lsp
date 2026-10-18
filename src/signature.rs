@@ -96,6 +96,30 @@ fn builtin(name: &str) -> Option<Signature> {
             (&[("file", false)], false)
         }
         "includeonly" => (&[("files", false)], false),
+        "csuse" | "csmeaning" => (&[("command", false)], false),
+        "ifcsdef" | "ifcsundef" | "ifcsvoid" | "ifcsmacro" | "ifcsparam" | "ifcsprotected"
+        | "ifcsltxprotect" => (
+            &[("command", false), ("then", false), ("else", false)],
+            false,
+        ),
+        "ifcsstring" => (
+            &[
+                ("command", false),
+                ("string", false),
+                ("then", false),
+                ("else", false),
+            ],
+            false,
+        ),
+        "ifcsequal" | "ifcsstrequal" => (
+            &[
+                ("first command", false),
+                ("second command", false),
+                ("then", false),
+                ("else", false),
+            ],
+            false,
+        ),
         "addbibresource" => (&[("options", true), ("file", false)], false),
         "part" | "chapter" | "section" | "subsection" | "subsubsection" | "paragraph"
         | "subparagraph" | "caption" => (&[("short title", true), ("title", false)], true),
@@ -597,24 +621,37 @@ pub fn help(workspace: &Workspace, uri: &Url, position: Position) -> Option<Sign
         }) {
             continue;
         }
-        let name = literal
-            .as_ref()
-            .map_or(command.name.as_str(), |span| &doc.text.source[span.clone()]);
+        let named = command.argument.as_ref().filter(|argument| {
+            command.name == "csuse"
+                && cursor >= argument.outer_span.end
+                && syntax::is_static_key(argument.value.trim())
+        });
+        let end = named.map_or(command.span.end, |argument| argument.outer_span.end);
+        let name = named
+            .map(|argument| argument.value.trim())
+            .or_else(|| literal.as_ref().map(|span| &doc.text.source[span.clone()]))
+            .unwrap_or(command.name.as_str());
         let signature = if name == "begin" {
-            command
-                .argument
-                .as_ref()
-                .filter(|argument| cursor > argument.span.end)
-                .and_then(|argument| lookup(workspace, argument.value.trim(), true, &scope))
-                .or_else(|| signature(workspace, name, &scope))
+            syntax::group(
+                &doc.text.source,
+                syntax::skip_space(&doc.text.source, end),
+                b'{',
+                b'}',
+            )
+            .map(|(argument, _)| argument)
+            .filter(|argument| cursor > argument.span.end)
+            .and_then(|argument| lookup(workspace, argument.value.trim(), true, &scope))
+            .or_else(|| signature(workspace, name, &scope))
         } else {
             signature(workspace, name, &scope)
         };
         if let Some(mut signature) = signature {
             if literal.is_some() {
                 signature.name = format!("csname {name}\\endcsname");
+            } else if named.is_some() {
+                signature.name = format!("csuse{{{name}}}");
             }
-            if let Some(active) = active_parameter(doc, command.span.end, cursor, &signature) {
+            if let Some(active) = active_parameter(doc, end, cursor, &signature) {
                 return Some(signature.information(active));
             }
         }

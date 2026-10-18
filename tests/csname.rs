@@ -360,3 +360,242 @@ fn robust_macro_renames_preserve_defaults_literal_calls_and_protected_expansion(
         }
     }
 }
+
+#[test]
+fn named_command_apis_navigate_and_rename_only_control_sequence_arguments() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let definitions = r"\newrobustcmd{\hello}[1]{#1}\newcommand{\other}{}";
+    let source = "\\documentclass{article}\\input{definitions}\n\\begin{document}\n\\csuse{hello}{hello}\\csmeaning{hello}\n\\ifcsdef{hello}{hello}{No}\\ifcsundef{hello}{No}{Yes}\\ifcsvoid{hello}{No}{Yes}\\ifcsmacro{hello}{Yes}{No}\\ifcsparam{hello}{Yes}{No}\\ifcsprotected{hello}{Yes}{No}\\ifcsltxprotect{hello}{Yes}{No}\n\\ifcsstring{hello}{hello}{Yes}{No}\\ifcsequal{hello}{hello}{Yes}{No}\\ifcsstrequal{other}{ hello }{Yes}{No}\n\\csuse{hello\\suffix}{Dynamic}\\ifcsdef{other}{hello}{No}\n% \\csuse{hello}\n\\verb|\\csuse{hello}|\\end{document}\n";
+    let workspace = project(
+        root,
+        &[("main.tex", source), ("definitions.tex", definitions)],
+    );
+    let main = uri(root, "main.tex");
+    for marker in [
+        "csuse{hello}",
+        "ifcsstring{hello}",
+        "ifcsequal{hello}",
+        "{ hello }",
+    ] {
+        let text = &workspace.documents[&main].text;
+        let offset = source.find(marker).unwrap() + marker.find("hello").unwrap() + 2;
+        let position = text.position(offset);
+        let targets = features::definitions(&workspace, &main, position);
+        assert_eq!(targets.len(), 1, "{marker}: {targets:?}");
+        assert_eq!(targets[0].uri, uri(root, "definitions.tex"));
+        assert!(features::hover(&workspace, &main, position).is_some());
+        assert_eq!(
+            features::references(&workspace, &main, position, true).len(),
+            14
+        );
+        let changed = renamed(&workspace, &main, position);
+        assert_eq!(changed[&main].matches("greeting").count(), 13);
+        for preserved in [
+            "{greeting}{hello}",
+            "ifcsstring{greeting}{hello}",
+            "csuse{hello\\suffix}",
+            "ifcsdef{other}{hello}",
+            "% \\csuse{hello}",
+            "\\verb|\\csuse{hello}|",
+        ] {
+            assert!(
+                changed[&main].contains(preserved),
+                "{preserved}: {}",
+                changed[&main]
+            );
+        }
+    }
+}
+
+#[test]
+fn named_command_completion_preserves_suffixes_and_skips_strings_dynamic_names_and_other_projects()
+{
+    for (marked, expected) in [
+        (
+            r"😀 \csuse{ he¦llo }{Existing}",
+            r"😀 \csuse{ hello }{Existing}",
+        ),
+        (
+            r"\ifcsequal{other}{hel¦lo}{Yes}{No}",
+            r"\ifcsequal{other}{hello}{Yes}{No}",
+        ),
+        (
+            r"\ifcsstrequal{hel¦lo}{other}{Yes}{No}",
+            r"\ifcsstrequal{hello}{other}{Yes}{No}",
+        ),
+        (r"\csmeaning{hel¦", r"\csmeaning{hello"),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let source = marked.replace('¦', "");
+        let workspace = project(
+            directory.path(),
+            &[
+                ("main.tex", &source),
+                ("definitions.tex", r"\newcommand{\hello}[1]{#1}"),
+            ],
+        );
+        let main = uri(directory.path(), "main.tex");
+        let text = &workspace.documents[&main].text;
+        let items =
+            features::completion(&workspace, &main, text.position(marked.find('¦').unwrap()));
+        let item = items.iter().find(|item| item.label == "hello").unwrap();
+        let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+            panic!()
+        };
+        assert_eq!(
+            text.changed(vec![TextDocumentContentChangeEvent {
+                range: Some(edit.range),
+                range_length: None,
+                text: edit.new_text.clone()
+            }])
+            .unwrap()
+            .source,
+            expected
+        );
+    }
+    for marked in [
+        r"\ifcsstring{hello}{hel¦lo}{Yes}{No}",
+        r"\ifcsdef{other}{hel¦lo}{No}",
+        r"\csuse{hel¦lo\suffix}",
+        r"\verb|\csuse{hel¦lo}|",
+        r"\ifcsequal{other}{hello}{hel¦lo}{No}",
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let source = marked.replace('¦', "");
+        let workspace = project(
+            directory.path(),
+            &[
+                ("main.tex", &source),
+                ("definitions.tex", r"\newcommand{\hello}{}"),
+            ],
+        );
+        let main = uri(directory.path(), "main.tex");
+        assert!(
+            features::completion(
+                &workspace,
+                &main,
+                workspace.documents[&main]
+                    .text
+                    .position(marked.find('¦').unwrap())
+            )
+            .is_empty(),
+            "{marked}"
+        );
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let source =
+        r"\documentclass{article}\newcommand{\hello}{}\begin{document}\csuse{hel}\end{document}";
+    let workspace = project(
+        directory.path(),
+        &[
+            ("a.tex", source),
+            (
+                "b.tex",
+                r"\documentclass{article}\newcommand{\helpother}{}\begin{document}Other.\end{document}",
+            ),
+        ],
+    );
+    let main = uri(directory.path(), "a.tex");
+    let position = workspace.documents[&main]
+        .text
+        .position(source.find("csuse{hel}").unwrap() + 9);
+    let items = features::completion(&workspace, &main, position);
+    assert!(items.iter().any(|item| item.label == "hello"));
+    assert!(!items.iter().any(|item| item.label == "helpother"));
+}
+
+#[test]
+fn generated_symbols_keep_their_ownership_through_named_command_apis() {
+    for (declaration, names) in [
+        (r"\newenvironment{hello}{}{}", vec!["hello", "endhello"]),
+        (r"\newcounter{hello}", vec!["thehello", "c@hello"]),
+        (
+            r"\newif\ifhello",
+            vec!["ifhello", "hellotrue", "hellofalse"],
+        ),
+        (r"\newtoggle{hello}", vec!["etb@tgl@hello"]),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let mut source = String::new();
+        for name in &names {
+            source.push_str(&format!("\\ifcsdef{{{name}}}{{Yes}}{{No}}"));
+        }
+        let workspace = project(
+            directory.path(),
+            &[("main.tex", &source), ("definitions.tex", declaration)],
+        );
+        let main = uri(directory.path(), "main.tex");
+        for name in &names {
+            let text = &workspace.documents[&main].text;
+            let position = text.position(source.find(name).unwrap() + 1);
+            assert_eq!(
+                features::definitions(&workspace, &main, position).len(),
+                1,
+                "{name}"
+            );
+            let changed = renamed(&workspace, &main, position);
+            assert_eq!(changed[&main], source.replace("hello", "greeting"));
+            assert_eq!(
+                changed[&uri(directory.path(), "definitions.tex")],
+                declaration.replace("hello", "greeting")
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex and etoolbox"]
+fn named_calls_and_predicates_still_compile_after_cross_file_macro_rename() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let definitions = r"\newrobustcmd{\hello}[2][blue]{\typeout{CALL:#1:#2}#2}";
+    let source = "\\documentclass{article}\\usepackage{etoolbox}\\input{definitions}\n\\begin{document}\n\\csuse{hello}{Default}\\csuse{hello}[red]{Explicit}\n\\ifcsdef{hello}{\\typeout{CALL:defined}}{Wrong.}\\ifcsundef{hello}{Wrong.}{\\typeout{CALL:not-undefined}}\n\\ifcsvoid{hello}{Wrong.}{\\typeout{CALL:not-void}}\\ifcsmacro{hello}{\\typeout{CALL:macro}}{Wrong.}\n\\ifcsparam{hello}{Wrong.}{\\typeout{CALL:optional-wrapper}}\\ifcsprotected{hello}{\\typeout{CALL:protected}}{Wrong.}\n\\ifcsltxprotect{hello}{Wrong.}{\\typeout{CALL:primitive-protection}}\\ifcsstring{hello}{hello}{Wrong.}{\\typeout{CALL:not-string}}\n\\ifcsequal{hello}{hello}{\\typeout{CALL:equal}}{Wrong.}\\ifcsstrequal{hello}{hello}{\\typeout{CALL:same-text}}{Wrong.}\n\\typeout{CALL:meaning: \\csmeaning{hello}}\\end{document}\n";
+    let workspace = project(
+        root,
+        &[("main.tex", source), ("definitions.tex", definitions)],
+    );
+    let main = root.join("main.tex");
+    let config = latex_lsp::config::BuildConfig {
+        executable: "pdflatex".into(),
+        ..Default::default()
+    };
+    let before = build::run(&main, &config, &AtomicBool::new(false));
+    assert_eq!(before.status, "success", "{}", before.output);
+    let document = uri(root, "main.tex");
+    let position = workspace.documents[&document]
+        .text
+        .position(source.find("csuse{hello}").unwrap() + 8);
+    for (uri, changed) in renamed(&workspace, &document, position) {
+        std::fs::write(uri.to_file_path().unwrap(), changed).unwrap();
+    }
+    let after = build::run(&main, &config, &AtomicBool::new(false));
+    assert_eq!(after.status, "success", "{}", after.output);
+    assert_eq!(after.pages, Some(1));
+    for state in [
+        "blue:Default",
+        "red:Explicit",
+        "defined",
+        "not-undefined",
+        "not-void",
+        "macro",
+        "optional-wrapper",
+        "protected",
+        "primitive-protection",
+        "not-string",
+        "equal",
+        "same-text",
+    ] {
+        let expected = format!("CALL:{state}");
+        assert!(
+            before.output.contains(&expected),
+            "{expected}: {}",
+            before.output
+        );
+        assert!(
+            after.output.contains(&expected),
+            "{expected}: {}",
+            after.output
+        );
+    }
+}

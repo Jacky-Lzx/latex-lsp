@@ -551,6 +551,49 @@ fn literal_control_sequence_calls_offer_builtin_macro_and_environment_signatures
     for (definitions, marked, label, active) in [
         (
             "",
+            r"\csuse{frac}{a}{b¦}",
+            r"\csuse{frac}{numerator}{denominator}",
+            1,
+        ),
+        ("", r"\csuse{fr¦ac}", r"\csuse{command}", 0),
+        (
+            r"\newrobustcmd{\pair}[2][blue]{#1#2}",
+            r"\csuse{pair}{😀¦}",
+            r"\csuse{pair}[#1=blue]{#2}",
+            1,
+        ),
+        (
+            r"\newrobustcmd{\pair}[2][blue]{#1#2}",
+            r"\csuse{pair}[red¦]{Text}",
+            r"\csuse{pair}[#1=blue]{#2}",
+            0,
+        ),
+        (
+            r"\newenvironment{panel}[1]{}{}",
+            r"\csuse{begin}{panel}{Text¦}",
+            r"\csuse{begin}{panel}{#1}",
+            1,
+        ),
+        (
+            r"\newenvironment{panel}[2][blue]{}{}",
+            r"\csuse{panel}{Text¦}",
+            r"\csuse{panel}[#1=blue]{#2}",
+            1,
+        ),
+        (
+            "",
+            r"\ifcsequal{first}{other¦}{Y}{N}",
+            r"\ifcsequal{first command}{second command}{then}{else}",
+            1,
+        ),
+        (
+            "",
+            r"\ifcsstring{first}{Text¦}{Y}{N}",
+            r"\ifcsstring{command}{string}{then}{else}",
+            1,
+        ),
+        (
+            "",
             r"\csname frac\endcsname{a}{b¦}",
             r"\csname frac\endcsname{numerator}{denominator}",
             1,
@@ -601,6 +644,12 @@ fn literal_control_sequence_calls_offer_builtin_macro_and_environment_signatures
         check(definitions, marked, label, active);
     }
     for (definitions, marked) in [
+        (r"\newcommand{\pair}[1]{#1}", r"\csuse{pair\suffix}{Text¦}"),
+        (r"\newcommand{\pair}[1]{#1}", r"\csuse{pair}{Text}Body¦"),
+        (
+            r"\newcommand{\pair}[1]{#1}\newcommand{\pair}[2]{#1#2}",
+            r"\csuse{pair}{Text¦}",
+        ),
         (
             r"\newcommand{\pair}[1]{#1}",
             r"\csname pair\suffix\endcsname{Text¦}",

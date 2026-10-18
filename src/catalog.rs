@@ -50,6 +50,66 @@ pub(crate) const PRIMITIVES: &[&str] = &[
 /// Templates retain literal TeX backslashes; completion escapes them for the client.
 pub const COMMANDS: &[(&str, &str, &str)] = &[
     (
+        "csuse",
+        "csuse{${1:command}}",
+        "Call a control sequence by name. Requires etoolbox.",
+    ),
+    (
+        "csmeaning",
+        "csmeaning{${1:command}}",
+        "Inspect a control sequence's meaning by name. Requires etoolbox.",
+    ),
+    (
+        "ifcsdef",
+        "ifcsdef{${1:command}}{${2:then}}{${3:else}}",
+        "Test whether a named control sequence exists. Requires etoolbox.",
+    ),
+    (
+        "ifcsundef",
+        "ifcsundef{${1:command}}{${2:then}}{${3:else}}",
+        "Test whether a named control sequence is undefined or relax. Requires etoolbox.",
+    ),
+    (
+        "ifcsvoid",
+        "ifcsvoid{${1:command}}{${2:then}}{${3:else}}",
+        "Test whether a named macro is undefined, relax or empty. Requires etoolbox.",
+    ),
+    (
+        "ifcsmacro",
+        "ifcsmacro{${1:command}}{${2:then}}{${3:else}}",
+        "Test whether a named control sequence is a macro. Requires etoolbox.",
+    ),
+    (
+        "ifcsparam",
+        "ifcsparam{${1:command}}{${2:then}}{${3:else}}",
+        "Test whether a named macro has parameters. Requires etoolbox.",
+    ),
+    (
+        "ifcsprotected",
+        "ifcsprotected{${1:command}}{${2:then}}{${3:else}}",
+        "Test whether a named macro is protected. Requires etoolbox.",
+    ),
+    (
+        "ifcsltxprotect",
+        "ifcsltxprotect{${1:command}}{${2:then}}{${3:else}}",
+        "Test whether a named macro uses LaTeX protection. Requires etoolbox.",
+    ),
+    (
+        "ifcsstring",
+        "ifcsstring{${1:command}}{${2:string}}{${3:then}}{${4:else}}",
+        "Compare a named macro's replacement text with a string. Requires etoolbox.",
+    ),
+    (
+        "ifcsequal",
+        "ifcsequal{${1:first command}}{${2:second command}}{${3:then}}{${4:else}}",
+        "Compare the meanings of two named control sequences. Requires etoolbox.",
+    ),
+    (
+        "ifcsstrequal",
+        "ifcsstrequal{${1:first command}}{${2:second command}}{${3:then}}{${4:else}}",
+        "Compare the replacement texts of two named macros. Requires etoolbox.",
+    ),
+    (
         "newtoggle",
         "newtoggle{${1:toggle}}",
         "Declare an etoolbox toggle.",

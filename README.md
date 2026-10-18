@@ -100,6 +100,8 @@ vim.lsp.enable('latex_lsp')
 
 ifthen 的 `newboolean` / `provideboolean` 与 etoolbox 的 `newbool` / `providebool` 复用同一布尔索引；重命名同时维护 `boolean`、`setboolean`、`setbool`、`booltrue` / `boolfalse`、`ifbool` / `notbool` 中的名称参数，以及直接或字面派生命令。名称和值参数提供补全、片段及参数提示，保留后缀、空白与其他实参；只读条件支持内置 `true` / `false`，赋值命令只建议已声明的开关。`ifboolexpr` / `ifboolexpe` 和 `whileboolexpr` / `unlessboolexpr` 支持静态 `bool {名称}` 操作数的补全、导航、引用和重命名，包括嵌套逻辑与未闭合表达式中的补全；跳过 `test {...}` 的普通文本及动态名称，不展开宏。
 
+etoolbox 的 `csuse` / `csmeaning`、`ifcsdef` / `ifcsundef` / `ifcsvoid`、宏类型检测及名称比较命令中的静态控制序列名称支持补全、导航、引用与重命名；识别 `ifcsequal` / `ifcsstrequal` 的两个名称参数，保留 `ifcsstring` 的字符串和条件分支正文。派生的环境、计数器和布尔命令仍归属于原始声明。`csuse` 调用可显示被调用命令或环境的参数提示，包括可选参数默认值；动态名称不作推断。
+
 etoolbox 的 `newtoggle` / `providetoggle` 使用独立命名空间，支持 `settoggle`、`toggletrue` / `togglefalse`、`iftoggle` / `nottoggle` 和上述表达式中的 `togl {名称}` 操作数。提供名称和值补全、片段、参数提示、布尔符号、跨文件导航与安全重命名；同名 boolean 保持独立。重命名同时维护直接或字面的内部 `etb@tgl@名称` 控制序列，并检查生成命令冲突。
 
 在语法错误处调用 `vim.lsp.buf.code_action()` 可选择快速修复；`vim.lsp.buf.document_highlight()` 高亮当前符号的定义和引用。Neovim 0.12 中可用 `vim.lsp.buf.selection_range(1)` 扩大语法选择范围。

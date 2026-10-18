@@ -44,6 +44,17 @@ fn raw_target(doc: &Document, offset: usize) -> Option<Target<'_>> {
         return None;
     }
     for command in &doc.syntax.commands {
+        if let Some(span) = crate::named_commands::spans(&doc.text.source, command)
+            .into_iter()
+            .find(|span| span.start <= offset && offset <= span.end)
+        {
+            return Some(Target {
+                kind: TargetKind::Command,
+                name: &doc.text.source[span.clone()],
+                span,
+                control_word: false,
+            });
+        }
         if let Some(arg) = &command.argument {
             let kind = if syntax::is_reference(&command.name) || command.name == "label" {
                 Some(TargetKind::Label)
@@ -428,6 +439,9 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
         return items;
     }
     if let Some(items) = crate::conditionals::completion(workspace, uri, offset, &scope) {
+        return items;
+    }
+    if let Some(items) = crate::named_commands::completion(workspace, uri, offset, &scope) {
         return items;
     }
     if let Some((command, span)) = argument_context(doc, offset) {
@@ -837,6 +851,15 @@ fn all_references(
         }
         for (index, command) in doc.syntax.commands.iter().enumerate() {
             if target.kind == TargetKind::Command {
+                result.extend(
+                    crate::named_commands::spans(&doc.text.source, command)
+                        .into_iter()
+                        .filter(|span| doc.text.source[span.clone()] == *target.name)
+                        .map(|span| Location {
+                            uri: uri.clone(),
+                            range: doc.text.range(span.start, span.end),
+                        }),
+                );
                 if let Some(span) =
                     syntax::literal_csname(&doc.text.source, &doc.syntax.commands, index)
                         .filter(|span| doc.text.source[span.clone()] == *target.name)

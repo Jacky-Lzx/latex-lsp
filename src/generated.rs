@@ -239,6 +239,19 @@ pub(crate) fn references(doc: &Document, name: &str, environment: Generated) -> 
                 });
             }
         }
+        for span in crate::named_commands::spans(&doc.text.source, command) {
+            if let Some((_, prefix)) = generated
+                .iter()
+                .find(|(name, _)| *name == doc.text.source[span.clone()])
+            {
+                let start = span.start + prefix;
+                result.push(Reference {
+                    span: start..start + name.len(),
+                    selection_span: span,
+                    control_word: false,
+                });
+            }
+        }
         let mut arguments = Vec::new();
         if matches!(environment.kind, Kind::Conditional | Kind::Toggle) {
             arguments.extend(crate::conditionals::expression_arguments(
