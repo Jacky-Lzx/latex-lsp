@@ -1380,6 +1380,164 @@ fn recorder_indexes_dynamic_inputs_and_uses_them_for_later_builds() {
 
 #[test]
 #[cfg(unix)]
+#[ignore = "requires latexmk and BibTeX"]
+fn real_bibliography_logs_discover_macro_expanded_inputs_and_enable_project_key_renames() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::create_dir(root.join(".inputs")).unwrap();
+    let main = Url::from_file_path(root.join("main.tex")).unwrap();
+    let bib = Url::from_file_path(root.join(".inputs/refs.bib")).unwrap();
+    let style = Url::from_file_path(root.join(".inputs/local.bst")).unwrap();
+    std::fs::write(main.to_file_path().unwrap(), "\\documentclass{article}\n\\def\\database{.inputs/refs}\n\\def\\stylename{.inputs/local}\n\\begin{document}\n\\cite{dynamic}\n\\bibliographystyle{\\stylename}\n\\bibliography{\\database}\n\\end{document}\n").unwrap();
+    std::fs::write(
+        bib.to_file_path().unwrap(),
+        "@book{dynamic,title={Discovered}}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        style.to_file_path().unwrap(),
+        r#"ENTRY { title } {} {}
+FUNCTION {book} { "\bibitem{" write$ cite$ write$ "}" write$ newline$ title write$ newline$ }
+READ
+FUNCTION {begin.bib} { "\begin{thebibliography}{9}" write$ newline$ }
+EXECUTE {begin.bib}
+ITERATE {call.type$}
+FUNCTION {end.bib} { "\end{thebibliography}" write$ newline$ }
+EXECUTE {end.bib}
+"#,
+    )
+    .unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(root).unwrap(),"capabilities":{}}));
+    server.notify("initialized", json!({}));
+    for (id, input) in [(2, &main), (3, &style)] {
+        server.request(
+            id,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[input]}),
+        );
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(finished["params"]["status"], "success", "{finished}");
+        assert_eq!(finished["params"]["stale"], false, "{finished}");
+        assert_eq!(finished["params"]["rootUri"], main.as_str());
+        assert_eq!(finished["params"]["dependenciesCount"], 3, "{finished}");
+    }
+    let edit = server.request(4, "textDocument/rename", json!({"textDocument":{"uri":main},"position":{"line":4,"character":8},"newName":"renamed"}));
+    let changes = edit["changes"].as_object().unwrap();
+    assert_eq!(changes.len(), 2, "{edit}");
+    assert_eq!(changes[main.as_str()][0]["newText"], "renamed");
+    assert_eq!(changes[bib.as_str()][0]["newText"], "renamed");
+    server.request(5, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+fn bibliography_logs_discover_inputs_without_replacing_or_losing_tex_recorder_dependencies() {
+    let script = "printf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf 'INPUT main.tex\\nINPUT .inputs/chapter.tex\\n' > \"$1/main.fls\"\nif [ ! -f \"$1/main.blg\" ]; then\n printf 'The top-level auxiliary file: build/latex-lsp/main.aux\\nDatabase file #1: .inputs/refs.bib\\nThe style file: .inputs/local.bst\\n' > \"$1/main.blg\"\nfi\n";
+    let (mut server, directory, main) = fake_build_server(script, false);
+    let root = directory.path();
+    std::fs::create_dir(root.join(".inputs")).unwrap();
+    for (name, source) in [
+        ("chapter.tex", "\\label{dynamic:chapter}\n"),
+        ("refs.bib", "@book{dynamic,title={Discovered}}\n"),
+        ("local.bst", "Original style\n"),
+    ] {
+        std::fs::write(root.join(".inputs").join(name), source).unwrap();
+    }
+    for id in [2, 3] {
+        server.request(
+            id,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(finished["params"]["status"], "success", "{finished}");
+        assert_eq!(finished["params"]["stale"], false, "{finished}");
+        assert_eq!(finished["params"]["dependenciesCount"], 4, "{finished}");
+    }
+    let symbols = server.request(4, "workspace/symbol", json!({"query":"dynamic"}));
+    assert_eq!(symbols.as_array().unwrap().len(), 2, "{symbols}");
+    // A later no-op build must still check the bibliography discovered earlier.
+    std::fs::write(root.join("compiler.sh"), "exit 0\n").unwrap();
+    let bib = root.join(".inputs/refs.bib");
+    let pdf_time = std::fs::metadata(root.join("build/latex-lsp/main.pdf"))
+        .unwrap()
+        .modified()
+        .unwrap();
+    std::fs::File::open(bib)
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(pdf_time + Duration::from_secs(1)))
+        .unwrap();
+    server.request(
+        5,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let outdated = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(outdated["params"]["status"], "error", "{outdated}");
+    assert!(
+        outdated["params"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("refs.bib"),
+        "{outdated}"
+    );
+    let style = Url::from_file_path(root.join(".inputs/local.bst")).unwrap();
+    server.notify("textDocument/didOpen", json!({"textDocument":{"uri":style,"languageId":"bst","version":1,"text":"Unsaved style\n"}}));
+    server.send(json!({"jsonrpc":"2.0","id":6,"method":"workspace/executeCommand","params":{"command":"latex.build","arguments":[style]}}));
+    let rejected = server.until(|message| message["id"] == 6);
+    assert!(
+        rejected["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("local.bst"),
+        "{rejected}"
+    );
+    server.request(7, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+fn newly_discovered_bibliography_inputs_discard_results_for_unsaved_or_changed_sources() {
+    for name in ["refs.bib", "local.bst"] {
+        for changed_during_build in [false, true] {
+            let script = "touch \"$1/ready\"\nwhile [ ! -f \"$1/release\" ]; do sleep 0.02; done\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf 'Database file #1: .inputs/refs.bib\\nThe style file: .inputs/local.bst\\n' > \"$1/main.blg\"\n";
+            let (mut server, directory, main) = fake_build_server(script, false);
+            let root = directory.path();
+            std::fs::create_dir(root.join(".inputs")).unwrap();
+            std::fs::write(root.join(".inputs/refs.bib"), "@book{example}\n").unwrap();
+            std::fs::write(root.join(".inputs/local.bst"), "Original style\n").unwrap();
+            let path = root.join(".inputs").join(name);
+            let uri = Url::from_file_path(&path).unwrap();
+            if !changed_during_build {
+                server.notify("textDocument/didOpen", json!({"textDocument":{"uri":uri,"languageId":"bib","version":1,"text":"Unsaved\n"}}));
+            }
+            server.request(
+                2,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            wait_for_file(&root.join("build/latex-lsp/ready"));
+            if changed_during_build {
+                std::fs::write(&path, "Changed during compilation\n").unwrap();
+            }
+            std::fs::write(root.join("build/latex-lsp/release"), "").unwrap();
+            let finished = server.until(|message| message["method"] == "latex/buildFinished");
+            assert_eq!(finished["params"]["stale"], true, "{name}: {finished}");
+            assert_eq!(finished["params"]["dependenciesCount"], 3, "{finished}");
+            server.request(3, "shutdown", Value::Null);
+            server.notify("exit", Value::Null);
+            server.wait_exit(0);
+        }
+    }
+}
+
+#[test]
+#[cfg(unix)]
 fn newly_recorded_inputs_discard_stale_diagnostics_but_unrelated_buffers_do_not() {
     for scenario in ["unsaved", "changed", "unrelated"] {
         let script = "touch \"$1/ready\"\nwhile [ ! -f \"$1/release\" ]; do sleep 0.02; done\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf 'PWD %s\\nINPUT main.tex\\nINPUT dynamic.tex\\n' \"$PWD\" > \"$1/main.fls\"\nprintf '%s:2: LaTeX Warning: recorder warning.\\n' \"$2\" > \"$1/main.log\"\n";

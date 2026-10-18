@@ -274,6 +274,11 @@ fn recorded_dependencies_follow_file_and_directory_moves() {
     let mut workspace = project(root);
     let main = uri(root, "main.tex");
     let chapter = uri(root, "chapters/old.tex");
+    let bibliography = uri(root, "chapters/refs.bib");
+    std::fs::write(root.join("chapters/refs.bib"), "@book{example}\n").unwrap();
+    workspace
+        .bibliography_inputs
+        .insert(main.clone(), [bibliography].into());
     workspace
         .recorded_inputs
         .insert(main.clone(), [main, chapter].into());
@@ -294,6 +299,12 @@ fn recorded_dependencies_follow_file_and_directory_moves() {
         [paper.clone(), chapter.clone()].into()
     );
     assert!(workspace.project_documents(&paper).contains(&chapter));
+    let bibliography = uri(root, "sections/refs.bib");
+    assert_eq!(
+        workspace.bibliography_inputs[&paper],
+        [bibliography.clone()].into()
+    );
+    assert!(workspace.project_documents(&paper).contains(&bibliography));
 }
 
 #[test]

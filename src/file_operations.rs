@@ -363,15 +363,20 @@ pub fn did_rename(workspace: &mut Workspace, files: &[FileRename]) -> Result<BTr
         affected.extend(project.keys().cloned());
     }
     workspace.build_diagnostics.clear();
-    workspace.recorded_inputs = std::mem::take(&mut workspace.recorded_inputs)
-        .into_iter()
-        .map(|(root, inputs)| {
-            (
-                renames.uri(&root),
-                inputs.iter().map(|uri| renames.uri(uri)).collect(),
-            )
-        })
-        .collect();
+    for inputs_by_root in [
+        &mut workspace.recorded_inputs,
+        &mut workspace.bibliography_inputs,
+    ] {
+        *inputs_by_root = std::mem::take(inputs_by_root)
+            .into_iter()
+            .map(|(root, inputs)| {
+                (
+                    renames.uri(&root),
+                    inputs.iter().map(|uri| renames.uri(uri)).collect(),
+                )
+            })
+            .collect();
+    }
     workspace.roots = workspace
         .roots
         .iter()

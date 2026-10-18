@@ -301,6 +301,18 @@ impl BuildManager {
                     }
                 }
             }
+            if let Some(inputs) = &outcome.bibliography_inputs {
+                let recorded = current.project_inputs(&root_uri, inputs);
+                project.extend(recorded.iter().cloned());
+                if matches!(outcome.status, "success" | "error") {
+                    current
+                        .bibliography_inputs
+                        .insert(root_uri.clone(), recorded.clone());
+                    for uri in &recorded {
+                        current.reload(uri);
+                    }
+                }
+            }
             // A no-op driver may deliberately ignore an \includeonly-excluded
             // file. Prefer recorded inputs when available, retaining BibTeX
             // sources which TeX's own recorder does not normally list.
@@ -310,6 +322,9 @@ impl BuildManager {
                 .cloned()
                 .unwrap_or_else(|| project.clone());
             artifact_inputs.insert(root_uri.clone());
+            if let Some(inputs) = current.bibliography_inputs.get(&root_uri) {
+                artifact_inputs.extend(inputs.iter().cloned());
+            }
             artifact_inputs.extend(
                 project
                     .iter()
@@ -545,6 +560,7 @@ pub struct Outcome {
     pub diagnostics: BTreeMap<Url, Vec<Diagnostic>>,
     pub output: String,
     pub inputs: Option<BTreeSet<Url>>,
+    pub bibliography_inputs: Option<BTreeSet<Url>>,
     pub pdf_updated: bool,
 }
 
@@ -559,6 +575,7 @@ impl Outcome {
             diagnostics: BTreeMap::new(),
             output: String::new(),
             inputs: None,
+            bibliography_inputs: None,
             pdf_updated: false,
         }
     }
@@ -795,6 +812,10 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool) -> Outcome 
             continue;
         }
         if let Some(log) = read_log(&path) {
+            outcome
+                .bibliography_inputs
+                .get_or_insert_with(BTreeSet::new)
+                .extend(crate::recorder::bibliography_inputs(root, &path, &log));
             for (uri, diagnostics) in build_log::parse_bibliography(root, &log) {
                 outcome
                     .diagnostics

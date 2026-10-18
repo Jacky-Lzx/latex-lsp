@@ -135,6 +135,7 @@ pub struct Workspace {
     pub config: crate::config::Config,
     pub build_diagnostics: BTreeMap<Url, BTreeMap<Url, Vec<tower_lsp::lsp_types::Diagnostic>>>,
     pub recorded_inputs: BTreeMap<Url, BTreeSet<Url>>,
+    pub bibliography_inputs: BTreeMap<Url, BTreeSet<Url>>,
 }
 
 pub(crate) struct SymbolProjects {
@@ -258,6 +259,9 @@ impl Workspace {
             .collect();
         if uri == root {
             if let Some(recorded) = self.recorded_inputs.get(root) {
+                dependencies.extend(recorded.iter().cloned());
+            }
+            if let Some(recorded) = self.bibliography_inputs.get(root) {
                 dependencies.extend(recorded.iter().cloned());
             }
         }
