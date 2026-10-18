@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use crate::text::Text;
-use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity};
+use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, TextEdit};
 
 #[derive(Clone, Debug)]
 pub struct Argument {
@@ -31,6 +31,14 @@ pub struct Syntax {
     pub definitions: Vec<Entry>,
     pub diagnostics: Vec<Diagnostic>,
     pub ignored: Vec<Range<usize>>,
+    pub fixes: Vec<QuickFix>,
+}
+
+#[derive(Clone, Debug)]
+pub struct QuickFix {
+    pub title: String,
+    pub diagnostic: Diagnostic,
+    pub edit: TextEdit,
 }
 
 pub fn diagnostic(text: &Text, span: Range<usize>, message: String) -> Diagnostic {
@@ -139,6 +147,24 @@ pub fn section_level(name: &str) -> Option<u32> {
 }
 
 impl Syntax {
+    fn fix(
+        &mut self,
+        text: &Text,
+        span: Range<usize>,
+        message: String,
+        title: String,
+        edit: TextEdit,
+    ) {
+        let mut diagnostic = diagnostic(text, span, message);
+        diagnostic.code = Some(NumberOrString::String("syntax".into()));
+        self.diagnostics.push(diagnostic.clone());
+        self.fixes.push(QuickFix {
+            title,
+            diagnostic,
+            edit,
+        });
+    }
+
     pub fn latex(text: &Text) -> Self {
         let source = &text.source;
         let bytes = source.as_bytes();
@@ -161,11 +187,16 @@ impl Syntax {
                 }
                 b'}' => {
                     if braces.pop().is_none() {
-                        result.diagnostics.push(diagnostic(
+                        result.fix(
                             text,
                             i..i + 1,
                             "Unexpected closing brace".into(),
-                        ));
+                            "Remove unexpected `}`".into(),
+                            TextEdit {
+                                range: text.range(i, i + 1),
+                                new_text: String::new(),
+                            },
+                        );
                     }
                     i += 1;
                 }
@@ -257,11 +288,13 @@ impl Syntax {
                                     if let Some(relative) = source[body_start..].find(&ending) {
                                         i = body_start + relative + ending.len();
                                     } else {
-                                        result.diagnostics.push(diagnostic(
+                                        result.fix(
                                             text,
                                             arg.span.clone(),
                                             format!("Unclosed environment `{env}`"),
-                                        ));
+                                            format!("Close environment `{env}`"),
+                                            environment_end(text, env),
+                                        );
                                         i = source.len();
                                     }
                                     result.ignored.push(body_start..i);
@@ -275,15 +308,20 @@ impl Syntax {
                                     environments.iter().rposition(|(name, _)| name == env)
                                 {
                                     for (name, span) in environments.drain(index + 1..) {
-                                        result.diagnostics.push(diagnostic(text, span, format!("Unclosed environment `{name}` before \\end{{{env}}}")));
+                                        result.fix(text, span, format!("Unclosed environment `{name}` before \\end{{{env}}}"), format!("Close environment `{name}` before `{env}`"), TextEdit { range:text.range(start, start), new_text:format!("\\end{{{name}}}{}", text.newline()) });
                                     }
                                     environments.pop();
                                 } else {
-                                    result.diagnostics.push(diagnostic(
+                                    result.fix(
                                         text,
                                         arg.span.clone(),
                                         format!("Unexpected \\end{{{env}}}"),
-                                    ));
+                                        format!("Remove unexpected \\end{{{env}}}"),
+                                        TextEdit {
+                                            range: text.range(start, arg.span.end + 1),
+                                            new_text: String::new(),
+                                        },
+                                    );
                                 }
                             }
                             _ => {}
@@ -294,17 +332,34 @@ impl Syntax {
                 _ => i += 1,
             }
         }
+        let comment_at_end = result
+            .ignored
+            .last()
+            .is_some_and(|span| span.end == source.len() && source[span.clone()].starts_with('%'));
         for start in braces {
-            result
-                .diagnostics
-                .push(diagnostic(text, start..start + 1, "Unclosed brace".into()));
+            result.fix(
+                text,
+                start..start + 1,
+                "Unclosed brace".into(),
+                "Insert missing `}`".into(),
+                TextEdit {
+                    range: text.range(source.len(), source.len()),
+                    new_text: if comment_at_end {
+                        format!("{}}}", text.newline())
+                    } else {
+                        "}".into()
+                    },
+                },
+            );
         }
         for (name, span) in environments {
-            result.diagnostics.push(diagnostic(
+            result.fix(
                 text,
                 span,
                 format!("Unclosed environment `{name}`"),
-            ));
+                format!("Close environment `{name}`"),
+                environment_end(text, &name),
+            );
         }
         result
     }
@@ -366,6 +421,16 @@ impl Syntax {
         self.ignored
             .iter()
             .any(|span| span.start <= offset && offset < span.end)
+    }
+}
+
+fn environment_end(text: &Text, name: &str) -> TextEdit {
+    let source = &text.source;
+    let newline = text.newline();
+    let prefix = if source.ends_with('\n') { "" } else { newline };
+    TextEdit {
+        range: text.range(source.len(), source.len()),
+        new_text: format!("{prefix}\\end{{{name}}}{newline}"),
     }
 }
 

@@ -701,6 +701,101 @@ fn rename_prepares_ranges_and_returns_versioned_cross_file_edits() {
 }
 
 #[test]
+fn command_only_code_actions_request_client_edits_and_reject_stale_versions() {
+    let mut server = Server::start();
+    let uri = Url::parse("file:///editing-protocol/legacy.tex").unwrap();
+    server.request(
+        1,
+        "initialize",
+        json!({"processId":null,"capabilities":{"workspace":{"applyEdit":true}}}),
+    );
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"latex","version":1,"text":"{broken"}}),
+    );
+    let diagnostics =
+        server.until(|message| message["method"] == "textDocument/publishDiagnostics");
+    let diagnostic = diagnostics["params"]["diagnostics"][0].clone();
+    let actions = server.request(2, "textDocument/codeAction", json!({"textDocument":{"uri":uri},"range":diagnostic["range"],"context":{"diagnostics":[diagnostic]}}));
+    assert_eq!(actions[0]["command"], "latex.applyQuickFix");
+    server.send(json!({"jsonrpc":"2.0","id":3,"method":"workspace/executeCommand","params":{"command":actions[0]["command"],"arguments":actions[0]["arguments"]}}));
+    let apply = server.until(|message| message["method"] == "workspace/applyEdit");
+    assert_eq!(
+        apply["params"]["edit"]["changes"][uri.as_str()][0]["newText"],
+        "}"
+    );
+    server.send(json!({"jsonrpc":"2.0","id":apply["id"],"result":{"applied":true}}));
+    let response = server.until(|message| message["id"] == 3);
+    assert_eq!(response["result"]["applied"], true);
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"text":"{still broken"}]}),
+    );
+    server.send(json!({"jsonrpc":"2.0","id":4,"method":"workspace/executeCommand","params":{"command":actions[0]["command"],"arguments":actions[0]["arguments"]}}));
+    let response = server.until(|message| message["id"] == 4);
+    assert_eq!(response["error"]["code"], -32602);
+    assert!(response["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("outdated"));
+    server.request(5, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+fn quick_fixes_highlights_and_selection_ranges_work_over_stdio() {
+    let mut server = Server::start();
+    let uri = Url::parse("file:///editing-protocol/main.tex").unwrap();
+    let init = server.request(1, "initialize", json!({"processId":null,"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}},"textDocument":{"codeAction":{"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix"]}}}}}}));
+    assert_eq!(
+        init["capabilities"]["codeActionProvider"]["codeActionKinds"][0],
+        "quickfix"
+    );
+    assert_eq!(init["capabilities"]["selectionRangeProvider"], true);
+    assert_eq!(init["capabilities"]["documentHighlightProvider"], true);
+    server.notify("initialized", json!({}));
+    let source = "\\label{x}\n\\ref{x}\n\\begin{equation}\nx=1\n";
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"latex","version":3,"text":source}}),
+    );
+    let diagnostics =
+        server.until(|message| message["method"] == "textDocument/publishDiagnostics");
+    let diagnostic = diagnostics["params"]["diagnostics"][0].clone();
+    let actions = server.request(2, "textDocument/codeAction", json!({"textDocument":{"uri":uri},"range":diagnostic["range"],"context":{"diagnostics":[diagnostic],"only":["quickfix"]}}));
+    assert_eq!(actions.as_array().unwrap().len(), 1);
+    assert_eq!(actions[0]["title"], "Close environment `equation`");
+    assert_eq!(
+        actions[0]["edit"]["documentChanges"][0]["textDocument"]["version"],
+        3
+    );
+    let highlights = server.request(
+        3,
+        "textDocument/documentHighlight",
+        json!({"textDocument":{"uri":uri},"position":{"line":1,"character":6}}),
+    );
+    assert_eq!(highlights.as_array().unwrap().len(), 2);
+    let selections = server.request(4, "textDocument/selectionRange", json!({"textDocument":{"uri":uri},"positions":[{"line":1,"character":6},{"line":3,"character":1}]}));
+    assert_eq!(selections.as_array().unwrap().len(), 2);
+    assert!(selections[0]["parent"].is_object());
+    let repaired = format!("{source}\\end{{equation}}\n");
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":uri,"version":4},"contentChanges":[{"text":repaired}]}),
+    );
+    server.until(|message| {
+        message["method"] == "textDocument/publishDiagnostics" && message["params"]["version"] == 4
+    });
+    let actions = server.request(5, "textDocument/codeAction", json!({"textDocument":{"uri":uri},"range":diagnostic["range"],"context":{"diagnostics":[diagnostic]}}));
+    assert!(actions.as_array().unwrap().is_empty());
+    server.request(6, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
 fn navigation_capabilities_and_requests_work_over_stdio() {
     let directory = tempfile::tempdir().unwrap();
     let root = Url::from_directory_path(directory.path()).unwrap();

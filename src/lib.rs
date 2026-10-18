@@ -2,6 +2,7 @@ pub mod build;
 pub mod build_log;
 pub mod catalog;
 pub mod config;
+pub mod editing;
 pub mod features;
 pub mod navigation;
 pub mod syntax;
@@ -79,6 +80,12 @@ impl LanguageServer for Backend {
             .and_then(|workspace| workspace.workspace_edit.as_ref())
             .and_then(|edit| edit.document_changes)
             .unwrap_or(false);
+        workspace.apply_edits = params
+            .capabilities
+            .workspace
+            .as_ref()
+            .and_then(|workspace| workspace.apply_edit)
+            .unwrap_or(false);
         workspace.watch_files = params
             .capabilities
             .workspace
@@ -101,6 +108,12 @@ impl LanguageServer for Backend {
             .and_then(|doc| doc.document_symbol.as_ref())
             .and_then(|symbols| symbols.hierarchical_document_symbol_support)
             .unwrap_or(false);
+        workspace.code_action_literals = params
+            .capabilities
+            .text_document
+            .as_ref()
+            .and_then(|doc| doc.code_action.as_ref())
+            .is_some_and(|action| action.code_action_literal_support.is_some());
         workspace.folding_limit = params
             .capabilities
             .text_document
@@ -139,6 +152,15 @@ impl LanguageServer for Backend {
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 definition_provider: Some(OneOf::Left(true)),
                 references_provider: Some(OneOf::Left(true)),
+                document_highlight_provider: Some(OneOf::Left(true)),
+                selection_range_provider: Some(SelectionRangeProviderCapability::Simple(true)),
+                code_action_provider: Some(CodeActionProviderCapability::Options(
+                    CodeActionOptions {
+                        code_action_kinds: Some(vec![CodeActionKind::QUICKFIX]),
+                        resolve_provider: Some(false),
+                        ..Default::default()
+                    },
+                )),
                 rename_provider: Some(OneOf::Right(RenameOptions {
                     prepare_provider: Some(true),
                     work_done_progress_options: WorkDoneProgressOptions::default(),
@@ -148,6 +170,7 @@ impl LanguageServer for Backend {
                         "latex.build".into(),
                         "latex.cancelBuild".into(),
                         "latex.buildStatus".into(),
+                        "latex.applyQuickFix".into(),
                     ],
                     ..Default::default()
                 }),
@@ -307,6 +330,20 @@ impl LanguageServer for Backend {
                 )
             })?;
         match params.command.as_str() {
+            "latex.applyQuickFix" => {
+                let request: editing::FixRequest =
+                    serde_json::from_value(argument.cloned().unwrap_or_default()).map_err(
+                        |_| tower_lsp::jsonrpc::Error::invalid_params("Invalid quick fix request"),
+                    )?;
+                let edit = editing::resolve_fix(&*self.workspace.read().await, request)
+                    .ok_or_else(|| {
+                        tower_lsp::jsonrpc::Error::invalid_params(
+                            "Quick fix is outdated; request code actions again",
+                        )
+                    })?;
+                let response = self.client.apply_edit(edit).await?;
+                Ok(Some(serde_json::to_value(response).unwrap()))
+            }
             "latex.build" => self.builds.start(uri).await.map(Some),
             "latex.cancelBuild" | "latex.buildStatus" => {
                 let root = self
@@ -412,6 +449,40 @@ impl LanguageServer for Backend {
             position.position,
             &params.new_name,
         )
+    }
+
+    async fn document_highlight(
+        &self,
+        params: DocumentHighlightParams,
+    ) -> Result<Option<Vec<DocumentHighlight>>> {
+        let params = params.text_document_position_params;
+        Ok(Some(editing::highlights(
+            &*self.workspace.read().await,
+            &params.text_document.uri,
+            params.position,
+        )))
+    }
+
+    async fn selection_range(
+        &self,
+        params: SelectionRangeParams,
+    ) -> Result<Option<Vec<SelectionRange>>> {
+        let workspace = self.workspace.read().await;
+        let Some(doc) = workspace.documents.get(&params.text_document.uri) else {
+            return Ok(None);
+        };
+        editing::selection_ranges(doc, &params.positions)
+            .map(Some)
+            .ok_or_else(|| tower_lsp::jsonrpc::Error::invalid_params("Invalid selection position"))
+    }
+
+    async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
+        Ok(Some(editing::code_actions(
+            &*self.workspace.read().await,
+            &params.text_document.uri,
+            params.range,
+            &params.context,
+        )))
     }
 
     async fn document_symbol(

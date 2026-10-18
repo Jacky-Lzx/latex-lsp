@@ -208,8 +208,15 @@ pub fn rename(
         edits.sort_by_key(|edit| (edit.range.start, edit.range.end));
         edits.dedup_by(|a, b| a.range == b.range);
     }
+    Ok(Some(workspace_edit(workspace, changes)))
+}
+
+pub fn workspace_edit(
+    workspace: &Workspace,
+    changes: std::collections::BTreeMap<Url, Vec<TextEdit>>,
+) -> WorkspaceEdit {
     if workspace.versioned_edits {
-        Ok(Some(WorkspaceEdit {
+        WorkspaceEdit {
             document_changes: Some(DocumentChanges::Edits(
                 changes
                     .into_iter()
@@ -223,12 +230,12 @@ pub fn rename(
                     .collect(),
             )),
             ..Default::default()
-        }))
+        }
     } else {
-        Ok(Some(WorkspaceEdit {
+        WorkspaceEdit {
             changes: Some(changes.into_iter().collect()),
             ..Default::default()
-        }))
+        }
     }
 }
 

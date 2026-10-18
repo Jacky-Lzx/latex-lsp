@@ -8,10 +8,12 @@
 
 - 文档同步：完整或增量更新，使用 UTF-16 位置，支持中文、emoji 和 CRLF；拒绝无效编辑和过期版本。
 - 实时诊断：未闭合/多余花括号、环境不匹配、同一文件内重复的标签或文献键。
+- 快速修复：补全缺失花括号、闭合环境、删除多余的闭合符号；支持版本化编辑和旧客户端的命令式操作，拒绝过期修复。
 - 补全：常用 LaTeX 命令、环境、用户命令、跨文件标签和 BibTeX 文献键。支持词中替换，根据客户端能力提供 snippet，并保留已有参数。
 - 悬浮提示：内置命令说明、标签/文献/自定义命令的定义位置。
 - 定义跳转：`\ref` / `\eqref` / `\cref` 等引用、常见 `\cite` 变体、自定义命令、输入文件、文献文件及本地包、类、图片。
 - 查找引用：标签、文献键、自定义命令；支持包含或排除定义。
+- 文档高亮：区分当前文件中的定义和引用；选择范围可逐级扩展到词、参数、命令、章节和整篇文档。
 - 跨文件重命名：标签、BibTeX 文献键、自定义命令；支持准备重命名、定义歧义/重名检查及版本化工作区编辑，跳过注释和逐字文本。
 - 文档符号：章节标题、标签、自定义命令和 BibTeX 条目；根据客户端能力返回层级结构或平铺列表。
 - 工作区符号搜索：跨文件搜索章节、标签、宏和文献键，支持中文、不区分大小写及子序列匹配，按相关性返回最多 256 项。
@@ -53,6 +55,8 @@ vim.lsp.enable('latex_lsp')
 ```
 
 打开 `.tex` 后，可用 `vim.lsp.buf.hover()` 查看提示，`vim.lsp.buf.definition()` 跳转，`vim.lsp.buf.references()` 查找引用，`vim.lsp.buf.rename()` 跨文件重命名。补全可通过 `<C-x><C-o>` 或支持 Neovim LSP 的补全插件触发；snippet 需要客户端声明支持。
+
+在语法错误处调用 `vim.lsp.buf.code_action()` 可选择快速修复；`vim.lsp.buf.document_highlight()` 高亮当前符号的定义和引用。Neovim 0.12 中可用 `vim.lsp.buf.selection_range(1)` 扩大语法选择范围。
 
 其他编辑器可将 `latex-lsp --stdio` 配置为 `tex` / `latex` / `bib` 文件的语言服务器。建议将根目录设为当前 LaTeX 项目，避免把多个无关项目混在同一个工作区。
 
@@ -139,7 +143,7 @@ cargo test --locked -- --include-ignored
 
 测试包含 UTF-16/增量编辑、语法容错、跨文件导航、文献补全、磁盘/未保存内容同步，以及启动真实进程验证的 stdio 协议流程。
 
-代码按职责拆分：`text.rs` 处理位置与编辑，`syntax.rs` 解析 LaTeX/BibTeX，`workspace.rs` 管理文件索引与根文档，`features.rs` 实现语言功能，`navigation.rs` 处理工作区搜索、折叠和链接，`build.rs` 管理后台编译，`build_log.rs` 分析日志，`config.rs` 校验配置，`lib.rs` 对接 LSP，`main.rs` 启动服务。
+代码按职责拆分：`text.rs` 处理位置与编辑，`syntax.rs` 解析 LaTeX/BibTeX，`workspace.rs` 管理文件索引与根文档，`features.rs` 实现语言功能，`navigation.rs` 处理工作区搜索、折叠和链接，`editing.rs` 处理快速修复、高亮和选择范围，`build.rs` 管理后台编译，`build_log.rs` 分析日志，`config.rs` 校验配置，`lib.rs` 对接 LSP，`main.rs` 启动服务。
 
 ## 当前范围
 

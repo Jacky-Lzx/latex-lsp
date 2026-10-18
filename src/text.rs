@@ -8,6 +8,14 @@ pub struct Text {
 }
 
 impl Text {
+    pub fn newline(&self) -> &'static str {
+        if self.source.contains("\r\n") {
+            "\r\n"
+        } else {
+            "\n"
+        }
+    }
+
     pub fn text_line_count(&self) -> usize {
         self.lines.len()
     }
