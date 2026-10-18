@@ -298,6 +298,46 @@ fn background_build_keeps_requests_responsive_and_publishes_compiler_results() {
 
 #[test]
 #[cfg(unix)]
+fn unsaved_local_packages_are_rejected_and_package_changes_make_build_results_stale() {
+    let (mut server, directory, uri) = fake_build_server(
+        "sleep 0.2\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\n",
+        false,
+    );
+    let source = "\\documentclass{article}\n\\usepackage{local}\n";
+    std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+    let package_path = directory.path().join("local.sty");
+    std::fs::write(&package_path, "\\newcommand{\\hello}{Hello}\n").unwrap();
+    let package = Url::from_file_path(&package_path).unwrap();
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"text":source}]}),
+    );
+    server.notify("textDocument/didOpen", json!({"textDocument":{"uri":package,"languageId":"latex","version":1,"text":"\\newcommand{\\hello}{Unsaved}\n"}}));
+    server.send(json!({"jsonrpc":"2.0","id":2,"method":"workspace/executeCommand","params":{"command":"latex.build","arguments":[uri]}}));
+    let rejected = server.until(|message| message["id"] == 2);
+    assert!(rejected["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("local.sty"));
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":package}}),
+    );
+    server.request(
+        3,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[uri]}),
+    );
+    std::fs::write(&package_path, "\\newcommand{\\hello}{Changed}\n").unwrap();
+    let finished = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(finished["params"]["stale"], true);
+    server.request(4, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
 fn repeated_saves_during_a_build_compile_the_latest_saved_content_once_more() {
     let script = "count=0\n[ ! -f \"$1/count\" ] || count=$(cat \"$1/count\")\ncount=$((count + 1))\nprintf '%s' \"$count\" > \"$1/count\"\nif [ \"$count\" = 1 ]; then\n  touch \"$1/ready\"\n  while [ ! -f \"$1/release\" ]; do sleep 0.02; done\nfi\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf '%s:2: LaTeX Warning: build %s.\\n' \"$2\" \"$count\" > \"$1/main.log\"\n";
     let (mut server, directory, uri) = fake_build_server(script, true);

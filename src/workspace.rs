@@ -75,6 +75,10 @@ impl Workspace {
     }
 
     pub fn dependencies(&self, uri: &Url) -> Vec<Url> {
+        self.dependencies_from(uri, uri)
+    }
+
+    fn dependencies_from(&self, uri: &Url, root: &Url) -> Vec<Url> {
         let Some(doc) = self.documents.get(uri) else {
             return vec![];
         };
@@ -85,15 +89,29 @@ impl Workspace {
                 let extension = match command.name.as_str() {
                     "input" | "include" | "subfile" => "tex",
                     "bibliography" | "addbibresource" => "bib",
+                    "usepackage" | "RequirePackage" => "sty",
+                    "documentclass" | "LoadClass" => "cls",
                     _ => return vec![],
                 };
                 command
                     .argument
                     .as_ref()
                     .map(|arg| {
-                        arg.value
-                            .split(',')
-                            .filter_map(|value| resolve_path(uri, value.trim(), extension))
+                        let multiple = matches!(
+                            command.name.as_str(),
+                            "bibliography" | "usepackage" | "RequirePackage"
+                        );
+                        let values = if multiple {
+                            arg.value.split(',').collect::<Vec<_>>()
+                        } else {
+                            vec![arg.value.as_str()]
+                        };
+                        values
+                            .into_iter()
+                            .filter_map(|value| {
+                                resolve_path(uri, value.trim(), extension)
+                                    .or_else(|| resolve_path(root, value.trim(), extension))
+                            })
                             .collect()
                     })
                     .unwrap_or_default()
@@ -106,7 +124,7 @@ impl Workspace {
         let mut pending = vec![root.clone()];
         while let Some(uri) = pending.pop() {
             if visited.insert(uri.clone()) {
-                pending.extend(self.dependencies(&uri));
+                pending.extend(self.dependencies_from(&uri, root));
             }
         }
         visited
@@ -291,19 +309,35 @@ impl Workspace {
     }
 
     pub fn load_dependencies(&mut self, uri: &Url, depth: usize) {
-        self.load_dependencies_inner(uri, depth, &mut BTreeSet::new());
+        self.load_dependencies_inner(uri, uri, depth, &mut BTreeSet::new(), false);
     }
 
-    fn load_dependencies_inner(&mut self, uri: &Url, depth: usize, visited: &mut BTreeSet<Url>) {
+    /// Reload each saved dependency before walking its includes: closed child
+    /// files may have gained new dependencies since the previous build.
+    pub fn refresh_project(&mut self, root: &Url) {
+        self.load_dependencies_inner(root, root, 0, &mut BTreeSet::new(), true);
+    }
+
+    fn load_dependencies_inner(
+        &mut self,
+        uri: &Url,
+        root: &Url,
+        depth: usize,
+        visited: &mut BTreeSet<Url>,
+        refresh: bool,
+    ) {
         if depth >= 16 || !visited.insert(uri.clone()) {
             return;
         }
-        let dependencies = self.dependencies(uri);
+        if refresh {
+            self.reload(uri);
+        }
+        let dependencies = self.dependencies_from(uri, root);
         for dependency in dependencies {
             if !self.documents.contains_key(&dependency) {
                 self.reload(&dependency);
             }
-            self.load_dependencies_inner(&dependency, depth + 1, visited);
+            self.load_dependencies_inner(&dependency, root, depth + 1, visited, refresh);
         }
     }
 }
@@ -319,15 +353,22 @@ fn file_uri(path: &Path) -> Result<Url, String> {
 }
 
 pub fn resolve_path(uri: &Url, value: &str, extension: &str) -> Option<Url> {
-    if value.is_empty() || value.contains(['\\', '{', '}', '#']) {
+    let mut value = value.to_owned();
+    for character in ['_', '%', '#', '&', '$', ' '] {
+        value = value.replace(&format!("\\{character}"), &character.to_string());
+    }
+    if value.is_empty() || value.contains(['\\', '{', '}']) {
         return None;
     }
     let parent = uri.to_file_path().ok()?.parent()?.to_path_buf();
-    let path = parent.join(value);
+    let path = parent.join(&value);
     let path = if path.is_file() {
         path
-    } else if path.extension().is_none() {
-        path.with_extension(extension)
+    } else if path.extension().and_then(|value| value.to_str()) != Some(extension) {
+        let mut name = path.as_os_str().to_os_string();
+        name.push(".");
+        name.push(extension);
+        PathBuf::from(name)
     } else {
         path
     };

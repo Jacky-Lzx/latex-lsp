@@ -97,12 +97,8 @@ impl BuildManager {
         let root = workspace
             .root_document(&uri)
             .map_err(Error::invalid_params)?;
-        workspace.reload(&root);
-        workspace.load_dependencies(&root, 0);
+        workspace.refresh_project(&root);
         let project = workspace.project_documents(&root);
-        for uri in &project {
-            workspace.reload(uri);
-        }
         let mut snapshots = BTreeMap::new();
         for uri in project {
             if let Some(doc) = workspace.documents.get(&uri) {

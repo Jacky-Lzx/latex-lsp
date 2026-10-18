@@ -46,6 +46,46 @@ fn root_detection_follows_includes_magic_comments_and_explicit_configuration() {
 }
 
 #[test]
+fn project_refresh_follows_updated_children_packages_and_root_relative_dependencies() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::create_dir(root.join("sections")).unwrap();
+    for (name, source) in [
+        (
+            "main.tex",
+            "\\documentclass{local}\\usepackage{macros}\\input{sections/child}",
+        ),
+        ("local.cls", "\\LoadClass{article}"),
+        ("macros.sty", "\\RequirePackage{other}"),
+        ("other.sty", "\\newcommand{\\hello}{Hello}"),
+        ("sections/child.tex", "Chapter"),
+        ("nested.v1.tex", "\\bibliography{refs\\_v1}"),
+        ("refs_v1.bib", "@book{example,title={A}}"),
+    ] {
+        std::fs::write(root.join(name), source).unwrap();
+    }
+    let main = Url::from_file_path(root.join("main.tex")).unwrap();
+    let mut workspace = Workspace::default();
+    workspace.add_root(root.into());
+    // Introduce a new include in a closed file after it has been indexed.
+    std::fs::write(root.join("sections/child.tex"), "\\input{nested.v1}").unwrap();
+    workspace.refresh_project(&main);
+    let project = workspace.project_documents(&main);
+    assert_eq!(project.len(), 7);
+    for name in [
+        "local.cls",
+        "macros.sty",
+        "other.sty",
+        "nested.v1.tex",
+        "refs_v1.bib",
+    ] {
+        let uri = Url::from_file_path(root.join(name)).unwrap();
+        assert!(project.contains(&uri), "missing {name}");
+        assert_eq!(workspace.root_document(&uri).unwrap(), main);
+    }
+}
+
+#[test]
 fn missing_compiler_produces_an_actionable_error_diagnostic() {
     let directory = tempfile::tempdir().unwrap();
     let main = directory.path().join("main.tex");
