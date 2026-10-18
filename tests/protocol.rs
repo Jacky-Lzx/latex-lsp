@@ -158,6 +158,110 @@ fn fake_build_server_capabilities(
 
 #[test]
 #[cfg(unix)]
+fn unchanged_pdf_older_than_an_included_source_is_rejected_but_fresh_noop_builds_succeed() {
+    let (mut server, directory, uri) = fake_build_server("exit 0\n", false);
+    let source = "\\documentclass{article}\n\\input{chapter}\n";
+    std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+    std::fs::write(directory.path().join("chapter.tex"), "Chapter\n").unwrap();
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"text":source}]}),
+    );
+    let output = directory.path().join("build/latex-lsp");
+    std::fs::create_dir_all(&output).unwrap();
+    let pdf = output.join("main.pdf");
+    std::fs::write(&pdf, "%PDF-1.4\n").unwrap();
+    let now = std::time::SystemTime::now();
+    std::fs::File::open(uri.to_file_path().unwrap())
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(now - Duration::from_secs(120)))
+        .unwrap();
+    std::fs::File::open(&pdf)
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(now - Duration::from_secs(60)))
+        .unwrap();
+    server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[uri]}),
+    );
+    let outdated = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(outdated["params"]["status"], "error", "{outdated}");
+    assert_eq!(outdated["params"]["stale"], false);
+    assert!(outdated["params"]["pdfUri"].is_null());
+    assert!(outdated["params"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("chapter.tex"));
+    let diagnostic = server.until(|message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["diagnostics"]
+                .as_array()
+                .is_some_and(|items| {
+                    items.iter().any(|item| {
+                        item["message"]
+                            .as_str()
+                            .is_some_and(|message| message.contains("outdated PDF"))
+                    })
+                })
+    });
+    assert_eq!(diagnostic["params"]["version"], 2);
+    std::fs::write(&pdf, "%PDF-1.4\nFresh\n").unwrap();
+    server.request(
+        3,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[uri]}),
+    );
+    let fresh = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(fresh["params"]["status"], "success", "{fresh}");
+    assert_eq!(fresh["params"]["stale"], false);
+    assert_eq!(fresh["params"]["diagnosticsCount"], 0);
+    server.request(4, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+fn unchanged_pdf_checks_prefer_recorded_inputs_over_statically_excluded_files() {
+    let script = "if [ ! -f \"$1/main.pdf\" ]; then\n printf '%%PDF-1.4\\n' > \"$1/main.pdf\"\n printf 'PWD %s\\nINPUT main.tex\\nINPUT used.tex\\n' \"$PWD\" > \"$1/main.fls\"\nfi\n";
+    let (mut server, directory, uri) = fake_build_server(script, false);
+    let source =
+        "\\documentclass{article}\n\\includeonly{used}\n\\include{used}\n\\include{excluded}\n";
+    std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+    std::fs::write(directory.path().join("used.tex"), "Used\n").unwrap();
+    std::fs::write(directory.path().join("excluded.tex"), "Excluded\n").unwrap();
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"text":source}]}),
+    );
+    server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[uri]}),
+    );
+    let first = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(first["params"]["status"], "success", "{first}");
+    std::fs::write(
+        directory.path().join("excluded.tex"),
+        "Changed but still excluded\n",
+    )
+    .unwrap();
+    server.request(
+        3,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[uri]}),
+    );
+    let second = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(second["params"]["status"], "success", "{second}");
+    assert_eq!(second["params"]["stale"], false);
+    server.request(4, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
 fn slow_synctex_queries_do_not_block_edits_and_discard_results_after_source_changes() {
     let script = "touch ready\nwhile [ ! -f release ]; do sleep 0.02; done\nprintf 'SyncTeX result begin\\nPage:1\\nx:10\\ny:20\\nSyncTeX result end\\n'\n";
     let (mut server, directory, uri) = fake_synctex_server(script);

@@ -257,7 +257,7 @@ impl BuildManager {
             let wall_started = std::time::SystemTime::now();
             let outcome =
                 tokio::task::spawn_blocking(move || run(&worker_root, &config, &cancel)).await;
-            let outcome = outcome
+            let mut outcome = outcome
                 .unwrap_or_else(|error| Outcome::error(format!("Compiler task failed: {error}")));
             let mut current = workspace.write().await;
             if let Some(inputs) = &outcome.inputs {
@@ -272,6 +272,28 @@ impl BuildManager {
                     }
                 }
             }
+            // A no-op driver may deliberately ignore an \includeonly-excluded
+            // file. Prefer recorded inputs when available, retaining BibTeX
+            // sources which TeX's own recorder does not normally list.
+            let mut artifact_inputs = current
+                .recorded_inputs
+                .get(&root_uri)
+                .cloned()
+                .unwrap_or_else(|| project.clone());
+            artifact_inputs.insert(root_uri.clone());
+            artifact_inputs.extend(
+                project
+                    .iter()
+                    .filter(|uri| uri.path().ends_with(".bib"))
+                    .cloned(),
+            );
+            reject_outdated_pdf(
+                &root_path,
+                &mut outcome,
+                artifact_inputs
+                    .iter()
+                    .filter_map(|uri| uri.to_file_path().ok()),
+            );
             let stale = project.iter().any(|uri| {
                 if let Some((version, text)) = snapshots.get(uri) {
                     current
@@ -490,6 +512,7 @@ pub struct Outcome {
     pub diagnostics: BTreeMap<Url, Vec<Diagnostic>>,
     pub output: String,
     pub inputs: Option<BTreeSet<Url>>,
+    pub pdf_updated: bool,
 }
 
 impl Outcome {
@@ -503,6 +526,7 @@ impl Outcome {
             diagnostics: BTreeMap::new(),
             output: String::new(),
             inputs: None,
+            pdf_updated: false,
         }
     }
 }
@@ -534,6 +558,7 @@ pub(crate) fn kill_group(child: &mut Child) {
 
 pub fn run(root: &Path, config: &BuildConfig, cancel: &AtomicBool) -> Outcome {
     let mut outcome = run_inner(root, config, cancel);
+    reject_outdated_pdf(root, &mut outcome, std::iter::once(root.to_path_buf()));
     if outcome.status == "error"
         && !outcome
             .diagnostics
@@ -558,6 +583,47 @@ pub fn run(root: &Path, config: &BuildConfig, cancel: &AtomicBool) -> Outcome {
     outcome
 }
 
+fn reject_outdated_pdf(root: &Path, outcome: &mut Outcome, sources: impl Iterator<Item = PathBuf>) {
+    if outcome.status != "success" || outcome.pdf_updated {
+        return;
+    }
+    let Some(pdf) = outcome
+        .pdf
+        .as_ref()
+        .and_then(|pdf| fingerprint(pdf))
+        .and_then(|(_, modified)| modified)
+    else {
+        return;
+    };
+    let outdated = sources.into_iter().find(|source| {
+        std::fs::metadata(source)
+            .ok()
+            .and_then(|metadata| metadata.modified().ok())
+            .is_some_and(|modified| modified > pdf)
+    });
+    if let Some(source) = outdated {
+        outcome.status = "error";
+        outcome.pdf = None;
+        outcome.message = format!(
+            "Compiler left an outdated PDF unchanged; rebuild after changes to {}",
+            source.display()
+        );
+        if let Ok(uri) = Url::from_file_path(root) {
+            outcome
+                .diagnostics
+                .entry(uri)
+                .or_default()
+                .push(Diagnostic {
+                    range: Range::default(),
+                    severity: Some(DiagnosticSeverity::ERROR),
+                    source: Some("latex-build".into()),
+                    message: outcome.message.clone(),
+                    ..Default::default()
+                });
+        }
+    }
+}
+
 fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool) -> Outcome {
     let Some(parent) = root.parent() else {
         return Outcome::error("Invalid root path".into());
@@ -571,6 +637,7 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool) -> Outcome 
     };
     let log_path = output_dir.join(format!("{}.log", stem.to_string_lossy()));
     let pdf_path = output_dir.join(format!("{}.pdf", stem.to_string_lossy()));
+    let pdf_before = fingerprint(&pdf_path);
     let recorder_path = output_dir.join(format!("{}.fls", stem.to_string_lossy()));
     let recorder_before = fingerprint(&recorder_path);
     let bibliography_before = bibliography_logs(&output_dir);
@@ -675,6 +742,10 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool) -> Outcome 
         String::from_utf8_lossy(&stderr)
     );
     let log = read_log(&log_path).unwrap_or_default();
+    outcome.pdf_updated = outcome
+        .pdf
+        .as_ref()
+        .is_some_and(|pdf| fingerprint(pdf) != pdf_before);
     let recorder_after = fingerprint(&recorder_path);
     if recorder_after.is_some() && recorder_after != recorder_before {
         outcome.inputs = read_log(&recorder_path).map(|log| crate::recorder::inputs(root, &log));

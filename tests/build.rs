@@ -48,6 +48,49 @@ fn engine_directives_use_the_root_comment_and_respect_explicit_configuration() {
 }
 
 #[test]
+#[cfg(unix)]
+fn unchanged_pdf_is_accepted_only_when_it_is_not_older_than_the_source() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    let output = directory.path().join("build/latex-lsp");
+    std::fs::create_dir_all(&output).unwrap();
+    let pdf = output.join("main.pdf");
+    std::fs::write(&main, "Original\n").unwrap();
+    std::fs::write(&pdf, "%PDF-1.4\n").unwrap();
+    let now = std::time::SystemTime::now();
+    std::fs::File::open(&main)
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(now - Duration::from_secs(120)))
+        .unwrap();
+    std::fs::File::open(&pdf)
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(now - Duration::from_secs(60)))
+        .unwrap();
+    let config = BuildConfig {
+        executable: "/bin/sh".into(),
+        arguments: Some(vec!["-c".into(), "exit 0".into()]),
+        ..Default::default()
+    };
+    let fresh = build::run(&main, &config, &AtomicBool::new(false));
+    assert_eq!(fresh.status, "success", "{}", fresh.message);
+    assert!(!fresh.pdf_updated);
+    std::fs::write(&main, "Changed before compilation\n").unwrap();
+    let outdated = build::run(&main, &config, &AtomicBool::new(false));
+    assert_eq!(outdated.status, "error");
+    assert!(outdated.pdf.is_none());
+    assert!(outdated.message.contains("outdated PDF"));
+    assert!(outdated
+        .diagnostics
+        .values()
+        .flatten()
+        .any(|diagnostic| diagnostic.severity == Some(DiagnosticSeverity::ERROR)));
+    assert!(
+        pdf.is_file(),
+        "the previous PDF should remain available on disk"
+    );
+}
+
+#[test]
 fn root_detection_follows_includes_magic_comments_and_explicit_configuration() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
