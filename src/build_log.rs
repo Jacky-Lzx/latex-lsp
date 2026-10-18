@@ -7,6 +7,23 @@ use std::{
 };
 use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range, Url};
 
+const AUXILIARY_EXTENSIONS: &[&str] = &[
+    "aux", "bbl", "toc", "lof", "lot", "out", "nav", "snm", "vrb",
+];
+
+fn log_extensions() -> impl Iterator<Item = &'static str> {
+    crate::workspace::SOURCE_EXTENSIONS
+        .iter()
+        .copied()
+        .chain(AUXILIARY_EXTENSIONS.iter().copied())
+}
+
+fn log_source(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| log_extensions().any(|candidate| candidate == extension))
+}
+
 /// TeX's byte-based print width can split a UTF-8 scalar across a line break.
 /// Remove a break only when the surrounding bytes form a valid scalar.
 pub(crate) fn decode_output(bytes: &[u8]) -> Cow<'_, str> {
@@ -108,12 +125,7 @@ fn numbered_error(line: &str) -> Option<(&str, u32, &str)> {
         let (number, message) = tail.split_once(':')?;
         if let Ok(number) = number.parse::<u32>() {
             let path = line[..colon].trim();
-            if [
-                ".tex", ".sty", ".cls", ".clo", ".def", ".bib", ".bst", ".ltx",
-            ]
-            .iter()
-            .any(|ext| path.trim_matches('"').ends_with(ext))
-            {
+            if log_source(Path::new(path.trim_matches('"'))) {
                 return Some((path, number, message.trim()));
             }
         }
@@ -310,7 +322,7 @@ fn emit(
     result: &mut BTreeMap<Url, Vec<Diagnostic>>,
     path: &Path,
     line: u32,
-    message: String,
+    mut message: String,
     severity: DiagnosticSeverity,
 ) {
     let Ok(uri) = Url::from_file_path(path) else {
@@ -330,6 +342,17 @@ fn emit(
     let source = std::fs::read_to_string(path).unwrap_or_default();
     let text = Text::new(source);
     let last_line = text.text_line_count().saturating_sub(1) as u32;
+    let reported_line = line;
+    let rewritten = line.saturating_sub(1) > last_line
+        && path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| AUXILIARY_EXTENSIONS.contains(&extension));
+    if rewritten {
+        message.push_str(&format!(
+            " (reported line {reported_line} is no longer present in the generated file)"
+        ));
+    }
     let line = line.saturating_sub(1).min(last_line);
     let value = text.source.lines().nth(line as usize).unwrap_or("");
     let start = value
@@ -368,6 +391,7 @@ fn emit(
                     .or_else(|| missing_include_key(&message).map(|_| "missing-include"))
                     .map(|code| NumberOrString::String(code.into())),
                 message: message.clone(),
+                data: rewritten.then(|| serde_json::json!({"reportedLine":reported_line})),
                 ..Default::default()
             }
         }));
@@ -400,18 +424,26 @@ fn message_boundary(line: &str) -> bool {
             .strip_prefix("l.")
             .is_some_and(|tail| tail.starts_with(|ch: char| ch.is_ascii_digit()))
         || line.starts_with(')')
-        || line.starts_with('(')
-            && [".tex", ".sty", ".cls", ".clo", ".def", ".ltx"]
-                .iter()
-                .any(|extension| line.contains(extension))
 }
 
-fn wrapped_message(lines: &[&str], i: &mut usize) -> String {
+fn wrapped_message(root: &Path, lines: &[&str], i: &mut usize) -> String {
     let mut message = lines[*i].trim().to_owned();
     while !message.ends_with(['.', '!']) && *i + 1 < lines.len() && message.len() < 4096 {
         let next = lines[*i + 1];
         if next.trim().is_empty() || message_boundary(next) {
             break;
+        }
+        if next.trim_start().starts_with('(') {
+            let mut next_index = *i + 1;
+            let announcement = continued_file_line(root, lines, &mut next_index);
+            if announcement
+                .trim_start()
+                .strip_prefix('(')
+                .and_then(|tail| stack_file(root, tail))
+                .is_some()
+            {
+                break;
+            }
         }
         *i += 1;
         message.push(' ');
@@ -424,7 +456,7 @@ fn stack_file(root: &Path, tail: &str) -> Option<(PathBuf, usize)> {
     if let Some(quoted) = tail.strip_prefix('"') {
         let end = quoted.find('"')?;
         let name = &quoted[..end];
-        return crate::workspace::is_source(Path::new(name))
+        return log_source(Path::new(name))
             .then(|| location(root, name))
             .flatten()
             .map(|path| (path, end + 2));
@@ -436,7 +468,7 @@ fn stack_file(root: &Path, tail: &str) -> Option<(PathBuf, usize)> {
         .match_indices('.')
         .take_while(|(index, _)| *index < 4096)
     {
-        for extension in crate::workspace::SOURCE_EXTENSIONS {
+        for extension in log_extensions() {
             let end = dot + 1 + extension.len();
             if tail.get(dot + 1..end) != Some(extension)
                 || tail[end..]
@@ -562,7 +594,7 @@ pub fn parse(root: &Path, log: &str) -> BTreeMap<Url, Vec<Diagnostic>> {
         } else if warning_start(line) || line.starts_with("Missing character:") {
             let path = current();
             // TeX wraps warnings at its configured print width.
-            let message = wrapped_message(&lines, &mut i);
+            let message = wrapped_message(root, &lines, &mut i);
             let number = input_line(&message).unwrap_or(1);
             emit(
                 &mut result,
