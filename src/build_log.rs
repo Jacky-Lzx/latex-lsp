@@ -45,6 +45,53 @@ fn input_line(message: &str) -> Option<u32> {
         .ok()
 }
 
+fn undefined_reference_ranges(text: &Text, line: u32, message: &str) -> Vec<Range> {
+    if !message.contains("undefined") {
+        return vec![];
+    }
+    let (citation, tail) = if let Some((_, tail)) = message.split_once("Reference `") {
+        (false, tail)
+    } else if let Some((_, tail)) = message.split_once("Citation `") {
+        (true, tail)
+    } else {
+        return vec![];
+    };
+    let Some((key, _)) = tail
+        .rsplit_once("' on ")
+        .or_else(|| tail.rsplit_once("' undefined"))
+    else {
+        return vec![];
+    };
+    let syntax = crate::syntax::Syntax::latex(text);
+    let mut ranges = Vec::new();
+    for command in &syntax.commands {
+        if !(if citation {
+            crate::syntax::is_citation(&command.name)
+        } else {
+            crate::syntax::is_reference(&command.name)
+        }) {
+            continue;
+        }
+        let Some(argument) = &command.argument else {
+            continue;
+        };
+        if text.position(command.span.start).line > line
+            || text.position(argument.span.end).line < line
+        {
+            continue;
+        }
+        let mut start = argument.span.start;
+        for value in argument.value.split(',') {
+            let span = crate::syntax::trimmed_span(&text.source, start..start + value.len());
+            if &text.source[span.clone()] == key {
+                ranges.push(text.range(span.start, span.end));
+            }
+            start += value.len() + 1;
+        }
+    }
+    ranges
+}
+
 fn emit(
     result: &mut BTreeMap<Url, Vec<Diagnostic>>,
     path: &Path,
@@ -77,16 +124,23 @@ fn emit(
         .map(char::len_utf16)
         .sum::<usize>() as u32;
     let end = value.encode_utf16().count() as u32;
-    result.entry(uri).or_default().push(Diagnostic {
-        range: Range::new(
+    let mut ranges = undefined_reference_ranges(&text, line, &message);
+    if ranges.is_empty() {
+        ranges.push(Range::new(
             Position::new(line, start.min(end)),
             Position::new(line, end),
-        ),
-        severity: Some(severity),
-        source: Some("latex-build".into()),
-        message,
-        ..Default::default()
-    });
+        ));
+    }
+    result
+        .entry(uri)
+        .or_default()
+        .extend(ranges.into_iter().map(|range| Diagnostic {
+            range,
+            severity: Some(severity),
+            source: Some("latex-build".into()),
+            message: message.clone(),
+            ..Default::default()
+        }));
 }
 
 fn warning_start(line: &str) -> bool {
@@ -612,6 +666,39 @@ mod tests {
                 .line,
             2
         );
+    }
+
+    #[test]
+    fn undefined_references_highlight_keys_in_lists_multiline_calls_and_utf16_text() {
+        let directory = tempfile::tempdir().unwrap();
+        let main = directory.path().join("main.tex");
+        let source = "😀 \\ref{missing} \\cref{found, missing} \\cite{lost}\n% \\ref{missing}\n\\verb|\\ref{missing}|\n\\ref{\nmissing}\n\\ref{O'Connor}\n";
+        std::fs::write(&main, source).unwrap();
+        let log = "(./main.tex\nLaTeX Warning: Reference `missing' on page 1 undefined on input line 1.\nPackage natbib Warning: Citation `lost' on page 1 undefined on input line 1.\nLaTeX Warning: Reference `missing' on page 1 undefined on input line 2.\nLaTeX Warning: Reference `missing' on page 1 undefined on input line 3.\nLaTeX Warning: Reference `missing' on page 1 undefined on input line 5.\nLaTeX Warning: Reference `O'Connor' undefined on input line 6.\n)";
+        let diagnostics = parse(&main, log);
+        let diagnostics = &diagnostics[&Url::from_file_path(&main).unwrap()];
+        assert_eq!(diagnostics.len(), 7, "{diagnostics:?}");
+        let text = Text::new(source.into());
+        let value = |range: Range| {
+            &source[text.offset(range.start).unwrap()..text.offset(range.end).unwrap()]
+        };
+        let first: Vec<_> = diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.range.start.line == 0)
+            .collect();
+        assert_eq!(first.len(), 3);
+        assert_eq!(first[0].range.start.character, 8);
+        assert_eq!(
+            first
+                .iter()
+                .map(|diagnostic| value(diagnostic.range))
+                .collect::<Vec<_>>(),
+            vec!["missing", "missing", "lost"]
+        );
+        assert_eq!(value(diagnostics[3].range), "% \\ref{missing}");
+        assert_eq!(value(diagnostics[4].range), "\\verb|\\ref{missing}|");
+        assert_eq!(value(diagnostics[5].range), "missing");
+        assert_eq!(value(diagnostics[6].range), "O'Connor");
     }
 
     #[test]

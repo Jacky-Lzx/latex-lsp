@@ -570,3 +570,35 @@ fn real_definition_file_warnings_with_spaces_and_parentheses_keep_their_source_c
             .contains("Wrapped filename warning")
     );
 }
+
+#[test]
+#[ignore = "requires latexmk and a TeX installation"]
+fn real_undefined_reference_and_citation_warnings_highlight_only_the_missing_keys() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    let chapter = directory.path().join("chapter.tex");
+    std::fs::write(
+        &main,
+        "\\documentclass{article}\n\\begin{document}\n\\input{chapter}\n\\end{document}\n",
+    )
+    .unwrap();
+    let source = "See \\ref{missing} and \\cite{lost}.\n";
+    std::fs::write(&chapter, source).unwrap();
+    let outcome = build::run(&main, &Default::default(), &Default::default());
+    assert_eq!(
+        outcome.status, "success",
+        "{}\n{}",
+        outcome.message, outcome.output
+    );
+    let diagnostics = &outcome.diagnostics[&Url::from_file_path(&chapter).unwrap()];
+    let text = latex_lsp::text::Text::new(source.into());
+    let values: Vec<_> = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.message.contains("undefined"))
+        .map(|diagnostic| {
+            &source[text.offset(diagnostic.range.start).unwrap()
+                ..text.offset(diagnostic.range.end).unwrap()]
+        })
+        .collect();
+    assert_eq!(values, vec!["missing", "lost"], "{:?}", outcome.diagnostics);
+}
