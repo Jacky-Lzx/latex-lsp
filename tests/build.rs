@@ -46,6 +46,24 @@ fn root_detection_follows_includes_magic_comments_and_explicit_configuration() {
 }
 
 #[test]
+fn root_magic_comments_inside_verbatim_are_ignored() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    let other = directory.path().join("other.tex");
+    std::fs::write(
+        &main,
+        "\\documentclass{article}\n\\begin{verbatim}\n% !TeX root = other.tex\n\\end{verbatim}\n",
+    )
+    .unwrap();
+    std::fs::write(&other, "Other").unwrap();
+    let mut workspace = Workspace::default();
+    workspace.add_root(directory.path().into());
+    let uri = Url::from_file_path(&main).unwrap();
+    assert_eq!(workspace.root_document(&uri).unwrap(), uri);
+    assert!(latex_lsp::navigation::document_links(&workspace, &uri).is_empty());
+}
+
+#[test]
 fn project_refresh_follows_updated_children_packages_and_root_relative_dependencies() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
@@ -206,7 +224,7 @@ fn cancellation_and_timeout_terminate_the_compiler_process_group() {
         let worker_cancel = cancel.clone();
         let started = Instant::now();
         let worker = std::thread::spawn(move || build::run(&main, &config, &worker_cancel));
-        let pid_file = directory.path().join(".latex-lsp/child.pid");
+        let pid_file = directory.path().join("build/latex-lsp/child.pid");
         while !pid_file.is_file() {
             assert!(started.elapsed() < Duration::from_secs(5));
             std::thread::sleep(Duration::from_millis(10));
@@ -243,6 +261,36 @@ fn cancellation_and_timeout_terminate_the_compiler_process_group() {
                 std::thread::sleep(Duration::from_millis(10));
             }
         }
+    }
+}
+
+#[test]
+#[ignore = "requires latexmk, BibTeX and a TeX installation"]
+fn real_bibliography_supports_configured_hidden_and_external_output_directories() {
+    let directory = tempfile::tempdir().unwrap();
+    let external = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    std::fs::write(&main,"\\documentclass{article}\n\\begin{document}\n\\cite{example}\n\\bibliographystyle{plain}\n\\bibliography{references}\n\\end{document}").unwrap();
+    std::fs::write(
+        directory.path().join("references.bib"),
+        "@book{example,author={A},title={Example},year={2025},publisher={P}}",
+    )
+    .unwrap();
+    for output_directory in [
+        ".custom-output".into(),
+        external.path().to_string_lossy().into_owned(),
+    ] {
+        let config = BuildConfig {
+            output_directory,
+            ..Default::default()
+        };
+        let outcome = build::run(&main, &config, &AtomicBool::new(false));
+        assert_eq!(
+            outcome.status, "success",
+            "{}\n{}",
+            outcome.message, outcome.output
+        );
+        assert!(outcome.pdf.unwrap().is_file());
     }
 }
 

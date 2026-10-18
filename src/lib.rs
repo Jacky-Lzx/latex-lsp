@@ -4,6 +4,7 @@ pub mod catalog;
 pub mod config;
 pub mod editing;
 pub mod features;
+pub mod file_operations;
 pub mod navigation;
 pub mod syntax;
 pub mod text;
@@ -16,6 +17,19 @@ use std::sync::{
 use tokio::sync::RwLock;
 use tower_lsp::{jsonrpc::Result, lsp_types::*, Client, LanguageServer};
 use workspace::{Document, Workspace};
+
+fn file_operation_options() -> FileOperationRegistrationOptions {
+    FileOperationRegistrationOptions {
+        filters: vec![FileOperationFilter {
+            scheme: Some("file".into()),
+            pattern: FileOperationPattern {
+                glob: "**/*".into(),
+                matches: None,
+                options: None,
+            },
+        }],
+    }
+}
 
 pub struct Backend {
     client: Client,
@@ -186,7 +200,11 @@ impl LanguageServer for Backend {
                         supported: Some(true),
                         change_notifications: Some(OneOf::Left(true)),
                     }),
-                    ..Default::default()
+                    file_operations: Some(WorkspaceFileOperationsServerCapabilities {
+                        will_rename: Some(file_operation_options()),
+                        did_rename: Some(file_operation_options()),
+                        ..Default::default()
+                    }),
                 }),
                 ..Default::default()
             },
@@ -364,6 +382,47 @@ impl LanguageServer for Backend {
                 "Unknown command: {}",
                 params.command
             ))),
+        }
+    }
+
+    async fn will_rename_files(&self, params: RenameFilesParams) -> Result<Option<WorkspaceEdit>> {
+        file_operations::will_rename(&*self.workspace.read().await, &params.files)
+    }
+
+    async fn did_rename_files(&self, params: RenameFilesParams) {
+        match file_operations::Renames::new(&params.files) {
+            Ok(renames) => self.builds.files_renamed(&renames).await,
+            Err(error) => {
+                self.client
+                    .log_message(MessageType::WARNING, error.message)
+                    .await;
+                return;
+            }
+        }
+        let mut workspace = self.workspace.write().await;
+        match file_operations::did_rename(&mut workspace, &params.files) {
+            Ok(affected) => {
+                let diagnostics = affected
+                    .into_iter()
+                    .map(|uri| {
+                        let version = workspace.documents.get(&uri).and_then(|doc| doc.version);
+                        let diagnostics = workspace.diagnostics(&uri);
+                        (uri, diagnostics, version)
+                    })
+                    .collect::<Vec<_>>();
+                drop(workspace);
+                for (uri, diagnostics, version) in diagnostics {
+                    self.client
+                        .publish_diagnostics(uri, diagnostics, version)
+                        .await;
+                }
+            }
+            Err(error) => {
+                drop(workspace);
+                self.client
+                    .log_message(MessageType::WARNING, error.message)
+                    .await;
+            }
         }
     }
 

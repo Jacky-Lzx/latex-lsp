@@ -36,6 +36,37 @@ impl Document {
     }
 }
 
+/// The first real magic comment in the first 20 lines, excluding raw content.
+pub fn root_directive(doc: &Document) -> Option<crate::syntax::Argument> {
+    let mut offset = 0;
+    for line in doc.text.source.split_inclusive('\n').take(20) {
+        let trimmed = line.trim_start();
+        let comment_start = offset + line.len() - trimmed.len();
+        if (doc.bibtex
+            || doc
+                .syntax
+                .ignored
+                .iter()
+                .any(|span| span.start == comment_start))
+            && trimmed.starts_with('%')
+        {
+            if let Some((name, value)) = trimmed[1..].trim().split_once('=') {
+                if name.trim().eq_ignore_ascii_case("!tex root") {
+                    let value = value.trim().trim_matches('"');
+                    let start = offset + line.find('=').unwrap() + 1;
+                    let start = start + line[start - offset..].find(value).unwrap();
+                    return Some(crate::syntax::Argument {
+                        value: value.into(),
+                        span: start..start + value.len(),
+                    });
+                }
+            }
+        }
+        offset += line.len();
+    }
+    None
+}
+
 #[derive(Default)]
 pub struct Workspace {
     pub documents: BTreeMap<Url, Document>,
@@ -154,32 +185,20 @@ impl Workspace {
             if !visited.insert(root.clone()) {
                 return Err("Cyclic TeX root directives".into());
             }
-            let text = self
+            let disk = if self.documents.contains_key(&root) {
+                None
+            } else {
+                root.to_file_path()
+                    .ok()
+                    .and_then(|path| std::fs::read_to_string(path).ok())
+                    .map(|text| Document::new(&root, text, None))
+            };
+            let doc = self
                 .documents
                 .get(&root)
-                .map(|doc| doc.text.source.clone())
-                .or_else(|| {
-                    root.to_file_path()
-                        .ok()
-                        .and_then(|path| std::fs::read_to_string(path).ok())
-                });
-            let Some(text) = text else {
-                return Err("Save the document before compiling".into());
-            };
-            let magic = text
-                .lines()
-                .take(20)
-                .filter_map(|line| {
-                    let (name, value) = line
-                        .trim_start()
-                        .strip_prefix('%')?
-                        .trim()
-                        .split_once('=')?;
-                    name.trim()
-                        .eq_ignore_ascii_case("!tex root")
-                        .then(|| value.trim().trim_matches('"'))
-                })
-                .next();
+                .or(disk.as_ref())
+                .ok_or("Save the document before compiling")?;
+            let magic = root_directive(doc);
             if let Some(magic) = magic {
                 let parent = root
                     .to_file_path()
@@ -187,7 +206,7 @@ impl Workspace {
                     .parent()
                     .ok_or("Invalid root path")?
                     .to_path_buf();
-                root = file_uri(&parent.join(magic))?;
+                root = file_uri(&parent.join(magic.value))?;
             } else {
                 if root != *uri {
                     return Ok(root);

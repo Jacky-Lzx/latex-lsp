@@ -1,6 +1,6 @@
 use crate::{
     features, syntax,
-    workspace::{resolve_path, Document, Workspace},
+    workspace::{resolve_path, root_directive, Document, Workspace},
 };
 use std::{collections::BTreeSet, ops::Range as Span};
 use tower_lsp::lsp_types::*;
@@ -227,6 +227,16 @@ pub fn document_links(workspace: &Workspace, uri: &Url) -> Vec<DocumentLink> {
         return vec![];
     };
     let mut links = Vec::new();
+    if let Some(directive) = root_directive(doc) {
+        if let Some(target) = resolve_path(uri, &directive.value, "tex") {
+            links.push(DocumentLink {
+                range: doc.text.range(directive.span.start, directive.span.end),
+                target: Some(target),
+                tooltip: Some("TeX root document".into()),
+                data: None,
+            });
+        }
+    }
     for command in &doc.syntax.commands {
         let Some(argument) = &command.argument else {
             continue;

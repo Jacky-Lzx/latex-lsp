@@ -298,6 +298,31 @@ fn background_build_keeps_requests_responsive_and_publishes_compiler_results() {
 
 #[test]
 #[cfg(unix)]
+fn moving_build_inputs_cancels_the_old_build_before_handling_new_requests() {
+    let (mut server, directory, uri) = fake_build_server("sleep 30\n", false);
+    let started = server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[uri]}),
+    );
+    let renamed = Url::from_file_path(directory.path().join("renamed.tex")).unwrap();
+    std::fs::rename(uri.to_file_path().unwrap(), renamed.to_file_path().unwrap()).unwrap();
+    server.notify(
+        "workspace/didRenameFiles",
+        json!({"files":[{"oldUri":uri,"newUri":renamed}]}),
+    );
+    let symbols = server.request(3, "workspace/symbol", json!({"query":"Title"}));
+    assert_eq!(symbols[0]["location"]["uri"], renamed.as_str());
+    let finished = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(finished["params"]["buildId"], started["buildId"]);
+    assert_eq!(finished["params"]["status"], "cancelled");
+    server.request(4, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
 fn unsaved_local_packages_are_rejected_and_package_changes_make_build_results_stale() {
     let (mut server, directory, uri) = fake_build_server(
         "sleep 0.2\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\n",
@@ -346,7 +371,7 @@ fn repeated_saves_during_a_build_compile_the_latest_saved_content_once_more() {
         "workspace/executeCommand",
         json!({"command":"latex.build","arguments":[uri]}),
     );
-    let output = directory.path().join(".latex-lsp");
+    let output = directory.path().join("build/latex-lsp");
     let deadline = std::time::Instant::now() + Duration::from_secs(3);
     while !output.join("ready").exists() {
         assert!(
@@ -696,6 +721,72 @@ fn rename_prepares_ranges_and_returns_versioned_cross_file_edits() {
         .unwrap();
     assert!(closed["textDocument"]["version"].is_null());
     server.request(4, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+fn file_rename_requests_update_references_and_preserve_open_document_versions() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = Url::from_directory_path(directory.path()).unwrap();
+    let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+    let child = Url::from_file_path(directory.path().join("child.tex")).unwrap();
+    let renamed = Url::from_file_path(directory.path().join("renamed.tex")).unwrap();
+    let source = "\\documentclass{article}\n\\input{child}\n\\ref{sec:x}\n";
+    std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+    std::fs::write(child.to_file_path().unwrap(), "\\label{sec:x}").unwrap();
+    let mut server = Server::start();
+    let init = server.request(1,"initialize",json!({"processId":null,"rootUri":root,"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true},"fileOperations":{"willRename":true,"didRename":true}}}}));
+    assert_eq!(
+        init["capabilities"]["workspace"]["fileOperations"]["willRename"]["filters"][0]["scheme"],
+        "file"
+    );
+    server.notify("initialized", json!({}));
+    for (uri, source, version) in [(&main, source, 1), (&child, "\\label{sec:x}", 4)] {
+        server.notify("textDocument/didOpen",json!({"textDocument":{"uri":uri,"languageId":"latex","version":version,"text":source}}));
+        server.until(|message| {
+            message["method"] == "textDocument/publishDiagnostics"
+                && message["params"]["uri"] == uri.as_str()
+        });
+    }
+    let files = json!({"files":[{"oldUri":child,"newUri":renamed}]});
+    let edit = server.request(2, "workspace/willRenameFiles", files.clone());
+    assert_eq!(
+        edit["documentChanges"][0]["textDocument"]["uri"],
+        main.as_str()
+    );
+    assert_eq!(edit["documentChanges"][0]["textDocument"]["version"], 1);
+    assert_eq!(edit["documentChanges"][0]["edits"][0]["newText"], "renamed");
+    let source = source.replace("{child}", "{renamed}");
+    std::fs::write(main.to_file_path().unwrap(), &source).unwrap();
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+    );
+    std::fs::rename(
+        child.to_file_path().unwrap(),
+        renamed.to_file_path().unwrap(),
+    )
+    .unwrap();
+    server.notify("workspace/didRenameFiles", files);
+    let symbols = server.request(3, "workspace/symbol", json!({"query":"sec:x"}));
+    assert_eq!(symbols[0]["location"]["uri"], renamed.as_str());
+    let rename = server.request(4,"textDocument/rename",json!({"textDocument":{"uri":renamed},"position":{"line":0,"character":9},"newName":"sec:new"}));
+    let documents = rename["documentChanges"].as_array().unwrap();
+    assert_eq!(
+        documents
+            .iter()
+            .find(|doc| doc["textDocument"]["uri"] == renamed.as_str())
+            .unwrap()["textDocument"]["version"],
+        4
+    );
+    let definition = server.request(
+        5,
+        "textDocument/definition",
+        json!({"textDocument":{"uri":main},"position":{"line":2,"character":8}}),
+    );
+    assert_eq!(definition[0]["uri"], renamed.as_str());
+    server.request(6, "shutdown", Value::Null);
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }

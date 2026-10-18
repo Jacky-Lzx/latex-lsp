@@ -125,6 +125,32 @@ fn links_and_definitions_select_individual_files_and_ignore_comments() {
 }
 
 #[test]
+fn magic_root_links_select_the_real_directive_and_support_definition_jumps() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join("main.tex"),
+        "\\documentclass{article}",
+    )
+    .unwrap();
+    let uri = Url::from_file_path(directory.path().join("child.tex")).unwrap();
+    let source = "  % !tEx root = \"main.tex\"\r\n% !TeX root = missing.tex\r\nBody";
+    let mut workspace = Workspace::default();
+    insert(&mut workspace, &uri, source);
+    let links = navigation::document_links(&workspace, &uri);
+    assert_eq!(links.len(), 1);
+    let text = &workspace.documents[&uri].text;
+    assert_eq!(
+        &source
+            [text.offset(links[0].range.start).unwrap()..text.offset(links[0].range.end).unwrap()],
+        "main.tex"
+    );
+    assert_eq!(
+        features::definitions(&workspace, &uri, links[0].range.start)[0].uri,
+        *links[0].target.as_ref().unwrap()
+    );
+}
+
+#[test]
 fn child_file_links_fall_back_to_the_project_root() {
     let directory = tempfile::tempdir().unwrap();
     std::fs::create_dir(directory.path().join("sections")).unwrap();

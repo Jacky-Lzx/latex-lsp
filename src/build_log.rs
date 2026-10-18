@@ -209,11 +209,25 @@ pub fn parse_bibliography(root: &Path, log: &str) -> BTreeMap<Url, Vec<Diagnosti
             location(root, name)
         })
         .collect();
+    let mut previous = "";
     for line in log.lines() {
         if let Some((message, tail)) = line.split_once("---line ") {
             if let Some((number, name)) = tail.split_once(" of file ") {
                 if let Ok(number) = number.trim().parse::<u32>() {
-                    let path = location(root, name).unwrap_or_else(|| root.into());
+                    let location = location(root, name).filter(|path| {
+                        matches!(
+                            path.extension().and_then(|ext| ext.to_str()),
+                            Some("tex" | "bib" | "sty" | "cls")
+                        )
+                    });
+                    let (path, number) = location
+                        .map(|path| (path, number))
+                        .unwrap_or_else(|| (root.into(), 1));
+                    let message = if message.trim().is_empty() {
+                        previous
+                    } else {
+                        message
+                    };
                     emit(
                         &mut result,
                         &path,
@@ -224,6 +238,19 @@ pub fn parse_bibliography(root: &Path, log: &str) -> BTreeMap<Url, Vec<Diagnosti
                     continue;
                 }
             }
+        }
+        if !line.trim().is_empty() {
+            previous = line.trim();
+        }
+        if let Some((message, _)) = line.split_once("---while reading file ") {
+            emit(
+                &mut result,
+                root,
+                1,
+                format!("BibTeX: {}", message.trim()),
+                DiagnosticSeverity::ERROR,
+            );
+            continue;
         }
         let (message, severity, tool) = if let Some(message) = line.strip_prefix("Warning--") {
             (message, DiagnosticSeverity::WARNING, "BibTeX")
@@ -355,6 +382,15 @@ mod tests {
         assert_eq!(diagnostics[0].range.start.line, 1);
         assert_eq!(diagnostics[1].range.start.line, 2);
         assert!(diagnostics[1].message.starts_with("Biber:"));
+        let diagnostics = parse_bibliography(&main,"I couldn't open database file missing.bib\n---line 4 of file main.aux\nI found no database files---while reading file main.aux\n");
+        let diagnostics = &diagnostics[&Url::from_file_path(&main).unwrap()];
+        assert_eq!(diagnostics.len(), 2);
+        assert!(diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("couldn't open database file missing.bib")));
+        assert!(diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.range.start.line == 0));
     }
 
     #[test]

@@ -420,9 +420,6 @@ pub fn definitions(workspace: &Workspace, uri: &Url, position: Position) -> Vec<
     let Some(offset) = doc.text.offset(position) else {
         return vec![];
     };
-    if doc.syntax.is_ignored(offset) {
-        return vec![];
-    }
     for link in crate::navigation::document_links(workspace, uri) {
         if link.range.start <= position && position <= link.range.end {
             if let Some(uri) = link.target.filter(|uri| uri.scheme() == "file") {
@@ -432,6 +429,9 @@ pub fn definitions(workspace: &Workspace, uri: &Url, position: Position) -> Vec<
                 }];
             }
         }
+    }
+    if doc.syntax.is_ignored(offset) {
+        return vec![];
     }
     let Some(target) = target(doc, offset) else {
         return vec![];

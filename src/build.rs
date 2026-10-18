@@ -38,6 +38,7 @@ struct Record {
     result: Option<Value>,
     queued: Option<Url>,
     cancel_generation: u64,
+    inputs: BTreeSet<Url>,
 }
 
 #[derive(Clone)]
@@ -143,6 +144,7 @@ impl BuildManager {
                 );
             }
             record.active = Some((build_id, cancel.clone()));
+            record.inputs = snapshots.keys().cloned().collect();
             self.tasks.fetch_add(1, Ordering::SeqCst);
         }
         self.launch(
@@ -400,6 +402,35 @@ impl BuildManager {
         loop {
             let finished = self.idle.notified();
             if self.tasks.load(Ordering::SeqCst) == 0 {
+                break;
+            }
+            finished.await;
+        }
+    }
+
+    pub async fn files_renamed(&self, renames: &crate::file_operations::Renames) {
+        let mut builds = BTreeSet::new();
+        {
+            let mut state = self.state.lock().unwrap();
+            for (root, record) in state.iter_mut() {
+                if renames.affects(root) || record.inputs.iter().any(|uri| renames.affects(uri)) {
+                    record.queued = None;
+                    record.cancel_generation = record.cancel_generation.wrapping_add(1);
+                    if let Some((id, cancel)) = &record.active {
+                        cancel.store(true, Ordering::Relaxed);
+                        builds.insert(*id);
+                    }
+                }
+            }
+        }
+        loop {
+            let finished = self.idle.notified();
+            if !self.state.lock().unwrap().values().any(|record| {
+                record
+                    .active
+                    .as_ref()
+                    .is_some_and(|(id, _)| builds.contains(id))
+            }) {
                 break;
             }
             finished.await;

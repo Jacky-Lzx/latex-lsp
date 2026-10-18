@@ -22,7 +22,7 @@ impl Default for BuildConfig {
         Self {
             executable: "latexmk".into(),
             arguments: None,
-            output_directory: ".latex-lsp".into(),
+            output_directory: "build/latex-lsp".into(),
             root_file: None,
             on_save: false,
             timeout_seconds: 120,
@@ -76,6 +76,7 @@ impl BuildConfig {
             ],
             _ => &[
                 "-pdf",
+                "-nobibfudge",
                 "-interaction=nonstopmode",
                 "-file-line-error",
                 "-synctex=1",
@@ -84,10 +85,26 @@ impl BuildConfig {
                 "%f",
             ],
         };
-        arguments
+        let mut arguments: Vec<String> = arguments
             .iter()
             .map(|argument| (*argument).into())
-            .collect()
+            .collect();
+        // BibTeX's default file policy rejects hidden or parent-relative output
+        // paths. Keep latexmk's directory workaround for explicitly configured
+        // paths that need it; ordinary in-project paths can preserve source cwd.
+        let output = std::path::Path::new(&self.output_directory);
+        let needs_fudge = output.is_absolute() || output.components().any(|component| {
+            matches!(component, std::path::Component::ParentDir)
+                || matches!(component, std::path::Component::Normal(name) if name.to_str().is_some_and(|name| name.starts_with('.')))
+        });
+        if needs_fudge {
+            for argument in &mut arguments {
+                if argument == "-nobibfudge" {
+                    *argument = "-bibfudge".into();
+                }
+            }
+        }
+        arguments
     }
 }
 
@@ -110,5 +127,18 @@ mod tests {
         assert!(Config::parse(json!({"build":{"timeoutSeconds":0}})).is_err());
         assert!(Config::parse(json!({"build":{"timeoutSecond":30}})).is_err());
         assert!(Config::parse(json!({"build":{"executable":""}})).is_err());
+        assert!(BuildConfig::default()
+            .arguments()
+            .contains(&"-nobibfudge".into()));
+        let config = BuildConfig {
+            output_directory: ".latex-lsp".into(),
+            ..Default::default()
+        };
+        assert!(config.arguments().contains(&"-bibfudge".into()));
+        let config = BuildConfig {
+            output_directory: "../output".into(),
+            ..Default::default()
+        };
+        assert!(config.arguments().contains(&"-bibfudge".into()));
     }
 }
