@@ -296,10 +296,16 @@ pub(crate) fn undefined_reference_ranges(text: &Text, line: u32, message: &str) 
     for command in &syntax.commands {
         if !(if citation {
             crate::syntax::is_citation(&command.name)
-        } else if command.name == "hyperref" {
-            hyper_link
+        } else if hyper_link {
+            command.name == "hyperref"
+                || matches!(command.name.as_str(), "Ref" | "autopageref")
+                    && text
+                        .source
+                        .as_bytes()
+                        .get(crate::syntax::skip_space(&text.source, command.span.end))
+                        != Some(&b'*')
         } else {
-            !hyper_link
+            command.name != "hyperref"
                 && (crate::syntax::warns_on_undefined_reference(&command.name)
                     || crate::syntax::is_counter_reference(&command.name))
         }) {

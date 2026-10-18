@@ -573,6 +573,9 @@ fn active_parameter(
 ) -> Option<usize> {
     let source = &doc.text.source;
     let mut i = end;
+    if signature.starred {
+        i = syntax::skip_space(source, i);
+    }
     if signature.starred && source.as_bytes().get(i) == Some(&b'*') {
         i += 1;
     }

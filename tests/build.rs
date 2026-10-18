@@ -1064,3 +1064,75 @@ fn real_hyperref_warnings_select_bracketed_labels_and_clear_after_repair() {
         }
     }
 }
+
+#[test]
+#[cfg(unix)]
+#[ignore = "requires pdflatex, xelatex, lualatex, hyperref and refcount"]
+fn real_capitalized_and_named_page_reference_warnings_distinguish_starred_calls_and_getters() {
+    for engine in ["pdflatex", "xelatex", "lualatex"] {
+        for file_line in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let main = root.join("main.tex");
+            let child = root.join("chapter.tex");
+            std::fs::write(&main, "\\documentclass{article}\\usepackage{hyperref}\\usepackage{refcount}\\begin{document}\\input{chapter}\\end{document}\n").unwrap();
+            let source = concat!(
+                "\\Ref{lost-upper}\n",
+                "\\Ref * {lost-star}\n",
+                "\\autopageref{lost-page}\n",
+                "\\autopageref * {lost-page-star}\n",
+                "\\Ref*{same} \\hyperref[same]{Link} \\getrefnumber{same}\n",
+            );
+            std::fs::write(&child, source).unwrap();
+            let mut arguments = vec![
+                "-interaction=nonstopmode".into(),
+                "-output-directory=%o".into(),
+                "%f".into(),
+            ];
+            if file_line {
+                arguments.insert(0, "-file-line-error".into());
+            }
+            let executable = if engine == "lualatex" {
+                script(root, "TEXMFVAR=\"${0%/*}/tex-cache\"\nTEXMFCACHE=\"$TEXMFVAR\"\nexport TEXMFVAR TEXMFCACHE\nmkdir -p \"$TEXMFVAR\"\nexec lualatex \"$@\"")
+            } else {
+                engine.into()
+            };
+            let config = BuildConfig {
+                executable,
+                arguments: Some(arguments),
+                ..Default::default()
+            };
+            let result = build::run(&main, &config, &Default::default());
+            assert_eq!(result.status, "success", "{engine}: {}", result.output);
+            let diagnostics: Vec<_> = result.diagnostics[&Url::from_file_path(&child).unwrap()]
+                .iter()
+                .filter(|diagnostic| diagnostic.message.contains("undefined"))
+                .collect();
+            assert_eq!(diagnostics.len(), 8, "{engine}: {diagnostics:?}");
+            let text = latex_lsp::text::Text::new(source.into());
+            for diagnostic in diagnostics {
+                let value = &source[text.offset(diagnostic.range.start).unwrap()
+                    ..text.offset(diagnostic.range.end).unwrap()];
+                assert!(
+                    matches!(
+                        value,
+                        "lost-upper" | "lost-star" | "lost-page" | "lost-page-star" | "same"
+                    ),
+                    "{engine}: {diagnostic:?}"
+                );
+                if diagnostic.range.start.line == 4 {
+                    let line = source.lines().nth(4).unwrap();
+                    let offset = if diagnostic.message.contains("Hyper reference") {
+                        line.find("[same]").unwrap() + 1
+                    } else {
+                        line.find("{same}").unwrap() + 1
+                    };
+                    assert_eq!(
+                        diagnostic.range.start.character, offset as u32,
+                        "{engine}: {diagnostic:?}"
+                    );
+                }
+            }
+        }
+    }
+}

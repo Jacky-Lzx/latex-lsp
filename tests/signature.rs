@@ -138,11 +138,25 @@ fn refcount_queries_offer_label_field_default_and_branch_parameters() {
     );
     assert_eq!(item.insert_text_format, Some(InsertTextFormat::SNIPPET));
     for name in [
-        "ref", "pageref", "autoref", "nameref", "vref", "cref", "Cref",
+        "ref",
+        "Ref",
+        "pageref",
+        "autopageref",
+        "autoref",
+        "nameref",
+        "vref",
+        "cref",
+        "Cref",
     ] {
         check(
             "",
             &format!("\\{name}*{{key¦}}"),
+            &format!("\\{name}{{keys}}"),
+            0,
+        );
+        check(
+            "",
+            &format!("\\{name} % star\n * {{key¦}}"),
             &format!("\\{name}{{keys}}"),
             0,
         );

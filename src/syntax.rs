@@ -224,7 +224,17 @@ pub fn is_reference(name: &str) -> bool {
 pub(crate) fn warns_on_undefined_reference(name: &str) -> bool {
     matches!(
         name,
-        "ref" | "eqref" | "pageref" | "autoref" | "cref" | "Cref" | "vref" | "nameref" | "refused"
+        "ref"
+            | "Ref"
+            | "eqref"
+            | "pageref"
+            | "autopageref"
+            | "autoref"
+            | "cref"
+            | "Cref"
+            | "vref"
+            | "nameref"
+            | "refused"
     )
 }
 
@@ -235,7 +245,15 @@ pub(crate) fn is_single_reference(name: &str) -> bool {
 pub(crate) fn reference_accepts_star(name: &str) -> bool {
     matches!(
         name,
-        "ref" | "pageref" | "autoref" | "nameref" | "vref" | "cref" | "Cref"
+        "ref"
+            | "Ref"
+            | "pageref"
+            | "autopageref"
+            | "autoref"
+            | "nameref"
+            | "vref"
+            | "cref"
+            | "Cref"
     )
 }
 
@@ -755,7 +773,8 @@ impl Syntax {
                     }
                     let name = &source[name_start..i];
                     let command_end = i;
-                    if name != "input" && bytes.get(i) == Some(&b'*') {
+                    let starred = name != "input" && bytes.get(i) == Some(&b'*');
+                    if starred {
                         i += 1;
                     }
                     if matches!(name, "verb" | "lstinline") {
@@ -781,6 +800,12 @@ impl Syntax {
                         continue;
                     }
                     let mut arg_start = skip_space(source, i);
+                    if !starred
+                        && reference_accepts_star(name)
+                        && bytes.get(arg_start) == Some(&b'*')
+                    {
+                        arg_start = skip_space(source, arg_start + 1);
+                    }
                     if name != "input" {
                         while let Some((_, end)) = group(source, arg_start, b'[', b']') {
                             arg_start = skip_space(source, end);

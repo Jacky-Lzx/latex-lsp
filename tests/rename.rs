@@ -409,6 +409,57 @@ fn real_hyperdef_label_renames_keep_the_pdf_destination_and_resolve_custom_links
 }
 
 #[test]
+fn capitalized_and_named_page_references_navigate_and_rename_both_star_forms() {
+    let mut workspace = Workspace::default();
+    let declaration = insert(
+        &mut workspace,
+        "chapter.tex",
+        r"\label{sec:old}\label{ sec:old }",
+        None,
+    );
+    let source = r"\Ref{sec:old}\Ref*{sec:old}\autopageref{sec:old}\autopageref * {sec:old}\Ref{ sec:old }\autopageref{ sec:old }";
+    let main = insert(&mut workspace, "main.tex", source, Some(3));
+    let text = &workspace.documents[&main].text;
+    for (at, _) in source.match_indices("{sec:old}") {
+        let position = text.position(at + 3);
+        assert_eq!(
+            features::definitions(&workspace, &main, position)[0].uri,
+            declaration
+        );
+        assert_eq!(
+            features::references(&workspace, &main, position, false).len(),
+            4
+        );
+        let changes = features::rename(&workspace, &main, position, "sec:new")
+            .unwrap()
+            .unwrap()
+            .changes
+            .unwrap();
+        assert_eq!(
+            edits_result(source, &changes[&main]),
+            source.replace("{sec:old}", "{sec:new}")
+        );
+        assert_eq!(
+            edits_result(
+                &workspace.documents[&declaration].text.source,
+                &changes[&declaration]
+            ),
+            r"\label{sec:new}\label{ sec:old }"
+        );
+    }
+    for source in [r"\Ref**{sec:old}", r"\autopageref * * {sec:old}"] {
+        let uri = insert(&mut workspace, "invalid.tex", source, None);
+        let position = workspace.documents[&uri]
+            .text
+            .position(source.find("sec:old").unwrap() + 3);
+        assert!(features::definitions(&workspace, &uri, position).is_empty());
+        assert!(features::prepare_rename(&workspace, &uri, position)
+            .unwrap()
+            .is_none());
+    }
+}
+
+#[test]
 fn refcount_queries_navigate_complete_and_rename_only_the_label_argument() {
     for (command, tail) in [
         ("getrefnumber", ""),

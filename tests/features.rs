@@ -99,6 +99,17 @@ fn completion_in_the_middle_replaces_the_remaining_word() {
         "@book{knuth1984, title={The TeXbook}}",
     );
     for (marked, label, expected) in [
+        (r"\Ref*{ sec:|旧 }", "sec:中文", r"\Ref*{sec:中文}"),
+        (
+            r"\autopageref{ sec:|旧 }",
+            "sec:中文",
+            r"\autopageref{sec:中文}",
+        ),
+        (
+            r"\autopageref * { sec:|旧 }",
+            "sec:中文",
+            r"\autopageref * {sec:中文}",
+        ),
         (
             r"\hyperref[{sec:|旧}]{Link}",
             "sec:中文",

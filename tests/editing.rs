@@ -133,6 +133,48 @@ fn hyperref_label_fixes_preserve_link_text_and_reject_forged_text_ranges() {
 }
 
 #[test]
+fn capitalized_and_named_page_reference_fixes_match_the_warning_kinds_each_star_form_emits() {
+    for command in ["Ref", "Ref *", "autopageref", "autopageref *"] {
+        for hyper_warning in [false, true] {
+            let source = format!("\\label{{sec:intro}}\n\\{command}{{sec:itnro}}\n");
+            let (mut workspace, uri) = setup(&source, true);
+            let start = source.find("sec:itnro").unwrap();
+            let diagnostic = Diagnostic {
+                range: workspace.documents[&uri].text.range(start, start + 9),
+                source: Some("latex-build".into()),
+                message: format!(
+                    "LaTeX Warning: {} `sec:itnro' on page 1 undefined on input line 2.",
+                    if hyper_warning {
+                        "Hyper reference"
+                    } else {
+                        "Reference"
+                    }
+                ),
+                ..Default::default()
+            };
+            workspace.build_diagnostics.insert(
+                uri.clone(),
+                [(uri.clone(), vec![diagnostic.clone()])].into(),
+            );
+            let actions = editing::code_actions(
+                &workspace,
+                &uri,
+                diagnostic.range,
+                &context(vec![diagnostic.clone()]),
+            );
+            if hyper_warning && command.contains('*') {
+                assert!(actions.is_empty(), "{command}: {actions:?}");
+            } else {
+                assert_eq!(actions.len(), 1, "{command}: {actions:?}");
+                let edit = action_edit(&actions[0], &uri);
+                assert_eq!(edit.range, diagnostic.range);
+                assert_eq!(edit.new_text, "sec:intro");
+            }
+        }
+    }
+}
+
+#[test]
 fn refcount_assignment_label_fixes_select_the_second_argument_and_reject_counter_ranges() {
     for command in [
         "setcounterref",
