@@ -23,7 +23,7 @@ struct Target<'a> {
     span: Span<usize>,
 }
 
-fn target(doc: &Document, offset: usize) -> Option<Target<'_>> {
+fn raw_target(doc: &Document, offset: usize) -> Option<Target<'_>> {
     if doc.syntax.is_ignored(offset) {
         return None;
     }
@@ -85,6 +85,30 @@ fn target(doc: &Document, offset: usize) -> Option<Target<'_>> {
     None
 }
 
+fn target<'a>(workspace: &'a Workspace, uri: &Url, offset: usize) -> Option<Target<'a>> {
+    let doc = workspace.documents.get(uri)?;
+    if doc.syntax.is_ignored(offset) {
+        return None;
+    }
+    let raw = raw_target(doc, offset);
+    if raw
+        .as_ref()
+        .is_some_and(|target| target.kind != TargetKind::Command)
+    {
+        return raw;
+    }
+    if let Some((name, span)) =
+        crate::theorem::target(workspace, &workspace.symbol_scope(uri), doc, offset)
+    {
+        return Some(Target {
+            kind: TargetKind::Environment,
+            name,
+            span,
+        });
+    }
+    raw
+}
+
 fn entries(doc: &Document, kind: TargetKind) -> &[Entry] {
     match kind {
         TargetKind::Label => &doc.syntax.labels,
@@ -105,7 +129,7 @@ fn rename_target<'a>(
     let Some(target) = doc
         .text
         .offset(position)
-        .and_then(|offset| target(doc, offset))
+        .and_then(|offset| target(workspace, uri, offset))
     else {
         return Ok(None);
     };
@@ -240,6 +264,11 @@ pub fn rename(
         return Err(tower_lsp::jsonrpc::Error::invalid_params(format!(
             "The name `{new_name}` is already defined"
         )));
+    }
+    if target.kind == TargetKind::Environment {
+        if let Some(theorem) = crate::theorem::in_scope(workspace, &scope, target.name) {
+            crate::theorem::validate(workspace, &scope, target.name, new_name, theorem)?;
+        }
     }
     let replacement = if target.kind == TargetKind::Command {
         format!("\\{new_name}")
@@ -574,7 +603,7 @@ pub fn definitions(workspace: &Workspace, uri: &Url, position: Position) -> Vec<
     if doc.syntax.is_ignored(offset) {
         return vec![];
     }
-    let Some(target) = target(doc, offset) else {
+    let Some(target) = target(workspace, uri, offset) else {
         return vec![];
     };
     let scope = workspace.symbol_scope(uri);
@@ -606,7 +635,7 @@ pub fn references(
     let Some(target) = doc
         .text
         .offset(position)
-        .and_then(|offset| target(doc, offset))
+        .and_then(|offset| target(workspace, uri, offset))
     else {
         return vec![];
     };
@@ -648,12 +677,27 @@ fn all_references(
     let Some(target) = doc
         .text
         .offset(position)
-        .and_then(|offset| target(doc, offset))
+        .and_then(|offset| target(workspace, uri, offset))
     else {
         return vec![];
     };
+    let theorem = if target.kind == TargetKind::Environment {
+        crate::theorem::in_scope(workspace, &workspace.symbol_scope(uri), target.name)
+    } else {
+        None
+    };
     let mut result = Vec::new();
     for (uri, doc) in &workspace.documents {
+        if let Some(theorem) = theorem {
+            result.extend(
+                crate::theorem::references(doc, target.name, theorem)
+                    .into_iter()
+                    .map(|reference| Location {
+                        uri: uri.clone(),
+                        range: doc.text.range(reference.span.start, reference.span.end),
+                    }),
+            );
+        }
         if target.kind == TargetKind::Citation {
             result.extend(
                 doc.syntax
@@ -728,7 +772,7 @@ fn all_references(
 
 pub fn hover(workspace: &Workspace, uri: &Url, position: Position) -> Option<Hover> {
     let doc = workspace.documents.get(uri)?;
-    let target = target(doc, doc.text.offset(position)?)?;
+    let target = target(workspace, uri, doc.text.offset(position)?)?;
     let scope = workspace.symbol_scope(uri);
     let mut value = None;
     for (entry_uri, entry_doc) in &workspace.documents {

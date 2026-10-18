@@ -16,6 +16,7 @@ pub mod signature;
 pub mod synctex;
 pub mod syntax;
 pub mod text;
+mod theorem;
 pub mod workspace;
 
 use std::sync::{
