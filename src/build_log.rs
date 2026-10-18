@@ -362,6 +362,36 @@ pub(crate) fn undefined_environment_name(message: &str) -> Option<&str> {
     crate::syntax::is_static_key(name).then_some(name)
 }
 
+pub(crate) fn undefined_counter_name(message: &str) -> Option<&str> {
+    let tail = message.strip_prefix("LaTeX Error: No counter ")?;
+    let name = tail
+        .strip_prefix('\'')
+        .or_else(|| tail.strip_prefix('`'))?
+        .strip_suffix("' defined.")?
+        .trim();
+    crate::syntax::is_static_key(name).then_some(name)
+}
+
+fn undefined_counter_range(text: &Text, line: u32, context: &str, name: &str) -> Option<Range> {
+    let prefix = context.trim_end();
+    let shortened = shortened_context(prefix);
+    let start = text.offset(Position::new(line, 0))?;
+    let syntax = crate::syntax::Syntax::latex(text);
+    let mut matches = syntax.commands.iter().filter_map(|command| {
+        let (span, tail) = crate::counters::invocation(&text.source, command)?;
+        if text.source[span.clone()] != *name || text.position(tail.end).line != line {
+            return None;
+        }
+        let consumed = &text.source[start..tail.end];
+        let matched = shortened.map_or(consumed == prefix, |suffix| {
+            suffix.ends_with(&text.source[tail]) && consumed.ends_with(suffix)
+        });
+        matched.then(|| text.range(span.start, span.end))
+    });
+    let range = matches.next()?;
+    matches.next().is_none().then_some(range)
+}
+
 struct EnvironmentError<'a> {
     command: &'static str,
     name: &'a str,
@@ -528,6 +558,11 @@ fn emit_with_context(
         .filter(|_| reported_line.checked_sub(1) == Some(line))
         .and_then(|error| environment_name_range(&text, line, context?, error));
     ranges.extend(environment_range);
+    let counter_name = undefined_counter_name(&message);
+    let counter_range = counter_name
+        .filter(|_| reported_line.checked_sub(1) == Some(line))
+        .and_then(|name| undefined_counter_range(&text, line, context?, name));
+    ranges.extend(counter_range);
     let command_name = command_range.and_then(|range| {
         let start = text.offset(range.start)?;
         let end = text.offset(range.end)?;
@@ -562,6 +597,7 @@ fn emit_with_context(
                     .or_else(|| missing_include_key(&message).map(|_| "missing-include"))
                     .or_else(|| command_range.map(|_| "undefined-control-sequence"))
                     .or_else(|| environment_range.and(environment.as_ref()).map(|error| error.code))
+                    .or_else(|| counter_range.map(|_| "undefined-counter"))
                     .map(|code| NumberOrString::String(code.into())),
                 message: message.clone(),
                 data: rewritten
@@ -574,7 +610,8 @@ fn emit_with_context(
                                 Some(expected) => serde_json::json!({"environment":error.name,"expectedEnvironment":expected}),
                                 None => serde_json::json!({"environment":error.name}),
                             })
-                    }),
+                    })
+                    .or_else(|| counter_range.and(counter_name).map(|name| serde_json::json!({"counter":name}))),
                 ..Default::default()
             }
         }));

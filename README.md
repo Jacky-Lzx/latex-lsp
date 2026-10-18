@@ -39,6 +39,8 @@
 
 `LaTeX Error: Environment ... undefined.` 同样可精确标出 `begin` 的环境名称，识别标准 LaTeX 帮助提示、多行参数与同一行的多处调用。截断上下文必须唯一匹配完整参数；动态名称、宏展开、忽略区域和源码不匹配时保留整行位置。精确诊断附带 `undefined-environment` 代码及环境名称数据。
 
+`LaTeX Error: No counter '...' defined.` 可精确标出 `setcounter` / `addtocounter`、`stepcounter` / `refstepcounter` / `usecounter` 的静态计数器名称，保留数值表达式；兼容传统引号、多行参数和同一行的多处调用。宏展开、动态或残缺实参以及无法唯一核对的日志上下文保留整行位置，精确诊断附带 `undefined-counter` 代码及计数器名称数据。
+
 `begin` 被不同名称的 `end` 闭合时，编译诊断会精确标出当前闭合名称，并以 `mismatched-environment-end` 代码附带实际名称与期望环境；识别带起始行号的 LaTeX 消息。同一行的多处闭合错误分别保留，宏展开或上下文不确定时保留整行位置。
 
 此类精确诊断可提供“闭合期望环境”的快速修复，只修改当前 `end` 名称。日志中的期望环境必须与同一文档的静态嵌套栈一致；未定义环境造成的连带错误、动态栈、先前交叉闭合、忽略区域及过期请求均不提供该修复。

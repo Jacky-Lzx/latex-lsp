@@ -31,6 +31,30 @@ pub(crate) const BUILTINS: &[&str] = &[
     "tocdepth",
 ];
 
+/// Name selection and the complete argument tail of a direct counter operation.
+/// Keep value expressions intact and leave unbraced or computed names unresolved.
+pub(crate) fn invocation(source: &str, command: &Command) -> Option<(Range<usize>, Range<usize>)> {
+    let value = match command.name.as_str() {
+        "setcounter" | "addtocounter" => true,
+        "stepcounter" | "refstepcounter" | "usecounter" => false,
+        _ => return None,
+    };
+    let (argument, mut end) = syntax::group(
+        source,
+        syntax::skip_space(source, command.span.end),
+        b'{',
+        b'}',
+    )?;
+    let span = syntax::trimmed_span(source, argument.span);
+    if !syntax::is_static_key(&source[span.clone()]) {
+        return None;
+    }
+    if value {
+        end = syntax::group(source, syntax::skip_space(source, end), b'{', b'}')?.1;
+    }
+    Some((span, argument.outer_span.start..end))
+}
+
 fn names(workspace: &Workspace, scope: &BTreeSet<Url>) -> BTreeMap<String, String> {
     let mut names: BTreeMap<_, _> = BUILTINS
         .iter()
