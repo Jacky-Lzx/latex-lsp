@@ -251,9 +251,8 @@ impl Workspace {
         visited
     }
 
-    pub(crate) fn symbol_projects(&self, uri: &Url) -> SymbolProjects {
-        let regions: BTreeMap<_, _> = self
-            .documents
+    pub(crate) fn saved_projects(&self) -> BTreeMap<Url, BTreeSet<Url>> {
+        self.documents
             .iter()
             .filter(|(uri, doc)| {
                 is_root(doc)
@@ -266,7 +265,11 @@ impl Workspace {
                     })
             })
             .map(|(root, _)| (root.clone(), self.project_documents(root)))
-            .collect();
+            .collect()
+    }
+
+    pub(crate) fn symbol_projects(&self, uri: &Url) -> SymbolProjects {
+        let regions = self.saved_projects();
         let selected = self.root_document(uri).ok().filter(|root| {
             regions.contains_key(root) || *root != *uri || self.config.build.root_file.is_some()
         });
@@ -301,12 +304,33 @@ impl Workspace {
         self.symbol_projects(uri).scope
     }
 
+    pub(crate) fn source_roots(&self, uri: &Url) -> Vec<Url> {
+        self.source_roots_in(uri, &self.saved_projects())
+    }
+
+    pub(crate) fn source_roots_in(
+        &self,
+        uri: &Url,
+        regions: &BTreeMap<Url, BTreeSet<Url>>,
+    ) -> Vec<Url> {
+        let roots: Vec<_> = regions
+            .iter()
+            .filter(|(_, project)| project.contains(uri))
+            .map(|(root, _)| root.clone())
+            .collect();
+        if roots.is_empty() {
+            vec![self.root_document(uri).unwrap_or_else(|_| uri.clone())]
+        } else {
+            roots
+        }
+    }
+
     /// Saved sources and image dependencies used by builds and artifact checks.
     pub fn project_files(&self, root: &Url) -> BTreeSet<Url> {
         let mut files = self.project_documents(root);
         let images: BTreeSet<_> = files
             .iter()
-            .flat_map(|uri| crate::graphics::images(self, uri))
+            .flat_map(|uri| crate::graphics::images_in(self, uri, root))
             .collect();
         files.extend(images);
         files

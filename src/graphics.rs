@@ -19,6 +19,26 @@ pub fn is_image(path: &std::path::Path) -> bool {
 
 /// Keep binary dependencies out of the text index while sharing link resolution.
 pub fn images(workspace: &Workspace, uri: &Url) -> BTreeSet<Url> {
+    collect_images(
+        workspace,
+        uri,
+        crate::navigation::document_links(workspace, uri),
+    )
+}
+
+pub(crate) fn images_in(workspace: &Workspace, uri: &Url, root: &Url) -> BTreeSet<Url> {
+    collect_images(
+        workspace,
+        uri,
+        crate::navigation::document_links_in(workspace, uri, root),
+    )
+}
+
+fn collect_images(
+    workspace: &Workspace,
+    uri: &Url,
+    links: Vec<tower_lsp::lsp_types::DocumentLink>,
+) -> BTreeSet<Url> {
     let Some(doc) = workspace.documents.get(uri) else {
         return BTreeSet::new();
     };
@@ -33,7 +53,7 @@ pub fn images(workspace: &Workspace, uri: &Url) -> BTreeSet<Url> {
     if ranges.is_empty() {
         return BTreeSet::new();
     }
-    crate::navigation::document_links(workspace, uri)
+    links
         .into_iter()
         .filter(|link| {
             ranges
@@ -59,25 +79,14 @@ pub fn declarations(workspace: &Workspace, uri: &Url) -> Vec<Directory> {
     }) {
         return vec![];
     }
-    let origins: Vec<_> = workspace
-        .symbol_projects(uri)
-        .regions
-        .into_iter()
-        .filter(|(_, project)| project.contains(uri))
-        .map(|(root, _)| root)
-        .collect();
-    let origins = if origins.is_empty() {
-        vec![workspace.root_document(uri).unwrap_or_else(|_| uri.clone())]
-    } else {
-        origins
-    };
+    let origins = workspace.source_roots(uri);
     origins
         .iter()
         .flat_map(|origin| declarations_in(workspace, uri, origin))
         .collect()
 }
 
-fn declarations_in(workspace: &Workspace, uri: &Url, origin: &Url) -> Vec<Directory> {
+pub(crate) fn declarations_in(workspace: &Workspace, uri: &Url, origin: &Url) -> Vec<Directory> {
     let Some(doc) = workspace.documents.get(uri) else {
         return vec![];
     };
@@ -134,18 +143,35 @@ fn declarations_in(workspace: &Workspace, uri: &Url, origin: &Url) -> Vec<Direct
 }
 
 pub fn directories(workspace: &Workspace, uri: &Url) -> Vec<PathBuf> {
-    let root = workspace.root_document(uri).unwrap_or_else(|_| uri.clone());
-    let project = workspace.project_documents(&root);
+    if let Ok(root) = workspace.root_document(uri) {
+        return directories_in(workspace, uri, &root);
+    }
+    let mut result = Vec::new();
+    for root in workspace.source_roots(uri) {
+        for directory in directories_in(workspace, uri, &root) {
+            if !result.contains(&directory) {
+                result.push(directory);
+            }
+            if result.len() >= 256 {
+                return result;
+            }
+        }
+    }
+    result
+}
+
+pub(crate) fn directories_in(workspace: &Workspace, uri: &Url, root: &Url) -> Vec<PathBuf> {
+    let project = workspace.project_documents(root);
     let mut seen = BTreeSet::new();
     let mut result = Vec::new();
     for document in std::iter::once(uri)
-        .chain(std::iter::once(&root))
+        .chain(std::iter::once(root))
         .chain(project.iter())
     {
         if !seen.insert(document.clone()) {
             continue;
         }
-        for directory in declarations_in(workspace, document, &root) {
+        for directory in declarations_in(workspace, document, root) {
             if directory.path.is_dir() && !result.contains(&directory.path) {
                 result.push(directory.path);
             }

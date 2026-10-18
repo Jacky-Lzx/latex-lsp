@@ -350,3 +350,189 @@ fn invalid_batches_and_unrepresentable_references_are_rejected() {
         .unwrap()
         .is_none());
 }
+
+fn shared_inputs_project(root: &Path) -> Workspace {
+    std::fs::write(
+        root.join("shared.tex"),
+        "\\input{setup}\n\\includegraphics[width=1cm]{plot}\n",
+    )
+    .unwrap();
+    for name in ["a", "b"] {
+        std::fs::create_dir(root.join(name)).unwrap();
+        std::fs::create_dir(root.join(format!("{name}/book"))).unwrap();
+        std::fs::write(root.join(format!("{name}/main.tex")),"\\documentclass{article}\n\\usepackage{graphicx}\n\\begin{document}\n\\input{../shared}\n\\end{document}\n").unwrap();
+        std::fs::write(
+            root.join(format!("{name}/setup.tex")),
+            "Project settings.\n",
+        )
+        .unwrap();
+        std::fs::write(root.join(format!("{name}/plot.pdf")), "pdf").unwrap();
+    }
+    let mut workspace = Workspace::default();
+    workspace.add_root(root.into());
+    workspace
+}
+
+#[test]
+fn shared_file_links_do_not_choose_arbitrary_targets_and_build_inputs_use_the_calling_root() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let mut workspace = shared_inputs_project(root);
+    let shared = uri(root, "shared.tex");
+    assert!(latex_lsp::navigation::document_links(&workspace, &shared).is_empty());
+    for (name, other) in [("a", "b"), ("b", "a")] {
+        let inputs = workspace.project_files(&uri(root, &format!("{name}/main.tex")));
+        assert!(inputs.contains(&uri(root, &format!("{name}/plot.pdf"))));
+        assert!(!inputs.contains(&uri(root, &format!("{other}/plot.pdf"))));
+    }
+    let source = format!(
+        "{}\\url{{https://example.test/}}",
+        workspace.documents[&shared].text.source
+    );
+    workspace
+        .documents
+        .insert(shared.clone(), Document::new(&shared, source, Some(1)));
+    let links = latex_lsp::navigation::document_links(&workspace, &shared);
+    assert_eq!(links.len(), 1);
+    assert_eq!(
+        links[0].target.as_ref().unwrap().as_str(),
+        "https://example.test/"
+    );
+    let doc = &workspace.documents[&shared];
+    let position = doc
+        .text
+        .position(doc.text.source.find("setup").unwrap() + 3);
+    let items = latex_lsp::features::completion(&workspace, &shared, position);
+    assert!(items.iter().any(|item| item.label == "setup.tex"));
+}
+
+#[test]
+fn shared_input_and_image_file_edits_require_agreement_from_all_consumers() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let workspace = shared_inputs_project(root);
+    let shared = uri(root, "shared.tex");
+    for files in [
+        vec![rename(root, "a/setup.tex", "a/config.tex")],
+        vec![rename(root, "a/plot.pdf", "a/chart.pdf")],
+        vec![rename(root, "a/main.tex", "a/book/main.tex")],
+    ] {
+        assert!(file_operations::will_rename(&workspace, &files)
+            .unwrap_err()
+            .message
+            .contains("different replacements"));
+    }
+    let files = [
+        rename(root, "a/setup.tex", "a/config.tex"),
+        rename(root, "b/setup.tex", "b/config.tex"),
+    ];
+    let changes = edits(
+        file_operations::will_rename(&workspace, &files)
+            .unwrap()
+            .unwrap(),
+    );
+    assert_eq!(changes[&shared].len(), 1);
+    assert_eq!(
+        apply(
+            &workspace.documents[&shared].text.source,
+            changes[&shared].clone()
+        ),
+        "\\input{config}\n\\includegraphics[width=1cm]{plot}\n"
+    );
+    let files = [
+        rename(root, "a/plot.pdf", "a/chart.pdf"),
+        rename(root, "b/plot.pdf", "b/chart.pdf"),
+    ];
+    let changes = edits(
+        file_operations::will_rename(&workspace, &files)
+            .unwrap()
+            .unwrap(),
+    );
+    assert_eq!(changes[&shared].len(), 1);
+    assert!(apply(
+        &workspace.documents[&shared].text.source,
+        changes[&shared].clone()
+    )
+    .contains("{chart}"));
+}
+
+#[test]
+fn shared_file_reference_missing_in_one_project_cannot_be_rewritten_for_another() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let workspace = shared_inputs_project(root);
+    std::fs::remove_file(root.join("b/setup.tex")).unwrap();
+    let error =
+        file_operations::will_rename(&workspace, &[rename(root, "a/setup.tex", "a/config.tex")])
+            .unwrap_err();
+    assert!(error.message.contains("consistently"), "{error}");
+}
+
+#[test]
+#[ignore = "requires latexmk and a TeX installation"]
+fn both_projects_compile_after_shared_input_and_image_paths_are_rebased() {
+    let image = tempfile::tempdir().unwrap();
+    std::fs::write(
+        image.path().join("image.tex"),
+        "\\documentclass{article}\\begin{document}Image\\end{document}",
+    )
+    .unwrap();
+    let image_build = latex_lsp::build::run(
+        &image.path().join("image.tex"),
+        &Default::default(),
+        &Default::default(),
+    );
+    assert_eq!(image_build.status, "success", "{}", image_build.output);
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let mut workspace = shared_inputs_project(root);
+    for name in ["a", "b"] {
+        std::fs::copy(
+            image_build.pdf.as_ref().unwrap(),
+            root.join(format!("{name}/plot.pdf")),
+        )
+        .unwrap();
+    }
+    let files = [
+        rename(root, "a/main.tex", "a/book/main.tex"),
+        rename(root, "b/main.tex", "b/book/main.tex"),
+        rename(root, "a/setup.tex", "a/config.tex"),
+        rename(root, "b/setup.tex", "b/config.tex"),
+    ];
+    let changes = edits(
+        file_operations::will_rename(&workspace, &files)
+            .unwrap()
+            .unwrap(),
+    );
+    let shared = uri(root, "shared.tex");
+    assert_eq!(changes[&shared].len(), 2);
+    for (uri, edits) in changes {
+        let source = apply(&workspace.documents[&uri].text.source, edits);
+        std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+    }
+    for file in &files {
+        std::fs::rename(
+            Url::parse(&file.old_uri).unwrap().to_file_path().unwrap(),
+            Url::parse(&file.new_uri).unwrap().to_file_path().unwrap(),
+        )
+        .unwrap();
+    }
+    file_operations::did_rename(&mut workspace, &files).unwrap();
+    assert_eq!(
+        workspace.documents[&shared].text.source,
+        "\\input{../config}\n\\includegraphics[width=1cm]{../plot}\n"
+    );
+    for name in ["a", "b"] {
+        let outcome = latex_lsp::build::run(
+            &root.join(format!("{name}/book/main.tex")),
+            &Default::default(),
+            &Default::default(),
+        );
+        assert_eq!(
+            outcome.status, "success",
+            "{}\n{}",
+            outcome.message, outcome.output
+        );
+        assert!(outcome.pdf.unwrap().is_file());
+    }
+}

@@ -81,12 +81,12 @@ fn relative_path(parent: &Path, target: &Path) -> PathBuf {
 }
 
 fn replacement(
-    workspace: &Workspace,
     renames: &Renames,
     uri: &Url,
     target: &Url,
     original: &str,
     graphics: &[PathBuf],
+    root: &Url,
 ) -> Result<String> {
     let target_path = target
         .to_file_path()
@@ -104,7 +104,7 @@ fn replacement(
     let origin = if resolve_path(uri, original, extension).as_ref() == Some(target) {
         uri.clone()
     } else {
-        workspace.root_document(uri).unwrap_or_else(|_| uri.clone())
+        root.clone()
     };
     let graphic_origin = if resolve_path(&origin, original, extension).as_ref() != Some(target) {
         graphics.iter().find(|directory| {
@@ -199,19 +199,23 @@ pub fn will_rename(workspace: &Workspace, files: &[FileRename]) -> Result<Option
     }
     let renames = Renames::new(files)?;
     let mut changes = BTreeMap::new();
+    let regions = workspace.saved_projects();
     for (uri, doc) in &workspace.documents {
+        let roots = workspace.source_roots_in(uri, &regions);
         let mut directories = BTreeMap::new();
-        for directory in graphics::declarations(workspace, uri) {
-            let original = &doc.text.source[directory.span.clone()];
-            let new_text = directory_replacement(&renames, &directory, original)?;
-            let span = (directory.span.start, directory.span.end);
-            if directories
-                .get(&span)
-                .is_some_and(|value| *value != new_text)
-            {
-                return Err(Error::invalid_params("Shared graphics search path would require different replacements in different projects"));
+        for root in &roots {
+            for directory in graphics::declarations_in(workspace, uri, root) {
+                let original = &doc.text.source[directory.span.clone()];
+                let new_text = directory_replacement(&renames, &directory, original)?;
+                let span = (directory.span.start, directory.span.end);
+                if directories
+                    .get(&span)
+                    .is_some_and(|value| *value != new_text)
+                {
+                    return Err(Error::invalid_params("Shared graphics search path would require different replacements in different projects"));
+                }
+                directories.insert(span, new_text);
             }
-            directories.insert(span, new_text);
         }
         for ((start, end), new_text) in directories {
             if new_text != doc.text.source[start..end] {
@@ -224,51 +228,68 @@ pub fn will_rename(workspace: &Workspace, files: &[FileRename]) -> Result<Option
                     });
             }
         }
-        let graphics = graphics::directories(workspace, uri);
-        for link in navigation::document_links(workspace, uri) {
-            let Some(target) = link.target.filter(|target| target.scheme() == "file") else {
-                continue;
-            };
-            let Some(start) = doc.text.offset(link.range.start) else {
-                continue;
-            };
-            let Some(end) = doc.text.offset(link.range.end) else {
-                continue;
-            };
-            let original = &doc.text.source[start..end];
-            // Unchanged links should retain their exact spelling and escaping.
-            let target_changed = target
-                .to_file_path()
-                .ok()
-                .is_some_and(|path| renames.path(&path) != path);
-            let document_changed = renames.uri(uri) != *uri;
-            let root_changed = workspace
-                .root_document(uri)
-                .ok()
-                .is_some_and(|root| renames.uri(&root) != root);
-            if !target_changed && !document_changed && !root_changed {
-                continue;
+        let mut links = BTreeMap::<(usize, usize), (String, usize)>::new();
+        for root in &roots {
+            let graphics = graphics::directories_in(workspace, uri, root);
+            for link in navigation::document_links_in(workspace, uri, root) {
+                let Some(target) = link.target.filter(|target| target.scheme() == "file") else {
+                    continue;
+                };
+                let (Some(start), Some(end)) = (
+                    doc.text.offset(link.range.start),
+                    doc.text.offset(link.range.end),
+                ) else {
+                    continue;
+                };
+                let original = &doc.text.source[start..end];
+                let target_changed = target
+                    .to_file_path()
+                    .ok()
+                    .is_some_and(|path| renames.path(&path) != path);
+                let document_changed = renames.affects(uri);
+                let root_changed = renames.affects(root);
+                // Retain spelling in contexts that do not require a change too:
+                // every consumer of a shared parameter must agree on its edit.
+                let new_text = if target_changed || document_changed || root_changed {
+                    let image = doc.syntax.commands.iter().any(|command| {
+                        command.name == "includegraphics"
+                            && command.argument.as_ref().is_some_and(|argument| {
+                                argument.span.start <= start && argument.span.end >= end
+                            })
+                    });
+                    replacement(
+                        &renames,
+                        uri,
+                        &target,
+                        original,
+                        if image { &graphics } else { &[] },
+                        root,
+                    )?
+                } else {
+                    original.into()
+                };
+                if let Some((previous, count)) = links.get_mut(&(start, end)) {
+                    if *previous != new_text {
+                        return Err(Error::invalid_params("Shared file reference would require different replacements in different projects"));
+                    }
+                    *count += 1;
+                } else {
+                    links.insert((start, end), (new_text, 1));
+                }
             }
-            let image = doc.syntax.commands.iter().any(|command| {
-                command.name == "includegraphics"
-                    && command.argument.as_ref().is_some_and(|argument| {
-                        argument.span.start <= start && argument.span.end >= end
-                    })
-            });
-            let new_text = replacement(
-                workspace,
-                &renames,
-                uri,
-                &target,
-                original,
-                if image { &graphics } else { &[] },
-            )?;
-            if new_text != original {
+        }
+        for ((start, end), (new_text, count)) in links {
+            if new_text != doc.text.source[start..end] {
+                if count != roots.len() {
+                    return Err(Error::invalid_params(
+                        "Shared file reference cannot be updated consistently across build roots",
+                    ));
+                }
                 changes
                     .entry(uri.clone())
                     .or_insert_with(Vec::new)
                     .push(TextEdit {
-                        range: link.range,
+                        range: doc.text.range(start, end),
                         new_text,
                     });
             }

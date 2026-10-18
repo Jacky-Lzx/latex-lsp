@@ -2,7 +2,11 @@ use crate::{
     features, syntax,
     workspace::{resolve_path, root_directive, Document, Workspace},
 };
-use std::{collections::BTreeSet, ops::Range as Span, path::PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ops::Range as Span,
+    path::PathBuf,
+};
 use tower_lsp::lsp_types::*;
 
 pub fn workspace_symbols(workspace: &Workspace, query: &str) -> Vec<SymbolInformation> {
@@ -211,14 +215,13 @@ fn unescape(value: &str) -> String {
 }
 
 fn file_link(
-    workspace: &Workspace,
     uri: &Url,
     name: &str,
     extensions: &[&str],
     graphics: &[PathBuf],
+    root: &Url,
 ) -> Option<Url> {
-    let root = workspace.root_document(uri).ok();
-    for origin in std::iter::once(uri).chain(root.as_ref().filter(|root| *root != uri)) {
+    for origin in std::iter::once(uri).chain(std::iter::once(root).filter(|root| *root != uri)) {
         for extension in extensions {
             if let Some(target) = resolve_path(origin, name, extension) {
                 return Some(target);
@@ -236,6 +239,35 @@ fn file_link(
 }
 
 pub fn document_links(workspace: &Workspace, uri: &Url) -> Vec<DocumentLink> {
+    if !workspace.documents.contains_key(uri) {
+        return vec![];
+    }
+    if let Ok(root) = workspace.root_document(uri) {
+        return document_links_in(workspace, uri, &root);
+    }
+    let roots = workspace.source_roots(uri);
+    if roots.len() == 1 {
+        return document_links_in(workspace, uri, &roots[0]);
+    }
+    let mut links = BTreeMap::<(Position, Position), (DocumentLink, usize, bool)>::new();
+    for root in &roots {
+        for link in document_links_in(workspace, uri, root) {
+            links
+                .entry((link.range.start, link.range.end))
+                .and_modify(|(first, count, conflict)| {
+                    *count += 1;
+                    *conflict |= first.target != link.target;
+                })
+                .or_insert((link, 1, false));
+        }
+    }
+    links
+        .into_values()
+        .filter_map(|(link, count, conflict)| (count == roots.len() && !conflict).then_some(link))
+        .collect()
+}
+
+pub(crate) fn document_links_in(workspace: &Workspace, uri: &Url, root: &Url) -> Vec<DocumentLink> {
     let Some(doc) = workspace.documents.get(uri) else {
         return vec![];
     };
@@ -246,7 +278,7 @@ pub fn document_links(workspace: &Workspace, uri: &Url) -> Vec<DocumentLink> {
         .iter()
         .any(|command| command.name == "includegraphics")
     {
-        crate::graphics::directories(workspace, uri)
+        crate::graphics::directories_in(workspace, uri, root)
     } else {
         vec![]
     };
@@ -286,7 +318,6 @@ pub fn document_links(workspace: &Workspace, uri: &Url) -> Vec<DocumentLink> {
                 })
             } else {
                 file_link(
-                    workspace,
                     uri,
                     &value,
                     extensions,
@@ -295,6 +326,7 @@ pub fn document_links(workspace: &Workspace, uri: &Url) -> Vec<DocumentLink> {
                     } else {
                         &[]
                     },
+                    root,
                 )
             };
             if let Some(target) = target {

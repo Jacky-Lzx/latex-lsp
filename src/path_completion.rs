@@ -29,10 +29,13 @@ pub fn complete(
     let existing_slash = suffix.as_bytes().get(suffix_length) == Some(&b'/');
     let existing_name = &doc.text.source[span.start + separator..span.end + suffix_length];
     let range = doc.text.range(span.start, span.end + suffix_length);
-    let root = workspace.root_document(uri).ok();
+    let roots = workspace
+        .root_document(uri)
+        .map(|root| vec![root])
+        .unwrap_or_else(|_| workspace.source_roots(uri));
     let mut candidates = BTreeMap::new();
     let mut directories = std::iter::once(uri)
-        .chain(root.as_ref().filter(|root| *root != uri))
+        .chain(roots.iter().filter(|root| *root != uri))
         .filter_map(|origin| {
             origin
                 .to_file_path()
