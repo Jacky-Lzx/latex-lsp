@@ -16,6 +16,9 @@ fn snippets_expand_in_a_real_editor_without_consuming_tex_backslashes() {
     for (name, expected) in [
         ("newcommand", r"newcommand{\name}[1]{definition}"),
         ("renewcommand", r"renewcommand{\name}{definition}"),
+        ("newrobustcmd", r"newrobustcmd{\name}{definition}"),
+        ("renewrobustcmd", r"renewrobustcmd{\name}{definition}"),
+        ("providerobustcmd", r"providerobustcmd{\name}{definition}"),
         (
             "NewDocumentCommand",
             r"NewDocumentCommand{\name}{m}{definition}",
@@ -63,9 +66,10 @@ fn snippets_expand_in_a_real_editor_without_consuming_tex_backslashes() {
         cases.push(serde_json::json!({"snippet":edit.new_text,"expected":expected}));
     }
     let macros = Url::parse("file:///snippets/macros.sty").unwrap();
-    workspace.documents.insert(macros.clone(),Document::new(&macros,r"\newcommand{\pair}[2][\linewidth]{#2}\NewDocumentCommand{\render}{s O{blue} m m}{#3#4}\def\texpair#1#2{#1#2}\NewDocumentEnvironment{panel}{s O{blue} m m}{#3#4}{}".into(),None));
+    workspace.documents.insert(macros.clone(),Document::new(&macros,r"\newcommand{\pair}[2][\linewidth]{#2}\newrobustcmd{\robustpair}[2][blue]{#2}\NewDocumentCommand{\render}{s O{blue} m m}{#3#4}\def\texpair#1#2{#1#2}\NewDocumentEnvironment{panel}{s O{blue} m m}{#3#4}{}".into(),None));
     for (name, expected) in [
         ("pair", "pair{arg2}"),
+        ("robustpair", "robustpair{arg2}"),
         ("render", "render{arg3}{arg4}"),
         ("texpair", "texpair{arg1}{arg2}"),
         ("panel", "panel{arg3}{arg4}"),

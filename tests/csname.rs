@@ -181,6 +181,9 @@ fn expanded_literal_definitions_index_the_resulting_name_and_preserve_declaratio
         r"\expandafter\xdef\csname hello\endcsname#1{Hello #1}",
         "\\global\\expandafter % comment\n\\def % comment\n\\csname  hello  \\endcsname#1{Hello #1}",
         r"\expandafter\newcommand\csname hello\endcsname[1]{Hello #1}",
+        r"\expandafter\newrobustcmd\csname hello\endcsname[1]{Hello #1}",
+        r"\expandafter\renewrobustcmd\csname hello\endcsname[1]{Hello #1}",
+        r"\expandafter\providerobustcmd\csname hello\endcsname[1]{Hello #1}",
         r"\expandafter\NewDocumentCommand\csname hello\endcsname{m}{Hello #1}",
     ] {
         let directory = tempfile::tempdir().unwrap();
@@ -218,6 +221,7 @@ fn computed_expanded_definitions_do_not_define_the_csname_primitive() {
     for declaration in [
         r"\expandafter\def\csname hello\suffix\endcsname{Hello}",
         r"\expandafter\newcommand\csname hello\suffix\endcsname{Hello}",
+        r"\expandafter\newrobustcmd\csname hello\suffix\endcsname{Hello}",
         "\\expandafter\\def\\csname hello% comment\n\\endcsname{Hello}",
         r"\expandafter\def\csname hello world\endcsname{Hello}",
         r"\expandafter\def\csname hello",
@@ -304,5 +308,55 @@ fn renamed_expanded_literal_definitions_and_aliases_still_compile() {
             outcome.output
         );
         assert_eq!(outcome.pages, Some(1));
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex and etoolbox"]
+fn robust_macro_renames_preserve_defaults_literal_calls_and_protected_expansion() {
+    for declaration in [
+        r"\newrobustcmd{\hello}",
+        r"\newrobustcmd*\hello",
+        r"\providerobustcmd\hello",
+        r"\expandafter\newrobustcmd\csname hello\endcsname",
+        r"\expandafter\providerobustcmd\csname hello\endcsname",
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let definitions = format!("{declaration}[2][blue]{{\\typeout{{ROBUST:#1:#2}}#2}}\n");
+        let source = "\\documentclass{article}\\usepackage{etoolbox}\\input{definitions}\n\\begin{document}\n\\hello{Default}\\hello[red]{Explicit}\\csname hello\\endcsname{Literal}\n\\edef\\protectedcall{\\hello{Protected}}\\typeout{ROBUST:before-call}\\protectedcall\n\\end{document}\n";
+        let workspace = project(
+            root,
+            &[("main.tex", source), ("definitions.tex", &definitions)],
+        );
+        let main = root.join("main.tex");
+        let config = latex_lsp::config::BuildConfig {
+            executable: "pdflatex".into(),
+            ..Default::default()
+        };
+        let before = build::run(&main, &config, &AtomicBool::new(false));
+        assert_eq!(before.status, "success", "{declaration}: {}", before.output);
+        let document = uri(root, "definitions.tex");
+        let text = &workspace.documents[&document].text;
+        let position = text.position(definitions.find("hello").unwrap() + 2);
+        for (uri, changed) in renamed(&workspace, &document, position) {
+            std::fs::write(uri.to_file_path().unwrap(), changed).unwrap();
+        }
+        let after = build::run(&main, &config, &AtomicBool::new(false));
+        assert_eq!(after.status, "success", "{declaration}: {}", after.output);
+        for output in [&before.output, &after.output] {
+            for state in [
+                "ROBUST:blue:Default",
+                "ROBUST:red:Explicit",
+                "ROBUST:blue:Literal",
+                "ROBUST:blue:Protected",
+            ] {
+                assert!(output.contains(state), "{declaration}: {state}\n{output}");
+            }
+            assert!(
+                output.find("ROBUST:before-call").unwrap()
+                    < output.find("ROBUST:blue:Protected").unwrap()
+            );
+        }
     }
 }

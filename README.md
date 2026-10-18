@@ -88,7 +88,7 @@ vim.lsp.enable('latex_lsp')
 
 输入命令参数时，可通过 `vim.lsp.buf.signature_help()` 查看签名；支持自动参数提示的插件也可使用标准 `textDocument/signatureHelp`。
 
-环境参数提示支持 `\newenvironment`、`\NewEnviron` 和 xparse 的 `\NewDocumentEnvironment` 系列定义，以及 `tabular`、`minipage`、`figure` 等常用环境；`\newtheorem` 定理提示可选标题 `[note]`。通过 `\begin{panel}` 或直接调用 `\panel` 均可查看参数，自定义环境的直接命令补全会插入必选参数的占位符并保留可选参数默认值。自定义命令与环境识别常规参数数量/默认值，以及 xparse 的 `m`、`o`、`O`、`s` 参数；复杂分隔参数和存在多个定义的名称不推断签名。
+环境参数提示支持 `\newenvironment`、`\NewEnviron` 和 xparse 的 `\NewDocumentEnvironment` 系列定义，以及 `tabular`、`minipage`、`figure` 等常用环境；`\newtheorem` 定理提示可选标题 `[note]`。通过 `\begin{panel}` 或直接调用 `\panel` 均可查看参数，自定义环境的直接命令补全会插入必选参数的占位符并保留可选参数默认值。自定义命令与环境识别常规参数数量/默认值，以及 xparse 的 `m`、`o`、`O`、`s` 参数；复杂分隔参数和存在多个定义的名称不推断签名。 etoolbox 的 `newrobustcmd` / `renewrobustcmd` / `providerobustcmd` 也支持导航、符号、补全、参数提示和跨文件重命名，识别带星号、无花括号及经 `expandafter` 展开的字面 `csname` 声明；补全保留首个可选参数的默认值。
 
 计数器操作支持命令片段、参数提示和名称补全，包括 `setcounter` / `addtocounter`、`stepcounter` / `refstepcounter`、`value` / `arabic` 等格式化命令、`counterwithin` / `counterwithout` / `numberwithin`。名称候选来自内置计数器、当前项目的 `newcounter` / `newaliascnt` 和拥有计数器的定理声明；支持新计数器、别名及定理的共享/重置参数，保留已有名称后缀、空白和其他实参。不同论文之间的候选按依赖隔离，宏生成的名称不作推断。
 

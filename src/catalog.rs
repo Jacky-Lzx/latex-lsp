@@ -623,6 +623,21 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
         "Define a robust LaTeX command.",
     ),
     (
+        "newrobustcmd",
+        "newrobustcmd{\\${1:name}}{${2:definition}}",
+        "Define an etoolbox robust command.",
+    ),
+    (
+        "renewrobustcmd",
+        "renewrobustcmd{\\${1:name}}{${2:definition}}",
+        "Redefine an etoolbox robust command.",
+    ),
+    (
+        "providerobustcmd",
+        "providerobustcmd{\\${1:name}}{${2:definition}}",
+        "Define an etoolbox robust command unless it exists.",
+    ),
+    (
         "def",
         "def\\${1:name}{${2:definition}}",
         "Define a TeX macro in the current group.",

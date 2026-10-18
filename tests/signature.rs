@@ -169,6 +169,9 @@ fn custom_newcommand_and_robust_command_signatures_follow_cross_file_declaration
         r"\renewcommand{\pair}[2][blue]{#1:#2}",
         r"\providecommand{\pair}[2][blue]{#1:#2}",
         r"\DeclareRobustCommand{\pair}[2][blue]{#1:#2}",
+        r"\newrobustcmd{\pair}[2][blue]{#1:#2}",
+        r"\renewrobustcmd*\pair[2][blue]{#1:#2}",
+        r"\providerobustcmd\pair[2][blue]{#1:#2}",
     ] {
         check(declaration, r"\pair{value¦}", r"\pair[#1=blue]{#2}", 1);
         check(declaration, r"\pair[red¦]{value}", r"\pair[#1=blue]{#2}", 0);
@@ -528,6 +531,9 @@ fn direct_environment_completions_insert_required_arguments_and_omit_optional_de
 fn expanded_literal_macro_declarations_keep_optional_defaults_and_required_parameters() {
     for declaration in [
         r"\expandafter\newcommand\csname pair\endcsname[2][blue]{#1#2}",
+        r"\expandafter\newrobustcmd\csname pair\endcsname[2][blue]{#1#2}",
+        r"\expandafter\renewrobustcmd\csname pair\endcsname[2][blue]{#1#2}",
+        r"\expandafter\providerobustcmd\csname pair\endcsname[2][blue]{#1#2}",
         r"\expandafter\NewDocumentCommand\csname pair\endcsname{O{blue}m}{#1#2}",
     ] {
         check(declaration, r"\pair{Value¦}", r"\pair[#1=blue]{#2}", 1);
