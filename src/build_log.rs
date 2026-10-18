@@ -418,6 +418,11 @@ fn emit_with_context(
     .then(|| context.and_then(|context| undefined_command_range(&text, line, context)))
     .flatten();
     ranges.extend(command_range);
+    let command_name = command_range.and_then(|range| {
+        let start = text.offset(range.start)?;
+        let end = text.offset(range.end)?;
+        text.source[start..end].strip_prefix('\\')
+    });
     if let Some(name) = missing_include_key(&message) {
         ranges.extend(missing_include_ranges(&text, name));
         // Optional package inputs also print "No file". Report chapter
@@ -448,7 +453,9 @@ fn emit_with_context(
                     .or_else(|| command_range.map(|_| "undefined-control-sequence"))
                     .map(|code| NumberOrString::String(code.into())),
                 message: message.clone(),
-                data: rewritten.then(|| serde_json::json!({"reportedLine":reported_line})),
+                data: rewritten
+                    .then(|| serde_json::json!({"reportedLine":reported_line}))
+                    .or_else(|| command_name.map(|name| serde_json::json!({"command":name}))),
                 ..Default::default()
             }
         }));

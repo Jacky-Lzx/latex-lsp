@@ -177,6 +177,110 @@ fn lowercase_unicode_uris_keep_root_detection_build_diagnostics_and_status() {
     server.wait_exit(0);
 }
 
+#[test]
+#[ignore = "requires pdflatex"]
+fn real_command_spelling_fixes_preserve_arguments_and_compile_after_repair() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let uri = Url::from_file_path(root.join("main.tex")).unwrap();
+    let source = "\\documentclass{article}\\input{definitions}\n\\begin{document}\n\\sectoin{Intro} \\reporttitel{Existing argument}\n\\end{document}\n";
+    std::fs::write(root.join("main.tex"), source).unwrap();
+    std::fs::write(
+        root.join("definitions.tex"),
+        "\\newcommand{\\reporttitle}[1]{\\textbf{#1}}\n",
+    )
+    .unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(root).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}},"textDocument":{"codeAction":{"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix"]}}}}},"initializationOptions":{"build":{"executable":"pdflatex","arguments":["-interaction=nonstopmode","-file-line-error","-output-directory=%o","%f"]}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"latex","version":1,"text":source}}),
+    );
+    server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[uri]}),
+    );
+    let finished = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(finished["params"]["errorsCount"], 2, "{finished}");
+    let published = server.until(|message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["uri"] == uri.as_str()
+            && message["params"]["diagnostics"]
+                .as_array()
+                .is_some_and(|items| {
+                    items.len() == 2
+                        && items
+                            .iter()
+                            .all(|item| item["code"] == "undefined-control-sequence")
+                })
+    });
+    let mut edits = Vec::new();
+    for (index, diagnostic) in published["params"]["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+    {
+        let actions = server.request(3 + index as u64, "textDocument/codeAction", json!({"textDocument":{"uri":uri},"range":diagnostic["range"],"context":{"diagnostics":[diagnostic],"only":["quickfix"]}}));
+        let replacement = if diagnostic["data"]["command"] == "sectoin" {
+            "\\section"
+        } else {
+            "\\reporttitle"
+        };
+        let action = actions
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|action| {
+                action["edit"]["documentChanges"][0]["edits"][0]["newText"] == replacement
+            })
+            .unwrap_or_else(|| panic!("{actions}"));
+        assert_eq!(action["isPreferred"], false);
+        let change = &action["edit"]["documentChanges"][0];
+        assert_eq!(change["textDocument"]["version"], 1);
+        edits.push(
+            serde_json::from_value::<tower_lsp::lsp_types::TextEdit>(change["edits"][0].clone())
+                .unwrap(),
+        );
+    }
+    edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
+    let repaired = latex_lsp::text::Text::new(source.into())
+        .changed(
+            edits
+                .into_iter()
+                .map(
+                    |edit| tower_lsp::lsp_types::TextDocumentContentChangeEvent {
+                        range: Some(edit.range),
+                        range_length: None,
+                        text: edit.new_text,
+                    },
+                )
+                .collect(),
+        )
+        .unwrap()
+        .source;
+    assert!(repaired.contains("\\section{Intro} \\reporttitle{Existing argument}"));
+    std::fs::write(root.join("main.tex"), &repaired).unwrap();
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"text":repaired}]}),
+    );
+    server.request(
+        5,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[uri]}),
+    );
+    let finished = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(finished["params"]["status"], "success", "{finished}");
+    assert_eq!(finished["params"]["pages"], 1);
+    assert_eq!(finished["params"]["diagnosticsCount"], 0);
+    server.request(6, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
 impl Server {
     fn start() -> Self {
         Self::start_with_env(&[])

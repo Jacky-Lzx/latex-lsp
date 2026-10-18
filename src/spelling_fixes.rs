@@ -1,7 +1,61 @@
 //! Suggest bounded spelling corrections from the diagnostic's own project.
 use crate::{build_log, syntax::QuickFix, workspace::Workspace};
 use std::collections::{BTreeMap, BTreeSet};
-use tower_lsp::lsp_types::{Range, TextEdit, Url};
+use tower_lsp::lsp_types::{Diagnostic, NumberOrString, Range, TextEdit, Url};
+
+#[derive(Clone, Copy, PartialEq)]
+enum Kind {
+    Label,
+    Citation,
+    Command,
+}
+
+fn target<'a>(
+    doc: &'a crate::workspace::Document,
+    diagnostic: &'a Diagnostic,
+) -> Option<(Kind, &'a str)> {
+    if let Some((citation, key)) = build_log::undefined_reference_key(&diagnostic.message) {
+        return build_log::undefined_reference_ranges(
+            &doc.text,
+            diagnostic.range.start.line,
+            &diagnostic.message,
+        )
+        .contains(&diagnostic.range)
+        .then_some((
+            if citation {
+                Kind::Citation
+            } else {
+                Kind::Label
+            },
+            key,
+        ));
+    }
+    if diagnostic.message != "Undefined control sequence."
+        || diagnostic.code != Some(NumberOrString::String("undefined-control-sequence".into()))
+    {
+        return None;
+    }
+    let name = diagnostic.data.as_ref()?.get("command")?.as_str()?;
+    doc.syntax
+        .commands
+        .iter()
+        .any(|command| {
+            command.name == name
+                && doc.text.range(command.span.start, command.span.end) == diagnostic.range
+        })
+        .then_some((Kind::Command, name))
+}
+
+fn valid_name(kind: Kind, name: &str) -> bool {
+    if kind == Kind::Command {
+        !name.is_empty()
+            && name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphabetic() || byte == b'@')
+    } else {
+        crate::syntax::is_static_key(name)
+    }
+}
 
 fn distance(left: &str, right: &str, limit: usize) -> Option<usize> {
     let left: Vec<_> = left.chars().take(129).collect();
@@ -52,20 +106,11 @@ pub fn fixes(workspace: &Workspace, uri: &Url, range: Range) -> Vec<QuickFix> {
             if examined > 64 {
                 return result;
             }
-            let Some((citation, key)) = build_log::undefined_reference_key(&diagnostic.message)
-            else {
+            let Some((kind, key)) = target(doc, diagnostic) else {
                 continue;
             };
             let length = key.chars().count();
-            if !(3..=128).contains(&length)
-                || !crate::syntax::is_static_key(key)
-                || !build_log::undefined_reference_ranges(
-                    &doc.text,
-                    diagnostic.range.start.line,
-                    &diagnostic.message,
-                )
-                .contains(&diagnostic.range)
-            {
+            if !(3..=128).contains(&length) || !valid_name(kind, key) {
                 continue;
             }
             let mut candidates = BTreeMap::<String, usize>::new();
@@ -74,10 +119,10 @@ pub fn fixes(workspace: &Workspace, uri: &Url, range: Range) -> Vec<QuickFix> {
                 .iter()
                 .filter_map(|uri| workspace.documents.get(uri))
             {
-                let entries = if citation {
-                    &document.syntax.citations
-                } else {
-                    &document.syntax.labels
+                let entries = match kind {
+                    Kind::Citation => &document.syntax.citations,
+                    Kind::Label => &document.syntax.labels,
+                    Kind::Command => &document.syntax.definitions,
                 };
                 for entry in entries {
                     *candidates.entry(entry.name.clone()).or_default() += 1;
@@ -86,8 +131,26 @@ pub fn fixes(workspace: &Workspace, uri: &Url, range: Range) -> Vec<QuickFix> {
                         break;
                     }
                 }
+                if kind == Kind::Command {
+                    for name in crate::generated::commands(document).take(4096) {
+                        *candidates.entry(name).or_default() += 1;
+                        total_entries += 1;
+                        if total_entries >= 4096 {
+                            break;
+                        }
+                    }
+                }
                 if total_entries >= 4096 {
                     break;
+                }
+            }
+            if kind == Kind::Command {
+                for name in crate::catalog::COMMANDS
+                    .iter()
+                    .map(|(name, _, _)| *name)
+                    .chain(crate::catalog::PRIMITIVES.iter().copied())
+                {
+                    candidates.entry(name.into()).or_insert(1);
                 }
             }
             // A known key can be unresolved because of build order or macros.
@@ -96,7 +159,7 @@ pub fn fixes(workspace: &Workspace, uri: &Url, range: Range) -> Vec<QuickFix> {
             }
             let mut candidates: Vec<_> = candidates
                 .into_iter()
-                .filter(|(name, count)| *count == 1 && crate::syntax::is_static_key(name))
+                .filter(|(name, count)| *count == 1 && valid_name(kind, name))
                 .filter_map(|(name, _)| {
                     comparisons += 1;
                     if comparisons > 16384 {
@@ -107,18 +170,20 @@ pub fn fixes(workspace: &Workspace, uri: &Url, range: Range) -> Vec<QuickFix> {
                 .collect();
             candidates.sort();
             for (_, name) in candidates.into_iter().take(5) {
+                let (category, replacement) = match kind {
+                    Kind::Label => ("label", name.clone()),
+                    Kind::Citation => ("citation", name.clone()),
+                    Kind::Command => ("command", format!("\\{name}")),
+                };
                 if !seen.insert((diagnostic.range.start, diagnostic.range.end, name.clone())) {
                     continue;
                 }
                 result.push(QuickFix {
-                    title: format!(
-                        "Replace with {} `{name}`",
-                        if citation { "citation" } else { "label" }
-                    ),
+                    title: format!("Replace with {category} `{replacement}`"),
                     diagnostic: diagnostic.clone(),
                     edit: TextEdit {
                         range: diagnostic.range,
-                        new_text: name,
+                        new_text: replacement,
                     },
                 });
                 if result.len() >= 256 {

@@ -1,5 +1,5 @@
 use crate::{
-    features, navigation, reference_fixes,
+    features, navigation, spelling_fixes,
     workspace::{Document, Workspace},
 };
 use tower_lsp::lsp_types::*;
@@ -25,7 +25,7 @@ pub fn code_actions(
         return vec![];
     };
     let mut fixes = doc.syntax.fixes.clone();
-    fixes.extend(reference_fixes::fixes(workspace, uri, range));
+    fixes.extend(spelling_fixes::fixes(workspace, uri, range));
     fixes
         .iter()
         .filter(|fix| {
@@ -76,7 +76,7 @@ pub fn resolve_fix(workspace: &Workspace, request: FixRequest) -> Option<Workspa
         return None;
     }
     let mut fixes = doc.syntax.fixes.clone();
-    fixes.extend(reference_fixes::fixes(
+    fixes.extend(spelling_fixes::fixes(
         workspace,
         &request.uri,
         request.diagnostic.range,

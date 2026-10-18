@@ -28,6 +28,10 @@ fn undefined_commands_on_the_same_line_keep_distinct_utf16_ranges() {
             );
             assert_eq!(error.message, "Undefined control sequence.");
             assert_eq!(error.severity, Some(DiagnosticSeverity::ERROR));
+            assert_eq!(
+                error.data.as_ref().unwrap()["command"],
+                command.strip_prefix('\\').unwrap()
+            );
         }
     }
 }

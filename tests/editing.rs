@@ -327,3 +327,168 @@ fn compiler_reference_suggestions_reject_ambiguous_dynamic_known_and_inexact_key
         }
     }
 }
+
+fn undefined_command_diagnostic(workspace: &mut Workspace, uri: &Url, name: &str) -> Diagnostic {
+    let text = &workspace.documents[uri].text;
+    let start = text.source.find(&format!("\\{name}")).unwrap();
+    let diagnostic = Diagnostic {
+        range: text.range(start, start + name.len() + 1),
+        source: Some("latex-build".into()),
+        message: "Undefined control sequence.".into(),
+        code: Some(NumberOrString::String("undefined-control-sequence".into())),
+        data: Some(serde_json::json!({"command":name})),
+        ..Default::default()
+    };
+    workspace.build_diagnostics.insert(
+        uri.clone(),
+        std::collections::BTreeMap::from([(uri.clone(), vec![diagnostic.clone()])]),
+    );
+    diagnostic
+}
+
+#[test]
+fn undefined_command_fixes_use_builtin_and_project_commands_preserving_arguments_and_utf16() {
+    for (name, replacement) in [
+        ("sectoin", "section"),
+        ("reporttitel", "reporttitle"),
+        ("documentwidht", "documentwidth"),
+        ("ifdrafft", "ifdraft"),
+        ("thecliam", "theclaim"),
+        ("endpanle", "endpanel"),
+    ] {
+        let source = format!("😀 \\{name}{{Existing}} trailing text.\n");
+        let (mut workspace, uri) = setup(&source, true);
+        let declarations = Url::parse("file:///editing/definitions.tex").unwrap();
+        let unrelated = Url::parse("file:///unrelated/main.tex").unwrap();
+        workspace.documents.insert(declarations.clone(), Document::new(&declarations, r"\newcommand{\reporttitle}[1]{#1}\newlength{\documentwidth}\newif\ifdraft\newtheorem{claim}{Claim}\newenvironment{panel}{}{}".into(), None));
+        workspace.documents.insert(
+            unrelated.clone(),
+            Document::new(&unrelated, format!("\\newcommand{{\\{name}}}{{}}"), None),
+        );
+        workspace
+            .recorded_inputs
+            .insert(uri.clone(), [uri.clone(), declarations].into());
+        let diagnostic = undefined_command_diagnostic(&mut workspace, &uri, name);
+        let actions = editing::code_actions(
+            &workspace,
+            &uri,
+            diagnostic.range,
+            &context(vec![diagnostic]),
+        );
+        let expected = format!("\\{replacement}");
+        let action = actions
+            .iter()
+            .find(|action| action_edit(action, &uri).new_text == expected)
+            .unwrap_or_else(|| panic!("{name}: {actions:?}"));
+        let edit = action_edit(action, &uri);
+        let changed = workspace.documents[&uri]
+            .text
+            .changed(vec![TextDocumentContentChangeEvent {
+                range: Some(edit.range),
+                range_length: None,
+                text: edit.new_text,
+            }])
+            .unwrap();
+        assert_eq!(
+            changed.source,
+            format!("😀 \\{replacement}{{Existing}} trailing text.\n")
+        );
+        let CodeActionOrCommand::CodeAction(action) = action else {
+            panic!()
+        };
+        assert_eq!(action.is_preferred, Some(false));
+        assert!(action.title.contains(&expected));
+        assert!(actions.len() <= 5);
+    }
+}
+
+#[test]
+fn command_spelling_fixes_reject_known_ambiguous_ignored_and_unproven_names() {
+    for (source, name, definitions, mode) in [
+        (r"\section{Title}", "section", "", "precise"),
+        (
+            r"\reporttitle{Title}",
+            "reporttitle",
+            r"\newcommand{\reporttitle}[1]{#1}",
+            "precise",
+        ),
+        (
+            r"\reporttitel{Title}",
+            "reporttitel",
+            r"\newcommand{\reporttitle}[1]{#1}\newcommand{\reporttitle}[1]{#1}",
+            "precise",
+        ),
+        (r"% \sectoin{Title}", "sectoin", "", "precise"),
+        (r"\verb|\sectoin{Title}|", "sectoin", "", "precise"),
+        (r"\fr{Title}", "fr", "", "precise"),
+        (r"\sectoin{Title}", "sectoin", "", "missing-data"),
+        (r"\sectoin{Title}", "sectoin", "", "wrong-data"),
+        (r"\sectoin{Title}", "sectoin", "", "line-range"),
+        (r"\sectoin{Title}", "sectoin", "", "macro-expansion"),
+    ] {
+        let (mut workspace, uri) = setup(source, false);
+        let declarations = Url::parse("file:///editing/definitions.tex").unwrap();
+        workspace.documents.insert(
+            declarations.clone(),
+            Document::new(&declarations, definitions.into(), None),
+        );
+        workspace
+            .recorded_inputs
+            .insert(uri.clone(), [uri.clone(), declarations].into());
+        let mut diagnostic = undefined_command_diagnostic(&mut workspace, &uri, name);
+        match mode {
+            "missing-data" => diagnostic.data = None,
+            "wrong-data" => diagnostic.data = Some(serde_json::json!({"command":"other"})),
+            "line-range" => {
+                diagnostic.range = workspace.documents[&uri].text.range(0, source.len())
+            }
+            "macro-expansion" => diagnostic.code = None,
+            _ => {}
+        }
+        workspace
+            .build_diagnostics
+            .get_mut(&uri)
+            .unwrap()
+            .get_mut(&uri)
+            .unwrap()[0] = diagnostic.clone();
+        let actions = editing::code_actions(
+            &workspace,
+            &uri,
+            diagnostic.range,
+            &context(vec![diagnostic]),
+        );
+        assert!(actions.is_empty(), "{name}/{mode}: {actions:?}");
+    }
+}
+
+#[test]
+fn command_spelling_requests_revalidate_version_diagnostic_and_replacement() {
+    let (mut workspace, uri) = setup(r"\sectoin{Existing}", true);
+    workspace.code_action_literals = false;
+    workspace.apply_edits = true;
+    let diagnostic = undefined_command_diagnostic(&mut workspace, &uri, "sectoin");
+    let actions = editing::code_actions(
+        &workspace,
+        &uri,
+        diagnostic.range,
+        &context(vec![diagnostic]),
+    );
+    let CodeActionOrCommand::Command(command) = &actions[0] else {
+        panic!()
+    };
+    let value = command.arguments.as_ref().unwrap()[0].clone();
+    assert_eq!(value["replacement"], "\\section");
+    assert!(
+        editing::resolve_fix(&workspace, serde_json::from_value(value.clone()).unwrap()).is_some()
+    );
+    let mut forged = value.clone();
+    forged["replacement"] = serde_json::json!("\\subsection");
+    assert!(editing::resolve_fix(&workspace, serde_json::from_value(forged).unwrap()).is_none());
+    workspace.documents.get_mut(&uri).unwrap().version = Some(10);
+    assert!(
+        editing::resolve_fix(&workspace, serde_json::from_value(value.clone()).unwrap()).is_none()
+    );
+    workspace.documents.get_mut(&uri).unwrap().version = Some(9);
+    workspace.clear_build_diagnostics(&uri);
+    assert!(editing::resolve_fix(&workspace, serde_json::from_value(value).unwrap()).is_none());
+}

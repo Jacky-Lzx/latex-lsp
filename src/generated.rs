@@ -474,3 +474,12 @@ pub(crate) fn generated_command_exists(doc: &Document, name: &str) -> bool {
                 .any(|(generated, _)| generated == name)
         })
 }
+
+pub(crate) fn commands(doc: &Document) -> impl Iterator<Item = String> + '_ {
+    doc.syntax
+        .commands
+        .iter()
+        .filter_map(|command| declaration(doc, command))
+        .flat_map(|declaration| generated_names(declaration.name, declaration.environment))
+        .map(|(name, _)| name)
+}
