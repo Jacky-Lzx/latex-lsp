@@ -377,3 +377,259 @@ fn rejects_conflicts_ambiguous_definitions_invalid_names_and_builtins() {
     insert(&mut workspace, "another.tex", r"\label{old}", None);
     assert!(features::prepare_rename(&workspace, &uri, Position::new(0, 8)).is_err());
 }
+
+#[test]
+fn independent_projects_rename_their_own_labels_citations_macros_and_environments() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    for name in ["a", "b"] {
+        std::fs::create_dir(root.join(name)).unwrap();
+        std::fs::write(root.join(format!("{name}/main.tex")),"\\documentclass{article}\n\\usepackage{local}\n\\begin{document}\n\\input{chapter}\n\\ref{sec:intro} \\cite{book} \\localmacro \\begin{panel}Text\\end{panel}\n\\bibliography{refs}\n\\end{document}\n").unwrap();
+        std::fs::write(
+            root.join(format!("{name}/chapter.tex")),
+            "\\label{sec:intro}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(format!("{name}/refs.bib")),
+            "@book{book,title={Example}}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(format!("{name}/local.sty")),
+            "\\newcommand{\\localmacro}{Hello}\n\\newenvironment{panel}{}{}\n",
+        )
+        .unwrap();
+    }
+    // Names in another paper must neither cause conflicts nor receive edits.
+    std::fs::write(
+        root.join("b/chapter.tex"),
+        "\\label{sec:intro}\\label{sec:new}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("b/refs.bib"),
+        "@book{book,title={B}}\n@book{newbook,title={Other}}\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("b/local.sty"),"\\newcommand{\\localmacro}{B}\\newcommand{\\renamedmacro}{B}\\newenvironment{panel}{}{}\\newenvironment{renamedpanel}{}{}").unwrap();
+    let mut workspace = Workspace::default();
+    workspace.add_root(root.into());
+    let main = Url::from_file_path(root.join("a/main.tex")).unwrap();
+    let source = &workspace.documents[&main].text;
+    for (needle, offset, new_name) in [
+        ("ref{sec:intro}", 5, "sec:new"),
+        ("cite{book}", 6, "newbook"),
+        ("\\localmacro", 2, "renamedmacro"),
+        ("begin{panel}", 7, "renamedpanel"),
+    ] {
+        let position = source.position(source.source.find(needle).unwrap() + offset);
+        assert!(features::prepare_rename(&workspace, &main, position)
+            .unwrap()
+            .is_some());
+        let changes = features::rename(&workspace, &main, position, new_name)
+            .unwrap()
+            .unwrap()
+            .changes
+            .unwrap();
+        assert!(changes.len() >= 2, "{needle}: {changes:?}");
+        assert!(
+            changes
+                .keys()
+                .all(|uri| uri.to_file_path().unwrap().starts_with(root.join("a"))),
+            "{needle}: {changes:?}"
+        );
+        assert!(changes[&main]
+            .iter()
+            .all(|edit| edit.new_text.trim_start_matches('\\') == new_name));
+    }
+}
+
+#[test]
+fn shared_declarations_rename_every_dependent_project_and_check_all_conflicts() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    for name in ["a", "b"] {
+        std::fs::write(root.join(format!("{name}.tex")),"\\documentclass{article}\n\\usepackage{common}\n\\begin{document}\n\\sharedmacro \\cite{sharedbook}\n\\bibliography{common}\n\\end{document}\n").unwrap();
+    }
+    std::fs::write(
+        root.join("common.sty"),
+        "\\newcommand{\\sharedmacro}{Hello}",
+    )
+    .unwrap();
+    std::fs::write(root.join("common.bib"), "@book{sharedbook,title={Example}}").unwrap();
+    std::fs::write(root.join("other.tex"),"\\documentclass{article}\\newcommand{\\sharedmacro}{Other}\\begin{document}\\sharedmacro\\cite{sharedbook}\\bibliography{other}\\end{document}").unwrap();
+    std::fs::write(root.join("other.bib"), "@book{sharedbook,title={Other}}").unwrap();
+    let mut workspace = Workspace::default();
+    workspace.add_root(root.into());
+    let main = Url::from_file_path(root.join("a.tex")).unwrap();
+    let b = Url::from_file_path(root.join("b.tex")).unwrap();
+    let shared = Url::from_file_path(root.join("common.sty")).unwrap();
+    let position = workspace.documents[&main].text.position(
+        workspace.documents[&main]
+            .text
+            .source
+            .find("\\sharedmacro")
+            .unwrap()
+            + 2,
+    );
+    let changes = features::rename(&workspace, &main, position, "renamedmacro")
+        .unwrap()
+        .unwrap()
+        .changes
+        .unwrap();
+    assert_eq!(
+        changes
+            .keys()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>(),
+        [main.clone(), b.clone(), shared.clone()].into()
+    );
+    // Starting at the shared definition works even though its root is ambiguous.
+    assert!(workspace.root_document(&shared).is_err());
+    let definition = workspace.documents[&shared].text.position(
+        workspace.documents[&shared]
+            .text
+            .source
+            .find("\\sharedmacro")
+            .unwrap()
+            + 2,
+    );
+    assert_eq!(
+        features::rename(&workspace, &shared, definition, "renamedmacro")
+            .unwrap()
+            .unwrap()
+            .changes
+            .unwrap()
+            .len(),
+        3
+    );
+    let citation = workspace.documents[&main].text.position(
+        workspace.documents[&main]
+            .text
+            .source
+            .find("sharedbook")
+            .unwrap()
+            + 2,
+    );
+    let changes = features::rename(&workspace, &main, citation, "newbook")
+        .unwrap()
+        .unwrap()
+        .changes
+        .unwrap();
+    assert_eq!(
+        changes
+            .keys()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>(),
+        [
+            main.clone(),
+            b.clone(),
+            Url::from_file_path(root.join("common.bib")).unwrap()
+        ]
+        .into()
+    );
+    let source = format!(
+        "{}\n\\newcommand{{\\conflict}}{{Conflict}}",
+        workspace.documents[&b].text.source
+    );
+    workspace
+        .documents
+        .insert(b.clone(), Document::new(&b, source, None));
+    assert!(features::rename(&workspace, &main, position, "conflict").is_err());
+    let source = format!(
+        "{}\n\\newcommand{{\\sharedmacro}}{{Override}}",
+        workspace.documents[&b].text.source
+    );
+    workspace
+        .documents
+        .insert(b.clone(), Document::new(&b, source, None));
+    assert!(features::prepare_rename(&workspace, &main, position).is_err());
+}
+
+#[test]
+fn shared_references_to_different_project_definitions_cannot_be_renamed() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::write(root.join("shared.tex"), "See \\ref{sec:intro}.\n").unwrap();
+    for name in ["a", "b"] {
+        std::fs::write(root.join(format!("{name}.tex")),"\\documentclass{article}\n\\begin{document}\n\\label{sec:intro}\n\\input{shared}\n\\end{document}\n").unwrap();
+    }
+    let mut workspace = Workspace::default();
+    workspace.add_root(root.into());
+    let main = Url::from_file_path(root.join("a.tex")).unwrap();
+    let position = workspace.documents[&main].text.position(
+        workspace.documents[&main]
+            .text
+            .source
+            .find("sec:intro")
+            .unwrap()
+            + 2,
+    );
+    assert!(features::prepare_rename(&workspace, &main, position)
+        .unwrap_err()
+        .message
+        .contains("shared occurrence"));
+    assert!(features::rename(&workspace, &main, position, "sec:new").is_err());
+    // A second consumer without any matching definition is equally unsafe.
+    let b = Url::from_file_path(root.join("b.tex")).unwrap();
+    let source = workspace.documents[&b]
+        .text
+        .source
+        .replace("\\label{sec:intro}", "");
+    workspace
+        .documents
+        .insert(b.clone(), Document::new(&b, source, None));
+    assert!(features::rename(&workspace, &main, position, "sec:new").is_err());
+}
+
+#[test]
+#[ignore = "requires latexmk and a TeX installation"]
+fn both_projects_compile_after_renaming_a_shared_macro() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    for name in ["a", "b"] {
+        std::fs::write(root.join(format!("{name}.tex")),"\\documentclass{article}\n\\usepackage{common}\n\\begin{document}\\greet\\end{document}\n").unwrap();
+    }
+    std::fs::write(root.join("common.sty"), "\\newcommand{\\greet}{Hello}\n").unwrap();
+    let other = "\\documentclass{article}\\newcommand{\\greet}{Other}\\begin{document}\\greet\\end{document}";
+    std::fs::write(root.join("other.tex"), other).unwrap();
+    let mut workspace = Workspace::default();
+    workspace.add_root(root.into());
+    let main = Url::from_file_path(root.join("a.tex")).unwrap();
+    let position = workspace.documents[&main].text.position(
+        workspace.documents[&main]
+            .text
+            .source
+            .find("\\greet")
+            .unwrap()
+            + 2,
+    );
+    let changes = features::rename(&workspace, &main, position, "salute")
+        .unwrap()
+        .unwrap()
+        .changes
+        .unwrap();
+    assert_eq!(changes.len(), 3);
+    for (uri, edits) in changes {
+        let source = edits_result(&workspace.documents[&uri].text.source, &edits);
+        std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+    }
+    assert_eq!(
+        std::fs::read_to_string(root.join("other.tex")).unwrap(),
+        other
+    );
+    for name in ["a", "b"] {
+        let outcome = latex_lsp::build::run(
+            &root.join(format!("{name}.tex")),
+            &Default::default(),
+            &Default::default(),
+        );
+        assert_eq!(
+            outcome.status, "success",
+            "{}\n{}",
+            outcome.message, outcome.output
+        );
+        assert!(outcome.pdf.unwrap().is_file());
+    }
+}

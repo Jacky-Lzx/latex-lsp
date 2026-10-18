@@ -48,6 +48,17 @@ pub fn root_directive(doc: &Document) -> Option<crate::syntax::Argument> {
     magic_directive(doc, &["root"])
 }
 
+pub(crate) fn is_root(doc: &Document) -> bool {
+    doc.syntax.commands.iter().any(|command| {
+        command.name == "documentclass"
+            || command.name == "begin"
+                && command
+                    .argument
+                    .as_ref()
+                    .is_some_and(|argument| argument.value == "document")
+    })
+}
+
 fn magic_directive(doc: &Document, fields: &[&str]) -> Option<crate::syntax::Argument> {
     let mut offset = 0;
     for line in doc.text.source.split_inclusive('\n').take(20) {
@@ -283,16 +294,6 @@ impl Workspace {
                 break;
             }
         }
-        let is_root = |doc: &Document| {
-            doc.syntax.commands.iter().any(|cmd| {
-                cmd.name == "documentclass"
-                    || cmd.name == "begin"
-                        && cmd
-                            .argument
-                            .as_ref()
-                            .is_some_and(|arg| arg.value == "document")
-            })
-        };
         if self.documents.get(uri).is_some_and(is_root) {
             return file_uri(&path);
         }

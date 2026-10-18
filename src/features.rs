@@ -98,7 +98,7 @@ fn rename_target<'a>(
     workspace: &'a Workspace,
     uri: &Url,
     position: Position,
-) -> tower_lsp::jsonrpc::Result<Option<Target<'a>>> {
+) -> tower_lsp::jsonrpc::Result<Option<(Target<'a>, BTreeSet<Url>)>> {
     let Some(doc) = workspace.documents.get(uri) else {
         return Ok(None);
     };
@@ -109,21 +109,89 @@ fn rename_target<'a>(
     else {
         return Ok(None);
     };
-    let declarations = workspace
+    let regions: std::collections::BTreeMap<_, _> = workspace
         .documents
-        .values()
-        .flat_map(|doc| entries(doc, target.kind))
-        .filter(|entry| entry.name == target.name)
-        .count();
-    if declarations == 0 {
+        .iter()
+        .filter(|(uri, doc)| {
+            crate::workspace::is_root(doc)
+                && uri.to_file_path().is_ok_and(|path| {
+                    path.is_file()
+                        && matches!(
+                            path.extension().and_then(|extension| extension.to_str()),
+                            Some("tex" | "ltx")
+                        )
+                })
+        })
+        .map(|(root, _)| (root.clone(), workspace.project_documents(root)))
+        .collect();
+    let selected = workspace.root_document(uri).ok().filter(|root| {
+        regions.contains_key(root) || *root != *uri || workspace.config.build.root_file.is_some()
+    });
+    let mut scope: BTreeSet<_> = if let Some(root) = selected {
+        workspace.project_documents(&root)
+    } else {
+        regions
+            .values()
+            .filter(|project| project.contains(uri))
+            .flat_map(|project| project.iter().cloned())
+            .collect()
+    };
+    if scope.is_empty() {
+        // Unassociated buffers still support editing without a saved TeX root.
+        scope.extend(workspace.documents.keys().cloned());
+    }
+    scope.insert(uri.clone());
+    let declarations = |scope: &BTreeSet<Url>| -> Vec<Url> {
+        workspace
+            .documents
+            .iter()
+            .filter(|(uri, _)| scope.contains(*uri))
+            .flat_map(|(uri, doc)| {
+                entries(doc, target.kind)
+                    .iter()
+                    .filter(|entry| entry.name == target.name)
+                    .map(move |_| uri.clone())
+            })
+            .collect()
+    };
+    let definitions = declarations(&scope);
+    if definitions.is_empty() {
         return Ok(None);
     }
-    if declarations != 1 {
+    if definitions.len() != 1 {
         return Err(tower_lsp::jsonrpc::Error::invalid_params(
-            "Rename is ambiguous: the name has multiple definitions in this workspace",
+            "Rename is ambiguous: the name has multiple definitions in this project",
         ));
     }
-    Ok(Some(target))
+    // Shared occurrences must resolve to this declaration in every consumer.
+    // Otherwise changing the shared file would silently break another paper.
+    let occurrences = references(workspace, uri, position, true);
+    loop {
+        let used: BTreeSet<_> = occurrences
+            .iter()
+            .filter(|location| scope.contains(&location.uri))
+            .map(|location| location.uri.clone())
+            .collect();
+        let before = scope.len();
+        for project in regions
+            .values()
+            .filter(|project| !project.is_disjoint(&used))
+        {
+            if !project.contains(&definitions[0]) {
+                return Err(tower_lsp::jsonrpc::Error::invalid_params("Rename is ambiguous: a shared occurrence belongs to a project with a different or missing definition"));
+            }
+            scope.extend(project.iter().cloned());
+        }
+        if scope.len() == before {
+            break;
+        }
+    }
+    if declarations(&scope).len() != 1 {
+        return Err(tower_lsp::jsonrpc::Error::invalid_params(
+            "Rename is ambiguous: projects sharing this definition contain multiple definitions",
+        ));
+    }
+    Ok(Some((target, scope)))
 }
 
 pub fn prepare_rename(
@@ -131,7 +199,7 @@ pub fn prepare_rename(
     uri: &Url,
     position: Position,
 ) -> tower_lsp::jsonrpc::Result<Option<PrepareRenameResponse>> {
-    let Some(target) = rename_target(workspace, uri, position)? else {
+    let Some((target, _)) = rename_target(workspace, uri, position)? else {
         return Ok(None);
     };
     let doc = &workspace.documents[uri];
@@ -148,7 +216,7 @@ pub fn rename(
     position: Position,
     new_name: &str,
 ) -> tower_lsp::jsonrpc::Result<Option<WorkspaceEdit>> {
-    let Some(target) = rename_target(workspace, uri, position)? else {
+    let Some((target, scope)) = rename_target(workspace, uri, position)? else {
         return Ok(None);
     };
     let new_name = if target.kind == TargetKind::Command {
@@ -173,8 +241,11 @@ pub fn rename(
     if new_name == target.name {
         return Ok(Some(WorkspaceEdit::default()));
     }
-    let conflicts =
-        workspace.documents.values().any(|doc| {
+    let conflicts = workspace
+        .documents
+        .iter()
+        .filter(|(uri, _)| scope.contains(*uri))
+        .any(|(_, doc)| {
             entries(doc, target.kind)
                 .iter()
                 .any(|entry| entry.name == new_name)
@@ -208,7 +279,10 @@ pub fn rename(
     };
     let mut changes: std::collections::BTreeMap<Url, Vec<TextEdit>> =
         std::collections::BTreeMap::new();
-    for location in references(workspace, uri, position, true) {
+    for location in references(workspace, uri, position, true)
+        .into_iter()
+        .filter(|location| scope.contains(&location.uri))
+    {
         changes.entry(location.uri).or_default().push(TextEdit {
             range: location.range,
             new_text: replacement.clone(),
