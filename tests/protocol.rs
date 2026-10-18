@@ -18,6 +18,134 @@ struct Server {
 
 #[test]
 #[ignore = "requires pdflatex and hyperref"]
+fn duplicate_compiler_destinations_link_declarations_and_clear_after_resolving_then_renaming() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = Url::from_file_path(root.join("main.tex")).unwrap();
+    let child = Url::from_file_path(root.join("chapter.tex")).unwrap();
+    let main_source = "\\documentclass{article}\\usepackage{hyperref}\\begin{document}\n\\hypertarget{section.1}{Explicit}\\section{Automatic}\n\\def\\chapterfile{chapter}\\input{\\chapterfile}\\end{document}\n";
+    let child_source = "\\hyperdef[bookmark-label]{}{section.1}{Other}\n\\hyperlink{section.1}{Link}\\label{section.1}\n";
+    std::fs::write(root.join("main.tex"), main_source).unwrap();
+    std::fs::write(root.join("chapter.tex"), child_source).unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(root).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}},"textDocument":{"publishDiagnostics":{"relatedInformation":true},"codeAction":{"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix"]}}}}},"initializationOptions":{"build":{"executable":"pdflatex","arguments":["-interaction=nonstopmode","-recorder","-output-directory=%o","%f"]}}}));
+    server.notify("initialized", json!({}));
+    for (uri, text) in [(&main, main_source), (&child, child_source)] {
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"languageId":"latex","version":1,"text":text}}),
+        );
+    }
+    server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let finished = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(finished["params"]["status"], "success", "{finished}");
+    assert_eq!(finished["params"]["stale"], false, "{finished}");
+    for (id, uri, other) in [(3, &main, &child), (4, &child, &main)] {
+        let published = server.until(|message| {
+            message["method"] == "textDocument/publishDiagnostics"
+                && message["params"]["uri"] == uri.as_str()
+                && message["params"]["diagnostics"]
+                    .as_array()
+                    .is_some_and(|items| {
+                        items
+                            .iter()
+                            .any(|item| item["code"] == "duplicate-pdf-destination")
+                    })
+        });
+        let duplicates: Vec<_> = published["params"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|item| item["code"] == "duplicate-pdf-destination")
+            .collect();
+        assert_eq!(duplicates.len(), 1, "{published}");
+        let diagnostic = duplicates[0];
+        assert_eq!(diagnostic["data"]["destination"], "section.1");
+        assert_eq!(
+            diagnostic["relatedInformation"].as_array().unwrap().len(),
+            1
+        );
+        assert_eq!(
+            diagnostic["relatedInformation"][0]["location"]["uri"],
+            other.as_str()
+        );
+        let actions = server.request(id, "textDocument/codeAction", json!({"textDocument":{"uri":uri},"range":diagnostic["range"],"context":{"diagnostics":[diagnostic]}}));
+        assert!(actions.as_array().unwrap().is_empty(), "{actions}");
+    }
+    let position = latex_lsp::text::Text::new(main_source.into())
+        .position(main_source.find("section.1").unwrap() + 2);
+    server.send(json!({"jsonrpc":"2.0","id":5,"method":"textDocument/rename","params":{"textDocument":{"uri":main},"position":position,"newName":"custom.section"}}));
+    let rejected = server.until(|message| message["id"] == 5);
+    assert!(rejected.get("error").is_some(), "{rejected}");
+    let child_repaired = "\\hyperlink{section.1}{Link}\\label{section.1}\n";
+    std::fs::write(root.join("chapter.tex"), child_repaired).unwrap();
+    server.notify("textDocument/didChange", json!({"textDocument":{"uri":child,"version":2},"contentChanges":[{"text":child_repaired}]}));
+    let edit = server.request(
+        6,
+        "textDocument/rename",
+        json!({"textDocument":{"uri":main},"position":position,"newName":"custom.section"}),
+    );
+    let changes = edit["documentChanges"].as_array().unwrap();
+    assert_eq!(changes.len(), 2, "{edit}");
+    for change in changes {
+        let uri: Url = serde_json::from_value(change["textDocument"]["uri"].clone()).unwrap();
+        let (source, version) = if uri == main {
+            (main_source, 2)
+        } else {
+            (child_repaired, 3)
+        };
+        let mut edits: Vec<tower_lsp::lsp_types::TextEdit> =
+            serde_json::from_value(change["edits"].clone()).unwrap();
+        edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
+        let changed = latex_lsp::text::Text::new(source.into())
+            .changed(
+                edits
+                    .into_iter()
+                    .map(
+                        |edit| tower_lsp::lsp_types::TextDocumentContentChangeEvent {
+                            range: Some(edit.range),
+                            range_length: None,
+                            text: edit.new_text,
+                        },
+                    )
+                    .collect(),
+            )
+            .unwrap()
+            .source;
+        if uri == main {
+            assert!(changed.contains("\\hypertarget{custom.section}{Explicit}\\section{Automatic}"));
+        } else {
+            assert_eq!(
+                changed,
+                "\\hyperlink{custom.section}{Link}\\label{section.1}\n"
+            );
+        }
+        std::fs::write(uri.to_file_path().unwrap(), &changed).unwrap();
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":version},"contentChanges":[{"text":changed}]}));
+    }
+    for id in [7, 8] {
+        server.request(
+            id,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[child]}),
+        );
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(finished["params"]["status"], "success", "{finished}");
+        if id == 8 {
+            assert_eq!(finished["params"]["diagnosticsCount"], 0, "{finished}");
+        }
+    }
+    server.request(9, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[ignore = "requires pdflatex and hyperref"]
 fn compiler_destination_diagnostics_follow_recorded_children_and_offer_preserving_fixes() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();

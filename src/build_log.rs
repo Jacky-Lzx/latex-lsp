@@ -188,6 +188,49 @@ fn destination_warning_name(message: &str) -> Option<&str> {
     }
 }
 
+fn duplicate_destination_warning_name(message: &str) -> Option<&str> {
+    if let Some(tail) =
+        message.strip_prefix("pdfTeX warning (ext4): destination with the same identifier (name{")
+    {
+        let (name, tail) = tail.split_once("}) has been already used")?;
+        let tail: String = tail.chars().filter(|ch| !ch.is_whitespace()).collect();
+        (tail == ",duplicateignored").then_some(name)
+    } else {
+        message
+            .strip_prefix("warning")?
+            .trim_start()
+            .strip_prefix("(pdf backend): ignoring duplicate destination with the name '")?
+            .strip_suffix('\'')
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum DestinationWarningKind {
+    Missing,
+    Duplicate,
+}
+
+impl DestinationWarningKind {
+    pub(crate) fn code(self) -> &'static str {
+        match self {
+            Self::Missing => "undefined-pdf-destination",
+            Self::Duplicate => "duplicate-pdf-destination",
+        }
+    }
+}
+
+pub(crate) fn destination_warning(message: &str) -> Option<(DestinationWarningKind, &str)> {
+    let (kind, name) = if let Some(name) = destination_warning_name(message) {
+        (DestinationWarningKind::Missing, name)
+    } else {
+        (
+            DestinationWarningKind::Duplicate,
+            duplicate_destination_warning_name(message)?,
+        )
+    };
+    crate::syntax::is_static_key(name).then_some((kind, name))
+}
+
 pub(crate) fn undefined_destination_name(message: &str) -> Option<&str> {
     let name = destination_warning_name(message)?;
     crate::syntax::is_static_key(name).then_some(name)
@@ -605,12 +648,16 @@ fn emit_with_context(
         .sum::<usize>() as u32;
     let end = value.encode_utf16().count() as u32;
     let mut ranges = undefined_reference_ranges(&text, line, &message);
-    let destination_name = undefined_destination_name(&message);
-    let destination_ranges: Vec<_> = destination_name
+    let destination = destination_warning(&message);
+    let destination_ranges: Vec<_> = destination
         .into_iter()
-        .flat_map(|name| {
-            crate::syntax::Syntax::latex(&text)
-                .anchor_references
+        .flat_map(|(kind, name)| {
+            let syntax = crate::syntax::Syntax::latex(&text);
+            let entries = match kind {
+                DestinationWarningKind::Missing => syntax.anchor_references,
+                DestinationWarningKind::Duplicate => syntax.anchors,
+            };
+            entries
                 .into_iter()
                 .filter(move |entry| entry.name == name)
                 .map(|entry| text.range(entry.span.start, entry.span.end))
@@ -665,7 +712,7 @@ fn emit_with_context(
                 severity: Some(severity),
                 source: Some("latex-build".into()),
                 code: box_code(&message)
-                    .or_else(|| precise_destination.then_some("undefined-pdf-destination"))
+                    .or_else(|| destination.filter(|_| precise_destination).map(|(kind, _)| kind.code()))
                     .or_else(|| missing_include_key(&message).map(|_| "missing-include"))
                     .or_else(|| command_range.map(|_| "undefined-control-sequence"))
                     .or_else(|| environment_range.and(environment.as_ref()).map(|error| error.code))
@@ -674,7 +721,7 @@ fn emit_with_context(
                 message: message.clone(),
                 data: rewritten
                     .then(|| serde_json::json!({"reportedLine":reported_line}))
-                    .or_else(|| precise_destination.then(|| serde_json::json!({"destination":destination_name})))
+                    .or_else(|| precise_destination.then(|| serde_json::json!({"destination":destination.map(|(_, name)| name)})))
                     .or_else(|| command_name.map(|name| serde_json::json!({"command":name})))
                     .or_else(|| {
                         environment_range
@@ -732,22 +779,33 @@ fn wrapped_message(
     let lua_destination = initial.strip_prefix("warning").is_some_and(|tail| {
         tail.trim_start()
             .starts_with("(pdf backend): unreferenced destination with name '")
+            || tail
+                .trim_start()
+                .starts_with("(pdf backend): ignoring duplicate destination with the name '")
     });
-    if initial.starts_with("pdfTeX warning (dest): name{") || lua_destination {
+    if initial.starts_with("pdfTeX warning (dest): name{")
+        || initial.starts_with("pdfTeX warning (ext4): destination with the same identifier (name{")
+        || lua_destination
+    {
         // The engines break these messages at a byte count, even within a
         // destination name or a word. Join the original bytes; adding spaces
         // or trimming a continuation can change the destination's identity.
         let mut message = initial.to_owned();
         for _ in 0..64 {
-            let complete = destination_warning_name(&message).is_some();
+            let complete = destination_warning_name(&message).is_some()
+                || duplicate_destination_warning_name(&message).is_some();
             // LuaTeX prints names without escaping apostrophes. An apostrophe
             // exactly at the print width can belong to a continued name.
             if (complete && (!lua_destination || lines[*i].len() < 79)) || message.len() >= 4096 {
                 break;
             }
             let Some(next) = lines.get(*i + 1) else { break };
+            let closes_destination = initial
+                .starts_with("pdfTeX warning (ext4): destination with the same identifier (name{")
+                && message.ends_with('}')
+                && next.starts_with(") has been already used");
             if next.trim().is_empty()
-                || message_boundary(next)
+                || (message_boundary(next) && !closes_destination)
                 || next.trim_start().starts_with(['<', '('])
                 || [
                     "Output written on ",
@@ -1310,6 +1368,79 @@ fn bibliography_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn duplicate_destination_warnings_select_declarations_and_preserve_shipout_boundaries() {
+        let directory = tempfile::tempdir().unwrap();
+        let main = directory.path().join("main.tex");
+        let source = "😀 \\hypertarget{section.1}{Target}\\label{section.1}\\hyperlink{section.1}{Link}\r\n\\hyperdef[reference-label]{section}% keep\r\n{1}{Target}\r\n";
+        std::fs::write(&main, source).unwrap();
+        let doc = crate::workspace::Document::new(
+            &Url::from_file_path(&main).unwrap(),
+            source.into(),
+            None,
+        );
+        for message in [
+            "pdfTeX warning (ext4): destination with the same identifier (name{section.1}) has been already used, duplicate ignored",
+            "warning  (pdf backend): ignoring duplicate destination with the name 'section.1'",
+        ] {
+            let log = format!("{message}\n<argument> ...shipout:D \\box_use:N \\l_shipout_box\nl.4 \\end{{document}}\nLaTeX Warning: Keep.\n");
+            let diagnostics = parse(&main, &log);
+            let items = &diagnostics[&Url::from_file_path(&main).unwrap()];
+            let duplicates: Vec<_> = items.iter().filter(|item| item.code == Some(NumberOrString::String("duplicate-pdf-destination".into()))).collect();
+            assert_eq!(duplicates.len(), 2, "{items:?}");
+            assert_eq!(items.len(), 3, "{items:?}");
+            for (item, entry) in duplicates.iter().zip(&doc.syntax.anchors) {
+                assert_eq!(item.range, doc.text.range(entry.span.start, entry.span.end));
+                assert_eq!(item.message, message);
+                assert_eq!(item.data, Some(serde_json::json!({"destination":"section.1"})));
+            }
+        }
+    }
+
+    #[test]
+    fn duplicate_destination_messages_recover_byte_wraps_without_normalizing_name_spaces() {
+        let directory = tempfile::tempdir().unwrap();
+        let main = directory.path().join("main.tex");
+        let name = format!("section.{}", "long".repeat(25));
+        std::fs::write(&main, format!("\\hypertarget{{{name}}}{{Target}}\n")).unwrap();
+        for (prefix, suffix) in [
+            (
+                "pdfTeX warning (ext4): destination with the same identifier (name{",
+                "}) has been already used, duplicate ignored",
+            ),
+            (
+                "warning  (pdf backend): ignoring duplicate destination with the name '",
+                "'",
+            ),
+        ] {
+            let message = format!("{prefix}{name}{suffix}");
+            for split in prefix.len()..message.len() {
+                let log = format!(
+                    "{}\n{}\n<argument> shipout\nl.1 text\n",
+                    &message[..split],
+                    &message[split..]
+                );
+                let diagnostics = parse(&main, &log);
+                let items = &diagnostics[&Url::from_file_path(&main).unwrap()];
+                assert_eq!(items.len(), 1, "split {split}: {items:?}");
+                assert_eq!(items[0].message, message, "split {split}");
+                assert_eq!(
+                    items[0].data,
+                    Some(serde_json::json!({"destination":name})),
+                    "split {split}"
+                );
+            }
+            let spaced = format!("{prefix} {name}{suffix}");
+            assert!(destination_warning(&spaced).is_none());
+        }
+        for message in [
+            "pdfTeX warning (ext4): destination with the same identifier (name{target}) has been already used",
+            "warning  (pdf backend): ignoring duplicate destination with the name '\\dynamic'",
+        ] {
+            assert!(destination_warning(message).is_none());
+        }
+    }
 
     #[test]
     fn destination_warning_byte_wraps_preserve_names_and_stop_at_resource_output() {

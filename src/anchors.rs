@@ -1,5 +1,6 @@
 //! Literal PDF destinations are independent of LaTeX reference labels.
 use crate::{
+    build_log::{self, DestinationWarningKind},
     syntax::{self, Argument, Command, Entry},
     workspace::{Document, Workspace},
 };
@@ -7,7 +8,10 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     ops::Range,
 };
-use tower_lsp::lsp_types::{Diagnostic, NumberOrString, Range as LspRange, TextEdit, Url};
+use tower_lsp::lsp_types::{
+    Diagnostic, DiagnosticRelatedInformation, Location, NumberOrString, Range as LspRange,
+    TextEdit, Url,
+};
 
 /// Destination warnings are emitted at shipout without a source line. Only map
 /// names confirmed by the compiler, using inputs from this particular build.
@@ -16,39 +20,57 @@ pub(crate) fn resolve_diagnostics(
     sources: &BTreeSet<Url>,
     diagnostics: &mut BTreeMap<Url, Vec<Diagnostic>>,
 ) {
-    let names: BTreeSet<_> = diagnostics
+    let mut names = BTreeMap::<DestinationWarningKind, BTreeSet<&str>>::new();
+    for (kind, name) in diagnostics
         .values()
         .flatten()
         .filter(|diagnostic| diagnostic.source.as_deref() == Some("latex-build"))
-        .filter_map(|diagnostic| crate::build_log::undefined_destination_name(&diagnostic.message))
-        .map(str::to_owned)
-        .collect();
+        .filter_map(|diagnostic| build_log::destination_warning(&diagnostic.message))
+    {
+        names.entry(kind).or_default().insert(name);
+    }
     if names.is_empty() {
         return;
     }
-    let mut locations = BTreeMap::<&str, Vec<(Url, LspRange)>>::new();
+    let mut locations = BTreeMap::<(DestinationWarningKind, &str), Vec<(Url, LspRange)>>::new();
     for uri in sources {
         let Some(doc) = workspace.documents.get(uri) else {
             continue;
         };
-        for entry in &doc.syntax.anchor_references {
-            if names.contains(&entry.name) {
-                locations.entry(&entry.name).or_default().push((
-                    uri.clone(),
-                    doc.text.range(entry.span.start, entry.span.end),
-                ));
+        for (kind, entries) in [
+            (
+                DestinationWarningKind::Missing,
+                &doc.syntax.anchor_references,
+            ),
+            (DestinationWarningKind::Duplicate, &doc.syntax.anchors),
+        ] {
+            let Some(names) = names.get(&kind) else {
+                continue;
+            };
+            for entry in entries {
+                if names.contains(entry.name.as_str()) {
+                    locations.entry((kind, &entry.name)).or_default().push((
+                        uri.clone(),
+                        doc.text.range(entry.span.start, entry.span.end),
+                    ));
+                }
             }
         }
     }
+    drop(names);
     let mut seen = BTreeSet::new();
     let mut result = BTreeMap::<Url, Vec<Diagnostic>>::new();
     for (uri, items) in std::mem::take(diagnostics) {
         for diagnostic in items {
             let mapped = (diagnostic.source.as_deref() == Some("latex-build"))
-                .then(|| crate::build_log::undefined_destination_name(&diagnostic.message))
+                .then(|| build_log::destination_warning(&diagnostic.message))
                 .flatten()
-                .and_then(|name| locations.get(name).map(|locations| (name, locations)));
-            if let Some((name, locations)) = mapped {
+                .and_then(|(kind, name)| {
+                    locations
+                        .get(&(kind, name))
+                        .map(|locations| (kind, name, locations))
+                });
+            if let Some((kind, name, locations)) = mapped {
                 for (uri, range) in locations {
                     if !seen.insert((
                         uri.clone(),
@@ -60,8 +82,22 @@ pub(crate) fn resolve_diagnostics(
                     }
                     let mut precise = diagnostic.clone();
                     precise.range = *range;
-                    precise.code = Some(NumberOrString::String("undefined-pdf-destination".into()));
+                    precise.code = Some(NumberOrString::String(kind.code().into()));
                     precise.data = Some(serde_json::json!({"destination":name}));
+                    if kind == DestinationWarningKind::Duplicate {
+                        let related: Vec<_> = locations
+                            .iter()
+                            .filter(|(other, at)| other != uri || at != range)
+                            .take(16)
+                            .map(|(uri, range)| DiagnosticRelatedInformation {
+                                location: Location::new(uri.clone(), *range),
+                                message: format!(
+                                    "Other explicit PDF destination `{name}` in this build"
+                                ),
+                            })
+                            .collect();
+                        precise.related_information = (!related.is_empty()).then_some(related);
+                    }
                     result.entry(uri.clone()).or_default().push(precise);
                 }
             } else {
@@ -206,6 +242,58 @@ pub(crate) fn replacement_text(doc: &Document, range: LspRange, new_name: &str) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn duplicate_compiler_destinations_link_only_the_recorded_explicit_declarations() {
+        let root = Url::parse("file:///anchors/main.tex").unwrap();
+        let child = Url::parse("file:///anchors/child.tex").unwrap();
+        let excluded = Url::parse("file:///anchors/excluded.tex").unwrap();
+        let mut workspace = Workspace::default();
+        for (uri, source) in [(&root, "😀 \\hypertarget{section.1}{Target}\\hyperlink{section.1}{Link}\\label{section.1}\n"), (&child, "\\hyperdef[label]{section}% keep\r\n{1}{Target}\n"), (&excluded, "\\hypertarget{section.1}{Excluded}")] {
+            workspace.documents.insert(uri.clone(), Document::new(uri, source.into(), None));
+        }
+        let warning = Diagnostic {
+            source: Some("latex-build".into()),
+            message:
+                "warning  (pdf backend): ignoring duplicate destination with the name 'section.1'"
+                    .into(),
+            ..Default::default()
+        };
+        let unknown = Diagnostic {
+            message:
+                "warning  (pdf backend): ignoring duplicate destination with the name 'generated.1'"
+                    .into(),
+            ..warning.clone()
+        };
+        let mut diagnostics = [(
+            root.clone(),
+            vec![warning.clone(), warning, unknown.clone()],
+        )]
+        .into();
+        resolve_diagnostics(
+            &workspace,
+            &[root.clone(), child.clone()].into(),
+            &mut diagnostics,
+        );
+        assert_eq!(diagnostics.len(), 2);
+        assert!(!diagnostics.contains_key(&excluded));
+        assert_eq!(diagnostics[&root].len(), 2);
+        assert!(diagnostics[&root].contains(&unknown));
+        assert_eq!(diagnostics[&child].len(), 1);
+        for (uri, other) in [(&root, &child), (&child, &root)] {
+            let doc = &workspace.documents[uri];
+            let entry = &doc.syntax.anchors[0];
+            let item = &diagnostics[uri][0];
+            assert_eq!(item.range, doc.text.range(entry.span.start, entry.span.end));
+            assert_eq!(
+                item.code,
+                Some(NumberOrString::String("duplicate-pdf-destination".into()))
+            );
+            let related = item.related_information.as_ref().unwrap();
+            assert_eq!(related.len(), 1);
+            assert_eq!(&related[0].location.uri, other);
+        }
+    }
 
     #[test]
     fn compiler_destinations_map_only_to_recorded_sources_and_merge_repetitions() {

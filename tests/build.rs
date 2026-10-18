@@ -11,6 +11,118 @@ use tower_lsp::lsp_types::{DiagnosticSeverity, Url};
 #[test]
 #[cfg(unix)]
 #[ignore = "requires pdflatex, lualatex and hyperref"]
+fn real_duplicate_destinations_include_automatic_collisions_and_long_compound_declarations() {
+    for engine in ["pdflatex", "lualatex"] {
+        let directory = tempfile::tempdir().unwrap();
+        let main = directory.path().join("main.tex");
+        let names = [
+            "shared".to_owned(),
+            format!("section.{}", "x".repeat(95)),
+            format!(
+                "{}'suffix",
+                "x".repeat(
+                    80 - "warning  (pdf backend): ignoring duplicate destination with the name '"
+                        .len()
+                        - 1
+                )
+            ),
+        ];
+        let mut source = "\\documentclass{article}\\usepackage{hyperref}\\begin{document}\n\\hypertarget{section.1}{Explicit}\\section{Automatic}\n".to_owned();
+        for name in &names {
+            source.push_str(&format!("\\hypertarget{{{name}}}{{First}}\\hyperdef{{}}% keep\n{{{name}}}{{Second}}\\hyperlink{{{name}}}{{Link}}\n"));
+        }
+        source.push_str("\\end{document}\n");
+        std::fs::write(&main, &source).unwrap();
+        let executable = if engine == "lualatex" {
+            script(directory.path(), "TEXMFVAR=\"${0%/*}/tex-cache\"\nTEXMFCACHE=\"$TEXMFVAR\"\nexport TEXMFVAR TEXMFCACHE\nmkdir -p \"$TEXMFVAR\"\nexec lualatex \"$@\"")
+        } else {
+            engine.into()
+        };
+        let config = BuildConfig {
+            executable,
+            arguments: Some(vec![
+                "-interaction=nonstopmode".into(),
+                "-output-directory=%o".into(),
+                "%f".into(),
+            ]),
+            ..Default::default()
+        };
+        let outcome = build::run(&main, &config, &Default::default());
+        assert_eq!(outcome.status, "success", "{engine}: {}", outcome.output);
+        let doc = latex_lsp::workspace::Document::new(
+            &Url::from_file_path(&main).unwrap(),
+            source.clone(),
+            None,
+        );
+        let warnings: Vec<_> = outcome
+            .diagnostics
+            .values()
+            .flatten()
+            .filter(|diagnostic| {
+                diagnostic.code
+                    == Some(tower_lsp::lsp_types::NumberOrString::String(
+                        "duplicate-pdf-destination".into(),
+                    ))
+            })
+            .collect();
+        assert_eq!(
+            warnings.len(),
+            if engine == "pdflatex" { 5 } else { 7 },
+            "{engine}: {:?}\n{}",
+            outcome.diagnostics,
+            outcome.output
+        );
+        for entry in &doc.syntax.anchors {
+            // pdfTeX abbreviates long duplicate names with \ETC. instead of
+            // printing their full identity. Such warnings must stay unlocated.
+            if engine == "pdflatex" && entry.name == names[1] {
+                continue;
+            }
+            let range = doc.text.range(entry.span.start, entry.span.end);
+            let warning = warnings
+                .iter()
+                .find(|warning| warning.range == range)
+                .unwrap_or_else(|| panic!("{engine}: {entry:?}\n{warnings:?}"));
+            assert_eq!(
+                warning.data,
+                Some(serde_json::json!({"destination":entry.name}))
+            );
+            assert!(!warning.message.contains("shipout"));
+        }
+        if engine == "pdflatex" {
+            assert!(outcome.diagnostics.values().flatten().any(|warning| warning
+                .message
+                .contains("\\ETC.")
+                && warning.code.is_none()
+                && warning.data.is_none()));
+        }
+        let mut repaired = source.replace("\\hypertarget{section.1}{Explicit}", "");
+        for name in &names {
+            repaired = repaired.replace(&format!("\\hypertarget{{{name}}}{{First}}"), "");
+        }
+        std::fs::write(&main, repaired).unwrap();
+        for _ in 0..2 {
+            let outcome = build::run(&main, &config, &Default::default());
+            assert_eq!(outcome.status, "success", "{engine}: {}", outcome.output);
+            assert!(
+                !outcome
+                    .diagnostics
+                    .values()
+                    .flatten()
+                    .any(
+                        |diagnostic| diagnostic.message.contains("duplicate destination")
+                            || diagnostic.message.contains("same identifier")
+                    ),
+                "{engine}: {:?}",
+                outcome.diagnostics
+            );
+        }
+    }
+}
+
+#[test]
+#[cfg(unix)]
+#[ignore = "requires pdflatex, lualatex and hyperref"]
 fn real_long_destination_warnings_recover_names_and_wrapped_explanatory_words() {
     for engine in ["pdflatex", "lualatex"] {
         let directory = tempfile::tempdir().unwrap();
