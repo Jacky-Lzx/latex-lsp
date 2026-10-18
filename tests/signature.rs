@@ -35,6 +35,22 @@ fn check(definitions: &str, marked: &str, label: &str, active: u32) {
 }
 
 #[test]
+fn named_alias_signatures_accept_grouped_and_bare_control_sequence_tokens() {
+    for (marked, label, active) in [
+        (r"\cslet{mir¦ror}{\hello}", r"\cslet{alias}{command}", 0),
+        (r"\cslet{mirror}{\hel¦lo}", r"\cslet{alias}{command}", 1),
+        (r"\cslet{mirror}\hel¦lo", r"\cslet{alias}{command}", 1),
+        (r"\letcs{\mir¦ror}{hello}", r"\letcs{alias}{command}", 0),
+        (r"\letcs{\mirror}{hel¦lo}", r"\letcs{alias}{command}", 1),
+        (r"\letcs\mirror{hel¦lo}", r"\letcs{alias}{command}", 1),
+        (r"\csletcs{mir¦ror}{hello}", r"\csletcs{alias}{command}", 0),
+        (r"\csletcs{mirror}{hel¦lo}", r"\csletcs{alias}{command}", 1),
+    ] {
+        check(r"\csdef{hello}#1#2{#1#2}", marked, label, active);
+    }
+}
+
+#[test]
 fn named_macro_mutations_offer_their_own_signature_instead_of_the_modified_macro_signature() {
     for command in [
         "csappto", "cseappto", "csgappto", "csxappto", "cspreto", "csepreto", "csgpreto",

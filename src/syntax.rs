@@ -300,6 +300,7 @@ fn declares_command(name: &str) -> bool {
                 | "RenewDocumentCommand"
                 | "ProvideDocumentCommand"
                 | "DeclareDocumentCommand"
+                | "letcs"
         )
 }
 
@@ -394,7 +395,7 @@ pub(crate) fn active_static_argument(
     Some(start..end)
 }
 
-fn control_word(source: &str, start: usize) -> Option<Range<usize>> {
+pub(crate) fn control_word(source: &str, start: usize) -> Option<Range<usize>> {
     if source.as_bytes().get(start) != Some(&b'\\') {
         return None;
     }
@@ -775,18 +776,13 @@ impl Syntax {
             }
         }
         for command in &result.commands {
-            if crate::named_commands::declares(&command.name) {
-                if let Some(span) = crate::named_commands::spans(source, command)
-                    .into_iter()
-                    .next()
-                {
-                    result.definitions.push(Entry {
-                        name: source[span.clone()].into(),
-                        span,
-                        detail: format!("Defined with \\{}", command.name),
-                        is_variable: false,
-                    });
-                }
+            if let Some(span) = crate::named_commands::declaration(source, command) {
+                result.definitions.push(Entry {
+                    name: source[span.clone()].into(),
+                    span,
+                    detail: format!("Defined with \\{}", command.name),
+                    is_variable: false,
+                });
             }
             if declares_toggle(&command.name) {
                 if let Some(argument) = &command.argument {

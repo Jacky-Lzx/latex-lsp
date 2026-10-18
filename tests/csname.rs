@@ -593,6 +593,9 @@ fn named_command_completion_preserves_suffixes_and_skips_strings_dynamic_names_a
         (r"\csepreto{hel¦lo}{hello}", r"\csepreto{hello}{hello}"),
         (r"\csundef{hel¦", r"\csundef{hello"),
         (r"\csgundef{hel¦lo}", r"\csgundef{hello}"),
+        (r"\csletcs{mirror}{hel¦lo}", r"\csletcs{mirror}{hello}"),
+        (r"\letcs{\mirror}{hel¦lo}", r"\letcs{\mirror}{hello}"),
+        (r"\letcs\mirror{hel¦", r"\letcs\mirror{hello"),
     ] {
         let directory = tempfile::tempdir().unwrap();
         let source = marked.replace('¦', "");
@@ -631,6 +634,10 @@ fn named_command_completion_preserves_suffixes_and_skips_strings_dynamic_names_a
         r"\csappto{hello}{hel¦lo}",
         r"\csepreto{hello}{hel¦lo}",
         r"\csundef{hel¦lo\suffix}",
+        r"\csletcs{hel¦lo}{other}",
+        r"\cslet{hel¦lo}{\other}",
+        r"\letcs{\mirror\other}{hel¦lo}",
+        r"\csletcs{mirror}{hel¦lo\suffix}",
     ] {
         let directory = tempfile::tempdir().unwrap();
         let source = marked.replace('¦', "");
@@ -746,6 +753,215 @@ fn mutations_in_shared_sources_must_resolve_to_the_same_definition_in_all_projec
                 features::rename(&workspace, &document, position, "greeting").is_err(),
                 "{command}: {name}"
             );
+        }
+    }
+}
+
+#[test]
+fn named_alias_declarations_keep_destination_and_source_symbol_identities_separate() {
+    for alias in [
+        r"\cslet{mirror}{\hello}",
+        r"\cslet{mirror}\hello",
+        r"\letcs{\mirror}{hello}",
+        r"\letcs\mirror{hello}",
+        r"\csletcs{mirror}{hello}",
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let definitions = format!(r"\csdef{{hello}}#1{{Hello #1}}{alias}");
+        let source = r"\documentclass{article}\input{definitions}\begin{document}\mirror{Direct}\csuse{mirror}{Named}\csname mirror\endcsname{Literal}\csuse{hello}{Original}\end{document}";
+        let workspace = project(
+            root,
+            &[("main.tex", source), ("definitions.tex", &definitions)],
+        );
+        let main = uri(root, "main.tex");
+        let declaration = uri(root, "definitions.tex");
+        let doc = &workspace.documents[&declaration];
+        assert_eq!(
+            doc.syntax.definitions.len(),
+            2,
+            "{alias}: {:?}",
+            doc.syntax.definitions
+        );
+        let destination = doc.text.position(definitions.find("mirror").unwrap());
+        let target = features::definitions(&workspace, &declaration, destination);
+        assert_eq!(target.len(), 1, "{alias}");
+        assert_eq!(target[0].uri, declaration);
+        assert_eq!(
+            features::references(&workspace, &declaration, destination, false).len(),
+            3,
+            "{alias}"
+        );
+        assert_eq!(
+            features::references(&workspace, &declaration, destination, true).len(),
+            4,
+            "{alias}"
+        );
+        let changed = renamed(&workspace, &declaration, destination);
+        assert_eq!(
+            changed[&declaration],
+            definitions.replace("mirror", "greeting")
+        );
+        assert_eq!(changed[&main], source.replace("mirror", "greeting"));
+        let original = doc.text.position(definitions.rfind("hello").unwrap());
+        assert_eq!(
+            features::references(&workspace, &declaration, original, true).len(),
+            3,
+            "{alias}"
+        );
+        let changed = renamed(&workspace, &declaration, original);
+        assert_eq!(
+            changed[&declaration],
+            definitions.replace("hello", "greeting")
+        );
+        assert_eq!(changed[&main], source.replace("hello", "greeting"));
+        let unicode = features::rename(&workspace, &declaration, original, "发布-模式");
+        assert_eq!(unicode.is_err(), alias.starts_with(r"\cslet{"), "{alias}");
+        assert!(features::rename(&workspace, &declaration, original, "mirror").is_err());
+    }
+}
+
+#[test]
+fn dynamic_alias_destinations_do_not_turn_static_sources_into_declarations() {
+    for alias in [
+        r"\csletcs{mirror\suffix}{hello}",
+        r"\cslet{mirror\suffix}\hello",
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let workspace = project(
+            root,
+            &[
+                ("main.tex", alias),
+                ("definitions.tex", r"\csdef{hello}{A}"),
+            ],
+        );
+        let main = uri(root, "main.tex");
+        let doc = &workspace.documents[&main];
+        assert!(
+            doc.syntax.definitions.is_empty(),
+            "{alias}: {:?}",
+            doc.syntax.definitions
+        );
+        let position = doc.text.position(alias.find("hello").unwrap());
+        assert_eq!(
+            features::definitions(&workspace, &main, position).len(),
+            1,
+            "{alias}"
+        );
+        assert_eq!(
+            features::references(&workspace, &main, position, false).len(),
+            1,
+            "{alias}"
+        );
+    }
+}
+
+#[test]
+fn shared_aliases_can_be_renamed_while_their_project_specific_sources_remain_ambiguous() {
+    for alias in [
+        r"\cslet{mirror}\hello",
+        r"\letcs\mirror{hello}",
+        r"\csletcs{mirror}{hello}",
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let workspace = project(
+            root,
+            &[
+                (
+                    "a.tex",
+                    r"\documentclass{article}\csdef{hello}{A}\input{shared}\begin{document}\csuse{mirror}\end{document}",
+                ),
+                (
+                    "b.tex",
+                    r"\documentclass{article}\csdef{hello}{B}\input{shared}\begin{document}\csuse{mirror}\end{document}",
+                ),
+                ("shared.tex", alias),
+            ],
+        );
+        let main = uri(root, "a.tex");
+        let shared = uri(root, "shared.tex");
+        let text = &workspace.documents[&main].text;
+        assert!(
+            features::rename(
+                &workspace,
+                &main,
+                text.position(text.source.find("hello").unwrap()),
+                "greeting"
+            )
+            .is_err(),
+            "{alias}"
+        );
+        let position = workspace.documents[&shared]
+            .text
+            .position(alias.find("mirror").unwrap());
+        let changed = renamed(&workspace, &shared, position);
+        assert_eq!(changed.len(), 3, "{alias}");
+        assert_eq!(changed[&shared], alias.replace("mirror", "greeting"));
+        for name in ["a.tex", "b.tex"] {
+            let document = uri(root, name);
+            assert_eq!(
+                changed[&document],
+                workspace.documents[&document]
+                    .text
+                    .source
+                    .replace("mirror", "greeting")
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex and etoolbox"]
+fn named_alias_renames_preserve_the_copied_meaning_when_the_original_is_redefined() {
+    for alias in [
+        r"\cslet{mirror}{\hello}",
+        r"\cslet{mirror}\hello",
+        r"\letcs{\mirror}{hello}",
+        r"\letcs\mirror{hello}",
+        r"\csletcs{mirror}{hello}",
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let definitions = format!(r"\csdef{{hello}}#1{{\typeout{{ORIGINAL:#1}}#1}}{alias}");
+        let source = r"\documentclass{article}\usepackage{etoolbox}\input{definitions}
+\begin{document}\csuse{mirror}{Before}\renewcommand{\hello}[1]{\typeout{CURRENT:#1}#1}\csuse{mirror}{Named}\csname mirror\endcsname{Literal}\hello{After}\end{document}";
+        let workspace = project(
+            root,
+            &[("main.tex", source), ("definitions.tex", &definitions)],
+        );
+        let main = root.join("main.tex");
+        let config = latex_lsp::config::BuildConfig {
+            executable: "pdflatex".into(),
+            ..Default::default()
+        };
+        let before = build::run(&main, &config, &AtomicBool::new(false));
+        assert_eq!(before.status, "success", "{alias}: {}", before.output);
+        let declaration = uri(root, "definitions.tex");
+        let position = workspace.documents[&declaration]
+            .text
+            .position(definitions.find("mirror").unwrap());
+        let name = if alias.starts_with(r"\letcs") {
+            "greeting"
+        } else {
+            "发布-模式"
+        };
+        for (uri, source) in renamed_to(&workspace, &declaration, position, name) {
+            std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+        }
+        let after = build::run(&main, &config, &AtomicBool::new(false));
+        assert_eq!(after.status, "success", "{alias}: {}", after.output);
+        for output in [&before.output, &after.output] {
+            for expected in [
+                "ORIGINAL:Before",
+                "ORIGINAL:Named",
+                "ORIGINAL:Literal",
+                "CURRENT:After",
+            ] {
+                assert!(output.contains(expected), "{alias}: {output}");
+            }
+            assert!(!output.contains("CURRENT:Named"), "{alias}: {output}");
         }
     }
 }

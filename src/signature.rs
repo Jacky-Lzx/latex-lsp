@@ -10,6 +10,7 @@ use tower_lsp::lsp_types::*;
 #[derive(Clone)]
 enum Kind {
     Required,
+    CommandToken,
     Optional,
     Star,
 }
@@ -72,7 +73,7 @@ pub fn completion(
     let mut snippet = name.to_owned();
     let mut tabstop = 0;
     for (index, parameter) in signature.parameters.iter().enumerate() {
-        if matches!(parameter.kind, Kind::Required) {
+        if matches!(parameter.kind, Kind::Required | Kind::CommandToken) {
             tabstop += 1;
             snippet.push_str(&format!("{{${{{tabstop}:arg{}}}}}", index + 1));
         }
@@ -97,6 +98,7 @@ fn builtin(name: &str) -> Option<Signature> {
         }
         "includeonly" => (&[("files", false)], false),
         "csuse" | "csmeaning" | "csundef" | "csgundef" => (&[("command", false)], false),
+        "cslet" | "letcs" | "csletcs" => (&[("alias", false), ("command", false)], false),
         "csappto" | "cseappto" | "csgappto" | "csxappto" | "cspreto" | "csepreto" | "csgpreto"
         | "csxpreto" => (&[("command", false), ("code", false)], false),
         "ifcsdef" | "ifcsundef" | "ifcsvoid" | "ifcsmacro" | "ifcsparam" | "ifcsprotected"
@@ -201,16 +203,19 @@ fn builtin(name: &str) -> Option<Signature> {
     };
     let parameters = arguments
         .iter()
-        .map(|(name, optional)| Parameter {
+        .enumerate()
+        .map(|(index, (label, optional))| Parameter {
             kind: if *optional {
                 Kind::Optional
+            } else if name == "cslet" && index == 1 || name == "letcs" && index == 0 {
+                Kind::CommandToken
             } else {
                 Kind::Required
             },
             label: if *optional {
-                format!("[{name}]")
+                format!("[{label}]")
             } else {
-                format!("{{{name}}}")
+                format!("{{{label}}}")
             },
         })
         .collect();
@@ -563,6 +568,14 @@ fn active_parameter(
             return Some(index);
         }
         let (open, close) = match parameter.kind {
+            Kind::CommandToken if source.as_bytes().get(i) != Some(&b'{') => {
+                let token = syntax::control_word(source, i)?;
+                if cursor <= token.end {
+                    return Some(index);
+                }
+                i = token.end;
+                continue;
+            }
             Kind::Star => {
                 if source.as_bytes().get(i) == Some(&b'*') {
                     i += 1;
@@ -572,7 +585,7 @@ fn active_parameter(
             Kind::Optional if source.as_bytes().get(i) != Some(&b'[') => continue,
             Kind::Optional => (b'[', b']'),
             Kind::Required if source.as_bytes().get(i) != Some(&b'{') => return None,
-            Kind::Required => (b'{', b'}'),
+            Kind::Required | Kind::CommandToken => (b'{', b'}'),
         };
         match group_end(doc, i, cursor, open, close) {
             Some(end) => i = end,

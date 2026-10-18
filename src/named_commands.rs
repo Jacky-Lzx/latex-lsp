@@ -6,33 +6,61 @@ use std::{
 };
 use tower_lsp::lsp_types::*;
 
-fn count(name: &str) -> usize {
-    if declares(name) {
-        return 1;
-    }
+/// Whether each argument contains a literal name, rather than a command token.
+fn arguments(name: &str) -> &'static [bool] {
     match name {
+        "letcs" => &[false, true],
+        "csletcs" | "ifcsequal" | "ifcsstrequal" => &[true, true],
+        name if declares(name) => &[true],
         "csuse" | "csmeaning" | "ifcsdef" | "ifcsundef" | "ifcsvoid" | "ifcsmacro"
         | "ifcsparam" | "ifcsprotected" | "ifcsltxprotect" | "ifcsstring" | "csundef"
         | "csgundef" | "csappto" | "cseappto" | "csgappto" | "csxappto" | "cspreto"
-        | "csepreto" | "csgpreto" | "csxpreto" => 1,
-        "ifcsequal" | "ifcsstrequal" => 2,
-        _ => 0,
+        | "csepreto" | "csgpreto" | "csxpreto" => &[true],
+        _ => &[],
     }
 }
 
 pub(crate) fn declares(name: &str) -> bool {
-    matches!(name, "csdef" | "csgdef" | "csedef" | "csxdef")
+    matches!(
+        name,
+        "csdef" | "csgdef" | "csedef" | "csxdef" | "cslet" | "csletcs"
+    )
+}
+
+pub(crate) fn declaration(source: &str, command: &syntax::Command) -> Option<Range<usize>> {
+    if !declares(&command.name) {
+        return None;
+    }
+    // Inspect the destination itself. A dynamic destination must never make
+    // csletcs's static source appear to be a declaration instead.
+    let start = syntax::skip_space(source, command.span.end);
+    argument(source, start, true)?.0
+}
+
+fn argument(source: &str, start: usize, named: bool) -> Option<(Option<Range<usize>>, usize)> {
+    if let Some((argument, end)) = syntax::group(source, start, b'{', b'}') {
+        let span = syntax::trimmed_span(source, argument.span);
+        if named {
+            let valid = syntax::is_static_key(&source[span.clone()]);
+            Some((valid.then_some(span), end))
+        } else {
+            (syntax::control_word(source, span.start)? == span).then_some((None, end))
+        }
+    } else if !named {
+        Some((None, syntax::control_word(source, start)?.end))
+    } else {
+        None
+    }
 }
 
 pub(crate) fn spans(source: &str, command: &syntax::Command) -> Vec<Range<usize>> {
     let mut result = Vec::new();
     let mut start = syntax::skip_space(source, command.span.end);
-    for _ in 0..count(&command.name) {
-        let Some((argument, end)) = syntax::group(source, start, b'{', b'}') else {
+    for &named in arguments(&command.name) {
+        let Some((span, end)) = argument(source, start, named) else {
             break;
         };
-        let span = syntax::trimmed_span(source, argument.span);
-        if syntax::is_static_key(&source[span.clone()]) {
+        if let Some(span) = span {
             result.push(span);
         }
         start = syntax::skip_space(source, end);
@@ -55,14 +83,16 @@ pub(crate) fn completion(
         .rev()
         .filter(|command| command.span.end <= cursor)
         .take(128)
-        .filter(|command| !declares(&command.name))
         .find_map(|command| {
             let mut start = syntax::skip_space(source, command.span.end);
-            for _ in 0..count(&command.name) {
-                if let Some(span) = syntax::active_static_argument(source, start, b'{', cursor) {
-                    return Some(span);
+            for (index, &named) in arguments(&command.name).iter().enumerate() {
+                if named && !(index == 0 && declares(&command.name)) {
+                    if let Some(span) = syntax::active_static_argument(source, start, b'{', cursor)
+                    {
+                        return Some(span);
+                    }
                 }
-                let (_, end) = syntax::group(source, start, b'{', b'}')?;
+                let (_, end) = argument(source, start, named)?;
                 start = syntax::skip_space(source, end);
             }
             None

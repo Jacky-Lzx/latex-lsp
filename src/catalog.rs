@@ -63,6 +63,9 @@ pub(crate) const PRIMITIVES: &[&str] = &[
 /// Command name, snippet template (without leading backslash), short documentation.
 /// Templates retain literal TeX backslashes; completion escapes them for the client.
 pub const COMMANDS: &[(&str, &str, &str)] = &[
+    ("cslet", "cslet{${1:alias}}{\\${2:command}}", "Assign a control sequence's current meaning to a named alias in the current group. Requires etoolbox."),
+    ("letcs", "letcs{\\${1:alias}}{${2:command}}", "Assign a named control sequence's current meaning to an alias token in the current group. Requires etoolbox."),
+    ("csletcs", "csletcs{${1:alias}}{${2:command}}", "Assign a named control sequence's current meaning to a named alias in the current group. Requires etoolbox."),
     ("csundef", "csundef{${1:command}}", "Undefine a control sequence by name in the current group. Requires etoolbox."),
     ("csgundef", "csgundef{${1:command}}", "Globally undefine a control sequence by name. Requires etoolbox."),
     ("csappto", "csappto{${1:command}}{${2:code}}", "Append unexpanded code to a named macro in the current group. Requires etoolbox."),
