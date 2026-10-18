@@ -107,6 +107,46 @@ fn bibliography_builds_with_custom_job_names_still_resolve_and_analyze_the_datab
 
 #[test]
 #[ignore = "requires pdflatex"]
+fn real_missing_include_warnings_reconstruct_tex_wrapped_long_chapter_names() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = root.join("main.tex");
+    let chapter = format!("chapters/{} (missing chapter)", "中".repeat(50));
+    std::fs::write(&main, format!("\\documentclass{{article}}\n\\begin{{document}}\nIntroduction.\n\\include{{{chapter}}}\n\\end{{document}}\n")).unwrap();
+    let config = BuildConfig {
+        executable: "pdflatex".into(),
+        ..Default::default()
+    };
+    let outcome = build::run(&main, &config, &AtomicBool::new(false));
+    assert_eq!(outcome.status, "success", "{}", outcome.output);
+    let source = Url::from_file_path(&main).unwrap();
+    let diagnostics = outcome
+        .diagnostics
+        .get(&source)
+        .unwrap_or_else(|| panic!("{}", outcome.output));
+    let warning = diagnostics
+        .iter()
+        .find(|diagnostic| {
+            diagnostic.code
+                == Some(tower_lsp::lsp_types::NumberOrString::String(
+                    "missing-include".into(),
+                ))
+        })
+        .unwrap_or_else(|| panic!("{diagnostics:?}\n{}", outcome.output));
+    assert_eq!(
+        warning.message,
+        format!("Included file `{chapter}.tex` not found")
+    );
+    assert_eq!(warning.range.start.line, 3);
+    assert_eq!(warning.range.start.character, 9);
+    assert_eq!(
+        warning.range.end.character as usize,
+        9 + chapter.encode_utf16().count()
+    );
+}
+
+#[test]
+#[ignore = "requires pdflatex"]
 fn real_overfull_paragraph_diagnostics_cover_the_complete_reported_source_range() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
@@ -830,7 +870,9 @@ fn real_definition_file_warnings_with_spaces_and_parentheses_keep_their_source_c
     let options = directory.path().join("layout options.clo");
     let long_name = format!("settings {}(old).def", "long-name-".repeat(12));
     let long_definition = directory.path().join(&long_name);
-    std::fs::write(&main,format!("\\documentclass{{article}}\n\\begin{{document}}\n\\input{{settings (old).def}}\n\\input{{layout options.clo}}\n\\PackageWarning{{audit}}{{Root warning}}\n\\input{{{long_name}}}\nText.\n\\end{{document}}\n")).unwrap();
+    let unicode_name = format!("settings {}(old).def", "中".repeat(50));
+    let unicode_definition = directory.path().join(&unicode_name);
+    std::fs::write(&main,format!("\\documentclass{{article}}\n\\begin{{document}}\n\\input{{settings (old).def}}\n\\input{{layout options.clo}}\n\\PackageWarning{{audit}}{{Root warning}}\n\\input{{{long_name}}}\n\\input{{{unicode_name}}}\nText.\n\\end{{document}}\n")).unwrap();
     std::fs::write(&definition,"% configuration\n\\PackageWarning{audit}{Closing ) marker}\n\\PackageWarning{audit}{Still in definition}\n").unwrap();
     std::fs::write(
         &options,
@@ -840,6 +882,11 @@ fn real_definition_file_warnings_with_spaces_and_parentheses_keep_their_source_c
     std::fs::write(
         &long_definition,
         "\\PackageWarning{audit}{Wrapped filename warning}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &unicode_definition,
+        "\\PackageWarning{audit}{Unicode wrapped filename warning}\n",
     )
     .unwrap();
     let outcome = build::run(&main, &Default::default(), &Default::default());
@@ -869,6 +916,11 @@ fn real_definition_file_warnings_with_spaces_and_parentheses_keep_their_source_c
         outcome.diagnostics[&Url::from_file_path(&long_definition).unwrap()][0]
             .message
             .contains("Wrapped filename warning")
+    );
+    assert!(
+        outcome.diagnostics[&Url::from_file_path(&unicode_definition).unwrap()][0]
+            .message
+            .contains("Unicode wrapped filename warning")
     );
 }
 

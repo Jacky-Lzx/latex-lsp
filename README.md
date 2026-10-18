@@ -129,7 +129,7 @@ latexmk 和直接 TeX 引擎编译前会为静态 `\include{chapters/name}` 预�
 
 文献依赖和日志定位共用搜索规则，识别 BibTeX 的工作目录与 latexmk 报告的数据库/样式搜索路径，避免主目录和输出目录中的同名文件导致定位错误。Biber 日志中的空格、中文及含单引号的数据库名也会保留。
 
-TeX 可能在缺少 `\include` 章节时仍生成 PDF 并返回成功。服务器会把 `No file chapter.tex.` 转为 `missing-include` 警告，识别并标出调用文件中的静态章节路径；补回文件并重新编译后清除。正常首次编译时缺少 `.aux` / `.bbl` 的消息，以及无法关联到章节声明的可选文件消息不会作为章节警告。
+TeX 可能在缺少 `\include` 章节时仍生成 PDF 并返回成功。服务器会把 `No file chapter.tex.` 转为 `missing-include` 警告，识别并标出调用文件中的静态章节路径；支持长路径自动折行，补回文件并重新编译后清除。正常首次编译时缺少 `.aux` / `.bbl` 的消息，以及无法关联到章节声明的可选文件消息不会作为章节警告。日志和编译输出中被 TeX 按字节换行拆开的 UTF-8 字符会先恢复，保留中文等路径和对应文件的诊断位置。
 
 Overfull/Underfull 诊断会覆盖日志中 `at lines N--M` 指定的完整源码范围，并分别标记 `overfull-box` / `underfull-box` 诊断代码；支持 UTF-16 和 CRLF，异常范围会限制在文档内。
 

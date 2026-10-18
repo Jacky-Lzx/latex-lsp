@@ -791,8 +791,8 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool) -> Outcome 
     let stderr = stderr.join().unwrap_or_default();
     let output = format!(
         "{}\n{}",
-        String::from_utf8_lossy(&stdout),
-        String::from_utf8_lossy(&stderr)
+        build_log::decode_output(&stdout),
+        build_log::decode_output(&stderr)
     );
     let log = read_log(&log_path).unwrap_or_default();
     outcome.pdf_updated = outcome
@@ -923,7 +923,7 @@ fn read_log(path: &Path) -> Option<String> {
     file.take((MAX_OUTPUT * 2) as u64)
         .read_to_end(&mut text)
         .ok()?;
-    Some(String::from_utf8_lossy(&text).into_owned())
+    Some(build_log::decode_output(&text).into_owned())
 }
 
 fn fingerprint(path: &Path) -> Option<(u64, Option<std::time::SystemTime>)> {

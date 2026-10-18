@@ -7,6 +7,52 @@ use std::{
 };
 use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range, Url};
 
+/// TeX's byte-based print width can split a UTF-8 scalar across a line break.
+/// Remove a break only when the surrounding bytes form a valid scalar.
+pub(crate) fn decode_output(bytes: &[u8]) -> Cow<'_, str> {
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        return Cow::Borrowed(text);
+    }
+    let mut repaired = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let width = match bytes[i] {
+            0xc2..=0xdf => 2,
+            0xe0..=0xef => 3,
+            0xf0..=0xf4 => 4,
+            _ => 1,
+        };
+        let mut scalar = [0; 4];
+        scalar[0] = bytes[i];
+        let mut count = 1;
+        let mut after = i + 1;
+        let mut wrapped = false;
+        while count < width && after < bytes.len() {
+            if !wrapped && bytes[after] == b'\n' {
+                wrapped = true;
+                after += 1;
+            } else if !wrapped && bytes[after..].starts_with(b"\r\n") {
+                wrapped = true;
+                after += 2;
+            } else if (0x80..=0xbf).contains(&bytes[after]) {
+                scalar[count] = bytes[after];
+                count += 1;
+                after += 1;
+            } else {
+                break;
+            }
+        }
+        if wrapped && count == width && std::str::from_utf8(&scalar[..width]).is_ok() {
+            repaired.extend_from_slice(&scalar[..width]);
+            i = after;
+        } else {
+            repaired.push(bytes[i]);
+            i += 1;
+        }
+    }
+    Cow::Owned(String::from_utf8_lossy(&repaired).into_owned())
+}
+
 fn location(root: &Path, name: &str) -> Option<PathBuf> {
     let path = root.parent()?.join(name.trim().trim_matches('"'));
     let path = path.canonicalize().ok()?;
@@ -112,16 +158,56 @@ fn box_range(text: &Text, message: &str) -> Option<Range> {
     ))
 }
 
-fn missing_include_file(line: &str) -> Option<&str> {
-    let name = line
-        .strip_prefix("No file ")?
-        .strip_suffix('.')?
-        .trim_matches('"');
-    (Path::new(name)
-        .extension()
-        .and_then(|extension| extension.to_str())
-        == Some("tex"))
-    .then_some(name)
+fn missing_include_file(path: &Path, lines: &[&str], index: &mut usize) -> Option<String> {
+    let line = lines[*index];
+    let text = Text::new(std::fs::read_to_string(path).ok()?);
+    let syntax = crate::syntax::Syntax::latex(&text);
+    let mut candidates = Vec::new();
+    for command in syntax
+        .commands
+        .iter()
+        .filter(|command| command.name == "include")
+        .take(1024)
+    {
+        let Some(argument) = &command.argument else {
+            continue;
+        };
+        let value = argument.value.trim();
+        if value.is_empty() || value.contains(['\\', '{', '}', '%', '#', '$', '\r', '\n']) {
+            continue;
+        }
+        for name in crate::syntax::file_lookup_names("include", value) {
+            for message in [format!("No file {name}."), format!("No file \"{name}\".")] {
+                if message.len() <= 8192 && message.starts_with(line) {
+                    if message == line {
+                        return Some(name.into_owned());
+                    }
+                    candidates.push((message, name.to_string()));
+                }
+            }
+        }
+    }
+    // Join only prefixes of a known static include. This avoids swallowing
+    // adjacent diagnostics or inventing chapter warnings for optional files.
+    if candidates.is_empty() {
+        return None;
+    }
+    let mut joined = line.to_owned();
+    for (next_index, next) in lines.iter().enumerate().skip(*index + 1).take(64) {
+        if joined.len() + next.len() > 8192 {
+            break;
+        }
+        joined.push_str(next);
+        candidates.retain(|(message, _)| message.starts_with(&joined));
+        if let Some((_, name)) = candidates.iter().find(|(message, _)| message == &joined) {
+            *index = next_index;
+            return Some(name.clone());
+        }
+        if candidates.is_empty() {
+            break;
+        }
+    }
+    None
 }
 
 fn missing_include_key(message: &str) -> Option<&str> {
@@ -434,14 +520,17 @@ pub fn parse(root: &Path, log: &str) -> BTreeMap<Url, Vec<Diagnostic>> {
                 message,
                 DiagnosticSeverity::WARNING,
             );
-        } else if let Some(name) = missing_include_file(line) {
-            emit(
-                &mut result,
-                &current(),
-                1,
-                format!("Included file `{name}` not found"),
-                DiagnosticSeverity::WARNING,
-            );
+        } else if line.starts_with("No file ") {
+            let path = current();
+            if let Some(name) = missing_include_file(&path, &lines, &mut i) {
+                emit(
+                    &mut result,
+                    &path,
+                    1,
+                    format!("Included file `{name}` not found"),
+                    DiagnosticSeverity::WARNING,
+                );
+            }
         } else if line.starts_with("Overfull ") || line.starts_with("Underfull ") {
             emit(
                 &mut result,
@@ -652,6 +741,37 @@ mod tests {
     use super::*;
 
     #[test]
+    fn tex_byte_wrapping_recovers_split_utf8_without_joining_valid_or_malformed_lines() {
+        for scalar in ["é", "中", "😀"] {
+            for split in 1..scalar.len() {
+                for newline in [b"\n".as_slice(), b"\r\n".as_slice()] {
+                    let bytes = [
+                        b"No file dir/",
+                        &scalar.as_bytes()[..split],
+                        newline,
+                        &scalar.as_bytes()[split..],
+                        b".tex.\n",
+                    ]
+                    .concat();
+                    assert_eq!(
+                        decode_output(&bytes),
+                        format!("No file dir/{scalar}.tex.\n")
+                    );
+                }
+            }
+        }
+        assert_eq!(decode_output("中文\n😀\n".as_bytes()), "中文\n😀\n");
+        for bytes in [
+            b"\xff\n\x80".as_slice(),
+            b"\xe0\x80\n\x80".as_slice(),
+            b"\xe4\nA".as_slice(),
+            b"\xe4\n\n\xb8\xad".as_slice(),
+        ] {
+            assert_eq!(decode_output(bytes), String::from_utf8_lossy(bytes));
+        }
+    }
+
+    #[test]
     fn bibliography_diagnostics_use_the_tool_working_directory_for_database_and_style_locations() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();
@@ -742,6 +862,57 @@ mod tests {
         assert!(missing
             .iter()
             .all(|diagnostic| diagnostic.severity == Some(DiagnosticSeverity::WARNING)));
+    }
+
+    #[test]
+    fn wrapped_missing_includes_preserve_file_context_and_adjacent_diagnostics() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let main = root.join("main.tex");
+        let child = root.join("child.tex");
+        std::fs::write(&main, "\\input{child}\n\\include{parent}\n").unwrap();
+        let chapter = format!("chapters/{} (中文 file)", "long-path-".repeat(12));
+        let source = format!("😀 \\include{{{chapter}}}\n");
+        std::fs::write(&child, &source).unwrap();
+        for width in [16, 79, 121] {
+            for quoted in [false, true] {
+                let missing = if quoted {
+                    format!("No file \"{chapter}.tex\".")
+                } else {
+                    format!("No file {chapter}.tex.")
+                };
+                let wrapped = missing
+                    .chars()
+                    .collect::<Vec<_>>()
+                    .chunks(width)
+                    .map(|chars| chars.iter().collect::<String>())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let log = format!("(./main.tex\n(./child.tex\nNo file optional(broken).tex.\n{wrapped}\nNo file chapters/long-path-\nPackage local Warning: Adjacent warning on input line 1.\n)\nNo file parent.tex.\n)");
+                let result = parse(&main, &log);
+                let child_diagnostics = &result[&Url::from_file_path(&child).unwrap()];
+                assert_eq!(child_diagnostics.len(), 2, "{result:?}");
+                let missing = child_diagnostics
+                    .iter()
+                    .find(|diagnostic| missing_include_key(&diagnostic.message).is_some())
+                    .unwrap();
+                assert_eq!(
+                    missing.message,
+                    format!("Included file `{chapter}.tex` not found")
+                );
+                assert_eq!(
+                    missing.range,
+                    Range::new(
+                        Position::new(0, 12),
+                        Position::new(0, 12 + chapter.encode_utf16().count() as u32)
+                    )
+                );
+                let parent = &result[&Url::from_file_path(&main).unwrap()];
+                assert_eq!(parent.len(), 1);
+                assert_eq!(parent[0].message, "Included file `parent.tex` not found");
+                assert_eq!(parent[0].range.start.line, 1);
+            }
+        }
     }
 
     #[test]
