@@ -18,6 +18,24 @@ pub struct Command {
     pub argument: Option<Argument>,
 }
 
+/// A literal `\csname name\endcsname`; names involving expansion, comments,
+/// or embedded whitespace remain unresolved. Inspect only the next command
+/// so malformed input cannot cause repeated scans of the remaining document.
+pub(crate) fn literal_csname(
+    source: &str,
+    commands: &[Command],
+    index: usize,
+) -> Option<Range<usize>> {
+    let command = commands
+        .get(index)
+        .filter(|command| command.name == "csname")?;
+    let end = commands
+        .get(index + 1)
+        .filter(|command| command.name == "endcsname")?;
+    let span = trimmed_span(source, command.span.end..end.span.start);
+    is_static_key(&source[span.clone()]).then_some(span)
+}
+
 #[derive(Clone, Debug)]
 pub struct Entry {
     pub name: String,

@@ -21,6 +21,7 @@ struct Target<'a> {
     kind: TargetKind,
     name: &'a str,
     span: Span<usize>,
+    control_word: bool,
 }
 
 fn raw_target(doc: &Document, offset: usize) -> Option<Target<'_>> {
@@ -56,6 +57,7 @@ fn raw_target(doc: &Document, offset: usize) -> Option<Target<'_>> {
                         kind,
                         name: &doc.text.source[span.clone()],
                         span,
+                        control_word: false,
                     });
                 }
             }
@@ -65,6 +67,7 @@ fn raw_target(doc: &Document, offset: usize) -> Option<Target<'_>> {
                 kind: TargetKind::Command,
                 name: &command.name,
                 span: command.span.clone(),
+                control_word: true,
             });
         }
     }
@@ -79,6 +82,7 @@ fn raw_target(doc: &Document, offset: usize) -> Option<Target<'_>> {
                 kind: TargetKind::Citation,
                 name: &entry.name,
                 span: entry.span.clone(),
+                control_word: false,
             });
         }
     }
@@ -104,7 +108,20 @@ fn target<'a>(workspace: &'a Workspace, uri: &Url, offset: usize) -> Option<Targ
             kind: TargetKind::Environment,
             name,
             span,
+            control_word: false,
         });
+    }
+    for index in 0..doc.syntax.commands.len() {
+        if let Some(span) = syntax::literal_csname(&doc.text.source, &doc.syntax.commands, index) {
+            if span.start <= offset && offset <= span.end {
+                return Some(Target {
+                    kind: TargetKind::Command,
+                    name: &doc.text.source[span.clone()],
+                    span,
+                    control_word: false,
+                });
+            }
+        }
     }
     raw
 }
@@ -196,7 +213,7 @@ pub fn prepare_rename(
         return Ok(None);
     };
     let doc = &workspace.documents[uri];
-    let start = target.span.start + usize::from(target.kind == TargetKind::Command);
+    let start = target.span.start + usize::from(target.control_word);
     Ok(Some(PrepareRenameResponse::RangeWithPlaceholder {
         range: doc.text.range(start, target.span.end),
         placeholder: target.name.into(),
@@ -270,20 +287,24 @@ pub fn rename(
             crate::environment::validate(workspace, &scope, target.name, new_name, environment)?;
         }
     }
-    let replacement = if target.kind == TargetKind::Command {
-        format!("\\{new_name}")
-    } else {
-        new_name.into()
-    };
     let mut changes: std::collections::BTreeMap<Url, Vec<TextEdit>> =
         std::collections::BTreeMap::new();
     for location in all_references(workspace, uri, position, true)
         .into_iter()
         .filter(|location| scope.contains(&location.uri))
     {
+        let text = &workspace.documents[&location.uri].text;
+        let control_word = target.kind == TargetKind::Command
+            && text
+                .offset(location.range.start)
+                .is_some_and(|offset| text.source[offset..].starts_with('\\'));
         changes.entry(location.uri).or_default().push(TextEdit {
             range: location.range,
-            new_text: replacement.clone(),
+            new_text: if control_word {
+                format!("\\{new_name}")
+            } else {
+                new_name.into()
+            },
         });
     }
     for edits in changes.values_mut() {
@@ -735,8 +756,17 @@ fn all_references(
                     }),
             );
         }
-        for command in &doc.syntax.commands {
+        for (index, command) in doc.syntax.commands.iter().enumerate() {
             if target.kind == TargetKind::Command {
+                if let Some(span) =
+                    syntax::literal_csname(&doc.text.source, &doc.syntax.commands, index)
+                        .filter(|span| doc.text.source[span.clone()] == *target.name)
+                {
+                    result.push(Location {
+                        uri: uri.clone(),
+                        range: doc.text.range(span.start, span.end),
+                    });
+                }
                 if command.name == target.name
                     && !doc
                         .syntax

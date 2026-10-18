@@ -121,25 +121,17 @@ pub(crate) fn references(doc: &Document, name: &str, environment: Environment) -
                 control_word: true,
             });
         }
-        if command.name == "csname" {
-            if let Some(end) = doc
-                .syntax
-                .commands
-                .get(index + 1)
-                .filter(|command| command.name == "endcsname")
+        if let Some(span) = syntax::literal_csname(&doc.text.source, &doc.syntax.commands, index) {
+            if let Some((_, prefix)) = generated
+                .iter()
+                .find(|(name, _)| *name == doc.text.source[span.clone()])
             {
-                let span = syntax::trimmed_span(&doc.text.source, command.span.end..end.span.start);
-                if let Some((_, prefix)) = generated
-                    .iter()
-                    .find(|(name, _)| *name == doc.text.source[span.clone()])
-                {
-                    let start = span.start + prefix;
-                    result.push(Reference {
-                        span: start..start + name.len(),
-                        selection_span: span,
-                        control_word: false,
-                    });
-                }
+                let start = span.start + prefix;
+                result.push(Reference {
+                    span: start..start + name.len(),
+                    selection_span: span,
+                    control_word: false,
+                });
             }
         }
         let mut arguments = Vec::new();
