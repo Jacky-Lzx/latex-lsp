@@ -23,11 +23,19 @@ pub struct Entry {
     pub detail: String,
 }
 
+#[derive(Clone, Debug)]
+pub struct CitationField {
+    pub name: String,
+    pub argument: Argument,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Syntax {
     pub commands: Vec<Command>,
     pub labels: Vec<Entry>,
     pub citations: Vec<Entry>,
+    pub citation_fields: Vec<CitationField>,
+    pub citation_references: Vec<Entry>,
     pub definitions: Vec<Entry>,
     pub environments: Vec<Entry>,
     pub diagnostics: Vec<Diagnostic>,
@@ -481,7 +489,7 @@ impl Syntax {
             let close = if open == b'{' { b'}' } else { b')' };
             let content = i + 1;
             // Skip the whole entry so @ signs in field values never become entries.
-            let end = bib_entry_end(source, i, close);
+            let (end, closed) = bib_entry_end(source, i, close);
             if !matches!(
                 kind.to_ascii_lowercase().as_str(),
                 "comment" | "string" | "preamble"
@@ -498,11 +506,71 @@ impl Syntax {
                         span,
                         detail: format!("BibTeX {kind}"),
                     });
+                    let body_end = if closed { end - 1 } else { end };
+                    result.bibliography_fields(source, key_end + 1, body_end);
                 }
             }
             i = end;
         }
         result
+    }
+
+    fn bibliography_fields(&mut self, source: &str, mut i: usize, end: usize) {
+        let bytes = source.as_bytes();
+        while i < end {
+            i = skip_space(source, i);
+            if bytes.get(i) == Some(&b',') {
+                i += 1;
+                continue;
+            }
+            let start = i;
+            while i < end && (bytes[i].is_ascii_alphanumeric() || matches!(bytes[i], b'_' | b'-')) {
+                i += 1;
+            }
+            if start == i {
+                break;
+            }
+            let name = source[start..i].to_ascii_lowercase();
+            i = skip_space(source, i);
+            if bytes.get(i) != Some(&b'=') {
+                break;
+            }
+            let start = skip_space(source, i + 1);
+            let value_end = bib_value_end(source, start, end);
+            i = value_end + 1;
+            if !matches!(
+                name.as_str(),
+                "crossref" | "xref" | "xdata" | "related" | "entryset"
+            ) {
+                continue;
+            }
+            let Some(argument) = bib_literal(source, start, value_end) else {
+                continue;
+            };
+            // Macro concatenations, escaped values and nested TeX groups cannot
+            // be renamed safely without evaluating BibTeX's string language.
+            if argument.value.contains(['\\', '{', '}', '%', '#', '"']) {
+                continue;
+            }
+            let multiple = matches!(name.as_str(), "xdata" | "related" | "entryset");
+            let mut offset = argument.span.start;
+            for key in if multiple {
+                argument.value.split(',').collect::<Vec<_>>()
+            } else {
+                vec![argument.value.as_str()]
+            } {
+                let span = trimmed_span(source, offset..offset + key.len());
+                if !span.is_empty() {
+                    self.citation_references.push(Entry {
+                        name: source[span.clone()].into(),
+                        span,
+                        detail: format!("BibTeX {name} reference"),
+                    });
+                }
+                offset += key.len() + 1;
+            }
+            self.citation_fields.push(CitationField { name, argument });
+        }
     }
 
     pub fn is_ignored(&self, offset: usize) -> bool {
@@ -522,7 +590,7 @@ fn environment_end(text: &Text, name: &str) -> TextEdit {
     }
 }
 
-fn bib_entry_end(source: &str, start: usize, close: u8) -> usize {
+fn bib_entry_end(source: &str, start: usize, close: u8) -> (usize, bool) {
     let bytes = source.as_bytes();
     let mut depth = 0u32;
     let mut quoted = false;
@@ -533,15 +601,95 @@ fn bib_entry_end(source: &str, start: usize, close: u8) -> usize {
                 i = (i + 2).min(bytes.len());
                 continue;
             }
+            b'%' if depth == 0 && !quoted => {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+                continue;
+            }
             b'"' if depth == 0 => quoted = !quoted,
             b'{' => depth += 1,
             b'}' if depth > 0 => depth -= 1,
-            b if b == close && depth == 0 && !quoted => return i + 1,
+            b if b == close && depth == 0 && !quoted => return (i + 1, true),
             _ => {}
         }
         i += 1;
     }
-    bytes.len()
+    (bytes.len(), false)
+}
+
+fn bib_value_end(source: &str, start: usize, end: usize) -> usize {
+    let bytes = source.as_bytes();
+    let mut depth = 0usize;
+    let mut quoted = false;
+    let mut i = start;
+    while i < end {
+        match bytes[i] {
+            b'\\' => {
+                i = (i + 2).min(end);
+                continue;
+            }
+            b'%' if depth == 0 && !quoted => {
+                while i < end && bytes[i] != b'\n' {
+                    i += 1;
+                }
+                continue;
+            }
+            b'"' if depth == 0 => quoted = !quoted,
+            b'{' => depth += 1,
+            b'}' => depth = depth.saturating_sub(1),
+            b',' if depth == 0 && !quoted => return i,
+            _ => {}
+        }
+        i += 1;
+    }
+    end
+}
+
+fn bib_literal(source: &str, start: usize, end: usize) -> Option<Argument> {
+    let bytes = source.as_bytes();
+    let (argument, after) = match bytes.get(start)? {
+        b'{' => group_mode(source, start, b'{', b'}', false).or_else(|| {
+            (end == source.len()).then(|| {
+                (
+                    Argument {
+                        value: source[start + 1..end].into(),
+                        span: start + 1..end,
+                    },
+                    end,
+                )
+            })
+        })?,
+        b'"' => {
+            let mut i = start + 1;
+            let mut depth = 0usize;
+            while i < end {
+                match bytes[i] {
+                    b'\\' => {
+                        i = (i + 2).min(end);
+                        continue;
+                    }
+                    b'{' => depth += 1,
+                    b'}' => depth = depth.saturating_sub(1),
+                    b'"' if depth == 0 => break,
+                    _ => {}
+                }
+                i += 1;
+            }
+            if bytes.get(i) != Some(&b'"') && end != source.len() {
+                return None;
+            }
+            (
+                Argument {
+                    value: source[start + 1..i].into(),
+                    span: start + 1..i,
+                },
+                (i + 1).min(end),
+            )
+        }
+        _ => return None,
+    };
+    (after <= end && skip_space(source, after) >= end).then_some(argument)
 }
 
 pub fn trimmed_span(source: &str, span: Range<usize>) -> Range<usize> {
@@ -650,6 +798,7 @@ mod tests {
                             .labels
                             .iter()
                             .chain(&syntax.citations)
+                            .chain(&syntax.citation_references)
                             .chain(&syntax.definitions)
                             .map(|entry| entry.span.clone()),
                     )

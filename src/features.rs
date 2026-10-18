@@ -68,7 +68,12 @@ fn target(doc: &Document, offset: usize) -> Option<Target<'_>> {
             });
         }
     }
-    for entry in &doc.syntax.citations {
+    for entry in doc
+        .syntax
+        .citations
+        .iter()
+        .chain(&doc.syntax.citation_references)
+    {
         if entry.span.start <= offset && offset <= entry.span.end {
             return Some(Target {
                 kind: TargetKind::Citation,
@@ -152,6 +157,7 @@ pub fn rename(
         new_name
     };
     let valid = !new_name.is_empty()
+        && !(target.kind == TargetKind::Citation && new_name == "*")
         && if target.kind == TargetKind::Command {
             new_name
                 .bytes()
@@ -290,7 +296,10 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
     let Some(offset) = doc.text.offset(position) else {
         return vec![];
     };
-    if doc.bibtex || doc.syntax.is_ignored(offset.saturating_sub(1)) {
+    if doc.bibtex {
+        return bibliography_completion(workspace, doc, offset);
+    }
+    if doc.syntax.is_ignored(offset.saturating_sub(1)) {
         return vec![];
     }
     if let Some((command, span)) = argument_context(doc, offset) {
@@ -439,6 +448,49 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
     result
 }
 
+fn bibliography_completion(
+    workspace: &Workspace,
+    doc: &Document,
+    offset: usize,
+) -> Vec<CompletionItem> {
+    let Some(field) = doc
+        .syntax
+        .citation_fields
+        .iter()
+        .find(|field| field.argument.span.start <= offset && offset <= field.argument.span.end)
+    else {
+        return vec![];
+    };
+    let value = &doc.text.source[field.argument.span.start..offset];
+    let key = if matches!(field.name.as_str(), "xdata" | "related" | "entryset") {
+        value.rsplit(',').next().unwrap_or("")
+    } else {
+        value
+    };
+    let key = key.trim_start();
+    let suffix = &doc.text.source[offset..field.argument.span.end];
+    let remaining = suffix.find(',').unwrap_or(suffix.len());
+    let remaining = suffix[..remaining].trim_end().len();
+    let range = doc.text.range(offset - key.len(), offset + remaining);
+    let mut seen = BTreeSet::new();
+    workspace
+        .documents
+        .iter()
+        .flat_map(|(uri, doc)| doc.syntax.citations.iter().map(move |entry| (uri, entry)))
+        .filter(|(_, entry)| entry.name.starts_with(key) && seen.insert(entry.name.clone()))
+        .map(|(uri, entry)| CompletionItem {
+            label: entry.name.clone(),
+            detail: Some(format!("{} — {}", entry.detail, uri.path())),
+            kind: Some(CompletionItemKind::REFERENCE),
+            text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                range,
+                new_text: entry.name.clone(),
+            })),
+            ..Default::default()
+        })
+        .collect()
+}
+
 pub fn definitions(workspace: &Workspace, uri: &Url, position: Position) -> Vec<Location> {
     let Some(doc) = workspace.documents.get(uri) else {
         return vec![];
@@ -495,6 +547,18 @@ pub fn references(
     };
     let mut result = Vec::new();
     for (uri, doc) in &workspace.documents {
+        if target.kind == TargetKind::Citation {
+            result.extend(
+                doc.syntax
+                    .citation_references
+                    .iter()
+                    .filter(|entry| entry.name == target.name)
+                    .map(|entry| Location {
+                        uri: uri.clone(),
+                        range: doc.text.range(entry.span.start, entry.span.end),
+                    }),
+            );
+        }
         if include_declaration {
             result.extend(
                 entries(doc, target.kind)

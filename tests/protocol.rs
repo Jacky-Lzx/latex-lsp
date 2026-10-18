@@ -906,6 +906,52 @@ fn real_synctex_round_trip_handles_spaces_and_rejects_unsaved_or_stale_sources()
     server.wait_exit(0);
 }
 
+#[test]
+fn bibliography_relations_support_navigation_completion_and_versioned_rename_over_stdio() {
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}}}}));
+    server.notify("initialized", json!({}));
+    let uri = "file:///bibliography-protocol/refs.bib";
+    let source = "@book{parent, title={Parent}}\n@incollection{child, crossref={parent}}\n";
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"bibtex","version":7,"text":source}}),
+    );
+    server.until(|message| message["method"] == "textDocument/publishDiagnostics");
+    let position = latex_lsp::text::Text::new(source.into())
+        .position(source.find("crossref={par").unwrap() + "crossref={par".len());
+    let target = json!({"textDocument":{"uri":uri},"position":position});
+    let definitions = server.request(2, "textDocument/definition", target.clone());
+    assert_eq!(definitions[0]["range"]["start"]["line"], 0);
+    let completions = server.request(3, "textDocument/completion", target.clone());
+    assert!(completions
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["label"] == "parent"));
+    let highlights = server.request(4, "textDocument/documentHighlight", target);
+    assert_eq!(highlights.as_array().unwrap().len(), 2);
+    let edits = server.request(
+        5,
+        "textDocument/rename",
+        json!({"textDocument":{"uri":uri},"position":position,"newName":"renamed"}),
+    );
+    assert_eq!(edits["documentChanges"][0]["textDocument"]["version"], 7);
+    assert_eq!(
+        edits["documentChanges"][0]["edits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    server.send(json!({"jsonrpc":"2.0","id":6,"method":"textDocument/rename","params":{"textDocument":{"uri":uri},"position":position,"newName":"*"}}));
+    let rejected = server.until(|message| message["id"] == 6);
+    assert!(rejected.get("error").is_some());
+    server.request(7, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
 impl Drop for Server {
     fn drop(&mut self) {
         let _ = self.child.kill();
