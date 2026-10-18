@@ -201,8 +201,8 @@ impl Workspace {
                         values
                             .into_iter()
                             .filter_map(|value| {
-                                resolve_path(uri, value.trim(), extension)
-                                    .or_else(|| resolve_path(root, value.trim(), extension))
+                                resolve_path(root, value.trim(), extension)
+                                    .or_else(|| resolve_path(uri, value.trim(), extension))
                             })
                             .collect()
                     })

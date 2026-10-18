@@ -92,7 +92,7 @@ fn project_graphics_paths_resolve_nested_unicode_and_package_images() {
     std::fs::write(root.join("sections/plot.pdf"), "local").unwrap();
     assert_eq!(
         navigation::document_links(&workspace, &child)[0].target,
-        Some(uri(root, "sections/plot.pdf"))
+        Some(uri(root, "plot.pdf"))
     );
     let main = uri(root, "main.tex");
     workspace.documents.insert(main.clone(), Document::new(&main, "\\documentclass{article}\\graphicspath{{\\unknown/}{missing/}{./}{assets.v1}}% \\graphicspath{{other/}}\n\\verb|\\graphicspath{{图 片/}}|".into(), Some(1)));

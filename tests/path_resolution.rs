@@ -1,0 +1,173 @@
+use latex_lsp::{
+    build, features, file_operations, navigation,
+    text::Text,
+    workspace::{Document, Workspace},
+};
+use std::{collections::BTreeMap, path::Path};
+use tower_lsp::lsp_types::*;
+
+fn uri(root: &Path, name: &str) -> Url {
+    Url::from_file_path(root.join(name)).unwrap()
+}
+
+fn project(root: &Path) -> Workspace {
+    std::fs::create_dir(root.join("sections")).unwrap();
+    for (name, source) in [
+        ("main.tex", "\\documentclass{article}\n\\begin{document}\n\\input{sections/child}\n\\end{document}\n"),
+        ("sections/child.tex", "% !TeX root = ../main.tex\n\\input{same}\n"),
+        ("same.tex", "\\typeout{SELECTED ROOT FILE}Root file."),
+        ("sections/same.tex", "\\typeout{SELECTED CHILD FILE}Child file."),
+    ] {
+        std::fs::write(root.join(name), source).unwrap();
+    }
+    let mut workspace = Workspace::default();
+    workspace.add_root(root.into());
+    workspace
+}
+
+fn rename(root: &Path, old: &str, new: &str) -> FileRename {
+    FileRename {
+        old_uri: uri(root, old).to_string(),
+        new_uri: uri(root, new).to_string(),
+    }
+}
+
+fn changed(workspace: &Workspace, files: &[FileRename]) -> BTreeMap<Url, String> {
+    file_operations::will_rename(workspace, files)
+        .unwrap()
+        .and_then(|edit| edit.changes)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(uri, mut edits)| {
+            edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
+            let source = workspace.documents[&uri]
+                .text
+                .changed(
+                    edits
+                        .into_iter()
+                        .map(|edit| TextDocumentContentChangeEvent {
+                            range: Some(edit.range),
+                            range_length: None,
+                            text: edit.new_text,
+                        })
+                        .collect(),
+                )
+                .unwrap()
+                .source;
+            (uri, source)
+        })
+        .collect()
+}
+
+#[test]
+fn dependencies_links_and_completion_prefer_the_compilers_working_directory() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let mut workspace = project(root);
+    let main = uri(root, "main.tex");
+    let child = uri(root, "sections/child.tex");
+    let files = workspace.project_documents(&main);
+    assert!(files.contains(&uri(root, "same.tex")));
+    assert!(!files.contains(&uri(root, "sections/same.tex")));
+    let links = navigation::document_links(&workspace, &child);
+    assert_eq!(links[0].target, Some(main));
+    assert_eq!(links[1].target, Some(uri(root, "same.tex")));
+
+    let source = "\\input{sa";
+    workspace
+        .documents
+        .insert(child.clone(), Document::new(&child, source.into(), Some(1)));
+    let completions = features::completion(
+        &workspace,
+        &child,
+        Text::new(source.into()).position(source.len()),
+    );
+    let matches: Vec<_> = completions
+        .iter()
+        .filter(|item| item.label == "same.tex")
+        .collect();
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].detail.as_deref(), root.join("same.tex").to_str());
+}
+
+#[test]
+fn renames_update_the_selected_file_and_preserve_root_relative_child_inputs() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let workspace = project(root);
+    let child = uri(root, "sections/child.tex");
+    assert!(
+        changed(&workspace, &[rename(root, "same.tex", "selected.tex")])[&child]
+            .contains("\\input{selected}")
+    );
+    assert!(changed(
+        &workspace,
+        &[rename(root, "sections/same.tex", "sections/hidden.tex")]
+    )
+    .is_empty());
+
+    let edits = changed(&workspace, &[rename(root, "sections", "parts/content")]);
+    assert!(edits[&child].contains("% !TeX root = ../../main.tex"));
+    assert!(edits[&child].contains("\\input{same}"));
+    assert!(edits[&uri(root, "main.tex")].contains("\\input{parts/content/child}"));
+}
+
+#[test]
+fn missing_root_candidates_still_allow_document_relative_fallbacks() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let workspace = project(root);
+    std::fs::remove_file(root.join("same.tex")).unwrap();
+    let child = uri(root, "sections/child.tex");
+    assert_eq!(
+        navigation::document_links(&workspace, &child)[1].target,
+        Some(uri(root, "sections/same.tex"))
+    );
+    let edits = changed(&workspace, &[rename(root, "sections", "parts/content")]);
+    assert!(edits[&child].contains("\\input{same}"));
+}
+
+#[test]
+#[ignore = "requires latexmk and a TeX installation"]
+fn actual_compiler_selection_matches_links_before_and_after_file_moves() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let mut workspace = project(root);
+    for renamed in [false, true] {
+        let main = root.join("main.tex");
+        let outcome = build::run(&main, &Default::default(), &Default::default());
+        assert_eq!(outcome.status, "success", "{}", outcome.output);
+        assert!(outcome.output.contains("SELECTED ROOT FILE"));
+        assert!(!outcome.output.contains("SELECTED CHILD FILE"));
+        let inputs = outcome.inputs.unwrap();
+        let selected = uri(root, if renamed { "selected.tex" } else { "same.tex" });
+        assert!(inputs.contains(&selected));
+        assert!(!inputs.contains(&uri(root, "sections/same.tex")));
+        let child = uri(
+            root,
+            if renamed {
+                "parts/content/child.tex"
+            } else {
+                "sections/child.tex"
+            },
+        );
+        assert_eq!(
+            navigation::document_links(&workspace, &child)[1].target,
+            Some(selected)
+        );
+        if renamed {
+            break;
+        }
+        let files = [
+            rename(root, "same.tex", "selected.tex"),
+            rename(root, "sections", "parts/content"),
+        ];
+        for (uri, source) in changed(&workspace, &files) {
+            std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+        }
+        std::fs::create_dir(root.join("parts")).unwrap();
+        std::fs::rename(root.join("same.tex"), root.join("selected.tex")).unwrap();
+        std::fs::rename(root.join("sections"), root.join("parts/content")).unwrap();
+        file_operations::did_rename(&mut workspace, &files).unwrap();
+    }
+}

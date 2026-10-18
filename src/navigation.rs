@@ -221,7 +221,7 @@ fn file_link(
     graphics: &[PathBuf],
     root: &Url,
 ) -> Option<Url> {
-    for origin in std::iter::once(uri).chain(std::iter::once(root).filter(|root| *root != uri)) {
+    for origin in std::iter::once(root).chain(std::iter::once(uri).filter(|uri| *uri != root)) {
         for extension in extensions {
             if let Some(target) = resolve_path(origin, name, extension) {
                 return Some(target);

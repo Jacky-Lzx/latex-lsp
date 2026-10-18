@@ -101,7 +101,9 @@ fn replacement(
         .extension()
         .and_then(|ext| ext.to_str())
         .unwrap_or_default();
-    let origin = if resolve_path(uri, original, extension).as_ref() == Some(target) {
+    let origin = if resolve_path(root, original, extension).as_ref() == Some(target) {
+        root.clone()
+    } else if resolve_path(uri, original, extension).as_ref() == Some(target) {
         uri.clone()
     } else {
         root.clone()
@@ -263,7 +265,11 @@ pub fn will_rename(workspace: &Workspace, files: &[FileRename]) -> Result<Option
                         &target,
                         original,
                         if image { &graphics } else { &[] },
-                        root,
+                        if link.tooltip.as_deref() == Some("TeX root document") {
+                            uri
+                        } else {
+                            root
+                        },
                     )?
                 } else {
                     original.into()

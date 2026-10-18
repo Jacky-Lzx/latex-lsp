@@ -146,7 +146,7 @@ fn file_completions_replace_partial_names_preserve_lists_and_reuse_existing_slas
 }
 
 #[test]
-fn completions_find_project_root_files_parent_paths_and_prefer_nearer_files() {
+fn completions_find_project_root_files_parent_paths_and_prefer_build_root_files() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("project");
     std::fs::create_dir_all(root.join("sections")).unwrap();
@@ -183,11 +183,7 @@ fn completions_find_project_root_files_parent_paths_and_prefer_nearer_files() {
         .filter(|item| item.label == "local.tex")
         .collect();
     assert_eq!(locals.len(), 1);
-    assert!(locals[0]
-        .detail
-        .as_ref()
-        .unwrap()
-        .ends_with("sections/local.tex"));
+    assert_eq!(locals[0].detail.as_deref(), root.join("local.tex").to_str());
     let main = Url::from_file_path(root.join("main.tex")).unwrap();
     assert_eq!(
         apply_completion(&mut workspace, &main, r"\input{../ou|}", "../outside.tex"),
