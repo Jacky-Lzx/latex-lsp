@@ -354,14 +354,13 @@ impl BuildManager {
                 }
                 affected.insert(root_uri.clone());
             }
-            let notifications = affected
-                .into_iter()
-                .map(|uri| {
-                    let version = current.documents.get(&uri).and_then(|doc| doc.version);
-                    let diagnostics = current.diagnostics(&uri);
-                    (uri, diagnostics, version)
-                })
-                .collect::<Vec<_>>();
+            affected.extend(
+                current
+                    .documents
+                    .iter()
+                    .filter_map(|(uri, doc)| doc.version.is_some().then_some(uri.clone())),
+            );
+            let notifications = current.diagnostic_snapshots(affected);
             drop(current);
             {
                 let mut state = state.lock().unwrap();

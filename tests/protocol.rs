@@ -127,6 +127,85 @@ impl Server {
     }
 }
 
+#[test]
+fn duplicate_project_diagnostics_refresh_related_open_documents_after_edits_and_disk_changes() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = Url::from_file_path(root.join("main.tex")).unwrap();
+    let child = Url::from_file_path(root.join("chapter.tex")).unwrap();
+    let main_source = "\\documentclass{article}\n\\input{chapter}\n\\label{shared}\n";
+    let child_source = "😀 \\label{shared}\n";
+    std::fs::write(root.join("main.tex"), main_source).unwrap();
+    std::fs::write(root.join("chapter.tex"), child_source).unwrap();
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(root).unwrap(),"capabilities":{"textDocument":{"publishDiagnostics":{"relatedInformation":true}}}}));
+    server.notify("initialized", json!({}));
+    for (uri, source) in [(&main, main_source), (&child, child_source)] {
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"languageId":"latex","version":1,"text":source}}),
+        );
+        let diagnostics = server.until(|message| {
+            message["method"] == "textDocument/publishDiagnostics"
+                && message["params"]["uri"] == uri.as_str()
+                && message["params"]["version"] == 1
+        });
+        let diagnostics = diagnostics["params"]["diagnostics"].as_array().unwrap();
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert_eq!(diagnostics[0]["code"], "duplicate-definition");
+        let other = if uri == &main { &child } else { &main };
+        assert_eq!(
+            diagnostics[0]["relatedInformation"][0]["location"]["uri"],
+            other.as_str()
+        );
+    }
+    // Drain initial notifications before checking a same-version refresh.
+    server.request(
+        2,
+        "textDocument/documentSymbol",
+        json!({"textDocument":{"uri":main}}),
+    );
+    server.pending.borrow_mut().clear();
+    server.notify("textDocument/didChange",json!({"textDocument":{"uri":child,"version":2},"contentChanges":[{"text":"\\label{unique}\n"}]}));
+    for (uri, version) in [(&main, 1), (&child, 2)] {
+        server.until(|message| {
+            message["method"] == "textDocument/publishDiagnostics"
+                && message["params"]["uri"] == uri.as_str()
+                && message["params"]["version"] == version
+                && message["params"]["diagnostics"] == json!([])
+        });
+    }
+    // Closing a changed buffer restores its saved declaration and the conflict.
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":child}}),
+    );
+    let diagnostics = server.until(|message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["uri"] == main.as_str()
+            && message["params"]["diagnostics"]
+                .as_array()
+                .is_some_and(|items| !items.is_empty())
+    });
+    assert_eq!(
+        diagnostics["params"]["diagnostics"][0]["code"],
+        "duplicate-definition"
+    );
+    std::fs::write(root.join("chapter.tex"), "\\label{disk:unique}\n").unwrap();
+    server.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({"changes":[{"uri":child,"type":2}]}),
+    );
+    server.until(|message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["uri"] == main.as_str()
+            && message["params"]["diagnostics"] == json!([])
+    });
+    server.request(3, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
 #[cfg(unix)]
 fn fake_build_server(script: &str, on_save: bool) -> (Server, tempfile::TempDir, Url) {
     fake_build_server_capabilities(script, on_save, json!({}))

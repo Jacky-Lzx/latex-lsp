@@ -9,6 +9,7 @@ pub mod file_operations;
 pub mod graphics;
 pub mod navigation;
 pub mod path_completion;
+mod project_diagnostics;
 pub mod recorder;
 mod reference_fixes;
 pub mod signature;
@@ -66,15 +67,16 @@ impl Backend {
         self.builds.cancel_progress(&params.token);
     }
 
-    async fn publish(&self, uri: Url) {
+    async fn publish_open(&self) {
         let workspace = self.workspace.read().await;
-        let snapshot = workspace
+        let uris = workspace
             .documents
-            .get(&uri)
-            .filter(|doc| doc.version.is_some())
-            .map(|doc| (workspace.diagnostics(&uri), doc.version));
+            .iter()
+            .filter(|(_, doc)| doc.version.is_some())
+            .map(|(uri, _)| uri.clone());
+        let snapshots = workspace.diagnostic_snapshots(uris);
         drop(workspace);
-        if let Some((diagnostics, version)) = snapshot {
+        for (uri, diagnostics, version) in snapshots {
             self.client
                 .publish_diagnostics(uri, diagnostics, version)
                 .await;
@@ -267,7 +269,7 @@ impl LanguageServer for Backend {
             .write()
             .await
             .open(item.uri.clone(), item.text, item.version);
-        self.publish(item.uri).await;
+        self.publish_open().await;
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
@@ -299,12 +301,12 @@ impl LanguageServer for Backend {
         workspace.clear_build_diagnostics(&uri);
         workspace.load_dependencies(&uri, 0);
         drop(workspace);
-        self.publish(uri).await;
+        self.publish_open().await;
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
         let uri = params.text_document.uri;
-        self.publish(uri.clone()).await;
+        self.publish_open().await;
         let on_save = self.workspace.read().await.config.build.on_save;
         if on_save {
             if let Err(error) = self.builds.on_save(uri).await {
@@ -322,6 +324,7 @@ impl LanguageServer for Backend {
         workspace.reload(&uri);
         drop(workspace);
         self.client.publish_diagnostics(uri, vec![], None).await;
+        self.publish_open().await;
     }
 
     async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
@@ -331,12 +334,15 @@ impl LanguageServer for Backend {
             workspace.clear_build_diagnostics(&change.uri);
             workspace.load_dependencies(&change.uri, 0);
         }
+        drop(workspace);
+        self.publish_open().await;
     }
 
     async fn did_change_configuration(&self, params: DidChangeConfigurationParams) {
         match config::Config::parse(params.settings) {
             Ok(config) => {
                 self.workspace.write().await.config = config;
+                self.publish_open().await;
             }
             Err(error) => self.client.log_message(MessageType::WARNING, error).await,
         }
@@ -444,14 +450,14 @@ impl LanguageServer for Backend {
         let mut workspace = self.workspace.write().await;
         match file_operations::did_rename(&mut workspace, &params.files) {
             Ok(affected) => {
-                let diagnostics = affected
-                    .into_iter()
-                    .map(|uri| {
-                        let version = workspace.documents.get(&uri).and_then(|doc| doc.version);
-                        let diagnostics = workspace.diagnostics(&uri);
-                        (uri, diagnostics, version)
-                    })
-                    .collect::<Vec<_>>();
+                let mut affected = affected;
+                affected.extend(
+                    workspace
+                        .documents
+                        .iter()
+                        .filter_map(|(uri, doc)| doc.version.is_some().then_some(uri.clone())),
+                );
+                let diagnostics = workspace.diagnostic_snapshots(affected);
                 drop(workspace);
                 for (uri, diagnostics, version) in diagnostics {
                     self.client
@@ -488,6 +494,8 @@ impl LanguageServer for Backend {
                 workspace.add_root(root);
             }
         }
+        drop(workspace);
+        self.publish_open().await;
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {

@@ -146,6 +146,31 @@ impl Workspace {
     }
 
     pub fn diagnostics(&self, uri: &Url) -> Vec<tower_lsp::lsp_types::Diagnostic> {
+        self.diagnostic_snapshots([uri.clone()])
+            .pop()
+            .map(|(_, diagnostics, _)| diagnostics)
+            .unwrap_or_default()
+    }
+
+    pub fn diagnostic_snapshots(
+        &self,
+        uris: impl IntoIterator<Item = Url>,
+    ) -> Vec<(Url, Vec<tower_lsp::lsp_types::Diagnostic>, Option<i32>)> {
+        let uris: BTreeSet<_> = uris.into_iter().collect();
+        let mut duplicates = crate::project_diagnostics::duplicates(self, &uris);
+        uris.into_iter()
+            .map(|uri| {
+                let version = self.documents.get(&uri).and_then(|doc| doc.version);
+                let mut diagnostics = self.local_and_build_diagnostics(&uri);
+                diagnostics.extend(duplicates.remove(&uri).unwrap_or_default());
+                diagnostics
+                    .sort_by_key(|diagnostic| (diagnostic.range.start, diagnostic.message.clone()));
+                (uri, diagnostics, version)
+            })
+            .collect()
+    }
+
+    fn local_and_build_diagnostics(&self, uri: &Url) -> Vec<tower_lsp::lsp_types::Diagnostic> {
         let mut diagnostics = self
             .documents
             .get(uri)
