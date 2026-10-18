@@ -12,6 +12,7 @@ use crate::{
 #[derive(Clone, Copy, PartialEq)]
 enum TargetKind {
     Label,
+    Anchor,
     Citation,
     Command,
     Environment,
@@ -42,6 +43,20 @@ struct Target<'a> {
 fn raw_target(doc: &Document, offset: usize) -> Option<Target<'_>> {
     if doc.syntax.is_ignored(offset) {
         return None;
+    }
+    if let Some(entry) = doc
+        .syntax
+        .anchors
+        .iter()
+        .chain(&doc.syntax.anchor_references)
+        .find(|entry| entry.span.start <= offset && offset <= entry.span.end)
+    {
+        return Some(Target {
+            kind: TargetKind::Anchor,
+            name: &entry.name,
+            span: entry.span.clone(),
+            control_word: false,
+        });
     }
     for command in &doc.syntax.commands {
         if let Some(span) = crate::named_commands::spans(doc, command)
@@ -189,6 +204,7 @@ fn target<'a>(workspace: &'a Workspace, uri: &Url, offset: usize) -> Option<Targ
 fn entries(doc: &Document, kind: TargetKind) -> &[Entry] {
     match kind {
         TargetKind::Label => &doc.syntax.labels,
+        TargetKind::Anchor => &doc.syntax.anchors,
         TargetKind::Citation => &doc.syntax.citations,
         TargetKind::Command => &doc.syntax.definitions,
         TargetKind::Environment => &doc.syntax.environments,
@@ -352,6 +368,11 @@ pub fn rename(
     {
         let document = &workspace.documents[&location.uri];
         let text = &document.text;
+        if target.kind == TargetKind::Anchor {
+            let edits = crate::anchors::rename_edits(document, location.range, new_name);
+            changes.entry(location.uri).or_default().extend(edits);
+            continue;
+        }
         let control_word = target.kind == TargetKind::Command
             && text
                 .offset(location.range.start)
@@ -442,6 +463,7 @@ fn argument_context(doc: &Document, offset: usize) -> Option<(&Command, Span<usi
     if matches!(command.name.as_str(), "begin" | "end")
         || syntax::is_single_reference(&command.name)
         || syntax::has_separate_label_argument(&command.name)
+        || command.name == "hyperlink"
     {
         let span = completion_name_argument(source, command, offset)?;
         let prefix = source[span.start..offset].trim_start();
@@ -514,6 +536,7 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
             if matches!(command.name.as_str(), "begin" | "end")
                 || syntax::is_single_reference(&command.name)
                 || syntax::has_separate_label_argument(&command.name)
+                || command.name == "hyperlink"
             {
                 let Some(name) = completion_name_argument(&doc.text.source, command, offset) else {
                     return vec![];
@@ -525,7 +548,9 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
             } else {
                 (doc.text.range(span.start, offset + suffix_length), vec![])
             };
-        let kind = if syntax::is_reference(&command.name)
+        let kind = if command.name == "hyperlink" {
+            Some(TargetKind::Anchor)
+        } else if syntax::is_reference(&command.name)
             || syntax::has_separate_label_argument(&command.name)
         {
             Some(TargetKind::Label)
@@ -922,6 +947,19 @@ fn all_references(
                     }),
             );
         }
+        if target.kind == TargetKind::Anchor {
+            result.extend(
+                doc.syntax
+                    .anchor_references
+                    .iter()
+                    .filter(|entry| entry.name == target.name)
+                    .map(|entry| Location {
+                        uri: uri.clone(),
+                        range: doc.text.range(entry.span.start, entry.span.end),
+                    }),
+            );
+            continue;
+        }
         for (index, command) in doc.syntax.commands.iter().enumerate() {
             if target.kind == TargetKind::Command {
                 result.extend(
@@ -980,7 +1018,7 @@ fn all_references(
                         || syntax::has_separate_label_argument(&command.name)
                 }
                 TargetKind::Citation => syntax::is_citation(&command.name),
-                TargetKind::Command => false,
+                TargetKind::Command | TargetKind::Anchor => false,
                 TargetKind::Counter | TargetKind::Conditional | TargetKind::Toggle => false,
                 TargetKind::Environment => matches!(command.name.as_str(), "begin" | "end"),
             };
@@ -1073,7 +1111,11 @@ pub fn hover(workspace: &Workspace, uri: &Url, position: Position) -> Option<Hov
 
 pub fn diagnostics(doc: &Document) -> Vec<Diagnostic> {
     let mut diagnostics = doc.syntax.diagnostics.clone();
-    for entries in [&doc.syntax.labels, &doc.syntax.citations] {
+    for entries in [
+        &doc.syntax.labels,
+        &doc.syntax.citations,
+        &doc.syntax.anchors,
+    ] {
         let mut seen = BTreeSet::new();
         for entry in entries {
             if !seen.insert(&entry.name) {
@@ -1140,6 +1182,7 @@ pub fn symbols(doc: &Document) -> Vec<DocumentSymbol> {
     }
     for (entries, kind) in [
         (&doc.syntax.labels, SymbolKind::KEY),
+        (&doc.syntax.anchors, SymbolKind::KEY),
         (&doc.syntax.definitions, SymbolKind::FUNCTION),
         (&doc.syntax.environments, SymbolKind::CLASS),
         (&doc.syntax.counters, SymbolKind::VARIABLE),

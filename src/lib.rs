@@ -1,3 +1,4 @@
+mod anchors;
 pub mod build;
 pub mod build_log;
 pub mod catalog;

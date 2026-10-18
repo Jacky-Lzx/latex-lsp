@@ -54,6 +54,8 @@ pub struct CitationField {
 pub struct Syntax {
     pub commands: Vec<Command>,
     pub labels: Vec<Entry>,
+    pub anchors: Vec<Entry>,
+    pub anchor_references: Vec<Entry>,
     pub citations: Vec<Entry>,
     pub citation_fields: Vec<CitationField>,
     pub citation_references: Vec<Entry>,
@@ -826,6 +828,13 @@ impl Syntax {
                         span: start..command_end,
                         argument,
                     };
+                    if let Some((declaration, entry)) = crate::anchors::entry(source, &command) {
+                        if declaration {
+                            result.anchors.push(entry);
+                        } else {
+                            result.anchor_references.push(entry);
+                        }
+                    }
                     if name == "hyperdef" {
                         if let Some(argument) = separate_label_argument(source, &command)
                             .filter(|argument| is_static_key(&argument.value))

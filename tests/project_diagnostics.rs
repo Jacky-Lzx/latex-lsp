@@ -87,6 +87,41 @@ fn hyperdef_labels_share_duplicate_checks_and_refresh_with_ordinary_label_declar
 }
 
 #[test]
+fn pdf_destination_duplicates_include_compound_definitions_but_keep_labels_and_projects_distinct() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    write(
+        root,
+        "a/main.tex",
+        r"\documentclass{article}\hypertarget{section.first}{Text}\label{section.first}\input{targets}",
+    );
+    write(root, "a/targets.tex", r"\hyperdef{section}{first}{Text}");
+    write(
+        root,
+        "b/main.tex",
+        r"\documentclass{article}\hypertarget{section.first}{Other paper}",
+    );
+    let mut workspace = Workspace::default();
+    workspace.add_root(root.into());
+    let main = uri(root, "a/main.tex");
+    let child = uri(root, "a/targets.tex");
+    let diagnostics = cross_file(&workspace, &main);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert!(diagnostics[0].message.contains("PDF destination"));
+    assert_eq!(
+        diagnostics[0].related_information.as_ref().unwrap()[0]
+            .location
+            .uri,
+        child
+    );
+    assert_eq!(cross_file(&workspace, &child).len(), 1);
+    assert!(cross_file(&workspace, &uri(root, "b/main.tex")).is_empty());
+    workspace.open(child.clone(), r"\hyperdef{section}{second}{Text}".into(), 1);
+    assert!(cross_file(&workspace, &main).is_empty());
+    assert!(cross_file(&workspace, &child).is_empty());
+}
+
+#[test]
 fn duplicate_labels_and_bibliography_keys_report_related_definitions_in_the_same_project() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();

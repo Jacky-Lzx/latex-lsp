@@ -94,6 +94,24 @@ fn hyperdef_signatures_offer_optional_labels_and_separate_destination_fields() {
 }
 
 #[test]
+fn pdf_destination_commands_hint_target_and_text_parameters() {
+    for name in ["hypertarget", "hyperlink"] {
+        check(
+            "",
+            &format!("\\{name}{{dest¦}}{{Text}}"),
+            &format!("\\{name}{{target}}{{text}}"),
+            0,
+        );
+        check(
+            "",
+            &format!("\\{name}{{dest}}{{Te¦xt}}"),
+            &format!("\\{name}{{target}}{{text}}"),
+            1,
+        );
+    }
+}
+
+#[test]
 fn refcount_queries_offer_label_field_default_and_branch_parameters() {
     for (marked, label, active) in [
         (r"\getrefnumber{key¦}", r"\getrefnumber{key}", 0),

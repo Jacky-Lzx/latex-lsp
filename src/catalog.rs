@@ -3,6 +3,8 @@ pub(crate) use crate::primitives::PRIMITIVES;
 /// Command name, snippet template (without leading backslash), short documentation.
 /// Templates retain literal TeX backslashes; completion escapes them for the client.
 pub const COMMANDS: &[(&str, &str, &str)] = &[
+    ("hypertarget", "hypertarget{${1:target}}{${2:text}}", "Define a PDF destination independently of reference labels. Requires hyperref."),
+    ("hyperlink", "hyperlink{${1:target}}{${2:text}}", "Link to a PDF destination by its name. Requires hyperref."),
     ("Ref", "Ref{${1:key}}", "Capitalize a reference. Requires nameref or hyperref."),
     ("autopageref", "autopageref{${1:key}}", "Print a page reference prefixed by its page name. Requires hyperref."),
     ("hyperdef", "hyperdef[${1:key}]{${2:category}}{${3:name}}{${4:text}}", "Define a hyperlink destination and optionally give it a reference label. Requires hyperref."),

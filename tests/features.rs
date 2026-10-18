@@ -95,10 +95,25 @@ fn completion_in_the_middle_replaces_the_remaining_word() {
     insert(&mut workspace, "chapter.tex", r"\label{sec:中文}");
     insert(
         &mut workspace,
+        "targets.tex",
+        r"\hypertarget{dest:中文}{Text}",
+    );
+    insert(
+        &mut workspace,
         "refs.bib",
         "@book{knuth1984, title={The TeXbook}}",
     );
     for (marked, label, expected) in [
+        (
+            r"\hyperlink{ dest:|旧 }{Text}",
+            "dest:中文",
+            r"\hyperlink{dest:中文}{Text}",
+        ),
+        (
+            "\\hyperlink{\r\n dest:|旧 \r\n}{Text}",
+            "dest:中文",
+            "\\hyperlink{dest:中文}{Text}",
+        ),
         (r"\Ref*{ sec:|旧 }", "sec:中文", r"\Ref*{sec:中文}"),
         (
             r"\autopageref{ sec:|旧 }",
@@ -277,6 +292,54 @@ fn hyperref_label_completion_ignores_urls_text_stars_and_dynamic_names() {
             panic!("missing edit")
         };
         assert_eq!(edit.new_text, item.label);
+    }
+}
+
+#[test]
+fn pdf_destination_index_and_completion_keep_labels_text_and_external_links_separate() {
+    let mut workspace = Workspace::default();
+    let source = concat!(
+        "\\hypertarget{dest:good}{Text}\\label{labelonly}\n",
+        "\\hyperdef[label]{section}{first}{Text}\n",
+        "\\hypertarget{ dest:good }{Text}\\hypertarget*{ignored}{Text}\n",
+        "\\hypertarget{\\prefix dynamic}{Text}\\hyperdef{\\category}{ignored}{Text}\n",
+        "% \\hypertarget{commented}{Text}\n\\verb|\\hypertarget{raw}{Text}|\n",
+        "\\hyperlink{dest:good}{Text}\\hyperref{}{section}{first}{Text}\n",
+        "\\hyperref{https://example.com/a%20b}{section}{first}{Text}\n",
+    );
+    let document = insert(&mut workspace, "targets.tex", source);
+    let doc = &workspace.documents[&document];
+    assert_eq!(
+        doc.syntax
+            .anchors
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect::<Vec<_>>(),
+        ["dest:good", "section.first"]
+    );
+    assert_eq!(
+        doc.syntax
+            .anchor_references
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect::<Vec<_>>(),
+        ["dest:good", "section.first"]
+    );
+    for (marked, expected) in [
+        (r"\hyperlink{¦}{Text}", 2),
+        (r"\hyperlink{label¦}{Text}", 0),
+        (r"\hypertarget{dest¦}{Text}", 0),
+        (r"\hyperlink*{dest¦}{Text}", 0),
+        (r"\hyperlink{dest:good}{dest¦}", 0),
+    ] {
+        let at = marked.find('¦').unwrap();
+        let source = marked.replace('¦', "");
+        let uri = insert(&mut workspace, "main.tex", &source);
+        assert_eq!(
+            features::completion(&workspace, &uri, Text::new(source).position(at)).len(),
+            expected,
+            "{marked}"
+        );
     }
 }
 

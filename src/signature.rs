@@ -134,6 +134,7 @@ fn builtin(name: &str) -> Option<Signature> {
         "begin" | "end" => (&[("environment", false)], false),
         "label" => (&[("key", false)], false),
         "hyperref" => (&[("key", true), ("text", false)], false),
+        "hypertarget" | "hyperlink" => (&[("target", false), ("text", false)], false),
         "hyperdef" => (
             &[
                 ("key", true),

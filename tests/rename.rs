@@ -311,15 +311,21 @@ fn hyperdef_labels_join_reference_navigation_and_rename_without_changing_destina
             );
         }
         let after_label = source.find(']').unwrap() + 1;
-        for (at, _) in source[after_label..].match_indices("sec:old") {
+        for (index, (at, _)) in source[after_label..].match_indices("sec:old").enumerate() {
             let at = after_label + at + 3;
-            assert!(features::prepare_rename(
+            let prepared = features::prepare_rename(
                 &workspace,
                 &declaration,
-                workspace.documents[&declaration].text.position(at)
+                workspace.documents[&declaration].text.position(at),
             )
-            .unwrap()
-            .is_none());
+            .unwrap();
+            if index < 2 {
+                assert!(
+                    matches!(prepared, Some(PrepareRenameResponse::RangeWithPlaceholder { placeholder, .. }) if placeholder == "sec:old.sec:old")
+                );
+            } else {
+                assert!(prepared.is_none());
+            }
         }
     }
     for source in [
@@ -457,6 +463,243 @@ fn capitalized_and_named_page_references_navigate_and_rename_both_star_forms() {
             .unwrap()
             .is_none());
     }
+}
+
+#[test]
+fn pdf_destinations_rename_independently_of_equal_reference_labels() {
+    let mut workspace = Workspace::default();
+    let definitions =
+        r"\hypertarget{shared}{shared}\label{shared}\label{other}\hypertarget{reserved}{Text}";
+    let declaration = insert(&mut workspace, "targets.tex", definitions, None);
+    let source = r"\hyperlink{shared}{shared}\hyperref{}{}{shared}{shared}\ref{shared}\hyperref[shared]{shared}";
+    let main = insert(&mut workspace, "main.tex", source, Some(2));
+    let text = &workspace.documents[&main].text;
+    for marker in [r"\hyperlink{shared}", r"\hyperref{}{}{shared}"] {
+        let at = source.find(marker).unwrap() + marker.find("shared").unwrap() + 2;
+        let position = text.position(at);
+        let found = features::definitions(&workspace, &main, position);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].uri, declaration);
+        assert_eq!(found[0].range.start.character, 13);
+        assert_eq!(
+            features::references(&workspace, &main, position, false).len(),
+            2
+        );
+        assert!(features::hover(&workspace, &main, position).is_some());
+        let changes = features::rename(&workspace, &main, position, "other")
+            .unwrap()
+            .unwrap()
+            .changes
+            .unwrap();
+        assert_eq!(
+            edits_result(definitions, &changes[&declaration]),
+            definitions.replacen("{shared}", "{other}", 1)
+        );
+        assert_eq!(
+            edits_result(source, &changes[&main]),
+            r"\hyperlink{other}{shared}\hyperref{}{}{other}{shared}\ref{shared}\hyperref[shared]{shared}"
+        );
+        assert!(features::rename(&workspace, &main, position, "reserved").is_err());
+    }
+    let position = text.position(source.find(r"\ref{shared}").unwrap() + 7);
+    let changes = features::rename(&workspace, &main, position, "label-new")
+        .unwrap()
+        .unwrap()
+        .changes
+        .unwrap();
+    assert_eq!(
+        edits_result(definitions, &changes[&declaration]),
+        definitions.replace(r"\label{shared}", r"\label{label-new}")
+    );
+    assert_eq!(
+        edits_result(source, &changes[&main]),
+        r"\hyperlink{shared}{shared}\hyperref{}{}{shared}{shared}\ref{label-new}\hyperref[label-new]{shared}"
+    );
+}
+
+#[test]
+fn compound_pdf_destination_renames_preserve_separators_comments_labels_and_text() {
+    let definitions = "\\hyperdef[label]{section}% definition separator\r\n{start}{section.start}";
+    let source = "\\hyperlink{section.start}{section.start}\n\\hyperref{}{section} % link separator\n{start}{section.start}\n\\hyperref[label]{Text}";
+    for name in ["section.updated", "chapter.final"] {
+        let mut workspace = Workspace::default();
+        let declaration = insert(&mut workspace, "targets.tex", definitions, None);
+        let main = insert(&mut workspace, "main.tex", source, Some(2));
+        for (document, marker) in [
+            (&declaration, "{section}"),
+            (&declaration, "{start}"),
+            (&main, "{start}"),
+        ] {
+            let text = &workspace.documents[document].text;
+            let position = text.position(text.source.find(marker).unwrap() + 2);
+            let prepared = features::prepare_rename(&workspace, document, position)
+                .unwrap()
+                .unwrap();
+            assert!(
+                matches!(prepared, PrepareRenameResponse::RangeWithPlaceholder { placeholder, .. } if placeholder == "section.start")
+            );
+            assert_eq!(
+                features::references(&workspace, document, position, false).len(),
+                2
+            );
+            let changes = features::rename(&workspace, document, position, name)
+                .unwrap()
+                .unwrap()
+                .changes
+                .unwrap();
+            let (category, key) = if name == "section.updated" {
+                ("section", "updated")
+            } else {
+                ("", "chapter.final")
+            };
+            assert_eq!(edits_result(definitions, &changes[&declaration]), format!("\\hyperdef[label]{{{category}}}% definition separator\r\n{{{key}}}{{section.start}}"));
+            assert_eq!(edits_result(source, &changes[&main]), format!("\\hyperlink{{{name}}}{{section.start}}\n\\hyperref{{}}{{{category}}} % link separator\n{{{key}}}{{section.start}}\n\\hyperref[label]{{Text}}"));
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex and hyperref"]
+fn real_pdf_destination_renames_update_direct_and_compound_links_without_renaming_labels() {
+    for compound in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let main = root.join("main.tex");
+        let targets = root.join("targets.tex");
+        let child = root.join("chapter.tex");
+        std::fs::write(&main, "\\pdfobjcompresslevel=0\\pdfcompresslevel=0\\documentclass{article}\\usepackage{hyperref}\\begin{document}\\section{Title}\\input{targets}\\input{chapter}\\end{document}\n").unwrap();
+        std::fs::write(
+            &targets,
+            if compound {
+                "\\hyperdef[section.start]{section}% keep definition separator\n{start}{Target}"
+            } else {
+                "\\hypertarget{section.start}{Target}\\label{section.start}"
+            },
+        )
+        .unwrap();
+        std::fs::write(&child, "\\hyperlink{section.start}{Direct}\\hyperref{}{section}% keep link separator\n{start}{Internal}\\hyperref[section.start]{Label}").unwrap();
+        let config = latex_lsp::config::BuildConfig {
+            executable: "pdflatex".into(),
+            ..Default::default()
+        };
+        let mut old_name = "section.start";
+        for (from_definition, name) in [(false, "section.next"), (true, "chapter.final")] {
+            let mut workspace = Workspace::default();
+            workspace.add_root(root.into());
+            let document =
+                Url::from_file_path(if from_definition { &targets } else { &child }).unwrap();
+            let doc = &workspace.documents[&document];
+            let offset = if from_definition {
+                doc.syntax
+                    .anchors
+                    .iter()
+                    .find(|entry| entry.name == old_name)
+                    .unwrap()
+                    .span
+                    .start
+            } else {
+                doc.text.source.find(old_name).unwrap() + 3
+            };
+            let changes = features::rename(&workspace, &document, doc.text.position(offset), name)
+                .unwrap()
+                .unwrap()
+                .changes
+                .unwrap();
+            assert_eq!(changes.len(), 2);
+            for (uri, edits) in changes {
+                std::fs::write(
+                    uri.to_file_path().unwrap(),
+                    edits_result(&workspace.documents[&uri].text.source, &edits),
+                )
+                .unwrap();
+            }
+            let source = std::fs::read_to_string(&child).unwrap();
+            assert!(
+                source.contains(r"\hyperref[section.start]{Label}"),
+                "{source}"
+            );
+            assert!(source.contains("% keep link separator\n"), "{source}");
+            let mut last = None;
+            for _ in 0..2 {
+                let result = latex_lsp::build::run(&main, &config, &Default::default());
+                assert_eq!(result.status, "success", "{}", result.output);
+                last = Some(result);
+            }
+            let result = last.unwrap();
+            assert!(
+                !result.output.contains("undefined") && !result.output.contains("does not exist"),
+                "{}",
+                result.output
+            );
+            let bytes = std::fs::read(config.artifact_path(&main, "pdf").unwrap()).unwrap();
+            let pdf = String::from_utf8_lossy(&bytes);
+            assert!(
+                pdf.split("/D")
+                    .skip(1)
+                    .filter(|tail| tail.trim_start().starts_with(&format!("({name})")))
+                    .count()
+                    >= 2,
+                "Missing PDF link destination {name}"
+            );
+            let auxiliary =
+                std::fs::read_to_string(config.artifact_path(&main, "aux").unwrap()).unwrap();
+            assert!(
+                auxiliary.contains(r"\newlabel{section.start}"),
+                "{auxiliary}"
+            );
+            if compound {
+                assert!(auxiliary.contains(name), "{auxiliary}");
+            }
+            old_name = name;
+        }
+    }
+}
+
+#[test]
+fn pdf_destination_renames_respect_projects_and_reject_shared_references_with_different_definitions(
+) {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    for project in ["a", "b"] {
+        std::fs::create_dir_all(root.join(project)).unwrap();
+        std::fs::write(
+            root.join(project).join("main.tex"),
+            r"\documentclass{article}\input{targets}\hyperlink{shared}{Link}",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(project).join("targets.tex"),
+            r"\hypertarget{shared}{Target}",
+        )
+        .unwrap();
+    }
+    let mut workspace = Workspace::default();
+    workspace.add_root(root.into());
+    let document = Url::from_file_path(root.join("a/main.tex")).unwrap();
+    let text = &workspace.documents[&document].text;
+    let position = text.position(text.source.find("shared").unwrap() + 2);
+    let changes = features::rename(&workspace, &document, position, "changed")
+        .unwrap()
+        .unwrap()
+        .changes
+        .unwrap();
+    assert_eq!(changes.len(), 2);
+    assert!(changes
+        .keys()
+        .all(|uri| uri.to_file_path().unwrap().starts_with(root.join("a"))));
+    std::fs::write(root.join("shared.tex"), r"\hyperlink{shared}{Link}").unwrap();
+    for project in ["a", "b"] {
+        std::fs::write(
+            root.join(project).join("main.tex"),
+            r"\documentclass{article}\hypertarget{shared}{Target}\input{../shared}",
+        )
+        .unwrap();
+    }
+    let mut workspace = Workspace::default();
+    workspace.add_root(root.into());
+    let text = &workspace.documents[&document].text;
+    let position = text.position(text.source.find("shared").unwrap() + 2);
+    assert!(features::rename(&workspace, &document, position, "changed").is_err());
 }
 
 #[test]
