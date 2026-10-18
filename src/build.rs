@@ -369,12 +369,31 @@ impl BuildManager {
                 }
             });
             let count = outcome.diagnostics.values().map(Vec::len).sum::<usize>();
+            let errors = outcome
+                .diagnostics
+                .values()
+                .flatten()
+                .filter(|diagnostic| diagnostic.severity == Some(DiagnosticSeverity::ERROR))
+                .count();
+            let warnings = outcome
+                .diagnostics
+                .values()
+                .flatten()
+                .filter(|diagnostic| diagnostic.severity == Some(DiagnosticSeverity::WARNING))
+                .count();
+            let pdf_size = outcome
+                .pdf
+                .as_ref()
+                .and_then(|pdf| std::fs::metadata(pdf).ok())
+                .map(|metadata| metadata.len());
             let result = json!({
                 "buildId":build_id, "rootUri":root_uri, "status":outcome.status,
                 "exitCode":outcome.exit_code, "message":if stale { format!("{} (sources changed; diagnostics discarded)",outcome.message) } else { outcome.message },
                 "pdfUri":outcome.pdf.as_ref().and_then(|path| Url::from_file_path(path).ok()),
                 "logUri":outcome.log.as_ref().and_then(|path| Url::from_file_path(path).ok()),
                 "diagnosticsCount":count, "stale":stale, "durationMs":started.elapsed().as_millis() as u64,
+                "errorsCount":errors, "warningsCount":warnings,
+                "pages":outcome.pages, "pdfSize":pdf_size,
                 "dependenciesCount":project.len(),
                 "executable":executable, "engine":engine,
                 "jobName":job_name,
@@ -556,6 +575,7 @@ pub struct Outcome {
     pub exit_code: Option<i32>,
     pub message: String,
     pub pdf: Option<PathBuf>,
+    pub pages: Option<u32>,
     pub log: Option<PathBuf>,
     pub diagnostics: BTreeMap<Url, Vec<Diagnostic>>,
     pub output: String,
@@ -571,6 +591,7 @@ impl Outcome {
             exit_code: None,
             message,
             pdf: None,
+            pages: None,
             log: None,
             diagnostics: BTreeMap::new(),
             output: String::new(),
@@ -654,6 +675,7 @@ fn reject_outdated_pdf(root: &Path, outcome: &mut Outcome, sources: impl Iterato
     if let Some(source) = outdated {
         outcome.status = "error";
         outcome.pdf = None;
+        outcome.pages = None;
         outcome.message = format!(
             "Compiler left an outdated PDF unchanged; rebuild after changes to {}",
             source.display()
@@ -852,6 +874,9 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool) -> Outcome 
         }
     }
     // Notifications carry a bounded tail; pipe readers above still drain all output.
+    if outcome.pdf.is_some() {
+        outcome.pages = build_log::page_count(if log.is_empty() { &output } else { &log });
+    }
     outcome.output = output
         .chars()
         .rev()

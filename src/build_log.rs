@@ -53,6 +53,47 @@ pub(crate) fn decode_output(bytes: &[u8]) -> Cow<'_, str> {
     Cow::Owned(String::from_utf8_lossy(&repaired).into_owned())
 }
 
+/// Read TeX's final PDF summary, including wrapped paths and page/byte counts.
+pub fn page_count(log: &str) -> Option<u32> {
+    let lines = log.lines().collect::<Vec<_>>();
+    for (index, line) in lines.iter().enumerate().rev() {
+        if !line.starts_with("Output written on ") {
+            continue;
+        }
+        let mut summary = String::new();
+        for line in lines.iter().skip(index).take(16) {
+            if summary.len() + line.len() > 8192 {
+                break;
+            }
+            summary.push_str(line);
+            let Some((_, tail)) = summary.rsplit_once('(') else {
+                continue;
+            };
+            let Some((pages, tail)) = tail.split_once(" page") else {
+                continue;
+            };
+            let tail = tail.strip_prefix('s').unwrap_or(tail);
+            let valid = tail == ")."
+                || tail
+                    .strip_prefix(", ")
+                    .and_then(|bytes| {
+                        bytes
+                            .strip_suffix(" bytes).")
+                            .or_else(|| bytes.strip_suffix(" byte)."))
+                    })
+                    .is_some_and(|bytes| bytes.parse::<u64>().is_ok());
+            if valid {
+                if let Ok(pages) = pages.parse::<u32>() {
+                    if pages > 0 {
+                        return Some(pages);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 fn location(root: &Path, name: &str) -> Option<PathBuf> {
     let path = root.parent()?.join(name.trim().trim_matches('"'));
     let path = path.canonicalize().ok()?;
@@ -739,6 +780,22 @@ fn bibliography_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn final_pdf_page_counts_support_engine_variants_and_wrapped_summaries() {
+        for (log, expected) in [
+            ("Output written on main.pdf (1 page, 123 bytes).\n", Some(1)),
+            ("Output written on main.pdf (12 pages).\n", Some(12)),
+            ("Output written on /long/path (draft)/\nmain.pdf (2 pa\nges, 3456 bytes).\n", Some(2)),
+            ("Output written on main.pdf (3 pages, 123 bytes).\nOutput written on main.pdf (4 pages, 456 bytes).\n", Some(4)),
+            ("Writing main.pdf\n", None),
+            ("Output written on main.pdf (0 pages, 0 bytes).\n", None),
+            ("Output written on main.pdf (999999999999 pages, 9 bytes).\n", None),
+            ("Output written on main.pdf (2 pages, invalid bytes).\n", None),
+        ] {
+            assert_eq!(page_count(log), expected, "{log}");
+        }
+    }
 
     #[test]
     fn tex_byte_wrapping_recovers_split_utf8_without_joining_valid_or_malformed_lines() {

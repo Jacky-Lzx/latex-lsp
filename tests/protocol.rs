@@ -947,6 +947,47 @@ fn rejected_or_unanswered_progress_requests_do_not_prevent_compilation() {
 
 #[test]
 #[cfg(unix)]
+fn build_summaries_use_final_logs_actual_pdf_sizes_and_clear_artifacts_after_errors() {
+    let script = "printf 'Output written on old.pdf (9 pages, 900 bytes).\\n'\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf '%s:2: LaTeX Warning: final pass warning.\\nOutput written on main.pdf (2 pages, 999 bytes).\\n' \"$2\" > \"$1/main.log\"\n";
+    let (mut server, directory, main) = fake_build_server(script, false);
+    server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let finished = server.until(|message| message["method"] == "latex/buildFinished");
+    let summary = &finished["params"];
+    assert_eq!(summary["status"], "success");
+    assert_eq!(summary["pages"], 2);
+    assert_eq!(summary["pdfSize"], 9);
+    assert_eq!(summary["diagnosticsCount"], 1);
+    assert_eq!(summary["errorsCount"], 0);
+    assert_eq!(summary["warningsCount"], 1);
+    let status = server.request(
+        3,
+        "workspace/executeCommand",
+        json!({"command":"latex.buildStatus","arguments":[main]}),
+    );
+    assert_eq!(&status, summary);
+    std::fs::write(directory.path().join("compiler.sh"), "printf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf '%s:2: Undefined control sequence.\\nOutput written on main.pdf (3 pages, 999 bytes).\\n' \"$2\" > \"$1/main.log\"\n").unwrap();
+    server.request(
+        4,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let failed = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(failed["params"]["status"], "error", "{failed}");
+    assert!(failed["params"]["pages"].is_null());
+    assert!(failed["params"]["pdfSize"].is_null());
+    assert_eq!(failed["params"]["errorsCount"], 1);
+    assert_eq!(failed["params"]["warningsCount"], 0);
+    server.request(5, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
 fn background_build_keeps_requests_responsive_and_publishes_compiler_results() {
     let (mut server, directory, uri) = fake_build_server("sleep 0.3\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf '%s:2: LaTeX Warning: example warning.\\n' \"$2\" > \"$1/main.log\"\n", false);
     let started = server.request(

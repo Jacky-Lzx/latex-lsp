@@ -47,6 +47,7 @@ fn custom_job_names_locate_pdf_logs_recorder_inputs_and_synctex_for_all_tex_engi
         );
         assert_eq!(outcome.pdf, config.artifact_path(&main, "pdf"));
         assert_eq!(outcome.log, config.artifact_path(&main, "log"));
+        assert_eq!(outcome.pages, Some(1), "{executable}: {}", outcome.output);
         let child = Url::from_file_path(root.join("chapter.tex")).unwrap();
         assert!(outcome.inputs.unwrap().contains(&child));
         assert!(
