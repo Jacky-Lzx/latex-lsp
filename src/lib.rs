@@ -49,6 +49,13 @@ impl Backend {
 impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
         let mut workspace = self.workspace.write().await;
+        workspace.versioned_edits = params
+            .capabilities
+            .workspace
+            .as_ref()
+            .and_then(|workspace| workspace.workspace_edit.as_ref())
+            .and_then(|edit| edit.document_changes)
+            .unwrap_or(false);
         workspace.watch_files = params
             .capabilities
             .workspace
@@ -103,6 +110,10 @@ impl LanguageServer for Backend {
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 definition_provider: Some(OneOf::Left(true)),
                 references_provider: Some(OneOf::Left(true)),
+                rename_provider: Some(OneOf::Right(RenameOptions {
+                    prepare_provider: Some(true),
+                    work_done_progress_options: WorkDoneProgressOptions::default(),
+                })),
                 document_symbol_provider: Some(OneOf::Left(true)),
                 workspace: Some(WorkspaceServerCapabilities {
                     workspace_folders: Some(WorkspaceFoldersServerCapabilities {
@@ -270,6 +281,27 @@ impl LanguageServer for Backend {
             position.position,
             params.context.include_declaration,
         )))
+    }
+
+    async fn prepare_rename(
+        &self,
+        params: TextDocumentPositionParams,
+    ) -> Result<Option<PrepareRenameResponse>> {
+        features::prepare_rename(
+            &*self.workspace.read().await,
+            &params.text_document.uri,
+            params.position,
+        )
+    }
+
+    async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
+        let position = params.text_document_position;
+        features::rename(
+            &*self.workspace.read().await,
+            &position.text_document.uri,
+            position.position,
+            &params.new_name,
+        )
     }
 
     async fn document_symbol(

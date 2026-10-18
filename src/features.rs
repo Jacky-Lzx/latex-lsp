@@ -83,6 +83,155 @@ fn entries(doc: &Document, kind: TargetKind) -> &[Entry] {
     }
 }
 
+fn rename_target<'a>(
+    workspace: &'a Workspace,
+    uri: &Url,
+    position: Position,
+) -> tower_lsp::jsonrpc::Result<Option<Target<'a>>> {
+    let Some(doc) = workspace.documents.get(uri) else {
+        return Ok(None);
+    };
+    let Some(target) = doc
+        .text
+        .offset(position)
+        .and_then(|offset| target(doc, offset))
+    else {
+        return Ok(None);
+    };
+    let declarations = workspace
+        .documents
+        .values()
+        .flat_map(|doc| entries(doc, target.kind))
+        .filter(|entry| entry.name == target.name)
+        .count();
+    if declarations == 0 {
+        return Ok(None);
+    }
+    if declarations != 1 {
+        return Err(tower_lsp::jsonrpc::Error::invalid_params(
+            "Rename is ambiguous: the name has multiple definitions in this workspace",
+        ));
+    }
+    Ok(Some(target))
+}
+
+pub fn prepare_rename(
+    workspace: &Workspace,
+    uri: &Url,
+    position: Position,
+) -> tower_lsp::jsonrpc::Result<Option<PrepareRenameResponse>> {
+    let Some(target) = rename_target(workspace, uri, position)? else {
+        return Ok(None);
+    };
+    let doc = &workspace.documents[uri];
+    let start = target.span.start + usize::from(target.kind == TargetKind::Command);
+    Ok(Some(PrepareRenameResponse::RangeWithPlaceholder {
+        range: doc.text.range(start, target.span.end),
+        placeholder: target.name.into(),
+    }))
+}
+
+pub fn rename(
+    workspace: &Workspace,
+    uri: &Url,
+    position: Position,
+    new_name: &str,
+) -> tower_lsp::jsonrpc::Result<Option<WorkspaceEdit>> {
+    let Some(target) = rename_target(workspace, uri, position)? else {
+        return Ok(None);
+    };
+    let new_name = if target.kind == TargetKind::Command {
+        new_name.strip_prefix('\\').unwrap_or(new_name)
+    } else {
+        new_name
+    };
+    let valid = !new_name.is_empty()
+        && if target.kind == TargetKind::Command {
+            new_name
+                .bytes()
+                .all(|b| b.is_ascii_alphabetic() || b == b'@')
+        } else {
+            !new_name.chars().any(|ch| {
+                ch.is_whitespace()
+                    || matches!(
+                        ch,
+                        '\\' | '{'
+                            | '}'
+                            | ','
+                            | '%'
+                            | '#'
+                            | '$'
+                            | '&'
+                            | '^'
+                            | '~'
+                            | '"'
+                            | '('
+                            | ')'
+                            | '='
+                    )
+            })
+        };
+    if !valid {
+        return Err(tower_lsp::jsonrpc::Error::invalid_params(
+            "Invalid name: use a single TeX command name or a reference key without separators",
+        ));
+    }
+    if new_name == target.name {
+        return Ok(Some(WorkspaceEdit::default()));
+    }
+    let conflicts = workspace.documents.values().any(|doc| {
+        entries(doc, target.kind)
+            .iter()
+            .any(|entry| entry.name == new_name)
+    });
+    let builtin =
+        target.kind == TargetKind::Command && COMMANDS.iter().any(|(name, _, _)| *name == new_name);
+    if conflicts || builtin {
+        return Err(tower_lsp::jsonrpc::Error::invalid_params(format!(
+            "The name `{new_name}` is already defined"
+        )));
+    }
+    let replacement = if target.kind == TargetKind::Command {
+        format!("\\{new_name}")
+    } else {
+        new_name.into()
+    };
+    let mut changes: std::collections::BTreeMap<Url, Vec<TextEdit>> =
+        std::collections::BTreeMap::new();
+    for location in references(workspace, uri, position, true) {
+        changes.entry(location.uri).or_default().push(TextEdit {
+            range: location.range,
+            new_text: replacement.clone(),
+        });
+    }
+    for edits in changes.values_mut() {
+        edits.sort_by_key(|edit| (edit.range.start, edit.range.end));
+        edits.dedup_by(|a, b| a.range == b.range);
+    }
+    if workspace.versioned_edits {
+        Ok(Some(WorkspaceEdit {
+            document_changes: Some(DocumentChanges::Edits(
+                changes
+                    .into_iter()
+                    .map(|(uri, edits)| {
+                        let version = workspace.documents.get(&uri).and_then(|doc| doc.version);
+                        TextDocumentEdit {
+                            text_document: OptionalVersionedTextDocumentIdentifier { uri, version },
+                            edits: edits.into_iter().map(OneOf::Left).collect(),
+                        }
+                    })
+                    .collect(),
+            )),
+            ..Default::default()
+        }))
+    } else {
+        Ok(Some(WorkspaceEdit {
+            changes: Some(changes.into_iter().collect()),
+            ..Default::default()
+        }))
+    }
+}
+
 /// Works for incomplete groups too, so typing `\ref{` can offer completions.
 fn argument_context(doc: &Document, offset: usize) -> Option<(&Command, Span<usize>)> {
     let source = &doc.text.source;

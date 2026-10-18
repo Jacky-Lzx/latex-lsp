@@ -43,6 +43,7 @@ pub struct Workspace {
     pub snippets: bool,
     pub watch_files: bool,
     pub hierarchical_symbols: bool,
+    pub versioned_edits: bool,
 }
 
 impl Workspace {

@@ -177,6 +177,50 @@ fn exit_without_shutdown_returns_failure() {
 }
 
 #[test]
+fn rename_prepares_ranges_and_returns_versioned_cross_file_edits() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = Url::from_directory_path(directory.path()).unwrap();
+    let chapter = Url::from_file_path(directory.path().join("chapter.tex")).unwrap();
+    std::fs::write(chapter.to_file_path().unwrap(), r"\label{old}").unwrap();
+    let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+    let mut server = Server::start();
+    let init = server.request(1, "initialize", json!({"processId":null,"rootUri":root,"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}}}}));
+    assert_eq!(
+        init["capabilities"]["renameProvider"]["prepareProvider"],
+        true
+    );
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"latex","version":9,"text":"\\ref{old}"}}),
+    );
+    server.until(|message| message["method"] == "textDocument/publishDiagnostics");
+    let params = json!({"textDocument":{"uri":uri},"position":{"line":0,"character":6}});
+    let prepared = server.request(2, "textDocument/prepareRename", params.clone());
+    assert_eq!(prepared["placeholder"], "old");
+    assert_eq!(prepared["range"]["start"]["character"], 5);
+    let mut params = params;
+    params["newName"] = json!("sec:new");
+    let edit = server.request(3, "textDocument/rename", params);
+    let documents = edit["documentChanges"].as_array().unwrap();
+    assert_eq!(documents.len(), 2);
+    let open = documents
+        .iter()
+        .find(|edit| edit["textDocument"]["uri"] == uri.as_str())
+        .unwrap();
+    assert_eq!(open["textDocument"]["version"], 9);
+    assert_eq!(open["edits"][0]["newText"], "sec:new");
+    let closed = documents
+        .iter()
+        .find(|edit| edit["textDocument"]["uri"] == chapter.as_str())
+        .unwrap();
+    assert!(closed["textDocument"]["version"].is_null());
+    server.request(4, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
 fn document_symbols_follow_the_clients_hierarchy_capability() {
     let directory = tempfile::tempdir().unwrap();
     let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
