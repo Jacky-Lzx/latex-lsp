@@ -440,6 +440,11 @@ pub(crate) fn loader_extension(command: &str) -> Option<&'static str> {
     }
 }
 
+/// The LaTeX package/class loaders discard TeX spaces in their load names.
+pub(crate) fn loader_name(value: &str) -> String {
+    value.replace([' ', '\t', '\n', '\r'], "")
+}
+
 pub(crate) fn file_lookup_names<'a>(
     command: &str,
     value: &'a str,
@@ -450,24 +455,29 @@ pub(crate) fn file_lookup_names<'a>(
         .is_some_and(|extension| {
             ["tex", "sty", "cls", "def", "clo", "fd", "aux", "bbl", "ldf"].contains(&extension)
         });
-    let extension = loader_extension(command).unwrap_or(match command {
+    let loader = loader_extension(command);
+    let normalized = loader.map(|_| loader_name(value));
+    let literal = normalized.as_deref().unwrap_or(value);
+    let empty = literal.is_empty();
+    let extension = loader.unwrap_or(match command {
         "bibliography" => "bib",
         "bibliographystyle" => "bst",
         _ => "tex",
     });
-    let append = !value.is_empty()
+    let append = !empty
         && match command {
             "include" | "includeonly" => !value.ends_with(".tex"),
             "input" => !recognized,
             "bibliography" | "bibliographystyle" => !value.ends_with(&format!(".{extension}")),
-            _ => loader_extension(command).is_some(),
+            _ => loader.is_some(),
         };
     let preferred = if append {
-        std::borrow::Cow::Owned(format!("{value}.{extension}"))
+        std::borrow::Cow::Owned(format!("{literal}.{extension}"))
     } else {
         std::borrow::Cow::Borrowed(value)
     };
     std::iter::once(preferred)
+        .filter(move |_| !empty)
         .chain((command == "input" && append).then_some(std::borrow::Cow::Borrowed(value)))
 }
 

@@ -18,12 +18,37 @@ pub(crate) fn fixes(
     let Some(doc) = workspace.documents.get(uri) else {
         return vec![];
     };
-    let command_name = if diagnostic.code == Some(NumberOrString::String("missing-input".into())) {
-        "input"
-    } else {
-        "include"
+    let code = match diagnostic.code.as_ref() {
+        Some(NumberOrString::String(code)) => code.as_str(),
+        _ => return vec![],
     };
-    let reported = if command_name == "input" {
+    let command_name = match code {
+        "missing-input" => "input",
+        "missing-include" => "include",
+        "missing-package" | "missing-class" => {
+            let Some(command) = diagnostic
+                .data
+                .as_ref()
+                .and_then(|data| data.get("loaderCommand"))
+                .and_then(|value| value.as_str())
+            else {
+                return vec![];
+            };
+            let expected = if code == "missing-package" {
+                "sty"
+            } else {
+                "cls"
+            };
+            if syntax::loader_extension(command) != Some(expected) {
+                return vec![];
+            }
+            command
+        }
+        _ => return vec![],
+    };
+    let loader_extension = syntax::loader_extension(command_name);
+    let extension = loader_extension.unwrap_or("tex");
+    let reported = if command_name != "include" {
         build_log::missing_file_name(&diagnostic.message).filter(|name| {
             diagnostic
                 .data
@@ -44,18 +69,39 @@ pub(crate) fn fixes(
         .iter()
         .filter(|command| command.name == command_name)
         .filter_map(|command| command.argument.as_ref())
-        .find(|argument| {
-            let span = syntax::trimmed_span(&doc.text.source, argument.span.clone());
-            doc.text.range(span.start, span.end) == diagnostic.range
-                && syntax::file_lookup_names(command_name, argument.value.trim())
-                    .any(|name| name == reported)
+        .find_map(|argument| {
+            let values = if syntax::file_list(command_name) {
+                argument.value.split(',').collect::<Vec<_>>()
+            } else {
+                vec![argument.value.as_str()]
+            };
+            if loader_extension.is_some()
+                && values
+                    .iter()
+                    .any(|value| !syntax::is_literal_file_path(&syntax::loader_name(value.trim())))
+            {
+                return None;
+            }
+            let mut offset = argument.span.start;
+            for value in values {
+                let span = syntax::trimmed_span(&doc.text.source, offset..offset + value.len());
+                if doc.text.range(span.start, span.end) == diagnostic.range
+                    && syntax::file_lookup_names(command_name, value.trim())
+                        .any(|name| name == reported)
+                {
+                    return Some((argument, span));
+                }
+                offset += value.len() + 1;
+            }
+            None
         });
-    let Some(argument) = argument else {
+    let Some((argument, span)) = argument else {
         return vec![];
     };
-    let value = argument.value.trim();
-    if !syntax::is_literal_file_path(value)
-        || workspace::resolve_file_path(root, command_name, value, &["tex"]).is_some()
+    let value = &doc.text.source[span];
+    let literal = loader_extension.map(|_| syntax::loader_name(value));
+    if !syntax::is_literal_file_path(literal.as_deref().unwrap_or(value))
+        || workspace::resolve_file_path(root, command_name, value, &[extension]).is_some()
         || command_name == "input"
             && doc.text.source[argument.outer_span.clone()].starts_with('"')
             && !doc.text.source[argument.outer_span.clone()].ends_with('"')
@@ -69,11 +115,17 @@ pub(crate) fn fixes(
     else {
         return vec![];
     };
-    let separator = value.rfind('/').map_or(0, |index| index + 1);
-    let prefix = &value[..separator];
-    let original = value[separator..]
-        .strip_suffix(".tex")
-        .unwrap_or(&value[separator..]);
+    let normalized = loader_extension.map(|_| syntax::loader_name(value));
+    let lookup = normalized.as_deref().unwrap_or(value);
+    let separator = lookup.rfind('/').map_or(0, |index| index + 1);
+    let prefix = &lookup[..separator];
+    let original = if loader_extension.is_some() {
+        &lookup[separator..]
+    } else {
+        lookup[separator..]
+            .strip_suffix(".tex")
+            .unwrap_or(&lookup[separator..])
+    };
     let length = original.chars().count();
     if !(3..=128).contains(&length) {
         return vec![];
@@ -127,7 +179,7 @@ pub(crate) fn fixes(
         let Ok(name) = entry.file_name().into_string() else {
             continue;
         };
-        let Some(stem) = name.strip_suffix(".tex") else {
+        let Some(stem) = name.strip_suffix(&format!(".{extension}")) else {
             continue;
         };
         if !syntax::is_literal_file_path(&name)
@@ -139,8 +191,14 @@ pub(crate) fn fixes(
             break;
         }
         *comparisons += 1;
-        let Some(score) = spelling_fixes::distance(original, stem, if length < 8 { 1 } else { 2 })
-        else {
+        // A frequent loader mistake is spelling the complete file name; the
+        // loader then appends its suffix a second time.
+        let score = if loader_extension.is_some() && name == original {
+            Some(1)
+        } else {
+            spelling_fixes::distance(original, stem, if length < 8 { 1 } else { 2 })
+        };
+        let Some(score) = score else {
             continue;
         };
         if score == 0 || !entry.path().is_file() {
@@ -148,7 +206,11 @@ pub(crate) fn fixes(
         }
         let replacement = format!(
             "{prefix}{}",
-            if value.ends_with(".tex") { &name } else { stem }
+            if loader_extension.is_none() && value.ends_with(".tex") {
+                &name
+            } else {
+                stem
+            }
         );
         let included_name = replacement.strip_suffix(".tex").unwrap_or(&replacement);
         if filters
@@ -157,10 +219,19 @@ pub(crate) fn fixes(
         {
             continue;
         }
-        let Some(target) = workspace::resolve_file_path(root, command_name, &replacement, &["tex"])
+        let Some(target) =
+            workspace::resolve_file_path(root, command_name, &replacement, &[extension])
         else {
             continue;
         };
+        let candidate = entry
+            .path()
+            .canonicalize()
+            .ok()
+            .and_then(|path| Url::from_file_path(path).ok());
+        if candidate.as_ref() != Some(&target) {
+            continue;
+        }
         if target == source || target == main {
             continue;
         }
@@ -191,6 +262,10 @@ pub(crate) fn fixes(
                 "Replace with {} file `{replacement}`",
                 if command_name == "input" {
                     "input"
+                } else if loader_extension == Some("sty") {
+                    "package"
+                } else if loader_extension == Some("cls") {
+                    "class"
                 } else {
                     "included"
                 }
@@ -227,6 +302,7 @@ mod tests {
             .insert(uri.clone(), Document::new(&uri, source.into(), Some(1)));
         let diagnostic = Diagnostic {
             range: workspace.documents[&uri].text.range(9, 16),
+            code: Some(NumberOrString::String("missing-include".into())),
             message: "Included file `chapetr.tex` not found".into(),
             ..Default::default()
         };

@@ -111,7 +111,7 @@ fn real_missing_input_and_package_causes_survive_emergency_stops_in_the_correct_
             let main = root.join("main.tex");
             let child = root.join("child.tex");
             let (source, cause_name, expected_line) = if package {
-                ("\\documentclass{article}\n\\usepackage{missing-lsp-package}\n\\begin{document}\nText.\\end{document}\n", "missing-lsp-package.sty", 2)
+                ("\\documentclass{article}\n\\usepackage{missing-lsp-package}\n\\begin{document}\nText.\\end{document}\n", "missing-lsp-package.sty", 1)
             } else {
                 std::fs::write(&child, "Child.\n\\input{missing-lsp-chapter}\n").unwrap();
                 ("\\documentclass{article}\n\\begin{document}\n\\input{child}\n\\end{document}\n", "missing-lsp-chapter.tex", 1)
@@ -150,6 +150,19 @@ fn real_missing_input_and_package_causes_survive_emergency_stops_in_the_correct_
                 outcome.output
             );
             assert_eq!(cause.severity, Some(DiagnosticSeverity::ERROR));
+            if package {
+                assert_eq!(
+                    cause.code,
+                    Some(tower_lsp::lsp_types::NumberOrString::String(
+                        "missing-package".into()
+                    ))
+                );
+                let stop = errors
+                    .iter()
+                    .find(|entry| entry.message == "Emergency stop.")
+                    .unwrap();
+                assert_eq!(stop.range.start.line, 2);
+            }
             assert!(errors
                 .iter()
                 .any(|entry| entry.message == "Emergency stop."));

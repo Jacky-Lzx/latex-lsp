@@ -616,6 +616,114 @@ fn missing_path_range(
     matches.next().is_none().then_some(range)
 }
 
+fn missing_loader_range(
+    text: &Text,
+    line: u32,
+    context: &str,
+    name: &str,
+) -> Option<(Range, &'static str)> {
+    if !name.ends_with(".sty") && !name.ends_with(".cls") {
+        return None;
+    }
+    let prefix = context.trim_end();
+    let shortened = shortened_context(prefix);
+    let start = text.offset(Position::new(line, 0))?;
+    let syntax = crate::syntax::Syntax::latex(text);
+    let mut matches = Vec::new();
+    for command in &syntax.commands {
+        let command_name = match command.name.as_str() {
+            "usepackage" => "usepackage",
+            "RequirePackage" => "RequirePackage",
+            "documentclass" => "documentclass",
+            "LoadClass" => "LoadClass",
+            _ => continue,
+        };
+        let Some(argument) = &command.argument else {
+            continue;
+        };
+        let next = crate::syntax::skip_space(&text.source, argument.outer_span.end);
+        // LaTeX reads the optional minimum version, or one lookahead token,
+        // before the loader discovers the missing file. That token may be on
+        // the next source line, while the path being diagnosed is above it.
+        let tail = if text.source.as_bytes().get(next) == Some(&b'[') {
+            crate::syntax::group(&text.source, next, b'[', b']').map(|(_, end)| end)
+        } else if text.source.as_bytes().get(next) == Some(&b'\\') {
+            crate::syntax::control_word(&text.source, next)
+                .map(|word| word.end)
+                .or_else(|| {
+                    text.source
+                        .get(next + 1..)?
+                        .chars()
+                        .next()
+                        .map(|token| next + 1 + token.len_utf8())
+                })
+        } else {
+            text.source
+                .get(next..)?
+                .chars()
+                .next()
+                .map(|token| next + token.len_utf8())
+        };
+        if text.source.as_bytes().get(next) == Some(&b'[') && tail.is_none() {
+            continue;
+        }
+        let confirmed = [Some(argument.outer_span.end), tail]
+            .into_iter()
+            .flatten()
+            .any(|end| {
+                if text.position(end).line != line {
+                    return false;
+                }
+                let consumed = &text.source[start..end];
+                let token = if end == argument.outer_span.end {
+                    &text.source[argument.outer_span.clone()]
+                } else {
+                    &text.source[next..end]
+                };
+                shortened.map_or(consumed == prefix, |suffix| {
+                    suffix.ends_with(token)
+                        && consumed.ends_with(suffix)
+                        && (text.position(argument.outer_span.start).line != line
+                            || suffix.contains(&text.source[argument.outer_span.clone()]))
+                        && text.source[start..]
+                            .split('\n')
+                            .next()
+                            .unwrap_or_default()
+                            .match_indices(suffix)
+                            .take(2)
+                            .count()
+                            == 1
+                })
+            });
+        if !confirmed {
+            continue;
+        }
+        let values = if crate::syntax::file_list(command_name) {
+            argument.value.split(',').collect::<Vec<_>>()
+        } else {
+            vec![argument.value.as_str()]
+        };
+        // A dynamic sibling can generate the reported filename; do not infer
+        // which item caused the error without a completely static list.
+        if values.iter().any(|value| {
+            !crate::syntax::is_literal_file_path(&crate::syntax::loader_name(value.trim()))
+        }) {
+            continue;
+        }
+        let mut offset = argument.span.start;
+        for value in values {
+            let span = crate::syntax::trimmed_span(&text.source, offset..offset + value.len());
+            if crate::syntax::file_lookup_names(command_name, value.trim())
+                .any(|candidate| candidate == name)
+            {
+                matches.push((text.range(span.start, span.end), command_name));
+            }
+            offset += value.len() + 1;
+        }
+    }
+    (matches.len() == 1).then(|| matches[0])
+}
+
 pub(crate) fn undefined_environment_name(message: &str) -> Option<&str> {
     let name = message
         .strip_prefix("LaTeX Error: Environment ")?
@@ -874,6 +982,9 @@ fn emit_with_context(
         .filter(|_| reported_line.checked_sub(1) == Some(line))
         .and_then(|name| missing_path_range(&text, line, context?, name, "input"));
     ranges.extend(input_range);
+    let loader_range =
+        missing_file.and_then(|name| missing_loader_range(&text, line, context?, name));
+    ranges.extend(loader_range.map(|(range, _)| range));
     let missing_graphic = missing_graphic_name(&message);
     let graphic_range = missing_graphic
         .filter(|_| reported_line.checked_sub(1) == Some(line))
@@ -910,6 +1021,7 @@ fn emit_with_context(
                     .or_else(|| destination.filter(|_| precise_destination).map(|(kind, _)| kind.code()))
                     .or_else(|| missing_include_key(&message).map(|_| "missing-include"))
                     .or_else(|| input_range.map(|_| "missing-input"))
+                    .or_else(|| loader_range.map(|(_, command)| if crate::syntax::loader_extension(command) == Some("sty") { "missing-package" } else { "missing-class" }))
                     .or_else(|| graphic_range.map(|_| "missing-image"))
                     .or_else(|| command_range.map(|_| "undefined-control-sequence"))
                     .or_else(|| environment_range.and(environment.as_ref()).map(|error| error.code))
@@ -928,6 +1040,7 @@ fn emit_with_context(
                     })
                     .or_else(|| counter_range.and(counter_name).map(|name| serde_json::json!({"counter":name})))
                     .or_else(|| input_range.and(missing_file).map(|name| serde_json::json!({"file":name})))
+                    .or_else(|| loader_range.map(|(_, command)| serde_json::json!({"file":missing_file,"loaderCommand":command})))
                     .or_else(|| graphic_range.and(missing_graphic).map(|name| serde_json::json!({"file":name}))),
                 ..Default::default()
             }

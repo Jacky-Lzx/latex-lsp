@@ -280,7 +280,7 @@ pub fn fixes(workspace: &Workspace, uri: &Url, range: Range) -> Vec<QuickFix> {
             if examined > 64 {
                 return result;
             }
-            if matches!(diagnostic.code.as_ref(), Some(NumberOrString::String(code)) if matches!(code.as_str(), "missing-include" | "missing-input" | "missing-image"))
+            if matches!(diagnostic.code.as_ref(), Some(NumberOrString::String(code)) if matches!(code.as_str(), "missing-include" | "missing-input" | "missing-image" | "missing-package" | "missing-class"))
             {
                 let fixes = if diagnostic.code
                     == Some(NumberOrString::String("missing-image".into()))
