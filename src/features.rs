@@ -83,7 +83,9 @@ fn raw_target(doc: &Document, offset: usize) -> Option<Target<'_>> {
                 control_word: false,
             });
         }
-        if let Some(argument) = syntax::separate_label_argument(&doc.text.source, command) {
+        if let Some(argument) = syntax::separate_label_argument(&doc.text.source, command)
+            .or_else(|| syntax::range_reference_end(&doc.text.source, command))
+        {
             if argument.span.start <= offset && offset <= argument.span.end {
                 if !syntax::is_static_key(&argument.value) {
                     return None;
@@ -469,7 +471,14 @@ fn completion_name_argument(source: &str, command: &Command, offset: usize) -> O
     } else {
         (syntax::skip_space(source, command.span.end), b'{')
     };
-    syntax::active_name_argument(source, start, open, offset)
+    syntax::active_name_argument(source, start, open, offset).or_else(|| {
+        syntax::active_name_argument(
+            source,
+            syntax::range_reference_end_start(source, command)?,
+            b'{',
+            offset,
+        )
+    })
 }
 
 fn argument_context(doc: &Document, offset: usize) -> Option<(&Command, Span<usize>)> {
@@ -512,6 +521,7 @@ fn argument_span(doc: &Document, command: &Command, offset: usize) -> Option<Spa
     // A completed inner call in an optional note must not hide the outer key.
     // Most calls also let us skip old, closed arguments without rescanning text.
     if !syntax::has_separate_label_argument(&command.name)
+        && !syntax::is_range_reference(&command.name)
         && !syntax::declares_environment_copy(&command.name)
         && command
             .argument
@@ -1130,6 +1140,16 @@ fn all_references(
             };
             if !matches {
                 continue;
+            }
+            if target.kind == TargetKind::Label {
+                if let Some(argument) = syntax::range_reference_end(&doc.text.source, command)
+                    .filter(|argument| argument.value == target.name)
+                {
+                    result.push(Location {
+                        uri: uri.clone(),
+                        range: doc.text.range(argument.span.start, argument.span.end),
+                    });
+                }
             }
             let separate_label = syntax::separate_label_argument(&doc.text.source, command);
             let argument = if syntax::has_separate_label_argument(&command.name) {

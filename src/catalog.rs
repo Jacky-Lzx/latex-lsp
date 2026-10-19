@@ -137,6 +137,8 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("Vref", "Vref{${1:key}}", "Capitalize a reference with relative page text and an optional same-page note. Requires varioref."),
     ("vpageref", "vpageref{${1:key}}", "Reference a label's relative page. Optional notes set the same-page text and a prefix used on other pages. Requires varioref."),
     ("fullref", "fullref{${1:key}}", "Print a label's number and page reference. Requires varioref."),
+    ("vrefrange", "vrefrange{${1:first}}{${2:last}}", "Reference two labels as a range with relative page text. Accepts an optional same-page note. Requires varioref."),
+    ("vpagerefrange", "vpagerefrange{${1:first}}{${2:last}}", "Reference the page range between two labels. Accepts an optional same-page note and a star. Requires varioref."),
     ("hyperdef", "hyperdef[${1:key}]{${2:category}}{${3:name}}{${4:text}}", "Define a hyperlink destination and optionally give it a reference label. Requires hyperref."),
     ("hyperref", "hyperref[${1:key}]{${2:text}}", "Link custom text to a label. Requires hyperref. The four required argument form links a URL instead."),
     ("cslet", "cslet{${1:alias}}{\\${2:command}}", "Assign a control sequence's current meaning to a named alias in the current group. Requires etoolbox."),

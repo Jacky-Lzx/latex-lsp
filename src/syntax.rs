@@ -264,6 +264,8 @@ pub(crate) fn warns_on_undefined_reference(name: &str) -> bool {
             | "Vref"
             | "vpageref"
             | "fullref"
+            | "vrefrange"
+            | "vpagerefrange"
             | "nameref"
             | "refused"
     )
@@ -285,13 +287,14 @@ pub(crate) fn reference_accepts_star(name: &str) -> bool {
             | "vref"
             | "Vref"
             | "vpageref"
+            | "vpagerefrange"
             | "cref"
             | "Cref"
     )
 }
 
 /// Locate a reference's label without treating unsupported flags or extra
-/// optional notes as part of a call. Varioref's notes precede its single key.
+/// optional notes as part of a call. Varioref's notes precede its label keys.
 pub(crate) fn reference_argument_start(
     source: &str,
     name: &str,
@@ -305,7 +308,7 @@ pub(crate) fn reference_argument_start(
         at = skip_space(source, at + 1);
     }
     let notes = match name {
-        "vref" | "Vref" => 1,
+        "vref" | "Vref" | "vrefrange" | "vpagerefrange" => 1,
         "vpageref" => 2,
         _ => 0,
     };
@@ -316,6 +319,32 @@ pub(crate) fn reference_argument_start(
         at = skip_space(source, end);
     }
     Some(at)
+}
+
+pub(crate) fn is_range_reference(name: &str) -> bool {
+    matches!(name, "vrefrange" | "vpagerefrange")
+}
+
+/// Range endpoints have separate names; never treat their optional note as a
+/// label or split either endpoint as a comma-separated list.
+pub(crate) fn range_reference_end_start(source: &str, command: &Command) -> Option<usize> {
+    if !is_range_reference(&command.name) {
+        return None;
+    }
+    Some(skip_space(
+        source,
+        command.argument.as_ref()?.outer_span.end,
+    ))
+}
+
+pub(crate) fn range_reference_end(source: &str, command: &Command) -> Option<Argument> {
+    group(
+        source,
+        range_reference_end_start(source, command)?,
+        b'{',
+        b'}',
+    )
+    .map(|(argument, _)| argument)
 }
 
 pub(crate) fn is_counter_reference(name: &str) -> bool {

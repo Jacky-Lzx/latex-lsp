@@ -387,6 +387,10 @@ fn builtin(name: &str) -> Option<Signature> {
             true,
         ),
         "fullref" => (&[("key", false)], false),
+        "vrefrange" | "vpagerefrange" => (
+            &[("same-page", true), ("first", false), ("last", false)],
+            syntax::reference_accepts_star(name),
+        ),
         name if syntax::is_reference(name) => {
             (&[("keys", false)], syntax::reference_accepts_star(name))
         }

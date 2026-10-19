@@ -100,7 +100,9 @@ fn candidates(doc: &Document) -> Vec<Token> {
                 literal(&mut tokens, source, argument.span.clone(), VARIABLE);
             }
         }
-        if let Some(argument) = syntax::separate_label_argument(source, command) {
+        if let Some(argument) = syntax::separate_label_argument(source, command)
+            .or_else(|| syntax::range_reference_end(source, command))
+        {
             literal(&mut tokens, source, argument.span, KEY);
         }
         for (declaration, span) in crate::anchors::name_spans(source, command) {

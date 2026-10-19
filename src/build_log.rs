@@ -387,8 +387,10 @@ pub(crate) fn undefined_reference_ranges(text: &Text, line: u32, message: &str) 
         let Some(argument) = argument else {
             continue;
         };
+        let range_end = crate::syntax::range_reference_end(&text.source, command);
         // hyperref reads the display text before warning, so a multiline link
         // reports the closing text line rather than the bracketed key's line.
+        // Varioref reads both endpoints before reporting either missing label.
         let report_end = if command.name == "hyperref" {
             crate::syntax::group(
                 &text.source,
@@ -398,7 +400,9 @@ pub(crate) fn undefined_reference_ranges(text: &Text, line: u32, message: &str) 
             )
             .map_or(argument.span.end, |(text, _)| text.span.end)
         } else {
-            argument.span.end
+            range_end
+                .as_ref()
+                .map_or(argument.span.end, |end| end.span.end)
         };
         if text.position(command.span.start).line > line || text.position(report_end).line < line {
             continue;
@@ -407,8 +411,12 @@ pub(crate) fn undefined_reference_ranges(text: &Text, line: u32, message: &str) 
             && (crate::syntax::is_single_reference(&command.name)
                 || crate::syntax::has_separate_label_argument(&command.name))
         {
-            if crate::syntax::is_static_key(key) && argument.value == key {
-                ranges.push(text.range(argument.span.start, argument.span.end));
+            if crate::syntax::is_static_key(key) {
+                for argument in std::iter::once(argument).chain(range_end.as_ref()) {
+                    if argument.value == key {
+                        ranges.push(text.range(argument.span.start, argument.span.end));
+                    }
+                }
             }
             continue;
         }
