@@ -3,6 +3,117 @@ use std::sync::atomic::AtomicBool;
 use tower_lsp::lsp_types::{DiagnosticSeverity, Url};
 
 #[test]
+fn pdftex_shipout_errors_keep_complete_font_names_across_byte_wraps() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    std::fs::write(&main, "Main.\nSecond.\n").unwrap();
+    let uri = Url::from_file_path(&main).unwrap();
+    let message = "pdfTeX error: /opt/tex/bin/pdflatex (file assets/audit.font.pfb): cannot open Type 1 font file for reading";
+    let file_start = message.find("assets/").unwrap();
+    for split in file_start..message.len() {
+        let log = format!("(./main.tex\n)\n!{}\n{}\n ==> Fatal error occurred, no output PDF file produced!\nTranscript written on main.log.\n", &message[..split], &message[split..]);
+        let diagnostics = build_log::parse(&main, &log);
+        let errors = &diagnostics[&uri];
+        assert_eq!(errors.len(), 1, "{split}: {errors:?}");
+        assert_eq!(errors[0].message, message, "{split}");
+        assert_eq!(errors[0].range.start.line, 0);
+        assert_eq!(errors[0].severity, Some(DiagnosticSeverity::ERROR));
+        assert!(errors[0].code.is_none());
+    }
+}
+
+#[test]
+fn pdftex_engine_headers_separate_adjacent_warnings_and_traditional_errors() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    std::fs::write(&main, "Main.\nSecond.\n").unwrap();
+    let log = "(./main.tex\nPackage audit Warning: Unfinished warning\n!pdfTeX error: /opt/tex/bin/pdflatex (file audit.pfb\n): cannot open Type 1 font file for reading\n! Ordinary error.\nl.2 Second.\n)\n";
+    let diagnostics = build_log::parse(&main, log);
+    let errors = &diagnostics[&Url::from_file_path(&main).unwrap()];
+    assert_eq!(errors.len(), 3, "{errors:?}");
+    assert!(errors.iter().any(|entry| entry.message
+        == "Package audit Warning: Unfinished warning"
+        && entry.severity == Some(DiagnosticSeverity::WARNING)));
+    assert!(errors.iter().any(|entry| entry.message == "pdfTeX error: /opt/tex/bin/pdflatex (file audit.pfb): cannot open Type 1 font file for reading"
+        && entry.range.start.line == 0));
+    assert!(errors
+        .iter()
+        .any(|entry| entry.message == "Ordinary error." && entry.range.start.line == 1));
+}
+
+#[test]
+fn only_known_no_space_error_headers_create_diagnostics() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    std::fs::write(&main, "Main.\n").unwrap();
+    let log =
+        "!not an error\n!pdfTeX errorish: text\n!pdfTeX errors: text\n!pdfTeX error-free: text\n";
+    assert!(build_log::parse(&main, log).is_empty());
+    for header in [
+        "!pdfTeX error (font expansion): Unavailable expansion.",
+        "! pdfTeX error: Unavailable font.",
+    ] {
+        let diagnostics = build_log::parse(&main, header);
+        let errors = &diagnostics[&Url::from_file_path(&main).unwrap()];
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].message.starts_with("pdfTeX error"));
+    }
+}
+
+#[test]
+fn compiler_summaries_do_not_extend_unfinished_error_details() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    std::fs::write(&main, "Main.\n").unwrap();
+    for summary in [
+        " ==> Fatal error occurred, no output PDF file produced!",
+        "Transcript written on main.log.",
+        "Output written on main.pdf (1 page, 123 bytes).",
+        "No pages of output.",
+    ] {
+        let log = format!("(./main.tex\n! Error without punctuation\n{summary}\n");
+        let diagnostics = build_log::parse(&main, &log);
+        let errors = &diagnostics[&Url::from_file_path(&main).unwrap()];
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].message, "Error without punctuation", "{summary}");
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex"]
+fn real_pdftex_shipout_font_errors_report_the_missing_resource_instead_of_exit_status() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    let name = format!("audit-{}missing-font.pfb", "long-name-".repeat(12));
+    std::fs::write(&main, format!("\\documentclass{{article}}\n\\pdfmapline{{=cmr10 CMR10 <{name}}}\n\\begin{{document}}Body.\\end{{document}}\n")).unwrap();
+    let config = BuildConfig {
+        executable: "pdflatex".into(),
+        ..Default::default()
+    };
+    let outcome = build::run(&main, &config, &AtomicBool::new(false));
+    assert_eq!(outcome.status, "error", "{}", outcome.output);
+    let uri = Url::from_file_path(&main).unwrap();
+    let errors = &outcome.diagnostics[&uri];
+    let error = errors
+        .iter()
+        .find(|error| error.message.starts_with("pdfTeX error:"))
+        .unwrap_or_else(|| panic!("{errors:?}\n{}", outcome.output));
+    assert!(error.message.contains(&name), "{}", error.message);
+    assert!(
+        error
+            .message
+            .contains("cannot open Type 1 font file for reading"),
+        "{}",
+        error.message
+    );
+    assert!(!error.message.contains("Fatal error occurred"));
+    assert_eq!(error.range.start.line, 0);
+    assert!(errors
+        .iter()
+        .all(|error| !error.message.contains("exited with exit status")));
+}
+
+#[test]
 fn missing_file_causes_survive_numbered_and_traditional_emergency_stops() {
     let directory = tempfile::tempdir().unwrap();
     let main = directory.path().join("main.tex");

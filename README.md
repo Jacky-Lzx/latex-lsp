@@ -84,6 +84,8 @@ LaTeX 内核的 `NewExpandableDocumentCommand`、`RenewExpandableDocumentCommand
 
 `LaTeX Error: Environment ... undefined.` 同样可精确标出 `begin` 的环境名称，识别标准 LaTeX 帮助提示、换行分隔的命令与实参，以及同一行的多处调用。截断上下文必须唯一匹配完整参数；动态名称、宏展开、忽略区域和源码不匹配时保留整行位置。精确诊断附带 `undefined-environment` 代码及环境名称数据。
 
+pdfTeX 在输出 PDF 时的 `!pdfTeX error:` 也会显示具体编译诊断，例如缺失的 Type 1 字体文件；保留换行中的完整文件名和错误说明，省略通用的致命退出提示。没有源码行号时定位到主文档开头，避免猜测字体声明位置。
+
 `LaTeX Error: No counter '...' defined.` 可精确标出 `setcounter` / `addtocounter`、`stepcounter` / `refstepcounter` / `usecounter` 的静态计数器名称，保留数值表达式；兼容传统引号、多行参数和同一行的多处调用。宏展开、动态或残缺实参以及无法唯一核对的日志上下文保留整行位置，精确诊断附带 `undefined-counter` 代码及计数器名称数据。
 
 父计数器、计数器别名及定理的共享/重置编号参数也使用精确计数器诊断，包括 `newcounter`、`newaliascnt`、`newtheorem` 和 `counterwithin` / `counterwithout` / `numberwithin` 的两个名称参数；识别星号和可选格式参数。修复只改动日志确认的名称，保留声明名称、标题、格式和参数分隔符；不建议形成自身别名或自身编号重置关系。可选计数器参数按 TeX 的方括号结束规则读取；含字面量 `[` 的父计数器、定理共享及重置计数器参与导航、补全和重命名。引入含 `]` 的名称时，父计数器及共享参数按需补足花括号保护，定理重置参数使用静态 `\detokenize{名称}`，使连续重命名保留计数器关系和编号格式。两个实参同名、动态名称或不完整调用无法确认具体位置时保留整行诊断。

@@ -1208,6 +1208,26 @@ fn emit_with_context(
         }));
 }
 
+fn pdftex_error(message: &str) -> bool {
+    message
+        .strip_prefix("pdfTeX error")
+        .is_some_and(|tail| tail.starts_with(':') || tail.starts_with(" ("))
+}
+
+fn error_message(line: &str) -> Option<&str> {
+    line.strip_prefix("! ").or_else(|| {
+        let message = line.strip_prefix('!')?;
+        pdftex_error(message).then_some(message)
+    })
+}
+
+fn incomplete_engine_file(message: &str) -> bool {
+    pdftex_error(message)
+        && message
+            .rsplit_once("(file ")
+            .is_some_and(|(_, file)| !file.contains("):"))
+}
+
 fn warning_start(line: &str) -> bool {
     (line.starts_with("LaTeX ") || line.starts_with("Package ") || line.starts_with("Class "))
         && line.contains(" Warning:")
@@ -1228,7 +1248,11 @@ fn message_boundary(line: &str) -> bool {
     let line = line.trim_start();
     line == crate::output::TRUNCATED
         || warning_start(line)
-        || line.starts_with("! ")
+        || error_message(line).is_some()
+        || line.starts_with("==> Fatal error occurred")
+        || line.starts_with("Transcript written on ")
+        || line.starts_with("Output written on ")
+        || line == "No pages of output."
         || line.starts_with("Missing character:")
         || line.starts_with("Overfull ")
         || line.starts_with("Underfull ")
@@ -1402,13 +1426,16 @@ fn wrapped_error_message(
         ]
         .iter()
         .any(|prefix| message.starts_with(prefix) || prefix.starts_with(&message))
-            && missing_graphic_name(&message).is_none();
+            && missing_graphic_name(&message).is_none()
+            || incomplete_engine_file(&message);
         if message.trim_end().ends_with(['.', '!']) && !incomplete_file || message.len() >= 4096 {
             break;
         }
         let Some(next) = lines.get(*i + 1) else { break };
+        let engine_file_close =
+            incomplete_engine_file(&message) && next.trim_start().starts_with("):");
         if next.trim().is_empty()
-            || message_boundary(next)
+            || (message_boundary(next) && !engine_file_close)
             || [
                 "<inserted text>",
                 "<recently read>",
@@ -1633,7 +1660,7 @@ fn continued_file_line<'a>(root: &Path, lines: &[&'a str], i: &mut usize) -> Cow
                 if next.is_empty()
                     || *next == crate::output::TRUNCATED
                     || warning_start(next)
-                    || next.starts_with("! ")
+                    || error_message(next).is_some()
                     || numbered_error(next).is_some()
                     || joined.len() + next.len() > 8192
                 {
@@ -1785,7 +1812,7 @@ pub(crate) fn parse_with_sources(
                 context,
                 confirmed_path,
             );
-        } else if let Some(message) = line.strip_prefix("! ") {
+        } else if let Some(message) = error_message(line) {
             let message = wrapped_error_message(root, &lines, &separator_lines, &mut i, message);
             if let Some((path, cause, context_start)) = pending.take() {
                 let (cause_line, context) = if path.confirmed
