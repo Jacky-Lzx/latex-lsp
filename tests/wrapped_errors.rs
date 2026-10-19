@@ -3,6 +3,154 @@ use std::sync::atomic::AtomicBool;
 use tower_lsp::lsp_types::{DiagnosticSeverity, Url};
 
 #[test]
+fn missing_file_causes_survive_numbered_and_traditional_emergency_stops() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    std::fs::write(&main, "First.\nSecond.\n😀 \\input{missing}\n").unwrap();
+    let uri = Url::from_file_path(&main).unwrap();
+    for cause in [
+        "LaTeX Error: File `missing.tex' not found.",
+        "I can't find file `missing'.",
+    ] {
+        for stop in ["! Emergency stop.", "./main.tex:3: Emergency stop."] {
+            let log = format!("(./main.tex\n! {cause}\n\nType X to quit or <RETURN> to proceed,\nor enter new name. (Default extension: tex)\n\nEnter file name: \n{stop}\n<read *>\n\nl.3 😀 \\input{{missing}}\n                        ^^M\n");
+            let diagnostics = build_log::parse(&main, &log);
+            let entries = &diagnostics[&uri];
+            assert_eq!(entries.len(), 2, "{log}\n{entries:?}");
+            let original = entries.iter().find(|entry| entry.message == cause).unwrap();
+            assert_eq!(original.range.start.line, 2, "{log}\n{entries:?}");
+            assert_eq!(original.range.end.character, 18);
+            assert_eq!(original.severity, Some(DiagnosticSeverity::ERROR));
+            assert!(entries
+                .iter()
+                .any(|entry| entry.message == "Emergency stop." && entry.range.start.line == 2));
+        }
+    }
+}
+
+#[test]
+fn pending_errors_are_preserved_without_borrowing_unrelated_file_or_line_context() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    let child = directory.path().join("child.tex");
+    std::fs::write(&main, "First.\nSecond.\nThird.\n").unwrap();
+    std::fs::write(&child, "Child.\nSecond child line.\nThird child line.\n").unwrap();
+    let main_uri = Url::from_file_path(&main).unwrap();
+    let child_uri = Url::from_file_path(&child).unwrap();
+    for (cause, stop, tail) in [
+        (
+            "Unfinished original error.",
+            "./main.tex:3: Unrelated error.",
+            "",
+        ),
+        (
+            "LaTeX Error: File `missing.tex' not found.",
+            "./child.tex:3: Emergency stop.",
+            "",
+        ),
+        (
+            "LaTeX Error: File `missing.tex' not found.",
+            "./unknown.tex:3: Emergency stop.",
+            "",
+        ),
+        (
+            "LaTeX Error: File `missing.tex' not found.",
+            "! Emergency stop.",
+            "[latex-lsp: middle of compiler output omitted]\nl.3 Third.\n",
+        ),
+        (
+            "LaTeX Error: File `missing.tex' not found.",
+            "! Emergency stop.",
+            "./child.tex:3: Another error.\nl.3 Third.\n",
+        ),
+    ] {
+        let log = format!("(./main.tex\n! {cause}\n{stop}\n{tail}");
+        let diagnostics = build_log::parse(&main, &log);
+        let original = diagnostics[&main_uri]
+            .iter()
+            .find(|entry| entry.message == cause)
+            .unwrap_or_else(|| panic!("{log}\n{diagnostics:?}"));
+        assert_eq!(original.range.start.line, 0, "{log}\n{diagnostics:?}");
+        assert!(diagnostics
+            .get(&child_uri)
+            .into_iter()
+            .flatten()
+            .all(|entry| entry.message != cause));
+    }
+    for gap in [
+        "(./child.tex\n)\n".to_owned(),
+        "Package demo Warning: Unrelated warning on input line 1.\n".to_owned(),
+        "\n".repeat(33),
+    ] {
+        let cause = "LaTeX Error: File `missing.tex' not found.";
+        let log =
+            format!("(./main.tex\n! {cause}\n{gap}./main.tex:3: Emergency stop.\nl.3 Third.\n");
+        let diagnostics = build_log::parse(&main, &log);
+        let original = diagnostics[&main_uri]
+            .iter()
+            .find(|entry| entry.message == cause)
+            .unwrap();
+        assert_eq!(original.range.start.line, 0, "{log}\n{diagnostics:?}");
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex"]
+fn real_missing_input_and_package_causes_survive_emergency_stops_in_the_correct_source() {
+    for file_line in [false, true] {
+        for package in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let main = root.join("main.tex");
+            let child = root.join("child.tex");
+            let (source, cause_name, expected_line) = if package {
+                ("\\documentclass{article}\n\\usepackage{missing-lsp-package}\n\\begin{document}\nText.\\end{document}\n", "missing-lsp-package.sty", 2)
+            } else {
+                std::fs::write(&child, "Child.\n\\input{missing-lsp-chapter}\n").unwrap();
+                ("\\documentclass{article}\n\\begin{document}\n\\input{child}\n\\end{document}\n", "missing-lsp-chapter.tex", 1)
+            };
+            std::fs::write(&main, source).unwrap();
+            let config = BuildConfig {
+                executable: "pdflatex".into(),
+                arguments: Some(vec![
+                    "-interaction=nonstopmode".into(),
+                    if file_line {
+                        "-file-line-error"
+                    } else {
+                        "-no-file-line-error"
+                    }
+                    .into(),
+                    "-output-directory=%o".into(),
+                    "%f".into(),
+                ]),
+                ..Default::default()
+            };
+            let outcome = build::run(&main, &config, &AtomicBool::new(false));
+            assert_eq!(outcome.status, "error", "{}", outcome.output);
+            let expected = format!("LaTeX Error: File `{cause_name}' not found.");
+            let uri = Url::from_file_path(if package { &main } else { &child }).unwrap();
+            let errors = outcome
+                .diagnostics
+                .get(&uri)
+                .unwrap_or_else(|| panic!("{:?}\n{}", outcome.diagnostics, outcome.output));
+            let cause = errors
+                .iter()
+                .find(|entry| entry.message == expected)
+                .unwrap_or_else(|| panic!("{file_line}/{package}: {errors:?}\n{}", outcome.output));
+            assert_eq!(
+                cause.range.start.line, expected_line,
+                "{file_line}/{package}: {errors:?}\n{}",
+                outcome.output
+            );
+            assert_eq!(cause.severity, Some(DiagnosticSeverity::ERROR));
+            assert!(errors
+                .iter()
+                .any(|entry| entry.message == "Emergency stop."));
+        }
+    }
+}
+
+#[test]
 fn wrapped_file_line_errors_recover_long_quoted_unicode_paths_and_complete_messages() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();

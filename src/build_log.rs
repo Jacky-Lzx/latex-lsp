@@ -458,6 +458,45 @@ fn error_context<'a>(lines: &[&'a str], start: usize, number: u32) -> Option<&'a
     tail[digits..].strip_prefix(' ')
 }
 
+fn missing_file_name(message: &str) -> Option<&str> {
+    let quoted = message
+        .strip_prefix("LaTeX Error: File ")
+        .and_then(|tail| tail.strip_suffix(" not found."))
+        .or_else(|| {
+            message
+                .strip_prefix("I can't find file ")?
+                .strip_suffix('.')
+        })?;
+    let name = quoted
+        .strip_prefix('`')
+        .or_else(|| quoted.strip_prefix('\''))?
+        .strip_suffix('\'')?;
+    (!name.is_empty()).then_some(name)
+}
+
+fn following_error_number(lines: &[&str], start: usize) -> Option<u32> {
+    for line in lines.iter().skip(start).take(16) {
+        let line = line.trim_start();
+        if let Some(tail) = line.strip_prefix("l.") {
+            let digits = tail.bytes().take_while(u8::is_ascii_digit).count();
+            return tail[..digits].parse().ok();
+        }
+        if message_boundary(line) || line.starts_with('(') {
+            break;
+        }
+    }
+    None
+}
+
+fn uninterrupted_file_prompt(lines: &[&str], start: usize, end: usize) -> bool {
+    end.saturating_sub(start) <= 32
+        && lines.get(start..end).is_some_and(|lines| {
+            lines
+                .iter()
+                .all(|line| !message_boundary(line) && !line.trim_start().starts_with('('))
+        })
+}
+
 pub(crate) fn undefined_environment_name(message: &str) -> Option<&str> {
     let name = message
         .strip_prefix("LaTeX Error: Environment ")?
@@ -1118,10 +1157,36 @@ pub(crate) fn parse_with_sources(
                 .unwrap_or_else(|| root.into())
         };
         let mut structural = false;
+        let diagnostic_start = i;
         let error_line = continued_error_line(root, &lines, &separator_lines, &mut i);
         if let Some((name, number, message)) = numbered_error(&error_line) {
-            let path = location(root, name).unwrap_or_else(|| root.into());
+            let reported_path = location(root, name);
+            let confirmed_path = reported_path.is_some();
+            let path = reported_path.unwrap_or_else(|| root.into());
             let message = wrapped_error_message(root, &lines, &separator_lines, &mut i, message);
+            if let Some((cause_path, cause, context_start)) = pending.take() {
+                // File lookup prompts end with a separate Emergency stop. The
+                // numbered error supplies the missing location of its cause.
+                if cause_path != path || cause != message {
+                    let cause_line = if confirmed_path
+                        && cause_path == path
+                        && message == "Emergency stop."
+                        && missing_file_name(&cause).is_some()
+                        && uninterrupted_file_prompt(&lines, context_start, diagnostic_start)
+                    {
+                        number
+                    } else {
+                        1
+                    };
+                    emit(
+                        &mut result,
+                        &cause_path,
+                        cause_line,
+                        cause,
+                        DiagnosticSeverity::ERROR,
+                    );
+                }
+            }
             let severity = if message.contains("Warning:") {
                 DiagnosticSeverity::WARNING
             } else {
@@ -1135,12 +1200,26 @@ pub(crate) fn parse_with_sources(
                 severity,
                 error_context(&lines, i + 1, number),
             );
-            pending = None;
         } else if let Some(message) = line.strip_prefix("! ") {
-            if let Some((path, message, _)) = pending.take() {
-                emit(&mut result, &path, 1, message, DiagnosticSeverity::ERROR);
-            }
             let message = wrapped_error_message(root, &lines, &separator_lines, &mut i, message);
+            if let Some((path, cause, context_start)) = pending.take() {
+                let cause_line = if path == current()
+                    && message == "Emergency stop."
+                    && missing_file_name(&cause).is_some()
+                    && uninterrupted_file_prompt(&lines, context_start, diagnostic_start)
+                {
+                    following_error_number(&lines, i + 1).unwrap_or(1)
+                } else {
+                    1
+                };
+                emit(
+                    &mut result,
+                    &path,
+                    cause_line,
+                    cause,
+                    DiagnosticSeverity::ERROR,
+                );
+            }
             pending = Some((current(), message, i + 1));
         } else if let Some(tail) = line.trim_start().strip_prefix("l.") {
             let number = tail
