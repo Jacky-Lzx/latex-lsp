@@ -336,3 +336,230 @@ fn directory_and_file_moves_update_bibliography_binding_names_and_targets() {
         [(new.join("refs.bib"), target)].into()
     );
 }
+
+#[test]
+#[cfg(unix)]
+fn static_aliases_preserve_database_style_and_tex_roles_across_reload_open_and_moves() {
+    use latex_lsp::workspace::DocumentKind;
+    for extension in ["payload", "tex", "csv", "png", "bst"] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let database = root.join(format!("database.{extension}"));
+        let package = root.join("package.bib");
+        let style = root.join("style.bib");
+        let bibliography = "@book{entry,title={Database}}\n";
+        std::fs::write(&database, bibliography).unwrap();
+        std::fs::write(&package, "\\newcommand{\\fromalias}{Package}\n").unwrap();
+        std::fs::write(
+            &style,
+            "@book{not-a-database,title={Style text}}\n\\newcommand{\\notatexmacro}{}\n",
+        )
+        .unwrap();
+        let database_alias = root.join("refs.bib");
+        std::os::unix::fs::symlink(&database, &database_alias).unwrap();
+        std::os::unix::fs::symlink(&package, root.join("alias.sty")).unwrap();
+        std::os::unix::fs::symlink(&style, root.join("chosen.bst")).unwrap();
+        let source = "\\documentclass{article}\n\\usepackage{alias}\n\\bibliographystyle{chosen}\n\\bibliography{refs}\n\\cite{entry} \\fromalias\n";
+        std::fs::write(root.join("main.tex"), source).unwrap();
+        let main = uri(root, "main.tex");
+        let data_uri = Url::from_file_path(&database).unwrap();
+        let package_uri = Url::from_file_path(&package).unwrap();
+        let style_uri = Url::from_file_path(&style).unwrap();
+        let mut workspace = Workspace::default();
+        workspace.add_root(root.into());
+        workspace.refresh_project(&main);
+        assert_eq!(
+            workspace.documents[&data_uri].kind,
+            DocumentKind::Bibtex,
+            "{extension}"
+        );
+        assert_eq!(workspace.documents[&package_uri].kind, DocumentKind::Latex);
+        assert_eq!(
+            workspace.documents[&style_uri].kind,
+            DocumentKind::BibtexStyle
+        );
+        assert!(workspace.documents[&style_uri].syntax.citations.is_empty());
+        assert!(workspace.documents[&style_uri].syntax.commands.is_empty());
+        let at = workspace.documents[&main]
+            .text
+            .position(source.find("cite{entry}").unwrap() + 6);
+        assert_eq!(
+            features::definitions(&workspace, &main, at)[0].uri,
+            data_uri
+        );
+        assert!(features::completion(&workspace, &main, at)
+            .iter()
+            .any(|item| item.label == "entry"));
+        let rename = features::rename(&workspace, &main, at, "renamed")
+            .unwrap()
+            .unwrap()
+            .changes
+            .unwrap();
+        assert_eq!(rename.len(), 2);
+        assert_eq!(rename[&data_uri][0].new_text, "renamed");
+        let macro_at = workspace.documents[&main]
+            .text
+            .position(source.find("\\fromalias").unwrap() + 3);
+        assert_eq!(
+            features::definitions(&workspace, &main, macro_at)[0].uri,
+            package_uri
+        );
+        let macro_rename = features::rename(&workspace, &main, macro_at, "renamedalias")
+            .unwrap()
+            .unwrap()
+            .changes
+            .unwrap();
+        assert_eq!(macro_rename.len(), 2);
+        assert_eq!(macro_rename[&package_uri][0].new_text, "\\renamedalias");
+        for input in [&data_uri, &package_uri, &style_uri] {
+            workspace.reload(input);
+        }
+        assert_eq!(workspace.documents[&data_uri].kind, DocumentKind::Bibtex);
+        assert_eq!(workspace.documents[&package_uri].kind, DocumentKind::Latex);
+        assert_eq!(
+            workspace.documents[&style_uri].kind,
+            DocumentKind::BibtexStyle
+        );
+        // An editor may select a mode from the physical extension. Reopening
+        // and refreshing still keep the role confirmed by the source command.
+        workspace.open(
+            data_uri.clone(),
+            bibliography.replace("Database", "Unsaved"),
+            3,
+        );
+        workspace.refresh_project(&main);
+        assert_eq!(workspace.documents[&data_uri].kind, DocumentKind::Bibtex);
+        assert_eq!(workspace.documents[&data_uri].version, Some(3));
+        assert!(workspace.documents[&data_uri]
+            .text
+            .source
+            .contains("Unsaved"));
+        let moved = root.join("renamed.tex");
+        std::fs::rename(&database, &moved).unwrap();
+        latex_lsp::file_operations::did_rename(
+            &mut workspace,
+            &[FileRename {
+                old_uri: data_uri.to_string(),
+                new_uri: Url::from_file_path(&moved).unwrap().to_string(),
+            }],
+        )
+        .unwrap();
+        let moved_uri = Url::from_file_path(&moved).unwrap();
+        assert_eq!(workspace.documents[&moved_uri].kind, DocumentKind::Bibtex);
+        assert_eq!(workspace.documents[&moved_uri].version, Some(3));
+        assert!(workspace.documents[&moved_uri]
+            .text
+            .source
+            .contains("Unsaved"));
+        std::fs::remove_file(database_alias).unwrap();
+        std::os::unix::fs::symlink(&moved, root.join("refs.bib")).unwrap();
+        workspace.refresh_project(&main);
+        assert_eq!(
+            features::definitions(&workspace, &main, at)[0].uri,
+            moved_uri
+        );
+    }
+}
+
+#[test]
+fn ordinary_unreferenced_files_follow_the_new_extension_after_a_move() {
+    let directory = tempfile::tempdir().unwrap();
+    let old = directory.path().join("unreferenced.tex");
+    let new = directory.path().join("renamed.bib");
+    std::fs::write(&old, "@book{entry,title={Title}}\n").unwrap();
+    let mut workspace = Workspace::default();
+    workspace.add_root(directory.path().into());
+    std::fs::rename(&old, &new).unwrap();
+    latex_lsp::file_operations::did_rename(
+        &mut workspace,
+        &[FileRename {
+            old_uri: Url::from_file_path(&old).unwrap().to_string(),
+            new_uri: Url::from_file_path(&new).unwrap().to_string(),
+        }],
+    )
+    .unwrap();
+    let doc = &workspace.documents[&Url::from_file_path(&new).unwrap()];
+    assert_eq!(doc.kind, latex_lsp::workspace::DocumentKind::Bibtex);
+    assert_eq!(doc.syntax.citations[0].name, "entry");
+}
+
+#[test]
+#[cfg(unix)]
+fn current_static_roles_replace_previous_recorder_roles_without_losing_unsaved_text() {
+    use latex_lsp::workspace::DocumentKind;
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let target = root.join("physical.payload");
+    let main = uri(root, "main.tex");
+    let target_uri = Url::from_file_path(&target).unwrap();
+    std::fs::write(&target, "\\newcommand{\\fromalias}{Text}\n").unwrap();
+    for alias in ["alias.sty", "refs.bib", "chosen.bst"] {
+        std::os::unix::fs::symlink(&target, root.join(alias)).unwrap();
+    }
+    let mut workspace = Workspace::default();
+    workspace.add_root(root.into());
+    workspace.open(
+        main.clone(),
+        "\\documentclass{article}\\usepackage{alias}\\fromalias\n".into(),
+        1,
+    );
+    workspace.recorded_bindings.insert(
+        main.clone(),
+        [(root.join("alias.sty"), target.clone())].into(),
+    );
+    workspace
+        .recorded_inputs
+        .insert(main.clone(), [target_uri.clone()].into());
+    let bibliography = "@book{entry,title={Book}}\n";
+    std::fs::write(&target, bibliography).unwrap();
+    workspace.open(
+        main.clone(),
+        "\\documentclass{article}\\bibliography{refs}\\cite{entry}\n".into(),
+        2,
+    );
+    workspace.refresh_project(&main);
+    assert_eq!(workspace.documents[&target_uri].kind, DocumentKind::Bibtex);
+    assert_eq!(
+        workspace.documents[&target_uri].syntax.citations[0].name,
+        "entry"
+    );
+    workspace.open(
+        target_uri.clone(),
+        bibliography.replace("Book", "Unsaved"),
+        1,
+    );
+    workspace.reload(&target_uri);
+    assert_eq!(workspace.documents[&target_uri].kind, DocumentKind::Bibtex);
+    assert!(workspace.documents[&target_uri]
+        .text
+        .source
+        .contains("Unsaved"));
+    workspace.open(
+        main.clone(),
+        "\\documentclass{article}\\bibliographystyle{chosen}\n".into(),
+        3,
+    );
+    workspace.refresh_project(&main);
+    assert_eq!(
+        workspace.documents[&target_uri].kind,
+        DocumentKind::BibtexStyle
+    );
+    assert_eq!(workspace.documents[&target_uri].version, Some(1));
+    assert!(workspace.documents[&target_uri]
+        .text
+        .source
+        .contains("Unsaved"));
+    assert!(workspace.documents[&target_uri].syntax.citations.is_empty());
+    workspace.open(
+        main.clone(),
+        "\\documentclass{article}\\usepackage{alias}\n".into(),
+        4,
+    );
+    workspace.refresh_project(&main);
+    assert_eq!(workspace.documents[&target_uri].kind, DocumentKind::Latex);
+    assert_eq!(workspace.documents[&target_uri].version, Some(1));
+    assert!(workspace.documents[&target_uri]
+        .text
+        .source
+        .contains("Unsaved"));
+}

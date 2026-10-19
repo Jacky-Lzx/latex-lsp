@@ -640,7 +640,7 @@ pub fn did_rename(workspace: &mut Workspace, files: &[FileRename]) -> Result<BTr
             affected.insert(new_uri.clone());
             moved.push((
                 new_uri.clone(),
-                Document::new(&new_uri, doc.text.source, doc.version),
+                Document::new_with_kind(&new_uri, doc.text.source, doc.version, doc.kind_hint),
             ));
         } else {
             workspace.documents.insert(uri, doc);

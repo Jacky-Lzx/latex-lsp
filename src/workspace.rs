@@ -83,6 +83,8 @@ pub struct Document {
     pub syntax: Syntax,
     pub version: Option<i32>,
     pub kind: DocumentKind,
+    /// Input role inferred before resolving aliases; otherwise use the URI.
+    pub kind_hint: Option<DocumentKind>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -94,26 +96,50 @@ pub enum DocumentKind {
 
 impl Document {
     pub fn new(uri: &Url, source: String, version: Option<i32>) -> Self {
+        Self::new_with_kind(uri, source, version, None)
+    }
+
+    pub(crate) fn new_with_kind(
+        uri: &Url,
+        source: String,
+        version: Option<i32>,
+        kind_hint: Option<DocumentKind>,
+    ) -> Self {
         let text = Text::new(source);
-        let kind = if uri.path().ends_with(".bib") {
-            DocumentKind::Bibtex
-        } else if uri.path().ends_with(".bst") {
-            DocumentKind::BibtexStyle
-        } else {
-            DocumentKind::Latex
-        };
-        let syntax = match kind {
-            DocumentKind::Bibtex => Syntax::bibtex(&text),
-            DocumentKind::Latex => Syntax::latex(&text),
-            // BibTeX styles use a stack language, not LaTeX commands/braces.
-            DocumentKind::BibtexStyle => Syntax::default(),
-        };
+        let kind = kind_hint.unwrap_or_else(|| {
+            if uri.path().ends_with(".bib") {
+                DocumentKind::Bibtex
+            } else if uri.path().ends_with(".bst") {
+                DocumentKind::BibtexStyle
+            } else {
+                DocumentKind::Latex
+            }
+        });
+        let syntax = Self::parse(&text, kind);
         Self {
             text,
             syntax,
             version,
             kind,
+            kind_hint,
         }
+    }
+
+    fn parse(text: &Text, kind: DocumentKind) -> Syntax {
+        match kind {
+            DocumentKind::Bibtex => Syntax::bibtex(text),
+            DocumentKind::Latex => Syntax::latex(text),
+            // BibTeX styles use a stack language, not LaTeX commands/braces.
+            DocumentKind::BibtexStyle => Syntax::default(),
+        }
+    }
+
+    fn set_kind_hint(&mut self, kind: DocumentKind) {
+        if self.kind != kind {
+            self.kind = kind;
+            self.syntax = Self::parse(&self.text, kind);
+        }
+        self.kind_hint = Some(kind);
     }
 }
 
@@ -305,6 +331,13 @@ impl Workspace {
     }
 
     fn source_dependencies_from(&self, uri: &Url, root: &Url) -> Vec<Url> {
+        self.source_dependencies_with_kinds(uri, root)
+            .into_iter()
+            .map(|(uri, _)| uri)
+            .collect()
+    }
+
+    fn source_dependencies_with_kinds(&self, uri: &Url, root: &Url) -> Vec<(Url, DocumentKind)> {
         let Some(doc) = self.documents.get(uri) else {
             return vec![];
         };
@@ -339,9 +372,16 @@ impl Workspace {
                                 } else {
                                     value.trim()
                                 };
-                                resolve_file_path(root, &command.name, value, &[extension]).or_else(
-                                    || resolve_file_path(uri, &command.name, value, &[extension]),
-                                )
+                                let kind = match extension {
+                                    "bib" => DocumentKind::Bibtex,
+                                    "bst" => DocumentKind::BibtexStyle,
+                                    _ => DocumentKind::Latex,
+                                };
+                                resolve_file_path(root, &command.name, value, &[extension])
+                                    .or_else(|| {
+                                        resolve_file_path(uri, &command.name, value, &[extension])
+                                    })
+                                    .map(|uri| (uri, kind))
                             })
                             .collect()
                     })
@@ -484,6 +524,16 @@ impl Workspace {
             .into_iter()
             .filter_map(move |by_root| by_root.get(root))
             .flat_map(|bindings| bindings.iter())
+    }
+
+    /// Static bibliography references retain their role even when their
+    /// physical targets have unrelated suffixes or cannot be parsed as UTF-8.
+    pub(crate) fn bibliography_files(&self, root: &Url) -> BTreeSet<Url> {
+        self.project_documents(root)
+            .into_iter()
+            .flat_map(|uri| self.source_dependencies_with_kinds(&uri, root))
+            .filter_map(|(uri, kind)| (kind != DocumentKind::Latex).then_some(uri))
+            .collect()
     }
 
     /// Saved sources and image dependencies used by builds and artifact checks.
@@ -638,29 +688,84 @@ impl Workspace {
         self.reload_document(uri, self.documents.contains_key(uri));
     }
 
+    fn recorded_kind(&self, uri: &Url) -> Option<DocumentKind> {
+        let path = uri.to_file_path().ok()?;
+        let mut style = false;
+        for (name, target) in self
+            .bibliography_bindings
+            .values()
+            .flat_map(|bindings| bindings.iter())
+        {
+            if *target == path {
+                match name.extension().and_then(|ext| ext.to_str()) {
+                    Some("bib") => return Some(DocumentKind::Bibtex),
+                    Some("bst") => style = true,
+                    _ => {}
+                }
+            }
+        }
+        if style {
+            return Some(DocumentKind::BibtexStyle);
+        }
+        self.recorded_bindings
+            .values()
+            .flat_map(|bindings| bindings.iter())
+            .any(|(name, target)| {
+                *target == path && is_source(name) && !crate::recorder::is_data(name)
+            })
+            .then_some(DocumentKind::Latex)
+    }
+
     pub(crate) fn reload_recorded(&mut self, uri: &Url, binary: bool) {
         if binary && !self.documents.contains_key(uri) {
             return;
         }
         // A source alias may resolve to a data-looking suffix. Its recorder
         // role is stronger evidence than the canonical name's extension.
-        self.reload_document(uri, true);
+        if binary {
+            self.reload_document(uri, true);
+        } else {
+            self.reload_document_as(uri, true, Some(DocumentKind::Latex));
+        }
+    }
+
+    pub(crate) fn reload_bibliography(&mut self, uri: &Url) {
+        // A fresh tool log is a new observation, unlike a passive disk reload.
+        let kind_hint = self.recorded_kind(uri);
+        self.reload_document_as(uri, true, kind_hint);
     }
 
     fn reload_document(&mut self, uri: &Url, parse_source: bool) {
-        // Unsaved editor content always wins over filesystem notifications.
-        if self
+        let kind_hint = self
             .documents
             .get(uri)
-            .is_some_and(|doc| doc.version.is_some())
+            .and_then(|doc| doc.kind_hint)
+            .or_else(|| self.recorded_kind(uri));
+        self.reload_document_as(uri, parse_source || kind_hint.is_some(), kind_hint);
+    }
+
+    fn reload_document_as(
+        &mut self,
+        uri: &Url,
+        parse_source: bool,
+        kind_hint: Option<DocumentKind>,
+    ) {
+        // Updating the parser role must preserve unsaved editor contents.
+        if let Some(doc) = self
+            .documents
+            .get_mut(uri)
+            .filter(|doc| doc.version.is_some())
         {
+            if let Some(kind) = kind_hint {
+                doc.set_kind_hint(kind);
+            }
             return;
         }
         if self.documents.len() >= MAX_FILES && !self.documents.contains_key(uri) {
             return;
         }
         let source = uri.to_file_path().ok().and_then(|path| {
-            if crate::graphics::is_image(&path)
+            if crate::graphics::is_image(&path) && kind_hint.is_none()
                 || !parse_source
                     && (crate::recorder::is_data(&path)
                         || self
@@ -677,8 +782,10 @@ impl Workspace {
             std::fs::read_to_string(path).ok()
         });
         if let Some(source) = source {
-            self.documents
-                .insert(uri.clone(), Document::new(uri, source, None));
+            self.documents.insert(
+                uri.clone(),
+                Document::new_with_kind(uri, source, None, kind_hint),
+            );
         } else {
             self.documents.remove(uri);
         }
@@ -723,6 +830,13 @@ impl Workspace {
         affected
     }
 
+    pub(crate) fn close(&mut self, uri: &Url) {
+        let previous_hint = self.documents.remove(uri).and_then(|doc| doc.kind_hint);
+        let kind_hint = previous_hint.or_else(|| self.recorded_kind(uri));
+        // Discard unsaved text while retaining the independently known role.
+        self.reload_document_as(uri, kind_hint.is_some(), kind_hint);
+    }
+
     pub fn open(&mut self, uri: Url, source: String, version: i32) {
         let uri = document_uri(uri);
         if self.roots.is_empty() {
@@ -732,8 +846,15 @@ impl Workspace {
                 }
             }
         }
-        self.documents
-            .insert(uri.clone(), Document::new(&uri, source, Some(version)));
+        let kind_hint = self
+            .documents
+            .get(&uri)
+            .and_then(|doc| doc.kind_hint)
+            .or_else(|| self.recorded_kind(&uri));
+        self.documents.insert(
+            uri.clone(),
+            Document::new_with_kind(&uri, source, Some(version), kind_hint),
+        );
         self.load_dependencies(&uri, 0);
     }
 
@@ -762,12 +883,21 @@ impl Workspace {
             self.reload(uri);
         }
         let dependencies = self.dependencies_from(uri, root);
-        let sources = self.source_dependencies_from(uri, root);
+        let sources: BTreeMap<_, _> = self
+            .source_dependencies_with_kinds(uri, root)
+            .into_iter()
+            .collect();
         for dependency in dependencies {
-            if !self.documents.contains_key(&dependency) {
+            if let Some(kind) = sources.get(&dependency) {
+                if let Some(doc) = self.documents.get_mut(&dependency) {
+                    doc.set_kind_hint(*kind);
+                } else {
+                    self.reload_document_as(&dependency, true, Some(*kind));
+                }
+            } else if !self.documents.contains_key(&dependency) {
                 // Explicit source inclusion keeps working for unusual names
                 // such as input{notes.txt}; recorder-only data stays unparsed.
-                self.reload_document(&dependency, sources.contains(&dependency));
+                self.reload_document(&dependency, false);
             }
             self.load_dependencies_inner(&dependency, root, depth + 1, visited, refresh);
         }

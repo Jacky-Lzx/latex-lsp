@@ -440,9 +440,15 @@ impl LanguageServer for Backend {
                 .await;
             return;
         };
+        let kind_hint = doc.kind_hint;
         workspace.documents.insert(
             uri.clone(),
-            Document::new(&uri, text.source, Some(params.text_document.version)),
+            Document::new_with_kind(
+                &uri,
+                text.source,
+                Some(params.text_document.version),
+                kind_hint,
+            ),
         );
         workspace.clear_build_diagnostics(&uri);
         workspace.load_dependencies(&uri, 0);
@@ -466,8 +472,7 @@ impl LanguageServer for Backend {
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = document_uri(params.text_document.uri);
         let mut workspace = self.workspace.write().await;
-        workspace.documents.remove(&uri);
-        workspace.reload(&uri);
+        workspace.close(&uri);
         self.semantic_cache.lock().await.remove(&uri);
         self.diagnostic_cache.lock().await.remove(&uri);
         let delivery = workspace.diagnostic_delivery.clone();

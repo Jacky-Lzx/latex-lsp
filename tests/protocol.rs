@@ -9069,3 +9069,296 @@ fn known_external_bindings_track_unindexed_target_contents_and_active_retargets(
         }
     }
 }
+
+#[test]
+#[cfg(unix)]
+fn compiler_input_roles_survive_open_edits_close_and_versioned_cross_file_rename() {
+    for (database, extension) in [
+        (true, "payload"),
+        (true, "tex"),
+        (true, "csv"),
+        (true, "png"),
+        (true, "bst"),
+        (false, "bib"),
+        (false, "bst"),
+        (false, "png"),
+    ] {
+        let (mut server, directory, main) = fake_build_server_capabilities(
+            "exit 1\n",
+            false,
+            json!({"workspace":{"workspaceEdit":{"documentChanges":true}}}),
+        );
+        let inputs = directory.path().join(".inputs");
+        std::fs::create_dir(&inputs).unwrap();
+        let physical = inputs.join(format!("physical.{extension}"));
+        let alias = inputs.join(if database { "alias.bib" } else { "alias.sty" });
+        let contents = if database {
+            "@book{entry,title={OLD}}\n"
+        } else {
+            "\\newcommand{\\fromalias}{OLD}\n"
+        };
+        std::fs::write(&physical, contents).unwrap();
+        std::os::unix::fs::symlink(&physical, &alias).unwrap();
+        let data_uri = Url::from_file_path(&physical).unwrap();
+        let source = if database {
+            "\\documentclass{article}\n\\def\\selected{.inputs/alias}\\bibliography{\\selected}\\cite{entry}\n"
+        } else {
+            "\\documentclass{article}\n\\def\\selected{.inputs/alias}\\usepackage{\\selected}\\fromalias\n"
+        };
+        let at = latex_lsp::text::Text::new(source.into()).position(if database {
+            source.find("cite{entry}").unwrap() + 6
+        } else {
+            source.find("\\fromalias").unwrap() + 3
+        });
+        std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+        );
+        let extra = if database {
+            "printf 'Database file #1: .inputs/alias.bib\\n' > \"$1/main.blg\"\n"
+        } else {
+            "printf 'INPUT .inputs/alias.sty\\n' >> \"$1/main.fls\"\n"
+        };
+        std::fs::write(directory.path().join("compiler.sh"), format!("printf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf 'INPUT %s\\n' \"$2\" > \"$1/main.fls\"\n{extra}")).unwrap();
+        assert_eq!(
+            server.request(
+                2,
+                "textDocument/definition",
+                json!({"textDocument":{"uri":main},"position":at})
+            ),
+            json!([])
+        );
+        server.request(
+            3,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let built = server.until(|m| m["method"] == "latex/buildFinished");
+        assert_eq!(
+            built["params"]["status"], "success",
+            "{database}/{extension}: {built}"
+        );
+        let definitions = server.request(
+            4,
+            "textDocument/definition",
+            json!({"textDocument":{"uri":main},"position":at}),
+        );
+        assert_eq!(definitions[0]["uri"], data_uri.as_str(), "{definitions}");
+        let references = server.request(5, "textDocument/references", json!({"textDocument":{"uri":main},"position":at,"context":{"includeDeclaration":true}}));
+        assert_eq!(references.as_array().unwrap().len(), 2, "{references}");
+        if database {
+            let completion = server.request(
+                6,
+                "textDocument/completion",
+                json!({"textDocument":{"uri":main},"position":at}),
+            );
+            assert!(
+                completion
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|item| item["label"] == "entry"),
+                "{completion}"
+            );
+        }
+        // The confirmed input role wins over the physical extension and stays
+        // attached to the editor buffer through full and incremental updates.
+        server.notify("textDocument/didOpen", json!({"textDocument":{"uri":data_uri,"languageId":"plaintext","version":1,"text":contents}}));
+        let changed = contents.replace("OLD", "NEW");
+        std::fs::write(&physical, &changed).unwrap();
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":data_uri,"version":2},"contentChanges":[{"text":changed}]}));
+        let new_name = if database {
+            "renamedentry"
+        } else {
+            "renamedalias"
+        };
+        let renamed = server.request(
+            7,
+            "textDocument/rename",
+            json!({"textDocument":{"uri":main},"position":at,"newName":new_name}),
+        );
+        let edits = renamed["documentChanges"].as_array().unwrap();
+        assert_eq!(edits.len(), 2, "{renamed}");
+        assert!(
+            edits
+                .iter()
+                .any(|edit| edit["textDocument"]["uri"] == data_uri.as_str()
+                    && edit["textDocument"]["version"] == 2),
+            "{renamed}"
+        );
+        for edit in edits {
+            let uri: Url = serde_json::from_value(edit["textDocument"]["uri"].clone()).unwrap();
+            let path = uri.to_file_path().unwrap();
+            let changes: Vec<tower_lsp::lsp_types::TextEdit> =
+                serde_json::from_value(edit["edits"].clone()).unwrap();
+            let text = latex_lsp::text::Text::new(std::fs::read_to_string(&path).unwrap())
+                .changed(
+                    changes
+                        .into_iter()
+                        .map(
+                            |edit| tower_lsp::lsp_types::TextDocumentContentChangeEvent {
+                                range: Some(edit.range),
+                                range_length: None,
+                                text: edit.new_text,
+                            },
+                        )
+                        .collect(),
+                )
+                .unwrap()
+                .source;
+            std::fs::write(&path, &text).unwrap();
+            server.notify(
+                "textDocument/didChange",
+                json!({"textDocument":{"uri":uri,"version":3},"contentChanges":[{"text":text}]}),
+            );
+        }
+        let definitions = server.request(
+            8,
+            "textDocument/definition",
+            json!({"textDocument":{"uri":main},"position":at}),
+        );
+        assert_eq!(definitions[0]["uri"], data_uri.as_str(), "{definitions}");
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":data_uri}}),
+        );
+        server.notify(
+            "workspace/didChangeWatchedFiles",
+            json!({"changes":[{"uri":data_uri,"type":2}]}),
+        );
+        let closed = server.request(
+            9,
+            "textDocument/definition",
+            json!({"textDocument":{"uri":main},"position":at}),
+        );
+        assert_eq!(closed[0]["uri"], data_uri.as_str(), "{closed}");
+        server.request(10, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn bibliography_alias_data_suffixes_do_not_bypass_external_source_index_scope() {
+    for extension in ["csv", "png"] {
+        let external = tempfile::tempdir().unwrap();
+        let physical = external.path().join(format!("database.{extension}"));
+        let alias = external.path().join("refs.bib");
+        let contents = "@book{external-entry,title={Book}}\n";
+        std::fs::write(&physical, contents).unwrap();
+        std::os::unix::fs::symlink(&physical, &alias).unwrap();
+        let (mut server, directory, main) = fake_build_server("exit 1\n", false);
+        let source = format!("\\documentclass{{article}}\n\\def\\selected{{{}}}\\bibliography{{\\selected}}\\cite{{external-entry}}\n", alias.display());
+        std::fs::write(main.to_file_path().unwrap(), &source).unwrap();
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+        );
+        std::fs::write(directory.path().join("compiler.sh"), format!("printf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf 'INPUT %s\\n' \"$2\" > \"$1/main.fls\"\nprintf 'Database file #1: {}\\n' > \"$1/main.blg\"\n", alias.display())).unwrap();
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let built = server.until(|m| m["method"] == "latex/buildFinished");
+        assert_eq!(built["params"]["status"], "success", "{built}");
+        assert_eq!(built["params"]["dependenciesCount"], 1, "{built}");
+        assert_eq!(
+            server.request(3, "workspace/symbol", json!({"query":"external-entry"})),
+            json!([])
+        );
+        let physical_uri = Url::from_file_path(&physical).unwrap();
+        server.notify("textDocument/didOpen", json!({"textDocument":{"uri":physical_uri,"languageId":"bibtex","version":1,"text":contents}}));
+        server.request(
+            4,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let opened = server.until(|m| m["method"] == "latex/buildFinished");
+        assert_eq!(opened["params"]["status"], "success", "{opened}");
+        assert_eq!(opened["params"]["dependenciesCount"], 2, "{opened}");
+        let at = latex_lsp::text::Text::new(source.clone())
+            .position(source.find("cite{external-entry}").unwrap() + 7);
+        let definitions = server.request(
+            5,
+            "textDocument/definition",
+            json!({"textDocument":{"uri":main},"position":at}),
+        );
+        assert_eq!(
+            definitions[0]["uri"],
+            physical_uri.as_str(),
+            "{definitions}"
+        );
+        server.request(6, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn static_bibliography_alias_roles_protect_old_pdfs_without_bibliography_logs() {
+    for style in [false, true] {
+        let (mut server, directory, main) = fake_synctex_server(
+            "printf 'SyncTeX result begin\\nPage:1\\nx:10\\ny:20\\nSyncTeX result end\\n'\n",
+        );
+        let database = directory.path().join("database.payload");
+        let stylesheet = directory.path().join("style.tex");
+        std::fs::write(&database, "@book{entry,title={OLD}}\n").unwrap();
+        std::fs::write(&stylesheet, "OLD STYLE\n").unwrap();
+        std::os::unix::fs::symlink(&database, directory.path().join("refs.bib")).unwrap();
+        std::os::unix::fs::symlink(&stylesheet, directory.path().join("chosen.bst")).unwrap();
+        let source = "\\documentclass{article}\n\\bibliographystyle{chosen}\\bibliography{refs}\\cite{entry}\n";
+        std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+        );
+        let compiler = directory.path().join("compiler.sh");
+        std::fs::write(&compiler, "if [ -f \"$1/noop\" ]; then exit 0; fi\nprintf '%%PDF-1.4\\nCOMPILED\\n' > \"$1/main.pdf\"\nprintf 'SyncTeX data\\n' > \"$1/main.synctex\"\nprintf 'INPUT %s\\n' \"$2\" > \"$1/main.fls\"\n").unwrap();
+        server.notify(
+            "workspace/didChangeConfiguration",
+            json!({"settings":{"build":{"executable":"/bin/sh","arguments":[compiler,"%o","%f"]}}}),
+        );
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let built = server.until(|m| m["method"] == "latex/buildFinished");
+        assert_eq!(built["params"]["status"], "success", "{built}");
+        let input = if style { &stylesheet } else { &database };
+        let original = std::fs::read_to_string(input).unwrap();
+        let modified = std::fs::metadata(input).unwrap().modified().unwrap();
+        std::fs::write(input, original.replace("OLD", "NEW")).unwrap();
+        std::fs::File::open(input)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        let forward = json!({"command":"latex.forwardSearch","arguments":[{"uri":main,"position":{"line":1,"character":0}}]});
+        server.send(
+            json!({"jsonrpc":"2.0","id":3,"method":"workspace/executeCommand","params":forward}),
+        );
+        let rejected = server.until(|m| m["id"] == 3);
+        assert!(
+            rejected["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("Input contents changed")),
+            "{rejected}"
+        );
+        std::fs::write(directory.path().join("build/latex-lsp/noop"), "").unwrap();
+        server.request(
+            4,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let noop = server.until(|m| m["method"] == "latex/buildFinished");
+        assert_eq!(noop["params"]["status"], "error", "{noop}");
+        assert!(noop["params"]["pdfUri"].is_null(), "{noop}");
+        server.request(5, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}

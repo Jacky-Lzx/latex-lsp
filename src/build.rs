@@ -413,7 +413,10 @@ impl BuildManager {
                 }
             }
             if let Some(inputs) = &outcome.bibliography_inputs {
-                let recorded = current.project_inputs(&root_uri, inputs);
+                // Database/style roles come from the bibliography tool, not a
+                // canonical suffix which could look like an image or dataset.
+                let recorded =
+                    current.project_inputs_with_binary(&root_uri, inputs, &BTreeSet::new());
                 project.extend(recorded.iter().cloned());
                 if matches!(outcome.status, "success" | "error") {
                     current
@@ -445,7 +448,7 @@ impl BuildManager {
                         .bibliography_bindings
                         .insert(root_uri.clone(), bindings);
                     for uri in &recorded {
-                        current.reload(uri);
+                        current.reload_bibliography(uri);
                     }
                 }
             }
@@ -504,13 +507,7 @@ impl BuildManager {
             if let Some(inputs) = current.bibliography_inputs.get(&root_uri) {
                 artifact_inputs.extend(inputs.iter().cloned());
             }
-            artifact_inputs.extend(
-                current
-                    .project_files(&root_uri)
-                    .iter()
-                    .filter(|uri| uri.path().ends_with(".bib") || uri.path().ends_with(".bst"))
-                    .cloned(),
-            );
+            artifact_inputs.extend(current.bibliography_files(&root_uri));
             artifact_inputs.extend(
                 current
                     .project_bindings(&root_uri)
