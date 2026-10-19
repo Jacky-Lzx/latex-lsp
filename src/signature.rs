@@ -524,6 +524,9 @@ fn builtin(name: &str) -> Option<Signature> {
             &[("same-page", true), ("first", false), ("last", false)],
             syntax::reference_accepts_star(name),
         ),
+        "crefrange" | "Crefrange" | "cpagerefrange" | "Cpagerefrange" => {
+            (&[("first", false), ("last", false)], true)
+        }
         name if syntax::is_reference(name) => {
             (&[("keys", false)], syntax::reference_accepts_star(name))
         }

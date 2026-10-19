@@ -272,6 +272,10 @@ pub(crate) fn warns_on_undefined_reference(name: &str) -> bool {
             | "autoref"
             | "cref"
             | "Cref"
+            | "crefrange"
+            | "Crefrange"
+            | "cpagerefrange"
+            | "Cpagerefrange"
             | "vref"
             | "Vref"
             | "vpageref"
@@ -303,6 +307,10 @@ pub(crate) fn reference_accepts_star(name: &str) -> bool {
             | "vpagerefrange"
             | "cref"
             | "Cref"
+            | "crefrange"
+            | "Crefrange"
+            | "cpagerefrange"
+            | "Cpagerefrange"
     )
 }
 
@@ -338,7 +346,15 @@ pub(crate) fn reference_argument_start(
 }
 
 pub(crate) fn is_range_reference(name: &str) -> bool {
-    matches!(name, "vrefrange" | "vpagerefrange")
+    matches!(
+        name,
+        "vrefrange"
+            | "vpagerefrange"
+            | "crefrange"
+            | "Crefrange"
+            | "cpagerefrange"
+            | "Cpagerefrange"
+    )
 }
 
 /// Range endpoints have separate names; never treat their optional note as a

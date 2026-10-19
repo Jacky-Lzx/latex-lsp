@@ -391,7 +391,7 @@ pub(crate) fn undefined_reference_ranges(text: &Text, line: u32, message: &str) 
         let range_end = crate::syntax::range_reference_end(&text.source, command);
         // hyperref reads the display text before warning, so a multiline link
         // reports the closing text line rather than the bracketed key's line.
-        // Varioref reads both endpoints before reporting either missing label.
+        // Range references read both endpoints before reporting missing labels.
         let report_end = if command.name == "hyperref" {
             crate::syntax::group(
                 &text.source,
