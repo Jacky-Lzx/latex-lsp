@@ -338,6 +338,7 @@ impl Workspace {
 
     /// Do not index TeX's distribution packages outside the project. Explicitly
     /// opened or already indexed external documents remain part of the project.
+    /// Recorded images can be shared outside the roots; reload keeps them binary.
     pub fn project_inputs(&self, root: &Url, inputs: &BTreeSet<Url>) -> BTreeSet<Url> {
         let parent = root
             .to_file_path()
@@ -348,9 +349,10 @@ impl Workspace {
             .filter(|uri| {
                 self.documents.contains_key(*uri)
                     || uri.to_file_path().ok().is_some_and(|path| {
-                        parent
-                            .as_ref()
-                            .is_some_and(|parent| path.starts_with(parent))
+                        crate::graphics::is_image(&path)
+                            || parent
+                                .as_ref()
+                                .is_some_and(|parent| path.starts_with(parent))
                             || self.roots.iter().any(|root| path.starts_with(root))
                     })
             })
