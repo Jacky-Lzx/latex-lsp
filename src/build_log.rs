@@ -1158,6 +1158,7 @@ fn unresolved_stack_file(tail: &str) -> Option<usize> {
         let end = quoted.bytes().take(4096).position(|byte| byte == b'"')?;
         return log_source(Path::new(&quoted[..end])).then_some(end + 2);
     }
+    let mut result = None;
     for (dot, _) in tail
         .as_bytes()
         .iter()
@@ -1193,11 +1194,11 @@ fn unresolved_stack_file(tail: &str) -> Option<usize> {
                 _ => true,
             });
             if balanced && depth == 0 {
-                return Some(end);
+                result = Some(end);
             }
         }
     }
-    None
+    result
 }
 
 // A closed parenthesis mentioning a missing .tex file can be warning prose.
@@ -1233,7 +1234,11 @@ fn update_file_stack(
     while i < line.len() {
         match line.as_bytes()[i] {
             b'(' => {
-                if let Some((file, length)) = stack_file(root, &line[i + 1..]) {
+                let tail = &line[i + 1..];
+                let unresolved = unresolved_stack_file(tail);
+                let resolved = stack_file(root, tail)
+                    .filter(|(_, length)| unresolved.is_none_or(|longer| longer <= *length));
+                if let Some((file, length)) = resolved {
                     if sources.len() < 4096 && crate::workspace::is_source(&file) {
                         if let Ok(uri) = Url::from_file_path(&file) {
                             sources.insert(uri);
@@ -1244,7 +1249,7 @@ fn update_file_stack(
                         confirmed: true,
                     }));
                     i += length;
-                } else if let Some(length) = unresolved_stack_file(&line[i + 1..]) {
+                } else if let Some(length) = unresolved {
                     stack.push(Some(LogSource {
                         path: root.into(),
                         confirmed: false,
@@ -1271,12 +1276,18 @@ fn continued_file_line<'a>(root: &Path, lines: &[&'a str], i: &mut usize) -> Cow
     if line.len() >= 60 {
         for (opening, _) in line.match_indices('(') {
             let tail = &line[opening + 1..];
-            if stack_file(root, tail).is_some() || unresolved_stack_file(tail).is_some() {
+            let complete =
+                stack_file(root, tail).is_some() || unresolved_stack_file(tail).is_some();
+            // A closing quote proves the filename ended. An unquoted name at
+            // the print boundary can still continue, even when its prefix is
+            // also an existing file. Prefer an actual longer continuation.
+            if complete && tail.starts_with('"') {
                 continue;
             }
             let explicit_path =
                 tail.starts_with(['"', '/']) || tail.starts_with("./") || tail.starts_with("../");
             let mut joined = line.to_owned();
+            let mut plain_continuation = true;
             for (next_index, next) in lines.iter().enumerate().skip(*i + 1).take(64) {
                 if next.is_empty()
                     || *next == crate::output::TRUNCATED
@@ -1288,10 +1299,12 @@ fn continued_file_line<'a>(root: &Path, lines: &[&'a str], i: &mut usize) -> Cow
                     break;
                 }
                 joined.push_str(next);
+                plain_continuation &= !next.chars().any(|ch| ch.is_whitespace() || ch == ':');
                 let tail = &joined[opening + 1..];
                 if stack_file(root, tail)
                     .is_some_and(|(_, length)| length > line.len() - opening - 1)
                     || explicit_path
+                        && (!complete || plain_continuation)
                         && unresolved_stack_file(tail)
                             .is_some_and(|length| length > line.len() - opening - 1)
                 {
