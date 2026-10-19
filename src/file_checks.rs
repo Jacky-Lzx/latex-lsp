@@ -23,6 +23,7 @@ pub struct Snapshot {
     watched: BTreeSet<Url>,
     artifact: Option<PathBuf>,
     inputs: BTreeMap<Url, InputSnapshot>,
+    pdf_contents: Option<InputSnapshot>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -67,19 +68,23 @@ impl InputSnapshot {
         let Ok(path) = uri.to_file_path() else {
             return true;
         };
+        self.changed_file(&path)
+    }
+
+    fn changed_file(&self, path: &Path) -> bool {
         match self {
             Self::Text { length, .. } => {
-                std::fs::metadata(&path).map_or(true, |metadata| metadata.len() != *length as u64)
+                std::fs::metadata(path).map_or(true, |metadata| metadata.len() != *length as u64)
                     || std::fs::read_to_string(path)
                         .ok()
                         .is_none_or(|text| Self::text(&text) != *self)
             }
             Self::File(before) => {
-                let length = std::fs::metadata(&path)
+                let length = std::fs::metadata(path)
                     .ok()
                     .filter(|metadata| metadata.is_file())
                     .map(|metadata| metadata.len());
-                length != before.as_ref().map(|(length, _)| *length) || Self::file(&path) != *self
+                length != before.as_ref().map(|(length, _)| *length) || Self::file(path) != *self
             }
         }
     }
@@ -256,6 +261,7 @@ impl Snapshot {
             paths,
             watched,
             inputs: BTreeMap::new(),
+            pdf_contents: None,
             artifact: config
                 .artifact_path(&root_path, "pdf")
                 .map(|path| normalize_path(&path)),
@@ -281,6 +287,18 @@ impl Snapshot {
         self.inputs
             .iter()
             .find_map(|(uri, before)| before.changed(uri).then_some(uri))
+    }
+
+    pub(crate) fn with_pdf_contents(mut self) -> Self {
+        self.pdf_contents = self.artifact.as_deref().map(InputSnapshot::file);
+        self
+    }
+
+    pub(crate) fn pdf_changed(&self) -> bool {
+        self.artifact
+            .as_deref()
+            .zip(self.pdf_contents.as_ref())
+            .is_some_and(|(path, before)| before.changed_file(path))
     }
 
     pub(crate) fn watched(&self) -> &BTreeSet<Url> {

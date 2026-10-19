@@ -421,6 +421,11 @@ impl BuildManager {
                                         .changed_input()
                                         .map(|uri| format!("input content changed ({uri})"))
                                 })
+                                .or_else(|| {
+                                    previous.pdf_changed().then(|| {
+                                        format!("build artifacts changed ({})", pdf.display())
+                                    })
+                                })
                         })
                 }) {
                     outcome.status = "error";
@@ -543,22 +548,31 @@ impl BuildManager {
                 };
             let mut affected = BTreeSet::new();
             // Even discarded diagnostics can accompany a newly written PDF.
-            // Retain that PDF's conditions so a later no-op cannot accept it.
+            // Retain the inputs and contents of the PDF actually produced.
+            // A successful no-op must not adopt a different recorder scope.
             if outcome.status == "success"
-                && outcome.pdf.is_some()
                 && (!stale || outcome.pdf_updated)
+                && outcome.pdf.as_ref().is_some_and(|pdf| {
+                    outcome.pdf_updated
+                        || current
+                            .pdf_checks
+                            .get(&root_uri)
+                            .is_none_or(|previous| !previous.matches_pdf(pdf))
+                })
             {
                 crate::file_checks::Snapshot::remember(
                     &mut current.pdf_checks,
                     root_uri.clone(),
                     Arc::new(
-                        checks.with_inputs(
-                            inputs
-                                .iter()
-                                .filter(|(uri, _)| artifact_inputs.contains(*uri))
-                                .map(|(uri, snapshot)| (uri.clone(), snapshot.clone()))
-                                .collect(),
-                        ),
+                        checks
+                            .with_inputs(
+                                inputs
+                                    .iter()
+                                    .filter(|(uri, _)| artifact_inputs.contains(*uri))
+                                    .map(|(uri, snapshot)| (uri.clone(), snapshot.clone()))
+                                    .collect(),
+                            )
+                            .with_pdf_contents(),
                     ),
                 );
             }
