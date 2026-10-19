@@ -272,3 +272,63 @@ fn bare_and_quoted_inputs_still_compile_after_file_renames_introduce_spaces_and_
         .iter()
         .all(|link| !link.target.as_ref().unwrap().path().contains("chapter")));
 }
+
+#[test]
+#[ignore = "requires pdflatex and xelatex"]
+fn unicode_input_filename_renames_read_the_moved_file_for_bare_and_quoted_forms() {
+    for engine in ["pdflatex", "xelatex"] {
+        for quoted in [false, true] {
+            for stem in ["新章节", "新 章节"] {
+                let directory = tempfile::tempdir().unwrap();
+                let root = directory.path();
+                let command = if quoted {
+                    "\\input\"old\" \\relax"
+                } else {
+                    "\\input old \\relax"
+                };
+                let source = format!("\\documentclass{{article}}\n% 😀 retain this comment\n\\begin{{document}}Before.\n{command}\n\\end{{document}}\n");
+                std::fs::write(root.join("main.tex"), &source).unwrap();
+                std::fs::write(
+                    root.join("old.tex"),
+                    "\\typeout{UNICODE-INPUT-READ}Input.\n",
+                )
+                .unwrap();
+                let mut workspace = Workspace::default();
+                workspace.add_root(root.into());
+                let config = latex_lsp::config::BuildConfig {
+                    executable: engine.into(),
+                    ..Default::default()
+                };
+                let before = build::run(&root.join("main.tex"), &config, &Default::default());
+                assert_eq!(before.status, "success", "{}", before.output);
+                let name = format!("{stem}.tex");
+                let files = [FileRename {
+                    old_uri: uri(root, "old.tex").to_string(),
+                    new_uri: uri(root, &name).to_string(),
+                }];
+                let updated = changed(&workspace, &files);
+                let expected =
+                    format!("\\input{}{{{stem}}} \\relax", if quoted { "" } else { " " });
+                assert!(updated.contains(&expected), "{updated}");
+                std::fs::write(root.join("main.tex"), updated).unwrap();
+                std::fs::rename(root.join("old.tex"), root.join(&name)).unwrap();
+                file_operations::did_rename(&mut workspace, &files).unwrap();
+                let after = build::run(&root.join("main.tex"), &config, &Default::default());
+                assert_eq!(
+                    after.status, "success",
+                    "{engine}, {quoted}, {stem}: {}",
+                    after.output
+                );
+                assert!(
+                    after.output.contains("UNICODE-INPUT-READ"),
+                    "{}",
+                    after.output
+                );
+                assert!(after.inputs.unwrap().contains(&uri(root, &name)));
+                let links = navigation::document_links(&workspace, &uri(root, "main.tex"));
+                assert_eq!(links.len(), 1);
+                assert_eq!(links[0].target, Some(uri(root, &name)));
+            }
+        }
+    }
+}

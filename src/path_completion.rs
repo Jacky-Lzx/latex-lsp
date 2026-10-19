@@ -163,12 +163,20 @@ pub fn complete(
                 continue;
             }
             let mut edit_range = range;
-            if input_argument.is_some_and(|argument| argument.outer_span == argument.span)
-                && new_text.chars().any(char::is_whitespace)
-            {
-                new_text.push_str(&doc.text.source[span.end + suffix_length..argument_end]);
-                new_text = format!("{{{new_text}}}");
-                edit_range = doc.text.range(span.start, argument_end);
+            let mut filter_start = "";
+            if command == "input" {
+                if let Some(argument) = input_argument {
+                    let completed = format!(
+                        "{new_text}{}",
+                        &doc.text.source[span.end + suffix_length..argument_end]
+                    );
+                    if syntax::input_filename_needs_braces(&doc.text.source, argument, &completed) {
+                        let edit = syntax::input_filename_edit(&doc.text, argument, completed);
+                        edit_range = edit.range;
+                        new_text = edit.new_text;
+                        filter_start = &doc.text.source[argument.outer_span.start..span.start];
+                    }
+                }
             }
             candidates.insert(
                 label.clone(),
@@ -176,7 +184,10 @@ pub fn complete(
                     label: label.clone(),
                     // Clients filter against the text before the cursor. Keep
                     // its spelling while displaying the real target path.
-                    filter_text: Some(format!("{filter_prefix}{}", &label[prefix.len()..])),
+                    filter_text: Some(format!(
+                        "{filter_start}{filter_prefix}{}",
+                        &label[prefix.len()..]
+                    )),
                     sort_text: Some(format!("{}{label}", if folder { "0" } else { "1" })),
                     detail: Some(entry.path().display().to_string()),
                     kind: Some(if folder {

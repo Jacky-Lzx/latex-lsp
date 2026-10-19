@@ -508,31 +508,40 @@ pub fn will_rename(workspace: &Workspace, files: &[FileRename]) -> Result<Option
                 }
             }
         }
-        for ((start, end), (mut new_text, count)) in links {
+        for ((start, end), (new_text, count)) in links {
             if new_text != doc.text.source[start..end] {
                 if count != roots.len() {
                     return Err(Error::invalid_params(
                         "Shared file reference cannot be updated consistently across build roots",
                     ));
                 }
-                if new_text.chars().any(char::is_whitespace)
-                    && doc.syntax.commands.iter().any(|command| {
-                        command.name == "input"
-                            && command.argument.as_ref().is_some_and(|argument| {
-                                argument.span == (start..end)
-                                    && argument.outer_span == argument.span
-                            })
-                    })
-                {
-                    new_text = format!("{{{new_text}}}");
-                }
+                let input = doc
+                    .syntax
+                    .commands
+                    .iter()
+                    .filter(|command| command.name == "input")
+                    .filter_map(|command| command.argument.as_ref())
+                    .find(|argument| {
+                        argument.span.start <= start
+                            && end <= argument.span.end
+                            && syntax::input_filename_needs_braces(
+                                &doc.text.source,
+                                argument,
+                                &new_text,
+                            )
+                    });
+                let edit = if let Some(argument) = input {
+                    syntax::input_filename_edit(&doc.text, argument, new_text)
+                } else {
+                    TextEdit {
+                        range: doc.text.range(start, end),
+                        new_text,
+                    }
+                };
                 changes
                     .entry(uri.clone())
                     .or_insert_with(Vec::new)
-                    .push(TextEdit {
-                        range: doc.text.range(start, end),
-                        new_text,
-                    });
+                    .push(edit);
             }
         }
     }

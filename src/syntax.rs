@@ -11,6 +11,30 @@ pub struct Argument {
     pub outer_span: Range<usize>,
 }
 
+/// pdfTeX's primitive filename scanner cannot read UTF-8 active characters.
+/// Braced LaTeX input uses the filename expansion path instead.
+pub(crate) fn input_filename_needs_braces(source: &str, argument: &Argument, value: &str) -> bool {
+    (argument.span == argument.outer_span && value.chars().any(char::is_whitespace))
+        || (!value.is_ascii() && source.as_bytes().get(argument.outer_span.start) != Some(&b'{'))
+}
+
+pub(crate) fn input_filename_edit(text: &Text, argument: &Argument, value: String) -> TextEdit {
+    let grouped = input_filename_needs_braces(&text.source, argument, &value);
+    let span = if grouped {
+        &argument.outer_span
+    } else {
+        &argument.span
+    };
+    TextEdit {
+        range: text.range(span.start, span.end),
+        new_text: if grouped {
+            format!("{{{value}}}")
+        } else {
+            value
+        },
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Command {
     pub name: String,

@@ -326,7 +326,7 @@ fn input_shadow_validation_preserves_valid_bare_quoted_and_unicode_paths() {
     let edits = changed(&workspace, &[rename(root, "same.tex", "新 章节.ltx")]);
     assert_eq!(
         edits[&child],
-        "\\input {新 章节.ltx}\n\\input\"新 章节.ltx\"\n\\input{新 章节.ltx}\n"
+        "\\input {新 章节.ltx}\n\\input{新 章节.ltx}\n\\input{新 章节.ltx}\n"
     );
     std::fs::write(root.join("新 章节.ltx.tex"), "Shadow.").unwrap();
     assert!(

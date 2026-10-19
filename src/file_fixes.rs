@@ -249,13 +249,15 @@ pub(crate) fn fixes(
         {
             continue;
         }
-        let new_text = if command_name == "input"
-            && argument.span == argument.outer_span
-            && replacement.contains(' ')
+        let edit = if command_name == "input"
+            && syntax::input_filename_needs_braces(&doc.text.source, argument, &replacement)
         {
-            format!("{{{replacement}}}")
+            syntax::input_filename_edit(&doc.text, argument, replacement.clone())
         } else {
-            replacement.clone()
+            TextEdit {
+                range: diagnostic.range,
+                new_text: replacement.clone(),
+            }
         };
         fixes.push(syntax::QuickFix {
             title: format!(
@@ -271,10 +273,7 @@ pub(crate) fn fixes(
                 }
             ),
             diagnostic: diagnostic.clone(),
-            edit: TextEdit {
-                range: diagnostic.range,
-                new_text,
-            },
+            edit,
             additional_edits: vec![],
         });
         if fixes.len() == 5 {

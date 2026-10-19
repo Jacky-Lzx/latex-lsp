@@ -195,6 +195,73 @@ fn input_spelling_fixes_protect_spaces_and_preserve_existing_delimiters_and_comm
 }
 
 #[test]
+fn unicode_input_fixes_group_paths_and_legacy_commands_revalidate_the_expanded_edit() {
+    for (command, expected) in [
+        (r"\input cafe trailing", r"\input {café} trailing"),
+        (r#"\input"cafe" trailing"#, r"\input{café} trailing"),
+        (r"\input{ cafe } trailing", r"\input{ café } trailing"),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let uri = Url::from_file_path(root.join("main.tex")).unwrap();
+        let source = format!("% 😀\r\n{command}\r\n");
+        std::fs::write(root.join("main.tex"), &source).unwrap();
+        std::fs::write(root.join("café.tex"), "Chapter.").unwrap();
+        let mut workspace = Workspace {
+            code_action_literals: true,
+            apply_edits: true,
+            versioned_edits: true,
+            ..Default::default()
+        };
+        workspace
+            .documents
+            .insert(uri.clone(), Document::new(&uri, source.clone(), Some(7)));
+        let diagnostic = input_warning(&mut workspace, &uri, &uri, "cafe.tex");
+        let result = actions(&workspace, &uri, diagnostic.clone());
+        assert_eq!(result.len(), 1, "{result:?}");
+        let CodeActionOrCommand::CodeAction(action) = &result[0] else {
+            panic!()
+        };
+        let modern = action.edit.clone().unwrap();
+        let DocumentChanges::Edits(changes) = modern.document_changes.as_ref().unwrap() else {
+            panic!()
+        };
+        assert_eq!(changes[0].text_document.version, Some(7));
+        let OneOf::Left(edit) = &changes[0].edits[0] else {
+            panic!()
+        };
+        let changed = Text::new(source)
+            .changed(vec![TextDocumentContentChangeEvent {
+                range: Some(edit.range),
+                range_length: None,
+                text: edit.new_text.clone(),
+            }])
+            .unwrap();
+        assert_eq!(changed.source, format!("% 😀\r\n{expected}\r\n"));
+        workspace.code_action_literals = false;
+        let legacy = actions(&workspace, &uri, diagnostic);
+        assert_eq!(legacy.len(), 1);
+        let CodeActionOrCommand::Command(command) = &legacy[0] else {
+            panic!()
+        };
+        let request = command.arguments.as_ref().unwrap()[0].clone();
+        let resolve = |workspace: &Workspace| {
+            editing::resolve_fix(workspace, serde_json::from_value(request.clone()).unwrap())
+        };
+        assert_eq!(resolve(&workspace), Some(modern));
+        workspace.documents.get_mut(&uri).unwrap().version = Some(8);
+        assert!(resolve(&workspace).is_none());
+        workspace.documents.get_mut(&uri).unwrap().version = Some(7);
+        std::fs::remove_file(root.join("café.tex")).unwrap();
+        assert!(resolve(&workspace).is_none());
+        std::fs::write(root.join("café.tex"), "Chapter.").unwrap();
+        assert!(resolve(&workspace).is_some());
+        workspace.clear_build_diagnostics(&uri);
+        assert!(resolve(&workspace).is_none());
+    }
+}
+
+#[test]
 fn input_file_fixes_ignore_includeonly_and_revalidate_files_and_command_requests() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
@@ -312,68 +379,67 @@ fn input_fixes_reject_incomplete_quotes_and_mismatched_compiler_filename_data() 
 #[test]
 #[ignore = "requires pdflatex"]
 fn real_input_filename_fixes_read_the_intended_source_for_braced_bare_and_quoted_inputs() {
-    for command in [
-        r"\input{mychapter}",
-        r"\input mychapter",
-        r#"\input"mychapter""#,
-    ] {
-        let directory = tempfile::tempdir().unwrap();
-        let root = directory.path();
-        let main = root.join("main.tex");
-        let uri = Url::from_file_path(&main).unwrap();
-        let source = format!(
-            "\\documentclass{{article}}\n\\begin{{document}}\n{command}\n\\end{{document}}\n"
-        );
-        std::fs::write(&main, &source).unwrap();
-        std::fs::write(
-            root.join("my chapter.tex"),
-            "\\typeout{REPAIRED INPUT READ}Chapter.\n",
-        )
-        .unwrap();
-        let config = latex_lsp::config::BuildConfig {
-            executable: "pdflatex".into(),
-            ..Default::default()
-        };
-        let failed = build::run(&main, &config, &Default::default());
-        assert_eq!(failed.status, "error", "{}", failed.output);
-        let diagnostic = failed.diagnostics[&uri]
-            .iter()
-            .find(|entry| entry.code == Some(NumberOrString::String("missing-input".into())))
-            .unwrap_or_else(|| panic!("{command}: {:?}\n{}", failed.diagnostics, failed.output))
-            .clone();
-        let mut workspace = Workspace {
-            code_action_literals: true,
-            ..Default::default()
-        };
-        workspace.add_root(root.into());
-        workspace
-            .build_diagnostics
-            .insert(uri.clone(), failed.diagnostics);
-        let result = actions(&workspace, &uri, diagnostic);
-        assert_eq!(result.len(), 1, "{result:?}");
-        let CodeActionOrCommand::CodeAction(action) = &result[0] else {
-            panic!()
-        };
-        let edit = &action.edit.as_ref().unwrap().changes.as_ref().unwrap()[&uri][0];
-        let changed = Text::new(source)
-            .changed(vec![TextDocumentContentChangeEvent {
-                range: Some(edit.range),
-                range_length: None,
-                text: edit.new_text.clone(),
-            }])
+    for (missing, target) in [("mychapter", "my chapter"), ("cafe", "café")] {
+        for template in [r"\input{NAME}", r"\input NAME", r#"\input"NAME""#] {
+            let command = template.replace("NAME", missing);
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let main = root.join("main.tex");
+            let uri = Url::from_file_path(&main).unwrap();
+            let source = format!(
+                "\\documentclass{{article}}\n\\begin{{document}}\n{command}\n\\end{{document}}\n"
+            );
+            std::fs::write(&main, &source).unwrap();
+            std::fs::write(
+                root.join(format!("{target}.tex")),
+                "\\typeout{REPAIRED INPUT READ}Chapter.\n",
+            )
             .unwrap();
-        std::fs::write(&main, changed.source).unwrap();
-        let repaired = build::run(&main, &config, &Default::default());
-        assert_eq!(repaired.status, "success", "{}", repaired.output);
-        assert!(repaired.output.contains("REPAIRED INPUT READ"));
-        assert!(repaired
-            .inputs
-            .unwrap()
-            .contains(&Url::from_file_path(root.join("my chapter.tex")).unwrap()));
-        assert!(
-            repaired.diagnostics.values().all(Vec::is_empty),
-            "{:?}",
-            repaired.diagnostics
-        );
+            let config = latex_lsp::config::BuildConfig {
+                executable: "pdflatex".into(),
+                ..Default::default()
+            };
+            let failed = build::run(&main, &config, &Default::default());
+            assert_eq!(failed.status, "error", "{}", failed.output);
+            let diagnostic = failed.diagnostics[&uri]
+                .iter()
+                .find(|entry| entry.code == Some(NumberOrString::String("missing-input".into())))
+                .unwrap_or_else(|| panic!("{command}: {:?}\n{}", failed.diagnostics, failed.output))
+                .clone();
+            let mut workspace = Workspace {
+                code_action_literals: true,
+                ..Default::default()
+            };
+            workspace.add_root(root.into());
+            workspace
+                .build_diagnostics
+                .insert(uri.clone(), failed.diagnostics);
+            let result = actions(&workspace, &uri, diagnostic);
+            assert_eq!(result.len(), 1, "{result:?}");
+            let CodeActionOrCommand::CodeAction(action) = &result[0] else {
+                panic!()
+            };
+            let edit = &action.edit.as_ref().unwrap().changes.as_ref().unwrap()[&uri][0];
+            let changed = Text::new(source)
+                .changed(vec![TextDocumentContentChangeEvent {
+                    range: Some(edit.range),
+                    range_length: None,
+                    text: edit.new_text.clone(),
+                }])
+                .unwrap();
+            std::fs::write(&main, changed.source).unwrap();
+            let repaired = build::run(&main, &config, &Default::default());
+            assert_eq!(repaired.status, "success", "{}", repaired.output);
+            assert!(repaired.output.contains("REPAIRED INPUT READ"));
+            assert!(repaired
+                .inputs
+                .unwrap()
+                .contains(&Url::from_file_path(root.join(format!("{target}.tex"))).unwrap()));
+            assert!(
+                repaired.diagnostics.values().all(Vec::is_empty),
+                "{:?}",
+                repaired.diagnostics
+            );
+        }
     }
 }

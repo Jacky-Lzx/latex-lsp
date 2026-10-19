@@ -22,6 +22,11 @@ fn apply_completion(workspace: &mut Workspace, uri: &Url, marked: &str, label: &
     };
     assert_eq!(edit.range.start.line, edit.range.end.line);
     assert!(edit.range.start <= text.position(offset) && text.position(offset) <= edit.range.end);
+    let typed = &text.source[text.offset(edit.range.start).unwrap()..offset];
+    assert!(
+        item.filter_text.as_ref().unwrap().starts_with(typed),
+        "{marked}: {item:?}"
+    );
     let mut edits = item.additional_text_edits.clone().unwrap_or_default();
     edits.push(edit.clone());
     edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
@@ -85,6 +90,37 @@ fn input_completions_keep_non_tex_extensions_and_links_do_not_infer_them() {
     assert_eq!(links.len(), 2);
     assert_eq!(links[0].range.start.line, 1);
     assert_eq!(links[1].range.start.line, 3);
+}
+
+#[test]
+fn unicode_input_completions_group_bare_and_quoted_paths_and_keep_directory_suffixes() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::write(root.join("main.tex"), "").unwrap();
+    for name in ["新章节.tex", "新 章节.tex", "my file.tex"] {
+        std::fs::write(root.join(name), "").unwrap();
+    }
+    std::fs::create_dir(root.join("目录")).unwrap();
+    std::fs::write(root.join("目录/child.tex"), "").unwrap();
+    let main = Url::from_file_path(root.join("main.tex")).unwrap();
+    let mut workspace = Workspace::default();
+    workspace.add_root(root.into());
+    for (marked, label, expected) in [
+        ("\\input |", "新章节.tex", "\\input {新章节}"),
+        ("\\input\"|\"", "新章节.tex", "\\input{新章节}"),
+        ("\\input\"|", "新章节.tex", "\\input{新章节}"),
+        ("\\input{|}", "新章节.tex", "\\input{新章节}"),
+        ("\\input\"|\"", "新 章节.tex", "\\input{新 章节}"),
+        ("\\input\"my|\"", "my file.tex", "\\input\"my file\""),
+        ("\\input\"目|/child\"", "目录/", "\\input{目录/child}"),
+        ("\\input 目|/child", "目录/", "\\input {目录/child}"),
+    ] {
+        assert_eq!(
+            apply_completion(&mut workspace, &main, marked, label),
+            expected,
+            "{marked}"
+        );
+    }
 }
 
 #[test]
@@ -544,5 +580,59 @@ fn completed_multiline_package_paths_load_the_suggested_file_in_real_compilers()
             latex_lsp::navigation::document_links(&workspace, &uri)[0].target,
             Some(Url::from_file_path(root.join("mylibs/localpkg.sty")).unwrap())
         );
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex and xelatex"]
+fn unicode_input_completions_read_the_suggested_file_in_real_compilers() {
+    for engine in ["pdflatex", "xelatex"] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        std::fs::create_dir(root.join("目录")).unwrap();
+        std::fs::write(
+            root.join("目录/child.tex"),
+            "\\typeout{UNICODE COMPLETION READ}Chapter.\n",
+        )
+        .unwrap();
+        let main = root.join("main.tex");
+        let uri = Url::from_file_path(&main).unwrap();
+        let target = Url::from_file_path(root.join("目录/child.tex")).unwrap();
+        let mut workspace = Workspace::default();
+        workspace.add_root(root.into());
+        for command in [
+            r"\input 目|/child",
+            r#"\input"目|/child""#,
+            r"\input{目|/child}",
+        ] {
+            // Complete a directory while retaining the existing filename suffix.
+            let marked = format!("% 😀\n\\documentclass{{article}}\n\\begin{{document}}\n{command}\n\\end{{document}}\n");
+            let completed = apply_completion(&mut workspace, &uri, &marked, "目录/");
+            std::fs::write(&main, &completed).unwrap();
+            workspace.open(uri.clone(), completed, 2);
+            let outcome = latex_lsp::build::run(
+                &main,
+                &latex_lsp::config::BuildConfig {
+                    executable: engine.into(),
+                    ..Default::default()
+                },
+                &Default::default(),
+            );
+            assert_eq!(
+                outcome.status, "success",
+                "{engine}, {command}: {}",
+                outcome.output
+            );
+            assert!(
+                outcome.output.contains("UNICODE COMPLETION READ"),
+                "{}",
+                outcome.output
+            );
+            assert!(outcome.inputs.unwrap().contains(&target));
+            assert_eq!(
+                latex_lsp::navigation::document_links(&workspace, &uri)[0].target,
+                Some(target.clone())
+            );
+        }
     }
 }
