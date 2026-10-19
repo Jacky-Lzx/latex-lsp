@@ -264,6 +264,7 @@ pub(crate) fn warns_on_undefined_reference(name: &str) -> bool {
     matches!(
         name,
         "ref"
+            | "subref"
             | "Ref"
             | "eqref"
             | "pageref"
@@ -290,6 +291,7 @@ pub(crate) fn reference_accepts_star(name: &str) -> bool {
     matches!(
         name,
         "ref"
+            | "subref"
             | "Ref"
             | "pageref"
             | "autopageref"

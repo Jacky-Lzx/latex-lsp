@@ -35,13 +35,24 @@ fn target<'a>(
             .then_some((Kind::Anchor, name));
     }
     if let Some((citation, key)) = build_log::undefined_reference_key(&diagnostic.message) {
-        return build_log::undefined_reference_ranges(
+        if !build_log::undefined_reference_ranges(
             &doc.text,
             diagnostic.range.start.line,
             &diagnostic.message,
         )
         .contains(&diagnostic.range)
-        .then_some((
+        {
+            return None;
+        }
+        let key = if citation {
+            key
+        } else {
+            // Auxiliary warning names may differ from the verified source key.
+            let start = doc.text.offset(diagnostic.range.start)?;
+            let end = doc.text.offset(diagnostic.range.end)?;
+            doc.text.source.get(start..end)?
+        };
+        return Some((
             if citation {
                 Kind::Citation
             } else {

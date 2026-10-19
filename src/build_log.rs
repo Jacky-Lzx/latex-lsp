@@ -366,7 +366,7 @@ pub(crate) fn undefined_reference_ranges(text: &Text, line: u32, message: &str) 
             command.name == "hyperref"
                 || matches!(
                     command.name.as_str(),
-                    "Ref" | "autopageref" | "vref" | "Vref"
+                    "Ref" | "autopageref" | "vref" | "Vref" | "subref"
                 ) && text
                     .source
                     .as_bytes()
@@ -412,7 +412,12 @@ pub(crate) fn undefined_reference_ranges(text: &Text, line: u32, message: &str) 
             && (crate::syntax::is_single_reference(&command.name)
                 || crate::syntax::has_separate_label_argument(&command.name))
         {
-            if crate::syntax::is_static_key(key) {
+            let source_key = if command.name == "subref" && !hyper_link {
+                key.strip_prefix("sub@")
+            } else {
+                Some(key)
+            };
+            if let Some(key) = source_key.filter(|key| crate::syntax::is_static_key(key)) {
                 for argument in std::iter::once(argument).chain(range_end.as_ref()) {
                     if argument.value == key {
                         ranges.push(text.range(argument.span.start, argument.span.end));

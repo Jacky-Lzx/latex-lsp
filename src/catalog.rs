@@ -133,6 +133,7 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("hyperlink", "hyperlink{${1:target}}{${2:text}}", "Link to a PDF destination by its name. Requires hyperref."),
     ("Ref", "Ref{${1:key}}", "Capitalize a reference. Requires nameref or hyperref."),
     ("autopageref", "autopageref{${1:key}}", "Print a page reference prefixed by its page name. Requires hyperref."),
+    ("subref", "subref{${1:key}}", "Reference a subfigure or subtable. A star suppresses hyperlinks. Requires subcaption."),
     ("vref", "vref{${1:key}}", "Reference a label with relative page text. The optional same-page note overrides the text used on the current page. Requires varioref."),
     ("Vref", "Vref{${1:key}}", "Capitalize a reference with relative page text and an optional same-page note. Requires varioref."),
     ("vpageref", "vpageref{${1:key}}", "Reference a label's relative page. Optional notes set the same-page text and a prefix used on other pages. Requires varioref."),
