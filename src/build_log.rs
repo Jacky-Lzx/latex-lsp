@@ -1264,12 +1264,18 @@ pub(crate) fn parse_with_sources(
             } else {
                 DiagnosticSeverity::ERROR
             };
-            let context = error_context(
-                &lines,
-                i + 1,
-                number,
-                message == "Undefined control sequence.",
-            );
+            // An unresolved reported source falls back to the root for display.
+            // Its context must not identify coincidentally matching root text.
+            let context = confirmed_path
+                .then(|| {
+                    error_context(
+                        &lines,
+                        i + 1,
+                        number,
+                        message == "Undefined control sequence.",
+                    )
+                })
+                .flatten();
             emit_with_context(&mut result, &path, number, message, severity, context);
         } else if let Some(message) = line.strip_prefix("! ") {
             let message = wrapped_error_message(root, &lines, &separator_lines, &mut i, message);

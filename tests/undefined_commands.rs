@@ -3,6 +3,86 @@ use std::sync::atomic::AtomicBool;
 use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString, Url};
 
 #[test]
+fn unresolved_numbered_sources_do_not_borrow_precise_error_context_from_the_root() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = root.join("main.tex");
+    let child = root.join("child.tex");
+    std::fs::create_dir(root.join("folder.tex")).unwrap();
+    let unknown_sources = [
+        "./gone.tex".to_owned(),
+        "./folder.tex".to_owned(),
+        "\"./missing file.tex\"".to_owned(),
+        root.join("missing absolute.tex")
+            .to_string_lossy()
+            .into_owned(),
+    ];
+    for (source, message, context, code) in [
+        (
+            "😀 \\bad{x}",
+            "Undefined control sequence.",
+            "l.1 😀 \\bad",
+            "undefined-control-sequence",
+        ),
+        (
+            "😀 $\\bad{x}$",
+            "Undefined control sequence.",
+            "<recently read> \\bad\n \nl.1 😀 $\\bad",
+            "undefined-control-sequence",
+        ),
+        (
+            "😀 \\begin{bad}Text",
+            "LaTeX Error: Environment bad undefined.",
+            "l.1 😀 \\begin{bad}",
+            "undefined-environment",
+        ),
+        (
+            "😀 \\setcounter{bad}{1}",
+            "LaTeX Error: No counter 'bad' defined.",
+            "l.1 😀 \\setcounter{bad}{1}",
+            "undefined-counter",
+        ),
+        (
+            "😀 \\input{bad}",
+            "I can't find file `bad.tex'.",
+            "l.1 😀 \\input{bad}",
+            "missing-input",
+        ),
+    ] {
+        std::fs::write(&main, format!("{source}\n")).unwrap();
+        std::fs::write(&child, format!("{source}\n")).unwrap();
+        for (name, path) in [("./main.tex", &main), ("./child.tex", &child)] {
+            let log = format!("(./main.tex\n{name}:1: {message}\n{context}\n)\n");
+            let diagnostics = build_log::parse(&main, &log);
+            let error = &diagnostics[&Url::from_file_path(path).unwrap()][0];
+            assert_eq!(
+                error.code,
+                Some(NumberOrString::String(code.into())),
+                "{name}: {error:?}"
+            );
+            assert!(error.data.is_some());
+        }
+        for name in &unknown_sources {
+            let log = format!("(./main.tex\n{name}:1: {message}\n{context}\n)\n");
+            let diagnostics = build_log::parse(&main, &log);
+            assert_eq!(diagnostics.len(), 1);
+            let error = &diagnostics[&Url::from_file_path(&main).unwrap()][0];
+            assert_eq!(error.message, message);
+            assert_eq!(error.severity, Some(DiagnosticSeverity::ERROR));
+            assert!(
+                error.code.is_none() && error.data.is_none(),
+                "{name}: {error:?}"
+            );
+            assert_eq!(error.range.start.character, 0);
+            assert_eq!(
+                error.range.end.character,
+                source.encode_utf16().count() as u32
+            );
+        }
+    }
+}
+
+#[test]
 fn direct_math_commands_with_matching_recent_tokens_keep_distinct_utf16_ranges() {
     let directory = tempfile::tempdir().unwrap();
     let main = directory.path().join("main.tex");
