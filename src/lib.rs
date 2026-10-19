@@ -159,19 +159,28 @@ impl Backend {
         } else {
             self.builds.files_changed(&changes).await;
         }
-        let affected = changes.refresh(&mut *self.workspace.write().await);
+        let affected = {
+            let mut workspace = self.workspace.write().await;
+            if from_watcher {
+                changes.refresh_watched(&mut workspace)
+            } else {
+                changes.refresh(&mut workspace)
+            }
+        };
         {
             let mut cache = self.semantic_cache.lock().await;
             for uri in &affected {
                 cache.remove(uri);
             }
         }
-        {
+        if !from_watcher {
             let mut cache = self.diagnostic_cache.lock().await;
             for uri in &affected {
                 cache.remove(uri);
             }
         }
+        // Pull requests recalculate the payload before consulting the cache.
+        // Keep result IDs when a delayed watcher changes neither it nor the version.
         self.publish_affected(affected).await;
     }
 }

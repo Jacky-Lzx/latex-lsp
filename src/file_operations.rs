@@ -38,6 +38,14 @@ impl FileChanges {
     }
 
     pub fn refresh(&self, workspace: &mut Workspace) -> BTreeSet<Url> {
+        self.refresh_inner(workspace, false)
+    }
+
+    pub(crate) fn refresh_watched(&self, workspace: &mut Workspace) -> BTreeSet<Url> {
+        self.refresh_inner(workspace, true)
+    }
+
+    fn refresh_inner(&self, workspace: &mut Workspace, verify_inputs: bool) -> BTreeSet<Url> {
         let mut affected = workspace.refresh_paths(&self.0);
         // A new file may satisfy an earlier missing input. A deleted file may
         // only remain in the previous compiler's source/recorder information.
@@ -45,16 +53,24 @@ impl FileChanges {
             .build_diagnostics
             .iter()
             .filter(|(root, diagnostics)| {
-                self.affects(root)
+                let mut checked = BTreeMap::new();
+                let mut changed = |uri: &Url| {
+                    self.affects(uri)
+                        && (!verify_inputs
+                            || *checked.entry(uri.clone()).or_insert_with(|| {
+                                workspace
+                                    .build_checks
+                                    .get(*root)
+                                    .is_none_or(|checks| checks.input_changed(uri))
+                            }))
+                };
+                changed(root)
                     || workspace.build_checks.get(*root).is_some_and(|checks| {
                         checks.watched().iter().any(|uri| self.affects(uri))
                             && checks.changed_path().is_some()
                     })
-                    || diagnostics.keys().any(|uri| self.affects(uri))
-                    || workspace
-                        .project_files(root)
-                        .iter()
-                        .any(|uri| self.affects(uri))
+                    || diagnostics.keys().any(&mut changed)
+                    || workspace.project_files(root).iter().any(&mut changed)
                     || [
                         &workspace.recorded_inputs,
                         &workspace.bibliography_inputs,
@@ -64,7 +80,7 @@ impl FileChanges {
                     .any(|inputs| {
                         inputs
                             .get(*root)
-                            .is_some_and(|uris| uris.iter().any(|uri| self.affects(uri)))
+                            .is_some_and(|uris| uris.iter().any(&mut changed))
                     })
             })
             .map(|(root, _)| root.clone())

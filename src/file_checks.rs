@@ -1,4 +1,4 @@
-//! Existence checks influence output without necessarily reading source text.
+//! Captured file conditions and content fingerprints for build validity.
 use crate::{
     config::BuildConfig,
     syntax,
@@ -6,7 +6,9 @@ use crate::{
 };
 use std::{
     cell::RefCell,
-    collections::{BTreeMap, BTreeSet},
+    collections::{hash_map::DefaultHasher, BTreeMap, BTreeSet},
+    hash::{Hash, Hasher},
+    io::Read,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -15,11 +17,79 @@ use tower_lsp::lsp_types::Url;
 const MAX_PATHS: usize = 4096;
 const MAX_ROOTS: usize = 128;
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Snapshot {
     paths: BTreeMap<PathBuf, Option<PathBuf>>,
     watched: BTreeSet<Url>,
     artifact: Option<PathBuf>,
+    inputs: BTreeMap<Url, InputSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum InputSnapshot {
+    Text { length: usize, hash: u64 },
+    File(Option<(u64, u64)>),
+}
+
+impl InputSnapshot {
+    pub(crate) fn text(text: &str) -> Self {
+        let mut hash = DefaultHasher::new();
+        text.hash(&mut hash);
+        Self::Text {
+            length: text.len(),
+            hash: hash.finish(),
+        }
+    }
+
+    pub(crate) fn file(path: &Path) -> Self {
+        let read = || {
+            if !std::fs::metadata(path).ok()?.is_file() {
+                return None;
+            }
+            let mut file = std::fs::File::open(path).ok()?;
+            let mut hash = DefaultHasher::new();
+            let mut length = 0;
+            let mut buffer = [0; 64 * 1024];
+            loop {
+                let count = file.read(&mut buffer).ok()?;
+                if count == 0 {
+                    break;
+                }
+                length += count as u64;
+                hash.write(&buffer[..count]);
+            }
+            Some((length, hash.finish()))
+        };
+        Self::File(read())
+    }
+
+    pub(crate) fn changed(&self, uri: &Url) -> bool {
+        let Ok(path) = uri.to_file_path() else {
+            return true;
+        };
+        match self {
+            Self::Text { length, .. } => {
+                std::fs::metadata(&path).map_or(true, |metadata| metadata.len() != *length as u64)
+                    || std::fs::read_to_string(path)
+                        .ok()
+                        .is_none_or(|text| Self::text(&text) != *self)
+            }
+            Self::File(before) => {
+                let length = std::fs::metadata(&path)
+                    .ok()
+                    .filter(|metadata| metadata.is_file())
+                    .map(|metadata| metadata.len());
+                length != before.as_ref().map(|(length, _)| *length) || Self::file(&path) != *self
+            }
+        }
+    }
+}
+
+pub(crate) fn fingerprint(path: &Path) -> Option<(u64, Option<std::time::SystemTime>)> {
+    let metadata = std::fs::metadata(path).ok()?;
+    metadata
+        .is_file()
+        .then_some((metadata.len(), metadata.modified().ok()))
 }
 
 fn file(path: &Path) -> Option<PathBuf> {
@@ -185,10 +255,26 @@ impl Snapshot {
         Self {
             paths,
             watched,
+            inputs: BTreeMap::new(),
             artifact: config
                 .artifact_path(&root_path, "pdf")
                 .map(|path| normalize_path(&path)),
         }
+    }
+
+    pub(crate) fn with_inputs(&self, inputs: BTreeMap<Url, InputSnapshot>) -> Self {
+        Self {
+            inputs,
+            ..self.clone()
+        }
+    }
+
+    pub(crate) fn input_changed(&self, uri: &Url) -> bool {
+        // Unknown inputs invalidate conservatively, including newly resolved
+        // dependencies and histories evicted by the root limit.
+        self.inputs
+            .get(uri)
+            .is_none_or(|before| before.changed(uri))
     }
 
     pub(crate) fn watched(&self) -> &BTreeSet<Url> {
@@ -206,7 +292,7 @@ impl Snapshot {
     }
 
     pub(crate) fn remember(map: &mut BTreeMap<Url, Arc<Self>>, root: Url, snapshot: Arc<Self>) {
-        if snapshot.paths.is_empty() {
+        if snapshot.paths.is_empty() && snapshot.inputs.is_empty() {
             map.remove(&root);
             return;
         }

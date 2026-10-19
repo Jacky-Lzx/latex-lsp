@@ -6260,3 +6260,351 @@ fn canonical_creation_events_clear_completed_diagnostics_for_missing_symlink_inp
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+#[cfg(unix)]
+fn repeated_watched_events_preserve_current_build_diagnostics_for_all_input_kinds() {
+    let script = "printf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf '%s:2: LaTeX Warning: current inputs warning.\\n' \"$2\" > \"$1/main.log\"\nprintf 'INPUT %s\\nINPUT %s/child.tex\\nINPUT %s/dynamic.inc\\nINPUT %s/plot.png\\nINPUT %s/refs.bib\\n' \"$2\" \"${2%/*}\" \"${2%/*}\" \"${2%/*}\" \"${2%/*}\" > \"$1/main.fls\"\n";
+    let (mut server, directory, main) =
+        fake_build_server_capabilities(script, false, json!({"textDocument":{"diagnostic":{}}}));
+    let source = "\\documentclass{article}\n\\input{child}\n\\includegraphics{plot.png}\n\\bibliography{refs}\n\\IfFileExists{optional.bin}{Found.}{Missing.}\n";
+    for (name, contents) in [
+        ("child.tex", "Old child.\n"),
+        ("dynamic.inc", "Dynamic.\n"),
+        ("refs.bib", "@book{book,title={Example}}\n"),
+    ] {
+        std::fs::write(directory.path().join(name), contents).unwrap();
+    }
+    std::fs::write(directory.path().join("plot.png"), [0, 255, 1]).unwrap();
+    std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+    );
+    server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let finished = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(finished["params"]["status"], "success", "{finished}");
+    assert_eq!(finished["params"]["stale"], false, "{finished}");
+    let old = server.request(
+        3,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":main}}),
+    );
+    assert!(
+        old["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["message"]
+                .as_str()
+                .is_some_and(|text| text.contains("current inputs warning"))),
+        "{old}"
+    );
+    for (id, name, kind) in [
+        (4, "main.tex", 2),
+        (5, "child.tex", 1),
+        (6, "dynamic.inc", 2),
+        (7, "plot.png", 2),
+        (8, "refs.bib", 2),
+        (9, "optional.bin", 3),
+        (10, "", 1),
+    ] {
+        server.notify("workspace/didChangeWatchedFiles", json!({"changes":[{"uri":Url::from_file_path(directory.path().join(name)).unwrap(),"type":kind}]}));
+        let current = server.request(
+            id,
+            "textDocument/diagnostic",
+            json!({"textDocument":{"uri":main},"previousResultId":old["resultId"]}),
+        );
+        assert_eq!(current["kind"], "unchanged", "{name}: {current}");
+        assert_eq!(current["resultId"], old["resultId"]);
+    }
+    let image = directory.path().join("plot.png");
+    let image_time = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1);
+    std::fs::File::open(&image)
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(image_time))
+        .unwrap();
+    server.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({"changes":[{"uri":Url::from_file_path(&image).unwrap(),"type":2}]}),
+    );
+    let touched = server.request(
+        20,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":main},"previousResultId":old["resultId"]}),
+    );
+    assert_eq!(touched["kind"], "unchanged", "{touched}");
+    let child = directory.path().join("child.tex");
+    let modified = std::fs::metadata(&child).unwrap().modified().unwrap();
+    std::fs::write(&child, "New child.\n").unwrap();
+    std::fs::File::open(&child)
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(modified))
+        .unwrap();
+    server.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({"changes":[{"uri":Url::from_file_path(child).unwrap(),"type":2}]}),
+    );
+    let cleared = server.request(
+        11,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":main},"previousResultId":old["resultId"]}),
+    );
+    assert_eq!(cleared["kind"], "full", "{cleared}");
+    assert_eq!(cleared["items"], json!([]), "{cleared}");
+    server.request(
+        21,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let rebuilt = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(rebuilt["params"]["status"], "success", "{rebuilt}");
+    let current = server.request(
+        22,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":main}}),
+    );
+    assert!(
+        current["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["source"] == "latex-build"),
+        "{current}"
+    );
+    std::fs::write(&image, [1, 255, 0]).unwrap();
+    std::fs::File::open(&image)
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(image_time))
+        .unwrap();
+    server.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({"changes":[{"uri":Url::from_file_path(image).unwrap(),"type":2}]}),
+    );
+    let cleared_image = server.request(
+        23,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":main},"previousResultId":current["resultId"]}),
+    );
+    assert_eq!(cleared_image["kind"], "full", "{cleared_image}");
+    assert_eq!(cleared_image["items"], json!([]), "{cleared_image}");
+    server.request(24, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+fn watched_shared_inputs_compare_each_roots_published_build_instead_of_the_latest_read() {
+    let script = "name=${2##*/}\nname=${name%.tex}\nprintf '%%PDF-1.4\\n' > \"$1/$name.pdf\"\nprintf '%s:2: LaTeX Warning: project-specific input warning.\\n' \"$2\" > \"$1/$name.log\"\n";
+    let (mut server, directory, main) =
+        fake_build_server_capabilities(script, false, json!({"textDocument":{"diagnostic":{}}}));
+    let source = "\\documentclass{article}\n\\input{shared}\n";
+    let shared = directory.path().join("shared.tex");
+    let other = Url::from_file_path(directory.path().join("other.tex")).unwrap();
+    std::fs::write(&shared, "Old.\n").unwrap();
+    std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+    std::fs::write(other.to_file_path().unwrap(), source).unwrap();
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+    );
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":other,"languageId":"latex","version":1,"text":source}}),
+    );
+    server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let first = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(first["params"]["status"], "success", "{first}");
+    std::fs::write(&shared, "New.\n").unwrap();
+    server.request(
+        3,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[other]}),
+    );
+    let second = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(second["params"]["status"], "success", "{second}");
+    let old_main = server.request(
+        4,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":main}}),
+    );
+    let old_other = server.request(
+        5,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":other}}),
+    );
+    for old in [&old_main, &old_other] {
+        assert!(
+            old["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["source"] == "latex-build"),
+            "{old}"
+        );
+    }
+    server.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({"changes":[{"uri":Url::from_file_path(shared).unwrap(),"type":2}]}),
+    );
+    let cleared = server.request(
+        6,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":main},"previousResultId":old_main["resultId"]}),
+    );
+    assert_eq!(cleared["kind"], "full", "{cleared}");
+    assert_eq!(cleared["items"], json!([]), "{cleared}");
+    let retained = server.request(
+        7,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":other},"previousResultId":old_other["resultId"]}),
+    );
+    assert_eq!(retained["kind"], "unchanged", "{retained}");
+    server.request(8, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+fn delayed_watchers_preserve_active_saved_builds_while_clearing_older_published_diagnostics() {
+    let script = "if [ -f \"$1/hold\" ]; then touch \"$1/ready\"; while [ ! -f \"$1/release\" ]; do sleep 0.02; done; fi\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf '%s:2: LaTeX Warning: warning for compiled inputs.\\n' \"$2\" > \"$1/main.log\"\n";
+    let (mut server, directory, main) =
+        fake_build_server_capabilities(script, false, json!({"textDocument":{"diagnostic":{}}}));
+    let source = "\\documentclass{article}\n\\input{child}\n";
+    let child = directory.path().join("child.tex");
+    std::fs::write(&child, "Old.\n").unwrap();
+    std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+    );
+    server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let first = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(first["params"]["status"], "success", "{first}");
+    let old = server.request(
+        3,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":main}}),
+    );
+    assert!(
+        old["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["source"] == "latex-build"),
+        "{old}"
+    );
+    std::fs::write(&child, "New.\n").unwrap();
+    let output = directory.path().join("build/latex-lsp");
+    std::fs::write(output.join("hold"), "").unwrap();
+    server.request(
+        4,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    wait_for_file(&output.join("ready"));
+    server.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({"changes":[{"uri":Url::from_file_path(child).unwrap(),"type":2}]}),
+    );
+    let status = server.request(
+        5,
+        "workspace/executeCommand",
+        json!({"command":"latex.buildStatus","arguments":[main]}),
+    );
+    let cleared = server.request(
+        6,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":main},"previousResultId":old["resultId"]}),
+    );
+    std::fs::write(output.join("release"), "").unwrap();
+    assert_eq!(status["status"], "running", "{status}");
+    assert_eq!(cleared["kind"], "full", "{cleared}");
+    assert_eq!(cleared["items"], json!([]), "{cleared}");
+    let second = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(second["params"]["status"], "success", "{second}");
+    assert_eq!(second["params"]["stale"], false, "{second}");
+    server.request(7, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+fn binary_input_content_changes_are_detected_even_with_preserved_size_and_timestamp() {
+    for notify in [false, true] {
+        let script = "touch \"$1/ready\"\nwhile [ ! -f \"$1/release\" ]; do sleep 0.02; done\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf '%s:2: LaTeX Warning: old image warning.\\n' \"$2\" > \"$1/main.log\"\n";
+        let (mut server, directory, main) = fake_build_server(script, true);
+        let source = "\\documentclass{article}\n\\includegraphics{plot.png}\n";
+        let image = directory.path().join("plot.png");
+        let mut pixels = vec![0; 128 * 1024 + 17];
+        pixels[0] = 255;
+        std::fs::write(&image, &pixels).unwrap();
+        let modified = std::fs::metadata(&image).unwrap().modified().unwrap();
+        std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+        );
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let output = directory.path().join("build/latex-lsp");
+        wait_for_file(&output.join("ready"));
+        if notify {
+            server.notify("textDocument/didSave", json!({"textDocument":{"uri":main}}));
+            let queued = server.request(
+                3,
+                "workspace/executeCommand",
+                json!({"command":"latex.buildStatus","arguments":[main]}),
+            );
+            assert_eq!(queued["queued"], true, "{queued}");
+        }
+        pixels[64 * 1024 + 7] = 1;
+        std::fs::write(&image, &pixels).unwrap();
+        std::fs::File::open(&image)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        if notify {
+            server.notify(
+                "workspace/didChangeWatchedFiles",
+                json!({"changes":[{"uri":Url::from_file_path(&image).unwrap(),"type":2}]}),
+            );
+            server.request(
+                4,
+                "workspace/executeCommand",
+                json!({"command":"latex.buildStatus","arguments":[main]}),
+            );
+        }
+        std::fs::write(output.join("release"), "").unwrap();
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(
+            finished["params"]["status"],
+            if notify { "cancelled" } else { "success" },
+            "{notify}: {finished}"
+        );
+        if !notify {
+            assert_eq!(finished["params"]["stale"], true, "{finished}");
+        }
+        server.request(5, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}

@@ -1,7 +1,6 @@
 use std::{
-    collections::{hash_map::DefaultHasher, BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet},
     future::Future,
-    hash::{Hash, Hasher},
     io::Read,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -12,7 +11,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{build_log, config::BuildConfig, workspace::Workspace};
+use crate::{
+    build_log,
+    config::BuildConfig,
+    file_checks::{fingerprint, InputSnapshot},
+    workspace::Workspace,
+};
 use serde_json::{json, Value};
 use tokio::sync::{Notify, RwLock};
 use tower_lsp::{
@@ -45,38 +49,6 @@ struct Record {
     artifact: Option<PathBuf>,
 }
 
-#[derive(PartialEq)]
-enum InputSnapshot {
-    Text { length: usize, hash: u64 },
-    File(Option<(u64, Option<std::time::SystemTime>)>),
-}
-
-impl InputSnapshot {
-    fn text(text: &str) -> Self {
-        let mut hash = DefaultHasher::new();
-        text.hash(&mut hash);
-        Self::Text {
-            length: text.len(),
-            hash: hash.finish(),
-        }
-    }
-
-    fn changed(&self, uri: &Url) -> bool {
-        let Ok(path) = uri.to_file_path() else {
-            return true;
-        };
-        match self {
-            Self::Text { length, .. } => {
-                std::fs::metadata(&path).map_or(true, |metadata| metadata.len() != *length as u64)
-                    || std::fs::read_to_string(path)
-                        .ok()
-                        .is_none_or(|text| Self::text(&text) != *self)
-            }
-            Self::File(before) => fingerprint(&path) != *before,
-        }
-    }
-}
-
 #[derive(Clone)]
 pub struct BuildManager {
     client: Client,
@@ -93,7 +65,7 @@ struct BuildInput {
     root: Url,
     root_path: PathBuf,
     snapshots: BTreeMap<Url, (Option<i32>, String)>,
-    file_snapshots: BTreeMap<Url, Option<(u64, Option<std::time::SystemTime>)>>,
+    file_snapshots: BTreeMap<Url, InputSnapshot>,
     config: BuildConfig,
     progress_supported: bool,
     project: BTreeSet<Url>,
@@ -178,7 +150,7 @@ impl BuildManager {
                 }
                 snapshots.insert(uri.clone(), (doc.version, doc.text.source.clone()));
             } else if let Ok(path) = uri.to_file_path() {
-                file_snapshots.insert(uri.clone(), fingerprint(&path));
+                file_snapshots.insert(uri.clone(), InputSnapshot::file(&path));
             }
         }
         // Dynamic dependencies may only be known after TeX writes its recorder.
@@ -243,7 +215,12 @@ impl BuildManager {
                 .iter()
                 .map(|uri| {
                     let snapshot = snapshots.get(uri).map_or_else(
-                        || InputSnapshot::File(file_snapshots.get(uri).copied().flatten()),
+                        || {
+                            file_snapshots
+                                .get(uri)
+                                .cloned()
+                                .unwrap_or(InputSnapshot::File(None))
+                        },
                         |(_, text)| InputSnapshot::text(text),
                     );
                     (uri.clone(), snapshot)
@@ -462,9 +439,7 @@ impl BuildManager {
                                 .as_ref()
                                 != Some(text)
                         } else if let Some(before) = file_snapshots.get(uri) {
-                            uri.to_file_path()
-                                .ok()
-                                .is_none_or(|path| fingerprint(&path) != *before)
+                            before.changed(uri)
                         } else {
                             let Ok(path) = uri.to_file_path() else {
                                 return true;
@@ -543,10 +518,30 @@ impl BuildManager {
                 current.build_checks.remove(&root_uri);
                 affected.insert(root_uri.clone());
             } else if matches!(outcome.status, "success" | "error") {
+                // Keep the published diagnostics tied to their own inputs;
+                // a newer active build may already be using different files.
+                let inputs = project
+                    .iter()
+                    .map(|uri| {
+                        let snapshot = if let Some((_, text)) = snapshots.get(uri) {
+                            InputSnapshot::text(text)
+                        } else if let Some(before) = file_snapshots.get(uri) {
+                            before.clone()
+                        } else if let Some(doc) = current.documents.get(uri) {
+                            InputSnapshot::text(&doc.text.source)
+                        } else {
+                            uri.to_file_path()
+                                .map_or(InputSnapshot::File(None), |path| {
+                                    InputSnapshot::file(&path)
+                                })
+                        };
+                        (uri.clone(), snapshot)
+                    })
+                    .collect();
                 crate::file_checks::Snapshot::remember(
                     &mut current.build_checks,
                     root_uri.clone(),
-                    checks.clone(),
+                    Arc::new(checks.with_inputs(inputs)),
                 );
                 current
                     .build_diagnostic_sources
@@ -1148,13 +1143,6 @@ fn prepare_include_directories(root: &Path, output: &Path) -> std::io::Result<()
 fn read_log(path: &Path) -> Option<String> {
     let text = crate::output::read(path, MAX_OUTPUT * 2).ok()?;
     Some(build_log::decode_output(&text).into_owned())
-}
-
-fn fingerprint(path: &Path) -> Option<(u64, Option<std::time::SystemTime>)> {
-    let metadata = std::fs::metadata(path).ok()?;
-    metadata
-        .is_file()
-        .then_some((metadata.len(), metadata.modified().ok()))
 }
 
 fn bibliography_logs(directory: &Path) -> BTreeMap<PathBuf, (u64, Option<std::time::SystemTime>)> {

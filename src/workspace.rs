@@ -196,7 +196,7 @@ pub struct Workspace {
     pub build_diagnostic_sources: BTreeMap<Url, BTreeSet<Url>>,
     pub recorded_inputs: BTreeMap<Url, BTreeSet<Url>>,
     pub bibliography_inputs: BTreeMap<Url, BTreeSet<Url>>,
-    /// Historical file conditions, separate from source and symbol dependencies.
+    /// File conditions and input snapshots for the latest published diagnostics.
     pub build_checks: BTreeMap<Url, std::sync::Arc<crate::file_checks::Snapshot>>,
     pub pdf_checks: BTreeMap<Url, std::sync::Arc<crate::file_checks::Snapshot>>,
 }
