@@ -15,6 +15,7 @@ enum Kind {
     Optional,
     UnstarredOptional,
     Star,
+    Flag(String),
     Delimited {
         open: String,
         close: String,
@@ -110,6 +111,11 @@ pub(crate) fn completion_at(
                 }
             }
             Kind::Optional | Kind::UnstarredOptional | Kind::Star => {}
+            Kind::Flag(flag) => {
+                if token(following, 0) == Some(flag.as_str()) {
+                    return Some((signature.label(), None));
+                }
+            }
             _ => break,
         }
     }
@@ -721,6 +727,11 @@ fn definition(uri: &Url, doc: &Document, entry: &Entry, environment: bool) -> Op
                         )
                     }
                     b's' => (Kind::Star, "*".into()),
+                    b't' => {
+                        let (flag, end) = delimiter_spec(source, i)?;
+                        i = end;
+                        (Kind::Flag(flag.clone()), flag)
+                    }
                     b'd' | b'D' | b'r' | b'R' => {
                         let (open, end) = delimiter_spec(source, i)?;
                         let (close, end) = delimiter_spec(source, end)?;
@@ -1087,6 +1098,7 @@ fn active_parameter(
                     optional: true,
                     ..
                 } if token(source, i).is_some_and(|value| value != open) => continue,
+                Kind::Flag(flag) if token(source, i).is_some_and(|value| value != flag) => continue,
                 _ => {}
             }
         }
@@ -1094,6 +1106,16 @@ fn active_parameter(
             return Some(index);
         }
         let (open, close) = match &parameter.kind {
+            Kind::Flag(flag) => {
+                if token(source, i) == Some(flag.as_str()) {
+                    let end = i + flag.len();
+                    if cursor < end {
+                        return Some(index);
+                    }
+                    i = end;
+                }
+                continue;
+            }
             Kind::Delimited {
                 open,
                 close,

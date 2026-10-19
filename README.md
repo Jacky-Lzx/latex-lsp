@@ -51,7 +51,7 @@
 
 解析时跳过 `%` 注释、`\verb`、`\lstinline` 和常见逐字环境（`verbatim`、`lstlisting`、`minted`、`comment`、`Verbatim`）。
 
-LaTeX 内核的 `NewExpandableDocumentCommand`、`RenewExpandableDocumentCommand`、`ProvideExpandableDocumentCommand` 和 `DeclareExpandableDocumentCommand` 与普通文档命令共用宏导航、引用、重命名和补全，兼容带花括号或裸命令目标及静态 `csname` 形式。声明提供命令、参数规格、定义体的参数提示；调用支持 `m`、`o`、`O`、`s` 以及 `d/D/r/R` 分隔参数规格及修饰符，补全保留可选参数默认值。复杂规格继续保守回退，不执行宏展开。
+LaTeX 内核的 `NewExpandableDocumentCommand`、`RenewExpandableDocumentCommand`、`ProvideExpandableDocumentCommand` 和 `DeclareExpandableDocumentCommand` 与普通文档命令共用宏导航、引用、重命名和补全，兼容带花括号或裸命令目标及静态 `csname` 形式。声明提供命令、参数规格、定义体的参数提示；调用支持 `m`、`o`、`O`、`s`、`t` 以及 `d/D/r/R` 分隔参数规格及修饰符，补全保留可选参数默认值。复杂规格继续保守回退，不执行宏展开。
 
 `NewCommandCopy`、`RenewCommandCopy` 和 `DeclareCommandCopy` 支持复制目标的导航、引用、补全和重命名，并提供声明参数提示与片段。复制目标是独立宏；重命名原命令时维护复制声明的来源参数，重命名副本时只更新副本的声明与调用。兼容带花括号或裸命令参数，以及目标的静态 `csname` 写法，保留注释和逐字内容。
 
@@ -220,7 +220,7 @@ vim.lsp.enable('latex_lsp')
 
 输入命令参数时，可通过 `vim.lsp.buf.signature_help()` 查看签名；支持自动参数提示的插件也可使用标准 `textDocument/signatureHelp`。
 
-环境参数提示支持 `\newenvironment`、`\NewEnviron` 和 xparse 的 `\NewDocumentEnvironment` 系列定义，以及 `tabular`、`minipage`、`figure` 等常用环境；`\newtheorem` 定理提示可选标题 `[note]`。通过 `\begin{panel}` 或直接调用 `\panel` 均可查看参数，自定义环境的直接命令补全会插入必选参数的占位符并保留可选参数默认值。自定义命令与环境识别常规参数数量/默认值，以及 xparse 的 `m`、`o`、`O`、`s` 及 `d/D/r/R` 参数；不支持的参数规格和存在多个定义的名称不推断签名。 etoolbox 的 `newrobustcmd` / `renewrobustcmd` / `providerobustcmd` 也支持导航、符号、补全、参数提示和跨文件重命名，识别带星号、无花括号及经 `expandafter` 展开的字面 `csname` 声明；补全保留首个可选参数的默认值。
+环境参数提示支持 `\newenvironment`、`\NewEnviron` 和 xparse 的 `\NewDocumentEnvironment` 系列定义，以及 `tabular`、`minipage`、`figure` 等常用环境；`\newtheorem` 定理提示可选标题 `[note]`。通过 `\begin{panel}` 或直接调用 `\panel` 均可查看参数，自定义环境的直接命令补全会插入必选参数的占位符并保留可选参数默认值。自定义命令与环境识别常规参数数量/默认值，以及 xparse 的 `m`、`o`、`O`、`s`、`t` 及 `d/D/r/R` 参数；不支持的参数规格和存在多个定义的名称不推断签名。 etoolbox 的 `newrobustcmd` / `renewrobustcmd` / `providerobustcmd` 也支持导航、符号、补全、参数提示和跨文件重命名，识别带星号、无花括号及经 `expandafter` 展开的字面 `csname` 声明；补全保留首个可选参数的默认值。
 
 计数器操作支持命令片段、参数提示和名称补全，包括 `setcounter` / `addtocounter`、`stepcounter` / `refstepcounter`、`value` / `arabic` 等格式化命令、`counterwithin` / `counterwithout` / `numberwithin`。名称候选来自内置计数器、当前项目的 `newcounter` / `newaliascnt` 和拥有计数器的定理声明；支持新计数器、别名及定理的共享/重置参数，保留已有名称后缀、空白和其他实参。不同论文之间的候选按依赖隔离，宏生成的名称不作推断。
 
@@ -476,9 +476,9 @@ cargo test --locked -- --include-ignored
 
 普通自定义宏也支持字面 `\csname hello\endcsname` 的定义跳转、悬浮、引用、高亮和重命名，与直接调用的 `\hello` 统一处理；保留名称前后的空白及调用参数。识别 `\expandafter\def\csname hello\endcsname#1{...}`、同样写法的 `gdef` / `edef` / `xdef`、`newcommand` / xparse 系列以及 `let` 别名定义；可从字面定义处发起重命名，参数提示与直接定义一致。字面调用可提示内置命令、自定义宏和环境参数，签名保留 `\csname ...\endcsname` 写法。名称中的宏展开、注释拼接、内部空白和未闭合的 `csname` 不作推断，也不会误记为重新定义 `csname` 原语；共享调用在不同项目里指向不同宏时拒绝重命名。
 
-用户宏参数提示识别 `\newcommand` 系列和 `\DeclareRobustCommand` 的参数数量/首个可选参数默认值，xparse 的 `m` / `o` / `O{...}` / `s` / `d<>` / `D<>{默认值}` / `r()` / `R(){默认值}`，以及 `\def` 系列连续的 `#1#2...` 参数。传统宏及环境的可选参数和默认值在首个未受花括号保护的 `]` 处结束，保留字面量 `[`；xparse 调用仍匹配嵌套方括号。直接调用、`csuse` 和静态 `csname` 使用所调用命令的规则，支持星号、嵌套调用、转义和多行注释。分隔参数支持字符、控制序列和 Unicode 分隔符，匹配嵌套、花括号保护及完整 token；缺失必需分隔符时保守回退。不支持的参数规格、字符串求值或定义有歧义时暂不推断签名；不在注释和逐字文本中提示。
+用户宏参数提示识别 `\newcommand` 系列和 `\DeclareRobustCommand` 的参数数量/首个可选参数默认值，xparse 的 `m` / `o` / `O{...}` / `s` / `t+` / `d<>` / `D<>{默认值}` / `r()` / `R(){默认值}`，以及 `\def` 系列连续的 `#1#2...` 参数。传统宏及环境的可选参数和默认值在首个未受花括号保护的 `]` 处结束，保留字面量 `[`；xparse 调用仍匹配嵌套方括号。直接调用、`csuse` 和静态 `csname` 使用所调用命令的规则，支持星号、嵌套调用、转义和多行注释。`t` 标志支持字符、控制序列及 Unicode token，保留有无标志时的后续参数编号；分隔参数支持字符、控制序列和 Unicode 分隔符，匹配嵌套、花括号保护及完整 token；缺失必需分隔符时保守回退。不支持的参数规格、字符串求值或定义有歧义时暂不推断签名；不在注释和逐字文本中提示。
 
-支持 snippet 的客户端补全用户宏时，还会按同一签名生成必选参数的 tabstop。例如 `\newcommand{\pair}[2][blue]{...}` 会补成 `\pair{...}`，保留首个可选参数的默认值；xparse 星号及可选分隔参数也默认省略，必需分隔参数保留分隔符，并正确转义 snippet 特殊字符及隔开控制词。宏后已有分组或分隔参数（包含隔着注释的情况）时仅替换命令名。客户端不支持 snippet 或签名无法安全推断时，继续提供命令名补全。
+支持 snippet 的客户端补全用户宏时，还会按同一签名生成必选参数的 tabstop。例如 `\newcommand{\pair}[2][blue]{...}` 会补成 `\pair{...}`，保留首个可选参数的默认值；xparse 星号、`t` 标志及可选分隔参数也默认省略，必需分隔参数保留分隔符，并正确转义 snippet 特殊字符及隔开控制词。宏后已有分组、标志或分隔参数（包含隔着注释的情况）时仅替换命令名。客户端不支持 snippet 或签名无法安全推断时，继续提供命令名补全。
 
 文献条目间引用支持 `crossref`、`xref`、`xdata`、`related` 和 `entryset`，包含花括号或双引号形式，以及后三类字段的逗号分隔列表；可补全、跳转、查找引用、高亮和重命名父条目。字段名不区分大小写，补全也支持尚未闭合的值。字符串宏、`#` 拼接或含 TeX 命令的值需要求值，暂不自动修改；标题和注释中的同名文本会保留。文献键不能重命名为 `*`，以免改变 `\nocite{*}` 的全选含义。
 

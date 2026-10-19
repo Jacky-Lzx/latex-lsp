@@ -74,6 +74,220 @@ fn xparse_delimited_parameters_track_defaults_nesting_and_omitted_arguments() {
 }
 
 #[test]
+fn xparse_token_flags_keep_parameter_numbers_for_direct_and_named_calls() {
+    for declaration in [
+        "NewDocumentCommand",
+        "RenewDocumentCommand",
+        "ProvideDocumentCommand",
+        "DeclareDocumentCommand",
+        "NewExpandableDocumentCommand",
+        "RenewExpandableDocumentCommand",
+        "ProvideExpandableDocumentCommand",
+        "DeclareExpandableDocumentCommand",
+    ] {
+        let definition = format!("\\{declaration}\\probe{{s t+ t\\FLAG O{{DEF}} r<>m}}{{#6}}");
+        for command in [r"\probe", r"\csuse{probe}", r"\csname probe\endcsname"] {
+            let label = format!("{command}*+\\FLAG[#4=DEF]<#5>{{#6}}");
+            for (arguments, active) in [
+                (r"*+\FLAG[red]<REQ>{BO¦DY}", 5),
+                (r"<REQ>{BO¦DY}", 5),
+                (r"+<REQ>{BO¦DY}", 5),
+                (r"\FLAG<REQ>{BO¦DY}", 5),
+                (r"*+\FL¦AG[red]<REQ>{BODY}", 2),
+                (r"¦+<REQ>{BODY}", 1),
+                (r"¦<REQ>{BODY}", 4),
+                (r"*+\FLAG[re¦d]<REQ>{BODY}", 3),
+                (r"*+\FLAG[red]<RE¦Q>{BODY}", 4),
+                (" % skip +\r\n+ % skip \\FLAG\r\n\\FLAG<REQ>{BO¦DY}", 5),
+            ] {
+                check(
+                    &definition,
+                    &format!("{command}{arguments}"),
+                    &label,
+                    active,
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn xparse_flags_match_literal_tokens_and_leave_completed_calls() {
+    for (spec, call, label, active) in [
+        ("t{+}m", r"\probe+{BO¦DY}", r"\probe+{#2}", 1),
+        ("t a m", r"\probe a{BO¦DY}", r"\probe a{#2}", 1),
+        ("t¿m", "😀 \\probe¿{BO¦DY}", "\\probe¿{#2}", 1),
+        (r"t\+m", r"\probe\+{BO¦DY}", r"\probe\+{#2}", 1),
+        (r"t\FLAG m", r"\probe\FL¦AG{BODY}", r"\probe\FLAG{#2}", 0),
+        (r"t\FLAG m", r"\probe\FLAG{BO¦DY}", r"\probe\FLAG{#2}", 1),
+        ("t+m", r"\probe{BO¦DY}", r"\probe+{#2}", 1),
+    ] {
+        check(
+            &format!("\\NewDocumentCommand\\probe{{{spec}}}{{#2}}"),
+            call,
+            label,
+            active,
+        );
+    }
+    for (spec, call) in [
+        (r"t\FLAG m", r"\probe\FLAGsuffix{BO¦DY}"),
+        (r"t\FLAG m", r"\probe\FLAG{BODY}¦"),
+        (r"t\+m", r"\probe+{BO¦DY}"),
+        ("t+", r"\probe+¦"),
+        ("t", r"\probe{BO¦DY}"),
+        ("t{}m", r"\probe{BO¦DY}"),
+        ("t{ab}m", r"\probe{BO¦DY}"),
+        ("t+mmmmmmmmm", r"\probe+{BO¦DY}"),
+    ] {
+        let definition = format!("\\NewDocumentCommand\\probe{{{spec}}}{{}}");
+        let (workspace, uri, position) = setup(&definition, call);
+        assert!(
+            signature::help(&workspace, &uri, position).is_none(),
+            "{spec}; {call}"
+        );
+    }
+}
+
+#[test]
+fn xparse_environment_flags_support_direct_named_and_begin_signatures() {
+    for declaration in [
+        "NewDocumentEnvironment",
+        "RenewDocumentEnvironment",
+        "ProvideDocumentEnvironment",
+        "DeclareDocumentEnvironment",
+    ] {
+        let definition = format!("\\{declaration}{{panel}}{{t+ t\\FLAG r()m}}{{}}{{}}");
+        for (call, label, active) in [
+            (
+                r"\begin{panel}+\FLAG(req){BO¦DY}",
+                r"\begin{panel}+\FLAG(#3){#4}",
+                4,
+            ),
+            (
+                r"\begin{panel}(req){BO¦DY}",
+                r"\begin{panel}+\FLAG(#3){#4}",
+                4,
+            ),
+            (r"\panel+\FLAG(req){BO¦DY}", r"\panel+\FLAG(#3){#4}", 3),
+            (r"\panel+\FL¦AG(req){BODY}", r"\panel+\FLAG(#3){#4}", 1),
+            (
+                r"\csuse{panel}(req){BO¦DY}",
+                r"\csuse{panel}+\FLAG(#3){#4}",
+                3,
+            ),
+        ] {
+            check(&definition, call, label, active);
+        }
+    }
+}
+
+#[test]
+fn xparse_flag_completions_omit_flags_and_preserve_already_written_tokens() {
+    for (definition, following, snippets, expected) in [
+        (
+            r"\NewDocumentCommand\probe{s t+ t\FLAG O{DEF}r<>m}{}",
+            "",
+            true,
+            "probe<${1:arg5}>{${2:arg6}}",
+        ),
+        (
+            r"\NewDocumentCommand\probe{s t+ t\FLAG O{DEF}r<>m}{}",
+            "+<REQ>{BODY}",
+            true,
+            "probe",
+        ),
+        (
+            r"\NewDocumentCommand\probe{s t+ t\FLAG O{DEF}r<>m}{}",
+            " % ignored\n\\FLAG<REQ>{BODY}",
+            true,
+            "probe",
+        ),
+        (
+            r"\NewDocumentCommand\probe{t a m}{}",
+            " a{BODY}",
+            true,
+            "probe",
+        ),
+        (
+            r"\NewDocumentCommand\probe{t\+m}{}",
+            r"\+{BODY}",
+            true,
+            "probe",
+        ),
+        (
+            r"\NewDocumentCommand\probe{t\FLAG m}{}",
+            r"\FLAGsuffix",
+            true,
+            "probe{${1:arg2}}",
+        ),
+        (r"\NewDocumentCommand\probe{t+}{}", "", true, "probe"),
+        (r"\NewDocumentCommand\probe{t+m}{}", "", false, "probe"),
+        (
+            r"\NewDocumentEnvironment{probe}{t+ t\FLAG r()m}{}{}",
+            "",
+            true,
+            "probe(${1:arg3}){${2:arg4}}",
+        ),
+    ] {
+        let (mut workspace, uri, position) = setup(definition, &format!("\\pro¦{following}"));
+        workspace.snippets = snippets;
+        let items = latex_lsp::features::completion(&workspace, &uri, position);
+        let item = items.iter().find(|item| item.label == "probe").unwrap();
+        let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+            panic!("missing edit")
+        };
+        assert_eq!(edit.new_text, expected, "{definition}; {following}");
+        assert_eq!(
+            item.insert_text_format,
+            Some(if expected == "probe" {
+                InsertTextFormat::PLAIN_TEXT
+            } else {
+                InsertTextFormat::SNIPPET
+            })
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex and xelatex"]
+fn xparse_signature_flags_match_real_boolean_and_optional_values() {
+    use latex_lsp::{build, config::BuildConfig};
+    use std::sync::atomic::AtomicBool;
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    for engine in ["pdflatex", "xelatex"] {
+        for declaration in ["NewDocumentCommand", "NewExpandableDocumentCommand"] {
+            let definition = format!("\\{declaration}\\probe{{s t+ t\\FLAG O{{DEF}} r<>m}}{{\\typeout{{S=\\IfBooleanTF{{#1}}{{Y}}{{N}};T=\\IfBooleanTF{{#2}}{{Y}}{{N}};F=\\IfBooleanTF{{#3}}{{Y}}{{N}};OPT=#4;REQ=#5;BODY=#6}}}}");
+            let calls = [
+                r"\probe*+\FLAG[red]<REQ>{BO¦DY}",
+                r"\probe<REQ>{BO¦DY}",
+                r"\probe+<REQ>{BO¦DY}",
+                r"\probe\FLAG<REQ>{BO¦DY}",
+            ];
+            for call in &calls {
+                check(&definition, call, r"\probe*+\FLAG[#4=DEF]<#5>{#6}", 5);
+            }
+            let source = format!("\\documentclass{{article}}\n{definition}\n\\begin{{document}}\nBody.\n{}\n\\end{{document}}\n", calls.join("\n").replace('¦', ""));
+            std::fs::write(&main, source).unwrap();
+            let config = BuildConfig {
+                executable: engine.into(),
+                ..Default::default()
+            };
+            let result = build::run(&main, &config, &AtomicBool::new(false));
+            assert_eq!(result.status, "success", "{}", result.output);
+            for marker in [
+                "S=Y;T=Y;F=Y;OPT=red;REQ=REQ;BODY=BODY",
+                "S=N;T=N;F=N;OPT=DEF;REQ=REQ;BODY=BODY",
+                "S=N;T=Y;F=N;OPT=DEF;REQ=REQ;BODY=BODY",
+                "S=N;T=N;F=Y;OPT=DEF;REQ=REQ;BODY=BODY",
+            ] {
+                assert!(result.output.contains(marker), "{}", result.output);
+            }
+        }
+    }
+}
+
+#[test]
 fn xparse_delimiters_respect_protected_escaped_and_commented_tokens() {
     let definition = r"\NewDocumentCommand\probe{d<>m}{#2}";
     for call in [
