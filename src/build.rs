@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
+    future::Future,
     io::Read,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -50,6 +51,7 @@ pub struct BuildManager {
     sequence: Arc<AtomicU64>,
     idle: Arc<Notify>,
     closing: Arc<AtomicBool>,
+    disconnected: Arc<AtomicBool>,
     tasks: Arc<AtomicUsize>,
 }
 
@@ -71,7 +73,7 @@ struct TaskGuard {
 impl Drop for TaskGuard {
     fn drop(&mut self) {
         self.tasks.fetch_sub(1, Ordering::SeqCst);
-        self.idle.notify_one();
+        self.idle.notify_waiters();
     }
 }
 
@@ -84,12 +86,34 @@ impl BuildManager {
             sequence: Arc::new(AtomicU64::new(1)),
             idle: Arc::default(),
             closing: Arc::default(),
+            disconnected: Arc::default(),
             tasks: Arc::default(),
         }
     }
 
     pub async fn start(&self, uri: Url) -> Result<Value> {
         self.start_request(uri, None).await
+    }
+
+    async fn while_open<F: Future>(&self, action: F) -> Option<F::Output> {
+        if self.disconnected.load(Ordering::SeqCst) {
+            return None;
+        }
+        let closed = async {
+            loop {
+                let changed = self.idle.notified();
+                if self.disconnected.load(Ordering::SeqCst) {
+                    return;
+                }
+                changed.await;
+            }
+        };
+        // EOF can stop the transport from consuming outgoing notifications.
+        // Cancellation must still finish when that channel is backpressured.
+        tokio::select! {
+            output = action => Some(output),
+            _ = closed => None,
+        }
     }
 
     async fn start_request(
@@ -244,8 +268,14 @@ impl BuildManager {
             let job_name = config
                 .job_name(&root_path)
                 .map(|name| name.to_string_lossy().into_owned());
-            client
-                .send_notification::<BuildStarted>(json!({"buildId":build_id, "rootUri":root_uri, "executable":executable, "engine":engine, "jobName":job_name}))
+            let _ = manager
+                .while_open(client.send_notification::<BuildStarted>(json!({
+                    "buildId": build_id,
+                    "rootUri": root_uri,
+                    "executable": executable,
+                    "engine": engine,
+                    "jobName": job_name,
+                })))
                 .await;
             let started = Instant::now();
             let token = NumberOrString::String(format!("latex-build-{build_id}"));
@@ -253,33 +283,36 @@ impl BuildManager {
             // A bounded wait keeps compilation and shutdown responsive.
             let progress = progress_supported
                 && matches!(
-                    tokio::time::timeout(
-                        Duration::from_secs(1),
-                        client.send_request::<request::WorkDoneProgressCreate>(
-                            WorkDoneProgressCreateParams {
-                                token: token.clone()
-                            }
-                        )
-                    )
-                    .await,
-                    Ok(Ok(()))
+                    manager
+                        .while_open(tokio::time::timeout(
+                            Duration::from_secs(1),
+                            client.send_request::<request::WorkDoneProgressCreate>(
+                                WorkDoneProgressCreateParams {
+                                    token: token.clone()
+                                }
+                            )
+                        ))
+                        .await,
+                    Some(Ok(Ok(())))
                 );
             if progress {
-                client
-                    .send_notification::<notification::Progress>(ProgressParams {
-                        token: token.clone(),
-                        value: ProgressParamsValue::WorkDone(WorkDoneProgress::Begin(
-                            WorkDoneProgressBegin {
-                                title: format!(
-                                    "LaTeX: {}",
-                                    root_path.file_name().unwrap_or_default().to_string_lossy()
-                                ),
-                                cancellable: Some(true),
-                                message: Some(format!("Running {}", config.executable)),
-                                percentage: None,
-                            },
-                        )),
-                    })
+                let _ = manager
+                    .while_open(client.send_notification::<notification::Progress>(
+                        ProgressParams {
+                            token: token.clone(),
+                            value: ProgressParamsValue::WorkDone(WorkDoneProgress::Begin(
+                                WorkDoneProgressBegin {
+                                    title: format!(
+                                        "LaTeX: {}",
+                                        root_path.file_name().unwrap_or_default().to_string_lossy()
+                                    ),
+                                    cancellable: Some(true),
+                                    message: Some(format!("Running {}", config.executable)),
+                                    percentage: None,
+                                },
+                            )),
+                        },
+                    ))
                     .await;
             }
             let worker_root = root_path.clone();
@@ -446,20 +479,26 @@ impl BuildManager {
                 record.active = None;
                 record.result = Some(result.clone());
             }
-            delivery.publish(&client, notifications).await;
+            let _ = manager
+                .while_open(delivery.publish(&client, notifications))
+                .await;
             if progress {
-                client
-                    .send_notification::<notification::Progress>(ProgressParams {
-                        token,
-                        value: ProgressParamsValue::WorkDone(WorkDoneProgress::End(
-                            WorkDoneProgressEnd {
-                                message: result["message"].as_str().map(str::to_owned),
-                            },
-                        )),
-                    })
+                let _ = manager
+                    .while_open(client.send_notification::<notification::Progress>(
+                        ProgressParams {
+                            token,
+                            value: ProgressParamsValue::WorkDone(WorkDoneProgress::End(
+                                WorkDoneProgressEnd {
+                                    message: result["message"].as_str().map(str::to_owned),
+                                },
+                            )),
+                        },
+                    ))
                     .await;
             }
-            client.send_notification::<BuildFinished>(result).await;
+            let _ = manager
+                .while_open(client.send_notification::<BuildFinished>(result))
+                .await;
             let queued = state.lock().unwrap().get_mut(&root_uri).and_then(|record| {
                 // A new manual build may already own the record. Its saves
                 // belong to that build and must remain in its queue.
@@ -479,11 +518,11 @@ impl BuildManager {
                         .start_request(uri, Some((root_uri, generation)))
                         .await
                     {
-                        client
-                            .log_message(
+                        let _ = manager
+                            .while_open(client.log_message(
                                 MessageType::WARNING,
                                 format!("Queued compilation skipped: {}", error.message),
-                            )
+                            ))
                             .await;
                     }
                 }
@@ -548,6 +587,7 @@ impl BuildManager {
 
     pub async fn shutdown(&self) {
         self.closing.store(true, Ordering::SeqCst);
+        self.idle.notify_waiters();
         self.cancel(None);
         loop {
             let finished = self.idle.notified();
@@ -556,6 +596,11 @@ impl BuildManager {
             }
             finished.await;
         }
+    }
+
+    pub fn disconnect(&self) {
+        self.disconnected.store(true, Ordering::SeqCst);
+        self.idle.notify_waiters();
     }
 
     pub async fn files_renamed(&self, renames: &crate::file_operations::Renames) {

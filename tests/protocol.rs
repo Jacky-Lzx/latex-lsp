@@ -11,7 +11,7 @@ use tower_lsp::lsp_types::Url;
 
 struct Server {
     child: Child,
-    stdin: ChildStdin,
+    stdin: Option<ChildStdin>,
     messages: mpsc::Receiver<Value>,
     pending: RefCell<Vec<Value>>,
 }
@@ -1094,7 +1094,7 @@ impl Server {
         });
         Self {
             child,
-            stdin,
+            stdin: Some(stdin),
             messages,
             pending: RefCell::new(Vec::new()),
         }
@@ -1107,9 +1107,10 @@ impl Server {
             message.as_object_mut().unwrap().remove("params");
         }
         let bytes = serde_json::to_vec(&message).unwrap();
-        write!(self.stdin, "Content-Length: {}\r\n\r\n", bytes.len()).unwrap();
-        self.stdin.write_all(&bytes).unwrap();
-        self.stdin.flush().unwrap();
+        let stdin = self.stdin.as_mut().unwrap();
+        write!(stdin, "Content-Length: {}\r\n\r\n", bytes.len()).unwrap();
+        stdin.write_all(&bytes).unwrap();
+        stdin.flush().unwrap();
     }
 
     fn until(&self, matches: impl Fn(&Value) -> bool) -> Value {
@@ -4426,4 +4427,165 @@ fn deleted_input_directories_cancel_active_and_queued_builds_but_unrelated_files
     server.request(1506, "shutdown", Value::Null);
     server.notify("exit", Value::Null);
     server.wait_exit(0);
+}
+
+#[cfg(unix)]
+struct OwnedProcessGroup(i32);
+
+#[cfg(unix)]
+impl Drop for OwnedProcessGroup {
+    fn drop(&mut self) {
+        // All groups used here were created by this test's compiler/query.
+        // A failed regression must not leave its sleep processes behind.
+        unsafe {
+            libc::kill(-self.0, libc::SIGKILL);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn assert_process_stopped(pid: i32) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        let alive = unsafe { libc::kill(pid, 0) } == 0;
+        let zombie = std::fs::read_to_string(format!("/proc/{pid}/stat"))
+            .ok()
+            .is_some_and(|stat| {
+                stat.rsplit_once(')')
+                    .is_some_and(|(_, state)| state.trim_start().starts_with('Z'))
+            });
+        if !alive || zombie {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "external process {pid} survived disconnect"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(unix)]
+impl Server {
+    fn terminate_transport(mut self, mode: &str) -> std::process::ExitStatus {
+        if mode != "eof" {
+            self.notify("exit", Value::Null);
+        }
+        if mode != "exit" {
+            drop(self.stdin.take());
+        }
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        loop {
+            if let Some(status) = self.child.try_wait().unwrap() {
+                return status;
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = self.child.kill();
+                let _ = self.child.wait();
+                panic!("server did not terminate promptly after {mode}");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn disconnects_reap_compilers_and_descendants_without_waiting_for_their_timeout() {
+    for mode in ["exit", "eof", "exit-eof"] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path();
+        std::fs::write(path.join("main.tex"), r"\documentclass{article}").unwrap();
+        let uri = Url::from_file_path(path.join("main.tex")).unwrap();
+        let script = "printf '%s' \"$$\" > compiler-parent\nsleep 30 &\nprintf '%s' \"$!\" > compiler-child\ntouch compiler-ready\nwait\n";
+        let mut server = Server::start();
+        server.request(1600, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(path).unwrap(),"capabilities":{},"initializationOptions":{"build":{"executable":"sh","arguments":["-c",script],"timeoutSeconds":30}}}));
+        server.notify("initialized", json!({}));
+        server.request(
+            1601,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[uri]}),
+        );
+        wait_for_file(&path.join("compiler-ready"));
+        let parent: i32 = std::fs::read_to_string(path.join("compiler-parent"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        let descendant: i32 = std::fs::read_to_string(path.join("compiler-child"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        let _group = OwnedProcessGroup(parent);
+        let status = server.terminate_transport(mode);
+        assert_eq!(
+            status.code(),
+            Some(if mode == "eof" { 0 } else { 1 }),
+            "{mode}"
+        );
+        assert_process_stopped(parent);
+        assert_process_stopped(descendant);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn disconnects_cancel_simultaneous_synctex_queries_and_builds_and_reap_both_groups() {
+    for mode in ["exit", "eof", "exit-eof"] {
+        let script = "printf '%s' \"$$\" > query-parent\nsleep 30 &\nprintf '%s' \"$!\" > query-child\ntouch query-ready\nwait\n";
+        let (mut server, directory, uri) = fake_synctex_server(script);
+        let path = directory.path();
+        server.send(json!({"jsonrpc":"2.0","id":2,"method":"workspace/executeCommand","params":{"command":"latex.forwardSearch","arguments":[{"uri":uri,"position":{"line":1,"character":0}}]}}));
+        wait_for_file(&path.join("query-ready"));
+        let query: i32 = std::fs::read_to_string(path.join("query-parent"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        let query_child: i32 = std::fs::read_to_string(path.join("query-child"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        let _query_group = OwnedProcessGroup(query);
+        let script = "printf '%s' \"$$\" > compiler-parent\nsleep 30 &\nprintf '%s' \"$!\" > compiler-child\ntouch compiler-ready\nwait\n";
+        server.notify("workspace/didChangeConfiguration", json!({"settings":{"build":{"executable":"sh","arguments":["-c",script],"timeoutSeconds":30}}}));
+        server.request(
+            3,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[uri]}),
+        );
+        wait_for_file(&path.join("compiler-ready"));
+        let compiler: i32 = std::fs::read_to_string(path.join("compiler-parent"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        let compiler_child: i32 = std::fs::read_to_string(path.join("compiler-child"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        let _compiler_group = OwnedProcessGroup(compiler);
+        let status = server.terminate_transport(mode);
+        assert_eq!(
+            status.code(),
+            Some(if mode == "eof" { 0 } else { 1 }),
+            "{mode}"
+        );
+        for pid in [query, query_child, compiler, compiler_child] {
+            assert_process_stopped(pid);
+        }
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn disconnects_do_not_wait_for_unacknowledged_client_registration_requests() {
+    for mode in ["exit", "eof", "exit-eof"] {
+        let directory = tempfile::tempdir().unwrap();
+        let mut server = Server::start();
+        server.request(1700, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(directory.path()).unwrap(),"capabilities":{"workspace":{"didChangeWatchedFiles":{"dynamicRegistration":true}}}}));
+        server.notify("initialized", json!({}));
+        server.until(|message| message["method"] == "client/registerCapability");
+        assert_eq!(
+            server.terminate_transport(mode).code(),
+            Some(if mode == "eof" { 0 } else { 1 })
+        );
+    }
 }

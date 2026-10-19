@@ -85,6 +85,28 @@ impl Backend {
         }
     }
 
+    /// Cancel and reap external work, retaining final notifications for shutdown.
+    pub fn cleanup(&self) -> impl std::future::Future<Output = ()> + Send + 'static {
+        let builds = self.builds.clone();
+        let queries = self.sync_queries.clone();
+        let workspace = self.workspace.clone();
+        async move {
+            queries.shutdown().await;
+            builds.shutdown().await;
+            workspace.read().await.diagnostic_delivery.close();
+        }
+    }
+
+    /// Stop outbound build messages before reaping work on a closed transport.
+    pub fn disconnect(&self) -> impl std::future::Future<Output = ()> + Send + 'static {
+        let builds = self.builds.clone();
+        let cleanup = self.cleanup();
+        async move {
+            builds.disconnect();
+            cleanup.await;
+        }
+    }
+
     pub fn is_shutdown(&self) -> bool {
         self.shutdown_requested.load(Ordering::Relaxed)
     }
@@ -347,9 +369,7 @@ impl LanguageServer for Backend {
     }
 
     async fn shutdown(&self) -> Result<()> {
-        self.sync_queries.shutdown().await;
-        self.builds.shutdown().await;
-        self.workspace.read().await.diagnostic_delivery.close();
+        self.cleanup().await;
         self.shutdown_requested.store(true, Ordering::Relaxed);
         Ok(())
     }

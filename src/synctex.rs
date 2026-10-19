@@ -20,6 +20,7 @@ use tower_lsp::{
 
 use crate::workspace::Workspace;
 
+#[derive(Clone)]
 pub struct Queries {
     slots: Arc<Semaphore>,
     closing: Arc<AtomicBool>,
@@ -76,7 +77,7 @@ struct ActiveQuery {
 impl Drop for ActiveQuery {
     fn drop(&mut self) {
         self.active.fetch_sub(1, Ordering::SeqCst);
-        self.idle.notify_one();
+        self.idle.notify_waiters();
     }
 }
 
