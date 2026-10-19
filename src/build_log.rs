@@ -3,6 +3,7 @@ use crate::text::Text;
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet},
+    ops::Range as ByteRange,
     path::{Path, PathBuf},
 };
 use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range, Url};
@@ -1982,17 +1983,27 @@ pub(crate) fn parse_bibliography_in(
         } else {
             continue;
         };
-        let (explicit_path, databases, source_confirmed) =
-            match bibliography_path(paths, message, tool == "Biber") {
-                BibliographyLocation::Inferred => (None, databases.as_slice(), true),
-                // A named file restricts entry lookup even when it is missing.
-                // Another database cannot supply its source range.
-                BibliographyLocation::Named(path) => {
-                    let confirmed = path.is_some();
-                    (path, &[][..], confirmed)
-                }
+        let location = bibliography_path(paths, message, tool == "Biber");
+        let number = if tool == "Biber" {
+            let filename = match &location {
+                BibliographyLocation::Named { span, .. } => Some(span),
+                BibliographyLocation::Inferred => None,
             };
-        let number = bibliography_line(message);
+            bibliography_line(message, filename)
+        } else {
+            // BibTeX reports source lines in its separate ---line format.
+            // Warnings ending in `in key` preserve the entire literal key.
+            None
+        };
+        let (explicit_path, databases, source_confirmed) = match location {
+            BibliographyLocation::Inferred => (None, databases.as_slice(), true),
+            // A named file restricts entry lookup even when it is missing.
+            // Another database cannot supply its source range.
+            BibliographyLocation::Named { path, .. } => {
+                let confirmed = path.is_some();
+                (path, &[][..], confirmed)
+            }
+        };
         let named_entry = message
             .split_once("entry '")
             .and_then(|(_, tail)| tail.split_once('\'').map(|(key, _)| key));
@@ -2058,13 +2069,42 @@ pub(crate) fn parse_bibliography_in(
     result
 }
 
-fn bibliography_line(message: &str) -> Option<u32> {
-    for (index, _) in message.match_indices("line ") {
-        if let Some(number) = message[index + 5..]
-            .split(|ch: char| !ch.is_ascii_digit())
-            .next()
-            .and_then(|value| value.parse().ok())
+fn bibliography_line(message: &str, filename: Option<&ByteRange<usize>>) -> Option<u32> {
+    let mut quote = None;
+    for (index, ch) in message.char_indices() {
+        if filename.is_some_and(|span| span.contains(&index)) {
+            continue;
+        }
+        if let Some(delimiter) = quote {
+            if ch == delimiter
+                && !message[index + ch.len_utf8()..]
+                    .starts_with(|ch: char| ch.is_alphanumeric() || ch == '_')
+            {
+                quote = None;
+            }
+            continue;
+        }
+        let word_start = !message[..index].ends_with(|ch: char| ch.is_alphanumeric() || ch == '_');
+        if word_start && matches!(ch, '\'' | '"') {
+            quote = Some(ch);
+            continue;
+        }
+        if !word_start || !message[index..].starts_with("line ") {
+            continue;
+        }
+        let tail = &message[index + 5..];
+        let end = tail
+            .find(|ch: char| !ch.is_ascii_digit())
+            .unwrap_or(tail.len());
+        let after = &tail[end..];
+        if after.starts_with(|ch: char| ch.is_alphanumeric() || ch == '_')
+            || after
+                .strip_prefix('.')
+                .is_some_and(|tail| tail.starts_with(|ch: char| ch.is_ascii_digit()))
         {
+            continue;
+        }
+        if let Ok(number) = tail[..end].parse() {
             return Some(number);
         }
     }
@@ -2073,7 +2113,11 @@ fn bibliography_line(message: &str) -> Option<u32> {
 
 enum BibliographyLocation {
     Inferred,
-    Named(Option<PathBuf>),
+    Named {
+        path: Option<PathBuf>,
+        /// Complete source field in the diagnostic, before canonicalization.
+        span: ByteRange<usize>,
+    },
 }
 
 fn bibliography_path(
@@ -2131,18 +2175,29 @@ fn bibliography_path(
                     .strip_prefix('.')
                     .is_some_and(|tail| tail.is_empty() || tail.starts_with(char::is_whitespace));
             if strong {
-                return BibliographyLocation::Named(resolve(&body[..end]));
+                return BibliographyLocation::Named {
+                    path: resolve(&body[..end]),
+                    span: start..start + end + 2,
+                };
             }
             if tail.starts_with(char::is_whitespace) {
                 ambiguous |= candidate.is_some();
                 candidate = Some(&body[..end]);
             }
         }
-        return BibliographyLocation::Named(if ambiguous {
-            None
+        let end = if ambiguous {
+            message.len()
         } else {
-            candidate.and_then(resolve)
-        });
+            candidate.map_or(message.len(), |name| start + name.len() + 2)
+        };
+        return BibliographyLocation::Named {
+            path: if ambiguous {
+                None
+            } else {
+                candidate.and_then(resolve)
+            },
+            span: start..end,
+        };
     }
     for (index, _) in message.match_indices(".bib") {
         let end = index + 4;
@@ -2169,11 +2224,15 @@ fn bibliography_path(
             .take(16)
             .map(|(index, _)| index + 1)
             .chain(std::iter::once(token_start));
-        if let Some(path) = starts
-            .into_iter()
-            .find_map(|start| paths.resolve(&message[start..end]))
-        {
-            return BibliographyLocation::Named(Some(path));
+        if let Some((path, span)) = starts.into_iter().find_map(|start| {
+            paths
+                .resolve(&message[start..end])
+                .map(|path| (path, start..end))
+        }) {
+            return BibliographyLocation::Named {
+                path: Some(path),
+                span,
+            };
         }
     }
     BibliographyLocation::Inferred
@@ -2856,6 +2915,101 @@ mod tests {
                 )
             );
         }
+    }
+
+    #[test]
+    fn biber_line_fields_ignore_complete_quoted_source_names() {
+        for name in [
+            "line 700 refs.bib",
+            "outline 700 refs.bib",
+            "line 700 author's refs.bib",
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let main = root.join("main.tex");
+            let bib = root.join(name);
+            std::fs::write(&main, "\\cite{entry}\n").unwrap();
+            std::fs::write(&bib, "% header\n@book{entry,title={Book}}\n% end\n").unwrap();
+            for quote in ['\'', '"'] {
+                for message in [
+                    format!("syntax error in file {quote}{name}{quote}, line 2"),
+                    format!("syntax error on line 2 in file {quote}{name}{quote}"),
+                ] {
+                    let log = format!("INFO - Found BibTeX data source '{name}'\nERROR - {message}\nWARN - Missing field for entry 'entry' (file {quote}{name}{quote})\n");
+                    let diagnostics = parse_bibliography(&main, &log);
+                    assert_eq!(diagnostics.len(), 1, "{message}: {diagnostics:?}");
+                    let items = &diagnostics[&Url::from_file_path(&bib).unwrap()];
+                    assert_eq!(items.len(), 2);
+                    assert!(
+                        items
+                            .iter()
+                            .all(|item| item.range.start.line == 1 && !unresolved_location(item)),
+                        "{message}: {items:?}"
+                    );
+                    let warning = items
+                        .iter()
+                        .find(|item| item.severity == Some(DiagnosticSeverity::WARNING))
+                        .unwrap();
+                    assert_eq!(
+                        warning.range,
+                        Range::new(Position::new(1, 6), Position::new(1, 11))
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn biber_line_fields_require_unquoted_complete_words_and_numbers() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let main = root.join("main.tex");
+        let bib = root.join("refs.bib");
+        std::fs::write(&main, "\\cite{entry}\n").unwrap();
+        std::fs::write(&bib, "% header\n@book{entry,title={Book}}\n% end\n").unwrap();
+        for prefix in [
+            "outline 700; error",
+            "pipeline 700; error",
+            "_line 700; error",
+            "unexpected token 'line 700'",
+            "unexpected token \"line 700\"",
+            "unexpected token 'author's line 700'",
+            "invalid line 700bad; error",
+            "invalid line 700.5; error",
+        ] {
+            let message = format!("{prefix} in file 'refs.bib', line 2");
+            let diagnostics = parse_bibliography(&main, &format!("ERROR - {message}\n"));
+            let items = &diagnostics[&Url::from_file_path(&bib).unwrap()];
+            assert_eq!(items[0].range.start.line, 1, "{message}: {items:?}");
+            assert!(!unresolved_location(&items[0]), "{message}: {items:?}");
+        }
+        for number in [0, u32::MAX] {
+            let message = format!("syntax error in file 'refs.bib', line {number}");
+            let diagnostics = parse_bibliography(&main, &format!("ERROR - {message}\n"));
+            let items = &diagnostics[&Url::from_file_path(&bib).unwrap()];
+            assert_eq!(items[0].data.as_ref().unwrap()["reportedLine"], number);
+            assert!(unresolved_location(&items[0]));
+        }
+    }
+
+    #[test]
+    fn bibtex_warning_text_does_not_override_the_entry_location_with_a_line_number() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let main = root.join("main.tex");
+        let bib = root.join("refs.bib");
+        std::fs::write(&main, "\\cite{entry}\n").unwrap();
+        std::fs::write(&bib, "% header\n@book{entry,title={Book}}\n").unwrap();
+        let diagnostics = parse_bibliography(
+            &main,
+            "Database file #1: refs.bib\nWarning--line 700 value in entry\n",
+        );
+        let items = &diagnostics[&Url::from_file_path(&bib).unwrap()];
+        assert_eq!(
+            items[0].range,
+            Range::new(Position::new(1, 6), Position::new(1, 11))
+        );
+        assert!(!unresolved_location(&items[0]));
     }
 
     #[test]

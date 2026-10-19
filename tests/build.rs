@@ -786,6 +786,53 @@ fn real_bibtex_warnings_keep_literal_entry_keys_despite_namesake_files() {
 }
 
 #[test]
+#[ignore = "requires latexmk, BibTeX, pdflatex and xelatex"]
+fn real_bibtex_style_warning_text_keeps_the_actual_entry_location() {
+    use latex_lsp::config::Engine;
+    use tower_lsp::lsp_types::{Position, Range};
+    for engine in [Engine::PdfLatex, Engine::XeLatex] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let main = root.join("main.tex");
+        let bib = root.join("refs.bib");
+        std::fs::write(&main, "\\documentclass{article}\n\\begin{document}\n\\cite{entry}\\bibliographystyle{local}\\bibliography{refs}\n\\end{document}\n").unwrap();
+        std::fs::write(&bib, "% header\n@book{entry,title={Book}}\n").unwrap();
+        std::fs::write(
+            root.join("local.bst"),
+            r#"ENTRY {title} {} {}
+FUNCTION {begin.bib} { "\begin{thebibliography}{1}" write$ newline$ }
+FUNCTION {book} {
+  "line 700 value in " cite$ * warning$
+  "\bibitem{" cite$ * "}" * write$ newline$
+  title write$ newline$
+}
+FUNCTION {end.bib} { "\end{thebibliography}" write$ newline$ }
+READ
+EXECUTE {begin.bib}
+ITERATE {call.type$}
+EXECUTE {end.bib}
+"#,
+        )
+        .unwrap();
+        let config = BuildConfig {
+            engine: Some(engine),
+            ..Default::default()
+        };
+        let outcome = build::run(&main, &config, &AtomicBool::new(false));
+        assert_eq!(outcome.status, "success", "{}", outcome.output);
+        let items = &outcome.diagnostics[&Url::from_file_path(&bib).unwrap()];
+        assert!(
+            items
+                .iter()
+                .any(|item| item.message == "BibTeX: line 700 value in entry"
+                    && item.range == Range::new(Position::new(1, 6), Position::new(1, 11))
+                    && item.data.is_none()),
+            "{engine:?}: {items:?}"
+        );
+    }
+}
+
+#[test]
 #[ignore = "requires pdflatex"]
 fn real_missing_include_warnings_reconstruct_tex_wrapped_long_chapter_names() {
     let directory = tempfile::tempdir().unwrap();
