@@ -277,6 +277,12 @@ impl Snapshot {
             .is_none_or(|before| before.changed(uri))
     }
 
+    pub(crate) fn changed_input(&self) -> Option<&Url> {
+        self.inputs
+            .iter()
+            .find_map(|(uri, before)| before.changed(uri).then_some(uri))
+    }
+
     pub(crate) fn watched(&self) -> &BTreeSet<Url> {
         &self.watched
     }

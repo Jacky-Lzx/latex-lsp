@@ -160,6 +160,14 @@ impl BuildManager {
                 snapshots
                     .entry(uri.clone())
                     .or_insert_with(|| (doc.version, doc.text.source.clone()));
+                // A dynamic input may have unsaved editor text. The compiler
+                // reads disk; retain both versions without requiring unrelated
+                // open buffers to be saved.
+                if !project.contains(uri) {
+                    if let Ok(path) = uri.to_file_path() {
+                        file_snapshots.insert(uri.clone(), InputSnapshot::file(&path));
+                    }
+                }
             }
         }
         let config = workspace.build_config(&root);
@@ -399,18 +407,24 @@ impl BuildManager {
                     .filter_map(|uri| uri.to_file_path().ok()),
             );
             if outcome.status == "success" && !outcome.pdf_updated {
-                if let Some(path) = outcome.pdf.as_ref().and_then(|pdf| {
+                if let Some(reason) = outcome.pdf.as_ref().and_then(|pdf| {
                     current
                         .pdf_checks
                         .get(&root_uri)
                         .filter(|previous| previous.matches_pdf(pdf))
-                        .and_then(|previous| previous.changed_path())
+                        .and_then(|previous| {
+                            previous
+                                .changed_path()
+                                .map(|path| format!("file condition changed ({})", path.display()))
+                                .or_else(|| {
+                                    previous
+                                        .changed_input()
+                                        .map(|uri| format!("input content changed ({uri})"))
+                                })
+                        })
                 }) {
                     outcome.status = "error";
-                    outcome.message = format!(
-                        "Compiler returned an outdated PDF: file condition changed ({})",
-                        path.display()
-                    );
+                    outcome.message = format!("Compiler returned an outdated PDF: {reason}");
                     outcome.pdf = None;
                     outcome.pages = None;
                     outcome
@@ -438,6 +452,9 @@ impl BuildManager {
                                 .and_then(|path| std::fs::read_to_string(path).ok())
                                 .as_ref()
                                 != Some(text)
+                                || file_snapshots
+                                    .get(uri)
+                                    .is_some_and(|before| before.changed(uri))
                         } else if let Some(before) = file_snapshots.get(uri) {
                             before.changed(uri)
                         } else {
@@ -497,6 +514,33 @@ impl BuildManager {
                 "jobName":job_name,
                 "output":outcome.output,
             });
+            // Preserve the inputs which produced the PDF even when this run
+            // became stale; a later no-op must not adopt changed source contents.
+            let inputs: BTreeMap<Url, InputSnapshot> =
+                if matches!(outcome.status, "success" | "error") {
+                    project
+                        .union(&artifact_inputs)
+                        .map(|uri| {
+                            let snapshot = if let Some(before) = file_snapshots.get(uri) {
+                                before.clone()
+                            } else if let Some((_, text)) = snapshots.get(uri) {
+                                InputSnapshot::text(text)
+                            } else if let Some(doc) =
+                                current.documents.get(uri).filter(|_| project.contains(uri))
+                            {
+                                InputSnapshot::text(&doc.text.source)
+                            } else {
+                                uri.to_file_path()
+                                    .map_or(InputSnapshot::File(None), |path| {
+                                        InputSnapshot::file(&path)
+                                    })
+                            };
+                            (uri.clone(), snapshot)
+                        })
+                        .collect()
+                } else {
+                    BTreeMap::new()
+                };
             let mut affected = BTreeSet::new();
             // Even discarded diagnostics can accompany a newly written PDF.
             // Retain that PDF's conditions so a later no-op cannot accept it.
@@ -507,7 +551,15 @@ impl BuildManager {
                 crate::file_checks::Snapshot::remember(
                     &mut current.pdf_checks,
                     root_uri.clone(),
-                    checks.clone(),
+                    Arc::new(
+                        checks.with_inputs(
+                            inputs
+                                .iter()
+                                .filter(|(uri, _)| artifact_inputs.contains(*uri))
+                                .map(|(uri, snapshot)| (uri.clone(), snapshot.clone()))
+                                .collect(),
+                        ),
+                    ),
                 );
             }
             if stale {
@@ -518,26 +570,6 @@ impl BuildManager {
                 current.build_checks.remove(&root_uri);
                 affected.insert(root_uri.clone());
             } else if matches!(outcome.status, "success" | "error") {
-                // Keep the published diagnostics tied to their own inputs;
-                // a newer active build may already be using different files.
-                let inputs = project
-                    .iter()
-                    .map(|uri| {
-                        let snapshot = if let Some((_, text)) = snapshots.get(uri) {
-                            InputSnapshot::text(text)
-                        } else if let Some(before) = file_snapshots.get(uri) {
-                            before.clone()
-                        } else if let Some(doc) = current.documents.get(uri) {
-                            InputSnapshot::text(&doc.text.source)
-                        } else {
-                            uri.to_file_path()
-                                .map_or(InputSnapshot::File(None), |path| {
-                                    InputSnapshot::file(&path)
-                                })
-                        };
-                        (uri.clone(), snapshot)
-                    })
-                    .collect();
                 crate::file_checks::Snapshot::remember(
                     &mut current.build_checks,
                     root_uri.clone(),

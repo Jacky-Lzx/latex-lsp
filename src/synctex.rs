@@ -183,6 +183,15 @@ pub fn prepare(workspace: &Workspace, uri: &Url) -> Result<Project> {
             "File conditions changed; compile again before querying SyncTeX",
         ));
     }
+    if workspace
+        .pdf_checks
+        .get(&root)
+        .is_some_and(|checks| checks.matches_pdf(&pdf) && checks.changed_input().is_some())
+    {
+        return Err(Error::invalid_params(
+            "Input contents changed; compile again before querying SyncTeX",
+        ));
+    }
     let mut artifacts = Vec::new();
     for path in [
         pdf.clone(),
