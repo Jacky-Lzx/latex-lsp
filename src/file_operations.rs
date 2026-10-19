@@ -597,6 +597,18 @@ pub fn did_rename(workspace: &mut Workspace, files: &[FileRename]) -> Result<BTr
             })
             .collect();
     }
+    workspace.recorded_bindings = std::mem::take(&mut workspace.recorded_bindings)
+        .into_iter()
+        .map(|(root, bindings)| {
+            (
+                renames.uri(&root),
+                bindings
+                    .into_iter()
+                    .map(|(path, target)| (renames.path(&path), renames.path(&target)))
+                    .collect(),
+            )
+        })
+        .collect();
     workspace.roots = workspace
         .roots
         .iter()

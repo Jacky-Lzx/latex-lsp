@@ -20,6 +20,8 @@ const MAX_ROOTS: usize = 128;
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
     paths: BTreeMap<PathBuf, Option<PathBuf>>,
+    recorded: BTreeMap<PathBuf, Option<PathBuf>>,
+    ambiguous: BTreeSet<PathBuf>,
     watched: BTreeSet<Url>,
     artifact: Option<PathBuf>,
     inputs: BTreeMap<Url, InputSnapshot>,
@@ -263,28 +265,70 @@ impl Snapshot {
             }
         }
         let paths = paths.into_inner();
-        let watched = paths
-            .iter()
-            .flat_map(|(path, before)| {
-                [
-                    Some(path.clone()),
-                    before.clone().or_else(|| canonical_candidate(path)),
-                ]
-                .into_iter()
-                .flatten()
-            })
-            .filter_map(|path| Url::from_file_path(path).ok())
+        let recorded = workspace
+            .recorded_bindings
+            .get(root)
+            .into_iter()
+            .flat_map(|bindings| bindings.keys())
+            .map(|path| (path.clone(), file(path)))
             .collect();
-        Self {
+        let mut snapshot = Self {
             paths,
-            watched,
-            inputs: BTreeMap::new(),
-            pdf_contents: None,
-            synctex_contents: BTreeMap::new(),
+            recorded,
             artifact: config
                 .artifact_path(&root_path, "pdf")
                 .map(|path| normalize_path(&path)),
-        }
+            ..Self::default()
+        };
+        snapshot.refresh_watched();
+        snapshot
+    }
+
+    fn refresh_watched(&mut self) {
+        self.watched = self
+            .paths
+            .iter()
+            .chain(&self.recorded)
+            .flat_map(|(path, before)| {
+                let mut watched = vec![path.clone()];
+                watched.extend(before.clone().or_else(|| canonical_candidate(path)));
+                // File URIs collapse `..`, while the kernel traverses it after
+                // following symlinks. Retain intermediate paths for events on
+                // a directory alias which disappears from the normalized URI.
+                if path
+                    .components()
+                    .any(|part| part == std::path::Component::ParentDir)
+                {
+                    watched.extend(path.ancestors().skip(1).map(Path::to_path_buf));
+                }
+                watched
+            })
+            .filter_map(|path| Url::from_file_path(normalize_path(&path)).ok())
+            .collect();
+    }
+
+    /// Drop obsolete recorder paths while preserving identities observed before
+    /// this build. Newly discovered names use the recorder's observed target.
+    pub(crate) fn with_recorded_bindings(&self, bindings: &BTreeMap<PathBuf, PathBuf>) -> Self {
+        let mut snapshot = self.clone();
+        snapshot.recorded = bindings
+            .iter()
+            .map(|(path, target)| {
+                let before = self
+                    .recorded
+                    .get(path)
+                    .cloned()
+                    .unwrap_or_else(|| Some(target.clone()));
+                // A retarget during compilation makes the PDF's actual input
+                // uncertain, even if the alias is restored before completion.
+                if before.as_ref() != Some(target) {
+                    snapshot.ambiguous.insert(path.clone());
+                }
+                (path.clone(), before)
+            })
+            .collect();
+        snapshot.refresh_watched();
+        snapshot
     }
 
     pub(crate) fn with_inputs(&self, inputs: BTreeMap<Url, InputSnapshot>) -> Self {
@@ -345,7 +389,9 @@ impl Snapshot {
     pub(crate) fn changed_path(&self) -> Option<&Path> {
         self.paths
             .iter()
+            .chain(&self.recorded)
             .find_map(|(path, before)| (file(path) != *before).then_some(path.as_path()))
+            .or_else(|| self.ambiguous.first().map(PathBuf::as_path))
     }
 
     pub(crate) fn matches_pdf(&self, pdf: &Path) -> bool {
@@ -353,7 +399,7 @@ impl Snapshot {
     }
 
     pub(crate) fn remember(map: &mut BTreeMap<Url, Arc<Self>>, root: Url, snapshot: Arc<Self>) {
-        if snapshot.paths.is_empty() && snapshot.inputs.is_empty() {
+        if snapshot.paths.is_empty() && snapshot.recorded.is_empty() && snapshot.inputs.is_empty() {
             map.remove(&root);
             return;
         }
@@ -362,5 +408,102 @@ impl Snapshot {
             let victim = map.keys().find(|key| **key != root).unwrap().clone();
             map.remove(&victim);
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recorder_parent_traversal_watches_the_directory_alias_before_dotdot() {
+        let directory = tempfile::tempdir().unwrap();
+        let shared = tempfile::tempdir().unwrap();
+        std::fs::create_dir(shared.path().join("child")).unwrap();
+        let data = shared.path().join("table.csv");
+        std::fs::write(&data, "data\n").unwrap();
+        let alias = directory.path().join("link");
+        std::os::unix::fs::symlink(shared.path().join("child"), &alias).unwrap();
+        let opened = alias.join("../table.csv");
+        let root = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+        let mut workspace = Workspace::default();
+        workspace
+            .recorded_bindings
+            .insert(root.clone(), [(opened.clone(), data.clone())].into());
+        let before = Snapshot::capture(&workspace, &root, &BuildConfig::default());
+        assert!(before
+            .watched()
+            .contains(&Url::from_file_path(&alias).unwrap()));
+        assert!(before
+            .watched()
+            .contains(&Url::from_file_path(&data).unwrap()));
+        let lexical = directory.path().join("table.csv");
+        assert!(before
+            .watched()
+            .contains(&Url::from_file_path(lexical).unwrap()));
+        std::fs::remove_file(alias).unwrap();
+        assert_eq!(before.changed_path(), Some(opened.as_path()));
+    }
+
+    #[test]
+    fn recorded_bindings_capture_current_identity_and_keep_ambiguous_pdfs_invalid() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("first.csv");
+        let second = directory.path().join("second.csv");
+        let alias = directory.path().join("table.csv");
+        for path in [&first, &second] {
+            std::fs::write(path, "same bytes\n").unwrap();
+        }
+        std::os::unix::fs::symlink(&first, &alias).unwrap();
+        let root = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+        let mut workspace = Workspace::default();
+        workspace
+            .recorded_bindings
+            .insert(root.clone(), [(alias.clone(), first.clone())].into());
+        let before = Snapshot::capture(&workspace, &root, &BuildConfig::default());
+        assert!(before.changed_path().is_none());
+        std::fs::remove_file(&alias).unwrap();
+        std::os::unix::fs::symlink(&second, &alias).unwrap();
+        assert_eq!(before.changed_path(), Some(alias.as_path()));
+        let complete = before.with_recorded_bindings(&[(alias.clone(), second.clone())].into());
+        assert_eq!(complete.changed_path(), Some(alias.as_path()));
+        std::fs::remove_file(&alias).unwrap();
+        std::os::unix::fs::symlink(&first, &alias).unwrap();
+        assert!(before.changed_path().is_none());
+        // The newly written PDF has uncertain provenance; restoring the old
+        // alias must not retroactively validate it.
+        assert_eq!(complete.changed_path(), Some(alias.as_path()));
+        std::fs::remove_file(&alias).unwrap();
+        std::os::unix::fs::symlink(&second, &alias).unwrap();
+        let next = Snapshot::capture(&workspace, &root, &BuildConfig::default());
+        assert!(next
+            .watched()
+            .contains(&Url::from_file_path(&second).unwrap()));
+        let rebuilt = next.with_recorded_bindings(&[(alias, second)].into());
+        assert!(rebuilt.changed_path().is_none());
+    }
+
+    #[test]
+    fn new_recorder_scope_drops_unused_bindings_but_keeps_static_conditions() {
+        let directory = tempfile::tempdir().unwrap();
+        let data = directory.path().join("table.csv");
+        let condition = directory.path().join("optional.tex");
+        std::fs::write(&data, "OLD\n").unwrap();
+        let before = Snapshot {
+            paths: [(condition.clone(), None)].into(),
+            recorded: [(data.clone(), Some(data.clone()))].into(),
+            ..Default::default()
+        };
+        let complete = before.with_recorded_bindings(&BTreeMap::new());
+        assert!(!complete
+            .watched()
+            .contains(&Url::from_file_path(&data).unwrap()));
+        assert!(complete
+            .watched()
+            .contains(&Url::from_file_path(&condition).unwrap()));
+        std::fs::remove_file(&data).unwrap();
+        assert!(complete.changed_path().is_none());
+        std::fs::write(&condition, "new\n").unwrap();
+        assert_eq!(complete.changed_path(), Some(condition.as_path()));
     }
 }

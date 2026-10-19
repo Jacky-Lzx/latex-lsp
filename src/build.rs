@@ -357,6 +357,7 @@ impl BuildManager {
             let mut outcome = outcome
                 .unwrap_or_else(|error| Outcome::error(format!("Compiler task failed: {error}")));
             let mut current = workspace.write().await;
+            let mut checks = checks;
             if let Some(inputs) = &outcome.inputs {
                 let recorded =
                     current.project_inputs_with_binary(&root_uri, inputs, &outcome.binary_inputs);
@@ -373,6 +374,16 @@ impl BuildManager {
                             .cloned()
                             .collect(),
                     );
+                    let bindings: BTreeMap<_, _> = outcome
+                        .bindings
+                        .iter()
+                        .filter(|(_, target)| {
+                            Url::from_file_path(target).is_ok_and(|uri| recorded.contains(&uri))
+                        })
+                        .map(|(path, target)| (path.clone(), target.clone()))
+                        .collect();
+                    checks = Arc::new(checks.with_recorded_bindings(&bindings));
+                    current.recorded_bindings.insert(root_uri.clone(), bindings);
                     for uri in &recorded {
                         current.reload_recorded(uri, outcome.binary_inputs.contains(uri));
                     }
@@ -821,6 +832,7 @@ pub struct Outcome {
     pub inputs: Option<BTreeSet<Url>>,
     /// Recorder-confirmed image/data types, before resolving symlink names.
     pub binary_inputs: BTreeSet<Url>,
+    pub bindings: BTreeMap<PathBuf, PathBuf>,
     pub bibliography_inputs: Option<BTreeSet<Url>>,
     pub pdf_updated: bool,
 }
@@ -840,6 +852,7 @@ impl Outcome {
             output: String::new(),
             inputs: None,
             binary_inputs: BTreeSet::new(),
+            bindings: BTreeMap::new(),
             bibliography_inputs: None,
             pdf_updated: false,
         }
@@ -1071,6 +1084,7 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool) -> Outcome 
         {
             outcome.inputs = Some(inputs.all);
             outcome.binary_inputs = inputs.binary;
+            outcome.bindings = inputs.bindings;
         }
     }
     // latexmk can run TeX several times. The final .log is authoritative;

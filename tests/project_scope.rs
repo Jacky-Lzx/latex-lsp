@@ -257,7 +257,11 @@ fn directory_renames_preserve_recorded_binary_roles_for_new_source_looking_paths
     );
     workspace
         .recorded_binary_inputs
-        .insert(main_uri, [data_uri].into());
+        .insert(main_uri.clone(), [data_uri].into());
+    workspace.recorded_bindings.insert(
+        main_uri,
+        [(old.join("alias.csv"), old.join("data.payload"))].into(),
+    );
     std::fs::rename(&old, &new).unwrap();
     latex_lsp::file_operations::did_rename(
         &mut workspace,
@@ -284,6 +288,10 @@ fn directory_renames_preserve_recorded_binary_roles_for_new_source_looking_paths
         [data_uri.clone()].into()
     );
     assert!(workspace.recorded_inputs[&main_uri].contains(&data_uri));
+    assert_eq!(
+        workspace.recorded_bindings[&main_uri],
+        [(new.join("alias.csv"), new.join("data.tex"))].into()
+    );
     workspace.refresh_project(&main_uri);
     assert!(!workspace.documents.contains_key(&data_uri));
 }

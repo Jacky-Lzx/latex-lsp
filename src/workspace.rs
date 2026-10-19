@@ -197,6 +197,8 @@ pub struct Workspace {
     pub recorded_inputs: BTreeMap<Url, BTreeSet<Url>>,
     /// Image/data roles retained independently of canonical filename suffixes.
     pub recorded_binary_inputs: BTreeMap<Url, BTreeSet<Url>>,
+    /// Opened recorder paths and the physical files selected by the last build.
+    pub recorded_bindings: BTreeMap<Url, BTreeMap<PathBuf, PathBuf>>,
     pub bibliography_inputs: BTreeMap<Url, BTreeSet<Url>>,
     /// File conditions and input snapshots for the latest published diagnostics.
     pub build_checks: BTreeMap<Url, std::sync::Arc<crate::file_checks::Snapshot>>,

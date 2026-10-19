@@ -1,6 +1,6 @@
 //! TeX's recorder names the files actually read, including expanded inputs.
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
 };
 use tower_lsp::lsp_types::Url;
@@ -28,6 +28,8 @@ pub fn inputs(root: &Path, contents: &str) -> BTreeSet<Url> {
 pub(crate) struct InputFiles {
     pub all: BTreeSet<Url>,
     pub binary: BTreeSet<Url>,
+    /// Absolute names TeX opened, before following symlinks or resolving `..`.
+    pub bindings: BTreeMap<PathBuf, PathBuf>,
 }
 
 /// Preserve the type of the name TeX opened. Canonicalization can resolve an
@@ -50,13 +52,16 @@ pub(crate) fn classified_inputs(root: &Path, contents: &str) -> InputFiles {
             if !crate::workspace::is_source(&path) && !binary {
                 continue;
             }
-            if let Ok(path) = path.canonicalize() {
-                if path.is_file() {
-                    if let Ok(uri) = Url::from_file_path(path) {
+            if let Ok(target) = path.canonicalize() {
+                if target.is_file() {
+                    if let Ok(uri) = Url::from_file_path(&target) {
                         if binary {
                             result.binary.insert(uri.clone());
                         }
                         result.all.insert(uri);
+                        if result.bindings.len() < 4096 {
+                            result.bindings.insert(path, target);
+                        }
                     }
                 }
             }
@@ -189,6 +194,32 @@ impl<'a> BibliographyPaths<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(unix)]
+    fn recorder_keeps_opened_alias_names_and_symlink_parent_traversal() {
+        let directory = tempfile::tempdir().unwrap();
+        let shared = tempfile::tempdir().unwrap();
+        let child = shared.path().join("child");
+        std::fs::create_dir(&child).unwrap();
+        std::fs::write(shared.path().join("table.csv"), "REAL\n").unwrap();
+        std::fs::write(directory.path().join("table.csv"), "DECOY\n").unwrap();
+        std::os::unix::fs::symlink(&child, directory.path().join("link")).unwrap();
+        let opened = directory.path().join("link/../table.csv");
+        let files = classified_inputs(
+            &directory.path().join("main.tex"),
+            &format!(
+                "PWD {}\nINPUT link/../table.csv\nINPUT table.csv\n",
+                directory.path().display()
+            ),
+        );
+        assert_eq!(files.bindings[&opened], shared.path().join("table.csv"));
+        assert_eq!(
+            files.bindings[&directory.path().join("table.csv")],
+            directory.path().join("table.csv")
+        );
+        assert_eq!(files.all.len(), 2);
+    }
 
     #[test]
     #[cfg(unix)]
