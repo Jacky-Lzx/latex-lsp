@@ -115,6 +115,49 @@ struct Destination {
     key: Argument,
 }
 
+struct Bookmark {
+    name: String,
+    level: Option<Argument>,
+    key: Argument,
+}
+
+fn literal_level(level: &str) -> bool {
+    let digits = level.strip_prefix(['+', '-']).unwrap_or(level);
+    !digits.is_empty()
+        && digits.bytes().all(|byte| byte.is_ascii_digit())
+        // hyperref initializes bookmark parents down to level -4; a bookmark
+        // itself must be at least -3 to have a defined parent.
+        && level.parse::<i32>().is_ok_and(|value| value >= -3)
+}
+
+fn bookmark(source: &str, command: &Command) -> Option<Bookmark> {
+    if command.name != "pdfbookmark" {
+        return None;
+    }
+    let mut at = syntax::skip_space(source, command.span.end);
+    let level = if source.as_bytes().get(at) == Some(&b'[') {
+        let (level, after) = syntax::group(source, at, b'[', b']')?;
+        if !literal_level(&level.value) {
+            return None;
+        }
+        at = syntax::skip_space(source, after);
+        Some(level)
+    } else {
+        None
+    };
+    let (_, after) = syntax::group(source, at, b'{', b'}')?;
+    let (key, _) = syntax::group(source, syntax::skip_space(source, after), b'{', b'}')?;
+    if !syntax::is_static_key(&key.value) {
+        return None;
+    }
+    let name = format!(
+        "{}.{}",
+        key.value,
+        level.as_ref().map_or("0", |level| level.value.as_str())
+    );
+    Some(Bookmark { name, level, key })
+}
+
 fn compound(source: &str, command: &Command) -> Option<Destination> {
     let mut at = syntax::skip_space(source, command.span.end);
     match command.name.as_str() {
@@ -160,8 +203,14 @@ fn compound(source: &str, command: &Command) -> Option<Destination> {
 }
 
 pub(crate) fn entry(source: &str, command: &Command) -> Option<(bool, Entry)> {
-    let declaration = matches!(command.name.as_str(), "hypertarget" | "hyperdef");
-    let (name, span) = if matches!(command.name.as_str(), "hypertarget" | "hyperlink") {
+    let declaration = matches!(
+        command.name.as_str(),
+        "hypertarget" | "hyperdef" | "pdfbookmark"
+    );
+    let (name, span) = if command.name == "pdfbookmark" {
+        let bookmark = bookmark(source, command)?;
+        (bookmark.name, bookmark.key.span)
+    } else if matches!(command.name.as_str(), "hypertarget" | "hyperlink") {
         let (argument, _) = syntax::group(
             source,
             syntax::skip_space(source, command.span.end),
@@ -188,8 +237,43 @@ pub(crate) fn entry(source: &str, command: &Command) -> Option<(bool, Entry)> {
 }
 
 /// Preserve the source separators and comments when a destination uses two fields.
-pub(crate) fn rename_edits(doc: &Document, range: LspRange, new_name: &str) -> Vec<TextEdit> {
+pub(crate) fn rename_edits(
+    doc: &Document,
+    range: LspRange,
+    new_name: &str,
+) -> tower_lsp::jsonrpc::Result<Vec<TextEdit>> {
     for command in &doc.syntax.commands {
+        if let Some(bookmark) = bookmark(&doc.text.source, command) {
+            if doc
+                .text
+                .range(bookmark.key.span.start, bookmark.key.span.end)
+                != range
+            {
+                continue;
+            }
+            let (base, level) = new_name.rsplit_once('.').filter(|(base, level)| syntax::is_static_key(base) && literal_level(level)).ok_or_else(|| tower_lsp::jsonrpc::Error::invalid_params("A PDF bookmark destination must end with a supported literal numeric level (at least -3), for example `name.0`"))?;
+            let mut edits = Vec::new();
+            if bookmark.key.value != base {
+                edits.push(TextEdit {
+                    range,
+                    new_text: base.into(),
+                });
+            }
+            if let Some(old) = bookmark.level {
+                if old.value != level {
+                    edits.push(TextEdit {
+                        range: doc.text.range(old.span.start, old.span.end),
+                        new_text: level.into(),
+                    });
+                }
+            } else if level != "0" {
+                edits.push(TextEdit {
+                    range: doc.text.range(command.span.end, command.span.end),
+                    new_text: format!("[{level}]"),
+                });
+            }
+            return Ok(edits);
+        }
         let Some(destination) = compound(&doc.text.source, command) else {
             continue;
         };
@@ -206,19 +290,19 @@ pub(crate) fn rename_edits(doc: &Document, range: LspRange, new_name: &str) -> V
             } else {
                 ("", new_name)
             };
-        return [(&destination.category, category), (&destination.key, key)]
+        return Ok([(&destination.category, category), (&destination.key, key)]
             .into_iter()
             .filter(|(argument, value)| argument.value != *value)
             .map(|(argument, value)| TextEdit {
                 range: doc.text.range(argument.span.start, argument.span.end),
                 new_text: value.into(),
             })
-            .collect();
+            .collect());
     }
-    vec![TextEdit {
+    Ok(vec![TextEdit {
         range,
         new_text: new_name.into(),
-    }]
+    }])
 }
 
 /// A single edit also lets legacy command clients distinguish compound fixes.
@@ -226,7 +310,7 @@ pub(crate) fn replacement_text(doc: &Document, range: LspRange, new_name: &str) 
     let start = doc.text.offset(range.start)?;
     let end = doc.text.offset(range.end)?;
     let mut result = doc.text.source.get(start..end)?.to_owned();
-    let mut edits = rename_edits(doc, range, new_name);
+    let mut edits = rename_edits(doc, range, new_name).ok()?;
     edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
     for edit in edits {
         let from = doc.text.offset(edit.range.start)?;

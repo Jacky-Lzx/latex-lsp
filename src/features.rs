@@ -369,7 +369,7 @@ pub fn rename(
         let document = &workspace.documents[&location.uri];
         let text = &document.text;
         if target.kind == TargetKind::Anchor {
-            let edits = crate::anchors::rename_edits(document, location.range, new_name);
+            let edits = crate::anchors::rename_edits(document, location.range, new_name)?;
             changes.entry(location.uri).or_default().extend(edits);
             continue;
         }

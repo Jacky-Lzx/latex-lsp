@@ -22,6 +22,57 @@ fn cursor(source: &str, needle: &str) -> Position {
 }
 
 #[test]
+fn pdfbookmark_targets_use_literal_levels_and_navigate_independently_of_titles_and_labels() {
+    let mut workspace = Workspace::default();
+    let source = concat!(
+        "\\pdfbookmark{base.0}{base}\\label{base.0}\n",
+        "\\pdfbookmark[01]{Title}{leading}\\pdfbookmark[-1]{Part}{part}\\pdfbookmark[+1]{Plus}{plus}\n",
+        "\\pdfbookmark[\\level]{Dynamic}{ignored}\\pdfbookmark[ 1 ]{Spaced}{ignored}\n",
+        "\\pdfbookmark{Dynamic}{\\name}\\pdfbookmark*{Starred}{ignored}\n",
+        "\\currentpdfbookmark{State}{ignored}\\subpdfbookmark{State}{ignored}\n",
+        "% \\pdfbookmark{Comment}{ignored}\n\\verb|\\pdfbookmark{Raw}{ignored}|\n",
+    );
+    let declaration = insert(&mut workspace, "bookmarks.tex", source);
+    let doc = &workspace.documents[&declaration];
+    assert_eq!(
+        doc.syntax
+            .anchors
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect::<Vec<_>>(),
+        ["base.0", "leading.01", "part.-1", "plus.+1"]
+    );
+    assert!(doc
+        .syntax
+        .anchors
+        .iter()
+        .all(|entry| !source[entry.span.clone()].contains('.')));
+    assert!(features::flat_symbols(doc, &declaration)
+        .iter()
+        .any(|symbol| symbol.name == "leading.01"));
+    let title = doc.text.position(source.find("base.0").unwrap() + 2);
+    assert!(features::definitions(&workspace, &declaration, title).is_empty());
+    let links = "😀 \\hyperlink{base.0}{Text}\\hyperref{}{}{base.0}{Compound}\\ref{base.0}\n\\hyperlink{base.";
+    let main = insert(&mut workspace, "main.tex", links);
+    let position = cursor(links, "\\hyperlink{base.");
+    let definitions = features::definitions(&workspace, &main, position);
+    assert_eq!(definitions.len(), 1);
+    assert_eq!(definitions[0].uri, declaration);
+    assert_eq!(
+        features::references(&workspace, &main, position, true).len(),
+        3
+    );
+    assert!(features::hover(&workspace, &main, position).is_some());
+    let items = features::completion(
+        &workspace,
+        &main,
+        Text::new(links.into()).position(links.len()),
+    );
+    assert_eq!(items.len(), 1, "{items:?}");
+    assert_eq!(items[0].label, "base.0");
+}
+
+#[test]
 fn labels_complete_and_navigate_across_documents() {
     let mut workspace = Workspace::default();
     let chapter = insert(

@@ -23,6 +23,37 @@ fn write(root: &Path, name: &str, source: &str) {
 }
 
 #[test]
+fn pdfbookmark_duplicate_checks_use_the_effective_destination_and_refresh_when_its_level_changes() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    write(root, "a/main.tex", "\\documentclass{article}\\hypertarget{intro.0}{Target}\\label{intro.0}\\input{bookmarks}\n");
+    write(root, "a/bookmarks.tex", "\\pdfbookmark{Title}{intro}\n");
+    write(
+        root,
+        "b/main.tex",
+        "\\documentclass{article}\\pdfbookmark{Other}{intro}\n",
+    );
+    let mut workspace = Workspace::default();
+    workspace.add_root(root.into());
+    let main = uri(root, "a/main.tex");
+    let child = uri(root, "a/bookmarks.tex");
+    let items = cross_file(&workspace, &main);
+    assert_eq!(items.len(), 1, "{items:?}");
+    assert!(items[0].message.contains("PDF destination `intro.0`"));
+    assert_eq!(
+        items[0].related_information.as_ref().unwrap()[0]
+            .location
+            .uri,
+        child
+    );
+    assert_eq!(cross_file(&workspace, &child).len(), 1);
+    assert!(cross_file(&workspace, &uri(root, "b/main.tex")).is_empty());
+    workspace.open(child.clone(), "\\pdfbookmark[1]{Title}{intro}\n".into(), 1);
+    assert!(cross_file(&workspace, &main).is_empty());
+    assert!(cross_file(&workspace, &child).is_empty());
+}
+
+#[test]
 fn distinct_spaced_label_names_do_not_report_normalized_duplicate_definitions() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();

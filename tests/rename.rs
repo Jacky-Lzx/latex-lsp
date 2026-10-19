@@ -28,6 +28,164 @@ fn edits_result(source: &str, edits: &[TextEdit]) -> String {
 }
 
 #[test]
+fn pdfbookmark_renames_update_literal_levels_preserve_titles_comments_and_reference_labels() {
+    for (option, old_level, new_name, new_level) in [
+        ("", "0", "renamed.0", "0"),
+        ("", "0", "chapter.final.2", "2"),
+        ("[01]", "01", "new.+1", "+1"),
+        ("[-1]", "-1", "part.0", "0"),
+        ("[-3]", "-3", "lowest.0", "0"),
+        ("[+1]", "+1", "next.+1", "+1"),
+    ] {
+        let definitions = format!("😀 \\pdfbookmark{option} % head\r\n{{Title key.0}}% title\r\n{{key}}\\hypertarget{{reserved.0}}{{Other}}\n");
+        let old_name = format!("key.{old_level}");
+        let source = format!("\\hyperlink{{{old_name}}}{{key.0}}\\hyperref{{}}{{}}{{{old_name}}}{{Text}}\\label{{{old_name}}}\\ref{{{old_name}}}\n");
+        let mut workspace = Workspace::default();
+        let declaration = insert(&mut workspace, "bookmarks.tex", &definitions, None);
+        let main = insert(&mut workspace, "main.tex", &source, Some(2));
+        for from_declaration in [false, true] {
+            let (uri, position) = if from_declaration {
+                let doc = &workspace.documents[&declaration];
+                (
+                    &declaration,
+                    doc.text.position(doc.syntax.anchors[0].span.start + 1),
+                )
+            } else {
+                (
+                    &main,
+                    Text::new(source.clone()).position(source.find(&old_name).unwrap() + 2),
+                )
+            };
+            let prepared = features::prepare_rename(&workspace, uri, position)
+                .unwrap()
+                .unwrap();
+            assert!(
+                matches!(prepared, PrepareRenameResponse::RangeWithPlaceholder { placeholder, .. } if placeholder == old_name)
+            );
+            let changes = features::rename(&workspace, uri, position, new_name)
+                .unwrap()
+                .unwrap()
+                .changes
+                .unwrap();
+            assert_eq!(changes.len(), 2);
+            let (base, _) = new_name.rsplit_once('.').unwrap();
+            let new_option = if option.is_empty() && new_level == "0" {
+                String::new()
+            } else {
+                format!("[{new_level}]")
+            };
+            assert_eq!(edits_result(&definitions, &changes[&declaration]), format!("😀 \\pdfbookmark{new_option} % head\r\n{{Title key.0}}% title\r\n{{{base}}}\\hypertarget{{reserved.0}}{{Other}}\n"));
+            assert_eq!(edits_result(&source, &changes[&main]), format!("\\hyperlink{{{new_name}}}{{key.0}}\\hyperref{{}}{{}}{{{new_name}}}{{Text}}\\label{{{old_name}}}\\ref{{{old_name}}}\n"));
+            for invalid in [
+                "plain",
+                ".1",
+                "name.invalid",
+                "name. 1",
+                "name.2147483648",
+                "name.-2147483648",
+                "name.-2147483647",
+                "name.-4",
+                "reserved.0",
+            ] {
+                assert!(
+                    features::rename(&workspace, uri, position, invalid).is_err(),
+                    "{invalid}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex and hyperref"]
+fn real_pdfbookmark_renames_keep_bookmarks_and_pdf_links_on_the_same_literal_destination() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = root.join("main.tex");
+    let targets = root.join("targets.tex");
+    let child = root.join("chapter.tex");
+    std::fs::write(&main, "\\pdfobjcompresslevel=0\\pdfcompresslevel=0\\documentclass{article}\\usepackage{hyperref}\\begin{document}\\section{Title}\\input{targets}\\input{chapter}\\end{document}\n").unwrap();
+    std::fs::write(
+        &targets,
+        "\\pdfbookmark % keep\n{Title base.0}% title\n{base}\\label{base.0}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &child,
+        "\\hyperlink{base.0}{Direct}\\hyperref{}{}{base.0}{Compound}\\ref{base.0}\n",
+    )
+    .unwrap();
+    let config = latex_lsp::config::BuildConfig {
+        executable: "pdflatex".into(),
+        ..Default::default()
+    };
+    let initial = latex_lsp::build::run(&main, &config, &Default::default());
+    assert_eq!(initial.status, "success", "{}", initial.output);
+    let mut old_name = "base.0";
+    for (from_definition, name) in [
+        (false, "chapter.first.01"),
+        (true, "part.final.-1"),
+        (false, "plus.final.+1"),
+    ] {
+        let mut workspace = Workspace::default();
+        workspace.add_root(root.into());
+        let uri = Url::from_file_path(if from_definition { &targets } else { &child }).unwrap();
+        let doc = &workspace.documents[&uri];
+        let at = if from_definition {
+            doc.syntax.anchors[0].span.start
+        } else {
+            doc.text.source.find(old_name).unwrap() + 2
+        };
+        let changes = features::rename(&workspace, &uri, doc.text.position(at), name)
+            .unwrap()
+            .unwrap()
+            .changes
+            .unwrap();
+        assert_eq!(changes.len(), 2);
+        for (uri, edits) in changes {
+            std::fs::write(
+                uri.to_file_path().unwrap(),
+                edits_result(&workspace.documents[&uri].text.source, &edits),
+            )
+            .unwrap();
+        }
+        let (base, level) = name.rsplit_once('.').unwrap();
+        assert_eq!(std::fs::read_to_string(&targets).unwrap(), format!("\\pdfbookmark[{level}] % keep\n{{Title base.0}}% title\n{{{base}}}\\label{{base.0}}\n"));
+        assert_eq!(std::fs::read_to_string(&child).unwrap(), format!("\\hyperlink{{{name}}}{{Direct}}\\hyperref{{}}{{}}{{{name}}}{{Compound}}\\ref{{base.0}}\n"));
+        let mut final_build = None;
+        for _ in 0..2 {
+            let outcome = latex_lsp::build::run(&main, &config, &Default::default());
+            assert_eq!(outcome.status, "success", "{}", outcome.output);
+            final_build = Some(outcome);
+        }
+        let outcome = final_build.unwrap();
+        assert!(outcome.diagnostics.is_empty(), "{:?}", outcome.diagnostics);
+        let bytes = std::fs::read(config.artifact_path(&main, "pdf").unwrap()).unwrap();
+        let pdf = String::from_utf8_lossy(&bytes);
+        assert!(
+            pdf.contains(&format!("({name})")),
+            "Missing PDF destination {name}"
+        );
+        let links: Vec<_> = pdf.split("/D").skip(1).collect();
+        assert!(
+            links
+                .iter()
+                .filter(|tail| tail.trim_start().starts_with(&format!("({name})")))
+                .count()
+                >= 2,
+            "Missing PDF links to {name}"
+        );
+        assert!(!links
+            .iter()
+            .any(|tail| tail.trim_start().starts_with(&format!("({old_name})"))));
+        let bookmarks =
+            std::fs::read_to_string(config.artifact_path(&main, "out").unwrap()).unwrap();
+        assert!(bookmarks.contains(&format!("{{{name}}}")), "{bookmarks}");
+        old_name = name;
+    }
+}
+
+#[test]
 fn renames_labels_in_multiple_files_but_not_comments_or_verbatim() {
     let mut workspace = Workspace::default();
     let declaration = insert(&mut workspace, "chapter.tex", "\\label{sec:old}", None);

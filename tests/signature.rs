@@ -35,6 +35,28 @@ fn check(definitions: &str, marked: &str, label: &str, active: u32) {
 }
 
 #[test]
+fn pdfbookmark_hints_distinguish_level_title_and_destination_base_and_offer_a_snippet() {
+    for (marked, active) in [
+        (r"\pdfbookmark[¦1]{Title}{name}", 0),
+        (r"\pdfbookmark{Ti¦tle}{name}", 1),
+        (r"\pdfbookmark[01]{Title}{na¦me}", 2),
+    ] {
+        check("", marked, r"\pdfbookmark[level]{title}{name}", active);
+    }
+    let (mut workspace, uri, position) = setup("", r"\pdfbook¦");
+    workspace.snippets = true;
+    let items = latex_lsp::features::completion(&workspace, &uri, position);
+    let item = items
+        .iter()
+        .find(|item| item.label == "pdfbookmark")
+        .unwrap();
+    let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+        panic!()
+    };
+    assert_eq!(edit.new_text, "pdfbookmark{${1:title}}{${2:name}}");
+}
+
+#[test]
 fn hyperref_signatures_distinguish_label_links_from_four_argument_urls() {
     for (marked, label, active) in [
         (r"\hyperref[sec:¦intro]{Link}", r"\hyperref[key]{text}", 0),

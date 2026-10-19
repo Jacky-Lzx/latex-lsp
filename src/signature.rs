@@ -135,6 +135,7 @@ fn builtin(name: &str) -> Option<Signature> {
         "label" => (&[("key", false)], false),
         "hyperref" => (&[("key", true), ("text", false)], false),
         "hypertarget" | "hyperlink" => (&[("target", false), ("text", false)], false),
+        "pdfbookmark" => (&[("level", true), ("title", false), ("name", false)], false),
         "hyperdef" => (
             &[
                 ("key", true),

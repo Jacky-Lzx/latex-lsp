@@ -14,6 +14,7 @@ fn snippets_expand_in_a_real_editor_without_consuming_tex_backslashes() {
     };
     let mut cases = Vec::new();
     for (name, expected) in [
+        ("pdfbookmark", "pdfbookmark{title}{name}"),
         ("newcommand", r"newcommand{\name}[1]{definition}"),
         ("renewcommand", r"renewcommand{\name}{definition}"),
         ("newrobustcmd", r"newrobustcmd{\name}{definition}"),

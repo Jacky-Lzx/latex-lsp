@@ -67,6 +67,23 @@ fn destination_diagnostic(workspace: &mut Workspace, uri: &Url) -> Diagnostic {
 }
 
 #[test]
+fn pdfbookmark_destinations_offer_spelling_candidates_with_the_literal_level_suffix() {
+    let (mut workspace, uri) = setup(
+        "\\pdfbookmark{Title}{intro}\\hyperlink{itnro.0}{Text}\n",
+        true,
+    );
+    let diagnostic = destination_diagnostic(&mut workspace, &uri);
+    let actions = editing::code_actions(
+        &workspace,
+        &uri,
+        diagnostic.range,
+        &context(vec![diagnostic]),
+    );
+    assert_eq!(actions.len(), 1, "{actions:?}");
+    assert_eq!(action_edit(&actions[0], &uri).new_text, "intro.0");
+}
+
+#[test]
 fn destination_candidates_use_the_diagnostic_builds_read_sources_before_counting_duplicates() {
     let (mut workspace, uri) = setup(
         "\\hypertarget{last}{Candidate}\\hyperlink{lost}{Text}\n",

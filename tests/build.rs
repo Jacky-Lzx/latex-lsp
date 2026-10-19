@@ -9,6 +9,92 @@ use std::{
 use tower_lsp::lsp_types::{DiagnosticSeverity, Url};
 
 #[test]
+#[cfg(unix)]
+#[ignore = "requires pdflatex, xelatex, lualatex and hyperref"]
+fn real_pdfbookmark_levels_match_actual_targets_across_engines_and_duplicate_warnings() {
+    for engine in ["pdflatex", "xelatex", "lualatex"] {
+        let directory = tempfile::tempdir().unwrap();
+        let main = directory.path().join("main.tex");
+        let source = "\\documentclass{article}\\usepackage{hyperref}\\begin{document}\n\\pdfbookmark[-3]{Lowest}{lowest}\\pdfbookmark{Default}{base}\\pdfbookmark[01]{Leading}{leading}\\pdfbookmark[-1]{Part}{part}\\pdfbookmark[+1]{Plus}{plus}\n\\hyperlink{base.0}{A}\\hyperlink{leading.01}{B}\\hyperlink{part.-1}{C}\\hyperlink{plus.+1}{D}\\hyperlink{lowest.-3}{E}\\end{document}\n";
+        std::fs::write(&main, source).unwrap();
+        let executable = if engine == "lualatex" {
+            script(directory.path(), "TEXMFVAR=\"${0%/*}/tex-cache\"\nTEXMFCACHE=\"$TEXMFVAR\"\nexport TEXMFVAR TEXMFCACHE\nmkdir -p \"$TEXMFVAR\"\nexec lualatex \"$@\"")
+        } else {
+            engine.into()
+        };
+        let config = BuildConfig {
+            executable,
+            arguments: Some(vec![
+                "-interaction=nonstopmode".into(),
+                "-output-directory=%o".into(),
+                "%f".into(),
+            ]),
+            ..Default::default()
+        };
+        for _ in 0..2 {
+            let outcome = build::run(&main, &config, &Default::default());
+            assert_eq!(outcome.status, "success", "{engine}: {}", outcome.output);
+            assert!(
+                !outcome
+                    .diagnostics
+                    .values()
+                    .flatten()
+                    .any(|warning| warning.code
+                        == Some(tower_lsp::lsp_types::NumberOrString::String(
+                            "undefined-pdf-destination".into()
+                        ))),
+                "{engine}: {:?}",
+                outcome.diagnostics
+            );
+        }
+        let bookmarks =
+            std::fs::read_to_string(config.artifact_path(&main, "out").unwrap()).unwrap();
+        for name in ["base.0", "leading.01", "part.-1", "plus.+1", "lowest.-3"] {
+            assert!(
+                bookmarks.contains(&format!("{{{name}}}")),
+                "{engine}: {bookmarks}"
+            );
+        }
+        if engine != "xelatex" {
+            let duplicated = source.replace(
+                "\\end{document}",
+                "\\hypertarget{base.0}{Duplicate}\\end{document}",
+            );
+            std::fs::write(&main, &duplicated).unwrap();
+            let outcome = build::run(&main, &config, &Default::default());
+            assert_eq!(outcome.status, "success", "{engine}: {}", outcome.output);
+            let warnings: Vec<_> = outcome
+                .diagnostics
+                .values()
+                .flatten()
+                .filter(|warning| {
+                    warning.code
+                        == Some(tower_lsp::lsp_types::NumberOrString::String(
+                            "duplicate-pdf-destination".into(),
+                        ))
+                })
+                .collect();
+            assert_eq!(warnings.len(), 2, "{engine}: {:?}", outcome.diagnostics);
+            let doc = latex_lsp::workspace::Document::new(
+                &Url::from_file_path(&main).unwrap(),
+                duplicated,
+                None,
+            );
+            let bookmark = doc
+                .syntax
+                .anchors
+                .iter()
+                .find(|entry| entry.name == "base.0")
+                .unwrap();
+            assert!(warnings
+                .iter()
+                .any(|warning| warning.range
+                    == doc.text.range(bookmark.span.start, bookmark.span.end)));
+        }
+    }
+}
+
+#[test]
 #[ignore = "requires pdflatex and hyperref"]
 fn final_log_sources_distinguish_read_chapters_from_includeonly_recorder_probes() {
     let directory = tempfile::tempdir().unwrap();
