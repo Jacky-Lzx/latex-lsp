@@ -938,6 +938,173 @@ fn custom_newcommand_and_robust_command_signatures_follow_cross_file_declaration
 }
 
 #[test]
+fn classic_macro_defaults_and_calls_end_at_the_first_unbraced_closing_bracket() {
+    for declaration in [
+        r"\newcommand{\pair}[2][x[y]{#1:#2}",
+        r"\newcommand\pair[2][x[y]{#1:#2}",
+        r"\renewcommand{\pair}[2][x[y]{#1:#2}",
+        r"\providecommand{\pair}[2][x[y]{#1:#2}",
+        r"\DeclareRobustCommand{\pair}[2][x[y]{#1:#2}",
+        r"\newrobustcmd{\pair}[2][x[y]{#1:#2}",
+        r"\renewrobustcmd*\pair[2][x[y]{#1:#2}",
+        r"\providerobustcmd\pair[2][x[y]{#1:#2}",
+        r"\DeclareTextCommand{\pair}{OT1}[2][x[y]{#1:#2}",
+        r"\DeclareTextCommandDefault{\pair}[2][x[y]{#1:#2}",
+    ] {
+        for call in [
+            r"\pair{val¦ue}",
+            r"\pair[x[y]{val¦ue}",
+            r"\pair[{x]y}]{val¦ue}",
+            "😀 \\pair[x[y] % ] ignored\r\n{val¦ue}",
+        ] {
+            check(declaration, call, r"\pair[#1=x[y]{#2}", 1);
+        }
+        check(
+            declaration,
+            r"\csuse{pair}[x[y]{val¦ue}",
+            r"\csuse{pair}[#1=x[y]{#2}",
+            1,
+        );
+        check(
+            declaration,
+            r"\csname pair\endcsname[x[y]{val¦ue}",
+            r"\csname pair\endcsname[#1=x[y]{#2}",
+            1,
+        );
+        for call in [r"\pair[x[y]{value}Body¦", r"\pair[x[y]]{val¦ue}"] {
+            let (workspace, uri, at) = setup(declaration, call);
+            assert!(signature::help(&workspace, &uri, at).is_none(), "{call}");
+        }
+    }
+    let (mut workspace, uri, at) = setup(r"\newcommand{\pair}[2][x[y]{#1:#2}", r"\pa¦");
+    workspace.snippets = true;
+    let items = latex_lsp::features::completion(&workspace, &uri, at);
+    let item = items.iter().find(|item| item.label == "pair").unwrap();
+    let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+        panic!("missing macro snippet")
+    };
+    assert_eq!(edit.new_text, "pair{${1:arg2}}");
+}
+
+#[test]
+fn classic_environment_defaults_follow_their_optional_argument_reader() {
+    for declaration in [
+        "newenvironment",
+        "renewenvironment",
+        "provideenvironment",
+        "NewEnviron",
+        "RenewEnviron",
+    ] {
+        let definitions = format!("\\{declaration}{{panel}}[2][x[y]{{#1:#2}}{{}}");
+        for call in [
+            r"\begin{panel}{val¦ue}",
+            r"\begin{panel}[x[y]{val¦ue}",
+            r"\begin{panel}[{x]y}]{val¦ue}",
+        ] {
+            check(&definitions, call, r"\begin{panel}[#1=x[y]{#2}", 2);
+        }
+        check(
+            &definitions,
+            r"\panel[x[y]{val¦ue}",
+            r"\panel[#1=x[y]{#2}",
+            1,
+        );
+    }
+    for call in [
+        r"\begin{result}[x[y]Body¦\end{result}",
+        r"\result[x[y]Body¦\endresult",
+    ] {
+        let (workspace, uri, at) = setup(r"\newtheorem{result}{Result}", call);
+        assert!(signature::help(&workspace, &uri, at).is_none(), "{call}");
+    }
+}
+
+#[test]
+fn xparse_optional_brackets_keep_nesting_even_when_overriding_a_builtin_name() {
+    for name in ["pair", "hyperref", "hyperdef", "newcounter", "fullcite"] {
+        let definitions = format!("\\NewDocumentCommand{{\\{name}}}{{O{{x[y}} m}}{{#1:#2}}");
+        let label = format!("\\{name}[#1=x[y]{{#2}}");
+        check(
+            &definitions,
+            &format!("\\{name}[x[y]]{{val¦ue}}"),
+            &label,
+            1,
+        );
+        check(&definitions, &format!("\\{name}[x[y]{{val¦ue}}"), &label, 0);
+    }
+    check(
+        r"\NewDocumentEnvironment{panel}{O{x[y}m}{#1:#2}{}",
+        r"\begin{panel}[x[y]]{val¦ue}",
+        r"\begin{panel}[#1=x[y]{#2}",
+        2,
+    );
+}
+
+#[test]
+fn named_builtin_calls_keep_the_same_optional_boundaries_as_direct_calls() {
+    check(
+        "",
+        r"\csuse{citep}[x[y]{ke¦y}",
+        r"\csuse{citep}[note / prenote][postnote]{keys}",
+        2,
+    );
+    check(
+        "",
+        r"\csname vref\endcsname[x[y]{ke¦y}",
+        r"\csname vref\endcsname[same-page]{key}",
+        1,
+    );
+}
+
+#[test]
+#[ignore = "requires pdflatex"]
+fn optional_signature_boundaries_match_the_values_received_by_real_tex_macros() {
+    use latex_lsp::{build, config::BuildConfig};
+    use std::sync::atomic::AtomicBool;
+
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    let config = BuildConfig {
+        executable: "pdflatex".into(),
+        ..Default::default()
+    };
+    for modern in [false, true] {
+        let declaration = if modern {
+            r"\NewDocumentCommand{\pair}{O{x[y}m}"
+        } else {
+            r"\newcommand{\pair}[2][x[y]"
+        };
+        let definitions = format!("{declaration}{{\\typeout{{FIRST=#1;SECOND=#2}}#1:#2}}");
+        let optional = if modern { "[x[y]]" } else { "[x[y]" };
+        let calls = [
+            r"\pair{DEFAULTBO¦DY}".to_string(),
+            format!("\\pair{optional}{{EXPLICITBO¦DY}}"),
+            r"\pair[{x]y}]{PROTECTEDBO¦DY}".into(),
+        ];
+        for call in &calls {
+            check(&definitions, call, r"\pair[#1=x[y]{#2}", 1);
+        }
+        let source = format!(
+            "\\documentclass{{article}}\n{definitions}\n\\begin{{document}}\n{}\n\\end{{document}}\n",
+            calls.join("\n").replace('¦', "")
+        );
+        std::fs::write(&main, source).unwrap();
+        let result = build::run(&main, &config, &AtomicBool::new(false));
+        assert_eq!(result.status, "success", "{}", result.output);
+        for marker in [
+            "FIRST=x[y;SECOND=DEFAULTBODY".to_string(),
+            format!(
+                "FIRST={};SECOND=EXPLICITBODY",
+                if modern { "x[y]" } else { "x[y" }
+            ),
+            "FIRST=x]y;SECOND=PROTECTEDBODY".into(),
+        ] {
+            assert!(result.output.contains(&marker), "{}", result.output);
+        }
+    }
+}
+
+#[test]
 fn xparse_and_undelimited_tex_macros_report_the_correct_parameter() {
     for command in [
         "NewDocumentCommand",

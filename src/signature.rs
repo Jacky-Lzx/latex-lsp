@@ -27,6 +27,7 @@ struct Signature {
     parameters: Vec<Parameter>,
     documentation: String,
     starred: bool,
+    nested_brackets: bool,
 }
 
 impl Signature {
@@ -470,6 +471,9 @@ fn builtin(name: &str) -> Option<Signature> {
         parameters,
         documentation,
         starred,
+        nested_brackets: !(syntax::is_citation(name)
+            || syntax::reference_note_count(name) > 0
+            || matches!(name, "hyperref" | "hyperdef" | "newcounter")),
     })
 }
 
@@ -497,6 +501,7 @@ fn definition(uri: &Url, doc: &Document, entry: &Entry, environment: bool) -> Op
         i = syntax::skip_space(source, end);
     }
     let mut parameters = Vec::new();
+    let mut nested_brackets = true;
     match declaration {
         "DeclareTextFontCommand"
         | "DeclareMathAlphabet"
@@ -551,13 +556,14 @@ fn definition(uri: &Url, doc: &Document, entry: &Entry, environment: bool) -> Op
         | "provideenvironment"
         | "NewEnviron"
         | "RenewEnviron" => {
+            nested_brackets = false;
             let (count, end) = syntax::group(source, i, b'[', b']')?;
             let count: usize = count.value.trim().parse().ok()?;
             if !(1..=9).contains(&count) {
                 return None;
             }
             i = syntax::skip_space(source, end);
-            let default = syntax::group(source, i, b'[', b']').map(|(argument, _)| argument.value);
+            let default = syntax::bracket_argument(source, i).map(|(argument, _)| argument.value);
             for number in 1..=count {
                 let optional = number == 1 && default.is_some();
                 let label = if optional {
@@ -620,6 +626,7 @@ fn definition(uri: &Url, doc: &Document, entry: &Entry, environment: bool) -> Op
             }
         }
         "newtheorem" => {
+            nested_brackets = false;
             parameters.push(Parameter {
                 kind: Kind::Optional,
                 label: "[note]".into(),
@@ -669,6 +676,7 @@ fn definition(uri: &Url, doc: &Document, entry: &Entry, environment: bool) -> Op
             doc.text.position(entry.span.start).line + 1
         ),
         starred: false,
+        nested_brackets,
     })
 }
 
@@ -777,6 +785,7 @@ fn builtin_environment(name: &str) -> Option<Signature> {
         parameters,
         documentation: format!("Arguments of the {name} environment."),
         starred: false,
+        nested_brackets: true,
     })
 }
 
@@ -889,13 +898,7 @@ fn active_parameter(
             Kind::Required if source.as_bytes().get(i) != Some(&b'{') => return None,
             Kind::Required | Kind::CommandToken => (b'{', b'}'),
         };
-        let end = if open == b'['
-            && (syntax::is_citation(&command.name)
-                || syntax::reference_note_count(&command.name) > 0
-                || matches!(
-                    command.name.as_str(),
-                    "hyperref" | "hyperdef" | "newcounter"
-                )) {
+        let end = if open == b'[' && !signature.nested_brackets {
             syntax::optional_note_end(&source[..cursor], i)
         } else {
             group_end(doc, i, cursor, open, close)
@@ -977,6 +980,7 @@ pub fn help(workspace: &Workspace, uri: &Url, position: Position) -> Option<Sign
             Some(Signature {
                 name: name.into(),
                 starred: false,
+                nested_brackets: true,
                 documentation: "Link to a URL using a category and target name. Requires hyperref."
                     .into(),
                 parameters: ["url", "category", "name", "text"]
