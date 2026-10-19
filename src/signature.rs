@@ -101,6 +101,8 @@ pub(crate) fn completion_at(
     following: &str,
 ) -> Option<(String, Option<String>)> {
     let signature = signature(workspace, name, scope)?;
+    let ungrouped_argument = completion_required_token(following).is_some();
+    let following = &following[syntax::skip_space(following, 0)..];
     // The same argument reader decides whether existing custom delimiters must
     // be preserved. Stop at the first required argument: later delimiters cannot
     // start a valid call here.
@@ -120,6 +122,7 @@ pub(crate) fn completion_at(
                     return Some((signature.label(), None));
                 }
             }
+            Kind::Required if ungrouped_argument => return Some((signature.label(), None)),
             _ => break,
         }
     }
@@ -911,6 +914,20 @@ fn required_token(source: &str, start: usize) -> Option<&str> {
         }
     }
     Some(value)
+}
+
+/// Preserve an existing bare argument on this logical line. A normal newline
+/// usually means the user is starting a new call, followed by unrelated source
+/// such as end{document}; a commented-out newline continues the current call.
+fn completion_required_token(source: &str) -> Option<&str> {
+    let mut i = 0;
+    loop {
+        match source.as_bytes().get(i) {
+            Some(b' ' | b'\t') => i += 1,
+            Some(b'%') => i += source[i..].find('\n')? + 1,
+            _ => return required_token(source, i),
+        }
+    }
 }
 
 fn delimiter_spec(source: &str, start: usize) -> Option<(String, usize)> {

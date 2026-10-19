@@ -794,7 +794,7 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
                 workspace,
                 &entry.name,
                 &scope,
-                &doc.text.source[after_command..],
+                &doc.text.source[command_end..],
             );
             let snippet = signature
                 .as_ref()

@@ -35,6 +35,77 @@ fn check(definitions: &str, marked: &str, label: &str, active: u32) {
 }
 
 #[test]
+fn custom_completions_preserve_existing_ungrouped_required_arguments() {
+    for definition in [
+        r"\newcommand\pair[2]{}",
+        r"\newcommand\pair[2][DEF]{}",
+        r"\DeclareRobustCommand\pair[2]{}",
+        r"\def\pair#1#2{}",
+        r"\csdef{pair}#1#2{}",
+        r"\NewDocumentCommand\pair{s t+ d<> O{DEF} m m}{}",
+        r"\NewExpandableDocumentCommand\pair{mm}{}",
+        r"\newenvironment{pair}[2]{}{}",
+        r"\NewDocumentEnvironment{pair}{s t+ d<> O{DEF} m m}{}{}",
+    ] {
+        for call in [
+            r"\pa¦ir a{BODY}",
+            r"\pa¦ir\payload{BODY}",
+            r"\pa¦ir\%{BODY}",
+            r"\pa¦ir\ {BODY}",
+            r"\pa¦ir\{{BODY}",
+            r"\pa¦ir ab",
+            r"\pa¦ir a",
+            r"\pa¦ a{BODY}",
+            "\\pa¦ir\t\\payload{BODY}",
+            "\\pa¦ir % ignored\n a{BODY}",
+            "\\pa¦ir % ignored\r\n a{BODY}",
+            "\\pa¦ir% first\n % second\n \\payload{BODY}",
+        ] {
+            let (mut workspace, uri, position) = setup(definition, call);
+            workspace.snippets = true;
+            let items = latex_lsp::features::completion(&workspace, &uri, position);
+            let item = items.iter().find(|item| item.label == "pair").unwrap();
+            let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+                panic!("missing edit");
+            };
+            assert_eq!(edit.new_text, "pair", "{definition}: {call}");
+            assert_eq!(item.insert_text_format, Some(InsertTextFormat::PLAIN_TEXT));
+            let text = &workspace.documents[&uri].text;
+            let replaced = &text.source
+                [text.offset(edit.range.start).unwrap()..text.offset(edit.range.end).unwrap()];
+            assert!(matches!(replaced, "pa" | "pair"), "{call}: {edit:?}");
+        }
+    }
+}
+
+#[test]
+fn custom_completions_keep_snippets_before_unrelated_lines() {
+    let definition = r"\newcommand\pair[2]{}";
+    for suffix in [
+        "",
+        " ",
+        "\n\\end{document}",
+        "\r\n\\end{document}",
+        "\n a{BODY}",
+        "\n% comment\n a{BODY}",
+        "% comment\n\n a{BODY}",
+        "% comment\n \r\n\\payload{BODY}",
+        "% comment without newline",
+    ] {
+        let call = format!("\\pa¦ir{suffix}");
+        let (mut workspace, uri, position) = setup(definition, &call);
+        workspace.snippets = true;
+        let items = latex_lsp::features::completion(&workspace, &uri, position);
+        let item = items.iter().find(|item| item.label == "pair").unwrap();
+        let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+            panic!("missing edit");
+        };
+        assert_eq!(edit.new_text, "pair{${1:arg1}}{${2:arg2}}", "{call}");
+        assert_eq!(item.insert_text_format, Some(InsertTextFormat::SNIPPET));
+    }
+}
+
+#[test]
 fn range_reference_endpoints_keep_grouped_keys_after_invalid_flags() {
     for (name, flags) in [("vrefrange", "*"), ("vpagerefrange", "**")] {
         for command in [
@@ -795,7 +866,13 @@ fn xparse_flag_completions_omit_flags_and_preserve_already_written_tokens() {
             r"\NewDocumentCommand\probe{t\FLAG m}{}",
             r"\FLAGsuffix",
             true,
-            "probe{${1:arg2}}",
+            "probe",
+        ),
+        (
+            r"\NewDocumentCommand\probe{t\FLAG r<>m}{}",
+            r"\FLAGsuffix",
+            true,
+            "probe<${1:arg2}>{${2:arg3}}",
         ),
         (r"\NewDocumentCommand\probe{t+}{}", "", true, "probe"),
         (r"\NewDocumentCommand\probe{t+m}{}", "", false, "probe"),
