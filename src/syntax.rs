@@ -139,7 +139,7 @@ pub(crate) fn skip_space(source: &str, mut i: usize) -> usize {
 
 /// Read a balanced group, ignoring comments and escaped delimiters.
 pub(crate) fn group(source: &str, i: usize, open: u8, close: u8) -> Option<(Argument, usize)> {
-    group_mode(source, i, open, close, true)
+    group_mode(source, i, open, close, true, true)
 }
 
 fn group_mode(
@@ -148,6 +148,7 @@ fn group_mode(
     open: u8,
     close: u8,
     comments: bool,
+    nested_delimiters: bool,
 ) -> Option<(Argument, usize)> {
     let bytes = source.as_bytes();
     if bytes.get(i) != Some(&open) {
@@ -174,7 +175,7 @@ fn group_mode(
             }
             b'{' if open != b'{' => braces += 1,
             b'}' if open != b'{' => braces = braces.saturating_sub(1),
-            c if c == open && braces == 0 => depth += 1,
+            c if c == open && braces == 0 && nested_delimiters => depth += 1,
             c if c == close && braces == 0 => {
                 depth -= 1;
                 if depth == 0 {
@@ -1013,6 +1014,12 @@ pub(crate) fn citation_accepts_notes(name: &str) -> bool {
     is_citation(name) && !matches!(name, "nocite" | "citenum" | "defcitealias")
 }
 
+/// TeX optional notes end at the first unbraced closing bracket. An opening
+/// bracket inside a note is ordinary text, not another grouping delimiter.
+pub(crate) fn citation_note_end(source: &str, at: usize) -> Option<usize> {
+    group_mode(source, at, b'[', b']', true, false).map(|(_, end)| end)
+}
+
 /// Citation keys follow at most two optional notes. Leave any extra bracket
 /// in place so callers cannot treat the following prose as a key argument.
 pub(crate) fn citation_argument_start(
@@ -1029,7 +1036,7 @@ pub(crate) fn citation_argument_start(
     }
     if citation_accepts_notes(name) {
         for _ in 0..2 {
-            let Some((_, end)) = group(source, at, b'[', b']') else {
+            let Some(end) = citation_note_end(source, at) else {
                 break;
             };
             at = skip_space(source, end);
@@ -1174,7 +1181,7 @@ impl Syntax {
                     let url_argument = matches!(name, "url" | "href")
                         || name == "hyperref"
                             && bytes.get(skip_space(source, command_end)) == Some(&b'{');
-                    let parsed = group_mode(source, arg_start, b'{', b'}', !url_argument)
+                    let parsed = group_mode(source, arg_start, b'{', b'}', !url_argument, true)
                         .or_else(|| {
                             (name == "input" && bytes.get(arg_start) != Some(&b'{'))
                                 .then(|| input_argument(source, arg_start))
@@ -1604,7 +1611,7 @@ fn bib_value_end(source: &str, start: usize, end: usize) -> usize {
 fn bib_literal(source: &str, start: usize, end: usize) -> Option<Argument> {
     let bytes = source.as_bytes();
     let (argument, after) = match bytes.get(start)? {
-        b'{' => group_mode(source, start, b'{', b'}', false).or_else(|| {
+        b'{' => group_mode(source, start, b'{', b'}', false, true).or_else(|| {
             (end == source.len()).then(|| {
                 (
                     Argument {

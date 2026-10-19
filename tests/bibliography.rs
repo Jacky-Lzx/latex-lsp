@@ -53,7 +53,7 @@ const NATBIB_VARIANTS: &[(&str, &str)] = &[
 ];
 
 #[test]
-fn excess_citation_notes_are_prose_and_never_participate_in_key_edits() {
+fn citation_note_boundaries_keep_prose_out_of_key_edits() {
     for command in [
         "citep",
         "citep*",
@@ -70,11 +70,17 @@ fn excess_citation_notes_are_prose_and_never_participate_in_key_edits() {
             "[parent]",
             "[see {nested [parent]}][p.~2]",
             " % keep\r\n[parent] % keep\r\n[p.~2]",
+            "[see [parent]",
+            "[see [parent][p.~2]",
+            "[see {parent ] [ text}][p.~2]",
         ];
         let invalid = [
             "[see][p.~2][surplus]",
             "[see][p.~2][third][fourth]",
             " % keep\r\n[parent] % keep\r\n[p.~2] % keep\r\n[surplus]",
+            "[see [parent]]",
+            "[see [parent]][p.~2]",
+            "[see][p.~[2]]",
         ];
         let make_source = |key: &str| {
             valid
@@ -157,7 +163,7 @@ fn excess_citation_notes_do_not_steal_another_calls_warning() {
     let directory = tempfile::tempdir().unwrap();
     let main = directory.path().join("main.tex");
     let uri = Url::from_file_path(&main).unwrap();
-    let source = "😀 \\citep[see][p.~2][surplus]{paretn} \\citep[see][p.~2]{paretn}\n";
+    let source = "😀 \\citep[see][p.~2][surplus]{paretn} \\citep[see [nested]]{paretn} \\citep[see [literal][p.~2]{paretn}\n";
     std::fs::write(&main, source).unwrap();
     let log = "(./main.tex\nPackage natbib Warning: Citation `paretn' on page 1 undefined on input line 1.\n)\n";
     let diagnostics = latex_lsp::build_log::parse(&main, log);
@@ -172,72 +178,81 @@ fn excess_citation_notes_do_not_steal_another_calls_warning() {
 
 #[test]
 #[ignore = "requires pdflatex and natbib"]
-fn real_natbib_excess_notes_preserve_prose_when_valid_keys_are_renamed() {
-    let directory = tempfile::tempdir().unwrap();
-    let root = directory.path();
-    let main = root.join("main.tex");
-    let child = root.join("chapter.tex");
-    let main_uri = Url::from_file_path(&main).unwrap();
-    let child_uri = Url::from_file_path(&child).unwrap();
-    let main_source = "\\documentclass{article}\\usepackage{natbib}\\begin{document}\n\\input{chapter}\n\\begin{thebibliography}{1}\n\\bibitem[Author(2026)]{parent} Entry parent.\n\\end{thebibliography}\\end{document}\n";
-    let make_child =
-        |key: &str| format!("\\citep[see][p.~2][surplus]{{parent}}\n\\citep[see][p.~2]{{{key}}}\n");
-    std::fs::write(&main, main_source).unwrap();
-    std::fs::write(&child, make_child("parent")).unwrap();
-    let config = latex_lsp::config::BuildConfig {
-        executable: "pdflatex".into(),
-        ..Default::default()
-    };
-    let compile = || {
-        let outcome = latex_lsp::build::run(&main, &config, &Default::default());
-        assert_eq!(outcome.status, "success", "{}", outcome.output);
-        outcome
-    };
-    compile();
-    let initial = compile();
-    let aux = std::fs::read_to_string(initial.pdf.unwrap().with_extension("aux")).unwrap();
-    assert!(
-        aux.contains("\\citation{[}") && aux.contains("\\citation{parent}"),
-        "{aux}"
-    );
-    let mut workspace = Workspace::default();
-    workspace.add_root(root.into());
-    workspace.reload(&main_uri);
-    workspace.reload(&child_uri);
-    let at = position(&make_child("parent"), "\\citep[see][p.~2]{par");
-    let changes = features::rename(&workspace, &child_uri, at, "renamed")
-        .unwrap()
-        .unwrap()
-        .changes
-        .unwrap();
-    assert_eq!(changes.len(), 2);
-    for (uri, edits) in changes {
-        let path = uri.to_file_path().unwrap();
-        let source = std::fs::read_to_string(&path).unwrap();
-        std::fs::write(path, apply(&source, edits)).unwrap();
+fn real_natbib_note_boundaries_preserve_prose_when_valid_keys_are_renamed() {
+    for (notes, actual_key) in [
+        ("[see][p.~2][surplus]", "["),
+        ("[see [nested]]", "]"),
+        ("[see [nested]][p.~2]", "]"),
+        ("[see][p.~[2]]", "]"),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let main = root.join("main.tex");
+        let child = root.join("chapter.tex");
+        let main_uri = Url::from_file_path(&main).unwrap();
+        let child_uri = Url::from_file_path(&child).unwrap();
+        let main_source = "\\documentclass{article}\\usepackage{natbib}\\begin{document}\n\\input{chapter}\n\\begin{thebibliography}{1}\n\\bibitem[Author(2026)]{parent} Entry parent.\n\\end{thebibliography}\\end{document}\n";
+        let make_child =
+            |key: &str| format!("\\citep{notes}{{parent}}\n\\citep[see [literal][p.~2]{{{key}}}\n");
+        std::fs::write(&main, main_source).unwrap();
+        std::fs::write(&child, make_child("parent")).unwrap();
+        let config = latex_lsp::config::BuildConfig {
+            executable: "pdflatex".into(),
+            ..Default::default()
+        };
+        let compile = || {
+            let outcome = latex_lsp::build::run(&main, &config, &Default::default());
+            assert_eq!(outcome.status, "success", "{}", outcome.output);
+            outcome
+        };
+        compile();
+        let initial = compile();
+        let aux = std::fs::read_to_string(initial.pdf.unwrap().with_extension("aux")).unwrap();
+        assert!(
+            aux.contains(&format!("\\citation{{{actual_key}}}"))
+                && aux.contains("\\citation{parent}"),
+            "{aux}"
+        );
+        let mut workspace = Workspace::default();
+        workspace.add_root(root.into());
+        workspace.reload(&main_uri);
+        workspace.reload(&child_uri);
+        let at = position(&make_child("parent"), "\\citep[see [literal][p.~2]{par");
+        let changes = features::rename(&workspace, &child_uri, at, "renamed")
+            .unwrap()
+            .unwrap()
+            .changes
+            .unwrap();
+        assert_eq!(changes.len(), 2);
+        for (uri, edits) in changes {
+            let path = uri.to_file_path().unwrap();
+            let source = std::fs::read_to_string(&path).unwrap();
+            std::fs::write(path, apply(&source, edits)).unwrap();
+        }
+        assert_eq!(
+            std::fs::read_to_string(&child).unwrap(),
+            make_child("renamed")
+        );
+        assert_eq!(
+            std::fs::read_to_string(&main).unwrap(),
+            main_source.replace("{parent}", "{renamed}")
+        );
+        compile();
+        let renamed = compile();
+        let aux = std::fs::read_to_string(renamed.pdf.unwrap().with_extension("aux")).unwrap();
+        assert!(
+            aux.contains(&format!("\\citation{{{actual_key}}}"))
+                && aux.contains("\\citation{renamed}")
+                && !aux.contains("\\citation{parent}"),
+            "{aux}"
+        );
+        assert!(
+            renamed.output.contains(&format!("Citation `{actual_key}'"))
+                && !renamed.output.contains("Citation `renamed'"),
+            "{}",
+            renamed.output
+        );
     }
-    assert_eq!(
-        std::fs::read_to_string(&child).unwrap(),
-        make_child("renamed")
-    );
-    assert_eq!(
-        std::fs::read_to_string(&main).unwrap(),
-        main_source.replace("{parent}", "{renamed}")
-    );
-    compile();
-    let renamed = compile();
-    let aux = std::fs::read_to_string(renamed.pdf.unwrap().with_extension("aux")).unwrap();
-    assert!(
-        aux.contains("\\citation{[}")
-            && aux.contains("\\citation{renamed}")
-            && !aux.contains("\\citation{parent}"),
-        "{aux}"
-    );
-    assert!(
-        renamed.output.contains("Citation `['") && !renamed.output.contains("Citation `renamed'"),
-        "{}",
-        renamed.output
-    );
 }
 
 #[test]

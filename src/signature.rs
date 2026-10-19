@@ -889,7 +889,12 @@ fn active_parameter(
             Kind::Required if source.as_bytes().get(i) != Some(&b'{') => return None,
             Kind::Required | Kind::CommandToken => (b'{', b'}'),
         };
-        match group_end(doc, i, cursor, open, close) {
+        let end = if open == b'[' && syntax::is_citation(&command.name) {
+            syntax::citation_note_end(&source[..cursor], i)
+        } else {
+            group_end(doc, i, cursor, open, close)
+        };
+        match end {
             Some(end) => i = end,
             None => return Some(index),
         }

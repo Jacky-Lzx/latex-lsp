@@ -527,6 +527,42 @@ fn hyperref_signatures_distinguish_label_links_from_four_argument_urls() {
 }
 
 #[test]
+fn citation_note_signatures_stop_at_unprotected_closing_brackets() {
+    for command in ["citep", "fullcite", "footfullcite"] {
+        let label = format!("\\{command}[note / prenote][postnote]{{keys}}");
+        check(
+            "",
+            &format!("\\{command}[see [li¦teral][p.~2]{{parent}}"),
+            &label,
+            0,
+        );
+        check(
+            "",
+            &format!("\\{command}[see [literal][p.¦~2]{{parent}}"),
+            &label,
+            1,
+        );
+        check(
+            "",
+            &format!("\\{command}[see [literal][p.~2]{{pa¦rent}}"),
+            &label,
+            2,
+        );
+        check(
+            "",
+            &format!("\\{command}[see {{nested [note]}}][p.~2]{{pa¦rent}}"),
+            &label,
+            2,
+        );
+        for notes in ["[see [nested]]", "[see [nested]][p.~2]", "[see][p.~[2]]"] {
+            let marked = format!("\\{command}{notes}{{pa¦rent}}");
+            let (workspace, uri, at) = setup("", &marked);
+            assert!(signature::help(&workspace, &uri, at).is_none(), "{marked}");
+        }
+    }
+}
+
+#[test]
 fn full_citation_signatures_and_snippets_preserve_optional_notes() {
     for command in ["fullcite", "footfullcite"] {
         let label = format!("\\{command}[note / prenote][postnote]{{keys}}");
