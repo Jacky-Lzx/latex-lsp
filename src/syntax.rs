@@ -380,7 +380,7 @@ pub(crate) fn range_reference_end(source: &str, command: &Command) -> Option<Arg
         b'{',
         b'}',
     )
-    .map(|(argument, _)| argument)
+    .map(|(argument, _)| label_argument(source, argument))
 }
 
 pub(crate) fn is_counter_reference(name: &str) -> bool {
@@ -405,7 +405,7 @@ pub(crate) fn counter_reference_label(source: &str, command: &Command) -> Option
         b'{',
         b'}',
     )
-    .map(|(argument, _)| argument)
+    .map(|(argument, _)| label_argument(source, argument))
 }
 
 /// These commands keep their label outside the ordinary first required argument.
@@ -422,13 +422,15 @@ pub(crate) fn separate_label_argument_start(
         if source.as_bytes().get(start) != Some(&b'[') {
             return None;
         }
-        if source.as_bytes().get(start + 1) == Some(&b'{') {
-            if group(source, start + 1, b'{', b'}').is_some_and(|(_, end)| {
+        let inner_start = skip_comments(source, start + 1);
+        if source.as_bytes().get(inner_start) == Some(&b'{') {
+            if group(source, inner_start, b'{', b'}').is_some_and(|(_, end)| {
+                let end = skip_comments(source, end);
                 end < source.len() && source.as_bytes().get(end) != Some(&b']')
             }) {
                 return None;
             }
-            Some((start + 1, b'{'))
+            Some((inner_start, b'{'))
         } else {
             Some((start, b'['))
         }
@@ -443,13 +445,82 @@ pub(crate) fn separate_label_argument(source: &str, command: &Command) -> Option
     }
     let outer_start = skip_space(source, command.span.end);
     let (outer, _) = bracket_argument(source, outer_start)?;
-    if let Some((mut inner, end)) = group(source, outer.span.start, b'{', b'}') {
-        if end == outer.span.end {
+    if let Some((mut inner, end)) =
+        group(source, skip_comments(source, outer.span.start), b'{', b'}')
+    {
+        if skip_comments(source, end) == outer.span.end {
             inner.outer_span = outer.outer_span;
-            return Some(inner);
+            return Some(label_argument(source, inner));
         }
     }
-    Some(outer)
+    Some(label_argument(source, outer))
+}
+
+/// Drop only comments: literal spaces around a protected label remain tokens.
+fn skip_comments(source: &str, mut at: usize) -> usize {
+    let bytes = source.as_bytes();
+    while bytes.get(at) == Some(&b'%') {
+        while at < bytes.len() && bytes[at] != b'\n' {
+            at += 1;
+        }
+        if at < bytes.len() {
+            at += 1;
+        }
+    }
+    at
+}
+
+/// Comments have no tokens, whereas literal spaces belong to a single label's
+/// name. Keep only a contiguous name bounded by comments, without trimming it.
+fn label_argument(source: &str, mut argument: Argument) -> Argument {
+    if !argument.value.contains('%') {
+        return argument;
+    }
+    let pieces = name_literal_pieces(source, argument.span.clone());
+    let mut names = pieces.into_iter().filter(|span| !span.is_empty());
+    if let Some(span) = names
+        .next()
+        .filter(|span| is_static_key(&source[span.clone()]))
+    {
+        if names.next().is_none() {
+            argument.value = source[span.clone()].into();
+            argument.span = span;
+        }
+    }
+    argument
+}
+
+/// Literal runs separated by TeX comments, preserving each comment's newline.
+fn name_literal_pieces(source: &str, span: Range<usize>) -> Vec<Range<usize>> {
+    let bytes = source.as_bytes();
+    let mut pieces = Vec::new();
+    let mut start = span.start;
+    let mut at = start;
+    while at < span.end {
+        match bytes[at] {
+            b'\\' => {
+                at += 1;
+                if at < span.end {
+                    at += source[at..].chars().next().unwrap().len_utf8();
+                }
+                continue;
+            }
+            b'%' => {
+                pieces.push(start..at);
+                while at < span.end && bytes[at] != b'\n' {
+                    at += 1;
+                }
+                if at < span.end {
+                    at += 1;
+                }
+                start = at;
+                continue;
+            }
+            _ => at += 1,
+        }
+    }
+    pieces.push(start..span.end);
+    pieces
 }
 
 pub(crate) fn label_name_text(source: &str, command: &Command, name: &str) -> String {
@@ -987,6 +1058,57 @@ pub(crate) fn active_label_argument(
     active_name_argument_mode(source, start, open, cursor, open != b'[')
 }
 
+/// Complete a single label without deleting comments. Whitespace outside the
+/// literal name is removed separately, since accepting a name must not retain
+/// spaces that would make it refer to a different label.
+pub(crate) fn active_commented_label_argument(
+    source: &str,
+    start: usize,
+    open: u8,
+    cursor: usize,
+    nested_delimiters: bool,
+) -> Option<(Range<usize>, Vec<Range<usize>>)> {
+    if source.as_bytes().get(start) != Some(&open) || cursor <= start {
+        return None;
+    }
+    let close = if open == b'{' { b'}' } else { b']' };
+    let span = group_mode(source, start, open, close, true, nested_delimiters)
+        .map_or(start + 1..source.len(), |(argument, _)| argument.span);
+    if cursor > span.end || !source[span.clone()].contains('%') {
+        return None;
+    }
+    let pieces = name_literal_pieces(source, span);
+    let mut nonempty = pieces
+        .iter()
+        .enumerate()
+        .filter(|(_, piece)| !source[(*piece).clone()].trim().is_empty());
+    let selected = if let Some((index, name)) = nonempty.next() {
+        if !is_static_key(source[name.clone()].trim()) || nonempty.next().is_some() {
+            return None;
+        }
+        index
+    } else {
+        pieces
+            .iter()
+            .position(|piece| piece.start <= cursor && cursor <= piece.end)?
+    };
+    let name = pieces.get(selected)?.clone();
+    if cursor < name.start || cursor > name.end {
+        return None;
+    }
+    let prefix = source[name.start..cursor].trim_start();
+    if !prefix.is_empty() && !is_static_key(prefix) {
+        return None;
+    }
+    let removals = pieces
+        .into_iter()
+        .enumerate()
+        .filter(|(index, piece)| *index != selected && !piece.is_empty())
+        .map(|(_, piece)| piece)
+        .collect();
+    Some((name, removals))
+}
+
 fn active_name_argument_mode(
     source: &str,
     start: usize,
@@ -1336,7 +1458,13 @@ impl Syntax {
                                 .flatten()
                         })
                         .filter(|_| !(starred && loader_extension(name).is_some()));
-                    let argument = parsed.as_ref().map(|(a, _)| a.clone());
+                    let argument = parsed.as_ref().map(|(argument, _)| {
+                        if name == "label" || is_single_reference(name) {
+                            label_argument(source, argument.clone())
+                        } else {
+                            argument.clone()
+                        }
+                    });
                     let command = Command {
                         name: name.into(),
                         span: start..command_end,

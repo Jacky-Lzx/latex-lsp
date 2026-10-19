@@ -481,7 +481,11 @@ pub fn workspace_edit(
 }
 
 /// Works for incomplete groups too, so typing `\ref{` can offer completions.
-fn completion_name_argument(source: &str, command: &Command, offset: usize) -> Option<Span<usize>> {
+fn completion_name_argument(
+    source: &str,
+    command: &Command,
+    offset: usize,
+) -> Option<(Span<usize>, Vec<Span<usize>>)> {
     let (start, open) = if syntax::declares_environment_copy(&command.name) {
         (
             syntax::environment_copy_source_start(source, command)?,
@@ -497,19 +501,31 @@ fn completion_name_argument(source: &str, command: &Command, offset: usize) -> O
     } else {
         (syntax::skip_space(source, command.span.end), b'{')
     };
-    let argument = if matches!(command.name.as_str(), "hyperref" | "hyperdef") {
-        syntax::active_label_argument(source, start, open, offset)
-    } else {
-        syntax::active_name_argument(source, start, open, offset)
+    let argument = |start, open| {
+        let hyperlink = matches!(command.name.as_str(), "hyperref" | "hyperdef");
+        if syntax::is_reference(&command.name)
+            || syntax::has_separate_label_argument(&command.name)
+            || command.name == "hyperdef"
+        {
+            if let Some(context) = syntax::active_commented_label_argument(
+                source,
+                start,
+                open,
+                offset,
+                !hyperlink || open != b'[',
+            ) {
+                return Some(context);
+            }
+        }
+        let span = if hyperlink {
+            syntax::active_label_argument(source, start, open, offset)
+        } else {
+            syntax::active_name_argument(source, start, open, offset)
+        }?;
+        Some((span, vec![]))
     };
-    argument.or_else(|| {
-        syntax::active_name_argument(
-            source,
-            syntax::range_reference_end_start(source, command)?,
-            b'{',
-            offset,
-        )
-    })
+    argument(start, open)
+        .or_else(|| argument(syntax::range_reference_end_start(source, command)?, b'{'))
 }
 
 fn argument_context(doc: &Document, offset: usize) -> Option<(&Command, Span<usize>)> {
@@ -568,7 +584,7 @@ fn argument_span(doc: &Document, command: &Command, offset: usize) -> Option<Spa
         || command.name == "hyperlink"
         || syntax::is_single_citation(&command.name)
     {
-        let span = completion_name_argument(source, command, offset)?;
+        let (span, _) = completion_name_argument(source, command, offset)?;
         let prefix = source[span.start..offset].trim_start();
         return Some(offset - prefix.len()..offset);
     }
@@ -681,13 +697,21 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
                 || command.name == "hyperlink"
                 || syntax::is_single_citation(&command.name)
             {
-                let Some(name) = completion_name_argument(&doc.text.source, command, offset) else {
+                let Some((name, removals)) =
+                    completion_name_argument(&doc.text.source, command, offset)
+                else {
                     return vec![];
                 };
-                let Some(edits) = syntax::name_completion_ranges(&doc.text, name, offset) else {
+                let Some((main, mut additional)) =
+                    syntax::name_completion_ranges(&doc.text, name, offset)
+                else {
                     return vec![];
                 };
-                edits
+                additional.extend(removals.into_iter().map(|span| TextEdit {
+                    range: doc.text.range(span.start, span.end),
+                    new_text: String::new(),
+                }));
+                (main, additional)
             } else {
                 (doc.text.range(span.start, offset + suffix_length), vec![])
             };

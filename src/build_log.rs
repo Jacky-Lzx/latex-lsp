@@ -399,11 +399,15 @@ pub(crate) fn undefined_reference_ranges(text: &Text, line: u32, message: &str) 
                 b'{',
                 b'}',
             )
-            .map_or(argument.span.end, |(text, _)| text.span.end)
+            .map_or(argument.outer_span.end.saturating_sub(1), |(text, _)| {
+                text.span.end
+            })
         } else {
             range_end
                 .as_ref()
-                .map_or(argument.span.end, |end| end.span.end)
+                .map_or(argument.outer_span.end.saturating_sub(1), |end| {
+                    end.outer_span.end.saturating_sub(1)
+                })
         };
         if text.position(command.span.start).line > line || text.position(report_end).line < line {
             continue;
