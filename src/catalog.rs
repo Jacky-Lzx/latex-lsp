@@ -3,6 +3,14 @@ pub(crate) use crate::primitives::PRIMITIVES;
 /// Command name, snippet template (without leading backslash), short documentation.
 /// Templates retain literal TeX backslashes; completion escapes them for the client.
 pub const COMMANDS: &[(&str, &str, &str)] = &[
+    ("newfontfamily", "newfontfamily{\\${1:command}}{${2:font}}", "Define a zero-argument command that selects a font family. Optional font features may precede or follow the font name. Requires fontspec."),
+    ("renewfontfamily", "renewfontfamily{\\${1:command}}{${2:font}}", "Redefine an existing font family selection command. Optional features may precede or follow the font name. Requires fontspec."),
+    ("providefontfamily", "providefontfamily{\\${1:command}}{${2:font}}", "Define a font family selection command unless it already exists. Optional features may precede or follow the font name. Requires fontspec."),
+    ("setfontfamily", "setfontfamily{\\${1:command}}{${2:font}}", "Define or replace a zero-argument font family selection command. Optional features may precede or follow the font name. Requires fontspec."),
+    ("newfontface", "newfontface{\\${1:command}}{${2:font}}", "Define a zero-argument command that selects a single font face. Optional features may precede or follow the font name. Requires fontspec."),
+    ("renewfontface", "renewfontface{\\${1:command}}{${2:font}}", "Redefine an existing font face selection command. Optional features may precede or follow the font name. Requires fontspec."),
+    ("providefontface", "providefontface{\\${1:command}}{${2:font}}", "Define a font face selection command unless it already exists. Optional features may precede or follow the font name. Requires fontspec."),
+    ("setfontface", "setfontface{\\${1:command}}{${2:font}}", "Define or replace a zero-argument font face selection command. Optional features may precede or follow the font name. Requires fontspec."),
     ("pdfbookmark", "pdfbookmark{${1:title}}{${2:name}}", "Create a PDF bookmark at destination name.level; the optional numeric level defaults to 0. Requires hyperref."),
     ("hypertarget", "hypertarget{${1:target}}{${2:text}}", "Define a PDF destination independently of reference labels. Requires hyperref."),
     ("hyperlink", "hyperlink{${1:target}}{${2:text}}", "Link to a PDF destination by its name. Requires hyperref."),

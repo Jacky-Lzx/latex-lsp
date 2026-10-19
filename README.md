@@ -144,6 +144,8 @@ vim.lsp.enable('latex_lsp')
 
 `newlength`、`newsavebox`、`newcount` / `newdimen` / `newskip` / `newmuskip` / `newtoks` / `newbox` 等寄存器分配，以及 `chardef` / `mathchardef`、寄存器绑定和字体声明也进入符号索引，支持变量补全、导航、悬停和跨文件安全重命名；识别直接名称和经 `expandafter` 展开的字面 `csname` 声明。常用长度操作、保存盒命令提供片段及参数提示；重命名会检查已有宏、寄存器、计数器派生命令和常用内置长度/寄存器原语的冲突。
 
+fontspec 的 `newfontfamily` / `renewfontfamily` / `providefontfamily` / `setfontfamily` 和对应的 `fontface` 声明也支持命令补全、导航、悬停、引用及跨文件安全重命名。识别裸命令与花括号包裹的命令目标；声明提供片段和参数提示，区分字体名前后的可选特性，生成的字体切换命令按零参数处理。沿用项目隔离、冲突与歧义检查，保留字体名称、特性、注释和逐字文本，不展开动态声明。
+
 直接 `\newif\ifdraft` 和字面 `\expandafter\newif\csname ifdraft\endcsname` 声明提供布尔符号、跳转、悬停和项目内的派生命令补全。从 `\ifdraft`、`\drafttrue`、`\draftfalse` 或对应字面 `csname` 引用发起重命名时，输入新的基础名称（例如 `release`），同步维护三种命令及声明；保留同名的独立 `\draft` 宏。只经字面 `csname` 使用的名称支持连字符和中文；存在直接控制序列时，新名称必须能组成 TeX 命令，不提供无法直接键入的补全。新名称与宏、寄存器、环境、其他开关或内置条件原语冲突，以及共享文件在其他项目中指向独立开关时拒绝修改；不展开动态声明。
 
 ifthen 的 `newboolean` / `provideboolean` 与 etoolbox 的 `newbool` / `providebool` 复用同一布尔索引；重命名同时维护 `boolean`、`setboolean`、`setbool`、`booltrue` / `boolfalse`、`ifbool` / `notbool` 中的名称参数，以及直接或字面派生命令。名称和值参数提供补全、片段及参数提示，保留后缀、空白与其他实参；只读条件支持内置 `true` / `false`，赋值命令只建议已声明的开关。`ifboolexpr` / `ifboolexpe` 和 `whileboolexpr` / `unlessboolexpr` 支持静态 `bool {名称}` 操作数的补全、导航、引用和重命名，包括嵌套逻辑与未闭合表达式中的补全；跳过 `test {...}` 的普通文本及动态名称，不展开宏。

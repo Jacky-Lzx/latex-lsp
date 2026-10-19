@@ -187,6 +187,15 @@ fn builtin(name: &str) -> Option<Signature> {
             false,
         ),
         "newfont" => (&[("command", false), ("font", false)], false),
+        name if syntax::declares_font_switch(name) => (
+            &[
+                ("command", false),
+                ("features", true),
+                ("font", false),
+                ("features", true),
+            ],
+            false,
+        ),
         "newaliascnt" => (&[("alias", false), ("counter", false)], false),
         "setcounterref" | "addtocounterref" | "setcounterpageref" | "addtocounterpageref" => {
             (&[("counter", false), ("key", false)], false)
@@ -243,7 +252,9 @@ fn builtin(name: &str) -> Option<Signature> {
         .map(|(index, (label, optional))| Parameter {
             kind: if *optional {
                 Kind::Optional
-            } else if name == "cslet" && index == 1 || name == "letcs" && index == 0 {
+            } else if name == "cslet" && index == 1
+                || (name == "letcs" || syntax::declares_font_switch(name)) && index == 0
+            {
                 Kind::CommandToken
             } else {
                 Kind::Required

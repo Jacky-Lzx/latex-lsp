@@ -43,6 +43,213 @@ fn renamed(
         .collect()
 }
 
+const FONT_DECLARATIONS: [&str; 8] = [
+    "newfontfamily",
+    "renewfontfamily",
+    "providefontfamily",
+    "setfontfamily",
+    "newfontface",
+    "renewfontface",
+    "providefontface",
+    "setfontface",
+];
+
+#[test]
+fn fontspec_switches_support_project_navigation_completion_and_safe_rename() {
+    for declaration in FONT_DECLARATIONS {
+        for target in [r"\oldfont", r"{\oldfont}"] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let definitions = format!("\\{declaration} % target\r\n{target}[Scale=1]{{Latin Modern Roman}}[Ligatures=TeX]\r\n");
+            let source = "\\documentclass{article}\n\\input{definitions}\n\\begin{document}\n😀 Use: \\oldfont \\csname oldfont\\endcsname\n% \\oldfont\n\\verb|\\oldfont|\n\\end{document}\n";
+            let independent = "\\documentclass{article}\\newcommand{\\oldfont}{Other}\\begin{document}\\oldfont\\end{document}";
+            let mut workspace = setup(
+                root,
+                &[
+                    ("main.tex", source),
+                    ("definitions.tex", &definitions),
+                    ("other.tex", independent),
+                ],
+            );
+            workspace.snippets = true;
+            let main = Url::from_file_path(root.join("main.tex")).unwrap();
+            let definition = Url::from_file_path(root.join("definitions.tex")).unwrap();
+            let text = &workspace.documents[&main].text;
+            let position = text.position(source.find("Use: ").unwrap() + 8);
+            let locations = features::definitions(&workspace, &main, position);
+            assert_eq!(locations.len(), 1, "{definitions}");
+            assert_eq!(locations[0].uri, definition);
+            assert!(features::hover(&workspace, &main, position).is_some());
+            let items = features::completion(&workspace, &main, position);
+            let item = items.iter().find(|item| item.label == "oldfont").unwrap();
+            assert_eq!(item.kind, Some(CompletionItemKind::FUNCTION));
+            let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+                panic!("missing edit")
+            };
+            assert_eq!(edit.new_text, "oldfont", "font switches have no arguments");
+            assert!(features::symbols(&workspace.documents[&definition])
+                .iter()
+                .any(|symbol| symbol.name == "oldfont" && symbol.kind == SymbolKind::FUNCTION));
+            assert_eq!(
+                features::references(&workspace, &main, position, true).len(),
+                3
+            );
+            let Some(PrepareRenameResponse::RangeWithPlaceholder { placeholder, .. }) =
+                features::prepare_rename(&workspace, &main, position).unwrap()
+            else {
+                panic!("missing rename: {definitions}")
+            };
+            assert_eq!(placeholder, "oldfont");
+            let changed = renamed(&workspace, &main, position, "newfontswitch");
+            assert_eq!(
+                changed.len(),
+                2,
+                "independent project must remain unchanged"
+            );
+            assert_eq!(
+                changed[&definition],
+                definitions.replace("oldfont", "newfontswitch")
+            );
+            assert_eq!(
+                changed[&main],
+                source.replace(
+                    "Use: \\oldfont \\csname oldfont",
+                    "Use: \\newfontswitch \\csname newfontswitch"
+                )
+            );
+            let declaration_position = workspace.documents[&definition]
+                .text
+                .position(definitions.find("oldfont").unwrap() + 2);
+            assert_eq!(
+                renamed(
+                    &workspace,
+                    &definition,
+                    declaration_position,
+                    "newfontswitch"
+                ),
+                changed
+            );
+            assert!(signature::help(
+                &workspace,
+                &main,
+                text.position(source.find("\\oldfont ").unwrap() + 9)
+            )
+            .is_none());
+        }
+    }
+}
+
+#[test]
+fn fontspec_renames_reject_macro_register_font_and_builtin_collisions() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = "\\newfontfamily\\oldfont{Latin Modern Roman}\n\\newfontface\\occupiedfont{Latin Modern Roman}\n\\newcommand{\\occupiedmacro}{X}\n\\newlength{\\occupiedlength}\n\\newcounter{exercise}\n";
+    let workspace = setup(directory.path(), &[("main.tex", source)]);
+    let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+    let position = workspace.documents[&uri]
+        .text
+        .position(source.find("oldfont").unwrap() + 2);
+    for name in [
+        "occupiedfont",
+        "occupiedmacro",
+        "occupiedlength",
+        "theexercise",
+        "newfontfamily",
+        "renewfontface",
+        "textwidth",
+    ] {
+        assert!(
+            features::rename(&workspace, &uri, position, name).is_err(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn fontspec_declarations_index_expanded_literal_names_and_skip_dynamic_or_ignored_names() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = concat!(
+        "\\expandafter\\newfontfamily\\csname literalfont\\endcsname{Latin Modern Roman}\n",
+        "\\expandafter\\newfontface\\csname \\dynamic\\endcsname{Latin Modern Roman}\n",
+        "\\newfontfamily{not-a-command}{Latin Modern Roman}\n",
+        "% \\newfontfamily\\commentfont{Latin Modern Roman}\n",
+        "\\verb|\\newfontface\\verbatimfont{Latin Modern Roman}|\n",
+        "\\literalfont \\csname literalfont\\endcsname\n",
+    );
+    let workspace = setup(directory.path(), &[("main.tex", source)]);
+    let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+    let doc = &workspace.documents[&uri];
+    assert_eq!(doc.syntax.definitions.len(), 1);
+    assert_eq!(doc.syntax.definitions[0].name, "literalfont");
+    let position = doc.text.position(source.find("literalfont").unwrap() + 2);
+    let changed = renamed(&workspace, &uri, position, "renamedfont");
+    assert_eq!(changed[&uri], source.replace("literalfont", "renamedfont"));
+}
+
+#[test]
+#[ignore = "requires xelatex and fontspec"]
+fn real_fontspec_renames_preserve_font_selection_and_compile_across_files() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    // This wrapper initializes renew targets without pretending its parameter
+    // is a statically known declaration. The call's command token is renamed.
+    let mut definitions =
+        String::from("\\newcommand{\\bootstrap}[1]{\\newfontfamily#1{Latin Modern Roman}}\n");
+    let mut content = String::new();
+    let names = [
+        "fonta", "fontb", "fontc", "fontd", "fonte", "fontf", "fontg", "fonth",
+    ];
+    for (index, (declaration, name)) in FONT_DECLARATIONS.iter().zip(names).enumerate() {
+        if declaration.starts_with("renew") {
+            definitions.push_str(&format!("\\bootstrap\\{name}\n"));
+        }
+        let target = if index % 2 == 0 {
+            format!("\\{name}")
+        } else {
+            format!("{{\\{name}}}")
+        };
+        definitions.push_str(&format!(
+            "\\{declaration}{target}[Scale=1]{{Latin Modern Roman}}[Ligatures=TeX]\n"
+        ));
+        content.push_str(&format!(
+            "{{\\{name}\\typeout{{FONT-AUDIT-{index}:\\fontname\\font}}Sample.}}\n"
+        ));
+    }
+    setup(root, &[("main.tex", "\\documentclass{article}\n\\usepackage{fontspec}\n\\input{definitions}\n\\begin{document}\n\\input{content}\n\\end{document}\n"), ("definitions.tex", &definitions), ("content.tex", &content)]);
+    let config = latex_lsp::config::BuildConfig {
+        executable: "xelatex".into(),
+        ..Default::default()
+    };
+    let main = root.join("main.tex");
+    let before = build::run(&main, &config, &AtomicBool::new(false));
+    assert_eq!(before.status, "success", "{}", before.output);
+    let definition = Url::from_file_path(root.join("definitions.tex")).unwrap();
+    for name in names {
+        let workspace = setup(root, &[]);
+        let text = &workspace.documents[&definition].text;
+        let position = text.position(text.source.find(&format!("\\{name}")).unwrap() + 2);
+        let changed = renamed(&workspace, &definition, position, &format!("{name}renamed"));
+        assert_eq!(changed.len(), 2, "{name}");
+        for (uri, source) in changed {
+            std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+        }
+    }
+    let after = build::run(&main, &config, &AtomicBool::new(false));
+    assert_eq!(after.status, "success", "{}", after.output);
+    assert_eq!(after.pages, Some(1));
+    let fonts = |output: &str| {
+        output
+            .lines()
+            .filter(|line| line.starts_with("FONT-AUDIT-"))
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(fonts(&before.output).len(), 8);
+    assert_eq!(fonts(&before.output), fonts(&after.output));
+    let definitions = std::fs::read_to_string(root.join("definitions.tex")).unwrap();
+    assert!(definitions.contains(r"\bootstrap\fontbrenamed"));
+    assert!(definitions.contains(r"\bootstrap\fontfrenamed"));
+}
+
 #[test]
 fn registers_lengths_fonts_and_constants_support_navigation_completion_and_rename() {
     for declaration in [

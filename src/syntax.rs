@@ -457,6 +457,7 @@ pub(crate) fn file_lookup_names<'a>(
 
 fn declares_command(name: &str) -> bool {
     declares_register(name)
+        || declares_font_switch(name)
         || matches!(
             name,
             "newcommand"
@@ -473,6 +474,20 @@ fn declares_command(name: &str) -> bool {
                 | "DeclareDocumentCommand"
                 | "letcs"
         )
+}
+
+pub(crate) fn declares_font_switch(name: &str) -> bool {
+    matches!(
+        name,
+        "newfontfamily"
+            | "renewfontfamily"
+            | "providefontfamily"
+            | "setfontfamily"
+            | "newfontface"
+            | "renewfontface"
+            | "providefontface"
+            | "setfontface"
+    )
 }
 
 pub(crate) fn declares_register(name: &str) -> bool {

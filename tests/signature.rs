@@ -35,6 +35,62 @@ fn check(definitions: &str, marked: &str, label: &str, active: u32) {
 }
 
 #[test]
+fn fontspec_declarations_accept_bare_and_grouped_switches_and_both_feature_lists() {
+    for name in [
+        "newfontfamily",
+        "renewfontfamily",
+        "providefontfamily",
+        "setfontfamily",
+        "newfontface",
+        "renewfontface",
+        "providefontface",
+        "setfontface",
+    ] {
+        let label = format!("\\{name}{{command}}[features]{{font}}[features]");
+        for (arguments, active) in [
+            (
+                r"{\fontsw¦itch}[Scale=1]{Latin Modern Roman}[Ligatures=TeX]",
+                0,
+            ),
+            (
+                r"\fontsw¦itch[Scale=1]{Latin Modern Roman}[Ligatures=TeX]",
+                0,
+            ),
+            (
+                r"\fontswitch[Sca¦le=1]{Latin Modern Roman}[Ligatures=TeX]",
+                1,
+            ),
+            (r"{\fontswitch}{Latin Mo¦dern Roman}", 2),
+            (r"\fontswitch{Latin Mo¦dern Roman}[Ligatures=TeX]", 2),
+            (
+                r"\fontswitch[Scale=1]{Latin Mo¦dern Roman}[Ligatures=TeX]",
+                2,
+            ),
+            (
+                r"{\fontswitch}[Scale=1]{Latin Modern Roman}[Ligatures=¦TeX]",
+                3,
+            ),
+            (r"\fontswitch{Latin Modern Roman}[Ligatures=¦TeX]", 3),
+        ] {
+            check("", &format!("\\{name}{arguments}"), &label, active);
+        }
+        let (mut workspace, uri, position) = setup("", &format!("\\{name}¦"));
+        workspace.snippets = true;
+        let items = latex_lsp::features::completion(&workspace, &uri, position);
+        let item = items.iter().find(|item| item.label == name).unwrap();
+        let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+            panic!("missing snippet: {name}")
+        };
+        assert_eq!(
+            edit.new_text,
+            format!("{name}{{\\\\${{1:command}}}}{{${{2:font}}}}")
+        );
+        assert_eq!(item.insert_text_format, Some(InsertTextFormat::SNIPPET));
+    }
+    check("", "\\newfontfamily % target\r\n\\fontswitch % features\r\n[Scale=1] % font\r\n{Latin Mo¦dern Roman}[Ligatures=TeX]", r"\newfontfamily{command}[features]{font}[features]", 2);
+}
+
+#[test]
 fn pdfbookmark_hints_distinguish_level_title_and_destination_base_and_offer_a_snippet() {
     for (marked, active) in [
         (r"\pdfbookmark[¦1]{Title}{name}", 0),
