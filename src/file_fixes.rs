@@ -1,21 +1,9 @@
-//! File spelling corrections only for compiler-confirmed static include warnings.
+//! Bounded file spelling corrections for compiler-confirmed static source inputs.
 use crate::{
     build_log, spelling_fixes, syntax,
     workspace::{self, Workspace},
 };
-use tower_lsp::lsp_types::{Diagnostic, TextEdit, Url};
-
-fn literal_path(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 8192
-        && !value.starts_with(' ')
-        && !value.ends_with(' ')
-        && !value.contains("  ")
-        && !value.chars().any(|ch| ch.is_whitespace() && ch != ' ')
-        && !value.contains([
-            '\\', '{', '}', '%', '#', '$', '&', '^', '~', '"', '\r', '\n', '\0',
-        ])
-}
+use tower_lsp::lsp_types::{Diagnostic, NumberOrString, TextEdit, Url};
 
 pub(crate) fn fixes(
     workspace: &Workspace,
@@ -30,27 +18,47 @@ pub(crate) fn fixes(
     let Some(doc) = workspace.documents.get(uri) else {
         return vec![];
     };
-    let Some(reported) = build_log::missing_include_key(&diagnostic.message) else {
+    let command_name = if diagnostic.code == Some(NumberOrString::String("missing-input".into())) {
+        "input"
+    } else {
+        "include"
+    };
+    let reported = if command_name == "input" {
+        build_log::missing_file_name(&diagnostic.message).filter(|name| {
+            diagnostic
+                .data
+                .as_ref()
+                .and_then(|data| data.get("file"))
+                .and_then(|name| name.as_str())
+                == Some(*name)
+        })
+    } else {
+        build_log::missing_include_key(&diagnostic.message)
+    };
+    let Some(reported) = reported else {
         return vec![];
     };
     let argument = doc
         .syntax
         .commands
         .iter()
-        .filter(|command| command.name == "include")
+        .filter(|command| command.name == command_name)
         .filter_map(|command| command.argument.as_ref())
         .find(|argument| {
             let span = syntax::trimmed_span(&doc.text.source, argument.span.clone());
             doc.text.range(span.start, span.end) == diagnostic.range
-                && syntax::file_lookup_names("include", argument.value.trim())
+                && syntax::file_lookup_names(command_name, argument.value.trim())
                     .any(|name| name == reported)
         });
     let Some(argument) = argument else {
         return vec![];
     };
     let value = argument.value.trim();
-    if !literal_path(value)
-        || workspace::resolve_file_path(root, "include", value, &["tex"]).is_some()
+    if !syntax::is_literal_file_path(value)
+        || workspace::resolve_file_path(root, command_name, value, &["tex"]).is_some()
+        || command_name == "input"
+            && doc.text.source[argument.outer_span.clone()].starts_with('"')
+            && !doc.text.source[argument.outer_span.clone()].ends_with('"')
     {
         return vec![];
     }
@@ -83,33 +91,35 @@ pub(crate) fn fixes(
     let source = canonical_uri(uri);
     let main = canonical_uri(root);
     let mut filters = Vec::new();
-    for document in workspace
-        .project_documents(root)
-        .iter()
-        .filter_map(|uri| workspace.documents.get(uri))
-    {
-        for command in document
-            .syntax
-            .commands
+    if command_name == "include" {
+        for document in workspace
+            .project_documents(root)
             .iter()
-            .filter(|command| command.name == "includeonly")
+            .filter_map(|uri| workspace.documents.get(uri))
         {
-            let Some(argument) = &command.argument else {
-                return vec![];
-            };
-            let mut names = Vec::new();
-            for value in argument
-                .value
-                .split(',')
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
+            for command in document
+                .syntax
+                .commands
+                .iter()
+                .filter(|command| command.name == "includeonly")
             {
-                if !literal_path(value) {
+                let Some(argument) = &command.argument else {
                     return vec![];
+                };
+                let mut names = Vec::new();
+                for value in argument
+                    .value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                {
+                    if !syntax::is_literal_file_path(value) {
+                        return vec![];
+                    }
+                    names.push(value.strip_suffix(".tex").unwrap_or(value).to_owned());
                 }
-                names.push(value.strip_suffix(".tex").unwrap_or(value).to_owned());
+                filters.push(names);
             }
-            filters.push(names);
         }
     }
     let mut candidates = Vec::new();
@@ -120,7 +130,9 @@ pub(crate) fn fixes(
         let Some(stem) = name.strip_suffix(".tex") else {
             continue;
         };
-        if !literal_path(&name) || name.starts_with('.') && !original.starts_with('.') {
+        if !syntax::is_literal_file_path(&name)
+            || name.starts_with('.') && !original.starts_with('.')
+        {
             continue;
         }
         if *comparisons >= spelling_fixes::MAX_COMPARISONS {
@@ -145,7 +157,7 @@ pub(crate) fn fixes(
         {
             continue;
         }
-        let Some(target) = workspace::resolve_file_path(root, "include", &replacement, &["tex"])
+        let Some(target) = workspace::resolve_file_path(root, command_name, &replacement, &["tex"])
         else {
             continue;
         };
@@ -166,12 +178,27 @@ pub(crate) fn fixes(
         {
             continue;
         }
+        let new_text = if command_name == "input"
+            && argument.span == argument.outer_span
+            && replacement.contains(' ')
+        {
+            format!("{{{replacement}}}")
+        } else {
+            replacement.clone()
+        };
         fixes.push(syntax::QuickFix {
-            title: format!("Replace with included file `{replacement}`"),
+            title: format!(
+                "Replace with {} file `{replacement}`",
+                if command_name == "input" {
+                    "input"
+                } else {
+                    "included"
+                }
+            ),
             diagnostic: diagnostic.clone(),
             edit: TextEdit {
                 range: diagnostic.range,
-                new_text: replacement,
+                new_text,
             },
             additional_edits: vec![],
         });

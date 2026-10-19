@@ -19,7 +19,14 @@ fn missing_file_causes_survive_numbered_and_traditional_emergency_stops() {
             assert_eq!(entries.len(), 2, "{log}\n{entries:?}");
             let original = entries.iter().find(|entry| entry.message == cause).unwrap();
             assert_eq!(original.range.start.line, 2, "{log}\n{entries:?}");
-            assert_eq!(original.range.end.character, 18);
+            assert_eq!(original.range.start.character, 10);
+            assert_eq!(original.range.end.character, 17);
+            assert_eq!(
+                original.code,
+                Some(tower_lsp::lsp_types::NumberOrString::String(
+                    "missing-input".into()
+                ))
+            );
             assert_eq!(original.severity, Some(DiagnosticSeverity::ERROR));
             assert!(entries
                 .iter()

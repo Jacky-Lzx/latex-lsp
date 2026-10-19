@@ -400,6 +400,19 @@ pub fn file_extensions(name: &str) -> Option<&'static [&'static str]> {
     })
 }
 
+/// A literal filename that can be replaced without introducing TeX tokens.
+pub(crate) fn is_literal_file_path(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 8192
+        && !value.starts_with(' ')
+        && !value.ends_with(' ')
+        && !value.contains("  ")
+        && !value.chars().any(|ch| ch.is_whitespace() && ch != ' ')
+        && !value.contains([
+            '\\', '{', '}', '%', '#', '$', '&', '^', '~', '"', '\r', '\n', '\0',
+        ])
+}
+
 pub fn file_list(name: &str) -> bool {
     matches!(
         name,

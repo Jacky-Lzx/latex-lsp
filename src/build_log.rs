@@ -458,7 +458,7 @@ fn error_context<'a>(lines: &[&'a str], start: usize, number: u32) -> Option<&'a
     tail[digits..].strip_prefix(' ')
 }
 
-fn missing_file_name(message: &str) -> Option<&str> {
+pub(crate) fn missing_file_name(message: &str) -> Option<&str> {
     let quoted = message
         .strip_prefix("LaTeX Error: File ")
         .and_then(|tail| tail.strip_suffix(" not found."))
@@ -471,18 +471,29 @@ fn missing_file_name(message: &str) -> Option<&str> {
         .strip_prefix('`')
         .or_else(|| quoted.strip_prefix('\''))?
         .strip_suffix('\'')?;
+    let name = name
+        .strip_prefix('"')
+        .and_then(|name| name.strip_suffix('"'))
+        .unwrap_or(name);
     (!name.is_empty()).then_some(name)
 }
 
-fn following_error_number(lines: &[&str], start: usize) -> Option<u32> {
+fn following_error_location<'a>(lines: &[&'a str], start: usize) -> Option<(u32, Option<&'a str>)> {
+    let mut direct = true;
     for line in lines.iter().skip(start).take(16) {
         let line = line.trim_start();
         if let Some(tail) = line.strip_prefix("l.") {
             let digits = tail.bytes().take_while(u8::is_ascii_digit).count();
-            return tail[..digits].parse().ok();
+            return Some((
+                tail[..digits].parse().ok()?,
+                direct.then(|| tail[digits..].strip_prefix(' ')).flatten(),
+            ));
         }
         if message_boundary(line) || line.starts_with('(') {
             break;
+        }
+        if !line.trim().is_empty() && line.trim() != "<read *>" {
+            direct = false;
         }
     }
     None
@@ -495,6 +506,37 @@ fn uninterrupted_file_prompt(lines: &[&str], start: usize, end: usize) -> bool {
                 .iter()
                 .all(|line| !message_boundary(line) && !line.trim_start().starts_with('('))
         })
+}
+
+fn missing_input_range(text: &Text, line: u32, context: &str, name: &str) -> Option<Range> {
+    let prefix = context.trim_end();
+    let shortened = shortened_context(prefix);
+    let start = text.offset(Position::new(line, 0))?;
+    let syntax = crate::syntax::Syntax::latex(text);
+    let mut matches = syntax.commands.iter().filter_map(|command| {
+        if command.name != "input" {
+            return None;
+        }
+        let argument = command.argument.as_ref()?;
+        let span = crate::syntax::trimmed_span(&text.source, argument.span.clone());
+        let value = &text.source[span.clone()];
+        if !crate::syntax::is_literal_file_path(value)
+            || !crate::syntax::file_lookup_names("input", value).any(|candidate| candidate == name)
+            || text.position(argument.outer_span.end).line != line
+            || text.source[argument.outer_span.clone()].starts_with('"')
+                && !text.source[argument.outer_span.clone()].ends_with('"')
+        {
+            return None;
+        }
+        let consumed = &text.source[start..argument.outer_span.end];
+        let matched = shortened.map_or(consumed == prefix, |suffix| {
+            suffix.ends_with(&text.source[argument.outer_span.clone()])
+                && consumed.ends_with(suffix)
+        });
+        matched.then(|| text.range(span.start, span.end))
+    });
+    let range = matches.next()?;
+    matches.next().is_none().then_some(range)
 }
 
 pub(crate) fn undefined_environment_name(message: &str) -> Option<&str> {
@@ -720,6 +762,11 @@ fn emit_with_context(
         .filter(|_| reported_line.checked_sub(1) == Some(line))
         .and_then(|name| undefined_counter_range(&text, line, context?, name));
     ranges.extend(counter_range);
+    let missing_file = missing_file_name(&message);
+    let input_range = missing_file
+        .filter(|_| reported_line.checked_sub(1) == Some(line))
+        .and_then(|name| missing_input_range(&text, line, context?, name));
+    ranges.extend(input_range);
     let command_name = command_range.and_then(|range| {
         let start = text.offset(range.start)?;
         let end = text.offset(range.end)?;
@@ -753,6 +800,7 @@ fn emit_with_context(
                 code: box_code(&message)
                     .or_else(|| destination.filter(|_| precise_destination).map(|(kind, _)| kind.code()))
                     .or_else(|| missing_include_key(&message).map(|_| "missing-include"))
+                    .or_else(|| input_range.map(|_| "missing-input"))
                     .or_else(|| command_range.map(|_| "undefined-control-sequence"))
                     .or_else(|| environment_range.and(environment.as_ref()).map(|error| error.code))
                     .or_else(|| counter_range.map(|_| "undefined-counter"))
@@ -770,7 +818,8 @@ fn emit_with_context(
                                 None => serde_json::json!({"environment":error.name}),
                             })
                     })
-                    .or_else(|| counter_range.and(counter_name).map(|name| serde_json::json!({"counter":name}))),
+                    .or_else(|| counter_range.and(counter_name).map(|name| serde_json::json!({"counter":name})))
+                    .or_else(|| input_range.and(missing_file).map(|name| serde_json::json!({"file":name}))),
                 ..Default::default()
             }
         }));
@@ -1168,22 +1217,24 @@ pub(crate) fn parse_with_sources(
                 // File lookup prompts end with a separate Emergency stop. The
                 // numbered error supplies the missing location of its cause.
                 if cause_path != path || cause != message {
-                    let cause_line = if confirmed_path
+                    let associated = confirmed_path
                         && cause_path == path
                         && message == "Emergency stop."
                         && missing_file_name(&cause).is_some()
-                        && uninterrupted_file_prompt(&lines, context_start, diagnostic_start)
-                    {
-                        number
-                    } else {
-                        1
-                    };
-                    emit(
+                        && uninterrupted_file_prompt(&lines, context_start, diagnostic_start);
+                    let cause_line = if associated { number } else { 1 };
+                    let context = associated
+                        .then(|| following_error_location(&lines, i + 1))
+                        .flatten()
+                        .filter(|(line, _)| *line == number)
+                        .and_then(|(_, context)| context);
+                    emit_with_context(
                         &mut result,
                         &cause_path,
                         cause_line,
                         cause,
                         DiagnosticSeverity::ERROR,
+                        context,
                     );
                 }
             }
@@ -1203,21 +1254,22 @@ pub(crate) fn parse_with_sources(
         } else if let Some(message) = line.strip_prefix("! ") {
             let message = wrapped_error_message(root, &lines, &separator_lines, &mut i, message);
             if let Some((path, cause, context_start)) = pending.take() {
-                let cause_line = if path == current()
+                let (cause_line, context) = if path == current()
                     && message == "Emergency stop."
                     && missing_file_name(&cause).is_some()
                     && uninterrupted_file_prompt(&lines, context_start, diagnostic_start)
                 {
-                    following_error_number(&lines, i + 1).unwrap_or(1)
+                    following_error_location(&lines, i + 1).unwrap_or((1, None))
                 } else {
-                    1
+                    (1, None)
                 };
-                emit(
+                emit_with_context(
                     &mut result,
                     &path,
                     cause_line,
                     cause,
                     DiagnosticSeverity::ERROR,
+                    context,
                 );
             }
             pending = Some((current(), message, i + 1));

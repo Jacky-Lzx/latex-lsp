@@ -279,9 +279,10 @@ pub fn fixes(workspace: &Workspace, uri: &Url, range: Range) -> Vec<QuickFix> {
             if examined > 64 {
                 return result;
             }
-            if diagnostic.code == Some(NumberOrString::String("missing-include".into())) {
+            if matches!(diagnostic.code.as_ref(), Some(NumberOrString::String(code)) if matches!(code.as_str(), "missing-include" | "missing-input"))
+            {
                 for fix in
-                    crate::include_fixes::fixes(workspace, root, uri, diagnostic, &mut comparisons)
+                    crate::file_fixes::fixes(workspace, root, uri, diagnostic, &mut comparisons)
                 {
                     if seen.insert((
                         diagnostic.range.start,
