@@ -153,7 +153,7 @@ pub(crate) fn has_existing_arguments(
 }
 
 fn existing_arguments(signature: &Signature, following: &str) -> bool {
-    let ungrouped_argument = completion_required_token(following).is_some();
+    let ungrouped_argument = completion_required_token(following);
     let following = &following[syntax::skip_space(following, 0)..];
     // The same argument reader decides whether existing custom delimiters must
     // be preserved. Stop at the first required argument: later delimiters cannot
@@ -174,7 +174,13 @@ fn existing_arguments(signature: &Signature, following: &str) -> bool {
                     return true;
                 }
             }
-            Kind::Required if ungrouped_argument => return true,
+            Kind::Required if ungrouped_argument.is_some() => return true,
+            Kind::CommandToken
+                if ungrouped_argument
+                    .is_some_and(|value| syntax::control_word(value, 0).is_some()) =>
+            {
+                return true;
+            }
             _ => break,
         }
     }
@@ -204,6 +210,25 @@ fn push_delimiter(snippet: &mut String, delimiter: &str) {
 
 fn builtin(name: &str) -> Option<Signature> {
     let (arguments, starred): (&[(&str, bool)], bool) = match name {
+        name if syntax::declares_traditional_command(name) => (
+            &[
+                ("command", false),
+                ("arguments", true),
+                ("default", true),
+                ("definition", false),
+            ],
+            true,
+        ),
+        "newenvironment" | "renewenvironment" => (
+            &[
+                ("environment", false),
+                ("arguments", true),
+                ("default", true),
+                ("begin", false),
+                ("end", false),
+            ],
+            true,
+        ),
         "DeclareTextCommand" | "ProvideTextCommand" => (
             &[
                 ("command", false),
@@ -552,6 +577,7 @@ fn builtin(name: &str) -> Option<Signature> {
             } else if syntax::declares_command_copy(name)
                 || name == "cslet" && index == 1
                 || (name == "letcs"
+                    || syntax::declares_traditional_command(name)
                     || syntax::declares_document_command(name)
                     || syntax::declares_text_command(name)
                     || syntax::declares_font_switch(name)
@@ -597,10 +623,13 @@ fn builtin(name: &str) -> Option<Signature> {
         documentation,
         starred,
         nested_brackets: !(syntax::is_citation(name)
+            || syntax::declares_traditional_command(name)
             || syntax::reference_note_count(name) > 0
             || matches!(
                 name,
                 "hyperref"
+                    | "newenvironment"
+                    | "renewenvironment"
                     | "hyperdef"
                     | "newcounter"
                     | "sqrt"

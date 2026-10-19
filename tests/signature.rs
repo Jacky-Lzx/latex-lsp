@@ -35,6 +35,113 @@ fn check(definitions: &str, marked: &str, label: &str, active: u32) {
 }
 
 #[test]
+fn traditional_command_declarations_offer_target_count_default_and_body_hints() {
+    for name in [
+        "newcommand",
+        "renewcommand",
+        "providecommand",
+        "DeclareRobustCommand",
+        "newrobustcmd",
+        "renewrobustcmd",
+        "providerobustcmd",
+    ] {
+        for command in [
+            format!("\\{name}"),
+            format!("\\csuse{{{name}}}"),
+            format!("\\csname {name}\\endcsname"),
+        ] {
+            let label = format!("{command}{{command}}[arguments][default]{{definition}}");
+            for (arguments, active) in [
+                (r"{\pa¦ir}[2][DEF]{#1#2}", 0),
+                (r"\pa¦ir[2][DEF]{#1#2}", 0),
+                (r"\pair[¦2][DEF]{#1#2}", 1),
+                (r"\pair[2][DE¦F]{#1#2}", 2),
+                (r"*\pair[2][DEF]{#1¦#2}", 3),
+                (r"\pair{BO¦DY}", 3),
+                (r"\pair[2][LEFT[RIGHT]{BO¦DY}", 3),
+                (r"\pair[2][{LEFT[RIGHT]}]{BO¦DY}", 3),
+                (
+                    "* % star\r\n \\pair % target\r\n [2] % count\r\n [DEF] % default\r\n {BO¦DY}",
+                    3,
+                ),
+            ] {
+                check("", &format!("{command}{arguments}"), &label, active);
+            }
+        }
+        for arguments in [
+            r"\pair[2][DEF]{#1#2}¦",
+            r"**\pair[2][DEF]{BO¦DY}",
+            r"x[2][DEF]{BO¦DY}",
+        ] {
+            let call = format!("\\{name}{arguments}");
+            let (workspace, uri, position) = setup("", &call);
+            assert!(
+                signature::help(&workspace, &uri, position).is_none(),
+                "{call}"
+            );
+        }
+    }
+}
+
+#[test]
+fn traditional_environment_declarations_distinguish_both_bodies_and_optional_defaults() {
+    for name in ["newenvironment", "renewenvironment"] {
+        for command in [
+            format!("\\{name}"),
+            format!("\\csuse{{{name}}}"),
+            format!("\\csname {name}\\endcsname"),
+        ] {
+            let label = format!("{command}{{environment}}[arguments][default]{{begin}}{{end}}");
+            for (arguments, active) in [
+                (r"{pan¦el}[2][DEF]{#1#2}{END}", 0),
+                (r"{panel}[¦2][DEF]{#1#2}{END}", 1),
+                (r"{panel}[2][DE¦F]{#1#2}{END}", 2),
+                (r"{panel}[2][DEF]{#1¦#2}{END}", 3),
+                (r"*{panel}[2][DEF]{#1#2}{EN¦D}", 4),
+                (r"{panel}{BE¦GIN}{END}", 3),
+                (r"{panel}{BEGIN}{EN¦D}", 4),
+                (r"{panel}[2][LEFT[RIGHT]{BE¦GIN}{END}", 3),
+                (r"{panel}[2][{LEFT[RIGHT]}]{BEGIN}{EN¦D}", 4),
+            ] {
+                check("", &format!("{command}{arguments}"), &label, active);
+            }
+        }
+    }
+}
+
+#[test]
+fn declaration_completions_preserve_existing_control_word_targets() {
+    for (call, name) in [
+        (r"\newcom¦mand\pair[2][DEF]{#1#2}", "newcommand"),
+        (r"\renewcom¦mand\pair[2]{#1#2}", "renewcommand"),
+        (r"\providecom¦mand\pair{BODY}", "providecommand"),
+        (r"\DeclareRobustCom¦mand\pair{BODY}", "DeclareRobustCommand"),
+        (r"\newrobustc¦md\pair{BODY}", "newrobustcmd"),
+        (r"\NewCommandCo¦py\pair\source", "NewCommandCopy"),
+        (r"\DeclareMathOpera¦tor\pair{argmin}", "DeclareMathOperator"),
+        ("\\newcom¦mand % continued\n \\pair{BODY}", "newcommand"),
+    ] {
+        let (mut workspace, uri, position) = setup("", call);
+        workspace.snippets = true;
+        let items = latex_lsp::features::completion(&workspace, &uri, position);
+        let item = items.iter().find(|item| item.label == name).unwrap();
+        let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+            panic!("missing edit");
+        };
+        assert_eq!(edit.new_text, name, "{call}");
+        assert_eq!(item.insert_text_format, Some(InsertTextFormat::PLAIN_TEXT));
+    }
+    let (mut workspace, uri, position) = setup("", "\\newcom¦mand\n\\end{document}");
+    workspace.snippets = true;
+    let items = latex_lsp::features::completion(&workspace, &uri, position);
+    let item = items
+        .iter()
+        .find(|item| item.label == "newcommand")
+        .unwrap();
+    assert_eq!(item.insert_text_format, Some(InsertTextFormat::SNIPPET));
+}
+
+#[test]
 fn builtin_completions_preserve_existing_ungrouped_required_arguments() {
     for (call, name) in [
         (r"\(\fr¦ac12\)", "frac"),

@@ -650,6 +650,7 @@ pub(crate) fn file_lookup_names<'a>(
 
 fn declares_command(name: &str) -> bool {
     declares_register(name)
+        || declares_traditional_command(name)
         || declares_font_switch(name)
         || declares_paired_delimiter(name)
         || declares_document_command(name)
@@ -657,20 +658,26 @@ fn declares_command(name: &str) -> bool {
         || declares_text_command(name)
         || matches!(
             name,
-            "newcommand"
-                | "renewcommand"
-                | "providecommand"
-                | "newrobustcmd"
-                | "renewrobustcmd"
-                | "providerobustcmd"
-                | "DeclareMathOperator"
+            "DeclareMathOperator"
                 | "DeclareMathAccent"
                 | "DeclareMathRadical"
                 | "DeclareMathAlphabet"
                 | "DeclareSymbolFontAlphabet"
-                | "DeclareRobustCommand"
                 | "letcs"
         )
+}
+
+pub(crate) fn declares_traditional_command(name: &str) -> bool {
+    matches!(
+        name,
+        "newcommand"
+            | "renewcommand"
+            | "providecommand"
+            | "newrobustcmd"
+            | "renewrobustcmd"
+            | "providerobustcmd"
+            | "DeclareRobustCommand"
+    )
 }
 
 pub(crate) fn declares_document_command(name: &str) -> bool {
