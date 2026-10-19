@@ -71,6 +71,10 @@ impl FileChanges {
                     })
                     || diagnostics.keys().any(&mut changed)
                     || workspace.project_files(root).iter().any(&mut changed)
+                    || workspace
+                        .project_bindings(root)
+                        .filter_map(|(_, target)| Url::from_file_path(target).ok())
+                        .any(|uri| changed(&uri))
                     || [
                         &workspace.recorded_inputs,
                         &workspace.bibliography_inputs,

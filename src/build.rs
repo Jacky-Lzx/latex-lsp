@@ -133,7 +133,17 @@ impl BuildManager {
             .root_document(&uri)
             .map_err(Error::invalid_params)?;
         workspace.refresh_project(&root);
-        let project = workspace.project_files(&root);
+        let mut project = workspace.project_files(&root);
+        // Known opened paths remain build dependencies even when their current
+        // targets are outside the source index. Capture the actual target now,
+        // rather than the one observed by the previous compiler invocation.
+        project.extend(
+            workspace
+                .project_bindings(&root)
+                .filter_map(|(path, _)| path.canonicalize().ok())
+                .filter(|path| path.is_file())
+                .filter_map(|path| Url::from_file_path(path).ok()),
+        );
         let mut snapshots = BTreeMap::new();
         let mut file_snapshots = BTreeMap::new();
         for uri in &project {
@@ -500,6 +510,11 @@ impl BuildManager {
                     .iter()
                     .filter(|uri| uri.path().ends_with(".bib") || uri.path().ends_with(".bst"))
                     .cloned(),
+            );
+            artifact_inputs.extend(
+                current
+                    .project_bindings(&root_uri)
+                    .filter_map(|(_, target)| Url::from_file_path(target).ok()),
             );
             reject_outdated_pdf(
                 &root_path,

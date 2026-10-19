@@ -474,6 +474,18 @@ impl Workspace {
         }
     }
 
+    /// Opened path names and selected physical targets, independently of the
+    /// source index. A known external alias can select an unindexed target.
+    pub(crate) fn project_bindings<'a>(
+        &'a self,
+        root: &'a Url,
+    ) -> impl Iterator<Item = (&'a PathBuf, &'a PathBuf)> {
+        [&self.recorded_bindings, &self.bibliography_bindings]
+            .into_iter()
+            .filter_map(move |by_root| by_root.get(root))
+            .flat_map(|bindings| bindings.iter())
+    }
+
     /// Saved sources and image dependencies used by builds and artifact checks.
     pub fn project_files(&self, root: &Url) -> BTreeSet<Url> {
         let mut files = self.project_documents(root);
