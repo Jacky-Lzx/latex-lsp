@@ -2060,9 +2060,23 @@ fn bibliography_path(
 ) -> Option<PathBuf> {
     for (index, _) in message.match_indices(".bib") {
         let end = index + 4;
+        let tail = &message[end..];
+        // Do not turn refs.bib.backup, refs.bib2 or a directory component
+        // into a different existing source. Sentence punctuation may follow
+        // an unquoted filename, but is not part of its extension.
+        let terminated = tail.is_empty()
+            || tail.starts_with(|ch: char| {
+                ch.is_whitespace() || matches!(ch, '\'' | '"' | ',' | ':' | ';' | ')' | ']' | '}')
+            })
+            || tail
+                .strip_prefix('.')
+                .is_some_and(|tail| tail.is_empty() || tail.starts_with(char::is_whitespace));
+        if !terminated {
+            continue;
+        }
         let prefix = &message[..index];
         let token_start = prefix
-            .rfind(|ch: char| ch.is_whitespace() || ch == ':')
+            .rfind(|ch: char| ch.is_whitespace() || matches!(ch, ':' | '(' | '[' | '{'))
             .map_or(0, |index| index + 1);
         let starts = prefix
             .rmatch_indices(['\'', '"'])
@@ -2551,6 +2565,79 @@ mod tests {
                 .iter()
                 .all(|diagnostic| diagnostic.range.start.line == 1));
             assert_eq!(diagnostics[&style][0].range.start.line, 1);
+        }
+    }
+
+    #[test]
+    fn biber_diagnostic_paths_do_not_resolve_prefixes_of_longer_filenames() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let main = root.join("main.tex");
+        std::fs::write(&main, "\\cite{entry}\nText.\n").unwrap();
+        std::fs::write(
+            root.join("refs.bib"),
+            "% decoy\n@book{decoy,title={Wrong}}\n",
+        )
+        .unwrap();
+        let main_uri = Url::from_file_path(&main).unwrap();
+        for name in [
+            "refs.bib.backup",
+            "refs.bib2",
+            "refs.bib-archive",
+            "refs.bib_archive",
+            "refs.bib中文",
+            "refs.bib/nonexistent.bib",
+        ] {
+            if !name.contains('/') {
+                std::fs::write(
+                    root.join(name),
+                    "% actual input\n@book{entry,title={Book}}\n",
+                )
+                .unwrap();
+            }
+            for quoted in [false, true] {
+                let name = if quoted {
+                    format!("'{name}'")
+                } else {
+                    name.into()
+                };
+                let message = format!("syntax error in file {name}, line 2");
+                let diagnostics = parse_bibliography(&main, &format!("ERROR - {message}\n"));
+                assert_eq!(diagnostics.len(), 1, "{name}: {diagnostics:?}");
+                let items = diagnostics
+                    .get(&main_uri)
+                    .unwrap_or_else(|| panic!("{name}: {diagnostics:?}"));
+                assert_eq!(items.len(), 1);
+                assert_eq!(items[0].message, format!("Biber: {message}"));
+            }
+        }
+    }
+
+    #[test]
+    fn biber_diagnostic_paths_keep_complete_names_before_message_punctuation() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let main = root.join("main.tex");
+        let bib = root.join("refs.bib");
+        std::fs::write(&main, "\\cite{entry}\n").unwrap();
+        std::fs::write(&bib, "% database\n@book{entry,title={Book}}\n").unwrap();
+        for message in [
+            "syntax error in file 'refs.bib', line 2",
+            "syntax error in file \"refs.bib\", line 2",
+            "syntax error in refs.bib, line 2",
+            "refs.bib: syntax error at line 2",
+            "syntax error in refs.bib; line 2",
+            "syntax error (refs.bib) at line 2",
+            "syntax error [refs.bib] at line 2",
+            "syntax error in refs.bib. See line 2",
+            "syntax error on line 2 of refs.bib.",
+            "syntax error on line 2 of refs.bib",
+        ] {
+            let diagnostics = parse_bibliography(&main, &format!("ERROR - {message}\n"));
+            assert_eq!(diagnostics.len(), 1, "{message}: {diagnostics:?}");
+            let items = &diagnostics[&Url::from_file_path(&bib).unwrap()];
+            assert_eq!(items[0].message, format!("Biber: {message}"));
+            assert_eq!(items[0].range.start.line, 1);
         }
     }
 
