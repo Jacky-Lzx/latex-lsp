@@ -616,7 +616,15 @@ fn missing_path_range(
     matches.next().is_none().then_some(range)
 }
 
-fn missing_loader_range(
+fn package_option_clash_name(message: &str) -> Option<&str> {
+    let name = message
+        .strip_prefix("LaTeX Error: Option clash for package ")?
+        .strip_suffix('.')?;
+    (crate::syntax::is_literal_file_path(name) && !name.contains([' ', '\t', '\r', '\n']))
+        .then_some(name)
+}
+
+fn loader_failure_range(
     text: &Text,
     line: u32,
     context: &str,
@@ -645,7 +653,7 @@ fn missing_loader_range(
         };
         let next = crate::syntax::skip_space(&text.source, argument.outer_span.end);
         // LaTeX reads the optional minimum version, or one lookahead token,
-        // before the loader discovers the missing file. That token may be on
+        // before the loader reports a failure. That token may be on
         // the next source line, while the path being diagnosed is above it.
         let tail = if text.source.as_bytes().get(next) == Some(&b'[') {
             crate::syntax::group(&text.source, next, b'[', b']').map(|(_, end)| end)
@@ -985,8 +993,15 @@ fn emit_with_context(
         .and_then(|name| missing_path_range(&text, line, context?, name, "input"));
     ranges.extend(input_range);
     let loader_range =
-        missing_file.and_then(|name| missing_loader_range(&text, line, context?, name));
+        missing_file.and_then(|name| loader_failure_range(&text, line, context?, name));
     ranges.extend(loader_range.map(|(range, _)| range));
+    let package_clash = package_option_clash_name(&message);
+    let clash_range = package_clash
+        .and_then(|name| loader_failure_range(&text, line, context?, &format!("{name}.sty")))
+        // WithOptions does not supply a new explicit options list. Do not
+        // attribute a clash to a forwarding call based on its name alone.
+        .filter(|(_, command)| matches!(*command, "usepackage" | "RequirePackage"));
+    ranges.extend(clash_range.map(|(range, _)| range));
     let missing_graphic = missing_graphic_name(&message);
     let graphic_range = missing_graphic
         .filter(|_| reported_line.checked_sub(1) == Some(line))
@@ -1024,6 +1039,7 @@ fn emit_with_context(
                     .or_else(|| missing_include_key(&message).map(|_| "missing-include"))
                     .or_else(|| input_range.map(|_| "missing-input"))
                     .or_else(|| loader_range.map(|(_, command)| if crate::syntax::loader_extension(command) == Some("sty") { "missing-package" } else { "missing-class" }))
+                    .or_else(|| clash_range.map(|_| "package-option-clash"))
                     .or_else(|| graphic_range.map(|_| "missing-image"))
                     .or_else(|| command_range.map(|_| "undefined-control-sequence"))
                     .or_else(|| environment_range.and(environment.as_ref()).map(|error| error.code))
@@ -1043,6 +1059,7 @@ fn emit_with_context(
                     .or_else(|| counter_range.and(counter_name).map(|name| serde_json::json!({"counter":name})))
                     .or_else(|| input_range.and(missing_file).map(|name| serde_json::json!({"file":name})))
                     .or_else(|| loader_range.map(|(_, command)| serde_json::json!({"file":missing_file,"loaderCommand":command})))
+                    .or_else(|| clash_range.map(|(_, command)| serde_json::json!({"package":package_clash,"loaderCommand":command})))
                     .or_else(|| graphic_range.and(missing_graphic).map(|name| serde_json::json!({"file":name}))),
                 ..Default::default()
             }
