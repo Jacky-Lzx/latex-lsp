@@ -2639,8 +2639,8 @@ EXECUTE {end.bib}
 
 #[test]
 #[cfg(unix)]
-fn biber_quoted_sources_keep_diagnostics_navigation_and_rename_on_the_complete_database() {
-    for quote in ['\'', '"'] {
+fn biber_logged_sources_keep_diagnostics_navigation_and_rename_on_the_complete_database() {
+    for quote in ["'", "\"", ""] {
         for suffix in [
             ":copy.bib",
             ";copy.bib",
@@ -2684,7 +2684,7 @@ fn biber_quoted_sources_keep_diagnostics_navigation_and_rename_on_the_complete_d
             );
             server.notify("textDocument/didSave", json!({"textDocument":{"uri":main}}));
             let fixture = root.join("fixture.blg");
-            let input = if quote == '\'' {
+            let input = if quote != "\"" {
                 bib.to_file_path().unwrap().to_str().unwrap().to_owned()
             } else {
                 name.clone()

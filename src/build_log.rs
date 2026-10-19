@@ -2199,12 +2199,7 @@ fn bibliography_path(
     } else {
         &["file ", "File "]
     };
-    let explicit = bibliography_fields_with(message, None, |start| {
-        bibliography_recorded_quote_end(paths, message, start)
-            .map(|(end, _)| end)
-            .or_else(|| bibliography_quote_end(message, start))
-    })
-    .find_map(|(start, _)| {
+    let explicit = bibliography_source_fields(paths, message).find_map(|(start, _)| {
         if message[..start].ends_with(|ch: char| ch.is_alphanumeric() || ch == '_') {
             return None;
         }
@@ -2263,6 +2258,11 @@ fn bibliography_path(
             };
             continue;
         }
+        if !ch.is_whitespace() && bibliography_token_start(message, index) {
+            if let Some(location) = bibliography_recorded_unquoted_path(paths, message, index) {
+                return location;
+            }
+        }
         if !message[index..].starts_with(".bib") {
             continue;
         }
@@ -2281,11 +2281,128 @@ fn bibliography_path(
     BibliographyLocation::Inferred
 }
 
+fn bibliography_token_start(message: &str, start: usize) -> bool {
+    start == 0
+        || message[..start]
+            .ends_with(|ch: char| ch.is_whitespace() || matches!(ch, ':' | '(' | '[' | '{'))
+}
+
+/// Known bare filenames can themselves contain quotes or apparent fields.
+/// Skip their complete spans before looking for explicit source markers.
+fn bibliography_source_fields<'a>(
+    paths: &'a crate::recorder::BibliographyPaths<'_>,
+    message: &'a str,
+) -> impl Iterator<Item = (usize, char)> + 'a {
+    let mut skip_until = 0;
+    message.char_indices().filter(move |&(start, ch)| {
+        if start < skip_until {
+            return false;
+        }
+        let word_start = !message[..start].ends_with(|ch: char| ch.is_alphanumeric() || ch == '_');
+        if word_start && matches!(ch, '\'' | '"') {
+            skip_until = bibliography_recorded_quote_end(paths, message, start)
+                .map(|(end, _)| end)
+                .or_else(|| bibliography_quote_end(message, start))
+                .map_or(message.len(), |end| end + 1);
+            return false;
+        }
+        if !ch.is_whitespace() && bibliography_token_start(message, start) {
+            if let Some(BibliographyLocation::Named { span, .. }) =
+                bibliography_recorded_unquoted_path(paths, message, start)
+            {
+                skip_until = span.end;
+                return false;
+            }
+        }
+        true
+    })
+}
+
+fn bibliography_unquoted_terminated(tail: &str) -> bool {
+    tail.is_empty()
+        || tail.starts_with(|ch: char| {
+            ch.is_whitespace() || matches!(ch, ',' | ':' | ';' | ')' | ']' | '}')
+        })
+        || tail
+            .strip_prefix('.')
+            .is_some_and(|tail| tail.is_empty() || tail.starts_with(char::is_whitespace))
+}
+
+/// Strip balanced message wrappers, preserving unmatched literal openers.
+fn bibliography_unquoted_name(body: &str, end: usize) -> (&str, usize) {
+    let leading = body[..end]
+        .find(|ch| !matches!(ch, '(' | '[' | '{'))
+        .unwrap_or(end);
+    let mut after = &body[end..];
+    let wrapped = body[..leading].chars().rev().all(|open| {
+        let close = match open {
+            '(' => ')',
+            '[' => ']',
+            _ => '}',
+        };
+        if let Some(tail) = after.strip_prefix(close) {
+            after = tail;
+            true
+        } else {
+            false
+        }
+    });
+    if wrapped {
+        (&body[leading..end], body.len() - after.len())
+    } else {
+        (&body[..end], end)
+    }
+}
+
+fn bibliography_recorded_unquoted_path(
+    paths: &crate::recorder::BibliographyPaths<'_>,
+    message: &str,
+    start: usize,
+) -> Option<BibliographyLocation> {
+    let body = &message[start..];
+    let token_end = body.find(char::is_whitespace).unwrap_or(body.len());
+    // A recorded short name must not truncate a complete longer bare token.
+    let minimum_end = body[..token_end]
+        .rmatch_indices(".bib")
+        .map(|(index, _)| index + 4)
+        .find(|&end| bibliography_unquoted_terminated(&body[end..]))
+        .unwrap_or(0);
+    body.rmatch_indices(".bib").find_map(|(index, _)| {
+        let end = index + 4;
+        if end < minimum_end || !bibliography_unquoted_terminated(&body[end..]) {
+            return None;
+        }
+        let (name, span_end) = bibliography_unquoted_name(body, end);
+        // A literal opening bracket in a logged name takes precedence over
+        // treating it as a wrapper supplied by the diagnostic message.
+        let (name, span_end, source) = paths
+            .recorded_bibliography_source(&body[..end])
+            .map(|source| (&body[..end], end, source))
+            .or_else(|| {
+                paths
+                    .recorded_bibliography_source(name)
+                    .map(|source| (name, span_end, source))
+            })?;
+        let path = if source.selected {
+            source.path
+        } else {
+            source.path.or_else(|| paths.resolve(name))
+        };
+        Some(BibliographyLocation::Named {
+            path,
+            span: start..start + span_end,
+        })
+    })
+}
+
 fn bibliography_unquoted_path(
     paths: &crate::recorder::BibliographyPaths<'_>,
     message: &str,
     start: usize,
 ) -> Option<BibliographyLocation> {
+    if let Some(location) = bibliography_recorded_unquoted_path(paths, message, start) {
+        return Some(location);
+    }
     let body = &message[start..];
     let token_end = body.find(char::is_whitespace).unwrap_or(body.len());
     // A whole filename takes precedence over internal .bib fragments or
@@ -2294,42 +2411,12 @@ fn bibliography_unquoted_path(
     extensions.peek()?;
     let end = extensions.find_map(|(index, _)| {
         let end = index + 4;
-        let tail = &body[end..];
-        let terminated = tail.is_empty()
-            || tail.starts_with(|ch: char| {
-                ch.is_whitespace() || matches!(ch, ',' | ':' | ';' | ')' | ']' | '}')
-            })
-            || tail
-                .strip_prefix('.')
-                .is_some_and(|tail| tail.is_empty() || tail.starts_with(char::is_whitespace));
-        terminated.then_some(end)
+        bibliography_unquoted_terminated(&body[end..]).then_some(end)
     });
     let (path, end) = match end {
         Some(end) => {
-            let leading = body[..end]
-                .find(|ch| !matches!(ch, '(' | '[' | '{'))
-                .unwrap_or(end);
-            let mut after = &body[end..];
-            let wrapped = body[..leading].chars().rev().all(|open| {
-                let close = match open {
-                    '(' => ')',
-                    '[' => ']',
-                    _ => '}',
-                };
-                if let Some(tail) = after.strip_prefix(close) {
-                    after = tail;
-                    true
-                } else {
-                    false
-                }
-            });
-            // Strip only balanced message wrappers; an unmatched opener
-            // can be a literal filename character and must not be borrowed.
-            if wrapped {
-                (paths.resolve(&body[leading..end]), body.len() - after.len())
-            } else {
-                (paths.resolve(&body[..end]), end)
-            }
+            let (name, span_end) = bibliography_unquoted_name(body, end);
+            (paths.resolve(name), span_end)
         }
         None => (None, token_end),
     };
@@ -3668,6 +3755,146 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn biber_logged_unquoted_sources_keep_complete_names_outside_message_fields() {
+        for name in [
+            "refs.bib line 700 copy.bib",
+            "中文 refs.bib in file 'wrong.bib' entry 'wrong' copy.bib",
+            "refs.bib': copy.bib",
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let main = root.join("main.tex");
+            let bib = root.join(name);
+            std::fs::write(&main, "\\cite{entry}\n").unwrap();
+            std::fs::write(&bib, "% header\n\n@book{entry,title={Actual}}\n").unwrap();
+            for decoy in ["refs.bib", "wrong.bib", "copy.bib"] {
+                std::fs::write(root.join(decoy), "@book{entry,title={Wrong}}\n").unwrap();
+            }
+            for missing in [false, true] {
+                if missing {
+                    std::fs::remove_file(&bib).unwrap();
+                }
+                for input in [name.to_owned(), bib.to_str().unwrap().to_owned()] {
+                    for source in [
+                        name.to_owned(),
+                        format!("./{name}"),
+                        bib.to_str().unwrap().to_owned(),
+                    ] {
+                        for (open, close) in [("", ""), ("(", ")"), ("[({", "})]")] {
+                            for message in [
+                                format!("Unexpected token \"in 'wrong.bib', line 900\" in file {open}{source}{close}, line 3"),
+                                format!("syntax error {open}{source}{close}, line 3"),
+                                format!("Missing field {open}{source}{close} for entry 'entry'"),
+                                format!("Missing field for entry 'entry' (file {open}{source}{close})"),
+                            ] {
+                                let log = format!("INFO - Found BibTeX data source '{input}'\nERROR - {message}\n");
+                                let diagnostics = parse_bibliography(&main, &log);
+                                let target = if missing { &main } else { &bib };
+                                let items = diagnostics
+                                    .get(&Url::from_file_path(target).unwrap())
+                                    .unwrap_or_else(|| panic!("{log}: {diagnostics:?}"));
+                                assert_eq!(diagnostics.len(), 1, "{log}: {diagnostics:?}");
+                                assert_eq!(items.len(), 1);
+                                assert_eq!(items[0].message, format!("Biber: {message}"));
+                                if missing {
+                                    assert_eq!(items[0].range.start, Position::new(0, 0));
+                                    assert_eq!(items[0].data.as_ref().unwrap()["unresolvedSource"], true);
+                                } else {
+                                    assert_eq!(items[0].range.start.line, 2, "{log}: {items:?}");
+                                    assert!(!unresolved_location(&items[0]), "{log}: {items:?}");
+                                    if message.starts_with("Missing") {
+                                        assert_eq!(items[0].range, Range::new(Position::new(2, 6), Position::new(2, 11)));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn biber_recorded_unquoted_prefixes_do_not_shorten_complete_unreported_tokens() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let main = root.join("main.tex");
+        std::fs::write(&main, "Text\n").unwrap();
+        std::fs::write(root.join("refs.bib"), "@book{entry,title={Wrong}}\n").unwrap();
+        for name in ["refs.bib,copy.bib", "refs.bib:copy.bib"] {
+            let bib = root.join(name);
+            std::fs::write(&bib, "% header\n\n@book{entry,title={Explicit}}\n").unwrap();
+            for missing in [false, true] {
+                if missing {
+                    std::fs::remove_file(&bib).unwrap();
+                }
+                for message in [
+                    format!("syntax error in file {name}, line 3"),
+                    format!("Missing field for entry 'entry' (file {name})"),
+                ] {
+                    let log =
+                        format!("INFO - Found BibTeX data source 'refs.bib'\nERROR - {message}\n");
+                    let diagnostics = parse_bibliography(&main, &log);
+                    let target = if missing { &main } else { &bib };
+                    let items = diagnostics
+                        .get(&Url::from_file_path(target).unwrap())
+                        .unwrap_or_else(|| panic!("{log}: {diagnostics:?}"));
+                    assert_eq!(diagnostics.len(), 1);
+                    assert_eq!(items[0].range.start.line, if missing { 0 } else { 2 });
+                    assert_eq!(unresolved_location(&items[0]), missing, "{log}: {items:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn biber_unquoted_sources_preserve_explicit_files_and_missing_selected_inputs() {
+        for name in ["plain.bib", "refs.bib line 700 copy.bib"] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let selected = root.join("selected");
+            std::fs::create_dir(&selected).unwrap();
+            let main = root.join("main.tex");
+            let explicit = root.join(name);
+            let input = selected.join(name);
+            let blg = root.join("main.blg");
+            std::fs::write(&main, "Text\n").unwrap();
+            std::fs::write(&explicit, "% header\n\n@book{entry,title={Explicit}}\n").unwrap();
+            std::fs::write(&input, "@book{entry,title={Selected}}\n").unwrap();
+            let log = format!("INFO - Found BibTeX data source '{name}'\nERROR - syntax error in file {}, line 3\nWARN - Missing field for entry 'entry' (file {})\n", explicit.display(), explicit.display());
+            let paths = crate::recorder::BibliographyPaths::new(&main, &blg, &log)
+                .with_search_output(&format!("BIBINPUTS='{}'\n", selected.display()));
+            let diagnostics = parse_bibliography_in(&main, &paths, &log);
+            assert_eq!(diagnostics.len(), 1);
+            let items = &diagnostics[&Url::from_file_path(&explicit).unwrap()];
+            assert_eq!(items.len(), 2);
+            assert!(
+                items
+                    .iter()
+                    .all(|item| item.range.start.line == 2 && !unresolved_location(item)),
+                "{log}: {items:?}"
+            );
+            assert_eq!(
+                paths.recorded_bibliography_source(name).unwrap().path,
+                Some(input.clone())
+            );
+            std::fs::remove_file(&input).unwrap();
+            let diagnostics = parse_bibliography_in(
+                &main,
+                &paths,
+                &format!("WARN - Missing field for entry 'entry' (file {name})\n"),
+            );
+            assert_eq!(diagnostics.len(), 1);
+            let items = &diagnostics[&Url::from_file_path(&main).unwrap()];
+            assert_eq!(items[0].range.start, Position::new(0, 0));
+            assert_eq!(items[0].data.as_ref().unwrap()["unresolvedSource"], true);
         }
     }
 
