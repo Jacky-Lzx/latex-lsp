@@ -25,6 +25,9 @@ fn standard_math_completions_keep_delimiters_bare_and_hint_accent_expressions() 
         (r"$\wideh", "widehat", "widehat{${1:expression}}"),
         (r"$\lang", "langle", "langle"),
         (r"$\Vert", "Vert", "Vert"),
+        (r"$\eps", "epsilon", "epsilon"),
+        (r"$\Gam", "Gamma", "Gamma"),
+        (r"$\sin", "sin", "sin"),
     ] {
         let (workspace, uri) = setup(source);
         let doc = &workspace.documents[&uri];
@@ -59,7 +62,20 @@ fn math_builtins_cannot_be_overwritten_by_macro_or_environment_renames() {
     for target in ["localmacro", "localenv", "namedmacro"] {
         let position = doc.text.position(source.find(target).unwrap() + 2);
         for name in [
-            "hat", "widehat", "bar", "vec", "sqrtsign", "langle", "Vert", "Uparrow",
+            "hat",
+            "widehat",
+            "bar",
+            "vec",
+            "sqrtsign",
+            "langle",
+            "Vert",
+            "Uparrow",
+            "epsilon",
+            "varepsilon",
+            "Gamma",
+            "sin",
+            "exp",
+            "max",
         ] {
             let error = features::rename(&workspace, &uri, position, name).unwrap_err();
             assert!(
@@ -82,74 +98,90 @@ fn math_builtins_cannot_be_overwritten_by_macro_or_environment_renames() {
 #[test]
 #[ignore = "requires pdflatex"]
 fn real_standard_math_typos_offer_a_fix_that_compiles_with_existing_accents_and_delimiters() {
-    let directory = tempfile::tempdir().unwrap();
-    let main = directory.path().join("main.tex");
-    let uri = Url::from_file_path(&main).unwrap();
-    let source = "\\documentclass{article}\n\\begin{document}\n\\hbox{$\\left\\langle\\widehaat{x}+\\vec{y}\\right\\rangle$}\n\\end{document}\n";
-    std::fs::write(&main, source).unwrap();
-    let config = BuildConfig {
-        executable: "pdflatex".into(),
-        ..Default::default()
-    };
-    let before = build::run(&main, &config, &Default::default());
-    assert_eq!(before.status, "error", "{}", before.output);
-    let diagnostic = before.diagnostics[&uri]
-        .iter()
-        .find(|diagnostic| {
-            diagnostic.code == Some(NumberOrString::String("undefined-control-sequence".into()))
-        })
-        .unwrap()
-        .clone();
-    let text = Text::new(source.into());
-    let span =
-        text.offset(diagnostic.range.start).unwrap()..text.offset(diagnostic.range.end).unwrap();
-    assert_eq!(&source[span], r"\widehaat");
-    let mut workspace = Workspace {
-        code_action_literals: true,
-        ..Default::default()
-    };
-    workspace.add_root(directory.path().into());
-    workspace
-        .build_diagnostics
-        .insert(uri.clone(), before.diagnostics);
-    let actions = editing::code_actions(
-        &workspace,
-        &uri,
-        diagnostic.range,
-        &CodeActionContext {
-            diagnostics: vec![diagnostic],
-            only: Some(vec![CodeActionKind::QUICKFIX]),
-            trigger_kind: None,
-        },
-    );
-    let edit = actions
-        .into_iter()
-        .find_map(|action| match action {
-            CodeActionOrCommand::CodeAction(action) => action
-                .edit
-                .and_then(|edit| edit.changes)
-                .and_then(|changes| {
-                    changes.get(&uri).and_then(|edits| {
-                        edits
-                            .iter()
-                            .find(|edit| edit.new_text == r"\widehat")
-                            .cloned()
-                    })
-                }),
-            _ => None,
-        })
-        .expect("missing standard math spelling fix");
-    let fixed = text
-        .changed(vec![TextDocumentContentChangeEvent {
-            range: Some(edit.range),
-            range_length: None,
-            text: edit.new_text,
-        }])
-        .unwrap()
-        .source;
-    assert_eq!(fixed, source.replace(r"\widehaat", r"\widehat"));
-    std::fs::write(&main, fixed).unwrap();
-    let after = build::run(&main, &config, &Default::default());
-    assert_eq!(after.status, "success", "{}", after.output);
-    assert_eq!(after.pages, Some(1));
+    for (typo, replacement, body) in [
+        (
+            "widehaat",
+            "widehat",
+            r"\left\langle\widehaat{x}+\vec{y}\right\rangle",
+        ),
+        (
+            "epsilonn",
+            "epsilon",
+            r"\epsilonn+\varepsilon+\Gamma+\sin x+\localop_x x+\operatorname*{arg\,max}_{x}f(x)",
+        ),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let main = directory.path().join("main.tex");
+        let uri = Url::from_file_path(&main).unwrap();
+        let source = format!("\\documentclass{{article}}\n\\usepackage{{amsmath}}\n\\DeclareMathOperator*{{\\localop}}{{local}}\n\\begin{{document}}\n\\hbox{{${body}$}}\n\\end{{document}}\n");
+        std::fs::write(&main, &source).unwrap();
+        let config = BuildConfig {
+            executable: "pdflatex".into(),
+            ..Default::default()
+        };
+        let before = build::run(&main, &config, &Default::default());
+        assert_eq!(before.status, "error", "{}", before.output);
+        let diagnostic = before.diagnostics[&uri]
+            .iter()
+            .find(|diagnostic| {
+                diagnostic.code == Some(NumberOrString::String("undefined-control-sequence".into()))
+            })
+            .unwrap()
+            .clone();
+        let text = Text::new(source.clone());
+        let span = text.offset(diagnostic.range.start).unwrap()
+            ..text.offset(diagnostic.range.end).unwrap();
+        assert_eq!(&source[span], format!("\\{typo}"));
+        let mut workspace = Workspace {
+            code_action_literals: true,
+            ..Default::default()
+        };
+        workspace.add_root(directory.path().into());
+        workspace
+            .build_diagnostics
+            .insert(uri.clone(), before.diagnostics);
+        let actions = editing::code_actions(
+            &workspace,
+            &uri,
+            diagnostic.range,
+            &CodeActionContext {
+                diagnostics: vec![diagnostic],
+                only: Some(vec![CodeActionKind::QUICKFIX]),
+                trigger_kind: None,
+            },
+        );
+        let edit = actions
+            .into_iter()
+            .find_map(|action| match action {
+                CodeActionOrCommand::CodeAction(action) => action
+                    .edit
+                    .and_then(|edit| edit.changes)
+                    .and_then(|changes| {
+                        changes.get(&uri).and_then(|edits| {
+                            edits
+                                .iter()
+                                .find(|edit| edit.new_text == format!("\\{replacement}"))
+                                .cloned()
+                        })
+                    }),
+                _ => None,
+            })
+            .expect("missing standard math spelling fix");
+        let fixed = text
+            .changed(vec![TextDocumentContentChangeEvent {
+                range: Some(edit.range),
+                range_length: None,
+                text: edit.new_text,
+            }])
+            .unwrap()
+            .source;
+        assert_eq!(
+            fixed,
+            source.replace(&format!("\\{typo}"), &format!("\\{replacement}"))
+        );
+        std::fs::write(&main, fixed).unwrap();
+        let after = build::run(&main, &config, &Default::default());
+        assert_eq!(after.status, "success", "{}", after.output);
+        assert_eq!(after.pages, Some(1));
+    }
 }

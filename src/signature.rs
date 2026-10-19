@@ -134,6 +134,8 @@ fn builtin(name: &str) -> Option<Signature> {
             ],
             false,
         ),
+        "DeclareMathOperator" => (&[("command", false), ("text", false)], true),
+        "operatorname" => (&[("text", false)], true),
         "frac" | "dfrac" | "tfrac" | "binom" => {
             (&[("numerator", false), ("denominator", false)], false)
         }
@@ -401,7 +403,8 @@ fn builtin(name: &str) -> Option<Signature> {
                     || syntax::declares_paired_delimiter(name)
                     || matches!(
                         name,
-                        "DeclareTextFontCommand"
+                        "DeclareMathOperator"
+                            | "DeclareTextFontCommand"
                             | "DeclareFixedFont"
                             | "DeclareMathAlphabet"
                             | "DeclareSymbolFontAlphabet"

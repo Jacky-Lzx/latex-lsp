@@ -206,13 +206,18 @@ fn snippets_respect_client_capabilities() {
     let mut workspace = Workspace::default();
     let main = insert(&mut workspace, "main.tex", "\\sec");
     let plain = features::completion(&workspace, &main, Position::new(0, 4));
-    let Some(CompletionTextEdit::Edit(edit)) = &plain[0].text_edit else {
+    let section = plain.iter().find(|item| item.label == "section").unwrap();
+    let Some(CompletionTextEdit::Edit(edit)) = &section.text_edit else {
         panic!();
     };
     assert_eq!(edit.new_text, "section");
     workspace.snippets = true;
     let snippets = features::completion(&workspace, &main, Position::new(0, 4));
-    let Some(CompletionTextEdit::Edit(edit)) = &snippets[0].text_edit else {
+    let section = snippets
+        .iter()
+        .find(|item| item.label == "section")
+        .unwrap();
+    let Some(CompletionTextEdit::Edit(edit)) = &section.text_edit else {
         panic!();
     };
     assert!(edit.new_text.contains("${1:Title}"));

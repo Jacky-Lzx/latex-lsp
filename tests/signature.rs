@@ -1395,3 +1395,28 @@ fn literal_control_sequence_calls_offer_builtin_macro_and_environment_signatures
         );
     }
 }
+
+#[test]
+fn math_operator_declarations_and_inline_names_hint_starred_and_bare_control_targets() {
+    for (source, active) in [
+        (r"\DeclareMathOperator\loc¦alop{local}", 0),
+        (r"\DeclareMathOperator*{\localop}{lo¦cal}", 1),
+        (
+            "\\DeclareMathOperator % star\r\n* % target\r\n\\localop % text\r\n{lo¦cal}",
+            1,
+        ),
+    ] {
+        check("", source, r"\DeclareMathOperator{command}{text}", active);
+    }
+    for source in [
+        r"\operatorname{ar¦g\,max}",
+        r"\operatorname*{ar¦g\,max}_{x}",
+    ] {
+        check("", source, r"\operatorname{text}", 0);
+    }
+    let (workspace, uri, position) = setup(
+        r"\DeclareMathOperator*{\localop}{arg\,max}",
+        r"\localop{x¦}",
+    );
+    assert!(signature::help(&workspace, &uri, position).is_none());
+}
