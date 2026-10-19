@@ -131,6 +131,8 @@ fn snippets_expand_in_a_real_editor_without_consuming_tex_backslashes() {
             "DeclareMathDelimiter",
             r"DeclareMathDelimiter{\command}{\mathopen}{symbols}{104}{largesymbols}{10}",
         ),
+        ("widehat", "widehat{expression}"),
+        ("langle", "langle"),
         ("date", r"date{\today}"),
         ("def", r"def\name{definition}"),
         ("let", r"let\alias=\command"),

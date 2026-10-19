@@ -1264,7 +1264,7 @@ fn macro_rename_preserves_backslashes_and_carries_document_versions() {
     };
     assert_eq!(placeholder, "foo");
     assert_eq!(range.start.character, 13);
-    let edit = features::rename(&workspace, &uri, Position::new(0, 14), "bar")
+    let edit = features::rename(&workspace, &uri, Position::new(0, 14), "renamedfoo")
         .unwrap()
         .unwrap();
     let Some(DocumentChanges::Edits(documents)) = edit.document_changes else {
@@ -1283,7 +1283,7 @@ fn macro_rename_preserves_backslashes_and_carries_document_versions() {
     assert_eq!(edits.len(), 2);
     assert_eq!(
         edits_result(source, &edits),
-        r"\newcommand{\bar}[1]{#1} \bar{中文}"
+        r"\newcommand{\renamedfoo}[1]{#1} \renamedfoo{中文}"
     );
 }
 

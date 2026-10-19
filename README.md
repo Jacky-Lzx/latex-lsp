@@ -166,6 +166,8 @@ LaTeX 标准的 `DeclareTextFontCommand`、`DeclareMathAlphabet`、`DeclareSymbo
 
 `DeclareMathAccent`、`DeclareMathRadical` 和以命令为目标的 `DeclareMathDelimiter` 也进入索引，支持导航、引用、语义高亮和跨文件安全重命名，并提供声明片段及字段参数提示。重音和根号命令按一个必选参数提供调用提示；根号不推断可选次数。定界符是零参数符号，可直接使用或跟随 `left` / `right` 伸缩；字符目标不会误记为命令声明。重命名保留数学类别、大小字体及槽位，不改动注释和逐字文本。
 
+常用标准数学重音和定界符（如 `hat`、`widehat`、`vec`、`langle` 和 `Vert`）提供补全、悬浮说明和命令拼写修复候选。重音、上下划线和 `sqrtsign` 按一个表达式参数提示及补全，定界符不追加参数；命令和环境重命名也会检查这些内置名称，避免覆盖已有数学命令。
+
 mathtools 的 `DeclarePairedDelimiter` / `DeclarePairedDelimiterX` / `DeclarePairedDelimiterXPP` 声明同样支持导航、引用、悬停、符号及跨文件重命名。参数提示识别星号自动缩放与 `[size]` 手动尺寸，X/XPP 的字面参数数量限于 1–9；补全只插入正文必选参数，保留其实际参数编号。声明本身提供命令片段及参数提示，X/XPP 的方括号参数数量为必填项；动态数量或定义有歧义时不推断调用签名，已有调用参数和声明的定界符、前后代码保持原样。
 
 直接 `\newif\ifdraft` 和字面 `\expandafter\newif\csname ifdraft\endcsname` 声明提供布尔符号、跳转、悬停和项目内的派生命令补全。从 `\ifdraft`、`\drafttrue`、`\draftfalse` 或对应字面 `csname` 引用发起重命名时，输入新的基础名称（例如 `release`），同步维护三种命令及声明；保留同名的独立 `\draft` 宏。只经字面 `csname` 使用的名称支持连字符和中文；存在直接控制序列时，新名称必须能组成 TeX 命令，不提供无法直接键入的补全。新名称与宏、寄存器、环境、其他开关或内置条件原语冲突，以及共享文件在其他项目中指向独立开关时拒绝修改；不展开动态声明。

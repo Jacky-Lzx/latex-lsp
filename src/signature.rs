@@ -138,6 +138,10 @@ fn builtin(name: &str) -> Option<Signature> {
             (&[("numerator", false), ("denominator", false)], false)
         }
         "sqrt" => (&[("degree", true), ("expression", false)], false),
+        "hat" | "widehat" | "tilde" | "widetilde" | "bar" | "vec" | "dot" | "ddot" | "acute"
+        | "grave" | "breve" | "check" | "mathring" | "overline" | "underline" | "sqrtsign" => {
+            (&[("expression", false)], false)
+        }
         "href" => (&[("url", false), ("text", false)], false),
         "url" => (&[("url", false)], false),
         "includegraphics" => (&[("options", true), ("file", false)], true),
