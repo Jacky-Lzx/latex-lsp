@@ -167,7 +167,7 @@ fn compound(source: &str, command: &Command) -> Option<Destination> {
     match command.name.as_str() {
         "hyperdef" => {
             if source.as_bytes().get(at) == Some(&b'[') {
-                at = syntax::skip_space(source, syntax::group(source, at, b'[', b']')?.1);
+                at = syntax::skip_space(source, syntax::optional_note_end(source, at)?);
             }
         }
         "hyperref" => {

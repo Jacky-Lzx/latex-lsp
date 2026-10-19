@@ -471,7 +471,12 @@ fn completion_name_argument(source: &str, command: &Command, offset: usize) -> O
     } else {
         (syntax::skip_space(source, command.span.end), b'{')
     };
-    syntax::active_name_argument(source, start, open, offset).or_else(|| {
+    let argument = if matches!(command.name.as_str(), "hyperref" | "hyperdef") {
+        syntax::active_label_argument(source, start, open, offset)
+    } else {
+        syntax::active_name_argument(source, start, open, offset)
+    };
+    argument.or_else(|| {
         syntax::active_name_argument(
             source,
             syntax::range_reference_end_start(source, command)?,

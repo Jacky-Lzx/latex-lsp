@@ -145,7 +145,11 @@ pub(crate) fn group(source: &str, i: usize, open: u8, close: u8) -> Option<(Argu
 /// TeX optional notes end at the first unbraced closing bracket. An opening
 /// bracket inside a note is ordinary text, not another grouping delimiter.
 pub(crate) fn optional_note_end(source: &str, at: usize) -> Option<usize> {
-    group_mode(source, at, b'[', b']', true, false).map(|(_, end)| end)
+    bracket_argument(source, at).map(|(_, end)| end)
+}
+
+pub(crate) fn bracket_argument(source: &str, at: usize) -> Option<(Argument, usize)> {
+    group_mode(source, at, b'[', b']', true, false)
 }
 
 fn group_mode(
@@ -416,7 +420,7 @@ pub(crate) fn separate_label_argument(source: &str, command: &Command) -> Option
         return counter_reference_label(source, command);
     }
     let outer_start = skip_space(source, command.span.end);
-    let (outer, _) = group(source, outer_start, b'[', b']')?;
+    let (outer, _) = bracket_argument(source, outer_start)?;
     if let Some((mut inner, end)) = group(source, outer.span.start, b'{', b'}') {
         if end == outer.span.end {
             inner.outer_span = outer.outer_span;
@@ -803,11 +807,23 @@ pub(crate) fn active_static_argument(
     open: u8,
     cursor: usize,
 ) -> Option<Range<usize>> {
+    active_static_argument_mode(source, start, open, cursor, true)
+}
+
+fn active_static_argument_mode(
+    source: &str,
+    start: usize,
+    open: u8,
+    cursor: usize,
+    nested_delimiters: bool,
+) -> Option<Range<usize>> {
     if source.as_bytes().get(start) != Some(&open) || cursor <= start {
         return None;
     }
     let close = if open == b'{' { b'}' } else { b']' };
-    let span = if let Some((argument, _)) = group(source, start, open, close) {
+    let span = if let Some((argument, _)) =
+        group_mode(source, start, open, close, true, nested_delimiters)
+    {
         argument.span
     } else {
         start + 1..source.len()
@@ -853,9 +869,28 @@ pub(crate) fn active_name_argument(
     open: u8,
     cursor: usize,
 ) -> Option<Range<usize>> {
-    active_static_argument(source, start, open, cursor)?;
+    active_name_argument_mode(source, start, open, cursor, true)
+}
+
+pub(crate) fn active_label_argument(
+    source: &str,
+    start: usize,
+    open: u8,
+    cursor: usize,
+) -> Option<Range<usize>> {
+    active_name_argument_mode(source, start, open, cursor, open != b'[')
+}
+
+fn active_name_argument_mode(
+    source: &str,
+    start: usize,
+    open: u8,
+    cursor: usize,
+    nested_delimiters: bool,
+) -> Option<Range<usize>> {
+    active_static_argument_mode(source, start, open, cursor, nested_delimiters)?;
     let close = if open == b'{' { b'}' } else { b']' };
-    let span = group(source, start, open, close).map_or_else(
+    let span = group_mode(source, start, open, close, true, nested_delimiters).map_or_else(
         || {
             let end = source[cursor..]
                 .find(['\r', '\n'])
@@ -1173,6 +1208,10 @@ impl Syntax {
                     } else if is_citation(name) {
                         arg_start = citation_argument_start(source, name, command_end)
                             .unwrap_or(source.len());
+                    } else if matches!(name, "hyperref" | "hyperdef") {
+                        if let Some((_, end)) = bracket_argument(source, arg_start) {
+                            arg_start = skip_space(source, end);
+                        }
                     } else if !matches!(name, "input" | "InputIfFileExists" | "IfFileExists")
                         && !passes_options(name)
                         && !loader_forwards_options(name)
