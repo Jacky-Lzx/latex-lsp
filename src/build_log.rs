@@ -429,7 +429,15 @@ fn emit(
     message: String,
     severity: DiagnosticSeverity,
 ) {
-    emit_with_context(result, path, line, message, severity, None);
+    emit_with_context(result, path, line, message, severity, None, true);
+}
+
+pub(crate) fn unresolved_source(diagnostic: &Diagnostic) -> bool {
+    diagnostic.data.as_ref().is_some_and(|data| {
+        data.get("unresolvedSource")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+    })
 }
 
 /// A direct TeX error prints the consumed source prefix on its l.N line.
@@ -710,6 +718,7 @@ fn emit_with_context(
     mut message: String,
     severity: DiagnosticSeverity,
     context: Option<&str>,
+    source_confirmed: bool,
 ) {
     let Ok(uri) = Url::from_file_path(path) else {
         return;
@@ -722,6 +731,7 @@ fn emit_with_context(
                 diagnostic.message == message
                     && diagnostic.severity == Some(severity)
                     && diagnostic.range.start.line == line.saturating_sub(1)
+                    && unresolved_source(diagnostic) != source_confirmed
             })
         })
     {
@@ -749,6 +759,27 @@ fn emit_with_context(
         .map(char::len_utf16)
         .sum::<usize>() as u32;
     let end = value.encode_utf16().count() as u32;
+    let line_range = Range::new(
+        Position::new(line, start.min(end)),
+        Position::new(line, end),
+    );
+    if !source_confirmed {
+        // References and destinations can be located without an expansion
+        // context. They must not borrow matching names from the fallback root.
+        let mut data = serde_json::json!({"unresolvedSource":true});
+        if rewritten {
+            data["reportedLine"] = reported_line.into();
+        }
+        result.entry(uri).or_default().push(Diagnostic {
+            range: line_range,
+            severity: Some(severity),
+            source: Some("latex-build".into()),
+            message,
+            data: Some(data),
+            ..Default::default()
+        });
+        return;
+    }
     let mut ranges = undefined_reference_ranges(&text, line, &message);
     let destination = destination_warning(&message);
     let destination_ranges: Vec<_> = destination
@@ -805,10 +836,7 @@ fn emit_with_context(
         ranges.push(range);
     }
     if ranges.is_empty() {
-        ranges.push(Range::new(
-            Position::new(line, start.min(end)),
-            Position::new(line, end),
-        ));
+        ranges.push(line_range);
     }
     result
         .entry(uri)
@@ -1256,10 +1284,16 @@ pub(crate) fn parse_with_sources(
                         cause,
                         DiagnosticSeverity::ERROR,
                         context,
+                        true,
                     );
                 }
             }
-            let severity = if message.contains("Warning:") {
+            let severity = if message.contains("Warning:")
+                || warning_start(&message)
+                || message.starts_with("Missing character:")
+                || box_code(&message).is_some()
+                || missing_include_key(&message).is_some()
+            {
                 DiagnosticSeverity::WARNING
             } else {
                 DiagnosticSeverity::ERROR
@@ -1276,7 +1310,15 @@ pub(crate) fn parse_with_sources(
                     )
                 })
                 .flatten();
-            emit_with_context(&mut result, &path, number, message, severity, context);
+            emit_with_context(
+                &mut result,
+                &path,
+                number,
+                message,
+                severity,
+                context,
+                confirmed_path,
+            );
         } else if let Some(message) = line.strip_prefix("! ") {
             let message = wrapped_error_message(root, &lines, &separator_lines, &mut i, message);
             if let Some((path, cause, context_start)) = pending.take() {
@@ -1296,6 +1338,7 @@ pub(crate) fn parse_with_sources(
                     cause,
                     DiagnosticSeverity::ERROR,
                     context,
+                    true,
                 );
             }
             pending = Some((current(), message, i + 1));
@@ -1318,6 +1361,7 @@ pub(crate) fn parse_with_sources(
                     message,
                     DiagnosticSeverity::ERROR,
                     context,
+                    true,
                 );
             }
         } else if warning_start(line) || line.starts_with("Missing character:") {
@@ -1367,7 +1411,11 @@ pub(crate) fn parse_with_sources(
     }
     for diagnostics in result.values_mut() {
         diagnostics.sort_by_key(|diagnostic| (diagnostic.range.start, diagnostic.message.clone()));
-        diagnostics.dedup_by(|a, b| a.range == b.range && a.message == b.message);
+        diagnostics.dedup_by(|a, b| {
+            a.range == b.range
+                && a.message == b.message
+                && unresolved_source(a) == unresolved_source(b)
+        });
     }
     (result, sources)
 }

@@ -9,6 +9,95 @@ use std::{
 use tower_lsp::lsp_types::{DiagnosticSeverity, Url};
 
 #[test]
+fn unresolved_numbered_sources_do_not_borrow_warning_ranges_or_codes_from_the_root() {
+    use latex_lsp::{build_log, text::Text};
+    use tower_lsp::lsp_types::{NumberOrString, Position, Range};
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = root.join("main.tex");
+    let child = root.join("child.tex");
+    std::fs::create_dir(root.join("folder.tex")).unwrap();
+    for (source, message, code) in [
+        (r"Prefix \ref{missing}", "LaTeX Warning: Reference `missing' on page 1 undefined on input line 1.", None),
+        (r"Prefix \cite{missing}", "Package natbib Warning: Citation `missing' on page 1 undefined on input line 1.", None),
+        (r"Prefix \hyperlink{missing}{Text}", "pdfTeX warning (dest): name{missing} has been referenced but does not exist, replaced by a fixed one", Some("undefined-pdf-destination")),
+        (r"Prefix \hyperlink{missing}{Text}", "warning  (pdf backend): unreferenced destination with name 'missing'", Some("undefined-pdf-destination")),
+        (r"Prefix \hypertarget{missing}{Text}", "pdfTeX warning (ext4): destination with the same identifier (name{missing}) has been already used, duplicate ignored", Some("duplicate-pdf-destination")),
+        (r"Prefix \include{missing}", "Included file `missing.tex` not found", Some("missing-include")),
+        ("First paragraph line.\nSecond paragraph line.", r"Overfull \hbox (12pt too wide) in paragraph at lines 1--2", Some("overfull-box")),
+        ("Paragraph.", "Missing character: There is no A (U+0041) in font nullfont!", None),
+    ] {
+        std::fs::write(&main, format!("{source}\n")).unwrap();
+        std::fs::write(&child, format!("{source}\n")).unwrap();
+        let text = Text::new(source.into());
+        let expected = if let Some(start) = source.find("missing") {
+            text.range(start, start + "missing".len())
+        } else {
+            text.range(0, source.len())
+        };
+        let mut severity = None;
+        for (name, path) in [("./main.tex", &main), ("./child.tex", &child)] {
+            let log = format!("(./main.tex\n{name}:1: {message}\n)\n");
+            let diagnostics = build_log::parse(&main, &log);
+            let item = &diagnostics[&Url::from_file_path(path).unwrap()][0];
+            assert_eq!(item.range, expected, "{name}: {message}");
+            assert_eq!(item.severity, Some(DiagnosticSeverity::WARNING), "{message}");
+            assert_eq!(item.code, code.map(|code| NumberOrString::String(code.into())));
+            severity = item.severity;
+        }
+        for name in ["./gone.tex", "./folder.tex"] {
+            let log = format!("(./main.tex\n{name}:1: {message}\n)\n");
+            let diagnostics = build_log::parse(&main, &log);
+            let item = &diagnostics[&Url::from_file_path(&main).unwrap()][0];
+            assert_eq!(item.message, message);
+            assert_eq!(item.severity, severity);
+            assert_eq!(item.code, None, "{name}: {item:?}");
+            assert_eq!(item.data, Some(serde_json::json!({"unresolvedSource":true})), "{name}: {item:?}");
+            let line_end = source.lines().next().unwrap().encode_utf16().count() as u32;
+            assert_eq!(item.range, Range::new(Position::new(0, 0), Position::new(0, line_end)), "{name}: {message}");
+        }
+    }
+}
+
+#[test]
+fn trusted_and_unresolved_numbered_warnings_do_not_suppress_each_other() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    let cases = [
+        (
+            r"\hyperlink{missing}{Text}",
+            "pdfTeX warning (dest): name{missing} has been referenced but does not exist, replaced by a fixed one",
+        ),
+        (
+            "Paragraph",
+            r"Overfull \hbox (12pt too wide) in paragraph at lines 1--1",
+        ),
+    ];
+    for (source, message) in cases {
+        std::fs::write(&main, format!("{source}\n")).unwrap();
+        for names in [["gone.tex", "main.tex"], ["main.tex", "gone.tex"]] {
+            let log = names
+                .map(|name| format!("./{name}:1: {message}\n"))
+                .concat();
+            let diagnostics = latex_lsp::build_log::parse(&main, &log);
+            let items = &diagnostics[&Url::from_file_path(&main).unwrap()];
+            assert_eq!(items.len(), 2, "{log}");
+            assert_eq!(items.iter().filter(|item| item.code.is_some()).count(), 1);
+            assert_eq!(
+                items
+                    .iter()
+                    .filter(|item| item
+                        .data
+                        .as_ref()
+                        .is_some_and(|data| data["unresolvedSource"] == true))
+                    .count(),
+                1
+            );
+        }
+    }
+}
+
+#[test]
 #[cfg(unix)]
 #[ignore = "requires pdflatex, xelatex, lualatex and hyperref"]
 fn real_pdfbookmark_levels_match_actual_targets_across_engines_and_duplicate_warnings() {

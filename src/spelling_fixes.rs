@@ -270,6 +270,7 @@ pub fn fixes(workspace: &Workspace, uri: &Url, range: Range) -> Vec<QuickFix> {
         let project = workspace.project_documents(root);
         for diagnostic in diagnostics {
             if diagnostic.source.as_deref() != Some("latex-build")
+                || build_log::unresolved_source(diagnostic)
                 || diagnostic.range.start > range.end
                 || range.start > diagnostic.range.end
             {

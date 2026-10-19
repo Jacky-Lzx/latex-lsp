@@ -70,7 +70,8 @@ fn unresolved_numbered_sources_do_not_borrow_precise_error_context_from_the_root
             assert_eq!(error.message, message);
             assert_eq!(error.severity, Some(DiagnosticSeverity::ERROR));
             assert!(
-                error.code.is_none() && error.data.is_none(),
+                error.code.is_none()
+                    && error.data == Some(serde_json::json!({"unresolvedSource":true})),
                 "{name}: {error:?}"
             );
             assert_eq!(error.range.start.character, 0);

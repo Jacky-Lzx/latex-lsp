@@ -24,7 +24,10 @@ pub(crate) fn resolve_diagnostics(
     for (kind, name) in diagnostics
         .values()
         .flatten()
-        .filter(|diagnostic| diagnostic.source.as_deref() == Some("latex-build"))
+        .filter(|diagnostic| {
+            diagnostic.source.as_deref() == Some("latex-build")
+                && !build_log::unresolved_source(diagnostic)
+        })
         .filter_map(|diagnostic| build_log::destination_warning(&diagnostic.message))
     {
         names.entry(kind).or_default().insert(name);
@@ -62,14 +65,15 @@ pub(crate) fn resolve_diagnostics(
     let mut result = BTreeMap::<Url, Vec<Diagnostic>>::new();
     for (uri, items) in std::mem::take(diagnostics) {
         for diagnostic in items {
-            let mapped = (diagnostic.source.as_deref() == Some("latex-build"))
-                .then(|| build_log::destination_warning(&diagnostic.message))
-                .flatten()
-                .and_then(|(kind, name)| {
-                    locations
-                        .get(&(kind, name))
-                        .map(|locations| (kind, name, locations))
-                });
+            let mapped = (diagnostic.source.as_deref() == Some("latex-build")
+                && !build_log::unresolved_source(&diagnostic))
+            .then(|| build_log::destination_warning(&diagnostic.message))
+            .flatten()
+            .and_then(|(kind, name)| {
+                locations
+                    .get(&(kind, name))
+                    .map(|locations| (kind, name, locations))
+            });
             if let Some((kind, name, locations)) = mapped {
                 for (uri, range) in locations {
                     if !seen.insert((
@@ -342,6 +346,49 @@ pub(crate) fn replacement_text(doc: &Document, range: LspRange, new_name: &str) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unresolved_sources_cannot_supply_or_reuse_destination_locations() {
+        let root = Url::parse("file:///anchors/main.tex").unwrap();
+        let child = Url::parse("file:///anchors/child.tex").unwrap();
+        let mut workspace = Workspace::default();
+        workspace.documents.insert(
+            child.clone(),
+            Document::new(
+                &child,
+                "\\hyperlink{lost}{Text}\\hypertarget{copy}{Target}".into(),
+                None,
+            ),
+        );
+        for message in [
+            "warning  (pdf backend): unreferenced destination with name 'lost'",
+            "warning  (pdf backend): ignoring duplicate destination with the name 'copy'",
+        ] {
+            let unresolved = Diagnostic {
+                source: Some("latex-build".into()),
+                message: message.into(),
+                data: Some(serde_json::json!({"unresolvedSource":true})),
+                ..Default::default()
+            };
+            for trusted in [false, true] {
+                let mut items = vec![unresolved.clone()];
+                if trusted {
+                    items.push(Diagnostic {
+                        data: None,
+                        ..unresolved.clone()
+                    });
+                }
+                let mut diagnostics = [(root.clone(), items)].into();
+                resolve_diagnostics(&workspace, &[child.clone()].into(), &mut diagnostics);
+                assert_eq!(diagnostics[&root], vec![unresolved.clone()]);
+                assert_eq!(diagnostics.contains_key(&child), trusted);
+                if trusted {
+                    assert_eq!(diagnostics[&child].len(), 1);
+                    assert!(diagnostics[&child][0].code.is_some());
+                }
+            }
+        }
+    }
 
     #[test]
     fn duplicate_compiler_destinations_link_only_the_recorded_explicit_declarations() {
