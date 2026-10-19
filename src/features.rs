@@ -506,8 +506,9 @@ fn completion_name_argument(
         if syntax::is_reference(&command.name)
             || syntax::has_separate_label_argument(&command.name)
             || command.name == "hyperdef"
+            || syntax::is_single_citation(&command.name)
         {
-            if let Some(context) = syntax::active_commented_label_argument(
+            if let Some(context) = syntax::active_commented_name_argument(
                 source,
                 start,
                 open,

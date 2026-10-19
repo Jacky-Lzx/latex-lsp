@@ -380,7 +380,7 @@ pub(crate) fn range_reference_end(source: &str, command: &Command) -> Option<Arg
         b'{',
         b'}',
     )
-    .map(|(argument, _)| label_argument(source, argument))
+    .map(|(argument, _)| single_key_argument(source, argument))
 }
 
 pub(crate) fn is_counter_reference(name: &str) -> bool {
@@ -405,7 +405,7 @@ pub(crate) fn counter_reference_label(source: &str, command: &Command) -> Option
         b'{',
         b'}',
     )
-    .map(|(argument, _)| label_argument(source, argument))
+    .map(|(argument, _)| single_key_argument(source, argument))
 }
 
 /// These commands keep their label outside the ordinary first required argument.
@@ -450,10 +450,10 @@ pub(crate) fn separate_label_argument(source: &str, command: &Command) -> Option
     {
         if skip_comments(source, end) == outer.span.end {
             inner.outer_span = outer.outer_span;
-            return Some(label_argument(source, inner));
+            return Some(single_key_argument(source, inner));
         }
     }
-    Some(label_argument(source, outer))
+    Some(single_key_argument(source, outer))
 }
 
 /// Drop only comments: literal spaces around a protected label remain tokens.
@@ -470,9 +470,9 @@ fn skip_comments(source: &str, mut at: usize) -> usize {
     at
 }
 
-/// Comments have no tokens, whereas literal spaces belong to a single label's
+/// Comments have no tokens, whereas literal spaces belong to a single key's
 /// name. Keep only a contiguous name bounded by comments, without trimming it.
-fn label_argument(source: &str, mut argument: Argument) -> Argument {
+fn single_key_argument(source: &str, mut argument: Argument) -> Argument {
     if !argument.value.contains('%') {
         return argument;
     }
@@ -1058,10 +1058,10 @@ pub(crate) fn active_label_argument(
     active_name_argument_mode(source, start, open, cursor, open != b'[')
 }
 
-/// Complete a single label without deleting comments. Whitespace outside the
+/// Complete a single key without deleting comments. Whitespace outside the
 /// literal name is removed separately, since accepting a name must not retain
-/// spaces that would make it refer to a different label.
-pub(crate) fn active_commented_label_argument(
+/// spaces that would make it refer to a different key.
+pub(crate) fn active_commented_name_argument(
     source: &str,
     start: usize,
     open: u8,
@@ -1459,8 +1459,9 @@ impl Syntax {
                         })
                         .filter(|_| !(starred && loader_extension(name).is_some()));
                     let argument = parsed.as_ref().map(|(argument, _)| {
-                        if name == "label" || is_single_reference(name) {
-                            label_argument(source, argument.clone())
+                        if name == "label" || is_single_reference(name) || is_single_citation(name)
+                        {
+                            single_key_argument(source, argument.clone())
                         } else {
                             argument.clone()
                         }
