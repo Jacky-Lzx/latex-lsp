@@ -1436,6 +1436,15 @@ impl Syntax {
                     } else if is_citation(name) {
                         arg_start = citation_argument_start(source, name, command_end)
                             .unwrap_or(source.len());
+                    } else if name == "bibitem" {
+                        // One optional label ends at the first unbraced `]`.
+                        // Extra notes and unsupported stars leave prose behind.
+                        if starred {
+                            arg_start = source.len();
+                        } else if bytes.get(arg_start) == Some(&b'[') {
+                            arg_start = optional_note_end(source, arg_start)
+                                .map_or(source.len(), |end| skip_space(source, end));
+                        }
                     } else if matches!(name, "hyperref" | "hyperdef") {
                         if let Some((_, end)) = bracket_argument(source, arg_start) {
                             arg_start = skip_space(source, end);
@@ -1459,7 +1468,9 @@ impl Syntax {
                         })
                         .filter(|_| !(starred && loader_extension(name).is_some()));
                     let argument = parsed.as_ref().map(|(argument, _)| {
-                        if name == "label" || is_single_reference(name) || is_single_citation(name)
+                        if matches!(name, "label" | "bibitem")
+                            || is_single_reference(name)
+                            || is_single_citation(name)
                         {
                             single_key_argument(source, argument.clone())
                         } else {
@@ -1541,7 +1552,9 @@ impl Syntax {
                                 });
                             }
                             "label" if is_static_key(&arg.value) => result.labels.push(entry()),
-                            "bibitem" => result.citations.push(entry()),
+                            "bibitem" if is_static_key(&arg.value) => {
+                                result.citations.push(entry())
+                            }
                             "begin" => {
                                 let env = arg.value.as_str();
                                 if is_verbatim_environment(env) {

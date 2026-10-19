@@ -134,7 +134,8 @@ fn raw_target(doc: &Document, offset: usize) -> Option<Target<'_>> {
                             && (command.name == "label"
                                 || syntax::is_single_reference(&command.name))
                         || kind == TargetKind::Citation
-                            && syntax::is_single_citation(&command.name))
+                            && (syntax::is_single_citation(&command.name)
+                                || command.name == "bibitem"))
                         && !syntax::is_static_key(&arg.value)
                     {
                         return None;
