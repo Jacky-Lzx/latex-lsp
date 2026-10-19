@@ -330,7 +330,7 @@ fn missing_include_file(path: &Path, lines: &[&str], index: &mut usize) -> Optio
     None
 }
 
-fn missing_include_key(message: &str) -> Option<&str> {
+pub(crate) fn missing_include_key(message: &str) -> Option<&str> {
     message
         .strip_prefix("Included file `")?
         .strip_suffix("` not found")

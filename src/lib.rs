@@ -11,6 +11,7 @@ pub mod features;
 pub mod file_operations;
 mod generated;
 pub mod graphics;
+mod include_fixes;
 mod named_commands;
 pub mod navigation;
 mod output;

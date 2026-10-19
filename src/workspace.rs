@@ -341,8 +341,12 @@ impl Workspace {
     }
 
     pub fn project_documents(&self, root: &Url) -> BTreeSet<Url> {
+        self.project_documents_from(root, root)
+    }
+
+    pub(crate) fn project_documents_from(&self, source: &Url, root: &Url) -> BTreeSet<Url> {
         let mut visited = BTreeSet::new();
-        let mut pending = vec![root.clone()];
+        let mut pending = vec![source.clone()];
         while let Some(uri) = pending.pop() {
             if visited.insert(uri.clone()) {
                 pending.extend(self.dependencies_from(&uri, root));

@@ -8,6 +8,92 @@ fn uri(root: &Path, name: &str) -> Url {
     Url::from_file_path(root.join(name)).unwrap()
 }
 
+#[test]
+#[ignore = "requires pdflatex"]
+fn real_missing_include_spelling_fixes_read_the_intended_chapter_after_recompiling() {
+    for extension in ["", ".tex"] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let main = root.join("main.tex");
+        std::fs::create_dir(root.join("sections")).unwrap();
+        std::fs::write(
+            root.join("sections/my chapter.tex"),
+            "\\typeout{INCLUDED CORRECTED CHAPTER}Chapter.\n",
+        )
+        .unwrap();
+        let source = format!("\\documentclass{{article}}\\begin{{document}}Start.\n\\include % keep\r\n{{sections/my chapetr{extension}}}\r\nEnd.\\end{{document}}\n");
+        std::fs::write(&main, &source).unwrap();
+        let config = latex_lsp::config::BuildConfig {
+            executable: "pdflatex".into(),
+            ..Default::default()
+        };
+        let compile = || {
+            let outcome = build::run(&main, &config, &Default::default());
+            assert_eq!(outcome.status, "success", "{}", outcome.output);
+            outcome
+        };
+        compile();
+        let outcome = compile();
+        let main_uri = uri(root, "main.tex");
+        let diagnostic = outcome.diagnostics[&main_uri]
+            .iter()
+            .find(|item| item.code == Some(NumberOrString::String("missing-include".into())))
+            .unwrap()
+            .clone();
+        let mut workspace = Workspace {
+            code_action_literals: true,
+            ..Default::default()
+        };
+        workspace.add_root(root.into());
+        workspace
+            .build_diagnostics
+            .insert(main_uri.clone(), outcome.diagnostics);
+        let actions = editing::code_actions(
+            &workspace,
+            &main_uri,
+            diagnostic.range,
+            &CodeActionContext {
+                diagnostics: vec![diagnostic],
+                ..Default::default()
+            },
+        );
+        assert_eq!(actions.len(), 1, "{actions:?}");
+        let CodeActionOrCommand::CodeAction(action) = &actions[0] else {
+            panic!()
+        };
+        let changes = action.edit.as_ref().unwrap().changes.as_ref().unwrap();
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[&main_uri].len(), 1);
+        let edit = &changes[&main_uri][0];
+        assert_eq!(edit.new_text, format!("sections/my chapter{extension}"));
+        let updated = latex_lsp::text::Text::new(source.clone())
+            .changed(vec![TextDocumentContentChangeEvent {
+                range: Some(edit.range),
+                range_length: None,
+                text: edit.new_text.clone(),
+            }])
+            .unwrap();
+        assert_eq!(updated.source, source.replace("chapetr", "chapter"));
+        std::fs::write(&main, updated.source).unwrap();
+        compile();
+        let corrected = compile();
+        assert!(
+            corrected.diagnostics.values().all(Vec::is_empty),
+            "{:?}",
+            corrected.diagnostics
+        );
+        assert!(
+            corrected.output.contains("INCLUDED CORRECTED CHAPTER"),
+            "{}",
+            corrected.output
+        );
+        assert!(corrected
+            .inputs
+            .unwrap()
+            .contains(&uri(root, "sections/my chapter.tex")));
+    }
+}
+
 fn project(root: &Path) -> Workspace {
     for (name, source) in [
         ("main.tex", SOURCE),

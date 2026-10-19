@@ -26,6 +26,337 @@ fn context(diagnostics: Vec<Diagnostic>) -> CodeActionContext {
     }
 }
 
+fn include_warning(workspace: &mut Workspace, root: &Url, uri: &Url, name: &str) -> Diagnostic {
+    let doc = &workspace.documents[uri];
+    let argument = doc
+        .syntax
+        .commands
+        .iter()
+        .find(|command| command.name == "include")
+        .unwrap()
+        .argument
+        .as_ref()
+        .unwrap();
+    let leading = argument.value.len() - argument.value.trim_start().len();
+    let trailing = argument.value.trim_end().len();
+    let diagnostic = Diagnostic {
+        range: doc.text.range(
+            argument.span.start + leading,
+            argument.span.start + trailing,
+        ),
+        source: Some("latex-build".into()),
+        code: Some(NumberOrString::String("missing-include".into())),
+        message: format!("Included file `{name}` not found"),
+        ..Default::default()
+    };
+    workspace.build_diagnostics.insert(
+        root.clone(),
+        [(uri.clone(), vec![diagnostic.clone()])].into(),
+    );
+    diagnostic
+}
+
+#[test]
+fn include_fix_requests_never_exceed_the_total_suggestion_limit() {
+    let directory = tempfile::tempdir().unwrap();
+    let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+    let source = "\\include{chapter}\n".repeat(64);
+    std::fs::write(directory.path().join("main.tex"), &source).unwrap();
+    for index in 0..8 {
+        std::fs::write(
+            directory.path().join(format!("chapter{index}.tex")),
+            "Chapter.",
+        )
+        .unwrap();
+    }
+    let mut workspace = Workspace {
+        code_action_literals: true,
+        ..Default::default()
+    };
+    workspace
+        .documents
+        .insert(uri.clone(), Document::new(&uri, source.clone(), Some(1)));
+    let text = &workspace.documents[&uri].text;
+    let diagnostics: Vec<_> = workspace.documents[&uri]
+        .syntax
+        .commands
+        .iter()
+        .filter_map(|command| command.argument.as_ref())
+        .map(|argument| Diagnostic {
+            range: text.range(argument.span.start, argument.span.end),
+            message: "Included file `chapter.tex` not found".into(),
+            source: Some("latex-build".into()),
+            code: Some(NumberOrString::String("missing-include".into())),
+            ..Default::default()
+        })
+        .collect();
+    let range = text.range(0, source.len());
+    workspace
+        .build_diagnostics
+        .insert(uri.clone(), [(uri.clone(), diagnostics.clone())].into());
+    let actions = editing::code_actions(&workspace, &uri, range, &context(diagnostics));
+    assert_eq!(actions.len(), 256);
+}
+
+#[test]
+fn missing_include_fixes_preserve_comments_utf16_prefixes_and_explicit_extensions() {
+    for versioned in [false, true] {
+        for extension in ["", ".tex"] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            std::fs::create_dir(root.join("sections")).unwrap();
+            std::fs::write(root.join("sections/chapter.tex"), "Chapter.\n").unwrap();
+            let uri = Url::from_file_path(root.join("main.tex")).unwrap();
+            let source =
+                format!("😀 \\include % keep\r\n{{ sections/chapetr{extension} }} % keep\r\n");
+            std::fs::write(root.join("main.tex"), &source).unwrap();
+            let mut workspace = Workspace {
+                versioned_edits: versioned,
+                code_action_literals: true,
+                ..Default::default()
+            };
+            workspace
+                .documents
+                .insert(uri.clone(), Document::new(&uri, source.clone(), Some(9)));
+            let diagnostic = include_warning(&mut workspace, &uri, &uri, "sections/chapetr.tex");
+            let actions = editing::code_actions(
+                &workspace,
+                &uri,
+                diagnostic.range,
+                &context(vec![diagnostic]),
+            );
+            assert_eq!(actions.len(), 1, "{actions:?}");
+            let edit = action_edit(&actions[0], &uri);
+            assert_eq!(edit.new_text, format!("sections/chapter{extension}"));
+            let updated = Text::new(source.clone())
+                .changed(vec![TextDocumentContentChangeEvent {
+                    range: Some(edit.range),
+                    range_length: None,
+                    text: edit.new_text,
+                }])
+                .unwrap();
+            assert_eq!(updated.source, source.replace("chapetr", "chapter"));
+        }
+    }
+}
+
+#[test]
+fn include_fix_commands_recheck_candidate_existence_original_existence_and_versions() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let uri = Url::from_file_path(root.join("main.tex")).unwrap();
+    let source = "\\include{chapetr}\n";
+    std::fs::write(root.join("main.tex"), source).unwrap();
+    std::fs::write(root.join("chapter.tex"), "Chapter.\n").unwrap();
+    let mut workspace = Workspace {
+        apply_edits: true,
+        ..Default::default()
+    };
+    workspace
+        .documents
+        .insert(uri.clone(), Document::new(&uri, source.into(), Some(9)));
+    let diagnostic = include_warning(&mut workspace, &uri, &uri, "chapetr.tex");
+    let actions = editing::code_actions(
+        &workspace,
+        &uri,
+        diagnostic.range,
+        &context(vec![diagnostic.clone()]),
+    );
+    assert_eq!(actions.len(), 1);
+    let CodeActionOrCommand::Command(command) = &actions[0] else {
+        panic!()
+    };
+    let argument = command.arguments.as_ref().unwrap()[0].clone();
+    let resolve = |workspace: &Workspace| {
+        editing::resolve_fix(workspace, serde_json::from_value(argument.clone()).unwrap())
+    };
+    assert!(resolve(&workspace).is_some());
+    std::fs::remove_file(root.join("chapter.tex")).unwrap();
+    assert!(resolve(&workspace).is_none());
+    std::fs::write(root.join("chapter.tex"), "Chapter.\n").unwrap();
+    std::fs::write(root.join("chapetr.tex"), "Now exists.\n").unwrap();
+    assert!(resolve(&workspace).is_none());
+    std::fs::remove_file(root.join("chapetr.tex")).unwrap();
+    workspace.documents.get_mut(&uri).unwrap().version = Some(10);
+    assert!(resolve(&workspace).is_none());
+    workspace.documents.insert(
+        uri.clone(),
+        Document::new(&uri, "\\include{another}\n".into(), Some(9)),
+    );
+    assert!(resolve(&workspace).is_none());
+}
+
+#[test]
+fn include_candidates_use_the_diagnostic_build_root_instead_of_another_project_or_source_folder() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    for folder in ["a", "b", "shared"] {
+        std::fs::create_dir(root.join(folder)).unwrap();
+    }
+    for (name, source) in [
+        (
+            "a/main.tex",
+            "\\documentclass{article}\\input{../shared/source}",
+        ),
+        (
+            "b/main.tex",
+            "\\documentclass{article}\\input{../shared/source}",
+        ),
+        ("shared/source.tex", "\\include{chapetr}\n"),
+        ("a/chapter.tex", "A."),
+        ("b/chapert.tex", "B."),
+        ("shared/chapetr.tex", "Wrong working directory."),
+    ] {
+        std::fs::write(root.join(name), source).unwrap();
+    }
+    let uri = Url::from_file_path(root.join("shared/source.tex")).unwrap();
+    let mut workspace = Workspace {
+        code_action_literals: true,
+        ..Default::default()
+    };
+    workspace.add_root(root.into());
+    for (folder, expected) in [("a", "chapter"), ("b", "chapert")] {
+        workspace.build_diagnostics.clear();
+        let main = Url::from_file_path(root.join(folder).join("main.tex")).unwrap();
+        let diagnostic = include_warning(&mut workspace, &main, &uri, "chapetr.tex");
+        let actions = editing::code_actions(
+            &workspace,
+            &uri,
+            diagnostic.range,
+            &context(vec![diagnostic]),
+        );
+        assert_eq!(actions.len(), 1, "{actions:?}");
+        assert_eq!(action_edit(&actions[0], &uri).new_text, expected);
+    }
+}
+
+#[test]
+fn include_fixes_suppress_self_inclusion_known_cycles_nonfiles_and_mismatched_warnings() {
+    for (main_name, candidate) in [
+        ("chapter.tex", "Text."),
+        ("main.tex", "\\input{main}"),
+        ("main.tex", "\\input{bridge}"),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let source = "\\documentclass{article}\\include{chapetr}\n";
+        std::fs::write(root.join(main_name), source).unwrap();
+        if main_name != "chapter.tex" {
+            std::fs::write(root.join("chapter.tex"), candidate).unwrap();
+        }
+        std::fs::write(root.join("bridge.tex"), "\\input{main}").unwrap();
+        let uri = Url::from_file_path(root.join(main_name)).unwrap();
+        let mut workspace = Workspace {
+            code_action_literals: true,
+            ..Default::default()
+        };
+        workspace.add_root(root.into());
+        let diagnostic = include_warning(&mut workspace, &uri, &uri, "chapetr.tex");
+        assert!(editing::code_actions(
+            &workspace,
+            &uri,
+            diagnostic.range,
+            &context(vec![diagnostic])
+        )
+        .is_empty());
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let uri = Url::from_file_path(root.join("main.tex")).unwrap();
+    std::fs::write(root.join("main.tex"), "\\include{chapetr}\n").unwrap();
+    std::fs::create_dir(root.join("chapter.tex")).unwrap();
+    std::fs::write(root.join("chapter.TEX"), "Wrong extension.").unwrap();
+    let mut workspace = Workspace {
+        code_action_literals: true,
+        ..Default::default()
+    };
+    workspace.add_root(root.into());
+    let diagnostic = include_warning(&mut workspace, &uri, &uri, "chapetr.tex");
+    assert!(editing::code_actions(
+        &workspace,
+        &uri,
+        diagnostic.range,
+        &context(vec![diagnostic.clone()])
+    )
+    .is_empty());
+    std::fs::remove_dir(root.join("chapter.tex")).unwrap();
+    std::fs::write(root.join("chapter.tex"), "Valid.").unwrap();
+    let mut stale = diagnostic.clone();
+    stale.message = "Included file `different.tex` not found".into();
+    workspace
+        .build_diagnostics
+        .get_mut(&uri)
+        .unwrap()
+        .insert(uri.clone(), vec![stale.clone()]);
+    assert!(editing::code_actions(&workspace, &uri, stale.range, &context(vec![stale])).is_empty());
+}
+
+#[test]
+fn include_fixes_bound_suggestions_support_unicode_and_respect_static_includeonly_lists() {
+    for (filter, original, candidate, expected) in [
+        ("", "章节引沿", "章节引言", 1),
+        ("\\includeonly{chapter,chapetr}", "chapetr", "chapter", 1),
+        (
+            "\\includeonly{chapter.tex,chapetr}",
+            "chapetr",
+            "chapter",
+            1,
+        ),
+        ("\\includeonly{chapetr}", "chapetr", "chapter", 0),
+        ("\\includeonly{\\selection}", "chapetr", "chapter", 0),
+        ("\\includeonly{}", "chapetr", "chapter", 0),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let uri = Url::from_file_path(root.join("main.tex")).unwrap();
+        let source = format!("\\documentclass{{article}}{filter}\\include{{{original}}}\n");
+        std::fs::write(root.join("main.tex"), source).unwrap();
+        std::fs::write(root.join(format!("{candidate}.tex")), "Chapter.").unwrap();
+        let mut workspace = Workspace {
+            code_action_literals: true,
+            ..Default::default()
+        };
+        workspace.add_root(root.into());
+        let diagnostic = include_warning(&mut workspace, &uri, &uri, &format!("{original}.tex"));
+        let actions = editing::code_actions(
+            &workspace,
+            &uri,
+            diagnostic.range,
+            &context(vec![diagnostic]),
+        );
+        assert_eq!(actions.len(), expected, "{filter}: {actions:?}");
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let uri = Url::from_file_path(root.join("main.tex")).unwrap();
+    std::fs::write(root.join("main.tex"), "\\include{chapter}\n").unwrap();
+    for index in 0..8 {
+        std::fs::write(root.join(format!("chapter{index}.tex")), "Chapter.").unwrap();
+    }
+    let mut workspace = Workspace {
+        code_action_literals: true,
+        ..Default::default()
+    };
+    workspace.add_root(root.into());
+    let diagnostic = include_warning(&mut workspace, &uri, &uri, "chapter.tex");
+    let actions = editing::code_actions(
+        &workspace,
+        &uri,
+        diagnostic.range,
+        &context(vec![diagnostic]),
+    );
+    assert_eq!(actions.len(), 5);
+    assert_eq!(
+        actions
+            .iter()
+            .map(|action| action_edit(action, &uri).new_text)
+            .collect::<Vec<_>>(),
+        (0..5)
+            .map(|index| format!("chapter{index}"))
+            .collect::<Vec<_>>()
+    );
+}
+
 fn action_edit(action: &CodeActionOrCommand, uri: &Url) -> TextEdit {
     let CodeActionOrCommand::CodeAction(action) = action else {
         panic!("missing code action");

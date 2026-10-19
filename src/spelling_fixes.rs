@@ -3,6 +3,8 @@ use crate::{build_log, syntax::QuickFix, workspace::Workspace};
 use std::collections::{BTreeMap, BTreeSet};
 use tower_lsp::lsp_types::{Diagnostic, NumberOrString, Range, TextEdit, Url};
 
+pub(crate) const MAX_COMPARISONS: usize = 16_384;
+
 #[derive(Clone, Copy, PartialEq)]
 enum Kind {
     Label,
@@ -228,7 +230,7 @@ fn valid_name(kind: Kind, name: &str) -> bool {
     }
 }
 
-fn distance(left: &str, right: &str, limit: usize) -> Option<usize> {
+pub(crate) fn distance(left: &str, right: &str, limit: usize) -> Option<usize> {
     let left: Vec<_> = left.chars().take(129).collect();
     let right: Vec<_> = right.chars().take(129).collect();
     if left.len() > 128 || right.len() > 128 || left.len().abs_diff(right.len()) > limit {
@@ -276,6 +278,23 @@ pub fn fixes(workspace: &Workspace, uri: &Url, range: Range) -> Vec<QuickFix> {
             examined += 1;
             if examined > 64 {
                 return result;
+            }
+            if diagnostic.code == Some(NumberOrString::String("missing-include".into())) {
+                for fix in
+                    crate::include_fixes::fixes(workspace, root, uri, diagnostic, &mut comparisons)
+                {
+                    if seen.insert((
+                        diagnostic.range.start,
+                        diagnostic.range.end,
+                        fix.edit.new_text.clone(),
+                    )) {
+                        result.push(fix);
+                        if result.len() >= 256 {
+                            return result;
+                        }
+                    }
+                }
+                continue;
             }
             if diagnostic.code == Some(NumberOrString::String("mismatched-environment-end".into()))
             {
@@ -393,11 +412,9 @@ pub fn fixes(workspace: &Workspace, uri: &Url, range: Range) -> Vec<QuickFix> {
                         && valid_name(kind, name)
                         && !counter_conflicts.contains(name.as_str())
                 })
+                .take(MAX_COMPARISONS.saturating_sub(comparisons))
                 .filter_map(|(name, _)| {
                     comparisons += 1;
-                    if comparisons > 16384 {
-                        return None;
-                    }
                     distance(key, &name, if length < 8 { 1 } else { 2 }).map(|score| (score, name))
                 })
                 .collect();
