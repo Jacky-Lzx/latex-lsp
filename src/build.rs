@@ -374,15 +374,28 @@ impl BuildManager {
                             .cloned()
                             .collect(),
                     );
+                    // Keep observations of known opened paths even if a new
+                    // external target is outside the source indexing scope.
+                    // Dropping that path would erase an in-flight retarget.
                     let bindings: BTreeMap<_, _> = outcome
                         .bindings
                         .iter()
-                        .filter(|(_, target)| {
+                        .filter(|(path, target)| {
                             Url::from_file_path(target).is_ok_and(|uri| recorded.contains(&uri))
+                                || current
+                                    .recorded_bindings
+                                    .get(&root_uri)
+                                    .is_some_and(|previous| previous.contains_key(*path))
                         })
                         .map(|(path, target)| (path.clone(), target.clone()))
+                        .chain(outcome.unresolved_bindings.iter().filter_map(|path| {
+                            current
+                                .recorded_bindings
+                                .get(&root_uri)?
+                                .get(path)
+                                .map(|target| (path.clone(), target.clone()))
+                        }))
                         .collect();
-                    checks = Arc::new(checks.with_recorded_bindings(&bindings));
                     current.recorded_bindings.insert(root_uri.clone(), bindings);
                     for uri in &recorded {
                         current.reload_recorded(uri, outcome.binary_inputs.contains(uri));
@@ -396,10 +409,63 @@ impl BuildManager {
                     current
                         .bibliography_inputs
                         .insert(root_uri.clone(), recorded.clone());
+                    let bindings =
+                        outcome
+                            .bibliography_bindings
+                            .iter()
+                            .filter(|(path, target)| {
+                                Url::from_file_path(target).is_ok_and(|uri| recorded.contains(&uri))
+                                    || current
+                                        .bibliography_bindings
+                                        .get(&root_uri)
+                                        .is_some_and(|previous| previous.contains_key(*path))
+                            })
+                            .map(|(path, target)| (path.clone(), target.clone()))
+                            .chain(outcome.bibliography_unresolved_bindings.iter().filter_map(
+                                |path| {
+                                    current
+                                        .bibliography_bindings
+                                        .get(&root_uri)?
+                                        .get(path)
+                                        .map(|target| (path.clone(), target.clone()))
+                                },
+                            ))
+                            .collect();
+                    current
+                        .bibliography_bindings
+                        .insert(root_uri.clone(), bindings);
                     for uri in &recorded {
                         current.reload(uri);
                     }
                 }
+            }
+            if matches!(outcome.status, "success" | "error") {
+                let empty = BTreeMap::new();
+                checks = Arc::new(
+                    checks.with_bindings([
+                        (
+                            current.recorded_bindings.get(&root_uri).unwrap_or(&empty),
+                            if outcome.inputs.is_some() {
+                                crate::file_checks::BindingStatus::Updated
+                            } else if outcome.pdf_updated {
+                                crate::file_checks::BindingStatus::Reused
+                            } else {
+                                crate::file_checks::BindingStatus::Unchanged
+                            },
+                        ),
+                        (
+                            current
+                                .bibliography_bindings
+                                .get(&root_uri)
+                                .unwrap_or(&empty),
+                            if outcome.bibliography_inputs.is_some() {
+                                crate::file_checks::BindingStatus::Updated
+                            } else {
+                                crate::file_checks::BindingStatus::Reused
+                            },
+                        ),
+                    ]),
+                );
             }
             // A no-op driver may deliberately ignore an \includeonly-excluded
             // file. Prefer recorded inputs when available, retaining BibTeX
@@ -414,7 +480,8 @@ impl BuildManager {
                 artifact_inputs.extend(inputs.iter().cloned());
             }
             artifact_inputs.extend(
-                project
+                current
+                    .project_files(&root_uri)
                     .iter()
                     .filter(|uri| uri.path().ends_with(".bib") || uri.path().ends_with(".bst"))
                     .cloned(),
@@ -833,7 +900,10 @@ pub struct Outcome {
     /// Recorder-confirmed image/data types, before resolving symlink names.
     pub binary_inputs: BTreeSet<Url>,
     pub bindings: BTreeMap<PathBuf, PathBuf>,
+    pub unresolved_bindings: BTreeSet<PathBuf>,
     pub bibliography_inputs: Option<BTreeSet<Url>>,
+    pub bibliography_bindings: BTreeMap<PathBuf, PathBuf>,
+    pub bibliography_unresolved_bindings: BTreeSet<PathBuf>,
     pub pdf_updated: bool,
 }
 
@@ -853,7 +923,10 @@ impl Outcome {
             inputs: None,
             binary_inputs: BTreeSet::new(),
             bindings: BTreeMap::new(),
+            unresolved_bindings: BTreeSet::new(),
             bibliography_inputs: None,
+            bibliography_bindings: BTreeMap::new(),
+            bibliography_unresolved_bindings: BTreeSet::new(),
             pdf_updated: false,
         }
     }
@@ -1085,6 +1158,7 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool) -> Outcome 
             outcome.inputs = Some(inputs.all);
             outcome.binary_inputs = inputs.binary;
             outcome.bindings = inputs.bindings;
+            outcome.unresolved_bindings = inputs.unresolved_bindings;
         }
     }
     // latexmk can run TeX several times. The final .log is authoritative;
@@ -1106,10 +1180,15 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool) -> Outcome 
             let paths = crate::recorder::BibliographyPaths::new(root, &path, &log)
                 .with_search_output(&output);
             if !truncated {
+                let inputs = crate::recorder::classified_bibliography_inputs(&paths, &log);
                 outcome
                     .bibliography_inputs
                     .get_or_insert_with(BTreeSet::new)
-                    .extend(crate::recorder::bibliography_inputs_in(&paths, &log));
+                    .extend(inputs.all);
+                outcome.bibliography_bindings.extend(inputs.bindings);
+                outcome
+                    .bibliography_unresolved_bindings
+                    .extend(inputs.unresolved_bindings);
             }
             for (uri, diagnostics) in build_log::parse_bibliography_in(root, &paths, &log) {
                 outcome
@@ -1122,6 +1201,8 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool) -> Outcome 
     }
     if !bibliography_complete {
         outcome.bibliography_inputs = None;
+        outcome.bibliography_bindings.clear();
+        outcome.bibliography_unresolved_bindings.clear();
     }
     if outcome.status == "success"
         && outcome

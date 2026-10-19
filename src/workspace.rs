@@ -200,6 +200,8 @@ pub struct Workspace {
     /// Opened recorder paths and the physical files selected by the last build.
     pub recorded_bindings: BTreeMap<Url, BTreeMap<PathBuf, PathBuf>>,
     pub bibliography_inputs: BTreeMap<Url, BTreeSet<Url>>,
+    /// Paths selected by the last complete BibTeX/Biber logs, before symlinks.
+    pub bibliography_bindings: BTreeMap<Url, BTreeMap<PathBuf, PathBuf>>,
     /// File conditions and input snapshots for the latest published diagnostics.
     pub build_checks: BTreeMap<Url, std::sync::Arc<crate::file_checks::Snapshot>>,
     pub pdf_checks: BTreeMap<Url, std::sync::Arc<crate::file_checks::Snapshot>>,

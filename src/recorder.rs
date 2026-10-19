@@ -30,6 +30,8 @@ pub(crate) struct InputFiles {
     pub binary: BTreeSet<Url>,
     /// Absolute names TeX opened, before following symlinks or resolving `..`.
     pub bindings: BTreeMap<PathBuf, PathBuf>,
+    /// Logged names which disappeared before the log could be inspected.
+    pub unresolved_bindings: BTreeSet<PathBuf>,
 }
 
 /// Preserve the type of the name TeX opened. Canonicalization can resolve an
@@ -52,18 +54,18 @@ pub(crate) fn classified_inputs(root: &Path, contents: &str) -> InputFiles {
             if !crate::workspace::is_source(&path) && !binary {
                 continue;
             }
-            if let Ok(target) = path.canonicalize() {
-                if target.is_file() {
-                    if let Ok(uri) = Url::from_file_path(&target) {
-                        if binary {
-                            result.binary.insert(uri.clone());
-                        }
-                        result.all.insert(uri);
-                        if result.bindings.len() < 4096 {
-                            result.bindings.insert(path, target);
-                        }
+            if let Some(target) = path.canonicalize().ok().filter(|target| target.is_file()) {
+                if let Ok(uri) = Url::from_file_path(&target) {
+                    if binary {
+                        result.binary.insert(uri.clone());
+                    }
+                    result.all.insert(uri);
+                    if result.bindings.len() < 4096 {
+                        result.bindings.insert(path, target);
                     }
                 }
+            } else if result.unresolved_bindings.len() < 4096 {
+                result.unresolved_bindings.insert(path);
             }
             if result.all.len() >= 4096 {
                 break;
@@ -84,7 +86,14 @@ pub(crate) fn bibliography_inputs_in(
     paths: &BibliographyPaths<'_>,
     contents: &str,
 ) -> BTreeSet<Url> {
-    let mut result = BTreeSet::new();
+    classified_bibliography_inputs(paths, contents).all
+}
+
+pub(crate) fn classified_bibliography_inputs(
+    paths: &BibliographyPaths<'_>,
+    contents: &str,
+) -> InputFiles {
+    let mut result = InputFiles::default();
     for name in contents.lines().take(32768).filter_map(bibliography_source) {
         if !matches!(
             Path::new(name.trim_matches('"'))
@@ -94,13 +103,21 @@ pub(crate) fn bibliography_inputs_in(
         ) {
             continue;
         }
-        if let Some(uri) = paths
-            .resolve(name)
-            .and_then(|path| Url::from_file_path(path).ok())
-        {
-            result.insert(uri);
+        if let Some((path, target)) = paths.resolve_binding(name) {
+            if let Ok(uri) = Url::from_file_path(&target) {
+                result.all.insert(uri);
+                if result.bindings.len() < 4096 {
+                    result.bindings.insert(path, target);
+                }
+            }
+        } else {
+            result.unresolved_bindings.extend(
+                paths
+                    .candidates(name)
+                    .take(4096 - result.unresolved_bindings.len()),
+            );
         }
-        if result.len() >= 4096 {
+        if result.all.len() >= 4096 {
             break;
         }
     }
@@ -174,6 +191,17 @@ impl<'a> BibliographyPaths<'a> {
     }
 
     pub(crate) fn resolve(&self, name: &str) -> Option<PathBuf> {
+        self.resolve_binding(name).map(|(_, target)| target)
+    }
+
+    fn resolve_binding(&self, name: &str) -> Option<(PathBuf, PathBuf)> {
+        self.candidates(name).find_map(|path| {
+            let target = path.canonicalize().ok()?;
+            target.is_file().then_some((path, target))
+        })
+    }
+
+    fn candidates<'b>(&'b self, name: &'b str) -> impl Iterator<Item = PathBuf> + 'b {
         let name = name.trim().trim_matches('"');
         let search = if name.ends_with(".bst") {
             &self.bst_directories
@@ -184,16 +212,58 @@ impl<'a> BibliographyPaths<'a> {
             .iter()
             .map(PathBuf::as_path)
             .chain(self.directories)
-            .find_map(|directory| {
-                let path = directory.join(name).canonicalize().ok()?;
-                path.is_file().then_some(path)
-            })
+            .map(move |directory| directory.join(name))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(unix)]
+    fn bibliography_bindings_keep_selected_search_paths_before_symlink_resolution() {
+        let directory = tempfile::tempdir().unwrap();
+        let shared = tempfile::tempdir().unwrap();
+        std::fs::create_dir(directory.path().join("build")).unwrap();
+        std::fs::create_dir(shared.path().join("child")).unwrap();
+        std::fs::write(directory.path().join("refs.bib"), "decoy\n").unwrap();
+        let bib = shared.path().join("refs.bib");
+        let style = shared.path().join("physical.bst");
+        std::fs::write(&bib, "@book{shared}\n").unwrap();
+        std::fs::write(&style, "style\n").unwrap();
+        std::os::unix::fs::symlink(
+            shared.path().join("child"),
+            directory.path().join("selected"),
+        )
+        .unwrap();
+        let style_alias = directory.path().join("named style.bst");
+        std::os::unix::fs::symlink(&style, &style_alias).unwrap();
+        let main = directory.path().join("main.tex");
+        let blg = directory.path().join("build/main.blg");
+        let log = "The top-level auxiliary file: build/main.aux\nDatabase file #1: refs.bib\nINFO - Found BibTeX data source 'refs.bib'\nThe style file: \"named style.bst\"\nDatabase file #2: missing.bib\n";
+        let paths = BibliographyPaths::new(&main, &blg, log).with_search_output(&format!(
+            "BIBINPUTS='{}'\nBSTINPUTS='{}'\n",
+            directory.path().join("selected/..").display(),
+            directory.path().display()
+        ));
+        let inputs = classified_bibliography_inputs(&paths, log);
+        assert_eq!(
+            inputs.all,
+            [&bib, &style]
+                .map(|path| Url::from_file_path(path).unwrap())
+                .into()
+        );
+        assert_eq!(
+            inputs.bindings,
+            [
+                (directory.path().join("selected/../refs.bib"), bib),
+                (style_alias, style),
+            ]
+            .into()
+        );
+        assert_eq!(bibliography_inputs_in(&paths, log), inputs.all);
+    }
 
     #[test]
     #[cfg(unix)]

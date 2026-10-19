@@ -17,6 +17,14 @@ use tower_lsp::lsp_types::Url;
 const MAX_PATHS: usize = 4096;
 const MAX_ROOTS: usize = 128;
 
+/// Whether a tool supplied new path observations or reused an older artifact.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum BindingStatus {
+    Updated,
+    Reused,
+    Unchanged,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
     paths: BTreeMap<PathBuf, Option<PathBuf>>,
@@ -265,13 +273,15 @@ impl Snapshot {
             }
         }
         let paths = paths.into_inner();
-        let recorded = workspace
-            .recorded_bindings
-            .get(root)
-            .into_iter()
-            .flat_map(|bindings| bindings.keys())
-            .map(|path| (path.clone(), file(path)))
-            .collect();
+        let recorded = [
+            &workspace.recorded_bindings,
+            &workspace.bibliography_bindings,
+        ]
+        .into_iter()
+        .filter_map(|by_root| by_root.get(root))
+        .flat_map(|bindings| bindings.keys())
+        .map(|path| (path.clone(), file(path)))
+        .collect();
         let mut snapshot = Self {
             paths,
             recorded,
@@ -307,13 +317,18 @@ impl Snapshot {
             .collect();
     }
 
-    /// Drop obsolete recorder paths while preserving identities observed before
-    /// this build. Newly discovered names use the recorder's observed target.
-    pub(crate) fn with_recorded_bindings(&self, bindings: &BTreeMap<PathBuf, PathBuf>) -> Self {
+    /// Merge independent tool scopes. Reused tool outputs retain identities
+    /// from their last run. Without a new TeX log or PDF, retain the filesystem
+    /// conditions captured before this build; the old PDF has its own history.
+    pub(crate) fn with_bindings<'a>(
+        &self,
+        scopes: impl IntoIterator<Item = (&'a BTreeMap<PathBuf, PathBuf>, BindingStatus)>,
+    ) -> Self {
         let mut snapshot = self.clone();
-        snapshot.recorded = bindings
-            .iter()
-            .map(|(path, target)| {
+        snapshot.recorded.clear();
+        snapshot.ambiguous.clear();
+        for (bindings, status) in scopes {
+            for (path, target) in bindings {
                 let before = self
                     .recorded
                     .get(path)
@@ -321,12 +336,22 @@ impl Snapshot {
                     .unwrap_or_else(|| Some(target.clone()));
                 // A retarget during compilation makes the PDF's actual input
                 // uncertain, even if the alias is restored before completion.
-                if before.as_ref() != Some(target) {
+                if status != BindingStatus::Unchanged && before.as_ref() != Some(target) {
                     snapshot.ambiguous.insert(path.clone());
                 }
-                (path.clone(), before)
-            })
-            .collect();
+                // An unchanged tool log describes the last run of that tool,
+                // not the current filesystem. A new TeX PDF can still reuse an
+                // old .bbl; it must not adopt a retargeted bibliography alias.
+                snapshot.recorded.insert(
+                    path.clone(),
+                    if status == BindingStatus::Reused {
+                        Some(target.clone())
+                    } else {
+                        before
+                    },
+                );
+            }
+        }
         snapshot.refresh_watched();
         snapshot
     }
@@ -416,6 +441,52 @@ mod tests {
     use super::*;
 
     #[test]
+    fn tex_and_bibliography_scopes_refresh_independently_and_keep_unread_bibliography_history() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+        let chapter = directory.path().join("chapter.tex");
+        let first = directory.path().join("first.bib");
+        let second = directory.path().join("second.bib");
+        let alias = directory.path().join("refs.bib");
+        for path in [&chapter, &first, &second] {
+            std::fs::write(path, "contents\n").unwrap();
+        }
+        std::os::unix::fs::symlink(&first, &alias).unwrap();
+        let mut workspace = Workspace::default();
+        let tex: BTreeMap<_, _> = [(chapter.clone(), chapter.clone())].into();
+        let bib: BTreeMap<_, _> = [(alias.clone(), first.clone())].into();
+        workspace.recorded_bindings.insert(root.clone(), tex);
+        workspace
+            .bibliography_bindings
+            .insert(root.clone(), bib.clone());
+        let before = Snapshot::capture(&workspace, &root, &BuildConfig::default());
+        let completed = before.with_bindings([
+            (&BTreeMap::new(), BindingStatus::Updated),
+            (&bib, BindingStatus::Reused),
+        ]);
+        std::fs::remove_file(chapter).unwrap();
+        assert!(completed.changed_path().is_none());
+        std::fs::remove_file(&alias).unwrap();
+        std::os::unix::fs::symlink(&second, &alias).unwrap();
+        assert_eq!(completed.changed_path(), Some(alias.as_path()));
+        // A new TeX run which did not rerun BibTeX still used the old .bbl.
+        let next = Snapshot::capture(&workspace, &root, &BuildConfig::default());
+        let unread = next.with_bindings([
+            (&BTreeMap::new(), BindingStatus::Updated),
+            (&bib, BindingStatus::Reused),
+        ]);
+        std::fs::remove_file(&alias).unwrap();
+        std::os::unix::fs::symlink(&first, &alias).unwrap();
+        assert_eq!(unread.changed_path(), Some(alias.as_path()));
+        let rebuilt =
+            Snapshot::capture(&workspace, &root, &BuildConfig::default()).with_bindings([
+                (&BTreeMap::new(), BindingStatus::Updated),
+                (&bib, BindingStatus::Updated),
+            ]);
+        assert!(rebuilt.changed_path().is_none());
+    }
+
+    #[test]
     fn recorder_parent_traversal_watches_the_directory_alias_before_dotdot() {
         let directory = tempfile::tempdir().unwrap();
         let shared = tempfile::tempdir().unwrap();
@@ -465,7 +536,10 @@ mod tests {
         std::fs::remove_file(&alias).unwrap();
         std::os::unix::fs::symlink(&second, &alias).unwrap();
         assert_eq!(before.changed_path(), Some(alias.as_path()));
-        let complete = before.with_recorded_bindings(&[(alias.clone(), second.clone())].into());
+        let complete = before.with_bindings([(
+            &[(alias.clone(), second.clone())].into(),
+            BindingStatus::Updated,
+        )]);
         assert_eq!(complete.changed_path(), Some(alias.as_path()));
         std::fs::remove_file(&alias).unwrap();
         std::os::unix::fs::symlink(&first, &alias).unwrap();
@@ -479,7 +553,7 @@ mod tests {
         assert!(next
             .watched()
             .contains(&Url::from_file_path(&second).unwrap()));
-        let rebuilt = next.with_recorded_bindings(&[(alias, second)].into());
+        let rebuilt = next.with_bindings([(&[(alias, second)].into(), BindingStatus::Updated)]);
         assert!(rebuilt.changed_path().is_none());
     }
 
@@ -494,7 +568,7 @@ mod tests {
             recorded: [(data.clone(), Some(data.clone()))].into(),
             ..Default::default()
         };
-        let complete = before.with_recorded_bindings(&BTreeMap::new());
+        let complete = before.with_bindings([(&BTreeMap::new(), BindingStatus::Updated)]);
         assert!(!complete
             .watched()
             .contains(&Url::from_file_path(&data).unwrap()));

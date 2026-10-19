@@ -1861,3 +1861,46 @@ fn real_capitalized_and_named_page_reference_warnings_distinguish_starred_calls_
         }
     }
 }
+
+#[test]
+#[cfg(unix)]
+fn partial_bibliography_log_sets_discard_all_new_bindings_including_complete_sibling_logs() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = root.join("main.tex");
+    let physical = root.join("physical.bib");
+    let alias = root.join("refs.bib");
+    std::fs::write(&main, "Source\n").unwrap();
+    std::fs::write(&physical, "@book{entry}\n").unwrap();
+    std::os::unix::fs::symlink(&physical, &alias).unwrap();
+    let executable = script(root, "printf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf 'Database file #1: refs.bib\\n' > \"$1/complete.blg\"\ncp partial-template \"$1/other.blg\"\n");
+    let config = BuildConfig {
+        executable,
+        arguments: Some(vec!["%o".into()]),
+        ..Default::default()
+    };
+    for partial in [false, true] {
+        let contents = if partial {
+            format!(
+                "Database file #1: refs.bib\n{}\n",
+                " ".repeat(9 * 1024 * 1024)
+            )
+        } else {
+            "Bibliography completed\n".into()
+        };
+        std::fs::write(root.join("partial-template"), contents).unwrap();
+        let outcome = build::run(&main, &config, &AtomicBool::new(false));
+        assert_eq!(outcome.status, "success", "{}", outcome.message);
+        assert_eq!(outcome.diagnostics_truncated, partial);
+        if partial {
+            assert!(outcome.bibliography_inputs.is_none());
+            assert!(outcome.bibliography_bindings.is_empty());
+        } else {
+            assert!(outcome
+                .bibliography_inputs
+                .unwrap()
+                .contains(&Url::from_file_path(&physical).unwrap()));
+            assert_eq!(outcome.bibliography_bindings[&alias], physical);
+        }
+    }
+}

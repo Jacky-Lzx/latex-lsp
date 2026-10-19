@@ -295,3 +295,44 @@ fn directory_renames_preserve_recorded_binary_roles_for_new_source_looking_paths
     workspace.refresh_project(&main_uri);
     assert!(!workspace.documents.contains_key(&data_uri));
 }
+
+#[test]
+fn directory_and_file_moves_update_bibliography_binding_names_and_targets() {
+    let directory = tempfile::tempdir().unwrap();
+    let old = directory.path().join("old");
+    let new = directory.path().join("new");
+    std::fs::create_dir(&old).unwrap();
+    std::fs::write(old.join("main.tex"), "\\documentclass{article}\n").unwrap();
+    std::fs::write(old.join("physical.bib"), "@book{entry}\n").unwrap();
+    let main = Url::from_file_path(old.join("main.tex")).unwrap();
+    let mut workspace = Workspace::default();
+    workspace.bibliography_bindings.insert(
+        main,
+        [(old.join("refs.bib"), old.join("physical.bib"))].into(),
+    );
+    std::fs::rename(&old, &new).unwrap();
+    latex_lsp::file_operations::did_rename(
+        &mut workspace,
+        &[FileRename {
+            old_uri: Url::from_file_path(&old).unwrap().to_string(),
+            new_uri: Url::from_file_path(&new).unwrap().to_string(),
+        }],
+    )
+    .unwrap();
+    let target = new.join("renamed.bib");
+    std::fs::rename(new.join("physical.bib"), &target).unwrap();
+    latex_lsp::file_operations::did_rename(
+        &mut workspace,
+        &[FileRename {
+            old_uri: Url::from_file_path(new.join("physical.bib"))
+                .unwrap()
+                .to_string(),
+            new_uri: Url::from_file_path(&target).unwrap().to_string(),
+        }],
+    )
+    .unwrap();
+    assert_eq!(
+        workspace.bibliography_bindings[&Url::from_file_path(new.join("main.tex")).unwrap()],
+        [(new.join("refs.bib"), target)].into()
+    );
+}
