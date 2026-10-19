@@ -207,7 +207,7 @@ fn external_relative_root_settings_keep_the_original_source_command_context() {
     let source = uri(&folder, "chapter.tex");
     let main = uri(root, "main.tex");
     assert_eq!(workspace.root_document(&source).unwrap(), main);
-    assert_ne!(workspace.root_document(&main).ok(), Some(main.clone()));
+    assert_eq!(workspace.root_document(&main).unwrap(), main);
     let result = code_lens::lenses(&workspace, &source);
     assert_eq!(result.len(), 1);
     let command = result[0].command.as_ref().unwrap();

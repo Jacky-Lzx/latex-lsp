@@ -17,6 +17,134 @@ struct Server {
 }
 
 #[test]
+#[cfg(unix)]
+fn active_external_root_builds_can_be_queried_and_cancelled_by_the_reported_uri() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let folder = root.join("workspace/a/b/c");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(
+        root.join("workspace/a/main.tex"),
+        "\\documentclass{article}",
+    )
+    .unwrap();
+    std::fs::write(root.join("main.tex"), "\\documentclass{report}").unwrap();
+    std::fs::write(folder.join("chapter.tex"), "Chapter.").unwrap();
+    let source = Url::from_file_path(folder.join("chapter.tex")).unwrap();
+    let main = Url::from_file_path(root.join("workspace/a/main.tex")).unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(folder).unwrap(),"capabilities":{},"initializationOptions":{"build":{"executable":"sh","arguments":["-c","sleep 30"],"rootFile":"../../main.tex","timeoutSeconds":5}}}));
+    server.notify("initialized", json!({}));
+    let started = server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[source]}),
+    );
+    assert_eq!(started["rootUri"], json!(main));
+    let status = server.request(
+        3,
+        "workspace/executeCommand",
+        json!({"command":"latex.buildStatus","arguments":[started["rootUri"]]}),
+    );
+    assert_eq!(status["status"], "running");
+    assert_eq!(status["buildId"], started["buildId"]);
+    let cancelled = server.request(
+        4,
+        "workspace/executeCommand",
+        json!({"command":"latex.cancelBuild","arguments":[started["rootUri"]]}),
+    );
+    assert_eq!(cancelled["cancelled"], 1);
+    let finished = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(finished["params"]["status"], "cancelled", "{finished}");
+    assert_eq!(finished["params"]["rootUri"], json!(main));
+    let status = server.request(
+        5,
+        "workspace/executeCommand",
+        json!({"command":"latex.buildStatus","arguments":[main]}),
+    );
+    assert_eq!(status["status"], "cancelled");
+    assert_eq!(status["buildId"], started["buildId"]);
+    server.request(6, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[ignore = "requires pdflatex"]
+fn external_relative_roots_return_uris_that_work_for_build_status_and_cancellation() {
+    for overlap in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let folder = root.join("workspace/a/b/c");
+        std::fs::create_dir_all(&folder).unwrap();
+        let main_path = root.join("workspace/a/main.tex");
+        std::fs::write(
+            &main_path,
+            "\\documentclass{article}\\begin{document}\\input{b/c/chapter}\\end{document}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("main.tex"),
+            "\\documentclass{article}\\begin{document}Wrong project.\\end{document}\n",
+        )
+        .unwrap();
+        std::fs::write(folder.join("chapter.tex"), "Expected project.\n").unwrap();
+        let source = Url::from_file_path(folder.join("chapter.tex")).unwrap();
+        let main = Url::from_file_path(&main_path).unwrap();
+        let mut folders =
+            vec![json!({"uri":Url::from_directory_path(&folder).unwrap(),"name":"nested"})];
+        if overlap {
+            folders.push(json!({"uri":Url::from_directory_path(root.join("workspace/a")).unwrap(),"name":"outer"}));
+        }
+        let mut server = Server::start();
+        server.request(1, "initialize", json!({"processId":null,"workspaceFolders":folders,"capabilities":{},"initializationOptions":{"build":{"executable":"pdflatex","rootFile":"../../main.tex"}}}));
+        server.notify("initialized", json!({}));
+        let started = server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[source]}),
+        );
+        assert_eq!(started["rootUri"], json!(main));
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(finished["params"]["status"], "success", "{finished}");
+        assert_eq!(finished["params"]["rootUri"], json!(main));
+        let status = server.request(
+            3,
+            "workspace/executeCommand",
+            json!({"command":"latex.buildStatus","arguments":[finished["params"]["rootUri"]]}),
+        );
+        assert_eq!(status["status"], "success", "{overlap}: {status}");
+        assert_eq!(status["buildId"], started["buildId"]);
+        assert_eq!(status["rootUri"], json!(main));
+        let cancelled = server.request(
+            4,
+            "workspace/executeCommand",
+            json!({"command":"latex.cancelBuild","arguments":[started["rootUri"]]}),
+        );
+        assert_eq!(cancelled["cancelled"], 0);
+        let again = server.request(
+            5,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[started["rootUri"]]}),
+        );
+        assert_eq!(again["rootUri"], json!(main));
+        let repeated = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(repeated["params"]["status"], "success", "{repeated}");
+        assert_eq!(repeated["params"]["rootUri"], json!(main));
+        let from_source = server.request(
+            6,
+            "workspace/executeCommand",
+            json!({"command":"latex.buildStatus","arguments":[source]}),
+        );
+        assert_eq!(from_source["buildId"], again["buildId"]);
+        assert_eq!(from_source["rootUri"], json!(main));
+        server.request(7, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
 #[ignore = "requires pdflatex"]
 fn real_builds_from_sources_ignore_deleted_roots_and_document_examples_in_packages() {
     for package in [false, true] {

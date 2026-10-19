@@ -447,6 +447,20 @@ impl Workspace {
             .to_file_path()
             .map_err(|_| "Compilation requires a local file URI")?;
         if let Some(root_file) = &self.config.build.root_file {
+            // Build notifications expose resolved roots. Recognize those URIs
+            // before applying a relative setting again in a different folder.
+            let requested = path
+                .canonicalize()
+                .unwrap_or_else(|_| normalize_path(&path));
+            for folder in &self.roots {
+                let configured = folder.join(root_file);
+                let identity = configured
+                    .canonicalize()
+                    .unwrap_or_else(|_| normalize_path(&configured));
+                if identity == requested {
+                    return file_uri(&configured);
+                }
+            }
             let folder = self
                 .roots
                 .iter()

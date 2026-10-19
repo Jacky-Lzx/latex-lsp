@@ -779,6 +779,45 @@ fn unchanged_pdf_is_accepted_only_when_it_is_not_older_than_the_source() {
 }
 
 #[test]
+fn external_configured_root_uris_round_trip_without_rebasing_or_masking_missing_roots() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let folder = root.join("workspace/a/b/c");
+    std::fs::create_dir_all(&folder).unwrap();
+    let name = "主文档 main.tex";
+    let main_path = root.join("workspace/a").join(name);
+    let wrong_path = root.join(name);
+    for path in [
+        &main_path,
+        &wrong_path,
+        &root.join("workspace/a/unrelated.tex"),
+    ] {
+        std::fs::write(path, "\\documentclass{article}").unwrap();
+    }
+    std::fs::write(folder.join("chapter.tex"), "Chapter.").unwrap();
+    let source = Url::from_file_path(folder.join("chapter.tex")).unwrap();
+    let main = Url::from_file_path(&main_path).unwrap();
+    let wrong = Url::from_file_path(&wrong_path).unwrap();
+    let unrelated = Url::from_file_path(root.join("workspace/a/unrelated.tex")).unwrap();
+    let mut workspace = Workspace::default();
+    workspace.add_root(folder);
+    workspace.config.build.root_file = Some(format!("../../{name}"));
+    assert_eq!(workspace.root_document(&source).unwrap(), main);
+    assert_eq!(workspace.root_document(&main).unwrap(), main);
+    workspace.add_root(root.join("workspace/a"));
+    assert_eq!(workspace.root_document(&source).unwrap(), main);
+    assert_eq!(workspace.root_document(&main).unwrap(), main);
+    assert_eq!(workspace.root_document(&wrong).unwrap(), wrong);
+    assert_eq!(workspace.root_document(&unrelated).unwrap(), wrong);
+    std::fs::remove_file(&main_path).unwrap();
+    assert!(
+        workspace.root_document(&main).is_err(),
+        "A removed configured root must not resolve to an existing unrelated file"
+    );
+    assert!(workspace.root_document(&source).is_err());
+}
+
+#[test]
 fn root_detection_ignores_deleted_indexed_roots_without_waiting_for_a_file_notification() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
