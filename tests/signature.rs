@@ -1108,6 +1108,52 @@ fn heading_caption_and_root_signatures_end_optional_arguments_at_unbraced_closin
 }
 
 #[test]
+fn starred_headings_hint_the_title_and_do_not_accept_a_short_title() {
+    for name in [
+        "part",
+        "chapter",
+        "section",
+        "subsection",
+        "subsubsection",
+        "paragraph",
+        "subparagraph",
+    ] {
+        for command in [
+            format!("\\{name}"),
+            format!("\\csuse{{{name}}}"),
+            format!("\\csname {name}\\endcsname"),
+        ] {
+            let label = format!("{command}[short title]{{title}}");
+            check("", &format!("{command}*¦"), &label, 1);
+            check("", &format!("{command}*{{val¦ue}}"), &label, 1);
+            check(
+                "",
+                &format!("{command}* % ignored\r\n{{val¦ue}}"),
+                &label,
+                1,
+            );
+            check("", &format!("{command}[Short]{{val¦ue}}"), &label, 1);
+            for call in [
+                format!("{command}*[Short]{{Body¦}}"),
+                format!("{command}*[Sh¦ort]{{Body}}"),
+                format!("{command}* % ignored\r\n[Short]{{Body¦}}"),
+                format!("{command}*{{Title}}Body¦"),
+            ] {
+                let (workspace, uri, at) = setup("", &call);
+                assert!(signature::help(&workspace, &uri, at).is_none(), "{call}");
+            }
+        }
+        let definitions = format!("\\NewDocumentCommand{{\\{name}}}{{s O{{x[y}} m}}{{#2:#3}}");
+        check(
+            &definitions,
+            &format!("\\{name}*[x[y]]{{val¦ue}}"),
+            &format!("\\{name}*[#2=x[y]{{#3}}"),
+            2,
+        );
+    }
+}
+
+#[test]
 fn named_builtin_calls_keep_the_same_optional_boundaries_as_direct_calls() {
     check(
         "",

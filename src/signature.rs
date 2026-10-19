@@ -427,7 +427,20 @@ fn builtin(name: &str) -> Option<Signature> {
                 ) {
                 Kind::RequiredBracket
             } else if *optional {
-                Kind::Optional
+                if matches!(
+                    name,
+                    "part"
+                        | "chapter"
+                        | "section"
+                        | "subsection"
+                        | "subsubsection"
+                        | "paragraph"
+                        | "subparagraph"
+                ) {
+                    Kind::UnstarredOptional
+                } else {
+                    Kind::Optional
+                }
             } else if syntax::declares_command_copy(name)
                 || name == "cslet" && index == 1
                 || (name == "letcs"
