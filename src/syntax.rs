@@ -389,7 +389,7 @@ pub(crate) fn is_static_key(value: &str) -> bool {
 
 pub fn file_extensions(name: &str) -> Option<&'static [&'static str]> {
     Some(match name {
-        "input" => &["tex", "ltx", "sty", "cls", "def", "clo"],
+        "input" | "InputIfFileExists" => &["tex", "ltx", "sty", "cls", "def", "clo"],
         "include" | "includeonly" | "subfile" => &["tex"],
         "bibliography" | "addbibresource" => &["bib"],
         "bibliographystyle" => &["bst"],
@@ -427,7 +427,7 @@ pub fn file_list(name: &str) -> bool {
 /// Completion can offer explicit source extensions that TeX does not infer.
 pub(crate) fn inferred_file_extensions(name: &str) -> Option<&'static [&'static str]> {
     let extensions = file_extensions(name)?;
-    Some(if name == "input" {
+    Some(if matches!(name, "input" | "InputIfFileExists") {
         &extensions[..1]
     } else {
         extensions
@@ -482,7 +482,7 @@ pub(crate) fn file_lookup_names<'a>(
     let append = !empty
         && match command {
             "include" | "includeonly" => !value.ends_with(".tex"),
-            "input" => !recognized,
+            "input" | "InputIfFileExists" => !recognized,
             "bibliography" | "bibliographystyle" => !literal.ends_with(&format!(".{extension}")),
             _ => loader.is_some(),
         };
@@ -498,7 +498,10 @@ pub(crate) fn file_lookup_names<'a>(
     let valid_style = command != "bibliographystyle" || !value.contains([' ', '\t', '\r', '\n']);
     std::iter::once(preferred)
         .filter(move |_| !empty && valid_style)
-        .chain((command == "input" && append).then_some(std::borrow::Cow::Borrowed(value)))
+        .chain(
+            (matches!(command, "input" | "InputIfFileExists") && append)
+                .then_some(std::borrow::Cow::Borrowed(value)),
+        )
 }
 
 fn declares_command(name: &str) -> bool {
@@ -962,7 +965,8 @@ impl Syntax {
                     }
                     let name = &source[name_start..i];
                     let command_end = i;
-                    let starred = name != "input" && bytes.get(i) == Some(&b'*');
+                    let starred = !matches!(name, "input" | "InputIfFileExists")
+                        && bytes.get(i) == Some(&b'*');
                     if starred {
                         i += 1;
                     }
@@ -999,7 +1003,9 @@ impl Syntax {
                         && (starred && !citation_accepts_star(name)
                             || bytes.get(arg_start) == Some(&b'[')
                                 && !citation_accepts_notes(name));
-                    if name != "input" && !loader_forwards_options(name) {
+                    if !matches!(name, "input" | "InputIfFileExists")
+                        && !loader_forwards_options(name)
+                    {
                         while let Some((_, end)) = group(source, arg_start, b'[', b']') {
                             arg_start = skip_space(source, end);
                         }

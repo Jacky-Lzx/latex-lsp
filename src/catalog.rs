@@ -683,6 +683,11 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
         "Insert another TeX source file.",
     ),
     (
+        "InputIfFileExists",
+        "InputIfFileExists{${1:file}}{${2:before input}}{${3:if missing}}",
+        "If a TeX file exists, run the second argument before reading it; otherwise run the third argument.",
+    ),
+    (
         "include",
         "include{${1:file}}",
         "Include a TeX file with page breaks.",

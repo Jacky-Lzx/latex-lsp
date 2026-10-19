@@ -28,12 +28,12 @@ pub fn complete(
     let separator = prefix.rfind('/').map_or(0, |index| index + 1);
     let directory = &prefix[..separator];
     let name_prefix = &prefix[separator..];
-    let input_argument = (command == "input")
+    let input_argument = matches!(command, "input" | "InputIfFileExists")
         .then(|| {
             doc.syntax
                 .commands
                 .iter()
-                .filter(|command| command.name == "input")
+                .filter(|candidate| candidate.name == command)
                 .filter_map(|command| command.argument.as_ref())
                 .find(|argument| argument.span.start == span.start && span.end <= argument.span.end)
         })
@@ -42,7 +42,8 @@ pub fn complete(
     let suffix = &doc.text.source[span.end..argument_end];
     let suffix_length = suffix
         .find(|ch| {
-            matches!(ch, '/' | '{' | '}' | ',' | '\\' | '%')
+            matches!(ch, '/' | '{' | '}' | '\\' | '%')
+                || ch == ',' && syntax::file_list(command)
                 || !compact && matches!(ch, '\n' | '\r')
         })
         .unwrap_or(suffix.len());

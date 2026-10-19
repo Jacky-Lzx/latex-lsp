@@ -514,7 +514,7 @@ fn argument_span(doc: &Document, command: &Command, offset: usize) -> Option<Spa
         let prefix = source[span.start..offset].trim_start();
         return Some(offset - prefix.len()..offset);
     }
-    if command.name == "input" {
+    if matches!(command.name.as_str(), "input" | "InputIfFileExists") {
         if let Some(argument) = &command.argument {
             if argument.span.start <= offset && offset <= argument.span.end {
                 let start = if source.as_bytes().get(argument.outer_span.start) == Some(&b'{') {
@@ -528,7 +528,8 @@ fn argument_span(doc: &Document, command: &Command, offset: usize) -> Option<Spa
     }
     let mut at = syntax::skip_space(source, command.span.end);
     if source.as_bytes().get(at) == Some(&b'*') {
-        if syntax::loader_extension(&command.name).is_some()
+        if command.name == "InputIfFileExists"
+            || syntax::loader_extension(&command.name).is_some()
             || syntax::is_citation(&command.name) && !syntax::citation_accepts_star(&command.name)
         {
             return None;
@@ -536,7 +537,8 @@ fn argument_span(doc: &Document, command: &Command, offset: usize) -> Option<Spa
         at = syntax::skip_space(source, at + 1);
     }
     while source.as_bytes().get(at) == Some(&b'[') {
-        if syntax::loader_forwards_options(&command.name)
+        if command.name == "InputIfFileExists"
+            || syntax::loader_forwards_options(&command.name)
             || syntax::is_citation(&command.name) && !syntax::citation_accepts_notes(&command.name)
         {
             return None;
@@ -556,7 +558,11 @@ fn argument_span(doc: &Document, command: &Command, offset: usize) -> Option<Spa
     {
         return None;
     }
-    let key = value.rsplit(',').next()?.trim_start();
+    let key = if command.name == "InputIfFileExists" {
+        value.trim_start()
+    } else {
+        value.rsplit(',').next()?.trim_start()
+    };
     Some(offset - key.len()..offset)
 }
 

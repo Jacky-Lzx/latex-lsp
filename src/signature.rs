@@ -161,6 +161,14 @@ fn builtin(name: &str) -> Option<Signature> {
         "input" | "include" | "subfile" | "bibliography" | "bibliographystyle" => {
             (&[("file", false)], false)
         }
+        "InputIfFileExists" => (
+            &[
+                ("file", false),
+                ("before input", false),
+                ("if missing", false),
+            ],
+            false,
+        ),
         "includeonly" => (&[("files", false)], false),
         "csuse" | "csmeaning" | "csundef" | "csgundef" => (&[("command", false)], false),
         "cslet" | "letcs" | "csletcs" => (&[("alias", false), ("command", false)], false),
