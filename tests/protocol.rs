@@ -3573,6 +3573,71 @@ fn signature_help_tracks_incremental_edits_and_custom_macros_over_stdio() {
     server.wait_exit(0);
 }
 
+#[test]
+fn signature_help_triggers_follow_custom_delimiters_flags_and_completed_arguments() {
+    let mut server = Server::start();
+    let init = server.request(1, "initialize", json!({"processId":null,"capabilities":{}}));
+    let options = &init["capabilities"]["signatureHelpProvider"];
+    for character in ["{", "[", ",", "<", "(", "|", "*", "+"] {
+        assert!(options["triggerCharacters"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(character)));
+    }
+    for character in ["}", "]", ">", ")", "|"] {
+        assert!(options["retriggerCharacters"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(character)));
+    }
+    server.notify("initialized", json!({}));
+    let main = "file:///signature-triggers/main.tex";
+    server.notify("textDocument/didOpen", json!({"textDocument":{"uri":"file:///signature-triggers/macros.sty","languageId":"latex","version":1,"text":"\\NewDocumentCommand\\probe{d<>r()t+m}{}\\NewDocumentCommand\\pipes{r||m}{}"}}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":main,"languageId":"latex","version":1,"text":""}}),
+    );
+    let cases = [
+        (r"\probe", "<", Some(0), false),
+        (r"\probe<x", ">", Some(1), true),
+        (r"\probe", "(", Some(1), false),
+        (r"\probe(req", ")", Some(2), true),
+        (r"\probe(req)", "+", Some(3), false),
+        (r"\probe(req)+", "{", Some(3), false),
+        (r"\probe(req)+{BODY", "}", None, true),
+        (r"\pipes", "|", Some(0), false),
+        (r"\pipes|one", "|", Some(1), true),
+        (r"\section", "*", Some(1), false),
+        (r"\cite{one", ",", Some(2), false),
+        (r"\sqrt", "[", Some(0), false),
+        (r"\sqrt[3", "]", Some(1), true),
+    ];
+    let mut version = 1;
+    let mut id = 1;
+    for prefix in ["", "😀 ", "% ignored < + *\n"] {
+        for (base, character, active, retrigger) in cases {
+            let mut text = format!("{prefix}{base}");
+            version += 1;
+            server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":version},"contentChanges":[{"text":text}]}));
+            let at = latex_lsp::text::Text::new(text.clone()).position(text.len());
+            version += 1;
+            server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":version},"contentChanges":[{"range":{"start":at,"end":at},"text":character}]}));
+            text.push_str(character);
+            let position = latex_lsp::text::Text::new(text.clone()).position(text.len());
+            id += 1;
+            let help = server.request(id, "textDocument/signatureHelp", json!({"textDocument":{"uri":main},"position":position,"context":{"triggerKind":2,"triggerCharacter":character,"isRetrigger":retrigger}}));
+            if let Some(active) = active {
+                assert_eq!(help["activeParameter"], active, "{text}; {help}");
+            } else {
+                assert!(help.is_null(), "{text}; {help}");
+            }
+        }
+    }
+    server.request(id + 1, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
 impl Drop for Server {
     fn drop(&mut self) {
         let _ = self.child.kill();

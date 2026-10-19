@@ -299,8 +299,18 @@ impl LanguageServer for Backend {
                 }),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 signature_help_provider: Some(SignatureHelpOptions {
-                    trigger_characters: Some(vec!["{".into(), "[".into(), ",".into()]),
-                    retrigger_characters: Some(vec!["}".into(), "]".into()]),
+                    trigger_characters: Some(
+                        ["{", "[", ",", "<", "(", "|", "*", "+"]
+                            .into_iter()
+                            .map(str::to_owned)
+                            .collect(),
+                    ),
+                    retrigger_characters: Some(
+                        ["}", "]", ">", ")", "|"]
+                            .into_iter()
+                            .map(str::to_owned)
+                            .collect(),
+                    ),
                     ..Default::default()
                 }),
                 definition_provider: Some(OneOf::Left(true)),
