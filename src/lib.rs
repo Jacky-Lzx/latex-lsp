@@ -14,6 +14,7 @@ mod file_fixes;
 pub mod file_operations;
 mod generated;
 pub mod graphics;
+mod image_fixes;
 mod named_commands;
 pub mod navigation;
 mod output;

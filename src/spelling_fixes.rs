@@ -280,11 +280,16 @@ pub fn fixes(workspace: &Workspace, uri: &Url, range: Range) -> Vec<QuickFix> {
             if examined > 64 {
                 return result;
             }
-            if matches!(diagnostic.code.as_ref(), Some(NumberOrString::String(code)) if matches!(code.as_str(), "missing-include" | "missing-input"))
+            if matches!(diagnostic.code.as_ref(), Some(NumberOrString::String(code)) if matches!(code.as_str(), "missing-include" | "missing-input" | "missing-image"))
             {
-                for fix in
-                    crate::file_fixes::fixes(workspace, root, uri, diagnostic, &mut comparisons)
+                let fixes = if diagnostic.code
+                    == Some(NumberOrString::String("missing-image".into()))
                 {
+                    crate::image_fixes::fixes(workspace, root, uri, diagnostic, &mut comparisons)
+                } else {
+                    crate::file_fixes::fixes(workspace, root, uri, diagnostic, &mut comparisons)
+                };
+                for fix in fixes {
                     if seen.insert((
                         diagnostic.range.start,
                         diagnostic.range.end,

@@ -449,7 +449,7 @@ fn error_context<'a>(
     lines: &[&'a str],
     start: usize,
     number: u32,
-    undefined_command: bool,
+    message: &str,
 ) -> Option<&'a str> {
     let mut context = lines
         .iter()
@@ -457,7 +457,7 @@ fn error_context<'a>(
         .take(16)
         .filter(|line| !line.trim().is_empty());
     let mut line = *context.next()?;
-    let recent = undefined_command
+    let recent = (message == "Undefined control sequence.")
         .then(|| line.trim_start().strip_prefix("<recently read>"))
         .flatten()
         .map(str::trim);
@@ -467,11 +467,29 @@ fn error_context<'a>(
         }
         line = context.next()?;
     }
-    if recent.is_none() && line.trim() == "See the LaTeX manual or LaTeX Companion for explanation."
-    {
+    let graphics = missing_graphic_name(message).is_some() && missing_file_name(message).is_none();
+    let documentation = line.trim() == "See the LaTeX manual or LaTeX Companion for explanation."
+        || graphics
+            && [
+                "See the pdftex.def package documentation for explanation.",
+                "See the luatex.def package documentation for explanation.",
+            ]
+            .contains(&line.trim());
+    if recent.is_none() && documentation {
         if context.next()?.trim() != "Type  H <return>  for immediate help."
             || context.next()?.trim() != "..."
         {
+            return None;
+        }
+        line = context.next()?;
+    }
+    // XeTeX reports this one internal read frame for a direct graphicx call.
+    // Other expansion frames still prevent precise source attribution.
+    if graphics
+        && message.starts_with("Unable to load picture or PDF file ")
+        && line.trim() == "<to be read again>"
+    {
+        if context.next()?.trim() != "}" {
             return None;
         }
         line = context.next()?;
@@ -500,6 +518,29 @@ pub(crate) fn missing_file_name(message: &str) -> Option<&str> {
         .strip_prefix('`')
         .or_else(|| quoted.strip_prefix('\''))?
         .strip_suffix('\'')?;
+    let name = name
+        .strip_prefix('"')
+        .and_then(|name| name.strip_suffix('"'))
+        .unwrap_or(name);
+    (!name.is_empty()).then_some(name)
+}
+
+pub(crate) fn missing_graphic_name(message: &str) -> Option<&str> {
+    if let Some(name) = missing_file_name(message) {
+        return Some(name);
+    }
+    let quoted = ["pdftex.def", "luatex.def"].into_iter().find_map(|driver| {
+        message
+            .strip_prefix(&format!("Package {driver} Error: File "))?
+            .strip_suffix(" not found: using draft setting.")
+    });
+    let name = if let Some(quoted) = quoted {
+        quoted.strip_prefix('`')?.strip_suffix('\'')?
+    } else {
+        message
+            .strip_prefix("Unable to load picture or PDF file '")?
+            .strip_suffix("'.")?
+    };
     let name = name
         .strip_prefix('"')
         .and_then(|name| name.strip_suffix('"'))
@@ -537,20 +578,27 @@ fn uninterrupted_file_prompt(lines: &[&str], start: usize, end: usize) -> bool {
         })
 }
 
-fn missing_input_range(text: &Text, line: u32, context: &str, name: &str) -> Option<Range> {
+fn missing_path_range(
+    text: &Text,
+    line: u32,
+    context: &str,
+    name: &str,
+    command_name: &str,
+) -> Option<Range> {
     let prefix = context.trim_end();
     let shortened = shortened_context(prefix);
     let start = text.offset(Position::new(line, 0))?;
     let syntax = crate::syntax::Syntax::latex(text);
     let mut matches = syntax.commands.iter().filter_map(|command| {
-        if command.name != "input" {
+        if command.name != command_name {
             return None;
         }
         let argument = command.argument.as_ref()?;
         let span = crate::syntax::trimmed_span(&text.source, argument.span.clone());
         let value = &text.source[span.clone()];
         if !crate::syntax::is_literal_file_path(value)
-            || !crate::syntax::file_lookup_names("input", value).any(|candidate| candidate == name)
+            || !crate::syntax::file_lookup_names(command_name, value)
+                .any(|candidate| candidate == name)
             || text.position(argument.outer_span.end).line != line
             || text.source[argument.outer_span.clone()].starts_with('"')
                 && !text.source[argument.outer_span.clone()].ends_with('"')
@@ -824,8 +872,13 @@ fn emit_with_context(
     let missing_file = missing_file_name(&message);
     let input_range = missing_file
         .filter(|_| reported_line.checked_sub(1) == Some(line))
-        .and_then(|name| missing_input_range(&text, line, context?, name));
+        .and_then(|name| missing_path_range(&text, line, context?, name, "input"));
     ranges.extend(input_range);
+    let missing_graphic = missing_graphic_name(&message);
+    let graphic_range = missing_graphic
+        .filter(|_| reported_line.checked_sub(1) == Some(line))
+        .and_then(|name| missing_path_range(&text, line, context?, name, "includegraphics"));
+    ranges.extend(graphic_range);
     let command_name = command_range.and_then(|range| {
         let start = text.offset(range.start)?;
         let end = text.offset(range.end)?;
@@ -857,6 +910,7 @@ fn emit_with_context(
                     .or_else(|| destination.filter(|_| precise_destination).map(|(kind, _)| kind.code()))
                     .or_else(|| missing_include_key(&message).map(|_| "missing-include"))
                     .or_else(|| input_range.map(|_| "missing-input"))
+                    .or_else(|| graphic_range.map(|_| "missing-image"))
                     .or_else(|| command_range.map(|_| "undefined-control-sequence"))
                     .or_else(|| environment_range.and(environment.as_ref()).map(|error| error.code))
                     .or_else(|| counter_range.map(|_| "undefined-counter"))
@@ -873,7 +927,8 @@ fn emit_with_context(
                             })
                     })
                     .or_else(|| counter_range.and(counter_name).map(|name| serde_json::json!({"counter":name})))
-                    .or_else(|| input_range.and(missing_file).map(|name| serde_json::json!({"file":name}))),
+                    .or_else(|| input_range.and(missing_file).map(|name| serde_json::json!({"file":name})))
+                    .or_else(|| graphic_range.and(missing_graphic).map(|name| serde_json::json!({"file":name}))),
                 ..Default::default()
             }
         }));
@@ -1062,7 +1117,19 @@ fn wrapped_error_message(
 ) -> String {
     let mut message = initial.to_owned();
     for _ in 0..64 {
-        if message.trim_end().ends_with(['.', '!']) || message.len() >= 4096 {
+        // A wrap can land on a period inside a driver or filename. It is only
+        // the end of a recognized file error once its closing text is present.
+        let incomplete_file = [
+            "LaTeX Error: File ",
+            "I can't find file ",
+            "Package pdftex.def Error: File ",
+            "Package luatex.def Error: File ",
+            "Unable to load picture or PDF file ",
+        ]
+        .iter()
+        .any(|prefix| message.starts_with(prefix) || prefix.starts_with(&message))
+            && missing_graphic_name(&message).is_none();
+        if message.trim_end().ends_with(['.', '!']) && !incomplete_file || message.len() >= 4096 {
             break;
         }
         let Some(next) = lines.get(*i + 1) else { break };
@@ -1433,14 +1500,7 @@ pub(crate) fn parse_with_sources(
             // An unresolved reported source falls back to the root for display.
             // Its context must not identify coincidentally matching root text.
             let context = confirmed_path
-                .then(|| {
-                    error_context(
-                        &lines,
-                        i + 1,
-                        number,
-                        message == "Undefined control sequence.",
-                    )
-                })
+                .then(|| error_context(&lines, i + 1, number, &message))
                 .flatten();
             emit_with_context(
                 &mut result,
@@ -1483,14 +1543,7 @@ pub(crate) fn parse_with_sources(
             if let (Some(number), Some((path, message, context_start))) = (number, pending.take()) {
                 let context = path
                     .confirmed
-                    .then(|| {
-                        error_context(
-                            &lines,
-                            context_start,
-                            number,
-                            message == "Undefined control sequence.",
-                        )
-                    })
+                    .then(|| error_context(&lines, context_start, number, &message))
                     .flatten();
                 emit_with_context(
                     &mut result,
