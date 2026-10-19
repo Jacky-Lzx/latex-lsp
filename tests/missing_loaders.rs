@@ -45,6 +45,22 @@ fn missing_loader_diagnostics_follow_static_names_and_the_consumed_lookahead_tok
             "locla",
         ),
         (
+            r"\RequirePackageWithOptions{graphicx, locla}[2020/01/01]",
+            r"...kageWithOptions{graphicx, locla}[2020/01/01]",
+            1,
+            "locla.sty",
+            "RequirePackageWithOptions",
+            "locla",
+        ),
+        (
+            "\\LoadClassWithOptions{locla}\n\\relax",
+            r"\relax",
+            2,
+            "locla.cls",
+            "LoadClassWithOptions",
+            "locla",
+        ),
+        (
             r"\documentclass{locla}\begin{document}",
             r"\documentclass{locla}\begin",
             1,
@@ -205,7 +221,10 @@ fn uncertain_missing_loader_sources_names_and_contexts_keep_line_diagnostics() {
 fn warning(workspace: &mut Workspace, uri: &Url, loader: &str, name: &str) -> Diagnostic {
     let source = &workspace.documents[uri].text;
     let start = source.source.find(name).unwrap();
-    let extension = if loader == "usepackage" || loader == "RequirePackage" {
+    let extension = if matches!(
+        loader,
+        "usepackage" | "RequirePackage" | "RequirePackageWithOptions"
+    ) {
         "sty"
     } else {
         "cls"
@@ -260,6 +279,20 @@ fn loader_repairs_preserve_options_lists_versions_and_fix_redundant_suffixes() {
             "RequirePackage",
             "local.sty",
             "local.sty",
+            "local",
+        ),
+        (
+            r"\RequirePackageWithOptions{graphicx, lcoal }[2024/01/01]",
+            "RequirePackageWithOptions",
+            "lcoal",
+            "local.sty",
+            "local",
+        ),
+        (
+            r"\LoadClassWithOptions{lcoal}[2024/01/01]",
+            "LoadClassWithOptions",
+            "lcoal",
+            "local.cls",
             "local",
         ),
         (
@@ -417,8 +450,10 @@ fn real_missing_package_and_class_names_offer_versioned_repairs_that_compile() {
         for loader in [
             "usepackage",
             "RequirePackage",
+            "RequirePackageWithOptions",
             "documentclass",
             "LoadClass",
+            "LoadClassWithOptions",
             "spaced-package",
             "redundant-package",
             "redundant-class",
@@ -428,6 +463,7 @@ fn real_missing_package_and_class_names_offer_versioned_repairs_that_compile() {
             let source = match loader {
             "usepackage" => "\\documentclass{article}\n\\usepackage{localpckg}\n\\begin{document}Hello.\\end{document}\n",
             "RequirePackage" => "\\RequirePackage{localpckg}\n\\documentclass{article}\n\\begin{document}Hello.\\end{document}\n",
+            "RequirePackageWithOptions" => "\\documentclass{article}\n\\usepackage{wrapperpkg}\n\\begin{document}Hello.\\end{document}\n",
             "documentclass" => "\\documentclass{localcalss}\n\\begin{document}Hello.\\end{document}\n",
             "spaced-package" => "\\documentclass{article}\n\\usepackage{my localpckg}\n\\begin{document}Hello.\\end{document}\n",
             "redundant-package" => "\\documentclass{article}\n\\usepackage{localpkg.sty}\n\\begin{document}Hello.\\end{document}\n",
@@ -445,7 +481,16 @@ fn real_missing_package_and_class_names_offer_versioned_repairs_that_compile() {
             .unwrap();
             std::fs::write(
                 root.join("wrapper.cls"),
-                "\\LoadClass{localcalss}\n\\relax\n",
+                if loader == "LoadClassWithOptions" {
+                    "\\LoadClassWithOptions{localcalss}\n\\relax\n"
+                } else {
+                    "\\LoadClass{localcalss}\n\\relax\n"
+                },
+            )
+            .unwrap();
+            std::fs::write(
+                root.join("wrapperpkg.sty"),
+                "\\RequirePackageWithOptions{localpckg}\n\\relax\n",
             )
             .unwrap();
             let mut workspace = Workspace {
@@ -455,8 +500,10 @@ fn real_missing_package_and_class_names_offer_versioned_repairs_that_compile() {
             };
             workspace.add_root(root.into());
             let main = Url::from_file_path(root.join("main.tex")).unwrap();
-            let uri = if loader == "LoadClass" {
+            let uri = if matches!(loader, "LoadClass" | "LoadClassWithOptions") {
                 Url::from_file_path(root.join("wrapper.cls")).unwrap()
+            } else if loader == "RequirePackageWithOptions" {
+                Url::from_file_path(root.join("wrapperpkg.sty")).unwrap()
             } else {
                 main.clone()
             };
@@ -470,7 +517,11 @@ fn real_missing_package_and_class_names_offer_versioned_repairs_that_compile() {
             assert_eq!(before.status, "error", "{loader}: {}", before.output);
             let code = if matches!(
                 loader,
-                "usepackage" | "RequirePackage" | "spaced-package" | "redundant-package"
+                "usepackage"
+                    | "RequirePackage"
+                    | "RequirePackageWithOptions"
+                    | "spaced-package"
+                    | "redundant-package"
             ) {
                 "missing-package"
             } else {

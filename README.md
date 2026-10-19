@@ -89,7 +89,7 @@ LaTeX 内核的 `NewExpandableDocumentCommand`、`RenewExpandableDocumentCommand
 
 缺失 `input` 文件的错误会核对 TeX 显示的源码上下文，精确标出静态文件名，并附带 `missing-input` 代码和文件名数据。支持花括号、裸文件名和引号形式，以及完整且唯一的省略前缀；宏展开、动态路径、残缺引号或不匹配的上下文保留整行位置。精确诊断同样提供最多 5 个现存 `.tex` 文件名建议，按诊断所属主文件目录查找；保留原有分隔符，裸路径改成含空格的名称时自动加花括号。`includeonly` 不限制普通 `input` 修复；建议遵守相同的版本、文件存在性、循环和请求资源限制。
 
-`\usepackage` / `\RequirePackage` 和 `\documentclass` / `\LoadClass` 的缺失文件错误支持 `missing-package` / `missing-class` 精确诊断，`data.file` 保存实际缺失文件，`data.loaderCommand` 保存加载命令。LaTeX 常在读取下一条命令后才发现文件缺失，服务器会核对这枚 token 或可选的最低版本参数，将位置还原到真正的加载名称；兼容跨行调用、宏包列表和 UTF-16。动态名称、宏展开栈、来源不确定或不唯一的省略上下文保留整行诊断。
+`\usepackage` / `\RequirePackage` / `\RequirePackageWithOptions` 和 `\documentclass` / `\LoadClass` / `\LoadClassWithOptions` 的缺失文件错误支持 `missing-package` / `missing-class` 精确诊断，`data.file` 保存实际缺失文件，`data.loaderCommand` 保存加载命令。LaTeX 常在读取下一条命令后才发现文件缺失，服务器会核对这枚 token 或可选的最低版本参数，将位置还原到真正的加载名称；兼容跨行调用、宏包列表和 UTF-16。动态名称、宏展开栈、来源不确定或不唯一的省略上下文保留整行诊断。
 
 这类诊断最多提供 5 个本地文件名建议，只在该次编译根目录及名称中显式指定的子目录查找 `.sty` / `.cls`，不推断系统宏包是否安装。修复保留其他宏包、选项、版本条件及参数外的空白；误写 `\usepackage{local.sty}` 而本地存在 `local.sty` 时，可改成正确的加载名称 `local`。版本、诊断、候选或原文件变化后，旧修复会失效；兼容版本化编辑和旧客户端命令。
 
@@ -146,6 +146,8 @@ LaTeX 在写出 `\bibliography` 的数据库名称前会移除空格、制表符
 `\bibliographystyle` 会保留名称中的空白，而 BibTeX 会拒绝这样的辅助文件指令，包括名称首尾的空白。服务器不将它解析成可加载样式，补全会排除无法表示的文件名，重命名也会拒绝引入这类路径；编译仍报告工具产生的错误。
 
 宏包和文档类参数是加载名称，`\usepackage` / `\RequirePackage` 总是追加 `.sty`，`\documentclass` / `\LoadClass` 总是追加 `.cls`；例如 `\usepackage{local.sty}` 查找 `local.sty.sty`。补全和重命名会去掉目标文件最后一个由加载器追加的后缀，避免重复扩展名；跳转与依赖跟踪遵循相同规则，并跳过同名的无扩展名文件。文件移动也会检查这些引用在整批移动后仍选中预期目标。
+
+`\RequirePackageWithOptions` / `\LoadClassWithOptions` 沿用相同的查找规则，支持本地文件依赖、补全、跳转、缺失文件修复和文件重命名；前者也识别包列表。命令和签名补全包含 `\RequirePackage`、`\LoadClass` 及这两个转发命令。普通加载器接受 `[options]{name}[minimum version]`，转发命令接受 `{name}[minimum version]`，并由 LaTeX 转发当前包/类的选项；服务器不会在转发命令前错误地建议显式选项参数。
 
 LaTeX 会忽略宏包和文档类加载名称中的空格、制表符和换行，例如 `\usepackage{my local}` 加载 `mylocal.sty`。查找、补全、诊断和重命名遵守相同规则；不会将带空格的同名磁盘文件当成这个名称实际加载的来源，也不会为其生成不安全的路径更新。
 

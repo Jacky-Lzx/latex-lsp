@@ -445,12 +445,10 @@ pub fn will_rename(workspace: &Workspace, files: &[FileRename]) -> Result<Option
                 let new_text = if needs_update {
                     let required_extension = command.and_then(|command| {
                         let extension = match command.name.as_str() {
-                            "usepackage" | "RequirePackage" => "sty",
-                            "documentclass" | "LoadClass" => "cls",
                             "include" | "includeonly" => "tex",
                             "bibliographystyle" => "bst",
                             "bibliography" => "bib",
-                            _ => return None,
+                            name => syntax::loader_extension(name)?,
                         };
                         Some((command, extension))
                     });

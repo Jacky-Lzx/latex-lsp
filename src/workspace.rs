@@ -290,9 +290,10 @@ impl Workspace {
                     "input" | "include" | "subfile" => "tex",
                     "bibliography" | "addbibresource" => "bib",
                     "bibliographystyle" => "bst",
-                    "usepackage" | "RequirePackage" => "sty",
-                    "documentclass" | "LoadClass" => "cls",
-                    _ => return vec![],
+                    name => match crate::syntax::loader_extension(name) {
+                        Some(extension) => extension,
+                        None => return vec![],
+                    },
                 };
                 command
                     .argument

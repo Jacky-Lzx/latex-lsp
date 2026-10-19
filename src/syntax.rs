@@ -393,8 +393,8 @@ pub fn file_extensions(name: &str) -> Option<&'static [&'static str]> {
         "include" | "includeonly" | "subfile" => &["tex"],
         "bibliography" | "addbibresource" => &["bib"],
         "bibliographystyle" => &["bst"],
-        "usepackage" | "RequirePackage" => &["sty"],
-        "documentclass" | "LoadClass" => &["cls"],
+        "usepackage" | "RequirePackage" | "RequirePackageWithOptions" => &["sty"],
+        "documentclass" | "LoadClass" | "LoadClassWithOptions" => &["cls"],
         "includegraphics" => &["pdf", "png", "jpg", "jpeg", "eps", "svg"],
         _ => return None,
     })
@@ -416,7 +416,11 @@ pub(crate) fn is_literal_file_path(value: &str) -> bool {
 pub fn file_list(name: &str) -> bool {
     matches!(
         name,
-        "bibliography" | "usepackage" | "RequirePackage" | "includeonly"
+        "bibliography"
+            | "usepackage"
+            | "RequirePackage"
+            | "RequirePackageWithOptions"
+            | "includeonly"
     )
 }
 
@@ -434,10 +438,17 @@ pub(crate) fn inferred_file_extensions(name: &str) -> Option<&'static [&'static 
 /// already ends in it; unlike input, the argument is not an explicit filename.
 pub(crate) fn loader_extension(command: &str) -> Option<&'static str> {
     match command {
-        "usepackage" | "RequirePackage" => Some("sty"),
-        "documentclass" | "LoadClass" => Some("cls"),
+        "usepackage" | "RequirePackage" | "RequirePackageWithOptions" => Some("sty"),
+        "documentclass" | "LoadClass" | "LoadClassWithOptions" => Some("cls"),
         _ => None,
     }
+}
+
+pub(crate) fn loader_forwards_options(command: &str) -> bool {
+    matches!(
+        command,
+        "RequirePackageWithOptions" | "LoadClassWithOptions"
+    )
 }
 
 /// Package/class loaders and bibliography database declarations discard TeX spaces.
@@ -984,7 +995,7 @@ impl Syntax {
                         && (starred && !citation_accepts_star(name)
                             || bytes.get(arg_start) == Some(&b'[')
                                 && !citation_accepts_notes(name));
-                    if name != "input" {
+                    if name != "input" && !loader_forwards_options(name) {
                         while let Some((_, end)) = group(source, arg_start, b'[', b']') {
                             arg_start = skip_space(source, end);
                         }
@@ -998,7 +1009,9 @@ impl Syntax {
                                 .then(|| input_argument(source, arg_start))
                                 .flatten()
                         })
-                        .filter(|_| !invalid_citation);
+                        .filter(|_| {
+                            !invalid_citation && !(starred && loader_extension(name).is_some())
+                        });
                     let argument = parsed.as_ref().map(|(a, _)| a.clone());
                     let command = Command {
                         name: name.into(),

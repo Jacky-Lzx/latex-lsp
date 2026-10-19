@@ -147,8 +147,16 @@ fn builtin(name: &str) -> Option<Signature> {
         "href" => (&[("url", false), ("text", false)], false),
         "url" => (&[("url", false)], false),
         "includegraphics" => (&[("options", true), ("file", false)], true),
-        "documentclass" | "usepackage" | "RequirePackage" => {
-            (&[("options", true), ("name", false)], false)
+        "documentclass" | "usepackage" | "RequirePackage" | "LoadClass" => (
+            &[
+                ("options", true),
+                ("name", false),
+                ("minimum version", true),
+            ],
+            false,
+        ),
+        name if syntax::loader_forwards_options(name) => {
+            (&[("name", false), ("minimum version", true)], false)
         }
         "input" | "include" | "subfile" | "bibliography" | "bibliographystyle" => {
             (&[("file", false)], false)

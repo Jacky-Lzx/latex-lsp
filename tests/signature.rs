@@ -1420,3 +1420,53 @@ fn math_operator_declarations_and_inline_names_hint_starred_and_bare_control_tar
     );
     assert!(signature::help(&workspace, &uri, position).is_none());
 }
+
+#[test]
+fn package_and_class_loader_signatures_include_minimum_versions_and_forwarded_options() {
+    for name in ["documentclass", "usepackage", "RequirePackage", "LoadClass"] {
+        let label = format!("\\{name}[options]{{name}}[minimum version]");
+        for (arguments, active) in [
+            ("[dra¦ft]{local}[2020/01/01]", 0),
+            ("{loc¦al}[2020/01/01]", 1),
+            ("[draft]{local} % version\r\n[2020/¦01/01]", 2),
+        ] {
+            check("", &format!("\\{name}{arguments}"), &label, active);
+        }
+    }
+    for name in ["RequirePackageWithOptions", "LoadClassWithOptions"] {
+        let label = format!("\\{name}{{name}}[minimum version]");
+        check("", &format!("\\{name}{{loc¦al}}[2020/01/01]"), &label, 0);
+        check(
+            "",
+            &format!("\\{name}{{local}} % version\r\n[2020/¦01/01]"),
+            &label,
+            1,
+        );
+        let (workspace, uri, position) = setup("", &format!("\\{name}[draft]{{loc¦al}}"));
+        assert!(signature::help(&workspace, &uri, position).is_none());
+    }
+    for name in [
+        "RequirePackage",
+        "LoadClass",
+        "RequirePackageWithOptions",
+        "LoadClassWithOptions",
+    ] {
+        let (mut workspace, uri, position) = setup("", &format!("\\{name}¦"));
+        workspace.snippets = true;
+        let items = latex_lsp::features::completion(&workspace, &uri, position);
+        let item = items.iter().find(|item| item.label == name).unwrap();
+        let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+            panic!()
+        };
+        let argument = if name.starts_with("LoadClass") {
+            "class"
+        } else {
+            "package"
+        };
+        assert_eq!(edit.new_text, format!("{name}{{${{1:{argument}}}}}"));
+        let Some(Documentation::String(documentation)) = &item.documentation else {
+            panic!()
+        };
+        assert!(!documentation.is_empty());
+    }
+}

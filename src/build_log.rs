@@ -634,8 +634,10 @@ fn missing_loader_range(
         let command_name = match command.name.as_str() {
             "usepackage" => "usepackage",
             "RequirePackage" => "RequirePackage",
+            "RequirePackageWithOptions" => "RequirePackageWithOptions",
             "documentclass" => "documentclass",
             "LoadClass" => "LoadClass",
+            "LoadClassWithOptions" => "LoadClassWithOptions",
             _ => continue,
         };
         let Some(argument) = &command.argument else {

@@ -528,13 +528,17 @@ fn argument_span(doc: &Document, command: &Command, offset: usize) -> Option<Spa
     }
     let mut at = syntax::skip_space(source, command.span.end);
     if source.as_bytes().get(at) == Some(&b'*') {
-        if syntax::is_citation(&command.name) && !syntax::citation_accepts_star(&command.name) {
+        if syntax::loader_extension(&command.name).is_some()
+            || syntax::is_citation(&command.name) && !syntax::citation_accepts_star(&command.name)
+        {
             return None;
         }
         at = syntax::skip_space(source, at + 1);
     }
     while source.as_bytes().get(at) == Some(&b'[') {
-        if syntax::is_citation(&command.name) && !syntax::citation_accepts_notes(&command.name) {
+        if syntax::loader_forwards_options(&command.name)
+            || syntax::is_citation(&command.name) && !syntax::citation_accepts_notes(&command.name)
+        {
             return None;
         }
         let (_, after) = syntax::group(source, at, b'[', b']')?;

@@ -461,6 +461,26 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
         "Load a LaTeX package. Optional settings go in square brackets.",
     ),
     (
+        "RequirePackage",
+        "RequirePackage{${1:package}}",
+        "Load packages from a package or class. Accepts optional settings and a trailing minimum version.",
+    ),
+    (
+        "LoadClass",
+        "LoadClass{${1:class}}",
+        "Load a base document class. Accepts optional settings and a trailing minimum version.",
+    ),
+    (
+        "RequirePackageWithOptions",
+        "RequirePackageWithOptions{${1:package}}",
+        "Load a package with the current package's options. Accepts a trailing minimum version, without a leading options argument.",
+    ),
+    (
+        "LoadClassWithOptions",
+        "LoadClassWithOptions{${1:class}}",
+        "Load a base class with the current class's options. Accepts a trailing minimum version, without a leading options argument.",
+    ),
+    (
         "begin",
         "begin{${1:environment}}\n\t$0\n\\end{${1:environment}}",
         "Start an environment; pair it with \\end{name}.",
