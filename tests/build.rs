@@ -743,6 +743,49 @@ fn real_bibtex_errors_follow_database_and_style_aliases_to_the_correct_file_and_
 }
 
 #[test]
+#[ignore = "requires latexmk, BibTeX, pdflatex and xelatex"]
+fn real_bibtex_warnings_keep_literal_entry_keys_despite_namesake_files() {
+    use latex_lsp::config::Engine;
+    use tower_lsp::lsp_types::{Position, Range};
+    for engine in [Engine::PdfLatex, Engine::XeLatex] {
+        for key in ["'entry'", "'entry.bib'", "entry.bib"] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let main = root.join("main.tex");
+            let bib = root.join("refs.bib");
+            std::fs::write(root.join("entry.bib"), "@book{wrong,title={Decoy}}\n").unwrap();
+            std::fs::write(&main, format!("\\documentclass{{article}}\n\\begin{{document}}\n\\cite{{{key}}}\\bibliographystyle{{plain}}\\bibliography{{refs}}\n\\end{{document}}\n")).unwrap();
+            std::fs::write(
+                &bib,
+                format!("@book{{{key},title={{Example}},year={{2026}},publisher={{P}}}}\n"),
+            )
+            .unwrap();
+            let config = BuildConfig {
+                engine: Some(engine),
+                ..Default::default()
+            };
+            let outcome = build::run(&main, &config, &AtomicBool::new(false));
+            assert_eq!(outcome.status, "success", "{}", outcome.output);
+            let range = Range::new(
+                Position::new(0, 6),
+                Position::new(0, 6 + key.encode_utf16().count() as u32),
+            );
+            assert!(
+                outcome
+                    .diagnostics
+                    .get(&Url::from_file_path(&bib).unwrap())
+                    .is_some_and(|items| items
+                        .iter()
+                        .any(|item| item.message.contains("empty author and editor")
+                            && item.range == range)),
+                "{engine:?} {key}: {:?}",
+                outcome.diagnostics
+            );
+        }
+    }
+}
+
+#[test]
 #[ignore = "requires pdflatex"]
 fn real_missing_include_warnings_reconstruct_tex_wrapped_long_chapter_names() {
     let directory = tempfile::tempdir().unwrap();

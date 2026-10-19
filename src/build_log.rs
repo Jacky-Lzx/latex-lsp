@@ -1982,16 +1982,27 @@ pub(crate) fn parse_bibliography_in(
         } else {
             continue;
         };
-        let explicit_path = bibliography_path(paths, message);
+        let (explicit_path, databases, source_confirmed) =
+            match bibliography_path(paths, message, tool == "Biber") {
+                BibliographyLocation::Inferred => (None, databases.as_slice(), true),
+                // A named file restricts entry lookup even when it is missing.
+                // Another database cannot supply its source range.
+                BibliographyLocation::Named(path) => {
+                    let confirmed = path.is_some();
+                    (path, &[][..], confirmed)
+                }
+            };
         let number = bibliography_line(message);
-        let key = message
-            .rsplit_once(" in ")
-            .map(|(_, key)| key.trim())
-            .or_else(|| {
-                message
-                    .split_once("entry '")
-                    .and_then(|(_, tail)| tail.split_once('\'').map(|(key, _)| key))
-            });
+        let named_entry = message
+            .split_once("entry '")
+            .and_then(|(_, tail)| tail.split_once('\'').map(|(key, _)| key));
+        let trailing_entry = message.rsplit_once(" in ").map(|(_, key)| key.trim());
+        let key = if tool == "Biber" {
+            named_entry.or(trailing_entry)
+        } else {
+            // BibTeX appends the literal key, including any quotes in it.
+            trailing_entry.or(named_entry)
+        };
         let mut entry = None;
         if let Some(key) = key {
             let candidates: Vec<_> = explicit_path
@@ -2019,12 +2030,18 @@ pub(crate) fn parse_bibliography_in(
             .or_else(|| entry.as_ref().map(|(path, _)| path.as_path()))
             .unwrap_or(root);
         let diagnostic_message = format!("{tool}: {}", message.trim());
-        emit(
+        emit_with_context(
             &mut result,
             path,
-            number.unwrap_or(1),
+            if source_confirmed {
+                number.unwrap_or(1)
+            } else {
+                1
+            },
             diagnostic_message,
             severity,
+            None,
+            source_confirmed,
         );
         if number.is_none() {
             if let Some((_, range)) = &entry {
@@ -2054,10 +2071,79 @@ fn bibliography_line(message: &str) -> Option<u32> {
     None
 }
 
+enum BibliographyLocation {
+    Inferred,
+    Named(Option<PathBuf>),
+}
+
 fn bibliography_path(
     paths: &crate::recorder::BibliographyPaths<'_>,
     message: &str,
-) -> Option<PathBuf> {
+    biber: bool,
+) -> BibliographyLocation {
+    // BibTeX's `in ...` warning suffix is the literal entry key. It can
+    // contain quotes, spaces or .bib and can even name an existing file.
+    if !biber && message.contains(" in ") {
+        return BibliographyLocation::Inferred;
+    }
+    // In BibTeX warnings, `in 'entry'` names a literal bibliography key.
+    let markers: &[&str] = if biber {
+        &["file ", "File ", "in ", "In "]
+    } else {
+        &["file ", "File "]
+    };
+    let quoted = markers
+        .iter()
+        .flat_map(|marker| {
+            message
+                .match_indices(*marker)
+                .map(move |(start, _)| (start, start + marker.len()))
+        })
+        .filter(|(start, after)| {
+            (*start == 0
+                || message[..*start]
+                    .chars()
+                    .next_back()
+                    .is_some_and(|ch| !ch.is_alphanumeric() && ch != '_'))
+                && message[*after..].starts_with(['\'', '"'])
+        })
+        .min_by_key(|(start, _)| *start);
+    if let Some((_, start)) = quoted {
+        let quote = message.as_bytes()[start] as char;
+        let body = &message[start + 1..];
+        let resolve = |name: &str| {
+            name.ends_with(".bib")
+                .then(|| paths.resolve(name))
+                .flatten()
+        };
+        let mut candidate = None;
+        let mut ambiguous = false;
+        for (end, _) in body.match_indices(quote) {
+            let tail = &body[end + 1..];
+            // Apostrophes inside filenames are literal. Prefer a closing
+            // quote followed by the log's line field or message punctuation;
+            // an internal .bib or quote followed by more name text is not an
+            // excuse to resolve an existing shorter file.
+            let strong = tail.is_empty()
+                || tail.starts_with([',', ':', ';', ')', ']', '}'])
+                || tail.trim_start().starts_with("line ")
+                || tail
+                    .strip_prefix('.')
+                    .is_some_and(|tail| tail.is_empty() || tail.starts_with(char::is_whitespace));
+            if strong {
+                return BibliographyLocation::Named(resolve(&body[..end]));
+            }
+            if tail.starts_with(char::is_whitespace) {
+                ambiguous |= candidate.is_some();
+                candidate = Some(&body[..end]);
+            }
+        }
+        return BibliographyLocation::Named(if ambiguous {
+            None
+        } else {
+            candidate.and_then(resolve)
+        });
+    }
     for (index, _) in message.match_indices(".bib") {
         let end = index + 4;
         let tail = &message[end..];
@@ -2087,10 +2173,10 @@ fn bibliography_path(
             .into_iter()
             .find_map(|start| paths.resolve(&message[start..end]))
         {
-            return Some(path);
+            return BibliographyLocation::Named(Some(path));
         }
     }
-    None
+    BibliographyLocation::Inferred
 }
 
 #[cfg(test)]
@@ -2638,6 +2724,137 @@ mod tests {
             let items = &diagnostics[&Url::from_file_path(&bib).unwrap()];
             assert_eq!(items[0].message, format!("Biber: {message}"));
             assert_eq!(items[0].range.start.line, 1);
+        }
+    }
+
+    #[test]
+    fn biber_quoted_paths_keep_spaces_apostrophes_and_internal_bib_suffixes() {
+        for name in [
+            "refs.bib copy.bib",
+            "refs.bib's copy.bib",
+            "refs.bib' copy.bib",
+            "中文 refs.bib copy's refs.bib",
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let main = root.join("main.tex");
+            let target = root.join(name);
+            std::fs::write(&main, "\\cite{entry}\n").unwrap();
+            for decoy in [
+                "refs.bib",
+                "copy.bib",
+                "s copy.bib",
+                "copy's refs.bib",
+                "中文 refs.bib",
+            ] {
+                std::fs::write(root.join(decoy), "@book{entry,title={Wrong}}\n").unwrap();
+            }
+            std::fs::write(&target, "% database\n\n@book{entry,title={Correct}}\n").unwrap();
+            for quote in ['\'', '"'] {
+                let log = format!("INFO - Found BibTeX data source '{name}'\nERROR - Error in {quote}{name}{quote} line 3\nWARN - Missing field for entry 'entry' (file {quote}{name}{quote})\nWARN - Missing another field for entry 'entry' in file {quote}{name}{quote}\n");
+                let diagnostics = parse_bibliography(&main, &log);
+                assert_eq!(diagnostics.len(), 1, "{name} {quote}: {diagnostics:?}");
+                let items = &diagnostics[&Url::from_file_path(&target).unwrap()];
+                assert_eq!(items.len(), 3);
+                assert!(items.iter().all(|item| item.range.start.line == 2));
+                for warning in items
+                    .iter()
+                    .filter(|item| item.severity == Some(DiagnosticSeverity::WARNING))
+                {
+                    assert_eq!(
+                        warning.range,
+                        Range::new(Position::new(2, 6), Position::new(2, 11))
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn biber_missing_quoted_paths_do_not_borrow_prefix_suffix_or_other_database_locations() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let main = root.join("main.tex");
+        let source = "\\cite{entry}\n";
+        std::fs::write(&main, source).unwrap();
+        for name in ["refs.bib", "copy.bib", "unrelated.bib"] {
+            std::fs::write(root.join(name), "% decoy\n\n\n@book{entry,title={Wrong}}\n").unwrap();
+        }
+        std::fs::create_dir(root.join("directory.bib")).unwrap();
+        for quote in ['\'', '"'] {
+            for name in ["refs.bib missing copy.bib", "directory.bib"] {
+                for closed in [false, true] {
+                    let closing = if closed {
+                        quote.to_string()
+                    } else {
+                        String::new()
+                    };
+                    let log = format!("INFO - Found BibTeX data source 'unrelated.bib'\nERROR - Error in {quote}{name}{closing} line 3\nWARN - Missing field for entry 'entry' (file {quote}{name}{closing})\n");
+                    let diagnostics = parse_bibliography(&main, &log);
+                    assert_eq!(diagnostics.len(), 1, "{quote}: {diagnostics:?}");
+                    let items = &diagnostics[&Url::from_file_path(&main).unwrap()];
+                    assert_eq!(items.len(), 2);
+                    let text = Text::new(source.into());
+                    assert!(items
+                        .iter()
+                        .all(|item| item.range.start.line == 0
+                            && text.offset(item.range.end).is_some()));
+                    assert!(items.iter().all(|item| item
+                        .data
+                        .as_ref()
+                        .is_some_and(|data| data["unresolvedSource"] == true)));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn biber_explicit_file_warnings_never_reuse_another_databases_entry_range() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let main = root.join("main.tex");
+        let target = root.join("actual.bib");
+        let contents = "@book{other,title={Actual}}\n";
+        std::fs::write(&main, "\\cite{entry}\n").unwrap();
+        std::fs::write(&target, contents).unwrap();
+        std::fs::write(
+            root.join("unrelated.bib"),
+            "% other\n\n\n@book{entry,title={Wrong}}\n",
+        )
+        .unwrap();
+        let log = "INFO - Found BibTeX data source 'unrelated.bib'\nWARN - Missing field for entry 'entry' (file 'actual.bib')\n";
+        let diagnostics = parse_bibliography(&main, log);
+        assert_eq!(diagnostics.len(), 1);
+        let items = &diagnostics[&Url::from_file_path(&target).unwrap()];
+        assert_eq!(items[0].range.start, Position::new(0, 0));
+        assert!(Text::new(contents.into())
+            .offset(items[0].range.end)
+            .is_some());
+    }
+
+    #[test]
+    fn bibtex_entry_keys_are_not_interpreted_as_namesake_source_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let main = root.join("main.tex");
+        let bib = root.join("refs.bib");
+        std::fs::write(&main, "\\cite{'entry'}\n").unwrap();
+        std::fs::write(root.join("entry.bib"), "@book{wrong,title={Decoy}}\n").unwrap();
+        for key in ["'entry'", "'entry.bib'", "entry.bib"] {
+            std::fs::write(&bib, format!("@book{{{key},title={{Book}}}}\n")).unwrap();
+            let log =
+                format!("Database file #1: refs.bib\nWarning--empty author and editor in {key}\n");
+            let diagnostics = parse_bibliography(&main, &log);
+            assert_eq!(diagnostics.len(), 1, "{key}: {diagnostics:?}");
+            let items = &diagnostics[&Url::from_file_path(&bib).unwrap()];
+            assert_eq!(items.len(), 1);
+            assert_eq!(
+                items[0].range,
+                Range::new(
+                    Position::new(0, 6),
+                    Position::new(0, 6 + key.encode_utf16().count() as u32)
+                )
+            );
         }
     }
 
