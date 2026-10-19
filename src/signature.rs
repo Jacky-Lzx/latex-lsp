@@ -200,6 +200,38 @@ fn builtin(name: &str) -> Option<Signature> {
             false,
         ),
         "newfont" => (&[("command", false), ("font", false)], false),
+        "DeclareTextFontCommand" => (&[("command", false), ("font commands", false)], false),
+        "DeclareFixedFont" => (
+            &[
+                ("command", false),
+                ("encoding", false),
+                ("family", false),
+                ("series", false),
+                ("shape", false),
+                ("size", false),
+            ],
+            false,
+        ),
+        "DeclareMathAlphabet" => (
+            &[
+                ("command", false),
+                ("encoding", false),
+                ("family", false),
+                ("series", false),
+                ("shape", false),
+            ],
+            false,
+        ),
+        "DeclareSymbolFontAlphabet" => (&[("command", false), ("symbol font", false)], false),
+        "DeclareMathSymbol" => (
+            &[
+                ("command", false),
+                ("class", false),
+                ("symbol font", false),
+                ("slot", false),
+            ],
+            false,
+        ),
         "DeclarePairedDelimiter" => (
             &[("command", false), ("left", false), ("right", false)],
             false,
@@ -300,7 +332,15 @@ fn builtin(name: &str) -> Option<Signature> {
             } else if name == "cslet" && index == 1
                 || (name == "letcs"
                     || syntax::declares_font_switch(name)
-                    || syntax::declares_paired_delimiter(name))
+                    || syntax::declares_paired_delimiter(name)
+                    || matches!(
+                        name,
+                        "DeclareTextFontCommand"
+                            | "DeclareFixedFont"
+                            | "DeclareMathAlphabet"
+                            | "DeclareSymbolFontAlphabet"
+                            | "DeclareMathSymbol"
+                    ))
                     && index == 0
             {
                 Kind::CommandToken
@@ -349,6 +389,12 @@ fn definition(uri: &Url, doc: &Document, entry: &Entry, environment: bool) -> Op
     i = syntax::skip_space(source, i);
     let mut parameters = Vec::new();
     match declaration {
+        "DeclareTextFontCommand" | "DeclareMathAlphabet" | "DeclareSymbolFontAlphabet" => {
+            parameters.push(Parameter {
+                kind: Kind::Required,
+                label: "{#1}".into(),
+            });
+        }
         declaration if syntax::declares_paired_delimiter(declaration) => {
             let count = if declaration == "DeclarePairedDelimiter" {
                 1

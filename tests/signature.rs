@@ -91,6 +91,75 @@ fn fontspec_declarations_accept_bare_and_grouped_switches_and_both_feature_lists
 }
 
 #[test]
+fn classic_font_declarations_hint_font_fields_and_offer_valid_command_snippets() {
+    for (marked, label, active) in [
+        (
+            r"\DeclareTextFontCommand\cust¦om{\bfseries}",
+            r"\DeclareTextFontCommand{command}{font commands}",
+            0,
+        ),
+        (
+            r"\DeclareTextFontCommand{\custom}{\bfse¦ries}",
+            r"\DeclareTextFontCommand{command}{font commands}",
+            1,
+        ),
+        (
+            r"\DeclareFixedFont\custom{OT1}{cmr}{m}{n}{1¦0}",
+            r"\DeclareFixedFont{command}{encoding}{family}{series}{shape}{size}",
+            5,
+        ),
+        (
+            r"\DeclareMathAlphabet{\custom}{OT1}{cmr}{m}{i¦t}",
+            r"\DeclareMathAlphabet{command}{encoding}{family}{series}{shape}",
+            4,
+        ),
+        (
+            r"\DeclareSymbolFontAlphabet\custom{oper¦ators}",
+            r"\DeclareSymbolFontAlphabet{command}{symbol font}",
+            1,
+        ),
+        (
+            r#"\DeclareMathSymbol\custom{\mathord}{letters}{"0¦B}"#,
+            r"\DeclareMathSymbol{command}{class}{symbol font}{slot}",
+            3,
+        ),
+    ] {
+        check("", marked, label, active);
+    }
+    for (name, expected) in [
+        (
+            "DeclareTextFontCommand",
+            r"DeclareTextFontCommand{\\${1:command}}{\\${2:bfseries}}",
+        ),
+        (
+            "DeclareFixedFont",
+            r"DeclareFixedFont{\\${1:command}}{${2:OT1}}{${3:cmr}}{${4:m}}{${5:n}}{${6:10}}",
+        ),
+        (
+            "DeclareMathAlphabet",
+            r"DeclareMathAlphabet{\\${1:command}}{${2:OT1}}{${3:cmr}}{${4:m}}{${5:it}}",
+        ),
+        (
+            "DeclareSymbolFontAlphabet",
+            r"DeclareSymbolFontAlphabet{\\${1:command}}{${2:operators}}",
+        ),
+        (
+            "DeclareMathSymbol",
+            r"DeclareMathSymbol{\\${1:command}}{\\${2:mathord}}{${3:letters}}{${4:0}}",
+        ),
+    ] {
+        let (mut workspace, uri, position) = setup("", &format!("\\{name}¦"));
+        workspace.snippets = true;
+        let items = latex_lsp::features::completion(&workspace, &uri, position);
+        let item = items.iter().find(|item| item.label == name).unwrap();
+        let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+            panic!()
+        };
+        assert_eq!(edit.new_text, expected);
+    }
+}
+
+#[test]
 fn paired_delimiter_signatures_follow_body_counts_and_exclusive_sizing_modes() {
     for definition in [
         r"\DeclarePairedDelimiter{\norm}{\lVert}{\rVert}",

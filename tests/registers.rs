@@ -54,6 +54,171 @@ const FONT_DECLARATIONS: [&str; 8] = [
     "setfontface",
 ];
 
+const CLASSIC_FONT_DECLARATIONS: [(&str, &str, bool, usize); 5] = [
+    ("DeclareTextFontCommand", r"{\bfseries}", false, 1),
+    ("DeclareFixedFont", "{OT1}{cmr}{m}{n}{10}", true, 0),
+    ("DeclareMathAlphabet", "{OT1}{cmr}{m}{it}", false, 1),
+    ("DeclareSymbolFontAlphabet", "{operators}", false, 1),
+    ("DeclareMathSymbol", r#"{\mathord}{letters}{"0B}"#, true, 0),
+];
+
+#[test]
+fn classic_font_commands_index_names_with_their_actual_arity_and_symbol_kind() {
+    for (declaration, arguments, variable, count) in CLASSIC_FONT_DECLARATIONS {
+        for target in [r"\oldfont", r"{\oldfont}"] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let definitions = format!("\\{declaration}{target}{arguments}\n");
+            let source = "\\documentclass{article}\n\\input{definitions}\n\\begin{document}\n😀 Use: \\oldfont{Text} \\csname oldfont\\endcsname{Text}\n% \\oldfont\n\\verb|\\oldfont|\n\\end{document}\n\\oldf";
+            let mut workspace = setup(
+                root,
+                &[("main.tex", source), ("definitions.tex", &definitions)],
+            );
+            workspace.snippets = true;
+            let main = Url::from_file_path(root.join("main.tex")).unwrap();
+            let definition = Url::from_file_path(root.join("definitions.tex")).unwrap();
+            let text = &workspace.documents[&main].text;
+            let position = text.position(source.find("Use: ").unwrap() + 8);
+            let locations = features::definitions(&workspace, &main, position);
+            assert_eq!(locations.len(), 1, "{definitions}");
+            assert_eq!(locations[0].uri, definition);
+            assert!(features::hover(&workspace, &main, position).is_some());
+            assert_eq!(
+                features::references(&workspace, &main, position, true).len(),
+                3
+            );
+            let items = features::completion(&workspace, &main, text.position(source.len()));
+            let item = items.iter().find(|item| item.label == "oldfont").unwrap();
+            assert_eq!(
+                item.kind,
+                Some(if variable {
+                    CompletionItemKind::VARIABLE
+                } else {
+                    CompletionItemKind::FUNCTION
+                })
+            );
+            let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+                panic!()
+            };
+            assert_eq!(
+                edit.new_text,
+                if count == 0 {
+                    "oldfont"
+                } else {
+                    "oldfont{${1:arg1}}"
+                }
+            );
+            assert!(features::symbols(&workspace.documents[&definition])
+                .iter()
+                .any(|symbol| symbol.name == "oldfont"
+                    && symbol.kind
+                        == if variable {
+                            SymbolKind::VARIABLE
+                        } else {
+                            SymbolKind::FUNCTION
+                        }));
+            let help = signature::help(
+                &workspace,
+                &main,
+                text.position(source.find("{Text}").unwrap() + 3),
+            );
+            if count == 0 {
+                assert!(help.is_none(), "{definitions}");
+            } else {
+                assert_eq!(help.unwrap().signatures[0].label, r"\oldfont{#1}");
+            }
+            let changed = renamed(&workspace, &main, position, "newfontcommand");
+            assert_eq!(
+                changed[&definition],
+                definitions.replace("oldfont", "newfontcommand")
+            );
+            assert_eq!(
+                changed[&main],
+                source.replace(
+                    "Use: \\oldfont{Text} \\csname oldfont",
+                    "Use: \\newfontcommand{Text} \\csname newfontcommand"
+                )
+            );
+            for name in [
+                "DeclareTextFontCommand",
+                "DeclareFixedFont",
+                "DeclareMathAlphabet",
+                "DeclareSymbolFontAlphabet",
+                "DeclareMathSymbol",
+            ] {
+                assert!(features::rename(&workspace, &main, position, name).is_err());
+            }
+        }
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let workspace = setup(
+        directory.path(),
+        &[(
+            "main.tex",
+            r#"\DeclareMathSymbol{+}{\mathbin}{operators}{"2B}\DeclareTextFontCommand{not-a-command}{\bfseries}"#,
+        )],
+    );
+    assert!(workspace
+        .documents
+        .values()
+        .all(|doc| doc.syntax.definitions.is_empty()));
+}
+
+#[test]
+#[ignore = "requires pdflatex"]
+fn real_classic_font_renames_preserve_selected_fonts_and_text_and_math_dimensions() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let names = [
+        "textcustom",
+        "fixedcustom",
+        "mathcustom",
+        "symbolcustom",
+        "alphacustom",
+    ];
+    let definitions = CLASSIC_FONT_DECLARATIONS
+        .iter()
+        .zip(names)
+        .map(|((command, args, _, _), name)| format!("\\{command}{{\\{name}}}{args}\n"))
+        .collect::<String>();
+    let content = concat!(
+        "\\setbox0=\\hbox{\\textcustom{Text} {\\fixedcustom Fixed.} $\\mathcustom{A}+\\symbolcustom{B}+\\alphacustom$}\n",
+        "\\typeout{CLASSIC-FONT-DIMENSIONS:\\the\\wd0/\\the\\ht0/\\the\\dp0}\\box0\n",
+        "{\\fixedcustom\\typeout{CLASSIC-FONT-SELECTION:\\fontname\\font}}\n",
+    );
+    setup(root, &[("main.tex", "\\documentclass{article}\\input{definitions}\\begin{document}\\input{content}\\end{document}\n"), ("definitions.tex", &definitions), ("content.tex", content)]);
+    let main = root.join("main.tex");
+    let config = latex_lsp::config::BuildConfig {
+        executable: "pdflatex".into(),
+        ..Default::default()
+    };
+    let before = build::run(&main, &config, &AtomicBool::new(false));
+    assert_eq!(before.status, "success", "{}", before.output);
+    let definition = Url::from_file_path(root.join("definitions.tex")).unwrap();
+    for name in names {
+        let workspace = setup(root, &[]);
+        let text = &workspace.documents[&definition].text;
+        let position = text.position(text.source.find(&format!("\\{name}")).unwrap() + 2);
+        let changed = renamed(&workspace, &definition, position, &format!("{name}renamed"));
+        assert_eq!(changed.len(), 2, "{name}");
+        for (uri, source) in changed {
+            std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+        }
+    }
+    let after = build::run(&main, &config, &AtomicBool::new(false));
+    assert_eq!(after.status, "success", "{}", after.output);
+    assert_eq!(after.pages, Some(1));
+    let metrics = |output: &str| {
+        output
+            .lines()
+            .filter(|line| line.starts_with("CLASSIC-FONT-"))
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(metrics(&before.output).len(), 2);
+    assert_eq!(metrics(&before.output), metrics(&after.output));
+}
+
 #[test]
 fn fontspec_switches_support_project_navigation_completion_and_safe_rename() {
     for declaration in FONT_DECLARATIONS {

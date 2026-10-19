@@ -3,6 +3,11 @@ pub(crate) use crate::primitives::PRIMITIVES;
 /// Command name, snippet template (without leading backslash), short documentation.
 /// Templates retain literal TeX backslashes; completion escapes them for the client.
 pub const COMMANDS: &[(&str, &str, &str)] = &[
+    ("DeclareTextFontCommand", "DeclareTextFontCommand{\\${1:command}}{\\${2:bfseries}}", "Define a one-argument text command that applies font commands to its text."),
+    ("DeclareFixedFont", "DeclareFixedFont{\\${1:command}}{${2:OT1}}{${3:cmr}}{${4:m}}{${5:n}}{${6:10}}", "Declare a zero-argument selector for a fixed font encoding, family, series, shape and size."),
+    ("DeclareMathAlphabet", "DeclareMathAlphabet{\\${1:command}}{${2:OT1}}{${3:cmr}}{${4:m}}{${5:it}}", "Declare a one-argument math alphabet command using a font encoding, family, series and shape."),
+    ("DeclareSymbolFontAlphabet", "DeclareSymbolFontAlphabet{\\${1:command}}{${2:operators}}", "Declare a one-argument math alphabet command backed by an existing symbol font."),
+    ("DeclareMathSymbol", "DeclareMathSymbol{\\${1:command}}{\\${2:mathord}}{${3:letters}}{${4:0}}", "Declare a math symbol command or assign a character's math code using a class, symbol font and slot."),
     ("DeclarePairedDelimiter", "DeclarePairedDelimiter{\\${1:command}}{${2:left}}{${3:right}}", "Define a one-argument paired delimiter command. Calls support automatic sizing with * or manual sizing with [size]. Requires mathtools."),
     ("DeclarePairedDelimiterX", "DeclarePairedDelimiterX{\\${1:command}}[${2:1}]{${3:left}}{${4:right}}{${5:body}}", "Define a paired delimiter command with 1 to 9 body arguments. Calls support * or [size]. The argument count in brackets is required. Requires mathtools."),
     ("DeclarePairedDelimiterXPP", "DeclarePairedDelimiterXPP{\\${1:command}}[${2:1}]{${3:before}}{${4:left}}{${5:right}}{${6:after}}{${7:body}}", "Define a paired delimiter command with surrounding code and 1 to 9 body arguments. Calls support * or [size]. The argument count in brackets is required. Requires mathtools."),

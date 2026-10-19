@@ -148,6 +148,8 @@ vim.lsp.enable('latex_lsp')
 
 fontspec 的 `newfontfamily` / `renewfontfamily` / `providefontfamily` / `setfontfamily` 和对应的 `fontface` 声明也支持命令补全、导航、悬停、引用及跨文件安全重命名。识别裸命令与花括号包裹的命令目标；声明提供片段和参数提示，区分字体名前后的可选特性，生成的字体切换命令按零参数处理。沿用项目隔离、冲突与歧义检查，保留字体名称、特性、注释和逐字文本，不展开动态声明。
 
+LaTeX 标准的 `DeclareTextFontCommand`、`DeclareMathAlphabet`、`DeclareSymbolFontAlphabet` 也进入命令索引，生成的命令按单个正文参数提供提示及补全。`DeclareFixedFont` 和以命令为目标的 `DeclareMathSymbol` 作为零参数字体选择器或符号常量进入变量索引；字符目标不会误记为命令声明。五种声明均提供命令片段、字段参数提示及跨文件安全重命名，保留编码、字体族、字形、字号、数学类别和字符槽位。
+
 mathtools 的 `DeclarePairedDelimiter` / `DeclarePairedDelimiterX` / `DeclarePairedDelimiterXPP` 声明同样支持导航、引用、悬停、符号及跨文件重命名。参数提示识别星号自动缩放与 `[size]` 手动尺寸，X/XPP 的字面参数数量限于 1–9；补全只插入正文必选参数，保留其实际参数编号。声明本身提供命令片段及参数提示，X/XPP 的方括号参数数量为必填项；动态数量或定义有歧义时不推断调用签名，已有调用参数和声明的定界符、前后代码保持原样。
 
 直接 `\newif\ifdraft` 和字面 `\expandafter\newif\csname ifdraft\endcsname` 声明提供布尔符号、跳转、悬停和项目内的派生命令补全。从 `\ifdraft`、`\drafttrue`、`\draftfalse` 或对应字面 `csname` 引用发起重命名时，输入新的基础名称（例如 `release`），同步维护三种命令及声明；保留同名的独立 `\draft` 宏。只经字面 `csname` 使用的名称支持连字符和中文；存在直接控制序列时，新名称必须能组成 TeX 命令，不提供无法直接键入的补全。新名称与宏、寄存器、环境、其他开关或内置条件原语冲突，以及共享文件在其他项目中指向独立开关时拒绝修改；不展开动态声明。

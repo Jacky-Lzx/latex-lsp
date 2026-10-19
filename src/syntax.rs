@@ -468,6 +468,9 @@ fn declares_command(name: &str) -> bool {
                 | "renewrobustcmd"
                 | "providerobustcmd"
                 | "DeclareMathOperator"
+                | "DeclareTextFontCommand"
+                | "DeclareMathAlphabet"
+                | "DeclareSymbolFontAlphabet"
                 | "DeclareRobustCommand"
                 | "NewDocumentCommand"
                 | "RenewDocumentCommand"
@@ -522,6 +525,8 @@ pub(crate) fn declares_register(name: &str) -> bool {
             | "muskipdef"
             | "toksdef"
             | "font"
+            | "DeclareFixedFont"
+            | "DeclareMathSymbol"
     )
 }
 
