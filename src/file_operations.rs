@@ -159,9 +159,10 @@ impl Renames {
         })
     }
 
-    fn input(&self, uri: &Url, root: &Url, name: &str) -> Option<Url> {
+    fn source(&self, uri: &Url, root: &Url, command: &str, name: &str) -> Option<Url> {
+        let extensions = syntax::inferred_file_extensions(command)?;
         [root, uri].into_iter().find_map(|origin| {
-            resolve_file_path_with(&self.uri(origin), "input", name, &["tex"], |path| {
+            resolve_file_path_with(&self.uri(origin), command, name, extensions, |path| {
                 self.file(path)
             })
         })
@@ -252,7 +253,9 @@ fn replacement(
         )
     };
     let mut value = safe_path(&path)?;
-    if !original.ends_with(&format!(".{extension}")) {
+    if command.and_then(syntax::loader_extension).is_some()
+        || !original.ends_with(&format!(".{extension}"))
+    {
         if let Some(extension) = path
             .extension()
             .and_then(|ext| ext.to_str())
@@ -264,14 +267,14 @@ fn replacement(
     if original.starts_with("./") && !value.starts_with('.') {
         value.insert_str(0, "./");
     }
-    if matches!(command, Some("includegraphics" | "input")) {
+    if let Some(command) = command {
         let target_after = Url::from_file_path(&new_target)
             .map_err(|_| Error::invalid_params("Invalid renamed file URI"))?;
         let resolves_to_target = |value: &str| {
-            let selected = if command == Some("input") {
-                renames.input(uri, root, value)
-            } else {
+            let selected = if command == "includegraphics" {
                 renames.image(root, value, inferred, graphics)
+            } else {
+                renames.source(uri, root, command, value)
             };
             selected.as_ref() == Some(&target_after)
         };
@@ -291,6 +294,11 @@ fn replacement(
                 )
             };
             value = safe_path(&explicit)?;
+            if let Some(extension) = syntax::loader_extension(command) {
+                if let Some(base) = value.strip_suffix(&format!(".{extension}")) {
+                    value = base.to_owned();
+                }
+            }
             if original.starts_with("./") && !value.starts_with('.') {
                 value.insert_str(0, "./");
             }
@@ -426,8 +434,7 @@ pub fn will_rename(workspace: &Workspace, files: &[FileRename]) -> Result<Option
                             syntax::inferred_file_extensions(&command.name).unwrap_or_default(),
                             &graphics,
                         ),
-                        "input" => renames.input(uri, root, original),
-                        _ => return false,
+                        name => renames.source(uri, root, name, original),
                     };
                     selected != Some(renames.uri(&target))
                 });
@@ -442,6 +449,7 @@ pub fn will_rename(workspace: &Workspace, files: &[FileRename]) -> Result<Option
                             "documentclass" | "LoadClass" => "cls",
                             "include" | "includeonly" => "tex",
                             "bibliographystyle" => "bst",
+                            "bibliography" => "bib",
                             _ => return None,
                         };
                         Some((command, extension))

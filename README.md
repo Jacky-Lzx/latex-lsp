@@ -120,7 +120,7 @@ natbib 的 `citealt` / `citealp`、`citenum`、`citeyearpar`、`citefullauthor` 
 
 共享源码中的输入文件和图片路径也按各主文档分别解析，编译输入检查使用当前编译的上下文。根不唯一且同一参数指向不同文件时，不提供单一跳转；路径补全可搜索这些主文档目录。文件移动要求所有使用者的路径编辑一致，一致时合并为一次编辑；存在冲突或某个项目无法解析该路径时拒绝改写。
 
-文件路径补全会同时查找主文档目录和当前文档目录，优先选择编译主文档目录，与 TeX 读取同名文件时保持一致，支持相对父目录和子目录；保留显式扩展名、文献列表中的其他项，以及目录后已有的斜杠。`\url` / `\href` 的 URL 参数独立解析，允许 `%20` 等编码，不把 URL 中的文本当成 LaTeX 命令。
+文件路径补全会同时查找主文档目录和当前文档目录，优先选择编译主文档目录，与 TeX 读取同名文件时保持一致，支持相对父目录和子目录；按加载命令处理扩展名，保留文献列表中的其他项，以及目录后已有的斜杠。`\url` / `\href` 的 URL 参数独立解析，允许 `%20` 等编码，不把 URL 中的文本当成 LaTeX 命令。
 
 `\includegraphics` 还会搜索当前项目中 `\graphicspath{{figures/}{plots/}}` 声明的目录，支持图片跳转、子目录补全和文件重命名。移动图片目录或主文档时会同步更新目录声明，并尽量保留图片的简短名称和省略的扩展名。路径以当前编译主文档目录为基准，共享包里的声明也遵守这一规则。允许空格和中文，识别以 `/` 结尾的静态目录；移动主文档时也会重算尚不存在的目录。如果共享声明在不同项目中需要不同的替换路径，会拒绝该次文件移动编辑。不展开宏，也不模拟条件、局部作用域或多次声明的覆盖顺序。
 
@@ -133,6 +133,10 @@ natbib 的 `citealt` / `citealp`、`citenum`、`citeyearpar`、`citefullauthor` 
 `\input` 可补全上述 TeX 来源类型，省略 `.tex` 时保留常见简写，其他扩展名会显式写入；跳转也遵守仅自动推断 `.tex` 的规则。主文档可以使用 `.tex` 或 `.ltx` 扩展名。 输入路径遵循 TeX 的默认扩展名搜索顺序，例如 `chapter.ltx` 和 `chapter.ltx.tex` 并存时优先后者。 `\include` 和选章列表按 LaTeX 规则补 `.tex`，不会误指向同名无扩展文件或 `.ltx` 文件；例如 `\include{chapter.ltx}` 对应 `chapter.ltx.tex`。
 
 输入文件重命名也会核对整批移动后的 `\input` 目标，包括同批移入和移走的文件。新根目录中的同名来源遮蔽原来的文档相对回退路径时，使用明确的根相对路径；改成 `.ltx` 等扩展名后仍会优先读入同名 `.ltx.tex`，无法通过路径保持目标时拒绝编辑。裸文件名、引号路径、空格和中文路径遵守相同检查。
+
+`\bibliography` 和 `\bibliographystyle` 分别补 `.bib` 和 `.bst`，已有相同后缀时保留；例如 `\bibliography{refs.ltx}` 读取 `refs.ltx.bib`，不会读取同名的 `refs.ltx`。文献库通过 `\bibliography` 使用时，改名必须保留 `.bib` 后缀。`\addbibresource` 继续使用显式资源路径。
+
+宏包和文档类参数是加载名称，`\usepackage` / `\RequirePackage` 总是追加 `.sty`，`\documentclass` / `\LoadClass` 总是追加 `.cls`；例如 `\usepackage{local.sty}` 查找 `local.sty.sty`。补全和重命名会去掉目标文件最后一个由加载器追加的后缀，避免重复扩展名；跳转与依赖跟踪遵循相同规则，并跳过同名的无扩展名文件。文件移动也会检查这些引用在整批移动后仍选中预期目标。
 
 ## 构建与运行
 
@@ -401,7 +405,7 @@ cargo test --locked -- --include-ignored
 
 目前不内置 PDF 预览、格式化或数学语义检查；默认编译生成 SyncTeX 数据，可由预览插件接入双向查询。未定义引用的即时静态检查暂不报错，编译器提供的相关警告会显示在诊断中。定义和引用在整个工作区索引中查找；重命名要求该名字在索引中只有一个定义，存在歧义时会拒绝操作。内置命令不支持重命名。
 
-文件/目录重命名需要编辑器或文件管理插件发送 `workspace/willRenameFiles` 并应用返回的编辑，然后移动文件并发送 `workspace/didRenameFiles`。服务器会保留打开文档的版本、刷新磁盘索引，并停止使用旧输入路径的编译；不会自行移动文件。含 TeX 宏的路径无法静态解析，新路径含无法安全表达的特殊字符时会拒绝引用更新；显式配置的 `build.rootFile` 需在主文件改名后同步修改。 输入源码改为其他扩展名时会保留新后缀，例如 `\input{chapter}` 在 `.tex` 改为 `.ltx` 后更新为 `\input{chapter.ltx}`，根指令同步更新；`\include` / `\includeonly` 章节需要保留 `.tex`，通过包/文档类加载命令使用的文件需要保留 `.sty` / `.cls` 后缀，本地 BibTeX 样式需要保留 `.bst`。
+文件/目录重命名需要编辑器或文件管理插件发送 `workspace/willRenameFiles` 并应用返回的编辑，然后移动文件并发送 `workspace/didRenameFiles`。服务器会保留打开文档的版本、刷新磁盘索引，并停止使用旧输入路径的编译；不会自行移动文件。含 TeX 宏的路径无法静态解析，新路径含无法安全表达的特殊字符时会拒绝引用更新；显式配置的 `build.rootFile` 需在主文件改名后同步修改。 输入源码改为其他扩展名时会保留新后缀，例如 `\input{chapter}` 在 `.tex` 改为 `.ltx` 后更新为 `\input{chapter.ltx}`，根指令同步更新；`\include` / `\includeonly` 章节需要保留 `.tex`，通过包/文档类加载命令使用的文件需要保留 `.sty` / `.cls` 后缀，本地 BibTeX 样式需要保留 `.bst`，通过 `\bibliography` 使用的文献库需要保留 `.bib`。
 
 重命名静态 `\newtheorem{claim}{Claim}` 时，同步维护 `\newtheorem{lemma}[claim]{Lemma}`、`\newtheorem{fact}{Fact}[claim]`、`\newcounter{inner}[claim]`、常见计数器操作与 `counterwithin` / `counterwithout` / `numberwithin`，以及 `\claim`、`\endclaim`、`\theclaim` 等派生命令；支持字面 `\csname theclaim\endcsname`，不展开动态宏。共享计数器的定理保留底层计数器，无编号定理不修改独立计数器。新名称与计数器或派生命令冲突、或共享引用属于其他项目中的独立计数器时拒绝改动；存在直接派生命令调用时，新名称需能组成 TeX 控制序列。
 

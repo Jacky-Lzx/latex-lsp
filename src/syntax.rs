@@ -430,6 +430,16 @@ pub(crate) fn inferred_file_extensions(name: &str) -> Option<&'static [&'static 
     })
 }
 
+/// Package and class loaders append their suffix even to a base name that
+/// already ends in it; unlike input, the argument is not an explicit filename.
+pub(crate) fn loader_extension(command: &str) -> Option<&'static str> {
+    match command {
+        "usepackage" | "RequirePackage" => Some("sty"),
+        "documentclass" | "LoadClass" => Some("cls"),
+        _ => None,
+    }
+}
+
 pub(crate) fn file_lookup_names<'a>(
     command: &str,
     value: &'a str,
@@ -440,14 +450,20 @@ pub(crate) fn file_lookup_names<'a>(
         .is_some_and(|extension| {
             ["tex", "sty", "cls", "def", "clo", "fd", "aux", "bbl", "ldf"].contains(&extension)
         });
+    let extension = loader_extension(command).unwrap_or(match command {
+        "bibliography" => "bib",
+        "bibliographystyle" => "bst",
+        _ => "tex",
+    });
     let append = !value.is_empty()
         && match command {
             "include" | "includeonly" => !value.ends_with(".tex"),
             "input" => !recognized,
-            _ => false,
+            "bibliography" | "bibliographystyle" => !value.ends_with(&format!(".{extension}")),
+            _ => loader_extension(command).is_some(),
         };
     let preferred = if append {
-        std::borrow::Cow::Owned(format!("{value}.tex"))
+        std::borrow::Cow::Owned(format!("{value}.{extension}"))
     } else {
         std::borrow::Cow::Borrowed(value)
     };

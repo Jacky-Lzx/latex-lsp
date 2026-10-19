@@ -117,7 +117,9 @@ pub fn complete(
                     .rsplit_once('.')
                     .is_some_and(|(_, typed)| extension.starts_with(typed));
                 // Uppercase extensions cannot be inferred by TeX on a case-sensitive filesystem.
-                if !explicit_extension && extensions.first() == Some(&extension) {
+                if (syntax::loader_extension(command).is_some() || !explicit_extension)
+                    && extensions.first() == Some(&extension)
+                {
                     new_text.truncate(new_text.len() - extension.len() - 1);
                 }
             }

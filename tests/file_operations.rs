@@ -863,3 +863,197 @@ fn both_projects_compile_after_shared_input_and_image_paths_are_rebased() {
         assert!(outcome.pdf.unwrap().is_file());
     }
 }
+
+#[test]
+fn package_and_class_links_always_append_the_loader_suffix() {
+    for (command, extension) in [
+        ("usepackage", "sty"),
+        ("RequirePackage", "sty"),
+        ("documentclass", "cls"),
+        ("LoadClass", "cls"),
+    ] {
+        for name in [
+            "custom".to_owned(),
+            "custom.inc".to_owned(),
+            format!("custom.{extension}"),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            std::fs::write(root.join(&name), "Wrong literal file.").unwrap();
+            let expected = format!("{name}.{extension}");
+            std::fs::write(root.join(&expected), "Expected loaded source.").unwrap();
+            let source = if command == "documentclass" {
+                format!("\\documentclass{{{name}}}")
+            } else {
+                format!("\\documentclass{{article}}\\{command}{{{name}}}")
+            };
+            std::fs::write(root.join("main.tex"), source).unwrap();
+            let mut workspace = Workspace::default();
+            workspace.add_root(root.into());
+            let main = uri(root, "main.tex");
+            let links = latex_lsp::navigation::document_links(&workspace, &main);
+            assert_eq!(links.len(), 1, "{command}/{name}: {links:?}");
+            assert_eq!(
+                links[0].target,
+                Some(uri(root, &expected)),
+                "{command}/{name}"
+            );
+            let dependencies = workspace.project_files(&main);
+            assert!(dependencies.contains(&uri(root, &expected)));
+            assert!(!dependencies.contains(&uri(root, &name)));
+            std::fs::remove_file(root.join(&expected)).unwrap();
+            assert!(latex_lsp::navigation::document_links(&workspace, &main).is_empty());
+        }
+    }
+}
+
+#[test]
+fn loader_renames_strip_the_appended_suffix_and_completion_avoids_doubled_extensions() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let mut workspace = project(root);
+    for name in ["local.cls.cls", "pkg.sty.sty"] {
+        std::fs::write(root.join(name), "Expected loaded source.").unwrap();
+    }
+    let main = uri(root, "main.tex");
+    let source = r"\documentclass{local.cls}\usepackage{pkg.sty}";
+    workspace.open(main.clone(), source.into(), 1);
+    let changes = edits(
+        file_operations::will_rename(
+            &workspace,
+            &[
+                rename(root, "local.cls.cls", "new-class.cls"),
+                rename(root, "pkg.sty.sty", "new-package.sty"),
+            ],
+        )
+        .unwrap()
+        .unwrap(),
+    );
+    assert_eq!(
+        apply(source, changes[&main].clone()),
+        r"\documentclass{new-class}\usepackage{new-package}"
+    );
+    let source = r"\usepackage{pkg.st";
+    workspace.open(main.clone(), source.into(), 2);
+    let items = latex_lsp::features::completion(
+        &workspace,
+        &main,
+        Text::new(source.into()).position(source.len()),
+    );
+    let item = items.iter().find(|item| item.label == "pkg.sty").unwrap();
+    let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+        panic!()
+    };
+    assert_eq!(edit.new_text, "pkg");
+}
+
+#[test]
+#[ignore = "requires pdflatex"]
+fn actual_package_and_class_loading_matches_navigation_and_renamed_base_names() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    for (name, source) in [
+        (
+            "main.tex",
+            r"\documentclass{local.cls}\usepackage{pkg.sty}\begin{document}Text.\end{document}",
+        ),
+        ("local.cls", r"\errmessage{WRONG CLASS}"),
+        (
+            "local.cls.cls",
+            r"\LoadClass{article}\typeout{EXPECTED CLASS}",
+        ),
+        ("pkg.sty", r"\errmessage{WRONG PACKAGE}"),
+        ("pkg.sty.sty", r"\typeout{EXPECTED PACKAGE}"),
+    ] {
+        std::fs::write(root.join(name), source).unwrap();
+    }
+    let mut workspace = Workspace::default();
+    workspace.add_root(root.into());
+    let config = latex_lsp::config::BuildConfig {
+        executable: "pdflatex".into(),
+        ..Default::default()
+    };
+    let main = uri(root, "main.tex");
+    for renamed in [false, true] {
+        let outcome = latex_lsp::build::run(&root.join("main.tex"), &config, &Default::default());
+        assert_eq!(outcome.status, "success", "{}", outcome.output);
+        assert!(
+            outcome.output.contains("EXPECTED CLASS"),
+            "{}",
+            outcome.output
+        );
+        assert!(
+            outcome.output.contains("EXPECTED PACKAGE"),
+            "{}",
+            outcome.output
+        );
+        let inputs = outcome.inputs.unwrap();
+        let links = latex_lsp::navigation::document_links(&workspace, &main);
+        for name in if renamed {
+            ["new-class.cls", "new-package.sty"]
+        } else {
+            ["local.cls.cls", "pkg.sty.sty"]
+        } {
+            assert!(inputs.contains(&uri(root, name)));
+            assert!(links
+                .iter()
+                .any(|link| link.target == Some(uri(root, name))));
+        }
+        if renamed {
+            break;
+        }
+        let files = [
+            rename(root, "local.cls.cls", "new-class.cls"),
+            rename(root, "pkg.sty.sty", "new-package.sty"),
+        ];
+        let changes = edits(
+            file_operations::will_rename(&workspace, &files)
+                .unwrap()
+                .unwrap(),
+        );
+        std::fs::write(
+            root.join("main.tex"),
+            apply(
+                &workspace.documents[&main].text.source,
+                changes[&main].clone(),
+            ),
+        )
+        .unwrap();
+        std::fs::rename(root.join("local.cls.cls"), root.join("new-class.cls")).unwrap();
+        std::fs::rename(root.join("pkg.sty.sty"), root.join("new-package.sty")).unwrap();
+        file_operations::did_rename(&mut workspace, &files).unwrap();
+    }
+}
+
+#[test]
+fn incoming_root_files_do_not_redirect_package_class_style_or_database_fallbacks() {
+    for (command, extension, expected) in [
+        ("RequirePackage", "sty", "chapters/item"),
+        ("LoadClass", "cls", "chapters/item"),
+        ("bibliographystyle", "bst", "chapters/item.bst"),
+        ("bibliography", "bib", "chapters/item.bib"),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let mut workspace = project(root);
+        std::fs::write(root.join(format!("chapters/item.{extension}")), "Expected.").unwrap();
+        std::fs::write(root.join(format!("other.{extension}")), "New shadow.").unwrap();
+        let child = uri(root, "chapters/old.tex");
+        let source = format!("\\{command}{{item}}");
+        workspace.open(child.clone(), source.clone(), 1);
+        let files = [rename(
+            root,
+            &format!("other.{extension}"),
+            &format!("item.{extension}"),
+        )];
+        let edit = file_operations::will_rename(&workspace, &files)
+            .unwrap()
+            .unwrap();
+        let changes = edits(edit);
+        assert_eq!(
+            apply(&source, changes[&child].clone()),
+            format!("\\{command}{{{expected}}}"),
+            "{command}"
+        );
+    }
+}
