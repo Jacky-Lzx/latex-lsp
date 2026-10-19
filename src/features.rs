@@ -114,6 +114,21 @@ fn raw_target(doc: &Document, offset: usize) -> Option<Target<'_>> {
             };
             if let Some(kind) = kind {
                 if arg.span.start <= offset && offset <= arg.span.end {
+                    if syntax::is_citation(&command.name)
+                        && !syntax::is_single_citation(&command.name)
+                        || syntax::is_reference(&command.name)
+                            && !syntax::is_single_reference(&command.name)
+                    {
+                        let span = syntax::key_list_spans(&doc.text.source, arg.span.clone())
+                            .into_iter()
+                            .find(|span| span.start <= offset && offset <= span.end)?;
+                        return Some(Target {
+                            kind,
+                            name: &doc.text.source[span.clone()],
+                            span,
+                            control_word: false,
+                        });
+                    }
                     if (matches!(kind, TargetKind::Environment | TargetKind::Counter)
                         || kind == TargetKind::Label
                             && (command.name == "label"
@@ -597,12 +612,12 @@ fn argument_span(doc: &Document, command: &Command, offset: usize) -> Option<Spa
         }
         at
     };
+    if syntax::is_reference(&command.name) || syntax::is_citation(&command.name) {
+        return syntax::active_key_list_prefix(source, at, offset);
+    }
     let value = source.get(at..offset)?.strip_prefix('{')?;
     if value.contains(['{', '}', '%'])
-        || value.contains('\n')
-            && !syntax::file_name_ignores_spaces(&command.name)
-            && !syntax::is_reference(&command.name)
-            && !syntax::is_citation(&command.name)
+        || value.contains('\n') && !syntax::file_name_ignores_spaces(&command.name)
         || command.name == "bibliographystyle"
             && (value.contains([' ', '\t', '\r', '\n'])
                 || command
@@ -1209,16 +1224,13 @@ fn all_references(
                     }
                     continue;
                 }
-                let mut start = arg.span.start;
-                for key in arg.value.split(',') {
-                    if key.trim() == target.name {
-                        let span = syntax::trimmed_span(&doc.text.source, start..start + key.len());
+                for span in syntax::key_list_spans(&doc.text.source, arg.span.clone()) {
+                    if doc.text.source[span.clone()] == *target.name {
                         result.push(Location {
                             uri: uri.clone(),
                             range: doc.text.range(span.start, span.end),
                         });
                     }
-                    start += key.len() + 1;
                 }
             }
         }

@@ -426,13 +426,10 @@ pub(crate) fn undefined_reference_ranges(text: &Text, line: u32, message: &str) 
             }
             continue;
         }
-        let mut start = argument.span.start;
-        for value in argument.value.split(',') {
-            let span = crate::syntax::trimmed_span(&text.source, start..start + value.len());
+        for span in crate::syntax::key_list_spans(&text.source, argument.span.clone()) {
             if &text.source[span.clone()] == key {
                 ranges.push(text.range(span.start, span.end));
             }
-            start += value.len() + 1;
         }
     }
     ranges

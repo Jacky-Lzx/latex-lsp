@@ -509,6 +509,83 @@ pub(crate) fn is_static_key(value: &str) -> bool {
         })
 }
 
+/// Split a TeX key list without interpreting commas inside comments, groups,
+/// or control symbols. Ranges always refer to the original document.
+fn key_list_segments(source: &str, span: Range<usize>) -> Vec<Range<usize>> {
+    let bytes = source.as_bytes();
+    let mut result = Vec::new();
+    let mut start = span.start;
+    let mut at = start;
+    let mut depth = 0usize;
+    while at < span.end {
+        match bytes[at] {
+            b'\\' => {
+                at += 1;
+                if at < span.end {
+                    at += source[at..].chars().next().unwrap().len_utf8();
+                }
+                continue;
+            }
+            b'%' => {
+                while at < span.end && bytes[at] != b'\n' {
+                    at += 1;
+                }
+                continue;
+            }
+            b'{' => depth += 1,
+            b'}' => depth = depth.saturating_sub(1),
+            b',' if depth == 0 => {
+                result.push(start..at);
+                start = at + 1;
+            }
+            _ => {}
+        }
+        at += 1;
+    }
+    result.push(start..span.end);
+    result
+}
+
+fn key_list_name(source: &str, segment: Range<usize>) -> Option<Range<usize>> {
+    let bounded = &source[..segment.end];
+    let start = skip_space(bounded, segment.start);
+    let end = source[start..segment.end]
+        .char_indices()
+        .find(|(_, ch)| ch.is_whitespace() || *ch == '%')
+        .map_or(segment.end, |(offset, _)| start + offset);
+    (skip_space(bounded, end) == segment.end && is_static_key(&source[start..end]))
+        .then_some(start..end)
+}
+
+/// Only contiguous literal names can be edited. Comments surrounding a key
+/// stay outside its range; macro expansion and comment-spliced names do not
+/// become partial references.
+pub(crate) fn key_list_spans(source: &str, span: Range<usize>) -> Vec<Range<usize>> {
+    key_list_segments(source, span)
+        .into_iter()
+        .filter_map(|segment| key_list_name(source, segment))
+        .collect()
+}
+
+pub(crate) fn active_key_list_prefix(
+    source: &str,
+    start: usize,
+    cursor: usize,
+) -> Option<Range<usize>> {
+    if source.as_bytes().get(start) != Some(&b'{') {
+        return None;
+    }
+    let span = group(source, start, b'{', b'}')
+        .map_or(start + 1..source.len(), |(argument, _)| argument.span);
+    let segment = key_list_segments(source, span)
+        .into_iter()
+        .find(|segment| segment.start <= cursor && cursor <= segment.end)?;
+    if let Some(name) = key_list_name(source, segment.clone()) {
+        return (name.start <= cursor && cursor <= name.end).then_some(name.start..cursor);
+    }
+    (skip_space(&source[..segment.end], segment.start) == segment.end).then_some(cursor..cursor)
+}
+
 pub fn file_extensions(name: &str) -> Option<&'static [&'static str]> {
     Some(match name {
         "input" | "InputIfFileExists" => &["tex", "ltx", "sty", "cls", "def", "clo"],

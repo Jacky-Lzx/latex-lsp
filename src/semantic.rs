@@ -87,11 +87,8 @@ fn candidates(doc: &Document) -> Vec<Token> {
                 {
                     literal(&mut tokens, source, argument.span.clone(), KEY);
                 } else {
-                    let mut start = argument.span.start;
-                    for name in argument.value.split(',') {
-                        let span = syntax::trimmed_span(source, start..start + name.len());
+                    for span in syntax::key_list_spans(source, argument.span.clone()) {
                         literal(&mut tokens, source, span, KEY);
-                        start += name.len() + 1;
                     }
                 }
             } else if syntax::boolean_reference(&command.name)
