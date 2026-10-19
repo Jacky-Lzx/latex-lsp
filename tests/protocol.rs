@@ -9689,3 +9689,67 @@ fn static_bibliography_alias_roles_protect_old_pdfs_without_bibliography_logs() 
         server.wait_exit(0);
     }
 }
+
+#[test]
+fn environment_linked_editing_tracks_incremental_changes_and_validates_positions_over_stdio() {
+    use latex_lsp::text::Text;
+    let mut server = Server::start();
+    let uri = Url::parse("file:///linked-editing-protocol/main.tex").unwrap();
+    let alias = "file:///linked-editing-protocol/%6dain.tex";
+    let initialized = server.request(1, "initialize", json!({"processId":null,"capabilities":{"textDocument":{"linkedEditingRange":{"dynamicRegistration":false}}}}));
+    assert_eq!(
+        initialized["capabilities"]["linkedEditingRangeProvider"],
+        true
+    );
+    server.notify("initialized", json!({}));
+    let source = "😀 \\begin{quote}\r\n\\begin{quote}Inner\\end{quote}\r\n\\end{quote}\r\n";
+    let text = Text::new(source.into());
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"latex","version":7,"text":source}}),
+    );
+    let begin = source.find("\n\\begin{quote}").unwrap() + 1 + "\\begin{".len();
+    let end = source.find("\\end{quote}").unwrap() + "\\end{".len();
+    let ranges = [text.range(begin, begin + 5), text.range(end, end + 5)];
+    let result = server.request(
+        2,
+        "textDocument/linkedEditingRange",
+        json!({"textDocument":{"uri":alias},"position":text.position(begin + 2)}),
+    );
+    assert_eq!(result["ranges"], json!(ranges));
+    assert!(result["wordPattern"].as_str().is_some());
+    server.notify("textDocument/didChange", json!({"textDocument":{"uri":alias,"version":8},"contentChanges":[{"range":ranges[1],"text":"center"},{"range":ranges[0],"text":"center"}]}));
+    let changed = text
+        .changed(vec![
+            tower_lsp::lsp_types::TextDocumentContentChangeEvent {
+                range: Some(ranges[1]),
+                range_length: None,
+                text: "center".into(),
+            },
+            tower_lsp::lsp_types::TextDocumentContentChangeEvent {
+                range: Some(ranges[0]),
+                range_length: None,
+                text: "center".into(),
+            },
+        ])
+        .unwrap();
+    let begin = changed.source.find("\\begin{center}").unwrap() + "\\begin{".len();
+    let end = changed.source.find("\\end{center}").unwrap() + "\\end{".len();
+    let updated = server.request(
+        3,
+        "textDocument/linkedEditingRange",
+        json!({"textDocument":{"uri":uri},"position":changed.position(end + 2)}),
+    );
+    assert_eq!(
+        updated["ranges"],
+        json!([changed.range(begin, begin + 6), changed.range(end, end + 6)])
+    );
+    let missing = server.request(4, "textDocument/linkedEditingRange", json!({"textDocument":{"uri":"file:///linked-editing-protocol/missing.tex"},"position":{"line":0,"character":0}}));
+    assert!(missing.is_null());
+    server.send(json!({"jsonrpc":"2.0","id":5,"method":"textDocument/linkedEditingRange","params":{"textDocument":{"uri":uri},"position":{"line":0,"character":1}}}));
+    let invalid = server.until(|message| message["id"] == 5);
+    assert_eq!(invalid["error"]["code"], -32602);
+    server.request(6, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

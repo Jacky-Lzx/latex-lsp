@@ -317,6 +317,9 @@ impl LanguageServer for Backend {
                 references_provider: Some(OneOf::Left(true)),
                 document_highlight_provider: Some(OneOf::Left(true)),
                 selection_range_provider: Some(SelectionRangeProviderCapability::Simple(true)),
+                linked_editing_range_provider: Some(LinkedEditingRangeServerCapabilities::Simple(
+                    true,
+                )),
                 code_action_provider: Some(CodeActionProviderCapability::Options(
                     CodeActionOptions {
                         code_action_kinds: Some(vec![CodeActionKind::QUICKFIX]),
@@ -840,6 +843,26 @@ impl LanguageServer for Backend {
             &document_uri(params.text_document.uri),
             params.position,
         )))
+    }
+
+    async fn linked_editing_range(
+        &self,
+        params: LinkedEditingRangeParams,
+    ) -> Result<Option<LinkedEditingRanges>> {
+        let params = params.text_document_position_params;
+        let workspace = self.workspace.read().await;
+        let Some(doc) = workspace
+            .documents
+            .get(&document_uri(params.text_document.uri))
+        else {
+            return Ok(None);
+        };
+        if doc.text.offset(params.position).is_none() {
+            return Err(tower_lsp::jsonrpc::Error::invalid_params(
+                "Invalid linked editing position",
+            ));
+        }
+        Ok(editing::linked_editing_ranges(doc, params.position))
     }
 
     async fn selection_range(

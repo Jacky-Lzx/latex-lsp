@@ -1,5 +1,5 @@
 use crate::{
-    features, navigation, spelling_fixes,
+    features, navigation, spelling_fixes, syntax,
     workspace::{Document, Workspace},
 };
 use tower_lsp::lsp_types::*;
@@ -256,4 +256,80 @@ pub fn selection_ranges(doc: &Document, positions: &[Position]) -> Option<Vec<Se
             parent.map(|selection| *selection)
         })
         .collect()
+}
+
+/// Link a single syntactically matched environment pair in this document.
+pub fn linked_editing_ranges(doc: &Document, position: Position) -> Option<LinkedEditingRanges> {
+    if doc.kind != crate::workspace::DocumentKind::Latex {
+        return None;
+    }
+    let cursor = doc.text.offset(position)?;
+    let source = &doc.text.source;
+    let pair = |begin: &std::ops::Range<usize>, end: &std::ops::Range<usize>| {
+        [begin, end]
+            .iter()
+            .any(|span| span.start <= cursor && cursor <= span.end)
+            .then(|| LinkedEditingRanges {
+                ranges: vec![
+                    doc.text.range(begin.start, begin.end),
+                    doc.text.range(end.start, end.end),
+                ],
+                word_pattern: Some(r"[^\s{}\\%]+".into()),
+            })
+    };
+    let mut stack = Vec::new();
+    for command in &doc.syntax.commands {
+        if !matches!(command.name.as_str(), "begin" | "end") {
+            continue;
+        }
+        let argument = command.argument.as_ref().filter(|argument| {
+            argument.outer_span.start == syntax::skip_space(source, command.span.end)
+                && syntax::is_static_key(&argument.value)
+        });
+        if command.name == "begin" {
+            if let Some(begin) =
+                argument.filter(|argument| syntax::is_verbatim_environment(&argument.value))
+            {
+                // Raw bodies contain no indexed end command. The parser's raw
+                // region includes its exact literal terminator, if present.
+                if let Some(raw) = doc
+                    .syntax
+                    .ignored
+                    .iter()
+                    .find(|raw| raw.start == begin.outer_span.end)
+                {
+                    let ending = format!("\\end{{{}}}", begin.value);
+                    if let Some(start) = raw
+                        .end
+                        .checked_sub(ending.len())
+                        .filter(|start| *start >= raw.start)
+                    {
+                        if source.get(start..raw.end) == Some(ending.as_str()) {
+                            let end = start + "\\end{".len()..raw.end - 1;
+                            if let Some(linked) = pair(&begin.span, &end) {
+                                return Some(linked);
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+            // Unknown argument shapes remain opaque until a closing command;
+            // they must not borrow a known enclosing environment's name.
+            stack.push(argument);
+        } else {
+            let Some(Some(begin)) = stack.pop() else {
+                stack.clear();
+                continue;
+            };
+            let Some(end) = argument.filter(|end| end.value == begin.value) else {
+                stack.clear();
+                continue;
+            };
+            if let Some(linked) = pair(&begin.span, &end.span) {
+                return Some(linked);
+            }
+        }
+    }
+    None
 }
