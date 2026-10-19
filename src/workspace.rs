@@ -722,14 +722,39 @@ pub(crate) fn resolve_file_path(
     value: &str,
     extensions: &[&str],
 ) -> Option<Url> {
+    resolve_file_path_with(uri, command, value, extensions, existing_file)
+}
+
+/// Share TeX's filename lookup with the proposed filesystem used for renames.
+pub(crate) fn resolve_file_path_with(
+    uri: &Url,
+    command: &str,
+    value: &str,
+    extensions: &[&str],
+    file: impl Fn(&Path) -> Option<PathBuf>,
+) -> Option<Url> {
     crate::syntax::file_lookup_names(command, value).find_map(|name| {
         extensions
             .iter()
-            .find_map(|extension| resolve_path(uri, &name, extension))
+            .find_map(|extension| resolve_path_with(uri, &name, extension, &file))
     })
 }
 
+fn existing_file(path: &Path) -> Option<PathBuf> {
+    let canonical = path.canonicalize().ok()?;
+    canonical.is_file().then_some(canonical)
+}
+
 pub fn resolve_path(uri: &Url, value: &str, extension: &str) -> Option<Url> {
+    resolve_path_with(uri, value, extension, &existing_file)
+}
+
+fn resolve_path_with(
+    uri: &Url,
+    value: &str,
+    extension: &str,
+    file: &impl Fn(&Path) -> Option<PathBuf>,
+) -> Option<Url> {
     let mut value = value.to_owned();
     for character in ['_', '%', '#', '&', '$', ' '] {
         value = value.replace(&format!("\\{character}"), &character.to_string());
@@ -739,18 +764,14 @@ pub fn resolve_path(uri: &Url, value: &str, extension: &str) -> Option<Url> {
     }
     let parent = uri.to_file_path().ok()?.parent()?.to_path_buf();
     let path = parent.join(&value);
-    let path = if path.is_file() {
-        path
-    } else if path.extension().and_then(|value| value.to_str()) != Some(extension) {
+    let selected = file(&path).or_else(|| {
+        if path.extension().and_then(|value| value.to_str()) == Some(extension) {
+            return None;
+        }
         let mut name = path.as_os_str().to_os_string();
         name.push(".");
         name.push(extension);
-        PathBuf::from(name)
-    } else {
-        path
-    };
-    let path = path.canonicalize().ok()?;
-    path.is_file()
-        .then(|| Url::from_file_path(path).ok())
-        .flatten()
+        file(&PathBuf::from(name))
+    })?;
+    Url::from_file_path(selected).ok()
 }

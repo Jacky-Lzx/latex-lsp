@@ -243,3 +243,130 @@ fn actual_compiler_selection_matches_links_before_and_after_file_moves() {
         file_operations::did_rename(&mut workspace, &files).unwrap();
     }
 }
+
+#[test]
+fn input_renames_reject_implicit_tex_suffixes_that_would_select_another_source() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let workspace = project(root);
+    std::fs::write(root.join("renamed.ltx.tex"), "Other source.").unwrap();
+    let error =
+        file_operations::will_rename(&workspace, &[rename(root, "same.tex", "renamed.ltx")])
+            .unwrap_err();
+    assert!(error.message.contains("different file"), "{error}");
+}
+
+#[test]
+fn input_rename_checks_consider_files_arriving_and_leaving_in_the_same_batch() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let workspace = project(root);
+    std::fs::write(root.join("renamed.ltx.tex"), "Shadow.").unwrap();
+    let child = uri(root, "sections/child.tex");
+    let edits = changed(
+        &workspace,
+        &[
+            rename(root, "same.tex", "renamed.ltx"),
+            rename(root, "renamed.ltx.tex", "other.tex"),
+        ],
+    );
+    assert!(edits[&child].contains(r"\input{renamed.ltx}"));
+    let error = file_operations::will_rename(
+        &workspace,
+        &[
+            rename(root, "same.tex", "new.ltx"),
+            rename(root, "renamed.ltx.tex", "new.ltx.tex"),
+        ],
+    )
+    .unwrap_err();
+    assert!(error.message.contains("different file"), "{error}");
+}
+
+#[test]
+fn unrelated_file_moves_cannot_redirect_an_unchanged_input() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let mut workspace = project(root);
+    let child = uri(root, "sections/child.tex");
+    std::fs::write(root.join("literal.ltx"), "Expected source.").unwrap();
+    std::fs::write(root.join("other.tex"), "Other source.").unwrap();
+    workspace.open(child.clone(), r"\input{literal.ltx}".into(), 3);
+    assert_eq!(
+        navigation::document_links(&workspace, &child)[0].target,
+        Some(uri(root, "literal.ltx"))
+    );
+    let error =
+        file_operations::will_rename(&workspace, &[rename(root, "other.tex", "literal.ltx.tex")])
+            .unwrap_err();
+    assert!(error.message.contains("different file"), "{error}");
+}
+
+#[test]
+fn incoming_root_inputs_preserve_document_relative_fallbacks_with_explicit_paths() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let workspace = project(root);
+    std::fs::remove_file(root.join("same.tex")).unwrap();
+    std::fs::write(root.join("other.tex"), "Other source.").unwrap();
+    let edits = changed(&workspace, &[rename(root, "other.tex", "same.tex")]);
+    assert!(edits[&uri(root, "sections/child.tex")].contains(r"\input{sections/same.tex}"));
+}
+
+#[test]
+fn input_shadow_validation_preserves_valid_bare_quoted_and_unicode_paths() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let mut workspace = project(root);
+    let child = uri(root, "sections/child.tex");
+    workspace.open(
+        child.clone(),
+        "\\input same\n\\input\"same\"\n\\input{same}\n".into(),
+        4,
+    );
+    let edits = changed(&workspace, &[rename(root, "same.tex", "新 章节.ltx")]);
+    assert_eq!(
+        edits[&child],
+        "\\input {新 章节.ltx}\n\\input\"新 章节.ltx\"\n\\input{新 章节.ltx}\n"
+    );
+    std::fs::write(root.join("新 章节.ltx.tex"), "Shadow.").unwrap();
+    assert!(
+        file_operations::will_rename(&workspace, &[rename(root, "same.tex", "新 章节.ltx")],)
+            .is_err()
+    );
+}
+
+#[test]
+#[ignore = "requires pdflatex"]
+fn source_extension_rename_rejects_wrong_compiler_inputs_and_allows_a_batch_removing_the_shadow() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let mut workspace = project(root);
+    std::fs::write(root.join("renamed.ltx.tex"), r"\typeout{WRONG INPUT}Other.").unwrap();
+    let config = latex_lsp::config::BuildConfig {
+        executable: "pdflatex".into(),
+        ..Default::default()
+    };
+    let before = build::run(&root.join("main.tex"), &config, &Default::default());
+    assert_eq!(before.status, "success", "{}", before.output);
+    let dangerous = [rename(root, "same.tex", "renamed.ltx")];
+    assert!(file_operations::will_rename(&workspace, &dangerous).is_err());
+    let safe = [
+        dangerous[0].clone(),
+        rename(root, "renamed.ltx.tex", "other.tex"),
+    ];
+    for (uri, source) in changed(&workspace, &safe) {
+        std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+    }
+    std::fs::rename(root.join("same.tex"), root.join("renamed.ltx")).unwrap();
+    std::fs::rename(root.join("renamed.ltx.tex"), root.join("other.tex")).unwrap();
+    file_operations::did_rename(&mut workspace, &safe).unwrap();
+    let after = build::run(&root.join("main.tex"), &config, &Default::default());
+    assert_eq!(after.status, "success", "{}", after.output);
+    assert!(
+        after.output.contains("SELECTED ROOT FILE"),
+        "{}",
+        after.output
+    );
+    assert!(!after.output.contains("WRONG INPUT"), "{}", after.output);
+    assert!(after.inputs.unwrap().contains(&uri(root, "renamed.ltx")));
+}

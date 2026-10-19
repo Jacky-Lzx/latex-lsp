@@ -132,6 +132,8 @@ natbib 的 `citealt` / `citealp`、`citenum`、`citeyearpar`、`citefullauthor` 
 
 `\input` 可补全上述 TeX 来源类型，省略 `.tex` 时保留常见简写，其他扩展名会显式写入；跳转也遵守仅自动推断 `.tex` 的规则。主文档可以使用 `.tex` 或 `.ltx` 扩展名。 输入路径遵循 TeX 的默认扩展名搜索顺序，例如 `chapter.ltx` 和 `chapter.ltx.tex` 并存时优先后者。 `\include` 和选章列表按 LaTeX 规则补 `.tex`，不会误指向同名无扩展文件或 `.ltx` 文件；例如 `\include{chapter.ltx}` 对应 `chapter.ltx.tex`。
 
+输入文件重命名也会核对整批移动后的 `\input` 目标，包括同批移入和移走的文件。新根目录中的同名来源遮蔽原来的文档相对回退路径时，使用明确的根相对路径；改成 `.ltx` 等扩展名后仍会优先读入同名 `.ltx.tex`，无法通过路径保持目标时拒绝编辑。裸文件名、引号路径、空格和中文路径遵守相同检查。
+
 ## 构建与运行
 
 安装当前稳定版 Rust，然后执行：
