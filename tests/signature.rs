@@ -35,6 +35,246 @@ fn check(definitions: &str, marked: &str, label: &str, active: u32) {
 }
 
 #[test]
+fn range_reference_endpoints_keep_grouped_keys_after_invalid_flags() {
+    for (name, flags) in [("vrefrange", "*"), ("vpagerefrange", "**")] {
+        for command in [
+            format!("\\{name}"),
+            format!("\\csuse{{{name}}}"),
+            format!("\\csname {name}\\endcsname"),
+        ] {
+            let call = format!("{command}{flags}{{sec:fi¦rst}}{{sec:last}}");
+            let (workspace, uri, position) = setup("", &call);
+            assert!(
+                signature::help(&workspace, &uri, position).is_none(),
+                "{call}"
+            );
+        }
+    }
+    check(
+        "",
+        r"\vrefrange[see]{sec:fi¦rst}{sec:last}",
+        r"\vrefrange[same-page]{first}{last}",
+        1,
+    );
+    check(
+        "",
+        r"\vpagerefrange*[see]{sec:first}{sec:la¦st}",
+        r"\vpagerefrange[same-page]{first}{last}",
+        2,
+    );
+}
+
+#[test]
+fn builtin_required_parameters_accept_single_characters_and_control_tokens() {
+    for (call, label, active) in [
+        (r"\frac1¦2", r"\frac{numerator}{denominator}", 1),
+        (r"\frac1¦", r"\frac{numerator}{denominator}", 1),
+        (r"\frac\pay¦load{BODY}", r"\frac{numerator}{denominator}", 0),
+        (
+            r"\frac{FIRST}\pay¦load",
+            r"\frac{numerator}{denominator}",
+            1,
+        ),
+        (r"\frac\{¦2", r"\frac{numerator}{denominator}", 1),
+        (r"\frac\\¦2", r"\frac{numerator}{denominator}", 1),
+        (r"\frac[¦2", r"\frac{numerator}{denominator}", 1),
+        (r"\sqrt[3]\pay¦load", r"\sqrt[degree]{expression}", 1),
+        (r"\textbf\pay¦load", r"\textbf{text}", 0),
+        (r"\frac\pay¦", r"\frac{numerator}{denominator}", 0),
+        (r"\frac1\pay¦", r"\frac{numerator}{denominator}", 1),
+        ("\\frac\\¦", r"\frac{numerator}{denominator}", 0),
+        ("\\frac1\\¦", r"\frac{numerator}{denominator}", 1),
+    ] {
+        check("", call, label, active);
+    }
+    for call in [
+        r"\frac12¦",
+        r"\frac\payload{BODY}¦",
+        r"\textbf a¦",
+        r"\textbf\payload ¦",
+    ] {
+        let (workspace, uri, position) = setup("", call);
+        assert!(
+            signature::help(&workspace, &uri, position).is_none(),
+            "{call}"
+        );
+    }
+}
+
+#[test]
+fn custom_macro_and_environment_signatures_count_ungrouped_required_tokens() {
+    let mut definitions = vec![
+        r"\newcommand\pair[2]{}".to_owned(),
+        r"\def\pair#1#2{}".into(),
+        r"\csdef{pair}#1#2{}".into(),
+    ];
+    for declaration in [
+        "NewDocumentCommand",
+        "RenewDocumentCommand",
+        "ProvideDocumentCommand",
+        "DeclareDocumentCommand",
+        "NewExpandableDocumentCommand",
+        "RenewExpandableDocumentCommand",
+        "ProvideExpandableDocumentCommand",
+        "DeclareExpandableDocumentCommand",
+    ] {
+        definitions.push(format!("\\{declaration}\\pair{{mm}}{{}}"));
+    }
+    for definition in &definitions {
+        for command in [r"\pair", r"\csuse{pair}", r"\csname pair\endcsname"] {
+            let label = format!("{command}{{#1}}{{#2}}");
+            for (arguments, active) in [
+                (" a{BO¦DY}", 1),
+                (r"\payload{BO¦DY}", 1),
+                (r"\%{BO¦DY}", 1),
+                (r"{FIRST}\pay¦load", 1),
+                (" a¦b", 1),
+                ("\\¦", 0),
+            ] {
+                check(definition, &format!("{command}{arguments}"), &label, active);
+            }
+        }
+    }
+    for definition in [
+        r"\newenvironment{panel}[2]{}{}",
+        r"\NewDocumentEnvironment{panel}{mm}{}{}",
+    ] {
+        for (command, label, active) in [
+            (r"\begin{panel}", r"\begin{panel}{#1}{#2}", 2),
+            (r"\panel", r"\panel{#1}{#2}", 1),
+            (r"\csuse{panel}", r"\csuse{panel}{#1}{#2}", 1),
+        ] {
+            check(definition, &format!("{command} a{{BO¦DY}}"), label, active);
+            check(
+                definition,
+                &format!("{command}\\payload{{BO¦DY}}"),
+                label,
+                active,
+            );
+        }
+    }
+    check(
+        r"\newcommand\pair[2][DEF]{}",
+        r"\pair\pay¦load",
+        r"\pair[#1=DEF]{#2}",
+        1,
+    );
+}
+
+#[test]
+fn ungrouped_required_arguments_keep_control_word_spaces_for_bang_optionals() {
+    let definition = r"\NewDocumentCommand\probe{m !O{DEF}}{}";
+    for (argument, lexical_spaces) in [
+        ("a", false),
+        (r"\payload", true),
+        (r"\%", false),
+        (r"\\", false),
+        ("\\ ", true),
+        (r"\{", false),
+    ] {
+        for separator in ["", " ", "\r\n", "% adjacent\n  "] {
+            let call = format!("\\probe {argument}{separator}[RE¦D]");
+            if separator.is_empty() || lexical_spaces || separator.starts_with('%') {
+                check(definition, &call, r"\probe{#1}[#2=DEF]", 1);
+            } else {
+                let (workspace, uri, position) = setup(definition, &call);
+                assert!(
+                    signature::help(&workspace, &uri, position).is_none(),
+                    "{call}"
+                );
+            }
+        }
+    }
+    let (workspace, uri, position) = setup(definition, "\\probe\\payload\n\n[RE¦D]");
+    assert!(signature::help(&workspace, &uri, position).is_none());
+}
+
+#[test]
+fn engine_dependent_ungrouped_tokens_and_paragraphs_remain_conservative() {
+    let definition = r"\NewDocumentCommand\pair{mm}{}";
+    for call in [
+        r"\pair 中{BO¦DY}",
+        r"\pair 😀{BO¦DY}",
+        r"\pair\payload中{BO¦DY}",
+        r"\pair\é{BO¦DY}",
+        r"\pair ^^61{BO¦DY}",
+        r"\pair\^^61{BO¦DY}",
+        r"\pair\payload^^61{BO¦DY}",
+        r"\pair\par{BO¦DY}",
+        r"\pair }{BO¦DY}",
+        "\\pair \\\n{BO¦DY}",
+        "\\pair\n\n a{BO¦DY}",
+    ] {
+        let (workspace, uri, position) = setup(definition, call);
+        assert!(
+            signature::help(&workspace, &uri, position).is_none(),
+            "{call}"
+        );
+    }
+    check(definition, r"\pair{中文😀}{BO¦DY}", r"\pair{#1}{#2}", 1);
+}
+
+#[test]
+#[ignore = "requires pdflatex and xelatex"]
+fn ungrouped_signature_arguments_match_real_tex_tokens_and_optional_values() {
+    use latex_lsp::{build, config::BuildConfig};
+    use std::sync::atomic::AtomicBool;
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    for declaration in [r"\newcommand\pair[2]", r"\NewDocumentCommand\pair{mm}"] {
+        let definition = format!("{declaration}{{\\typeout{{A1=\\detokenize{{#1}};A2=\\detokenize{{#2}}}}}}\n\\NewDocumentCommand\\optionalpair{{m !O{{DEF}}}}{{\\typeout{{OPTIONAL=#2}}}}");
+        let calls = [
+            r"\pair a¦b",
+            r"\pair\payload{BO¦DY}",
+            r"\pair\%{BO¦DY}",
+            r"\pair{FIRST}\pay¦load",
+            r"\pair\ {BO¦DY}",
+            r"\pair\{{BO¦DY}",
+        ];
+        for call in &calls {
+            check(&definition, call, r"\pair{#1}{#2}", 1);
+        }
+        let optionals = [
+            r"\optionalpair\payload [RED]",
+            r"\optionalpair\% [RED]",
+            r"\optionalpair\  [RED]",
+        ];
+        let source = format!("\\documentclass{{article}}\n{definition}\n\\begin{{document}}\nBody.\n{}\n{}\n\\end{{document}}\n", calls.join("\n").replace('¦', ""), optionals.join("\n"));
+        std::fs::write(&main, source).unwrap();
+        for engine in ["pdflatex", "xelatex"] {
+            let config = BuildConfig {
+                executable: engine.into(),
+                ..Default::default()
+            };
+            let result = build::run(&main, &config, &AtomicBool::new(false));
+            assert_eq!(result.status, "success", "{}", result.output);
+            for marker in [
+                "A1=a;A2=b",
+                r"A1=\payload ;A2=BODY",
+                r"A1=\%;A2=BODY",
+                r"A1=FIRST;A2=\payload ",
+                r"A1=\ ;A2=BODY",
+                r"A1=\{;A2=BODY",
+            ] {
+                assert!(result.output.contains(marker), "{}", result.output);
+            }
+            assert_eq!(
+                result.output.matches("OPTIONAL=RED").count(),
+                2,
+                "{}",
+                result.output
+            );
+            assert_eq!(
+                result.output.matches("OPTIONAL=DEF").count(),
+                1,
+                "{}",
+                result.output
+            );
+        }
+    }
+}
+
+#[test]
 fn xparse_bang_optionals_preserve_space_tokens_and_delete_adjacent_comments() {
     for declaration in [
         "NewDocumentCommand",

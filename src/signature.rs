@@ -1,4 +1,4 @@
-//! Linearly match grouped call arguments; do not execute macro definitions.
+//! Linearly match call arguments; do not execute macro definitions.
 use crate::{
     catalog::COMMANDS,
     syntax::{self, Entry},
@@ -10,6 +10,7 @@ use tower_lsp::lsp_types::*;
 #[derive(Clone)]
 enum Kind {
     Required,
+    RequiredGroup,
     CommandToken,
     RequiredBracket,
     Optional,
@@ -126,7 +127,7 @@ pub(crate) fn completion_at(
     let mut tabstop = 0;
     for (index, parameter) in signature.parameters.iter().enumerate() {
         let (open, close) = match &parameter.kind {
-            Kind::Required | Kind::CommandToken => ("{", "}"),
+            Kind::Required | Kind::RequiredGroup | Kind::CommandToken => ("{", "}"),
             Kind::RequiredBracket => ("[", "]"),
             Kind::Delimited {
                 open,
@@ -550,6 +551,10 @@ fn builtin(name: &str) -> Option<Signature> {
                     && index == 0
             {
                 Kind::CommandToken
+            } else if syntax::is_range_reference(name) {
+                // Keep range endpoints aligned with reference navigation. In
+                // particular, an unsupported star is not the first label.
+                Kind::RequiredGroup
             } else {
                 Kind::Required
             },
@@ -880,6 +885,32 @@ fn token(source: &str, start: usize) -> Option<&str> {
         start + ch.len_utf8()
     };
     Some(&source[start..end])
+}
+
+/// Only infer ungrouped tokens whose boundaries agree across the engines. In
+/// pdfTeX a Unicode character consists of several UTF-8 tokens; XeTeX reads one
+/// character and may include Unicode letters in a control word instead.
+fn required_token(source: &str, start: usize) -> Option<&str> {
+    let rest = source.get(start..)?;
+    if rest.starts_with("^^") || rest.starts_with("\\^^") {
+        return None;
+    }
+    let value = token(source, start)?;
+    if !value.is_ascii()
+        || value.bytes().any(|byte| byte.is_ascii_control())
+        || (value.contains(' ') && value != "\\ ")
+        || matches!(value, "{" | "}" | "%" | "\\par")
+    {
+        return None;
+    }
+    if syntax::control_word(value, 0).is_some() {
+        let following = &source[start + value.len()..];
+        if following.starts_with("^^") || following.chars().next().is_some_and(|ch| !ch.is_ascii())
+        {
+            return None;
+        }
+    }
+    Some(value)
 }
 
 fn delimiter_spec(source: &str, start: usize) -> Option<(String, usize)> {
@@ -1235,8 +1266,26 @@ fn active_parameter(
             }
             Kind::RequiredBracket if source.as_bytes().get(i) != Some(&b'[') => return None,
             Kind::Optional | Kind::UnstarredOptional | Kind::RequiredBracket => (b'[', b']'),
-            Kind::Required if source.as_bytes().get(i) != Some(&b'{') => return None,
-            Kind::Required | Kind::CommandToken => (b'{', b'}'),
+            Kind::Required if source.as_bytes().get(i) != Some(&b'{') => {
+                if &source[i..] == "\\" {
+                    return Some(index);
+                }
+                let argument = required_token(source, i)?;
+                let end = i + argument.len();
+                let word = syntax::control_word(argument, 0).is_some();
+                // At EOF the user may still be typing this control word. A
+                // lexical separator confirms that the argument has finished.
+                if cursor < end || (word && cursor == end && end == source.len()) {
+                    return Some(index);
+                }
+                i = end;
+                // Both control words and the control-space token discard
+                // following lexical blanks; other control symbols do not.
+                control_word_spaces = word || argument == "\\ ";
+                continue;
+            }
+            Kind::RequiredGroup if source.as_bytes().get(i) != Some(&b'{') => return None,
+            Kind::Required | Kind::RequiredGroup | Kind::CommandToken => (b'{', b'}'),
         };
         let end = if open == b'[' && !signature.nested_brackets {
             syntax::optional_note_end(&source[..cursor], i)
