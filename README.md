@@ -126,6 +126,8 @@ natbib 的 `citealt` / `citealp`、`citenum`、`citeyearpar`、`citefullauthor` 
 
 图片省略扩展名时，按默认扩展名顺序逐个搜索编译根目录及声明目录；支持的显式扩展名先按原名查找。例如根目录有 `plot.png`、`figures/` 有 `plot.pdf` 时，`\includegraphics{plot}` 选中 PDF，显式 `plot.png` 选中 PNG。子文件所在目录不会提前覆盖这些图片；以子文件自身为根时才使用它的目录。跳转、补全、输入跟踪及文件重命名共用这一搜索基准。
 
+图片重命名会检查整批文件移动后的搜索结果，保留仍指向原图片的简写；简写将选中其他图片时，改用相对于新编译根目录的路径和实际扩展名。同批移动其他文件造成的同名遮蔽也会触发引用更新；无法安全保持目标时拒绝编辑，避免编译成功却使用了另一张图片。
+
 `\includeonly{chapter-a, chapter-b}` 支持列表路径补全、跳转和文件/目录重命名，保留其他列表项与空白；重命名选中章节时同步维护编译选择。该命令只选择 `\include` 已声明的章节，不会单独建立输入依赖。
 
 `\input` 可补全上述 TeX 来源类型，省略 `.tex` 时保留常见简写，其他扩展名会显式写入；跳转也遵守仅自动推断 `.tex` 的规则。主文档可以使用 `.tex` 或 `.ltx` 扩展名。 输入路径遵循 TeX 的默认扩展名搜索顺序，例如 `chapter.ltx` 和 `chapter.ltx.tex` 并存时优先后者。 `\include` 和选章列表按 LaTeX 规则补 `.tex`，不会误指向同名无扩展文件或 `.ltx` 文件；例如 `\include{chapter.ltx}` 对应 `chapter.ltx.tex`。

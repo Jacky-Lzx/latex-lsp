@@ -3,7 +3,11 @@ use crate::{
     syntax,
     workspace::{normalize_path, resolve_path, Workspace},
 };
-use std::{collections::BTreeSet, ops::Range, path::PathBuf};
+use std::{
+    collections::BTreeSet,
+    ops::Range,
+    path::{Path, PathBuf},
+};
 use tower_lsp::lsp_types::Url;
 
 pub fn is_image(path: &std::path::Path) -> bool {
@@ -196,30 +200,55 @@ pub(crate) fn resolve_in(
     extensions: &[&str],
     directories: &[PathBuf],
 ) -> Option<Url> {
-    let exact = |name: &str, extension: &str| {
-        resolve_path(root, name, extension).or_else(|| {
+    resolve_with(root, name, extensions, directories, |path| {
+        let path = path.canonicalize().ok()?;
+        path.is_file().then_some(path)
+    })
+}
+
+/// The same search can inspect the filesystem after a proposed rename batch
+/// without moving files or constructing temporary copies of binary assets.
+pub(crate) fn resolve_with(
+    root: &Url,
+    name: &str,
+    extensions: &[&str],
+    directories: &[PathBuf],
+    file: impl Fn(&Path) -> Option<PathBuf>,
+) -> Option<Url> {
+    let mut literal = name.to_owned();
+    for character in ['_', '%', '#', '&', '$', ' '] {
+        literal = literal.replace(&format!("\\{character}"), &character.to_string());
+    }
+    let name = literal.as_str();
+    if name.is_empty() || name.contains(['\\', '{', '}']) {
+        return None;
+    }
+    let parent = root.to_file_path().ok()?.parent()?.to_owned();
+    let exact = |name: &str| {
+        file(&parent.join(name)).or_else(|| {
             directories
                 .iter()
-                .find_map(|directory| resolve(directory, name, extension))
+                .find_map(|directory| file(&directory.join(name)))
         })
     };
     let explicit = std::path::Path::new(name)
         .extension()
         .and_then(|extension| extension.to_str());
-    let direct = explicit.and_then(|extension| exact(name, extension));
-    if direct.is_some()
+    let direct = explicit.and_then(|_| exact(name));
+    let selected = if direct.is_some()
         && explicit.is_some_and(|extension| {
             extensions
                 .iter()
                 .any(|supported| extension.eq_ignore_ascii_case(supported))
-        })
-    {
-        return direct;
-    }
-    // graphicx also tries appending its extensions to a dotted filename when
-    // its explicit name is missing or has no known graphics rule.
-    extensions
-        .iter()
-        .find_map(|extension| exact(&format!("{name}.{extension}"), extension))
-        .or(direct)
+        }) {
+        direct
+    } else {
+        // graphicx also tries appending its extensions to a dotted filename
+        // when its explicit name is missing or has no known graphics rule.
+        extensions
+            .iter()
+            .find_map(|extension| exact(&format!("{name}.{extension}")))
+            .or(direct)
+    };
+    selected.and_then(|path| Url::from_file_path(path).ok())
 }

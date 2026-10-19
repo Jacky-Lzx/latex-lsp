@@ -119,6 +119,43 @@ impl Renames {
             .unwrap_or_else(|| uri.clone())
     }
 
+    /// Resolve a file at its proposed location, including directory moves and
+    /// nested overrides. Paths moved away no longer exist in this view.
+    fn file(&self, path: &Path) -> Option<PathBuf> {
+        let path = normalize_path(path);
+        for (old, new) in &self.0 {
+            let Ok(tail) = path.strip_prefix(new) else {
+                continue;
+            };
+            let original = if tail.as_os_str().is_empty() {
+                old.clone()
+            } else {
+                old.join(tail)
+            };
+            if self.path(&original) == path && original.is_file() {
+                return Some(path);
+            }
+        }
+        if self.path(&path) != path {
+            return None;
+        }
+        let canonical = path.canonicalize().ok()?;
+        (canonical.is_file() && self.path(&canonical) == canonical).then_some(canonical)
+    }
+
+    fn image(
+        &self,
+        root: &Url,
+        name: &str,
+        extensions: &[&str],
+        directories: &[PathBuf],
+    ) -> Option<Url> {
+        let directories: Vec<_> = directories.iter().map(|path| self.path(path)).collect();
+        graphics::resolve_with(&self.uri(root), name, extensions, &directories, |path| {
+            self.file(path)
+        })
+    }
+
     pub fn affects(&self, uri: &Url) -> bool {
         self.uri(uri) != *uri
     }
@@ -189,7 +226,7 @@ fn replacement(
         .to_file_path()
         .map_err(|_| Error::invalid_params("Invalid document URI"))?;
     let path = if Path::new(original).is_absolute() {
-        new_target
+        new_target.clone()
     } else if let Some(directory) = graphic_origin
         .map(|directory| renames.path(directory))
         .filter(|directory| new_target.starts_with(directory))
@@ -215,6 +252,38 @@ fn replacement(
     }
     if original.starts_with("./") && !value.starts_with('.') {
         value.insert_str(0, "./");
+    }
+    if command == Some("includegraphics") {
+        let target_after = Url::from_file_path(&new_target)
+            .map_err(|_| Error::invalid_params("Invalid renamed image URI"))?;
+        let resolves_to_target = |value: &str| {
+            renames.image(root, value, inferred, graphics).as_ref() == Some(&target_after)
+        };
+        if !resolves_to_target(&value) {
+            let explicit = if Path::new(original).is_absolute() {
+                new_target
+            } else {
+                let root_path = renames
+                    .uri(root)
+                    .to_file_path()
+                    .map_err(|_| Error::invalid_params("Invalid compilation root URI"))?;
+                relative_path(
+                    root_path
+                        .parent()
+                        .ok_or_else(|| Error::invalid_params("Invalid compilation root path"))?,
+                    &new_target,
+                )
+            };
+            value = safe_path(&explicit)?;
+            if original.starts_with("./") && !value.starts_with('.') {
+                value.insert_str(0, "./");
+            }
+            if !resolves_to_target(&value) {
+                return Err(Error::invalid_params(
+                    "Renamed image reference would select a different file",
+                ));
+            }
+        }
     }
     Ok(value)
 }
@@ -325,67 +394,79 @@ pub fn will_rename(workspace: &Workspace, files: &[FileRename]) -> Result<Option
                     .is_some_and(|path| renames.path(&path) != path);
                 let document_changed = renames.affects(uri);
                 let root_changed = renames.affects(root);
+                let command = doc.syntax.commands.iter().find(|command| {
+                    syntax::file_extensions(&command.name).is_some()
+                        && command.argument.as_ref().is_some_and(|argument| {
+                            argument.span.start <= start && argument.span.end >= end
+                        })
+                });
+                // An unrelated file can arrive ahead of this image in the
+                // search order even when neither source nor target moves.
+                let image_redirected = command.is_some_and(|command| {
+                    command.name == "includegraphics"
+                        && renames.image(
+                            root,
+                            original,
+                            syntax::inferred_file_extensions(&command.name).unwrap_or_default(),
+                            &graphics,
+                        ) != Some(renames.uri(&target))
+                });
                 // Retain spelling in contexts that do not require a change too:
                 // every consumer of a shared parameter must agree on its edit.
-                let new_text = if target_changed || document_changed || root_changed {
-                    let command = doc.syntax.commands.iter().find(|command| {
-                        syntax::file_extensions(&command.name).is_some()
-                            && command.argument.as_ref().is_some_and(|argument| {
-                                argument.span.start <= start && argument.span.end >= end
-                            })
-                    });
-                    let required_extension = command.and_then(|command| {
-                        let extension = match command.name.as_str() {
-                            "usepackage" | "RequirePackage" => "sty",
-                            "documentclass" | "LoadClass" => "cls",
-                            "include" | "includeonly" => "tex",
-                            "bibliographystyle" => "bst",
-                            _ => return None,
-                        };
-                        Some((command, extension))
-                    });
-                    if let Some((command, extension)) =
-                        required_extension.filter(|_| target_changed)
-                    {
-                        let renamed = renames
-                            .uri(&target)
-                            .to_file_path()
-                            .map_err(|_| Error::invalid_params("Invalid renamed file URI"))?;
-                        if target
-                            .to_file_path()
-                            .ok()
-                            .as_ref()
-                            .and_then(|path| path.extension())
-                            != renamed.extension()
-                            && renamed.extension().and_then(|extension| extension.to_str())
-                                != Some(extension)
+                let new_text =
+                    if target_changed || document_changed || root_changed || image_redirected {
+                        let required_extension = command.and_then(|command| {
+                            let extension = match command.name.as_str() {
+                                "usepackage" | "RequirePackage" => "sty",
+                                "documentclass" | "LoadClass" => "cls",
+                                "include" | "includeonly" => "tex",
+                                "bibliographystyle" => "bst",
+                                _ => return None,
+                            };
+                            Some((command, extension))
+                        });
+                        if let Some((command, extension)) =
+                            required_extension.filter(|_| target_changed)
                         {
-                            return Err(Error::invalid_params(format!(
-                                "File loaded by \\{} must retain the .{extension} extension",
-                                command.name
-                            )));
+                            let renamed = renames
+                                .uri(&target)
+                                .to_file_path()
+                                .map_err(|_| Error::invalid_params("Invalid renamed file URI"))?;
+                            if target
+                                .to_file_path()
+                                .ok()
+                                .as_ref()
+                                .and_then(|path| path.extension())
+                                != renamed.extension()
+                                && renamed.extension().and_then(|extension| extension.to_str())
+                                    != Some(extension)
+                            {
+                                return Err(Error::invalid_params(format!(
+                                    "File loaded by \\{} must retain the .{extension} extension",
+                                    command.name
+                                )));
+                            }
                         }
-                    }
-                    replacement(
-                        &renames,
-                        uri,
-                        &target,
-                        original,
-                        if command.is_some_and(|command| command.name == "includegraphics") {
-                            &graphics
-                        } else {
-                            &[]
-                        },
-                        if link.tooltip.as_deref() == Some("TeX root document") {
-                            uri
-                        } else {
-                            root
-                        },
-                        command.map(|command| command.name.as_str()),
-                    )?
-                } else {
-                    original.into()
-                };
+                        replacement(
+                            &renames,
+                            uri,
+                            &target,
+                            original,
+                            if command.is_some_and(|command| command.name == "includegraphics") {
+                                &graphics
+                            } else {
+                                &[]
+                            },
+                            if link.tooltip.as_deref() == Some("TeX root document") {
+                                uri
+                            } else {
+                                root
+                            },
+                            command.map(|command| command.name.as_str()),
+                        )?
+                    } else {
+                        original.into()
+                    };
                 if let Some((previous, count)) = links.get_mut(&(start, end)) {
                     if *previous != new_text {
                         return Err(Error::invalid_params("Shared file reference would require different replacements in different projects"));

@@ -276,3 +276,196 @@ fn root_graphics_images_remain_selected_after_image_and_main_file_renames() {
         .unwrap()
         .contains(&uri(root, "assets/figure.pdf")));
 }
+
+#[test]
+fn image_renames_use_explicit_root_paths_when_short_names_would_select_other_files() {
+    for extension in ["pdf", "png"] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let workspace = project(root);
+        std::fs::write(root.join("figure.pdf"), "another image").unwrap();
+        let child = uri(root, "sections/child.tex");
+        let files = [rename(
+            root,
+            "assets/plot.pdf",
+            &format!("assets/figure.{extension}"),
+        )];
+        let changed = edits(&workspace, &files);
+        assert_eq!(
+            changed[&child],
+            format!("\\includegraphics{{assets/figure.{extension}}}\\includegraphics{{plot.png}}")
+        );
+    }
+}
+
+#[test]
+fn image_renames_consider_files_arriving_at_and_leaving_the_search_paths() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let workspace = project(root);
+    std::fs::write(root.join("figure.pdf"), "old shadow").unwrap();
+    std::fs::write(root.join("other.pdf"), "new shadow").unwrap();
+    let child = uri(root, "sections/child.tex");
+    // The current shadow moves away, so the short name remains valid.
+    let changed = edits(
+        &workspace,
+        &[
+            rename(root, "assets/plot.pdf", "assets/figure.pdf"),
+            rename(root, "figure.pdf", "retired.pdf"),
+        ],
+    );
+    assert_eq!(
+        changed[&child],
+        r"\includegraphics{figure}\includegraphics{plot.png}"
+    );
+    // A currently absent shadow is introduced by another operation in the batch.
+    let changed = edits(
+        &workspace,
+        &[
+            rename(root, "assets", "pictures"),
+            rename(root, "other.pdf", "plot.pdf"),
+        ],
+    );
+    assert_eq!(
+        changed[&child],
+        r"\includegraphics{pictures/plot.pdf}\includegraphics{plot.png}"
+    );
+}
+
+#[test]
+fn image_rename_shadow_checks_follow_the_new_compilation_root() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let workspace = project(root);
+    std::fs::create_dir(root.join("book")).unwrap();
+    std::fs::write(root.join("book/figure.pdf"), "shadow in the future cwd").unwrap();
+    let changed = edits(
+        &workspace,
+        &[
+            rename(root, "assets/plot.pdf", "assets/figure.pdf"),
+            rename(root, "main.tex", "book/main.tex"),
+        ],
+    );
+    assert_eq!(
+        changed[&uri(root, "sections/child.tex")],
+        r"\includegraphics{../assets/figure.pdf}\includegraphics{../plot.png}"
+    );
+}
+
+#[test]
+#[ignore = "requires pdflatex and graphicx"]
+fn renamed_images_do_not_silently_compile_using_a_different_existing_picture() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let mut workspace = project(root);
+    let child = uri(root, "sections/child.tex");
+    std::fs::write(root.join("sections/child.tex"), r"\includegraphics{plot}").unwrap();
+    workspace.reload(&child);
+    let drawing = tempfile::tempdir().unwrap();
+    std::fs::write(
+        drawing.path().join("drawing.tex"),
+        r"\documentclass{article}\begin{document}Figure\end{document}",
+    )
+    .unwrap();
+    let config = latex_lsp::config::BuildConfig {
+        executable: "pdflatex".into(),
+        ..Default::default()
+    };
+    let image = latex_lsp::build::run(
+        &drawing.path().join("drawing.tex"),
+        &config,
+        &Default::default(),
+    );
+    assert_eq!(image.status, "success", "{}", image.output);
+    let pdf = image.pdf.unwrap();
+    std::fs::copy(&pdf, root.join("assets/plot.pdf")).unwrap();
+    std::fs::copy(&pdf, root.join("figure.pdf")).unwrap();
+    let before = latex_lsp::build::run(&root.join("main.tex"), &config, &Default::default());
+    assert_eq!(before.status, "success", "{}", before.output);
+    let files = [rename(root, "assets/plot.pdf", "assets/figure.pdf")];
+    let changed = edits(&workspace, &files);
+    assert_eq!(changed[&child], r"\includegraphics{assets/figure.pdf}");
+    for (uri, source) in changed {
+        std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+    }
+    std::fs::rename(root.join("assets/plot.pdf"), root.join("assets/figure.pdf")).unwrap();
+    file_operations::did_rename(&mut workspace, &files).unwrap();
+    assert_eq!(
+        navigation::document_links(&workspace, &child)[0].target,
+        Some(uri(root, "assets/figure.pdf"))
+    );
+    let after = latex_lsp::build::run(&root.join("main.tex"), &config, &Default::default());
+    assert_eq!(after.status, "success", "{}", after.output);
+    let inputs = after.inputs.unwrap();
+    assert!(inputs.contains(&uri(root, "assets/figure.pdf")));
+    assert!(!inputs.contains(&uri(root, "figure.pdf")));
+}
+
+#[test]
+fn unrelated_file_moves_cannot_redirect_an_existing_short_image_reference() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let workspace = project(root);
+    std::fs::write(root.join("other.pdf"), "new shadow").unwrap();
+    let changed = edits(&workspace, &[rename(root, "other.pdf", "plot.pdf")]);
+    assert_eq!(
+        changed[&uri(root, "sections/child.tex")],
+        r"\includegraphics{assets/plot.pdf}\includegraphics{plot.png}"
+    );
+}
+
+#[test]
+fn nested_image_and_directory_moves_are_checked_at_their_final_destinations() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let workspace = project(root);
+    std::fs::write(root.join("figure.pdf"), "shadow").unwrap();
+    let changed = edits(
+        &workspace,
+        &[
+            rename(root, "assets", "pictures"),
+            rename(root, "assets/plot.pdf", "pictures/figure.pdf"),
+        ],
+    );
+    assert_eq!(
+        changed[&uri(root, "sections/child.tex")],
+        r"\includegraphics{pictures/figure.pdf}\includegraphics{plot.png}"
+    );
+    assert!(changed[&uri(root, "main.tex")].contains(r"\graphicspath{{pictures/}}"));
+}
+
+#[test]
+fn image_moves_are_rejected_when_even_an_explicit_path_would_select_another_file() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let workspace = project(root);
+    std::fs::write(
+        root.join("assets/figure.unknown.pdf"),
+        "would be selected by graphicx",
+    )
+    .unwrap();
+    let error = file_operations::will_rename(
+        &workspace,
+        &[rename(root, "assets/plot.pdf", "assets/figure.unknown")],
+    )
+    .unwrap_err();
+    assert!(error.message.contains("different file"), "{error}");
+}
+
+#[test]
+fn image_search_preserves_escaped_literal_paths_and_skips_empty_or_dynamic_names() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let mut workspace = project(root);
+    std::fs::write(root.join("assets/my plot_1.pdf"), "image").unwrap();
+    std::fs::write(root.join(".pdf"), "not an empty filename").unwrap();
+    let child = uri(root, "sections/child.tex");
+    workspace.open(
+        child.clone(),
+        r"\includegraphics{my\ plot\_1}\includegraphics{}\includegraphics{\dynamic}".into(),
+        1,
+    );
+    let links = navigation::document_links(&workspace, &child);
+    assert_eq!(links.len(), 1, "{links:?}");
+    assert_eq!(links[0].target, Some(uri(root, "assets/my plot_1.pdf")));
+}
