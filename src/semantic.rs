@@ -79,7 +79,9 @@ fn candidates(doc: &Document) -> Vec<Token> {
             if matches!(command.name.as_str(), "begin" | "end") {
                 literal(&mut tokens, source, argument.span.clone(), TYPE);
             } else if syntax::is_reference(&command.name) || syntax::is_citation(&command.name) {
-                if syntax::is_single_reference(&command.name) {
+                if syntax::is_single_reference(&command.name)
+                    || syntax::is_single_citation(&command.name)
+                {
                     literal(&mut tokens, source, argument.span.clone(), KEY);
                 } else {
                     let mut start = argument.span.start;

@@ -216,13 +216,23 @@ fn builtin(name: &str) -> Option<Signature> {
         name if syntax::is_reference(name) => {
             (&[("keys", false)], syntax::reference_accepts_star(name))
         }
+        "defcitealias" => (&[("key", false), ("text", false)], false),
+        "citenum" => (&[("keys", false)], false),
+        "citeyearpar" | "citefullauthor" | "citetalias" | "citepalias" => (
+            &[
+                ("note / prenote", true),
+                ("postnote", true),
+                ("keys", false),
+            ],
+            false,
+        ),
         name if syntax::is_citation(name) && name != "nocite" => (
             &[
                 ("note / prenote", true),
                 ("postnote", true),
                 ("keys", false),
             ],
-            true,
+            syntax::citation_accepts_star(name),
         ),
         "nocite" => (&[("keys", false)], false),
         _ => return None,

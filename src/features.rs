@@ -102,7 +102,9 @@ fn raw_target(doc: &Document, offset: usize) -> Option<Target<'_>> {
                     if (matches!(kind, TargetKind::Environment | TargetKind::Counter)
                         || kind == TargetKind::Label
                             && (command.name == "label"
-                                || syntax::is_single_reference(&command.name)))
+                                || syntax::is_single_reference(&command.name))
+                        || kind == TargetKind::Citation
+                            && syntax::is_single_citation(&command.name))
                         && !syntax::is_static_key(&arg.value)
                     {
                         return None;
@@ -464,6 +466,7 @@ fn argument_context(doc: &Document, offset: usize) -> Option<(&Command, Span<usi
         || syntax::is_single_reference(&command.name)
         || syntax::has_separate_label_argument(&command.name)
         || command.name == "hyperlink"
+        || syntax::is_single_citation(&command.name)
     {
         let span = completion_name_argument(source, command, offset)?;
         let prefix = source[span.start..offset].trim_start();
@@ -481,12 +484,21 @@ fn argument_context(doc: &Document, offset: usize) -> Option<(&Command, Span<usi
             }
         }
     }
-    let mut tail = &source[command.span.end..offset];
-    tail = tail.strip_prefix('*').unwrap_or(tail).trim_start();
-    while tail.starts_with('[') {
-        tail = tail.get(tail.find(']')? + 1..)?.trim_start();
+    let mut at = syntax::skip_space(source, command.span.end);
+    if source.as_bytes().get(at) == Some(&b'*') {
+        if syntax::is_citation(&command.name) && !syntax::citation_accepts_star(&command.name) {
+            return None;
+        }
+        at = syntax::skip_space(source, at + 1);
     }
-    let value = tail.strip_prefix('{')?;
+    while source.as_bytes().get(at) == Some(&b'[') {
+        if syntax::is_citation(&command.name) && !syntax::citation_accepts_notes(&command.name) {
+            return None;
+        }
+        let (_, after) = syntax::group(source, at, b'[', b']')?;
+        at = syntax::skip_space(source, after);
+    }
+    let value = source.get(at..offset)?.strip_prefix('{')?;
     if value.contains(['{', '}', '\n', '%']) {
         return None;
     }
@@ -537,6 +549,7 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
                 || syntax::is_single_reference(&command.name)
                 || syntax::has_separate_label_argument(&command.name)
                 || command.name == "hyperlink"
+                || syntax::is_single_citation(&command.name)
             {
                 let Some(name) = completion_name_argument(&doc.text.source, command, offset) else {
                     return vec![];
@@ -1033,6 +1046,8 @@ fn all_references(
             };
             if let Some(arg) = argument {
                 if target.kind == TargetKind::Environment
+                    || target.kind == TargetKind::Citation
+                        && syntax::is_single_citation(&command.name)
                     || target.kind == TargetKind::Label
                         && (syntax::is_single_reference(&command.name)
                             || syntax::has_separate_label_argument(&command.name))

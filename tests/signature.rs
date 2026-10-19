@@ -93,6 +93,47 @@ fn hyperref_signatures_distinguish_label_links_from_four_argument_urls() {
 }
 
 #[test]
+fn natbib_signatures_distinguish_numeric_citations_alias_text_and_optional_notes() {
+    check(
+        "",
+        "\\Citealp % before\r\n* % after\r\n[see][p.~2]{pa¦rent}",
+        r"\Citealp[note / prenote][postnote]{keys}",
+        2,
+    );
+    check(
+        "",
+        r"\defcitealias{pa¦rent}{Display}",
+        r"\defcitealias{key}{text}",
+        0,
+    );
+    check(
+        "",
+        r"\defcitealias{parent}{Dis¦play}",
+        r"\defcitealias{key}{text}",
+        1,
+    );
+    check("", r"\citenum{pa¦rent}", r"\citenum{keys}", 0);
+    for command in [
+        "citealt",
+        "citealp",
+        "citeyearpar",
+        "citefullauthor",
+        "Citet",
+        "Citep",
+        "Citealt",
+        "Citealp",
+        "Citeauthor",
+        "citetalias",
+        "citepalias",
+    ] {
+        let label = format!("\\{command}[note / prenote][postnote]{{keys}}");
+        check("", &format!("\\{command}[se¦e][p.~2]{{parent}}"), &label, 0);
+        check("", &format!("\\{command}[see][p.¦~2]{{parent}}"), &label, 1);
+        check("", &format!("\\{command}[see][p.~2]{{pa¦rent}}"), &label, 2);
+    }
+}
+
+#[test]
 fn hyperdef_signatures_offer_optional_labels_and_separate_destination_fields() {
     for (marked, active) in [
         (r"\hyperdef[sec:¦intro]{section}{1}{Text}", 0),

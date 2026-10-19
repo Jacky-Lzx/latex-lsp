@@ -14,6 +14,19 @@ fn snippets_expand_in_a_real_editor_without_consuming_tex_backslashes() {
     };
     let mut cases = Vec::new();
     for (name, expected) in [
+        ("defcitealias", "defcitealias{key}{text}"),
+        ("citealt", "citealt{key}"),
+        ("citealp", "citealp{key}"),
+        ("citenum", "citenum{key}"),
+        ("citeyearpar", "citeyearpar{key}"),
+        ("citefullauthor", "citefullauthor{key}"),
+        ("Citet", "Citet{key}"),
+        ("Citep", "Citep{key}"),
+        ("Citealt", "Citealt{key}"),
+        ("Citealp", "Citealp{key}"),
+        ("Citeauthor", "Citeauthor{key}"),
+        ("citetalias", "citetalias{key}"),
+        ("citepalias", "citepalias{key}"),
         ("pdfbookmark", "pdfbookmark{title}{name}"),
         ("newcommand", r"newcommand{\name}[1]{definition}"),
         ("renewcommand", r"renewcommand{\name}{definition}"),

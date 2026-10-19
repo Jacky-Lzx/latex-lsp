@@ -360,7 +360,7 @@ pub(crate) fn undefined_reference_ranges(text: &Text, line: u32, message: &str) 
     let mut ranges = Vec::new();
     for command in &syntax.commands {
         if !(if citation {
-            crate::syntax::is_citation(&command.name)
+            crate::syntax::warns_on_undefined_citation(&command.name)
         } else if hyper_link {
             command.name == "hyperref"
                 || matches!(command.name.as_str(), "Ref" | "autopageref")

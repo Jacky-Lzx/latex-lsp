@@ -686,12 +686,52 @@ pub fn is_citation(name: &str) -> bool {
             | "citet"
             | "citeauthor"
             | "citeyear"
+            | "citealt"
+            | "citealp"
+            | "citenum"
+            | "citeyearpar"
+            | "citefullauthor"
+            | "Citet"
+            | "Citep"
+            | "Citealt"
+            | "Citealp"
+            | "Citeauthor"
+            | "citetalias"
+            | "citepalias"
+            | "defcitealias"
             | "autocite"
             | "parencite"
             | "textcite"
             | "nocite"
             | "footcite"
     )
+}
+
+/// Alias definitions name one key and do not themselves request a citation.
+pub(crate) fn is_single_citation(name: &str) -> bool {
+    name == "defcitealias"
+}
+
+pub(crate) fn warns_on_undefined_citation(name: &str) -> bool {
+    is_citation(name) && !is_single_citation(name)
+}
+
+pub(crate) fn citation_accepts_star(name: &str) -> bool {
+    is_citation(name)
+        && !matches!(
+            name,
+            "nocite"
+                | "citenum"
+                | "citeyearpar"
+                | "citefullauthor"
+                | "citetalias"
+                | "citepalias"
+                | "defcitealias"
+        )
+}
+
+pub(crate) fn citation_accepts_notes(name: &str) -> bool {
+    is_citation(name) && !matches!(name, "nocite" | "citenum" | "defcitealias")
 }
 
 pub fn section_level(name: &str) -> Option<u32> {
@@ -806,11 +846,15 @@ impl Syntax {
                     }
                     let mut arg_start = skip_space(source, i);
                     if !starred
-                        && reference_accepts_star(name)
+                        && (reference_accepts_star(name) || citation_accepts_star(name))
                         && bytes.get(arg_start) == Some(&b'*')
                     {
                         arg_start = skip_space(source, arg_start + 1);
                     }
+                    let invalid_citation = is_citation(name)
+                        && (starred && !citation_accepts_star(name)
+                            || bytes.get(arg_start) == Some(&b'[')
+                                && !citation_accepts_notes(name));
                     if name != "input" {
                         while let Some((_, end)) = group(source, arg_start, b'[', b']') {
                             arg_start = skip_space(source, end);
@@ -819,12 +863,13 @@ impl Syntax {
                     let url_argument = matches!(name, "url" | "href")
                         || name == "hyperref"
                             && bytes.get(skip_space(source, command_end)) == Some(&b'{');
-                    let parsed =
-                        group_mode(source, arg_start, b'{', b'}', !url_argument).or_else(|| {
+                    let parsed = group_mode(source, arg_start, b'{', b'}', !url_argument)
+                        .or_else(|| {
                             (name == "input" && bytes.get(arg_start) != Some(&b'{'))
                                 .then(|| input_argument(source, arg_start))
                                 .flatten()
-                        });
+                        })
+                        .filter(|_| !invalid_citation);
                     let argument = parsed.as_ref().map(|(a, _)| a.clone());
                     let command = Command {
                         name: name.into(),

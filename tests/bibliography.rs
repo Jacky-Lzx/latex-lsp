@@ -34,6 +34,222 @@ fn apply(source: &str, mut edits: Vec<TextEdit>) -> String {
         .source
 }
 
+const NATBIB_VARIANTS: &[(&str, &str)] = &[
+    (
+        "citealt",
+        " % before star\r\n* % after star\r\n[parent][p.~2]",
+    ),
+    ("citealp", "*[parent][p.~2]"),
+    ("citenum", ""),
+    ("citeyearpar", "[parent][p.~2]"),
+    ("citefullauthor", "[parent][p.~2]"),
+    ("Citet", "*[parent][p.~2]"),
+    ("Citep", "*[parent][p.~2]"),
+    ("Citealt", "*[parent][p.~2]"),
+    ("Citealp", "*[parent][p.~2]"),
+    ("Citeauthor", "*[parent][p.~2]"),
+    ("citetalias", "[parent][p.~2]"),
+    ("citepalias", "[parent][p.~2]"),
+];
+
+#[test]
+fn natbib_variants_and_single_key_aliases_navigate_complete_and_rename_without_changing_text() {
+    let mut workspace = Workspace::default();
+    let bibliography = "@book{parent, title={parent}}\n@book{other, title={Other}}\n";
+    let bib = insert(&mut workspace, "refs.bib", bibliography);
+    let make_source = |key: &str| {
+        let mut source = format!("😀 \\defcitealias % keep\r\n{{{key}}}{{Literal parent}}\n");
+        for (command, options) in NATBIB_VARIANTS {
+            source.push_str(&format!("\\{command}{options}{{other, {key}}}\n"));
+        }
+        source.push_str("\\defcitealias{parent,other}{Not a list}\\defcitealias{ parent }{Distinct key}\\citetext{parent}\n\\defcitealias*{parent}{Unsupported star}\\citenum*{parent}\\citenum[note]{parent}\n% \\citealt{parent}\n\\verb|\\Citep{parent}|\n");
+        source
+    };
+    let source = make_source("parent");
+    let main = insert(&mut workspace, "main.tex", &source);
+    let prepared_at = position(&source, "{par");
+    assert_eq!(
+        features::definitions(&workspace, &main, prepared_at)[0].uri,
+        bib
+    );
+    assert!(features::hover(&workspace, &main, prepared_at).is_some());
+    let references = features::references(&workspace, &main, prepared_at, false);
+    assert_eq!(references.len(), NATBIB_VARIANTS.len() + 1);
+    for (command, options) in NATBIB_VARIANTS {
+        let at = position(&source, &format!("\\{command}{options}{{other, par"));
+        assert_eq!(
+            features::definitions(&workspace, &main, at)[0].uri,
+            bib,
+            "{command}"
+        );
+        let completions = features::completion(&workspace, &main, at);
+        assert!(
+            completions.iter().any(|item| item.label == "parent"),
+            "{command}: {completions:?}"
+        );
+    }
+    let changes = features::rename(&workspace, &main, prepared_at, "renamed")
+        .unwrap()
+        .unwrap()
+        .changes
+        .unwrap();
+    assert_eq!(
+        apply(&source, changes[&main].clone()),
+        make_source("renamed")
+    );
+    assert_eq!(
+        apply(bibliography, changes[&bib].clone()),
+        bibliography.replacen("{parent,", "{renamed,", 1)
+    );
+    for marker in [
+        "\\defcitealias{par",
+        "\\defcitealias{ par",
+        "\\citetext{par",
+    ] {
+        assert!(features::definitions(&workspace, &main, position(&source, marker)).is_empty());
+    }
+    let incomplete = "\\defcitealias % keep\r\n{parBAD}{Display parent}";
+    let main = insert(&mut workspace, "main.tex", incomplete);
+    let items = features::completion(&workspace, &main, position(incomplete, "{par"));
+    let item = items.iter().find(|item| item.label == "parent").unwrap();
+    let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+        panic!()
+    };
+    assert_eq!(
+        apply(incomplete, vec![edit.clone()]),
+        "\\defcitealias % keep\r\n{parent}{Display parent}"
+    );
+}
+
+#[test]
+fn natbib_alias_setters_do_not_receive_another_calls_missing_citation_diagnostic() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    let uri = Url::from_file_path(&main).unwrap();
+    let source = "😀 \\defcitealias{paretn}{Display paretn}\\Citealp{paretn}\\citetalias{paretn}\n";
+    std::fs::write(&main, source).unwrap();
+    let log = "(./main.tex\nPackage natbib Warning: Citation `paretn' on page 1 undefined on input line 1.\n)\n";
+    let diagnostics = latex_lsp::build_log::parse(&main, log);
+    let items = &diagnostics[&uri];
+    assert_eq!(items.len(), 2, "{items:?}");
+    let text = Text::new(source.into());
+    for (item, marker) in items.iter().zip(["\\Citealp{", "\\citetalias{"]) {
+        let start = source.find(marker).unwrap() + marker.len();
+        assert_eq!(item.range, text.range(start, start + "paretn".len()));
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex and natbib"]
+fn real_natbib_citation_fixes_and_alias_renames_preserve_text_and_compile_cleanly() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = root.join("main.tex");
+    let child = root.join("chapter.tex");
+    let main_uri = Url::from_file_path(&main).unwrap();
+    let child_uri = Url::from_file_path(&child).unwrap();
+    let main_source = concat!(
+        "\\documentclass{article}\\usepackage[authoryear]{natbib}\\begin{document}\n",
+        "\\defcitealias{parent}{Display parent}\\defcitealias{paretn}{Unused typo alias}\\defcitealias{other}{Other alias}\n",
+        "\\input{chapter}\n\\begin{thebibliography}{1}\n",
+        "\\bibitem[Author(2026)]{parent} Entry parent.\n",
+        "\\bibitem[Other(2025)]{other} Other entry.\n",
+        "\\end{thebibliography}\\end{document}\n",
+    );
+    let make_child = |key: &str| {
+        NATBIB_VARIANTS
+            .iter()
+            .map(|(command, options)| format!("\\{command}{options}{{other, {key}}}\\par\n"))
+            .collect::<String>()
+    };
+    std::fs::write(&main, main_source).unwrap();
+    std::fs::write(&child, make_child("paretn")).unwrap();
+    let config = latex_lsp::config::BuildConfig {
+        executable: "pdflatex".into(),
+        ..Default::default()
+    };
+    let compile = || {
+        let outcome = latex_lsp::build::run(&main, &config, &Default::default());
+        assert_eq!(outcome.status, "success", "{}", outcome.output);
+        outcome
+    };
+    compile();
+    let outcome = compile();
+    let mut workspace = Workspace {
+        code_action_literals: true,
+        ..Default::default()
+    };
+    workspace.add_root(root.into());
+    workspace
+        .build_diagnostics
+        .insert(main_uri.clone(), outcome.diagnostics.clone());
+    let warnings: Vec<_> = outcome.diagnostics[&child_uri]
+        .iter()
+        .filter(|item| item.message.contains("Citation `paretn'"))
+        .collect();
+    assert_eq!(
+        warnings.len(),
+        NATBIB_VARIANTS.len(),
+        "{:?}",
+        outcome.diagnostics
+    );
+    let mut edits = Vec::new();
+    for warning in warnings {
+        let actions = editing::code_actions(
+            &workspace,
+            &child_uri,
+            warning.range,
+            &CodeActionContext {
+                diagnostics: vec![warning.clone()],
+                ..Default::default()
+            },
+        );
+        assert_eq!(actions.len(), 1, "{actions:?}");
+        let CodeActionOrCommand::CodeAction(action) = &actions[0] else {
+            panic!()
+        };
+        let changes = action.edit.as_ref().unwrap().changes.as_ref().unwrap();
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[&child_uri].len(), 1);
+        assert_eq!(changes[&child_uri][0].range, warning.range);
+        assert_eq!(changes[&child_uri][0].new_text, "parent");
+        edits.extend_from_slice(&changes[&child_uri]);
+    }
+    let fixed = apply(&make_child("paretn"), edits);
+    assert_eq!(fixed, make_child("parent"));
+    std::fs::write(&child, &fixed).unwrap();
+    compile();
+    assert!(compile().diagnostics.values().all(Vec::is_empty));
+    workspace.reload(&child_uri);
+    let at = position(main_source, "\\defcitealias{par");
+    let changes = features::rename(&workspace, &main_uri, at, "renamed")
+        .unwrap()
+        .unwrap()
+        .changes
+        .unwrap();
+    assert_eq!(changes.len(), 2);
+    for (uri, edits) in changes {
+        let path = uri.to_file_path().unwrap();
+        let source = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(path, apply(&source, edits)).unwrap();
+    }
+    assert_eq!(
+        std::fs::read_to_string(&child).unwrap(),
+        make_child("renamed")
+    );
+    assert_eq!(
+        std::fs::read_to_string(&main).unwrap(),
+        main_source
+            .replace("\\defcitealias{parent}", "\\defcitealias{renamed}")
+            .replace(
+                "\\bibitem[Author(2026)]{parent}",
+                "\\bibitem[Author(2026)]{renamed}"
+            )
+    );
+    compile();
+    assert!(compile().diagnostics.values().all(Vec::is_empty));
+}
+
 #[test]
 fn bibliography_relations_navigate_highlight_and_rename_without_changing_literal_text() {
     let mut workspace = Workspace::default();
