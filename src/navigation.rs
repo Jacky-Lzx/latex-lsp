@@ -343,7 +343,7 @@ pub(crate) fn document_links_in(workspace: &Workspace, uri: &Url, root: &Url) ->
             links.extend(hyperref_url_link(doc, command));
             continue;
         }
-        let Some(argument) = &command.argument else {
+        let Some(argument) = syntax::file_argument(&doc.text.source, command) else {
             continue;
         };
         let extensions = match syntax::inferred_file_extensions(&command.name) {

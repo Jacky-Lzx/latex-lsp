@@ -396,6 +396,8 @@ pub fn file_extensions(name: &str) -> Option<&'static [&'static str]> {
         "bibliographystyle" => &["bst"],
         "usepackage" | "RequirePackage" | "RequirePackageWithOptions" => &["sty"],
         "documentclass" | "LoadClass" | "LoadClassWithOptions" => &["cls"],
+        "PassOptionsToPackage" => &["sty"],
+        "PassOptionsToClass" => &["cls"],
         "includegraphics" => &["pdf", "png", "jpg", "jpeg", "eps", "svg"],
         _ => return None,
     })
@@ -445,6 +447,43 @@ pub(crate) fn loader_extension(command: &str) -> Option<&'static str> {
     }
 }
 
+pub(crate) fn passes_options(command: &str) -> bool {
+    matches!(command, "PassOptionsToPackage" | "PassOptionsToClass")
+}
+
+/// Option forwarding names the same package/class file without loading it.
+pub(crate) fn package_class_extension(command: &str) -> Option<&'static str> {
+    match command {
+        "PassOptionsToPackage" => Some("sty"),
+        "PassOptionsToClass" => Some("cls"),
+        _ => loader_extension(command),
+    }
+}
+
+pub(crate) fn forwarded_file_argument_start(source: &str, command: &Command) -> Option<usize> {
+    passes_options(&command.name).then_some(())?;
+    Some(skip_space(
+        source,
+        command.argument.as_ref()?.outer_span.end,
+    ))
+}
+
+pub(crate) fn file_argument<'a>(
+    source: &str,
+    command: &'a Command,
+) -> Option<std::borrow::Cow<'a, Argument>> {
+    if passes_options(&command.name) {
+        let start = forwarded_file_argument_start(source, command)?;
+        let (argument, _) = group(source, start, b'{', b'}')?;
+        // These names are option-table keys, unlike the loaders' space-free
+        // names. Do not trim them into a different forwarding declaration.
+        (is_literal_file_path(&argument.value) && !argument.value.chars().any(char::is_whitespace))
+            .then_some(std::borrow::Cow::Owned(argument))
+    } else {
+        command.argument.as_ref().map(std::borrow::Cow::Borrowed)
+    }
+}
+
 pub(crate) fn loader_forwards_options(command: &str) -> bool {
     matches!(
         command,
@@ -471,7 +510,7 @@ pub(crate) fn file_lookup_names<'a>(
         .is_some_and(|extension| {
             ["tex", "sty", "cls", "def", "clo", "fd", "aux", "bbl", "ldf"].contains(&extension)
         });
-    let loader = loader_extension(command);
+    let loader = package_class_extension(command);
     let normalized = file_name_ignores_spaces(command).then(|| loader_name(value));
     let literal = normalized.as_deref().unwrap_or(value);
     let empty = literal.is_empty();
@@ -497,8 +536,10 @@ pub(crate) fn file_lookup_names<'a>(
     // LaTeX preserves style-name spaces in bibstyle, and BibTeX rejects the
     // resulting auxiliary command instead of opening a spaced filename.
     let valid_style = command != "bibliographystyle" || !value.contains([' ', '\t', '\r', '\n']);
+    let valid_forward = !passes_options(command)
+        || is_literal_file_path(value) && !value.chars().any(char::is_whitespace);
     std::iter::once(preferred)
-        .filter(move |_| !empty && valid_style)
+        .filter(move |_| !empty && valid_style && valid_forward)
         .chain(
             (matches!(command, "input" | "InputIfFileExists" | "IfFileExists") && append)
                 .then_some(std::borrow::Cow::Borrowed(value)),
@@ -967,6 +1008,7 @@ impl Syntax {
                     let name = &source[name_start..i];
                     let command_end = i;
                     let starred = !matches!(name, "input" | "InputIfFileExists" | "IfFileExists")
+                        && !passes_options(name)
                         && bytes.get(i) == Some(&b'*');
                     if starred {
                         i += 1;
@@ -1005,6 +1047,7 @@ impl Syntax {
                             || bytes.get(arg_start) == Some(&b'[')
                                 && !citation_accepts_notes(name));
                     if !matches!(name, "input" | "InputIfFileExists" | "IfFileExists")
+                        && !passes_options(name)
                         && !loader_forwards_options(name)
                     {
                         while let Some((_, end)) = group(source, arg_start, b'[', b']') {

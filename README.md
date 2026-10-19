@@ -153,6 +153,8 @@ LaTeX 在写出 `\bibliography` 的数据库名称前会移除空格、制表符
 
 `\RequirePackageWithOptions` / `\LoadClassWithOptions` 沿用相同的查找规则，支持本地文件依赖、补全、跳转、缺失文件修复和文件重命名；前者也识别包列表。命令和签名补全包含 `\RequirePackage`、`\LoadClass` 及这两个转发命令。普通加载器接受 `[options]{name}[minimum version]`，转发命令接受 `{name}[minimum version]`，并由 LaTeX 转发当前包/类的选项；服务器不会在转发命令前错误地建议显式选项参数。
 
+`\PassOptionsToPackage{options}{name}` / `\PassOptionsToClass{options}{name}` 的第二个参数支持本地文件补全、跳转和安全重命名。移动宏包或文档类时，同步更新选项转发声明与实际加载命令，保留选项内容、注释和换行，避免编译仍成功但选项失效。单独转发选项不会把文件加入静态输入依赖；这些名称按选项表键处理，含内部或首尾空白、宏展开及未能解析的目标不作路径推断。命令片段和参数提示包含两个必选参数。
+
 LaTeX 会忽略宏包和文档类加载名称中的空格、制表符和换行，例如 `\usepackage{my local}` 加载 `mylocal.sty`。查找、补全、诊断和重命名遵守相同规则；不会将带空格的同名磁盘文件当成这个名称实际加载的来源，也不会为其生成不安全的路径更新。
 
 路径补全会按加载规则匹配已经输入的空白，支持跨行的宏包、文档类和 `\bibliography` 名称，包括目录片段；接受补全后仍能跳转到编译器实际读取的文件。无法用于这些加载器的带空格目录不会出现在候选中，`\input` 和 `\addbibresource` 继续保留可用的空格路径。`\bibliographystyle` 参数已有空白时，不提供会留下无效空白的路径补全。

@@ -253,7 +253,7 @@ fn replacement(
         )
     };
     let mut value = safe_path(&path)?;
-    if command.and_then(syntax::loader_extension).is_some()
+    if command.and_then(syntax::package_class_extension).is_some()
         || !original.ends_with(&format!(".{extension}"))
     {
         if let Some(extension) = path
@@ -294,7 +294,7 @@ fn replacement(
                 )
             };
             value = safe_path(&explicit)?;
-            if let Some(extension) = syntax::loader_extension(command) {
+            if let Some(extension) = syntax::package_class_extension(command) {
                 if let Some(base) = value.strip_suffix(&format!(".{extension}")) {
                     value = base.to_owned();
                 }
@@ -420,9 +420,9 @@ pub fn will_rename(workspace: &Workspace, files: &[FileRename]) -> Result<Option
                 let root_changed = renames.affects(root);
                 let command = doc.syntax.commands.iter().find(|command| {
                     syntax::file_extensions(&command.name).is_some()
-                        && command.argument.as_ref().is_some_and(|argument| {
-                            argument.span.start <= start && argument.span.end >= end
-                        })
+                        && syntax::file_argument(&doc.text.source, command).is_some_and(
+                            |argument| argument.span.start <= start && argument.span.end >= end,
+                        )
                 });
                 // An unrelated file can arrive ahead of this target in the
                 // search order even when neither source nor target moves.
@@ -448,7 +448,7 @@ pub fn will_rename(workspace: &Workspace, files: &[FileRename]) -> Result<Option
                             "include" | "includeonly" => "tex",
                             "bibliographystyle" => "bst",
                             "bibliography" => "bib",
-                            name => syntax::loader_extension(name)?,
+                            name => syntax::package_class_extension(name)?,
                         };
                         Some((command, extension))
                     });

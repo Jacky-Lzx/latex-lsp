@@ -693,6 +693,16 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
         "Check whether a file exists and run the corresponding branch without reading its contents.",
     ),
     (
+        "PassOptionsToPackage",
+        "PassOptionsToPackage{${1:options}}{${2:name}}",
+        "Forward options to one package before it is loaded.",
+    ),
+    (
+        "PassOptionsToClass",
+        "PassOptionsToClass{${1:options}}{${2:name}}",
+        "Forward options to one document class before it is loaded.",
+    ),
+    (
         "include",
         "include{${1:file}}",
         "Include a TeX file with page breaks.",

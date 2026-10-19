@@ -492,6 +492,23 @@ fn argument_span(doc: &Document, command: &Command, offset: usize) -> Option<Spa
     {
         return None;
     }
+    if syntax::passes_options(&command.name) {
+        let start = syntax::forwarded_file_argument_start(source, command)?;
+        if syntax::group(source, start, b'{', b'}').is_some_and(|(argument, _)| {
+            !argument.value.is_empty()
+                && (!syntax::is_literal_file_path(&argument.value)
+                    || argument.value.chars().any(char::is_whitespace))
+        }) {
+            return None;
+        }
+        let prefix = source.get(start..offset)?.strip_prefix('{')?;
+        if !prefix.is_empty()
+            && (!syntax::is_literal_file_path(prefix) || prefix.chars().any(char::is_whitespace))
+        {
+            return None;
+        }
+        return Some(start + 1..offset);
+    }
     // A completed inner call in an optional note must not hide the outer key.
     // Most calls also let us skip old, closed arguments without rescanning text.
     if !syntax::has_separate_label_argument(&command.name)

@@ -96,7 +96,7 @@ pub fn complete(
             };
             if !name.starts_with(name_prefix)
                 || name.starts_with('.') && !name_prefix.starts_with('.')
-                || (compact || command == "bibliographystyle")
+                || (compact || syntax::passes_options(command) || command == "bibliographystyle")
                     && name.contains([' ', '\t', '\r', '\n'])
                 || name.contains([
                     '\\', '%', '#', '$', '&', '{', '}', '^', '~', '"', '\n', '\r',
@@ -137,7 +137,7 @@ pub fn complete(
                     .rsplit_once('.')
                     .is_some_and(|(_, typed)| extension.starts_with(typed));
                 // Uppercase extensions cannot be inferred by TeX on a case-sensitive filesystem.
-                if (syntax::loader_extension(command).is_some() || !explicit_extension)
+                if (syntax::package_class_extension(command).is_some() || !explicit_extension)
                     && extensions.first() == Some(&extension)
                 {
                     new_text.truncate(new_text.len() - extension.len() - 1);

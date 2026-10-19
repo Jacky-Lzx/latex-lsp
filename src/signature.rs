@@ -173,6 +173,9 @@ fn builtin(name: &str) -> Option<Signature> {
             &[("file", false), ("if exists", false), ("if missing", false)],
             false,
         ),
+        "PassOptionsToPackage" | "PassOptionsToClass" => {
+            (&[("options", false), ("name", false)], false)
+        }
         "includeonly" => (&[("files", false)], false),
         "csuse" | "csmeaning" | "csundef" | "csgundef" => (&[("command", false)], false),
         "cslet" | "letcs" | "csletcs" => (&[("alias", false), ("command", false)], false),
