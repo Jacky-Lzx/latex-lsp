@@ -532,6 +532,7 @@ fn builtin(name: &str) -> Option<Signature> {
         }
         "bibitem" => (&[("label", true), ("key", false)], false),
         "bibentry" => (&[("key", false)], false),
+        "nobibliography" => (&[("databases", false)], false),
         "defcitealias" => (&[("key", false), ("text", false)], false),
         "citenum" => (&[("keys", false)], false),
         "citeyearpar" | "citefullauthor" | "citetalias" | "citepalias" => (

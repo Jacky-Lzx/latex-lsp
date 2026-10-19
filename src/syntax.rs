@@ -662,7 +662,7 @@ pub fn file_extensions(name: &str) -> Option<&'static [&'static str]> {
         "input" | "InputIfFileExists" => &["tex", "ltx", "sty", "cls", "def", "clo"],
         "IfFileExists" => &["tex"],
         "include" | "includeonly" | "subfile" => &["tex"],
-        "bibliography" | "addbibresource" => &["bib"],
+        "bibliography" | "nobibliography" | "addbibresource" => &["bib"],
         "bibliographystyle" => &["bst"],
         "usepackage" | "RequirePackage" | "RequirePackageWithOptions" => &["sty"],
         "documentclass" | "LoadClass" | "LoadClassWithOptions" => &["cls"],
@@ -690,6 +690,7 @@ pub fn file_list(name: &str) -> bool {
     matches!(
         name,
         "bibliography"
+            | "nobibliography"
             | "usepackage"
             | "RequirePackage"
             | "RequirePackageWithOptions"
@@ -767,7 +768,7 @@ pub(crate) fn loader_name(value: &str) -> String {
 }
 
 pub(crate) fn file_name_ignores_spaces(command: &str) -> bool {
-    loader_extension(command).is_some() || command == "bibliography"
+    loader_extension(command).is_some() || matches!(command, "bibliography" | "nobibliography")
 }
 
 pub(crate) fn file_lookup_names<'a>(
@@ -785,7 +786,7 @@ pub(crate) fn file_lookup_names<'a>(
     let literal = normalized.as_deref().unwrap_or(value);
     let empty = literal.is_empty();
     let extension = loader.unwrap_or(match command {
-        "bibliography" => "bib",
+        "bibliography" | "nobibliography" => "bib",
         "bibliographystyle" => "bst",
         _ => "tex",
     });
@@ -793,7 +794,9 @@ pub(crate) fn file_lookup_names<'a>(
         && match command {
             "include" | "includeonly" => !value.ends_with(".tex"),
             "input" | "InputIfFileExists" | "IfFileExists" => !recognized,
-            "bibliography" | "bibliographystyle" => !literal.ends_with(&format!(".{extension}")),
+            "bibliography" | "nobibliography" | "bibliographystyle" => {
+                !literal.ends_with(&format!(".{extension}"))
+            }
             _ => loader.is_some(),
         };
     let preferred = if append {
@@ -1438,6 +1441,14 @@ impl Syntax {
                     } else if is_citation(name) {
                         arg_start = citation_argument_start(source, name, command_end)
                             .unwrap_or(source.len());
+                    } else if name == "nobibliography" {
+                        // The starred form reads the existing bibliography
+                        // without taking a database argument. Neither form
+                        // accepts optional notes before the database list.
+                        arg_start = skip_space(source, command_end);
+                        if bytes.get(arg_start) == Some(&b'*') {
+                            arg_start = source.len();
+                        }
                     } else if name == "bibitem" {
                         // One optional label ends at the first unbraced `]`.
                         // Extra notes and unsupported stars leave prose behind.

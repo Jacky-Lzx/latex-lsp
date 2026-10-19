@@ -347,7 +347,7 @@ impl Workspace {
             .flat_map(|command| {
                 let extension = match command.name.as_str() {
                     "input" | "InputIfFileExists" | "include" | "subfile" => "tex",
-                    "bibliography" | "addbibresource" => "bib",
+                    "bibliography" | "nobibliography" | "addbibresource" => "bib",
                     "bibliographystyle" => "bst",
                     name => match crate::syntax::loader_extension(name) {
                         Some(extension) => extension,

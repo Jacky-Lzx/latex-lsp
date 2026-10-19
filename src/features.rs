@@ -612,16 +612,20 @@ fn argument_span(doc: &Document, command: &Command, offset: usize) -> Option<Spa
     } else {
         let mut at = syntax::skip_space(source, command.span.end);
         if source.as_bytes().get(at) == Some(&b'*') {
-            if matches!(command.name.as_str(), "InputIfFileExists" | "IfFileExists")
-                || syntax::loader_extension(&command.name).is_some()
+            if matches!(
+                command.name.as_str(),
+                "InputIfFileExists" | "IfFileExists" | "nobibliography"
+            ) || syntax::loader_extension(&command.name).is_some()
             {
                 return None;
             }
             at = syntax::skip_space(source, at + 1);
         }
         while source.as_bytes().get(at) == Some(&b'[') {
-            if matches!(command.name.as_str(), "InputIfFileExists" | "IfFileExists")
-                || syntax::loader_forwards_options(&command.name)
+            if matches!(
+                command.name.as_str(),
+                "InputIfFileExists" | "IfFileExists" | "nobibliography"
+            ) || syntax::loader_forwards_options(&command.name)
             {
                 return None;
             }

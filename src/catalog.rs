@@ -653,6 +653,7 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("Citealp", "Citealp{${1:key}}", "Print a capitalized author-year citation without parentheses. Requires natbib."),
     ("Citeauthor", "Citeauthor{${1:key}}", "Print capitalized citation authors. Requires natbib."),
     ("bibentry", "bibentry{${1:key}}", "Print a bibliography entry inline. Requires bibentry."),
+    ("nobibliography", "nobibliography{${1:databases}}", "Load bibliography databases for inline entries without printing a bibliography. Requires bibentry. The starred form takes no argument."),
     ("defcitealias", "defcitealias{${1:key}}{${2:text}}", "Define the text for an alias of one bibliography key. Requires natbib."),
     ("citetalias", "citetalias{${1:key}}", "Print a textual citation alias. Requires natbib."),
     ("citepalias", "citepalias{${1:key}}", "Print a parenthesized citation alias. Requires natbib."),

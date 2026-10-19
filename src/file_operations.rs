@@ -471,7 +471,7 @@ pub fn will_rename(workspace: &Workspace, files: &[FileRename]) -> Result<Option
                         let extension = match command.name.as_str() {
                             "include" | "includeonly" => "tex",
                             "bibliographystyle" => "bst",
-                            "bibliography" => "bib",
+                            "bibliography" | "nobibliography" => "bib",
                             name => syntax::package_class_extension(name)?,
                         };
                         Some((command, extension))
