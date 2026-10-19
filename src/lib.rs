@@ -366,9 +366,10 @@ impl LanguageServer for Backend {
 
     async fn initialized(&self, _: InitializedParams) {
         if self.workspace.read().await.watch_files {
-            let images = syntax::file_extensions("includegraphics")
+            let binary_inputs = syntax::file_extensions("includegraphics")
                 .unwrap()
                 .iter()
+                .chain(recorder::DATA_EXTENSIONS)
                 .map(|extension| {
                     extension
                         .chars()
@@ -383,7 +384,7 @@ impl LanguageServer for Backend {
                 register_options: Some(serde_json::json!({
                     "watchers": [
                         {"globPattern": format!("**/*.{{{}}}",workspace::SOURCE_EXTENSIONS.join(",")), "kind": 7},
-                        {"globPattern": format!("**/*.{{{images}}}"), "kind": 7},
+                        {"globPattern": format!("**/*.{{{binary_inputs}}}"), "kind": 7},
                         {"globPattern": "**/*", "kind": 5}
                     ]
                 })),

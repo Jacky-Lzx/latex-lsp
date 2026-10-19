@@ -36,6 +36,80 @@ fn project() -> (tempfile::TempDir, Workspace) {
 }
 
 #[test]
+fn recorded_local_and_shared_data_remains_outside_the_latex_symbol_index() {
+    let directory = tempfile::tempdir().unwrap();
+    let shared = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    std::fs::write(&main, "\\documentclass{article}\n").unwrap();
+    let local = directory.path().join("table.CSV");
+    let external = shared.path().join("data.json");
+    let system_package = shared.path().join("system.sty");
+    for path in [&local, &external, &system_package] {
+        std::fs::write(path, "\\label{data-source}\\input{not-a-dependency}\n").unwrap();
+    }
+    let mut workspace = Workspace::default();
+    workspace.add_root(directory.path().into());
+    let uri = Url::from_file_path(&main).unwrap();
+    let inputs = latex_lsp::recorder::inputs(
+        &main,
+        &format!(
+            "INPUT {}\nINPUT {}\nINPUT {}\nINPUT {}\n",
+            main.display(),
+            local.display(),
+            external.display(),
+            system_package.display()
+        ),
+    );
+    let selected = workspace.project_inputs(&uri, &inputs);
+    let expected = [&main, &local, &external]
+        .map(|path| Url::from_file_path(path).unwrap())
+        .into();
+    assert_eq!(selected, expected);
+    workspace
+        .recorded_inputs
+        .insert(uri.clone(), selected.clone());
+    workspace.refresh_project(&uri);
+    assert_eq!(workspace.project_files(&uri), selected);
+    assert_eq!(workspace.documents.len(), 1);
+    // Closed data watcher updates must not silently introduce LaTeX symbols.
+    for data in [&local, &external] {
+        workspace.reload(&Url::from_file_path(data).unwrap());
+    }
+    assert_eq!(workspace.documents.len(), 1);
+}
+
+#[test]
+fn explicit_data_extension_source_inputs_still_load_nested_sources_and_update_on_reload() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    let source = directory.path().join("notes.txt");
+    let child = directory.path().join("details.csv");
+    std::fs::write(&main, "\\documentclass{article}\n\\input{notes.txt}\n").unwrap();
+    std::fs::write(&source, "\\label{note}\\input{details.csv}\n").unwrap();
+    std::fs::write(&child, "\\label{detail}\n").unwrap();
+    let mut workspace = Workspace::default();
+    workspace.add_root(directory.path().into());
+    let uri = Url::from_file_path(&main).unwrap();
+    workspace.refresh_project(&uri);
+    let source_uri = Url::from_file_path(&source).unwrap();
+    let child_uri = Url::from_file_path(&child).unwrap();
+    assert_eq!(
+        workspace.documents[&source_uri].syntax.labels[0].name,
+        "note"
+    );
+    assert_eq!(
+        workspace.documents[&child_uri].syntax.labels[0].name,
+        "detail"
+    );
+    std::fs::write(&child, "\\label{updated-detail}\n").unwrap();
+    workspace.reload(&child_uri);
+    assert_eq!(
+        workspace.documents[&child_uri].syntax.labels[0].name,
+        "updated-detail"
+    );
+}
+
+#[test]
 fn definitions_references_hover_and_signatures_respect_the_active_paper() {
     let (directory, workspace) = project();
     let root = directory.path();

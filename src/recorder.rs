@@ -5,6 +5,21 @@ use std::{
 };
 use tower_lsp::lsp_types::Url;
 
+/// Files commonly read as data with openin or package-specific table loaders.
+/// Their contents are dependencies, not implicitly LaTeX source documents.
+pub(crate) const DATA_EXTENSIONS: &[&str] =
+    &["csv", "tsv", "dat", "json", "xml", "yaml", "yml", "txt"];
+
+pub(crate) fn is_data(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            DATA_EXTENSIONS
+                .iter()
+                .any(|data| extension.eq_ignore_ascii_case(data))
+        })
+}
+
 pub fn inputs(root: &Path, contents: &str) -> BTreeSet<Url> {
     let mut directory = root
         .parent()
@@ -19,7 +34,10 @@ pub fn inputs(root: &Path, contents: &str) -> BTreeSet<Url> {
             }
         } else if let Some(value) = line.strip_prefix("INPUT ") {
             let path = directory.join(value.trim_matches('"'));
-            if !crate::workspace::is_source(&path) && !crate::graphics::is_image(&path) {
+            if !crate::workspace::is_source(&path)
+                && !crate::graphics::is_image(&path)
+                && !is_data(&path)
+            {
                 continue;
             }
             if let Ok(path) = path.canonicalize() {
@@ -158,6 +176,36 @@ impl<'a> BibliographyPaths<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recorder_tracks_confirmed_data_reads_without_outputs_missing_files_or_directories() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("main.tex");
+        let mut contents = format!("PWD {}\n", directory.path().display());
+        let mut expected = BTreeSet::new();
+        for name in [
+            "中文 table.csv",
+            "table.TSV",
+            "raw.dat",
+            "data.json",
+            "data.xml",
+            "data.yaml",
+            "data.yml",
+            "data.txt",
+        ] {
+            let path = directory.path().join(name);
+            std::fs::write(&path, "data").unwrap();
+            contents.push_str(&format!("INPUT {name}\nINPUT {name}\n"));
+            expected.insert(Url::from_file_path(path).unwrap());
+        }
+        std::fs::write(directory.path().join("output.csv"), "generated").unwrap();
+        std::fs::write(directory.path().join("main.aux"), "auxiliary").unwrap();
+        std::fs::create_dir(directory.path().join("directory.dat")).unwrap();
+        contents.push_str(
+            "OUTPUT output.csv\nINPUT main.aux\nINPUT missing.csv\nINPUT directory.dat\n",
+        );
+        assert_eq!(inputs(&root, &contents), expected);
+    }
 
     #[test]
     fn bibliography_search_paths_reported_by_latexmk_override_cwd_and_remain_tool_specific() {

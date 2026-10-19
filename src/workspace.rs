@@ -281,11 +281,26 @@ impl Workspace {
     }
 
     fn dependencies_from(&self, uri: &Url, root: &Url) -> Vec<Url> {
+        if !self.documents.contains_key(uri) {
+            return vec![];
+        }
+        let mut dependencies = self.source_dependencies_from(uri, root);
+        if uri == root {
+            if let Some(recorded) = self.recorded_inputs.get(root) {
+                dependencies.extend(recorded.iter().cloned());
+            }
+            if let Some(recorded) = self.bibliography_inputs.get(root) {
+                dependencies.extend(recorded.iter().cloned());
+            }
+        }
+        dependencies
+    }
+
+    fn source_dependencies_from(&self, uri: &Url, root: &Url) -> Vec<Url> {
         let Some(doc) = self.documents.get(uri) else {
             return vec![];
         };
-        let mut dependencies: Vec<Url> = doc
-            .syntax
+        doc.syntax
             .commands
             .iter()
             .flat_map(|command| {
@@ -324,21 +339,13 @@ impl Workspace {
                     })
                     .unwrap_or_default()
             })
-            .collect();
-        if uri == root {
-            if let Some(recorded) = self.recorded_inputs.get(root) {
-                dependencies.extend(recorded.iter().cloned());
-            }
-            if let Some(recorded) = self.bibliography_inputs.get(root) {
-                dependencies.extend(recorded.iter().cloned());
-            }
-        }
-        dependencies
+            .collect()
     }
 
     /// Do not index TeX's distribution packages outside the project. Explicitly
     /// opened or already indexed external documents remain part of the project.
-    /// Recorded images can be shared outside the roots; reload keeps them binary.
+    /// Recorded images and data can be shared outside the roots; their presence
+    /// alone does not load their contents into the source document index.
     pub fn project_inputs(&self, root: &Url, inputs: &BTreeSet<Url>) -> BTreeSet<Url> {
         let parent = root
             .to_file_path()
@@ -350,6 +357,7 @@ impl Workspace {
                 self.documents.contains_key(*uri)
                     || uri.to_file_path().ok().is_some_and(|path| {
                         crate::graphics::is_image(&path)
+                            || crate::recorder::is_data(&path)
                             || parent
                                 .as_ref()
                                 .is_some_and(|parent| path.starts_with(parent))
@@ -590,6 +598,10 @@ impl Workspace {
     }
 
     pub fn reload(&mut self, uri: &Url) {
+        self.reload_document(uri, self.documents.contains_key(uri));
+    }
+
+    fn reload_document(&mut self, uri: &Url, parse_data: bool) {
         // Unsaved editor content always wins over filesystem notifications.
         if self
             .documents
@@ -602,7 +614,7 @@ impl Workspace {
             return;
         }
         let source = uri.to_file_path().ok().and_then(|path| {
-            if crate::graphics::is_image(&path) {
+            if crate::graphics::is_image(&path) || !parse_data && crate::recorder::is_data(&path) {
                 return None;
             }
             let metadata = std::fs::metadata(&path).ok()?;
@@ -697,9 +709,12 @@ impl Workspace {
             self.reload(uri);
         }
         let dependencies = self.dependencies_from(uri, root);
+        let sources = self.source_dependencies_from(uri, root);
         for dependency in dependencies {
             if !self.documents.contains_key(&dependency) {
-                self.reload(&dependency);
+                // Explicit source inclusion keeps working for unusual names
+                // such as input{notes.txt}; recorder-only data stays unparsed.
+                self.reload_document(&dependency, sources.contains(&dependency));
             }
             self.load_dependencies_inner(&dependency, root, depth + 1, visited, refresh);
         }
