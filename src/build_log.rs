@@ -440,6 +440,109 @@ pub(crate) fn unresolved_location(diagnostic: &Diagnostic) -> bool {
     })
 }
 
+struct PackageOptions {
+    loaded: String,
+    requested: String,
+}
+
+struct ErrorContext<'a> {
+    source: &'a str,
+    package_options: Option<PackageOptions>,
+}
+
+impl<'a> ErrorContext<'a> {
+    fn source(source: &'a str) -> Self {
+        Self {
+            source,
+            package_options: None,
+        }
+    }
+}
+
+/// Help is printed after the two-line source echo, with byte wraps even inside
+/// names and values. Keep an independent, bounded cursor so looking for help
+/// cannot consume a later diagnostic or change the main log parser's position.
+#[derive(Clone, Copy)]
+struct OptionHelp<'a> {
+    lines: &'a [&'a str],
+    index: usize,
+    bytes: usize,
+}
+
+impl<'a> OptionHelp<'a> {
+    fn read_line(&mut self) -> Option<&'a str> {
+        let line = *self.lines.get(self.index)?;
+        if self.index >= 64 || self.bytes + line.len() > 8192 || line == crate::output::TRUNCATED {
+            return None;
+        }
+        self.index += 1;
+        self.bytes += line.len();
+        Some(line)
+    }
+
+    fn expect(&mut self, mut value: &str) -> Option<()> {
+        while !value.is_empty() {
+            let line = self.read_line()?;
+            if line.is_empty() {
+                return None;
+            }
+            value = value.strip_prefix(line)?;
+        }
+        Some(())
+    }
+
+    fn options(&mut self, following: &str) -> Option<String> {
+        let mut value = self.read_line()?.strip_prefix("  [")?.to_owned();
+        loop {
+            if value.len() > 4096 {
+                return None;
+            }
+            if let Some(content) = value.strip_suffix(']') {
+                let mut after = *self;
+                if after.expect(following).is_some() {
+                    *self = after;
+                    return Some(content.into());
+                }
+            }
+            let line = self.read_line()?;
+            if line.trim().is_empty()
+                || message_boundary(line)
+                || line.trim_start().starts_with('(')
+                || ["The package ", "There has now ", "Adding the global "]
+                    .iter()
+                    .any(|prefix| line.starts_with(prefix))
+            {
+                return None;
+            }
+            value.push_str(line);
+        }
+    }
+}
+
+fn package_option_details(lines: &[&str], start: usize, message: &str) -> Option<PackageOptions> {
+    let name = package_option_clash_name(message)?;
+    let mut lines = lines.get(start..)?;
+    // TeX's second source-echo line is indented. Only this immediate line may
+    // precede the help header; arbitrary intervening output is not evidence.
+    if lines
+        .first()
+        .is_some_and(|line| line.is_empty() || line.starts_with(' '))
+    {
+        lines = &lines[1..];
+    }
+    let mut help = OptionHelp {
+        lines,
+        index: 0,
+        bytes: 0,
+    };
+    help.expect(&format!(
+        "The package {name} has already been loaded with options:"
+    ))?;
+    let loaded = help.options("There has now been an attempt to load it with options")?;
+    let requested = help.options("Adding the global options:")?;
+    Some(PackageOptions { loaded, requested })
+}
+
 /// A direct TeX error prints the consumed source prefix on its l.N line.
 /// Expansion frames precede that line. Allow a single recently read token for
 /// undefined commands only when it also ends the consumed source prefix. Math
@@ -450,13 +553,15 @@ fn error_context<'a>(
     start: usize,
     number: u32,
     message: &str,
-) -> Option<&'a str> {
+) -> Option<ErrorContext<'a>> {
     let mut context = lines
         .iter()
+        .enumerate()
         .skip(start)
         .take(16)
-        .filter(|line| !line.trim().is_empty());
-    let mut line = *context.next()?;
+        .filter(|(_, line)| !line.trim().is_empty())
+        .map(|(index, &line)| (index, line));
+    let (mut index, mut line) = context.next()?;
     let recent = (message == "Undefined control sequence.")
         .then(|| line.trim_start().strip_prefix("<recently read>"))
         .flatten()
@@ -465,7 +570,7 @@ fn error_context<'a>(
         if crate::syntax::control_word(token, 0)? != (0..token.len()) {
             return None;
         }
-        line = context.next()?;
+        (index, line) = context.next()?;
     }
     let graphics = missing_graphic_name(message).is_some() && missing_file_name(message).is_none();
     let documentation = line.trim() == "See the LaTeX manual or LaTeX Companion for explanation."
@@ -476,12 +581,12 @@ fn error_context<'a>(
             ]
             .contains(&line.trim());
     if recent.is_none() && documentation {
-        if context.next()?.trim() != "Type  H <return>  for immediate help."
-            || context.next()?.trim() != "..."
+        if context.next()?.1.trim() != "Type  H <return>  for immediate help."
+            || context.next()?.1.trim() != "..."
         {
             return None;
         }
-        line = context.next()?;
+        (index, line) = context.next()?;
     }
     // XeTeX reports this one internal read frame for a direct graphicx call.
     // Other expansion frames still prevent precise source attribution.
@@ -489,10 +594,10 @@ fn error_context<'a>(
         && message.starts_with("Unable to load picture or PDF file ")
         && line.trim() == "<to be read again>"
     {
-        if context.next()?.trim() != "}" {
+        if context.next()?.1.trim() != "}" {
             return None;
         }
-        line = context.next()?;
+        (index, line) = context.next()?;
     }
     let tail = line.trim_start().strip_prefix("l.")?;
     let digits = tail.bytes().take_while(u8::is_ascii_digit).count();
@@ -502,7 +607,10 @@ fn error_context<'a>(
     let prefix = tail[digits..].strip_prefix(' ')?;
     recent
         .is_none_or(|token| prefix.trim_end().ends_with(token))
-        .then_some(prefix)
+        .then(|| ErrorContext {
+            source: prefix,
+            package_options: package_option_details(lines, index + 1, message),
+        })
 }
 
 pub(crate) fn missing_file_name(message: &str) -> Option<&str> {
@@ -883,9 +991,13 @@ fn emit_with_context(
     line: u32,
     mut message: String,
     severity: DiagnosticSeverity,
-    context: Option<&str>,
+    error: Option<ErrorContext<'_>>,
     source_confirmed: bool,
 ) {
+    let context = error.as_ref().map(|context| context.source);
+    let package_options = error
+        .as_ref()
+        .and_then(|context| context.package_options.as_ref());
     let Ok(uri) = Url::from_file_path(path) else {
         return;
     };
@@ -1026,6 +1138,13 @@ fn emit_with_context(
     if ranges.is_empty() {
         ranges.push(line_range);
     }
+    let displayed_message = match (clash_range, package_options) {
+        (Some(_), Some(options)) => format!(
+            "{message}\nAlready loaded options: [{}]\nRequested options: [{}]",
+            options.loaded, options.requested
+        ),
+        _ => message.clone(),
+    };
     result
         .entry(uri)
         .or_default()
@@ -1045,7 +1164,7 @@ fn emit_with_context(
                     .or_else(|| environment_range.and(environment.as_ref()).map(|error| error.code))
                     .or_else(|| counter_range.map(|_| "undefined-counter"))
                     .map(|code| NumberOrString::String(code.into())),
-                message: message.clone(),
+                message: displayed_message.clone(),
                 data: precise_destination.then(|| serde_json::json!({"destination":destination.map(|(_, name)| name)}))
                     .or_else(|| command_name.map(|name| serde_json::json!({"command":name})))
                     .or_else(|| {
@@ -1059,7 +1178,14 @@ fn emit_with_context(
                     .or_else(|| counter_range.and(counter_name).map(|name| serde_json::json!({"counter":name})))
                     .or_else(|| input_range.and(missing_file).map(|name| serde_json::json!({"file":name})))
                     .or_else(|| loader_range.map(|(_, command)| serde_json::json!({"file":missing_file,"loaderCommand":command})))
-                    .or_else(|| clash_range.map(|(_, command)| serde_json::json!({"package":package_clash,"loaderCommand":command})))
+                    .or_else(|| clash_range.map(|(_, command)| {
+                        let mut data = serde_json::json!({"package":package_clash,"loaderCommand":command});
+                        if let Some(options) = package_options {
+                            data["loadedOptions"] = options.loaded.clone().into();
+                            data["requestedOptions"] = options.requested.clone().into();
+                        }
+                        data
+                    }))
                     .or_else(|| graphic_range.and(missing_graphic).map(|name| serde_json::json!({"file":name}))),
                 ..Default::default()
             }
@@ -1614,7 +1740,7 @@ pub(crate) fn parse_with_sources(
                         cause_line,
                         cause,
                         DiagnosticSeverity::ERROR,
-                        context,
+                        context.map(ErrorContext::source),
                         cause_path.confirmed,
                     );
                 }
@@ -1662,7 +1788,7 @@ pub(crate) fn parse_with_sources(
                     cause_line,
                     cause,
                     DiagnosticSeverity::ERROR,
-                    context,
+                    context.map(ErrorContext::source),
                     path.confirmed,
                 );
             }
