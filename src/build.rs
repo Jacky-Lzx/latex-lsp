@@ -1,6 +1,7 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{hash_map::DefaultHasher, BTreeMap, BTreeSet},
     future::Future,
+    hash::{Hash, Hasher},
     io::Read,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -39,8 +40,41 @@ struct Record {
     result: Option<Value>,
     queued: Option<Url>,
     cancel_generation: u64,
-    inputs: BTreeSet<Url>,
+    inputs: BTreeMap<Url, InputSnapshot>,
+    checks: Arc<crate::file_checks::Snapshot>,
     artifact: Option<PathBuf>,
+}
+
+#[derive(PartialEq)]
+enum InputSnapshot {
+    Text { length: usize, hash: u64 },
+    File(Option<(u64, Option<std::time::SystemTime>)>),
+}
+
+impl InputSnapshot {
+    fn text(text: &str) -> Self {
+        let mut hash = DefaultHasher::new();
+        text.hash(&mut hash);
+        Self::Text {
+            length: text.len(),
+            hash: hash.finish(),
+        }
+    }
+
+    fn changed(&self, uri: &Url) -> bool {
+        let Ok(path) = uri.to_file_path() else {
+            return true;
+        };
+        match self {
+            Self::Text { length, .. } => {
+                std::fs::metadata(&path).map_or(true, |metadata| metadata.len() != *length as u64)
+                    || std::fs::read_to_string(path)
+                        .ok()
+                        .is_none_or(|text| Self::text(&text) != *self)
+            }
+            Self::File(before) => fingerprint(&path) != *before,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -205,8 +239,17 @@ impl BuildManager {
                 );
             }
             record.active = Some((build_id, cancel.clone()));
-            record.inputs = project.clone();
-            record.inputs.extend(checks.watched().iter().cloned());
+            record.inputs = project
+                .iter()
+                .map(|uri| {
+                    let snapshot = snapshots.get(uri).map_or_else(
+                        || InputSnapshot::File(file_snapshots.get(uri).copied().flatten()),
+                        |(_, text)| InputSnapshot::text(text),
+                    );
+                    (uri.clone(), snapshot)
+                })
+                .collect();
+            record.checks = checks.clone();
             record.artifact = artifact;
             self.tasks.fetch_add(1, Ordering::SeqCst);
         }
@@ -656,19 +699,32 @@ impl BuildManager {
     }
 
     pub async fn files_renamed(&self, renames: &crate::file_operations::Renames) {
-        self.cancel_changed_inputs(|uri| renames.affects(uri)).await;
+        self.cancel_changed_inputs(|uri| renames.affects(uri), false)
+            .await;
     }
 
     pub async fn files_changed(&self, changes: &crate::file_operations::FileChanges) {
-        self.cancel_changed_inputs(|uri| changes.affects(uri)).await;
+        self.cancel_changed_inputs(|uri| changes.affects(uri), false)
+            .await;
     }
 
-    async fn cancel_changed_inputs(&self, affects: impl Fn(&Url) -> bool) {
+    pub async fn watched_files_changed(&self, changes: &crate::file_operations::FileChanges) {
+        self.cancel_changed_inputs(|uri| changes.affects(uri), true)
+            .await;
+    }
+
+    async fn cancel_changed_inputs(&self, affects: impl Fn(&Url) -> bool, verify_inputs: bool) {
         let mut builds = BTreeSet::new();
         {
             let mut state = self.state.lock().unwrap();
             for (root, record) in state.iter_mut() {
-                if affects(root) || record.inputs.iter().any(&affects) {
+                if (!verify_inputs && affects(root))
+                    || record.inputs.iter().any(|(uri, snapshot)| {
+                        affects(uri) && (!verify_inputs || snapshot.changed(uri))
+                    })
+                    || (record.checks.watched().iter().any(&affects)
+                        && record.checks.changed_path().is_some())
+                {
                     record.queued = None;
                     record.cancel_generation = record.cancel_generation.wrapping_add(1);
                     if let Some((id, cancel)) = &record.active {

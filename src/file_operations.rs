@@ -46,10 +46,10 @@ impl FileChanges {
             .iter()
             .filter(|(root, diagnostics)| {
                 self.affects(root)
-                    || workspace
-                        .build_checks
-                        .get(*root)
-                        .is_some_and(|checks| checks.watched().iter().any(|uri| self.affects(uri)))
+                    || workspace.build_checks.get(*root).is_some_and(|checks| {
+                        checks.watched().iter().any(|uri| self.affects(uri))
+                            && checks.changed_path().is_some()
+                    })
                     || diagnostics.keys().any(|uri| self.affects(uri))
                     || workspace
                         .project_files(root)

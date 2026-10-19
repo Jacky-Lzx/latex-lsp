@@ -140,7 +140,11 @@ impl Backend {
         delivery.publish(&self.client, snapshots).await;
     }
 
-    async fn refresh_file_events(&self, changes: Result<file_operations::FileChanges>) {
+    async fn refresh_file_events(
+        &self,
+        changes: Result<file_operations::FileChanges>,
+        from_watcher: bool,
+    ) {
         let changes = match changes {
             Ok(changes) => changes,
             Err(error) => {
@@ -150,7 +154,11 @@ impl Backend {
                 return;
             }
         };
-        self.builds.files_changed(&changes).await;
+        if from_watcher {
+            self.builds.watched_files_changed(&changes).await;
+        } else {
+            self.builds.files_changed(&changes).await;
+        }
         let affected = changes.refresh(&mut *self.workspace.write().await);
         {
             let mut cache = self.semantic_cache.lock().await;
@@ -349,11 +357,26 @@ impl LanguageServer for Backend {
 
     async fn initialized(&self, _: InitializedParams) {
         if self.workspace.read().await.watch_files {
+            let images = syntax::file_extensions("includegraphics")
+                .unwrap()
+                .iter()
+                .map(|extension| {
+                    extension
+                        .chars()
+                        .flat_map(|ch| ['[', ch, ch.to_ascii_uppercase(), ']'])
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join(",");
             let registration = Registration {
                 id: "latex-lsp-watch-files".into(),
                 method: "workspace/didChangeWatchedFiles".into(),
                 register_options: Some(serde_json::json!({
-                    "watchers": [{"globPattern": format!("**/*.{{{}}}",workspace::SOURCE_EXTENSIONS.join(",")), "kind": 7}]
+                    "watchers": [
+                        {"globPattern": format!("**/*.{{{}}}",workspace::SOURCE_EXTENSIONS.join(",")), "kind": 7},
+                        {"globPattern": format!("**/*.{{{images}}}"), "kind": 7},
+                        {"globPattern": "**/*", "kind": 5}
+                    ]
                 })),
             };
             if let Err(error) = self.client.register_capability(vec![registration]).await {
@@ -448,15 +471,13 @@ impl LanguageServer for Backend {
     }
 
     async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
-        let mut workspace = self.workspace.write().await;
-        for change in params.changes {
-            let uri = document_uri(change.uri);
-            workspace.reload(&uri);
-            workspace.clear_build_diagnostics(&uri);
-            workspace.load_dependencies(&uri, 0);
-        }
-        drop(workspace);
-        self.publish_open().await;
+        self.refresh_file_events(
+            file_operations::FileChanges::new(
+                params.changes.iter().map(|change| change.uri.as_str()),
+            ),
+            true,
+        )
+        .await;
     }
 
     async fn did_change_configuration(&self, params: DidChangeConfigurationParams) {
@@ -561,16 +582,18 @@ impl LanguageServer for Backend {
     }
 
     async fn did_create_files(&self, params: CreateFilesParams) {
-        self.refresh_file_events(file_operations::FileChanges::new(
-            params.files.iter().map(|file| file.uri.as_str()),
-        ))
+        self.refresh_file_events(
+            file_operations::FileChanges::new(params.files.iter().map(|file| file.uri.as_str())),
+            false,
+        )
         .await;
     }
 
     async fn did_delete_files(&self, params: DeleteFilesParams) {
-        self.refresh_file_events(file_operations::FileChanges::new(
-            params.files.iter().map(|file| file.uri.as_str()),
-        ))
+        self.refresh_file_events(
+            file_operations::FileChanges::new(params.files.iter().map(|file| file.uri.as_str())),
+            false,
+        )
         .await;
     }
 

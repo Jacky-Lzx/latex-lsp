@@ -3135,6 +3135,33 @@ fn ltx_def_and_clo_sources_are_indexed_and_included_in_dynamic_watch_registratio
     for extension in ["tex", "ltx", "bib", "sty", "cls", "def", "clo"] {
         assert!(pattern.contains(extension));
     }
+    let watchers = registration["params"]["registrations"][0]["registerOptions"]["watchers"]
+        .as_array()
+        .unwrap();
+    assert!(
+        watchers
+            .iter()
+            .any(|watcher| watcher["globPattern"] == "**/*" && watcher["kind"] == 5),
+        "{registration}"
+    );
+    let image = watchers
+        .iter()
+        .find(|watcher| {
+            watcher["kind"] == 7
+                && watcher["globPattern"]
+                    .as_str()
+                    .is_some_and(|pattern| pattern.contains("[pP][nN][gG]"))
+        })
+        .expect("case-insensitive image updates must be registered");
+    for extension in [
+        "[pP][dD][fF]",
+        "[jJ][pP][gG]",
+        "[jJ][pP][eE][gG]",
+        "[eE][pP][sS]",
+        "[sS][vV][gG]",
+    ] {
+        assert!(image["globPattern"].as_str().unwrap().contains(extension));
+    }
     server.send(json!({"jsonrpc":"2.0","id":registration["id"],"result":null}));
     let symbols = server.request(2, "workspace/symbol", json!({"query":"source:"}));
     assert_eq!(symbols.as_array().unwrap().len(), 3);
@@ -4296,6 +4323,309 @@ fn conditional_generated_artifacts_and_include_auxiliaries_do_not_make_builds_st
     assert_eq!(finished["params"]["status"], "success", "{finished}");
     assert_eq!(finished["params"]["stale"], false, "{finished}");
     server.request(3, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+fn watched_file_changes_clear_root_build_warnings_and_keep_data_out_of_the_symbol_index() {
+    for conditional in [false, true] {
+        let script = "printf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf '%s:2: LaTeX Warning: outdated project warning.\\n' \"$2\" > \"$1/main.log\"\n";
+        let (mut server, directory, main) = fake_build_server(script, false);
+        let name = if conditional {
+            "optional.bin"
+        } else {
+            "child.tex"
+        };
+        let target = directory.path().join(name);
+        if !conditional {
+            std::fs::write(&target, "Old child.").unwrap();
+        }
+        let source = if conditional {
+            "\\documentclass{article}\n\\IfFileExists{optional.bin}{Found.}{Missing.}\n"
+        } else {
+            "\\documentclass{article}\n\\input{child}\n"
+        };
+        std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+        );
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let first = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(first["params"]["status"], "success", "{first}");
+        server.until(|message| {
+            message["method"] == "textDocument/publishDiagnostics"
+                && message["params"]["diagnostics"]
+                    .as_array()
+                    .is_some_and(|items| {
+                        items.iter().any(|item| {
+                            item["message"]
+                                .as_str()
+                                .is_some_and(|text| text.contains("outdated project warning"))
+                        })
+                    })
+        });
+        server.request(
+            3,
+            "workspace/executeCommand",
+            json!({"command":"latex.buildStatus","arguments":[main]}),
+        );
+        server.pending.borrow_mut().clear();
+        std::fs::write(&target, "\\label{watched-data-label}New contents.").unwrap();
+        server.notify("workspace/didChangeWatchedFiles", json!({"changes":[{"uri":Url::from_file_path(&target).unwrap(),"type":if conditional {1} else {2}}]}));
+        server.request(
+            4,
+            "workspace/executeCommand",
+            json!({"command":"latex.buildStatus","arguments":[main]}),
+        );
+        let published = server.until(|message| {
+            message["method"] == "textDocument/publishDiagnostics"
+                && message["params"]["uri"] == main.as_str()
+        });
+        assert_eq!(
+            published["params"]["diagnostics"],
+            json!([]),
+            "conditional={conditional}: {published}"
+        );
+        let symbols = server.request(5, "workspace/symbol", json!({"query":"watched-data-label"}));
+        assert_eq!(
+            symbols.as_array().unwrap().len(),
+            usize::from(!conditional),
+            "{symbols}"
+        );
+        server.request(6, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn watched_files_cancel_changed_project_inputs_but_preserve_existence_only_content_edits() {
+    for kind in ["source", "image", "create", "delete", "data-content"] {
+        let script = "touch \"$1/ready\"\nwhile [ ! -f \"$1/release\" ]; do sleep 0.02; done\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\n";
+        let (mut server, directory, main) = fake_build_server(script, true);
+        let (name, source) = match kind {
+            "source" => ("child.tex", "\\documentclass{article}\n\\input{child}\n"),
+            "image" => (
+                "plot.PnG",
+                "\\documentclass{article}\n\\includegraphics{plot.PnG}\n",
+            ),
+            _ => (
+                "optional.bin",
+                "\\documentclass{article}\n\\IfFileExists{optional.bin}{Found.}{Missing.}\n",
+            ),
+        };
+        let target = directory.path().join(name);
+        if kind != "create" {
+            std::fs::write(&target, "Original.").unwrap();
+        }
+        std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+        );
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let output = directory.path().join("build/latex-lsp");
+        wait_for_file(&output.join("ready"));
+        if kind != "data-content" {
+            server.notify("textDocument/didSave", json!({"textDocument":{"uri":main}}));
+            assert_eq!(
+                server.request(
+                    3,
+                    "workspace/executeCommand",
+                    json!({"command":"latex.buildStatus","arguments":[main]})
+                )["queued"],
+                true
+            );
+        }
+        if kind == "delete" {
+            std::fs::remove_file(&target).unwrap();
+        } else {
+            let modified = std::fs::metadata(&target)
+                .ok()
+                .and_then(|metadata| metadata.modified().ok());
+            std::fs::write(
+                &target,
+                if kind == "data-content" {
+                    "\\label{watched-data-label}Different."
+                } else {
+                    "Different"
+                },
+            )
+            .unwrap();
+            if kind == "source" {
+                // Both the original and replacement have nine bytes.
+                std::fs::File::open(&target)
+                    .unwrap()
+                    .set_times(std::fs::FileTimes::new().set_modified(modified.unwrap()))
+                    .unwrap();
+            }
+        }
+        server.notify("workspace/didChangeWatchedFiles", json!({"changes":[{"uri":Url::from_file_path(&target).unwrap(),"type":match kind {"create"=>1,"delete"=>3,_=>2}}]}));
+        let status = server.request(
+            4,
+            "workspace/executeCommand",
+            json!({"command":"latex.buildStatus","arguments":[main]}),
+        );
+        if kind == "data-content" {
+            assert_eq!(status["status"], "running", "{status}");
+            std::fs::write(output.join("release"), "").unwrap();
+        }
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(
+            finished["params"]["status"],
+            if kind == "data-content" {
+                "success"
+            } else {
+                "cancelled"
+            },
+            "{kind}: {finished}"
+        );
+        if kind == "data-content" {
+            assert_eq!(finished["params"]["stale"], false, "{finished}");
+            assert_eq!(
+                server.request(5, "workspace/symbol", json!({"query":"watched-data-label"})),
+                json!([])
+            );
+        } else {
+            assert_ne!(status["queued"], true, "{status}");
+        }
+        server.request(6, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn watched_delayed_notifications_do_not_cancel_a_build_of_the_same_saved_inputs() {
+    let script = "touch \"$1/ready\"\nwhile [ ! -f \"$1/release\" ]; do sleep 0.02; done\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\n";
+    let (mut server, directory, main) = fake_build_server(script, false);
+    let source = "\\documentclass{article}\n\\input{child}\n\\includegraphics{plot.png}\n\\IfFileExists{optional.bin}{Found.}{Missing.}\n";
+    let child = directory.path().join("child.tex");
+    let image = directory.path().join("plot.png");
+    std::fs::write(&child, "Saved source.").unwrap();
+    std::fs::write(&image, [0, 255, 1]).unwrap();
+    std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+    );
+    server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let output = directory.path().join("build/latex-lsp");
+    wait_for_file(&output.join("ready"));
+    server.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({"changes":[
+            {"uri":main,"type":2},
+            {"uri":Url::from_file_path(&child).unwrap(),"type":1},
+            {"uri":Url::from_file_path(&image).unwrap(),"type":2},
+            {"uri":Url::from_file_path(directory.path().join("optional.bin")).unwrap(),"type":3}
+        ]}),
+    );
+    let status = server.request(
+        3,
+        "workspace/executeCommand",
+        json!({"command":"latex.buildStatus","arguments":[main]}),
+    );
+    assert_eq!(status["status"], "running", "{status}");
+    std::fs::write(output.join("release"), "").unwrap();
+    let finished = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(finished["params"]["status"], "success", "{finished}");
+    assert_eq!(finished["params"]["stale"], false, "{finished}");
+    server.request(4, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+fn watched_conditional_file_changes_refresh_pulled_project_diagnostics() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+    let source = "\\documentclass{article}\n\\IfFileExists{optional.bin}{Found.}{Missing.}\n";
+    std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+    let script = directory.path().join("compiler.sh");
+    std::fs::write(&script, "printf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf '%s:2: LaTeX Warning: outdated pull condition.\\n' \"$2\" > \"$1/main.log\"\n").unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(directory.path()).unwrap(),"capabilities":{"textDocument":{"diagnostic":{}},"workspace":{"diagnostic":{"refreshSupport":true}}},"initializationOptions":{"build":{"executable":"/bin/sh","arguments":[script,"%o","%f"]}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":main,"languageId":"latex","version":1,"text":source}}),
+    );
+    // Acknowledge the opening refresh before testing the build refresh.
+    let refresh = server.until(|message| message["method"] == "workspace/diagnostic/refresh");
+    server.send(json!({"jsonrpc":"2.0","id":refresh["id"],"result":null}));
+    server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let first = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(first["params"]["status"], "success", "{first}");
+    let refresh = server.until(|message| message["method"] == "workspace/diagnostic/refresh");
+    server.send(json!({"jsonrpc":"2.0","id":refresh["id"],"result":null}));
+    let diagnostics = server.request(
+        3,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":main}}),
+    );
+    assert!(
+        diagnostics["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["message"]
+                .as_str()
+                .is_some_and(|text| text.contains("outdated pull condition"))),
+        "{diagnostics}"
+    );
+    let flag = directory.path().join("optional.bin");
+    std::fs::write(&flag, "\\label{data-should-stay-unindexed}").unwrap();
+    server.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({"changes":[{"uri":Url::from_file_path(&flag).unwrap(),"type":1}]}),
+    );
+    let refresh = server.until(|message| message["method"] == "workspace/diagnostic/refresh");
+    server.send(json!({"jsonrpc":"2.0","id":refresh["id"],"result":null}));
+    let cleared = server.request(
+        4,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":main},"previousResultId":diagnostics["resultId"]}),
+    );
+    assert_eq!(cleared["kind"], "full", "{cleared}");
+    assert_eq!(cleared["items"], json!([]), "{cleared}");
+    assert_ne!(cleared["resultId"], diagnostics["resultId"]);
+    assert_eq!(
+        server.request(
+            5,
+            "workspace/symbol",
+            json!({"query":"data-should-stay-unindexed"})
+        ),
+        json!([])
+    );
+    assert!(!server
+        .pending
+        .borrow()
+        .iter()
+        .any(|message| message["method"] == "textDocument/publishDiagnostics"));
+    server.request(6, "shutdown", Value::Null);
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
