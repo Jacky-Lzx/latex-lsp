@@ -473,7 +473,21 @@ fn builtin(name: &str) -> Option<Signature> {
         starred,
         nested_brackets: !(syntax::is_citation(name)
             || syntax::reference_note_count(name) > 0
-            || matches!(name, "hyperref" | "hyperdef" | "newcounter")),
+            || matches!(
+                name,
+                "hyperref"
+                    | "hyperdef"
+                    | "newcounter"
+                    | "sqrt"
+                    | "part"
+                    | "chapter"
+                    | "section"
+                    | "subsection"
+                    | "subsubsection"
+                    | "paragraph"
+                    | "subparagraph"
+                    | "caption"
+            )),
     })
 }
 

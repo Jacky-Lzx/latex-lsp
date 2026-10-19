@@ -1021,7 +1021,16 @@ fn classic_environment_defaults_follow_their_optional_argument_reader() {
 
 #[test]
 fn xparse_optional_brackets_keep_nesting_even_when_overriding_a_builtin_name() {
-    for name in ["pair", "hyperref", "hyperdef", "newcounter", "fullcite"] {
+    for name in [
+        "pair",
+        "hyperref",
+        "hyperdef",
+        "newcounter",
+        "fullcite",
+        "section",
+        "caption",
+        "sqrt",
+    ] {
         let definitions = format!("\\NewDocumentCommand{{\\{name}}}{{O{{x[y}} m}}{{#1:#2}}");
         let label = format!("\\{name}[#1=x[y]{{#2}}");
         check(
@@ -1038,6 +1047,64 @@ fn xparse_optional_brackets_keep_nesting_even_when_overriding_a_builtin_name() {
         r"\begin{panel}[#1=x[y]{#2}",
         2,
     );
+}
+
+#[test]
+fn heading_caption_and_root_signatures_end_optional_arguments_at_unbraced_closing_brackets() {
+    for name in [
+        "part",
+        "chapter",
+        "section",
+        "subsection",
+        "subsubsection",
+        "paragraph",
+        "subparagraph",
+        "caption",
+        "sqrt",
+    ] {
+        let label = if name == "sqrt" {
+            r"\sqrt[degree]{expression}".into()
+        } else {
+            format!("\\{name}[short title]{{title}}")
+        };
+        check(
+            "",
+            &format!("\\{name}[literal [opening]{{val¦ue}}"),
+            &label,
+            1,
+        );
+        check(
+            "",
+            &format!("\\{name}[{{protected ] closing}}]{{val¦ue}}"),
+            &label,
+            1,
+        );
+        check(
+            "",
+            &format!("\\{name}[literal [ope¦ning]{{value}}"),
+            &label,
+            0,
+        );
+        check(
+            "",
+            &format!("😀 \\{name}[literal [opening] % ignored ]\r\n{{val¦ue}}"),
+            &label,
+            1,
+        );
+        check(
+            "",
+            &format!("\\csuse{{{name}}}[literal [opening]{{val¦ue}}"),
+            &label.replace(&format!("\\{name}"), &format!("\\csuse{{{name}}}")),
+            1,
+        );
+        for call in [
+            format!("\\{name}[literal [opening]{{value}}Body¦"),
+            format!("\\{name}[literal [opening]]{{val¦ue}}"),
+        ] {
+            let (workspace, uri, at) = setup("", &call);
+            assert!(signature::help(&workspace, &uri, at).is_none(), "{call}");
+        }
+    }
 }
 
 #[test]
