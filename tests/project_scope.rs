@@ -202,3 +202,88 @@ fn completions_and_user_snippets_exclude_symbols_from_independent_papers() {
     assert!(items.iter().any(|item| item.label == "aonlybook"));
     assert!(!items.iter().any(|item| item.label == "bonlybook"));
 }
+
+#[test]
+fn recorded_binary_roles_do_not_block_explicit_source_inclusion() {
+    let directory = tempfile::tempdir().unwrap();
+    let shared = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    let data = shared.path().join("table.tex");
+    std::fs::write(&main, "\\documentclass{article}\n").unwrap();
+    std::fs::write(&data, "\\label{data-source}\n").unwrap();
+    let mut workspace = Workspace::default();
+    workspace.add_root(directory.path().into());
+    let main_uri = Url::from_file_path(&main).unwrap();
+    let data_uri = Url::from_file_path(&data).unwrap();
+    workspace.recorded_inputs.insert(
+        main_uri.clone(),
+        [main_uri.clone(), data_uri.clone()].into(),
+    );
+    workspace
+        .recorded_binary_inputs
+        .insert(main_uri.clone(), [data_uri.clone()].into());
+    workspace.refresh_project(&main_uri);
+    assert!(!workspace.documents.contains_key(&data_uri));
+    workspace.reload(&data_uri);
+    assert!(!workspace.documents.contains_key(&data_uri));
+    std::fs::write(
+        &main,
+        format!("\\documentclass{{article}}\\input{{{}}}\n", data.display()),
+    )
+    .unwrap();
+    workspace.refresh_project(&main_uri);
+    assert_eq!(
+        workspace.documents[&data_uri].syntax.labels[0].name,
+        "data-source"
+    );
+}
+
+#[test]
+fn directory_renames_preserve_recorded_binary_roles_for_new_source_looking_paths() {
+    let directory = tempfile::tempdir().unwrap();
+    let old = directory.path().join("old");
+    let new = directory.path().join("new");
+    std::fs::create_dir(&old).unwrap();
+    std::fs::write(old.join("main.tex"), "\\documentclass{article}\n").unwrap();
+    // The recorder initially admitted this path through a binary alias.
+    std::fs::write(old.join("data.payload"), "\\label{not-a-source}\n").unwrap();
+    let mut workspace = Workspace::default();
+    workspace.add_root(old.clone());
+    let main_uri = Url::from_file_path(old.join("main.tex")).unwrap();
+    let data_uri = Url::from_file_path(old.join("data.payload")).unwrap();
+    workspace.recorded_inputs.insert(
+        main_uri.clone(),
+        [main_uri.clone(), data_uri.clone()].into(),
+    );
+    workspace
+        .recorded_binary_inputs
+        .insert(main_uri, [data_uri].into());
+    std::fs::rename(&old, &new).unwrap();
+    latex_lsp::file_operations::did_rename(
+        &mut workspace,
+        &[FileRename {
+            old_uri: Url::from_file_path(&old).unwrap().to_string(),
+            new_uri: Url::from_file_path(&new).unwrap().to_string(),
+        }],
+    )
+    .unwrap();
+    let main_uri = Url::from_file_path(new.join("main.tex")).unwrap();
+    let old_data_uri = Url::from_file_path(new.join("data.payload")).unwrap();
+    let data_uri = Url::from_file_path(new.join("data.tex")).unwrap();
+    std::fs::rename(new.join("data.payload"), new.join("data.tex")).unwrap();
+    latex_lsp::file_operations::did_rename(
+        &mut workspace,
+        &[FileRename {
+            old_uri: old_data_uri.to_string(),
+            new_uri: data_uri.to_string(),
+        }],
+    )
+    .unwrap();
+    assert_eq!(
+        workspace.recorded_binary_inputs[&main_uri],
+        [data_uri.clone()].into()
+    );
+    assert!(workspace.recorded_inputs[&main_uri].contains(&data_uri));
+    workspace.refresh_project(&main_uri);
+    assert!(!workspace.documents.contains_key(&data_uri));
+}

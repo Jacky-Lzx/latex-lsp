@@ -584,6 +584,7 @@ pub fn did_rename(workspace: &mut Workspace, files: &[FileRename]) -> Result<BTr
         .collect();
     for inputs_by_root in [
         &mut workspace.recorded_inputs,
+        &mut workspace.recorded_binary_inputs,
         &mut workspace.bibliography_inputs,
     ] {
         *inputs_by_root = std::mem::take(inputs_by_root)

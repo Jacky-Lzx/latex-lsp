@@ -7702,3 +7702,200 @@ fn changed_recorded_data_invalidates_active_builds_with_or_without_watcher_event
         server.wait_exit(0);
     }
 }
+
+#[test]
+#[cfg(unix)]
+fn recorded_binary_aliases_keep_pdf_history_and_do_not_become_latex_sources() {
+    for (extension, target) in [
+        ("png", "blob"),
+        ("png", "tex"),
+        ("CSV", "payload"),
+        ("csv", "tex"),
+    ] {
+        let external = tempfile::tempdir().unwrap();
+        let data = external.path().join(format!("table.{target}"));
+        let alias = external.path().join(format!("alias.{extension}"));
+        std::os::unix::fs::symlink(&data, &alias).unwrap();
+        std::fs::write(&data, "\\label{aliased-source-old}\n").unwrap();
+        let modified = std::fs::metadata(&data).unwrap().modified().unwrap();
+        let (mut server, directory, main) = fake_synctex_server("touch queried\nprintf 'SyncTeX result begin\\nPage:1\\nx:10\\ny:20\\nSyncTeX result end\\n'\n");
+        let source = if extension.eq_ignore_ascii_case("png") {
+            format!("\\documentclass{{article}}\n\\def\\selected{{{}}}\\includegraphics{{\\selected}}\n", alias.display())
+        } else {
+            format!(
+                "\\documentclass{{article}}\n\\newread\\dataset\\openin\\dataset={}\\relax\n",
+                alias.display()
+            )
+        };
+        std::fs::write(main.to_file_path().unwrap(), &source).unwrap();
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+        );
+        let compiler = directory.path().join("compiler.sh");
+        std::fs::write(&compiler, format!("if [ -f \"$1/noop\" ]; then exit 0; fi\nprintf '%%PDF-1.4\\nCOMPILED\\n' > \"$1/main.pdf\"\nprintf 'SyncTeX data\\n' > \"$1/main.synctex\"\nprintf 'INPUT %s\\nINPUT {}\\n' \"$2\" > \"$1/main.fls\"\n", alias.display())).unwrap();
+        server.notify(
+            "workspace/didChangeConfiguration",
+            json!({"settings":{"build":{"executable":"/bin/sh","arguments":[compiler,"%o","%f"]}}}),
+        );
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let first = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(first["params"]["status"], "success", "{first}");
+        assert_eq!(first["params"]["stale"], false, "{first}");
+        assert_eq!(
+            first["params"]["dependenciesCount"], 2,
+            "{extension}: {first}"
+        );
+        let symbols = server.request(3, "workspace/symbol", json!({"query":"aliased-source"}));
+        assert!(symbols.as_array().unwrap().is_empty(), "{symbols}");
+        let forward = json!({"command":"latex.forwardSearch","arguments":[{"uri":main,"position":{"line":1,"character":0}}]});
+        let valid = server.request(4, "workspace/executeCommand", forward.clone());
+        assert_eq!(valid["locations"][0]["page"], 1, "{valid}");
+        std::fs::remove_file(directory.path().join("queried")).unwrap();
+        std::fs::write(&data, "\\label{aliased-source-new}\n").unwrap();
+        std::fs::File::open(&data)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        server.send(
+            json!({"jsonrpc":"2.0","id":5,"method":"workspace/executeCommand","params":forward}),
+        );
+        let rejected = server.until(|message| message["id"] == 5);
+        assert!(
+            rejected["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("Input contents changed")),
+            "{extension}: {rejected}"
+        );
+        assert!(!directory.path().join("queried").exists());
+        let output = directory.path().join("build/latex-lsp");
+        std::fs::write(output.join("noop"), "").unwrap();
+        for id in [6, 7] {
+            server.request(
+                id,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            let noop = server.until(|message| message["method"] == "latex/buildFinished");
+            assert_eq!(noop["params"]["status"], "error", "{extension}: {noop}");
+            assert!(noop["params"]["pdfUri"].is_null());
+            assert!(
+                noop["params"]["message"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("input content changed")),
+                "{noop}"
+            );
+        }
+        std::fs::remove_file(output.join("noop")).unwrap();
+        server.request(
+            8,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let rebuilt = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(rebuilt["params"]["status"], "success", "{rebuilt}");
+        let restored = server.request(9, "workspace/executeCommand", forward);
+        assert_eq!(restored["locations"][0]["page"], 1, "{restored}");
+        server.request(10, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn changed_recorded_binary_aliases_invalidate_active_builds_with_or_without_watcher_events() {
+    for notify in [false, true] {
+        let external = tempfile::tempdir().unwrap();
+        let data = external.path().join("table.tex");
+        let alias = external.path().join("alias.CSV");
+        std::os::unix::fs::symlink(&data, &alias).unwrap();
+        std::fs::write(&data, b"OLD\n").unwrap();
+        let modified = std::fs::metadata(&data).unwrap().modified().unwrap();
+        let script = format!("printf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf 'INPUT %s\\nINPUT {}\\n' \"$2\" > \"$1/main.fls\"\nprintf '%s:2: LaTeX Warning: old data.\\n' \"$2\" > \"$1/main.log\"\nif [ -f \"$1/hold\" ]; then touch \"$1/ready\"; while [ ! -f \"$1/release\" ]; do sleep 0.02; done; fi\n", alias.display());
+        let (mut server, directory, main) = fake_build_server_capabilities(
+            &script,
+            false,
+            json!({"textDocument":{"diagnostic":{}}}),
+        );
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let first = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(first["params"]["status"], "success", "{first}");
+        assert_eq!(first["params"]["dependenciesCount"], 2, "{first}");
+        let old = server.request(
+            10,
+            "textDocument/diagnostic",
+            json!({"textDocument":{"uri":main}}),
+        );
+        assert!(
+            old["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["source"] == "latex-build"),
+            "{old}"
+        );
+        let output = directory.path().join("build/latex-lsp");
+        std::fs::write(output.join("hold"), "").unwrap();
+        server.request(
+            3,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        wait_for_file(&output.join("ready"));
+        std::fs::write(&data, b"NEW\n").unwrap();
+        std::fs::File::open(&data)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        if notify {
+            server.notify(
+                "workspace/didChangeWatchedFiles",
+                json!({"changes":[{"uri":Url::from_file_path(&data).unwrap(),"type":2}]}),
+            );
+        } else {
+            std::fs::write(output.join("release"), "").unwrap();
+        }
+        let result = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(
+            result["params"]["status"],
+            if notify { "cancelled" } else { "success" },
+            "{result}"
+        );
+        if !notify {
+            assert_eq!(result["params"]["stale"], true, "{result}");
+        }
+        let cleared = server.request(
+            11,
+            "textDocument/diagnostic",
+            json!({"textDocument":{"uri":main},"previousResultId":old["resultId"]}),
+        );
+        assert_eq!(cleared["kind"], "full", "{cleared}");
+        assert_eq!(cleared["items"], json!([]), "{cleared}");
+        std::fs::write(output.join("release"), "").unwrap();
+        std::fs::remove_file(output.join("hold")).unwrap();
+        server.request(
+            4,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let rebuilt = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(rebuilt["params"]["status"], "success", "{rebuilt}");
+        assert_eq!(rebuilt["params"]["stale"], false, "{rebuilt}");
+        assert!(
+            rebuilt["params"]["warningsCount"].as_u64().unwrap() > 0,
+            "{rebuilt}"
+        );
+        server.request(5, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}

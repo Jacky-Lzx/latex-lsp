@@ -195,6 +195,8 @@ pub struct Workspace {
     /// Sources confirmed read for each root's latest published build diagnostics.
     pub build_diagnostic_sources: BTreeMap<Url, BTreeSet<Url>>,
     pub recorded_inputs: BTreeMap<Url, BTreeSet<Url>>,
+    /// Image/data roles retained independently of canonical filename suffixes.
+    pub recorded_binary_inputs: BTreeMap<Url, BTreeSet<Url>>,
     pub bibliography_inputs: BTreeMap<Url, BTreeSet<Url>>,
     /// File conditions and input snapshots for the latest published diagnostics.
     pub build_checks: BTreeMap<Url, std::sync::Arc<crate::file_checks::Snapshot>>,
@@ -347,6 +349,24 @@ impl Workspace {
     /// Recorded images and data can be shared outside the roots; their presence
     /// alone does not load their contents into the source document index.
     pub fn project_inputs(&self, root: &Url, inputs: &BTreeSet<Url>) -> BTreeSet<Url> {
+        let binary = inputs
+            .iter()
+            .filter(|uri| {
+                uri.to_file_path().ok().is_some_and(|path| {
+                    crate::graphics::is_image(&path) || crate::recorder::is_data(&path)
+                })
+            })
+            .cloned()
+            .collect();
+        self.project_inputs_with_binary(root, inputs, &binary)
+    }
+
+    pub(crate) fn project_inputs_with_binary(
+        &self,
+        root: &Url,
+        inputs: &BTreeSet<Url>,
+        binary: &BTreeSet<Url>,
+    ) -> BTreeSet<Url> {
         let parent = root
             .to_file_path()
             .ok()
@@ -355,12 +375,11 @@ impl Workspace {
             .iter()
             .filter(|uri| {
                 self.documents.contains_key(*uri)
+                    || binary.contains(*uri)
                     || uri.to_file_path().ok().is_some_and(|path| {
-                        crate::graphics::is_image(&path)
-                            || crate::recorder::is_data(&path)
-                            || parent
-                                .as_ref()
-                                .is_some_and(|parent| path.starts_with(parent))
+                        parent
+                            .as_ref()
+                            .is_some_and(|parent| path.starts_with(parent))
                             || self.roots.iter().any(|root| path.starts_with(root))
                     })
             })
@@ -601,7 +620,16 @@ impl Workspace {
         self.reload_document(uri, self.documents.contains_key(uri));
     }
 
-    fn reload_document(&mut self, uri: &Url, parse_data: bool) {
+    pub(crate) fn reload_recorded(&mut self, uri: &Url, binary: bool) {
+        if binary && !self.documents.contains_key(uri) {
+            return;
+        }
+        // A source alias may resolve to a data-looking suffix. Its recorder
+        // role is stronger evidence than the canonical name's extension.
+        self.reload_document(uri, true);
+    }
+
+    fn reload_document(&mut self, uri: &Url, parse_source: bool) {
         // Unsaved editor content always wins over filesystem notifications.
         if self
             .documents
@@ -614,7 +642,14 @@ impl Workspace {
             return;
         }
         let source = uri.to_file_path().ok().and_then(|path| {
-            if crate::graphics::is_image(&path) || !parse_data && crate::recorder::is_data(&path) {
+            if crate::graphics::is_image(&path)
+                || !parse_source
+                    && (crate::recorder::is_data(&path)
+                        || self
+                            .recorded_binary_inputs
+                            .values()
+                            .any(|inputs| inputs.contains(uri)))
+            {
                 return None;
             }
             let metadata = std::fs::metadata(&path).ok()?;

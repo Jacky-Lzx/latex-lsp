@@ -21,11 +21,23 @@ pub(crate) fn is_data(path: &Path) -> bool {
 }
 
 pub fn inputs(root: &Path, contents: &str) -> BTreeSet<Url> {
+    classified_inputs(root, contents).all
+}
+
+#[derive(Default)]
+pub(crate) struct InputFiles {
+    pub all: BTreeSet<Url>,
+    pub binary: BTreeSet<Url>,
+}
+
+/// Preserve the type of the name TeX opened. Canonicalization can resolve an
+/// image/data alias to an extensionless file, or even one ending in tex.
+pub(crate) fn classified_inputs(root: &Path, contents: &str) -> InputFiles {
     let mut directory = root
         .parent()
         .unwrap_or_else(|| Path::new("."))
         .to_path_buf();
-    let mut result = BTreeSet::new();
+    let mut result = InputFiles::default();
     for line in contents.lines().take(32768) {
         if let Some(value) = line.strip_prefix("PWD ") {
             let path = Path::new(value.trim_matches('"'));
@@ -34,20 +46,21 @@ pub fn inputs(root: &Path, contents: &str) -> BTreeSet<Url> {
             }
         } else if let Some(value) = line.strip_prefix("INPUT ") {
             let path = directory.join(value.trim_matches('"'));
-            if !crate::workspace::is_source(&path)
-                && !crate::graphics::is_image(&path)
-                && !is_data(&path)
-            {
+            let binary = crate::graphics::is_image(&path) || is_data(&path);
+            if !crate::workspace::is_source(&path) && !binary {
                 continue;
             }
             if let Ok(path) = path.canonicalize() {
                 if path.is_file() {
                     if let Ok(uri) = Url::from_file_path(path) {
-                        result.insert(uri);
+                        if binary {
+                            result.binary.insert(uri.clone());
+                        }
+                        result.all.insert(uri);
                     }
                 }
             }
-            if result.len() >= 4096 {
+            if result.all.len() >= 4096 {
                 break;
             }
         }
@@ -176,6 +189,65 @@ impl<'a> BibliographyPaths<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(unix)]
+    fn recorder_preserves_binary_alias_roles_before_canonicalizing_suffixes() {
+        let directory = tempfile::tempdir().unwrap();
+        let shared = tempfile::tempdir().unwrap();
+        let image = shared.path().join("image.tex");
+        let data = shared.path().join("data.payload");
+        let source = shared.path().join("source.csv");
+        let local_source = directory.path().join("local.csv");
+        let mut log = format!("PWD {}\n", directory.path().display());
+        for (alias, target) in [
+            ("image.PNG", &image),
+            ("data.CSV", &data),
+            ("package.sty", &source),
+            ("local.sty", &local_source),
+        ] {
+            std::fs::write(target, "contents").unwrap();
+            std::os::unix::fs::symlink(target, directory.path().join(alias)).unwrap();
+            log.push_str(&format!("INPUT {alias}\n"));
+        }
+        std::fs::write(&local_source, "\\label{source-role}\n").unwrap();
+        let root = directory.path().join("main.tex");
+        let files = classified_inputs(&root, &log);
+        assert_eq!(
+            files.all,
+            [&image, &data, &source, &local_source]
+                .map(|path| Url::from_file_path(path).unwrap())
+                .into()
+        );
+        assert_eq!(
+            files.binary,
+            [&image, &data]
+                .map(|path| Url::from_file_path(path).unwrap())
+                .into()
+        );
+        assert_eq!(inputs(&root, &log), files.all);
+        let mut workspace = crate::workspace::Workspace::default();
+        let root_uri = Url::from_file_path(root).unwrap();
+        let selected = workspace.project_inputs_with_binary(&root_uri, &files.all, &files.binary);
+        // A distribution source alias resolving to a data-looking suffix must
+        // not gain the privileges of an image/data input.
+        let local_source_uri = Url::from_file_path(local_source).unwrap();
+        let mut expected = files.binary.clone();
+        expected.insert(local_source_uri.clone());
+        assert_eq!(selected, expected);
+        workspace
+            .recorded_binary_inputs
+            .insert(root_uri, files.binary.clone());
+        for uri in &selected {
+            workspace.reload_recorded(uri, files.binary.contains(uri));
+            workspace.reload(uri);
+        }
+        assert_eq!(workspace.documents.len(), 1);
+        assert_eq!(
+            workspace.documents[&local_source_uri].syntax.labels[0].name,
+            "source-role"
+        );
+    }
 
     #[test]
     fn recorder_tracks_confirmed_data_reads_without_outputs_missing_files_or_directories() {

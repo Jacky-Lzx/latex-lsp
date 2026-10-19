@@ -358,14 +358,23 @@ impl BuildManager {
                 .unwrap_or_else(|error| Outcome::error(format!("Compiler task failed: {error}")));
             let mut current = workspace.write().await;
             if let Some(inputs) = &outcome.inputs {
-                let recorded = current.project_inputs(&root_uri, inputs);
+                let recorded =
+                    current.project_inputs_with_binary(&root_uri, inputs, &outcome.binary_inputs);
                 project.extend(recorded.iter().cloned());
                 if matches!(outcome.status, "success" | "error") {
                     current
                         .recorded_inputs
                         .insert(root_uri.clone(), recorded.clone());
+                    current.recorded_binary_inputs.insert(
+                        root_uri.clone(),
+                        outcome
+                            .binary_inputs
+                            .intersection(&recorded)
+                            .cloned()
+                            .collect(),
+                    );
                     for uri in &recorded {
-                        current.reload(uri);
+                        current.reload_recorded(uri, outcome.binary_inputs.contains(uri));
                     }
                 }
             }
@@ -810,6 +819,8 @@ pub struct Outcome {
     pub diagnostic_sources: BTreeSet<Url>,
     pub output: String,
     pub inputs: Option<BTreeSet<Url>>,
+    /// Recorder-confirmed image/data types, before resolving symlink names.
+    pub binary_inputs: BTreeSet<Url>,
     pub bibliography_inputs: Option<BTreeSet<Url>>,
     pub pdf_updated: bool,
 }
@@ -828,6 +839,7 @@ impl Outcome {
             diagnostic_sources: BTreeSet::new(),
             output: String::new(),
             inputs: None,
+            binary_inputs: BTreeSet::new(),
             bibliography_inputs: None,
             pdf_updated: false,
         }
@@ -1053,9 +1065,13 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool) -> Outcome 
     let recorder_after = ArtifactFingerprint::capture(&recorder_path);
     if recorder_after.is_some() && recorder_after != recorder_before {
         // Partial dependency lists must not replace the last complete recorder.
-        outcome.inputs = read_log(&recorder_path)
+        if let Some(inputs) = read_log(&recorder_path)
             .filter(|log| !crate::output::truncated(log))
-            .map(|log| crate::recorder::inputs(root, &log));
+            .map(|log| crate::recorder::classified_inputs(root, &log))
+        {
+            outcome.inputs = Some(inputs.all);
+            outcome.binary_inputs = inputs.binary;
+        }
     }
     // latexmk can run TeX several times. The final .log is authoritative;
     // earlier stdout passes may contain references that are already resolved.
