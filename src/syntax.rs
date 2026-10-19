@@ -272,6 +272,8 @@ pub(crate) fn warns_on_undefined_reference(name: &str) -> bool {
             | "autoref"
             | "cref"
             | "Cref"
+            | "cpageref"
+            | "Cpageref"
             | "crefrange"
             | "Crefrange"
             | "cpagerefrange"
@@ -288,7 +290,7 @@ pub(crate) fn warns_on_undefined_reference(name: &str) -> bool {
 }
 
 pub(crate) fn is_single_reference(name: &str) -> bool {
-    is_reference(name) && !matches!(name, "cref" | "Cref")
+    is_reference(name) && !matches!(name, "cref" | "Cref" | "cpageref" | "Cpageref")
 }
 
 pub(crate) fn reference_accepts_star(name: &str) -> bool {
@@ -307,6 +309,8 @@ pub(crate) fn reference_accepts_star(name: &str) -> bool {
             | "vpagerefrange"
             | "cref"
             | "Cref"
+            | "cpageref"
+            | "Cpageref"
             | "crefrange"
             | "Crefrange"
             | "cpagerefrange"

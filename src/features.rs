@@ -574,6 +574,8 @@ fn argument_span(doc: &Document, command: &Command, offset: usize) -> Option<Spa
     }
     let at = if syntax::is_citation(&command.name) {
         syntax::citation_argument_start(source, &command.name, command.span.end)?
+    } else if syntax::is_reference(&command.name) {
+        syntax::reference_argument_start(source, &command.name, command.span.end)?
     } else {
         let mut at = syntax::skip_space(source, command.span.end);
         if source.as_bytes().get(at) == Some(&b'*') {
@@ -597,7 +599,9 @@ fn argument_span(doc: &Document, command: &Command, offset: usize) -> Option<Spa
     };
     let value = source.get(at..offset)?.strip_prefix('{')?;
     if value.contains(['{', '}', '%'])
-        || value.contains('\n') && !syntax::file_name_ignores_spaces(&command.name)
+        || value.contains('\n')
+            && !syntax::file_name_ignores_spaces(&command.name)
+            && !syntax::is_reference(&command.name)
         || command.name == "bibliographystyle"
             && (value.contains([' ', '\t', '\r', '\n'])
                 || command

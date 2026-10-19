@@ -140,6 +140,8 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("fullref", "fullref{${1:key}}", "Print a label's number and page reference. Requires varioref."),
     ("vrefrange", "vrefrange{${1:first}}{${2:last}}", "Reference two labels as a range with relative page text. Accepts an optional same-page note. Requires varioref."),
     ("vpagerefrange", "vpagerefrange{${1:first}}{${2:last}}", "Reference the page range between two labels. Accepts an optional same-page note and a star. Requires varioref."),
+    ("cpageref", "cpageref{${1:keys}}", "Reference the pages of a comma-separated list of labels. A star suppresses hyperlinks. Requires cleveref."),
+    ("Cpageref", "Cpageref{${1:keys}}", "Capitalize a page reference for a comma-separated list of labels. A star suppresses hyperlinks. Requires cleveref."),
     ("crefrange", "crefrange{${1:first}}{${2:last}}", "Reference two labels as a named range. A star suppresses hyperlinks. Requires cleveref."),
     ("Crefrange", "Crefrange{${1:first}}{${2:last}}", "Capitalize a named reference range. A star suppresses hyperlinks. Requires cleveref."),
     ("cpagerefrange", "cpagerefrange{${1:first}}{${2:last}}", "Reference the page range between two labels. A star suppresses hyperlinks. Requires cleveref."),
