@@ -2684,7 +2684,12 @@ fn biber_quoted_sources_keep_diagnostics_navigation_and_rename_on_the_complete_d
             );
             server.notify("textDocument/didSave", json!({"textDocument":{"uri":main}}));
             let fixture = root.join("fixture.blg");
-            std::fs::write(&fixture, format!("INFO - Found BibTeX data source '{name}'\nERROR - syntax error in file {quote}{name}{quote}, line 3\nWARN - Missing field for entry 'entry' (file {quote}{name}{quote})\n")).unwrap();
+            let input = if quote == '\'' {
+                bib.to_file_path().unwrap().to_str().unwrap().to_owned()
+            } else {
+                name.clone()
+            };
+            std::fs::write(&fixture, format!("INFO - Found BibTeX data source '{input}'\nERROR - syntax error in file {quote}{name}{quote}, line 3\nWARN - Missing field for entry 'entry' (file {quote}{name}{quote})\n")).unwrap();
             server.request(
                 2,
                 "workspace/executeCommand",

@@ -2,6 +2,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
+    sync::OnceLock,
 };
 use tower_lsp::lsp_types::Url;
 
@@ -142,6 +143,35 @@ pub(crate) struct BibliographyPaths<'a> {
     bst_directories: Vec<PathBuf>,
     /// Complete logged database names, before resolution.
     bibliography_names: BTreeSet<String>,
+    bibliography_sources: OnceLock<BibliographySources>,
+}
+
+#[derive(Default)]
+struct BibliographySources {
+    raw: BTreeMap<String, Option<PathBuf>>,
+    targets: BTreeSet<PathBuf>,
+    opened: BTreeSet<PathBuf>,
+    missing: BTreeSet<PathBuf>,
+    candidates: BTreeSet<PathBuf>,
+}
+
+pub(crate) struct RecordedBibliographySource {
+    /// A missing, changed or unselected input has no confirmed location.
+    pub path: Option<PathBuf>,
+    /// False when only the complete name in another search slot is known.
+    pub selected: bool,
+}
+
+/// Remove redundant separators and `.` without folding a symlink's `..`.
+/// An existing parent also gives missing leaves a physical directory identity.
+fn bibliography_binding_names(path: &Path) -> impl Iterator<Item = PathBuf> {
+    let physical = path.file_name().and_then(|name| {
+        path.parent()?
+            .canonicalize()
+            .ok()
+            .map(|parent| parent.join(name))
+    });
+    std::iter::once(path.components().collect()).chain(physical)
 }
 
 impl<'a> BibliographyPaths<'a> {
@@ -181,12 +211,15 @@ impl<'a> BibliographyPaths<'a> {
             bib_directories: Vec::new(),
             bst_directories: Vec::new(),
             bibliography_names: bibliography_names.into_iter().map(str::to_owned).collect(),
+            bibliography_sources: OnceLock::new(),
         }
     }
 
     /// latexmk prepends source paths before invoking BibTeX in another cwd.
     /// Its reported search paths take precedence over cwd-based fallbacks.
     pub(crate) fn with_search_output(mut self, output: &str) -> Self {
+        // The selected names depend on the final tool-specific search paths.
+        self.bibliography_sources = OnceLock::new();
         for line in output.lines().take(32768) {
             for (prefix, directories) in [
                 ("BIBINPUTS='", &mut self.bib_directories),
@@ -210,8 +243,79 @@ impl<'a> BibliographyPaths<'a> {
         self.resolve_binding(name).map(|(_, target)| target)
     }
 
-    pub(crate) fn contains_bibliography_name(&self, name: &str) -> bool {
-        self.bibliography_names.contains(name)
+    pub(crate) fn recorded_bibliography_source(
+        &self,
+        name: &str,
+    ) -> Option<RecordedBibliographySource> {
+        if self.bibliography_names.is_empty() {
+            return None;
+        }
+        let sources = self.bibliography_sources.get_or_init(|| {
+            let mut sources = BibliographySources::default();
+            for name in &self.bibliography_names {
+                let missing = if let Some((opened, target)) = self.resolve_binding(name) {
+                    sources.opened.extend(bibliography_binding_names(&opened));
+                    sources.targets.insert(target.clone());
+                    sources.raw.insert(name.clone(), Some(target));
+                    false
+                } else {
+                    sources.raw.insert(name.clone(), None);
+                    true
+                };
+                // Other search candidates still delimit a complete source
+                // name, but cannot supply a different database's location.
+                for path in self.candidates(name) {
+                    if sources.candidates.len() >= 8192
+                        && (!missing || sources.missing.len() >= 8192)
+                    {
+                        break;
+                    }
+                    for binding in bibliography_binding_names(&path) {
+                        if sources.candidates.len() < 8192 {
+                            sources.candidates.insert(binding.clone());
+                        }
+                        if missing && sources.missing.len() < 8192 {
+                            sources.missing.insert(binding);
+                        }
+                    }
+                }
+            }
+            sources
+        });
+        if let Some(target) = sources.raw.get(name) {
+            // Once a source was selected, disappearance must not silently
+            // switch its raw name to an unrelated fallback database.
+            return Some(RecordedBibliographySource {
+                path: target
+                    .as_ref()
+                    .filter(|target| self.resolve(name).as_ref() == Some(*target))
+                    .cloned(),
+                selected: true,
+            });
+        }
+        // Prefer a confirmed tool input over an unreported same-named file in
+        // a fallback directory. Candidate order still selects between inputs.
+        let mut named = false;
+        let mut selected = false;
+        for path in self.candidates(name) {
+            if let Some(target) = path.canonicalize().ok().filter(|path| path.is_file()) {
+                if sources.targets.contains(&target) {
+                    return Some(RecordedBibliographySource {
+                        path: Some(target),
+                        selected: true,
+                    });
+                }
+            }
+            for binding in bibliography_binding_names(&path) {
+                let input = sources.opened.contains(&binding) || sources.missing.contains(&binding);
+                selected |= input;
+                named |= input || sources.candidates.contains(&binding);
+            }
+        }
+        named.then_some(RecordedBibliographySource {
+            path: None,
+            selected,
+        })
     }
 
     fn resolve_binding(&self, name: &str) -> Option<(PathBuf, PathBuf)> {
@@ -239,6 +343,94 @@ impl<'a> BibliographyPaths<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(unix)]
+    fn bibliography_source_equivalence_preserves_symlink_parents_and_reconfigured_search_paths() {
+        let directory = tempfile::tempdir().unwrap();
+        let shared = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        std::fs::create_dir(root.join("build")).unwrap();
+        std::fs::create_dir(shared.path().join("child")).unwrap();
+        std::os::unix::fs::symlink(shared.path().join("child"), root.join("selected")).unwrap();
+        let name = "refs.bib': copy.bib";
+        let local = root.join(name);
+        let actual = shared.path().join(name);
+        std::fs::write(&local, "@book{wrong}\n").unwrap();
+        std::fs::write(&actual, "@book{entry}\n").unwrap();
+        let main = root.join("main.tex");
+        let blg = root.join("build/main.blg");
+        let log = format!("INFO - Found BibTeX data source '{name}'\n");
+        let paths = BibliographyPaths::new(&main, &blg, &log);
+        assert_eq!(
+            paths
+                .recorded_bibliography_source(local.to_str().unwrap())
+                .unwrap()
+                .path,
+            Some(local.clone())
+        );
+        let paths = paths.with_search_output(&format!(
+            "BIBINPUTS='{}'\n",
+            root.join("selected/..").display()
+        ));
+        assert_eq!(
+            paths
+                .recorded_bibliography_source(actual.to_str().unwrap())
+                .unwrap()
+                .path,
+            Some(actual.clone())
+        );
+        assert!(paths
+            .recorded_bibliography_source(local.to_str().unwrap())
+            .unwrap()
+            .path
+            .is_none());
+        std::fs::create_dir(root.join("unrelated")).unwrap();
+        let unrelated = root.join("unrelated").join(name);
+        std::fs::write(&unrelated, "@book{unrelated}\n").unwrap();
+        assert!(paths
+            .recorded_bibliography_source(unrelated.to_str().unwrap())
+            .is_none());
+        let inputs = classified_bibliography_inputs(&paths, &log);
+        assert_eq!(inputs.all, [Url::from_file_path(&actual).unwrap()].into());
+        assert_eq!(
+            inputs.bindings,
+            [(root.join("selected/..").join(name), actual.clone())].into()
+        );
+        std::fs::remove_file(&actual).unwrap();
+        for source in [
+            actual.to_str().unwrap().to_owned(),
+            format!("./{name}"),
+            name.to_owned(),
+        ] {
+            assert!(
+                paths
+                    .recorded_bibliography_source(&source)
+                    .unwrap()
+                    .path
+                    .is_none(),
+                "{source}"
+            );
+        }
+        // A fresh tool run can select the fallback file, but a diagnostic
+        // explicitly naming the missing preferred path must remain unresolved.
+        let fresh = BibliographyPaths::new(&main, &blg, &log).with_search_output(&format!(
+            "BIBINPUTS='{}'\n",
+            root.join("selected/..").display()
+        ));
+        assert!(fresh
+            .recorded_bibliography_source(actual.to_str().unwrap())
+            .unwrap()
+            .path
+            .is_none());
+        assert_eq!(
+            fresh
+                .recorded_bibliography_source(&format!("./{name}"))
+                .unwrap()
+                .path,
+            Some(local)
+        );
+    }
 
     #[test]
     #[cfg(unix)]

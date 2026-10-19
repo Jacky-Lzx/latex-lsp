@@ -2201,6 +2201,7 @@ fn bibliography_path(
     };
     let explicit = bibliography_fields_with(message, None, |start| {
         bibliography_recorded_quote_end(paths, message, start)
+            .map(|(end, _)| end)
             .or_else(|| bibliography_quote_end(message, start))
     })
     .find_map(|(start, _)| {
@@ -2346,22 +2347,27 @@ fn bibliography_quote_terminated(tail: &str) -> bool {
 }
 
 /// Logged names disambiguate literal quotes even when punctuation and spaces
-/// follow them. Match the longest complete raw name before checking existence.
+/// follow them. Match the longest complete source across equivalent paths;
+/// shorter existing files cannot replace a missing recorded source.
 fn bibliography_recorded_quote_end(
     paths: &crate::recorder::BibliographyPaths<'_>,
     message: &str,
     start: usize,
-) -> Option<usize> {
+) -> Option<(usize, crate::recorder::RecordedBibliographySource)> {
     let quote = message.as_bytes()[start] as char;
     let body = &message[start + 1..];
     body.rmatch_indices(quote).find_map(|(end, _)| {
         let name = &body[..end];
-        if !name.ends_with(".bib") || !paths.contains_bibliography_name(name) {
+        if !name.ends_with(".bib") {
             return None;
         }
         let tail = &body[end + 1..];
-        (tail.starts_with(char::is_whitespace) || bibliography_quote_terminated(tail))
-            .then_some(start + 1 + name.len())
+        if !tail.starts_with(char::is_whitespace) && !bibliography_quote_terminated(tail) {
+            return None;
+        }
+        paths
+            .recorded_bibliography_source(name)
+            .map(|source| (start + 1 + end, source))
     })
 }
 
@@ -2377,21 +2383,38 @@ fn bibliography_quoted_path(
     start: usize,
 ) -> QuotedBibliographyPath {
     let parsed = bibliography_name_quote_end(message, start);
-    let recorded = bibliography_recorded_quote_end(paths, message, start).filter(|&end| {
+    let recorded = bibliography_recorded_quote_end(paths, message, start).filter(|(end, _)| {
         // A recorded prefix cannot truncate an otherwise complete longer
         // filename, including a source missing from this tool's input list.
-        !parsed.is_some_and(|parsed| parsed > end && message[start + 1..parsed].ends_with(".bib"))
+        !parsed.is_some_and(|parsed| parsed > *end && message[start + 1..parsed].ends_with(".bib"))
     });
-    let end = recorded.or(parsed);
+    let is_recorded = recorded.is_some();
+    let (end, path) = if let Some((end, source)) = recorded {
+        // A complete explicit file can be outside the input list. A source
+        // actually selected by this context must never switch after deletion.
+        let path = if source.selected {
+            source.path
+        } else {
+            source
+                .path
+                .or_else(|| paths.resolve(&message[start + 1..end]))
+        };
+        (Some(end), path)
+    } else {
+        (
+            parsed,
+            parsed.and_then(|end| {
+                let name = &message[start + 1..end];
+                name.ends_with(".bib")
+                    .then(|| paths.resolve(name))
+                    .flatten()
+            }),
+        )
+    };
     QuotedBibliographyPath {
-        path: end.and_then(|end| {
-            let name = &message[start + 1..end];
-            name.ends_with(".bib")
-                .then(|| paths.resolve(name))
-                .flatten()
-        }),
+        path,
         span: start..end.map_or(message.len(), |end| end + 1),
-        recorded: recorded.is_some(),
+        recorded: is_recorded,
     }
 }
 
@@ -3012,6 +3035,201 @@ mod tests {
                 {
                     assert_eq!(
                         warning.range,
+                        Range::new(Position::new(2, 6), Position::new(2, 11))
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn biber_explicit_paths_preserve_unreported_files_and_do_not_replace_changed_inputs() {
+        for name in ["plain.bib", "refs.bib': copy.bib"] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let selected = root.join("selected");
+            std::fs::create_dir(&selected).unwrap();
+            let main = root.join("main.tex");
+            let blg = root.join("main.blg");
+            let explicit = root.join(name);
+            let input = selected.join(name);
+            std::fs::write(&main, "\\cite{entry}\n").unwrap();
+            std::fs::write(&explicit, "% header\n\n@book{entry,title={Explicit}}\n").unwrap();
+            std::fs::write(&input, "@book{entry,title={Read input}}\n").unwrap();
+            for source in [explicit.to_str().unwrap().to_owned(), format!("../{name}")] {
+                let log = format!("INFO - Found BibTeX data source '{name}'\nERROR - syntax error in file '{source}', line 3\nWARN - Missing field for entry 'entry' (file '{source}')\n");
+                let paths = crate::recorder::BibliographyPaths::new(&main, &blg, &log)
+                    .with_search_output(&format!("BIBINPUTS='{}'\n", selected.display()));
+                let diagnostics = parse_bibliography_in(&main, &paths, &log);
+                let items = diagnostics
+                    .get(&Url::from_file_path(&explicit).unwrap())
+                    .unwrap_or_else(|| panic!("{log}: {diagnostics:?}"));
+                assert_eq!(diagnostics.len(), 1);
+                assert_eq!(items.len(), 2);
+                assert!(
+                    items
+                        .iter()
+                        .all(|item| item.range.start.line == 2 && !unresolved_location(item)),
+                    "{log}: {items:?}"
+                );
+                assert_eq!(
+                    crate::recorder::bibliography_inputs_in(&paths, &log),
+                    [Url::from_file_path(&input).unwrap()].into()
+                );
+            }
+            let log = format!("INFO - Found BibTeX data source '{name}'\nWARN - Missing field for entry 'entry' (file '{name}')\n");
+            let paths = crate::recorder::BibliographyPaths::new(&main, &blg, &log)
+                .with_search_output(&format!("BIBINPUTS='{}'\n", selected.display()));
+            assert_eq!(
+                paths.recorded_bibliography_source(name).unwrap().path,
+                Some(input.clone())
+            );
+            std::fs::remove_file(&input).unwrap();
+            let diagnostics = parse_bibliography_in(&main, &paths, &log);
+            assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+            let items = &diagnostics[&Url::from_file_path(&main).unwrap()];
+            assert_eq!(items[0].data.as_ref().unwrap()["unresolvedSource"], true);
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn biber_recorded_sources_share_absolute_relative_and_dot_spellings() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        std::fs::create_dir(root.join("inputs")).unwrap();
+        std::fs::create_dir(root.join("build")).unwrap();
+        let main = root.join("main.tex");
+        let blg = root.join("build/main.blg");
+        let name = "inputs/中文 refs.bib': in file 'wrong.bib' line 700 copy.bib";
+        let bib = root.join(name);
+        std::fs::write(&main, "\\cite{entry}\n").unwrap();
+        std::fs::write(&bib, "% header\n\n@book{entry,title={Actual}}\n").unwrap();
+        for decoy in ["inputs/中文 refs.bib", "wrong.bib", "copy.bib"] {
+            std::fs::write(root.join(decoy), "@book{entry,title={Wrong}}\n").unwrap();
+        }
+        let spellings = [
+            name.to_owned(),
+            format!("./{name}"),
+            bib.to_str().unwrap().to_owned(),
+            root.join(format!("./{name}")).to_str().unwrap().to_owned(),
+        ];
+        for missing in [false, true] {
+            if missing {
+                std::fs::remove_file(&bib).unwrap();
+            }
+            for input in &spellings {
+                for source in &spellings {
+                    for quote in ['\'', '"'] {
+                        for message in [
+                            format!("syntax error in file {quote}{source}{quote}, line 3"),
+                            format!("syntax error {quote}{source}{quote}, line 3"),
+                            format!("Missing field {quote}{source}{quote} for entry 'entry'"),
+                        ] {
+                            let log = format!(
+                                "INFO - Found BibTeX data source '{input}'\n{} - {message}\n",
+                                if message.starts_with("Missing") {
+                                    "WARN"
+                                } else {
+                                    "ERROR"
+                                }
+                            );
+                            let diagnostics = parse_bibliography_log(&main, &blg, &log);
+                            let target = if missing { &main } else { &bib };
+                            let items = diagnostics
+                                .get(&Url::from_file_path(target).unwrap())
+                                .unwrap_or_else(|| panic!("{log}: {diagnostics:?}"));
+                            assert_eq!(diagnostics.len(), 1, "{log}: {diagnostics:?}");
+                            assert_eq!(items.len(), 1);
+                            if missing {
+                                assert_eq!(items[0].range.start.line, 0);
+                                assert_eq!(
+                                    items[0].data.as_ref().unwrap()["unresolvedSource"],
+                                    true
+                                );
+                            } else {
+                                assert_eq!(items[0].range.start.line, 2, "{log}: {items:?}");
+                                assert!(!unresolved_location(&items[0]), "{log}: {items:?}");
+                                if message.starts_with("Missing") {
+                                    assert_eq!(
+                                        items[0].range,
+                                        Range::new(Position::new(2, 6), Position::new(2, 11))
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn biber_recorded_sources_respect_search_paths_and_selected_working_directories() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let output = root.join("build");
+        std::fs::create_dir(&output).unwrap();
+        let main = root.join("main.tex");
+        let blg = output.join("main.blg");
+        let name = "refs.bib': line 700 copy.bib";
+        std::fs::write(&main, "\\cite{entry}\n").unwrap();
+        for base in [root, &output] {
+            std::fs::write(base.join(name), "% header\n\n@book{entry,title={Actual}}\n").unwrap();
+            std::fs::write(base.join("refs.bib"), "@book{entry,title={Wrong}}\n").unwrap();
+        }
+        for auxiliary in ["main.aux", "build/main.aux"] {
+            for selected in [root, &output] {
+                for absolute_input in [false, true] {
+                    let input = if absolute_input {
+                        selected.join(name).to_str().unwrap().to_owned()
+                    } else {
+                        name.to_owned()
+                    };
+                    let source = if absolute_input {
+                        name.to_owned()
+                    } else {
+                        selected.join(name).to_str().unwrap().to_owned()
+                    };
+                    let log = format!("The top-level auxiliary file: {auxiliary}\nINFO - Found BibTeX data source '{input}'\nWARN - Missing field for entry 'entry' (file '{source}')\n");
+                    let paths = crate::recorder::BibliographyPaths::new(&main, &blg, &log)
+                        .with_search_output(&format!("BIBINPUTS='{}'\n", selected.display()));
+                    let diagnostics = parse_bibliography_in(&main, &paths, &log);
+                    let target = Url::from_file_path(selected.join(name)).unwrap();
+                    let items = diagnostics
+                        .get(&target)
+                        .unwrap_or_else(|| panic!("{log}: {diagnostics:?}"));
+                    assert_eq!(diagnostics.len(), 1);
+                    assert_eq!(
+                        items[0].range,
+                        Range::new(Position::new(2, 6), Position::new(2, 11))
+                    );
+                }
+            }
+        }
+        // An absolute input record disambiguates an unreported full-name
+        // lookalike in cwd, even if cwd precedes the log directory.
+        let actual = output.join(name);
+        let log = format!("INFO - Found BibTeX data source '{}'\nWARN - Missing field for entry 'entry' (file '{name}')\n", actual.display());
+        for missing in [false, true] {
+            if missing {
+                std::fs::remove_file(&actual).unwrap();
+            }
+            for search in [String::new(), format!("BIBINPUTS='{}'\n", root.display())] {
+                let paths = crate::recorder::BibliographyPaths::new(&main, &blg, &log)
+                    .with_search_output(&search);
+                let diagnostics = parse_bibliography_in(&main, &paths, &log);
+                let target = if missing { &main } else { &actual };
+                let items = &diagnostics[&Url::from_file_path(target).unwrap()];
+                assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+                assert_eq!(items.len(), 1);
+                if missing {
+                    assert_eq!(items[0].data.as_ref().unwrap()["unresolvedSource"], true);
+                } else {
+                    assert_eq!(
+                        items[0].range,
                         Range::new(Position::new(2, 6), Position::new(2, 11))
                     );
                 }
