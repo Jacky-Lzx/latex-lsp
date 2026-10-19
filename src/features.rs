@@ -1384,6 +1384,7 @@ pub fn symbols(doc: &Document) -> Vec<DocumentSymbol> {
     }
     for (entries, kind) in [
         (&doc.syntax.labels, SymbolKind::KEY),
+        (&doc.syntax.citations, SymbolKind::KEY),
         (&doc.syntax.anchors, SymbolKind::KEY),
         (&doc.syntax.definitions, SymbolKind::FUNCTION),
         (&doc.syntax.environments, SymbolKind::CLASS),
