@@ -1113,11 +1113,15 @@ impl Server {
     }
 
     fn until(&self, matches: impl Fn(&Value) -> bool) -> Value {
+        self.until_with_timeout(Duration::from_secs(10), matches)
+    }
+
+    fn until_with_timeout(&self, timeout: Duration, matches: impl Fn(&Value) -> bool) -> Value {
         let existing = self.pending.borrow().iter().position(&matches);
         if let Some(index) = existing {
             return self.pending.borrow_mut().remove(index);
         }
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let deadline = std::time::Instant::now() + timeout;
         loop {
             let message = self
                 .messages
@@ -3018,7 +3022,11 @@ fn real_engine_directives_select_the_root_engine_and_explicit_configuration_over
         );
         let started = server.until(|message| message["method"] == "latex/buildStarted");
         assert_eq!(started["params"]["engine"], engine);
-        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        // A fresh LuaTeX font cache can exceed the ordinary LSP message
+        // budget when other real-engine tests are running concurrently.
+        let finished = server.until_with_timeout(Duration::from_secs(30), |message| {
+            message["method"] == "latex/buildFinished"
+        });
         assert_eq!(
             finished["params"]["status"], "success",
             "{engine}: {finished}"
