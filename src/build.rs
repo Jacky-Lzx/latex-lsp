@@ -572,7 +572,7 @@ impl BuildManager {
                                     .map(|(uri, snapshot)| (uri.clone(), snapshot.clone()))
                                     .collect(),
                             )
-                            .with_pdf_contents(),
+                            .with_artifact_contents(),
                     ),
                 );
             }

@@ -24,6 +24,7 @@ pub struct Snapshot {
     artifact: Option<PathBuf>,
     inputs: BTreeMap<Url, InputSnapshot>,
     pdf_contents: Option<InputSnapshot>,
+    synctex_contents: BTreeMap<PathBuf, InputSnapshot>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -262,6 +263,7 @@ impl Snapshot {
             watched,
             inputs: BTreeMap::new(),
             pdf_contents: None,
+            synctex_contents: BTreeMap::new(),
             artifact: config
                 .artifact_path(&root_path, "pdf")
                 .map(|path| normalize_path(&path)),
@@ -289,8 +291,20 @@ impl Snapshot {
             .find_map(|(uri, before)| before.changed(uri).then_some(uri))
     }
 
-    pub(crate) fn with_pdf_contents(mut self) -> Self {
+    pub(crate) fn with_artifact_contents(mut self) -> Self {
         self.pdf_contents = self.artifact.as_deref().map(InputSnapshot::file);
+        if let Some(pdf) = &self.artifact {
+            // Record both names, including missing alternatives: introducing a
+            // second format can change which mapping the external tool reads.
+            self.synctex_contents = ["synctex.gz", "synctex"]
+                .into_iter()
+                .map(|extension| {
+                    let path = pdf.with_extension(extension);
+                    let contents = InputSnapshot::file(&path);
+                    (path, contents)
+                })
+                .collect();
+        }
         self
     }
 
@@ -299,6 +313,12 @@ impl Snapshot {
             .as_deref()
             .zip(self.pdf_contents.as_ref())
             .is_some_and(|(path, before)| before.changed_file(path))
+    }
+
+    pub(crate) fn synctex_changed(&self) -> bool {
+        self.synctex_contents
+            .iter()
+            .any(|(path, before)| before.changed_file(path))
     }
 
     pub(crate) fn watched(&self) -> &BTreeSet<Url> {

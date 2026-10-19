@@ -18,7 +18,7 @@ use tower_lsp::{
     lsp_types::*,
 };
 
-use crate::workspace::Workspace;
+use crate::{file_checks::InputSnapshot, workspace::Workspace};
 
 #[derive(Clone)]
 pub struct Queries {
@@ -158,7 +158,7 @@ pub struct Project {
     pub root: Url,
     pub pdf: PathBuf,
     directory: PathBuf,
-    artifacts: Vec<(PathBuf, u64, SystemTime)>,
+    artifacts: Vec<(PathBuf, u64, SystemTime, InputSnapshot)>,
 }
 
 /// Refuse to map current editor text against old or incomplete build artifacts.
@@ -192,11 +192,9 @@ pub fn prepare(workspace: &Workspace, uri: &Url) -> Result<Project> {
             "Input contents changed; compile again before querying SyncTeX",
         ));
     }
-    if workspace
-        .pdf_checks
-        .get(&root)
-        .is_some_and(|checks| checks.matches_pdf(&pdf) && checks.pdf_changed())
-    {
+    if workspace.pdf_checks.get(&root).is_some_and(|checks| {
+        checks.matches_pdf(&pdf) && (checks.pdf_changed() || checks.synctex_changed())
+    }) {
         return Err(Error::invalid_params(
             "Build artifacts changed; compile again before querying SyncTeX",
         ));
@@ -210,20 +208,21 @@ pub fn prepare(workspace: &Workspace, uri: &Url) -> Result<Project> {
         if let Ok(metadata) = std::fs::metadata(&path) {
             if metadata.is_file() && metadata.len() > 0 {
                 if let Ok(modified) = metadata.modified() {
-                    artifacts.push((path, metadata.len(), modified));
+                    let contents = InputSnapshot::file(&path);
+                    artifacts.push((path, metadata.len(), modified, contents));
                 }
             }
         }
     }
-    if !artifacts.iter().any(|(path, _, _)| path == &pdf) || artifacts.len() < 2 {
+    if !artifacts.iter().any(|(path, ..)| path == &pdf) || artifacts.len() < 2 {
         return Err(Error::invalid_params(
             "Compile with SyncTeX enabled first; PDF or SyncTeX data is missing",
         ));
     }
     let recorded = artifacts
         .iter()
-        .filter(|(path, _, _)| path != &pdf)
-        .map(|(_, _, modified)| *modified)
+        .filter(|(path, ..)| path != &pdf)
+        .map(|(_, _, modified, _)| *modified)
         .max()
         .unwrap();
     let mut inputs = workspace.project_files(&root);

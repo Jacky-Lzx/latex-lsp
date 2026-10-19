@@ -6995,3 +6995,173 @@ fn successful_noop_builds_keep_the_actual_pdf_input_scope_when_recorder_output_c
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+#[cfg(unix)]
+fn replaced_synctex_data_cannot_be_adopted_by_successful_noop_builds() {
+    for compressed in [false, true] {
+        for scenario in ["overwrite", "failed", "delete", "alternate"] {
+            let (mut server, directory, main) = fake_synctex_server("touch queried\nif [ \"$1\" = edit ]; then\nprintf 'SyncTeX result begin\\nInput:%s/main.tex\\nLine:2\\nColumn:0\\nSyncTeX result end\\n' \"$PWD\"\nelse\nprintf 'SyncTeX result begin\\nPage:1\\nx:10\\ny:20\\nSyncTeX result end\\n'\nfi\n");
+            let root = directory.path();
+            let extension = if compressed { "synctex.gz" } else { "synctex" };
+            let other = if compressed { "synctex" } else { "synctex.gz" };
+            let compiler = root.join("compiler.sh");
+            std::fs::write(&compiler, format!("if [ -f \"$1/noop\" ]; then exit 0; fi\nprintf '%%PDF-1.4\\nCOMPILED\\n' > \"$1/main.pdf\"\nrm -f \"$1/main.synctex\" \"$1/main.synctex.gz\"\nprintf 'MAPS-OLD\\n' > \"$1/main.{extension}\"\nif [ -f \"$1/fail\" ]; then printf 'MAPS-NEW\\n' > \"$1/main.{extension}\"; exit 1; fi\n")).unwrap();
+            server.notify(
+                "workspace/didChangeConfiguration",
+                json!({"settings":{"build":{"executable":"/bin/sh","arguments":[compiler,"%o","%f"]}}}),
+            );
+            server.request(
+                2,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            let first = server.until(|message| message["method"] == "latex/buildFinished");
+            assert_eq!(first["params"]["status"], "success", "{first}");
+            let forward = json!({"command":"latex.forwardSearch","arguments":[{"uri":main,"position":{"line":1,"character":0}}]});
+            let inverse = json!({"command":"latex.inverseSearch","arguments":[{"uri":main,"page":1,"x":10,"y":20}]});
+            let original = server.request(3, "workspace/executeCommand", forward.clone());
+            assert_eq!(original["locations"][0]["page"], 1, "{original}");
+            let output = root.join("build/latex-lsp");
+            let mapping = output.join(format!("main.{extension}"));
+            let modified = std::fs::metadata(&mapping).unwrap().modified().unwrap();
+            std::fs::File::open(&mapping)
+                .unwrap()
+                .set_times(
+                    std::fs::FileTimes::new().set_modified(modified + Duration::from_secs(1)),
+                )
+                .unwrap();
+            let touched = server.request(4, "workspace/executeCommand", forward.clone());
+            assert_eq!(touched["locations"][0]["page"], 1, "{touched}");
+            std::fs::remove_file(root.join("queried")).unwrap();
+            match scenario {
+                "failed" => {
+                    std::fs::write(output.join("fail"), "").unwrap();
+                    server.request(
+                        5,
+                        "workspace/executeCommand",
+                        json!({"command":"latex.build","arguments":[main]}),
+                    );
+                    let failed = server.until(|message| message["method"] == "latex/buildFinished");
+                    assert_eq!(failed["params"]["status"], "error", "{failed}");
+                    std::fs::remove_file(output.join("fail")).unwrap();
+                }
+                "overwrite" => std::fs::write(&mapping, "MAPS-NEW\n").unwrap(),
+                "delete" => std::fs::remove_file(&mapping).unwrap(),
+                "alternate" => {
+                    std::fs::write(output.join(format!("main.{other}")), "OTHER-MAP\n").unwrap()
+                }
+                _ => unreachable!(),
+            }
+            if mapping.exists() {
+                std::fs::File::open(&mapping)
+                    .unwrap()
+                    .set_times(std::fs::FileTimes::new().set_modified(modified))
+                    .unwrap();
+            }
+            let mut id = 6;
+            for params in [&forward, &inverse] {
+                server.send(json!({"jsonrpc":"2.0","id":id,"method":"workspace/executeCommand","params":params}));
+                let rejected = server.until(|message| message["id"] == id);
+                assert!(
+                    rejected["error"]["message"]
+                        .as_str()
+                        .is_some_and(|text| text.contains("Build artifacts changed")),
+                    "{compressed}/{scenario}: {rejected}"
+                );
+                id += 1;
+            }
+            assert!(!root.join("queried").exists());
+            std::fs::write(output.join("noop"), "").unwrap();
+            for _ in 0..2 {
+                server.request(
+                    id,
+                    "workspace/executeCommand",
+                    json!({"command":"latex.build","arguments":[main]}),
+                );
+                id += 1;
+                let noop = server.until(|message| message["method"] == "latex/buildFinished");
+                assert_eq!(
+                    noop["params"]["status"], "success",
+                    "{compressed}/{scenario}: {noop}"
+                );
+                assert!(noop["params"]["pdfUri"].as_str().is_some());
+                server.send(json!({"jsonrpc":"2.0","id":id,"method":"workspace/executeCommand","params":forward}));
+                let rejected = server.until(|message| message["id"] == id);
+                assert!(
+                    rejected["error"]["message"]
+                        .as_str()
+                        .is_some_and(|text| text.contains("Build artifacts changed")),
+                    "{compressed}/{scenario}: {rejected}"
+                );
+                id += 1;
+            }
+            assert!(!root.join("queried").exists());
+            std::fs::remove_file(output.join("noop")).unwrap();
+            server.request(
+                id,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            id += 1;
+            let rebuilt = server.until(|message| message["method"] == "latex/buildFinished");
+            assert_eq!(rebuilt["params"]["status"], "success", "{rebuilt}");
+            for params in [forward, inverse] {
+                let restored = server.request(id, "workspace/executeCommand", params);
+                assert!(
+                    !restored["locations"].as_array().unwrap().is_empty(),
+                    "{restored}"
+                );
+                id += 1;
+            }
+            server.request(id, "shutdown", Value::Null);
+            server.notify("exit", Value::Null);
+            server.wait_exit(0);
+        }
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn equal_size_and_timestamp_artifact_replacements_during_synctex_queries_are_rejected() {
+    for extension in ["pdf", "synctex", "synctex.gz"] {
+        for inverse in [false, true] {
+            let (mut server, directory, main) = fake_synctex_server("touch ready\nwhile [ ! -f release ]; do sleep 0.02; done\nif [ \"$1\" = edit ]; then\nprintf 'SyncTeX result begin\\nInput:%s/main.tex\\nLine:2\\nColumn:0\\nSyncTeX result end\\n' \"$PWD\"\nelse\nprintf 'SyncTeX result begin\\nPage:1\\nx:10\\ny:20\\nSyncTeX result end\\n'\nfi\n");
+            let root = directory.path();
+            let output = root.join("build/latex-lsp");
+            if extension == "synctex.gz" {
+                std::fs::rename(output.join("main.synctex"), output.join("main.synctex.gz"))
+                    .unwrap();
+            }
+            let artifact = output.join(format!("main.{extension}"));
+            let modified = std::fs::metadata(&artifact).unwrap().modified().unwrap();
+            let params = if inverse {
+                json!({"command":"latex.inverseSearch","arguments":[{"uri":main,"page":1,"x":10,"y":20}]})
+            } else {
+                json!({"command":"latex.forwardSearch","arguments":[{"uri":main,"position":{"line":1,"character":0}}]})
+            };
+            server.send(
+                json!({"jsonrpc":"2.0","id":2,"method":"workspace/executeCommand","params":params}),
+            );
+            wait_for_file(&root.join("ready"));
+            let mut replacement = std::fs::read(&artifact).unwrap();
+            *replacement.last_mut().unwrap() ^= 1;
+            std::fs::write(&artifact, replacement).unwrap();
+            std::fs::File::open(&artifact)
+                .unwrap()
+                .set_times(std::fs::FileTimes::new().set_modified(modified))
+                .unwrap();
+            std::fs::write(root.join("release"), "").unwrap();
+            let rejected = server.until(|message| message["id"] == 2);
+            assert!(
+                rejected["error"]["message"].as_str().is_some_and(
+                    |text| text.contains("Build artifacts changed during the SyncTeX query")
+                ),
+                "{extension}/{inverse}: {rejected}"
+            );
+            server.request(3, "shutdown", Value::Null);
+            server.notify("exit", Value::Null);
+            server.wait_exit(0);
+        }
+    }
+}
