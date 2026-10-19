@@ -33,6 +33,28 @@ impl Snapshot {
             return Self::default();
         };
         let sources = workspace.project_documents(root);
+        // A missing chapter is meaningful only when it can be selected.
+        // Unknown or conflicting filters must not guess that TeX reads it.
+        let include_filters: Option<Vec<BTreeSet<_>>> = sources
+            .iter()
+            .filter_map(|source| workspace.documents.get(source))
+            .flat_map(|doc| &doc.syntax.commands)
+            .filter(|command| command.name == "includeonly")
+            .map(|command| {
+                command
+                    .argument
+                    .as_ref()?
+                    .value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .map(|name| {
+                        syntax::is_literal_file_path(name)
+                            .then(|| name.strip_suffix(".tex").unwrap_or(name).to_owned())
+                    })
+                    .collect()
+            })
+            .collect();
         let mut outputs: BTreeSet<_> = [
             "pdf",
             "log",
@@ -93,7 +115,10 @@ impl Snapshot {
                 if paths.borrow().len() >= MAX_PATHS {
                     break 'sources;
                 }
-                if !matches!(command.name.as_str(), "IfFileExists" | "InputIfFileExists") {
+                if !matches!(
+                    command.name.as_str(),
+                    "IfFileExists" | "InputIfFileExists" | "include"
+                ) {
                     continue;
                 }
                 let Some(argument) = &command.argument else {
@@ -102,6 +127,20 @@ impl Snapshot {
                 let name = argument.value.trim();
                 if !syntax::is_literal_file_path(name) {
                     continue;
+                }
+                if command.name == "include" {
+                    let base = name.strip_suffix(".tex").unwrap_or(name);
+                    let selected = include_filters
+                        .as_ref()
+                        .is_some_and(|filters| filters.iter().all(|names| names.contains(base)));
+                    if !selected
+                        || [root, &source].into_iter().any(|origin| {
+                            resolve_file_path_with(origin, "include", name, &["tex"], file)
+                                .is_some()
+                        })
+                    {
+                        continue;
+                    }
                 }
                 for origin in [root, &source] {
                     let selected =

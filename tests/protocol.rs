@@ -3929,6 +3929,297 @@ fn conditional_first_stale_pdf_cannot_be_accepted_by_a_later_noop_build() {
 
 #[test]
 #[cfg(unix)]
+fn missing_include_creation_invalidates_results_and_old_pdfs_unless_the_chapter_is_excluded() {
+    for (selection, stale) in [
+        ("", true),
+        ("\\includeonly{chapter}\n", true),
+        ("\\includeonly{chapter.tex}\n", true),
+        ("\\includeonly{ chapter.tex, other }\n", true),
+        ("\\includeonly{other}\n", false),
+        ("\\includeonly{}\n", false),
+        ("\\includeonly{\\selected}\n", false),
+        ("\\includeonly{other}\n\\includeonly{chapter}\n", false),
+    ] {
+        let script = "if [ ! -f \"$1/main.pdf\" ]; then\ntouch \"$1/ready\"\nwhile [ ! -f \"$1/release\" ]; do sleep 0.02; done\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nfi\n";
+        let (mut server, directory, main) = fake_build_server(script, false);
+        let source = format!("\\documentclass{{article}}\n{selection}\\include{{chapter}}\n");
+        std::fs::write(main.to_file_path().unwrap(), &source).unwrap();
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+        );
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let output = directory.path().join("build/latex-lsp");
+        wait_for_file(&output.join("ready"));
+        std::fs::write(directory.path().join("chapter.tex"), "New chapter.").unwrap();
+        std::fs::write(output.join("release"), "").unwrap();
+        let first = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(first["params"]["status"], "success", "{first}");
+        assert_eq!(first["params"]["stale"], stale, "{selection}: {first}");
+        server.request(
+            3,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let noop = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(
+            noop["params"]["status"],
+            if stale { "error" } else { "success" },
+            "{selection}: {noop}"
+        );
+        if stale {
+            assert!(noop["params"]["pdfUri"].is_null());
+            assert!(
+                noop["params"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("file condition changed"),
+                "{noop}"
+            );
+        }
+        server.request(4, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn missing_include_directory_creation_cancels_selected_builds_and_their_queue_only() {
+    for selected in [false, true] {
+        let script = "touch \"$1/ready\"\nwhile [ ! -f \"$1/release\" ]; do sleep 0.02; done\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\n";
+        let (mut server, directory, main) = fake_build_server(script, true);
+        let settings = directory.path().join("settings.tex");
+        std::fs::write(
+            &settings,
+            if selected {
+                "\\includeonly{chapters/missing.tex}\n"
+            } else {
+                "\\includeonly{other}\n"
+            },
+        )
+        .unwrap();
+        let source = "\\documentclass{article}\n\\input{settings}\n\\include{chapters/missing}\n";
+        std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+        );
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        wait_for_file(&directory.path().join("build/latex-lsp/ready"));
+        server.notify("textDocument/didSave", json!({"textDocument":{"uri":main}}));
+        assert_eq!(
+            server.request(
+                3,
+                "workspace/executeCommand",
+                json!({"command":"latex.buildStatus","arguments":[main]})
+            )["queued"],
+            true
+        );
+        let folder = directory.path().join("chapters");
+        std::fs::create_dir(&folder).unwrap();
+        std::fs::write(folder.join("missing.tex"), "New chapter.").unwrap();
+        server.notify(
+            "workspace/didChangeWatchedFiles",
+            json!({"changes":[{"uri":Url::from_file_path(&folder).unwrap(),"type":1}]}),
+        );
+        let status = server.request(
+            4,
+            "workspace/executeCommand",
+            json!({"command":"latex.buildStatus","arguments":[main]}),
+        );
+        if selected {
+            assert_eq!(status["status"], "cancelled", "{status}");
+            assert_ne!(status["queued"], true, "{status}");
+        } else {
+            assert_eq!(status["status"], "running", "{status}");
+            assert_eq!(status["queued"], true, "{status}");
+            server.request(
+                5,
+                "workspace/executeCommand",
+                json!({"command":"latex.cancelBuild","arguments":[main]}),
+            );
+        }
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(finished["params"]["status"], "cancelled", "{finished}");
+        server.request(6, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn missing_include_warning_clears_when_the_chapter_is_created_and_synctex_rejects_the_old_pdf() {
+    let script = "if [ ! -f \"$1/main.pdf\" ]; then\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf 'SyncTeX test data\\n' > \"$1/main.synctex\"\nprintf 'No file chapter.tex.\\n' > \"$1/main.log\"\nfi\n";
+    let (mut server, directory, main) = fake_build_server(script, false);
+    let source = "\\documentclass{article}\n\\include{chapter}\n";
+    std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+    );
+    server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let first = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(first["params"]["status"], "success", "{first}");
+    assert_eq!(first["params"]["stale"], false, "{first}");
+    server.until(|message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["diagnostics"]
+                .as_array()
+                .is_some_and(|items| items.iter().any(|item| item["code"] == "missing-include"))
+    });
+    let chapter = directory.path().join("chapter.tex");
+    std::fs::write(&chapter, "New chapter.").unwrap();
+    // Restoring an old timestamp cannot make the old mapping trustworthy.
+    let old = std::fs::metadata(main.to_file_path().unwrap())
+        .unwrap()
+        .modified()
+        .unwrap()
+        - Duration::from_secs(60);
+    std::fs::File::open(&chapter)
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(old))
+        .unwrap();
+    server.send(json!({"jsonrpc":"2.0","id":3,"method":"workspace/executeCommand","params":{"command":"latex.forwardSearch","arguments":[{"uri":main,"position":{"line":1,"character":0}}]}}));
+    let rejected = server.until(|message| message["id"] == 3);
+    assert!(
+        rejected["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("File conditions changed"),
+        "{rejected}"
+    );
+    server.notify(
+        "workspace/didCreateFiles",
+        json!({"files":[{"uri":Url::from_file_path(&chapter).unwrap()}]}),
+    );
+    server.until(|message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["uri"] == main.as_str()
+            && message["params"]["diagnostics"] == json!([])
+    });
+    server.request(
+        4,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let noop = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(noop["params"]["status"], "error", "{noop}");
+    assert!(
+        noop["params"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("file condition changed"),
+        "{noop}"
+    );
+    assert!(noop["params"]["pdfUri"].is_null());
+    server.request(5, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+#[ignore = "requires pdflatex and xelatex"]
+fn real_missing_include_creation_discards_the_incomplete_pdf_and_respects_includeonly() {
+    for engine in ["pdflatex", "xelatex"] {
+        for selected in [false, true] {
+            let script = format!("if [ -f \"$1/noop\" ]; then exit 0; fi\n{engine} -interaction=nonstopmode -halt-on-error -recorder -synctex=1 -output-directory=\"$1\" \"$2\"\nresult=$?\ntouch \"$1/ready\"\nwhile [ ! -f \"$1/release\" ]; do sleep 0.02; done\nexit \"$result\"\n");
+            let (mut server, directory, main) = fake_build_server(&script, false);
+            let selection = if selected {
+                "chapters/新章节.tex"
+            } else {
+                "other"
+            };
+            // This custom shell wrapper must prepare its own auxiliary folder.
+            std::fs::create_dir_all(directory.path().join("build/latex-lsp/chapters")).unwrap();
+            let source = format!("\\documentclass{{article}}\n\\includeonly{{{selection}}}\n\\begin{{document}}Hello.\n\\include{{chapters/新章节}}\n\\end{{document}}\n");
+            std::fs::write(main.to_file_path().unwrap(), &source).unwrap();
+            server.notify(
+                "textDocument/didChange",
+                json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+            );
+            server.request(
+                2,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            let output = directory.path().join("build/latex-lsp");
+            wait_for_file(&output.join("ready"));
+            std::fs::create_dir(directory.path().join("chapters")).unwrap();
+            std::fs::write(
+                directory.path().join("chapters/新章节.tex"),
+                "\\typeout{NEW-INCLUDE-LOADED}New chapter.\n",
+            )
+            .unwrap();
+            std::fs::write(output.join("release"), "").unwrap();
+            let first = server.until(|message| message["method"] == "latex/buildFinished");
+            assert_eq!(
+                first["params"]["status"], "success",
+                "{engine}, {selected}: {first}"
+            );
+            assert_eq!(
+                first["params"]["stale"], selected,
+                "{engine}, {selected}: {first}"
+            );
+            assert!(!first["params"]["output"]
+                .as_str()
+                .unwrap()
+                .contains("NEW-INCLUDE-LOADED"));
+            std::fs::write(output.join("noop"), "").unwrap();
+            server.request(
+                3,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            let noop = server.until(|message| message["method"] == "latex/buildFinished");
+            assert_eq!(
+                noop["params"]["status"],
+                if selected { "error" } else { "success" },
+                "{engine}, {selected}: {noop}"
+            );
+            std::fs::remove_file(output.join("noop")).unwrap();
+            server.request(
+                4,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            let rebuilt = server.until(|message| message["method"] == "latex/buildFinished");
+            assert_eq!(
+                rebuilt["params"]["status"], "success",
+                "{engine}, {selected}: {rebuilt}"
+            );
+            assert_eq!(rebuilt["params"]["stale"], false, "{rebuilt}");
+            assert_eq!(
+                rebuilt["params"]["output"]
+                    .as_str()
+                    .unwrap()
+                    .contains("NEW-INCLUDE-LOADED"),
+                selected,
+                "{rebuilt}"
+            );
+            server.request(5, "shutdown", Value::Null);
+            server.notify("exit", Value::Null);
+            server.wait_exit(0);
+        }
+    }
+}
+
+#[test]
+#[cfg(unix)]
 fn conditional_lookup_tracks_suffix_shadows_and_root_priority_without_other_project_checks() {
     for (root_exists, changed, expected_stale) in [
         (true, "optional.bin.tex", true),
