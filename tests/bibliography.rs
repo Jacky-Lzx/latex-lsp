@@ -53,6 +53,194 @@ const NATBIB_VARIANTS: &[(&str, &str)] = &[
 ];
 
 #[test]
+fn excess_citation_notes_are_prose_and_never_participate_in_key_edits() {
+    for command in [
+        "citep",
+        "citep*",
+        "Citealt*",
+        "citetalias",
+        "fullcite",
+        "footfullcite",
+    ] {
+        let mut workspace = Workspace::default();
+        let bibliography = "@book{parent,title={Literal parent}}\n";
+        let bib = insert(&mut workspace, "refs.bib", bibliography);
+        let valid = [
+            "",
+            "[parent]",
+            "[see {nested [parent]}][p.~2]",
+            " % keep\r\n[parent] % keep\r\n[p.~2]",
+        ];
+        let invalid = [
+            "[see][p.~2][surplus]",
+            "[see][p.~2][third][fourth]",
+            " % keep\r\n[parent] % keep\r\n[p.~2] % keep\r\n[surplus]",
+        ];
+        let make_source = |key: &str| {
+            valid
+                .iter()
+                .map(|notes| format!("😀 \\{command}{notes}{{{key}}}\r\n"))
+                .chain(
+                    invalid
+                        .iter()
+                        .map(|notes| format!("😀 \\{command}{notes}{{parent}}\r\n")),
+                )
+                .collect::<String>()
+        };
+        let source = make_source("parent");
+        let main = insert(&mut workspace, "main.tex", &source);
+        for notes in valid {
+            let at = position(&source, &format!("\\{command}{notes}{{par"));
+            assert_eq!(
+                features::definitions(&workspace, &main, at).len(),
+                1,
+                "{command}{notes}"
+            );
+            assert_eq!(
+                features::references(&workspace, &main, at, false).len(),
+                valid.len(),
+                "{command}{notes}"
+            );
+            assert!(
+                features::completion(&workspace, &main, at)
+                    .iter()
+                    .any(|item| item.label == "parent"),
+                "{command}{notes}"
+            );
+        }
+        for notes in invalid {
+            let at = position(&source, &format!("\\{command}{notes}{{par"));
+            assert!(
+                features::definitions(&workspace, &main, at).is_empty(),
+                "{command}{notes}"
+            );
+            assert!(features::hover(&workspace, &main, at).is_none());
+            assert!(features::prepare_rename(&workspace, &main, at)
+                .unwrap()
+                .is_none());
+            assert!(features::rename(&workspace, &main, at, "renamed")
+                .unwrap()
+                .is_none());
+            assert!(latex_lsp::signature::help(&workspace, &main, at).is_none());
+            assert!(!features::completion(&workspace, &main, at)
+                .iter()
+                .any(|item| item.label == "parent"));
+        }
+        let at = position(&source, &format!("\\{command}{{par"));
+        let changes = features::rename(&workspace, &main, at, "renamed")
+            .unwrap()
+            .unwrap()
+            .changes
+            .unwrap();
+        assert_eq!(
+            apply(&source, changes[&main].clone()),
+            make_source("renamed")
+        );
+        assert_eq!(
+            apply(bibliography, changes[&bib].clone()),
+            bibliography.replacen("{parent,", "{renamed,", 1)
+        );
+        let incomplete = format!("\\{command}[see][p.~2][surplus]{{par");
+        let main = insert(&mut workspace, "main.tex", &incomplete);
+        assert!(!features::completion(
+            &workspace,
+            &main,
+            Text::new(incomplete.clone()).position(incomplete.len())
+        )
+        .iter()
+        .any(|item| item.label == "parent"));
+    }
+}
+
+#[test]
+fn excess_citation_notes_do_not_steal_another_calls_warning() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    let uri = Url::from_file_path(&main).unwrap();
+    let source = "😀 \\citep[see][p.~2][surplus]{paretn} \\citep[see][p.~2]{paretn}\n";
+    std::fs::write(&main, source).unwrap();
+    let log = "(./main.tex\nPackage natbib Warning: Citation `paretn' on page 1 undefined on input line 1.\n)\n";
+    let diagnostics = latex_lsp::build_log::parse(&main, log);
+    let items = &diagnostics[&uri];
+    assert_eq!(items.len(), 1, "{items:?}");
+    let start = source.rfind("{paretn}").unwrap() + 1;
+    assert_eq!(
+        items[0].range,
+        Text::new(source.into()).range(start, start + "paretn".len())
+    );
+}
+
+#[test]
+#[ignore = "requires pdflatex and natbib"]
+fn real_natbib_excess_notes_preserve_prose_when_valid_keys_are_renamed() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = root.join("main.tex");
+    let child = root.join("chapter.tex");
+    let main_uri = Url::from_file_path(&main).unwrap();
+    let child_uri = Url::from_file_path(&child).unwrap();
+    let main_source = "\\documentclass{article}\\usepackage{natbib}\\begin{document}\n\\input{chapter}\n\\begin{thebibliography}{1}\n\\bibitem[Author(2026)]{parent} Entry parent.\n\\end{thebibliography}\\end{document}\n";
+    let make_child =
+        |key: &str| format!("\\citep[see][p.~2][surplus]{{parent}}\n\\citep[see][p.~2]{{{key}}}\n");
+    std::fs::write(&main, main_source).unwrap();
+    std::fs::write(&child, make_child("parent")).unwrap();
+    let config = latex_lsp::config::BuildConfig {
+        executable: "pdflatex".into(),
+        ..Default::default()
+    };
+    let compile = || {
+        let outcome = latex_lsp::build::run(&main, &config, &Default::default());
+        assert_eq!(outcome.status, "success", "{}", outcome.output);
+        outcome
+    };
+    compile();
+    let initial = compile();
+    let aux = std::fs::read_to_string(initial.pdf.unwrap().with_extension("aux")).unwrap();
+    assert!(
+        aux.contains("\\citation{[}") && aux.contains("\\citation{parent}"),
+        "{aux}"
+    );
+    let mut workspace = Workspace::default();
+    workspace.add_root(root.into());
+    workspace.reload(&main_uri);
+    workspace.reload(&child_uri);
+    let at = position(&make_child("parent"), "\\citep[see][p.~2]{par");
+    let changes = features::rename(&workspace, &child_uri, at, "renamed")
+        .unwrap()
+        .unwrap()
+        .changes
+        .unwrap();
+    assert_eq!(changes.len(), 2);
+    for (uri, edits) in changes {
+        let path = uri.to_file_path().unwrap();
+        let source = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(path, apply(&source, edits)).unwrap();
+    }
+    assert_eq!(
+        std::fs::read_to_string(&child).unwrap(),
+        make_child("renamed")
+    );
+    assert_eq!(
+        std::fs::read_to_string(&main).unwrap(),
+        main_source.replace("{parent}", "{renamed}")
+    );
+    compile();
+    let renamed = compile();
+    let aux = std::fs::read_to_string(renamed.pdf.unwrap().with_extension("aux")).unwrap();
+    assert!(
+        aux.contains("\\citation{[}")
+            && aux.contains("\\citation{renamed}")
+            && !aux.contains("\\citation{parent}"),
+        "{aux}"
+    );
+    assert!(
+        renamed.output.contains("Citation `['") && !renamed.output.contains("Citation `renamed'"),
+        "{}",
+        renamed.output
+    );
+}
+
+#[test]
 fn full_citation_commands_share_keys_with_ordinary_citations_and_preserve_notes() {
     let mut workspace = Workspace::default();
     let bibliography = "@book{parent,title={Literal parent}}\n@book{other,title={Other}}\n";

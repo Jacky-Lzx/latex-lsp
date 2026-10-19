@@ -1013,6 +1013,31 @@ pub(crate) fn citation_accepts_notes(name: &str) -> bool {
     is_citation(name) && !matches!(name, "nocite" | "citenum" | "defcitealias")
 }
 
+/// Citation keys follow at most two optional notes. Leave any extra bracket
+/// in place so callers cannot treat the following prose as a key argument.
+pub(crate) fn citation_argument_start(
+    source: &str,
+    name: &str,
+    command_end: usize,
+) -> Option<usize> {
+    let mut at = skip_space(source, command_end);
+    if source.as_bytes().get(at) == Some(&b'*') {
+        if !citation_accepts_star(name) {
+            return None;
+        }
+        at = skip_space(source, at + 1);
+    }
+    if citation_accepts_notes(name) {
+        for _ in 0..2 {
+            let Some((_, end)) = group(source, at, b'[', b']') else {
+                break;
+            };
+            at = skip_space(source, end);
+        }
+    }
+    Some(at)
+}
+
 pub fn section_level(name: &str) -> Option<u32> {
     match name {
         "part" => Some(0),
@@ -1132,12 +1157,11 @@ impl Syntax {
                     {
                         arg_start = skip_space(source, arg_start + 1);
                     }
-                    let invalid_citation = is_citation(name)
-                        && (starred && !citation_accepts_star(name)
-                            || bytes.get(arg_start) == Some(&b'[')
-                                && !citation_accepts_notes(name));
                     if is_reference(name) {
                         arg_start = reference_argument_start(source, name, command_end)
+                            .unwrap_or(source.len());
+                    } else if is_citation(name) {
+                        arg_start = citation_argument_start(source, name, command_end)
                             .unwrap_or(source.len());
                     } else if !matches!(name, "input" | "InputIfFileExists" | "IfFileExists")
                         && !passes_options(name)
@@ -1156,9 +1180,7 @@ impl Syntax {
                                 .then(|| input_argument(source, arg_start))
                                 .flatten()
                         })
-                        .filter(|_| {
-                            !invalid_citation && !(starred && loader_extension(name).is_some())
-                        });
+                        .filter(|_| !(starred && loader_extension(name).is_some()));
                     let argument = parsed.as_ref().map(|(a, _)| a.clone());
                     let command = Command {
                         name: name.into(),

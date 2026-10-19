@@ -556,26 +556,29 @@ fn argument_span(doc: &Document, command: &Command, offset: usize) -> Option<Spa
             }
         }
     }
-    let mut at = syntax::skip_space(source, command.span.end);
-    if source.as_bytes().get(at) == Some(&b'*') {
-        if matches!(command.name.as_str(), "InputIfFileExists" | "IfFileExists")
-            || syntax::loader_extension(&command.name).is_some()
-            || syntax::is_citation(&command.name) && !syntax::citation_accepts_star(&command.name)
-        {
-            return None;
+    let at = if syntax::is_citation(&command.name) {
+        syntax::citation_argument_start(source, &command.name, command.span.end)?
+    } else {
+        let mut at = syntax::skip_space(source, command.span.end);
+        if source.as_bytes().get(at) == Some(&b'*') {
+            if matches!(command.name.as_str(), "InputIfFileExists" | "IfFileExists")
+                || syntax::loader_extension(&command.name).is_some()
+            {
+                return None;
+            }
+            at = syntax::skip_space(source, at + 1);
         }
-        at = syntax::skip_space(source, at + 1);
-    }
-    while source.as_bytes().get(at) == Some(&b'[') {
-        if matches!(command.name.as_str(), "InputIfFileExists" | "IfFileExists")
-            || syntax::loader_forwards_options(&command.name)
-            || syntax::is_citation(&command.name) && !syntax::citation_accepts_notes(&command.name)
-        {
-            return None;
+        while source.as_bytes().get(at) == Some(&b'[') {
+            if matches!(command.name.as_str(), "InputIfFileExists" | "IfFileExists")
+                || syntax::loader_forwards_options(&command.name)
+            {
+                return None;
+            }
+            let (_, after) = syntax::group(source, at, b'[', b']')?;
+            at = syntax::skip_space(source, after);
         }
-        let (_, after) = syntax::group(source, at, b'[', b']')?;
-        at = syntax::skip_space(source, after);
-    }
+        at
+    };
     let value = source.get(at..offset)?.strip_prefix('{')?;
     if value.contains(['{', '}', '%'])
         || value.contains('\n') && !syntax::file_name_ignores_spaces(&command.name)
