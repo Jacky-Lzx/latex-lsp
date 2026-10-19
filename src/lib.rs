@@ -10,6 +10,7 @@ pub mod diagnostic;
 pub mod dispatch;
 pub mod editing;
 pub mod features;
+mod file_checks;
 mod file_fixes;
 pub mod file_operations;
 mod generated;

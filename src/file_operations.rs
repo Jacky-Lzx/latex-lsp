@@ -46,6 +46,10 @@ impl FileChanges {
             .iter()
             .filter(|(root, diagnostics)| {
                 self.affects(root)
+                    || workspace
+                        .build_checks
+                        .get(*root)
+                        .is_some_and(|checks| checks.watched().iter().any(|uri| self.affects(uri)))
                     || diagnostics.keys().any(|uri| self.affects(uri))
                     || workspace
                         .project_files(root)
@@ -546,6 +550,13 @@ pub fn did_rename(workspace: &mut Workspace, files: &[FileRename]) -> Result<BTr
     }
     workspace.build_diagnostics.clear();
     workspace.build_diagnostic_sources.clear();
+    workspace.build_checks.clear();
+    // Preserve historical condition paths so moving a checked file invalidates
+    // its old PDF even after the source reference is updated.
+    workspace.pdf_checks = std::mem::take(&mut workspace.pdf_checks)
+        .into_iter()
+        .map(|(root, checks)| (renames.uri(&root), checks))
+        .collect();
     for inputs_by_root in [
         &mut workspace.recorded_inputs,
         &mut workspace.bibliography_inputs,

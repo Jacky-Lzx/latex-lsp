@@ -63,6 +63,7 @@ struct BuildInput {
     config: BuildConfig,
     progress_supported: bool,
     project: BTreeSet<Url>,
+    checks: Arc<crate::file_checks::Snapshot>,
 }
 
 struct TaskGuard {
@@ -156,6 +157,9 @@ impl BuildManager {
             }
         }
         let config = workspace.build_config(&root);
+        let checks = Arc::new(crate::file_checks::Snapshot::capture(
+            &workspace, &root, &config,
+        ));
         let progress_supported = workspace.build_progress;
         let root_path = root
             .to_file_path()
@@ -202,6 +206,7 @@ impl BuildManager {
             }
             record.active = Some((build_id, cancel.clone()));
             record.inputs = project.clone();
+            record.inputs.extend(checks.watched().iter().cloned());
             record.artifact = artifact;
             self.tasks.fetch_add(1, Ordering::SeqCst);
         }
@@ -214,6 +219,7 @@ impl BuildManager {
                 config,
                 progress_supported,
                 project,
+                checks,
             },
             build_id,
             cancel,
@@ -252,6 +258,7 @@ impl BuildManager {
             config,
             progress_supported,
             mut project,
+            checks,
         } = input;
         let manager = self.clone();
         let guard = TaskGuard {
@@ -371,36 +378,64 @@ impl BuildManager {
                     .iter()
                     .filter_map(|uri| uri.to_file_path().ok()),
             );
-            let stale = project.iter().any(|uri| {
-                if let Some((version, text)) = snapshots.get(uri) {
+            if outcome.status == "success" && !outcome.pdf_updated {
+                if let Some(path) = outcome.pdf.as_ref().and_then(|pdf| {
                     current
-                        .documents
-                        .get(uri)
-                        .is_none_or(|doc| doc.version != *version || doc.text.source != *text)
-                        || uri
-                            .to_file_path()
-                            .ok()
-                            .and_then(|path| std::fs::read_to_string(path).ok())
-                            .as_ref()
-                            != Some(text)
-                } else if let Some(before) = file_snapshots.get(uri) {
-                    uri.to_file_path()
-                        .ok()
-                        .is_none_or(|path| fingerprint(&path) != *before)
-                } else {
-                    let Ok(path) = uri.to_file_path() else {
-                        return true;
-                    };
-                    current.documents.get(uri).is_some_and(|doc| {
-                        doc.version.is_some()
-                            && std::fs::read_to_string(&path).ok().as_ref()
-                                != Some(&doc.text.source)
-                    }) || std::fs::metadata(path)
-                        .ok()
-                        .and_then(|metadata| metadata.modified().ok())
-                        .is_none_or(|modified| modified > wall_started)
+                        .pdf_checks
+                        .get(&root_uri)
+                        .filter(|previous| previous.matches_pdf(pdf))
+                        .and_then(|previous| previous.changed_path())
+                }) {
+                    outcome.status = "error";
+                    outcome.message = format!(
+                        "Compiler returned an outdated PDF: file condition changed ({})",
+                        path.display()
+                    );
+                    outcome.pdf = None;
+                    outcome.pages = None;
+                    outcome
+                        .diagnostics
+                        .entry(root_uri.clone())
+                        .or_default()
+                        .push(Diagnostic {
+                            range: Range::default(),
+                            severity: Some(DiagnosticSeverity::ERROR),
+                            source: Some("latex-build".into()),
+                            message: outcome.message.clone(),
+                            ..Default::default()
+                        });
                 }
-            });
+            }
+            let stale =
+                checks.changed_path().is_some()
+                    || project.iter().any(|uri| {
+                        if let Some((version, text)) = snapshots.get(uri) {
+                            current.documents.get(uri).is_none_or(|doc| {
+                                doc.version != *version || doc.text.source != *text
+                            }) || uri
+                                .to_file_path()
+                                .ok()
+                                .and_then(|path| std::fs::read_to_string(path).ok())
+                                .as_ref()
+                                != Some(text)
+                        } else if let Some(before) = file_snapshots.get(uri) {
+                            uri.to_file_path()
+                                .ok()
+                                .is_none_or(|path| fingerprint(&path) != *before)
+                        } else {
+                            let Ok(path) = uri.to_file_path() else {
+                                return true;
+                            };
+                            current.documents.get(uri).is_some_and(|doc| {
+                                doc.version.is_some()
+                                    && std::fs::read_to_string(&path).ok().as_ref()
+                                        != Some(&doc.text.source)
+                            }) || std::fs::metadata(path)
+                                .ok()
+                                .and_then(|metadata| metadata.modified().ok())
+                                .is_none_or(|modified| modified > wall_started)
+                        }
+                    });
             let diagnostic_sources = artifact_inputs
                 .intersection(&outcome.diagnostic_sources)
                 .cloned()
@@ -445,7 +480,24 @@ impl BuildManager {
                 "output":outcome.output,
             });
             let mut affected = BTreeSet::new();
+            // Even discarded diagnostics can accompany a newly written PDF.
+            // Retain that PDF's conditions so a later no-op cannot accept it.
+            if outcome.status == "success"
+                && outcome.pdf.is_some()
+                && (!stale || outcome.pdf_updated)
+            {
+                crate::file_checks::Snapshot::remember(
+                    &mut current.pdf_checks,
+                    root_uri.clone(),
+                    checks.clone(),
+                );
+            }
             if !stale && matches!(outcome.status, "success" | "error") {
+                crate::file_checks::Snapshot::remember(
+                    &mut current.build_checks,
+                    root_uri.clone(),
+                    checks.clone(),
+                );
                 current
                     .build_diagnostic_sources
                     .insert(root_uri.clone(), diagnostic_sources);

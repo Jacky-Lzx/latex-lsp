@@ -3812,6 +3812,549 @@ fn static_graphicspath_images_changed_during_build_discard_diagnostics_without_a
 }
 
 #[test]
+#[cfg(unix)]
+fn conditional_files_changed_during_build_discard_diagnostics_without_file_events() {
+    for (command, name, existed) in [
+        ("IfFileExists", "optional.bin", false),
+        ("IfFileExists", "optional.bin", true),
+        ("InputIfFileExists", "optional.tex", false),
+    ] {
+        let script = "touch \"$1/ready\"\nwhile [ ! -f \"$1/release\" ]; do sleep 0.02; done\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf '%s:2: LaTeX Warning: previous file condition.\\n' \"$2\" > \"$1/main.log\"\n";
+        let (mut server, directory, main) = fake_build_server(script, false);
+        let target = directory.path().join(name);
+        if existed {
+            std::fs::write(&target, "Data.").unwrap();
+        }
+        let source =
+            format!("\\documentclass{{article}}\n\\{command}{{{name}}}{{Found.}}{{Missing.}}\n");
+        std::fs::write(main.to_file_path().unwrap(), &source).unwrap();
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+        );
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let output = directory.path().join("build/latex-lsp");
+        wait_for_file(&output.join("ready"));
+        if existed {
+            std::fs::remove_file(&target).unwrap();
+        } else {
+            std::fs::write(&target, "New data.").unwrap();
+        }
+        std::fs::write(output.join("release"), "").unwrap();
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(finished["params"]["status"], "success", "{finished}");
+        assert_eq!(
+            finished["params"]["stale"], true,
+            "{command}, {existed}: {finished}"
+        );
+        server.request(3, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn conditional_first_stale_pdf_cannot_be_accepted_by_a_later_noop_build() {
+    let script = "if [ ! -f \"$1/main.pdf\" ]; then\ntouch \"$1/ready\"\nwhile [ ! -f \"$1/release\" ]; do sleep 0.02; done\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nfi\n";
+    let (mut server, directory, main) = fake_build_server(script, false);
+    let source = "\\documentclass{article}\n\\IfFileExists{optional.bin}{Found.}{Missing.}\n";
+    std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+    );
+    server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let output = directory.path().join("build/latex-lsp");
+    wait_for_file(&output.join("ready"));
+    std::fs::write(directory.path().join("optional.bin"), "Created.").unwrap();
+    std::fs::write(output.join("release"), "").unwrap();
+    let stale = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(stale["params"]["status"], "success", "{stale}");
+    assert_eq!(stale["params"]["stale"], true, "{stale}");
+    server.request(
+        3,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let noop = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(noop["params"]["status"], "error", "{noop}");
+    assert!(
+        noop["params"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("file condition changed"),
+        "{noop}"
+    );
+    assert!(noop["params"]["pdfUri"].is_null());
+    server.request(4, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+fn conditional_lookup_tracks_suffix_shadows_and_root_priority_without_other_project_checks() {
+    for (root_exists, changed, expected_stale) in [
+        (true, "optional.bin.tex", true),
+        (true, "chapters/optional.bin", false),
+        (false, "optional.bin", true),
+        (false, "chapters/optional.bin", true),
+        (false, "other/optional.bin", false),
+    ] {
+        let script = "touch \"$1/ready\"\nwhile [ ! -f \"$1/release\" ]; do sleep 0.02; done\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\n";
+        let (mut server, directory, main) = fake_build_server(script, false);
+        std::fs::create_dir(directory.path().join("chapters")).unwrap();
+        std::fs::create_dir(directory.path().join("other")).unwrap();
+        let source = "\\documentclass{article}\n\\input{chapters/child}\n";
+        std::fs::write(
+            directory.path().join("chapters/child.tex"),
+            "\\IfFileExists{optional.bin}{Found.}{Missing.}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            directory.path().join("other/main.tex"),
+            "\\documentclass{article}\n\\IfFileExists{optional.bin}{Found.}{Missing.}\n",
+        )
+        .unwrap();
+        if root_exists {
+            std::fs::write(directory.path().join("optional.bin"), "Root file.").unwrap();
+        }
+        std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+        );
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let output = directory.path().join("build/latex-lsp");
+        wait_for_file(&output.join("ready"));
+        std::fs::write(directory.path().join(changed), "New candidate.").unwrap();
+        std::fs::write(output.join("release"), "").unwrap();
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(finished["params"]["status"], "success", "{finished}");
+        assert_eq!(
+            finished["params"]["stale"], expected_stale,
+            "{root_exists}, {changed}: {finished}"
+        );
+        server.request(3, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn conditional_symlink_retargets_are_stale_and_canonical_target_deletion_cancels_builds() {
+    for notify in [false, true] {
+        let script = "touch \"$1/ready\"\nwhile [ ! -f \"$1/release\" ]; do sleep 0.02; done\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\n";
+        let (mut server, directory, main) = fake_build_server(script, false);
+        let first = directory.path().join("first.bin");
+        let second = directory.path().join("second.bin");
+        let link = directory.path().join("optional.bin");
+        std::fs::write(&first, "First.").unwrap();
+        std::fs::write(&second, "Second.").unwrap();
+        std::os::unix::fs::symlink(&first, &link).unwrap();
+        let source = "\\documentclass{article}\n\\IfFileExists{optional.bin}{Found.}{Missing.}\n";
+        std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+        );
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let output = directory.path().join("build/latex-lsp");
+        wait_for_file(&output.join("ready"));
+        if notify {
+            std::fs::remove_file(&first).unwrap();
+            server.notify(
+                "workspace/didDeleteFiles",
+                json!({"files":[{"uri":Url::from_file_path(&first).unwrap()}]}),
+            );
+        } else {
+            std::fs::remove_file(&link).unwrap();
+            std::os::unix::fs::symlink(&second, &link).unwrap();
+            std::fs::write(output.join("release"), "").unwrap();
+        }
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(
+            finished["params"]["status"],
+            if notify { "cancelled" } else { "success" },
+            "{finished}"
+        );
+        if !notify {
+            assert_eq!(finished["params"]["stale"], true, "{finished}");
+        }
+        server.request(3, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn conditional_file_rename_updates_the_reference_and_preserves_old_pdf_conditions() {
+    let script = "if [ ! -f \"$1/main.pdf\" ]; then\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nfi\n";
+    let (mut server, directory, main) = fake_build_server_capabilities(
+        script,
+        false,
+        json!({"workspace":{"workspaceEdit":{"documentChanges":true},"fileOperations":{"willRename":true,"didRename":true}}}),
+    );
+    let original = directory.path().join("optional.bin");
+    let renamed = directory.path().join("renamed flag.bin");
+    std::fs::write(&original, "Data.").unwrap();
+    let source = "\\documentclass{article}\n\\IfFileExists{optional.bin}{Found.}{Missing.}\n";
+    std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+    let original_time = std::fs::metadata(main.to_file_path().unwrap())
+        .unwrap()
+        .modified()
+        .unwrap();
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+    );
+    server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let first = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(first["params"]["status"], "success", "{first}");
+    let files = json!({"files":[{"oldUri":Url::from_file_path(&original).unwrap(),"newUri":Url::from_file_path(&renamed).unwrap()}]});
+    let edit = server.request(3, "workspace/willRenameFiles", files.clone());
+    assert_eq!(edit["documentChanges"][0]["textDocument"]["version"], 2);
+    assert_eq!(
+        edit["documentChanges"][0]["edits"][0]["newText"],
+        "renamed flag.bin"
+    );
+    let updated = source.replace("optional.bin", "renamed flag.bin");
+    std::fs::write(main.to_file_path().unwrap(), &updated).unwrap();
+    // A preserved source mtime must not bypass the historical file check.
+    std::fs::File::open(main.to_file_path().unwrap())
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(original_time))
+        .unwrap();
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":3},"contentChanges":[{"text":updated}]}),
+    );
+    std::fs::rename(original, renamed).unwrap();
+    server.notify("workspace/didRenameFiles", files);
+    server.request(
+        4,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let noop = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(noop["params"]["status"], "error", "{noop}");
+    assert!(
+        noop["params"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("file condition changed"),
+        "{noop}"
+    );
+    assert!(noop["params"]["pdfUri"].is_null());
+    server.request(5, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+fn conditional_file_events_cancel_active_and_queued_builds_but_unrelated_files_do_not() {
+    for existed in [false, true] {
+        let script="touch \"$1/ready\"\nwhile [ ! -f \"$1/release\" ]; do sleep 0.02; done\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\n";
+        let (mut server, directory, main) = fake_build_server(script, true);
+        let flag = directory.path().join("flags/optional.bin");
+        std::fs::create_dir(flag.parent().unwrap()).unwrap();
+        if existed {
+            std::fs::write(&flag, "Data.").unwrap();
+        }
+        let source =
+            "\\documentclass{article}\n\\IfFileExists{flags/optional.bin}{Found.}{Missing.}\n";
+        std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+        );
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        wait_for_file(&directory.path().join("build/latex-lsp/ready"));
+        let other = directory.path().join("unrelated.bin");
+        std::fs::write(&other, "Other.").unwrap();
+        server.notify(
+            "workspace/didCreateFiles",
+            json!({"files":[{"uri":Url::from_file_path(&other).unwrap()}]}),
+        );
+        assert_eq!(
+            server.request(
+                3,
+                "workspace/executeCommand",
+                json!({"command":"latex.buildStatus","arguments":[main]})
+            )["status"],
+            "running"
+        );
+        server.notify("textDocument/didSave", json!({"textDocument":{"uri":main}}));
+        assert_eq!(
+            server.request(
+                4,
+                "workspace/executeCommand",
+                json!({"command":"latex.buildStatus","arguments":[main]})
+            )["queued"],
+            true
+        );
+        if existed {
+            std::fs::remove_dir_all(flag.parent().unwrap()).unwrap();
+            server.notify(
+                "workspace/didDeleteFiles",
+                json!({"files":[{"uri":Url::from_file_path(flag.parent().unwrap()).unwrap()}]}),
+            );
+        } else {
+            std::fs::write(&flag, "Created.").unwrap();
+            server.notify(
+                "workspace/didCreateFiles",
+                json!({"files":[{"uri":Url::from_file_path(&flag).unwrap()}]}),
+            );
+        }
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(finished["params"]["status"], "cancelled", "{finished}");
+        let status = server.request(
+            5,
+            "workspace/executeCommand",
+            json!({"command":"latex.buildStatus","arguments":[main]}),
+        );
+        assert_eq!(status["status"], "cancelled", "{status}");
+        assert_eq!(status["buildId"], finished["params"]["buildId"]);
+        server.request(6, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn conditional_data_content_and_unsaved_buffers_do_not_change_existence_or_import_symbols() {
+    let script="touch \"$1/ready\"\nwhile [ ! -f \"$1/release\" ]; do sleep 0.02; done\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\n";
+    let (mut server, directory, main) = fake_build_server(script, false);
+    let flag = directory.path().join("optional.bin");
+    std::fs::write(&flag, "Data.").unwrap();
+    let source =
+        "\\documentclass{article}\n\\IfFileExists{optional.bin}{Found.}{Missing.}\\ref{hidden}\n";
+    std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+    );
+    server.notify("textDocument/didOpen",json!({"textDocument":{"uri":Url::from_file_path(&flag).unwrap(),"languageId":"plaintext","version":9,"text":"\\label{hidden}Unsaved data."}}));
+    server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let output = directory.path().join("build/latex-lsp");
+    wait_for_file(&output.join("ready"));
+    std::fs::write(&flag, "Different disk contents, still present.").unwrap();
+    std::fs::write(output.join("release"), "").unwrap();
+    let finished = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(finished["params"]["status"], "success", "{finished}");
+    assert_eq!(finished["params"]["stale"], false, "{finished}");
+    assert_eq!(finished["params"]["dependenciesCount"], 1);
+    let at = source.find("hidden").unwrap();
+    let position = latex_lsp::text::Text::new(source.into()).position(at);
+    assert_eq!(
+        server.request(
+            3,
+            "textDocument/definition",
+            json!({"textDocument":{"uri":main},"position":position})
+        ),
+        json!([])
+    );
+    server.request(4, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+fn conditional_file_events_clear_diagnostics_and_reject_old_pdf_and_synctex_until_rebuilt() {
+    let script="if [ ! -f \"$1/main.pdf\" ] || [ -f \"$1/rebuild\" ]; then\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf 'SyncTeX test data\\n' > \"$1/main.synctex\"\nfi\nprintf '%s:2: LaTeX Warning: condition-specific warning.\\n' \"$2\" > \"$1/main.log\"\n";
+    let (mut server, directory, main) = fake_build_server(script, false);
+    let source = "\\documentclass{article}\n\\IfFileExists{optional.bin}{Found.}{Missing.}\n";
+    std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+    );
+    server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let first = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(first["params"]["status"], "success", "{first}");
+    server.until(|message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["diagnostics"]
+                .as_array()
+                .is_some_and(|items| {
+                    items.iter().any(|item| {
+                        item["message"]
+                            .as_str()
+                            .is_some_and(|text| text.contains("condition-specific"))
+                    })
+                })
+    });
+    let flag = directory.path().join("optional.bin");
+    std::fs::write(&flag, "Created.").unwrap();
+    server.send(json!({"jsonrpc":"2.0","id":3,"method":"workspace/executeCommand","params":{"command":"latex.forwardSearch","arguments":[{"uri":main,"position":{"line":1,"character":0}}]}}));
+    let rejected = server.until(|message| message["id"] == 3);
+    assert!(
+        rejected["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("File conditions changed"),
+        "{rejected}"
+    );
+    server.notify(
+        "workspace/didCreateFiles",
+        json!({"files":[{"uri":Url::from_file_path(&flag).unwrap()}]}),
+    );
+    server.until(|message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["uri"] == main.as_str()
+            && message["params"]["diagnostics"] == json!([])
+    });
+    for id in [4, 5] {
+        server.request(
+            id,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let old = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(old["params"]["status"], "error", "{old}");
+        assert!(
+            old["params"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("file condition changed"),
+            "{old}"
+        );
+        assert!(old["params"]["pdfUri"].is_null());
+        assert_eq!(old["params"]["stale"], false);
+    }
+    std::fs::write(directory.path().join("build/latex-lsp/rebuild"), "").unwrap();
+    server.request(
+        6,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let rebuilt = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(rebuilt["params"]["status"], "success", "{rebuilt}");
+    assert_eq!(rebuilt["params"]["stale"], false);
+    server.request(7, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+fn conditional_generated_artifacts_and_include_auxiliaries_do_not_make_builds_stale() {
+    let script="mkdir -p \"$1/chapters\"\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf 'Auxiliary\\n' > \"$1/main.aux\"\nprintf 'Child auxiliary\\n' > \"$1/chapters/child.aux\"\n";
+    let (mut server, directory, main) = fake_build_server(script, false);
+    std::fs::create_dir(directory.path().join("chapters")).unwrap();
+    std::fs::write(directory.path().join("chapters/child.tex"), "Chapter.").unwrap();
+    let source="\\documentclass{article}\n\\IfFileExists{build/latex-lsp/main.pdf}{}{}\n\\IfFileExists{build/latex-lsp/main.aux}{}{}\n\\IfFileExists{build/latex-lsp/chapters/child.aux}{}{}\n\\include{chapters/child.tex}\n";
+    std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+    );
+    server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let finished = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(finished["params"]["status"], "success", "{finished}");
+    assert_eq!(finished["params"]["stale"], false, "{finished}");
+    server.request(3, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+#[ignore = "requires pdflatex and xelatex"]
+fn real_conditional_file_changes_after_tex_runs_discard_old_results_and_rebuild_the_right_branch() {
+    for engine in ["pdflatex", "xelatex"] {
+        let script=format!("{engine} -interaction=nonstopmode -halt-on-error -recorder -synctex=1 -output-directory=\"$1\" \"$2\"\nresult=$?\ntouch \"$1/ready\"\nwhile [ ! -f \"$1/release\" ]; do sleep 0.02; done\nexit \"$result\"\n");
+        let (mut server, directory, main) = fake_build_server(&script, false);
+        let source="\\documentclass{article}\\begin{document}\n\\IfFileExists{状态.flag}{\\typeout{CONDITION-BRANCH:FOUND}Found.}{\\typeout{CONDITION-BRANCH:MISSING}Missing.}\n\\end{document}\n";
+        std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+        );
+        let output = directory.path().join("build/latex-lsp");
+        for (id, second) in [(2, false), (3, true)] {
+            if second {
+                std::fs::remove_file(output.join("ready")).unwrap();
+                std::fs::remove_file(output.join("release")).unwrap();
+            }
+            server.request(
+                id,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            wait_for_file(&output.join("ready"));
+            if !second {
+                std::fs::write(
+                    directory.path().join("状态.flag"),
+                    "\\undefinedcheckedcommand",
+                )
+                .unwrap();
+            }
+            std::fs::write(output.join("release"), "").unwrap();
+            let finished = server.until(|message| message["method"] == "latex/buildFinished");
+            assert_eq!(finished["params"]["status"], "success", "{finished}");
+            assert_eq!(finished["params"]["stale"], !second, "{finished}");
+            assert!(
+                finished["params"]["output"]
+                    .as_str()
+                    .unwrap()
+                    .contains(if second {
+                        "CONDITION-BRANCH:FOUND"
+                    } else {
+                        "CONDITION-BRANCH:MISSING"
+                    }),
+                "{finished}"
+            );
+        }
+        server.request(4, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
 #[ignore = "requires latexmk, BibTeX and a TeX installation"]
 fn real_compiler_reference_quick_fixes_remove_label_and_citation_typos_after_rebuilding() {
     let directory = tempfile::tempdir().unwrap();

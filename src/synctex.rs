@@ -174,6 +174,15 @@ pub fn prepare(workspace: &Workspace, uri: &Url) -> Result<Project> {
     let pdf = config
         .artifact_path(&path, "pdf")
         .ok_or_else(|| Error::invalid_params("Invalid root filename"))?;
+    if workspace
+        .pdf_checks
+        .get(&root)
+        .is_some_and(|checks| checks.matches_pdf(&pdf) && checks.changed_path().is_some())
+    {
+        return Err(Error::invalid_params(
+            "File conditions changed; compile again before querying SyncTeX",
+        ));
+    }
     let mut artifacts = Vec::new();
     for path in [
         pdf.clone(),
