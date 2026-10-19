@@ -485,6 +485,8 @@ fn renamed_expanded_literal_definitions_and_aliases_still_compile() {
         r"\expandafter\ProvideExpandableDocumentCommand\csname hello\endcsname{m}{Hello #1}",
         r"\expandafter\DeclareExpandableDocumentCommand\csname hello\endcsname{m}{Hello #1}",
         r"\expandafter\let\csname hello\endcsname=\textbf",
+        r"\expandafter\NewCommandCopy\csname hello\endcsname{\textbf}",
+        r"\expandafter\DeclareCommandCopy\csname hello\endcsname\textbf",
     ] {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();

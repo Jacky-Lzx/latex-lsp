@@ -96,6 +96,9 @@ pub fn completion(
 
 fn builtin(name: &str) -> Option<Signature> {
     let (arguments, starred): (&[(&str, bool)], bool) = match name {
+        name if syntax::declares_command_copy(name) => {
+            (&[("command", false), ("source command", false)], false)
+        }
         name if syntax::declares_document_command(name) => (
             &[
                 ("command", false),
@@ -337,7 +340,8 @@ fn builtin(name: &str) -> Option<Signature> {
                 Kind::RequiredBracket
             } else if *optional {
                 Kind::Optional
-            } else if name == "cslet" && index == 1
+            } else if syntax::declares_command_copy(name)
+                || name == "cslet" && index == 1
                 || (name == "letcs"
                     || syntax::declares_document_command(name)
                     || syntax::declares_font_switch(name)

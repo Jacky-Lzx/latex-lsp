@@ -460,6 +460,7 @@ fn declares_command(name: &str) -> bool {
         || declares_font_switch(name)
         || declares_paired_delimiter(name)
         || declares_document_command(name)
+        || declares_command_copy(name)
         || matches!(
             name,
             "newcommand"
@@ -488,6 +489,13 @@ pub(crate) fn declares_document_command(name: &str) -> bool {
             | "RenewExpandableDocumentCommand"
             | "ProvideExpandableDocumentCommand"
             | "DeclareExpandableDocumentCommand"
+    )
+}
+
+pub(crate) fn declares_command_copy(name: &str) -> bool {
+    matches!(
+        name,
+        "NewCommandCopy" | "RenewCommandCopy" | "DeclareCommandCopy"
     )
 }
 

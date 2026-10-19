@@ -28,6 +28,121 @@ fn edits_result(source: &str, edits: &[TextEdit]) -> String {
 }
 
 #[test]
+fn command_copy_targets_and_source_parameters_remain_independent_symbols() {
+    for name in ["NewCommandCopy", "RenewCommandCopy", "DeclareCommandCopy"] {
+        for arguments in [
+            r"{\alias}{\original}",
+            r"\alias\original",
+            "\\alias % keep\r\n{\\original}",
+        ] {
+            let mut workspace = Workspace::default();
+            let definition = format!("\\newcommand{{\\original}}[1]{{#1}}\\{name}{arguments}");
+            let definitions = insert(&mut workspace, "definitions.tex", &definition, Some(1));
+            let source = "😀 \\alias{Copied}\\original{Direct}\\csname alias\\endcsname{Literal}\n% \\alias \\original\n\\verb|\\alias \\original|";
+            let main = insert(&mut workspace, "main.tex", source, Some(2));
+            for (old, new, count) in [
+                ("alias", "copyrenamed", 3),
+                ("original", "sourcerenamed", 3),
+            ] {
+                let doc = &workspace.documents[&main];
+                let position = doc
+                    .text
+                    .position(source.find(&format!("\\{old}")).unwrap() + 2);
+                assert_eq!(features::definitions(&workspace, &main, position).len(), 1);
+                assert_eq!(
+                    features::references(&workspace, &main, position, true).len(),
+                    count
+                );
+                let changes = features::rename(&workspace, &main, position, new)
+                    .unwrap()
+                    .unwrap()
+                    .changes
+                    .unwrap();
+                assert_eq!(changes.len(), 2);
+                let declarations = edits_result(&definition, &changes[&definitions]);
+                assert_eq!(
+                    declarations,
+                    definition.replace(&format!("\\{old}"), &format!("\\{new}"))
+                );
+                let changed = edits_result(source, &changes[&main]);
+                let (body, rest) = source.split_once('\n').unwrap();
+                let expected = body
+                    .replace(&format!("\\{old}"), &format!("\\{new}"))
+                    .replace(&format!("csname {old}"), &format!("csname {new}"));
+                assert_eq!(changed, format!("{expected}\n{rest}"));
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex with command copy support"]
+fn real_command_copy_renames_preserve_copied_optional_arguments_after_source_redefinition() {
+    for copy in ["NewCommandCopy", "DeclareCommandCopy"] {
+        for declaration in [
+            "\\DeclareRobustCommand{\\original}[2][blue]{\\typeout{COPY-AUDIT:#1:#2}#2}",
+            "\\NewDocumentCommand{\\original}{O{blue}m}{\\typeout{COPY-AUDIT:#1:#2}#2}",
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let main = root.join("main.tex");
+            let definitions = format!("{declaration}\n\\{copy}{{\\alias}}{{\\original}}% \\alias\n\\renewcommand{{\\original}}[1]{{Changed:#1}}\n");
+            let content = "\\alias{Default}\\alias[red]{Explicit}\\csname alias\\endcsname{Literal}\n% \\alias\n\\verb|\\alias|\n";
+            std::fs::write(&main, "\\documentclass{article}\\input{definitions}\\begin{document}\\input{content}\\end{document}\n").unwrap();
+            std::fs::write(root.join("definitions.tex"), &definitions).unwrap();
+            std::fs::write(root.join("content.tex"), content).unwrap();
+            let config = latex_lsp::config::BuildConfig {
+                executable: "pdflatex".into(),
+                ..Default::default()
+            };
+            let before = latex_lsp::build::run(&main, &config, &Default::default());
+            assert_eq!(before.status, "success", "{copy}: {}", before.output);
+            let mut workspace = Workspace::default();
+            workspace.add_root(root.into());
+            let uri = Url::from_file_path(root.join("content.tex")).unwrap();
+            let position = workspace.documents[&uri].text.position(2);
+            let changes = features::rename(&workspace, &uri, position, "renamedalias")
+                .unwrap()
+                .unwrap()
+                .changes
+                .unwrap();
+            assert_eq!(changes.len(), 2);
+            for (uri, edits) in changes {
+                std::fs::write(
+                    uri.to_file_path().unwrap(),
+                    edits_result(&workspace.documents[&uri].text.source, &edits),
+                )
+                .unwrap();
+            }
+            assert_eq!(
+                std::fs::read_to_string(root.join("definitions.tex")).unwrap(),
+                definitions.replacen("\\alias", "\\renamedalias", 1)
+            );
+            assert!(std::fs::read_to_string(root.join("content.tex"))
+                .unwrap()
+                .ends_with("% \\alias\n\\verb|\\alias|\n"));
+            let after = latex_lsp::build::run(&main, &config, &Default::default());
+            assert_eq!(after.status, "success", "{copy}: {}", after.output);
+            for outcome in [before, after] {
+                let observed: Vec<_> = outcome
+                    .output
+                    .lines()
+                    .filter(|line| line.starts_with("COPY-AUDIT:"))
+                    .collect();
+                assert_eq!(
+                    observed,
+                    [
+                        "COPY-AUDIT:blue:Default",
+                        "COPY-AUDIT:red:Explicit",
+                        "COPY-AUDIT:blue:Literal"
+                    ]
+                );
+            }
+        }
+    }
+}
+
+#[test]
 #[ignore = "requires pdflatex with document command support"]
 fn real_expandable_command_renames_preserve_edef_results_and_optional_defaults() {
     let directory = tempfile::tempdir().unwrap();
@@ -1373,6 +1488,9 @@ fn modern_and_unbraced_macro_declarations_support_navigation_completion_and_rena
         r"\edef\hello{Hello}",
         r"\xdef\hello{Hello}",
         r"\let\hello=\textbf",
+        r"\NewCommandCopy{\hello}{\textbf}",
+        r"\RenewCommandCopy\hello\textbf",
+        r"\DeclareCommandCopy\hello{\textbf}",
         r"\long\def\hello#1{Hello #1}",
     ] {
         let mut workspace = Workspace::default();

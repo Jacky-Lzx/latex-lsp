@@ -35,6 +35,32 @@ fn check(definitions: &str, marked: &str, label: &str, active: u32) {
 }
 
 #[test]
+fn command_copy_declarations_hint_both_command_tokens_with_or_without_groups() {
+    for name in ["NewCommandCopy", "RenewCommandCopy", "DeclareCommandCopy"] {
+        let label = format!("\\{name}{{command}}{{source command}}");
+        for (arguments, active) in [
+            (r"{\ali¦as}{\original}", 0),
+            (r"\ali¦as\original", 0),
+            (r"{\alias}{\orig¦inal}", 1),
+            ("\\alias % target\r\n\\orig¦inal", 1),
+        ] {
+            check("", &format!("\\{name}{arguments}"), &label, active);
+        }
+        let (mut workspace, uri, position) = setup("", &format!("\\{name}¦"));
+        workspace.snippets = true;
+        let items = latex_lsp::features::completion(&workspace, &uri, position);
+        let item = items.iter().find(|item| item.label == name).unwrap();
+        let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+            panic!("missing snippet: {name}")
+        };
+        assert_eq!(
+            edit.new_text,
+            format!("{name}{{\\\\${{1:name}}}}{{\\\\${{2:source}}}}")
+        );
+    }
+}
+
+#[test]
 fn document_command_declarations_hint_grouped_and_bare_targets_and_preserve_snippet_backslashes() {
     for name in [
         "NewDocumentCommand",

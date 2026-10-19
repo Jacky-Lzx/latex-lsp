@@ -787,6 +787,21 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
         "Define a command using an xparse argument specification.",
     ),
     (
+        "NewCommandCopy",
+        "NewCommandCopy{\\${1:name}}{\\${2:source}}",
+        "Create an independent copy of a command, preserving its optional arguments and robust implementation.",
+    ),
+    (
+        "RenewCommandCopy",
+        "RenewCommandCopy{\\${1:name}}{\\${2:source}}",
+        "Replace an existing command with an independent copy of another command.",
+    ),
+    (
+        "DeclareCommandCopy",
+        "DeclareCommandCopy{\\${1:name}}{\\${2:source}}",
+        "Create or replace a command with an independent copy of another command.",
+    ),
+    (
         "RenewDocumentCommand",
         "RenewDocumentCommand{\\${1:name}}{${2:m}}{${3:definition}}",
         "Redefine a command using an xparse argument specification.",
