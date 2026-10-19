@@ -6115,3 +6115,148 @@ fn disconnects_do_not_wait_for_unacknowledged_client_registration_requests() {
         );
     }
 }
+#[test]
+#[cfg(unix)]
+fn missing_inputs_under_symlink_directories_match_canonical_creation_notifications() {
+    for (command, selected) in [
+        (
+            r"\IfFileExists{alias/deep/nested/optional.bin}{Found.}{Missing.}",
+            true,
+        ),
+        (
+            r"\InputIfFileExists{alias/deep/nested/optional.bin}{}{}",
+            true,
+        ),
+        (r"\input{alias/deep/nested/optional.bin}", true),
+        (r"\subfile{alias/deep/nested/optional.bin}", true),
+        (r"\include{alias/deep/nested/optional}", true),
+        (
+            r"\includeonly{other}\include{alias/deep/nested/optional}",
+            false,
+        ),
+    ] {
+        for (watcher, directory_event) in [(true, false), (true, true), (false, true)] {
+            let script = "touch \"$1/ready\"\nwhile [ ! -f \"$1/release\" ]; do sleep 0.02; done\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\n";
+            let (mut server, directory, main) = fake_build_server(script, true);
+            let physical = tempfile::tempdir().unwrap();
+            std::os::unix::fs::symlink(physical.path(), directory.path().join("alias")).unwrap();
+            let source = format!("\\documentclass{{article}}\n{command}\n");
+            std::fs::write(main.to_file_path().unwrap(), &source).unwrap();
+            server.notify(
+                "textDocument/didChange",
+                json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+            );
+            server.request(
+                2,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            let output = directory.path().join("build/latex-lsp");
+            wait_for_file(&output.join("ready"));
+            server.notify("textDocument/didSave", json!({"textDocument":{"uri":main}}));
+            let queued = server.request(
+                3,
+                "workspace/executeCommand",
+                json!({"command":"latex.buildStatus","arguments":[main]}),
+            );
+            assert_eq!(queued["queued"], true, "{queued}");
+            std::fs::create_dir_all(physical.path().join("deep/nested")).unwrap();
+            let target = physical.path().join(if command.contains("\\include") {
+                "deep/nested/optional.tex"
+            } else {
+                "deep/nested/optional.bin"
+            });
+            std::fs::write(&target, "Created externally.\n").unwrap();
+            let changed = if directory_event {
+                physical.path().join("deep")
+            } else {
+                target
+            };
+            let event = Url::from_file_path(changed).unwrap();
+            if watcher {
+                server.notify(
+                    "workspace/didChangeWatchedFiles",
+                    json!({"changes":[{"uri":event,"type":1}]}),
+                );
+            } else {
+                server.notify("workspace/didCreateFiles", json!({"files":[{"uri":event}]}));
+            }
+            let status = server.request(
+                4,
+                "workspace/executeCommand",
+                json!({"command":"latex.buildStatus","arguments":[main]}),
+            );
+            std::fs::write(output.join("release"), "").unwrap();
+            let finished = server.until(|message| message["method"] == "latex/buildFinished");
+            assert_eq!(
+                finished["params"]["status"],
+                if selected { "cancelled" } else { "success" },
+                "{command}, {watcher}, {directory_event}: {finished}"
+            );
+            if selected {
+                assert_ne!(status["queued"], true, "{status}");
+            } else {
+                assert_eq!(finished["params"]["stale"], false, "{finished}");
+            }
+            server.request(5, "shutdown", Value::Null);
+            server.notify("exit", Value::Null);
+            server.wait_exit(0);
+        }
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn canonical_creation_events_clear_completed_diagnostics_for_missing_symlink_inputs() {
+    let script = "printf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf '%s:2: LaTeX Warning: missing symlink input.\\n' \"$2\" > \"$1/main.log\"\n";
+    let (mut server, directory, main) =
+        fake_build_server_capabilities(script, false, json!({"textDocument":{"diagnostic":{}}}));
+    let physical = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(physical.path(), directory.path().join("alias")).unwrap();
+    let source =
+        "\\documentclass{article}\n\\IfFileExists{alias/nested/optional.bin}{Found.}{Missing.}\n";
+    std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+    );
+    server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let finished = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(finished["params"]["status"], "success", "{finished}");
+    let old = server.request(
+        3,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":main}}),
+    );
+    assert!(
+        old["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["message"]
+                .as_str()
+                .is_some_and(|text| text.contains("missing symlink input"))),
+        "{old}"
+    );
+    std::fs::create_dir(physical.path().join("nested")).unwrap();
+    let target = physical.path().join("nested/optional.bin");
+    std::fs::write(&target, "Created.\n").unwrap();
+    server.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({"changes":[{"uri":Url::from_file_path(target).unwrap(),"type":1}]}),
+    );
+    let cleared = server.request(
+        4,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":main},"previousResultId":old["resultId"]}),
+    );
+    assert_eq!(cleared["kind"], "full", "{cleared}");
+    assert_eq!(cleared["items"], json!([]), "{cleared}");
+    server.request(5, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

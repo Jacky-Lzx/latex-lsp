@@ -27,6 +27,17 @@ fn file(path: &Path) -> Option<PathBuf> {
     path.is_file().then_some(path)
 }
 
+// A missing file cannot be canonicalized, but an existing parent may be a
+// symlink. Editors can report its eventual creation through the physical path.
+fn canonical_candidate(path: &Path) -> Option<PathBuf> {
+    path.ancestors().find_map(|parent| {
+        parent
+            .canonicalize()
+            .ok()
+            .map(|canonical| canonical.join(path.strip_prefix(parent).unwrap()))
+    })
+}
+
 impl Snapshot {
     pub(crate) fn capture(workspace: &Workspace, root: &Url, config: &BuildConfig) -> Self {
         let Ok(root_path) = root.to_file_path() else {
@@ -161,7 +172,14 @@ impl Snapshot {
         let paths = paths.into_inner();
         let watched = paths
             .iter()
-            .flat_map(|(path, before)| std::iter::once(path).chain(before.iter()))
+            .flat_map(|(path, before)| {
+                [
+                    Some(path.clone()),
+                    before.clone().or_else(|| canonical_candidate(path)),
+                ]
+                .into_iter()
+                .flatten()
+            })
             .filter_map(|path| Url::from_file_path(path).ok())
             .collect();
         Self {
