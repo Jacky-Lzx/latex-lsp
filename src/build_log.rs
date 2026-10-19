@@ -2190,23 +2190,18 @@ fn bibliography_path(
     } else {
         &["file ", "File "]
     };
-    let quoted = markers
-        .iter()
-        .flat_map(|marker| {
-            message
-                .match_indices(*marker)
-                .map(move |(start, _)| (start, start + marker.len()))
+    let quoted = bibliography_fields(message, None).find_map(|(start, _)| {
+        if message[..start].ends_with(|ch: char| ch.is_alphanumeric() || ch == '_') {
+            return None;
+        }
+        markers.iter().find_map(|marker| {
+            message[start..]
+                .strip_prefix(*marker)
+                .filter(|tail| tail.starts_with(['\'', '"']))
+                .map(|_| start + marker.len())
         })
-        .filter(|(start, after)| {
-            (*start == 0
-                || message[..*start]
-                    .chars()
-                    .next_back()
-                    .is_some_and(|ch| !ch.is_alphanumeric() && ch != '_'))
-                && message[*after..].starts_with(['\'', '"'])
-        })
-        .min_by_key(|(start, _)| *start);
-    if let Some((_, start)) = quoted {
+    });
+    if let Some(start) = quoted {
         let quote = message.as_bytes()[start] as char;
         let body = &message[start + 1..];
         let resolve = |name: &str| {
@@ -3160,6 +3155,72 @@ mod tests {
                         );
                     }
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn biber_source_fields_ignore_markers_in_quoted_error_content() {
+        for name in ["refs.bib", "author's 中文 refs.bib", "entry 'wrong'.bib"] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let main = root.join("main.tex");
+            let bib = root.join(name);
+            std::fs::write(&main, "Text\n").unwrap();
+            std::fs::write(&bib, "% header\n@book{entry,title={Actual}}\n").unwrap();
+            std::fs::write(root.join("wrong.bib"), "@book{entry,title={Wrong}}\n").unwrap();
+            for (outer, inner) in [('"', '\''), ('\'', '"')] {
+                for marker in ["in", "In", "file", "File"] {
+                    let content = format!(
+                        "Unexpected token {outer}{marker} {inner}wrong.bib{inner}, line 900{outer}"
+                    );
+                    for quote in ['\'', '"'] {
+                        let source = format!("in file {quote}{name}{quote}");
+                        for message in [
+                            format!("{content} {source}, line 2"),
+                            format!("{source}, {content}, line 2"),
+                        ] {
+                            let log = format!(
+                                "INFO - Found BibTeX data source '{name}'\nERROR - {message}\n"
+                            );
+                            let diagnostics = parse_bibliography(&main, &log);
+                            assert_eq!(diagnostics.len(), 1, "{log}: {diagnostics:?}");
+                            let items = diagnostics
+                                .get(&Url::from_file_path(&bib).unwrap())
+                                .unwrap_or_else(|| panic!("{log}: {diagnostics:?}"));
+                            assert_eq!(
+                                items[0].range.start,
+                                Position::new(1, 0),
+                                "{log}: {items:?}"
+                            );
+                            assert!(!unresolved_location(&items[0]), "{log}: {items:?}");
+                            assert_eq!(items[0].message, format!("Biber: {message}"));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn biber_missing_source_fields_do_not_use_files_named_in_quoted_error_content() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let main = root.join("main.tex");
+        std::fs::write(&main, "Text\n").unwrap();
+        std::fs::write(root.join("refs.bib"), "@book{entry,title={Other}}\n").unwrap();
+        std::fs::write(root.join("wrong.bib"), "@book{entry,title={Wrong}}\n").unwrap();
+        for (outer, inner) in [('"', '\''), ('\'', '"')] {
+            for marker in ["in", "In", "file", "File"] {
+                let message = format!("Unexpected token {outer}{marker} {inner}wrong.bib{inner}, line 900{outer} in file 'missing.bib', line 2");
+                let log =
+                    format!("INFO - Found BibTeX data source 'refs.bib'\nERROR - {message}\n");
+                let diagnostics = parse_bibliography(&main, &log);
+                assert_eq!(diagnostics.len(), 1, "{log}: {diagnostics:?}");
+                let items = &diagnostics[&Url::from_file_path(&main).unwrap()];
+                assert_eq!(items[0].range.start, Position::new(0, 0));
+                assert_eq!(items[0].data.as_ref().unwrap()["unresolvedSource"], true);
+                assert_eq!(items[0].message, format!("Biber: {message}"));
             }
         }
     }
