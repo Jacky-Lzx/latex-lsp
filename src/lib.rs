@@ -19,6 +19,7 @@ mod primitives;
 mod project_diagnostics;
 pub mod recorder;
 pub mod semantic;
+mod semantic_cache;
 pub mod signature;
 mod spelling_fixes;
 pub mod synctex;
@@ -30,7 +31,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tower_lsp::{jsonrpc::Result, lsp_types::*, Client, LanguageServer};
 use workspace::{document_uri, Document, Workspace};
 
@@ -53,6 +54,7 @@ pub struct Backend {
     builds: build::BuildManager,
     sync_queries: synctex::Queries,
     shutdown_requested: AtomicBool,
+    semantic_cache: Mutex<semantic_cache::Cache>,
 }
 
 impl Backend {
@@ -64,6 +66,7 @@ impl Backend {
             client,
             workspace,
             shutdown_requested: AtomicBool::new(false),
+            semantic_cache: Mutex::new(semantic_cache::Cache::default()),
         }
     }
 
@@ -333,6 +336,7 @@ impl LanguageServer for Backend {
         let mut workspace = self.workspace.write().await;
         workspace.documents.remove(&uri);
         workspace.reload(&uri);
+        self.semantic_cache.lock().await.remove(&uri);
         drop(workspace);
         self.client.publish_diagnostics(uri, vec![], None).await;
         self.publish_open().await;
@@ -658,11 +662,31 @@ impl LanguageServer for Backend {
         params: SemanticTokensParams,
     ) -> Result<Option<SemanticTokensResult>> {
         let workspace = self.workspace.read().await;
-        workspace
-            .documents
-            .get(&document_uri(params.text_document.uri))
-            .map(|doc| semantic::tokens(doc, None).map(SemanticTokensResult::Tokens))
-            .transpose()
+        let uri = document_uri(params.text_document.uri);
+        let Some(doc) = workspace.documents.get(&uri) else {
+            return Ok(None);
+        };
+        let tokens = semantic::tokens(doc, None)?;
+        Ok(Some(SemanticTokensResult::Tokens(
+            self.semantic_cache.lock().await.full(uri, tokens),
+        )))
+    }
+
+    async fn semantic_tokens_full_delta(
+        &self,
+        params: SemanticTokensDeltaParams,
+    ) -> Result<Option<SemanticTokensFullDeltaResult>> {
+        let workspace = self.workspace.read().await;
+        let uri = document_uri(params.text_document.uri);
+        let Some(doc) = workspace.documents.get(&uri) else {
+            return Ok(None);
+        };
+        let tokens = semantic::tokens(doc, None)?;
+        Ok(Some(self.semantic_cache.lock().await.delta(
+            uri,
+            &params.previous_result_id,
+            tokens,
+        )))
     }
 
     async fn semantic_tokens_range(

@@ -215,6 +215,28 @@ fn bibliography_keys_use_the_existing_index_and_style_files_stay_unclassified() 
 }
 
 #[test]
+fn viewport_ranges_accept_eof_and_oversized_columns_without_relaxing_edit_positions() {
+    for source in ["\\ref{key}", "\\ref{key}\n", "\\ref{key}\r\n"] {
+        let doc = document("no-final-newline.tex", source);
+        let full = semantic::tokens(&doc, None).unwrap();
+        let eof = Position::new(doc.text.text_line_count() as u32, 0);
+        let viewport = semantic::tokens(&doc, Some(Range::new(Position::new(0, 0), eof))).unwrap();
+        assert_eq!(full.data, viewport.data);
+        assert_eq!(
+            full.data,
+            semantic::tokens(
+                &doc,
+                Some(Range::new(Position::new(0, 0), Position::new(0, u32::MAX)))
+            )
+            .unwrap()
+            .data
+        );
+        assert!(doc.text.offset(eof).is_none());
+        assert!(doc.text.offset(Position::new(0, u32::MAX)).is_none());
+    }
+}
+
+#[test]
 fn large_single_line_documents_encode_in_order_without_overlaps() {
     let mut source = "😀 ".to_owned();
     source.push_str(&"\\ref{key}".repeat(10_000));

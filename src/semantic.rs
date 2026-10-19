@@ -25,7 +25,7 @@ pub fn options() -> SemanticTokensOptions {
             token_modifiers: vec![SemanticTokenModifier::DECLARATION],
         },
         range: Some(true),
-        full: Some(SemanticTokensFullOptions::Bool(true)),
+        full: Some(SemanticTokensFullOptions::Delta { delta: Some(true) }),
         ..Default::default()
     }
 }
@@ -215,12 +215,30 @@ fn advance(source: &str, from: usize, to: usize, position: &mut Position) {
     }
 }
 
+fn range_offset(doc: &Document, position: Position) -> Option<usize> {
+    if let Some(offset) = doc.text.offset(position) {
+        return Some(offset);
+    }
+    // Editors use (line count, 0) for a viewport ending at EOF, including
+    // buffers without a final newline. Keep this normalization local to queries.
+    if position.line as usize == doc.text.text_line_count() && position.character == 0 {
+        return Some(doc.text.source.len());
+    }
+    let start = doc.text.offset(Position::new(position.line, 0))?;
+    let tail = &doc.text.source[start..];
+    let line = tail.split('\n').next()?;
+    let line = line.strip_suffix('\r').unwrap_or(line);
+    // LSP columns past the end of a line clamp to its length. A position
+    // inside a surrogate pair remains invalid.
+    (position.character as usize > line.encode_utf16().count()).then_some(start + line.len())
+}
+
 pub fn tokens(doc: &Document, range: Option<Range>) -> jsonrpc::Result<SemanticTokens> {
     let source = &doc.text.source;
     let requested = match range {
         Some(range) => {
-            let start = doc.text.offset(range.start);
-            let end = doc.text.offset(range.end);
+            let start = range_offset(doc, range.start);
+            let end = range_offset(doc, range.end);
             match (start, end) {
                 (Some(start), Some(end)) if start <= end => start..end,
                 _ => {

@@ -21,7 +21,7 @@ fn semantic_tokens_advertise_full_and_range_and_follow_incremental_changes() {
     let mut server = Server::start();
     let init = server.request(1, "initialize", json!({"processId":null,"capabilities":{"textDocument":{"semanticTokens":{"requests":{"full":true,"range":true},"tokenTypes":["macro","variable","type","enumMember","string","comment"],"tokenModifiers":["declaration"],"formats":["relative"]}}}}));
     let provider = &init["capabilities"]["semanticTokensProvider"];
-    assert_eq!(provider["full"], true);
+    assert_eq!(provider["full"]["delta"], true);
     assert_eq!(provider["range"], true);
     assert_eq!(provider["legend"]["tokenModifiers"], json!(["declaration"]));
     assert_eq!(
@@ -72,6 +72,87 @@ fn semantic_tokens_advertise_full_and_range_and_follow_incremental_changes() {
     );
     assert!(missing.is_null());
     server.request(7, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+fn semantic_token_deltas_use_flat_array_offsets_and_fall_back_after_close_or_stale_ids() {
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"capabilities":{"textDocument":{"semanticTokens":{"requests":{"full":{"delta":true},"range":true},"tokenTypes":["macro","enumMember"],"tokenModifiers":["declaration"],"formats":["relative"]}}}}));
+    server.notify("initialized", json!({}));
+    let uri = "file:///semantic-delta/main.tex";
+    let source = "\\label{key}\\ref{key}\\ref{key}\\ref{key}\n";
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"latex","version":1,"text":source}}),
+    );
+    let initial = server.request(
+        2,
+        "textDocument/semanticTokens/full",
+        json!({"textDocument":{"uri":uri}}),
+    );
+    let initial_id = initial["resultId"].as_str().unwrap();
+    // A range response has its own absolute positions and must not replace
+    // the full snapshot used by the client's next delta request.
+    let range = server.request(3, "textDocument/semanticTokens/range", json!({"textDocument":{"uri":uri},"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":6}}}));
+    assert!(range.get("resultId").is_none());
+    let unchanged = server.request(
+        4,
+        "textDocument/semanticTokens/full/delta",
+        json!({"textDocument":{"uri":uri},"previousResultId":initial_id}),
+    );
+    assert_eq!(unchanged["edits"], json!([]));
+    let next_id = unchanged["resultId"].as_str().unwrap();
+    assert_ne!(next_id, initial_id);
+    server.notify("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}},"text":"\n"}]}));
+    let delta = server.request(
+        5,
+        "textDocument/semanticTokens/full/delta",
+        json!({"textDocument":{"uri":uri},"previousResultId":next_id}),
+    );
+    assert_eq!(
+        delta["edits"],
+        json!([{"start":0,"deleteCount":5,"data":[1,0,6,0,0]}])
+    );
+    let mut reconstructed = initial["data"].as_array().unwrap().clone();
+    reconstructed.splice(0..5, delta["edits"][0]["data"].as_array().unwrap().clone());
+    let verified = server.request(
+        6,
+        "textDocument/semanticTokens/full",
+        json!({"textDocument":{"uri":uri}}),
+    );
+    assert_eq!(verified["data"], Value::Array(reconstructed));
+    // An older result or another file's result must receive complete data.
+    let stale = server.request(
+        7,
+        "textDocument/semanticTokens/full/delta",
+        json!({"textDocument":{"uri":uri},"previousResultId":next_id}),
+    );
+    assert_eq!(stale["data"], verified["data"]);
+    let other = "file:///semantic-delta/other.tex";
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":other,"languageId":"latex","version":1,"text":source}}),
+    );
+    let isolated = server.request(
+        8,
+        "textDocument/semanticTokens/full/delta",
+        json!({"textDocument":{"uri":other},"previousResultId":stale["resultId"]}),
+    );
+    assert_eq!(isolated["data"], initial["data"]);
+    server.notify("textDocument/didClose", json!({"textDocument":{"uri":uri}}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"latex","version":1,"text":source}}),
+    );
+    let reopened = server.request(
+        9,
+        "textDocument/semanticTokens/full/delta",
+        json!({"textDocument":{"uri":uri},"previousResultId":stale["resultId"]}),
+    );
+    assert_eq!(reopened["data"], initial["data"]);
+    server.request(10, "shutdown", Value::Null);
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
