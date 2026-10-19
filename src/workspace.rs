@@ -359,7 +359,14 @@ impl Workspace {
                     .as_ref()
                     .map(|arg| {
                         let multiple = crate::syntax::file_list(&command.name);
-                        let values = if multiple {
+                        let values = if let Some(spans) =
+                            crate::syntax::bibliography_file_spans(&doc.text.source, command)
+                        {
+                            spans
+                                .into_iter()
+                                .map(|span| &doc.text.source[span])
+                                .collect::<Vec<_>>()
+                        } else if multiple {
                             arg.value.split(',').collect::<Vec<_>>()
                         } else {
                             vec![arg.value.as_str()]

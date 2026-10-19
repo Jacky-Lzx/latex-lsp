@@ -638,6 +638,78 @@ pub(crate) fn key_list_spans(source: &str, span: Range<usize>) -> Vec<Range<usiz
         .collect()
 }
 
+fn bibliography_file_span(source: &str, segment: Range<usize>) -> Option<Range<usize>> {
+    let mut pieces = name_literal_pieces(source, segment)
+        .into_iter()
+        .map(|span| trimmed_span(source, span))
+        .filter(|span| !span.is_empty());
+    let span = pieces.next()?;
+    if pieces.next().is_some() {
+        return None;
+    }
+    // Retain the literal escapes already understood by filename lookup. Use
+    // harmless placeholders only for validation: a decoded percent must not
+    // become a source comment, and arbitrary control sequences remain invalid.
+    let mut literal = loader_name(&source[span.clone()]);
+    for character in ['_', '%', '#', '&', '$'] {
+        literal = literal.replace(&format!("\\{character}"), "_");
+    }
+    is_literal_file_path(&literal).then_some(span)
+}
+
+/// Bibliography database names discard TeX spaces, while comments and their
+/// commas remain outside the editable filename. Do not infer macro expansion
+/// or join separate literal pieces across a comment.
+pub(crate) fn bibliography_file_spans(
+    source: &str,
+    command: &Command,
+) -> Option<Vec<Range<usize>>> {
+    if !matches!(command.name.as_str(), "bibliography" | "nobibliography") {
+        return None;
+    }
+    let start = skip_space(source, command.span.end);
+    let Some(argument) = command
+        .argument
+        .as_ref()
+        .filter(|argument| argument.outer_span.start == start)
+    else {
+        return Some(vec![]);
+    };
+    Some(
+        key_list_segments(source, argument.span.clone())
+            .into_iter()
+            .filter_map(|segment| bibliography_file_span(source, segment))
+            .collect(),
+    )
+}
+
+pub(crate) fn active_bibliography_file_prefix(
+    source: &str,
+    start: usize,
+    cursor: usize,
+) -> Option<Range<usize>> {
+    if source.as_bytes().get(start) != Some(&b'{') {
+        return None;
+    }
+    let span = group(source, start, b'{', b'}')
+        .map_or(start + 1..source.len(), |(argument, _)| argument.span);
+    let segment = key_list_segments(source, span)
+        .into_iter()
+        .find(|segment| segment.start <= cursor && cursor <= segment.end)?;
+    if let Some(span) = bibliography_file_span(source, segment.clone()) {
+        // The path completer does not decode TeX escapes. Replacing only the
+        // prefix before an escape would leave a duplicate filename suffix.
+        if source[span.clone()].contains('\\') {
+            return None;
+        }
+        return (span.start <= cursor && cursor <= span.end).then_some(span.start..cursor);
+    }
+    name_literal_pieces(source, segment)
+        .iter()
+        .all(|span| source[span.clone()].trim().is_empty())
+        .then_some(cursor..cursor)
+}
+
 pub(crate) fn active_key_list_prefix(
     source: &str,
     start: usize,

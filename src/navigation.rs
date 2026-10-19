@@ -351,14 +351,29 @@ pub(crate) fn document_links_in(workspace: &Workspace, uri: &Url, root: &Url) ->
             None if matches!(command.name.as_str(), "url" | "href") => &[],
             None => continue,
         };
-        let multiple = syntax::file_list(&command.name);
-        let mut start = argument.span.start;
-        for name in if multiple {
-            argument.value.split(',').collect::<Vec<_>>()
+        let names = if let Some(spans) = syntax::bibliography_file_spans(&doc.text.source, command)
+        {
+            spans
+                .into_iter()
+                .map(|span| (span.clone(), &doc.text.source[span]))
+                .collect::<Vec<_>>()
         } else {
-            vec![argument.value.as_str()]
-        } {
-            let span = syntax::trimmed_span(&doc.text.source, start..start + name.len());
+            let values = if syntax::file_list(&command.name) {
+                argument.value.split(',').collect::<Vec<_>>()
+            } else {
+                vec![argument.value.as_str()]
+            };
+            let mut start = argument.span.start;
+            values
+                .into_iter()
+                .map(|name| {
+                    let span = syntax::trimmed_span(&doc.text.source, start..start + name.len());
+                    start += name.len() + 1;
+                    (span, name)
+                })
+                .collect()
+        };
+        for (span, name) in names {
             let value = unescape(if command.name == "bibliographystyle" {
                 name
             } else {
@@ -388,7 +403,6 @@ pub(crate) fn document_links_in(workspace: &Workspace, uri: &Url, root: &Url) ->
                     data: None,
                 });
             }
-            start += name.len() + 1;
         }
     }
     let mut seen = BTreeSet::new();
