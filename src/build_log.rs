@@ -2334,18 +2334,25 @@ fn bibliography_quoted_path(
     };
     let mut candidate = None;
     let mut ambiguous = false;
+    let terminated = |tail: &str| {
+        let after = tail.trim_start_matches([',', ':', ';', ')', ']', '}', '.']);
+        tail.is_empty()
+            || (after.len() != tail.len()
+                && (after.is_empty() || after.starts_with(char::is_whitespace)))
+    };
     for (end, _) in body.match_indices(quote) {
         let tail = &body[end + 1..];
-        // Apostrophes inside filenames are literal. Prefer a closing
-        // quote followed by the log's line field or message punctuation;
-        // an internal .bib or quote followed by more name text is not an
-        // excuse to resolve an existing shorter file.
-        let strong = tail.is_empty()
-            || tail.starts_with([',', ':', ';', ')', ']', '}'])
-            || tail.trim_start().starts_with("line ")
-            || tail
-                .strip_prefix('.')
-                .is_some_and(|tail| tail.is_empty() || tail.starts_with(char::is_whitespace));
+        // Message punctuation must itself end at a separator. For example,
+        // the quote in refs.bib':copy.bib is still part of the filename.
+        // A whitespace-only boundary is tentative unless it introduces a
+        // complete line field: `line 700 copy.bib` is still name text.
+        let line = tail.trim_start().strip_prefix("line ").is_some_and(|tail| {
+            let end = tail
+                .find(|ch: char| !ch.is_ascii_digit())
+                .unwrap_or(tail.len());
+            end > 0 && terminated(tail[end..].trim_start())
+        });
+        let strong = terminated(tail) || line;
         if strong {
             return (resolve(&body[..end]), start..start + end + 2);
         }
@@ -2956,6 +2963,75 @@ mod tests {
                         Range::new(Position::new(2, 6), Position::new(2, 11))
                     );
                 }
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn biber_quoted_paths_keep_punctuation_and_line_text_after_literal_quotes() {
+        for suffix in [
+            ":copy.bib",
+            ";copy.bib",
+            ")copy.bib",
+            "]copy.bib",
+            "}copy.bib",
+            ",copy.bib",
+            "),;copy.bib",
+            " line 700 copy.bib",
+            " line 700.copy.bib",
+        ] {
+            for quote in ['\'', '"'] {
+                let directory = tempfile::tempdir().unwrap();
+                let root = directory.path();
+                let main = root.join("main.tex");
+                let name = format!("中文 refs.bib{quote}{suffix}");
+                let target = root.join(&name);
+                std::fs::write(&main, "\\cite{entry}\n").unwrap();
+                for decoy in ["中文 refs.bib", "copy.bib"] {
+                    std::fs::write(root.join(decoy), "@book{entry,title={Wrong}}\n").unwrap();
+                }
+                std::fs::write(&target, "% header\n\n@book{entry,title={Actual}}\n").unwrap();
+                for message in [
+                    format!("syntax error in file {quote}{name}{quote}, line 3"),
+                    format!("syntax error on line 3 in file {quote}{name}{quote}"),
+                    format!("syntax error {quote}{name}{quote}: line 3"),
+                ] {
+                    let log = format!("INFO - Found BibTeX data source '{name}'\nERROR - {message}\nWARN - Missing field for entry 'entry' (file {quote}{name}{quote})\n");
+                    let diagnostics = parse_bibliography(&main, &log);
+                    let items = diagnostics
+                        .get(&Url::from_file_path(&target).unwrap())
+                        .unwrap_or_else(|| panic!("{log}: {diagnostics:?}"));
+                    assert_eq!(diagnostics.len(), 1, "{log}: {diagnostics:?}");
+                    assert_eq!(items.len(), 2);
+                    assert!(
+                        items
+                            .iter()
+                            .all(|item| item.range.start.line == 2 && !unresolved_location(item)),
+                        "{log}: {items:?}"
+                    );
+                    let warning = items
+                        .iter()
+                        .find(|item| item.severity == Some(DiagnosticSeverity::WARNING))
+                        .unwrap();
+                    assert_eq!(
+                        warning.range,
+                        Range::new(Position::new(2, 6), Position::new(2, 11))
+                    );
+                }
+                std::fs::remove_file(&target).unwrap();
+                let log = format!("INFO - Found BibTeX data source '中文 refs.bib'\nERROR - syntax error in file {quote}{name}{quote}, line 3\nWARN - Missing field for entry 'entry' (file {quote}{name}{quote})\n");
+                let diagnostics = parse_bibliography(&main, &log);
+                assert_eq!(diagnostics.len(), 1, "{log}: {diagnostics:?}");
+                let items = &diagnostics[&Url::from_file_path(&main).unwrap()];
+                assert_eq!(items.len(), 2);
+                assert!(
+                    items.iter().all(|item| item
+                        .data
+                        .as_ref()
+                        .is_some_and(|data| data["unresolvedSource"] == true)),
+                    "{log}: {items:?}"
+                );
             }
         }
     }

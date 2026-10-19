@@ -416,6 +416,42 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn bibliography_bindings_preserve_literal_quotes_and_attached_punctuation() {
+        for quote in ['\'', '"'] {
+            for suffix in [
+                ":copy.bib",
+                ";copy.bib",
+                ")copy.bib",
+                "]copy.bib",
+                "}copy.bib",
+                ",copy.bib",
+                " line 700 copy.bib",
+            ] {
+                let directory = tempfile::tempdir().unwrap();
+                let root = directory.path();
+                let name = format!("refs.bib{quote}{suffix}");
+                let path = root.join(&name);
+                std::fs::write(&path, "@book{entry}\n").unwrap();
+                std::fs::write(root.join("refs.bib"), "decoy\n").unwrap();
+                let main = root.join("main.tex");
+                let blg = root.join("main.blg");
+                let log = format!("INFO - Found BibTeX data source '{name}'\n");
+                let paths = BibliographyPaths::new(&main, &blg, &log);
+                let inputs = classified_bibliography_inputs(&paths, &log);
+                assert_eq!(inputs.all, [Url::from_file_path(&path).unwrap()].into());
+                assert_eq!(inputs.bindings, [(path.clone(), path.clone())].into());
+                assert!(inputs.unresolved_bindings.is_empty());
+                std::fs::remove_file(&path).unwrap();
+                let inputs = classified_bibliography_inputs(&paths, &log);
+                assert!(inputs.all.is_empty());
+                assert!(inputs.bindings.is_empty());
+                assert_eq!(inputs.unresolved_bindings, [path].into());
+            }
+        }
+    }
+
+    #[test]
     fn bibliography_inputs_resolve_bibtex_and_biber_names_without_diagnostic_false_positives() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();

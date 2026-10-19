@@ -2639,6 +2639,142 @@ EXECUTE {end.bib}
 
 #[test]
 #[cfg(unix)]
+fn biber_quoted_sources_keep_diagnostics_navigation_and_rename_on_the_complete_database() {
+    for quote in ['\'', '"'] {
+        for suffix in [
+            ":copy.bib",
+            ";copy.bib",
+            ")copy.bib",
+            "]copy.bib",
+            "}copy.bib",
+            ",copy.bib",
+            " line 700 copy.bib",
+        ] {
+            let script = "cp \"${2%/*}/fixture.blg\" \"$1/main.blg\"\nprintf 'INPUT %s\\n' \"$2\" > \"$1/main.fls\"\nexit 1\n";
+            let (mut server, directory, main) = fake_build_server_capabilities(
+                script,
+                false,
+                json!({"textDocument":{"diagnostic":{}},"workspace":{"workspaceEdit":{"documentChanges":true}}}),
+            );
+            let root = directory.path();
+            std::fs::create_dir(root.join(".inputs")).unwrap();
+            let name = format!(".inputs/refs.bib{quote}{suffix}");
+            let bib = Url::from_file_path(root.join(&name)).unwrap();
+            let decoy = Url::from_file_path(root.join(".inputs/refs.bib")).unwrap();
+            std::fs::write(
+                bib.to_file_path().unwrap(),
+                "% 中文 😀 header\n\n@book{entry,title={Actual}}\n",
+            )
+            .unwrap();
+            std::fs::write(
+                decoy.to_file_path().unwrap(),
+                "@book{entry,title={Wrong}}\n",
+            )
+            .unwrap();
+            let source = "\\documentclass{article}\n\\cite{entry}\n% \\cite{entry}\n";
+            std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+            server.notify(
+                "textDocument/didChange",
+                json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+            );
+            server.notify("textDocument/didSave", json!({"textDocument":{"uri":main}}));
+            let fixture = root.join("fixture.blg");
+            std::fs::write(&fixture, format!("INFO - Found BibTeX data source '{name}'\nERROR - syntax error in file {quote}{name}{quote}, line 3\nWARN - Missing field for entry 'entry' (file {quote}{name}{quote})\n")).unwrap();
+            server.request(
+                2,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            let finished = server.until(|message| message["method"] == "latex/buildFinished");
+            assert_eq!(finished["params"]["status"], "error", "{finished}");
+            let diagnostics = server.request(
+                3,
+                "textDocument/diagnostic",
+                json!({"textDocument":{"uri":bib}}),
+            );
+            let items: Vec<_> = diagnostics["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|item| item["source"] == "latex-build")
+                .collect();
+            assert_eq!(items.len(), 2, "{name}: {diagnostics}");
+            assert!(
+                items.iter().all(|item| item["range"]["start"]["line"] == 2),
+                "{name}: {diagnostics}"
+            );
+            let warning = items.iter().find(|item| item["severity"] == 2).unwrap();
+            assert_eq!(
+                warning["range"],
+                json!({"start":{"line":2,"character":6},"end":{"line":2,"character":11}})
+            );
+            let target = json!({"textDocument":{"uri":main},"position":{"line":1,"character":8}});
+            let definitions = server.request(4, "textDocument/definition", target.clone());
+            assert_eq!(
+                definitions.as_array().unwrap().len(),
+                1,
+                "{name}: {definitions}"
+            );
+            assert_eq!(definitions[0]["uri"], json!(bib));
+            let edit = server.request(5, "textDocument/rename", json!({"textDocument":{"uri":main},"position":target["position"],"newName":"renamed"}));
+            let changes = edit["documentChanges"].as_array().unwrap();
+            assert_eq!(changes.len(), 2, "{name}: {edit}");
+            for change in changes {
+                let uri = &change["textDocument"]["uri"];
+                assert!(
+                    uri == main.as_str() || uri == bib.as_str(),
+                    "{name}: {edit}"
+                );
+                assert_eq!(
+                    change["textDocument"]["version"],
+                    if uri == main.as_str() {
+                        json!(2)
+                    } else {
+                        Value::Null
+                    }
+                );
+                assert_eq!(change["edits"].as_array().unwrap().len(), 1);
+                assert_eq!(change["edits"][0]["newText"], "renamed");
+                assert_eq!(
+                    change["edits"][0]["range"]["start"]["line"],
+                    if uri == main.as_str() { 1 } else { 2 }
+                );
+            }
+            std::fs::write(
+                &fixture,
+                format!("INFO - Found BibTeX data source '{name}'\n"),
+            )
+            .unwrap();
+            server.request(
+                6,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            server.until(|message| message["method"] == "latex/buildFinished");
+            for (index, uri) in [&main, &bib, &decoy].into_iter().enumerate() {
+                let diagnostics = server.request(
+                    7 + index as u64,
+                    "textDocument/diagnostic",
+                    json!({"textDocument":{"uri":uri}}),
+                );
+                assert!(
+                    diagnostics["items"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .all(|item| !item["message"].as_str().unwrap().starts_with("Biber:")),
+                    "{name}: {diagnostics}"
+                );
+            }
+            server.request(10, "shutdown", Value::Null);
+            server.notify("exit", Value::Null);
+            server.wait_exit(0);
+        }
+    }
+}
+
+#[test]
+#[cfg(unix)]
 fn bibliography_logs_discover_inputs_without_replacing_or_losing_tex_recorder_dependencies() {
     let script = "printf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf 'INPUT main.tex\\nINPUT .inputs/chapter.tex\\n' > \"$1/main.fls\"\nif [ ! -f \"$1/main.blg\" ]; then\n printf 'The top-level auxiliary file: build/latex-lsp/main.aux\\nDatabase file #1: .inputs/refs.bib\\nThe style file: .inputs/local.bst\\n' > \"$1/main.blg\"\nfi\n";
     let (mut server, directory, main) = fake_build_server(script, false);
