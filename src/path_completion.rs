@@ -18,7 +18,10 @@ pub fn complete(
     let Some(extensions) = syntax::file_extensions(command) else {
         return vec![];
     };
-    let prefix = &doc.text.source[span.clone()];
+    let raw_prefix = &doc.text.source[span.clone()];
+    let compact = syntax::file_name_ignores_spaces(command);
+    let normalized_prefix = compact.then(|| syntax::loader_name(raw_prefix));
+    let prefix = normalized_prefix.as_deref().unwrap_or(raw_prefix);
     if prefix.contains(['\\', '%', '#', '$', '&', '{', '}', '^', '~']) {
         return vec![];
     }
@@ -38,12 +41,25 @@ pub fn complete(
     let argument_end = input_argument.map_or(doc.text.source.len(), |argument| argument.span.end);
     let suffix = &doc.text.source[span.end..argument_end];
     let suffix_length = suffix
-        .find(['/', '{', '}', ',', '\\', '%', '\n', '\r'])
+        .find(|ch| {
+            matches!(ch, '/' | '{' | '}' | ',' | '\\' | '%')
+                || !compact && matches!(ch, '\n' | '\r')
+        })
         .unwrap_or(suffix.len());
     let suffix_length = suffix[..suffix_length].trim_end().len();
     let existing_slash = suffix.as_bytes().get(suffix_length) == Some(&b'/');
-    let existing_name = &doc.text.source[span.start + separator..span.end + suffix_length];
-    let range = doc.text.range(span.start, span.end + suffix_length);
+    // Normalization changes byte lengths; edits and suffix inspection still
+    // use offsets in the original document, including UTF-8 and CRLF.
+    let raw_separator = raw_prefix.rfind('/').map_or(0, |index| index + 1);
+    let raw_name = &doc.text.source[span.start + raw_separator..span.end + suffix_length];
+    let normalized_name = compact.then(|| syntax::loader_name(raw_name));
+    let existing_name = normalized_name.as_deref().unwrap_or(raw_name);
+    let Some((range, additional_edits)) =
+        syntax::name_completion_ranges(&doc.text, span.start..span.end + suffix_length, span.end)
+    else {
+        return vec![];
+    };
+    let filter_prefix = raw_prefix.rsplit('\n').next().unwrap_or(raw_prefix);
     let roots = workspace
         .root_document(uri)
         .map(|root| vec![root])
@@ -79,6 +95,8 @@ pub fn complete(
             };
             if !name.starts_with(name_prefix)
                 || name.starts_with('.') && !name_prefix.starts_with('.')
+                || (compact || command == "bibliographystyle")
+                    && name.contains([' ', '\t', '\r', '\n'])
                 || name.contains([
                     '\\', '%', '#', '$', '&', '{', '}', '^', '~', '"', '\n', '\r',
                 ])
@@ -154,7 +172,9 @@ pub fn complete(
                 label.clone(),
                 CompletionItem {
                     label: label.clone(),
-                    filter_text: Some(label.clone()),
+                    // Clients filter against the text before the cursor. Keep
+                    // its spelling while displaying the real target path.
+                    filter_text: Some(format!("{filter_prefix}{}", &label[prefix.len()..])),
                     sort_text: Some(format!("{}{label}", if folder { "0" } else { "1" })),
                     detail: Some(entry.path().display().to_string()),
                     kind: Some(if folder {
@@ -166,6 +186,8 @@ pub fn complete(
                         range: edit_range,
                         new_text,
                     })),
+                    additional_text_edits: (!additional_edits.is_empty())
+                        .then(|| additional_edits.clone()),
                     ..Default::default()
                 },
             );

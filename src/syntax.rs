@@ -456,6 +456,10 @@ pub(crate) fn loader_name(value: &str) -> String {
     value.replace([' ', '\t', '\n', '\r'], "")
 }
 
+pub(crate) fn file_name_ignores_spaces(command: &str) -> bool {
+    loader_extension(command).is_some() || command == "bibliography"
+}
+
 pub(crate) fn file_lookup_names<'a>(
     command: &str,
     value: &'a str,
@@ -467,7 +471,7 @@ pub(crate) fn file_lookup_names<'a>(
             ["tex", "sty", "cls", "def", "clo", "fd", "aux", "bbl", "ldf"].contains(&extension)
         });
     let loader = loader_extension(command);
-    let normalized = (loader.is_some() || command == "bibliography").then(|| loader_name(value));
+    let normalized = file_name_ignores_spaces(command).then(|| loader_name(value));
     let literal = normalized.as_deref().unwrap_or(value);
     let empty = literal.is_empty();
     let extension = loader.unwrap_or(match command {

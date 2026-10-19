@@ -20,11 +20,24 @@ fn apply_completion(workspace: &mut Workspace, uri: &Url, marked: &str, label: &
     let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
         panic!();
     };
-    text.changed(vec![TextDocumentContentChangeEvent {
-        range: Some(edit.range),
-        range_length: None,
-        text: edit.new_text.clone(),
-    }])
+    assert_eq!(edit.range.start.line, edit.range.end.line);
+    assert!(edit.range.start <= text.position(offset) && text.position(offset) <= edit.range.end);
+    let mut edits = item.additional_text_edits.clone().unwrap_or_default();
+    edits.push(edit.clone());
+    edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
+    for pair in edits.windows(2) {
+        assert!(pair[1].range.end <= pair[0].range.start);
+    }
+    text.changed(
+        edits
+            .into_iter()
+            .map(|edit| TextDocumentContentChangeEvent {
+                range: Some(edit.range),
+                range_length: None,
+                text: edit.new_text,
+            })
+            .collect(),
+    )
     .unwrap()
     .source
 }
@@ -323,4 +336,213 @@ fn file_completions_filter_types_hidden_files_and_ignored_regions_and_bound_resu
         .len(),
         256
     );
+}
+
+#[test]
+fn loader_and_database_completions_match_compacted_names_and_replace_raw_utf16_ranges() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::create_dir(root.join("mydir")).unwrap();
+    for ext in ["sty", "cls", "bib"] {
+        std::fs::write(root.join(format!("mydir/文献.{ext}")), "Source.").unwrap();
+    }
+    let uri = Url::from_file_path(root.join("main.tex")).unwrap();
+    let mut workspace = Workspace::default();
+    for (command, ext) in [
+        ("usepackage", "sty"),
+        ("RequirePackage", "sty"),
+        ("RequirePackageWithOptions", "sty"),
+        ("documentclass", "cls"),
+        ("LoadClass", "cls"),
+        ("LoadClassWithOptions", "cls"),
+        ("bibliography", "bib"),
+    ] {
+        for whitespace in [" ", "\t", "\n", "\r\n"] {
+            let marked =
+                format!("😀 \\{command}{{my{whitespace}dir/文{whitespace}|旧}}[2020/01/01]");
+            let expected = format!("😀 \\{command}{{mydir/文献}}[2020/01/01]");
+            let completed =
+                apply_completion(&mut workspace, &uri, &marked, &format!("mydir/文献.{ext}"));
+            assert_eq!(completed, expected, "{marked:?}");
+            let offset = marked.find('|').unwrap();
+            let source = Text::new(marked.replace('|', ""));
+            let items = features::completion(&workspace, &uri, source.position(offset));
+            let item = items
+                .iter()
+                .find(|item| item.label == format!("mydir/文献.{ext}"))
+                .unwrap();
+            let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+                panic!()
+            };
+            let typed = &source.source[source.offset(edit.range.start).unwrap()..offset];
+            assert!(item.filter_text.as_ref().unwrap().starts_with(typed));
+            workspace.open(uri.clone(), completed, 2);
+            assert_eq!(
+                latex_lsp::navigation::document_links(&workspace, &uri)[0].target,
+                Some(Url::from_file_path(root.join(format!("mydir/文献.{ext}"))).unwrap())
+            );
+        }
+    }
+    assert_eq!(
+        apply_completion(
+            &mut workspace,
+            &uri,
+            "\\bibliography{prior, my dir/文|旧.b ib, next}",
+            "mydir/文献.bib"
+        ),
+        r"\bibliography{prior, mydir/文献.bib, next}"
+    );
+}
+
+#[test]
+fn compacting_loaders_exclude_unrepresentable_directory_completions() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    for folder in ["mydir", "my dir"] {
+        std::fs::create_dir(root.join(folder)).unwrap();
+    }
+    let uri = Url::from_file_path(root.join("main.tex")).unwrap();
+    let mut workspace = Workspace::default();
+    for command in [
+        "usepackage",
+        "RequirePackageWithOptions",
+        "documentclass",
+        "LoadClassWithOptions",
+        "bibliography",
+        "bibliographystyle",
+    ] {
+        let source = format!("\\{command}{{my");
+        workspace.open(uri.clone(), source.clone(), 1);
+        let items = features::completion(
+            &workspace,
+            &uri,
+            Text::new(source.clone()).position(source.len()),
+        );
+        assert!(
+            items.iter().any(|item| item.label == "mydir/"),
+            "{command}: {items:?}"
+        );
+        assert!(
+            !items.iter().any(|item| item.label == "my dir/"),
+            "{command}: {items:?}"
+        );
+    }
+    for command in ["input", "addbibresource"] {
+        assert_eq!(
+            apply_completion(
+                &mut workspace,
+                &uri,
+                &format!("\\{command}{{my|/file}}"),
+                "my dir/"
+            ),
+            format!("\\{command}{{my dir/file}}")
+        );
+    }
+}
+
+#[test]
+fn style_completion_does_not_leave_invalid_whitespace_outside_the_replacement() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::write(root.join("local.bst"), "STYLE").unwrap();
+    let uri = Url::from_file_path(root.join("main.tex")).unwrap();
+    let mut workspace = Workspace::default();
+    for marked in [
+        r"\bibliographystyle{ lo|cal}",
+        r"\bibliographystyle{lo|cal }",
+        r"\bibliographystyle{lo| cal}",
+        "\\bibliographystyle{\tlo|cal}",
+        "\\bibliographystyle{lo|cal\n}",
+        r"\bibliographystyle{ lo|",
+    ] {
+        let offset = marked.find('|').unwrap();
+        let source = marked.replace('|', "");
+        workspace.open(uri.clone(), source.clone(), 1);
+        let items = features::completion(&workspace, &uri, Text::new(source).position(offset));
+        assert!(
+            !items
+                .iter()
+                .any(|item| item.kind == Some(CompletionItemKind::FILE)),
+            "{marked:?}: {items:?}"
+        );
+    }
+}
+
+#[test]
+fn multiline_path_completions_remove_suffix_lines_and_avoid_overlapping_empty_insertions() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::create_dir(root.join("mydir")).unwrap();
+    for name in ["local.sty", "refs.bib"] {
+        std::fs::write(root.join("mydir").join(name), "Source.").unwrap();
+    }
+    let uri = Url::from_file_path(root.join("main.tex")).unwrap();
+    let mut workspace = Workspace::default();
+    for (marked, label, expected) in [
+        (
+            "😀 \\usepackage{my dir/lo| \r\ncal}",
+            "mydir/local.sty",
+            r"😀 \usepackage{mydir/local}",
+        ),
+        (
+            "\\bibliography{first, my dir/re|fs.b \nib, last}",
+            "mydir/refs.bib",
+            r"\bibliography{first, mydir/refs.bib, last}",
+        ),
+    ] {
+        assert_eq!(
+            apply_completion(&mut workspace, &uri, marked, label),
+            expected
+        );
+    }
+    let marked = "\\usepackage{mydir/\n|\nlocal}";
+    let offset = marked.find('|').unwrap();
+    let source = marked.replace('|', "");
+    workspace.open(uri.clone(), source.clone(), 1);
+    let items = features::completion(&workspace, &uri, Text::new(source).position(offset));
+    assert!(!items
+        .iter()
+        .any(|item| item.kind == Some(CompletionItemKind::FILE)));
+}
+
+#[test]
+#[ignore = "requires pdflatex and xelatex"]
+fn completed_multiline_package_paths_load_the_suggested_file_in_real_compilers() {
+    for engine in ["pdflatex", "xelatex"] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        std::fs::create_dir(root.join("mylibs")).unwrap();
+        std::fs::write(
+            root.join("mylibs/localpkg.sty"),
+            r"\typeout{COMPLETED PACKAGE LOADED}",
+        )
+        .unwrap();
+        let main = root.join("main.tex");
+        let uri = Url::from_file_path(&main).unwrap();
+        let mut workspace = Workspace::default();
+        workspace.add_root(root.into());
+        let marked = "% 😀\r\n\\documentclass{article}\r\n\\usepackage{my \r\n libs/lo ca|l}\r\n\\begin{document}Hello.\\end{document}\r\n";
+        let completed = apply_completion(&mut workspace, &uri, marked, "mylibs/localpkg.sty");
+        assert!(completed.contains(r"\usepackage{mylibs/localpkg}"));
+        std::fs::write(&main, &completed).unwrap();
+        workspace.open(uri.clone(), completed, 2);
+        let outcome = latex_lsp::build::run(
+            &main,
+            &latex_lsp::config::BuildConfig {
+                executable: engine.into(),
+                ..Default::default()
+            },
+            &Default::default(),
+        );
+        assert_eq!(outcome.status, "success", "{engine}: {}", outcome.output);
+        assert!(
+            outcome.output.contains("COMPLETED PACKAGE LOADED"),
+            "{}",
+            outcome.output
+        );
+        assert_eq!(
+            latex_lsp::navigation::document_links(&workspace, &uri)[0].target,
+            Some(Url::from_file_path(root.join("mylibs/localpkg.sty")).unwrap())
+        );
+    }
 }

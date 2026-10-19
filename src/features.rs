@@ -545,7 +545,15 @@ fn argument_span(doc: &Document, command: &Command, offset: usize) -> Option<Spa
         at = syntax::skip_space(source, after);
     }
     let value = source.get(at..offset)?.strip_prefix('{')?;
-    if value.contains(['{', '}', '\n', '%']) {
+    if value.contains(['{', '}', '%'])
+        || value.contains('\n') && !syntax::file_name_ignores_spaces(&command.name)
+        || command.name == "bibliographystyle"
+            && (value.contains([' ', '\t', '\r', '\n'])
+                || command
+                    .argument
+                    .as_ref()
+                    .is_some_and(|argument| argument.value.contains([' ', '\t', '\r', '\n'])))
+    {
         return None;
     }
     let key = value.rsplit(',').next()?.trim_start();
