@@ -35,6 +35,343 @@ fn check(definitions: &str, marked: &str, label: &str, active: u32) {
 }
 
 #[test]
+fn xparse_bang_optionals_preserve_space_tokens_and_delete_adjacent_comments() {
+    for declaration in [
+        "NewDocumentCommand",
+        "RenewDocumentCommand",
+        "ProvideDocumentCommand",
+        "DeclareDocumentCommand",
+    ] {
+        for (spec, label) in [
+            ("m !o", r"\probe{#1}[#2]"),
+            ("m +!O{DEF}", r"\probe{#1}[#2=DEF]"),
+        ] {
+            let definition = format!("\\{declaration}\\probe{{{spec}}}{{#1}}");
+            for separator in [
+                "",
+                "% ignored\n",
+                "% ignored\r\n \t",
+                "% first\n % second\n   ",
+            ] {
+                let call = format!("😀 \\probe{{BODY}}{separator}[RE¦D]");
+                check(&definition, &call, label, 1);
+                let (workspace, uri, position) = setup(&definition, &call);
+                let help = signature::help(&workspace, &uri, position).unwrap();
+                assert!(help.signatures[0].parameters.as_ref().unwrap()[1]
+                    .documentation
+                    .is_some());
+            }
+            for separator in [" ", "\t", "\n", "\r\n", " % ignored\n", "% ignored\n\n"] {
+                let call = format!("\\probe{{BODY}}{separator}[RE¦D]");
+                let (workspace, uri, position) = setup(&definition, &call);
+                assert!(
+                    signature::help(&workspace, &uri, position).is_none(),
+                    "{spec}; {call}"
+                );
+            }
+            let (workspace, _, _) = setup(&definition, r"\pro¦");
+            let scope = workspace.documents.keys().cloned().collect();
+            assert_eq!(
+                signature::completion(&workspace, "probe", &scope).unwrap(),
+                (label.into(), Some("probe{${1:arg1}}".into()))
+            );
+        }
+    }
+}
+
+#[test]
+fn xparse_bang_initial_optionals_follow_control_word_and_named_call_tokenization() {
+    let definitions =
+        r"\NewDocumentCommand\probe{!O{DEF}}{#1}\NewDocumentEnvironment{panel}{!o}{}{}";
+    for (command, label, active, ignores_spaces) in [
+        (r"\probe", r"\probe[#1=DEF]", 0, true),
+        (r"\csuse{probe}", r"\csuse{probe}[#1=DEF]", 0, false),
+        (
+            r"\csname probe\endcsname",
+            r"\csname probe\endcsname[#1=DEF]",
+            0,
+            true,
+        ),
+        (r"\begin{panel}", r"\begin{panel}[#1]", 1, false),
+        (r"\panel", r"\panel[#1]", 0, true),
+        (r"\csuse{panel}", r"\csuse{panel}[#1]", 0, false),
+        (
+            r"\csname panel\endcsname",
+            r"\csname panel\endcsname[#1]",
+            0,
+            true,
+        ),
+    ] {
+        for separator in [
+            "",
+            " ",
+            "\t",
+            "\r\n",
+            "% comment\r\n  ",
+            "% first\n % second\n ",
+            "\n\n",
+            "% comment\n\n",
+        ] {
+            let call = format!("{command}{separator}[RE¦D]");
+            let comment_only = separator.starts_with('%') && !separator.ends_with("\n\n");
+            let expected = separator.is_empty()
+                || comment_only
+                || (ignores_spaces && !separator.ends_with("\n\n"));
+            if expected {
+                check(definitions, &call, label, active);
+            } else {
+                let (workspace, uri, position) = setup(definitions, &call);
+                assert!(
+                    signature::help(&workspace, &uri, position).is_none(),
+                    "{call}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn xparse_bang_delimiters_flags_and_later_optionals_keep_independent_space_rules() {
+    for (spec, prefix, label, control_word) in [
+        (
+            r"r\OPEN\CLOSE !o",
+            r"\probe\OPEN BODY\CLOSE",
+            r"\probe\OPEN#1\CLOSE[#2]",
+            true,
+        ),
+        (r"r\{\} !o", r"\probe\{BODY\}", r"\probe\{#1\}[#2]", false),
+        (r"t\FLAG !o", r"\probe\FLAG", r"\probe\FLAG[#2]", true),
+        ("t+ !o", r"\probe+", r"\probe+[#2]", false),
+        ("s !o", r"\probe*", r"\probe*[#2]", false),
+    ] {
+        let definition = format!("\\NewDocumentCommand\\probe{{{spec}}}{{}}");
+        check(&definition, &format!("{prefix}[RE¦D]"), label, 1);
+        for separator in [" ", "\r\n", "% ignored\n "] {
+            let call = format!("{prefix}{separator}[RE¦D]");
+            if control_word || separator.starts_with('%') {
+                check(&definition, &call, label, 1);
+            } else {
+                let (workspace, uri, position) = setup(&definition, &call);
+                assert!(
+                    signature::help(&workspace, &uri, position).is_none(),
+                    "{call}"
+                );
+            }
+        }
+    }
+    for (spec, call, label, active) in [
+        ("m !d<>", r"\probe{BODY}<RE¦D>", r"\probe{#1}<#2>", 1),
+        (
+            "m !D<>{DEF}",
+            r"\probe{BODY}<{a>b}RE¦D>",
+            r"\probe{#1}<#2=DEF>",
+            1,
+        ),
+        (r"m !t\FLAG", r"\probe{BODY}\FL¦AG", r"\probe{#1}\FLAG", 1),
+        ("m !o o", r"\probe{BODY} [RE¦D]", r"\probe{#1}[#2][#3]", 2),
+        (
+            "m !o o",
+            r"\probe{BODY}[ONE] [RE¦D]",
+            r"\probe{#1}[#2][#3]",
+            2,
+        ),
+        ("m !t+ o", r"\probe{BODY} [RE¦D]", r"\probe{#1}+[#3]", 2),
+    ] {
+        check(
+            &format!("\\NewDocumentCommand\\probe{{{spec}}}{{}}"),
+            call,
+            label,
+            active,
+        );
+    }
+    for (spec, call) in [
+        ("m !d<>", r"\probe{BODY} <RE¦D>"),
+        ("m !D<>{DEF}", r"\probe{BODY} <RE¦D>"),
+        (r"m !t\FLAG", r"\probe{BODY} \FL¦AG"),
+        ("m !o !o", r"\probe{BODY}[ONE] [RE¦D]"),
+    ] {
+        let (workspace, uri, position) =
+            setup(&format!("\\NewDocumentCommand\\probe{{{spec}}}{{}}"), call);
+        assert!(
+            signature::help(&workspace, &uri, position).is_none(),
+            "{call}"
+        );
+    }
+}
+
+#[test]
+fn xparse_bang_rejects_invalid_prefix_positions_and_expandable_specs() {
+    for (declaration, spec) in [
+        ("NewDocumentCommand", "!o m"),
+        ("NewDocumentCommand", "!t+ r<>"),
+        ("NewDocumentCommand", "m !o R(){DEF}"),
+        ("NewDocumentCommand", "!m"),
+        ("NewDocumentCommand", "m !!o"),
+        ("NewDocumentCommand", "m !"),
+        ("NewDocumentCommand", "m !+"),
+        ("NewExpandableDocumentCommand", "m !o"),
+        ("RenewExpandableDocumentCommand", "!o"),
+        ("ProvideExpandableDocumentCommand", "!t+"),
+        ("DeclareExpandableDocumentCommand", "!d<>"),
+    ] {
+        let definition = format!("\\{declaration}\\probe{{{spec}}}{{}}");
+        let (workspace, uri, position) = setup(&definition, r"\probe{BODY}[RE¦D]");
+        assert!(
+            signature::help(&workspace, &uri, position).is_none(),
+            "{definition}"
+        );
+        let scope = workspace.documents.keys().cloned().collect();
+        assert!(
+            signature::completion(&workspace, "probe", &scope).is_none(),
+            "{definition}"
+        );
+    }
+}
+
+#[test]
+fn absent_optional_lookahead_preserves_spaces_for_later_bang_parameters() {
+    for first in ["o", "s", "t+", "d()"] {
+        let definition = format!("\\NewDocumentCommand\\probe{{m {first} !d<>}}{{}}");
+        let label = format!(
+            "\\probe{{#1}}{}<#3>",
+            match first {
+                "o" => "[#2]",
+                "s" => "*",
+                "t+" => "+",
+                _ => "(#2)",
+            }
+        );
+        check(&definition, r"\probe{BODY}<RE¦D>", &label, 2);
+        check(&definition, "\\probe{BODY}% comment\n  <RE¦D>", &label, 2);
+        for separator in [" ", "\t", "\r\n", " % comment\n", "\n\n"] {
+            let call = format!("\\probe{{BODY}}{separator}<RE¦D>");
+            let (workspace, uri, position) = setup(&definition, &call);
+            assert!(
+                signature::help(&workspace, &uri, position).is_none(),
+                "{first}; {call}"
+            );
+        }
+    }
+    check(
+        r"\NewDocumentCommand\probe{o !d<>}{}",
+        r"\probe <RE¦D>",
+        r"\probe[#1]<#2>",
+        1,
+    );
+    let (workspace, uri, position) = setup(
+        r"\NewDocumentCommand\probe{o !d<>}{}",
+        r"\csuse{probe} <RE¦D>",
+    );
+    assert!(signature::help(&workspace, &uri, position).is_none());
+}
+
+#[test]
+fn paragraph_tokens_end_grouped_call_signatures_instead_of_becoming_whitespace() {
+    for (definition, call) in [
+        ("", "\\frac{one}\n\n{tw¦o}"),
+        ("", "\\sqrt\r\n\r\n[3]{val¦ue}"),
+        ("", "\\section% adjacent comment\n\n{Tit¦le}"),
+        ("", "\\begin\n\n{tabular}{l¦c}"),
+        (r"\newcommand\probe[2][DEF]{#2}", "\\probe\n\n[RED]{BO¦DY}"),
+        (
+            r"\NewDocumentCommand\probe{om}{}",
+            "\\probe\n\n[RED]{BO¦DY}",
+        ),
+    ] {
+        let (workspace, uri, position) = setup(definition, call);
+        assert!(
+            signature::help(&workspace, &uri, position).is_none(),
+            "{call}"
+        );
+    }
+    check(
+        "",
+        "\\frac{one}% remove endline\n\t{tw¦o}",
+        r"\frac{numerator}{denominator}",
+        1,
+    );
+    check(
+        "",
+        "\\section\r\n  {Tit¦le}",
+        r"\section[short title]{title}",
+        1,
+    );
+}
+
+#[test]
+#[ignore = "requires pdflatex, xelatex and etoolbox"]
+fn xparse_bang_signatures_match_real_optional_values_in_macros_and_environments() {
+    use latex_lsp::{build, config::BuildConfig};
+    use std::sync::atomic::AtomicBool;
+    let definitions = r"\NewDocumentCommand\probe{m !O{DEF}}{\typeout{PROBE=#2}}
+\NewDocumentCommand\initial{!O{DEF}}{\typeout{INITIAL=#1}}
+\NewDocumentCommand\control{r\OPEN\CLOSE !O{DEF}}{\typeout{CONTROL=#2}}
+\NewDocumentCommand\flag{t+ !O{DEF}}{\typeout{FLAG=#2}}
+\NewDocumentEnvironment{panel}{!O{DEF}}{\typeout{PANEL=#1}}{}";
+    let calls = [
+        (r"\probe{BODY}[RE¦D]", Some((r"\probe{#1}[#2=DEF]", 1))),
+        (r"\probe{BODY} [RE¦D]", None),
+        (
+            "\\probe{BODY}% comment\r\n [RE¦D]",
+            Some((r"\probe{#1}[#2=DEF]", 1)),
+        ),
+        (r"\initial [RE¦D]", Some((r"\initial[#1=DEF]", 0))),
+        (r"\csuse{initial} [RE¦D]", None),
+        (
+            r"\csname initial\endcsname [RE¦D]",
+            Some((r"\csname initial\endcsname[#1=DEF]", 0)),
+        ),
+        (
+            r"\control\OPEN BODY\CLOSE [RE¦D]",
+            Some((r"\control\OPEN#1\CLOSE[#2=DEF]", 1)),
+        ),
+        (r"\flag+ [RE¦D]", None),
+        (r"\begin{panel} [RE¦D]\end{panel}", None),
+        (r"\panel [RE¦D]\endpanel", Some((r"\panel[#1=DEF]", 0))),
+    ];
+    for (call, expected) in &calls {
+        if let Some((label, active)) = expected {
+            check(definitions, call, label, *active);
+        } else {
+            let (workspace, uri, position) = setup(definitions, call);
+            assert!(
+                signature::help(&workspace, &uri, position).is_none(),
+                "{call}"
+            );
+        }
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    let source = format!("\\documentclass{{article}}\n\\usepackage{{etoolbox}}\n{definitions}\n\\begin{{document}}\nBody.\n{}\n\\end{{document}}\n", calls.iter().map(|(call, _)| call.replace('¦', "")).collect::<Vec<_>>().join("\n"));
+    std::fs::write(&main, source).unwrap();
+    for engine in ["pdflatex", "xelatex"] {
+        let config = BuildConfig {
+            executable: engine.into(),
+            ..Default::default()
+        };
+        let result = build::run(&main, &config, &AtomicBool::new(false));
+        assert_eq!(result.status, "success", "{}", result.output);
+        for (marker, count) in [
+            ("PROBE=RED", 2),
+            ("PROBE=DEF", 1),
+            ("INITIAL=RED", 2),
+            ("INITIAL=DEF", 1),
+            ("CONTROL=RED", 1),
+            ("FLAG=DEF", 1),
+            ("PANEL=DEF", 1),
+            ("PANEL=RED", 1),
+        ] {
+            assert_eq!(
+                result.output.matches(marker).count(),
+                count,
+                "{}",
+                result.output
+            );
+        }
+    }
+}
+
+#[test]
 fn xparse_delimited_parameters_track_defaults_nesting_and_omitted_arguments() {
     for declaration in [
         "NewDocumentCommand",

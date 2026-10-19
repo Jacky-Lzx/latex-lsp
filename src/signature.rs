@@ -24,6 +24,7 @@ enum Kind {
 }
 
 struct Parameter {
+    obey_spaces: bool,
     kind: Kind,
     label: String,
 }
@@ -68,7 +69,9 @@ impl Signature {
                         .into_iter()
                         .map(|parameter| ParameterInformation {
                             label: ParameterLabel::Simple(parameter.label),
-                            documentation: None,
+                            documentation: parameter.obey_spaces.then(|| Documentation::String(
+                                "An intervening TeX space prevents this optional argument from being read (xparse !).".into(),
+                            )),
                         })
                         .collect(),
                 ),
@@ -503,6 +506,7 @@ fn builtin(name: &str) -> Option<Signature> {
         .iter()
         .enumerate()
         .map(|(index, (label, optional))| Parameter {
+            obey_spaces: false,
             kind: if index == 1
                 && matches!(
                     name,
@@ -620,6 +624,7 @@ fn definition(uri: &Url, doc: &Document, entry: &Entry, environment: bool) -> Op
         | "DeclareMathAccent"
         | "DeclareMathRadical" => {
             parameters.push(Parameter {
+                obey_spaces: false,
                 kind: Kind::Required,
                 label: "{#1}".into(),
             });
@@ -636,15 +641,18 @@ fn definition(uri: &Url, doc: &Document, entry: &Entry, environment: bool) -> Op
                 count
             };
             parameters.push(Parameter {
+                obey_spaces: false,
                 kind: Kind::Star,
                 label: "*".into(),
             });
             parameters.push(Parameter {
+                obey_spaces: false,
                 kind: Kind::UnstarredOptional,
                 label: "[size]".into(),
             });
             for number in 1..=count {
                 parameters.push(Parameter {
+                    obey_spaces: false,
                     kind: Kind::Required,
                     label: format!("{{#{number}}}"),
                 });
@@ -682,6 +690,7 @@ fn definition(uri: &Url, doc: &Document, entry: &Entry, environment: bool) -> Op
                     format!("{{#{number}}}")
                 };
                 parameters.push(Parameter {
+                    obey_spaces: false,
                     kind: if optional {
                         Kind::Optional
                     } else {
@@ -704,14 +713,29 @@ fn definition(uri: &Url, doc: &Document, entry: &Entry, environment: bool) -> Op
             let (arguments, _) = syntax::group(source, i, b'{', b'}')?;
             let source = &arguments.value;
             let mut i = 0;
+            let mut obey_spaces = false;
+            let mut seen_obey_spaces = false;
             while i < source.len() {
                 i = syntax::skip_space(source, i);
                 let Some(&kind) = source.as_bytes().get(i) else {
                     break;
                 };
                 i += 1;
-                if matches!(kind, b'+' | b'!') {
+                if kind == b'+' {
                     continue;
+                }
+                if kind == b'!' {
+                    if obey_spaces || declaration.contains("ExpandableDocumentCommand") {
+                        return None;
+                    }
+                    obey_spaces = true;
+                    seen_obey_spaces = true;
+                    continue;
+                }
+                // The kernel permits ! only on the final optional arguments.
+                // A mandatory argument after any such modifier is invalid.
+                if seen_obey_spaces && matches!(kind, b'm' | b'r' | b'R') {
+                    return None;
                 }
                 let number = parameters.len() + 1;
                 let (kind, label) = match kind {
@@ -756,15 +780,24 @@ fn definition(uri: &Url, doc: &Document, entry: &Entry, environment: bool) -> Op
                     }
                     _ => return None,
                 };
-                parameters.push(Parameter { kind, label });
+                parameters.push(Parameter {
+                    kind,
+                    label,
+                    obey_spaces,
+                });
+                obey_spaces = false;
                 if parameters.len() > 9 {
                     return None;
                 }
+            }
+            if obey_spaces {
+                return None;
             }
         }
         "newtheorem" => {
             nested_brackets = false;
             parameters.push(Parameter {
+                obey_spaces: false,
                 kind: Kind::Optional,
                 label: "[note]".into(),
             });
@@ -776,6 +809,7 @@ fn definition(uri: &Url, doc: &Document, entry: &Entry, environment: bool) -> Op
                     return None;
                 }
                 parameters.push(Parameter {
+                    obey_spaces: false,
                     kind: Kind::Required,
                     label: format!("{{#{number}}}"),
                 });
@@ -794,6 +828,7 @@ fn definition(uri: &Url, doc: &Document, entry: &Entry, environment: bool) -> Op
         parameters.insert(
             0,
             Parameter {
+                obey_spaces: false,
                 kind: Kind::Required,
                 label: format!("{{{}}}", entry.name),
             },
@@ -942,10 +977,12 @@ fn builtin_environment(name: &str) -> Option<Signature> {
         _ => return None,
     };
     let mut parameters = vec![Parameter {
+        obey_spaces: false,
         kind: Kind::Required,
         label: format!("{{{name}}}"),
     }];
     parameters.extend(arguments.iter().map(|(label, optional)| Parameter {
+        obey_spaces: false,
         kind: if *optional {
             Kind::Optional
         } else {
@@ -1061,6 +1098,38 @@ fn delimited_end(
     None
 }
 
+/// Readers may ignore spaces, including lexical blanks after a control word.
+/// A comment removes its endline and the next line's indentation. A genuinely
+/// blank line contributes \par even when ordinary space tokens are ignored.
+fn optional_start(source: &str, mut i: usize, ignore_spaces: bool) -> usize {
+    let bytes = source.as_bytes();
+    let mut skip_blanks = ignore_spaces;
+    let mut new_line = false;
+    loop {
+        match bytes.get(i) {
+            Some(b'%') => {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+                if i < bytes.len() {
+                    i += 1;
+                }
+                skip_blanks = true;
+                new_line = true;
+            }
+            Some(b' ' | b'\t') if skip_blanks => i += 1,
+            Some(b'\r' | b'\n') if skip_blanks && !new_line => {
+                if bytes[i] == b'\r' && bytes.get(i + 1) == Some(&b'\n') {
+                    i += 1;
+                }
+                i += 1;
+                new_line = true;
+            }
+            _ => return i,
+        }
+    }
+}
+
 fn active_parameter(
     doc: &Document,
     command: &syntax::Command,
@@ -1070,37 +1139,44 @@ fn active_parameter(
 ) -> Option<usize> {
     let source = &doc.text.source;
     let mut i = end;
+    // Literal control words discard following lexical blanks; named calls
+    // through a grouped csuse argument do not. endcsname is a control word too.
+    let mut control_word_spaces = end == command.span.end;
     let mut starred = false;
     if signature.starred {
-        i = syntax::skip_space(source, i);
-    }
-    if signature.starred && source.as_bytes().get(i) == Some(&b'*') {
-        i += 1;
-        starred = true;
+        let at = optional_start(source, i, true);
+        if source.as_bytes().get(at) == Some(&b'*') {
+            i = at + 1;
+            starred = true;
+            control_word_spaces = false;
+        }
     }
     for (index, parameter) in signature.parameters.iter().enumerate() {
-        i = syntax::skip_space(source, i);
         if starred && matches!(parameter.kind, Kind::UnstarredOptional) {
             continue;
         }
-        if i == cursor {
-            match &parameter.kind {
-                Kind::Optional | Kind::UnstarredOptional
-                    if source.as_bytes().get(i).is_some_and(|byte| *byte != b'[') =>
-                {
-                    continue
-                }
-                Kind::Star if source.as_bytes().get(i).is_some_and(|byte| *byte != b'*') => {
-                    continue
-                }
-                Kind::Delimited {
-                    open,
-                    optional: true,
-                    ..
-                } if token(source, i).is_some_and(|value| value != open) => continue,
-                Kind::Flag(flag) if token(source, i).is_some_and(|value| value != flag) => continue,
-                _ => {}
-            }
+        let before_space = i;
+        i = if parameter.obey_spaces {
+            optional_start(source, i, control_word_spaces)
+        } else {
+            optional_start(source, i, true)
+        };
+        let missing_optional = match &parameter.kind {
+            Kind::Optional | Kind::UnstarredOptional => source.as_bytes().get(i) != Some(&b'['),
+            Kind::Star => source.as_bytes().get(i) != Some(&b'*'),
+            Kind::Flag(flag) => token(source, i) != Some(flag.as_str()),
+            Kind::Delimited {
+                open,
+                optional: true,
+                ..
+            } => token(source, i) != Some(open.as_str()),
+            _ => false,
+        };
+        if missing_optional && i <= cursor && i < source.len() {
+            // Optional lookahead preserves skipped space tokens on a miss.
+            // A later ! parameter must see them even if this reader ignored them.
+            i = before_space;
+            continue;
         }
         if i >= cursor {
             return Some(index);
@@ -1113,6 +1189,7 @@ fn active_parameter(
                         return Some(index);
                     }
                     i = end;
+                    control_word_spaces = syntax::control_word(flag, 0).is_some();
                 }
                 continue;
             }
@@ -1128,7 +1205,10 @@ fn active_parameter(
                     return None;
                 }
                 match delimited_end(doc, i, cursor, open, close) {
-                    Some(end) => i = end,
+                    Some(end) => {
+                        i = end;
+                        control_word_spaces = syntax::control_word(close, 0).is_some();
+                    }
                     None => return Some(index),
                 }
                 continue;
@@ -1139,12 +1219,14 @@ fn active_parameter(
                     return Some(index);
                 }
                 i = end;
+                control_word_spaces = false;
                 continue;
             }
             Kind::Star => {
                 if source.as_bytes().get(i) == Some(&b'*') {
                     i += 1;
                     starred = true;
+                    control_word_spaces = false;
                 }
                 continue;
             }
@@ -1162,7 +1244,10 @@ fn active_parameter(
             group_end(doc, i, cursor, open, close)
         };
         match end {
-            Some(end) => i = end,
+            Some(end) => {
+                i = end;
+                control_word_spaces = false;
+            }
             None => return Some(index),
         }
     }
@@ -1244,6 +1329,7 @@ pub fn help(workspace: &Workspace, uri: &Url, position: Position) -> Option<Sign
                 parameters: ["url", "category", "name", "text"]
                     .into_iter()
                     .map(|label| Parameter {
+                        obey_spaces: false,
                         kind: Kind::Required,
                         label: format!("{{{label}}}"),
                     })
