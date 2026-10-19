@@ -1951,6 +1951,73 @@ fn standard_progress_completes_and_cancellation_uses_the_build_token() {
 
 #[test]
 #[cfg(unix)]
+fn cancelling_before_progress_acknowledgement_preserves_previous_build_artifacts() {
+    for existing in [false, true] {
+        for progress_cancel in [false, true] {
+            let (mut server, directory, uri) = fake_build_server_capabilities(
+                "touch compiler-started\nprintf 'new log' > \"$1/main.log\"\n",
+                false,
+                json!({"window":{"workDoneProgress":true}}),
+            );
+            let output = directory.path().join("build/latex-lsp");
+            let extensions = ["log", "pdf", "fls", "blg", "aux", "synctex.gz"];
+            if existing {
+                std::fs::create_dir_all(&output).unwrap();
+                for extension in extensions {
+                    std::fs::write(output.join(format!("main.{extension}")), "previous build")
+                        .unwrap();
+                }
+            }
+            server.request(
+                2,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[uri]}),
+            );
+            let create =
+                server.until(|message| message["method"] == "window/workDoneProgress/create");
+            if progress_cancel {
+                server.notify(
+                    "window/workDoneProgress/cancel",
+                    json!({"token":create["params"]["token"]}),
+                );
+            } else {
+                let result = server.request(
+                    3,
+                    "workspace/executeCommand",
+                    json!({"command":"latex.cancelBuild","arguments":[uri]}),
+                );
+                assert_eq!(result["cancelled"], 1);
+            }
+            // This response establishes wire order before acknowledging progress.
+            server.request(4, "workspace/symbol", json!({"query":"Title"}));
+            server.send(json!({"jsonrpc":"2.0","id":create["id"],"result":null}));
+            let finished = server.until(|message| message["method"] == "latex/buildFinished");
+            let summary = &finished["params"];
+            assert_eq!(summary["status"], "cancelled", "{finished}");
+            assert_eq!(output.exists(), existing);
+            if existing {
+                for extension in extensions {
+                    assert_eq!(
+                        std::fs::read_to_string(output.join(format!("main.{extension}"))).unwrap(),
+                        "previous build"
+                    );
+                }
+            }
+            assert_eq!(summary["exitCode"], Value::Null);
+            assert_eq!(summary["logUri"], Value::Null);
+            assert_eq!(summary["pdfUri"], Value::Null);
+            assert_eq!(summary["diagnosticsCount"], 0);
+            assert_eq!(summary["output"], "");
+            assert!(!directory.path().join("compiler-started").exists());
+            server.request(5, "shutdown", Value::Null);
+            server.notify("exit", Value::Null);
+            server.wait_exit(0);
+        }
+    }
+}
+
+#[test]
+#[cfg(unix)]
 fn rejected_or_unanswered_progress_requests_do_not_prevent_compilation() {
     for reply in [false, true] {
         let (mut server, _directory, uri) = fake_build_server_capabilities(

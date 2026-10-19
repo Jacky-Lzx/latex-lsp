@@ -693,6 +693,14 @@ pub(crate) fn kill_group(child: &mut Child) {
 }
 
 pub fn run(root: &Path, config: &BuildConfig, cancel: &AtomicBool) -> Outcome {
+    // A task can be cancelled while waiting for client progress registration,
+    // before its worker starts. Preserve existing artifacts in that case.
+    if cancel.load(Ordering::Relaxed) {
+        return Outcome {
+            status: "cancelled",
+            ..Outcome::error("Compilation cancelled".into())
+        };
+    }
     let mut outcome = run_inner(root, config, cancel);
     reject_outdated_pdf(root, &mut outcome, std::iter::once(root.to_path_buf()));
     if outcome.status == "error"

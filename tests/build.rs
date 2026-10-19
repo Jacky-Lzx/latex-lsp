@@ -1256,6 +1256,62 @@ fn arguments_are_passed_without_shell_interpolation_and_dotted_names_work() {
 }
 
 #[test]
+fn builds_cancelled_before_start_preserve_artifacts_and_do_not_create_output_directories() {
+    for existing in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let main = directory.path().join("main.tex");
+        std::fs::write(&main, "source").unwrap();
+        let config = BuildConfig {
+            // Cancellation must take precedence over trying an unavailable tool.
+            executable: directory
+                .path()
+                .join("missing-compiler")
+                .to_string_lossy()
+                .into(),
+            output_directory: "out/reports".into(),
+            job_name: Some("résumé.1".into()),
+            ..Default::default()
+        };
+        let output = directory.path().join(&config.output_directory);
+        let extensions = ["log", "pdf", "fls", "blg", "aux", "synctex.gz"];
+        if existing {
+            std::fs::create_dir_all(&output).unwrap();
+            for extension in extensions {
+                std::fs::write(
+                    config.artifact_path(&main, extension).unwrap(),
+                    "previous build",
+                )
+                .unwrap();
+            }
+        }
+        let outcome = build::run(&main, &config, &AtomicBool::new(true));
+        assert_eq!(outcome.status, "cancelled", "{}", outcome.message);
+        assert_eq!(outcome.message, "Compilation cancelled");
+        assert_eq!(outcome.exit_code, None);
+        assert!(outcome.diagnostics.is_empty());
+        assert!(outcome.diagnostic_sources.is_empty());
+        assert!(!outcome.diagnostics_truncated);
+        assert!(outcome.pdf.is_none());
+        assert!(outcome.log.is_none());
+        assert!(outcome.pages.is_none());
+        assert!(outcome.inputs.is_none());
+        assert!(outcome.bibliography_inputs.is_none());
+        assert!(!outcome.pdf_updated);
+        assert!(outcome.output.is_empty());
+        assert_eq!(output.exists(), existing);
+        if existing {
+            for extension in extensions {
+                assert_eq!(
+                    std::fs::read_to_string(config.artifact_path(&main, extension).unwrap())
+                        .unwrap(),
+                    "previous build"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 #[cfg(unix)]
 fn cancellation_and_timeout_terminate_the_compiler_process_group() {
     for cancelled in [false, true] {
