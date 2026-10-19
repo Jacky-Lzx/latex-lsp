@@ -28,6 +28,73 @@ fn edits_result(source: &str, edits: &[TextEdit]) -> String {
 }
 
 #[test]
+#[ignore = "requires pdflatex and mathtools"]
+fn real_paired_delimiter_renames_preserve_all_sizing_forms_and_formula_dimensions() {
+    use std::sync::atomic::AtomicBool;
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let definitions = concat!(
+        "\\DeclarePairedDelimiter{\\absval}{\\lvert}{\\rvert}\n",
+        "\\DeclarePairedDelimiterX\\innerprod[2]{\\langle}{\\rangle}{#1,#2}\n",
+        "\\DeclarePairedDelimiterXPP{\\scalednorm}[1]{\\mathopen{}}{\\lVert}{\\rVert}{^2}{#1}\n",
+    );
+    let content = concat!(
+        "\\setbox0=\\hbox{$\\absval{x}+\\absval*{\\frac12}+\\absval[\\Big]{x}$}\n",
+        "\\typeout{DELIMITER-AUDIT-ABS:\\the\\wd0/\\the\\ht0/\\the\\dp0}\\box0\n",
+        "\\setbox0=\\hbox{$\\innerprod{x}{y}+\\innerprod*{\\frac12}{y}+\\innerprod[\\Big]{x}{y}$}\n",
+        "\\typeout{DELIMITER-AUDIT-INNER:\\the\\wd0/\\the\\ht0/\\the\\dp0}\\box0\n",
+        "\\setbox0=\\hbox{$\\scalednorm{x}+\\scalednorm*{\\frac12}+\\scalednorm[\\Big]{x}$}\n",
+        "\\typeout{DELIMITER-AUDIT-NORM:\\the\\wd0/\\the\\ht0/\\the\\dp0}\\box0\n",
+        "% \\absval \\innerprod \\scalednorm\n",
+        "\\verb|\\absval \\innerprod \\scalednorm|\n",
+    );
+    std::fs::write(root.join("main.tex"), "\\documentclass{article}\n\\usepackage{mathtools}\n\\input{definitions}\n\\begin{document}\n\\input{content}\n\\end{document}\n").unwrap();
+    std::fs::write(root.join("definitions.tex"), definitions).unwrap();
+    std::fs::write(root.join("content.tex"), content).unwrap();
+    let main = root.join("main.tex");
+    let config = latex_lsp::config::BuildConfig {
+        executable: "pdflatex".into(),
+        ..Default::default()
+    };
+    let before = latex_lsp::build::run(&main, &config, &AtomicBool::new(false));
+    assert_eq!(before.status, "success", "{}", before.output);
+    for name in ["absval", "innerprod", "scalednorm"] {
+        let mut workspace = Workspace::default();
+        workspace.add_root(root.to_owned());
+        let uri = Url::from_file_path(root.join("definitions.tex")).unwrap();
+        let doc = &workspace.documents[&uri];
+        let position = doc
+            .text
+            .position(doc.text.source.find(&format!("\\{name}")).unwrap() + 2);
+        let changes = features::rename(&workspace, &uri, position, &format!("{name}renamed"))
+            .unwrap()
+            .unwrap()
+            .changes
+            .unwrap();
+        assert_eq!(changes.len(), 2);
+        for (uri, edits) in changes {
+            let changed = edits_result(&workspace.documents[&uri].text.source, &edits);
+            std::fs::write(uri.to_file_path().unwrap(), changed).unwrap();
+        }
+    }
+    let after = latex_lsp::build::run(&main, &config, &AtomicBool::new(false));
+    assert_eq!(after.status, "success", "{}", after.output);
+    assert_eq!(after.pages, Some(1));
+    let dimensions = |output: &str| {
+        output
+            .lines()
+            .filter(|line| line.starts_with("DELIMITER-AUDIT-"))
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(dimensions(&before.output).len(), 3);
+    assert_eq!(dimensions(&before.output), dimensions(&after.output));
+    let changed = std::fs::read_to_string(root.join("content.tex")).unwrap();
+    assert!(changed.contains("% \\absval \\innerprod \\scalednorm\n"));
+    assert!(changed.contains(r"\verb|\absval \innerprod \scalednorm|"));
+}
+
+#[test]
 fn pdfbookmark_renames_update_literal_levels_preserve_titles_comments_and_reference_labels() {
     for (option, old_level, new_name, new_level) in [
         ("", "0", "renamed.0", "0"),
@@ -1219,6 +1286,12 @@ fn modern_and_unbraced_macro_declarations_support_navigation_completion_and_rena
         r"\renewcommand* \hello [1] {Hello #1}",
         "\\providecommand % declaration\n\\hello[1]{Hello #1}",
         r"\DeclareMathOperator*{\hello}{hello}",
+        r"\DeclarePairedDelimiter{\hello}{\lvert}{\rvert}",
+        r"\DeclarePairedDelimiter\hello{(}{)}",
+        r"\DeclarePairedDelimiterX{\hello}[2]{\langle}{\rangle}{#1,#2}",
+        r"\DeclarePairedDelimiterX\hello[1]{[}{]}{#1}",
+        r"\DeclarePairedDelimiterXPP{\hello}[1]{\mathopen{}}{\lVert}{\rVert}{^2}{#1}",
+        r"\DeclarePairedDelimiterXPP\hello[1]{}{(}{)}{}{#1}",
         r"\DeclareRobustCommand\hello[1]{#1}",
         r"\newrobustcmd{\hello}[1]{Hello #1}",
         r"\csdef{hello}#1{Hello #1}",

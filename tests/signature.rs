@@ -91,6 +91,159 @@ fn fontspec_declarations_accept_bare_and_grouped_switches_and_both_feature_lists
 }
 
 #[test]
+fn paired_delimiter_signatures_follow_body_counts_and_exclusive_sizing_modes() {
+    for definition in [
+        r"\DeclarePairedDelimiter{\norm}{\lVert}{\rVert}",
+        r"\DeclarePairedDelimiter\norm{(}{)}",
+        r"\DeclarePairedDelimiterX{\norm}[1]{(}{)}{#1}",
+        r"\DeclarePairedDelimiterXPP\norm[1]{\mathopen{}}{(}{)}{^2}{#1}",
+        r"\expandafter\DeclarePairedDelimiterX\csname norm\endcsname[1]{(}{)}{#1}",
+    ] {
+        for (call, active) in [
+            (r"\norm{Te¦xt}", 2),
+            (r"\norm*{Te¦xt}", 2),
+            (r"\norm[\Bi¦g]{Text}", 1),
+            (r"\norm[\Big]{Te¦xt}", 2),
+            ("\\norm % star\r\n* % body\r\n{Te¦xt}", 2),
+        ] {
+            check(definition, call, r"\norm*[size]{#1}", active);
+        }
+        for call in [r"\norm*[\Big]{Te¦xt}", r"\norm{Text}Body¦"] {
+            let (workspace, uri, position) = setup(definition, call);
+            assert!(
+                signature::help(&workspace, &uri, position).is_none(),
+                "{definition}: {call}"
+            );
+        }
+        let (mut workspace, uri, position) = setup(definition, r"\no¦");
+        workspace.snippets = true;
+        let items = latex_lsp::features::completion(&workspace, &uri, position);
+        let item = items.iter().find(|item| item.label == "norm").unwrap();
+        let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+            panic!()
+        };
+        assert_eq!(edit.new_text, "norm{${1:arg1}}");
+    }
+    for definition in [
+        r"\DeclarePairedDelimiterX{\pair}[2]{\langle}{\rangle}{#1,#2}",
+        r"\DeclarePairedDelimiterXPP{\pair}[2]{}{(}{)}{}{#1,#2}",
+    ] {
+        check(definition, r"\pair{one}{tw¦o}", r"\pair*[size]{#1}{#2}", 3);
+        check(definition, r"\pair*{one}{tw¦o}", r"\pair*[size]{#1}{#2}", 3);
+        check(
+            definition,
+            r"\pair[\big]{one}{tw¦o}",
+            r"\pair*[size]{#1}{#2}",
+            3,
+        );
+        let (mut workspace, uri, position) = setup(definition, r"\pa¦");
+        workspace.snippets = true;
+        let items = latex_lsp::features::completion(&workspace, &uri, position);
+        let item = items.iter().find(|item| item.label == "pair").unwrap();
+        let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+            panic!()
+        };
+        assert_eq!(edit.new_text, "pair{${1:arg1}}{${2:arg2}}");
+    }
+    for count in [
+        "",
+        "0",
+        "10",
+        "-1",
+        "9999999999999999999999999",
+        r"\countmacro",
+    ] {
+        let definition = format!("\\DeclarePairedDelimiterX{{\\pair}}[{count}]{{(}}{{)}}{{#1}}");
+        let (workspace, uri, position) = setup(&definition, r"\pair{Te¦xt}");
+        assert!(
+            signature::help(&workspace, &uri, position).is_none(),
+            "{count}"
+        );
+    }
+    let (workspace, uri, position) = setup(
+        r"\DeclarePairedDelimiter{\pair}{(}{)}\DeclarePairedDelimiterX{\pair}[2]{(}{)}{#1,#2}",
+        r"\pair{Te¦xt}",
+    );
+    assert!(signature::help(&workspace, &uri, position).is_none());
+}
+
+#[test]
+fn paired_delimiter_declarations_offer_target_count_and_body_hints_and_snippets() {
+    for (marked, label, active) in [
+        (
+            r"\DeclarePairedDelimiter\norm{le¦ft}{right}",
+            r"\DeclarePairedDelimiter{command}{left}{right}",
+            1,
+        ),
+        (
+            r"\DeclarePairedDelimiter\no¦rm{(}{)}",
+            r"\DeclarePairedDelimiter{command}{left}{right}",
+            0,
+        ),
+        (
+            r"\DeclarePairedDelimiter{\norm}{\lv¦ert}{\rvert}",
+            r"\DeclarePairedDelimiter{command}{left}{right}",
+            1,
+        ),
+        (
+            r"\DeclarePairedDelimiterX\pair[¦2]{(}{)}{#1,#2}",
+            r"\DeclarePairedDelimiterX{command}[arguments]{left}{right}{body}",
+            1,
+        ),
+        (
+            r"\DeclarePairedDelimiterX{\pair}[2]{(}{)}{#1,¦#2}",
+            r"\DeclarePairedDelimiterX{command}[arguments]{left}{right}{body}",
+            4,
+        ),
+        (
+            r"\DeclarePairedDelimiterXPP\norm[1]{pre¦}{(}{)}{post}{#1}",
+            r"\DeclarePairedDelimiterXPP{command}[arguments]{before}{left}{right}{after}{body}",
+            2,
+        ),
+        (
+            r"\DeclarePairedDelimiterXPP{\norm}[1]{pre}{(}{)}{post¦}{#1}",
+            r"\DeclarePairedDelimiterXPP{command}[arguments]{before}{left}{right}{after}{body}",
+            5,
+        ),
+        (
+            r"\DeclarePairedDelimiterXPP{\norm}[1]{pre}{(}{)}{post}{#¦1}",
+            r"\DeclarePairedDelimiterXPP{command}[arguments]{before}{left}{right}{after}{body}",
+            6,
+        ),
+    ] {
+        check("", marked, label, active);
+    }
+    for (name, expected) in [
+        (
+            "DeclarePairedDelimiter",
+            r"DeclarePairedDelimiter{\\${1:command}}{${2:left}}{${3:right}}",
+        ),
+        (
+            "DeclarePairedDelimiterX",
+            r"DeclarePairedDelimiterX{\\${1:command}}[${2:1}]{${3:left}}{${4:right}}{${5:body}}",
+        ),
+        (
+            "DeclarePairedDelimiterXPP",
+            r"DeclarePairedDelimiterXPP{\\${1:command}}[${2:1}]{${3:before}}{${4:left}}{${5:right}}{${6:after}}{${7:body}}",
+        ),
+    ] {
+        let (mut workspace, uri, position) = setup("", &format!("\\{name}¦"));
+        workspace.snippets = true;
+        let items = latex_lsp::features::completion(&workspace, &uri, position);
+        let item = items.iter().find(|item| item.label == name).unwrap();
+        let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+            panic!()
+        };
+        assert_eq!(edit.new_text, expected);
+    }
+    let (workspace, uri, position) = setup("", r"\DeclarePairedDelimiterX{\pair}{(}{)}{Te¦xt}");
+    assert!(
+        signature::help(&workspace, &uri, position).is_none(),
+        "X requires an explicit bracketed count"
+    );
+}
+
+#[test]
 fn pdfbookmark_hints_distinguish_level_title_and_destination_base_and_offer_a_snippet() {
     for (marked, active) in [
         (r"\pdfbookmark[¦1]{Title}{name}", 0),

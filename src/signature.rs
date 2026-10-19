@@ -11,7 +11,9 @@ use tower_lsp::lsp_types::*;
 enum Kind {
     Required,
     CommandToken,
+    RequiredBracket,
     Optional,
+    UnstarredOptional,
     Star,
 }
 
@@ -73,10 +75,21 @@ pub fn completion(
     let mut snippet = name.to_owned();
     let mut tabstop = 0;
     for (index, parameter) in signature.parameters.iter().enumerate() {
-        if matches!(parameter.kind, Kind::Required | Kind::CommandToken) {
-            tabstop += 1;
-            snippet.push_str(&format!("{{${{{tabstop}:arg{}}}}}", index + 1));
-        }
+        let (open, close) = match parameter.kind {
+            Kind::Required | Kind::CommandToken => ('{', '}'),
+            Kind::RequiredBracket => ('[', ']'),
+            _ => continue,
+        };
+        let number = parameter
+            .label
+            .strip_prefix("{#")
+            .and_then(|label| label.strip_suffix('}'))
+            .and_then(|number| number.parse::<usize>().ok())
+            .unwrap_or(index + 1);
+        tabstop += 1;
+        snippet.push(open);
+        snippet.push_str(&format!("${{{tabstop}:arg{number}}}"));
+        snippet.push(close);
     }
     Some((signature.label(), (tabstop > 0).then_some(snippet)))
 }
@@ -187,6 +200,32 @@ fn builtin(name: &str) -> Option<Signature> {
             false,
         ),
         "newfont" => (&[("command", false), ("font", false)], false),
+        "DeclarePairedDelimiter" => (
+            &[("command", false), ("left", false), ("right", false)],
+            false,
+        ),
+        "DeclarePairedDelimiterX" => (
+            &[
+                ("command", false),
+                ("arguments", true),
+                ("left", false),
+                ("right", false),
+                ("body", false),
+            ],
+            false,
+        ),
+        "DeclarePairedDelimiterXPP" => (
+            &[
+                ("command", false),
+                ("arguments", true),
+                ("before", false),
+                ("left", false),
+                ("right", false),
+                ("after", false),
+                ("body", false),
+            ],
+            false,
+        ),
         name if syntax::declares_font_switch(name) => (
             &[
                 ("command", false),
@@ -250,10 +289,19 @@ fn builtin(name: &str) -> Option<Signature> {
         .iter()
         .enumerate()
         .map(|(index, (label, optional))| Parameter {
-            kind: if *optional {
+            kind: if index == 1
+                && matches!(
+                    name,
+                    "DeclarePairedDelimiterX" | "DeclarePairedDelimiterXPP"
+                ) {
+                Kind::RequiredBracket
+            } else if *optional {
                 Kind::Optional
             } else if name == "cslet" && index == 1
-                || (name == "letcs" || syntax::declares_font_switch(name)) && index == 0
+                || (name == "letcs"
+                    || syntax::declares_font_switch(name)
+                    || syntax::declares_paired_delimiter(name))
+                    && index == 0
             {
                 Kind::CommandToken
             } else {
@@ -301,6 +349,32 @@ fn definition(uri: &Url, doc: &Document, entry: &Entry, environment: bool) -> Op
     i = syntax::skip_space(source, i);
     let mut parameters = Vec::new();
     match declaration {
+        declaration if syntax::declares_paired_delimiter(declaration) => {
+            let count = if declaration == "DeclarePairedDelimiter" {
+                1
+            } else {
+                let (argument, _) = syntax::group(source, i, b'[', b']')?;
+                let count = argument.value.trim().parse::<usize>().ok()?;
+                if !(1..=9).contains(&count) {
+                    return None;
+                }
+                count
+            };
+            parameters.push(Parameter {
+                kind: Kind::Star,
+                label: "*".into(),
+            });
+            parameters.push(Parameter {
+                kind: Kind::UnstarredOptional,
+                label: "[size]".into(),
+            });
+            for number in 1..=count {
+                parameters.push(Parameter {
+                    kind: Kind::Required,
+                    label: format!("{{#{number}}}"),
+                });
+            }
+        }
         "newcommand"
         | "renewcommand"
         | "providecommand"
@@ -596,17 +670,24 @@ fn active_parameter(
 ) -> Option<usize> {
     let source = &doc.text.source;
     let mut i = end;
+    let mut starred = false;
     if signature.starred {
         i = syntax::skip_space(source, i);
     }
     if signature.starred && source.as_bytes().get(i) == Some(&b'*') {
         i += 1;
+        starred = true;
     }
     for (index, parameter) in signature.parameters.iter().enumerate() {
         i = syntax::skip_space(source, i);
+        if starred && matches!(parameter.kind, Kind::UnstarredOptional) {
+            continue;
+        }
         if i == cursor {
             match parameter.kind {
-                Kind::Optional if source.as_bytes().get(i).is_some_and(|byte| *byte != b'[') => {
+                Kind::Optional | Kind::UnstarredOptional
+                    if source.as_bytes().get(i).is_some_and(|byte| *byte != b'[') =>
+                {
                     continue
                 }
                 Kind::Star if source.as_bytes().get(i).is_some_and(|byte| *byte != b'*') => {
@@ -630,11 +711,15 @@ fn active_parameter(
             Kind::Star => {
                 if source.as_bytes().get(i) == Some(&b'*') {
                     i += 1;
+                    starred = true;
                 }
                 continue;
             }
-            Kind::Optional if source.as_bytes().get(i) != Some(&b'[') => continue,
-            Kind::Optional => (b'[', b']'),
+            Kind::Optional | Kind::UnstarredOptional if source.as_bytes().get(i) != Some(&b'[') => {
+                continue
+            }
+            Kind::RequiredBracket if source.as_bytes().get(i) != Some(&b'[') => return None,
+            Kind::Optional | Kind::UnstarredOptional | Kind::RequiredBracket => (b'[', b']'),
             Kind::Required if source.as_bytes().get(i) != Some(&b'{') => return None,
             Kind::Required | Kind::CommandToken => (b'{', b'}'),
         };
@@ -682,11 +767,8 @@ pub fn help(workspace: &Workspace, uri: &Url, position: Position) -> Option<Sign
         } else {
             None
         };
-        if literal.as_ref().is_some_and(|span| {
-            doc.syntax
-                .definitions
-                .iter()
-                .any(|entry| entry.span == *span)
+        if doc.syntax.definitions.iter().any(|entry| {
+            entry.span == command.span || literal.as_ref().is_some_and(|span| entry.span == *span)
         }) {
             continue;
         }

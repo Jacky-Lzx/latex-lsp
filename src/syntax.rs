@@ -458,6 +458,7 @@ pub(crate) fn file_lookup_names<'a>(
 fn declares_command(name: &str) -> bool {
     declares_register(name)
         || declares_font_switch(name)
+        || declares_paired_delimiter(name)
         || matches!(
             name,
             "newcommand"
@@ -487,6 +488,13 @@ pub(crate) fn declares_font_switch(name: &str) -> bool {
             | "renewfontface"
             | "providefontface"
             | "setfontface"
+    )
+}
+
+pub(crate) fn declares_paired_delimiter(name: &str) -> bool {
+    matches!(
+        name,
+        "DeclarePairedDelimiter" | "DeclarePairedDelimiterX" | "DeclarePairedDelimiterXPP"
     )
 }
 
