@@ -1221,6 +1221,10 @@ fn error_message(line: &str) -> Option<&str> {
     })
 }
 
+fn fatal_summary(message: &str) -> bool {
+    message.trim() == "==> Fatal error occurred, no output PDF file produced!"
+}
+
 fn incomplete_engine_file(message: &str) -> bool {
     pdftex_error(message)
         && message
@@ -1992,6 +1996,20 @@ pub(crate) fn parse_with_sources(
             None,
             path.confirmed,
         );
+    }
+    // LuaTeX also marks its generic fatal trailer as an error. Keep it only
+    // when the log provides no specific cause, otherwise it can sort before
+    // the actual failure and become the build's misleading summary.
+    let specific_error = result.values().flatten().any(|diagnostic| {
+        diagnostic.severity == Some(DiagnosticSeverity::ERROR)
+            && !diagnostic.message.trim().is_empty()
+            && !fatal_summary(&diagnostic.message)
+    });
+    if specific_error {
+        for diagnostics in result.values_mut() {
+            diagnostics.retain(|diagnostic| !fatal_summary(&diagnostic.message));
+        }
+        result.retain(|_, diagnostics| !diagnostics.is_empty());
     }
     for diagnostics in result.values_mut() {
         diagnostics.sort_by_key(|diagnostic| (diagnostic.range.start, diagnostic.message.clone()));

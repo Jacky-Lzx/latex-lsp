@@ -3,6 +3,136 @@ use std::sync::atomic::AtomicBool;
 use tower_lsp::lsp_types::{DiagnosticSeverity, Url};
 
 #[test]
+fn specific_causes_replace_fatal_summaries_across_sources_and_message_orderings() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    let child = directory.path().join("child.tex");
+    std::fs::write(&main, "Main.\nSecond root line.\n").unwrap();
+    std::fs::write(&child, "Child.\nSecond child line.\n").unwrap();
+    let child_uri = Url::from_file_path(&child).unwrap();
+    for numbered in [false, true] {
+        let cause = if numbered {
+            "./child.tex:2: Missing font resource."
+        } else {
+            "! Missing font resource."
+        };
+        let cause = format!("(./child.tex\n{cause}\n)\n");
+        for summary in [
+            "!  ==> Fatal error occurred, no output PDF file produced!",
+            "./main.tex:1: ==> Fatal error occurred, no output PDF file produced!",
+        ] {
+            for summary_first in [false, true] {
+                let log = if summary_first {
+                    format!("(./main.tex\n{summary}\n{cause})\n")
+                } else {
+                    format!("(./main.tex\n{cause}{summary}\n)\n")
+                };
+                let diagnostics = build_log::parse(&main, &log);
+                assert_eq!(diagnostics.len(), 1, "{log}\n{diagnostics:?}");
+                let entries = &diagnostics[&child_uri];
+                assert_eq!(entries.len(), 1);
+                assert_eq!(entries[0].message, "Missing font resource.");
+                assert_eq!(entries[0].range.start.line, u32::from(numbered));
+            }
+        }
+    }
+}
+
+#[test]
+fn fatal_summary_is_kept_when_it_is_the_only_known_error() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    std::fs::write(&main, "Main.\nSecond.\n").unwrap();
+    for warning in ["", "Package audit Warning: Cosmetic issue.\n"] {
+        for header in ["!  ", "./main.tex:2: "] {
+            let log = format!("(./main.tex\n{warning}{header}==> Fatal error occurred, no output PDF file produced!\n)\n");
+            let diagnostics = build_log::parse(&main, &log);
+            let errors = diagnostics
+                .values()
+                .flatten()
+                .filter(|entry| entry.severity == Some(DiagnosticSeverity::ERROR))
+                .collect::<Vec<_>>();
+            assert_eq!(errors.len(), 1, "{log}\n{diagnostics:?}");
+            assert_eq!(
+                errors[0].message,
+                "==> Fatal error occurred, no output PDF file produced!"
+            );
+        }
+    }
+}
+
+#[test]
+fn fatal_details_are_not_removed_by_generic_summary_cleanup() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    std::fs::write(&main, "Main.\n").unwrap();
+    for detail in [
+        "==> Fatal error occurred, no output PDF file produced! Missing font data.",
+        "Fatal error occurred while loading font data.",
+        "==> Fatal error occurred, no output PDF file produced: missing-font.pfb.",
+    ] {
+        let log = format!("! First error.\n! {detail}\n");
+        let diagnostics = build_log::parse(&main, &log);
+        let entries = &diagnostics[&Url::from_file_path(&main).unwrap()];
+        assert_eq!(entries.len(), 2, "{entries:?}");
+        assert!(entries.iter().any(|entry| entry.message == detail));
+    }
+}
+
+#[test]
+fn fatal_trailers_do_not_move_the_cause_to_a_later_line() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    std::fs::write(&main, "Main.\nUnrelated.\n").unwrap();
+    let log = "(./main.tex\n! Missing font without punctuation\n!  ==> Fatal error occurred, no output PDF file produced!\nl.2 Unrelated.\n)\n";
+    let diagnostics = build_log::parse(&main, log);
+    let entries = &diagnostics[&Url::from_file_path(&main).unwrap()];
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].message, "Missing font without punctuation");
+    assert_eq!(entries[0].range.start.line, 0);
+}
+
+#[test]
+#[ignore = "requires luatex"]
+fn real_luatex_failures_use_the_specific_cause_as_the_build_summary() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    let name = format!("audit-{}missing-font.pfb", "long-name-".repeat(12));
+    std::fs::write(&main, format!("% LuaTeX audit\n\\pdfextension mapline{{=cmr10 CMR10 <{name}}}\n\\font\\auditfont=cmr10 \\auditfont Body.\\bye\n")).unwrap();
+    let config = BuildConfig {
+        executable: "luatex".into(),
+        arguments: Some(
+            [
+                "-synctex=1",
+                "-interaction=nonstopmode",
+                "-halt-on-error",
+                "-file-line-error",
+                "-recorder",
+                "-output-directory=%o",
+                "%f",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+        ),
+        ..Default::default()
+    };
+    let outcome = build::run(&main, &config, &AtomicBool::new(false));
+    assert_eq!(outcome.status, "error", "{}", outcome.output);
+    let errors = outcome
+        .diagnostics
+        .values()
+        .flatten()
+        .filter(|entry| entry.severity == Some(DiagnosticSeverity::ERROR))
+        .collect::<Vec<_>>();
+    assert_eq!(errors.len(), 1, "{errors:?}\n{}", outcome.output);
+    assert_eq!(outcome.message, errors[0].message);
+    assert!(outcome.message.contains(&name));
+    assert!(outcome.message.contains("cannot open file for reading"));
+    assert!(!outcome.message.contains("Fatal error occurred"));
+}
+
+#[test]
 fn pdftex_shipout_errors_keep_complete_font_names_across_byte_wraps() {
     let directory = tempfile::tempdir().unwrap();
     let main = directory.path().join("main.tex");

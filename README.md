@@ -86,6 +86,8 @@ LaTeX 内核的 `NewExpandableDocumentCommand`、`RenewExpandableDocumentCommand
 
 pdfTeX 在输出 PDF 时的 `!pdfTeX error:` 也会显示具体编译诊断，例如缺失的 Type 1 字体文件；保留换行中的完整文件名和错误说明，省略通用的致命退出提示。没有源码行号时定位到主文档开头，避免猜测字体声明位置。
 
+LuaTeX 等引擎的通用致命退出提示在已有具体错误时不再重复显示，编译结果摘要优先展示实际原因；日志没有更具体的错误时，仍保留通用退出错误。
+
 PDF 驱动失败时，XeLaTeX 的 `xdvipdfmx` 和独立 `dvipdfmx` 的 fatal 消息及相关警告同样显示为编译诊断，包括仅写入 stderr 的错误。字体警告中连续的 `>>` 详情会合并，保留实际映射的字体文件名；驱动消息定位到主文档开头，不借用 TeX 子文件或后续行号。
 
 `LaTeX Error: No counter '...' defined.` 可精确标出 `setcounter` / `addtocounter`、`stepcounter` / `refstepcounter` / `usecounter` 的静态计数器名称，保留数值表达式；兼容传统引号、多行参数和同一行的多处调用。宏展开、动态或残缺实参以及无法唯一核对的日志上下文保留整行位置，精确诊断附带 `undefined-counter` 代码及计数器名称数据。
