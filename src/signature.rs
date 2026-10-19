@@ -15,6 +15,11 @@ enum Kind {
     Optional,
     UnstarredOptional,
     Star,
+    Delimited {
+        open: String,
+        close: String,
+        optional: bool,
+    },
 }
 
 struct Parameter {
@@ -33,8 +38,17 @@ struct Signature {
 impl Signature {
     fn label(&self) -> String {
         format!(
-            "\\{}{}",
+            "\\{}{}{}",
             self.name,
+            if self
+                .parameters
+                .first()
+                .is_some_and(|parameter| starts_letter(&parameter.label))
+            {
+                " "
+            } else {
+                ""
+            },
             self.parameters
                 .iter()
                 .map(|parameter| parameter.label.as_str())
@@ -72,13 +86,44 @@ pub fn completion(
     name: &str,
     scope: &BTreeSet<Url>,
 ) -> Option<(String, Option<String>)> {
+    completion_at(workspace, name, scope, "")
+}
+
+pub(crate) fn completion_at(
+    workspace: &Workspace,
+    name: &str,
+    scope: &BTreeSet<Url>,
+    following: &str,
+) -> Option<(String, Option<String>)> {
     let signature = signature(workspace, name, scope)?;
+    // The same argument reader decides whether existing custom delimiters must
+    // be preserved. Stop at the first required argument: later delimiters cannot
+    // start a valid call here.
+    for parameter in &signature.parameters {
+        match &parameter.kind {
+            Kind::Delimited { open, optional, .. } => {
+                if token(following, 0) == Some(open.as_str()) {
+                    return Some((signature.label(), None));
+                }
+                if !optional {
+                    break;
+                }
+            }
+            Kind::Optional | Kind::UnstarredOptional | Kind::Star => {}
+            _ => break,
+        }
+    }
     let mut snippet = name.to_owned();
     let mut tabstop = 0;
     for (index, parameter) in signature.parameters.iter().enumerate() {
-        let (open, close) = match parameter.kind {
-            Kind::Required | Kind::CommandToken => ('{', '}'),
-            Kind::RequiredBracket => ('[', ']'),
+        let (open, close) = match &parameter.kind {
+            Kind::Required | Kind::CommandToken => ("{", "}"),
+            Kind::RequiredBracket => ("[", "]"),
+            Kind::Delimited {
+                open,
+                close,
+                optional: false,
+            } => (open.as_str(), close.as_str()),
             _ => continue,
         };
         let number = parameter
@@ -88,11 +133,43 @@ pub fn completion(
             .and_then(|number| number.parse::<usize>().ok())
             .unwrap_or(index + 1);
         tabstop += 1;
-        snippet.push(open);
+        if tabstop == 1 && starts_letter(open) {
+            snippet.push(' ');
+        }
+        if matches!(parameter.kind, Kind::Delimited { .. }) {
+            push_delimiter(&mut snippet, open);
+        } else {
+            snippet.push_str(open);
+        }
         snippet.push_str(&format!("${{{tabstop}:arg{number}}}"));
-        snippet.push(close);
+        if matches!(parameter.kind, Kind::Delimited { .. }) {
+            push_delimiter(&mut snippet, close);
+        } else {
+            snippet.push_str(close);
+        }
     }
     Some((signature.label(), (tabstop > 0).then_some(snippet)))
+}
+
+fn starts_letter(value: &str) -> bool {
+    value
+        .chars()
+        .next()
+        .is_some_and(|ch| ch.is_alphabetic() || ch == '@')
+}
+
+fn push_delimiter(snippet: &mut String, delimiter: &str) {
+    for ch in delimiter.chars() {
+        if matches!(ch, '\\' | '$' | '}') {
+            snippet.push('\\');
+        }
+        snippet.push(ch);
+    }
+    // A control word followed by an argument placeholder (or another letter
+    // delimiter) needs a separator; TeX discards this space when tokenizing.
+    if delimiter.starts_with('\\') && syntax::control_word(delimiter, 0).is_some() {
+        snippet.push(' ');
+    }
 }
 
 fn builtin(name: &str) -> Option<Signature> {
@@ -644,6 +721,28 @@ fn definition(uri: &Url, doc: &Document, entry: &Entry, environment: bool) -> Op
                         )
                     }
                     b's' => (Kind::Star, "*".into()),
+                    b'd' | b'D' | b'r' | b'R' => {
+                        let (open, end) = delimiter_spec(source, i)?;
+                        let (close, end) = delimiter_spec(source, end)?;
+                        i = end;
+                        let default = if matches!(kind, b'D' | b'R') {
+                            i = syntax::skip_space(source, i);
+                            let (default, end) = syntax::group(source, i, b'{', b'}')?;
+                            i = end;
+                            format!("={}", short(&default.value))
+                        } else {
+                            String::new()
+                        };
+                        let label = format!("{open}#{number}{default}{close}");
+                        (
+                            Kind::Delimited {
+                                open,
+                                close,
+                                optional: matches!(kind, b'd' | b'D'),
+                            },
+                            label,
+                        )
+                    }
                     _ => return None,
                 };
                 parameters.push(Parameter { kind, label });
@@ -715,6 +814,46 @@ fn short(value: &str) -> String {
         .chars()
         .take(80)
         .collect()
+}
+
+/// Read one lexical TeX token without expanding it. In particular, a delimiter
+/// control word must not match a prefix of a longer control word.
+fn token(source: &str, start: usize) -> Option<&str> {
+    let ch = source.get(start..)?.chars().next()?;
+    let end = if ch == '\\' {
+        syntax::control_word(source, start).map_or_else(
+            || {
+                source[start + 1..]
+                    .chars()
+                    .next()
+                    .map(|ch| start + 1 + ch.len_utf8())
+            },
+            |span| Some(span.end),
+        )?
+    } else {
+        start + ch.len_utf8()
+    };
+    Some(&source[start..end])
+}
+
+fn delimiter_spec(source: &str, start: usize) -> Option<(String, usize)> {
+    let start = syntax::skip_space(source, start);
+    let (value, end) = if source.as_bytes().get(start) == Some(&b'{') {
+        let (group, end) = syntax::group(source, start, b'{', b'}')?;
+        (group.value, end)
+    } else {
+        let value = token(source, start)?;
+        (value.to_owned(), start + value.len())
+    };
+    let at = syntax::skip_space(&value, 0);
+    let delimiter = token(&value, at)?;
+    if syntax::skip_space(&value, at + delimiter.len()) != value.len()
+        || delimiter.chars().any(char::is_whitespace)
+        || matches!(delimiter, "{" | "}" | "%" | "#")
+    {
+        return None;
+    }
+    Some((delimiter.to_owned(), end))
 }
 
 fn signature(workspace: &Workspace, name: &str, scope: &BTreeSet<Url>) -> Option<Signature> {
@@ -863,6 +1002,54 @@ fn group_end(doc: &Document, start: usize, cursor: usize, open: u8, close: u8) -
     None
 }
 
+fn delimited_end(
+    doc: &Document,
+    start: usize,
+    cursor: usize,
+    open: &str,
+    close: &str,
+) -> Option<usize> {
+    let source = &doc.text.source;
+    let mut i = start + open.len();
+    let mut depth = 1usize;
+    let mut braces = 0usize;
+    let mut ignored = doc.syntax.ignored.partition_point(|span| span.end <= i);
+    while i < cursor {
+        while doc
+            .syntax
+            .ignored
+            .get(ignored)
+            .is_some_and(|span| span.end <= i)
+        {
+            ignored += 1;
+        }
+        if let Some(span) = doc.syntax.ignored.get(ignored) {
+            if span.start <= i {
+                i = span.end;
+                continue;
+            }
+        }
+        let current = token(source, i)?;
+        i += current.len();
+        if i > cursor {
+            return None;
+        }
+        match current {
+            "{" => braces += 1,
+            "}" => braces = braces.saturating_sub(1),
+            current if current == close && braces == 0 => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            current if current == open && braces == 0 => depth += 1,
+            _ => {}
+        }
+    }
+    None
+}
+
 fn active_parameter(
     doc: &Document,
     command: &syntax::Command,
@@ -886,7 +1073,7 @@ fn active_parameter(
             continue;
         }
         if i == cursor {
-            match parameter.kind {
+            match &parameter.kind {
                 Kind::Optional | Kind::UnstarredOptional
                     if source.as_bytes().get(i).is_some_and(|byte| *byte != b'[') =>
                 {
@@ -895,13 +1082,35 @@ fn active_parameter(
                 Kind::Star if source.as_bytes().get(i).is_some_and(|byte| *byte != b'*') => {
                     continue
                 }
+                Kind::Delimited {
+                    open,
+                    optional: true,
+                    ..
+                } if token(source, i).is_some_and(|value| value != open) => continue,
                 _ => {}
             }
         }
         if i >= cursor {
             return Some(index);
         }
-        let (open, close) = match parameter.kind {
+        let (open, close) = match &parameter.kind {
+            Kind::Delimited {
+                open,
+                close,
+                optional,
+            } => {
+                if token(source, i) != Some(open.as_str()) {
+                    if *optional {
+                        continue;
+                    }
+                    return None;
+                }
+                match delimited_end(doc, i, cursor, open, close) {
+                    Some(end) => i = end,
+                    None => return Some(index),
+                }
+                continue;
+            }
             Kind::CommandToken if source.as_bytes().get(i) != Some(&b'{') => {
                 let end = crate::named_commands::control_argument_end(doc, command, i)?;
                 if cursor <= end {

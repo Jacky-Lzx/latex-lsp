@@ -790,7 +790,12 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
         })
     {
         if entry.name.starts_with(prefix) && seen.insert(entry.name.clone()) {
-            let signature = crate::signature::completion(workspace, &entry.name, &scope);
+            let signature = crate::signature::completion_at(
+                workspace,
+                &entry.name,
+                &scope,
+                &doc.text.source[after_command..],
+            );
             let snippet = signature
                 .as_ref()
                 .and_then(|(_, snippet)| snippet.as_ref())

@@ -35,6 +35,302 @@ fn check(definitions: &str, marked: &str, label: &str, active: u32) {
 }
 
 #[test]
+fn xparse_delimited_parameters_track_defaults_nesting_and_omitted_arguments() {
+    for declaration in [
+        "NewDocumentCommand",
+        "RenewDocumentCommand",
+        "ProvideDocumentCommand",
+        "DeclareDocumentCommand",
+        "NewExpandableDocumentCommand",
+        "RenewExpandableDocumentCommand",
+        "ProvideExpandableDocumentCommand",
+        "DeclareExpandableDocumentCommand",
+    ] {
+        let definitions =
+            format!("\\{declaration}\\probe{{d<> D(){{DEF}} +r|| R[]{{FALL}} m}}{{#5}}");
+        let label = r"\probe<#1>(#2=DEF)|#3|[#4=FALL]{#5}";
+        for (call, active) in [
+            (r"\probe<a<b¦>c>(d(e)f)|same|[req]{BODY}", 0),
+            (r"\probe<a<b>c>(d(e¦)f)|same|[req]{BODY}", 1),
+            (r"\probe<a<b>c>(d(e)f)|sa¦me|[req]{BODY}", 2),
+            (r"\probe<a<b>c>(d(e)f)|same|[r¦eq]{BODY}", 3),
+            (r"\probe<a<b>c>(d(e)f)|same|[req]{BO¦DY}", 4),
+            (r"\probe|sa¦me|[req]{BODY}", 2),
+            (r"\probe|same|[req]{BO¦DY}", 4),
+            (r"\probe¦|same|[req]{BODY}", 2),
+            (r"\probe¦", 0),
+        ] {
+            check(&definitions, call, label, active);
+        }
+        for command in [r"\csuse{probe}", r"\csname probe\endcsname"] {
+            check(
+                &definitions,
+                &format!("{command}|same|[req]{{BO¦DY}}"),
+                &label.replacen(r"\probe", command, 1),
+                4,
+            );
+        }
+    }
+}
+
+#[test]
+fn xparse_delimiters_respect_protected_escaped_and_commented_tokens() {
+    let definition = r"\NewDocumentCommand\probe{d<>m}{#2}";
+    for call in [
+        r"\probe<{a>b}>{BO¦DY}",
+        r"\probe<a\>b>{BO¦DY}",
+        r"\probe<a\<b>{BO¦DY}",
+        r"\probe<a{<}b>{BO¦DY}",
+        "\\probe<a % ignored >\r\n b>{BO¦DY}",
+        "😀 \\probe % skipped <\r\n<a<b>c> % ignored <\r\n{BO¦DY}",
+    ] {
+        check(definition, call, r"\probe<#1>{#2}", 1);
+    }
+    for call in [r"\probe<a<b>c¦>", r"\probe<{a>¦b}>", r"\probe<a\>b¦>"] {
+        check(definition, call, r"\probe<#1>{#2}", 0);
+    }
+    for call in [r"\probe<a>{BODY}¦", r"\probe<a>{BODY} body¦"] {
+        let (workspace, uri, position) = setup(definition, call);
+        assert!(
+            signature::help(&workspace, &uri, position).is_none(),
+            "{call}"
+        );
+    }
+}
+
+#[test]
+fn xparse_control_sequence_and_unicode_delimiters_match_whole_tokens() {
+    for (spec, call, active, label) in [
+        (
+            r"d\OPEN\CLOSE m",
+            r"\probe\OPEN a\OPEN b\CLOSE c\CLOSE{BO¦DY}",
+            1,
+            r"\probe\OPEN#1\CLOSE{#2}",
+        ),
+        (
+            r"d\OPEN\CLOSE m",
+            r"\probe\OPEN x\CLOSEsuffix y¦\CLOSE{BODY}",
+            0,
+            r"\probe\OPEN#1\CLOSE{#2}",
+        ),
+        (
+            r"d\OPEN\CLOSE m",
+            r"\probe\OPEN x\CLOSEsuffix y\CLOSE{BO¦DY}",
+            1,
+            r"\probe\OPEN#1\CLOSE{#2}",
+        ),
+        (
+            r"d\OPEN\CLOSE m",
+            r"\probe\OPEN {\CLOSE} y\CLOSE{BO¦DY}",
+            1,
+            r"\probe\OPEN#1\CLOSE{#2}",
+        ),
+        (
+            r"r\{\}m",
+            r"\probe\{a\{b\}c\}{BO¦DY}",
+            1,
+            r"\probe\{#1\}{#2}",
+        ),
+        ("d«»m", "😀 \\probe«a«b»c»{BO¦DY}", 1, "\\probe«#1»{#2}"),
+        ("d«»m", "\\probe«a«b¦»c»{BODY}", 0, "\\probe«#1»{#2}"),
+        ("d{<}{>}m", r"\probe<a<b>c>{BO¦DY}", 1, r"\probe<#1>{#2}"),
+        ("r||m", r"\probe|one|{BO¦DY}", 1, r"\probe|#1|{#2}"),
+        ("r a b m", r"\probe aoneb{BO¦DY}", 1, r"\probe a#1b{#2}"),
+    ] {
+        check(
+            &format!("\\NewDocumentCommand\\probe{{{spec}}}{{#2}}"),
+            call,
+            label,
+            active,
+        );
+    }
+    for (spec, call) in [
+        (r"d\OPEN\CLOSE m", r"\probe\OPENsuffix a\CLOSE{BO¦DY}"),
+        (r"r<>m", r"\probe{BO¦DY}"),
+        (r"R<>{FALL}m", r"\probe{BO¦DY}"),
+    ] {
+        let definitions = format!("\\NewDocumentCommand\\probe{{{spec}}}{{#2}}");
+        let (workspace, uri, position) = setup(&definitions, call);
+        assert!(
+            signature::help(&workspace, &uri, position).is_none(),
+            "{call}"
+        );
+    }
+}
+
+#[test]
+fn xparse_delimited_environment_signatures_work_for_begins_and_direct_calls() {
+    for declaration in [
+        "NewDocumentEnvironment",
+        "RenewDocumentEnvironment",
+        "ProvideDocumentEnvironment",
+        "DeclareDocumentEnvironment",
+    ] {
+        let definitions = format!("\\{declaration}{{panel}}{{d<>R(){{DEF}}m}}{{}}{{}}");
+        check(
+            &definitions,
+            r"\begin{panel}<a<b¦>c>(req){BODY}",
+            r"\begin{panel}<#1>(#2=DEF){#3}",
+            1,
+        );
+        check(
+            &definitions,
+            r"\begin{panel}(req){BO¦DY}",
+            r"\begin{panel}<#1>(#2=DEF){#3}",
+            3,
+        );
+        check(
+            &definitions,
+            r"\panel<a<b>c>(req){BO¦DY}",
+            r"\panel<#1>(#2=DEF){#3}",
+            2,
+        );
+        check(
+            &definitions,
+            r"\csuse{panel}(req){BO¦DY}",
+            r"\csuse{panel}<#1>(#2=DEF){#3}",
+            2,
+        );
+    }
+}
+
+#[test]
+fn xparse_delimited_completions_insert_required_tokens_and_preserve_existing_arguments() {
+    for (definition, following, expected) in [
+        (
+            r"\NewDocumentCommand\probe{d<>D(){DEF}r||R[]{FALL}m}{}",
+            "",
+            "probe|${1:arg3}|[${2:arg4}]{${3:arg5}}",
+        ),
+        (
+            r"\NewDocumentCommand\probe{r\OPEN\CLOSE m}{}",
+            "",
+            r"probe\\OPEN ${1:arg1}\\CLOSE {${2:arg2}}",
+        ),
+        (
+            r"\NewDocumentCommand\probe{r\{\}m}{}",
+            "",
+            r"probe\\{${1:arg1}\\\}{${2:arg2}}",
+        ),
+        (
+            r"\NewDocumentCommand\probe{r$$m}{}",
+            "",
+            r"probe\$${1:arg1}\${${2:arg2}}",
+        ),
+        (
+            r"\NewDocumentCommand\probe{r a b m}{}",
+            "",
+            "probe a${1:arg1}b{${2:arg2}}",
+        ),
+        (
+            "\\NewDocumentCommand\\probe{r«»m}{}",
+            "",
+            "probe«${1:arg1}»{${2:arg2}}",
+        ),
+        (
+            r"\NewDocumentEnvironment{probe}{d<>r()m}{}{}",
+            "",
+            "probe(${1:arg2}){${2:arg3}}",
+        ),
+        (
+            r"\NewDocumentCommand\probe{d<>r()m}{}",
+            "<old>(req){BODY}",
+            "probe",
+        ),
+        (
+            r"\NewDocumentCommand\probe{d<>r()m}{}",
+            "(req){BODY}",
+            "probe",
+        ),
+        (
+            r"\NewDocumentCommand\probe{r\OPEN\CLOSE m}{}",
+            " % comment\n\\OPEN old\\CLOSE{BODY}",
+            "probe",
+        ),
+    ] {
+        let (mut workspace, uri, position) = setup(definition, &format!("\\pro¦{following}"));
+        workspace.snippets = true;
+        let items = latex_lsp::features::completion(&workspace, &uri, position);
+        let item = items.iter().find(|item| item.label == "probe").unwrap();
+        let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+            panic!("missing edit")
+        };
+        assert_eq!(edit.new_text, expected, "{definition}; {following}");
+        assert_eq!(
+            item.insert_text_format,
+            Some(if expected == "probe" {
+                InsertTextFormat::PLAIN_TEXT
+            } else {
+                InsertTextFormat::SNIPPET
+            })
+        );
+    }
+}
+
+#[test]
+fn xparse_malformed_or_multi_token_delimiters_remain_conservative() {
+    for spec in [
+        "d<",
+        "D<>",
+        "R()",
+        "d{ab}{>}m",
+        "r{}{>}m",
+        "d{#}{>}m",
+        "d<>v",
+        "d<>mmmmmmmmm",
+    ] {
+        let definition = format!("\\NewDocumentCommand\\probe{{{spec}}}{{}}");
+        let (workspace, uri, position) = setup(&definition, r"\probe<value>{BO¦DY}");
+        assert!(
+            signature::help(&workspace, &uri, position).is_none(),
+            "{spec}"
+        );
+        let scope = workspace.documents.keys().cloned().collect();
+        assert!(
+            signature::completion(&workspace, "probe", &scope).is_none(),
+            "{spec}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex and xelatex"]
+fn xparse_delimited_signature_boundaries_match_real_tex_argument_values() {
+    use latex_lsp::{build, config::BuildConfig};
+    use std::sync::atomic::AtomicBool;
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    for engine in ["pdflatex", "xelatex"] {
+        for declaration in ["NewDocumentCommand", "NewExpandableDocumentCommand"] {
+            let definition = format!("\\{declaration}\\probe{{d<>D(){{DEF}}r||R[]{{FALL}}m}}{{\\typeout{{A=\\detokenize{{#1}};B=\\detokenize{{#2}};C=#3;D=#4;E=#5}}}}");
+            let calls = [
+                r"\probe<a<b>c>(d(e)f)|same|[req]{BO¦DY}",
+                r"\probe|same|[req]{BO¦DY}",
+                r"\probe<{a>b}>|same|[req]{BO¦DY}",
+            ];
+            for call in &calls {
+                check(&definition, call, r"\probe<#1>(#2=DEF)|#3|[#4=FALL]{#5}", 4);
+            }
+            let source = format!("\\documentclass{{article}}\n{definition}\n\\begin{{document}}\nBody.\n{}\n\\end{{document}}\n", calls.join("\n").replace('¦', ""));
+            std::fs::write(&main, source).unwrap();
+            let config = BuildConfig {
+                executable: engine.into(),
+                ..Default::default()
+            };
+            let result = build::run(&main, &config, &AtomicBool::new(false));
+            assert_eq!(result.status, "success", "{}", result.output);
+            for marker in [
+                "A=a<b>c;B=d(e)f;C=same;D=req;E=BODY",
+                "A=-NoValue-;B=DEF;C=same;D=req;E=BODY",
+                "A=a>b;B=DEF;C=same;D=req;E=BODY",
+            ] {
+                assert!(result.output.contains(marker), "{}", result.output);
+            }
+        }
+    }
+}
+
+#[test]
 fn text_font_commands_skip_encodings_and_retain_optional_defaults_in_call_signatures() {
     for name in [
         "DeclareTextCommand",
@@ -1283,7 +1579,7 @@ fn signatures_suppress_comments_raw_text_completed_calls_and_unsupported_or_ambi
         ),
         (r"\def\pair#1,#2{#1#2}", r"\pair{a}{b¦}"),
         (r"\csdef{pair}#1,#2{#1#2}", r"\csuse{pair}{a}{b¦}"),
-        (r"\NewDocumentCommand{\pair}{d()m}{#2}", r"\pair{a}{b¦}"),
+        (r"\NewDocumentCommand{\pair}{v m}{#2}", r"\pair{a}{b¦}"),
     ] {
         let (workspace, uri, position) = setup(definitions, source);
         assert!(
@@ -1358,7 +1654,7 @@ fn custom_environment_signatures_follow_latex_and_xparse_declarations() {
     );
     for definitions in [
         r"\newenvironment{panel}[1]{#1}{}",
-        r"\NewDocumentEnvironment{panel}{d()m}{}{}",
+        r"\NewDocumentEnvironment{panel}{v m}{}{}",
         r"\newenvironment{panel}[1]{#1}{}\newenvironment{panel}[1]{#1}{}",
         r"\newenvironment{ panel }[1]{#1}{}",
     ] {
@@ -1468,7 +1764,7 @@ fn direct_environment_calls_use_declared_arguments_and_respect_macro_overrides()
     );
     for definitions in [
         r"\newenvironment{panel}[1]{#1}{}\newenvironment{panel}[2]{#1#2}{}",
-        r"\NewDocumentEnvironment{panel}{d()m}{}{}",
+        r"\NewDocumentEnvironment{panel}{v m}{}{}",
         r"\newenvironment{panel}[1]{#1}{}\renewcommand{\panel}{No arguments}",
     ] {
         let (workspace, uri, position) = setup(definitions, r"\panel{title¦}");
