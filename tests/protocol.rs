@@ -3560,6 +3560,9 @@ fn stdio_lifecycle_incremental_edits_navigation_and_diagnostics() {
         "initialize",
         json!({"processId":null,"rootUri":root,"capabilities":{}}),
     );
+    assert!(initialized["capabilities"]
+        .get("diagnosticProvider")
+        .is_none());
     assert_eq!(initialized["capabilities"]["positionEncoding"], "utf-16");
     assert_eq!(initialized["capabilities"]["textDocumentSync"]["change"], 2);
     server.notify("initialized", json!({}));
@@ -3842,6 +3845,315 @@ fn real_compiler_reference_quick_fixes_remove_label_and_citation_typos_after_reb
     assert_eq!(second["params"]["stale"], false);
     assert_eq!(second["params"]["diagnosticsCount"], 0, "{second}");
     server.request(6, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+fn assert_no_pushed_diagnostics(server: &Server) {
+    assert!(
+        server
+            .pending
+            .borrow()
+            .iter()
+            .all(|message| { message["method"] != "textDocument/publishDiagnostics" }),
+        "pull client received pushed diagnostics"
+    );
+}
+
+#[test]
+fn pull_diagnostics_refresh_without_blocking_and_keep_result_ids_scoped_to_document_versions() {
+    let directory = tempfile::tempdir().unwrap();
+    let uri = Url::from_file_path(directory.path().join("章节.tex")).unwrap();
+    let alternate = uri
+        .as_str()
+        .replace("%E7%AB%A0%E8%8A%82", "%e7%ab%a0%e8%8a%82");
+    let mut server = Server::start();
+    let init = server.request(1000, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(directory.path()).unwrap(),"capabilities":{"textDocument":{"diagnostic":{}},"workspace":{"diagnostic":{"refreshSupport":true}}}}));
+    assert_eq!(
+        init["capabilities"]["diagnosticProvider"],
+        json!({"identifier":"latex-lsp","interFileDependencies":true,"workspaceDiagnostics":true})
+    );
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":alternate,"languageId":"latex","version":1,"text":"😀{"}}),
+    );
+    let refresh = server.until(|message| message["method"] == "workspace/diagnostic/refresh");
+    // Pull before acknowledging refresh: the server's wire-order queue must be free.
+    let first = server.request(
+        1001,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":alternate},"identifier":"latex-lsp"}),
+    );
+    assert_eq!(first["kind"], "full");
+    assert_eq!(first["items"].as_array().unwrap().len(), 1, "{first}");
+    assert_eq!(first["items"][0]["range"]["start"]["character"], 2);
+    let unchanged = server.request(
+        1002,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":uri},"previousResultId":first["resultId"]}),
+    );
+    assert_eq!(
+        unchanged,
+        json!({"kind":"unchanged","resultId":first["resultId"]})
+    );
+    let full = server.request(
+        1003,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":uri},"previousResultId":"unknown"}),
+    );
+    assert_eq!(full, first);
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":alternate,"version":2},"contentChanges":[{"text":"😀{}"}]}),
+    );
+    let cleared = server.request(
+        1004,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":uri},"previousResultId":first["resultId"]}),
+    );
+    assert_eq!(cleared["kind"], "full");
+    assert_eq!(cleared["items"], json!([]));
+    assert_ne!(cleared["resultId"], first["resultId"]);
+    server.send(json!({"jsonrpc":"2.0","id":refresh["id"],"result":null}));
+    // A second invalidation survives even though the earlier refresh was pending.
+    let second_refresh =
+        server.until(|message| message["method"] == "workspace/diagnostic/refresh");
+    server.send(json!({"jsonrpc":"2.0","id":second_refresh["id"],"result":null}));
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":alternate}}),
+    );
+    let removed = server.request(
+        1005,
+        "workspace/diagnostic",
+        json!({"previousResultIds":[{"uri":alternate,"value":cleared["resultId"]}]}),
+    );
+    assert_eq!(removed["items"].as_array().unwrap().len(), 1);
+    assert_eq!(removed["items"][0]["uri"], uri.as_str());
+    assert_eq!(removed["items"][0]["kind"], "full");
+    assert_eq!(removed["items"][0]["items"], json!([]));
+    assert_eq!(removed["items"][0]["version"], Value::Null);
+    server.send(json!({"jsonrpc":"2.0","id":1006,"method":"textDocument/diagnostic","params":{"textDocument":{"uri":uri},"identifier":"another-provider"}}));
+    let error = server.until(|message| message["id"] == 1006);
+    assert_eq!(error["error"]["code"], -32602);
+    server.request(1007, "shutdown", Value::Null);
+    assert_no_pushed_diagnostics(&server);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+fn workspace_pull_diagnostics_follow_project_dependencies_deletions_and_renames() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path();
+    std::fs::write(
+        path.join("main.tex"),
+        r"\documentclass{article}\input{a}\input{b}",
+    )
+    .unwrap();
+    std::fs::write(path.join("a.tex"), r"\label{same}").unwrap();
+    std::fs::write(path.join("b.tex"), r"\label{same}").unwrap();
+    let a = Url::from_file_path(path.join("a.tex")).unwrap();
+    let b = Url::from_file_path(path.join("b.tex")).unwrap();
+    let moved = Url::from_file_path(path.join("moved.tex")).unwrap();
+    let mut server = Server::start();
+    server.request(1100, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(path).unwrap(),"capabilities":{"textDocument":{"diagnostic":{}}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":a,"languageId":"latex","version":7,"text":"\\label{same}"}}),
+    );
+    let first = server.request(
+        1101,
+        "workspace/diagnostic",
+        json!({"previousResultIds":[]}),
+    );
+    let items = first["items"].as_array().unwrap();
+    assert_eq!(items.len(), 3);
+    for uri in [&a, &b] {
+        let item = items
+            .iter()
+            .find(|item| item["uri"] == uri.as_str())
+            .unwrap();
+        assert_eq!(item["items"].as_array().unwrap().len(), 1, "{item}");
+        assert_eq!(item["items"][0]["code"], "duplicate-definition");
+        assert_eq!(
+            item["version"],
+            if uri == &a { json!(7) } else { Value::Null }
+        );
+    }
+    let previous: Vec<_> = items
+        .iter()
+        .map(|item| json!({"uri":item["uri"],"value":item["resultId"]}))
+        .collect();
+    let unchanged = server.request(
+        1102,
+        "workspace/diagnostic",
+        json!({"previousResultIds":previous}),
+    );
+    assert!(unchanged["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|item| item["kind"] == "unchanged"));
+    std::fs::remove_file(path.join("b.tex")).unwrap();
+    server.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({"changes":[{"uri":b,"type":3}]}),
+    );
+    let cleared = server.request(
+        1103,
+        "workspace/diagnostic",
+        json!({"previousResultIds":previous}),
+    );
+    for uri in [&a, &b] {
+        let item = cleared["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["uri"] == uri.as_str())
+            .unwrap();
+        assert_eq!(item["kind"], "full", "{item}");
+        assert_eq!(item["items"], json!([]));
+    }
+    let previous: Vec<_> = cleared["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| json!({"uri":item["uri"],"value":item["resultId"]}))
+        .collect();
+    std::fs::rename(path.join("a.tex"), path.join("moved.tex")).unwrap();
+    server.notify(
+        "workspace/didRenameFiles",
+        json!({"files":[{"oldUri":a,"newUri":moved}]}),
+    );
+    let renamed = server.request(
+        1104,
+        "workspace/diagnostic",
+        json!({"previousResultIds":previous}),
+    );
+    let items = renamed["items"].as_array().unwrap();
+    let old = items.iter().find(|item| item["uri"] == a.as_str()).unwrap();
+    assert_eq!(old["kind"], "full");
+    assert_eq!(old["version"], Value::Null);
+    assert_eq!(old["items"], json!([]));
+    let new = items
+        .iter()
+        .find(|item| item["uri"] == moved.as_str())
+        .unwrap();
+    assert_eq!(new["kind"], "full");
+    assert_eq!(new["version"], 7);
+    assert_eq!(new["items"], json!([]));
+    server.request(1105, "shutdown", Value::Null);
+    assert_no_pushed_diagnostics(&server);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[ignore = "requires pdflatex"]
+fn compiler_pull_diagnostics_refresh_and_offer_versioned_spelling_fixes() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("main.tex");
+    let uri = Url::from_file_path(&path).unwrap();
+    let source = "\\documentclass{article}\n\\begin{document}\n$\\epsilonn$\n\\end{document}\n";
+    std::fs::write(&path, source).unwrap();
+    let mut server = Server::start();
+    server.request(1200, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(directory.path()).unwrap(),"capabilities":{"textDocument":{"diagnostic":{},"codeAction":{"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix"]}}}},"workspace":{"workspaceEdit":{"documentChanges":true},"diagnostic":{"refreshSupport":true}}},"initializationOptions":{"build":{"executable":"pdflatex"}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"latex","version":3,"text":source}}),
+    );
+    let refresh = server.until(|message| message["method"] == "workspace/diagnostic/refresh");
+    server.send(json!({"jsonrpc":"2.0","id":refresh["id"],"result":null}));
+    let before = server.request(
+        1201,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":uri}}),
+    );
+    assert_eq!(before["items"], json!([]));
+    server.request(
+        1202,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[uri]}),
+    );
+    let finished = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(finished["params"]["status"], "error");
+    let refresh = server.until(|message| message["method"] == "workspace/diagnostic/refresh");
+    let built = server.request(
+        1203,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":uri},"previousResultId":before["resultId"]}),
+    );
+    assert_eq!(built["kind"], "full");
+    let diagnostic = built["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["code"] == "undefined-control-sequence")
+        .unwrap();
+    assert_eq!(diagnostic["data"]["command"], "epsilonn");
+    assert_eq!(
+        diagnostic["range"]["start"],
+        json!({"line":2,"character":1})
+    );
+    let actions = server.request(1204, "textDocument/codeAction", json!({"textDocument":{"uri":uri},"range":diagnostic["range"],"context":{"diagnostics":[diagnostic],"only":["quickfix"]}}));
+    let fix = actions
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|action| action["title"] == "Replace with command `\\epsilon`")
+        .unwrap();
+    assert_eq!(
+        fix["edit"]["documentChanges"][0]["textDocument"]["version"],
+        3
+    );
+    let fixed = source.replace("epsilonn", "epsilon");
+    std::fs::write(&path, &fixed).unwrap();
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":uri,"version":4},"contentChanges":[{"text":fixed}]}),
+    );
+    let cleared = server.request(
+        1205,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":uri},"previousResultId":built["resultId"]}),
+    );
+    assert_eq!(cleared["kind"], "full");
+    assert_eq!(cleared["items"], json!([]));
+    server.send(json!({"jsonrpc":"2.0","id":refresh["id"],"result":null}));
+    let refresh = server.until(|message| message["method"] == "workspace/diagnostic/refresh");
+    server.send(json!({"jsonrpc":"2.0","id":refresh["id"],"result":null}));
+    server.request(
+        1206,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[uri]}),
+    );
+    let finished = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(finished["params"]["status"], "success", "{finished}");
+    let unchanged = server.request(
+        1207,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":uri},"previousResultId":cleared["resultId"]}),
+    );
+    assert_eq!(unchanged["kind"], "unchanged");
+    let workspace = server.request(
+        1208,
+        "workspace/diagnostic",
+        json!({"previousResultIds":[]}),
+    );
+    let report = workspace["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["uri"] == uri.as_str())
+        .unwrap();
+    assert_eq!(report["version"], 4);
+    assert_eq!(report["items"], json!([]));
+    server.request(1209, "shutdown", Value::Null);
+    assert_no_pushed_diagnostics(&server);
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }

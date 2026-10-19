@@ -433,7 +433,12 @@ impl BuildManager {
                     .iter()
                     .filter_map(|(uri, doc)| doc.version.is_some().then_some(uri.clone())),
             );
-            let notifications = current.diagnostic_snapshots(affected);
+            let delivery = current.diagnostic_delivery.clone();
+            let notifications = if delivery.is_pull() {
+                vec![]
+            } else {
+                current.diagnostic_snapshots(affected)
+            };
             drop(current);
             {
                 let mut state = state.lock().unwrap();
@@ -441,9 +446,7 @@ impl BuildManager {
                 record.active = None;
                 record.result = Some(result.clone());
             }
-            for (uri, diagnostics, version) in notifications {
-                client.publish_diagnostics(uri, diagnostics, version).await;
-            }
+            delivery.publish(&client, notifications).await;
             if progress {
                 client
                     .send_notification::<notification::Progress>(ProgressParams {

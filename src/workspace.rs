@@ -189,6 +189,7 @@ pub struct Workspace {
     pub build_progress: bool,
     pub code_action_literals: bool,
     pub apply_edits: bool,
+    pub diagnostic_delivery: crate::diagnostic::Delivery,
     pub config: crate::config::Config,
     pub build_diagnostics: BTreeMap<Url, BTreeMap<Url, Vec<tower_lsp::lsp_types::Diagnostic>>>,
     /// Sources confirmed read for each root's latest published build diagnostics.

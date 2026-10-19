@@ -7,6 +7,7 @@
 ## 功能
 
 - 文档同步：完整或增量更新，使用 UTF-16 位置，支持中文、emoji 和 CRLF；拒绝无效编辑和过期版本。
+- LSP 3.17 诊断拉取：协商支持 `textDocument/diagnostic` 和 `workspace/diagnostic`，合并实时、项目重复定义和编译诊断；返回结果 ID，未变更时省略条目，关闭后回到磁盘内容，移动或删除文件后清除旧位置的结果。支持客户端刷新请求，编译完成和跨文件编辑后重新拉取；旧客户端继续接收推送诊断。结果缓存按连接隔离并限制大小。
 - 实时诊断：未闭合/多余花括号、环境不匹配、同一文件内重复的标签或文献键，以及同一项目中跨文件重复的标签和文献键。
 - 快速修复：补全缺失花括号、闭合环境、删除多余的闭合符号，以及编译诊断中标签、文献键、命令、环境、计数器和 PDF 目标的拼写建议；支持版本化编辑和旧客户端的命令式操作，拒绝过期修复。
 - 补全：常用 LaTeX 命令、环境、用户命令、跨文件标签、BibTeX 文献键及输入文件/图片/本地包等路径。支持词中替换，根据客户端能力提供 snippet，并保留已有参数；引用和路径的可选参数含有嵌套命令时，仍可找到当前的键名或文件参数。
@@ -150,9 +151,27 @@ vim.lsp.config('latex_lsp', {
   cmd = { 'latex-lsp', '--stdio' },
   filetypes = { 'tex', 'plaintex', 'bib', 'bst' },
   root_markers = { '.latexmkrc', 'latexmkrc', '.git' },
+  capabilities = { workspace = { diagnostic = { refreshSupport = true } } },
+  handlers = {
+    ['workspace/diagnostic/refresh'] = function(err, result, ctx, config)
+      local response = vim.lsp.handlers['workspace/diagnostic/refresh'](err, result, ctx, config)
+      local client = vim.lsp.get_client_by_id(ctx.client_id)
+      if not err and client and client:supports_method('workspace/diagnostic') then
+        for bufnr in pairs(client.attached_buffers) do
+          client:request('textDocument/diagnostic', {
+            textDocument = { uri = vim.uri_from_bufnr(bufnr) },
+            identifier = client.server_capabilities.diagnosticProvider.identifier,
+          }, nil, bufnr)
+        end
+      end
+      return response
+    end,
+  },
 })
 vim.lsp.enable('latex_lsp')
 ```
+
+上面的能力声明启用服务器主动刷新诊断，处理器同时更新工作区和已打开的文档。Neovim 0.12.6 默认未声明 `refreshSupport`，其默认处理器在启用工作区拉取后还会跳过已按文档拉取的缓冲区；这段配置保证编译完成和跨文件修改后，当前文件也显示最新诊断。
 
 打开 `.tex` 后，可用 `vim.lsp.buf.hover()` 查看提示，`vim.lsp.buf.definition()` 跳转，`vim.lsp.buf.references()` 查找引用，`vim.lsp.buf.rename()` 跨文件重命名。补全可通过 `<C-x><C-o>` 或支持 Neovim LSP 的补全插件触发；snippet 需要客户端声明支持。
 

@@ -6,6 +6,7 @@ pub mod code_lens;
 mod conditionals;
 pub mod config;
 mod counters;
+pub mod diagnostic;
 pub mod dispatch;
 pub mod editing;
 pub mod features;
@@ -50,6 +51,16 @@ fn file_operation_options() -> FileOperationRegistrationOptions {
     }
 }
 
+fn validate_diagnostic_identifier(identifier: Option<&str>) -> Result<()> {
+    if identifier.is_some_and(|identifier| identifier != diagnostic::IDENTIFIER) {
+        Err(tower_lsp::jsonrpc::Error::invalid_params(
+            "Unknown diagnostic provider",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 pub struct Backend {
     client: Client,
     workspace: Arc<RwLock<Workspace>>,
@@ -57,6 +68,7 @@ pub struct Backend {
     sync_queries: synctex::Queries,
     shutdown_requested: AtomicBool,
     semantic_cache: Mutex<semantic_cache::Cache>,
+    diagnostic_cache: Mutex<diagnostic::Cache>,
 }
 
 impl Backend {
@@ -69,6 +81,7 @@ impl Backend {
             workspace,
             shutdown_requested: AtomicBool::new(false),
             semantic_cache: Mutex::new(semantic_cache::Cache::default()),
+            diagnostic_cache: Mutex::new(diagnostic::Cache::default()),
         }
     }
 
@@ -82,18 +95,19 @@ impl Backend {
 
     async fn publish_open(&self) {
         let workspace = self.workspace.read().await;
-        let uris = workspace
-            .documents
-            .iter()
-            .filter(|(_, doc)| doc.version.is_some())
-            .map(|(uri, _)| uri.clone());
-        let snapshots = workspace.diagnostic_snapshots(uris);
+        let delivery = workspace.diagnostic_delivery.clone();
+        let snapshots = if delivery.is_pull() {
+            vec![]
+        } else {
+            let uris = workspace
+                .documents
+                .iter()
+                .filter(|(_, doc)| doc.version.is_some())
+                .map(|(uri, _)| uri.clone());
+            workspace.diagnostic_snapshots(uris)
+        };
         drop(workspace);
-        for (uri, diagnostics, version) in snapshots {
-            self.client
-                .publish_diagnostics(uri, diagnostics, version)
-                .await;
-        }
+        delivery.publish(&self.client, snapshots).await;
     }
 }
 
@@ -101,6 +115,20 @@ impl Backend {
 impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
         let mut workspace = self.workspace.write().await;
+        let pull_diagnostics = params
+            .capabilities
+            .text_document
+            .as_ref()
+            .is_some_and(|document| document.diagnostic.is_some());
+        let diagnostic_refresh = params
+            .capabilities
+            .workspace
+            .as_ref()
+            .and_then(|workspace| workspace.diagnostic.as_ref())
+            .and_then(|diagnostic| diagnostic.refresh_support)
+            .unwrap_or(false);
+        workspace.diagnostic_delivery =
+            diagnostic::Delivery::new(pull_diagnostics, diagnostic_refresh);
         workspace.build_progress = params
             .capabilities
             .window
@@ -186,6 +214,14 @@ impl LanguageServer for Backend {
                 completion_provider: Some(CompletionOptions {
                     trigger_characters: Some(vec!["\\".into(), "{".into(), ",".into(), "/".into()]),
                     ..Default::default()
+                }),
+                diagnostic_provider: pull_diagnostics.then(|| {
+                    DiagnosticServerCapabilities::Options(DiagnosticOptions {
+                        identifier: Some(diagnostic::IDENTIFIER.into()),
+                        inter_file_dependencies: true,
+                        workspace_diagnostics: true,
+                        work_done_progress_options: WorkDoneProgressOptions::default(),
+                    })
                 }),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 signature_help_provider: Some(SignatureHelpOptions {
@@ -278,6 +314,7 @@ impl LanguageServer for Backend {
     async fn shutdown(&self) -> Result<()> {
         self.sync_queries.shutdown().await;
         self.builds.shutdown().await;
+        self.workspace.read().await.diagnostic_delivery.close();
         self.shutdown_requested.store(true, Ordering::Relaxed);
         Ok(())
     }
@@ -342,8 +379,14 @@ impl LanguageServer for Backend {
         workspace.documents.remove(&uri);
         workspace.reload(&uri);
         self.semantic_cache.lock().await.remove(&uri);
+        self.diagnostic_cache.lock().await.remove(&uri);
+        let delivery = workspace.diagnostic_delivery.clone();
         drop(workspace);
-        self.client.publish_diagnostics(uri, vec![], None).await;
+        if !delivery.is_pull() {
+            delivery
+                .publish(&self.client, vec![(uri, vec![], None)])
+                .await;
+        }
         self.publish_open().await;
     }
 
@@ -480,13 +523,14 @@ impl LanguageServer for Backend {
                         .iter()
                         .filter_map(|(uri, doc)| doc.version.is_some().then_some(uri.clone())),
                 );
-                let diagnostics = workspace.diagnostic_snapshots(affected);
+                let delivery = workspace.diagnostic_delivery.clone();
+                let diagnostics = if delivery.is_pull() {
+                    vec![]
+                } else {
+                    workspace.diagnostic_snapshots(affected)
+                };
                 drop(workspace);
-                for (uri, diagnostics, version) in diagnostics {
-                    self.client
-                        .publish_diagnostics(uri, diagnostics, version)
-                        .await;
-                }
+                delivery.publish(&self.client, diagnostics).await;
             }
             Err(error) => {
                 drop(workspace);
@@ -519,6 +563,94 @@ impl LanguageServer for Backend {
         }
         drop(workspace);
         self.publish_open().await;
+    }
+
+    async fn diagnostic(
+        &self,
+        params: DocumentDiagnosticParams,
+    ) -> Result<DocumentDiagnosticReportResult> {
+        validate_diagnostic_identifier(params.identifier.as_deref())?;
+        let uri = document_uri(params.text_document.uri);
+        let workspace = self.workspace.read().await;
+        let snapshot = workspace.diagnostic_snapshots([uri]).pop().unwrap();
+        drop(workspace);
+        let report = self
+            .diagnostic_cache
+            .lock()
+            .await
+            .report(snapshot, params.previous_result_id.as_deref());
+        let report = match report {
+            DocumentDiagnosticReportKind::Full(full_document_diagnostic_report) => {
+                DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport {
+                    related_documents: None,
+                    full_document_diagnostic_report,
+                })
+            }
+            DocumentDiagnosticReportKind::Unchanged(unchanged_document_diagnostic_report) => {
+                DocumentDiagnosticReport::Unchanged(RelatedUnchangedDocumentDiagnosticReport {
+                    related_documents: None,
+                    unchanged_document_diagnostic_report,
+                })
+            }
+        };
+        Ok(report.into())
+    }
+
+    async fn workspace_diagnostic(
+        &self,
+        params: WorkspaceDiagnosticParams,
+    ) -> Result<WorkspaceDiagnosticReportResult> {
+        validate_diagnostic_identifier(params.identifier.as_deref())?;
+        let previous: std::collections::BTreeMap<_, _> = params
+            .previous_result_ids
+            .into_iter()
+            .map(|previous| (document_uri(previous.uri), previous.value))
+            .collect();
+        let workspace = self.workspace.read().await;
+        let uris = workspace
+            .documents
+            .keys()
+            .cloned()
+            .chain(
+                workspace
+                    .build_diagnostics
+                    .values()
+                    .flat_map(|project| project.keys().cloned()),
+            )
+            // Previously reported files may have been removed or renamed. Send
+            // empty reports for them so the client clears their diagnostics.
+            .chain(previous.keys().cloned());
+        let snapshots = workspace.diagnostic_snapshots(uris);
+        drop(workspace);
+        let mut cache = self.diagnostic_cache.lock().await;
+        let items = snapshots
+            .into_iter()
+            .map(|snapshot| {
+                let uri = snapshot.0.clone();
+                let version = snapshot.2.map(i64::from);
+                match cache.report(snapshot, previous.get(&uri).map(String::as_str)) {
+                    DocumentDiagnosticReportKind::Full(full_document_diagnostic_report) => {
+                        WorkspaceDocumentDiagnosticReport::Full(
+                            WorkspaceFullDocumentDiagnosticReport {
+                                uri,
+                                version,
+                                full_document_diagnostic_report,
+                            },
+                        )
+                    }
+                    DocumentDiagnosticReportKind::Unchanged(
+                        unchanged_document_diagnostic_report,
+                    ) => WorkspaceDocumentDiagnosticReport::Unchanged(
+                        WorkspaceUnchangedDocumentDiagnosticReport {
+                            uri,
+                            version,
+                            unchanged_document_diagnostic_report,
+                        },
+                    ),
+                }
+            })
+            .collect();
+        Ok(WorkspaceDiagnosticReport { items }.into())
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
