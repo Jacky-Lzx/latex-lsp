@@ -2190,113 +2190,183 @@ fn bibliography_path(
     } else {
         &["file ", "File "]
     };
-    let quoted = bibliography_fields(message, None).find_map(|(start, _)| {
+    let explicit = bibliography_fields(message, None).find_map(|(start, _)| {
         if message[..start].ends_with(|ch: char| ch.is_alphanumeric() || ch == '_') {
             return None;
         }
         markers.iter().find_map(|marker| {
-            message[start..]
-                .strip_prefix(*marker)
-                .filter(|tail| tail.starts_with(['\'', '"']))
-                .map(|_| start + marker.len())
+            let tail = message[start..].strip_prefix(*marker)?.trim_start();
+            let start = message.len() - tail.len();
+            if tail.starts_with(['\'', '"']) {
+                let (path, span) = bibliography_quoted_path(paths, message, start);
+                Some(BibliographyLocation::Named { path, span })
+            } else {
+                bibliography_unquoted_path(paths, message, start)
+            }
         })
     });
-    if let Some(start) = quoted {
-        let quote = message.as_bytes()[start] as char;
-        let body = &message[start + 1..];
-        let resolve = |name: &str| {
-            name.ends_with(".bib")
-                .then(|| paths.resolve(name))
-                .flatten()
-        };
-        let mut candidate = None;
-        let mut ambiguous = false;
-        for (end, _) in body.match_indices(quote) {
-            let tail = &body[end + 1..];
-            // Apostrophes inside filenames are literal. Prefer a closing
-            // quote followed by the log's line field or message punctuation;
-            // an internal .bib or quote followed by more name text is not an
-            // excuse to resolve an existing shorter file.
-            let strong = tail.is_empty()
-                || tail.starts_with([',', ':', ';', ')', ']', '}'])
-                || tail.trim_start().starts_with("line ")
-                || tail
-                    .strip_prefix('.')
-                    .is_some_and(|tail| tail.is_empty() || tail.starts_with(char::is_whitespace));
-            if strong {
-                return BibliographyLocation::Named {
-                    path: resolve(&body[..end]),
-                    span: start..start + end + 2,
-                };
-            }
-            if tail.starts_with(char::is_whitespace) {
-                ambiguous |= candidate.is_some();
-                candidate = Some(&body[..end]);
-            }
-        }
-        let end = if ambiguous {
-            message.len()
-        } else {
-            candidate.map_or(message.len(), |name| start + name.len() + 2)
-        };
-        return BibliographyLocation::Named {
-            path: if ambiguous {
-                None
-            } else {
-                candidate.and_then(resolve)
-            },
-            span: start..end,
-        };
+    if let Some(location) = explicit {
+        return location;
     }
     // A reported entry key is literal metadata even when it names an
     // existing .bib file. Only text outside that field can name a source.
     let entry_span = match bibliography_entry(message, None) {
-        BibliographyEntry::Key(span) | BibliographyEntry::Unconfirmed(span) => Some(span),
+        BibliographyEntry::Key(span) | BibliographyEntry::Unconfirmed(span) => {
+            Some(span.start - 1..(span.end + 1).min(message.len()))
+        }
         BibliographyEntry::Absent => None,
     };
-    for (index, _) in message.match_indices(".bib") {
-        if entry_span
-            .as_ref()
-            .is_some_and(|span| span.contains(&index))
+    let mut quoted_until = 0;
+    for (index, ch) in message.char_indices() {
+        if index < quoted_until
+            || entry_span
+                .as_ref()
+                .is_some_and(|span| span.contains(&index))
         {
             continue;
         }
-        let end = index + 4;
-        let tail = &message[end..];
-        // Do not turn refs.bib.backup, refs.bib2 or a directory component
-        // into a different existing source. Sentence punctuation may follow
-        // an unquoted filename, but is not part of its extension.
-        let terminated = tail.is_empty()
-            || tail.starts_with(|ch: char| {
-                ch.is_whitespace() || matches!(ch, '\'' | '"' | ',' | ':' | ';' | ')' | ']' | '}')
-            })
-            || tail
-                .strip_prefix('.')
-                .is_some_and(|tail| tail.is_empty() || tail.starts_with(char::is_whitespace));
-        if !terminated {
+        let word_start = !message[..index].ends_with(|ch: char| ch.is_alphanumeric() || ch == '_');
+        if word_start && matches!(ch, '\'' | '"') {
+            let (path, span) = bibliography_quoted_path(paths, message, index);
+            if path.is_some() {
+                return BibliographyLocation::Named { path, span };
+            }
+            let body = &message[index + 1..span.end];
+            let filename = body
+                .match_indices(ch)
+                .any(|(end, _)| body[..end].ends_with(".bib"));
+            // Preserve uncertain filenames as a whole, but keep independent
+            // quoted message strings from hiding a bare path between them.
+            quoted_until = if filename {
+                span.end
+            } else {
+                bibliography_quote_end(message, index).map_or(message.len(), |end| end + 1)
+            };
+            continue;
+        }
+        if !message[index..].starts_with(".bib") {
             continue;
         }
         let prefix = &message[..index];
         let token_start = prefix
-            .rfind(|ch: char| ch.is_whitespace() || matches!(ch, ':' | '(' | '[' | '{'))
-            .map_or(0, |index| index + 1);
-        let starts = prefix
-            .rmatch_indices(['\'', '"'])
-            .take(16)
-            .map(|(index, _)| index + 1)
-            .chain(std::iter::once(token_start));
-        if let Some((path, span)) = starts.into_iter().find_map(|start| {
-            paths
-                .resolve(&message[start..end])
-                .map(|path| (path, start..end))
-        }) {
-            return BibliographyLocation::Named {
-                path: Some(path),
-                span,
-            };
+            .char_indices()
+            .rev()
+            .find(|&(_, ch)| ch.is_whitespace() || matches!(ch, ':' | '(' | '[' | '{'))
+            .map_or(0, |(index, ch)| index + ch.len_utf8());
+        if let Some(location @ BibliographyLocation::Named { path: Some(_), .. }) =
+            bibliography_unquoted_path(paths, message, token_start)
+        {
+            return location;
         }
     }
     BibliographyLocation::Inferred
+}
+
+fn bibliography_unquoted_path(
+    paths: &crate::recorder::BibliographyPaths<'_>,
+    message: &str,
+    start: usize,
+) -> Option<BibliographyLocation> {
+    let body = &message[start..];
+    let token_end = body.find(char::is_whitespace).unwrap_or(body.len());
+    // A whole filename takes precedence over internal .bib fragments or
+    // punctuation. A missing explicit source still restricts entry lookup.
+    let mut extensions = body[..token_end].rmatch_indices(".bib").peekable();
+    extensions.peek()?;
+    let end = extensions.find_map(|(index, _)| {
+        let end = index + 4;
+        let tail = &body[end..];
+        let terminated = tail.is_empty()
+            || tail.starts_with(|ch: char| {
+                ch.is_whitespace() || matches!(ch, ',' | ':' | ';' | ')' | ']' | '}')
+            })
+            || tail
+                .strip_prefix('.')
+                .is_some_and(|tail| tail.is_empty() || tail.starts_with(char::is_whitespace));
+        terminated.then_some(end)
+    });
+    let (path, end) = match end {
+        Some(end) => {
+            let leading = body[..end]
+                .find(|ch| !matches!(ch, '(' | '[' | '{'))
+                .unwrap_or(end);
+            let mut after = &body[end..];
+            let wrapped = body[..leading].chars().rev().all(|open| {
+                let close = match open {
+                    '(' => ')',
+                    '[' => ']',
+                    _ => '}',
+                };
+                if let Some(tail) = after.strip_prefix(close) {
+                    after = tail;
+                    true
+                } else {
+                    false
+                }
+            });
+            // Strip only balanced message wrappers; an unmatched opener
+            // can be a literal filename character and must not be borrowed.
+            if wrapped {
+                (paths.resolve(&body[leading..end]), body.len() - after.len())
+            } else {
+                (paths.resolve(&body[..end]), end)
+            }
+        }
+        None => (None, token_end),
+    };
+    Some(BibliographyLocation::Named {
+        path,
+        span: start..start + end,
+    })
+}
+
+fn bibliography_quoted_path(
+    paths: &crate::recorder::BibliographyPaths<'_>,
+    message: &str,
+    start: usize,
+) -> (Option<PathBuf>, ByteRange<usize>) {
+    let quote = message.as_bytes()[start] as char;
+    let body = &message[start + 1..];
+    let resolve = |name: &str| {
+        name.ends_with(".bib")
+            .then(|| paths.resolve(name))
+            .flatten()
+    };
+    let mut candidate = None;
+    let mut ambiguous = false;
+    for (end, _) in body.match_indices(quote) {
+        let tail = &body[end + 1..];
+        // Apostrophes inside filenames are literal. Prefer a closing
+        // quote followed by the log's line field or message punctuation;
+        // an internal .bib or quote followed by more name text is not an
+        // excuse to resolve an existing shorter file.
+        let strong = tail.is_empty()
+            || tail.starts_with([',', ':', ';', ')', ']', '}'])
+            || tail.trim_start().starts_with("line ")
+            || tail
+                .strip_prefix('.')
+                .is_some_and(|tail| tail.is_empty() || tail.starts_with(char::is_whitespace));
+        if strong {
+            return (resolve(&body[..end]), start..start + end + 2);
+        }
+        if tail.starts_with(char::is_whitespace) {
+            ambiguous |= candidate.is_some();
+            candidate = Some(&body[..end]);
+        }
+    }
+    let end = if ambiguous {
+        message.len()
+    } else {
+        candidate.map_or(message.len(), |name| start + name.len() + 2)
+    };
+    (
+        if ambiguous {
+            None
+        } else {
+            candidate.and_then(resolve)
+        },
+        start..end,
+    )
 }
 
 #[cfg(test)]
@@ -3155,6 +3225,191 @@ mod tests {
                         );
                     }
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn biber_unquoted_sources_take_precedence_over_quoted_error_filenames() {
+        for name in [
+            "refs.bib",
+            "author's.bib",
+            "中文.bib",
+            "dir.bib/refs.bib",
+            "refs.bib,copy.bib",
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let main = root.join("main.tex");
+            let bib = root.join(name);
+            std::fs::create_dir_all(bib.parent().unwrap()).unwrap();
+            std::fs::write(&main, "Text\n").unwrap();
+            for decoy in ["wrong.bib", "s.bib", "copy.bib", "refs.bib"] {
+                std::fs::write(root.join(decoy), "@book{entry,title={Wrong}}\n").unwrap();
+            }
+            std::fs::write(&bib, "% header\n@book{entry,title={Actual}}\n").unwrap();
+            for content in [
+                "\"in 'wrong.bib', line 900\"",
+                "'file \"wrong.bib\"'",
+                "\"wrong.bib\"",
+                "'wrong.bib'",
+            ] {
+                for marker in [
+                    "in file",
+                    "file",
+                    "File",
+                    "in",
+                    "In",
+                    "in file ",
+                    "in file \u{3000}",
+                ] {
+                    for message in [
+                        format!(
+                            "Error in parser: unexpected token {content} {marker} {name}, line 2"
+                        ),
+                        format!("{marker} {name}, unexpected token {content}, line 2"),
+                        format!("Unexpected token {content} {marker} ({name}), line 2"),
+                        format!("{marker} [{name}], unexpected token {content}, line 2"),
+                        format!("Unexpected token {content} {marker} {{{name}}}, line 2"),
+                        format!("Unexpected token {content} {marker} [({name})], line 2"),
+                    ] {
+                        let log = format!(
+                            "INFO - Found BibTeX data source '{name}'\nERROR - {message}\n"
+                        );
+                        let diagnostics = parse_bibliography(&main, &log);
+                        assert_eq!(diagnostics.len(), 1, "{log}: {diagnostics:?}");
+                        let items = diagnostics
+                            .get(&Url::from_file_path(&bib).unwrap())
+                            .unwrap_or_else(|| panic!("{log}: {diagnostics:?}"));
+                        assert_eq!(
+                            items[0].range.start,
+                            Position::new(1, 0),
+                            "{log}: {items:?}"
+                        );
+                        assert!(!unresolved_location(&items[0]), "{log}: {items:?}");
+                        assert_eq!(items[0].message, format!("Biber: {message}"));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn biber_unquoted_missing_sources_do_not_borrow_quoted_files_or_entry_ranges() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let main = root.join("main.tex");
+        std::fs::write(&main, "Text\n").unwrap();
+        for name in ["wrong.bib", "refs.bib"] {
+            std::fs::write(root.join(name), "% header\n\n@book{entry,title={Wrong}}\n").unwrap();
+        }
+        std::fs::create_dir(root.join("directory.bib")).unwrap();
+        for name in [
+            "missing.bib",
+            "directory.bib",
+            "refs.bib.backup",
+            "refs.bib2",
+            "refs.bib's-backup",
+            "refs.bib/nonexistent.bib",
+            "(refs.bib",
+            "[refs.bib",
+            "{refs.bib",
+        ] {
+            for message in [
+                format!("Unexpected token \"in 'wrong.bib'\" in file {name}, line 2"),
+                format!("Missing field for entry 'entry' in file {name}"),
+            ] {
+                let log =
+                    format!("INFO - Found BibTeX data source 'refs.bib'\nERROR - {message}\n");
+                let diagnostics = parse_bibliography(&main, &log);
+                assert_eq!(diagnostics.len(), 1, "{log}: {diagnostics:?}");
+                let items = diagnostics
+                    .get(&Url::from_file_path(&main).unwrap())
+                    .unwrap_or_else(|| panic!("{log}: {diagnostics:?}"));
+                assert_eq!(items[0].range.start, Position::new(0, 0));
+                assert_eq!(
+                    items[0].data.as_ref().unwrap()["unresolvedSource"],
+                    true,
+                    "{log}: {items:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn biber_unquoted_bare_sources_ignore_nested_filenames_in_quoted_errors() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let main = root.join("main.tex");
+        std::fs::write(&main, "Text\n").unwrap();
+        for name in ["wrong.bib", "s.bib", "refs.bib", "author's.bib"] {
+            std::fs::write(root.join(name), "% header\n@book{entry,title={Actual}}\n").unwrap();
+        }
+        for name in ["refs.bib", "author's.bib"] {
+            for tail in [
+                format!("{name}: syntax error at line 2"),
+                format!("syntax error ({name}) at line 2"),
+                format!("syntax error [{name}] at line 2"),
+                format!("syntax error on line 2 of {name}."),
+                format!("syntax error \u{3000}{name}, line 2"),
+                format!("syntax error \u{a0}{name}, line 2"),
+            ] {
+                for message in [
+                    format!("Unexpected token \"in 'wrong.bib', line 900\"; {tail}"),
+                    format!("Unexpected token \"bang\" {tail} \"detail\""),
+                    format!("Unexpected token \"in 'wrong.bib', line 900\" {tail} \"detail\""),
+                ] {
+                    let diagnostics = parse_bibliography(&main, &format!("ERROR - {message}\n"));
+                    assert_eq!(diagnostics.len(), 1, "{message}: {diagnostics:?}");
+                    let items = diagnostics
+                        .get(&Url::from_file_path(root.join(name)).unwrap())
+                        .unwrap_or_else(|| panic!("{message}: {diagnostics:?}"));
+                    assert_eq!(
+                        items[0].range.start,
+                        Position::new(1, 0),
+                        "{message}: {items:?}"
+                    );
+                    assert!(!unresolved_location(&items[0]));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn biber_standalone_quoted_sources_preserve_complete_filename_boundaries() {
+        for name in [
+            "refs.bib copy.bib",
+            "refs.bib's copy.bib",
+            "refs.bib' copy.bib",
+            "中文 refs.bib copy's refs.bib",
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let main = root.join("main.tex");
+            let bib = root.join(name);
+            std::fs::write(&main, "Text\n").unwrap();
+            for decoy in [
+                "refs.bib",
+                "copy.bib",
+                "s copy.bib",
+                "copy's refs.bib",
+                "中文 refs.bib",
+            ] {
+                std::fs::write(root.join(decoy), "@book{entry,title={Wrong}}\n").unwrap();
+            }
+            std::fs::write(&bib, "% header\n\n@book{entry,title={Actual}}\n").unwrap();
+            for quote in ['\'', '"'] {
+                let message = format!("syntax error {quote}{name}{quote}, line 3");
+                let diagnostics = parse_bibliography(&main, &format!("ERROR - {message}\n"));
+                assert_eq!(diagnostics.len(), 1, "{message}: {diagnostics:?}");
+                let items = diagnostics
+                    .get(&Url::from_file_path(&bib).unwrap())
+                    .unwrap_or_else(|| panic!("{message}: {diagnostics:?}"));
+                assert_eq!(
+                    items[0].range.start,
+                    Position::new(2, 0),
+                    "{message}: {items:?}"
+                );
             }
         }
     }
