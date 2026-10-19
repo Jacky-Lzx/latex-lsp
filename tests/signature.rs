@@ -35,6 +35,43 @@ fn check(definitions: &str, marked: &str, label: &str, active: u32) {
 }
 
 #[test]
+fn bibitem_hints_follow_the_actual_optional_label_and_single_key_boundaries() {
+    for command in [
+        r"\bibitem",
+        r"\csuse{bibitem}",
+        r"\csname bibitem\endcsname",
+    ] {
+        let label = format!("{command}[label]{{key}}");
+        for (arguments, active) in [
+            ("{al¦pha} Entry", 1),
+            ("{¦", 1),
+            ("[No¦te [literal]{alpha} Entry", 0),
+            ("[Note [literal]{al¦pha} Entry", 1),
+            ("[Note {literal ] [ text}]{al¦pha} Entry", 1),
+            (
+                "% before\r\n[Note [literal]% after\r\n{% key😀\r\nal¦pha% tail\r\n} Entry",
+                1,
+            ),
+        ] {
+            check("", &format!("{command}{arguments}"), &label, active);
+        }
+        for arguments in [
+            "{alpha} En¦try",
+            "[Note [nested]]{al¦pha} Entry",
+            "[one][two]{al¦pha} Entry",
+            "*{al¦pha} Entry",
+        ] {
+            let call = format!("{command}{arguments}");
+            let (workspace, uri, position) = setup("", &call);
+            assert!(
+                signature::help(&workspace, &uri, position).is_none(),
+                "{call}"
+            );
+        }
+    }
+}
+
+#[test]
 fn traditional_command_declarations_offer_target_count_default_and_body_hints() {
     for name in [
         "newcommand",

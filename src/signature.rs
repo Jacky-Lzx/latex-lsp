@@ -530,6 +530,7 @@ fn builtin(name: &str) -> Option<Signature> {
         name if syntax::is_reference(name) => {
             (&[("keys", false)], syntax::reference_accepts_star(name))
         }
+        "bibitem" => (&[("label", true), ("key", false)], false),
         "defcitealias" => (&[("key", false), ("text", false)], false),
         "citenum" => (&[("keys", false)], false),
         "citeyearpar" | "citefullauthor" | "citetalias" | "citepalias" => (
@@ -631,6 +632,7 @@ fn builtin(name: &str) -> Option<Signature> {
             || matches!(
                 name,
                 "hyperref"
+                    | "bibitem"
                     | "newenvironment"
                     | "renewenvironment"
                     | "hyperdef"
