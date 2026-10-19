@@ -3,6 +3,156 @@ use std::sync::atomic::AtomicBool;
 use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString, Url};
 
 #[test]
+fn direct_math_commands_with_matching_recent_tokens_keep_distinct_utf16_ranges() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    let source = "\\typeout{😀} $\\firstbad +\\secondbad$\r\n\\hbox{$\\thirdbad$}\r\n";
+    std::fs::write(&main, source).unwrap();
+    let text = Text::new(source.into());
+    for numbered in [false, true] {
+        let mut log = String::from("(./main.tex\n");
+        for (line, name, prefix) in [
+            (1, "firstbad", "\\typeout{😀} $\\firstbad"),
+            (1, "secondbad", "\\typeout{😀} $\\firstbad +\\secondbad"),
+            (2, "thirdbad", "\\hbox{$\\thirdbad"),
+        ] {
+            let header = if numbered {
+                format!("./main.tex:{line}: Undefined control sequence.")
+            } else {
+                "! Undefined control sequence.".into()
+            };
+            log.push_str(&format!("{header}\n<recently read> \\{name} \n                         \nl.{line} {prefix}\n"));
+        }
+        log.push_str(")\n");
+        let diagnostics = build_log::parse(&main, &log);
+        let errors = &diagnostics[&Url::from_file_path(&main).unwrap()];
+        assert_eq!(errors.len(), 3, "{numbered}: {errors:?}");
+        for (error, name) in errors.iter().zip(["firstbad", "secondbad", "thirdbad"]) {
+            let command = format!("\\{name}");
+            let start = source.find(&command).unwrap();
+            assert_eq!(
+                error.range,
+                text.range(start, start + command.len()),
+                "{numbered}: {name}"
+            );
+            assert_eq!(
+                error.code,
+                Some(NumberOrString::String("undefined-control-sequence".into()))
+            );
+            assert_eq!(error.data.as_ref().unwrap()["command"], name);
+        }
+    }
+}
+
+#[test]
+fn recent_tokens_require_one_matching_literal_token_and_immediate_trustworthy_context() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    let source = "$\\bad +\\bad$\n";
+    std::fs::write(&main, source).unwrap();
+    for context in [
+        "<recently read> \\other\nl.1 $\\bad",
+        "<recently read> \\bad extra\nl.1 $\\bad",
+        "<recently read> \\bad\\other\nl.1 $\\bad",
+        "<recently read> \\?\nl.1 $\\bad",
+        "<recently read> \\bad\n<argument> \\bad\nl.1 $\\bad",
+        "<argument> \\bad\n<recently read> \\bad\nl.1 $\\bad",
+        "<recently read> \\bad\n<recently read> \\bad\nl.1 $\\bad",
+        "<recently read> \\bad\nl.2 $\\bad",
+        "<recently read> \\bad\nl.1 Changed $\\bad",
+        "<recently read> \\bad\nl.1 ...\\bad",
+        "<recently read> \\bad\nPackage audit Warning: Adjacent.\nl.1 $\\bad",
+        "<recently read> \\bad\n[latex-lsp: middle of compiler output omitted]\nl.1 $\\bad",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .chain([format!(
+        "<recently read> \\bad\n{}l.1 $\\bad",
+        " \n".repeat(20)
+    )]) {
+        for numbered in [false, true] {
+            let header = if numbered {
+                "./main.tex:1: Undefined control sequence."
+            } else {
+                "! Undefined control sequence."
+            };
+            let log = format!("(./main.tex\n{header}\n{context}\n)\n");
+            let diagnostics = build_log::parse(&main, &log);
+            let error = diagnostics[&Url::from_file_path(&main).unwrap()]
+                .iter()
+                .find(|error| error.message == "Undefined control sequence.")
+                .unwrap();
+            assert!(
+                error.code.is_none() && error.data.is_none(),
+                "{numbered}: {context}: {error:?}"
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex, xelatex and lualatex"]
+fn real_math_errors_pinpoint_recently_read_tokens_without_blaming_expanding_macros() {
+    for engine in ["pdflatex", "xelatex", "lualatex"] {
+        for numbered in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let main = directory.path().join("main.tex");
+            let child = directory.path().join("章节.tex");
+            let source =
+                "\\typeout{😀} $\\firstbad +\\secondbad$\n\\hbox{$\\thirdbad$}\n$\\broken$\n";
+            std::fs::write(&main, "\\documentclass{article}\n\\newcommand{\\broken}{\\missinginside}\n\\begin{document}\\input{章节}\\end{document}\n").unwrap();
+            std::fs::write(&child, source).unwrap();
+            let config = BuildConfig {
+                executable: engine.into(),
+                arguments: Some(vec![
+                    "-interaction=nonstopmode".into(),
+                    if numbered {
+                        "-file-line-error"
+                    } else {
+                        "-no-file-line-error"
+                    }
+                    .into(),
+                    "-output-directory=%o".into(),
+                    "%f".into(),
+                ]),
+                ..Default::default()
+            };
+            let outcome = build::run(&main, &config, &AtomicBool::new(false));
+            assert_eq!(outcome.status, "error", "{engine}: {}", outcome.output);
+            let errors = outcome.diagnostics[&Url::from_file_path(&child).unwrap()]
+                .iter()
+                .filter(|error| error.message == "Undefined control sequence.")
+                .collect::<Vec<_>>();
+            assert_eq!(
+                errors.len(),
+                4,
+                "{engine}/{numbered}: {:?}\n{}",
+                outcome.diagnostics,
+                outcome.output
+            );
+            let text = Text::new(source.into());
+            for (error, name) in errors[..3]
+                .iter()
+                .zip(["firstbad", "secondbad", "thirdbad"])
+            {
+                let command = format!("\\{name}");
+                let start = source.find(&command).unwrap();
+                assert_eq!(
+                    error.range,
+                    text.range(start, start + command.len()),
+                    "{engine}/{numbered}: {}",
+                    outcome.output
+                );
+                assert_eq!(error.data.as_ref().unwrap()["command"], name);
+            }
+            assert_eq!(errors[3].range.start.line, 2);
+            assert_eq!(errors[3].range.start.character, 0);
+            assert!(errors[3].code.is_none() && errors[3].data.is_none());
+        }
+    }
+}
+
+#[test]
 fn undefined_commands_on_the_same_line_keep_distinct_utf16_ranges() {
     let directory = tempfile::tempdir().unwrap();
     let main = directory.path().join("main.tex");

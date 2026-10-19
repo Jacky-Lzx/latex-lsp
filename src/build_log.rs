@@ -433,16 +433,34 @@ fn emit(
 }
 
 /// A direct TeX error prints the consumed source prefix on its l.N line.
-/// Expansion frames precede that line. Apart from LaTeX's exact standard help
-/// block, require immediate source context to avoid blaming a valid macro call.
-fn error_context<'a>(lines: &[&'a str], start: usize, number: u32) -> Option<&'a str> {
+/// Expansion frames precede that line. Allow a single recently read token for
+/// undefined commands only when it also ends the consumed source prefix. Math
+/// mode adds this frame even for direct calls. Other expansion frames still
+/// require a whole-line diagnostic rather than blaming a valid macro call.
+fn error_context<'a>(
+    lines: &[&'a str],
+    start: usize,
+    number: u32,
+    undefined_command: bool,
+) -> Option<&'a str> {
     let mut context = lines
         .iter()
         .skip(start)
         .take(16)
         .filter(|line| !line.trim().is_empty());
     let mut line = *context.next()?;
-    if line.trim() == "See the LaTeX manual or LaTeX Companion for explanation." {
+    let recent = undefined_command
+        .then(|| line.trim_start().strip_prefix("<recently read>"))
+        .flatten()
+        .map(str::trim);
+    if let Some(token) = recent {
+        if crate::syntax::control_word(token, 0)? != (0..token.len()) {
+            return None;
+        }
+        line = context.next()?;
+    }
+    if recent.is_none() && line.trim() == "See the LaTeX manual or LaTeX Companion for explanation."
+    {
         if context.next()?.trim() != "Type  H <return>  for immediate help."
             || context.next()?.trim() != "..."
         {
@@ -455,7 +473,10 @@ fn error_context<'a>(lines: &[&'a str], start: usize, number: u32) -> Option<&'a
     if tail[..digits].parse::<u32>().ok()? != number {
         return None;
     }
-    tail[digits..].strip_prefix(' ')
+    let prefix = tail[digits..].strip_prefix(' ')?;
+    recent
+        .is_none_or(|token| prefix.trim_end().ends_with(token))
+        .then_some(prefix)
 }
 
 pub(crate) fn missing_file_name(message: &str) -> Option<&str> {
@@ -1243,14 +1264,13 @@ pub(crate) fn parse_with_sources(
             } else {
                 DiagnosticSeverity::ERROR
             };
-            emit_with_context(
-                &mut result,
-                &path,
+            let context = error_context(
+                &lines,
+                i + 1,
                 number,
-                message,
-                severity,
-                error_context(&lines, i + 1, number),
+                message == "Undefined control sequence.",
             );
+            emit_with_context(&mut result, &path, number, message, severity, context);
         } else if let Some(message) = line.strip_prefix("! ") {
             let message = wrapped_error_message(root, &lines, &separator_lines, &mut i, message);
             if let Some((path, cause, context_start)) = pending.take() {
@@ -1279,13 +1299,19 @@ pub(crate) fn parse_with_sources(
                 .next()
                 .and_then(|value| value.parse().ok());
             if let (Some(number), Some((path, message, context_start))) = (number, pending.take()) {
+                let context = error_context(
+                    &lines,
+                    context_start,
+                    number,
+                    message == "Undefined control sequence.",
+                );
                 emit_with_context(
                     &mut result,
                     &path,
                     number,
                     message,
                     DiagnosticSeverity::ERROR,
-                    error_context(&lines, context_start, number),
+                    context,
                 );
             }
         } else if warning_start(line) || line.starts_with("Missing character:") {
