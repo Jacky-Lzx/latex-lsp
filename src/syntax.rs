@@ -461,6 +461,7 @@ fn declares_command(name: &str) -> bool {
         || declares_paired_delimiter(name)
         || declares_document_command(name)
         || declares_command_copy(name)
+        || declares_text_command(name)
         || matches!(
             name,
             "newcommand"
@@ -470,7 +471,6 @@ fn declares_command(name: &str) -> bool {
                 | "renewrobustcmd"
                 | "providerobustcmd"
                 | "DeclareMathOperator"
-                | "DeclareTextFontCommand"
                 | "DeclareMathAlphabet"
                 | "DeclareSymbolFontAlphabet"
                 | "DeclareRobustCommand"
@@ -496,6 +496,19 @@ pub(crate) fn declares_command_copy(name: &str) -> bool {
     matches!(
         name,
         "NewCommandCopy" | "RenewCommandCopy" | "DeclareCommandCopy"
+    )
+}
+
+pub(crate) fn declares_text_command(name: &str) -> bool {
+    matches!(
+        name,
+        "DeclareTextCommand"
+            | "ProvideTextCommand"
+            | "DeclareTextCommandDefault"
+            | "ProvideTextCommandDefault"
+            | "DeclareTextFontCommand"
+            | "DeclareTextSymbol"
+            | "DeclareTextAccent"
     )
 }
 
@@ -546,6 +559,7 @@ pub(crate) fn declares_register(name: &str) -> bool {
             | "font"
             | "DeclareFixedFont"
             | "DeclareMathSymbol"
+            | "DeclareTextSymbol"
     )
 }
 

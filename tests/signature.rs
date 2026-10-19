@@ -35,6 +35,68 @@ fn check(definitions: &str, marked: &str, label: &str, active: u32) {
 }
 
 #[test]
+fn text_font_commands_skip_encodings_and_retain_optional_defaults_in_call_signatures() {
+    for name in [
+        "DeclareTextCommand",
+        "ProvideTextCommand",
+        "DeclareTextCommandDefault",
+        "ProvideTextCommandDefault",
+    ] {
+        let encoding = if name.ends_with("Default") {
+            ""
+        } else {
+            "{OT1}"
+        };
+        let definition =
+            format!("\\{name} % target\r\n\\custom % encoding\r\n{encoding}[2][blue]{{#1:#2}}");
+        check(&definition, r"\custom{Val¦ue}", r"\custom[#1=blue]{#2}", 1);
+        check(
+            &definition,
+            r"\custom[re¦d]{Value}",
+            r"\custom[#1=blue]{#2}",
+            0,
+        );
+        let (mut workspace, uri, position) = setup(&definition, r"\cust¦");
+        workspace.snippets = true;
+        let items = latex_lsp::features::completion(&workspace, &uri, position);
+        let item = items.iter().find(|item| item.label == "custom").unwrap();
+        let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+            panic!("missing call snippet")
+        };
+        assert_eq!(edit.new_text, "custom{${1:arg2}}");
+        let label = format!(
+            "\\{name}{{command}}{}[arguments][default]{{definition}}",
+            if encoding.is_empty() {
+                ""
+            } else {
+                "{encoding}"
+            }
+        );
+        let optional_index = if encoding.is_empty() { 1 } else { 2 };
+        check(
+            "",
+            &format!("\\{name}\\custom{encoding}[¦2][blue]{{#1:#2}}"),
+            &label,
+            optional_index,
+        );
+        check(
+            "",
+            &format!("\\{name}{{\\cust¦om}}{encoding}[2][blue]{{#1:#2}}"),
+            &label,
+            0,
+        );
+    }
+    for name in ["DeclareTextSymbol", "DeclareTextAccent"] {
+        check(
+            "",
+            &format!("\\{name}\\custom{{OT1}}{{6¦5}}"),
+            &format!("\\{name}{{command}}{{encoding}}{{slot}}"),
+            2,
+        );
+    }
+}
+
+#[test]
 fn environment_copy_declarations_hint_the_target_and_source_names() {
     for name in [
         "NewEnvironmentCopy",

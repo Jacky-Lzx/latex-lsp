@@ -96,6 +96,29 @@ pub fn completion(
 
 fn builtin(name: &str) -> Option<Signature> {
     let (arguments, starred): (&[(&str, bool)], bool) = match name {
+        "DeclareTextCommand" | "ProvideTextCommand" => (
+            &[
+                ("command", false),
+                ("encoding", false),
+                ("arguments", true),
+                ("default", true),
+                ("definition", false),
+            ],
+            false,
+        ),
+        "DeclareTextCommandDefault" | "ProvideTextCommandDefault" => (
+            &[
+                ("command", false),
+                ("arguments", true),
+                ("default", true),
+                ("definition", false),
+            ],
+            false,
+        ),
+        "DeclareTextSymbol" | "DeclareTextAccent" => (
+            &[("command", false), ("encoding", false), ("slot", false)],
+            false,
+        ),
         name if syntax::declares_environment_copy(name) => (
             &[("environment", false), ("source environment", false)],
             false,
@@ -348,6 +371,7 @@ fn builtin(name: &str) -> Option<Signature> {
                 || name == "cslet" && index == 1
                 || (name == "letcs"
                     || syntax::declares_document_command(name)
+                    || syntax::declares_text_command(name)
                     || syntax::declares_font_switch(name)
                     || syntax::declares_paired_delimiter(name)
                     || matches!(
@@ -404,9 +428,16 @@ fn definition(uri: &Url, doc: &Document, entry: &Entry, environment: bool) -> Op
         i += 1;
     }
     i = syntax::skip_space(source, i);
+    if matches!(declaration, "DeclareTextCommand" | "ProvideTextCommand") {
+        let (_, end) = syntax::group(source, i, b'{', b'}')?;
+        i = syntax::skip_space(source, end);
+    }
     let mut parameters = Vec::new();
     match declaration {
-        "DeclareTextFontCommand" | "DeclareMathAlphabet" | "DeclareSymbolFontAlphabet" => {
+        "DeclareTextFontCommand"
+        | "DeclareMathAlphabet"
+        | "DeclareSymbolFontAlphabet"
+        | "DeclareTextAccent" => {
             parameters.push(Parameter {
                 kind: Kind::Required,
                 label: "{#1}".into(),
@@ -439,6 +470,10 @@ fn definition(uri: &Url, doc: &Document, entry: &Entry, environment: bool) -> Op
             }
         }
         "newcommand"
+        | "DeclareTextCommand"
+        | "ProvideTextCommand"
+        | "DeclareTextCommandDefault"
+        | "ProvideTextCommandDefault"
         | "renewcommand"
         | "providecommand"
         | "newrobustcmd"

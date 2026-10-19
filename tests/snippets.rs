@@ -101,6 +101,24 @@ fn snippets_expand_in_a_real_editor_without_consuming_tex_backslashes() {
             "DeclareEnvironmentCopy",
             "DeclareEnvironmentCopy{name}{source}",
         ),
+        (
+            "DeclareTextCommand",
+            r"DeclareTextCommand{\command}{OT1}[1]{definition}",
+        ),
+        (
+            "ProvideTextCommand",
+            r"ProvideTextCommand{\command}{OT1}[1]{definition}",
+        ),
+        (
+            "DeclareTextCommandDefault",
+            r"DeclareTextCommandDefault{\command}[1]{definition}",
+        ),
+        (
+            "ProvideTextCommandDefault",
+            r"ProvideTextCommandDefault{\command}[1]{definition}",
+        ),
+        ("DeclareTextSymbol", r"DeclareTextSymbol{\command}{OT1}{65}"),
+        ("DeclareTextAccent", r"DeclareTextAccent{\command}{OT1}{19}"),
         ("date", r"date{\today}"),
         ("def", r"def\name{definition}"),
         ("let", r"let\alias=\command"),

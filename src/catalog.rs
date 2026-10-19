@@ -3,6 +3,12 @@ pub(crate) use crate::primitives::PRIMITIVES;
 /// Command name, snippet template (without leading backslash), short documentation.
 /// Templates retain literal TeX backslashes; completion escapes them for the client.
 pub const COMMANDS: &[(&str, &str, &str)] = &[
+    ("DeclareTextCommand", "DeclareTextCommand{\\${1:command}}{${2:OT1}}[${3:1}]{${4:definition}}", "Define a text command for a font encoding, with optional argument count and default."),
+    ("ProvideTextCommand", "ProvideTextCommand{\\${1:command}}{${2:OT1}}[${3:1}]{${4:definition}}", "Define an encoding-specific text command if it does not exist."),
+    ("DeclareTextCommandDefault", "DeclareTextCommandDefault{\\${1:command}}[${2:1}]{${3:definition}}", "Define the fallback implementation of a text command."),
+    ("ProvideTextCommandDefault", "ProvideTextCommandDefault{\\${1:command}}[${2:1}]{${3:definition}}", "Provide a fallback text command if it does not exist."),
+    ("DeclareTextSymbol", "DeclareTextSymbol{\\${1:command}}{${2:OT1}}{${3:65}}", "Declare a zero-argument text symbol at a font encoding slot."),
+    ("DeclareTextAccent", "DeclareTextAccent{\\${1:command}}{${2:OT1}}{${3:19}}", "Declare a one-argument text accent at a font encoding slot."),
     ("DeclareTextFontCommand", "DeclareTextFontCommand{\\${1:command}}{\\${2:bfseries}}", "Define a one-argument text command that applies font commands to its text."),
     ("DeclareFixedFont", "DeclareFixedFont{\\${1:command}}{${2:OT1}}{${3:cmr}}{${4:m}}{${5:n}}{${6:10}}", "Declare a zero-argument selector for a fixed font encoding, family, series, shape and size."),
     ("DeclareMathAlphabet", "DeclareMathAlphabet{\\${1:command}}{${2:OT1}}{${3:cmr}}{${4:m}}{${5:it}}", "Declare a one-argument math alphabet command using a font encoding, family, series and shape."),
