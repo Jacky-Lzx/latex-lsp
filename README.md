@@ -141,6 +141,10 @@ natbib 的 `citealt` / `citealp`、`citenum`、`citeyearpar`、`citefullauthor` 
 
 `\bibliography` 和 `\bibliographystyle` 分别补 `.bib` 和 `.bst`，已有相同后缀时保留；例如 `\bibliography{refs.ltx}` 读取 `refs.ltx.bib`，不会读取同名的 `refs.ltx`。文献库通过 `\bibliography` 使用时，改名必须保留 `.bib` 后缀。`\addbibresource` 继续使用显式资源路径。
 
+LaTeX 在写出 `\bibliography` 的数据库名称前会移除空格、制表符和换行，因此 `\bibliography{my refs}` 实际读取 `myrefs.bib`；目录和扩展名中的空白也按这一规则处理。导航、依赖和重命名会选择实际读取的文件，忽略带空格的同名干扰文件。`\addbibresource` 的显式文件名继续保留空白。
+
+`\bibliographystyle` 会保留名称中的空白，而 BibTeX 会拒绝这样的辅助文件指令，包括名称首尾的空白。服务器不将它解析成可加载样式，补全会排除无法表示的文件名，重命名也会拒绝引入这类路径；编译仍报告工具产生的错误。
+
 宏包和文档类参数是加载名称，`\usepackage` / `\RequirePackage` 总是追加 `.sty`，`\documentclass` / `\LoadClass` 总是追加 `.cls`；例如 `\usepackage{local.sty}` 查找 `local.sty.sty`。补全和重命名会去掉目标文件最后一个由加载器追加的后缀，避免重复扩展名；跳转与依赖跟踪遵循相同规则，并跳过同名的无扩展名文件。文件移动也会检查这些引用在整批移动后仍选中预期目标。
 
 LaTeX 会忽略宏包和文档类加载名称中的空格、制表符和换行，例如 `\usepackage{my local}` 加载 `mylocal.sty`。查找、补全、诊断和重命名遵守相同规则；不会将带空格的同名磁盘文件当成这个名称实际加载的来源，也不会为其生成不安全的路径更新。

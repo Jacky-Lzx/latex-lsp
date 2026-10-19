@@ -440,7 +440,7 @@ pub(crate) fn loader_extension(command: &str) -> Option<&'static str> {
     }
 }
 
-/// The LaTeX package/class loaders discard TeX spaces in their load names.
+/// Package/class loaders and bibliography database declarations discard TeX spaces.
 pub(crate) fn loader_name(value: &str) -> String {
     value.replace([' ', '\t', '\n', '\r'], "")
 }
@@ -456,7 +456,7 @@ pub(crate) fn file_lookup_names<'a>(
             ["tex", "sty", "cls", "def", "clo", "fd", "aux", "bbl", "ldf"].contains(&extension)
         });
     let loader = loader_extension(command);
-    let normalized = loader.map(|_| loader_name(value));
+    let normalized = (loader.is_some() || command == "bibliography").then(|| loader_name(value));
     let literal = normalized.as_deref().unwrap_or(value);
     let empty = literal.is_empty();
     let extension = loader.unwrap_or(match command {
@@ -468,16 +468,21 @@ pub(crate) fn file_lookup_names<'a>(
         && match command {
             "include" | "includeonly" => !value.ends_with(".tex"),
             "input" => !recognized,
-            "bibliography" | "bibliographystyle" => !value.ends_with(&format!(".{extension}")),
+            "bibliography" | "bibliographystyle" => !literal.ends_with(&format!(".{extension}")),
             _ => loader.is_some(),
         };
     let preferred = if append {
         std::borrow::Cow::Owned(format!("{literal}.{extension}"))
+    } else if let Some(normalized) = normalized {
+        std::borrow::Cow::Owned(normalized)
     } else {
         std::borrow::Cow::Borrowed(value)
     };
+    // LaTeX preserves style-name spaces in bibstyle, and BibTeX rejects the
+    // resulting auxiliary command instead of opening a spaced filename.
+    let valid_style = command != "bibliographystyle" || !value.contains([' ', '\t', '\r', '\n']);
     std::iter::once(preferred)
-        .filter(move |_| !empty)
+        .filter(move |_| !empty && valid_style)
         .chain((command == "input" && append).then_some(std::borrow::Cow::Borrowed(value)))
 }
 

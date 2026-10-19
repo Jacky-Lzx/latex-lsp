@@ -307,15 +307,14 @@ impl Workspace {
                         values
                             .into_iter()
                             .filter_map(|value| {
-                                resolve_file_path(root, &command.name, value.trim(), &[extension])
-                                    .or_else(|| {
-                                        resolve_file_path(
-                                            uri,
-                                            &command.name,
-                                            value.trim(),
-                                            &[extension],
-                                        )
-                                    })
+                                let value = if command.name == "bibliographystyle" {
+                                    value
+                                } else {
+                                    value.trim()
+                                };
+                                resolve_file_path(root, &command.name, value, &[extension]).or_else(
+                                    || resolve_file_path(uri, &command.name, value, &[extension]),
+                                )
                             })
                             .collect()
                     })

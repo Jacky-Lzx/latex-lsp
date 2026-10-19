@@ -359,7 +359,11 @@ pub(crate) fn document_links_in(workspace: &Workspace, uri: &Url, root: &Url) ->
             vec![argument.value.as_str()]
         } {
             let span = syntax::trimmed_span(&doc.text.source, start..start + name.len());
-            let value = unescape(name.trim());
+            let value = unescape(if command.name == "bibliographystyle" {
+                name
+            } else {
+                name.trim()
+            });
             let target = if extensions.is_empty() {
                 external_url(&value)
             } else {
