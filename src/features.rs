@@ -455,13 +455,34 @@ fn completion_name_argument(source: &str, command: &Command, offset: usize) -> O
 }
 
 fn argument_context(doc: &Document, offset: usize) -> Option<(&Command, Span<usize>)> {
-    let source = &doc.text.source;
-    let command = doc
-        .syntax
+    doc.syntax
         .commands
         .iter()
         .rev()
-        .find(|cmd| cmd.span.end <= offset)?;
+        .filter(|command| command.span.end <= offset)
+        .find_map(|command| argument_span(doc, command, offset).map(|span| (command, span)))
+}
+
+fn argument_span(doc: &Document, command: &Command, offset: usize) -> Option<Span<usize>> {
+    let source = &doc.text.source;
+    if !(matches!(command.name.as_str(), "begin" | "end" | "hyperlink")
+        || syntax::is_reference(&command.name)
+        || syntax::has_separate_label_argument(&command.name)
+        || syntax::is_citation(&command.name)
+        || syntax::file_extensions(&command.name).is_some())
+    {
+        return None;
+    }
+    // A completed inner call in an optional note must not hide the outer key.
+    // Most calls also let us skip old, closed arguments without rescanning text.
+    if !syntax::has_separate_label_argument(&command.name)
+        && command
+            .argument
+            .as_ref()
+            .is_some_and(|arg| arg.outer_span.end < offset)
+    {
+        return None;
+    }
     if matches!(command.name.as_str(), "begin" | "end")
         || syntax::is_single_reference(&command.name)
         || syntax::has_separate_label_argument(&command.name)
@@ -470,7 +491,7 @@ fn argument_context(doc: &Document, offset: usize) -> Option<(&Command, Span<usi
     {
         let span = completion_name_argument(source, command, offset)?;
         let prefix = source[span.start..offset].trim_start();
-        return Some((command, offset - prefix.len()..offset));
+        return Some(offset - prefix.len()..offset);
     }
     if command.name == "input" {
         if let Some(argument) = &command.argument {
@@ -480,7 +501,7 @@ fn argument_context(doc: &Document, offset: usize) -> Option<(&Command, Span<usi
                 } else {
                     argument.span.start
                 };
-                return Some((command, start..offset));
+                return Some(start..offset);
             }
         }
     }
@@ -503,7 +524,7 @@ fn argument_context(doc: &Document, offset: usize) -> Option<(&Command, Span<usi
         return None;
     }
     let key = value.rsplit(',').next()?.trim_start();
-    Some((command, offset - key.len()..offset))
+    Some(offset - key.len()..offset)
 }
 
 pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<CompletionItem> {

@@ -22,6 +22,85 @@ fn cursor(source: &str, needle: &str) -> Position {
 }
 
 #[test]
+fn argument_completions_find_outer_keys_after_nested_commands_in_optional_notes() {
+    let mut workspace = Workspace::default();
+    insert(
+        &mut workspace,
+        "refs.bib",
+        "@book{parent, title={Parent}}\n@book{other, title={Other}}\n",
+    );
+    insert(&mut workspace, "labels.tex", "\\label{sec:intro}");
+    for (marked, label, expected) in [
+        (
+            r"\citep[\emph{see}][p.~2]{other, pa¦BAD}",
+            "parent",
+            r"\citep[\emph{see}][p.~2]{other, parent}",
+        ),
+        (
+            r"\Citealp*[see \ref{sec:intro}][p.~2]{pa¦BAD}",
+            "parent",
+            r"\Citealp*[see \ref{sec:intro}][p.~2]{parent}",
+        ),
+        (
+            r"\citep[see \citet{other}]{pa¦BAD}",
+            "parent",
+            r"\citep[see \citet{other}]{parent}",
+        ),
+        (
+            r"\citep[{see ] \emph{also}}]{pa¦BAD}",
+            "parent",
+            r"\citep[{see ] \emph{also}}]{parent}",
+        ),
+        (
+            r"\citep[\emph{see}]{pa¦",
+            "parent",
+            r"\citep[\emph{see}]{parent",
+        ),
+        (
+            r"\citep[see \ref{sec:in¦BAD}]{parent}",
+            "sec:intro",
+            r"\citep[see \ref{sec:intro}]{parent}",
+        ),
+    ] {
+        let offset = marked.find('¦').unwrap();
+        let source = marked.replace('¦', "");
+        let main = insert(&mut workspace, "main.tex", &source);
+        let items = features::completion(
+            &workspace,
+            &main,
+            Text::new(source.clone()).position(offset),
+        );
+        let item = items
+            .iter()
+            .find(|item| item.label == label)
+            .unwrap_or_else(|| panic!("{marked}: {items:?}"));
+        let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+            panic!()
+        };
+        let updated = Text::new(source)
+            .changed(vec![TextDocumentContentChangeEvent {
+                range: Some(edit.range),
+                range_length: None,
+                text: edit.new_text.clone(),
+            }])
+            .unwrap();
+        assert_eq!(updated.source, expected);
+    }
+    for marked in [
+        r"\citep[\emph{pa¦}]{parent}",
+        r"\citep{parent} plain pa¦",
+        r"\citep[\emph{see}]{parent} \textbf{pa¦}",
+        r"\citep[see \ref{sec:intro}]{parent} pa¦",
+    ] {
+        let offset = marked.find('¦').unwrap();
+        let source = marked.replace('¦', "");
+        let main = insert(&mut workspace, "main.tex", &source);
+        let items = features::completion(&workspace, &main, Text::new(source).position(offset));
+        assert!(items.is_empty(), "{marked}: {items:?}");
+    }
+}
+
+#[test]
 fn pdfbookmark_targets_use_literal_levels_and_navigate_independently_of_titles_and_labels() {
     let mut workspace = Workspace::default();
     let source = concat!(

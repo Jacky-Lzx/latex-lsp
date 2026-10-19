@@ -152,6 +152,16 @@ fn file_completions_replace_partial_names_preserve_lists_and_reuse_existing_slas
             r"\includegraphics[width=2cm]{image.png}",
         ),
         (
+            r"\includegraphics[width=0.5\linewidth]{im|BAD}",
+            "image.png",
+            r"\includegraphics[width=0.5\linewidth]{image.png}",
+        ),
+        (
+            r"\addbibresource[label={\emph{References}}]{re|BAD}",
+            "references.bib",
+            r"\addbibresource[label={\emph{References}}]{references.bib}",
+        ),
+        (
             r"\usepackage{other, lo|cal}",
             "local.sty",
             r"\usepackage{other, local}",
