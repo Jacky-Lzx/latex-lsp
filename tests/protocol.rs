@@ -2689,7 +2689,7 @@ fn biber_logged_sources_keep_diagnostics_navigation_and_rename_on_the_complete_d
             } else {
                 name.clone()
             };
-            std::fs::write(&fixture, format!("INFO - Found BibTeX data source '{input}'\nERROR - syntax error in file {quote}{name}{quote}, line 3\nWARN - Missing field for entry 'entry' (file {quote}{name}{quote})\n")).unwrap();
+            std::fs::write(&fixture, format!("INFO - Found BibTeX data source '{input}'\nERROR - syntax error in 'parser'; in file {quote}{name}{quote}, line 3\nWARN - Missing field in 'parser'; for entry 'entry' (file {quote}{name}{quote})\n")).unwrap();
             server.request(
                 2,
                 "workspace/executeCommand",

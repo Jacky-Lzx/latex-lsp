@@ -2216,24 +2216,38 @@ fn bibliography_path(
                 tail
             };
             let start = message.len() - tail.len();
-            if tail.starts_with(['\'', '"']) {
-                let QuotedBibliographyPath { path, span, .. } =
-                    bibliography_quoted_path(paths, message, start);
-                Some(BibliographyLocation::Named { path, span })
-            } else {
-                let location = bibliography_explicit_unquoted_path(paths, message, start)?;
-                // Prose such as `in parser: ... in file refs.bib` must not
-                // preempt the real file field. Retain an unresolved generic
-                // field only if no stronger source follows it.
+            let location = if tail.starts_with(['\'', '"']) {
+                let QuotedBibliographyPath {
+                    path,
+                    span,
+                    recorded,
+                } = bibliography_quoted_path(paths, message, start);
+                // A generic quoted word is prose, unless it names a
+                // bibliography or belongs to a complete logged source.
                 if generic
                     && file.is_none()
-                    && matches!(location, BibliographyLocation::Named { path: None, .. })
+                    && path.is_none()
+                    && !recorded
+                    && bibliography_quote_end(message, start)
+                        .is_some_and(|end| !message[start + 1..end].contains(".bib"))
                 {
-                    unconfirmed.get_or_insert(location);
-                    None
-                } else {
-                    Some(location)
+                    return None;
                 }
+                BibliographyLocation::Named { path, span }
+            } else {
+                bibliography_explicit_unquoted_path(paths, message, start)?
+            };
+            // Prose such as `in parser` or `in 'parser'` must not preempt
+            // the real file field. Retain an unresolved generic field only
+            // if no stronger source follows it.
+            if generic
+                && file.is_none()
+                && matches!(location, BibliographyLocation::Named { path: None, .. })
+            {
+                unconfirmed.get_or_insert(location);
+                None
+            } else {
+                Some(location)
             }
         })
     });
@@ -2268,15 +2282,19 @@ fn bibliography_path(
                 return BibliographyLocation::Named { path, span };
             }
             let body = &message[index + 1..span.end];
-            let filename = body
-                .match_indices(ch)
-                .any(|(end, _)| body[..end].ends_with(".bib"));
+            let first_quote = bibliography_quote_end(message, index);
+            // A plain quoted word cannot consume another quoted database
+            // merely because whitespace separates their closing quotes.
+            let filename = first_quote.is_none_or(|end| message[index + 1..end].contains(".bib"))
+                && body
+                    .match_indices(ch)
+                    .any(|(end, _)| body[..end].ends_with(".bib"));
             // Preserve uncertain filenames as a whole, but keep independent
             // quoted message strings from hiding a bare path between them.
             quoted_until = if filename {
                 span.end
             } else {
-                bibliography_quote_end(message, index).map_or(message.len(), |end| end + 1)
+                first_quote.map_or(message.len(), |end| end + 1)
             };
             continue;
         }
@@ -4042,6 +4060,54 @@ mod tests {
                 let items = &diagnostics[&Url::from_file_path(&main).unwrap()];
                 assert_eq!(items[0].range.start, Position::new(0, 0));
                 assert_eq!(items[0].data.as_ref().unwrap()["unresolvedSource"], true);
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn biber_quoted_generic_prose_does_not_hide_the_actual_source_field() {
+        for name in ["refs.bib", "中文 refs.bib': copy.bib"] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let main = root.join("main.tex");
+            let bib = root.join(name);
+            std::fs::write(&main, "Text\n").unwrap();
+            std::fs::write(&bib, "% header\n\n@book{entry,title={Actual}}\n").unwrap();
+            std::fs::write(root.join("wrong.bib"), "@book{entry,title={Wrong}}\n").unwrap();
+            for missing in [false, true] {
+                if missing {
+                    std::fs::remove_file(&bib).unwrap();
+                }
+                for prose in ['\'', '"'] {
+                    for quote in ['\'', '"'] {
+                        for marker in ["file", "in file", "in"] {
+                            for message in [
+                                format!("Error in {prose}parser{prose}; {marker} {quote}{name}{quote}, line 3"),
+                                format!("Missing field in {prose}parser{prose}; for entry 'entry' ({marker} {quote}{name}{quote})"),
+                                format!("Error in {prose}parser{prose}; {quote}{name}{quote}, line 3"),
+                                format!("Missing field in {prose}parser{prose}; {quote}{name}{quote} for entry 'entry'"),
+                                format!("Error in {prose}parser{prose}; {name}, line 3"),
+                                format!("Missing field in {prose}parser{prose}; {name} for entry 'entry'"),
+                                format!("Error in {prose}parser{prose} {quote}{name}{quote}, line 3"),
+                                format!("Missing field in {prose}parser{prose} {quote}{name}{quote} for entry 'entry'"),
+                            ] {
+                                let log = format!("INFO - Found BibTeX data source '{name}'\nERROR - {message}\n");
+                                let diagnostics = parse_bibliography(&main, &log);
+                                let target = if missing { &main } else { &bib };
+                                let items = diagnostics.get(&Url::from_file_path(target).unwrap())
+                                    .unwrap_or_else(|| panic!("{log}: {diagnostics:?}"));
+                                assert_eq!(diagnostics.len(), 1);
+                                assert_eq!(items[0].message, format!("Biber: {message}"));
+                                assert_eq!(items[0].range.start.line, if missing { 0 } else { 2 }, "{log}: {items:?}");
+                                assert_eq!(unresolved_location(&items[0]), missing, "{log}: {items:?}");
+                                if !missing && message.starts_with("Missing") {
+                                    assert_eq!(items[0].range, Range::new(Position::new(2, 6), Position::new(2, 11)));
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
