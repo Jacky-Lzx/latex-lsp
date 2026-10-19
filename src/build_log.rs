@@ -1321,6 +1321,7 @@ pub(crate) fn parse_with_sources(
         sources.insert(uri);
     }
     let mut stack: Vec<Option<LogSource>> = Vec::new();
+    let mut fallback_confirmed = true;
     let mut pending: Option<(LogSource, String, usize)> = None;
     let lines = log.lines().collect::<Vec<_>>();
     let separator_lines: Vec<_> = lines
@@ -1353,6 +1354,7 @@ pub(crate) fn parse_with_sources(
                 );
             }
             stack.clear();
+            fallback_confirmed = false;
             i += 1;
             continue;
         }
@@ -1364,7 +1366,7 @@ pub(crate) fn parse_with_sources(
                 .cloned()
                 .unwrap_or_else(|| LogSource {
                     path: root.into(),
-                    confirmed: true,
+                    confirmed: fallback_confirmed,
                 })
         };
         let mut structural = false;
