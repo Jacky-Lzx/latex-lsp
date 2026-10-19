@@ -117,7 +117,7 @@ impl Snapshot {
                 }
                 if !matches!(
                     command.name.as_str(),
-                    "IfFileExists" | "InputIfFileExists" | "include"
+                    "IfFileExists" | "InputIfFileExists" | "include" | "input" | "subfile"
                 ) {
                     continue;
                 }

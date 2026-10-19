@@ -1561,6 +1561,7 @@ fn fake_build_server_capabilities(
     on_save: bool,
     capabilities: Value,
 ) -> (Server, tempfile::TempDir, Url) {
+    let pulls_diagnostics = capabilities.pointer("/textDocument/diagnostic").is_some();
     let directory = tempfile::tempdir().unwrap();
     let root = Url::from_directory_path(directory.path()).unwrap();
     let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
@@ -1575,7 +1576,15 @@ fn fake_build_server_capabilities(
         "textDocument/didOpen",
         json!({"textDocument":{"uri":uri,"languageId":"latex","version":1,"text":source}}),
     );
-    server.until(|message| message["method"] == "textDocument/publishDiagnostics");
+    if pulls_diagnostics {
+        server.request(
+            0,
+            "textDocument/documentSymbol",
+            json!({"textDocument":{"uri":uri}}),
+        );
+    } else {
+        server.until(|message| message["method"] == "textDocument/publishDiagnostics");
+    }
     (server, directory, uri)
 }
 
@@ -3984,6 +3993,292 @@ fn missing_include_creation_invalidates_results_and_old_pdfs_unless_the_chapter_
         server.request(4, "shutdown", Value::Null);
         server.notify("exit", Value::Null);
         server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn missing_required_inputs_created_during_failed_builds_discard_obsolete_errors() {
+    for (command, name) in [
+        ("\\input{child}", "child.tex"),
+        ("\\input child", "child.tex"),
+        ("\\input \"my file\"", "my file.tex"),
+        ("\\input{child.ltx}", "child.ltx"),
+        ("\\subfile{child}", "child.tex"),
+    ] {
+        let script = "touch \"$1/ready\"\nwhile [ ! -f \"$1/release\" ]; do sleep 0.02; done\nprintf '%s:2: Undefined control sequence.\\n' \"$2\" > \"$1/main.log\"\nexit 1\n";
+        let (mut server, directory, main) = fake_build_server(script, false);
+        let source = format!("\\documentclass{{article}}\n{command}\n");
+        std::fs::write(main.to_file_path().unwrap(), &source).unwrap();
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+        );
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let output = directory.path().join("build/latex-lsp");
+        wait_for_file(&output.join("ready"));
+        std::fs::write(directory.path().join(name), "New input.").unwrap();
+        std::fs::write(output.join("release"), "").unwrap();
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(finished["params"]["status"], "error", "{finished}");
+        assert_eq!(finished["params"]["stale"], true, "{command}: {finished}");
+        assert!(finished["params"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("diagnostics discarded"));
+        server.request(3, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn stale_builds_clear_previously_published_errors_without_file_notifications() {
+    let script = "if [ -f \"$1/first\" ]; then\ntouch \"$1/ready\"\nwhile [ ! -f \"$1/release\" ]; do sleep 0.02; done\nelse touch \"$1/first\"; fi\nprintf '%s:2: Undefined control sequence.\\n' \"$2\" > \"$1/main.log\"\nexit 1\n";
+    let (mut server, directory, main) =
+        fake_build_server_capabilities(script, false, json!({"textDocument":{"diagnostic":{}}}));
+    let source = "\\documentclass{article}\n\\input{child}\n";
+    std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+    );
+    server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let first = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(first["params"]["status"], "error", "{first}");
+    assert_eq!(first["params"]["stale"], false, "{first}");
+    let old = server.request(
+        3,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":main}}),
+    );
+    assert!(
+        old["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["source"] == "latex-build"),
+        "{old}"
+    );
+    server.request(
+        4,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let output = directory.path().join("build/latex-lsp");
+    wait_for_file(&output.join("ready"));
+    std::fs::write(directory.path().join("child.tex"), "Restored input.").unwrap();
+    std::fs::write(output.join("release"), "").unwrap();
+    let stale = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(stale["params"]["stale"], true, "{stale}");
+    let cleared = server.request(
+        5,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":main},"previousResultId":old["resultId"]}),
+    );
+    assert_eq!(cleared["kind"], "full", "{cleared}");
+    assert_eq!(cleared["items"], json!([]), "{cleared}");
+    server.request(6, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+fn required_input_filename_selection_changes_invalidate_results_and_unchanged_pdfs() {
+    for symlink in [false, true] {
+        let script = "if [ ! -f \"$1/main.pdf\" ]; then\ntouch \"$1/ready\"\nwhile [ ! -f \"$1/release\" ]; do sleep 0.02; done\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nfi\n";
+        let (mut server, directory, main) = fake_build_server(script, false);
+        let original = directory.path().join("original.tex");
+        let replacement = directory.path().join("replacement.tex");
+        std::fs::write(&original, "Original.").unwrap();
+        std::fs::write(&replacement, "Replacement.").unwrap();
+        let name = if symlink { "child.tex" } else { "child.ltx" };
+        let input = directory.path().join(name);
+        if symlink {
+            std::os::unix::fs::symlink(&original, &input).unwrap();
+        } else {
+            std::fs::write(&input, "Original.").unwrap();
+        }
+        let source = format!("\\documentclass{{article}}\n\\input{{{name}}}\n");
+        std::fs::write(main.to_file_path().unwrap(), &source).unwrap();
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+        );
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let output = directory.path().join("build/latex-lsp");
+        wait_for_file(&output.join("ready"));
+        if symlink {
+            std::fs::remove_file(&input).unwrap();
+            std::os::unix::fs::symlink(&replacement, &input).unwrap();
+        } else {
+            std::fs::write(directory.path().join("child.ltx.tex"), "Preferred suffix.").unwrap();
+        }
+        std::fs::write(output.join("release"), "").unwrap();
+        let first = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(first["params"]["status"], "success", "{first}");
+        assert_eq!(first["params"]["stale"], true, "{symlink}: {first}");
+        server.request(
+            3,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let noop = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(noop["params"]["status"], "error", "{noop}");
+        assert!(
+            noop["params"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("file condition changed"),
+            "{noop}"
+        );
+        assert!(noop["params"]["pdfUri"].is_null());
+        server.request(4, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn required_input_creation_notifications_cancel_builds_and_queues_despite_includeonly() {
+    for command in ["input", "subfile"] {
+        let script = "touch \"$1/ready\"\nwhile [ ! -f \"$1/release\" ]; do sleep 0.02; done\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\n";
+        let (mut server, directory, main) = fake_build_server(script, true);
+        let source =
+            format!("\\documentclass{{article}}\n\\includeonly{{other}}\n\\{command}{{my file}}\n");
+        std::fs::write(main.to_file_path().unwrap(), &source).unwrap();
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+        );
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        wait_for_file(&directory.path().join("build/latex-lsp/ready"));
+        server.notify("textDocument/didSave", json!({"textDocument":{"uri":main}}));
+        assert_eq!(
+            server.request(
+                3,
+                "workspace/executeCommand",
+                json!({"command":"latex.buildStatus","arguments":[main]})
+            )["queued"],
+            true
+        );
+        let target = directory.path().join("my file.tex");
+        std::fs::write(&target, "New source.").unwrap();
+        let target = Url::from_file_path(&target).unwrap();
+        if command == "input" {
+            server.notify(
+                "workspace/didChangeWatchedFiles",
+                json!({"changes":[{"uri":target,"type":1}]}),
+            );
+        } else {
+            server.notify(
+                "workspace/didCreateFiles",
+                json!({"files":[{"uri":target}]}),
+            );
+        }
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(
+            finished["params"]["status"], "cancelled",
+            "{command}: {finished}"
+        );
+        let status = server.request(
+            4,
+            "workspace/executeCommand",
+            json!({"command":"latex.buildStatus","arguments":[main]}),
+        );
+        assert_eq!(status["buildId"], finished["params"]["buildId"]);
+        assert_ne!(status["queued"], true, "{status}");
+        server.request(5, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+#[ignore = "requires pdflatex and xelatex"]
+fn real_required_input_restoration_discards_missing_file_errors_and_rebuilds_each_filename_form() {
+    for engine in ["pdflatex", "xelatex"] {
+        for (command, name) in [
+            ("\\input{child}", "child.tex"),
+            ("\\input child", "child.tex"),
+            ("\\input \"my file\"", "my file.tex"),
+            ("\\input{输入 file}", "输入 file.tex"),
+            ("\\input{child.ltx}", "child.ltx"),
+        ] {
+            let script = format!("{engine} -interaction=nonstopmode -halt-on-error -recorder -synctex=1 -output-directory=\"$1\" \"$2\"\nresult=$?\ntouch \"$1/ready\"\nwhile [ ! -f \"$1/release\" ]; do sleep 0.02; done\nexit \"$result\"\n");
+            let (mut server, directory, main) = fake_build_server(&script, false);
+            let source = format!("\\documentclass{{article}}\n\\begin{{document}}Hello.\n{command}\n\\end{{document}}\n");
+            std::fs::write(main.to_file_path().unwrap(), &source).unwrap();
+            server.notify(
+                "textDocument/didChange",
+                json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+            );
+            server.request(
+                2,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            let output = directory.path().join("build/latex-lsp");
+            wait_for_file(&output.join("ready"));
+            std::fs::write(
+                directory.path().join(name),
+                "\\typeout{NEW-INPUT-READ}Restored input.\n",
+            )
+            .unwrap();
+            std::fs::write(output.join("release"), "").unwrap();
+            let failed = server.until(|message| message["method"] == "latex/buildFinished");
+            assert_eq!(
+                failed["params"]["status"], "error",
+                "{engine}, {command}: {failed}"
+            );
+            assert_eq!(
+                failed["params"]["stale"], true,
+                "{engine}, {command}: {failed}"
+            );
+            server.request(
+                3,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            let rebuilt = server.until(|message| message["method"] == "latex/buildFinished");
+            assert_eq!(
+                rebuilt["params"]["status"], "success",
+                "{engine}, {command}: {rebuilt}"
+            );
+            assert_eq!(rebuilt["params"]["stale"], false, "{rebuilt}");
+            assert!(
+                rebuilt["params"]["output"]
+                    .as_str()
+                    .unwrap()
+                    .contains("NEW-INPUT-READ"),
+                "{rebuilt}"
+            );
+            assert_eq!(rebuilt["params"]["pages"], 1);
+            assert_eq!(rebuilt["params"]["dependenciesCount"], 2);
+            server.request(4, "shutdown", Value::Null);
+            server.notify("exit", Value::Null);
+            server.wait_exit(0);
+        }
     }
 }
 

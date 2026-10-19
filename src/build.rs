@@ -535,7 +535,14 @@ impl BuildManager {
                     checks.clone(),
                 );
             }
-            if !stale && matches!(outcome.status, "success" | "error") {
+            if stale {
+                if let Some(old) = current.build_diagnostics.remove(&root_uri) {
+                    affected.extend(old.into_keys());
+                }
+                current.build_diagnostic_sources.remove(&root_uri);
+                current.build_checks.remove(&root_uri);
+                affected.insert(root_uri.clone());
+            } else if matches!(outcome.status, "success" | "error") {
                 crate::file_checks::Snapshot::remember(
                     &mut current.build_checks,
                     root_uri.clone(),

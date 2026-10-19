@@ -278,7 +278,7 @@ etoolbox 的 `newtoggle` / `providetoggle` 使用独立命名空间，支持 `se
 
 任务在编译工作线程启动前已被取消时，不会调用编译器、创建输出目录或替换旧日志，已有 PDF、日志和辅助文件会保留。取消结果不把这些旧文件作为本次编译产物返回。
 
-服务器发出 `latex/buildStarted` 和 `latex/buildFinished` 通知，两者都包含实际 `executable` 和可推断的 `engine`（使用自定义参数或无法识别的工具时为 `null`）。完成通知还包含 `status`（`success` / `error` / `cancelled` / `timeout`）、`buildId`、`rootUri`、`pdfUri`、`logUri`、`exitCode`、`diagnosticsCount`、`errorsCount`、`warningsCount`、`dependenciesCount`（包含根文件的来源数量）、`durationMs`、`message` 和有长度限制的 `output` 摘要。成功结果的 `pages` 为最终 TeX 日志报告的页数（未知时为 `null`），`pdfSize` 为实际 PDF 的字节数；失败结果两者为 `null`。`latex.buildStatus` 保留相同摘要。若文档在编译中变化，`stale` 为 `true`，不会发布这次编译的旧诊断。失败编译不把可能不完整的 PDF 标记为成功结果。
+服务器发出 `latex/buildStarted` 和 `latex/buildFinished` 通知，两者都包含实际 `executable` 和可推断的 `engine`（使用自定义参数或无法识别的工具时为 `null`）。完成通知还包含 `status`（`success` / `error` / `cancelled` / `timeout`）、`buildId`、`rootUri`、`pdfUri`、`logUri`、`exitCode`、`diagnosticsCount`、`errorsCount`、`warningsCount`、`dependenciesCount`（包含根文件的来源数量）、`durationMs`、`message` 和有长度限制的 `output` 摘要。成功结果的 `pages` 为最终 TeX 日志报告的页数（未知时为 `null`），`pdfSize` 为实际 PDF 的字节数；失败结果两者为 `null`。`latex.buildStatus` 保留相同摘要。若文档或已知输入选择在编译中变化，`stale` 为 `true`，不会发布这次编译的旧诊断，并清除该项目上一次编译的诊断，避免旧错误继续留在编辑器中。失败编译不把可能不完整的 PDF 标记为成功结果。
 
 编译管道输出超过 4 MiB、日志超过 8 MiB 时，分析缓冲区保留开头和结尾，省略中间部分；完整日志仍保留在磁盘。省略后清除文件栈，显式文件位置和新出现的文件上下文仍可定位，其他诊断回退到主文档。完成通知的 `diagnosticsTruncated` 标明 TeX 或文献诊断使用了省略后的内容，此时诊断数量仅统计已分析部分。部分 recorder 或文献依赖列表不会替换上一次完整记录。
 
@@ -299,6 +299,8 @@ latexmk 和直接 TeX 引擎编译前会为静态 `\include{chapters/name}` 预�
 本地 `.bst` 样式通过 `bibliographystyle` 参与路径补全、跳转、文件移动及编译输入检查；修改时需要先保存，编译期间变化会使结果过期。BibTeX 报告的样式错误会定位到 `.bst` 对应行；编辑时不把它作为 LaTeX 语法解析。
 
 `\input` 支持花括号、裸文件名和双引号文件名，例如 `\input chapter.tex` 与 `\input "my file"`；这些形式都参与补全、跳转、项目依赖和文件重命名。裸文件名以空白结束；改名或补全引入空格时自动添加花括号，已有双引号则保留。含宏展开、注释拼接或混合引号的文件名留给编译后的 recorder 发现。
+
+静态 `\input` 和 `\subfile` 的文件查找也记录缺失候选、优先后缀候选及选中文件的身份。缺失来源在失败编译期间补回时，即使没有文件通知，也会将错误结果标为过期并清除历史编译诊断；文件创建通知会取消对应任务及队列。已存在的来源被更高优先级的后缀文件遮蔽，或符号链接切换到另一来源时，同样使结果过期，并阻止不重写 PDF 的编译接受旧产物。这项查找追踪不受 `\includeonly` 影响；源码内容仍使用原有保存、内容变化和 recorder 检查。
 
 `\InputIfFileExists{file}{before input}{if missing}` 的静态文件名也支持路径补全、跳转、项目依赖和文件重命名，使用与 `\input` 相同的查找顺序及扩展名规则。文件中的符号可在编译前跨文件导航和重命名；路径编辑保留两个代码参数、注释及空白，允许中文、空格和逗号文件名。命令补全和参数提示说明第二个参数在读取文件前执行，第三个参数只在文件缺失时执行。缺失文件按 LaTeX 的分支继续编译；服务器不模拟分支执行，静态依赖分析不将只检查存在性的 `\IfFileExists` 视为文件输入命令。
 
