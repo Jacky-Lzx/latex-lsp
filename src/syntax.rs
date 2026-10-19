@@ -142,6 +142,12 @@ pub(crate) fn group(source: &str, i: usize, open: u8, close: u8) -> Option<(Argu
     group_mode(source, i, open, close, true, true)
 }
 
+/// TeX optional notes end at the first unbraced closing bracket. An opening
+/// bracket inside a note is ordinary text, not another grouping delimiter.
+pub(crate) fn optional_note_end(source: &str, at: usize) -> Option<usize> {
+    group_mode(source, at, b'[', b']', true, false).map(|(_, end)| end)
+}
+
 fn group_mode(
     source: &str,
     i: usize,
@@ -294,6 +300,14 @@ pub(crate) fn reference_accepts_star(name: &str) -> bool {
     )
 }
 
+pub(crate) fn reference_note_count(name: &str) -> usize {
+    match name {
+        "vref" | "Vref" | "vrefrange" | "vpagerefrange" => 1,
+        "vpageref" => 2,
+        _ => 0,
+    }
+}
+
 /// Locate a reference's label without treating unsupported flags or extra
 /// optional notes as part of a call. Varioref's notes precede its label keys.
 pub(crate) fn reference_argument_start(
@@ -308,13 +322,8 @@ pub(crate) fn reference_argument_start(
         }
         at = skip_space(source, at + 1);
     }
-    let notes = match name {
-        "vref" | "Vref" | "vrefrange" | "vpagerefrange" => 1,
-        "vpageref" => 2,
-        _ => 0,
-    };
-    for _ in 0..notes {
-        let Some((_, end)) = group(source, at, b'[', b']') else {
+    for _ in 0..reference_note_count(name) {
+        let Some(end) = optional_note_end(source, at) else {
             break;
         };
         at = skip_space(source, end);
@@ -1014,12 +1023,6 @@ pub(crate) fn citation_accepts_notes(name: &str) -> bool {
     is_citation(name) && !matches!(name, "nocite" | "citenum" | "defcitealias")
 }
 
-/// TeX optional notes end at the first unbraced closing bracket. An opening
-/// bracket inside a note is ordinary text, not another grouping delimiter.
-pub(crate) fn citation_note_end(source: &str, at: usize) -> Option<usize> {
-    group_mode(source, at, b'[', b']', true, false).map(|(_, end)| end)
-}
-
 /// Citation keys follow at most two optional notes. Leave any extra bracket
 /// in place so callers cannot treat the following prose as a key argument.
 pub(crate) fn citation_argument_start(
@@ -1036,7 +1039,7 @@ pub(crate) fn citation_argument_start(
     }
     if citation_accepts_notes(name) {
         for _ in 0..2 {
-            let Some(end) = citation_note_end(source, at) else {
+            let Some(end) = optional_note_end(source, at) else {
                 break;
             };
             at = skip_space(source, end);

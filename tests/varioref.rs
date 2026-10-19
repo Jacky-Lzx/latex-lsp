@@ -47,10 +47,12 @@ fn varioref_labels_navigate_and_rename_across_notes_stars_and_files() {
         r"\Vref*[sec:old]{sec:old}",
         r"\vpageref{sec:old}",
         r"\vpageref*[sec:old][prefix]{sec:old}",
+        r"\vref[see [sec:old]{sec:old}",
+        r"\vpageref*[same][see [sec:old]{sec:old}",
         r"\fullref{sec:old}",
     ];
     let valid = format!("😀 {}", calls.join("\n"));
-    let ignored = "\n% \\Vref{sec:old}\n\\verb|\\vpageref{sec:old}|";
+    let ignored = "\n% \\Vref{sec:old}\n\\verb|\\vpageref{sec:old}|\n\\vref[see [nested]]{sec:old}\n\\vpageref[see][there [nested]]{sec:old}";
     let source = format!("{valid}{ignored}");
     let main = insert(&mut workspace, "main.tex", &source);
     let text = &workspace.documents[&main].text;
@@ -61,7 +63,7 @@ fn varioref_labels_navigate_and_rename_across_notes_stars_and_files() {
         assert_eq!(definitions[0].uri, declaration);
         assert_eq!(
             features::references(&workspace, &main, position, true).len(),
-            10,
+            calls.len() + 2,
             "{at}"
         );
         let edit = features::rename(&workspace, &main, position, "sec:new")
@@ -91,6 +93,10 @@ fn unsupported_reference_stars_and_excess_notes_are_not_rename_targets() {
         r"\vref[first][second]{sec:old}",
         r"\Vref*[first][second]{sec:old}",
         r"\vpageref[first][second][third]{sec:old}",
+        r"\vref[see [nested]]{sec:old}",
+        r"\Vref*[see [nested]]{sec:old}",
+        r"\vpageref[see [nested]]{sec:old}",
+        r"\vpageref*[see][there [nested]]{sec:old}",
         r"\vpageref**{sec:old}",
         r"\fullref*{sec:old}",
         r"\fullref[note]{sec:old}",
@@ -135,6 +141,14 @@ fn label_completion_skips_complete_varioref_notes_and_preserves_their_contents()
             r"\vpageref*[{same [nested]}][other \emph{page}]{sec:target}",
         ),
         (r"\fullref{sec:t¦BAD}", r"\fullref{sec:target}"),
+        (
+            r"\vref[see [literal]{sec:t¦BAD}",
+            r"\vref[see [literal]{sec:target}",
+        ),
+        (
+            r"\vpageref*[same][see [literal]{sec:t¦",
+            r"\vpageref*[same][see [literal]{sec:target",
+        ),
         (r"\vref[same]{¦}", r"\vref[same]{sec:target}"),
         (
             r"\vpageref[here][there]{sec:t¦",
@@ -176,6 +190,18 @@ fn varioref_signatures_track_the_optional_notes_and_required_label() {
         ),
         (r"\vpageref{ke¦y}", r"\vpageref[same-page][prefix]{key}", 2),
         (r"\fullref{ke¦y}", r"\fullref{key}", 0),
+        (r"\vref[see [li¦teral]{key}", r"\vref[same-page]{key}", 0),
+        (r"\vref[see [literal]{ke¦y}", r"\vref[same-page]{key}", 1),
+        (
+            r"\vpageref[see [literal][pre¦fix]{key}",
+            r"\vpageref[same-page][prefix]{key}",
+            1,
+        ),
+        (
+            r"\vpageref*[same][see [literal]{ke¦y}",
+            r"\vpageref[same-page][prefix]{key}",
+            2,
+        ),
     ] {
         let mut workspace = Workspace::default();
         let at = marked.find('¦').unwrap();
@@ -185,6 +211,17 @@ fn varioref_signatures_track_the_optional_notes_and_required_label() {
             .unwrap_or_else(|| panic!("missing signature: {marked}"));
         assert_eq!(help.signatures[0].label, label, "{marked}");
         assert_eq!(help.active_parameter, Some(active), "{marked}");
+    }
+    for source in [
+        r"\vref[see [nested]]{key}",
+        r"\Vref*[see [nested]]{key}",
+        r"\vpageref[see [nested]]{key}",
+        r"\vpageref*[same][there [nested]]{key}",
+    ] {
+        let mut workspace = Workspace::default();
+        let main = insert(&mut workspace, "invalid.tex", source);
+        let at = Text::new(source.into()).position(source.rfind("key").unwrap() + 1);
+        assert!(signature::help(&workspace, &main, at).is_none(), "{source}");
     }
     for name in ["vref", "Vref", "vpageref", "fullref"] {
         let mut workspace = Workspace {
@@ -219,13 +256,14 @@ fn varioref_reference_warnings_have_precise_utf16_ranges_and_label_spelling_repa
         (r"\vpageref*[same][prefix]{sec:itnro}", "Reference"),
         (r"\fullref{sec:itnro}", "Reference"),
     ] {
-        let source = format!("\\label{{sec:intro}}\n😀 {call}\n");
+        let source = format!("\\label{{sec:intro}}\n😀 \\vref[see [nested]]{{sec:itnro}} {call}\n");
         std::fs::write(&main, &source).unwrap();
         let log = format!(
             "{}:2: LaTeX Warning: {prefix} `sec:itnro' on page 1 undefined on input line 2.\n",
             main.display()
         );
         let diagnostics = build_log::parse(&main, &log);
+        assert_eq!(diagnostics[&uri].len(), 1, "{call}: {diagnostics:?}");
         let diagnostic = &diagnostics[&uri][0];
         let text = Text::new(source.clone());
         let at = source.rfind("sec:itnro").unwrap();

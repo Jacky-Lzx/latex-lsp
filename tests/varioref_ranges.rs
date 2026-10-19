@@ -44,11 +44,13 @@ fn range_endpoints_navigate_and_rename_independently_across_files() {
         r"\vrefrange[sec:last]{sec:first}{sec:last}",
         r"\vpagerefrange{sec:first}{sec:last}",
         r"\vpagerefrange*[sec:first]{sec:first}{sec:last}",
+        r"\vrefrange[see [sec:last]{sec:first}{sec:last}",
+        r"\vpagerefrange*[see [sec:first]{sec:first}{sec:last}",
         "\\vpagerefrange % star\r\n * [same]{sec:first}% between\r\n{sec:last}",
     ];
     let active = format!("😀 {}", calls.join("\n"));
     let ignored =
-        "\n% \\vrefrange{sec:first}{sec:last}\n\\verb|\\vpagerefrange{sec:first}{sec:last}|";
+        "\n% \\vrefrange{sec:first}{sec:last}\n\\verb|\\vpagerefrange{sec:first}{sec:last}|\n\\vrefrange[see [nested]]{sec:first}{sec:last}\n\\vpagerefrange*[see [nested]]{sec:first}{sec:last}";
     let source = format!("{active}{ignored}");
     let main = insert(&mut workspace, "main.tex", &source);
     for key in ["sec:first", "sec:last"] {
@@ -59,7 +61,7 @@ fn range_endpoints_navigate_and_rename_independently_across_files() {
             assert_eq!(definitions[0].uri, declaration);
             assert_eq!(
                 features::references(&workspace, &main, position, true).len(),
-                6
+                calls.len() + 1
             );
             let edit = features::rename(&workspace, &main, position, "sec:renamed")
                 .unwrap()
@@ -100,6 +102,8 @@ fn invalid_range_flags_and_notes_do_not_create_label_targets() {
         r"\vrefrange[first][second]{sec:first}{sec:last}",
         r"\vpagerefrange**{sec:first}{sec:last}",
         r"\vpagerefrange*[first][second]{sec:first}{sec:last}",
+        r"\vrefrange[see [nested]]{sec:first}{sec:last}",
+        r"\vpagerefrange*[see [nested]]{sec:first}{sec:last}",
     ] {
         let main = insert(&mut workspace, "invalid.tex", source);
         for key in ["sec:first", "sec:last"] {
@@ -114,6 +118,16 @@ fn invalid_range_flags_and_notes_do_not_create_label_targets() {
                 features::prepare_rename(&workspace, &main, position)
                     .unwrap()
                     .is_none(),
+                "{source}"
+            );
+            assert!(
+                signature::help(&workspace, &main, position).is_none(),
+                "{source}"
+            );
+            assert!(
+                !features::completion(&workspace, &main, position)
+                    .iter()
+                    .any(|item| item.label == key),
                 "{source}"
             );
         }
@@ -166,6 +180,14 @@ fn range_completion_replaces_only_the_active_endpoint_including_incomplete_calls
         ),
         (r"\vrefrange{¦", r"\vrefrange{sec:target"),
         (
+            r"\vrefrange[see [literal]{sec:t¦BAD}{last}",
+            r"\vrefrange[see [literal]{sec:target}{last}",
+        ),
+        (
+            r"\vpagerefrange*[see [literal]{first}{sec:t¦",
+            r"\vpagerefrange*[see [literal]{first}{sec:target",
+        ),
+        (
             "\\vrefrange{first}{\n sec:t¦BAD\n }",
             r"\vrefrange{first}{sec:target}",
         ),
@@ -198,6 +220,9 @@ fn range_signatures_and_snippets_expose_both_required_labels() {
             ("[sa¦me]{first}{last}", 0),
             ("{fir¦st}{last}", 1),
             ("[same]{first}{la¦st}", 2),
+            ("[see [li¦teral]{first}{last}", 0),
+            ("[see [literal]{fir¦st}{last}", 1),
+            ("[see [literal]{first}{la¦st}", 2),
         ] {
             let marked = format!("\\{name}{arguments}");
             let at = marked.find('¦').unwrap();
@@ -234,7 +259,7 @@ fn multiline_range_warnings_select_and_repair_each_endpoint_at_the_final_input_l
     let main = directory.path().join("main.tex");
     let uri = Url::from_file_path(&main).unwrap();
     for command in ["vrefrange", "vpagerefrange", "vpagerefrange*"] {
-        let source = format!("\\label{{sec:first}}\\label{{sec:last}}\n😀 \\{command}[same]{{sec:frist}}% note\n{{sec:lsat}}\n");
+        let source = format!("\\label{{sec:first}}\\label{{sec:last}}\n😀 \\{command}[same]{{sec:frist}}% note\n{{sec:lsat}} \\{command}[see [nested]]{{sec:first}}{{sec:lsat}}\n");
         std::fs::write(&main, &source).unwrap();
         let log = ["sec:frist", "sec:lsat"]
             .map(|key| {
@@ -294,8 +319,8 @@ fn multiline_range_warnings_select_and_repair_each_endpoint_at_the_final_input_l
         assert_eq!(
             apply(&source, &edits),
             source
-                .replace("sec:frist", "sec:first")
-                .replace("sec:lsat", "sec:last")
+                .replacen("sec:frist", "sec:first", 1)
+                .replacen("sec:lsat", "sec:last", 1)
         );
     }
 }
