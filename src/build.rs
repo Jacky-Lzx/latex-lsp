@@ -14,7 +14,7 @@ use std::{
 use crate::{
     build_log,
     config::BuildConfig,
-    file_checks::{fingerprint, InputSnapshot},
+    file_checks::{fingerprint, ArtifactFingerprint, InputSnapshot},
     workspace::Workspace,
 };
 use serde_json::{json, Value};
@@ -949,9 +949,9 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool) -> Outcome 
         return Outcome::error("Invalid root filename".into());
     };
     let pdf_path = config.artifact_path(root, "pdf").unwrap();
-    let pdf_before = fingerprint(&pdf_path);
+    let pdf_before = ArtifactFingerprint::capture(&pdf_path);
     let recorder_path = config.artifact_path(root, "fls").unwrap();
-    let recorder_before = fingerprint(&recorder_path);
+    let recorder_before = ArtifactFingerprint::capture(&recorder_path);
     let bibliography_before = bibliography_logs(&output_dir);
     // A previous log must never be interpreted as the result of a failed spawn.
     if log_path.exists() {
@@ -1049,8 +1049,8 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool) -> Outcome 
     outcome.pdf_updated = outcome
         .pdf
         .as_ref()
-        .is_some_and(|pdf| fingerprint(pdf) != pdf_before);
-    let recorder_after = fingerprint(&recorder_path);
+        .is_some_and(|pdf| ArtifactFingerprint::capture(pdf) != pdf_before);
+    let recorder_after = ArtifactFingerprint::capture(&recorder_path);
     if recorder_after.is_some() && recorder_after != recorder_before {
         // Partial dependency lists must not replace the last complete recorder.
         outcome.inputs = read_log(&recorder_path)
@@ -1191,7 +1191,7 @@ fn read_log(path: &Path) -> Option<String> {
     Some(build_log::decode_output(&text).into_owned())
 }
 
-fn bibliography_logs(directory: &Path) -> BTreeMap<PathBuf, (u64, Option<std::time::SystemTime>)> {
+fn bibliography_logs(directory: &Path) -> BTreeMap<PathBuf, ArtifactFingerprint> {
     std::fs::read_dir(directory)
         .into_iter()
         .flatten()
@@ -1201,10 +1201,11 @@ fn bibliography_logs(directory: &Path) -> BTreeMap<PathBuf, (u64, Option<std::ti
             if path.extension()? != "blg" {
                 return None;
             }
-            let metadata = entry.metadata().ok()?;
-            metadata
-                .is_file()
-                .then_some((path, (metadata.len(), metadata.modified().ok())))
+            if !entry.metadata().ok()?.is_file() {
+                return None;
+            }
+            let snapshot = ArtifactFingerprint::capture(&path)?;
+            Some((path, snapshot))
         })
         .take(64)
         .collect()

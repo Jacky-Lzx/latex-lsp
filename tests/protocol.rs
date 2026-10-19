@@ -7353,3 +7353,154 @@ fn changed_recorded_external_images_invalidate_active_builds_with_or_without_wat
         server.wait_exit(0);
     }
 }
+
+#[test]
+#[cfg(unix)]
+fn content_updates_to_pdf_and_recorder_are_accepted_with_preserved_output_metadata() {
+    let script = "if [ -f \"$1/noop\" ]; then exit 0; fi\nif [ -f \"$1/new\" ]; then chosen=other; content=NEW; else chosen=first; content=OLD; fi\nprintf '%%PDF-1.4\\n%s\\n' \"$content\" > \"$1/main.pdf\"\nprintf 'INPUT %s\\nINPUT %s/.inputs/%s.ltx\\n' \"$2\" \"${2%/*}\" \"$chosen\" > \"$1/main.fls\"\nif [ -f \"$1/clock\" ]; then touch -r \"$1/clock\" \"$1/main.pdf\" \"$1/main.fls\"; fi\n";
+    let (mut server, directory, main) = fake_build_server(script, false);
+    let inputs = directory.path().join(".inputs");
+    std::fs::create_dir(&inputs).unwrap();
+    std::fs::write(inputs.join("first.ltx"), "\\label{first-child}\n").unwrap();
+    std::fs::write(inputs.join("other.ltx"), "\\label{other-child}\n").unwrap();
+    server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let first = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(first["params"]["status"], "success", "{first}");
+    let output = directory.path().join("build/latex-lsp");
+    let future = std::time::SystemTime::now() + Duration::from_secs(120);
+    std::fs::write(output.join("clock"), "").unwrap();
+    let paths = [output.join("main.pdf"), output.join("main.fls")];
+    let lengths = paths
+        .each_ref()
+        .map(|path| std::fs::metadata(path).unwrap().len());
+    for path in paths.iter().chain([output.join("clock")].iter()) {
+        std::fs::File::open(path)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(future))
+            .unwrap();
+    }
+    std::fs::write(output.join("new"), "").unwrap();
+    server.request(
+        3,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let rebuilt = server.until(|message| message["method"] == "latex/buildFinished");
+    for (path, length) in paths.iter().zip(lengths) {
+        let metadata = std::fs::metadata(path).unwrap();
+        assert_eq!(metadata.len(), length);
+        assert_eq!(metadata.modified().unwrap(), future);
+    }
+    assert!(std::fs::read_to_string(&paths[0]).unwrap().contains("NEW"));
+    assert!(std::fs::read_to_string(&paths[1])
+        .unwrap()
+        .contains("other.ltx"));
+    assert_eq!(rebuilt["params"]["status"], "success", "{rebuilt}");
+    assert_eq!(rebuilt["params"]["stale"], false, "{rebuilt}");
+    let symbols = server.request(4, "workspace/symbol", json!({"query":"other-child"}));
+    assert_eq!(symbols.as_array().unwrap().len(), 1, "{symbols}");
+    assert_eq!(
+        symbols[0]["location"]["uri"],
+        json!(Url::from_file_path(inputs.join("other.ltx")).unwrap())
+    );
+    std::fs::write(output.join("noop"), "").unwrap();
+    server.request(
+        5,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let noop = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(noop["params"]["status"], "success", "{noop}");
+    server.request(6, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+fn bibliography_log_content_updates_are_analyzed_with_preserved_output_metadata() {
+    let script = "if [ -f \"$1/noop\" ]; then exit 0; fi\nif [ -f \"$1/new\" ]; then chosen=new; else chosen=old; fi\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf 'Database file #1: .inputs/%srefs.bib\\nWarning--empty author in %s\\n' \"$chosen\" \"$chosen\" > \"$1/main.blg\"\nif [ -f \"$1/clock\" ]; then touch -r \"$1/clock\" \"$1/main.blg\"; fi\n";
+    let (mut server, directory, main) = fake_build_server(script, false);
+    let inputs = directory.path().join(".inputs");
+    std::fs::create_dir(&inputs).unwrap();
+    for name in ["old", "new"] {
+        std::fs::write(
+            inputs.join(format!("{name}refs.bib")),
+            format!("@book{{{name},title={{Title}}}}\n"),
+        )
+        .unwrap();
+    }
+    server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let first = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(first["params"]["status"], "success", "{first}");
+    assert_eq!(first["params"]["warningsCount"], 1, "{first}");
+    let output = directory.path().join("build/latex-lsp");
+    let log = output.join("main.blg");
+    let length = std::fs::metadata(&log).unwrap().len();
+    let future = std::time::SystemTime::now() + Duration::from_secs(120);
+    std::fs::write(output.join("clock"), "").unwrap();
+    for path in [&log, &output.join("clock")] {
+        std::fs::File::open(path)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(future))
+            .unwrap();
+    }
+    std::fs::write(output.join("new"), "").unwrap();
+    server.request(
+        3,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let rebuilt = server.until(|message| message["method"] == "latex/buildFinished");
+    let metadata = std::fs::metadata(&log).unwrap();
+    assert_eq!(metadata.len(), length);
+    assert_eq!(metadata.modified().unwrap(), future);
+    assert_eq!(rebuilt["params"]["status"], "success", "{rebuilt}");
+    assert_eq!(rebuilt["params"]["warningsCount"], 1, "{rebuilt}");
+    let bibliography = Url::from_file_path(inputs.join("newrefs.bib")).unwrap();
+    let diagnostics = server.request(
+        4,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":bibliography}}),
+    );
+    assert!(
+        diagnostics["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["source"] == "latex-build"
+                && item["message"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("author in new"))),
+        "{diagnostics}"
+    );
+    let symbols = server.request(5, "workspace/symbol", json!({"query":"new"}));
+    assert!(
+        symbols
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["location"]["uri"] == json!(bibliography)),
+        "{symbols}"
+    );
+    std::fs::write(output.join("noop"), "").unwrap();
+    server.request(
+        6,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let noop = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(noop["params"]["status"], "success", "{noop}");
+    assert_eq!(noop["params"]["warningsCount"], 0, "{noop}");
+    server.request(7, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

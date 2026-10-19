@@ -98,6 +98,23 @@ pub(crate) fn fingerprint(path: &Path) -> Option<(u64, Option<std::time::SystemT
         .then_some((metadata.len(), metadata.modified().ok()))
 }
 
+/// Metadata detects rewrites of identical outputs; contents detect replacements
+/// by tools which preserve the output's length and modification time.
+#[derive(Debug, PartialEq)]
+pub(crate) struct ArtifactFingerprint {
+    metadata: (u64, Option<std::time::SystemTime>),
+    contents: InputSnapshot,
+}
+
+impl ArtifactFingerprint {
+    pub(crate) fn capture(path: &Path) -> Option<Self> {
+        Some(Self {
+            metadata: fingerprint(path)?,
+            contents: InputSnapshot::file(path),
+        })
+    }
+}
+
 fn file(path: &Path) -> Option<PathBuf> {
     let path = path.canonicalize().ok()?;
     path.is_file().then_some(path)
