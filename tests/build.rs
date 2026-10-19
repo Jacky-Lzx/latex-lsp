@@ -675,6 +675,74 @@ fn bibliography_builds_with_custom_job_names_still_resolve_and_analyze_the_datab
 }
 
 #[test]
+#[cfg(unix)]
+#[ignore = "requires latexmk, BibTeX, pdflatex and xelatex"]
+fn real_bibtex_errors_follow_database_and_style_aliases_to_the_correct_file_and_line() {
+    use latex_lsp::config::Engine;
+    for engine in [Engine::PdfLatex, Engine::XeLatex] {
+        for style_error in [false, true] {
+            for extension in ["payload", "png", "tex"] {
+                let directory = tempfile::tempdir().unwrap();
+                let root = directory.path();
+                let main = root.join("main.tex");
+                let physical = root.join(format!("physical.{extension}"));
+                let (style, name, contents, message, line) = if style_error {
+                    (
+                        "chosen",
+                        "chosen.bst",
+                        "ENTRY {title} {} {}\nFUNCTION {broken} {notafunction}\nREAD\n",
+                        "notafunction is an unknown function",
+                        1,
+                    )
+                } else {
+                    (
+                        "plain",
+                        "refs.bib",
+                        "% database\n@book{entry,author={Writer},title={Title},year={2026}}\n@book{entry,author={Writer},title={Duplicate},year={2026}}\n",
+                        "Repeated entry",
+                        2,
+                    )
+                };
+                std::fs::write(&physical, contents).unwrap();
+                std::os::unix::fs::symlink(&physical, root.join(name)).unwrap();
+                if style_error {
+                    std::fs::write(
+                        root.join("refs.bib"),
+                        "@book{entry,author={Writer},title={Title},year={2026}}\n",
+                    )
+                    .unwrap();
+                }
+                std::fs::write(&main, format!("\\documentclass{{article}}\n\\begin{{document}}\n\\cite{{entry}}\\bibliographystyle{{{style}}}\\bibliography{{refs}}\n\\end{{document}}\n")).unwrap();
+                let config = BuildConfig {
+                    engine: Some(engine),
+                    ..Default::default()
+                };
+                let outcome = build::run(&main, &config, &AtomicBool::new(false));
+                assert_eq!(outcome.status, "error", "{}", outcome.output);
+                let uri = Url::from_file_path(&physical).unwrap();
+                assert!(
+                    outcome
+                        .diagnostics
+                        .get(&uri)
+                        .is_some_and(|items| items
+                            .iter()
+                            .any(|item| item.message == format!("BibTeX: {message}")
+                                && item.range.start.line == line
+                                && item.severity == Some(DiagnosticSeverity::ERROR))),
+                    "{engine:?} style={style_error} extension={extension}: {:?}\n{}",
+                    outcome.diagnostics,
+                    outcome.output
+                );
+                assert!(!outcome
+                    .diagnostics
+                    .get(&Url::from_file_path(&main).unwrap())
+                    .is_some_and(|items| items.iter().any(|item| item.message.contains(message))));
+            }
+        }
+    }
+}
+
+#[test]
 #[ignore = "requires pdflatex"]
 fn real_missing_include_warnings_reconstruct_tex_wrapped_long_chapter_names() {
     let directory = tempfile::tempdir().unwrap();

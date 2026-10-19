@@ -1930,12 +1930,17 @@ pub(crate) fn parse_bibliography_in(
         if let Some((message, tail)) = line.split_once("---line ") {
             if let Some((number, name)) = tail.split_once(" of file ") {
                 if let Ok(number) = number.trim().parse::<u32>() {
-                    let location = paths.resolve(name).filter(|path| {
-                        matches!(
-                            path.extension().and_then(|ext| ext.to_str()),
-                            Some("tex" | "bib" | "bst" | "sty" | "cls")
-                        )
-                    });
+                    // The logged input name identifies its role. A source
+                    // alias can resolve to any suffix; an auxiliary alias
+                    // must not become a source because its target is .bib.
+                    let location = matches!(
+                        Path::new(name.trim().trim_matches('"'))
+                            .extension()
+                            .and_then(|ext| ext.to_str()),
+                        Some("tex" | "bib" | "bst" | "sty" | "cls")
+                    )
+                    .then(|| paths.resolve(name))
+                    .flatten();
                     let (path, number) = location
                         .map(|path| (path, number))
                         .unwrap_or_else(|| (root.into(), 1));
@@ -2447,6 +2452,71 @@ mod tests {
             b"\xe4\n\n\xb8\xad".as_slice(),
         ] {
             assert_eq!(decode_output(bytes), String::from_utf8_lossy(bytes));
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn bibliography_line_errors_follow_source_aliases_with_unrelated_target_extensions() {
+        for extension in ["payload", "png", "tex", "bib"] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let main = root.join("main.tex");
+            let database = root.join(format!("database.{extension}"));
+            let style = root.join(format!("style.{extension}"));
+            std::fs::write(&main, "\\cite{entry}\n").unwrap();
+            std::fs::write(
+                &database,
+                "% database\n@book{entry,title={Book}}\n@book{entry,title={Duplicate}}\n",
+            )
+            .unwrap();
+            std::fs::write(&style, "ENTRY {title} {} {}\nFUNCTION {broken} {unknown}\n").unwrap();
+            std::os::unix::fs::symlink(&database, root.join("with spaces.bib")).unwrap();
+            std::os::unix::fs::symlink(&style, root.join("local.bst")).unwrap();
+            let diagnostics = parse_bibliography(&main, "Database file #1: with spaces.bib\nThe style file: local.bst\nRepeated entry---line 3 of file \"with spaces.bib\"\nunknown is an unknown function---line 2 of file local.bst\nWarning--empty author in entry\n");
+            let database_uri = Url::from_file_path(&database).unwrap();
+            let style_uri = Url::from_file_path(&style).unwrap();
+            assert_eq!(diagnostics.len(), 2, "{extension}: {diagnostics:?}");
+            let errors = &diagnostics[&database_uri];
+            assert_eq!(errors.len(), 2);
+            assert!(errors
+                .iter()
+                .any(|item| item.message == "BibTeX: Repeated entry"
+                    && item.range.start.line == 2
+                    && item.severity == Some(DiagnosticSeverity::ERROR)));
+            assert!(errors
+                .iter()
+                .any(|item| item.message == "BibTeX: empty author in entry"
+                    && item.range.start == Position::new(1, 6)
+                    && item.severity == Some(DiagnosticSeverity::WARNING)));
+            assert_eq!(diagnostics[&style_uri][0].range.start.line, 1);
+            assert_eq!(
+                diagnostics[&style_uri][0].message,
+                "BibTeX: unknown is an unknown function"
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn bibliography_line_errors_do_not_treat_auxiliary_alias_targets_as_sources() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let main = root.join("main.tex");
+        let physical = root.join("physical.bib");
+        std::fs::write(&main, "\\cite{entry}\n").unwrap();
+        std::fs::write(&physical, "% database\n@book{entry,\n title={Book}}\n").unwrap();
+        for name in ["main.aux", "raw.csv"] {
+            std::os::unix::fs::symlink(&physical, root.join(name)).unwrap();
+        }
+        std::fs::create_dir(root.join("directory.bst")).unwrap();
+        for name in ["main.aux", "raw.csv", "missing.bib", "directory.bst"] {
+            let log = format!("Error in auxiliary input---line 3 of file {name}\n");
+            let diagnostics = parse_bibliography(&main, &log);
+            assert_eq!(diagnostics.len(), 1, "{name}: {diagnostics:?}");
+            let items = &diagnostics[&Url::from_file_path(&main).unwrap()];
+            assert_eq!(items[0].range.start.line, 0);
+            assert_eq!(items[0].message, "BibTeX: Error in auxiliary input");
         }
     }
 
