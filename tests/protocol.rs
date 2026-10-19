@@ -2785,6 +2785,122 @@ fn biber_logged_sources_keep_diagnostics_navigation_and_rename_on_the_complete_d
 
 #[test]
 #[cfg(unix)]
+fn biber_unreported_unquoted_sources_restrict_diagnostics_to_the_complete_explicit_file() {
+    for name in ["with spaces.bib", "refs.bib line 700 copy.bib"] {
+        for missing in [false, true] {
+            let script = "cp \"${2%/*}/fixture.blg\" \"$1/main.blg\"\nprintf 'INPUT %s\\n' \"$2\" > \"$1/main.fls\"\nexit 1\n";
+            let (mut server, directory, main) = fake_build_server_capabilities(
+                script,
+                false,
+                json!({"textDocument":{"diagnostic":{}}}),
+            );
+            let root = directory.path();
+            std::fs::create_dir(root.join(".inputs")).unwrap();
+            let path = root.join(".inputs").join(name);
+            let bib = Url::from_file_path(&path).unwrap();
+            let decoy = Url::from_file_path(root.join(".inputs/refs.bib")).unwrap();
+            let wrong = Url::from_file_path(root.join("wrong.bib")).unwrap();
+            std::fs::write(
+                decoy.to_file_path().unwrap(),
+                "@book{entry,title={Decoy}}\n",
+            )
+            .unwrap();
+            std::fs::write(
+                wrong.to_file_path().unwrap(),
+                "@book{entry,title={Wrong}}\n",
+            )
+            .unwrap();
+            if !missing {
+                std::fs::write(&path, "% header\n\n@book{entry,title={Explicit}}\n").unwrap();
+            }
+            let fixture = root.join("fixture.blg");
+            let input = "INFO - Found BibTeX data source '.inputs/refs.bib'\n";
+            let error = format!("Unexpected token 'wrong.bib' in file .inputs/{name}, line 3");
+            let warning = format!("Missing field for entry 'entry' (file .inputs/{name})");
+            std::fs::write(
+                &fixture,
+                format!("{input}ERROR - {error}\nWARN - {warning}\n"),
+            )
+            .unwrap();
+            server.request(
+                2,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            let finished = server.until(|message| message["method"] == "latex/buildFinished");
+            assert_eq!(finished["params"]["status"], "error", "{finished}");
+            let target = if missing { &main } else { &bib };
+            let mut id = 3;
+            for uri in [&main, &bib, &decoy, &wrong] {
+                let diagnostics = server.request(
+                    id,
+                    "textDocument/diagnostic",
+                    json!({"textDocument":{"uri":uri}}),
+                );
+                id += 1;
+                let items: Vec<_> = diagnostics["items"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|item| item["message"].as_str().unwrap().starts_with("Biber:"))
+                    .collect();
+                if uri == target {
+                    assert_eq!(items.len(), 2, "{name}: {diagnostics}");
+                    assert!(
+                        items
+                            .iter()
+                            .all(|item| item["range"]["start"]["line"]
+                                == if missing { 0 } else { 2 }),
+                        "{name}: {diagnostics}"
+                    );
+                    if missing {
+                        assert!(items
+                            .iter()
+                            .all(|item| item["data"]["unresolvedSource"] == true));
+                    } else {
+                        let warning = items.iter().find(|item| item["severity"] == 2).unwrap();
+                        assert_eq!(
+                            warning["range"],
+                            json!({"start":{"line":2,"character":6},"end":{"line":2,"character":11}})
+                        );
+                    }
+                } else {
+                    assert!(items.is_empty(), "{name}: {diagnostics}");
+                }
+            }
+            std::fs::write(&fixture, input).unwrap();
+            server.request(
+                id,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            id += 1;
+            server.until(|message| message["method"] == "latex/buildFinished");
+            for uri in [&main, &bib, &decoy, &wrong] {
+                let diagnostics = server.request(
+                    id,
+                    "textDocument/diagnostic",
+                    json!({"textDocument":{"uri":uri}}),
+                );
+                id += 1;
+                assert!(
+                    diagnostics["items"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .all(|item| !item["message"].as_str().unwrap().starts_with("Biber:")),
+                    "{name}: {diagnostics}"
+                );
+            }
+            server.request(id, "shutdown", Value::Null);
+            server.notify("exit", Value::Null);
+            server.wait_exit(0);
+        }
+    }
+}
+
+#[test]
+#[cfg(unix)]
 fn bibliography_logs_discover_inputs_without_replacing_or_losing_tex_recorder_dependencies() {
     let script = "printf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf 'INPUT main.tex\\nINPUT .inputs/chapter.tex\\n' > \"$1/main.fls\"\nif [ ! -f \"$1/main.blg\" ]; then\n printf 'The top-level auxiliary file: build/latex-lsp/main.aux\\nDatabase file #1: .inputs/refs.bib\\nThe style file: .inputs/local.bst\\n' > \"$1/main.blg\"\nfi\n";
     let (mut server, directory, main) = fake_build_server(script, false);

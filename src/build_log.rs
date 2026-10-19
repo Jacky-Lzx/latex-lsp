@@ -2199,23 +2199,45 @@ fn bibliography_path(
     } else {
         &["file ", "File "]
     };
+    let mut unconfirmed = None;
     let explicit = bibliography_source_fields(paths, message).find_map(|(start, _)| {
         if message[..start].ends_with(|ch: char| ch.is_alphanumeric() || ch == '_') {
             return None;
         }
         markers.iter().find_map(|marker| {
             let tail = message[start..].strip_prefix(*marker)?.trim_start();
+            let generic = matches!(*marker, "in " | "In ");
+            let file = tail
+                .strip_prefix("file ")
+                .or_else(|| tail.strip_prefix("File "));
+            let tail = if generic {
+                file.unwrap_or(tail).trim_start()
+            } else {
+                tail
+            };
             let start = message.len() - tail.len();
             if tail.starts_with(['\'', '"']) {
                 let QuotedBibliographyPath { path, span, .. } =
                     bibliography_quoted_path(paths, message, start);
                 Some(BibliographyLocation::Named { path, span })
             } else {
-                bibliography_unquoted_path(paths, message, start)
+                let location = bibliography_explicit_unquoted_path(paths, message, start)?;
+                // Prose such as `in parser: ... in file refs.bib` must not
+                // preempt the real file field. Retain an unresolved generic
+                // field only if no stronger source follows it.
+                if generic
+                    && file.is_none()
+                    && matches!(location, BibliographyLocation::Named { path: None, .. })
+                {
+                    unconfirmed.get_or_insert(location);
+                    None
+                } else {
+                    Some(location)
+                }
             }
         })
     });
-    if let Some(location) = explicit {
+    if let Some(location) = explicit.or(unconfirmed) {
         return location;
     }
     // A reported entry key is literal metadata even when it names an
@@ -2419,6 +2441,45 @@ fn bibliography_unquoted_path(
             (paths.resolve(name), span_end)
         }
         None => (None, token_end),
+    };
+    Some(BibliographyLocation::Named {
+        path,
+        span: start..start + end,
+    })
+}
+
+/// An explicit file field restricts lookup even without an input record.
+/// Its complete name can contain spaces; quoted error text is not a boundary.
+fn bibliography_explicit_unquoted_path(
+    paths: &crate::recorder::BibliographyPaths<'_>,
+    message: &str,
+    start: usize,
+) -> Option<BibliographyLocation> {
+    let recorded = bibliography_recorded_unquoted_path(paths, message, start);
+    let body = &message[start..];
+    let last_extension = bibliography_fields(body, None)
+        .filter_map(|(index, _)| body[index..].starts_with(".bib").then_some(index + 4))
+        .last();
+    if let Some(BibliographyLocation::Named { path, span }) = recorded {
+        // Keep the selected input's identity, including disappearance. A
+        // complete longer explicit name can still override a logged prefix.
+        if last_extension.is_none_or(|end| start + end <= span.end) {
+            return Some(BibliographyLocation::Named { path, span });
+        }
+    }
+    let Some(end) = last_extension else {
+        return bibliography_unquoted_path(paths, message, start);
+    };
+    let (path, end) = if bibliography_unquoted_terminated(&body[end..]) {
+        let (name, span_end) = bibliography_unquoted_name(body, end);
+        (paths.resolve(name), span_end)
+    } else {
+        // A longer incomplete/unsupported name cannot borrow its existing
+        // .bib prefix, nor a quoted filename elsewhere in the message.
+        let end = body[end..]
+            .find(char::is_whitespace)
+            .map_or(body.len(), |offset| end + offset);
+        (None, end)
     };
     Some(BibliographyLocation::Named {
         path,
@@ -3895,6 +3956,93 @@ mod tests {
             let items = &diagnostics[&Url::from_file_path(&main).unwrap()];
             assert_eq!(items[0].range.start, Position::new(0, 0));
             assert_eq!(items[0].data.as_ref().unwrap()["unresolvedSource"], true);
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn biber_unreported_explicit_sources_keep_spaces_and_do_not_borrow_message_files() {
+        for name in [
+            "missing refs.bib",
+            "refs.bib line 700 copy.bib",
+            "refs.bib, copy.bib",
+            "中文 refs.bib': copy.bib",
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let main = root.join("main.tex");
+            let bib = root.join(name);
+            std::fs::write(&main, "Text\n").unwrap();
+            std::fs::write(&bib, "% header\n\n@book{entry,title={Explicit}}\n").unwrap();
+            for decoy in ["refs.bib", "wrong.bib", "copy.bib"] {
+                std::fs::write(root.join(decoy), "@book{entry,title={Wrong}}\n").unwrap();
+            }
+            for missing in [false, true] {
+                if missing {
+                    std::fs::remove_file(&bib).unwrap();
+                }
+                for marker in ["file", "File", "in", "In", "in file", "in \tFile"] {
+                    for (open, close) in [("", ""), ("[({", "})]")] {
+                        for message in [
+                            format!(
+                                "Unexpected token 'wrong.bib' {marker} {open}{name}{close}, line 3"
+                            ),
+                            format!(
+                                "Missing field for entry 'entry' ({marker} {open}{name}{close})"
+                            ),
+                        ] {
+                            let log = format!(
+                                "INFO - Found BibTeX data source 'refs.bib'\nERROR - {message}\n"
+                            );
+                            let diagnostics = parse_bibliography(&main, &log);
+                            let target = if missing { &main } else { &bib };
+                            let items = diagnostics
+                                .get(&Url::from_file_path(target).unwrap())
+                                .unwrap_or_else(|| panic!("{log}: {diagnostics:?}"));
+                            assert_eq!(diagnostics.len(), 1);
+                            assert_eq!(items.len(), 1);
+                            assert_eq!(items[0].message, format!("Biber: {message}"));
+                            assert_eq!(
+                                items[0].range.start.line,
+                                if missing { 0 } else { 2 },
+                                "{log}: {items:?}"
+                            );
+                            assert_eq!(unresolved_location(&items[0]), missing, "{log}: {items:?}");
+                            if !missing && message.starts_with("Missing") {
+                                assert_eq!(
+                                    items[0].range,
+                                    Range::new(Position::new(2, 6), Position::new(2, 11))
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn biber_explicit_multiword_non_bibliography_names_do_not_borrow_short_sources() {
+        for name in ["missing refs.bib.backup", "missing refs.bib2"] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let main = root.join("main.tex");
+            std::fs::write(&main, "Text\n").unwrap();
+            for file in [name, "refs.bib", "wrong.bib"] {
+                std::fs::write(root.join(file), "@book{entry,title={Wrong}}\n").unwrap();
+            }
+            for message in [
+                format!("Unexpected token 'wrong.bib' in file {name}, line 3"),
+                format!("Missing field for entry 'entry' (file {name})"),
+            ] {
+                let log =
+                    format!("INFO - Found BibTeX data source 'refs.bib'\nERROR - {message}\n");
+                let diagnostics = parse_bibliography(&main, &log);
+                assert_eq!(diagnostics.len(), 1, "{log}: {diagnostics:?}");
+                let items = &diagnostics[&Url::from_file_path(&main).unwrap()];
+                assert_eq!(items[0].range.start, Position::new(0, 0));
+                assert_eq!(items[0].data.as_ref().unwrap()["unresolvedSource"], true);
+            }
         }
     }
 
