@@ -17,6 +17,72 @@ struct Server {
 }
 
 #[test]
+#[ignore = "requires pdflatex"]
+fn real_builds_from_sources_ignore_deleted_roots_and_document_examples_in_packages() {
+    for package in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let main_name = if package { "main.tex" } else { "b.tex" };
+        let source_name = if package { "local.sty" } else { "chapter.tex" };
+        let main_source = if package {
+            "\\documentclass{article}\\usepackage{local}\\begin{document}\\fromChild\\end{document}\n"
+        } else {
+            "\\documentclass{article}\\begin{document}\\input{chapter}\\end{document}\n"
+        };
+        let source = if package {
+            std::fs::write(
+                root.join("chapter.tex"),
+                "\\newcommand{\\fromChild}{Hello.}\n",
+            )
+            .unwrap();
+            "\\ProvidesPackage{local}\\newcommand{\\beginLater}{\\begin{document}}\\input{chapter}\n"
+        } else {
+            std::fs::write(root.join("a.tex"), main_source).unwrap();
+            "Hello.\n"
+        };
+        std::fs::write(root.join(main_name), main_source).unwrap();
+        std::fs::write(root.join(source_name), source).unwrap();
+        let folder = Url::from_directory_path(root).unwrap();
+        let main = Url::from_file_path(root.join(main_name)).unwrap();
+        let source_uri = Url::from_file_path(root.join(source_name)).unwrap();
+        let mut server = Server::start();
+        server.request(1, "initialize", json!({"processId":null,"rootUri":folder,"capabilities":{},"initializationOptions":{"build":{"executable":"pdflatex"}}}));
+        server.notify("initialized", json!({}));
+        server.notify("textDocument/didOpen", json!({"textDocument":{"uri":source_uri,"languageId":"latex","version":1,"text":source}}));
+        if !package {
+            // No file notification: keep the removed main in the server's index.
+            std::fs::remove_file(root.join("a.tex")).unwrap();
+        }
+        let started = server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[source_uri]}),
+        );
+        assert_eq!(started["rootUri"], json!(main), "{started}");
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(
+            finished["params"]["status"], "success",
+            "{package}: {finished}"
+        );
+        assert_eq!(finished["params"]["rootUri"], json!(main));
+        assert_eq!(finished["params"]["stale"], false);
+        assert_eq!(finished["params"]["diagnosticsCount"], 0);
+        let stem = std::path::Path::new(main_name)
+            .file_stem()
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(root
+            .join("build/latex-lsp")
+            .join(format!("{stem}.pdf"))
+            .is_file());
+        server.request(3, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
 fn build_code_lenses_advertise_resolved_commands_and_follow_root_configuration() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();

@@ -779,6 +779,68 @@ fn unchanged_pdf_is_accepted_only_when_it_is_not_older_than_the_source() {
 }
 
 #[test]
+fn root_detection_ignores_deleted_indexed_roots_without_waiting_for_a_file_notification() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    for name in ["a.tex", "b.ltx"] {
+        std::fs::write(root.join(name), "\\documentclass{article}\\input{chapter}").unwrap();
+    }
+    std::fs::write(root.join("chapter.tex"), "Chapter.").unwrap();
+    let source = Url::from_file_path(root.join("chapter.tex")).unwrap();
+    let first = Url::from_file_path(root.join("a.tex")).unwrap();
+    let second = Url::from_file_path(root.join("b.ltx")).unwrap();
+    let mut workspace = Workspace::default();
+    workspace.add_root(root.into());
+    assert!(workspace.root_document(&source).is_err());
+    std::fs::remove_file(root.join("a.tex")).unwrap();
+    assert!(workspace.documents.contains_key(&first));
+    assert_eq!(workspace.root_document(&source).unwrap(), second);
+    assert!(
+        workspace.root_document(&first).is_err(),
+        "Direct builds of a deleted main must still report the missing root"
+    );
+    std::fs::create_dir(root.join("a.tex")).unwrap();
+    assert_eq!(workspace.root_document(&source).unwrap(), second);
+    workspace.config.build.root_file = Some("a.tex".into());
+    assert!(
+        workspace.root_document(&source).is_err(),
+        "An explicit missing root must not fall back to another project"
+    );
+}
+
+#[test]
+fn package_class_and_support_file_document_examples_do_not_become_compilation_roots() {
+    for extension in ["sty", "cls", "def", "clo"] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        std::fs::write(
+            root.join("main.tex"),
+            format!("\\documentclass{{article}}\\input{{support.{extension}}}"),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(format!("support.{extension}")),
+            "\\newcommand{\\beginLater}{\\begin{document}}\\input{chapter}",
+        )
+        .unwrap();
+        std::fs::write(root.join("chapter.tex"), "Chapter.").unwrap();
+        let main = Url::from_file_path(root.join("main.tex")).unwrap();
+        let mut workspace = Workspace::default();
+        workspace.add_root(root.into());
+        for name in ["chapter.tex".to_owned(), format!("support.{extension}")] {
+            let source = Url::from_file_path(root.join(name)).unwrap();
+            assert_eq!(
+                workspace.root_document(&source).unwrap(),
+                main,
+                "{extension}"
+            );
+        }
+        workspace.config.build.root_file = Some(format!("support.{extension}"));
+        assert!(workspace.root_document(&main).is_err());
+    }
+}
+
+#[test]
 fn root_detection_follows_includes_magic_comments_and_explicit_configuration() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();

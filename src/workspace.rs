@@ -133,6 +133,16 @@ pub(crate) fn is_root(doc: &Document) -> bool {
     })
 }
 
+fn is_saved_root(uri: &Url, doc: &Document) -> bool {
+    is_root(doc)
+        && uri.to_file_path().is_ok_and(|path| {
+            matches!(
+                path.extension().and_then(|extension| extension.to_str()),
+                Some("tex" | "ltx")
+            ) && file_uri(&path).is_ok()
+        })
+}
+
 fn magic_directive(doc: &Document, fields: &[&str]) -> Option<crate::syntax::Argument> {
     let mut offset = 0;
     for line in doc.text.source.split_inclusive('\n').take(20) {
@@ -358,16 +368,7 @@ impl Workspace {
     pub(crate) fn saved_projects(&self) -> BTreeMap<Url, BTreeSet<Url>> {
         self.documents
             .iter()
-            .filter(|(uri, doc)| {
-                is_root(doc)
-                    && uri.to_file_path().is_ok_and(|path| {
-                        path.is_file()
-                            && matches!(
-                                path.extension().and_then(|extension| extension.to_str()),
-                                Some("tex" | "ltx")
-                            )
-                    })
-            })
+            .filter(|(uri, doc)| is_saved_root(uri, doc))
             .map(|(root, _)| (root.clone(), self.project_documents(root)))
             .collect()
     }
@@ -492,13 +493,25 @@ impl Workspace {
             }
         }
         if self.documents.get(uri).is_some_and(is_root) {
-            return file_uri(&path);
+            let selected = file_uri(&path);
+            if selected.is_ok()
+                || matches!(
+                    path.extension().and_then(|extension| extension.to_str()),
+                    Some("tex" | "ltx")
+                )
+            {
+                return selected;
+            }
+            // Package/support files may define a command containing
+            // begin{document}; continue looking for their containing project.
         }
         let candidates = self
             .documents
             .iter()
             .filter(|(candidate, doc)| {
-                *candidate != uri && is_root(doc) && self.project_documents(candidate).contains(uri)
+                *candidate != uri
+                    && is_saved_root(candidate, doc)
+                    && self.project_documents(candidate).contains(uri)
             })
             .map(|(uri, _)| uri.clone())
             .collect::<Vec<_>>();
