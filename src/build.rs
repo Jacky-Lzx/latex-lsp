@@ -1228,6 +1228,30 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool) -> Outcome 
     outcome.diagnostics_truncated = crate::output::truncated(diagnostic_log);
     (outcome.diagnostics, outcome.diagnostic_sources) =
         build_log::parse_with_sources(root, diagnostic_log);
+    // A failed PDF driver may report its cause only on stderr. Retain the final
+    // TeX log's authority: fill an unexplained failure, without reviving an old
+    // backend error after a successful pass or a different final TeX error.
+    if !log.is_empty()
+        && outcome.status == "error"
+        && !outcome
+            .diagnostics
+            .values()
+            .flatten()
+            .any(|diagnostic| diagnostic.severity == Some(DiagnosticSeverity::ERROR))
+    {
+        let driver_diagnostics = build_log::parse_driver_output(root, &output);
+        if !driver_diagnostics.is_empty() {
+            outcome.diagnostics_truncated |= crate::output::truncated(&output);
+        }
+        for (uri, diagnostics) in driver_diagnostics {
+            let entries = outcome.diagnostics.entry(uri).or_default();
+            for diagnostic in diagnostics {
+                if !entries.contains(&diagnostic) {
+                    entries.push(diagnostic);
+                }
+            }
+        }
+    }
     let mut bibliography_complete = true;
     for (path, fingerprint) in bibliography_logs(&output_dir) {
         // An old .blg left by a previous failed build is not this build's result.

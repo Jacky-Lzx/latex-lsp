@@ -1228,6 +1228,22 @@ fn incomplete_engine_file(message: &str) -> bool {
             .is_some_and(|(_, file)| !file.contains("):"))
 }
 
+fn driver_message(line: &str) -> Option<(&'static str, DiagnosticSeverity, &str)> {
+    let line = line.trim_start();
+    let (driver, tail) = ["xdvipdfmx", "dvipdfmx"].into_iter().find_map(|driver| {
+        line.strip_prefix(driver)
+            .and_then(|tail| tail.strip_prefix(':'))
+            .map(|tail| (driver, tail))
+    })?;
+    let (severity, body) = if let Some(body) = tail.strip_prefix("fatal:") {
+        (DiagnosticSeverity::ERROR, body)
+    } else {
+        (DiagnosticSeverity::WARNING, tail.strip_prefix("warning:")?)
+    };
+    let body = body.trim();
+    (!body.is_empty()).then_some((driver, severity, body))
+}
+
 fn warning_start(line: &str) -> bool {
     (line.starts_with("LaTeX ") || line.starts_with("Package ") || line.starts_with("Class "))
         && line.contains(" Warning:")
@@ -1249,10 +1265,12 @@ fn message_boundary(line: &str) -> bool {
     line == crate::output::TRUNCATED
         || warning_start(line)
         || error_message(line).is_some()
+        || driver_message(line).is_some()
         || line.starts_with("==> Fatal error occurred")
         || line.starts_with("Transcript written on ")
         || line.starts_with("Output written on ")
         || line == "No pages of output."
+        || line == "No output PDF file written."
         || line.starts_with("Missing character:")
         || line.starts_with("Overfull ")
         || line.starts_with("Underfull ")
@@ -1661,6 +1679,7 @@ fn continued_file_line<'a>(root: &Path, lines: &[&'a str], i: &mut usize) -> Cow
                     || *next == crate::output::TRUNCATED
                     || warning_start(next)
                     || error_message(next).is_some()
+                    || driver_message(next).is_some()
                     || numbered_error(next).is_some()
                     || joined.len() + next.len() > 8192
                 {
@@ -1687,6 +1706,19 @@ fn continued_file_line<'a>(root: &Path, lines: &[&'a str], i: &mut usize) -> Cow
 
 pub fn parse(root: &Path, log: &str) -> BTreeMap<Url, Vec<Diagnostic>> {
     parse_with_sources(root, log).0
+}
+
+/// PDF driver errors can appear only on stderr, after TeX closes its log. Keep
+/// intervening blank barriers so unrelated driver detail blocks stay separate.
+pub(crate) fn parse_driver_output(root: &Path, output: &str) -> BTreeMap<Url, Vec<Diagnostic>> {
+    let mut log = String::new();
+    for line in output.lines() {
+        if driver_message(line).is_some() || line == crate::output::TRUNCATED {
+            log.push_str(line);
+        }
+        log.push('\n');
+    }
+    parse(root, &log)
 }
 
 /// The recorder also lists existence probes. File-entry events in the final
@@ -1750,6 +1782,49 @@ pub(crate) fn parse_with_sources(
                     confirmed: fallback_confirmed,
                 })
         };
+        if let Some((driver, severity, body)) = driver_message(line) {
+            if let Some((path, cause, _)) = pending.take() {
+                emit_with_context(
+                    &mut result,
+                    &path.path,
+                    1,
+                    cause,
+                    DiagnosticSeverity::ERROR,
+                    None,
+                    path.confirmed,
+                );
+            }
+            let level = if severity == DiagnosticSeverity::ERROR {
+                "fatal"
+            } else {
+                "warning"
+            };
+            let mut message = format!("{driver}:{level}: {body}");
+            if severity == DiagnosticSeverity::WARNING {
+                for _ in 0..64 {
+                    let Some((next_driver, next_severity, next_body)) =
+                        lines.get(i + 1).and_then(|line| driver_message(line))
+                    else {
+                        break;
+                    };
+                    if next_driver != driver
+                        || next_severity != severity
+                        || !next_body.starts_with(">>")
+                        || message.len() + next_body.len() + 1 > 4096
+                    {
+                        break;
+                    }
+                    message.push('\n');
+                    message.push_str(next_body);
+                    i += 1;
+                }
+            }
+            // The PDF driver has no TeX source-line context. Its messages must
+            // not borrow an open input file or a later l.N from the TeX log.
+            emit_with_context(&mut result, root, 1, message, severity, None, false);
+            i += 1;
+            continue;
+        }
         let mut structural = false;
         let diagnostic_start = i;
         let error_line = continued_error_line(root, &lines, &separator_lines, &mut i);
