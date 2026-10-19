@@ -412,9 +412,10 @@ pub(crate) fn undefined_reference_ranges(text: &Text, line: u32, message: &str) 
         if text.position(command.span.start).line > line || text.position(report_end).line < line {
             continue;
         }
-        if !citation
-            && (crate::syntax::is_single_reference(&command.name)
-                || crate::syntax::has_separate_label_argument(&command.name))
+        if citation && crate::syntax::is_single_citation(&command.name)
+            || !citation
+                && (crate::syntax::is_single_reference(&command.name)
+                    || crate::syntax::has_separate_label_argument(&command.name))
         {
             let source_key = if command.name == "subref" && !hyper_link {
                 key.strip_prefix("sub@")

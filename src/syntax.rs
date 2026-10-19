@@ -1230,6 +1230,7 @@ pub fn is_citation(name: &str) -> bool {
     matches!(
         name,
         "cite"
+            | "bibentry"
             | "citep"
             | "citet"
             | "citeauthor"
@@ -1257,13 +1258,13 @@ pub fn is_citation(name: &str) -> bool {
     )
 }
 
-/// Alias definitions name one key and do not themselves request a citation.
+/// Inline entries and alias definitions name one key rather than a key list.
 pub(crate) fn is_single_citation(name: &str) -> bool {
-    name == "defcitealias"
+    matches!(name, "bibentry" | "defcitealias")
 }
 
 pub(crate) fn warns_on_undefined_citation(name: &str) -> bool {
-    is_citation(name) && !is_single_citation(name)
+    is_citation(name) && name != "defcitealias"
 }
 
 pub(crate) fn citation_accepts_star(name: &str) -> bool {
@@ -1271,6 +1272,7 @@ pub(crate) fn citation_accepts_star(name: &str) -> bool {
         && !matches!(
             name,
             "nocite"
+                | "bibentry"
                 | "citenum"
                 | "citeyearpar"
                 | "citefullauthor"
@@ -1283,7 +1285,7 @@ pub(crate) fn citation_accepts_star(name: &str) -> bool {
 }
 
 pub(crate) fn citation_accepts_notes(name: &str) -> bool {
-    is_citation(name) && !matches!(name, "nocite" | "citenum" | "defcitealias")
+    is_citation(name) && !matches!(name, "nocite" | "citenum" | "bibentry" | "defcitealias")
 }
 
 /// Citation keys follow at most two optional notes. Leave any extra bracket

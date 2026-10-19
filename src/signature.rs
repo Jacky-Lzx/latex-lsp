@@ -531,6 +531,7 @@ fn builtin(name: &str) -> Option<Signature> {
             (&[("keys", false)], syntax::reference_accepts_star(name))
         }
         "bibitem" => (&[("label", true), ("key", false)], false),
+        "bibentry" => (&[("key", false)], false),
         "defcitealias" => (&[("key", false), ("text", false)], false),
         "citenum" => (&[("keys", false)], false),
         "citeyearpar" | "citefullauthor" | "citetalias" | "citepalias" => (
