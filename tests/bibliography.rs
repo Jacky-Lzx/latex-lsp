@@ -564,6 +564,121 @@ fn bibliography_relations_navigate_highlight_and_rename_without_changing_literal
 }
 
 #[test]
+fn multiline_citation_completion_preserves_notes_other_keys_and_crlf() {
+    let mut workspace = Workspace::default();
+    insert(
+        &mut workspace,
+        "refs.bib",
+        "@book{parent,title={Parent}}\n@book{other,title={Other}}\n",
+    );
+    for (command, notes) in [
+        ("cite", ""),
+        ("citep*", "[see][p.~2]"),
+        ("textcite", "[see]"),
+        ("fullcite", "[see][p.~2]"),
+        ("footfullcite", ""),
+        ("nocite", ""),
+    ] {
+        for (arguments, expected) in [
+            ("{other,\n par¦BAD,last}", "{other,\n parent,last}"),
+            ("{\r\npar¦BAD,other}", "{\r\nparent,other}"),
+            ("{other,\r\n par¦", "{other,\r\n parent"),
+            ("{other,\r\n ¦}", "{other,\r\n parent}"),
+        ] {
+            let marked = format!("😀 \\{command}{notes}{arguments}");
+            let offset = marked.find('¦').unwrap();
+            let source = marked.replace('¦', "");
+            let uri = insert(&mut workspace, "main.tex", &source);
+            let items =
+                features::completion(&workspace, &uri, Text::new(source.clone()).position(offset));
+            let item = items
+                .iter()
+                .find(|item| item.label == "parent")
+                .unwrap_or_else(|| panic!("{marked}: {items:?}"));
+            let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+                panic!("missing edit")
+            };
+            assert_eq!(edit.range.start.line, edit.range.end.line);
+            assert_eq!(
+                apply(&source, vec![edit.clone()]),
+                format!("😀 \\{command}{notes}{expected}")
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex"]
+fn real_multiline_citation_completion_and_bibitem_rename_compile_cleanly() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    let refs = directory.path().join("refs.tex");
+    let main_uri = Url::from_file_path(&main).unwrap();
+    let refs_uri = Url::from_file_path(&refs).unwrap();
+    let source = "\\documentclass{article}\n\\begin{document}\nSee \\cite{alpha,\n betBAD}.\n\\input{refs}\n\\end{document}\n";
+    let bibliography = "\\begin{thebibliography}{9}\n\\bibitem{alpha} First.\n\\bibitem{beta} Second.\n\\end{thebibliography}\n";
+    std::fs::write(&main, source).unwrap();
+    std::fs::write(&refs, bibliography).unwrap();
+    let mut workspace = Workspace::default();
+    workspace.open(main_uri.clone(), source.into(), 7);
+    workspace.open(refs_uri.clone(), bibliography.into(), 11);
+    let items = features::completion(&workspace, &main_uri, position(source, "\n bet"));
+    let item = items.iter().find(|item| item.label == "beta").unwrap();
+    let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+        panic!("missing edit")
+    };
+    let fixed = apply(source, vec![edit.clone()]);
+    assert_eq!(fixed, source.replace("betBAD", "beta"));
+    std::fs::write(&main, &fixed).unwrap();
+    workspace.open(main_uri.clone(), fixed.clone(), 8);
+    let config = latex_lsp::config::BuildConfig {
+        executable: "pdflatex".into(),
+        ..Default::default()
+    };
+    let compile = || {
+        let result = latex_lsp::build::run(&main, &config, &Default::default());
+        assert_eq!(result.status, "success", "{}", result.output);
+        assert!(result.pdf.as_ref().is_some_and(|path| path.is_file()));
+        result
+    };
+    let compile_twice = || {
+        compile();
+        let result = compile();
+        assert!(
+            result.diagnostics.values().all(Vec::is_empty),
+            "{:?}",
+            result.diagnostics
+        );
+        result
+    };
+    compile_twice();
+    let changes = features::rename(
+        &workspace,
+        &main_uri,
+        position(&fixed, "\n beta"),
+        "beta-renamed",
+    )
+    .unwrap()
+    .unwrap()
+    .changes
+    .unwrap();
+    assert_eq!(changes.len(), 2);
+    let renamed = apply(&fixed, changes[&main_uri].clone());
+    let renamed_bibliography = apply(bibliography, changes[&refs_uri].clone());
+    assert_eq!(renamed, fixed.replace("beta", "beta-renamed"));
+    assert_eq!(
+        renamed_bibliography,
+        bibliography.replace("{beta}", "{beta-renamed}")
+    );
+    std::fs::write(&main, renamed).unwrap();
+    std::fs::write(&refs, renamed_bibliography).unwrap();
+    let result = compile_twice();
+    let aux = std::fs::read_to_string(result.pdf.unwrap().with_extension("aux")).unwrap();
+    assert!(aux.contains("\\bibcite{beta-renamed}"));
+    assert!(!aux.contains("betBAD"));
+}
+
+#[test]
 fn bibliography_completion_replaces_only_the_selected_key_and_supports_incomplete_values() {
     for (source, needle, expected) in [
         (
