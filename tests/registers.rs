@@ -54,7 +54,7 @@ const FONT_DECLARATIONS: [&str; 8] = [
     "setfontface",
 ];
 
-const CLASSIC_FONT_DECLARATIONS: [(&str, &str, bool, usize); 11] = [
+const CLASSIC_FONT_DECLARATIONS: [(&str, &str, bool, usize); 14] = [
     ("DeclareTextFontCommand", r"{\bfseries}", false, 1),
     ("DeclareFixedFont", "{OT1}{cmr}{m}{n}{10}", true, 0),
     ("DeclareMathAlphabet", "{OT1}{cmr}{m}{it}", false, 1),
@@ -66,6 +66,24 @@ const CLASSIC_FONT_DECLARATIONS: [(&str, &str, bool, usize); 11] = [
     ("ProvideTextCommandDefault", "[1]{#1}", false, 1),
     ("DeclareTextSymbol", "{OT1}{65}", true, 0),
     ("DeclareTextAccent", "{OT1}{19}", false, 1),
+    (
+        "DeclareMathAccent",
+        r"{\mathalpha}{operators}{94}",
+        false,
+        1,
+    ),
+    (
+        "DeclareMathRadical",
+        "{symbols}{112}{largesymbols}{112}",
+        false,
+        1,
+    ),
+    (
+        "DeclareMathDelimiter",
+        r"{\mathopen}{symbols}{104}{largesymbols}{10}",
+        true,
+        0,
+    ),
 ];
 
 #[test]
@@ -138,12 +156,76 @@ fn real_text_font_declaration_renames_preserve_defaults_symbols_accents_and_fall
 }
 
 #[test]
+#[ignore = "requires pdflatex"]
+fn real_math_font_renames_preserve_accents_radicals_and_extensible_delimiters() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let definitions = concat!(
+        "\\DeclareMathAccent{\\mathaccentcmd}{\\mathalpha}{operators}{94}\n",
+        "\\expandafter\\DeclareMathRadical\\csname mathradicalcmd\\endcsname{symbols}{112}{largesymbols}{112}\n",
+        "\\DeclareMathDelimiter{\\mathdelimitercmd}{\\mathopen}{symbols}{104}{largesymbols}{10}\n",
+    );
+    let names = ["mathaccentcmd", "mathradicalcmd", "mathdelimitercmd"];
+    let content = concat!(
+        "\\setbox0=\\hbox{$\\mathaccentcmd{a}+\\mathradicalcmd{b}+\\mathdelimitercmd c\\rangle+\\left\\mathdelimitercmd\\frac{1}{2}\\right\\rangle+\\csname mathaccentcmd\\endcsname{d}$}\n",
+        "\\typeout{MATH-FONT-DIMENSIONS:\\the\\wd0/\\the\\ht0/\\the\\dp0}\\box0\n",
+        "% \\mathaccentcmd \\mathradicalcmd \\mathdelimitercmd\n",
+        "\\verb|\\mathaccentcmd \\mathradicalcmd \\mathdelimitercmd|\n",
+    );
+    setup(root, &[("main.tex", "\\documentclass{article}\\input{definitions}\\begin{document}\\input{content}\\end{document}\n"), ("definitions.tex", definitions), ("content.tex", content)]);
+    let config = latex_lsp::config::BuildConfig {
+        executable: "pdflatex".into(),
+        ..Default::default()
+    };
+    let main = root.join("main.tex");
+    let before = build::run(&main, &config, &Default::default());
+    assert_eq!(before.status, "success", "{}", before.output);
+    let definition_uri = Url::from_file_path(root.join("definitions.tex")).unwrap();
+    for name in names {
+        let workspace = setup(root, &[]);
+        let doc = &workspace.documents[&definition_uri];
+        let position = doc.text.position(doc.text.source.find(name).unwrap() + 2);
+        let changes = renamed(
+            &workspace,
+            &definition_uri,
+            position,
+            &format!("{name}renamed"),
+        );
+        assert_eq!(changes.len(), 2);
+        for (uri, source) in changes {
+            std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+        }
+    }
+    let changed = std::fs::read_to_string(root.join("content.tex")).unwrap();
+    assert_eq!(
+        changed.split_once('%').unwrap().1,
+        content.split_once('%').unwrap().1
+    );
+    let after = build::run(&main, &config, &Default::default());
+    assert_eq!(after.status, "success", "{}", after.output);
+    let metrics = |output: &str| {
+        output
+            .lines()
+            .filter(|line| line.starts_with("MATH-FONT-DIMENSIONS:"))
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(metrics(&before.output).len(), 1);
+    assert_eq!(metrics(&before.output), metrics(&after.output));
+}
+
+#[test]
 fn classic_font_commands_index_names_with_their_actual_arity_and_symbol_kind() {
     for (declaration, arguments, variable, count) in CLASSIC_FONT_DECLARATIONS {
-        for target in [r"\oldfont", r"{\oldfont}"] {
+        for target in [r"\oldfont", r"{\oldfont}", r"\csname oldfont\endcsname"] {
             let directory = tempfile::tempdir().unwrap();
             let root = directory.path();
-            let definitions = format!("\\{declaration}{target}{arguments}\n");
+            let prefix = if target.starts_with(r"\csname") {
+                r"\expandafter"
+            } else {
+                ""
+            };
+            let definitions = format!("{prefix}\\{declaration}{target}{arguments}\n");
             let source = "\\documentclass{article}\n\\input{definitions}\n\\begin{document}\n😀 Use: \\oldfont{Text} \\csname oldfont\\endcsname{Text}\n% \\oldfont\n\\verb|\\oldfont|\n\\end{document}\n\\oldf";
             let mut workspace = setup(
                 root,
@@ -226,6 +308,9 @@ fn classic_font_commands_index_names_with_their_actual_arity_and_symbol_kind() {
                 "ProvideTextCommandDefault",
                 "DeclareTextSymbol",
                 "DeclareTextAccent",
+                "DeclareMathAccent",
+                "DeclareMathRadical",
+                "DeclareMathDelimiter",
             ] {
                 assert!(features::rename(&workspace, &main, position, name).is_err());
             }
@@ -236,7 +321,7 @@ fn classic_font_commands_index_names_with_their_actual_arity_and_symbol_kind() {
         directory.path(),
         &[(
             "main.tex",
-            r#"\DeclareMathSymbol{+}{\mathbin}{operators}{"2B}\DeclareTextFontCommand{not-a-command}{\bfseries}\DeclareTextSymbol{+}{OT1}{65}\DeclareTextAccent{not-a-command}{OT1}{19}"#,
+            r#"\DeclareMathSymbol{+}{\mathbin}{operators}{"2B}\DeclareTextFontCommand{not-a-command}{\bfseries}\DeclareTextSymbol{+}{OT1}{65}\DeclareTextAccent{not-a-command}{OT1}{19}\DeclareMathDelimiter{<}{\mathopen}{symbols}{104}{largesymbols}{10}\DeclareMathAccent{not-a-command}{\mathalpha}{operators}{94}\DeclareMathRadical{not-a-command}{symbols}{112}{largesymbols}{112}"#,
         )],
     );
     assert!(workspace

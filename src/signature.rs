@@ -261,12 +261,33 @@ fn builtin(name: &str) -> Option<Signature> {
             false,
         ),
         "DeclareSymbolFontAlphabet" => (&[("command", false), ("symbol font", false)], false),
-        "DeclareMathSymbol" => (
+        "DeclareMathSymbol" | "DeclareMathAccent" => (
             &[
                 ("command", false),
                 ("class", false),
                 ("symbol font", false),
                 ("slot", false),
+            ],
+            false,
+        ),
+        "DeclareMathRadical" => (
+            &[
+                ("command", false),
+                ("small symbol font", false),
+                ("small slot", false),
+                ("large symbol font", false),
+                ("large slot", false),
+            ],
+            false,
+        ),
+        "DeclareMathDelimiter" => (
+            &[
+                ("command", false),
+                ("class", false),
+                ("small symbol font", false),
+                ("small slot", false),
+                ("large symbol font", false),
+                ("large slot", false),
             ],
             false,
         ),
@@ -381,6 +402,9 @@ fn builtin(name: &str) -> Option<Signature> {
                             | "DeclareMathAlphabet"
                             | "DeclareSymbolFontAlphabet"
                             | "DeclareMathSymbol"
+                            | "DeclareMathAccent"
+                            | "DeclareMathRadical"
+                            | "DeclareMathDelimiter"
                     ))
                     && index == 0
             {
@@ -437,7 +461,9 @@ fn definition(uri: &Url, doc: &Document, entry: &Entry, environment: bool) -> Op
         "DeclareTextFontCommand"
         | "DeclareMathAlphabet"
         | "DeclareSymbolFontAlphabet"
-        | "DeclareTextAccent" => {
+        | "DeclareTextAccent"
+        | "DeclareMathAccent"
+        | "DeclareMathRadical" => {
             parameters.push(Parameter {
                 kind: Kind::Required,
                 label: "{#1}".into(),

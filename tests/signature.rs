@@ -264,6 +264,21 @@ fn classic_font_declarations_hint_font_fields_and_offer_valid_command_snippets()
             r"\DeclareMathSymbol{command}{class}{symbol font}{slot}",
             3,
         ),
+        (
+            r"\DeclareMathAccent\custom{\mathalpha}{operators}{9¦4}",
+            r"\DeclareMathAccent{command}{class}{symbol font}{slot}",
+            3,
+        ),
+        (
+            r"\DeclareMathRadical{\custom}{symbols}{112}{largesymbols}{11¦2}",
+            r"\DeclareMathRadical{command}{small symbol font}{small slot}{large symbol font}{large slot}",
+            4,
+        ),
+        (
+            r"\DeclareMathDelimiter\custom{\mathopen}{symbols}{104}{largesymbols}{1¦0}",
+            r"\DeclareMathDelimiter{command}{class}{small symbol font}{small slot}{large symbol font}{large slot}",
+            5,
+        ),
     ] {
         check("", marked, label, active);
     }

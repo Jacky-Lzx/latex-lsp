@@ -3,6 +3,9 @@ pub(crate) use crate::primitives::PRIMITIVES;
 /// Command name, snippet template (without leading backslash), short documentation.
 /// Templates retain literal TeX backslashes; completion escapes them for the client.
 pub const COMMANDS: &[(&str, &str, &str)] = &[
+    ("DeclareMathAccent", "DeclareMathAccent{\\${1:command}}{\\${2:mathalpha}}{${3:operators}}{${4:94}}", "Declare a one-argument math accent using a class, symbol font and slot."),
+    ("DeclareMathRadical", "DeclareMathRadical{\\${1:command}}{${2:symbols}}{${3:112}}{${4:largesymbols}}{${5:112}}", "Declare a one-argument math radical with small and extensible glyphs. The generated command has no optional degree argument."),
+    ("DeclareMathDelimiter", "DeclareMathDelimiter{\\${1:command}}{\\${2:mathopen}}{${3:symbols}}{${4:104}}{${5:largesymbols}}{${6:10}}", "Declare a zero-argument math delimiter command or assign a character's delimiter code. Use the command directly or with left/right sizing."),
     ("DeclareTextCommand", "DeclareTextCommand{\\${1:command}}{${2:OT1}}[${3:1}]{${4:definition}}", "Define a text command for a font encoding, with optional argument count and default."),
     ("ProvideTextCommand", "ProvideTextCommand{\\${1:command}}{${2:OT1}}[${3:1}]{${4:definition}}", "Define an encoding-specific text command if it does not exist."),
     ("DeclareTextCommandDefault", "DeclareTextCommandDefault{\\${1:command}}[${2:1}]{${3:definition}}", "Define the fallback implementation of a text command."),

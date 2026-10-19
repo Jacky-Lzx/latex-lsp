@@ -119,6 +119,18 @@ fn snippets_expand_in_a_real_editor_without_consuming_tex_backslashes() {
         ),
         ("DeclareTextSymbol", r"DeclareTextSymbol{\command}{OT1}{65}"),
         ("DeclareTextAccent", r"DeclareTextAccent{\command}{OT1}{19}"),
+        (
+            "DeclareMathAccent",
+            r"DeclareMathAccent{\command}{\mathalpha}{operators}{94}",
+        ),
+        (
+            "DeclareMathRadical",
+            r"DeclareMathRadical{\command}{symbols}{112}{largesymbols}{112}",
+        ),
+        (
+            "DeclareMathDelimiter",
+            r"DeclareMathDelimiter{\command}{\mathopen}{symbols}{104}{largesymbols}{10}",
+        ),
         ("date", r"date{\today}"),
         ("def", r"def\name{definition}"),
         ("let", r"let\alias=\command"),

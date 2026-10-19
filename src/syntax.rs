@@ -471,6 +471,8 @@ fn declares_command(name: &str) -> bool {
                 | "renewrobustcmd"
                 | "providerobustcmd"
                 | "DeclareMathOperator"
+                | "DeclareMathAccent"
+                | "DeclareMathRadical"
                 | "DeclareMathAlphabet"
                 | "DeclareSymbolFontAlphabet"
                 | "DeclareRobustCommand"
@@ -559,6 +561,7 @@ pub(crate) fn declares_register(name: &str) -> bool {
             | "font"
             | "DeclareFixedFont"
             | "DeclareMathSymbol"
+            | "DeclareMathDelimiter"
             | "DeclareTextSymbol"
     )
 }
