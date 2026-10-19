@@ -998,8 +998,9 @@ fn wrapped_message(
             if announcement
                 .trim_start()
                 .strip_prefix('(')
-                .and_then(|tail| stack_file(root, tail))
-                .is_some()
+                .is_some_and(|tail| {
+                    stack_file(root, tail).is_some() || unresolved_file_opening(tail)
+                })
             {
                 break;
             }
@@ -1097,8 +1098,9 @@ fn wrapped_error_message(
             if announcement
                 .trim_start()
                 .strip_prefix('(')
-                .and_then(|tail| stack_file(root, tail))
-                .is_some()
+                .is_some_and(|tail| {
+                    stack_file(root, tail).is_some() || unresolved_file_opening(tail)
+                })
             {
                 break;
             }
@@ -1143,10 +1145,88 @@ fn stack_file(root: &Path, tail: &str) -> Option<(PathBuf, usize)> {
     result
 }
 
+#[derive(Clone, PartialEq, Eq)]
+struct LogSource {
+    path: PathBuf,
+    confirmed: bool,
+}
+
+/// A recognizable source name still blocks its parent when that file has
+/// disappeared before analysis. Generic parentheses do not change sources.
+fn unresolved_stack_file(tail: &str) -> Option<usize> {
+    if let Some(quoted) = tail.strip_prefix('"') {
+        let end = quoted.bytes().take(4096).position(|byte| byte == b'"')?;
+        return log_source(Path::new(&quoted[..end])).then_some(end + 2);
+    }
+    for (dot, _) in tail
+        .as_bytes()
+        .iter()
+        .take(4096)
+        .enumerate()
+        .filter(|(_, byte)| **byte == b'.')
+    {
+        for extension in log_extensions() {
+            let end = dot + 1 + extension.len();
+            if tail.get(dot + 1..end) != Some(extension)
+                || tail[end..]
+                    .starts_with(|ch: char| !ch.is_whitespace() && !matches!(ch, '(' | ')' | '['))
+            {
+                continue;
+            }
+            // Do not swallow an ordinary parenthesis followed by a separate
+            // file entry on the same line. Balanced parentheses in a name,
+            // and arbitrary parentheses inside quoted names, remain valid.
+            let mut depth = 0usize;
+            let balanced = tail[..end].bytes().all(|byte| match byte {
+                b'(' => {
+                    depth += 1;
+                    true
+                }
+                b')' => {
+                    if depth == 0 {
+                        false
+                    } else {
+                        depth -= 1;
+                        true
+                    }
+                }
+                _ => true,
+            });
+            if balanced && depth == 0 {
+                return Some(end);
+            }
+        }
+    }
+    None
+}
+
+// A closed parenthesis mentioning a missing .tex file can be warning prose.
+// It opens no persistent context; retain it in the surrounding message.
+fn unresolved_file_opening(tail: &str) -> bool {
+    let Some(end) = unresolved_stack_file(tail) else {
+        return false;
+    };
+    let tail = &tail[end..];
+    let mut depth = 1usize;
+    for (index, byte) in tail.bytes().enumerate() {
+        match byte {
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return tail[index + 1..].contains('(');
+                }
+            }
+            _ => {}
+        }
+    }
+    true
+}
+
 fn update_file_stack(
     line: &str,
     root: &Path,
-    stack: &mut Vec<Option<PathBuf>>,
+    stack: &mut Vec<Option<LogSource>>,
     sources: &mut BTreeSet<Url>,
 ) {
     let mut i = 0;
@@ -1159,7 +1239,16 @@ fn update_file_stack(
                             sources.insert(uri);
                         }
                     }
-                    stack.push(Some(file));
+                    stack.push(Some(LogSource {
+                        path: file,
+                        confirmed: true,
+                    }));
+                    i += length;
+                } else if let Some(length) = unresolved_stack_file(&line[i + 1..]) {
+                    stack.push(Some(LogSource {
+                        path: root.into(),
+                        confirmed: false,
+                    }));
                     i += length;
                 } else {
                     stack.push(None);
@@ -1177,12 +1266,16 @@ fn update_file_stack(
 fn continued_file_line<'a>(root: &Path, lines: &[&'a str], i: &mut usize) -> Cow<'a, str> {
     let line = lines[*i];
     // TeX wraps file announcements at max_print_line (normally 79). Join only
-    // when the continuation completes an actual file, with bounded lookahead.
+    // when the continuation completes a file, with bounded lookahead. Explicit
+    // unresolved paths retain their source barrier after byte wrapping too.
     if line.len() >= 60 {
         for (opening, _) in line.match_indices('(') {
-            if stack_file(root, &line[opening + 1..]).is_some() {
+            let tail = &line[opening + 1..];
+            if stack_file(root, tail).is_some() || unresolved_stack_file(tail).is_some() {
                 continue;
             }
+            let explicit_path =
+                tail.starts_with(['"', '/']) || tail.starts_with("./") || tail.starts_with("../");
             let mut joined = line.to_owned();
             for (next_index, next) in lines.iter().enumerate().skip(*i + 1).take(64) {
                 if next.is_empty()
@@ -1195,8 +1288,12 @@ fn continued_file_line<'a>(root: &Path, lines: &[&'a str], i: &mut usize) -> Cow
                     break;
                 }
                 joined.push_str(next);
-                if stack_file(root, &joined[opening + 1..])
+                let tail = &joined[opening + 1..];
+                if stack_file(root, tail)
                     .is_some_and(|(_, length)| length > line.len() - opening - 1)
+                    || explicit_path
+                        && unresolved_stack_file(tail)
+                            .is_some_and(|length| length > line.len() - opening - 1)
                 {
                     *i = next_index;
                     return Cow::Owned(joined);
@@ -1223,8 +1320,8 @@ pub(crate) fn parse_with_sources(
     if let Ok(uri) = Url::from_file_path(root_path) {
         sources.insert(uri);
     }
-    let mut stack: Vec<Option<PathBuf>> = Vec::new();
-    let mut pending: Option<(PathBuf, String, usize)> = None;
+    let mut stack: Vec<Option<LogSource>> = Vec::new();
+    let mut pending: Option<(LogSource, String, usize)> = None;
     let lines = log.lines().collect::<Vec<_>>();
     let separator_lines: Vec<_> = lines
         .iter()
@@ -1245,7 +1342,15 @@ pub(crate) fn parse_with_sources(
         let line = lines[i];
         if line == crate::output::TRUNCATED {
             if let Some((path, message, _)) = pending.take() {
-                emit(&mut result, &path, 1, message, DiagnosticSeverity::ERROR);
+                emit_with_context(
+                    &mut result,
+                    &path.path,
+                    1,
+                    message,
+                    DiagnosticSeverity::ERROR,
+                    None,
+                    path.confirmed,
+                );
             }
             stack.clear();
             i += 1;
@@ -1257,7 +1362,10 @@ pub(crate) fn parse_with_sources(
                 .rev()
                 .find_map(Option::as_ref)
                 .cloned()
-                .unwrap_or_else(|| root.into())
+                .unwrap_or_else(|| LogSource {
+                    path: root.into(),
+                    confirmed: true,
+                })
         };
         let mut structural = false;
         let diagnostic_start = i;
@@ -1270,9 +1378,13 @@ pub(crate) fn parse_with_sources(
             if let Some((cause_path, cause, context_start)) = pending.take() {
                 // File lookup prompts end with a separate Emergency stop. The
                 // numbered error supplies the missing location of its cause.
-                if cause_path != path || cause != message {
+                if cause_path.path != path
+                    || cause_path.confirmed != confirmed_path
+                    || cause != message
+                {
                     let associated = confirmed_path
-                        && cause_path == path
+                        && cause_path.confirmed
+                        && cause_path.path == path
                         && message == "Emergency stop."
                         && missing_file_name(&cause).is_some()
                         && uninterrupted_file_prompt(&lines, context_start, diagnostic_start);
@@ -1284,12 +1396,12 @@ pub(crate) fn parse_with_sources(
                         .and_then(|(_, context)| context);
                     emit_with_context(
                         &mut result,
-                        &cause_path,
+                        &cause_path.path,
                         cause_line,
                         cause,
                         DiagnosticSeverity::ERROR,
                         context,
-                        true,
+                        cause_path.confirmed,
                     );
                 }
             }
@@ -1327,7 +1439,8 @@ pub(crate) fn parse_with_sources(
         } else if let Some(message) = line.strip_prefix("! ") {
             let message = wrapped_error_message(root, &lines, &separator_lines, &mut i, message);
             if let Some((path, cause, context_start)) = pending.take() {
-                let (cause_line, context) = if path == current()
+                let (cause_line, context) = if path.confirmed
+                    && path == current()
                     && message == "Emergency stop."
                     && missing_file_name(&cause).is_some()
                     && uninterrupted_file_prompt(&lines, context_start, diagnostic_start)
@@ -1338,12 +1451,12 @@ pub(crate) fn parse_with_sources(
                 };
                 emit_with_context(
                     &mut result,
-                    &path,
+                    &path.path,
                     cause_line,
                     cause,
                     DiagnosticSeverity::ERROR,
                     context,
-                    true,
+                    path.confirmed,
                 );
             }
             pending = Some((current(), message, i + 1));
@@ -1353,20 +1466,25 @@ pub(crate) fn parse_with_sources(
                 .next()
                 .and_then(|value| value.parse().ok());
             if let (Some(number), Some((path, message, context_start))) = (number, pending.take()) {
-                let context = error_context(
-                    &lines,
-                    context_start,
-                    number,
-                    message == "Undefined control sequence.",
-                );
+                let context = path
+                    .confirmed
+                    .then(|| {
+                        error_context(
+                            &lines,
+                            context_start,
+                            number,
+                            message == "Undefined control sequence.",
+                        )
+                    })
+                    .flatten();
                 emit_with_context(
                     &mut result,
-                    &path,
+                    &path.path,
                     number,
                     message,
                     DiagnosticSeverity::ERROR,
                     context,
-                    true,
+                    path.confirmed,
                 );
             }
         } else if warning_start(line) || line.starts_with("Missing character:") {
@@ -1374,31 +1492,40 @@ pub(crate) fn parse_with_sources(
             // TeX wraps warnings at its configured print width.
             let message = wrapped_message(root, &lines, &separator_lines, &mut i);
             let number = input_line(&message).unwrap_or(1);
-            emit(
+            emit_with_context(
                 &mut result,
-                &path,
+                &path.path,
                 number,
                 message,
                 DiagnosticSeverity::WARNING,
+                None,
+                path.confirmed,
             );
         } else if line.starts_with("No file ") {
             let path = current();
-            if let Some(name) = missing_include_file(&path, &lines, &mut i) {
+            if let Some(name) = path
+                .confirmed
+                .then(|| missing_include_file(&path.path, &lines, &mut i))
+                .flatten()
+            {
                 emit(
                     &mut result,
-                    &path,
+                    &path.path,
                     1,
                     format!("Included file `{name}` not found"),
                     DiagnosticSeverity::WARNING,
                 );
             }
         } else if line.starts_with("Overfull ") || line.starts_with("Underfull ") {
-            emit(
+            let path = current();
+            emit_with_context(
                 &mut result,
-                &current(),
+                &path.path,
                 input_line(line).unwrap_or(1),
                 line.into(),
                 DiagnosticSeverity::WARNING,
+                None,
+                path.confirmed,
             );
         } else {
             structural = true;
@@ -1412,7 +1539,15 @@ pub(crate) fn parse_with_sources(
         i += 1;
     }
     if let Some((path, message, _)) = pending {
-        emit(&mut result, &path, 1, message, DiagnosticSeverity::ERROR);
+        emit_with_context(
+            &mut result,
+            &path.path,
+            1,
+            message,
+            DiagnosticSeverity::ERROR,
+            None,
+            path.confirmed,
+        );
     }
     for diagnostics in result.values_mut() {
         diagnostics.sort_by_key(|diagnostic| (diagnostic.range.start, diagnostic.message.clone()));
