@@ -140,6 +140,8 @@ pub(crate) struct BibliographyPaths<'a> {
     directories: [&'a Path; 3],
     bib_directories: Vec<PathBuf>,
     bst_directories: Vec<PathBuf>,
+    /// Complete logged database names, before resolution.
+    bibliography_names: BTreeSet<String>,
 }
 
 impl<'a> BibliographyPaths<'a> {
@@ -161,10 +163,24 @@ impl<'a> BibliographyPaths<'a> {
                 }
             })
             .unwrap_or(source_directory);
+        let mut bibliography_names = BTreeSet::new();
+        for name in contents
+            .lines()
+            .take(32768)
+            .filter_map(bibliography_source)
+            .map(|name| name.trim().trim_matches('"'))
+            .filter(|name| name.ends_with(".bib"))
+        {
+            bibliography_names.insert(name);
+            if bibliography_names.len() >= 4096 {
+                break;
+            }
+        }
         Self {
             directories: [directory, source_directory, log_directory],
             bib_directories: Vec::new(),
             bst_directories: Vec::new(),
+            bibliography_names: bibliography_names.into_iter().map(str::to_owned).collect(),
         }
     }
 
@@ -192,6 +208,10 @@ impl<'a> BibliographyPaths<'a> {
 
     pub(crate) fn resolve(&self, name: &str) -> Option<PathBuf> {
         self.resolve_binding(name).map(|(_, target)| target)
+    }
+
+    pub(crate) fn contains_bibliography_name(&self, name: &str) -> bool {
+        self.bibliography_names.contains(name)
     }
 
     fn resolve_binding(&self, name: &str) -> Option<(PathBuf, PathBuf)> {
@@ -427,6 +447,11 @@ mod tests {
                 "}copy.bib",
                 ",copy.bib",
                 " line 700 copy.bib",
+                ": copy.bib",
+                "; copy.bib",
+                ") copy.bib",
+                ", line 700 copy.bib",
+                ", in file 'wrong.bib' copy.bib",
             ] {
                 let directory = tempfile::tempdir().unwrap();
                 let root = directory.path();

@@ -2649,6 +2649,11 @@ fn biber_quoted_sources_keep_diagnostics_navigation_and_rename_on_the_complete_d
             "}copy.bib",
             ",copy.bib",
             " line 700 copy.bib",
+            ": copy.bib",
+            "; copy.bib",
+            ") copy.bib",
+            ", line 700 copy.bib",
+            ", in file 'wrong.bib' copy.bib",
         ] {
             let script = "cp \"${2%/*}/fixture.blg\" \"$1/main.blg\"\nprintf 'INPUT %s\\n' \"$2\" > \"$1/main.fls\"\nexit 1\n";
             let (mut server, directory, main) = fake_build_server_capabilities(

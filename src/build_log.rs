@@ -2099,6 +2099,16 @@ fn bibliography_fields<'a>(
     message: &'a str,
     filename: Option<&'a ByteRange<usize>>,
 ) -> impl Iterator<Item = (usize, char)> + 'a {
+    bibliography_fields_with(message, filename, move |start| {
+        bibliography_quote_end(message, start)
+    })
+}
+
+fn bibliography_fields_with<'a>(
+    message: &'a str,
+    filename: Option<&'a ByteRange<usize>>,
+    quote_end: impl Fn(usize) -> Option<usize> + 'a,
+) -> impl Iterator<Item = (usize, char)> + 'a {
     let mut quoted_until = 0;
     message.char_indices().filter(move |&(index, ch)| {
         if index < quoted_until || filename.is_some_and(|span| span.contains(&index)) {
@@ -2106,8 +2116,7 @@ fn bibliography_fields<'a>(
         }
         let word_start = !message[..index].ends_with(|ch: char| ch.is_alphanumeric() || ch == '_');
         if word_start && matches!(ch, '\'' | '"') {
-            quoted_until =
-                bibliography_quote_end(message, index).map_or(message.len(), |end| end + 1);
+            quoted_until = quote_end(index).map_or(message.len(), |end| end + 1);
             return false;
         }
         true
@@ -2190,7 +2199,11 @@ fn bibliography_path(
     } else {
         &["file ", "File "]
     };
-    let explicit = bibliography_fields(message, None).find_map(|(start, _)| {
+    let explicit = bibliography_fields_with(message, None, |start| {
+        bibliography_recorded_quote_end(paths, message, start)
+            .or_else(|| bibliography_quote_end(message, start))
+    })
+    .find_map(|(start, _)| {
         if message[..start].ends_with(|ch: char| ch.is_alphanumeric() || ch == '_') {
             return None;
         }
@@ -2198,7 +2211,8 @@ fn bibliography_path(
             let tail = message[start..].strip_prefix(*marker)?.trim_start();
             let start = message.len() - tail.len();
             if tail.starts_with(['\'', '"']) {
-                let (path, span) = bibliography_quoted_path(paths, message, start);
+                let QuotedBibliographyPath { path, span, .. } =
+                    bibliography_quoted_path(paths, message, start);
                 Some(BibliographyLocation::Named { path, span })
             } else {
                 bibliography_unquoted_path(paths, message, start)
@@ -2227,8 +2241,12 @@ fn bibliography_path(
         }
         let word_start = !message[..index].ends_with(|ch: char| ch.is_alphanumeric() || ch == '_');
         if word_start && matches!(ch, '\'' | '"') {
-            let (path, span) = bibliography_quoted_path(paths, message, index);
-            if path.is_some() {
+            let QuotedBibliographyPath {
+                path,
+                span,
+                recorded,
+            } = bibliography_quoted_path(paths, message, index);
+            if path.is_some() || recorded {
                 return BibliographyLocation::Named { path, span };
             }
             let body = &message[index + 1..span.end];
@@ -2320,26 +2338,68 @@ fn bibliography_unquoted_path(
     })
 }
 
+fn bibliography_quote_terminated(tail: &str) -> bool {
+    let after = tail.trim_start_matches([',', ':', ';', ')', ']', '}', '.']);
+    tail.is_empty()
+        || (after.len() != tail.len()
+            && (after.is_empty() || after.starts_with(char::is_whitespace)))
+}
+
+/// Logged names disambiguate literal quotes even when punctuation and spaces
+/// follow them. Match the longest complete raw name before checking existence.
+fn bibliography_recorded_quote_end(
+    paths: &crate::recorder::BibliographyPaths<'_>,
+    message: &str,
+    start: usize,
+) -> Option<usize> {
+    let quote = message.as_bytes()[start] as char;
+    let body = &message[start + 1..];
+    body.rmatch_indices(quote).find_map(|(end, _)| {
+        let name = &body[..end];
+        if !name.ends_with(".bib") || !paths.contains_bibliography_name(name) {
+            return None;
+        }
+        let tail = &body[end + 1..];
+        (tail.starts_with(char::is_whitespace) || bibliography_quote_terminated(tail))
+            .then_some(start + 1 + name.len())
+    })
+}
+
+struct QuotedBibliographyPath {
+    path: Option<PathBuf>,
+    span: ByteRange<usize>,
+    recorded: bool,
+}
+
 fn bibliography_quoted_path(
     paths: &crate::recorder::BibliographyPaths<'_>,
     message: &str,
     start: usize,
-) -> (Option<PathBuf>, ByteRange<usize>) {
+) -> QuotedBibliographyPath {
+    let parsed = bibliography_name_quote_end(message, start);
+    let recorded = bibliography_recorded_quote_end(paths, message, start).filter(|&end| {
+        // A recorded prefix cannot truncate an otherwise complete longer
+        // filename, including a source missing from this tool's input list.
+        !parsed.is_some_and(|parsed| parsed > end && message[start + 1..parsed].ends_with(".bib"))
+    });
+    let end = recorded.or(parsed);
+    QuotedBibliographyPath {
+        path: end.and_then(|end| {
+            let name = &message[start + 1..end];
+            name.ends_with(".bib")
+                .then(|| paths.resolve(name))
+                .flatten()
+        }),
+        span: start..end.map_or(message.len(), |end| end + 1),
+        recorded: recorded.is_some(),
+    }
+}
+
+fn bibliography_name_quote_end(message: &str, start: usize) -> Option<usize> {
     let quote = message.as_bytes()[start] as char;
     let body = &message[start + 1..];
-    let resolve = |name: &str| {
-        name.ends_with(".bib")
-            .then(|| paths.resolve(name))
-            .flatten()
-    };
     let mut candidate = None;
     let mut ambiguous = false;
-    let terminated = |tail: &str| {
-        let after = tail.trim_start_matches([',', ':', ';', ')', ']', '}', '.']);
-        tail.is_empty()
-            || (after.len() != tail.len()
-                && (after.is_empty() || after.starts_with(char::is_whitespace)))
-    };
     for (end, _) in body.match_indices(quote) {
         let tail = &body[end + 1..];
         // Message punctuation must itself end at a separator. For example,
@@ -2350,30 +2410,22 @@ fn bibliography_quoted_path(
             let end = tail
                 .find(|ch: char| !ch.is_ascii_digit())
                 .unwrap_or(tail.len());
-            end > 0 && terminated(tail[end..].trim_start())
+            end > 0 && bibliography_quote_terminated(tail[end..].trim_start())
         });
-        let strong = terminated(tail) || line;
+        let strong = bibliography_quote_terminated(tail) || line;
         if strong {
-            return (resolve(&body[..end]), start..start + end + 2);
+            return Some(start + 1 + end);
         }
         if tail.starts_with(char::is_whitespace) {
             ambiguous |= candidate.is_some();
-            candidate = Some(&body[..end]);
+            candidate = Some(start + 1 + end);
         }
     }
-    let end = if ambiguous {
-        message.len()
+    if ambiguous {
+        None
     } else {
-        candidate.map_or(message.len(), |name| start + name.len() + 2)
-    };
-    (
-        if ambiguous {
-            None
-        } else {
-            candidate.and_then(resolve)
-        },
-        start..end,
-    )
+        candidate
+    }
 }
 
 #[cfg(test)]
@@ -2962,6 +3014,102 @@ mod tests {
                         warning.range,
                         Range::new(Position::new(2, 6), Position::new(2, 11))
                     );
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn repeated_bibliography_records_do_not_hide_a_later_complete_source_name() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let main = root.join("main.tex");
+        let name = "refs.bib': copy.bib";
+        let bib = root.join(name);
+        std::fs::write(&main, "\\cite{entry}\n").unwrap();
+        std::fs::write(root.join("refs.bib"), "@book{entry,title={Wrong}}\n").unwrap();
+        std::fs::write(&bib, "% header\n@book{entry,title={Actual}}\n").unwrap();
+        let mut log = "INFO - Found BibTeX data source 'refs.bib'\n".repeat(4096);
+        log.push_str(&format!("INFO - Found BibTeX data source '{name}'\nWARN - Missing field for entry 'entry' in file '{name}'\n"));
+        let diagnostics = parse_bibliography(&main, &log);
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        let items = diagnostics
+            .get(&Url::from_file_path(&bib).unwrap())
+            .unwrap_or_else(|| panic!("{diagnostics:?}"));
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0].range,
+            Range::new(Position::new(1, 6), Position::new(1, 11))
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn biber_logged_quoted_names_disambiguate_punctuation_spaces_and_metadata() {
+        for suffix in [
+            ": copy.bib",
+            "; copy.bib",
+            ") copy.bib",
+            "] copy.bib",
+            "} copy.bib",
+            ", copy.bib",
+            ": line 700 copy.bib",
+            ", in file 'wrong.bib' copy.bib",
+            ", entry 'wrong' copy.bib",
+        ] {
+            for quote in ['\'', '"'] {
+                let directory = tempfile::tempdir().unwrap();
+                let root = directory.path();
+                let main = root.join("main.tex");
+                let name = format!("中文 refs.bib{quote}{suffix}");
+                let bib = root.join(&name);
+                std::fs::write(&main, "\\cite{entry}\n").unwrap();
+                for decoy in ["中文 refs.bib", "copy.bib", "wrong.bib"] {
+                    std::fs::write(
+                        root.join(decoy),
+                        "@book{entry,title={Wrong}}\n@book{wrong}\n",
+                    )
+                    .unwrap();
+                }
+                std::fs::write(&bib, "% header\n\n@book{entry,title={Actual}}\n").unwrap();
+                for missing in [false, true] {
+                    if missing {
+                        std::fs::remove_file(&bib).unwrap();
+                    }
+                    for outer in ['\'', '"'] {
+                        for message in [
+                            format!("syntax error in file {outer}{name}{outer}, line 3"),
+                            format!("syntax error on line 3 in file {outer}{name}{outer}"),
+                            format!("syntax error {outer}{name}{outer}: line 3"),
+                            format!("Missing field for entry 'entry' (file {outer}{name}{outer})"),
+                            format!("Missing field {outer}{name}{outer} for entry 'entry'"),
+                        ] {
+                            // Both names are reported; their order and existence
+                            // cannot make a literal long name select the short one.
+                            for names in [
+                                format!("INFO - Found BibTeX data source '中文 refs.bib'\nINFO - Found BibTeX data source '{name}'\n"),
+                                format!("INFO - Found BibTeX data source '{name}'\nINFO - Found BibTeX data source '中文 refs.bib'\n"),
+                            ] {
+                                let log = format!("{names}{} - {message}\n", if message.starts_with("Missing") { "WARN" } else { "ERROR" });
+                                let diagnostics = parse_bibliography(&main, &log);
+                                let target = if missing { &main } else { &bib };
+                                let items = diagnostics.get(&Url::from_file_path(target).unwrap()).unwrap_or_else(|| panic!("{log}: {diagnostics:?}"));
+                                assert_eq!(diagnostics.len(), 1, "{log}: {diagnostics:?}");
+                                assert_eq!(items.len(), 1);
+                                if missing {
+                                    assert_eq!(items[0].data.as_ref().unwrap()["unresolvedSource"], true, "{log}: {items:?}");
+                                    assert_eq!(items[0].range.start.line, 0);
+                                } else {
+                                    assert_eq!(items[0].range.start.line, 2, "{log}: {items:?}");
+                                    assert!(!unresolved_location(&items[0]), "{log}: {items:?}");
+                                    if message.starts_with("Missing") {
+                                        assert_eq!(items[0].range, Range::new(Position::new(2, 6), Position::new(2, 11)), "{log}: {items:?}");
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
