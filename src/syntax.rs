@@ -261,6 +261,9 @@ pub(crate) fn warns_on_undefined_reference(name: &str) -> bool {
             | "cref"
             | "Cref"
             | "vref"
+            | "Vref"
+            | "vpageref"
+            | "fullref"
             | "nameref"
             | "refused"
     )
@@ -280,9 +283,39 @@ pub(crate) fn reference_accepts_star(name: &str) -> bool {
             | "autoref"
             | "nameref"
             | "vref"
+            | "Vref"
+            | "vpageref"
             | "cref"
             | "Cref"
     )
+}
+
+/// Locate a reference's label without treating unsupported flags or extra
+/// optional notes as part of a call. Varioref's notes precede its single key.
+pub(crate) fn reference_argument_start(
+    source: &str,
+    name: &str,
+    command_end: usize,
+) -> Option<usize> {
+    let mut at = skip_space(source, command_end);
+    if source.as_bytes().get(at) == Some(&b'*') {
+        if !reference_accepts_star(name) {
+            return None;
+        }
+        at = skip_space(source, at + 1);
+    }
+    let notes = match name {
+        "vref" | "Vref" => 1,
+        "vpageref" => 2,
+        _ => 0,
+    };
+    for _ in 0..notes {
+        let Some((_, end)) = group(source, at, b'[', b']') else {
+            break;
+        };
+        at = skip_space(source, end);
+    }
+    Some(at)
 }
 
 pub(crate) fn is_counter_reference(name: &str) -> bool {
@@ -1070,7 +1103,10 @@ impl Syntax {
                         && (starred && !citation_accepts_star(name)
                             || bytes.get(arg_start) == Some(&b'[')
                                 && !citation_accepts_notes(name));
-                    if !matches!(name, "input" | "InputIfFileExists" | "IfFileExists")
+                    if is_reference(name) {
+                        arg_start = reference_argument_start(source, name, command_end)
+                            .unwrap_or(source.len());
+                    } else if !matches!(name, "input" | "InputIfFileExists" | "IfFileExists")
                         && !passes_options(name)
                         && !loader_forwards_options(name)
                     {

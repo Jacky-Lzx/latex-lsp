@@ -363,12 +363,14 @@ pub(crate) fn undefined_reference_ranges(text: &Text, line: u32, message: &str) 
             crate::syntax::warns_on_undefined_citation(&command.name)
         } else if hyper_link {
             command.name == "hyperref"
-                || matches!(command.name.as_str(), "Ref" | "autopageref")
-                    && text
-                        .source
-                        .as_bytes()
-                        .get(crate::syntax::skip_space(&text.source, command.span.end))
-                        != Some(&b'*')
+                || matches!(
+                    command.name.as_str(),
+                    "Ref" | "autopageref" | "vref" | "Vref"
+                ) && text
+                    .source
+                    .as_bytes()
+                    .get(crate::syntax::skip_space(&text.source, command.span.end))
+                    != Some(&b'*')
         } else {
             command.name != "hyperref"
                 && (crate::syntax::warns_on_undefined_reference(&command.name)

@@ -659,7 +659,6 @@ fn refcount_queries_offer_label_field_default_and_branch_parameters() {
         "autopageref",
         "autoref",
         "nameref",
-        "vref",
         "cref",
         "Cref",
     ] {

@@ -255,7 +255,12 @@ pub(crate) fn distance(left: &str, right: &str, limit: usize) -> Option<usize> {
     (result <= limit).then_some(result)
 }
 
-pub fn fixes(workspace: &Workspace, uri: &Url, range: Range) -> Vec<QuickFix> {
+pub fn fixes(
+    workspace: &Workspace,
+    uri: &Url,
+    range: Range,
+    requested: &[Diagnostic],
+) -> Vec<QuickFix> {
     let Some(doc) = workspace.documents.get(uri) else {
         return vec![];
     };
@@ -269,10 +274,18 @@ pub fn fixes(workspace: &Workspace, uri: &Url, range: Range) -> Vec<QuickFix> {
         };
         let project = workspace.project_documents(root);
         for diagnostic in diagnostics {
+            // Match the selected warning before deduplicating edits. Hyperref
+            // can report both Hyper reference and Reference for the same key.
             if diagnostic.source.as_deref() != Some("latex-build")
                 || build_log::unresolved_location(diagnostic)
                 || diagnostic.range.start > range.end
                 || range.start > diagnostic.range.end
+                || !requested.is_empty()
+                    && !requested.iter().any(|reported| {
+                        reported.range == diagnostic.range
+                            && reported.message == diagnostic.message
+                            && reported.source == diagnostic.source
+                    })
             {
                 continue;
             }

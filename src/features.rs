@@ -461,13 +461,13 @@ fn completion_name_argument(source: &str, command: &Command, offset: usize) -> O
         )
     } else if syntax::has_separate_label_argument(&command.name) {
         syntax::separate_label_argument_start(source, command)?
+    } else if syntax::is_reference(&command.name) {
+        (
+            syntax::reference_argument_start(source, &command.name, command.span.end)?,
+            b'{',
+        )
     } else {
-        let mut at = syntax::skip_space(source, command.span.end);
-        if syntax::reference_accepts_star(&command.name) && source.as_bytes().get(at) == Some(&b'*')
-        {
-            at = syntax::skip_space(source, at + 1);
-        }
-        (at, b'{')
+        (syntax::skip_space(source, command.span.end), b'{')
     };
     syntax::active_name_argument(source, start, open, offset)
 }

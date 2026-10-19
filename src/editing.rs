@@ -25,7 +25,12 @@ pub fn code_actions(
         return vec![];
     };
     let mut fixes = doc.syntax.fixes.clone();
-    fixes.extend(spelling_fixes::fixes(workspace, uri, range));
+    fixes.extend(spelling_fixes::fixes(
+        workspace,
+        uri,
+        range,
+        &context.diagnostics,
+    ));
     fixes
         .iter()
         .filter(|fix| {
@@ -80,6 +85,7 @@ pub fn resolve_fix(workspace: &Workspace, request: FixRequest) -> Option<Workspa
         workspace,
         &request.uri,
         request.diagnostic.range,
+        std::slice::from_ref(&request.diagnostic),
     ));
     let fix = fixes.iter().find(|fix| {
         fix.diagnostic.range == request.diagnostic.range
