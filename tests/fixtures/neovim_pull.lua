@@ -117,6 +117,26 @@ local ok, err = xpcall(function()
     return d.uri == uri
   end)
   assert(main and main.kind == "full" and #main.items == 0, vim.inspect(workspace))
+  local child_uri = vim.uri_from_fname(project .. "/chapter.tex")
+  vim.fn.delete(project .. "/chapter.tex")
+  client:notify("workspace/didDeleteFiles", { files = { { uri = child_uri } } })
+  assert(
+    vim.wait(5000, function()
+      return #vim.diagnostic.get(child) == 0
+    end, 20),
+    "deleting the closed source did not clear its compiler diagnostic"
+  )
+  vim.fn.writefile({ [[\PackageWarning{audit}{Recreated child warning}]] }, project .. "/chapter.tex")
+  client:notify("workspace/didCreateFiles", { files = { { uri = child_uri } } })
+  compile("success")
+  assert(
+    vim.wait(5000, function()
+      return vim.iter(vim.diagnostic.get(child)):any(function(d)
+        return d.source == "latex-build" and d.message:find("Recreated child warning", 1, true)
+      end)
+    end, 20),
+    "recreating the source did not restore compiler diagnostics"
+  )
   assert(pushes == 0, "pull client received pushed diagnostics")
   assert(refreshes >= 2, "missing refresh after compilation")
   client:stop()
@@ -125,7 +145,7 @@ local ok, err = xpcall(function()
   end, 20))
   vim.fn.delete(project, "rf")
   print(
-    "Neovim pull diagnostic audit passed: native compilation refresh, precise error display, unchanged reports, versioned typo fix, edit clearing and successful recompilation."
+    "Neovim pull diagnostic audit passed: native compilation refresh, precise errors, versioned typo fix, closed source deletion/recreation and successful recompilation."
   )
 end, debug.traceback)
 if not ok then

@@ -13,6 +13,67 @@ use tower_lsp::{
 
 pub struct Renames(Vec<(PathBuf, PathBuf)>);
 
+/// Filesystem notifications can name a directory without listing its children.
+pub struct FileChanges(Vec<PathBuf>);
+
+impl FileChanges {
+    pub fn new<'a>(uris: impl IntoIterator<Item = &'a str>) -> Result<Self> {
+        let mut paths = BTreeSet::new();
+        for uri in uris {
+            let path = Url::parse(uri)
+                .ok()
+                .and_then(|uri| uri.to_file_path().ok())
+                .ok_or_else(|| Error::invalid_params("File events require local file URIs"))?;
+            paths.insert(normalize_path(&path));
+        }
+        Ok(Self(paths.into_iter().collect()))
+    }
+
+    pub fn affects(&self, uri: &Url) -> bool {
+        uri.to_file_path()
+            .is_ok_and(|path| self.0.iter().any(|changed| path.starts_with(changed)))
+    }
+
+    pub fn refresh(&self, workspace: &mut Workspace) -> BTreeSet<Url> {
+        let mut affected = workspace.refresh_paths(&self.0);
+        // A new file may satisfy an earlier missing input. A deleted file may
+        // only remain in the previous compiler's source/recorder information.
+        let invalidated: Vec<_> = workspace
+            .build_diagnostics
+            .iter()
+            .filter(|(root, diagnostics)| {
+                self.affects(root)
+                    || diagnostics.keys().any(|uri| self.affects(uri))
+                    || workspace
+                        .project_files(root)
+                        .iter()
+                        .any(|uri| self.affects(uri))
+                    || [
+                        &workspace.recorded_inputs,
+                        &workspace.bibliography_inputs,
+                        &workspace.build_diagnostic_sources,
+                    ]
+                    .iter()
+                    .any(|inputs| {
+                        inputs
+                            .get(*root)
+                            .is_some_and(|uris| uris.iter().any(|uri| self.affects(uri)))
+                    })
+            })
+            .map(|(root, _)| root.clone())
+            .collect();
+        for root in invalidated {
+            if let Some(diagnostics) = workspace.build_diagnostics.remove(&root) {
+                affected.extend(diagnostics.into_keys());
+            }
+            workspace.build_diagnostic_sources.remove(&root);
+        }
+        // Keep recorder inputs until the next build: they let artifact checks
+        // continue to reject PDFs whose inputs have disappeared.
+        affected
+    }
+}
+
 impl Renames {
     pub fn new(files: &[FileRename]) -> Result<Self> {
         let mut paths = BTreeMap::new();

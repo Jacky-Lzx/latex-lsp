@@ -614,6 +614,45 @@ impl Workspace {
         }
     }
 
+    pub(crate) fn refresh_paths(&mut self, paths: &[PathBuf]) -> BTreeSet<Url> {
+        let matches = |uri: &Url| {
+            uri.to_file_path()
+                .is_ok_and(|path| paths.iter().any(|changed| path.starts_with(changed)))
+        };
+        let mut affected: BTreeSet<_> = self
+            .documents
+            .keys()
+            .filter(|uri| matches(uri))
+            .cloned()
+            .collect();
+        for uri in &affected {
+            self.reload(uri);
+        }
+        for path in paths {
+            if path.is_dir() {
+                self.scan(path, 0);
+            } else if is_source(path) {
+                if let Ok(uri) = Url::from_file_path(path) {
+                    self.reload(&uri);
+                    affected.insert(uri);
+                }
+            }
+        }
+        affected.extend(self.documents.keys().filter(|uri| matches(uri)).cloned());
+        let mut refresh = affected.clone();
+        refresh.extend(
+            self.saved_projects()
+                .into_iter()
+                .filter(|(_, project)| project.iter().any(&matches))
+                .map(|(root, _)| root),
+        );
+        for uri in &refresh {
+            self.load_dependencies(uri, 0);
+        }
+        affected.extend(self.documents.keys().filter(|uri| matches(uri)).cloned());
+        affected
+    }
+
     pub fn open(&mut self, uri: Url, source: String, version: i32) {
         let uri = document_uri(uri);
         if self.roots.is_empty() {

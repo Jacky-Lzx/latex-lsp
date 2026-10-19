@@ -4157,3 +4157,273 @@ fn compiler_pull_diagnostics_refresh_and_offer_versioned_spelling_fixes() {
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+fn file_event_notifications_refresh_navigation_and_duplicate_diagnostics_without_watchers() {
+    for pull in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path();
+        let main = Url::from_file_path(path.join("main.tex")).unwrap();
+        let folder = Url::from_file_path(path.join("chapters")).unwrap();
+        let child = Url::from_file_path(path.join("chapters/child.tex")).unwrap();
+        let source = r"\documentclass{article}\input{chapters/child}\label{shared}\ref{shared}";
+        std::fs::write(path.join("main.tex"), source).unwrap();
+        let capabilities = if pull {
+            json!({"textDocument":{"diagnostic":{}}})
+        } else {
+            json!({})
+        };
+        let mut server = Server::start();
+        let init = server.request(1300, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(path).unwrap(),"capabilities":capabilities}));
+        for event in ["didCreate", "didDelete"] {
+            assert_eq!(
+                init["capabilities"]["workspace"]["fileOperations"][event]["filters"][0]["scheme"],
+                "file"
+            );
+        }
+        server.notify("initialized", json!({}));
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":main,"languageId":"latex","version":3,"text":source}}),
+        );
+        assert_eq!(
+            server
+                .request(1301, "workspace/symbol", json!({"query":"shared"}))
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        std::fs::create_dir(path.join("chapters")).unwrap();
+        std::fs::write(path.join("chapters/child.tex"), r"\label{shared}").unwrap();
+        // Reject the whole invalid batch before indexing its valid first item.
+        server.notify(
+            "workspace/didCreateFiles",
+            json!({"files":[{"uri":folder},{"uri":"https://example.test/remote.tex"}]}),
+        );
+        assert_eq!(
+            server
+                .request(1302, "workspace/symbol", json!({"query":"shared"}))
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        server.notify(
+            "workspace/didCreateFiles",
+            json!({"files":[{"uri":folder}]}),
+        );
+        let symbols = server.request(1303, "workspace/symbol", json!({"query":"shared"}));
+        assert_eq!(symbols.as_array().unwrap().len(), 2);
+        assert!(symbols
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["location"]["uri"] == child.as_str()));
+        let diagnostic = server.request(
+            1304,
+            "textDocument/diagnostic",
+            json!({"textDocument":{"uri":main}}),
+        );
+        assert_eq!(
+            diagnostic["items"].as_array().unwrap().len(),
+            1,
+            "{diagnostic}"
+        );
+        assert_eq!(diagnostic["items"][0]["code"], "duplicate-definition");
+        std::fs::remove_dir_all(path.join("chapters")).unwrap();
+        server.notify(
+            "workspace/didDeleteFiles",
+            json!({"files":[{"uri":folder}]}),
+        );
+        let cleared = server.request(
+            1305,
+            "textDocument/diagnostic",
+            json!({"textDocument":{"uri":main},"previousResultId":diagnostic["resultId"]}),
+        );
+        assert_eq!(cleared["kind"], "full");
+        assert_eq!(cleared["items"], json!([]));
+        let workspace = server.request(
+            1306,
+            "workspace/diagnostic",
+            json!({"previousResultIds":[]}),
+        );
+        let main_report = workspace["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["uri"] == main.as_str())
+            .unwrap();
+        assert_eq!(main_report["version"], 3);
+        assert_eq!(
+            server
+                .request(1307, "workspace/symbol", json!({"query":"shared"}))
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        server.request(1308, "shutdown", Value::Null);
+        if pull {
+            assert_no_pushed_diagnostics(&server);
+        }
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex"]
+fn real_file_events_clear_missing_input_errors_and_reindex_deleted_chapters() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path();
+    let main = Url::from_file_path(path.join("main.tex")).unwrap();
+    let folder = Url::from_file_path(path.join("chapters")).unwrap();
+    let source =
+        "\\documentclass{article}\n\\begin{document}\n\\input{chapters/child}\n\\end{document}\n";
+    std::fs::write(path.join("main.tex"), source).unwrap();
+    let mut server = Server::start();
+    server.request(1400, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(path).unwrap(),"capabilities":{"textDocument":{"diagnostic":{}}},"initializationOptions":{"build":{"executable":"pdflatex"}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":main,"languageId":"latex","version":1,"text":source}}),
+    );
+    server.request(
+        1401,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let failed = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(failed["params"]["status"], "error");
+    let missing = server.request(
+        1402,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":main}}),
+    );
+    assert!(
+        missing["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["message"].as_str().unwrap().contains("chapters/child")),
+        "{missing}"
+    );
+    std::fs::create_dir(path.join("chapters")).unwrap();
+    std::fs::write(
+        path.join("chapters/child.tex"),
+        r"\newcommand{\fresh}{Created source.}\fresh",
+    )
+    .unwrap();
+    server.notify(
+        "workspace/didCreateFiles",
+        json!({"files":[{"uri":folder}]}),
+    );
+    let cleared = server.request(
+        1403,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":main},"previousResultId":missing["resultId"]}),
+    );
+    assert_eq!(cleared["kind"], "full");
+    assert_eq!(cleared["items"], json!([]));
+    assert_eq!(
+        server
+            .request(1404, "workspace/symbol", json!({"query":"fresh"}))
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    server.request(
+        1405,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let built = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(built["params"]["status"], "success", "{built}");
+    std::fs::remove_dir_all(path.join("chapters")).unwrap();
+    server.notify(
+        "workspace/didDeleteFiles",
+        json!({"files":[{"uri":folder}]}),
+    );
+    assert_eq!(
+        server.request(1406, "workspace/symbol", json!({"query":"fresh"})),
+        json!([])
+    );
+    server.request(
+        1407,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let deleted = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(deleted["params"]["status"], "error");
+    server.request(1408, "shutdown", Value::Null);
+    assert_no_pushed_diagnostics(&server);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+fn deleted_input_directories_cancel_active_and_queued_builds_but_unrelated_files_do_not() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path();
+    std::fs::create_dir(path.join("chapters")).unwrap();
+    std::fs::write(path.join("chapters/child.tex"), r"\label{chapter}").unwrap();
+    let source = r"\documentclass{article}\input{chapters/child}";
+    std::fs::write(path.join("main.tex"), source).unwrap();
+    let main = Url::from_file_path(path.join("main.tex")).unwrap();
+    let folder = Url::from_file_path(path.join("chapters")).unwrap();
+    let unrelated = Url::from_file_path(path.join("other.tex")).unwrap();
+    let mut server = Server::start();
+    server.request(1500, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(path).unwrap(),"capabilities":{},"initializationOptions":{"build":{"executable":"sh","arguments":["-c","sleep 30"],"onSave":true,"timeoutSeconds":5}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":main,"languageId":"latex","version":1,"text":source}}),
+    );
+    server.request(
+        1501,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    server.until(|message| message["method"] == "latex/buildStarted");
+    std::fs::write(path.join("other.tex"), "Unrelated.").unwrap();
+    server.notify(
+        "workspace/didCreateFiles",
+        json!({"files":[{"uri":unrelated}]}),
+    );
+    let running = server.request(
+        1502,
+        "workspace/executeCommand",
+        json!({"command":"latex.buildStatus","arguments":[main]}),
+    );
+    assert_eq!(running["status"], "running");
+    server.notify("textDocument/didSave", json!({"textDocument":{"uri":main}}));
+    let queued = server.request(
+        1503,
+        "workspace/executeCommand",
+        json!({"command":"latex.buildStatus","arguments":[main]}),
+    );
+    assert_eq!(queued["queued"], true);
+    std::fs::remove_dir_all(path.join("chapters")).unwrap();
+    server.notify(
+        "workspace/didDeleteFiles",
+        json!({"files":[{"uri":folder}]}),
+    );
+    let cancelled = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(cancelled["params"]["status"], "cancelled", "{cancelled}");
+    let status = server.request(
+        1504,
+        "workspace/executeCommand",
+        json!({"command":"latex.buildStatus","arguments":[main]}),
+    );
+    assert_eq!(status["status"], "cancelled");
+    assert_eq!(
+        server.request(1505, "workspace/symbol", json!({"query":"chapter"})),
+        json!([])
+    );
+    server.request(1506, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

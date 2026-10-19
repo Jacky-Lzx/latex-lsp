@@ -10,6 +10,126 @@ fn uri(root: &Path, name: &str) -> Url {
     Url::from_file_path(root.join(name)).unwrap()
 }
 
+#[test]
+fn created_and_deleted_directories_refresh_sources_without_discarding_open_buffers() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let mut workspace = Workspace::default();
+    workspace.add_root(root.into());
+    std::fs::create_dir(root.join("章节")).unwrap();
+    std::fs::create_dir(root.join("章节-extra")).unwrap();
+    for (name, source) in [
+        ("章节/open.tex", "Saved"),
+        ("章节/closed.tex", r"\label{closed}"),
+        ("章节/refs.bib", "@book{book, title={Example}}"),
+        ("章节/ignored.aux", "Generated"),
+        ("章节-extra/neighbor.tex", "Neighbor"),
+    ] {
+        std::fs::write(root.join(name), source).unwrap();
+    }
+    let open = uri(root, "章节/open.tex");
+    workspace.open(open.clone(), r"\label{unsaved}".into(), 9);
+    let folder = uri(root, "章节");
+    let alternate = folder
+        .as_str()
+        .replace("%E7%AB%A0%E8%8A%82", "%e7%ab%a0%e8%8a%82");
+    let changes = file_operations::FileChanges::new([alternate.as_str()]).unwrap();
+    assert!(!changes.affects(&uri(root, "章节-extra/neighbor.tex")));
+    let affected = changes.refresh(&mut workspace);
+    assert!(affected.contains(&uri(root, "章节/closed.tex")));
+    assert!(affected.contains(&uri(root, "章节/refs.bib")));
+    assert!(!workspace
+        .documents
+        .contains_key(&uri(root, "章节/ignored.aux")));
+    assert_eq!(workspace.documents[&open].version, Some(9));
+    assert_eq!(workspace.documents[&open].text.source, r"\label{unsaved}");
+    workspace.reload(&uri(root, "章节-extra/neighbor.tex"));
+    std::fs::remove_dir_all(root.join("章节")).unwrap();
+    let affected = changes.refresh(&mut workspace);
+    assert!(affected.contains(&uri(root, "章节/closed.tex")));
+    assert!(!workspace
+        .documents
+        .contains_key(&uri(root, "章节/closed.tex")));
+    assert!(!workspace
+        .documents
+        .contains_key(&uri(root, "章节/refs.bib")));
+    assert_eq!(workspace.documents[&open].version, Some(9));
+    assert!(workspace
+        .documents
+        .contains_key(&uri(root, "章节-extra/neighbor.tex")));
+    assert!(file_operations::FileChanges::new([
+        folder.as_str(),
+        "https://example.test/remote.tex"
+    ])
+    .is_err());
+}
+
+#[test]
+fn file_events_invalidate_only_affected_builds_and_preserve_artifact_input_checks() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::create_dir(root.join("a")).unwrap();
+    std::fs::create_dir(root.join("b")).unwrap();
+    for name in ["a/main.tex", "b/main.tex"] {
+        std::fs::write(
+            root.join(name),
+            r"\documentclass{article}\input{child}\input{fragment.inc}",
+        )
+        .unwrap();
+    }
+    let mut workspace = Workspace::default();
+    workspace.add_root(root.into());
+    let a = uri(root, "a/main.tex");
+    let b = uri(root, "b/main.tex");
+    let child = uri(root, "a/child.tex");
+    let warning = Diagnostic::new_simple(Range::default(), "Old compiler warning".into());
+    for main in [&a, &b] {
+        workspace
+            .build_diagnostics
+            .insert(main.clone(), [(main.clone(), vec![warning.clone()])].into());
+    }
+    std::fs::write(root.join("a/child.tex"), r"\label{new}").unwrap();
+    let changes = file_operations::FileChanges::new([child.as_str()]).unwrap();
+    let affected = changes.refresh(&mut workspace);
+    assert!(affected.contains(&a));
+    assert!(!workspace.build_diagnostics.contains_key(&a));
+    assert!(workspace.build_diagnostics.contains_key(&b));
+    workspace
+        .recorded_inputs
+        .insert(a.clone(), [a.clone(), child.clone()].into());
+    workspace
+        .build_diagnostics
+        .insert(a.clone(), [(a.clone(), vec![warning.clone()])].into());
+    std::fs::remove_file(root.join("a/child.tex")).unwrap();
+    changes.refresh(&mut workspace);
+    assert!(!workspace.build_diagnostics.contains_key(&a));
+    assert!(workspace.build_diagnostics.contains_key(&b));
+    assert!(workspace.recorded_inputs[&a].contains(&child));
+    // Images are not indexed as documents, but deleting a recorded image must
+    // still invalidate the compiler diagnostics belonging to its project.
+    let image = uri(root, "a/image.png");
+    workspace
+        .recorded_inputs
+        .get_mut(&a)
+        .unwrap()
+        .insert(image.clone());
+    workspace
+        .build_diagnostics
+        .insert(a.clone(), [(a.clone(), vec![warning])].into());
+    file_operations::FileChanges::new([image.as_str()])
+        .unwrap()
+        .refresh(&mut workspace);
+    assert!(!workspace.build_diagnostics.contains_key(&a));
+    assert!(workspace.build_diagnostics.contains_key(&b));
+    assert!(workspace.recorded_inputs[&a].contains(&image));
+    let fragment = uri(root, "a/fragment.inc");
+    std::fs::write(root.join("a/fragment.inc"), r"\label{fragment}").unwrap();
+    file_operations::FileChanges::new([fragment.as_str()])
+        .unwrap()
+        .refresh(&mut workspace);
+    assert!(workspace.documents.contains_key(&fragment));
+}
+
 fn rename(root: &Path, old: &str, new: &str) -> FileRename {
     FileRename {
         old_uri: uri(root, old).to_string(),

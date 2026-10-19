@@ -94,20 +94,53 @@ impl Backend {
     }
 
     async fn publish_open(&self) {
+        self.publish_affected(Default::default()).await;
+    }
+
+    async fn publish_affected(&self, affected: std::collections::BTreeSet<Url>) {
         let workspace = self.workspace.read().await;
         let delivery = workspace.diagnostic_delivery.clone();
         let snapshots = if delivery.is_pull() {
             vec![]
         } else {
-            let uris = workspace
-                .documents
-                .iter()
-                .filter(|(_, doc)| doc.version.is_some())
-                .map(|(uri, _)| uri.clone());
+            let uris = affected.into_iter().chain(
+                workspace
+                    .documents
+                    .iter()
+                    .filter(|(_, doc)| doc.version.is_some())
+                    .map(|(uri, _)| uri.clone()),
+            );
             workspace.diagnostic_snapshots(uris)
         };
         drop(workspace);
         delivery.publish(&self.client, snapshots).await;
+    }
+
+    async fn refresh_file_events(&self, changes: Result<file_operations::FileChanges>) {
+        let changes = match changes {
+            Ok(changes) => changes,
+            Err(error) => {
+                self.client
+                    .log_message(MessageType::WARNING, error.message)
+                    .await;
+                return;
+            }
+        };
+        self.builds.files_changed(&changes).await;
+        let affected = changes.refresh(&mut *self.workspace.write().await);
+        {
+            let mut cache = self.semantic_cache.lock().await;
+            for uri in &affected {
+                cache.remove(uri);
+            }
+        }
+        {
+            let mut cache = self.diagnostic_cache.lock().await;
+            for uri in &affected {
+                cache.remove(uri);
+            }
+        }
+        self.publish_affected(affected).await;
     }
 }
 
@@ -274,6 +307,8 @@ impl LanguageServer for Backend {
                         change_notifications: Some(OneOf::Left(true)),
                     }),
                     file_operations: Some(WorkspaceFileOperationsServerCapabilities {
+                        did_create: Some(file_operation_options()),
+                        did_delete: Some(file_operation_options()),
                         will_rename: Some(file_operation_options()),
                         did_rename: Some(file_operation_options()),
                         ..Default::default()
@@ -503,6 +538,20 @@ impl LanguageServer for Backend {
         file_operations::will_rename(&*self.workspace.read().await, &params.files)
     }
 
+    async fn did_create_files(&self, params: CreateFilesParams) {
+        self.refresh_file_events(file_operations::FileChanges::new(
+            params.files.iter().map(|file| file.uri.as_str()),
+        ))
+        .await;
+    }
+
+    async fn did_delete_files(&self, params: DeleteFilesParams) {
+        self.refresh_file_events(file_operations::FileChanges::new(
+            params.files.iter().map(|file| file.uri.as_str()),
+        ))
+        .await;
+    }
+
     async fn did_rename_files(&self, params: RenameFilesParams) {
         match file_operations::Renames::new(&params.files) {
             Ok(renames) => self.builds.files_renamed(&renames).await,
@@ -516,21 +565,8 @@ impl LanguageServer for Backend {
         let mut workspace = self.workspace.write().await;
         match file_operations::did_rename(&mut workspace, &params.files) {
             Ok(affected) => {
-                let mut affected = affected;
-                affected.extend(
-                    workspace
-                        .documents
-                        .iter()
-                        .filter_map(|(uri, doc)| doc.version.is_some().then_some(uri.clone())),
-                );
-                let delivery = workspace.diagnostic_delivery.clone();
-                let diagnostics = if delivery.is_pull() {
-                    vec![]
-                } else {
-                    workspace.diagnostic_snapshots(affected)
-                };
                 drop(workspace);
-                delivery.publish(&self.client, diagnostics).await;
+                self.publish_affected(affected).await;
             }
             Err(error) => {
                 drop(workspace);

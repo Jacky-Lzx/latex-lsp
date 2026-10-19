@@ -559,11 +559,19 @@ impl BuildManager {
     }
 
     pub async fn files_renamed(&self, renames: &crate::file_operations::Renames) {
+        self.cancel_changed_inputs(|uri| renames.affects(uri)).await;
+    }
+
+    pub async fn files_changed(&self, changes: &crate::file_operations::FileChanges) {
+        self.cancel_changed_inputs(|uri| changes.affects(uri)).await;
+    }
+
+    async fn cancel_changed_inputs(&self, affects: impl Fn(&Url) -> bool) {
         let mut builds = BTreeSet::new();
         {
             let mut state = self.state.lock().unwrap();
             for (root, record) in state.iter_mut() {
-                if renames.affects(root) || record.inputs.iter().any(|uri| renames.affects(uri)) {
+                if affects(root) || record.inputs.iter().any(&affects) {
                     record.queued = None;
                     record.cancel_generation = record.cancel_generation.wrapping_add(1);
                     if let Some((id, cancel)) = &record.active {
