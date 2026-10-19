@@ -432,11 +432,11 @@ fn emit(
     emit_with_context(result, path, line, message, severity, None, true);
 }
 
-pub(crate) fn unresolved_source(diagnostic: &Diagnostic) -> bool {
+pub(crate) fn unresolved_location(diagnostic: &Diagnostic) -> bool {
     diagnostic.data.as_ref().is_some_and(|data| {
-        data.get("unresolvedSource")
-            .and_then(serde_json::Value::as_bool)
-            == Some(true)
+        ["unresolvedSource", "unresolvedLine"]
+            .iter()
+            .any(|key| data.get(key).and_then(serde_json::Value::as_bool) == Some(true))
     })
 }
 
@@ -725,13 +725,14 @@ fn emit_with_context(
     };
     // Font/glyph diagnostics often repeat at shipout. Avoid reading and mapping
     // the same source file once for every repetition of an identical warning.
-    if context.is_none()
+    if line != 0
+        && context.is_none()
         && result.get(&uri).is_some_and(|diagnostics| {
             diagnostics.iter().any(|diagnostic| {
                 diagnostic.message == message
                     && diagnostic.severity == Some(severity)
                     && diagnostic.range.start.line == line.saturating_sub(1)
-                    && unresolved_source(diagnostic) != source_confirmed
+                    && unresolved_location(diagnostic) != source_confirmed
             })
         })
     {
@@ -741,6 +742,7 @@ fn emit_with_context(
     let text = Text::new(source);
     let last_line = text.text_line_count().saturating_sub(1) as u32;
     let reported_line = line;
+    let invalid_line = line.checked_sub(1).is_none_or(|line| line > last_line);
     let rewritten = line.saturating_sub(1) > last_line
         && path
             .extension()
@@ -763,11 +765,16 @@ fn emit_with_context(
         Position::new(line, start.min(end)),
         Position::new(line, end),
     );
-    if !source_confirmed {
+    if !source_confirmed || invalid_line {
         // References and destinations can be located without an expansion
-        // context. They must not borrow matching names from the fallback root.
-        let mut data = serde_json::json!({"unresolvedSource":true});
-        if rewritten {
+        // context. They must not borrow matching names from a fallback file
+        // or a clamped line whose reported location could not be verified.
+        let mut data = serde_json::json!({});
+        if !source_confirmed {
+            data["unresolvedSource"] = true.into();
+        }
+        if invalid_line {
+            data["unresolvedLine"] = true.into();
             data["reportedLine"] = reported_line.into();
         }
         result.entry(uri).or_default().push(Diagnostic {
@@ -855,9 +862,7 @@ fn emit_with_context(
                     .or_else(|| counter_range.map(|_| "undefined-counter"))
                     .map(|code| NumberOrString::String(code.into())),
                 message: message.clone(),
-                data: rewritten
-                    .then(|| serde_json::json!({"reportedLine":reported_line}))
-                    .or_else(|| precise_destination.then(|| serde_json::json!({"destination":destination.map(|(_, name)| name)})))
+                data: precise_destination.then(|| serde_json::json!({"destination":destination.map(|(_, name)| name)}))
                     .or_else(|| command_name.map(|name| serde_json::json!({"command":name})))
                     .or_else(|| {
                         environment_range
@@ -1412,9 +1417,7 @@ pub(crate) fn parse_with_sources(
     for diagnostics in result.values_mut() {
         diagnostics.sort_by_key(|diagnostic| (diagnostic.range.start, diagnostic.message.clone()));
         diagnostics.dedup_by(|a, b| {
-            a.range == b.range
-                && a.message == b.message
-                && unresolved_source(a) == unresolved_source(b)
+            a.range == b.range && a.message == b.message && a.code == b.code && a.data == b.data
         });
     }
     (result, sources)

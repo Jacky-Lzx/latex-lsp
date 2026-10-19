@@ -9,6 +9,93 @@ use std::{
 use tower_lsp::lsp_types::{DiagnosticSeverity, Url};
 
 #[test]
+fn invalid_reported_lines_never_borrow_names_or_ranges_from_clamped_source_lines() {
+    use latex_lsp::{build_log, text::Text};
+    use tower_lsp::lsp_types::{Position, Range};
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    let child = directory.path().join("child.tex");
+    let cases = [
+        (r"😀 \ref{missing}", "LaTeX Warning: Reference `missing' on page 1 undefined on input line {line}.", DiagnosticSeverity::WARNING),
+        (r"😀 \cite{missing}", "Package natbib Warning: Citation `missing' on page 1 undefined on input line {line}.", DiagnosticSeverity::WARNING),
+        (r"😀 \hyperlink{missing}{Text}", "pdfTeX warning (dest): name{missing} has been referenced but does not exist, replaced by a fixed one", DiagnosticSeverity::WARNING),
+        (r"😀 \hypertarget{missing}{Text}", "pdfTeX warning (ext4): destination with the same identifier (name{missing}) has been already used, duplicate ignored", DiagnosticSeverity::WARNING),
+        (r"😀 \include{missing}", "Included file `missing.tex` not found", DiagnosticSeverity::WARNING),
+        ("😀 Paragraph", r"Overfull \hbox (12pt too wide) in paragraph at lines 1--1", DiagnosticSeverity::WARNING),
+        (r"😀 \bad{x}", "Undefined control sequence.", DiagnosticSeverity::ERROR),
+    ];
+    for (source, message, severity) in cases {
+        for path in [&main, &child] {
+            std::fs::write(path, source).unwrap();
+        }
+        let end = source.encode_utf16().count() as u32;
+        for name in ["main.tex", "child.tex"] {
+            let path = directory.path().join(name);
+            for number in [0, 2, 999, u32::MAX] {
+                let message = message.replace("{line}", &number.to_string());
+                let log = format!("./{name}:{number}: {message}\nl.{number} 😀 \\bad\n");
+                let diagnostics = build_log::parse(&main, &log);
+                let items = &diagnostics[&Url::from_file_path(&path).unwrap()];
+                assert_eq!(items.len(), 1, "{log}");
+                let item = &items[0];
+                assert_eq!(item.message, message);
+                assert_eq!(
+                    item.range,
+                    Range::new(Position::new(0, 0), Position::new(0, end))
+                );
+                assert_eq!(item.severity, Some(severity));
+                assert_eq!(item.code, None, "{log}");
+                assert_eq!(
+                    item.data,
+                    Some(serde_json::json!({"unresolvedLine":true,"reportedLine":number})),
+                    "{log}"
+                );
+                assert!(Text::new(source.into()).offset(item.range.end).is_some());
+            }
+        }
+    }
+}
+
+#[test]
+fn valid_and_zero_line_warnings_both_survive_parsing_and_publication() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    let uri = Url::from_file_path(&main).unwrap();
+    let source = "Paragraph";
+    std::fs::write(&main, source).unwrap();
+    let message = r"Overfull \hbox (12pt too wide) in paragraph at lines 1--1";
+    for numbers in [[0, 1], [1, 0]] {
+        let log = numbers
+            .map(|number| format!("./main.tex:{number}: {message}\n"))
+            .concat();
+        let mut workspace = Workspace::default();
+        workspace.open(uri.clone(), source.into(), 1);
+        workspace
+            .build_diagnostics
+            .insert(uri.clone(), latex_lsp::build_log::parse(&main, &log));
+        let diagnostics = workspace.diagnostics(&uri);
+        assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
+        assert_eq!(
+            diagnostics
+                .iter()
+                .filter(|item| item.code.is_some())
+                .count(),
+            1
+        );
+        assert_eq!(
+            diagnostics
+                .iter()
+                .filter(|item| item
+                    .data
+                    .as_ref()
+                    .is_some_and(|data| data["unresolvedLine"] == true))
+                .count(),
+            1
+        );
+    }
+}
+
+#[test]
 fn unresolved_numbered_sources_do_not_borrow_warning_ranges_or_codes_from_the_root() {
     use latex_lsp::{build_log, text::Text};
     use tower_lsp::lsp_types::{NumberOrString, Position, Range};
@@ -93,6 +180,11 @@ fn trusted_and_unresolved_numbered_warnings_do_not_suppress_each_other() {
                     .count(),
                 1
             );
+            let uri = Url::from_file_path(&main).unwrap();
+            let mut workspace = Workspace::default();
+            workspace.open(uri.clone(), source.into(), 1);
+            workspace.build_diagnostics.insert(uri.clone(), diagnostics);
+            assert_eq!(workspace.diagnostics(&uri).len(), 2);
         }
     }
 }

@@ -256,8 +256,13 @@ impl Workspace {
             }
         }
         diagnostics.sort_by_key(|diagnostic| (diagnostic.range.start, diagnostic.message.clone()));
-        diagnostics
-            .dedup_by(|a, b| a.range == b.range && a.message == b.message && a.source == b.source);
+        diagnostics.dedup_by(|a, b| {
+            a.range == b.range
+                && a.message == b.message
+                && a.source == b.source
+                && a.code == b.code
+                && a.data == b.data
+        });
         diagnostics
     }
 

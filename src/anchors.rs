@@ -26,7 +26,7 @@ pub(crate) fn resolve_diagnostics(
         .flatten()
         .filter(|diagnostic| {
             diagnostic.source.as_deref() == Some("latex-build")
-                && !build_log::unresolved_source(diagnostic)
+                && !build_log::unresolved_location(diagnostic)
         })
         .filter_map(|diagnostic| build_log::destination_warning(&diagnostic.message))
     {
@@ -66,7 +66,7 @@ pub(crate) fn resolve_diagnostics(
     for (uri, items) in std::mem::take(diagnostics) {
         for diagnostic in items {
             let mapped = (diagnostic.source.as_deref() == Some("latex-build")
-                && !build_log::unresolved_source(&diagnostic))
+                && !build_log::unresolved_location(&diagnostic))
             .then(|| build_log::destination_warning(&diagnostic.message))
             .flatten()
             .and_then(|(kind, name)| {
@@ -364,27 +364,29 @@ mod tests {
             "warning  (pdf backend): unreferenced destination with name 'lost'",
             "warning  (pdf backend): ignoring duplicate destination with the name 'copy'",
         ] {
-            let unresolved = Diagnostic {
-                source: Some("latex-build".into()),
-                message: message.into(),
-                data: Some(serde_json::json!({"unresolvedSource":true})),
-                ..Default::default()
-            };
-            for trusted in [false, true] {
-                let mut items = vec![unresolved.clone()];
-                if trusted {
-                    items.push(Diagnostic {
-                        data: None,
-                        ..unresolved.clone()
-                    });
-                }
-                let mut diagnostics = [(root.clone(), items)].into();
-                resolve_diagnostics(&workspace, &[child.clone()].into(), &mut diagnostics);
-                assert_eq!(diagnostics[&root], vec![unresolved.clone()]);
-                assert_eq!(diagnostics.contains_key(&child), trusted);
-                if trusted {
-                    assert_eq!(diagnostics[&child].len(), 1);
-                    assert!(diagnostics[&child][0].code.is_some());
+            for flag in ["unresolvedSource", "unresolvedLine"] {
+                let unresolved = Diagnostic {
+                    source: Some("latex-build".into()),
+                    message: message.into(),
+                    data: Some(serde_json::json!({flag:true})),
+                    ..Default::default()
+                };
+                for trusted in [false, true] {
+                    let mut items = vec![unresolved.clone()];
+                    if trusted {
+                        items.push(Diagnostic {
+                            data: None,
+                            ..unresolved.clone()
+                        });
+                    }
+                    let mut diagnostics = [(root.clone(), items)].into();
+                    resolve_diagnostics(&workspace, &[child.clone()].into(), &mut diagnostics);
+                    assert_eq!(diagnostics[&root], vec![unresolved.clone()]);
+                    assert_eq!(diagnostics.contains_key(&child), trusted);
+                    if trusted {
+                        assert_eq!(diagnostics[&child].len(), 1);
+                        assert!(diagnostics[&child][0].code.is_some());
+                    }
                 }
             }
         }
