@@ -254,7 +254,6 @@ fn conditional_inputs_ignore_unexpanded_paths_and_unsupported_star_and_option_sy
         "\\InputIfFileExists[options]{child}{}{}\n",
         "\\InputIfFileExists child {}{}\n",
         "\\InputIfFileExists{missing}{}{}\n",
-        "\\IfFileExists{child}{}{}\n",
     );
     std::fs::write(root.join("main.tex"), source).unwrap();
     std::fs::write(root.join("child.tex"), "Child.").unwrap();

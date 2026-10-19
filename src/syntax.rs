@@ -390,6 +390,7 @@ pub(crate) fn is_static_key(value: &str) -> bool {
 pub fn file_extensions(name: &str) -> Option<&'static [&'static str]> {
     Some(match name {
         "input" | "InputIfFileExists" => &["tex", "ltx", "sty", "cls", "def", "clo"],
+        "IfFileExists" => &["tex"],
         "include" | "includeonly" | "subfile" => &["tex"],
         "bibliography" | "addbibresource" => &["bib"],
         "bibliographystyle" => &["bst"],
@@ -482,7 +483,7 @@ pub(crate) fn file_lookup_names<'a>(
     let append = !empty
         && match command {
             "include" | "includeonly" => !value.ends_with(".tex"),
-            "input" | "InputIfFileExists" => !recognized,
+            "input" | "InputIfFileExists" | "IfFileExists" => !recognized,
             "bibliography" | "bibliographystyle" => !literal.ends_with(&format!(".{extension}")),
             _ => loader.is_some(),
         };
@@ -499,7 +500,7 @@ pub(crate) fn file_lookup_names<'a>(
     std::iter::once(preferred)
         .filter(move |_| !empty && valid_style)
         .chain(
-            (matches!(command, "input" | "InputIfFileExists") && append)
+            (matches!(command, "input" | "InputIfFileExists" | "IfFileExists") && append)
                 .then_some(std::borrow::Cow::Borrowed(value)),
         )
 }
@@ -965,7 +966,7 @@ impl Syntax {
                     }
                     let name = &source[name_start..i];
                     let command_end = i;
-                    let starred = !matches!(name, "input" | "InputIfFileExists")
+                    let starred = !matches!(name, "input" | "InputIfFileExists" | "IfFileExists")
                         && bytes.get(i) == Some(&b'*');
                     if starred {
                         i += 1;
@@ -1003,7 +1004,7 @@ impl Syntax {
                         && (starred && !citation_accepts_star(name)
                             || bytes.get(arg_start) == Some(&b'[')
                                 && !citation_accepts_notes(name));
-                    if !matches!(name, "input" | "InputIfFileExists")
+                    if !matches!(name, "input" | "InputIfFileExists" | "IfFileExists")
                         && !loader_forwards_options(name)
                     {
                         while let Some((_, end)) = group(source, arg_start, b'[', b']') {

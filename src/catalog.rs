@@ -688,6 +688,11 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
         "If a TeX file exists, run the second argument before reading it; otherwise run the third argument.",
     ),
     (
+        "IfFileExists",
+        "IfFileExists{${1:file}}{${2:if exists}}{${3:if missing}}",
+        "Check whether a file exists and run the corresponding branch without reading its contents.",
+    ),
+    (
         "include",
         "include{${1:file}}",
         "Include a TeX file with page breaks.",

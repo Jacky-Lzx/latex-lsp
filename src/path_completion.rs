@@ -28,7 +28,7 @@ pub fn complete(
     let separator = prefix.rfind('/').map_or(0, |index| index + 1);
     let directory = &prefix[..separator];
     let name_prefix = &prefix[separator..];
-    let input_argument = matches!(command, "input" | "InputIfFileExists")
+    let input_argument = matches!(command, "input" | "InputIfFileExists" | "IfFileExists")
         .then(|| {
             doc.syntax
                 .commands
@@ -116,6 +116,7 @@ pub fn complete(
                 .and_then(|ext| ext.to_str())
                 .unwrap_or("");
             if !folder
+                && command != "IfFileExists"
                 && !extensions
                     .iter()
                     .any(|ext| extension.eq_ignore_ascii_case(ext))
