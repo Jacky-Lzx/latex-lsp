@@ -253,6 +253,9 @@ pub(crate) fn references(doc: &Document, name: &str, environment: Generated) -> 
             }
         }
         let mut arguments = Vec::new();
+        if environment.kind == Kind::Environment {
+            arguments.extend(syntax::environment_copy_source(&doc.text.source, command));
+        }
         if matches!(environment.kind, Kind::Conditional | Kind::Toggle) {
             arguments.extend(crate::conditionals::expression_arguments(
                 &doc.text.source,

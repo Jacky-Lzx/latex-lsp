@@ -550,19 +550,40 @@ pub(crate) fn declares_register(name: &str) -> bool {
 }
 
 pub fn declares_environment(name: &str) -> bool {
+    declares_environment_copy(name)
+        || matches!(
+            name,
+            "newenvironment"
+                | "renewenvironment"
+                | "provideenvironment"
+                | "NewDocumentEnvironment"
+                | "RenewDocumentEnvironment"
+                | "ProvideDocumentEnvironment"
+                | "DeclareDocumentEnvironment"
+                | "NewEnviron"
+                | "RenewEnviron"
+                | "newtheorem"
+        )
+}
+
+pub(crate) fn declares_environment_copy(name: &str) -> bool {
     matches!(
         name,
-        "newenvironment"
-            | "renewenvironment"
-            | "provideenvironment"
-            | "NewDocumentEnvironment"
-            | "RenewDocumentEnvironment"
-            | "ProvideDocumentEnvironment"
-            | "DeclareDocumentEnvironment"
-            | "NewEnviron"
-            | "RenewEnviron"
-            | "newtheorem"
+        "NewEnvironmentCopy" | "RenewEnvironmentCopy" | "DeclareEnvironmentCopy"
     )
+}
+
+pub(crate) fn environment_copy_source_start(source: &str, command: &Command) -> Option<usize> {
+    if !declares_environment_copy(&command.name) {
+        return None;
+    }
+    let argument = command.argument.as_ref()?;
+    Some(skip_space(source, argument.outer_span.end))
+}
+
+pub(crate) fn environment_copy_source(source: &str, command: &Command) -> Option<Argument> {
+    let start = environment_copy_source_start(source, command)?;
+    group(source, start, b'{', b'}').map(|(argument, _)| argument)
 }
 
 pub(crate) fn is_verbatim_environment(name: &str) -> bool {

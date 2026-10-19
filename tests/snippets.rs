@@ -95,6 +95,12 @@ fn snippets_expand_in_a_real_editor_without_consuming_tex_backslashes() {
         ("NewCommandCopy", r"NewCommandCopy{\name}{\source}"),
         ("RenewCommandCopy", r"RenewCommandCopy{\name}{\source}"),
         ("DeclareCommandCopy", r"DeclareCommandCopy{\name}{\source}"),
+        ("NewEnvironmentCopy", "NewEnvironmentCopy{name}{source}"),
+        ("RenewEnvironmentCopy", "RenewEnvironmentCopy{name}{source}"),
+        (
+            "DeclareEnvironmentCopy",
+            "DeclareEnvironmentCopy{name}{source}",
+        ),
         ("date", r"date{\today}"),
         ("def", r"def\name{definition}"),
         ("let", r"let\alias=\command"),

@@ -96,6 +96,10 @@ pub fn completion(
 
 fn builtin(name: &str) -> Option<Signature> {
     let (arguments, starred): (&[(&str, bool)], bool) = match name {
+        name if syntax::declares_environment_copy(name) => (
+            &[("environment", false), ("source environment", false)],
+            false,
+        ),
         name if syntax::declares_command_copy(name) => {
             (&[("command", false), ("source command", false)], false)
         }

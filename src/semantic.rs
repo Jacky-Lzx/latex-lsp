@@ -65,6 +65,9 @@ fn candidates(doc: &Document) -> Vec<Token> {
         .map(|entry| entry.name.as_str())
         .collect();
     for (index, command) in doc.syntax.commands.iter().enumerate() {
+        if let Some(argument) = syntax::environment_copy_source(source, command) {
+            literal(&mut tokens, source, argument.span, TYPE);
+        }
         tokens.push(Token {
             span: command.span.clone(),
             kind: if variables.contains(command.name.as_str()) {

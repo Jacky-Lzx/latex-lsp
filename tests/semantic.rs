@@ -47,6 +47,31 @@ fn decoded(doc: &Document, range: Option<Range>) -> Vec<(Range, String, String, 
 }
 
 #[test]
+fn environment_copy_targets_are_declarations_and_sources_are_type_references() {
+    for command in [
+        "NewEnvironmentCopy",
+        "RenewEnvironmentCopy",
+        "DeclareEnvironmentCopy",
+    ] {
+        let source = format!("😀 \\{command}{{copied}}{{original}}\\begin{{copied}}Text.\\end{{copied}}\n\\{command}{{other}}{{ original }}");
+        let doc = document("main.tex", &source);
+        let tokens = decoded(&doc, None);
+        for (value, bits) in [("copied", 1), ("copied", 0), ("original", 0)] {
+            assert!(
+                tokens.iter().any(|(_, text, kind, flags)| text == value
+                    && kind == "type"
+                    && *flags == bits),
+                "{tokens:?}"
+            );
+        }
+        let unsupported = source.rfind("{ original }").unwrap() + 1;
+        assert!(!tokens.iter().any(|(range, _, kind, _)| {
+            kind == "type" && doc.text.offset(range.start).unwrap() >= unsupported
+        }));
+    }
+}
+
+#[test]
 fn latex_names_and_declarations_have_distinct_semantics_without_coloring_prose() {
     let source = "\\newcommand{\\greet}[1]{Hello #1}\\newlength{\\width}\\width\n\\newenvironment{panel}{}{}\\begin{panel}\\greet{World}\\end{panel}\n\\newcounter{steps}\\setcounter{steps}{1}\\newbool{draft}\\ifbool{draft}{Yes}{No}\n\\label{sec:中}\\ref{sec:中}\\cref{sec:中, sec:two}\\citep[see]{alpha, beta}\\ref{ spaced }\\ref{\\dynamic}\n";
     let doc = document("main.tex", source);

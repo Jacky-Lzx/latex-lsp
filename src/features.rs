@@ -59,6 +59,19 @@ fn raw_target(doc: &Document, offset: usize) -> Option<Target<'_>> {
         });
     }
     for command in &doc.syntax.commands {
+        if let Some(argument) = syntax::environment_copy_source(&doc.text.source, command) {
+            if argument.span.start <= offset && offset <= argument.span.end {
+                if !syntax::is_static_key(&argument.value) {
+                    return None;
+                }
+                return Some(Target {
+                    kind: TargetKind::Environment,
+                    name: &doc.text.source[argument.span.clone()],
+                    span: argument.span,
+                    control_word: false,
+                });
+            }
+        }
         if let Some(span) = crate::named_commands::spans(doc, command)
             .into_iter()
             .find(|span| span.start <= offset && offset <= span.end)
@@ -441,7 +454,12 @@ pub fn workspace_edit(
 
 /// Works for incomplete groups too, so typing `\ref{` can offer completions.
 fn completion_name_argument(source: &str, command: &Command, offset: usize) -> Option<Span<usize>> {
-    let (start, open) = if syntax::has_separate_label_argument(&command.name) {
+    let (start, open) = if syntax::declares_environment_copy(&command.name) {
+        (
+            syntax::environment_copy_source_start(source, command)?,
+            b'{',
+        )
+    } else if syntax::has_separate_label_argument(&command.name) {
         syntax::separate_label_argument_start(source, command)?
     } else {
         let mut at = syntax::skip_space(source, command.span.end);
@@ -466,6 +484,7 @@ fn argument_context(doc: &Document, offset: usize) -> Option<(&Command, Span<usi
 fn argument_span(doc: &Document, command: &Command, offset: usize) -> Option<Span<usize>> {
     let source = &doc.text.source;
     if !(matches!(command.name.as_str(), "begin" | "end" | "hyperlink")
+        || syntax::declares_environment_copy(&command.name)
         || syntax::is_reference(&command.name)
         || syntax::has_separate_label_argument(&command.name)
         || syntax::is_citation(&command.name)
@@ -476,6 +495,7 @@ fn argument_span(doc: &Document, command: &Command, offset: usize) -> Option<Spa
     // A completed inner call in an optional note must not hide the outer key.
     // Most calls also let us skip old, closed arguments without rescanning text.
     if !syntax::has_separate_label_argument(&command.name)
+        && !syntax::declares_environment_copy(&command.name)
         && command
             .argument
             .as_ref()
@@ -484,6 +504,7 @@ fn argument_span(doc: &Document, command: &Command, offset: usize) -> Option<Spa
         return None;
     }
     if matches!(command.name.as_str(), "begin" | "end")
+        || syntax::declares_environment_copy(&command.name)
         || syntax::is_single_reference(&command.name)
         || syntax::has_separate_label_argument(&command.name)
         || command.name == "hyperlink"
@@ -567,6 +588,7 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
             .sum::<usize>();
         let (replacement_range, additional_edits) =
             if matches!(command.name.as_str(), "begin" | "end")
+                || syntax::declares_environment_copy(&command.name)
                 || syntax::is_single_reference(&command.name)
                 || syntax::has_separate_label_argument(&command.name)
                 || command.name == "hyperlink"
@@ -606,7 +628,9 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
                     ));
                 }
             }
-        } else if matches!(command.name.as_str(), "begin" | "end") {
+        } else if matches!(command.name.as_str(), "begin" | "end")
+            || syntax::declares_environment_copy(&command.name)
+        {
             candidates.extend(
                 ENVIRONMENTS
                     .iter()
@@ -995,6 +1019,16 @@ fn all_references(
             continue;
         }
         for (index, command) in doc.syntax.commands.iter().enumerate() {
+            if target.kind == TargetKind::Environment && generated.is_none() {
+                if let Some(argument) = syntax::environment_copy_source(&doc.text.source, command)
+                    .filter(|argument| argument.value == target.name)
+                {
+                    result.push(Location {
+                        uri: uri.clone(),
+                        range: doc.text.range(argument.span.start, argument.span.end),
+                    });
+                }
+            }
             if target.kind == TargetKind::Command {
                 result.extend(
                     crate::named_commands::spans(doc, command)

@@ -35,6 +35,24 @@ fn check(definitions: &str, marked: &str, label: &str, active: u32) {
 }
 
 #[test]
+fn environment_copy_declarations_hint_the_target_and_source_names() {
+    for name in [
+        "NewEnvironmentCopy",
+        "RenewEnvironmentCopy",
+        "DeclareEnvironmentCopy",
+    ] {
+        let label = format!("\\{name}{{environment}}{{source environment}}");
+        check("", &format!("\\{name}{{cop¦y}}{{original}}"), &label, 0);
+        check(
+            "",
+            &format!("\\{name}{{copy}} % keep\r\n{{orig¦inal}}"),
+            &label,
+            1,
+        );
+    }
+}
+
+#[test]
 fn command_copy_declarations_hint_both_command_tokens_with_or_without_groups() {
     for name in ["NewCommandCopy", "RenewCommandCopy", "DeclareCommandCopy"] {
         let label = format!("\\{name}{{command}}{{source command}}");

@@ -626,6 +626,9 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
         "newenvironment{${1:name}}{${2:begin}}{${3:end}}",
         "Define an environment.",
     ),
+    ("NewEnvironmentCopy", "NewEnvironmentCopy{${1:name}}{${2:source}}", "Create an independent copy of an environment's begin and end commands."),
+    ("RenewEnvironmentCopy", "RenewEnvironmentCopy{${1:name}}{${2:source}}", "Replace an existing environment with an independent copy of another environment."),
+    ("DeclareEnvironmentCopy", "DeclareEnvironmentCopy{${1:name}}{${2:source}}", "Create or replace an environment with an independent copy of another environment."),
     (
         "renewenvironment",
         "renewenvironment{${1:name}}{${2:begin}}{${3:end}}",
