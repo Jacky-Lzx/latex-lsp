@@ -120,6 +120,52 @@ fn apply_count(workspace: &Workspace, uri: &Url, edit: WorkspaceEdit, count: usi
 }
 
 #[test]
+fn optional_counter_repairs_protect_closing_brackets_without_changing_titles() {
+    for (source, expected) in [
+        (
+            r"\newcounter{child}[counterNnew]",
+            r"\newcounter{child}[{counter]new}]",
+        ),
+        (
+            r"\newtheorem{shared}[counterNnew]{Title counterNnew}",
+            r"\newtheorem{shared}[{counter]new}]{Title counterNnew}",
+        ),
+        (
+            r"\newtheorem{within}{Title counterNnew}[counterNnew]",
+            r"\newtheorem{within}{Title counterNnew}[\detokenize{counter]new}]",
+        ),
+        (
+            r"\newtheorem{within}{Title}[{counterNnew}]",
+            r"\newtheorem{within}{Title}[{\detokenize{counter]new}}]",
+        ),
+        (
+            r"\newtheorem{within}{Title}[{{counterNnew}}]",
+            r"\newtheorem{within}{Title}[{\detokenize{counter]new}}]",
+        ),
+    ] {
+        for versioned in [false, true] {
+            let (mut workspace, uri, _) = setup(source, r"\newcounter{counter]new}");
+            workspace.versioned_edits = versioned;
+            let mut diagnostic = diagnostic(&mut workspace, &uri, "counterNnew");
+            if source.starts_with(r"\newtheorem{within}") {
+                let start = source.rfind("counterNnew").unwrap();
+                diagnostic.range = workspace.documents[&uri]
+                    .text
+                    .range(start, start + "counterNnew".len());
+                store(&mut workspace, &uri, diagnostic.clone());
+            }
+            let response = actions(&workspace, &uri, &diagnostic);
+            let action = action(&response, "counter]new");
+            assert_eq!(
+                apply(&workspace, &uri, action.edit.unwrap()),
+                expected,
+                "{source}"
+            );
+        }
+    }
+}
+
+#[test]
 fn counter_fixes_preserve_values_whitespace_utf16_and_other_calls() {
     for command in [
         "setcounter",

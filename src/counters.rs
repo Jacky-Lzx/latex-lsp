@@ -31,6 +31,125 @@ pub(crate) const BUILTINS: &[&str] = &[
     "tocdepth",
 ];
 
+/// Read literal names through the optional readers used by counter declarations.
+/// Recognize explicit protection without expanding arbitrary TeX commands.
+pub(crate) fn optional_argument(
+    source: &str,
+    start: usize,
+    passes: usize,
+) -> Option<(syntax::Argument, usize)> {
+    let (outer, after) = syntax::bracket_argument(source, start)?;
+    let mut argument = outer.clone();
+    let mut wrapped = 0;
+    for _ in 0..passes {
+        let Some((mut inner, end)) = syntax::group(source, argument.span.start, b'{', b'}') else {
+            break;
+        };
+        if end != argument.span.end {
+            break;
+        }
+        inner.outer_span = outer.outer_span.clone();
+        argument = inner;
+        wrapped += 1;
+    }
+    let mut literal = false;
+    if let Some(value) = argument.value.strip_prefix("\\detokenize") {
+        let start = argument.span.end - value.len();
+        if let Some((mut inner, end)) = syntax::group(source, start, b'{', b'}') {
+            if end == argument.span.end && syntax::is_static_key(&inner.value) {
+                inner.outer_span = outer.outer_span.clone();
+                argument = inner;
+                literal = true;
+            }
+        }
+    }
+    if passes == 2 && wrapped < 2 && argument.value.contains(']') && !literal {
+        return Some((outer, after));
+    }
+    Some((argument, after))
+}
+
+fn optional_field(source: &str, command: &Command) -> Option<(syntax::Argument, usize)> {
+    let first = command.argument.as_ref()?;
+    if !syntax::is_static_key(&first.value) {
+        return None;
+    }
+    let at = syntax::skip_space(source, first.outer_span.end);
+    let (start, passes) = match command.name.as_str() {
+        "newcounter" => (at, 1),
+        "newtheorem"
+            if source
+                .as_bytes()
+                .get(syntax::skip_space(source, command.span.end))
+                != Some(&b'*') =>
+        {
+            if source.as_bytes().get(at) == Some(&b'[') {
+                (at, 1)
+            } else {
+                let (_, end) = syntax::group(source, at, b'{', b'}')?;
+                (syntax::skip_space(source, end), 2)
+            }
+        }
+        _ => return None,
+    };
+    optional_argument(source, start, passes).map(|(argument, _)| (argument, passes))
+}
+
+fn protected_name(name: &str, passes: usize, wrapped: usize) -> String {
+    // Extra braces alter the generated parent-number formatter. A literal
+    // token list survives both readers while retaining the original numbering.
+    if passes == 2 && wrapped <= passes && name.contains(']') {
+        return format!("\\detokenize{{{name}}}");
+    }
+    let extra = if name.contains(']') {
+        passes.saturating_sub(wrapped)
+    } else {
+        0
+    };
+    format!("{}{name}{}", "{".repeat(extra), "}".repeat(extra))
+}
+
+fn replacement_span(
+    source: &str,
+    argument: &syntax::Argument,
+    passes: usize,
+) -> (Range<usize>, usize) {
+    if passes == 2 && source[argument.outer_span.start + 1..].starts_with("{{") {
+        // Keeping two outer groups makes LaTeX generate \\the{parent} rather
+        // than \\theparent. Replace the inner group as well as its name.
+        return (
+            argument.outer_span.start + 2..argument.outer_span.end - 2,
+            1,
+        );
+    }
+    (
+        argument.span.clone(),
+        argument.span.start - argument.outer_span.start - 1,
+    )
+}
+
+pub(crate) fn replacement_edit(
+    doc: &Document,
+    range: tower_lsp::lsp_types::Range,
+    name: &str,
+) -> TextEdit {
+    for command in &doc.syntax.commands {
+        if let Some((argument, passes)) = optional_field(&doc.text.source, command) {
+            if doc.text.range(argument.span.start, argument.span.end) == range {
+                let (span, wrapped) = replacement_span(&doc.text.source, &argument, passes);
+                return TextEdit {
+                    range: doc.text.range(span.start, span.end),
+                    new_text: protected_name(name, passes, wrapped),
+                };
+            }
+        }
+    }
+    TextEdit {
+        range,
+        new_text: name.into(),
+    }
+}
+
 /// Static name selections and the complete argument tail of direct counter operations.
 /// Names must be literal; values, format expressions and theorem titles stay intact.
 pub(crate) fn invocations(source: &str, command: &Command) -> Vec<(Range<usize>, Range<usize>)> {
@@ -113,17 +232,17 @@ fn invocation_arguments(
             }
             at = syntax::skip_space(source, end);
             let (name, after) = match command.name.as_str() {
-                "newcounter" => syntax::group(source, at, b'[', b']')?,
+                "newcounter" => optional_argument(source, at, 1)?,
                 "newaliascnt" => syntax::group(source, at, b'{', b'}')?,
                 _ if source.as_bytes().get(at) == Some(&b'[') => {
-                    let (shared, after) = syntax::group(source, at, b'[', b']')?;
+                    let (shared, after) = optional_argument(source, at, 1)?;
                     let (_, end) =
                         syntax::group(source, syntax::skip_space(source, after), b'{', b'}')?;
                     (shared, end)
                 }
                 _ => {
                     let (_, after) = syntax::group(source, at, b'{', b'}')?;
-                    syntax::group(source, syntax::skip_space(source, after), b'[', b']')?
+                    optional_argument(source, syntax::skip_space(source, after), 2)?
                 }
             };
             names.push(name);
@@ -204,7 +323,64 @@ fn closed(source: &str, start: usize, open: u8) -> Option<usize> {
         .map(|(_, end)| syntax::skip_space(source, end))
 }
 
-fn context(doc: &Document, command: &Command, cursor: usize) -> Option<Range<usize>> {
+struct CompletionContext {
+    span: Range<usize>,
+    edit_span: Range<usize>,
+    passes: usize,
+    wrapped: usize,
+}
+
+fn optional_context(
+    source: &str,
+    start: usize,
+    cursor: usize,
+    passes: usize,
+) -> Option<CompletionContext> {
+    if let Some((argument, _)) = optional_argument(source, start, passes) {
+        if cursor < argument.span.start || cursor > argument.span.end {
+            return None;
+        }
+        let value = source[argument.span.clone()].trim();
+        let prefix = source[argument.span.start..cursor].trim_start();
+        if (!value.is_empty() && !syntax::is_static_key(value))
+            || (!prefix.is_empty() && !syntax::is_static_key(prefix))
+        {
+            return None;
+        }
+        let (edit_span, wrapped) = replacement_span(source, &argument, passes);
+        return Some(CompletionContext {
+            wrapped,
+            edit_span,
+            span: argument.span,
+            passes,
+        });
+    }
+    if source.as_bytes().get(start) != Some(&b'[') {
+        return None;
+    }
+    let mut at = start;
+    let mut wrapped = 0;
+    while wrapped < passes && source.as_bytes().get(at + 1) == Some(&b'{') {
+        at += 1;
+        wrapped += 1;
+    }
+    let span =
+        syntax::active_label_argument(source, at, if wrapped == 0 { b'[' } else { b'{' }, cursor)?;
+    let edit_span = if passes == 2 && wrapped == 2 {
+        wrapped = 1;
+        span.start - 1..span.end + usize::from(source.as_bytes().get(span.end) == Some(&b'}'))
+    } else {
+        span.clone()
+    };
+    Some(CompletionContext {
+        span,
+        edit_span,
+        passes,
+        wrapped,
+    })
+}
+
+fn context(doc: &Document, command: &Command, cursor: usize) -> Option<CompletionContext> {
     let source = &doc.text.source;
     let mut at = command.span.end;
     let starred = source.as_bytes().get(at) == Some(&b'*');
@@ -215,7 +391,7 @@ fn context(doc: &Document, command: &Command, cursor: usize) -> Option<Range<usi
         at += 1;
     }
     at = syntax::skip_space(source, at);
-    match command.name.as_str() {
+    let span = match command.name.as_str() {
         "setcounter"
         | "addtocounter"
         | "setcounterref"
@@ -243,7 +419,7 @@ fn context(doc: &Document, command: &Command, cursor: usize) -> Option<Range<usi
             })
         }
         "newcounter" => {
-            syntax::active_name_argument(source, closed(source, at, b'{')?, b'[', cursor)
+            return optional_context(source, closed(source, at, b'{')?, cursor, 1);
         }
         "newaliascnt" => {
             syntax::active_name_argument(source, closed(source, at, b'{')?, b'{', cursor)
@@ -251,13 +427,19 @@ fn context(doc: &Document, command: &Command, cursor: usize) -> Option<Range<usi
         "newtheorem" if !starred => {
             at = closed(source, at, b'{')?;
             if source.as_bytes().get(at) == Some(&b'[') {
-                syntax::active_name_argument(source, at, b'[', cursor)
+                return optional_context(source, at, cursor, 1);
             } else {
-                syntax::active_name_argument(source, closed(source, at, b'{')?, b'[', cursor)
+                return optional_context(source, closed(source, at, b'{')?, cursor, 2);
             }
         }
         _ => None,
-    }
+    }?;
+    Some(CompletionContext {
+        edit_span: span.clone(),
+        span,
+        passes: 0,
+        wrapped: 0,
+    })
 }
 
 pub(crate) fn completion(
@@ -267,7 +449,7 @@ pub(crate) fn completion(
     scope: &BTreeSet<Url>,
 ) -> Option<Vec<CompletionItem>> {
     let doc = workspace.documents.get(uri)?;
-    let span = doc
+    let context = doc
         .syntax
         .commands
         .iter()
@@ -275,8 +457,9 @@ pub(crate) fn completion(
         .filter(|command| command.span.end <= cursor)
         .take(128)
         .find_map(|command| context(doc, command, cursor))?;
-    let prefix = doc.text.source[span.start..cursor].trim_start();
-    let (range, additional_edits) = syntax::name_completion_ranges(&doc.text, span, cursor)?;
+    let prefix = doc.text.source[context.span.start..cursor].trim_start();
+    let (range, additional_edits) =
+        syntax::name_completion_ranges(&doc.text, context.edit_span, cursor)?;
     Some(
         names(workspace, scope)
             .into_iter()
@@ -287,7 +470,7 @@ pub(crate) fn completion(
                 detail: Some(detail),
                 text_edit: Some(CompletionTextEdit::Edit(TextEdit {
                     range,
-                    new_text: name,
+                    new_text: protected_name(&name, context.passes, context.wrapped),
                 })),
                 additional_text_edits: (!additional_edits.is_empty())
                     .then(|| additional_edits.clone()),

@@ -390,6 +390,17 @@ pub fn rename(
             changes.entry(location.uri).or_default().extend(edits);
             continue;
         }
+        if matches!(target.kind, TargetKind::Counter | TargetKind::Environment) {
+            changes
+                .entry(location.uri)
+                .or_default()
+                .push(crate::counters::replacement_edit(
+                    document,
+                    location.range,
+                    new_name,
+                ));
+            continue;
+        }
         let control_word = target.kind == TargetKind::Command
             && text
                 .offset(location.range.start)

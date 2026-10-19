@@ -83,7 +83,7 @@ LaTeX 内核的 `NewExpandableDocumentCommand`、`RenewExpandableDocumentCommand
 
 `LaTeX Error: No counter '...' defined.` 可精确标出 `setcounter` / `addtocounter`、`stepcounter` / `refstepcounter` / `usecounter` 的静态计数器名称，保留数值表达式；兼容传统引号、多行参数和同一行的多处调用。宏展开、动态或残缺实参以及无法唯一核对的日志上下文保留整行位置，精确诊断附带 `undefined-counter` 代码及计数器名称数据。
 
-父计数器、计数器别名及定理的共享/重置编号参数也使用精确计数器诊断，包括 `newcounter`、`newaliascnt`、`newtheorem` 和 `counterwithin` / `counterwithout` / `numberwithin` 的两个名称参数；识别星号和可选格式参数。修复只改动日志确认的名称，保留声明名称、标题、格式和参数分隔符；不建议形成自身别名或自身编号重置关系。两个实参同名、动态名称或不完整调用无法确认具体位置时保留整行诊断。
+父计数器、计数器别名及定理的共享/重置编号参数也使用精确计数器诊断，包括 `newcounter`、`newaliascnt`、`newtheorem` 和 `counterwithin` / `counterwithout` / `numberwithin` 的两个名称参数；识别星号和可选格式参数。修复只改动日志确认的名称，保留声明名称、标题、格式和参数分隔符；不建议形成自身别名或自身编号重置关系。可选计数器参数按 TeX 的方括号结束规则读取；含字面量 `[` 的父计数器、定理共享及重置计数器参与导航、补全和重命名。引入含 `]` 的名称时，父计数器及共享参数按需补足花括号保护，定理重置参数使用静态 `\detokenize{名称}`，使连续重命名保留计数器关系和编号格式。两个实参同名、动态名称或不完整调用无法确认具体位置时保留整行诊断。
 
 `begin` 被不同名称的 `end` 闭合时，编译诊断会精确标出当前闭合名称，并以 `mismatched-environment-end` 代码附带实际名称与期望环境；识别带起始行号的 LaTeX 消息。同一行的多处闭合错误分别保留，宏展开或上下文不确定时保留整行位置。
 

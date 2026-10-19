@@ -112,14 +112,16 @@ fn declaration<'a>(doc: &'a Document, command: &Command) -> Option<Declaration<'
         .trim_start()
         .starts_with('*');
     let after = syntax::skip_space(source, argument.outer_span.end);
-    let shared = syntax::group(source, after, b'[', b']');
+    let shared = crate::counters::optional_argument(source, after, 1);
     let title_start = shared
         .as_ref()
         .map_or(after, |(_, end)| syntax::skip_space(source, *end));
     let title = syntax::group(source, title_start, b'{', b'}');
     let within = if shared.is_none() {
         title
-            .and_then(|(_, end)| syntax::group(source, syntax::skip_space(source, end), b'[', b']'))
+            .and_then(|(_, end)| {
+                crate::counters::optional_argument(source, syntax::skip_space(source, end), 2)
+            })
             .map(|(argument, _)| argument)
     } else {
         None
@@ -328,11 +330,10 @@ pub(crate) fn references(doc: &Document, name: &str, environment: Generated) -> 
             if command.name == "newcounter" {
                 if let Some(first) = &command.argument {
                     arguments.extend(
-                        syntax::group(
+                        crate::counters::optional_argument(
                             &doc.text.source,
                             syntax::skip_space(&doc.text.source, first.outer_span.end),
-                            b'[',
-                            b']',
+                            1,
                         )
                         .map(|(argument, _)| argument),
                     );

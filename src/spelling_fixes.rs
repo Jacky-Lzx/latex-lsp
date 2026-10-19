@@ -469,16 +469,20 @@ pub fn fixes(
                 result.push(QuickFix {
                     title: format!(
                         "Replace with {category} `{}`",
-                        if matches!(kind, Kind::Label | Kind::Anchor) {
+                        if matches!(kind, Kind::Label | Kind::Anchor | Kind::Counter) {
                             &name
                         } else {
                             &replacement
                         }
                     ),
                     diagnostic: diagnostic.clone(),
-                    edit: TextEdit {
-                        range: diagnostic.range,
-                        new_text: replacement.clone(),
+                    edit: if kind == Kind::Counter {
+                        crate::counters::replacement_edit(doc, diagnostic.range, &name)
+                    } else {
+                        TextEdit {
+                            range: diagnostic.range,
+                            new_text: replacement.clone(),
+                        }
                     },
                     additional_edits: paired_end
                         .into_iter()

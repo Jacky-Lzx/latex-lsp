@@ -892,8 +892,10 @@ fn active_parameter(
         let end = if open == b'['
             && (syntax::is_citation(&command.name)
                 || syntax::reference_note_count(&command.name) > 0
-                || matches!(command.name.as_str(), "hyperref" | "hyperdef"))
-        {
+                || matches!(
+                    command.name.as_str(),
+                    "hyperref" | "hyperdef" | "newcounter"
+                )) {
             syntax::optional_note_end(&source[..cursor], i)
         } else {
             group_end(doc, i, cursor, open, close)
