@@ -2009,13 +2009,13 @@ pub(crate) fn parse_bibliography_in(
         let key = if tool == "Biber" {
             match named_entry {
                 BibliographyEntry::Absent => trailing_entry,
-                BibliographyEntry::Key(key) => Some(key),
-                BibliographyEntry::Unconfirmed => None,
+                BibliographyEntry::Key(span) => Some(&message[span]),
+                BibliographyEntry::Unconfirmed(_) => None,
             }
         } else {
             // BibTeX appends the literal key, including any quotes in it.
             trailing_entry.or(match named_entry {
-                BibliographyEntry::Key(key) => Some(key),
+                BibliographyEntry::Key(span) => Some(&message[span]),
                 _ => None,
             })
         };
@@ -2114,16 +2114,13 @@ fn bibliography_fields<'a>(
     })
 }
 
-enum BibliographyEntry<'a> {
+enum BibliographyEntry {
     Absent,
-    Key(&'a str),
-    Unconfirmed,
+    Key(ByteRange<usize>),
+    Unconfirmed(ByteRange<usize>),
 }
 
-fn bibliography_entry<'a>(
-    message: &'a str,
-    filename: Option<&ByteRange<usize>>,
-) -> BibliographyEntry<'a> {
+fn bibliography_entry(message: &str, filename: Option<&ByteRange<usize>>) -> BibliographyEntry {
     for (index, _) in bibliography_fields(message, filename) {
         let word_start = !message[..index].ends_with(|ch: char| ch.is_alphanumeric() || ch == '_');
         if !word_start
@@ -2135,10 +2132,10 @@ fn bibliography_entry<'a>(
         if !message[start..].starts_with(['\'', '"']) {
             continue;
         }
-        return bibliography_quote_end(message, start)
-            .map_or(BibliographyEntry::Unconfirmed, |end| {
-                BibliographyEntry::Key(&message[start + 1..end])
-            });
+        return match bibliography_quote_end(message, start) {
+            Some(end) => BibliographyEntry::Key(start + 1..end),
+            None => BibliographyEntry::Unconfirmed(start + 1..message.len()),
+        };
     }
     BibliographyEntry::Absent
 }
@@ -2256,7 +2253,19 @@ fn bibliography_path(
             span: start..end,
         };
     }
+    // A reported entry key is literal metadata even when it names an
+    // existing .bib file. Only text outside that field can name a source.
+    let entry_span = match bibliography_entry(message, None) {
+        BibliographyEntry::Key(span) | BibliographyEntry::Unconfirmed(span) => Some(span),
+        BibliographyEntry::Absent => None,
+    };
     for (index, _) in message.match_indices(".bib") {
+        if entry_span
+            .as_ref()
+            .is_some_and(|span| span.contains(&index))
+        {
+            continue;
+        }
         let end = index + 4;
         let tail = &message[end..];
         // Do not turn refs.bib.backup, refs.bib2 or a directory component
@@ -3113,6 +3122,63 @@ mod tests {
                     assert_eq!(items[0].message, format!("Biber: {message}"));
                 }
             }
+        }
+    }
+
+    #[test]
+    fn biber_entry_keys_do_not_select_namesake_database_files() {
+        for key in ["entry.bib", "'entry.bib'", "O'Connor.bib", "dir/entry.bib"] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let main = root.join("main.tex");
+            let bib = root.join("refs.bib");
+            let decoy = root.join(key);
+            std::fs::create_dir_all(decoy.parent().unwrap()).unwrap();
+            std::fs::write(&main, "Text\n").unwrap();
+            std::fs::write(&bib, format!("% header\n@book{{{key},title={{Actual}}}}\n")).unwrap();
+            std::fs::write(
+                &decoy,
+                format!("% decoy\n\n\n@book{{{key},title={{Wrong}}}}\n"),
+            )
+            .unwrap();
+            for label in ["entry", "Entry"] {
+                for quote in ['\'', '"'] {
+                    for source in ["", " in refs.bib", " in file 'refs.bib'"] {
+                        let log = format!("INFO - Found BibTeX data source 'refs.bib'\nWARN - Missing field for {label} {quote}{key}{quote}{source}\n");
+                        let diagnostics = parse_bibliography(&main, &log);
+                        assert_eq!(diagnostics.len(), 1, "{log}: {diagnostics:?}");
+                        let items = diagnostics
+                            .get(&Url::from_file_path(&bib).unwrap())
+                            .unwrap_or_else(|| panic!("{log}: {diagnostics:?}"));
+                        assert_eq!(
+                            items[0].range,
+                            Range::new(
+                                Position::new(1, 6),
+                                Position::new(1, 6 + key.encode_utf16().count() as u32)
+                            ),
+                            "{log}: {items:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn biber_incomplete_entry_keys_do_not_select_namesake_database_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let main = root.join("main.tex");
+        std::fs::write(&main, "Text\n").unwrap();
+        std::fs::write(root.join("entry.bib"), "@book{entry.bib,title={Wrong}}\n").unwrap();
+        for quote in ['\'', '"'] {
+            let log = format!("WARN - Missing field for entry {quote}entry.bib\n");
+            let diagnostics = parse_bibliography(&main, &log);
+            assert_eq!(diagnostics.len(), 1, "{log}: {diagnostics:?}");
+            let items = diagnostics
+                .get(&Url::from_file_path(&main).unwrap())
+                .unwrap_or_else(|| panic!("{log}: {diagnostics:?}"));
+            assert_eq!(items[0].range.start, Position::new(0, 0));
         }
     }
 
