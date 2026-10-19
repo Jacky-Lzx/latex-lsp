@@ -2,6 +2,7 @@ mod anchors;
 pub mod build;
 pub mod build_log;
 pub mod catalog;
+pub mod code_lens;
 mod conditionals;
 pub mod config;
 mod counters;
@@ -219,6 +220,9 @@ impl LanguageServer for Backend {
                     ..Default::default()
                 }),
                 document_symbol_provider: Some(OneOf::Left(true)),
+                code_lens_provider: Some(CodeLensOptions {
+                    resolve_provider: Some(false),
+                }),
                 workspace_symbol_provider: Some(OneOf::Left(true)),
                 folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
                 semantic_tokens_provider: Some(
@@ -622,6 +626,13 @@ impl LanguageServer for Backend {
             &document_uri(params.text_document.uri),
             params.range,
             &params.context,
+        )))
+    }
+
+    async fn code_lens(&self, params: CodeLensParams) -> Result<Option<Vec<CodeLens>>> {
+        Ok(Some(code_lens::lenses(
+            &*self.workspace.read().await,
+            &document_uri(params.text_document.uri),
         )))
     }
 

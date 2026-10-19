@@ -17,6 +17,74 @@ struct Server {
 }
 
 #[test]
+fn build_code_lenses_advertise_resolved_commands_and_follow_root_configuration() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    for name in ["a.tex", "b.ltx"] {
+        std::fs::write(root.join(name), "\\documentclass{article}\\input{章节}").unwrap();
+    }
+    std::fs::write(root.join("章节.tex"), "Chapter.").unwrap();
+    let folder = Url::from_directory_path(root).unwrap();
+    let child = Url::from_file_path(root.join("章节.tex")).unwrap();
+    let first = Url::from_file_path(root.join("a.tex")).unwrap();
+    let second = Url::from_file_path(root.join("b.ltx")).unwrap();
+    let mut server = Server::start();
+    let init = server.request(
+        1,
+        "initialize",
+        json!({"processId":null,"rootUri":folder,"capabilities":{"textDocument":{"codeLens":{}}}}),
+    );
+    assert_eq!(
+        init["capabilities"]["codeLensProvider"]["resolveProvider"],
+        false
+    );
+    assert!(init["capabilities"]["executeCommandProvider"]["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|command| command == "latex.build"));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":child,"languageId":"latex","version":1,"text":"Chapter."}}),
+    );
+    let result = server.request(
+        2,
+        "textDocument/codeLens",
+        json!({"textDocument":{"uri":child}}),
+    );
+    assert_eq!(result.as_array().unwrap().len(), 2);
+    for (lens, root) in result.as_array().unwrap().iter().zip([&first, &second]) {
+        assert_eq!(lens["command"]["command"], "latex.build");
+        assert_eq!(lens["command"]["arguments"], json!([root]));
+        assert_eq!(
+            lens["range"],
+            json!({"start":{"line":0,"character":0},"end":{"line":0,"character":0}})
+        );
+    }
+    server.notify(
+        "workspace/didChangeConfiguration",
+        json!({"settings":{"build":{"rootFile":"b.ltx"}}}),
+    );
+    let selected = server.request(
+        3,
+        "textDocument/codeLens",
+        json!({"textDocument":{"uri":child}}),
+    );
+    assert_eq!(selected.as_array().unwrap().len(), 1);
+    assert_eq!(selected[0]["command"]["arguments"], json!([child]));
+    let missing = server.request(
+        4,
+        "textDocument/codeLens",
+        json!({"textDocument":{"uri":"untitled:missing.tex"}}),
+    );
+    assert_eq!(missing, json!([]));
+    server.request(5, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
 fn semantic_tokens_advertise_full_and_range_and_follow_incremental_changes() {
     let mut server = Server::start();
     let init = server.request(1, "initialize", json!({"processId":null,"capabilities":{"textDocument":{"semanticTokens":{"requests":{"full":true,"range":true},"tokenTypes":["macro","variable","type","enumMember","string","comment"],"tokenModifiers":["declaration"],"formats":["relative"]}}}}));
