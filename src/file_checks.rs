@@ -152,21 +152,15 @@ impl Snapshot {
         let include_filters: Option<Vec<BTreeSet<_>>> = sources
             .iter()
             .filter_map(|source| workspace.documents.get(source))
-            .flat_map(|doc| &doc.syntax.commands)
-            .filter(|command| command.name == "includeonly")
-            .map(|command| {
-                command
-                    .argument
-                    .as_ref()?
-                    .value
-                    .split(',')
-                    .map(str::trim)
-                    .filter(|name| !name.is_empty())
-                    .map(|name| {
-                        syntax::is_literal_file_path(name)
-                            .then(|| name.strip_suffix(".tex").unwrap_or(name).to_owned())
+            .flat_map(|doc| {
+                doc.syntax
+                    .commands
+                    .iter()
+                    .filter(|command| command.name == "includeonly")
+                    .map(move |command| {
+                        syntax::includeonly_names(&doc.text.source, command)
+                            .map(|names| names.into_iter().collect())
                     })
-                    .collect()
             })
             .collect();
         let mut outputs: BTreeSet<_> = [

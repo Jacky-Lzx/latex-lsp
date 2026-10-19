@@ -351,8 +351,7 @@ pub(crate) fn document_links_in(workspace: &Workspace, uri: &Url, root: &Url) ->
             None if matches!(command.name.as_str(), "url" | "href") => &[],
             None => continue,
         };
-        let names = if let Some(spans) = syntax::bibliography_file_spans(&doc.text.source, command)
-        {
+        let names = if let Some(spans) = syntax::file_list_spans(&doc.text.source, command) {
             spans
                 .into_iter()
                 .map(|span| (span.clone(), &doc.text.source[span]))

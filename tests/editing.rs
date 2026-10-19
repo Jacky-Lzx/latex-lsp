@@ -305,6 +305,25 @@ fn include_fixes_bound_suggestions_support_unicode_and_respect_static_includeonl
         ("\\includeonly{chapetr}", "chapetr", "chapter", 0),
         ("\\includeonly{\\selection}", "chapetr", "chapter", 0),
         ("\\includeonly{}", "chapetr", "chapter", 0),
+        (
+            "\\includeonly{% head, phantom, }\r\n chapter% tail\r\n,chapetr% typo\r\n}",
+            "chapetr",
+            "chapter",
+            1,
+        ),
+        (
+            "\\includeonly{% head, chapter, }\n chapetr% tail\n}",
+            "chapetr",
+            "chapter",
+            0,
+        ),
+        (
+            "\\includeonly{% head\n chapter,\\dynamic\n}",
+            "chapetr",
+            "chapter",
+            0,
+        ),
+        ("\\includeonly{% empty, chapter\n}", "chapetr", "chapter", 0),
     ] {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();

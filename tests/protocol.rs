@@ -4288,6 +4288,13 @@ fn missing_include_creation_invalidates_results_and_old_pdfs_unless_the_chapter_
         ("\\includeonly{other}\n", false),
         ("\\includeonly{}\n", false),
         ("\\includeonly{\\selected}\n", false),
+        (
+            "\\includeonly{% head, other, }\r\n chapter% tail\r\n}\r\n",
+            true,
+        ),
+        ("\\includeonly{% chapter, }\n other% tail\n}\n", false),
+        ("\\includeonly{% comment\n chapter,\\selected}\n", false),
+        ("\\includeonly{% chapter\n}\n", false),
         ("\\includeonly{other}\n\\includeonly{chapter}\n", false),
     ] {
         let script = "if [ ! -f \"$1/main.pdf\" ]; then\ntouch \"$1/ready\"\nwhile [ ! -f \"$1/release\" ]; do sleep 0.02; done\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nfi\n";
@@ -4772,14 +4779,14 @@ fn missing_include_warning_clears_when_the_chapter_is_created_and_synctex_reject
 #[ignore = "requires pdflatex and xelatex"]
 fn real_missing_include_creation_discards_the_incomplete_pdf_and_respects_includeonly() {
     for engine in ["pdflatex", "xelatex"] {
-        for selected in [false, true] {
+        for (selection, selected) in [
+            ("chapters/新章节.tex", true),
+            ("other", false),
+            ("% head, other, }\r\n chapters/新章节.tex% tail\r\n", true),
+            ("% chapters/新章节, }\n other% tail\n", false),
+        ] {
             let script = format!("if [ -f \"$1/noop\" ]; then exit 0; fi\n{engine} -interaction=nonstopmode -halt-on-error -recorder -synctex=1 -output-directory=\"$1\" \"$2\"\nresult=$?\ntouch \"$1/ready\"\nwhile [ ! -f \"$1/release\" ]; do sleep 0.02; done\nexit \"$result\"\n");
             let (mut server, directory, main) = fake_build_server(&script, false);
-            let selection = if selected {
-                "chapters/新章节.tex"
-            } else {
-                "other"
-            };
             // This custom shell wrapper must prepare its own auxiliary folder.
             std::fs::create_dir_all(directory.path().join("build/latex-lsp/chapters")).unwrap();
             let source = format!("\\documentclass{{article}}\n\\includeonly{{{selection}}}\n\\begin{{document}}Hello.\n\\include{{chapters/新章节}}\n\\end{{document}}\n");

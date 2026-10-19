@@ -567,11 +567,15 @@ fn argument_span(doc: &Document, command: &Command, offset: usize) -> Option<Spa
         }
         return Some(start + 1..offset);
     }
-    if matches!(command.name.as_str(), "bibliography" | "nobibliography") {
-        return syntax::active_bibliography_file_prefix(
+    if matches!(
+        command.name.as_str(),
+        "bibliography" | "nobibliography" | "includeonly"
+    ) {
+        return syntax::active_file_list_prefix(
             source,
             syntax::skip_space(source, command.span.end),
             offset,
+            syntax::file_name_ignores_spaces(&command.name),
         );
     }
     // A completed inner call in an optional note must not hide the outer key.

@@ -360,7 +360,7 @@ impl Workspace {
                     .map(|arg| {
                         let multiple = crate::syntax::file_list(&command.name);
                         let values = if let Some(spans) =
-                            crate::syntax::bibliography_file_spans(&doc.text.source, command)
+                            crate::syntax::file_list_spans(&doc.text.source, command)
                         {
                             spans
                                 .into_iter()

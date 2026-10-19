@@ -155,21 +155,9 @@ pub(crate) fn fixes(
                 .iter()
                 .filter(|command| command.name == "includeonly")
             {
-                let Some(argument) = &command.argument else {
+                let Some(names) = syntax::includeonly_names(&document.text.source, command) else {
                     return vec![];
                 };
-                let mut names = Vec::new();
-                for value in argument
-                    .value
-                    .split(',')
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                {
-                    if !syntax::is_literal_file_path(value) {
-                        return vec![];
-                    }
-                    names.push(value.strip_suffix(".tex").unwrap_or(value).to_owned());
-                }
                 filters.push(names);
             }
         }
