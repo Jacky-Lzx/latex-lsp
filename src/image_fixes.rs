@@ -53,16 +53,11 @@ pub(crate) fn fixes(
     else {
         return vec![];
     };
+    let search = graphics::directories_in(workspace, uri, root);
     let mut directories = vec![parent];
-    directories.extend(graphics::directories_in(workspace, uri, root));
+    directories.extend(search.iter().cloned());
     let extensions = syntax::file_extensions("includegraphics").unwrap();
-    let resolve = |name: &str| {
-        directories.iter().find_map(|directory| {
-            extensions
-                .iter()
-                .find_map(|extension| graphics::resolve(directory, name, extension))
-        })
-    };
+    let resolve = |name: &str| graphics::resolve_in(root, name, extensions, &search);
     // A compiler error that contradicts the current search paths may be stale.
     if resolve(value).is_some() {
         return vec![];

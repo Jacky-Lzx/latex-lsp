@@ -170,7 +170,7 @@ fn replacement(
         Some(command) => resolve_file_path(origin, command, original, inferred),
         None => resolve_path(origin, original, extension),
     };
-    let origin = if resolve(root).as_ref() == Some(target) {
+    let origin = if command == Some("includegraphics") || resolve(root).as_ref() == Some(target) {
         root.clone()
     } else if resolve(uri).as_ref() == Some(target) {
         uri.clone()

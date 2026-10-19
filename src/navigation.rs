@@ -273,16 +273,12 @@ fn file_link(
     root: &Url,
     command: &str,
 ) -> Option<Url> {
+    if command == "includegraphics" {
+        return crate::graphics::resolve_in(root, name, extensions, graphics);
+    }
     for origin in std::iter::once(root).chain(std::iter::once(uri).filter(|uri| *uri != root)) {
         if let Some(target) = resolve_file_path(origin, command, name, extensions) {
             return Some(target);
-        }
-    }
-    for directory in graphics {
-        for extension in extensions {
-            if let Some(target) = crate::graphics::resolve(directory, name, extension) {
-                return Some(target);
-            }
         }
     }
     None

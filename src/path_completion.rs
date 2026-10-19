@@ -52,7 +52,9 @@ pub fn complete(
     let mut insertions = BTreeSet::new();
     let mut directories = roots
         .iter()
-        .chain(std::iter::once(uri).filter(|uri| !roots.contains(uri)))
+        .chain(
+            std::iter::once(uri).filter(|uri| command != "includegraphics" && !roots.contains(uri)),
+        )
         .filter_map(|origin| {
             origin
                 .to_file_path()

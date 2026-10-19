@@ -187,3 +187,39 @@ pub fn resolve(directory: &std::path::Path, name: &str, extension: &str) -> Opti
     let origin = Url::from_file_path(directory.join("__latex_lsp_graphics__.tex")).ok()?;
     resolve_path(&origin, name, extension)
 }
+
+/// graphicx searches one extension across the root and its declared directories
+/// before trying the next extension. Included sources do not change TeX's cwd.
+pub(crate) fn resolve_in(
+    root: &Url,
+    name: &str,
+    extensions: &[&str],
+    directories: &[PathBuf],
+) -> Option<Url> {
+    let exact = |name: &str, extension: &str| {
+        resolve_path(root, name, extension).or_else(|| {
+            directories
+                .iter()
+                .find_map(|directory| resolve(directory, name, extension))
+        })
+    };
+    let explicit = std::path::Path::new(name)
+        .extension()
+        .and_then(|extension| extension.to_str());
+    let direct = explicit.and_then(|extension| exact(name, extension));
+    if direct.is_some()
+        && explicit.is_some_and(|extension| {
+            extensions
+                .iter()
+                .any(|supported| extension.eq_ignore_ascii_case(supported))
+        })
+    {
+        return direct;
+    }
+    // graphicx also tries appending its extensions to a dotted filename when
+    // its explicit name is missing or has no known graphics rule.
+    extensions
+        .iter()
+        .find_map(|extension| exact(&format!("{name}.{extension}"), extension))
+        .or(direct)
+}
