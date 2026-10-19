@@ -43,6 +43,8 @@
 
 解析时跳过 `%` 注释、`\verb`、`\lstinline` 和常见逐字环境（`verbatim`、`lstlisting`、`minted`、`comment`、`Verbatim`）。
 
+LaTeX 内核的 `NewExpandableDocumentCommand`、`RenewExpandableDocumentCommand`、`ProvideExpandableDocumentCommand` 和 `DeclareExpandableDocumentCommand` 与普通文档命令共用宏导航、引用、重命名和补全，兼容带花括号或裸命令目标及静态 `csname` 形式。声明提供命令、参数规格、定义体的参数提示；调用支持已有的 `m`、`o`、`O`、`s` 规格及修饰符，补全保留可选参数默认值。复杂规格继续保守回退，不执行宏展开。
+
 未定义标签或文献的编译警告会尽量标出具体键名，包括列表中的单个键、同一行的多处引用，以及使用单引号的包警告；无法从源码明确匹配时保留整行位置。日志文件上下文支持 `.def`、`.clo` 等来源、带空格/括号的路径，以及 TeX 自动换行的长文件名。
 
 显式“文件名:行号:错误”跨行时，恢复实际文件路径和行号，包括文件扩展名或行号分隔符恰好被拆开的情况；传统 `!` 错误和显式位置错误的消息也支持按字节折行，保留单词内部的拼接与原有空格。恢复不会跨越相邻诊断、文件切换、TeX 源码上下文或大日志的省略边界。

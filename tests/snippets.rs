@@ -73,6 +73,22 @@ fn snippets_expand_in_a_real_editor_without_consuming_tex_backslashes() {
             r"NewDocumentCommand{\name}{m}{definition}",
         ),
         (
+            "NewExpandableDocumentCommand",
+            r"NewExpandableDocumentCommand{\name}{m}{definition}",
+        ),
+        (
+            "RenewExpandableDocumentCommand",
+            r"RenewExpandableDocumentCommand{\name}{m}{definition}",
+        ),
+        (
+            "ProvideExpandableDocumentCommand",
+            r"ProvideExpandableDocumentCommand{\name}{m}{definition}",
+        ),
+        (
+            "DeclareExpandableDocumentCommand",
+            r"DeclareExpandableDocumentCommand{\name}{m}{definition}",
+        ),
+        (
             "includegraphics",
             r"includegraphics[width=\linewidth]{file}",
         ),

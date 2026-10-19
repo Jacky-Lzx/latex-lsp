@@ -459,6 +459,7 @@ fn declares_command(name: &str) -> bool {
     declares_register(name)
         || declares_font_switch(name)
         || declares_paired_delimiter(name)
+        || declares_document_command(name)
         || matches!(
             name,
             "newcommand"
@@ -472,12 +473,22 @@ fn declares_command(name: &str) -> bool {
                 | "DeclareMathAlphabet"
                 | "DeclareSymbolFontAlphabet"
                 | "DeclareRobustCommand"
-                | "NewDocumentCommand"
-                | "RenewDocumentCommand"
-                | "ProvideDocumentCommand"
-                | "DeclareDocumentCommand"
                 | "letcs"
         )
+}
+
+pub(crate) fn declares_document_command(name: &str) -> bool {
+    matches!(
+        name,
+        "NewDocumentCommand"
+            | "RenewDocumentCommand"
+            | "ProvideDocumentCommand"
+            | "DeclareDocumentCommand"
+            | "NewExpandableDocumentCommand"
+            | "RenewExpandableDocumentCommand"
+            | "ProvideExpandableDocumentCommand"
+            | "DeclareExpandableDocumentCommand"
+    )
 }
 
 pub(crate) fn declares_font_switch(name: &str) -> bool {

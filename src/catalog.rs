@@ -802,6 +802,26 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
         "Declare a command using an xparse argument specification.",
     ),
     (
+        "NewExpandableDocumentCommand",
+        "NewExpandableDocumentCommand{\\${1:name}}{${2:m}}{${3:definition}}",
+        "Define an expandable command using a document argument specification.",
+    ),
+    (
+        "RenewExpandableDocumentCommand",
+        "RenewExpandableDocumentCommand{\\${1:name}}{${2:m}}{${3:definition}}",
+        "Redefine an existing command as an expandable document command.",
+    ),
+    (
+        "ProvideExpandableDocumentCommand",
+        "ProvideExpandableDocumentCommand{\\${1:name}}{${2:m}}{${3:definition}}",
+        "Define an expandable document command if it does not exist.",
+    ),
+    (
+        "DeclareExpandableDocumentCommand",
+        "DeclareExpandableDocumentCommand{\\${1:name}}{${2:m}}{${3:definition}}",
+        "Declare an expandable command using a document argument specification.",
+    ),
+    (
         "DeclareMathOperator",
         "DeclareMathOperator{\\${1:name}}{${2:text}}",
         "Define a mathematical operator. Requires amsmath.",

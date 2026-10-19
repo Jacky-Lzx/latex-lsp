@@ -35,6 +35,41 @@ fn check(definitions: &str, marked: &str, label: &str, active: u32) {
 }
 
 #[test]
+fn document_command_declarations_hint_grouped_and_bare_targets_and_preserve_snippet_backslashes() {
+    for name in [
+        "NewDocumentCommand",
+        "RenewDocumentCommand",
+        "ProvideDocumentCommand",
+        "DeclareDocumentCommand",
+        "NewExpandableDocumentCommand",
+        "RenewExpandableDocumentCommand",
+        "ProvideExpandableDocumentCommand",
+        "DeclareExpandableDocumentCommand",
+    ] {
+        let label = format!("\\{name}{{command}}{{argument specification}}{{definition}}");
+        for (arguments, active) in [
+            (r"{\cust¦om}{O{blue}m}{#1:#2}", 0),
+            (r"\cust¦om{O{blue}m}{#1:#2}", 0),
+            (r"{\custom}{O{blue}¦m}{#1:#2}", 1),
+            (r"\custom{O{blue}m}{#1:¦#2}", 2),
+        ] {
+            check("", &format!("\\{name}{arguments}"), &label, active);
+        }
+        let (mut workspace, uri, position) = setup("", &format!("\\{name}¦"));
+        workspace.snippets = true;
+        let items = latex_lsp::features::completion(&workspace, &uri, position);
+        let item = items.iter().find(|item| item.label == name).unwrap();
+        let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+            panic!("missing snippet: {name}")
+        };
+        assert_eq!(
+            edit.new_text,
+            format!("{name}{{\\\\${{1:name}}}}{{${{2:m}}}}{{${{3:definition}}}}")
+        );
+    }
+}
+
+#[test]
 fn fontspec_declarations_accept_bare_and_grouped_switches_and_both_feature_lists() {
     for name in [
         "newfontfamily",
@@ -734,6 +769,10 @@ fn xparse_and_undelimited_tex_macros_report_the_correct_parameter() {
         "RenewDocumentCommand",
         "ProvideDocumentCommand",
         "DeclareDocumentCommand",
+        "NewExpandableDocumentCommand",
+        "RenewExpandableDocumentCommand",
+        "ProvideExpandableDocumentCommand",
+        "DeclareExpandableDocumentCommand",
     ] {
         let definitions = format!("\\{command}{{\\render}}{{s O{{blue}} +m}}{{#3}}");
         check(

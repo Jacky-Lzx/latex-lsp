@@ -28,6 +28,66 @@ fn edits_result(source: &str, edits: &[TextEdit]) -> String {
 }
 
 #[test]
+#[ignore = "requires pdflatex with document command support"]
+fn real_expandable_command_renames_preserve_edef_results_and_optional_defaults() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = root.join("main.tex");
+    let definitions = "\\NewExpandableDocumentCommand % declaration\n{\\formatpair} % target\n{O{blue} +m}{#1:#2}% \\formatpair\n";
+    let content = concat!(
+        "\\edef\\observed{\\formatpair{Default}/\\formatpair[red]{Explicit}/\\csname formatpair\\endcsname{Dynamic}}\n",
+        "\\typeout{EXPANDABLE-AUDIT:\\observed}\\observed\n",
+        "% \\formatpair\n\\verb|\\formatpair|\n",
+    );
+    std::fs::write(&main, "\\documentclass{article}\\input{definitions}\\begin{document}\\input{content}\\end{document}\n").unwrap();
+    std::fs::write(root.join("definitions.tex"), definitions).unwrap();
+    std::fs::write(root.join("content.tex"), content).unwrap();
+    let config = latex_lsp::config::BuildConfig {
+        executable: "pdflatex".into(),
+        ..Default::default()
+    };
+    let before = latex_lsp::build::run(&main, &config, &Default::default());
+    assert_eq!(before.status, "success", "{}", before.output);
+    let mut workspace = Workspace::default();
+    workspace.add_root(root.into());
+    let uri = Url::from_file_path(root.join("content.tex")).unwrap();
+    let doc = &workspace.documents[&uri];
+    let position = doc.text.position(content.find("\\formatpair").unwrap() + 2);
+    let changes = features::rename(&workspace, &uri, position, "renderpair")
+        .unwrap()
+        .unwrap()
+        .changes
+        .unwrap();
+    assert_eq!(changes.len(), 2);
+    for (uri, edits) in changes {
+        std::fs::write(
+            uri.to_file_path().unwrap(),
+            edits_result(&workspace.documents[&uri].text.source, &edits),
+        )
+        .unwrap();
+    }
+    assert_eq!(
+        std::fs::read_to_string(root.join("definitions.tex")).unwrap(),
+        definitions.replacen("\\formatpair", "\\renderpair", 1)
+    );
+    let changed = std::fs::read_to_string(root.join("content.tex")).unwrap();
+    assert!(changed.ends_with("% \\formatpair\n\\verb|\\formatpair|\n"));
+    let after = latex_lsp::build::run(&main, &config, &Default::default());
+    assert_eq!(after.status, "success", "{}", after.output);
+    let expected = "EXPANDABLE-AUDIT:blue:Default/red:Explicit/blue:Dynamic";
+    assert!(
+        before.output.lines().any(|line| line == expected),
+        "{}",
+        before.output
+    );
+    assert!(
+        after.output.lines().any(|line| line == expected),
+        "{}",
+        after.output
+    );
+}
+
+#[test]
 #[ignore = "requires pdflatex and mathtools"]
 fn real_paired_delimiter_renames_preserve_all_sizing_forms_and_formula_dimensions() {
     use std::sync::atomic::AtomicBool;
@@ -1304,6 +1364,10 @@ fn modern_and_unbraced_macro_declarations_support_navigation_completion_and_rena
         r"\RenewDocumentCommand\hello{m}{#1}",
         r"\ProvideDocumentCommand{\hello}{O{x}}{#1}",
         r"\DeclareDocumentCommand{\hello}{m}{#1}",
+        r"\NewExpandableDocumentCommand{\hello}{O{blue}m}{#1:#2}",
+        r"\RenewExpandableDocumentCommand\hello{m}{#1}",
+        r"\ProvideExpandableDocumentCommand{\hello}{m}{#1}",
+        r"\DeclareExpandableDocumentCommand\hello{m}{#1}",
         r"\def\hello#1{Hello #1}",
         r"\gdef\hello#1{Hello #1}",
         r"\edef\hello{Hello}",

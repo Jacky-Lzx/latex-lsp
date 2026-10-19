@@ -381,6 +381,10 @@ fn expanded_literal_definitions_index_the_resulting_name_and_preserve_declaratio
         r"\expandafter\renewrobustcmd\csname hello\endcsname[1]{Hello #1}",
         r"\expandafter\providerobustcmd\csname hello\endcsname[1]{Hello #1}",
         r"\expandafter\NewDocumentCommand\csname hello\endcsname{m}{Hello #1}",
+        r"\expandafter\NewExpandableDocumentCommand\csname hello\endcsname{m}{Hello #1}",
+        r"\expandafter\RenewExpandableDocumentCommand\csname hello\endcsname{m}{Hello #1}",
+        r"\expandafter\ProvideExpandableDocumentCommand\csname hello\endcsname{m}{Hello #1}",
+        r"\expandafter\DeclareExpandableDocumentCommand\csname hello\endcsname{m}{Hello #1}",
     ] {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();
@@ -477,6 +481,9 @@ fn renamed_expanded_literal_definitions_and_aliases_still_compile() {
         r"\expandafter\xdef\csname hello\endcsname#1{Hello #1}",
         r"\expandafter\newcommand\csname hello\endcsname[1]{Hello #1}",
         r"\expandafter\NewDocumentCommand\csname hello\endcsname{m}{Hello #1}",
+        r"\expandafter\NewExpandableDocumentCommand\csname hello\endcsname{m}{Hello #1}",
+        r"\expandafter\ProvideExpandableDocumentCommand\csname hello\endcsname{m}{Hello #1}",
+        r"\expandafter\DeclareExpandableDocumentCommand\csname hello\endcsname{m}{Hello #1}",
         r"\expandafter\let\csname hello\endcsname=\textbf",
     ] {
         let directory = tempfile::tempdir().unwrap();

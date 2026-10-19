@@ -96,6 +96,14 @@ pub fn completion(
 
 fn builtin(name: &str) -> Option<Signature> {
     let (arguments, starred): (&[(&str, bool)], bool) = match name {
+        name if syntax::declares_document_command(name) => (
+            &[
+                ("command", false),
+                ("argument specification", false),
+                ("definition", false),
+            ],
+            false,
+        ),
         "frac" | "dfrac" | "tfrac" | "binom" => {
             (&[("numerator", false), ("denominator", false)], false)
         }
@@ -331,6 +339,7 @@ fn builtin(name: &str) -> Option<Signature> {
                 Kind::Optional
             } else if name == "cslet" && index == 1
                 || (name == "letcs"
+                    || syntax::declares_document_command(name)
                     || syntax::declares_font_switch(name)
                     || syntax::declares_paired_delimiter(name)
                     || matches!(
@@ -457,14 +466,16 @@ fn definition(uri: &Url, doc: &Document, entry: &Entry, environment: bool) -> Op
                 });
             }
         }
-        "NewDocumentCommand"
-        | "RenewDocumentCommand"
-        | "ProvideDocumentCommand"
-        | "DeclareDocumentCommand"
-        | "NewDocumentEnvironment"
-        | "RenewDocumentEnvironment"
-        | "ProvideDocumentEnvironment"
-        | "DeclareDocumentEnvironment" => {
+        declaration
+            if syntax::declares_document_command(declaration)
+                || matches!(
+                    declaration,
+                    "NewDocumentEnvironment"
+                        | "RenewDocumentEnvironment"
+                        | "ProvideDocumentEnvironment"
+                        | "DeclareDocumentEnvironment"
+                ) =>
+        {
             let (arguments, _) = syntax::group(source, i, b'{', b'}')?;
             let source = &arguments.value;
             let mut i = 0;
