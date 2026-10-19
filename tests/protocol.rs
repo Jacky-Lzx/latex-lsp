@@ -17,6 +17,66 @@ struct Server {
 }
 
 #[test]
+fn semantic_tokens_advertise_full_and_range_and_follow_incremental_changes() {
+    let mut server = Server::start();
+    let init = server.request(1, "initialize", json!({"processId":null,"capabilities":{"textDocument":{"semanticTokens":{"requests":{"full":true,"range":true},"tokenTypes":["macro","variable","type","enumMember","string","comment"],"tokenModifiers":["declaration"],"formats":["relative"]}}}}));
+    let provider = &init["capabilities"]["semanticTokensProvider"];
+    assert_eq!(provider["full"], true);
+    assert_eq!(provider["range"], true);
+    assert_eq!(provider["legend"]["tokenModifiers"], json!(["declaration"]));
+    assert_eq!(
+        provider["legend"]["tokenTypes"],
+        json!([
+            "macro",
+            "variable",
+            "type",
+            "enumMember",
+            "string",
+            "comment"
+        ])
+    );
+    server.notify("initialized", json!({}));
+    let uri = "file:///semantic-protocol/main.tex";
+    server.notify("textDocument/didOpen", json!({"textDocument":{"uri":uri,"languageId":"latex","version":1,"text":"😀 \\label{one}\\ref{one}\r\n% 中文😀\r\n"}}));
+    let full = server.request(
+        2,
+        "textDocument/semanticTokens/full",
+        json!({"textDocument":{"uri":uri}}),
+    );
+    assert_eq!(
+        full["data"],
+        json!([0, 3, 6, 0, 0, 0, 7, 3, 3, 1, 0, 4, 4, 0, 0, 0, 5, 3, 3, 0, 1, 0, 6, 5, 0])
+    );
+    let range = server.request(3, "textDocument/semanticTokens/range", json!({"textDocument":{"uri":uri},"range":{"start":{"line":1,"character":2},"end":{"line":1,"character":6}}}));
+    assert_eq!(range["data"], json!([1, 2, 4, 5, 0]));
+    server.send(json!({"jsonrpc":"2.0","id":4,"method":"textDocument/semanticTokens/range","params":{"textDocument":{"uri":uri},"range":{"start":{"line":1,"character":5},"end":{"line":1,"character":6}}}}));
+    assert_eq!(
+        server.until(|message| message["id"] == 4)["error"]["code"],
+        -32602
+    );
+    // No semantic cache may retain the old line layout or deleted comment.
+    server.notify("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"range":{"start":{"line":1,"character":0},"end":{"line":2,"character":0}},"text":"\\ref{two}\n"}]}));
+    let updated = server.request(
+        5,
+        "textDocument/semanticTokens/full",
+        json!({"textDocument":{"uri":uri}}),
+    );
+    let expected = json!([
+        0, 3, 6, 0, 0, 0, 7, 3, 3, 1, 0, 4, 4, 0, 0, 0, 5, 3, 3, 0, 1, 0, 4, 0, 0, 0, 5, 3, 3, 0
+    ]);
+    assert_eq!(updated["data"], expected);
+    let missing = server.request(
+        6,
+        "textDocument/semanticTokens/full",
+        json!({"textDocument":{"uri":"file:///semantic-protocol/missing.tex"}}),
+    );
+    assert!(missing.is_null());
+    server.request(7, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
 #[ignore = "requires pdflatex and hyperref"]
 fn destination_diagnostics_exclude_chapters_only_probed_by_the_tex_recorder() {
     let directory = tempfile::tempdir().unwrap();

@@ -18,6 +18,7 @@ pub mod path_completion;
 mod primitives;
 mod project_diagnostics;
 pub mod recorder;
+pub mod semantic;
 pub mod signature;
 mod spelling_fixes;
 pub mod synctex;
@@ -216,6 +217,9 @@ impl LanguageServer for Backend {
                 document_symbol_provider: Some(OneOf::Left(true)),
                 workspace_symbol_provider: Some(OneOf::Left(true)),
                 folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
+                semantic_tokens_provider: Some(
+                    SemanticTokensServerCapabilities::SemanticTokensOptions(semantic::options()),
+                ),
                 document_link_provider: Some(DocumentLinkOptions {
                     resolve_provider: Some(false),
                     work_done_progress_options: WorkDoneProgressOptions::default(),
@@ -647,6 +651,32 @@ impl LanguageServer for Backend {
             .documents
             .get(&document_uri(params.text_document.uri))
             .map(|doc| navigation::folding_ranges(doc, workspace.folding_limit)))
+    }
+
+    async fn semantic_tokens_full(
+        &self,
+        params: SemanticTokensParams,
+    ) -> Result<Option<SemanticTokensResult>> {
+        let workspace = self.workspace.read().await;
+        workspace
+            .documents
+            .get(&document_uri(params.text_document.uri))
+            .map(|doc| semantic::tokens(doc, None).map(SemanticTokensResult::Tokens))
+            .transpose()
+    }
+
+    async fn semantic_tokens_range(
+        &self,
+        params: SemanticTokensRangeParams,
+    ) -> Result<Option<SemanticTokensRangeResult>> {
+        let workspace = self.workspace.read().await;
+        workspace
+            .documents
+            .get(&document_uri(params.text_document.uri))
+            .map(|doc| {
+                semantic::tokens(doc, Some(params.range)).map(SemanticTokensRangeResult::Tokens)
+            })
+            .transpose()
     }
 
     async fn document_link(&self, params: DocumentLinkParams) -> Result<Option<Vec<DocumentLink>>> {

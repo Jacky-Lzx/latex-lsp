@@ -66,6 +66,8 @@ pub struct Syntax {
     pub toggles: Vec<Entry>,
     pub diagnostics: Vec<Diagnostic>,
     pub ignored: Vec<Range<usize>>,
+    /// Actual comments, distinguished from ignored URLs and verbatim text.
+    pub comments: Vec<Range<usize>>,
     pub fixes: Vec<QuickFix>,
 }
 
@@ -740,6 +742,7 @@ impl Syntax {
                         i += 1;
                     }
                     result.ignored.push(start..i);
+                    result.comments.push(start..i);
                 }
                 b'{' => {
                     braces.push(i);
@@ -917,6 +920,9 @@ impl Syntax {
                                         i = source.len();
                                     }
                                     result.ignored.push(body_start..i);
+                                    if env == "comment" {
+                                        result.comments.push(body_start..i);
+                                    }
                                 } else {
                                     environments.push((env.into(), arg.span.clone()));
                                 }
@@ -1051,9 +1057,12 @@ impl Syntax {
         let mut i = 0;
         while i < bytes.len() {
             if bytes[i] == b'%' {
+                let start = i;
                 while i < bytes.len() && bytes[i] != b'\n' {
                     i += 1;
                 }
+                result.ignored.push(start..i);
+                result.comments.push(start..i);
                 continue;
             }
             if bytes[i] != b'@' {
@@ -1074,6 +1083,10 @@ impl Syntax {
             let content = i + 1;
             // Skip the whole entry so @ signs in field values never become entries.
             let (end, closed) = bib_entry_end(source, i, close);
+            if kind.eq_ignore_ascii_case("comment") {
+                result.ignored.push(kind_start - 1..end);
+                result.comments.push(kind_start - 1..end);
+            }
             if !matches!(
                 kind.to_ascii_lowercase().as_str(),
                 "comment" | "string" | "preamble"

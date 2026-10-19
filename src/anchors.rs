@@ -236,6 +236,22 @@ pub(crate) fn entry(source: &str, command: &Command) -> Option<(bool, Entry)> {
     ))
 }
 
+/// Compound destinations have distinct name fields separated by TeX syntax.
+pub(crate) fn name_spans(source: &str, command: &Command) -> Vec<(bool, Range<usize>)> {
+    if let Some(destination) = compound(source, command) {
+        let declaration = command.name == "hyperdef";
+        return [destination.category.span, destination.key.span]
+            .into_iter()
+            .filter(|span| !span.is_empty())
+            .map(|span| (declaration, span))
+            .collect();
+    }
+    entry(source, command)
+        .map(|(declaration, entry)| (declaration, entry.span))
+        .into_iter()
+        .collect()
+}
+
 /// Preserve the source separators and comments when a destination uses two fields.
 pub(crate) fn rename_edits(
     doc: &Document,
