@@ -115,6 +115,8 @@ LaTeX 内核的 `NewExpandableDocumentCommand`、`RenewExpandableDocumentCommand
 
 natbib 的 `citealt` / `citealp`、`citenum`、`citeyearpar`、`citefullauthor` 及 `Citet` / `Citep` / `Citealt` / `Citealp` / `Citeauthor` 支持文献键补全、导航、引用、语义高亮、安全重命名、编译警告定位及拼写修复，并提供命令片段与参数提示。识别支持的星号形式及星号前后的空白和注释，保留引用列表、注释参数和正文。
 
+biblatex 的 `fullcite` / `footfullcite` 与普通引用共用文献键导航、补全、引用查找、重命名及编译警告定位，并提供命令片段与参数提示。重命名保留前后注释、可选说明及引用列表中的其他键；这两个命令不支持的星号调用不会被当作文献键引用。
+
 `defcitealias{键}{显示文字}` 的单个静态键参与上述编辑功能，`citetalias` / `citepalias` 与普通引用使用同一文献键；重命名同步维护别名设置与引用，保留显示文字。别名设置本身不产生缺失文献键警告，不会领取同一行其他引用的编译诊断；逗号列表、含语义空白或动态的别名键不作推断。
 
 `setcounterref` / `addtocounterref`、`setcounterpageref` / `addtocounterpageref` 分别识别首个计数器参数和第二个标签参数，提供各自的补全、导航、引用、重命名、编译诊断和拼写修复。同名计数器与标签仍属于不同的符号，修复和重命名只改动相应参数；支持命令片段、参数提示及跨行标签的补全。常用的带星号引用（如 `ref*`、`pageref*`）也支持名称补全和参数提示。

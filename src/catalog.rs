@@ -654,6 +654,16 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
         "Print a textual citation. Requires biblatex.",
     ),
     (
+        "fullcite",
+        "fullcite{${1:key}}",
+        "Print full bibliography entries in the text. Requires biblatex.",
+    ),
+    (
+        "footfullcite",
+        "footfullcite{${1:key}}",
+        "Print full bibliography entries in a footnote. Requires biblatex.",
+    ),
+    (
         "autocite",
         "autocite{${1:key}}",
         "Print a citation using the configured biblatex style.",

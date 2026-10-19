@@ -53,6 +53,74 @@ const NATBIB_VARIANTS: &[(&str, &str)] = &[
 ];
 
 #[test]
+fn full_citation_commands_share_keys_with_ordinary_citations_and_preserve_notes() {
+    let mut workspace = Workspace::default();
+    let bibliography = "@book{parent,title={Literal parent}}\n@book{other,title={Other}}\n";
+    let bib = insert(&mut workspace, "refs.bib", bibliography);
+    let make_source = |key: &str| {
+        let mut source = format!("😀 \\cite{{{key}}}\r\n");
+        for command in ["fullcite", "footfullcite"] {
+            source.push_str(&format!(
+                "\\{command} % keep\r\n[see \\emph{{parent}}][p.~2]{{other, {key}}}\r\n"
+            ));
+        }
+        source.push_str("\\fullcite*{parent}\\footfullcite*{parent}\n% \\fullcite{parent}\n\\verb|\\footfullcite{parent}|\n");
+        source
+    };
+    let source = make_source("parent");
+    let main = insert(&mut workspace, "main.tex", &source);
+    let at = position(&source, "\\cite{par");
+    assert_eq!(features::references(&workspace, &main, at, false).len(), 3);
+    for command in ["fullcite", "footfullcite"] {
+        let at = position(
+            &source,
+            &format!("\\{command} % keep\r\n[see \\emph{{parent}}][p.~2]{{other, par"),
+        );
+        let definitions = features::definitions(&workspace, &main, at);
+        assert_eq!(definitions.len(), 1, "{command}: {definitions:?}");
+        assert_eq!(definitions[0].uri, bib);
+        assert!(features::hover(&workspace, &main, at).is_some());
+        assert!(features::completion(&workspace, &main, at)
+            .iter()
+            .any(|item| item.label == "parent"));
+        let starred = position(&source, &format!("\\{command}*{{par"));
+        assert!(features::definitions(&workspace, &main, starred).is_empty());
+    }
+    let changes = features::rename(&workspace, &main, at, "renamed")
+        .unwrap()
+        .unwrap()
+        .changes
+        .unwrap();
+    assert_eq!(
+        apply(&source, changes[&main].clone()),
+        make_source("renamed")
+    );
+    assert_eq!(
+        apply(bibliography, changes[&bib].clone()),
+        bibliography.replacen("{parent,", "{renamed,", 1)
+    );
+}
+
+#[test]
+fn full_citation_warnings_select_keys_and_leave_notes_and_unsupported_stars_alone() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    let uri = Url::from_file_path(&main).unwrap();
+    let source =
+        "😀 \\fullcite[see paretn][p.~2]{paretn} \\footfullcite{paretn} \\fullcite*{paretn}\n";
+    std::fs::write(&main, source).unwrap();
+    let log = "(./main.tex\nPackage biblatex Warning: Citation 'paretn' on page 1 undefined on input line 1.\n)\n";
+    let diagnostics = latex_lsp::build_log::parse(&main, log);
+    let items = &diagnostics[&uri];
+    assert_eq!(items.len(), 2, "{items:?}");
+    let text = Text::new(source.into());
+    for (item, marker) in items.iter().zip(["[p.~2]{", "\\footfullcite{"]) {
+        let start = source.find(marker).unwrap() + marker.len();
+        assert_eq!(item.range, text.range(start, start + "paretn".len()));
+    }
+}
+
+#[test]
 fn natbib_variants_and_single_key_aliases_navigate_complete_and_rename_without_changing_text() {
     let mut workspace = Workspace::default();
     let bibliography = "@book{parent, title={parent}}\n@book{other, title={Other}}\n";

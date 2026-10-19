@@ -977,6 +977,8 @@ pub fn is_citation(name: &str) -> bool {
             | "autocite"
             | "parencite"
             | "textcite"
+            | "fullcite"
+            | "footfullcite"
             | "nocite"
             | "footcite"
     )
@@ -1002,6 +1004,8 @@ pub(crate) fn citation_accepts_star(name: &str) -> bool {
                 | "citetalias"
                 | "citepalias"
                 | "defcitealias"
+                | "fullcite"
+                | "footfullcite"
         )
 }
 

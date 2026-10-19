@@ -527,6 +527,25 @@ fn hyperref_signatures_distinguish_label_links_from_four_argument_urls() {
 }
 
 #[test]
+fn full_citation_signatures_and_snippets_preserve_optional_notes() {
+    for command in ["fullcite", "footfullcite"] {
+        let label = format!("\\{command}[note / prenote][postnote]{{keys}}");
+        check("", &format!("\\{command}[se¦e][p.~2]{{parent}}"), &label, 0);
+        check("", &format!("\\{command}[see][p.¦~2]{{parent}}"), &label, 1);
+        check("", &format!("\\{command}[see][p.~2]{{pa¦rent}}"), &label, 2);
+        let marked = format!("\\{command}¦");
+        let (mut workspace, uri, at) = setup("", &marked);
+        workspace.snippets = true;
+        let items = latex_lsp::features::completion(&workspace, &uri, at);
+        let item = items.iter().find(|item| item.label == command).unwrap();
+        let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+            panic!("missing snippet")
+        };
+        assert_eq!(edit.new_text, format!("{command}{{${{1:key}}}}"));
+    }
+}
+
+#[test]
 fn natbib_signatures_distinguish_numeric_citations_alias_text_and_optional_notes() {
     check(
         "",
