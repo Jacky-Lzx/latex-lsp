@@ -8702,3 +8702,145 @@ fn bibliography_and_tex_bindings_keep_independent_scopes_and_reject_unrerun_tool
         server.wait_exit(0);
     }
 }
+
+#[test]
+#[cfg(unix)]
+fn tex_only_builds_do_not_adopt_changed_bibliography_contents_or_partial_tool_logs() {
+    for extension in ["bib", "bst"] {
+        for partial in [false, true] {
+            let (mut server, directory, main) = fake_synctex_server(
+                "printf 'SyncTeX result begin\\nPage:1\\nx:10\\ny:20\\nSyncTeX result end\\n'\n",
+            );
+            let inputs = directory.path().join(".inputs");
+            std::fs::create_dir(&inputs).unwrap();
+            let bibliography = inputs.join(format!("refs.{extension}"));
+            let original = "@book{entry,title={OLD}}\n";
+            let replacement = "@book{entry,title={NEW}}\n";
+            std::fs::write(&bibliography, original).unwrap();
+            let modified = std::fs::metadata(&bibliography)
+                .unwrap()
+                .modified()
+                .unwrap();
+            let record = if extension == "bib" {
+                "Database file #1:"
+            } else {
+                "The style file:"
+            };
+            let compiler = directory.path().join("compiler.sh");
+            std::fs::write(&compiler, format!(
+                "if [ -f \"$1/noop\" ]; then exit 0; fi\nprintf '%%PDF-1.4\\nCOMPILED\\n' > \"$1/main.pdf\"\nprintf 'SyncTeX data\\n' > \"$1/main.synctex\"\nprintf 'INPUT %s\\n' \"$2\" > \"$1/main.fls\"\nif [ ! -f \"$1/keep-bib\" ]; then printf '{record} .inputs/refs.{extension}\\n' > \"$1/main.blg\"; elif [ -f \"$1/partial\" ]; then cp \"${{2%/*}}/partial-template\" \"$1/main.blg\"; fi\nprintf '%s:2: LaTeX Warning: bibliography warning.\\n' \"$2\" > \"$1/main.log\"\n"
+            )).unwrap();
+            server.notify("workspace/didChangeConfiguration", json!({"settings":{"build":{"executable":"/bin/sh","arguments":[compiler,"%o","%f"]}}}));
+            server.request(
+                2,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            let first = server.until(|m| m["method"] == "latex/buildFinished");
+            assert_eq!(first["params"]["status"], "success", "{first}");
+            assert_eq!(first["params"]["stale"], false, "{first}");
+            let old = server.request(
+                3,
+                "textDocument/diagnostic",
+                json!({"textDocument":{"uri":main}}),
+            );
+            assert!(
+                old["items"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|d| d["source"] == "latex-build"),
+                "{old}"
+            );
+            let output = directory.path().join("build/latex-lsp");
+            std::fs::write(output.join("keep-bib"), "").unwrap();
+            if partial {
+                std::fs::write(
+                    directory.path().join("partial-template"),
+                    format!(
+                        "{record} .inputs/refs.{extension}\n{}\n",
+                        " ".repeat(9 * 1024 * 1024)
+                    ),
+                )
+                .unwrap();
+                std::fs::write(output.join("partial"), "").unwrap();
+            }
+            std::fs::write(&bibliography, replacement).unwrap();
+            std::fs::File::open(&bibliography)
+                .unwrap()
+                .set_times(std::fs::FileTimes::new().set_modified(modified))
+                .unwrap();
+            server.request(
+                4,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            let reused = server.until(|m| m["method"] == "latex/buildFinished");
+            assert_eq!(
+                reused["params"]["status"], "success",
+                "{extension}, partial={partial}: {reused}"
+            );
+            assert_eq!(
+                reused["params"]["stale"], true,
+                "{extension}, partial={partial}: {reused}"
+            );
+            assert_eq!(
+                reused["params"]["diagnosticsTruncated"], partial,
+                "{reused}"
+            );
+            let cleared = server.request(
+                5,
+                "textDocument/diagnostic",
+                json!({"textDocument":{"uri":main},"previousResultId":old["resultId"]}),
+            );
+            assert_eq!(cleared["kind"], "full", "{cleared}");
+            assert_eq!(cleared["items"], json!([]), "{cleared}");
+            // Restoring the data cannot establish which contents produced this
+            // new PDF; only a complete bibliography rerun can replace history.
+            std::fs::write(&bibliography, original).unwrap();
+            std::fs::File::open(&bibliography)
+                .unwrap()
+                .set_times(std::fs::FileTimes::new().set_modified(modified))
+                .unwrap();
+            let forward = json!({"command":"latex.forwardSearch","arguments":[{"uri":main,"position":{"line":1,"character":0}}]});
+            server.send(json!({"jsonrpc":"2.0","id":6,"method":"workspace/executeCommand","params":forward}));
+            let uncertain = server.until(|m| m["id"] == 6);
+            assert!(
+                uncertain["error"]["message"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("File conditions changed")),
+                "{uncertain}"
+            );
+            std::fs::write(output.join("noop"), "").unwrap();
+            for id in [7, 8] {
+                server.request(
+                    id,
+                    "workspace/executeCommand",
+                    json!({"command":"latex.build","arguments":[main]}),
+                );
+                let noop = server.until(|m| m["method"] == "latex/buildFinished");
+                assert_eq!(noop["params"]["status"], "error", "{noop}");
+                assert!(noop["params"]["pdfUri"].is_null(), "{noop}");
+            }
+            std::fs::write(&bibliography, replacement).unwrap();
+            std::fs::remove_file(output.join("noop")).unwrap();
+            std::fs::remove_file(output.join("keep-bib")).unwrap();
+            if partial {
+                std::fs::remove_file(output.join("partial")).unwrap();
+            }
+            server.request(
+                9,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            let rebuilt = server.until(|m| m["method"] == "latex/buildFinished");
+            assert_eq!(rebuilt["params"]["status"], "success", "{rebuilt}");
+            assert_eq!(rebuilt["params"]["stale"], false, "{rebuilt}");
+            let valid = server.request(10, "workspace/executeCommand", forward);
+            assert_eq!(valid["locations"][0]["page"], 1, "{valid}");
+            server.request(11, "shutdown", Value::Null);
+            server.notify("exit", Value::Null);
+            server.wait_exit(0);
+        }
+    }
+}

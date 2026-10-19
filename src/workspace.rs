@@ -202,6 +202,8 @@ pub struct Workspace {
     pub bibliography_inputs: BTreeMap<Url, BTreeSet<Url>>,
     /// Paths selected by the last complete BibTeX/Biber logs, before symlinks.
     pub bibliography_bindings: BTreeMap<Url, BTreeMap<PathBuf, PathBuf>>,
+    /// Input contents from each root's last complete bibliography tool logs.
+    pub bibliography_checks: BTreeMap<Url, std::sync::Arc<crate::file_checks::Snapshot>>,
     /// File conditions and input snapshots for the latest published diagnostics.
     pub build_checks: BTreeMap<Url, std::sync::Arc<crate::file_checks::Snapshot>>,
     pub pdf_checks: BTreeMap<Url, std::sync::Arc<crate::file_checks::Snapshot>>,

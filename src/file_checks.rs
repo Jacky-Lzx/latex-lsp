@@ -356,6 +356,39 @@ impl Snapshot {
         snapshot
     }
 
+    /// A new TeX PDF can reuse a .bbl generated from older bibliography data.
+    /// Once those inputs differ, keep that PDF uncertain even after restoration.
+    pub(crate) fn with_reused_inputs(&self, previous: &Self) -> Self {
+        let mut snapshot = self.clone();
+        snapshot.ambiguous.extend(
+            previous
+                .inputs
+                .iter()
+                .filter(|(uri, before)| before.changed(uri))
+                .filter_map(|(uri, _)| uri.to_file_path().ok()),
+        );
+        snapshot
+    }
+
+    /// Bibliography tool history follows moved inputs and output directories;
+    /// historical PDF checks deliberately retain their original paths.
+    pub(crate) fn renamed_inputs(&self, rename: impl Fn(&Path) -> PathBuf) -> Self {
+        Self {
+            artifact: self.artifact.as_deref().map(&rename),
+            inputs: self
+                .inputs
+                .iter()
+                .filter_map(|(uri, before)| {
+                    Some((
+                        Url::from_file_path(rename(&uri.to_file_path().ok()?)).ok()?,
+                        before.clone(),
+                    ))
+                })
+                .collect(),
+            ..Self::default()
+        }
+    }
+
     pub(crate) fn with_inputs(&self, inputs: BTreeMap<Url, InputSnapshot>) -> Self {
         Self {
             inputs,
@@ -439,6 +472,41 @@ impl Snapshot {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn moved_bibliography_history_keeps_content_fingerprints_and_tracks_the_new_output_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let old = directory.path().join("old");
+        let new = directory.path().join("new");
+        std::fs::create_dir(&old).unwrap();
+        let bibliography = old.join("refs.bib");
+        std::fs::write(&bibliography, "OLD\n").unwrap();
+        let history = Snapshot {
+            artifact: Some(old.join("main.pdf")),
+            inputs: [(
+                Url::from_file_path(&bibliography).unwrap(),
+                InputSnapshot::file(&bibliography),
+            )]
+            .into(),
+            ..Default::default()
+        };
+        std::fs::rename(&old, &new).unwrap();
+        let moved = history.renamed_inputs(|path| new.join(path.strip_prefix(&old).unwrap()));
+        assert!(moved.matches_pdf(&new.join("main.pdf")));
+        assert!(moved.changed_input().is_none());
+        std::fs::write(new.join("refs.bib"), "NEW\n").unwrap();
+        assert_eq!(
+            moved.changed_input(),
+            Some(&Url::from_file_path(new.join("refs.bib")).unwrap())
+        );
+        let uncertain = Snapshot::default().with_reused_inputs(&moved);
+        std::fs::write(new.join("refs.bib"), "OLD\n").unwrap();
+        assert!(moved.changed_input().is_none());
+        assert_eq!(
+            uncertain.changed_path(),
+            Some(new.join("refs.bib").as_path())
+        );
+    }
 
     #[test]
     fn tex_and_bibliography_scopes_refresh_independently_and_keep_unread_bibliography_history() {

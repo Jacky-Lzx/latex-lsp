@@ -467,6 +467,21 @@ impl BuildManager {
                     ]),
                 );
             }
+            if outcome.bibliography_inputs.is_none() {
+                if let Some(previous) =
+                    current
+                        .bibliography_checks
+                        .get(&root_uri)
+                        .filter(|previous| {
+                            outcome
+                                .pdf
+                                .as_ref()
+                                .is_some_and(|pdf| previous.matches_pdf(pdf))
+                        })
+                {
+                    checks = Arc::new(checks.with_reused_inputs(previous));
+                }
+            }
             // A no-op driver may deliberately ignore an \includeonly-excluded
             // file. Prefer recorded inputs when available, retaining BibTeX
             // sources which TeX's own recorder does not normally list.
@@ -633,6 +648,40 @@ impl BuildManager {
                 } else {
                     BTreeMap::new()
                 };
+            if outcome.bibliography_inputs.is_some()
+                && matches!(outcome.status, "success" | "error")
+            {
+                let mut bibliography = current
+                    .bibliography_inputs
+                    .get(&root_uri)
+                    .cloned()
+                    .unwrap_or_default();
+                bibliography.extend(
+                    current
+                        .bibliography_bindings
+                        .get(&root_uri)
+                        .into_iter()
+                        .flat_map(|bindings| bindings.values())
+                        .filter_map(|path| Url::from_file_path(path).ok()),
+                );
+                let contents = bibliography
+                    .into_iter()
+                    .map(|uri| {
+                        let before = inputs.get(&uri).cloned().unwrap_or_else(|| {
+                            uri.to_file_path()
+                                .map_or(InputSnapshot::File(None), |path| {
+                                    InputSnapshot::file(&path)
+                                })
+                        });
+                        (uri, before)
+                    })
+                    .collect();
+                crate::file_checks::Snapshot::remember(
+                    &mut current.bibliography_checks,
+                    root_uri.clone(),
+                    Arc::new(checks.with_inputs(contents)),
+                );
+            }
             let mut affected = BTreeSet::new();
             // Even discarded diagnostics can accompany a newly written PDF.
             // Retain the inputs and contents of the PDF actually produced.

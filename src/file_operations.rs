@@ -582,6 +582,15 @@ pub fn did_rename(workspace: &mut Workspace, files: &[FileRename]) -> Result<BTr
         .into_iter()
         .map(|(root, checks)| (renames.uri(&root), checks))
         .collect();
+    workspace.bibliography_checks = std::mem::take(&mut workspace.bibliography_checks)
+        .into_iter()
+        .map(|(root, checks)| {
+            (
+                renames.uri(&root),
+                std::sync::Arc::new(checks.renamed_inputs(|path| renames.path(path))),
+            )
+        })
+        .collect();
     for inputs_by_root in [
         &mut workspace.recorded_inputs,
         &mut workspace.recorded_binary_inputs,
