@@ -35,6 +35,114 @@ fn check(definitions: &str, marked: &str, label: &str, active: u32) {
 }
 
 #[test]
+fn builtin_completions_preserve_existing_ungrouped_required_arguments() {
+    for (call, name) in [
+        (r"\(\fr¦ac12\)", "frac"),
+        (r"\(\sq¦rt2\)", "sqrt"),
+        (r"\textb¦f\payload", "textbf"),
+        (r"\textb¦f\%", "textbf"),
+        (r"\textb¦f\ ", "textbf"),
+        (r"\sect¦ion A", "section"),
+        ("\\textb¦f % ignored\r\n a", "textbf"),
+    ] {
+        let (mut workspace, uri, position) = setup("", call);
+        workspace.snippets = true;
+        let items = latex_lsp::features::completion(&workspace, &uri, position);
+        let item = items.iter().find(|item| item.label == name).unwrap();
+        let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+            panic!("missing edit");
+        };
+        assert_eq!(edit.new_text, name, "{call}");
+        assert_eq!(item.insert_text_format, Some(InsertTextFormat::PLAIN_TEXT));
+        let text = &workspace.documents[&uri].text;
+        assert_eq!(
+            &text.source
+                [text.offset(edit.range.start).unwrap()..text.offset(edit.range.end).unwrap()],
+            name,
+            "{call}"
+        );
+    }
+}
+
+#[test]
+fn completion_placeholders_remain_before_surrounding_tex_boundaries() {
+    for (definition, name, snippet) in [
+        ("", "frac", "frac{${1:numerator}}{${2:denominator}}"),
+        (
+            r"\newcommand\pair[2]{}",
+            "pair",
+            "pair{${1:arg1}}{${2:arg2}}",
+        ),
+    ] {
+        for suffix in [
+            "$",
+            r"\)",
+            r"\]",
+            r"\right)",
+            "&",
+            r"\\",
+            "}",
+            r"\end{panel}",
+            r"\endgroup",
+            r"\egroup",
+            r"\fi",
+            r"\else",
+            r"\or",
+            "\n\\end{document}",
+        ] {
+            let call = format!("\\{}¦{} {suffix}", &name[..2], &name[2..]);
+            let (mut workspace, uri, position) = setup(definition, &call);
+            workspace.snippets = true;
+            let items = latex_lsp::features::completion(&workspace, &uri, position);
+            let item = items.iter().find(|item| item.label == name).unwrap();
+            let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+                panic!("missing edit");
+            };
+            assert_eq!(edit.new_text, snippet, "{call}");
+            assert_eq!(item.insert_text_format, Some(InsertTextFormat::SNIPPET));
+        }
+    }
+    // An explicitly declared flag or delimiter still wins over the heuristic
+    // for an unfinished required argument before a surrounding boundary.
+    for (definition, call) in [
+        (r"\NewDocumentCommand\probe{t$ m}{}", r"\pro¦$"),
+        (
+            r"\NewDocumentCommand\probe{r\)\]m}{}",
+            r"\pro¦\)OLD\]{BODY}",
+        ),
+    ] {
+        let (mut workspace, uri, position) = setup(definition, call);
+        workspace.snippets = true;
+        let items = latex_lsp::features::completion(&workspace, &uri, position);
+        let item = items.iter().find(|item| item.label == "probe").unwrap();
+        let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+            panic!("missing edit");
+        };
+        assert_eq!(edit.new_text, "probe", "{call}");
+        assert_eq!(item.insert_text_format, Some(InsertTextFormat::PLAIN_TEXT));
+    }
+}
+
+#[test]
+fn bare_text_keeps_catalog_templates_for_commands_without_required_arguments() {
+    for (call, name, expected) in [
+        (r"\it¦em text", "item", "item $0"),
+        (r"\al¦pha text", "alpha", "alpha"),
+        (r"\su¦m1", "sum", "sum_{${1:i=1}}^{${2:n}} $0"),
+    ] {
+        let (mut workspace, uri, position) = setup("", call);
+        workspace.snippets = true;
+        let items = latex_lsp::features::completion(&workspace, &uri, position);
+        let item = items.iter().find(|item| item.label == name).unwrap();
+        let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+            panic!("missing edit");
+        };
+        assert_eq!(edit.new_text, expected, "{call}");
+        assert_eq!(item.insert_text_format, Some(InsertTextFormat::SNIPPET));
+    }
+}
+
+#[test]
 fn custom_completions_preserve_existing_ungrouped_required_arguments() {
     for definition in [
         r"\newcommand\pair[2]{}",

@@ -101,30 +101,8 @@ pub(crate) fn completion_at(
     following: &str,
 ) -> Option<(String, Option<String>)> {
     let signature = signature(workspace, name, scope)?;
-    let ungrouped_argument = completion_required_token(following).is_some();
-    let following = &following[syntax::skip_space(following, 0)..];
-    // The same argument reader decides whether existing custom delimiters must
-    // be preserved. Stop at the first required argument: later delimiters cannot
-    // start a valid call here.
-    for parameter in &signature.parameters {
-        match &parameter.kind {
-            Kind::Delimited { open, optional, .. } => {
-                if token(following, 0) == Some(open.as_str()) {
-                    return Some((signature.label(), None));
-                }
-                if !optional {
-                    break;
-                }
-            }
-            Kind::Optional | Kind::UnstarredOptional | Kind::Star => {}
-            Kind::Flag(flag) => {
-                if token(following, 0) == Some(flag.as_str()) {
-                    return Some((signature.label(), None));
-                }
-            }
-            Kind::Required if ungrouped_argument => return Some((signature.label(), None)),
-            _ => break,
-        }
+    if existing_arguments(&signature, following) {
+        return Some((signature.label(), None));
     }
     let mut snippet = name.to_owned();
     let mut tabstop = 0;
@@ -162,6 +140,45 @@ pub(crate) fn completion_at(
         }
     }
     Some((signature.label(), (tabstop > 0).then_some(snippet)))
+}
+
+pub(crate) fn has_existing_arguments(
+    workspace: &Workspace,
+    name: &str,
+    scope: &BTreeSet<Url>,
+    following: &str,
+) -> bool {
+    signature(workspace, name, scope)
+        .is_some_and(|signature| existing_arguments(&signature, following))
+}
+
+fn existing_arguments(signature: &Signature, following: &str) -> bool {
+    let ungrouped_argument = completion_required_token(following).is_some();
+    let following = &following[syntax::skip_space(following, 0)..];
+    // The same argument reader decides whether existing custom delimiters must
+    // be preserved. Stop at the first required argument: later delimiters cannot
+    // start a valid call here.
+    for parameter in &signature.parameters {
+        match &parameter.kind {
+            Kind::Delimited { open, optional, .. } => {
+                if token(following, 0) == Some(open.as_str()) {
+                    return true;
+                }
+                if !optional {
+                    break;
+                }
+            }
+            Kind::Optional | Kind::UnstarredOptional | Kind::Star => {}
+            Kind::Flag(flag) => {
+                if token(following, 0) == Some(flag.as_str()) {
+                    return true;
+                }
+            }
+            Kind::Required if ungrouped_argument => return true,
+            _ => break,
+        }
+    }
+    false
 }
 
 fn starts_letter(value: &str) -> bool {
@@ -925,7 +942,27 @@ fn completion_required_token(source: &str) -> Option<&str> {
         match source.as_bytes().get(i) {
             Some(b' ' | b'\t') => i += 1,
             Some(b'%') => i += source[i..].find('\n')? + 1,
-            _ => return required_token(source, i),
+            _ => {
+                let value = required_token(source, i)?;
+                // These tokens normally close a surrounding math, alignment,
+                // group, or environment. Keep placeholders before them when
+                // completing an unfinished call.
+                return (!matches!(
+                    value,
+                    "$" | "&"
+                        | "\\\\"
+                        | "\\)"
+                        | "\\]"
+                        | "\\right"
+                        | "\\end"
+                        | "\\endgroup"
+                        | "\\egroup"
+                        | "\\fi"
+                        | "\\else"
+                        | "\\or"
+                ))
+                .then_some(value);
+            }
         }
     }
 }

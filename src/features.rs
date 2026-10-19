@@ -863,6 +863,13 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
     }
     for &(name, snippet, documentation) in COMMANDS {
         if name.starts_with(prefix) && seen.insert(name.into()) {
+            let use_snippets = use_snippets
+                && !crate::signature::has_existing_arguments(
+                    workspace,
+                    name,
+                    &scope,
+                    &doc.text.source[command_end..],
+                );
             result.push(CompletionItem {
                 label: name.into(),
                 kind: Some(CompletionItemKind::FUNCTION),
