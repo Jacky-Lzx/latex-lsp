@@ -9760,3 +9760,107 @@ fn environment_linked_editing_tracks_incremental_changes_and_validates_positions
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+fn color_picker_edits_track_incremental_changes_and_validate_context_over_stdio() {
+    use latex_lsp::text::Text;
+    use tower_lsp::lsp_types::{ColorPresentation, TextDocumentContentChangeEvent};
+    let mut server = Server::start();
+    let uri = Url::parse("file:///color-protocol/main.tex").unwrap();
+    let alias = "file:///color-protocol/%6dain.tex";
+    let initialized = server.request(1, "initialize", json!({"processId":null,"capabilities":{"textDocument":{"colorProvider":{"dynamicRegistration":false}}}}));
+    assert_eq!(initialized["capabilities"]["colorProvider"], true);
+    server.notify("initialized", json!({}));
+    let source = "😀 \\textcolor[gray]{ .5 }{Body}\r\n% \\color[rgb]{1,0,0}\r\n\\verb|\\color[rgb]{1,0,0}|\r\n";
+    let text = Text::new(source.into());
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"latex","version":7,"text":source}}),
+    );
+    let found = server.request(
+        2,
+        "textDocument/documentColor",
+        json!({"textDocument":{"uri":alias}}),
+    );
+    let at = source.find(".5").unwrap();
+    let range = text.range(at, at + 2);
+    assert_eq!(
+        found,
+        json!([{"range":range,"color":{"red":0.5,"green":0.5,"blue":0.5,"alpha":1.0}}])
+    );
+    let green = json!({"red":0.0,"green":1.0,"blue":0.0,"alpha":1.0});
+    let presented = server.request(
+        3,
+        "textDocument/colorPresentation",
+        json!({"textDocument":{"uri":alias},"range":range,"color":green}),
+    );
+    let mut presentations: Vec<ColorPresentation> = serde_json::from_value(presented).unwrap();
+    assert_eq!(presentations.len(), 1);
+    let presentation = presentations.pop().unwrap();
+    assert_eq!(presentation.text_edit.as_ref().unwrap().range, range);
+    let mut edits = presentation.additional_text_edits.unwrap();
+    assert_eq!(edits.len(), 1);
+    edits.extend(presentation.text_edit);
+    edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
+    let changes: Vec<_> = edits
+        .into_iter()
+        .map(|edit| TextDocumentContentChangeEvent {
+            range: Some(edit.range),
+            range_length: None,
+            text: edit.new_text,
+        })
+        .collect();
+    let changed = text.changed(changes.clone()).unwrap();
+    assert_eq!(
+        changed.source,
+        source.replace("[gray]{ .5 }", "[rgb]{ 0,1,0 }")
+    );
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":alias,"version":8},"contentChanges":changes}),
+    );
+    let updated = server.request(
+        4,
+        "textDocument/documentColor",
+        json!({"textDocument":{"uri":uri}}),
+    );
+    assert_eq!(updated.as_array().unwrap().len(), 1);
+    assert_eq!(updated[0]["color"], green);
+    let stale = server.request(
+        5,
+        "textDocument/colorPresentation",
+        json!({"textDocument":{"uri":uri},"range":range,"color":green}),
+    );
+    assert_eq!(stale, json!([]));
+    let transparent = server.request(6, "textDocument/colorPresentation", json!({"textDocument":{"uri":uri},"range":updated[0]["range"],"color":{"red":0,"green":1,"blue":0,"alpha":0.5}}));
+    assert_eq!(transparent, json!([]));
+    for (id, range) in [
+        (
+            7,
+            json!({"start":{"line":0,"character":1},"end":{"line":0,"character":2}}),
+        ),
+        (
+            8,
+            json!({"start":{"line":99,"character":0},"end":{"line":99,"character":2}}),
+        ),
+        (
+            9,
+            json!({"start":{"line":0,"character":10},"end":{"line":0,"character":9}}),
+        ),
+    ] {
+        server.send(json!({"jsonrpc":"2.0","id":id,"method":"textDocument/colorPresentation","params":{"textDocument":{"uri":uri},"range":range,"color":green}}));
+        let invalid = server.until(|message| message["id"] == id);
+        assert_eq!(invalid["error"]["code"], -32602, "{invalid}");
+    }
+    let missing = server.request(
+        10,
+        "textDocument/documentColor",
+        json!({"textDocument":{"uri":"file:///color-protocol/missing.tex"}}),
+    );
+    assert_eq!(missing, json!([]));
+    let missing = server.request(11, "textDocument/colorPresentation", json!({"textDocument":{"uri":"file:///color-protocol/missing.tex"},"range":range,"color":green}));
+    assert_eq!(missing, json!([]));
+    server.request(12, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

@@ -3,6 +3,7 @@ pub mod build;
 pub mod build_log;
 pub mod catalog;
 pub mod code_lens;
+pub mod colors;
 mod conditionals;
 pub mod config;
 mod counters;
@@ -348,6 +349,7 @@ impl LanguageServer for Backend {
                 }),
                 workspace_symbol_provider: Some(OneOf::Left(true)),
                 folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
+                color_provider: Some(ColorProviderCapability::Simple(true)),
                 semantic_tokens_provider: Some(
                     SemanticTokensServerCapabilities::SemanticTokensOptions(semantic::options()),
                 ),
@@ -928,6 +930,37 @@ impl LanguageServer for Backend {
             .documents
             .get(&document_uri(params.text_document.uri))
             .map(|doc| navigation::folding_ranges(doc, workspace.folding_limit)))
+    }
+
+    async fn document_color(&self, params: DocumentColorParams) -> Result<Vec<ColorInformation>> {
+        let workspace = self.workspace.read().await;
+        Ok(workspace
+            .documents
+            .get(&document_uri(params.text_document.uri))
+            .map(colors::document_colors)
+            .unwrap_or_default())
+    }
+
+    async fn color_presentation(
+        &self,
+        params: ColorPresentationParams,
+    ) -> Result<Vec<ColorPresentation>> {
+        let workspace = self.workspace.read().await;
+        let Some(doc) = workspace
+            .documents
+            .get(&document_uri(params.text_document.uri))
+        else {
+            return Ok(vec![]);
+        };
+        if params.range.start > params.range.end
+            || doc.text.offset(params.range.start).is_none()
+            || doc.text.offset(params.range.end).is_none()
+        {
+            return Err(tower_lsp::jsonrpc::Error::invalid_params(
+                "Invalid color presentation range",
+            ));
+        }
+        Ok(colors::presentations(doc, params.range, params.color))
     }
 
     async fn semantic_tokens_full(
