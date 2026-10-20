@@ -92,6 +92,8 @@ pub struct Syntax {
     pub saved_text_references: Vec<Entry>,
     pub moving_text: Vec<Entry>,
     pub moving_text_references: Vec<Entry>,
+    /// Command identities used while expanding otherwise opaque name arguments.
+    pub name_command_references: Vec<Entry>,
     pub diagnostics: Vec<Diagnostic>,
     pub ignored: Vec<Range<usize>>,
     /// Actual comments, distinguished from ignored URLs and verbatim text.

@@ -4,7 +4,10 @@ use crate::{
     syntax::{self, Argument, Command, Entry, Syntax},
     workspace::{Document, Workspace},
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ops::Range as Span,
+};
 use tower_lsp::{jsonrpc, lsp_types::*};
 
 #[derive(Clone, Copy, PartialEq)]
@@ -54,16 +57,122 @@ pub(crate) fn literal_name(name: &str) -> bool {
         })
 }
 
+fn command_reference(name: &str, span: Span<usize>) -> Entry {
+    Entry {
+        name: name.into(),
+        span,
+        detail: "Command referenced in a saved-text name".into(),
+        is_variable: false,
+    }
+}
+
+/// Name arguments expand control words but do not execute LaTeX declarations.
+/// Literal conversion primitives consume data, which must remain untouched.
+fn name_commands(source: &str, span: Span<usize>) -> Vec<Entry> {
+    let mut result = Vec::new();
+    let mut at = span.start;
+    while at < span.end {
+        match source.as_bytes()[at] {
+            b'%' => {
+                at = source[at..span.end]
+                    .find('\n')
+                    .map_or(span.end, |newline| at + newline + 1);
+            }
+            b'\\' => {
+                let Some(word) =
+                    syntax::control_word(source, at).filter(|word| word.end <= span.end)
+                else {
+                    at += 1;
+                    if at < span.end {
+                        at += source[at..].chars().next().unwrap().len_utf8()
+                    }
+                    continue;
+                };
+                let name = &source[word.start + 1..word.end];
+                result.push(command_reference(name, word.clone()));
+                at = word.end;
+                match name {
+                    "detokenize" => {
+                        let open = syntax::skip_space(source, at);
+                        if let Some((_, end)) = syntax::group(source, open, b'{', b'}')
+                            .filter(|(_, end)| *end <= span.end)
+                        {
+                            at = end;
+                        }
+                    }
+                    "string" => {
+                        // Unlike detokenize, string reads exactly one token,
+                        // including a brace rather than a complete group.
+                        at = syntax::skip_space(source, at).min(span.end);
+                        if at < span.end {
+                            at = syntax::control_word(source, at)
+                                .map_or_else(
+                                    || {
+                                        let first = source[at..].chars().next().unwrap();
+                                        let after = at + first.len_utf8();
+                                        if first == '\\' && after < span.end {
+                                            after
+                                                + source[after..].chars().next().unwrap().len_utf8()
+                                        } else {
+                                            after
+                                        }
+                                    },
+                                    |word| word.end,
+                                )
+                                .min(span.end);
+                        }
+                    }
+                    "csname" => {
+                        if let Some(offset) = source[at..span.end].find('\\') {
+                            let close = at + offset;
+                            if syntax::control_word(source, close).is_some_and(|word| {
+                                word.end <= span.end && &source[word] == "\\endcsname"
+                            }) {
+                                // TeX skips the control word's delimiter, but
+                                // spaces before endcsname belong to the name.
+                                let name_span = syntax::skip_space(source, at).min(close)..close;
+                                if syntax::is_static_key(&source[name_span.clone()]) {
+                                    result.push(command_reference(
+                                        &source[name_span.clone()],
+                                        name_span,
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    "csuse" => {
+                        let open = syntax::skip_space(source, at);
+                        if let Some((argument, _)) = syntax::group(source, open, b'{', b'}')
+                            .filter(|(_, end)| *end <= span.end)
+                        {
+                            if syntax::is_static_key(&argument.value) {
+                                result.push(command_reference(&argument.value, argument.span));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ => at += source[at..].chars().next().unwrap().len_utf8(),
+        }
+    }
+    result
+}
+
 pub(crate) fn index(source: &str, parsed: &mut Syntax) {
     for command in &parsed.commands {
         let Some((kind, declaration)) = role(command) else {
             continue;
         };
-        let Some(argument) =
-            argument(source, command).filter(|argument| literal_name(&argument.value))
-        else {
+        let Some(argument) = argument(source, command) else {
             continue;
         };
+        parsed
+            .name_command_references
+            .extend(name_commands(source, argument.span.clone()));
+        if !literal_name(&argument.value) {
+            continue;
+        }
         let entry = Entry {
             name: argument.value,
             span: argument.span,

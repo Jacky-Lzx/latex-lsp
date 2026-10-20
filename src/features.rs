@@ -66,6 +66,19 @@ fn raw_target(doc: &Document, offset: usize) -> Option<Target<'_>> {
             });
         }
     }
+    if let Some(entry) = doc
+        .syntax
+        .name_command_references
+        .iter()
+        .find(|entry| entry.span.start <= offset && offset <= entry.span.end)
+    {
+        return Some(Target {
+            kind: TargetKind::Command,
+            name: &entry.name,
+            span: entry.span.clone(),
+            control_word: doc.text.source[entry.span.clone()].starts_with('\\'),
+        });
+    }
     if doc.syntax.is_ignored(offset) {
         return None;
     }
@@ -221,7 +234,7 @@ fn target<'a>(workspace: &'a Workspace, uri: &Url, offset: usize) -> Option<Targ
         return raw;
     }
     if doc.syntax.is_ignored(offset) {
-        return None;
+        return raw;
     }
     if raw
         .as_ref()
@@ -747,7 +760,12 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
     if let Some(items) = crate::saved_text::completion(workspace, uri, offset, &scope) {
         return items;
     }
-    if doc.syntax.is_ignored(offset.saturating_sub(1)) {
+    let name_command = doc.syntax.name_command_references.iter().any(|entry| {
+        doc.text.source[entry.span.clone()].starts_with('\\')
+            && entry.span.start < offset
+            && offset <= entry.span.end
+    });
+    if doc.syntax.is_ignored(offset.saturating_sub(1)) && !name_command {
         return vec![];
     }
     if let Some(items) = crate::counters::completion(workspace, uri, offset, &scope) {
@@ -759,7 +777,7 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
     if let Some(items) = crate::named_commands::completion(workspace, uri, offset, &scope) {
         return items;
     }
-    if let Some((command, span)) = argument_context(doc, offset) {
+    if let Some((command, span)) = argument_context(doc, offset).filter(|_| !name_command) {
         if syntax::file_extensions(&command.name).is_some() {
             return crate::path_completion::complete(workspace, uri, &command.name, span);
         }
@@ -1199,6 +1217,18 @@ fn all_references(
         if include_declaration {
             result.extend(
                 entries(doc, target.kind)
+                    .iter()
+                    .filter(|entry| entry.name == target.name)
+                    .map(|entry| Location {
+                        uri: uri.clone(),
+                        range: doc.text.range(entry.span.start, entry.span.end),
+                    }),
+            );
+        }
+        if target.kind == TargetKind::Command {
+            result.extend(
+                doc.syntax
+                    .name_command_references
                     .iter()
                     .filter(|entry| entry.name == target.name)
                     .map(|entry| Location {

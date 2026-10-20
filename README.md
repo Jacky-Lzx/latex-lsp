@@ -78,6 +78,8 @@
 
 保存文本名称支持定义跳转、引用、悬停、补全和版本化重命名。`SaveVerb` 与 `SaveVerbatim` 共用名称，`UseVerb` 及三个 `UseVerbatim` 命令读取这一组；`SaveGVerb` 与 `UseMVerb`、`pUseMVerb` 使用另一组。名称按完整字面值匹配，保留首尾空格、逗号和 Unicode；改写裸参数时自动补花括号。共享文件的修改会覆盖所有依赖项目，并检查各项目的定义与命名冲突。空名称、宏展开、名称内的注释及跨行名称暂不推断；包含动态名称的调用、相关重定义、可执行字符设置、无法静态确认的 `SaveMVerb` 定义或项目歧义会阻止自动重命名。
 
+动态保存名称中的普通宏引用仍支持跳转、引用查询、悬停、补全和宏重命名，例如 `\UseVerb{\keyname}`；也识别其中字面 `\csname keyname\endcsname` 与 `\csuse{keyname}` 的宏引用。修改宏名称会同步更新这些使用位置，但不推断宏展开得到的保存名称值。名称参数不会产生 LaTeX 声明、标签或文件依赖；注释、逐字正文、`\detokenize{...}` 内容和 `\string` 的下一个 token 保持原样。
+
 LaTeX 内核的 `NewExpandableDocumentCommand`、`RenewExpandableDocumentCommand`、`ProvideExpandableDocumentCommand` 和 `DeclareExpandableDocumentCommand` 与普通文档命令共用宏导航、引用、重命名和补全，兼容带花括号或裸命令目标及静态 `csname` 形式。声明提供命令、参数规格、定义体的参数提示；调用支持 `m`、`o`、`O`、`s`、`t` 以及 `d/D/r/R` 分隔参数规格及修饰符，补全保留可选参数默认值。复杂规格继续保守回退，不执行宏展开。
 
 `NewCommandCopy`、`RenewCommandCopy` 和 `DeclareCommandCopy` 支持复制目标的导航、引用、补全和重命名，并提供声明参数提示与片段。复制目标是独立宏；重命名原命令时维护复制声明的来源参数，重命名副本时只更新副本的声明与调用。兼容带花括号或裸命令参数，以及目标的静态 `csname` 写法，保留注释和逐字内容。
