@@ -3444,6 +3444,11 @@ fn ltx_def_and_clo_sources_are_indexed_and_included_in_dynamic_watch_registratio
         "[yY][aA][mM][lL]",
         "[yY][mM][lL]",
         "[tT][xX][tT]",
+        "[rR][sS]",
+        "[pP][yY]",
+        "[cC][pP][pP]",
+        "[tT][sS][xX]",
+        "[tT][oO][mM][lL]",
     ] {
         assert!(image["globPattern"].as_str().unwrap().contains(extension));
     }
@@ -7856,7 +7861,10 @@ fn bibliography_log_content_updates_are_analyzed_with_preserved_output_metadata(
 #[test]
 #[cfg(unix)]
 fn recorded_data_inputs_keep_pdf_history_without_latex_indexing() {
-    for extension in ["csv", "TSV", "dat", "json", "xml", "yaml", "yml", "txt"] {
+    for extension in [
+        "csv", "TSV", "dat", "json", "xml", "yaml", "yml", "txt", "rs", "PY", "cpp", "HPP", "js",
+        "TSX", "go", "java", "sh", "toml",
+    ] {
         let external = tempfile::tempdir().unwrap();
         let data = external.path().join(format!("table.{extension}"));
         std::fs::write(&data, "\\label{data-source-old}\n").unwrap();
@@ -7948,9 +7956,12 @@ fn recorded_data_inputs_keep_pdf_history_without_latex_indexing() {
 #[test]
 #[cfg(unix)]
 fn changed_recorded_data_invalidates_active_builds_with_or_without_watcher_events() {
-    for notify in [false, true] {
+    for (extension, notify) in ["CSV", "rs", "PY"]
+        .into_iter()
+        .flat_map(|extension| [false, true].map(|notify| (extension, notify)))
+    {
         let external = tempfile::tempdir().unwrap();
-        let data = external.path().join("table.CSV");
+        let data = external.path().join(format!("table.{extension}"));
         std::fs::write(&data, b"OLD\n").unwrap();
         let modified = std::fs::metadata(&data).unwrap().modified().unwrap();
         let script = format!("printf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf 'INPUT %s\\nINPUT {}\\n' \"$2\" > \"$1/main.fls\"\nprintf '%s:2: LaTeX Warning: old data.\\n' \"$2\" > \"$1/main.log\"\nif [ -f \"$1/hold\" ]; then touch \"$1/ready\"; while [ ! -f \"$1/release\" ]; do sleep 0.02; done; fi\n", data.display());
@@ -8045,6 +8056,8 @@ fn recorded_binary_aliases_keep_pdf_history_and_do_not_become_latex_sources() {
         ("png", "tex"),
         ("CSV", "payload"),
         ("csv", "tex"),
+        ("RS", "tex"),
+        ("py", "payload"),
     ] {
         let external = tempfile::tempdir().unwrap();
         let data = external.path().join(format!("table.{target}"));

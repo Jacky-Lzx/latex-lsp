@@ -2182,3 +2182,37 @@ fn real_forced_latexmk_rebuild_replaces_an_existing_pdf_after_a_noop() {
         assert!(forced.pdf_updated);
     }
 }
+
+#[test]
+#[ignore = "requires pdflatex, xelatex and listings"]
+fn real_listings_code_inputs_are_recorded_as_data_dependencies() {
+    for engine in ["pdflatex", "xelatex"] {
+        for (extension, code) in [
+            ("rs", "fn main() { println!(\"Rust listing\"); }\n"),
+            ("py", "print(\"Python listing\")\n"),
+            ("cpp", "int main() { return 0; }\n"),
+            ("js", "console.log(\"JS listing\");\n"),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let main = root.join("main.tex");
+            let code_path = root.join(format!("sample.{extension}"));
+            std::fs::write(&code_path, code).unwrap();
+            std::fs::write(&main, format!("\\documentclass{{article}}\\usepackage{{listings}}\\begin{{document}}\\lstinputlisting{{sample.{extension}}}\\end{{document}}\n")).unwrap();
+            let config = BuildConfig {
+                executable: engine.into(),
+                ..Default::default()
+            };
+            let outcome = build::run(&main, &config, &Default::default());
+            assert_eq!(
+                outcome.status, "success",
+                "{engine}/{extension}: {}",
+                outcome.output
+            );
+            let code_uri = Url::from_file_path(&code_path).unwrap();
+            assert!(outcome.inputs.as_ref().unwrap().contains(&code_uri));
+            assert!(outcome.binary_inputs.contains(&code_uri));
+            assert!(outcome.pdf.is_some());
+        }
+    }
+}

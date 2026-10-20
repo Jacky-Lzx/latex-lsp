@@ -6,10 +6,16 @@ use std::{
 };
 use tower_lsp::lsp_types::Url;
 
-/// Files commonly read as data with openin or package-specific table loaders.
+/// Files read as data, configuration or verbatim code by package-specific loaders.
 /// Their contents are dependencies, not implicitly LaTeX source documents.
-pub(crate) const DATA_EXTENSIONS: &[&str] =
-    &["csv", "tsv", "dat", "json", "xml", "yaml", "yml", "txt"];
+pub(crate) const DATA_EXTENSIONS: &[&str] = &[
+    "csv", "tsv", "dat", "json", "xml", "yaml", "yml", "txt", "rs", "py", "pyi", "ipynb", "c",
+    "cc", "cpp", "cxx", "h", "hh", "hpp", "hxx", "cu", "cuh", "cs", "fs", "fsx", "go", "java",
+    "js", "mjs", "cjs", "jsx", "ts", "tsx", "sh", "bash", "zsh", "fish", "ps1", "bat", "cmd", "rb",
+    "php", "pl", "pm", "lua", "r", "jl", "m", "mm", "kt", "kts", "swift", "scala", "sc", "sql",
+    "html", "htm", "css", "scss", "sass", "less", "vue", "svelte", "f", "for", "f90", "f95", "f03",
+    "f08", "pas", "pp", "asm", "s", "toml", "ini", "cfg", "conf", "md", "rst",
+];
 
 pub(crate) fn is_data(path: &Path) -> bool {
     path.extension()
@@ -525,12 +531,16 @@ mod tests {
         let shared = tempfile::tempdir().unwrap();
         let image = shared.path().join("image.tex");
         let data = shared.path().join("data.payload");
+        let code = shared.path().join("code.tex");
+        let code_source = shared.path().join("source.rs");
         let source = shared.path().join("source.csv");
         let local_source = directory.path().join("local.csv");
         let mut log = format!("PWD {}\n", directory.path().display());
         for (alias, target) in [
             ("image.PNG", &image),
             ("data.CSV", &data),
+            ("code.PY", &code),
+            ("code-source.sty", &code_source),
             ("package.sty", &source),
             ("local.sty", &local_source),
         ] {
@@ -543,13 +553,13 @@ mod tests {
         let files = classified_inputs(&root, &log);
         assert_eq!(
             files.all,
-            [&image, &data, &source, &local_source]
+            [&image, &data, &code, &code_source, &source, &local_source]
                 .map(|path| Url::from_file_path(path).unwrap())
                 .into()
         );
         assert_eq!(
             files.binary,
-            [&image, &data]
+            [&image, &data, &code]
                 .map(|path| Url::from_file_path(path).unwrap())
                 .into()
         );
@@ -592,6 +602,28 @@ mod tests {
             "data.yaml",
             "data.yml",
             "data.txt",
+            "code.RS",
+            "code.py",
+            "types.pyi",
+            "notebook.ipynb",
+            "main.CPP",
+            "header.hpp",
+            "kernel.cu",
+            "program.java",
+            "server.go",
+            "component.tsx",
+            "module.mjs",
+            "build.sh",
+            "query.sql",
+            "script.lua",
+            "analysis.R",
+            "program.f90",
+            "app.kt",
+            "page.html",
+            "style.scss",
+            "settings.toml",
+            "build.ini",
+            "config.conf",
         ] {
             let path = directory.path().join(name);
             std::fs::write(&path, "data").unwrap();

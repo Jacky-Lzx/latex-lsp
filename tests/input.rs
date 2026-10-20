@@ -332,3 +332,51 @@ fn unicode_input_filename_renames_read_the_moved_file_for_bare_and_quoted_forms(
         }
     }
 }
+
+#[test]
+fn explicit_code_and_configuration_suffix_inputs_still_import_latex_symbols() {
+    for extension in ["rs", "py", "cpp", "sh", "toml", "txt"] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let source = format!(
+            "\\documentclass{{article}}\\input{{definitions.{extension}}}\\ref{{source-label}}\n"
+        );
+        std::fs::write(root.join("main.tex"), &source).unwrap();
+        std::fs::write(
+            root.join(format!("definitions.{extension}")),
+            "\\label{source-label}\\newcommand{\\sourcecommand}{Text}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(format!("unread.{extension}")),
+            "\\label{unread-label}\n",
+        )
+        .unwrap();
+        let mut workspace = Workspace::default();
+        workspace.add_root(root.into());
+        let main = uri(root, "main.tex");
+        let definitions = uri(root, &format!("definitions.{extension}"));
+        workspace.open(main.clone(), source.clone(), 1);
+        assert!(workspace.project_documents(&main).contains(&definitions));
+        assert_eq!(
+            workspace.documents[&definitions].syntax.labels[0].name,
+            "source-label"
+        );
+        assert!(!workspace
+            .documents
+            .contains_key(&uri(root, &format!("unread.{extension}"))));
+        let position = workspace.documents[&main]
+            .text
+            .position(source.find("source-label").unwrap() + 3);
+        let locations = features::definitions(&workspace, &main, position);
+        assert_eq!(locations.len(), 1);
+        assert_eq!(locations[0].uri, definitions);
+        let renamed = features::rename(&workspace, &main, position, "new-label")
+            .unwrap()
+            .unwrap()
+            .changes
+            .unwrap();
+        assert_eq!(renamed.len(), 2);
+        assert!(renamed.contains_key(&definitions));
+    }
+}
