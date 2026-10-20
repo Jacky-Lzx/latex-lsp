@@ -53,7 +53,20 @@ pub(crate) fn name_error_invocation(
         return None;
     }
     let start = syntax::skip_space(source, command.span.end);
-    let (argument, mut end) = syntax::group(source, start, b'{', b'}')?;
+    let (argument, mut end) = if let Some(group) = syntax::group(source, start, b'{', b'}') {
+        group
+    } else {
+        let span = syntax::control_word(source, start)?;
+        let end = span.end;
+        (
+            syntax::Argument {
+                value: source[span.clone()].into(),
+                span: span.clone(),
+                outer_span: span,
+            },
+            end,
+        )
+    };
     if argument.value != frame
         || syntax::control_word(&argument.value, 0)? != (0..argument.value.len())
     {

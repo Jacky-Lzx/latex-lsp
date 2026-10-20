@@ -34,7 +34,17 @@ fn single_name_interfaces_pinpoint_the_reported_macro_and_respect_consumed_opera
         (r"\cspreto{\keynme}{Body}", r"\cspreto{\keynme}"),
         (r"\ifcsdef{\keynme}{Yes}{No}", r"\ifcsdef{\keynme}"),
         (r"\csundef{\keynme}", r"\csundef{\keynme}"),
-    ] {
+    ]
+    .into_iter()
+    .flat_map(|(call, consumed)| {
+        [
+            (call.to_owned(), consumed.to_owned()),
+            (
+                call.replace(r"{\keynme}", "\\keynme "),
+                consumed.replace(r"{\keynme}", "\\keynme "),
+            ),
+        ]
+    }) {
         let source = format!("\\typeout{{😀}} {call} Remains\r\n");
         let text = Text::new(source.clone());
         let start = source.find(r"\keynme").unwrap();
@@ -64,7 +74,18 @@ fn dynamic_lists_unknown_interfaces_wrappers_and_opaque_text_keep_line_diagnosti
         (r"\csuse{prefix\keynme}", r"\csuse{prefix\keynme}"),
         (r"\csuse{\keynme }", r"\csuse{\keynme }"),
         (r"\csuse{\keynme\suffix}", r"\csuse{\keynme\suffix}"),
-        (r"\csuse\keynme", r"\csuse\keynme"),
+        (r"\csuse\keynmee", r"\csuse\keynmee"),
+        (r"\cslet\keynme\payload", r"\cslet\keynme"),
+        (r"\unknown\keynme", r"\unknown\keynme"),
+        (r"% \csuse\keynme", r"% \csuse\keynme"),
+        (
+            r"\SaveVerb{saved}|\csuse\keynme|",
+            r"\SaveVerb{saved}|\csuse\keynme|",
+        ),
+        (
+            r"\UseVerb{\detokenize{\csuse\keynme}}",
+            r"\UseVerb{\detokenize{\csuse\keynme}}",
+        ),
         (r"\csletcs{\keynme}{source}", r"\csletcs{\keynme}{source}"),
         (
             r"\ifcsequal{\keynme}{source}{Yes}{No}",
@@ -91,6 +112,8 @@ fn dynamic_lists_unknown_interfaces_wrappers_and_opaque_text_keep_line_diagnosti
         (r"\csuse{\keynme}", r"Changed \csuse{\keynme}"),
         (r"\csuse{\keynme} \csuse{\keynme}", r"...{\keynme}"),
         (r"\csuse{\keynme}", r"...keynme}"),
+        (r"\csuse\keynme \csuse\keynme", r"...\keynme"),
+        (r"\csuse\keynme", r"...keynme"),
     ] {
         for numbered in [false, true] {
             let diagnostic = parse(
@@ -107,6 +130,12 @@ fn dynamic_lists_unknown_interfaces_wrappers_and_opaque_text_keep_line_diagnosti
     let diagnostic = parse(
         r"Long prefix \csuse{\keynme}",
         "<argument> \\keynme\nl.1 ...{\\keynme}",
+        true,
+    );
+    assert!(diagnostic.code.is_some());
+    let diagnostic = parse(
+        r"Long prefix \csuse\keynme",
+        "<argument> \\keynme\nl.1 ...\\keynme",
         true,
     );
     assert!(diagnostic.code.is_some());
@@ -193,7 +222,10 @@ fn real_named_argument_macro_fixes_restore_successful_compilation() {
             r"\ifcsdef{\keynme}{MarkerUnique}{Other}",
             r"\csmeaning{\keynme}",
             r"\csundef{\keynme}MarkerUnique",
-        ] {
+        ]
+        .into_iter()
+        .flat_map(|call| [call.to_owned(), call.replace(r"{\keynme}", "\\keynme ")])
+        {
             let directory = tempfile::tempdir().unwrap();
             let main = directory.path().join("main.tex");
             let uri = Url::from_file_path(&main).unwrap();
