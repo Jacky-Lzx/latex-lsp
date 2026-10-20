@@ -302,7 +302,7 @@ fn builtin(name: &str) -> Option<Signature> {
             false,
         ),
         "includegraphics" => (&[("options", true), ("file", false)], true),
-        "VerbatimInput" => (&[("options", true), ("file", false)], true),
+        name if crate::fancyvrb::is_input(name) => (&[("options", true), ("file", false)], true),
         "verbatiminput" => (&[("file", false)], true),
         "lstinputlisting" => (&[("options", true), ("file", false)], false),
         "documentclass" | "usepackage" | "RequirePackage" | "LoadClass" => (
@@ -658,7 +658,8 @@ fn builtin(name: &str) -> Option<Signature> {
         parameters,
         documentation,
         starred,
-        nested_brackets: !(matches!(name, "lstinputlisting" | "VerbatimInput")
+        nested_brackets: !(name == "lstinputlisting"
+            || crate::fancyvrb::is_input(name)
             || syntax::is_citation(name)
             || syntax::loader_extension(name).is_some()
             || syntax::declares_traditional_command(name)

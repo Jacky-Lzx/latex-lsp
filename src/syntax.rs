@@ -731,12 +731,14 @@ pub(crate) fn file_name_argument_start(
 ) -> Option<usize> {
     let mut start = skip_space(source, command_end);
     if source.as_bytes().get(start) == Some(&b'*') {
-        if !matches!(name, "verbatiminput" | "VerbatimInput") {
+        if name != "verbatiminput" && !crate::fancyvrb::is_input(name) {
             return None;
         }
         start = skip_space(source, start + 1);
     }
-    if (loader_extension(name).is_some() || matches!(name, "lstinputlisting" | "VerbatimInput"))
+    if (loader_extension(name).is_some()
+        || name == "lstinputlisting"
+        || crate::fancyvrb::is_input(name))
         && !loader_forwards_options(name)
         && source.as_bytes().get(start) == Some(&b'[')
     {
@@ -875,7 +877,7 @@ pub(crate) fn active_key_list_prefix(
 
 /// Files displayed as literal code, rather than executed as TeX source.
 pub(crate) fn code_input_command(name: &str) -> bool {
-    matches!(name, "lstinputlisting" | "verbatiminput" | "VerbatimInput")
+    matches!(name, "lstinputlisting" | "verbatiminput") || crate::fancyvrb::is_input(name)
 }
 
 pub fn file_extensions(name: &str) -> Option<&'static [&'static str]> {
@@ -883,7 +885,7 @@ pub fn file_extensions(name: &str) -> Option<&'static [&'static str]> {
         "input" | "InputIfFileExists" => &["tex", "ltx", "sty", "cls", "def", "clo"],
         "IfFileExists" => &["tex"],
         // Empty suffix means an exact arbitrary file, never an appended dot.
-        "lstinputlisting" | "verbatiminput" | "VerbatimInput" => &[""],
+        name if code_input_command(name) => &[""],
         "include" | "includeonly" | "subfile" => &["tex"],
         "bibliography" | "nobibliography" | "addbibresource" => &["bib"],
         "bibliographystyle" => &["bst"],
@@ -974,17 +976,15 @@ pub(crate) fn file_argument<'a>(
         (is_literal_file_path(&argument.value) && !argument.value.chars().any(char::is_whitespace))
             .then_some(std::borrow::Cow::Owned(argument))
     } else if loader_extension(&command.name) == Some("cls")
-        || matches!(
-            command.name.as_str(),
-            "bibliographystyle" | "lstinputlisting" | "verbatiminput" | "VerbatimInput"
-        )
+        || command.name == "bibliographystyle"
+        || code_input_command(&command.name)
     {
         let start = file_name_argument_start(source, &command.name, command.span.end)?;
         let argument = command
             .argument
             .as_ref()
             .filter(|argument| argument.outer_span.start == start)?;
-        let span = if command.name == "VerbatimInput" {
+        let span = if crate::fancyvrb::is_input(&command.name) {
             crate::fancyvrb::filename(source, argument.span.clone(), false)?
         } else if code_input_command(&command.name) {
             is_literal_file_path(&argument.value).then_some(argument.span.clone())?
@@ -1042,8 +1042,8 @@ pub(crate) fn file_lookup_names<'a>(
     let append = !empty
         && match command {
             "include" | "includeonly" => !value.ends_with(".tex"),
-            "input" | "InputIfFileExists" | "IfFileExists" | "lstinputlisting"
-            | "verbatiminput" | "VerbatimInput" => !recognized,
+            "input" | "InputIfFileExists" | "IfFileExists" => !recognized,
+            name if code_input_command(name) => !recognized,
             "bibliography" | "nobibliography" | "bibliographystyle" => {
                 !literal.ends_with(&format!(".{extension}"))
             }
@@ -1064,15 +1064,9 @@ pub(crate) fn file_lookup_names<'a>(
     std::iter::once(preferred)
         .filter(move |_| !empty && valid_style && valid_forward)
         .chain(
-            (matches!(
-                command,
-                "input"
-                    | "InputIfFileExists"
-                    | "IfFileExists"
-                    | "lstinputlisting"
-                    | "verbatiminput"
-                    | "VerbatimInput"
-            ) && append)
+            ((matches!(command, "input" | "InputIfFileExists" | "IfFileExists")
+                || code_input_command(command))
+                && append)
                 .then_some(std::borrow::Cow::Borrowed(value)),
         )
 }
@@ -1700,13 +1694,8 @@ impl Syntax {
                         arg_start = citation_argument_start(source, name, command_end)
                             .unwrap_or(source.len());
                     } else if loader_extension(name).is_some()
-                        || matches!(
-                            name,
-                            "bibliographystyle"
-                                | "lstinputlisting"
-                                | "verbatiminput"
-                                | "VerbatimInput"
-                        )
+                        || name == "bibliographystyle"
+                        || code_input_command(name)
                     {
                         arg_start = file_name_argument_start(source, name, command_end)
                             .unwrap_or(source.len());

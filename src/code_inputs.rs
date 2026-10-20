@@ -6,11 +6,17 @@ use crate::{
 use std::collections::BTreeSet;
 use tower_lsp::lsp_types::Url;
 
-const COMMANDS: [&str; 3] = ["lstinputlisting", "verbatiminput", "VerbatimInput"];
+const COMMANDS: [&str; 5] = [
+    "lstinputlisting",
+    "verbatiminput",
+    "VerbatimInput",
+    "LVerbatimInput",
+    "BVerbatimInput",
+];
 
 pub(crate) fn safe_syntax(source: &str, parsed: &syntax::Syntax, name: &str) -> bool {
     match name {
-        "VerbatimInput" => crate::fancyvrb::safe_syntax(source, parsed),
+        name if crate::fancyvrb::is_input(name) => crate::fancyvrb::safe_syntax(source, parsed),
         "lstinputlisting" => listings::safe_syntax(source, parsed),
         "verbatiminput" => !parsed.definitions.iter().any(|definition| {
             matches!(
@@ -32,7 +38,7 @@ fn safe_project(workspace: &Workspace, sources: &BTreeSet<Url>, name: &str) -> b
 pub(crate) fn safe_call(source: &str, command: &syntax::Command) -> bool {
     match command.name.as_str() {
         "lstinputlisting" => listings::safe_call(source, command),
-        "VerbatimInput" => crate::fancyvrb::safe_call(source, command),
+        name if crate::fancyvrb::is_input(name) => crate::fancyvrb::safe_call(source, command),
         _ => true,
     }
 }
@@ -59,21 +65,59 @@ fn literal_inputs(
         .collect()
 }
 
+/// A display call proves a data dependency, but not an exclusively data role:
+/// another call can execute the very same file using commandchars or escapes.
+fn displayed_inputs(workspace: &Workspace, sources: &BTreeSet<Url>, root: &Url) -> BTreeSet<Url> {
+    let safe: BTreeSet<_> = COMMANDS
+        .iter()
+        .copied()
+        .filter(|name| safe_project(workspace, sources, name))
+        .collect();
+    let mut displayed: BTreeSet<_> = safe
+        .iter()
+        .flat_map(|name| literal_inputs(workspace, sources, root, name))
+        .collect();
+    for doc in sources
+        .iter()
+        .filter_map(|uri| workspace.documents.get(uri))
+    {
+        for command in &doc.syntax.commands {
+            if !syntax::code_input_command(&command.name)
+                || safe.contains(command.name.as_str()) && safe_call(&doc.text.source, command)
+            {
+                continue;
+            }
+            // Redefinitions and dynamic filenames cannot identify which
+            // recorded source was executed. Retain the recorder's source role.
+            if !safe.contains(command.name.as_str()) {
+                return BTreeSet::new();
+            }
+            let Some(argument) = syntax::file_argument(&doc.text.source, command) else {
+                return BTreeSet::new();
+            };
+            if let Some(input) = resolve_file_path(root, &command.name, &argument.value, &[""]) {
+                displayed.remove(&input);
+            }
+        }
+    }
+    displayed
+}
+
 fn context_sources(workspace: &Workspace, uri: &Url, root: &Url) -> BTreeSet<Url> {
     let mut explicit = workspace.source_documents_from(root, root);
     explicit.extend(workspace.source_documents_from(uri, root));
     // Only understood calls can identify data. A redefined command may execute
     // the file as real source, including settings for the other package.
-    let displayed: BTreeSet<_> = COMMANDS
-        .iter()
-        .filter(|name| safe_project(workspace, &explicit, name))
-        .flat_map(|name| literal_inputs(workspace, &explicit, root, name))
-        .collect();
+    let displayed = displayed_inputs(workspace, &explicit, root);
     let mut sources = explicit;
     if let Some(recorded) = workspace.recorded_inputs.get(root) {
         sources.extend(recorded.difference(&displayed).cloned());
     }
     sources
+}
+
+pub(crate) fn displayed(workspace: &Workspace, root: &Url) -> BTreeSet<Url> {
+    displayed_inputs(workspace, &context_sources(workspace, root, root), root)
 }
 
 pub(crate) fn supported(

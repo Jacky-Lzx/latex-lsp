@@ -828,13 +828,18 @@ fn missing_path_range(
     let shortened = shortened_context(prefix);
     let start = text.offset(Position::new(line, 0))?;
     let syntax = crate::syntax::Syntax::latex(text);
+    let fancyverb = crate::fancyvrb::is_input(command_name);
     if crate::syntax::code_input_command(command_name)
         && !crate::code_inputs::safe_syntax(&text.source, &syntax, command_name)
     {
         return None;
     }
     let mut matches = syntax.commands.iter().filter_map(|command| {
-        if command.name != command_name {
+        if !(if fancyverb {
+            crate::fancyvrb::is_input(&command.name)
+        } else {
+            command.name == command_name
+        }) {
             return None;
         }
         let argument = crate::syntax::file_argument(&text.source, command)?;
@@ -847,7 +852,7 @@ fn missing_path_range(
         let value = &text.source[span.clone()];
         let matches_report = if command_name == "lstinputlisting" {
             crate::listings::missing_report(value) == name
-        } else if command_name == "VerbatimInput" {
+        } else if fancyverb {
             value == name
         } else {
             crate::syntax::file_lookup_names(command_name, value).any(|candidate| candidate == name)
@@ -862,7 +867,7 @@ fn missing_path_range(
         }
         let consumed = &text.source[start..argument.outer_span.end];
         let matched = shortened.map_or(consumed == prefix, |suffix| {
-            (command_name == "VerbatimInput" && !suffix.is_empty()
+            (fancyverb && !suffix.is_empty()
                 || suffix.ends_with(&text.source[argument.outer_span.clone()]))
                 && consumed.ends_with(suffix)
         });

@@ -3,6 +3,10 @@ use crate::{syntax, text::Text};
 use std::ops::Range;
 use tower_lsp::lsp_types::TextEdit;
 
+pub(crate) fn is_input(name: &str) -> bool {
+    matches!(name, "VerbatimInput" | "LVerbatimInput" | "BVerbatimInput")
+}
+
 fn safe_options(source: &str) -> bool {
     if source.contains(['\\', '%']) {
         return false;
@@ -30,10 +34,11 @@ fn internal_command(name: &str) -> bool {
 
 pub(crate) fn safe_syntax(source: &str, parsed: &syntax::Syntax) -> bool {
     !parsed.definitions.iter().any(|definition| {
-        internal_command(&definition.name)
+        is_input(&definition.name)
+            || internal_command(&definition.name)
             || matches!(
                 definition.name.as_str(),
-                "VerbatimInput" | "fvset" | "detokenize" | "setkeys" | "define@key"
+                "fvset" | "detokenize" | "setkeys" | "define@key"
             )
     }) && parsed
         .commands

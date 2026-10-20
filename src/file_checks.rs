@@ -1564,11 +1564,17 @@ mod listing_conditions {
 
     #[test]
     fn fancyverb_candidates_watch_literal_quoted_and_detokenized_names() {
-        for value in [
-            "sample.unknown",
-            "\"sample one.rs\"",
-            "\\detokenize{\"样例 one.rs\"}",
-        ] {
+        for (command, value) in ["VerbatimInput", "LVerbatimInput", "BVerbatimInput"]
+            .into_iter()
+            .flat_map(|command| {
+                [
+                    "sample.unknown",
+                    "\"sample one.rs\"",
+                    "\\detokenize{\"样例 one.rs\"}",
+                ]
+                .map(|value| (command, value))
+            })
+        {
             let directory = tempfile::tempdir().unwrap();
             let root = directory.path();
             let name = value
@@ -1576,7 +1582,7 @@ mod listing_conditions {
                 .and_then(|v| v.strip_suffix('}'))
                 .unwrap_or(value)
                 .trim_matches('"');
-            let source = format!("\\VerbatimInput *[frame=single]{{{value}}}");
+            let source = format!("\\{command} *[frame=single]{{{value}}}");
             let snapshot = capture(root, &source);
             assert!(
                 snapshot.paths.contains_key(&root.join(name)),
@@ -1621,7 +1627,13 @@ mod listing_conditions {
     #[test]
     #[cfg(unix)]
     fn code_aliases_watch_both_opened_paths_and_their_physical_targets() {
-        for command in ["lstinputlisting", "verbatiminput *", "VerbatimInput *"] {
+        for command in [
+            "lstinputlisting",
+            "verbatiminput *",
+            "VerbatimInput *",
+            "LVerbatimInput *",
+            "BVerbatimInput *",
+        ] {
             check_code_alias(command);
         }
     }

@@ -554,7 +554,7 @@ pub fn will_rename(workspace: &Workspace, files: &[FileRename]) -> Result<Option
                             )
                     });
                 let fancy = doc.syntax.commands.iter().find(|command| {
-                    command.name == "VerbatimInput"
+                    crate::fancyvrb::is_input(&command.name)
                         && syntax::file_argument(&doc.text.source, command).is_some_and(
                             |argument| argument.span.start == start && argument.span.end == end,
                         )

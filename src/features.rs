@@ -574,7 +574,7 @@ fn argument_span(doc: &Document, command: &Command, offset: usize) -> Option<Spa
             offset,
         );
     }
-    if command.name == "VerbatimInput" {
+    if crate::fancyvrb::is_input(&command.name) {
         return crate::fancyvrb::prefix(source, command, offset);
     }
     if syntax::code_input_command(&command.name) {

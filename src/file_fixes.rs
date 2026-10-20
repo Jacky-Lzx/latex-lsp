@@ -64,16 +64,17 @@ pub(crate) fn fixes(
     };
     let loader_extension = syntax::loader_extension(command_name);
     let listing = command_name == "lstinputlisting";
+    let fancyverb = crate::fancyvrb::is_input(command_name);
     let code_input = syntax::code_input_command(command_name);
     let database = matches!(command_name, "bibliography" | "nobibliography");
     let extension = loader_extension.unwrap_or(match command_name {
         "bibliographystyle" => "bst",
         "bibliography" | "nobibliography" => "bib",
-        "lstinputlisting" | "verbatiminput" | "VerbatimInput" => "",
+        name if syntax::code_input_command(name) => "",
         _ => "tex",
     });
     let compact = syntax::file_name_ignores_spaces(command_name);
-    let reported = if command_name == "VerbatimInput" {
+    let reported = if fancyverb {
         build_log::missing_fancyverb_name(&diagnostic.message)
     } else if command_name == "verbatiminput" {
         build_log::missing_verbatim_name(&diagnostic.message)
@@ -111,7 +112,9 @@ pub(crate) fn fixes(
         .syntax
         .commands
         .iter()
-        .filter(|command| command.name == command_name)
+        .filter(|command| {
+            command.name == command_name || fancyverb && crate::fancyvrb::is_input(&command.name)
+        })
         .find_map(|command| {
             if code_input && !crate::code_inputs::supported(workspace, uri, root, command) {
                 return None;
@@ -140,7 +143,7 @@ pub(crate) fn fixes(
             }
             for span in spans {
                 let value = &doc.text.source[span.clone()];
-                let matches_report = if matches!(command_name, "verbatiminput" | "VerbatimInput") {
+                let matches_report = if command_name == "verbatiminput" || fancyverb {
                     value == reported
                 } else if listing {
                     crate::listings::missing_report(value) == reported
@@ -158,6 +161,7 @@ pub(crate) fn fixes(
     let Some((argument, span, command)) = argument else {
         return vec![];
     };
+    let command_name = command.name.as_str();
     let value = &doc.text.source[span];
     let literal = compact.then(|| syntax::loader_name(value));
     if !syntax::is_literal_file_path(literal.as_deref().unwrap_or(value))
@@ -308,7 +312,7 @@ pub(crate) fn fixes(
                 continue;
             }
         }
-        let edit = if command_name == "VerbatimInput" {
+        let edit = if crate::fancyvrb::is_input(command_name) {
             let Some(edit) =
                 crate::fancyvrb::filename_edit(&doc.text, command, replacement.clone())
             else {

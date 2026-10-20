@@ -744,6 +744,16 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
         "Display a literal file as code, with optional formatting and visible-space star. Requires fancyvrb.",
     ),
     (
+        "LVerbatimInput",
+        "LVerbatimInput{${1:file}}",
+        "Display a literal file with the LVerbatim layout, optional formatting and visible-space star. Requires fancyvrb.",
+    ),
+    (
+        "BVerbatimInput",
+        "BVerbatimInput{${1:file}}",
+        "Display a boxed literal file, with optional formatting and visible-space star. Requires fancyvrb.",
+    ),
+    (
         "verbatiminput",
         "verbatiminput{${1:file}}",
         "Display a file verbatim; the starred form shows spaces. Requires verbatim.",

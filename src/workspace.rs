@@ -324,7 +324,7 @@ impl Workspace {
                 // Recorder suffixes cannot distinguish displayed TeX code
                 // from executed source. Explicit includes above retain their
                 // source role independently, including in another project.
-                let displayed = crate::code_inputs::inputs(self, root);
+                let displayed = crate::code_inputs::displayed(self, root);
                 dependencies.extend(recorded.difference(&displayed).cloned());
             }
             if let Some(recorded) = self.bibliography_inputs.get(root) {

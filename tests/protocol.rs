@@ -11215,6 +11215,8 @@ fn static_code_inputs_keep_pdf_and_synctex_history_without_a_recorder_entry() {
         "verbatiminput",
         "verbatiminput *",
         "VerbatimInput *",
+        "LVerbatimInput *",
+        "BVerbatimInput *",
     ]
     .into_iter()
     .flat_map(|command| ["unknown", "", "rs", "tex"].map(|extension| (command, extension)))
@@ -11312,14 +11314,19 @@ fn static_code_inputs_keep_pdf_and_synctex_history_without_a_recorder_entry() {
 #[test]
 #[cfg(unix)]
 fn static_code_content_changes_invalidate_the_first_build_without_recorder_evidence() {
-    for (command, name, notify) in ["lstinputlisting", "verbatiminput *", "VerbatimInput *"]
-        .into_iter()
-        .flat_map(|command| {
-            ["README", "example.unknown", "example.tex"]
-                .into_iter()
-                .flat_map(move |name| [false, true].map(move |notify| (command, name, notify)))
-        })
-    {
+    for (command, name, notify) in [
+        "lstinputlisting",
+        "verbatiminput *",
+        "VerbatimInput *",
+        "LVerbatimInput *",
+        "BVerbatimInput *",
+    ]
+    .into_iter()
+    .flat_map(|command| {
+        ["README", "example.unknown", "example.tex"]
+            .into_iter()
+            .flat_map(move |name| [false, true].map(move |notify| (command, name, notify)))
+    }) {
         let external = tempfile::tempdir().unwrap();
         let code = external.path().join(name);
         std::fs::write(&code, "Original code.\n").unwrap();
@@ -11382,7 +11389,13 @@ fn static_code_content_changes_invalidate_the_first_build_without_recorder_evide
 #[test]
 #[cfg(unix)]
 fn in_flight_code_path_edits_do_not_erase_the_original_pdf_input_history() {
-    for command in ["lstinputlisting", "verbatiminput *", "VerbatimInput *"] {
+    for command in [
+        "lstinputlisting",
+        "verbatiminput *",
+        "VerbatimInput *",
+        "LVerbatimInput *",
+        "BVerbatimInput *",
+    ] {
         check_in_flight_code_input_history(command);
     }
 }

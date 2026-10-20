@@ -44,7 +44,7 @@ pub fn complete(
         .find(|ch| {
             matches!(ch, '/' | '{' | '}' | '\\' | '%')
                 || ch == ',' && syntax::file_list(command)
-                || command == "VerbatimInput" && ch == '"'
+                || crate::fancyvrb::is_input(command) && ch == '"'
                 || !compact && matches!(ch, '\n' | '\r')
         })
         .unwrap_or(suffix.len());
@@ -69,7 +69,7 @@ pub fn complete(
     if syntax::code_input_command(command)
         && !doc.syntax.commands.iter().any(|candidate| {
             candidate.name == command
-                && (if command == "VerbatimInput" {
+                && (if crate::fancyvrb::is_input(command) {
                     crate::fancyvrb::prefix(&doc.text.source, candidate, span.end)
                         == Some(span.clone())
                 } else {
@@ -88,10 +88,9 @@ pub fn complete(
     let mut directories = roots
         .iter()
         .chain(std::iter::once(uri).filter(|uri| {
-            !matches!(
-                command,
-                "includegraphics" | "lstinputlisting" | "verbatiminput" | "VerbatimInput"
-            ) && !roots.contains(uri)
+            command != "includegraphics"
+                && !syntax::code_input_command(command)
+                && !roots.contains(uri)
         }))
         .filter_map(|origin| {
             origin
@@ -137,10 +136,8 @@ pub fn complete(
                 .and_then(|ext| ext.to_str())
                 .unwrap_or("");
             if !folder
-                && !matches!(
-                    command,
-                    "IfFileExists" | "lstinputlisting" | "verbatiminput" | "VerbatimInput"
-                )
+                && command != "IfFileExists"
+                && !syntax::code_input_command(command)
                 && !extensions
                     .iter()
                     .any(|ext| extension.eq_ignore_ascii_case(ext))
@@ -156,14 +153,9 @@ pub fn complete(
                 if !existing_slash {
                     new_text.push('/');
                 }
-            } else if !matches!(
-                command,
-                "includegraphics"
-                    | "addbibresource"
-                    | "lstinputlisting"
-                    | "verbatiminput"
-                    | "VerbatimInput"
-            ) {
+            } else if !matches!(command, "includegraphics" | "addbibresource")
+                && !syntax::code_input_command(command)
+            {
                 let explicit_extension = existing_name
                     .rsplit_once('.')
                     .is_some_and(|(_, typed)| extension.starts_with(typed));
@@ -209,7 +201,7 @@ pub fn complete(
                     }
                 }
             }
-            if command == "VerbatimInput" {
+            if crate::fancyvrb::is_input(command) {
                 let candidate = doc.syntax.commands.iter().find(|candidate| {
                     candidate.name == command
                         && crate::fancyvrb::prefix(&doc.text.source, candidate, span.end)
