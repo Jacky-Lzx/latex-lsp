@@ -1655,6 +1655,162 @@ fn unchanged_pdf_older_than_an_included_source_is_rejected_but_fresh_noop_builds
 
 #[test]
 #[cfg(unix)]
+fn unchanged_input_contents_allow_noop_builds_after_repeated_saves() {
+    for on_save in [false, true] {
+        let script = "if [ ! -f \"$1/main.pdf\" ]; then\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf 'INPUT %s\\nINPUT chapter.tex\\nINPUT plot.png\\n' \"$2\" > \"$1/main.fls\"\nfi\n";
+        let (mut server, directory, main) = fake_build_server(script, on_save);
+        let source = "\\documentclass{article}\n\\input{chapter}\n\\includegraphics{plot.png}\n\\bibliography{refs}\n\\bibliographystyle{local}\n";
+        let main_path = main.to_file_path().unwrap();
+        std::fs::write(&main_path, source).unwrap();
+        for (name, contents) in [
+            ("chapter.tex", b"Chapter\n".as_slice()),
+            ("plot.png", &[0, 255, 1]),
+            ("refs.bib", b"@book{book,title={Title}}\n"),
+            ("local.bst", b"Style\n"),
+        ] {
+            std::fs::write(directory.path().join(name), contents).unwrap();
+        }
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+        );
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let first = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(first["params"]["status"], "success", "{first}");
+        let pdf = directory.path().join("build/latex-lsp/main.pdf");
+        let pdf_before = std::fs::read(&pdf).unwrap();
+        let pdf_modified = std::fs::metadata(&pdf).unwrap().modified().unwrap();
+        for (index, name) in [
+            "main.tex",
+            "chapter.tex",
+            "plot.png",
+            "refs.bib",
+            "local.bst",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let input = directory.path().join(name);
+            let contents = std::fs::read(&input).unwrap();
+            std::fs::write(&input, contents).unwrap();
+            std::fs::File::open(&input)
+                .unwrap()
+                .set_times(
+                    std::fs::FileTimes::new().set_modified(pdf_modified + Duration::from_secs(1)),
+                )
+                .unwrap();
+            if on_save {
+                server.notify("textDocument/didSave", json!({"textDocument":{"uri":main}}));
+            } else {
+                server.request(
+                    3 + index as u64,
+                    "workspace/executeCommand",
+                    json!({"command":"latex.build","arguments":[main]}),
+                );
+            }
+            let noop = server.until(|message| message["method"] == "latex/buildFinished");
+            assert_eq!(noop["params"]["status"], "success", "{name}: {noop}");
+            assert_eq!(noop["params"]["stale"], false, "{noop}");
+            assert_eq!(noop["params"]["diagnosticsCount"], 0, "{noop}");
+            assert_eq!(noop["params"]["pdfUri"], first["params"]["pdfUri"]);
+            assert_eq!(std::fs::read(&pdf).unwrap(), pdf_before);
+            assert_eq!(
+                std::fs::metadata(&pdf).unwrap().modified().unwrap(),
+                pdf_modified
+            );
+        }
+        // The accepted no-ops must retain the original content history.
+        std::fs::write(&main_path, source.replace("article", "minimal")).unwrap();
+        std::fs::File::open(&main_path)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(pdf_modified))
+            .unwrap();
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":3},"contentChanges":[{"text":source.replace("article", "minimal")}]}),
+        );
+        server.request(
+            10,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let outdated = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(outdated["params"]["status"], "error", "{outdated}");
+        assert!(outdated["params"]["pdfUri"].is_null());
+        assert!(
+            outdated["params"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("input content changed")),
+            "{outdated}"
+        );
+        server.request(11, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+#[ignore = "requires latexmk and a TeX installation"]
+fn real_latexmk_reuses_the_pdf_after_saving_identical_source_contents() {
+    let directory = tempfile::tempdir().unwrap();
+    let main_path = directory.path().join("main.tex");
+    let main = Url::from_file_path(&main_path).unwrap();
+    let source = "\\documentclass{article}\n\\begin{document}\nHello, world.\n\\end{document}\n";
+    std::fs::write(&main_path, source).unwrap();
+    let mut server = Server::start();
+    server.request(
+        1,
+        "initialize",
+        json!({"processId":null,"rootUri":Url::from_directory_path(directory.path()).unwrap(),"capabilities":{},"initializationOptions":{"build":{"onSave":true}}}),
+    );
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":main,"languageId":"latex","version":1,"text":source}}),
+    );
+    server.notify("textDocument/didSave", json!({"textDocument":{"uri":main}}));
+    let first = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(first["params"]["status"], "success", "{first}");
+    let pdf = directory.path().join("build/latex-lsp/main.pdf");
+    let pdf_before = std::fs::read(&pdf).unwrap();
+    let pdf_modified = std::fs::metadata(&pdf).unwrap().modified().unwrap();
+    for _ in 0..2 {
+        std::fs::write(&main_path, source).unwrap();
+        std::fs::File::open(&main_path)
+            .unwrap()
+            .set_times(
+                std::fs::FileTimes::new().set_modified(pdf_modified + Duration::from_secs(1)),
+            )
+            .unwrap();
+        server.notify("textDocument/didSave", json!({"textDocument":{"uri":main}}));
+        let noop = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(noop["params"]["status"], "success", "{noop}");
+        assert_eq!(noop["params"]["stale"], false, "{noop}");
+        assert_eq!(noop["params"]["diagnosticsCount"], 0, "{noop}");
+        assert!(
+            noop["params"]["output"]
+                .as_str()
+                .is_some_and(|output| output.contains("Nothing to do")),
+            "{noop}"
+        );
+        assert_eq!(std::fs::read(&pdf).unwrap(), pdf_before);
+        assert_eq!(
+            std::fs::metadata(&pdf).unwrap().modified().unwrap(),
+            pdf_modified
+        );
+    }
+    server.request(2, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
 fn bibliography_styles_invalidate_old_pdfs_even_when_missing_from_tex_recorder() {
     let script = "if [ ! -f \"$1/main.pdf\" ]; then\n printf '%%PDF-1.4\\n' > \"$1/main.pdf\"\n printf 'INPUT main.tex\\n' > \"$1/main.fls\"\nfi\n";
     let (mut server, directory, main) = fake_build_server(script, false);
@@ -2933,10 +3089,19 @@ fn bibliography_logs_discover_inputs_without_replacing_or_losing_tex_recorder_de
         .unwrap()
         .modified()
         .unwrap();
-    std::fs::File::open(bib)
+    std::fs::File::open(&bib)
         .unwrap()
         .set_times(std::fs::FileTimes::new().set_modified(pdf_time + Duration::from_secs(1)))
         .unwrap();
+    server.request(
+        50,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let touched = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(touched["params"]["status"], "success", "{touched}");
+    assert_eq!(touched["params"]["dependenciesCount"], 4, "{touched}");
+    std::fs::write(&bib, "@book{dynamic,title={Changed}}\n").unwrap();
     server.request(
         5,
         "workspace/executeCommand",
@@ -4118,6 +4283,19 @@ fn recorded_images_remain_binary_and_invalidate_unchanged_pdf_artifacts() {
     let pdf = directory.path().join("build/latex-lsp/main.pdf");
     let old_pdf = std::fs::read(&pdf).unwrap();
     let newer = std::fs::metadata(&pdf).unwrap().modified().unwrap() + Duration::from_secs(1);
+    std::fs::File::open(&image)
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(newer))
+        .unwrap();
+    server.request(
+        40,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let touched = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(touched["params"]["status"], "success", "{touched}");
+    assert_eq!(std::fs::read(&pdf).unwrap(), old_pdf);
+    std::fs::write(&image, "\\label{image:changed-but-not-indexed}").unwrap();
     std::fs::File::open(&image)
         .unwrap()
         .set_times(std::fs::FileTimes::new().set_modified(newer))

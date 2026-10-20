@@ -14,7 +14,7 @@ use std::{
 use crate::{
     build_log,
     config::BuildConfig,
-    file_checks::{fingerprint, ArtifactFingerprint, InputSnapshot},
+    file_checks::{fingerprint, ArtifactFingerprint, InputSnapshot, Snapshot},
     workspace::Workspace,
 };
 use serde_json::{json, Value};
@@ -403,9 +403,16 @@ impl BuildManager {
                     .await;
             }
             let worker_root = root_path.clone();
+            let previous_pdf = workspace.read().await.pdf_checks.get(&root_uri).cloned();
             let wall_started = std::time::SystemTime::now();
             let outcome = tokio::task::spawn_blocking(move || {
-                run_with_mode(&worker_root, &config, &cancel, rebuild)
+                run_with_mode(
+                    &worker_root,
+                    &config,
+                    &cancel,
+                    rebuild,
+                    previous_pdf.as_deref(),
+                )
             })
             .await;
             let mut outcome = outcome
@@ -568,6 +575,7 @@ impl BuildManager {
                 artifact_inputs
                     .iter()
                     .filter_map(|uri| uri.to_file_path().ok()),
+                current.pdf_checks.get(&root_uri).map(Arc::as_ref),
             );
             if outcome.status == "success" && !outcome.pdf_updated {
                 if let Some(reason) = outcome.pdf.as_ref().and_then(|pdf| {
@@ -1068,14 +1076,20 @@ pub(crate) fn kill_group(child: &mut Child) {
 }
 
 pub fn run(root: &Path, config: &BuildConfig, cancel: &AtomicBool) -> Outcome {
-    run_with_mode(root, config, cancel, false)
+    run_with_mode(root, config, cancel, false, None)
 }
 
 pub fn rebuild(root: &Path, config: &BuildConfig, cancel: &AtomicBool) -> Outcome {
-    run_with_mode(root, config, cancel, true)
+    run_with_mode(root, config, cancel, true, None)
 }
 
-fn run_with_mode(root: &Path, config: &BuildConfig, cancel: &AtomicBool, rebuild: bool) -> Outcome {
+fn run_with_mode(
+    root: &Path,
+    config: &BuildConfig,
+    cancel: &AtomicBool,
+    rebuild: bool,
+    previous_pdf: Option<&Snapshot>,
+) -> Outcome {
     // A task can be cancelled while waiting for client progress registration,
     // before its worker starts. Preserve existing artifacts in that case.
     if cancel.load(Ordering::Relaxed) {
@@ -1085,7 +1099,12 @@ fn run_with_mode(root: &Path, config: &BuildConfig, cancel: &AtomicBool, rebuild
         };
     }
     let mut outcome = run_inner(root, config, cancel, rebuild);
-    reject_outdated_pdf(root, &mut outcome, std::iter::once(root.to_path_buf()));
+    reject_outdated_pdf(
+        root,
+        &mut outcome,
+        std::iter::once(root.to_path_buf()),
+        previous_pdf,
+    );
     if outcome.status == "error"
         && !outcome
             .diagnostics
@@ -1110,23 +1129,36 @@ fn run_with_mode(root: &Path, config: &BuildConfig, cancel: &AtomicBool, rebuild
     outcome
 }
 
-fn reject_outdated_pdf(root: &Path, outcome: &mut Outcome, sources: impl Iterator<Item = PathBuf>) {
+fn reject_outdated_pdf(
+    root: &Path,
+    outcome: &mut Outcome,
+    sources: impl Iterator<Item = PathBuf>,
+    previous_pdf: Option<&Snapshot>,
+) {
     if outcome.status != "success" || outcome.pdf_updated {
         return;
     }
-    let Some(pdf) = outcome
-        .pdf
-        .as_ref()
-        .and_then(|pdf| fingerprint(pdf))
-        .and_then(|(_, modified)| modified)
-    else {
+    let Some(pdf_path) = outcome.pdf.as_ref() else {
         return;
     };
+    let Some(pdf) = fingerprint(pdf_path).and_then(|(_, modified)| modified) else {
+        return;
+    };
+    // Editors can rewrite identical inputs after the PDF was produced, while
+    // latexmk correctly skips TeX. Only override the timestamp check using the
+    // input history of this exact, unmodified PDF; unknown inputs stay unsafe.
+    let previous_pdf =
+        previous_pdf.filter(|previous| previous.matches_pdf(pdf_path) && !previous.pdf_changed());
     let outdated = sources.into_iter().find(|source| {
         std::fs::metadata(source)
             .ok()
             .and_then(|metadata| metadata.modified().ok())
-            .is_none_or(|modified| modified > pdf)
+            .is_none_or(|modified| {
+                modified > pdf
+                    && previous_pdf.is_none_or(|previous| {
+                        Url::from_file_path(source).map_or(true, |uri| previous.input_changed(&uri))
+                    })
+            })
     });
     if let Some(source) = outdated {
         outcome.status = "error";
