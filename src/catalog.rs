@@ -3,6 +3,11 @@ pub(crate) use crate::primitives::PRIMITIVES;
 /// Command name, snippet template (without leading backslash), short documentation.
 /// Templates retain literal TeX backslashes; completion escapes them for the client.
 pub const COMMANDS: &[(&str, &str, &str)] = &[
+    ("definecolor", "definecolor{${1:name}}{${2:rgb}}{${3:0,0,0}}", "Define a named color using a color model and specification. Optional type and name prefix arguments are available. Requires xcolor."),
+    ("color", "color{${1:color}}", "Select a text color within the current group. An optional model allows a literal color specification. Requires color or xcolor."),
+    ("textcolor", "textcolor{${1:color}}{${2:text}}", "Typeset text using a color. An optional model allows a literal color specification. Requires color or xcolor."),
+    ("colorbox", "colorbox{${1:color}}{${2:text}}", "Place text in a box with a colored background. An optional model allows a literal color specification. Requires color or xcolor."),
+    ("pagecolor", "pagecolor{${1:color}}", "Set the page background color. An optional model allows a literal color specification. Requires color or xcolor."),
     ("epsilon", "epsilon", "Greek lowercase epsilon (math mode)."),
     ("zeta", "zeta", "Greek lowercase zeta (math mode)."),
     ("eta", "eta", "Greek lowercase eta (math mode)."),

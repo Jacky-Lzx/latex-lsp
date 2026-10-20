@@ -279,6 +279,18 @@ fn builtin(name: &str) -> Option<Signature> {
         }
         "href" => (&[("url", false), ("text", false)], false),
         "url" => (&[("url", false)], false),
+        "definecolor" => (
+            &[
+                ("type", true),
+                ("name", false),
+                ("prefix", true),
+                ("model", false),
+                ("specification", false),
+            ],
+            false,
+        ),
+        "color" | "pagecolor" => (&[("model", true), ("color", false)], false),
+        "textcolor" | "colorbox" => (&[("model", true), ("color", false), ("text", false)], false),
         "includegraphics" => (&[("options", true), ("file", false)], true),
         "documentclass" | "usepackage" | "RequirePackage" | "LoadClass" => (
             &[
@@ -603,9 +615,12 @@ fn builtin(name: &str) -> Option<Signature> {
                     && index == 0
             {
                 Kind::CommandToken
-            } else if syntax::is_range_reference(name) {
-                // Keep range endpoints aligned with reference navigation. In
-                // particular, an unsupported star is not the first label.
+            } else if syntax::is_range_reference(name)
+                || index == 1 && matches!(name, "definecolor" | "textcolor" | "colorbox")
+            {
+                // Keep range endpoints aligned with reference navigation and
+                // color names aligned with their grouped declaration/wrappers.
+                // Unsupported stars and extra notes are not bare names.
                 Kind::RequiredGroup
             } else {
                 Kind::Required
@@ -635,6 +650,11 @@ fn builtin(name: &str) -> Option<Signature> {
             || matches!(
                 name,
                 "hyperref"
+                    | "definecolor"
+                    | "color"
+                    | "textcolor"
+                    | "colorbox"
+                    | "pagecolor"
                     | "bibitem"
                     | "newenvironment"
                     | "renewenvironment"
