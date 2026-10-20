@@ -1154,6 +1154,29 @@ fn undefined_command_range(text: &Text, line: u32, context: &str) -> Option<Rang
     Some(text.range(command.span.start, command.span.end))
 }
 
+fn reference_macro_error_invocation(
+    source: &str,
+    command: &crate::syntax::Command,
+    frame: &str,
+) -> Option<(ByteRange<usize>, ByteRange<usize>)> {
+    let start = match command.name.as_str() {
+        "ref" | "pageref" | "eqref" => {
+            crate::syntax::reference_argument_start(source, &command.name, command.span.end)?
+        }
+        "cite" | "nocite" => {
+            crate::syntax::citation_argument_start(source, &command.name, command.span.end)?
+        }
+        _ => return None,
+    };
+    let (argument, _) = crate::syntax::group(source, start, b'{', b'}')?;
+    if argument.value != frame
+        || crate::syntax::control_word(&argument.value, 0)? != (0..argument.value.len())
+    {
+        return None;
+    }
+    Some((argument.span, argument.outer_span))
+}
+
 fn undefined_name_command_range(
     text: &Text,
     line: u32,
@@ -1166,9 +1189,8 @@ fn undefined_name_command_range(
     let syntax = crate::syntax::Syntax::latex(text);
     let mut matches = syntax.commands.iter().filter_map(|command| {
         let (span, tail) = crate::saved_text::name_error_invocation(&text.source, command, frame)
-            .or_else(|| {
-            crate::named_commands::name_error_invocation(&text.source, command, frame)
-        })?;
+            .or_else(|| crate::named_commands::name_error_invocation(&text.source, command, frame))
+            .or_else(|| reference_macro_error_invocation(&text.source, command, frame))?;
         if text.position(tail.end).line != line
             || !(syntax
                 .name_command_references
