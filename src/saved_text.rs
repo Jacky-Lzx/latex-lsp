@@ -46,6 +46,44 @@ fn argument(source: &str, command: &Command) -> Option<Argument> {
     }
 }
 
+/// Only a single control word can be attributed through FancyVerb's known
+/// name-expansion frame. User expansions and mixed token lists stay unresolved.
+pub(crate) fn name_error_invocation(
+    source: &str,
+    command: &Command,
+    frame: &str,
+) -> Option<(Span<usize>, Span<usize>)> {
+    if command.name == "begin" || executable_call(source, command) {
+        return None;
+    }
+    let (kind, declaration) = role(command)?;
+    let argument = argument(source, command)?;
+    if syntax::control_word(&argument.value, 0)? != (0..argument.value.len()) {
+        return None;
+    }
+    let prefix = match (kind, declaration) {
+        (Kind::Saved, _) => "FV@SV@",
+        (Kind::Moving, true) => "FV@SVG@",
+        (Kind::Moving, false) => "",
+    };
+    if frame.strip_prefix(prefix)? != argument.value {
+        return None;
+    }
+    let end = if declaration {
+        let at = syntax::skip_space(source, argument.outer_span.end);
+        let (delimiter, end) = fancyvrb::name_argument(source, at)?;
+        let mut chars = delimiter.value.chars();
+        let ch = chars.next()?;
+        if chars.next().is_some() || ch.is_whitespace() || matches!(ch, '\\' | '{' | '}' | '%') {
+            return None;
+        }
+        end
+    } else {
+        argument.outer_span.end
+    };
+    Some((argument.span, argument.outer_span.start..end))
+}
+
 /// A conservative literal token list: spaces and commas are meaningful, while
 /// expansion, comments, grouping and TeX's active input syntax stay unresolved.
 pub(crate) fn literal_name(name: &str) -> bool {

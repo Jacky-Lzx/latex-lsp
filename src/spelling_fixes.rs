@@ -105,14 +105,16 @@ fn target<'a>(
         return None;
     }
     let name = diagnostic.data.as_ref()?.get("command")?.as_str()?;
-    doc.syntax
-        .commands
-        .iter()
-        .any(|command| {
-            command.name == name
-                && doc.text.range(command.span.start, command.span.end) == diagnostic.range
-        })
-        .then_some((Kind::Command, name))
+    let direct = doc.syntax.commands.iter().any(|command| {
+        command.name == name
+            && doc.text.range(command.span.start, command.span.end) == diagnostic.range
+    });
+    let saved = doc.syntax.name_command_references.iter().any(|entry| {
+        entry.name == name
+            && doc.text.source[entry.span.clone()].starts_with('\\')
+            && doc.text.range(entry.span.start, entry.span.end) == diagnostic.range
+    });
+    (direct || saved).then_some((Kind::Command, name))
 }
 
 fn opaque_environment(

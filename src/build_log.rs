@@ -540,6 +540,7 @@ struct PackageOptions {
 struct ErrorContext<'a> {
     source: &'a str,
     package_options: Option<PackageOptions>,
+    saved_name_frame: Option<&'a str>,
 }
 
 impl<'a> ErrorContext<'a> {
@@ -547,6 +548,7 @@ impl<'a> ErrorContext<'a> {
         Self {
             source,
             package_options: None,
+            saved_name_frame: None,
         }
     }
 }
@@ -664,6 +666,20 @@ fn error_context<'a>(
         }
         (index, line) = context.next()?;
     }
+    let saved_name_frame = (message == "Undefined control sequence." && recent.is_none())
+        .then(|| line.trim_start().strip_prefix("<argument> "))
+        .flatten()
+        .map(str::trim_end);
+    if let Some(frame) = saved_name_frame {
+        let token = frame
+            .strip_prefix("FV@SVG@")
+            .or_else(|| frame.strip_prefix("FV@SV@"))
+            .unwrap_or(frame);
+        if crate::syntax::control_word(token, 0)? != (0..token.len()) {
+            return None;
+        }
+        (index, line) = context.next()?;
+    }
     let graphics = missing_graphic_name(message).is_some() && missing_file_name(message).is_none();
     let documentation = line.trim() == "See the LaTeX manual or LaTeX Companion for explanation."
         || graphics
@@ -717,6 +733,7 @@ fn error_context<'a>(
         .then(|| ErrorContext {
             source: prefix,
             package_options: package_option_details(lines, index + 1, message),
+            saved_name_frame,
         })
 }
 
@@ -1137,6 +1154,36 @@ fn undefined_command_range(text: &Text, line: u32, context: &str) -> Option<Rang
     Some(text.range(command.span.start, command.span.end))
 }
 
+fn undefined_saved_name_command_range(
+    text: &Text,
+    line: u32,
+    context: &str,
+    frame: &str,
+) -> Option<Range> {
+    let prefix = context.trim_end();
+    let shortened = shortened_context(prefix);
+    let start = text.offset(Position::new(line, 0))?;
+    let syntax = crate::syntax::Syntax::latex(text);
+    let mut matches = syntax.commands.iter().filter_map(|command| {
+        let (span, tail) = crate::saved_text::name_error_invocation(&text.source, command, frame)?;
+        if text.position(tail.end).line != line
+            || !syntax
+                .name_command_references
+                .iter()
+                .any(|entry| entry.span == span)
+        {
+            return None;
+        }
+        let consumed = &text.source[start..tail.end];
+        let matched = shortened.map_or(consumed == prefix, |suffix| {
+            suffix.ends_with(&text.source[tail]) && consumed.ends_with(suffix)
+        });
+        matched.then(|| text.range(span.start, span.end))
+    });
+    let range = matches.next()?;
+    matches.next().is_none().then_some(range)
+}
+
 fn emit_with_context(
     result: &mut BTreeMap<Url, Vec<Diagnostic>>,
     path: &Path,
@@ -1146,7 +1193,10 @@ fn emit_with_context(
     error: Option<ErrorContext<'_>>,
     source_confirmed: bool,
 ) {
-    let context = error.as_ref().map(|context| context.source);
+    let context = error
+        .as_ref()
+        .filter(|context| context.saved_name_frame.is_none())
+        .map(|context| context.source);
     let package_options = error
         .as_ref()
         .and_then(|context| context.package_options.as_ref());
@@ -1237,7 +1287,14 @@ fn emit_with_context(
     ranges.extend(destination_ranges);
     let command_range = (message == "Undefined control sequence."
         && reported_line.checked_sub(1) == Some(line))
-    .then(|| context.and_then(|context| undefined_command_range(&text, line, context)))
+    .then(|| {
+        let error = error.as_ref()?;
+        if let Some(frame) = error.saved_name_frame {
+            undefined_saved_name_command_range(&text, line, error.source, frame)
+        } else {
+            undefined_command_range(&text, line, error.source)
+        }
+    })
     .flatten();
     ranges.extend(command_range);
     let environment = environment_error(&message);
