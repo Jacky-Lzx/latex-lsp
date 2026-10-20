@@ -782,7 +782,7 @@ fn loader_failure_range(
         // before the loader reports a failure. That token may be on
         // the next source line, while the path being diagnosed is above it.
         let tail = if text.source.as_bytes().get(next) == Some(&b'[') {
-            crate::syntax::group(&text.source, next, b'[', b']').map(|(_, end)| end)
+            crate::syntax::optional_note_end(&text.source, next)
         } else if text.source.as_bytes().get(next) == Some(&b'\\') {
             crate::syntax::control_word(&text.source, next)
                 .map(|word| word.end)
@@ -834,27 +834,28 @@ fn loader_failure_range(
         if !confirmed {
             continue;
         }
-        let values = if crate::syntax::file_list(command_name) {
-            argument.value.split(',').collect::<Vec<_>>()
+        // A dynamic sibling can generate the reported filename. Require the
+        // complete static list before attributing an error to one item.
+        let spans = if crate::syntax::file_list(command_name) {
+            let Some(spans) = crate::syntax::complete_file_list_spans(&text.source, command) else {
+                continue;
+            };
+            spans
         } else {
-            vec![argument.value.as_str()]
+            let span = crate::syntax::trimmed_span(&text.source, argument.span.clone());
+            if !crate::syntax::is_literal_file_path(&crate::syntax::loader_name(
+                &text.source[span.clone()],
+            )) {
+                continue;
+            }
+            vec![span]
         };
-        // A dynamic sibling can generate the reported filename; do not infer
-        // which item caused the error without a completely static list.
-        if values.iter().any(|value| {
-            !crate::syntax::is_literal_file_path(&crate::syntax::loader_name(value.trim()))
-        }) {
-            continue;
-        }
-        let mut offset = argument.span.start;
-        for value in values {
-            let span = crate::syntax::trimmed_span(&text.source, offset..offset + value.len());
-            if crate::syntax::file_lookup_names(command_name, value.trim())
+        for span in spans {
+            if crate::syntax::file_lookup_names(command_name, &text.source[span.clone()])
                 .any(|candidate| candidate == name)
             {
                 matches.push((text.range(span.start, span.end), command_name));
             }
-            offset += value.len() + 1;
         }
     }
     (matches.len() == 1).then(|| matches[0])

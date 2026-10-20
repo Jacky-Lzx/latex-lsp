@@ -629,6 +629,7 @@ fn builtin(name: &str) -> Option<Signature> {
         documentation,
         starred,
         nested_brackets: !(syntax::is_citation(name)
+            || syntax::loader_extension(name) == Some("sty")
             || syntax::declares_traditional_command(name)
             || syntax::reference_note_count(name) > 0
             || matches!(

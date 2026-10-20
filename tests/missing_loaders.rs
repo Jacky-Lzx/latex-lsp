@@ -92,6 +92,14 @@ fn missing_loader_diagnostics_follow_static_names_and_the_consumed_lookahead_tok
             "usepackage",
             "locla.sty",
         ),
+        (
+            "\\usepackage[draft [literal]{% head, phantom, }\r\n local% first\r\n,% separator, }\r\n locla% missing\r\n}\r\n\\begin{document}",
+            r"\begin", 6, "locla.sty", "usepackage", "locla",
+        ),
+        (
+            "\\RequirePackageWithOptions{% head, phantom, }\n local% first\n,locla% missing\n}\n\\endinput",
+            r"\endinput", 5, "locla.sty", "RequirePackageWithOptions", "locla",
+        ),
     ] {
         for numbered in [false, true] {
             let directory = tempfile::tempdir().unwrap();
@@ -267,6 +275,8 @@ fn actions(workspace: &Workspace, uri: &Url, diagnostic: Diagnostic) -> CodeActi
 #[test]
 fn loader_repairs_preserve_options_lists_versions_and_fix_redundant_suffixes() {
     for (source, loader, name, filename, replacement) in [
+        ("\\usepackage[draft [literal]{% keep, phantom, }\r\n graphicx% first\r\n, lcoal% typo\r\n}", "usepackage", "lcoal", "local.sty", "local"),
+        ("\\RequirePackageWithOptions{% keep, phantom\n lcoal% typo\n}", "RequirePackageWithOptions", "lcoal", "local.sty", "local"),
         (
             r"\usepackage[draft]{graphicx, lcoal }[2024/01/01]",
             "usepackage",

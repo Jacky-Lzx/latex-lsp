@@ -661,22 +661,45 @@ fn file_list_span(source: &str, segment: Range<usize>, compact: bool) -> Option<
     is_literal_file_path(&literal).then_some(span)
 }
 
-/// Static bibliography and chapter-selection lists leave comments and their
-/// commas outside editable names. Only bibliography names discard TeX spaces.
-/// Do not infer macro expansion or join separate pieces across a comment.
-pub(crate) fn file_list_spans(source: &str, command: &Command) -> Option<Vec<Range<usize>>> {
-    if !matches!(
-        command.name.as_str(),
-        "bibliography" | "nobibliography" | "includeonly"
-    ) {
+/// Package loaders accept one optional options argument, while bibliography
+/// and chapter-selection lists start directly with their mandatory group.
+pub(crate) fn file_list_argument_start(
+    source: &str,
+    name: &str,
+    command_end: usize,
+) -> Option<usize> {
+    let mut start = skip_space(source, command_end);
+    if source.as_bytes().get(start) == Some(&b'*') {
         return None;
     }
-    let start = skip_space(source, command.span.end);
-    let Some(argument) = command
+    if loader_extension(name) == Some("sty")
+        && !loader_forwards_options(name)
+        && source.as_bytes().get(start) == Some(&b'[')
+    {
+        start = skip_space(source, optional_note_end(source, start)?);
+    }
+    Some(start)
+}
+
+fn file_list_argument<'a>(source: &str, command: &'a Command) -> Option<&'a Argument> {
+    if !file_list(&command.name) {
+        return None;
+    }
+    let start = file_list_argument_start(source, &command.name, command.span.end)?;
+    command
         .argument
         .as_ref()
         .filter(|argument| argument.outer_span.start == start)
-    else {
+}
+
+/// Keep comments and their commas outside each editable name. Bibliography
+/// and package names discard TeX spaces, while chapter names preserve them.
+/// Do not infer macro expansion or join separate pieces across a comment.
+pub(crate) fn file_list_spans(source: &str, command: &Command) -> Option<Vec<Range<usize>>> {
+    if !file_list(&command.name) {
+        return None;
+    }
+    let Some(argument) = file_list_argument(source, command) else {
         return Some(vec![]);
     };
     Some(
@@ -689,17 +712,15 @@ pub(crate) fn file_list_spans(source: &str, command: &Command) -> Option<Vec<Ran
     )
 }
 
-/// A chapter selection is usable only when every nonempty item has a known
-/// literal name. Unknown items must not turn an excluded include into a read.
-pub(crate) fn includeonly_names(source: &str, command: &Command) -> Option<Vec<String>> {
-    if command.name != "includeonly" {
-        return None;
-    }
-    let start = skip_space(source, command.span.end);
-    let argument = command
-        .argument
-        .as_ref()
-        .filter(|argument| argument.outer_span.start == start)?;
+/// Compiler errors and chapter filters require every item to be static. A
+/// dynamic sibling could produce the reported filename or change selection.
+/// Leave TeX escape expansion unresolved in these stricter consumers.
+pub(crate) fn complete_file_list_spans(
+    source: &str,
+    command: &Command,
+) -> Option<Vec<Range<usize>>> {
+    let argument = file_list_argument(source, command)?;
+    let compact = file_name_ignores_spaces(&command.name);
     key_list_segments(source, argument.span.clone())
         .into_iter()
         .filter(|segment| {
@@ -708,11 +729,31 @@ pub(crate) fn includeonly_names(source: &str, command: &Command) -> Option<Vec<S
                 .any(|span| !source[span.clone()].trim().is_empty())
         })
         .map(|segment| {
-            let span = file_list_span(source, segment, false)?;
-            let name = &source[span];
-            is_literal_file_path(name).then(|| name.strip_suffix(".tex").unwrap_or(name).to_owned())
+            let span = file_list_span(source, segment, compact)?;
+            let raw = &source[span.clone()];
+            let literal = if compact {
+                loader_name(raw)
+            } else {
+                raw.into()
+            };
+            is_literal_file_path(&literal).then_some(span)
         })
         .collect()
+}
+
+pub(crate) fn includeonly_names(source: &str, command: &Command) -> Option<Vec<String>> {
+    if command.name != "includeonly" {
+        return None;
+    }
+    Some(
+        complete_file_list_spans(source, command)?
+            .into_iter()
+            .map(|span| {
+                let name = &source[span];
+                name.strip_suffix(".tex").unwrap_or(name).to_owned()
+            })
+            .collect(),
+    )
 }
 
 pub(crate) fn active_file_list_prefix(
@@ -1545,6 +1586,9 @@ impl Syntax {
                             .unwrap_or(source.len());
                     } else if is_citation(name) {
                         arg_start = citation_argument_start(source, name, command_end)
+                            .unwrap_or(source.len());
+                    } else if loader_extension(name) == Some("sty") {
+                        arg_start = file_list_argument_start(source, name, command_end)
                             .unwrap_or(source.len());
                     } else if name == "nobibliography" {
                         // The starred form reads the existing bibliography

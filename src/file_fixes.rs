@@ -68,30 +68,32 @@ pub(crate) fn fixes(
         .commands
         .iter()
         .filter(|command| command.name == command_name)
-        .filter_map(|command| command.argument.as_ref())
-        .find_map(|argument| {
-            let values = if syntax::file_list(command_name) {
-                argument.value.split(',').collect::<Vec<_>>()
+        .find_map(|command| {
+            let argument = command.argument.as_ref()?;
+            let spans = if syntax::file_list(command_name) {
+                syntax::complete_file_list_spans(&doc.text.source, command)?
             } else {
-                vec![argument.value.as_str()]
+                vec![syntax::trimmed_span(
+                    &doc.text.source,
+                    argument.span.clone(),
+                )]
             };
             if loader_extension.is_some()
-                && values
-                    .iter()
-                    .any(|value| !syntax::is_literal_file_path(&syntax::loader_name(value.trim())))
+                && spans.iter().any(|span| {
+                    !syntax::is_literal_file_path(&syntax::loader_name(
+                        &doc.text.source[span.clone()],
+                    ))
+                })
             {
                 return None;
             }
-            let mut offset = argument.span.start;
-            for value in values {
-                let span = syntax::trimmed_span(&doc.text.source, offset..offset + value.len());
+            for span in spans {
+                let value = &doc.text.source[span.clone()];
                 if doc.text.range(span.start, span.end) == diagnostic.range
-                    && syntax::file_lookup_names(command_name, value.trim())
-                        .any(|name| name == reported)
+                    && syntax::file_lookup_names(command_name, value).any(|name| name == reported)
                 {
                     return Some((argument, span));
                 }
-                offset += value.len() + 1;
             }
             None
         });
