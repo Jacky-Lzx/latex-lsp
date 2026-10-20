@@ -2033,7 +2033,146 @@ pub fn parse_bibliography_log(
     log: &str,
 ) -> BTreeMap<Url, Vec<Diagnostic>> {
     let paths = crate::recorder::BibliographyPaths::new(root, log_path, log);
-    parse_bibliography_in(root, &paths, log)
+    let mut result = parse_bibliography_in(root, &paths, log);
+    if !crate::output::truncated(log) {
+        if let Ok(uri) = Url::from_file_path(root) {
+            locate_missing_bibliography_styles(&BTreeSet::from([uri]), &mut result);
+        }
+    }
+    result
+}
+
+pub(crate) fn missing_bibliography_style_name(message: &str) -> Option<&str> {
+    let name = message.strip_prefix("BibTeX: I couldn't open style file ")?;
+    let stem = name.strip_suffix(".bst")?;
+    (!stem.is_empty()
+        && crate::syntax::is_literal_file_path(name)
+        && !name.chars().any(char::is_whitespace))
+    .then_some(name)
+}
+
+/// Auxiliary line numbers identify generated data, not the originating TeX
+/// declaration. Only a unique static declaration in confirmed sources can
+/// provide a source range; unread namesakes must not participate.
+pub(crate) fn locate_missing_bibliography_styles(
+    sources: &BTreeSet<Url>,
+    diagnostics: &mut BTreeMap<Url, Vec<Diagnostic>>,
+) {
+    use std::io::Read;
+
+    let requested: BTreeSet<_> = diagnostics
+        .values()
+        .flatten()
+        .filter(|item| {
+            item.code == Some(NumberOrString::String("missing-bibliography-style".into()))
+                && item.severity == Some(DiagnosticSeverity::ERROR)
+        })
+        .filter_map(|item| missing_bibliography_style_name(&item.message).map(str::to_owned))
+        .collect();
+    if requested.is_empty() || requested.len() > 64 {
+        return;
+    }
+    let mut occurrences: BTreeMap<String, Vec<(Url, Range)>> = BTreeMap::new();
+    let mut total = 0usize;
+    let mut count = 0usize;
+    for uri in sources {
+        let Ok(path) = uri.to_file_path() else {
+            return;
+        };
+        if matches!(
+            path.extension().and_then(|ext| ext.to_str()),
+            Some("bib" | "bst")
+        ) {
+            continue;
+        }
+        count += 1;
+        if count > 1024
+            || std::fs::metadata(&path).map_or(true, |metadata| metadata.len() > 2 * 1024 * 1024)
+        {
+            return;
+        }
+        let Ok(file) = std::fs::File::open(path) else {
+            return;
+        };
+        let mut source = String::new();
+        if file
+            .take(2 * 1024 * 1024 + 1)
+            .read_to_string(&mut source)
+            .is_err()
+        {
+            return;
+        }
+        total += source.len();
+        if source.len() > 2 * 1024 * 1024 || total > 16 * 1024 * 1024 {
+            return;
+        }
+        let text = Text::new(source);
+        let syntax = crate::syntax::Syntax::latex(&text);
+        if syntax
+            .definitions
+            .iter()
+            .any(|entry| entry.name == "bibliographystyle")
+        {
+            return;
+        }
+        for command in syntax
+            .commands
+            .iter()
+            .filter(|command| command.name == "bibliographystyle")
+        {
+            // An expanded or spliced name might be the actual failed style.
+            // Do not choose a static namesake by guessing execution order.
+            let Some(argument) = crate::syntax::file_argument(&text.source, command) else {
+                return;
+            };
+            let name = format!("{}.bst", argument.value);
+            if requested.contains(&name) {
+                let entries = occurrences.entry(name).or_default();
+                if entries.len() < 2 {
+                    entries.push((
+                        uri.clone(),
+                        text.range(argument.span.start, argument.span.end),
+                    ));
+                }
+            }
+        }
+    }
+    let mut relocated = Vec::new();
+    for entries in diagnostics.values_mut() {
+        entries.retain(|item| {
+            if item.code != Some(NumberOrString::String("missing-bibliography-style".into()))
+                || item.severity != Some(DiagnosticSeverity::ERROR)
+            {
+                return true;
+            }
+            let Some(name) = missing_bibliography_style_name(&item.message) else {
+                return true;
+            };
+            if item
+                .data
+                .as_ref()
+                .and_then(|data| data.get("file"))
+                .and_then(|name| name.as_str())
+                != Some(name)
+            {
+                return true;
+            }
+            let Some(candidates) = occurrences.get(name).filter(|entries| entries.len() == 1)
+            else {
+                return true;
+            };
+            let (uri, range) = &candidates[0];
+            let mut item = item.clone();
+            item.range = *range;
+            item.data = Some(serde_json::json!({"file":name}));
+            relocated.push((uri.clone(), item));
+            false
+        });
+    }
+    diagnostics.retain(|_, entries| !entries.is_empty());
+    for (uri, item) in relocated {
+        diagnostics.entry(uri).or_default().push(item);
+    }
 }
 
 pub(crate) fn parse_bibliography_in(
@@ -2076,13 +2215,34 @@ pub(crate) fn parse_bibliography_in(
                     } else {
                         message
                     };
+                    let message = format!("BibTeX: {}", message.trim());
+                    let missing_style = (Path::new(name.trim().trim_matches('"'))
+                        .extension()
+                        .and_then(|extension| extension.to_str())
+                        == Some("aux"))
+                    .then(|| missing_bibliography_style_name(&message))
+                    .flatten();
                     emit(
                         &mut result,
                         &path,
                         number,
-                        format!("BibTeX: {}", message.trim()),
+                        message.clone(),
                         DiagnosticSeverity::ERROR,
                     );
+                    if let (Some(file), Ok(uri)) = (missing_style, Url::from_file_path(root)) {
+                        if let Some(entries) = result.get_mut(&uri) {
+                            for entry in entries.iter_mut().filter(|entry| {
+                                entry.message == message
+                                    && entry.severity == Some(DiagnosticSeverity::ERROR)
+                            }) {
+                                entry.code = Some(NumberOrString::String(
+                                    "missing-bibliography-style".into(),
+                                ));
+                                entry.data =
+                                    Some(serde_json::json!({"file":file,"unresolvedSource":true}));
+                            }
+                        }
+                    }
                     continue;
                 }
             }
@@ -5061,5 +5221,103 @@ mod tests {
         );
         let diagnostics = parse(&main, &log);
         assert_eq!(diagnostics[&Url::from_file_path(&main).unwrap()].len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod bibliography_style_locations {
+    use super::*;
+
+    fn missing(root: &Path) -> BTreeMap<Url, Vec<Diagnostic>> {
+        parse_bibliography(
+            root,
+            "I couldn't open style file local,styel.bst\n---line 2 of file main.aux\n",
+        )
+    }
+
+    #[test]
+    fn style_locations_use_only_confirmed_sources_and_preserve_ambiguous_failures() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let main = root.join("main.tex");
+        let settings = root.join("settings.tex");
+        let unread = root.join("unread.tex");
+        std::fs::write(&main, "\\input{settings}\n").unwrap();
+        let source = "% emoji😀\r\n\\bibliographystyle{% before\r\n local,styel% after\r\n}\r\n";
+        std::fs::write(&settings, source).unwrap();
+        std::fs::write(&unread, source).unwrap();
+        let main_uri = Url::from_file_path(&main).unwrap();
+        let settings_uri = Url::from_file_path(&settings).unwrap();
+        let unread_uri = Url::from_file_path(&unread).unwrap();
+        let sources = BTreeSet::from([main_uri.clone(), settings_uri.clone()]);
+        let mut diagnostics = missing(&main);
+        locate_missing_bibliography_styles(&sources, &mut diagnostics);
+        assert!(!diagnostics.contains_key(&main_uri));
+        let item = &diagnostics[&settings_uri][0];
+        let start = source.find(" local,styel").unwrap() + 1;
+        assert_eq!(
+            item.range,
+            Text::new(source.into()).range(start, start + "local,styel".len())
+        );
+        assert_eq!(
+            item.data,
+            Some(serde_json::json!({"file":"local,styel.bst"}))
+        );
+
+        let mut sources = sources;
+        sources.insert(unread_uri);
+        let mut diagnostics = missing(&main);
+        locate_missing_bibliography_styles(&sources, &mut diagnostics);
+        assert!(!diagnostics.contains_key(&settings_uri));
+        assert_eq!(
+            diagnostics[&main_uri][0].data.as_ref().unwrap()["unresolvedSource"],
+            true
+        );
+        std::fs::write(&unread, r"\bibliographystyle{\chosen}").unwrap();
+        let mut diagnostics = missing(&main);
+        locate_missing_bibliography_styles(&sources, &mut diagnostics);
+        assert_eq!(
+            diagnostics[&main_uri][0].data.as_ref().unwrap()["unresolvedSource"],
+            true
+        );
+    }
+
+    #[test]
+    fn unavailable_oversized_or_truncated_style_sources_do_not_create_false_unique_locations() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let main = root.join("main.tex");
+        let settings = root.join("settings.tex");
+        let other = root.join("other.tex");
+        std::fs::write(&main, "Main.\n").unwrap();
+        std::fs::write(&settings, r"\bibliographystyle{local,styel}").unwrap();
+        let main_uri = Url::from_file_path(&main).unwrap();
+        let sources = [main.clone(), settings, other.clone()]
+            .into_iter()
+            .map(|path| Url::from_file_path(path).unwrap())
+            .collect();
+        let mut diagnostics = missing(&main);
+        locate_missing_bibliography_styles(&sources, &mut diagnostics);
+        assert_eq!(
+            diagnostics[&main_uri][0].data.as_ref().unwrap()["unresolvedSource"],
+            true
+        );
+        std::fs::write(other, "%".repeat(2 * 1024 * 1024 + 1)).unwrap();
+        let mut diagnostics = missing(&main);
+        locate_missing_bibliography_styles(&sources, &mut diagnostics);
+        assert_eq!(
+            diagnostics[&main_uri][0].data.as_ref().unwrap()["unresolvedSource"],
+            true
+        );
+        std::fs::write(&main, r"\bibliographystyle{local,styel}").unwrap();
+        let log = format!(
+            "I couldn't open style file local,styel.bst\n---line 2 of file main.aux\n{}\n",
+            crate::output::TRUNCATED
+        );
+        let diagnostics = parse_bibliography(&main, &log);
+        assert_eq!(
+            diagnostics[&main_uri][0].data.as_ref().unwrap()["unresolvedSource"],
+            true
+        );
     }
 }

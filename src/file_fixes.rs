@@ -25,6 +25,7 @@ pub(crate) fn fixes(
     let command_name = match code {
         "missing-input" => "input",
         "missing-include" => "include",
+        "missing-bibliography-style" => "bibliographystyle",
         "missing-package" | "missing-class" => {
             let Some(command) = diagnostic
                 .data
@@ -47,9 +48,22 @@ pub(crate) fn fixes(
         _ => return vec![],
     };
     let loader_extension = syntax::loader_extension(command_name);
-    let extension = loader_extension.unwrap_or("tex");
+    let extension = loader_extension.unwrap_or(if command_name == "bibliographystyle" {
+        "bst"
+    } else {
+        "tex"
+    });
     let compact = syntax::file_name_ignores_spaces(command_name);
-    let reported = if command_name != "include" {
+    let reported = if command_name == "bibliographystyle" {
+        build_log::missing_bibliography_style_name(&diagnostic.message).filter(|name| {
+            diagnostic
+                .data
+                .as_ref()
+                .and_then(|data| data.get("file"))
+                .and_then(|name| name.as_str())
+                == Some(*name)
+        })
+    } else if command_name != "include" {
         build_log::missing_file_name(&diagnostic.message).filter(|name| {
             diagnostic
                 .data
@@ -94,9 +108,12 @@ pub(crate) fn fixes(
             }
             for span in spans {
                 let value = &doc.text.source[span.clone()];
-                if doc.text.range(span.start, span.end) == diagnostic.range
-                    && syntax::file_lookup_names(command_name, value).any(|name| name == reported)
-                {
+                let matches_report = if command_name == "bibliographystyle" {
+                    format!("{value}.bst") == reported
+                } else {
+                    syntax::file_lookup_names(command_name, value).any(|name| name == reported)
+                };
+                if doc.text.range(span.start, span.end) == diagnostic.range && matches_report {
                     return Some((argument.into_owned(), span));
                 }
             }
@@ -130,7 +147,7 @@ pub(crate) fn fixes(
         &lookup[separator..]
     } else {
         lookup[separator..]
-            .strip_suffix(".tex")
+            .strip_suffix(&format!(".{extension}"))
             .unwrap_or(&lookup[separator..])
     };
     let length = original.chars().count();
@@ -179,6 +196,7 @@ pub(crate) fn fixes(
         };
         if !syntax::is_literal_file_path(&name)
             || name.starts_with('.') && !original.starts_with('.')
+            || command_name == "bibliographystyle" && name.chars().any(char::is_whitespace)
         {
             continue;
         }
@@ -201,7 +219,7 @@ pub(crate) fn fixes(
         }
         let replacement = format!(
             "{prefix}{}",
-            if loader_extension.is_none() && value.ends_with(".tex") {
+            if loader_extension.is_none() && value.ends_with(&format!(".{extension}")) {
                 &name
             } else {
                 stem
@@ -263,6 +281,8 @@ pub(crate) fn fixes(
                     "package"
                 } else if loader_extension == Some("cls") {
                     "class"
+                } else if command_name == "bibliographystyle" {
+                    "bibliography style"
                 } else {
                     "included"
                 }

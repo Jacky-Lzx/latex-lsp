@@ -1275,7 +1275,14 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool) -> Outcome 
                     .bibliography_unresolved_bindings
                     .extend(inputs.unresolved_bindings);
             }
-            for (uri, diagnostics) in build_log::parse_bibliography_in(root, &paths, &log) {
+            let mut diagnostics = build_log::parse_bibliography_in(root, &paths, &log);
+            if !outcome.diagnostics_truncated {
+                build_log::locate_missing_bibliography_styles(
+                    &outcome.diagnostic_sources,
+                    &mut diagnostics,
+                );
+            }
+            for (uri, diagnostics) in diagnostics {
                 outcome
                     .diagnostics
                     .entry(uri)

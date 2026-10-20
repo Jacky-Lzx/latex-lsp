@@ -143,6 +143,8 @@ pub(crate) struct BibliographyPaths<'a> {
     bst_directories: Vec<PathBuf>,
     /// Complete logged database names, before resolution.
     bibliography_names: BTreeSet<String>,
+    /// BibTeX prints an extra suffix for already suffixed style arguments.
+    style_names: BTreeMap<String, String>,
     bibliography_sources: OnceLock<BibliographySources>,
 }
 
@@ -211,6 +213,15 @@ impl<'a> BibliographyPaths<'a> {
             bib_directories: Vec::new(),
             bst_directories: Vec::new(),
             bibliography_names: bibliography_names.into_iter().map(str::to_owned).collect(),
+            style_names: contents
+                .lines()
+                .take(32768)
+                .filter_map(|line| line.strip_prefix("The style file: "))
+                .map(|name| name.trim().trim_matches('"'))
+                .filter(|name| name.ends_with(".bst.bst"))
+                .take(4096)
+                .map(|name| (name.into(), name[..name.len() - 4].into()))
+                .collect(),
             bibliography_sources: OnceLock::new(),
         }
     }
@@ -327,6 +338,10 @@ impl<'a> BibliographyPaths<'a> {
 
     fn candidates<'b>(&'b self, name: &'b str) -> impl Iterator<Item = PathBuf> + 'b {
         let name = name.trim().trim_matches('"');
+        // This is a printed name, not a fallback search. Even when both files
+        // exist, BibTeX opened foo.bst for a logged foo.bst.bst. Other tools and
+        // database names retain their literal spelling.
+        let name = self.style_names.get(name).map_or(name, String::as_str);
         let search = if name.ends_with(".bst") {
             &self.bst_directories
         } else {
@@ -735,5 +750,59 @@ mod tests {
         assert!(inputs.contains(
             &Url::from_file_path(directory.path().join("chapters/中文 file.tex")).unwrap()
         ));
+    }
+}
+
+#[cfg(test)]
+mod suffixed_style_names {
+    use super::*;
+
+    #[test]
+    fn logged_extra_style_suffixes_select_the_real_file_even_with_an_existing_namesake() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let main = root.join("main.tex");
+        let single = root.join("local,style.bst");
+        let double = root.join("local,style.bst.bst");
+        std::fs::write(&main, "Main.").unwrap();
+        std::fs::write(&single, "Real style").unwrap();
+        std::fs::write(&double, "Unrelated style").unwrap();
+        let blg = root.join("main.blg");
+        let log = "The style file: local,style.bst.bst\n";
+        let paths = BibliographyPaths::new(&main, &blg, log);
+        assert_eq!(paths.resolve("local,style.bst.bst"), Some(single.clone()));
+        let inputs = classified_bibliography_inputs(&paths, log);
+        assert_eq!(
+            inputs.all,
+            BTreeSet::from([Url::from_file_path(&single).unwrap()])
+        );
+        assert_eq!(
+            inputs.bindings,
+            BTreeMap::from([(single.clone(), single.clone())])
+        );
+        let database = "Database file #1: local,style.bst.bst\n";
+        let database_paths = BibliographyPaths::new(&main, &blg, database);
+        assert_eq!(database_paths.resolve("local,style.bst.bst"), Some(double));
+        std::fs::remove_file(&single).unwrap();
+        let inputs = classified_bibliography_inputs(&paths, log);
+        assert!(inputs.all.is_empty());
+        assert!(inputs.unresolved_bindings.contains(&single));
+    }
+
+    #[test]
+    fn printed_style_names_remove_only_the_single_extra_suffix_and_keep_search_precedence() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        std::fs::create_dir(root.join("build")).unwrap();
+        std::fs::create_dir(root.join("styles")).unwrap();
+        let main = root.join("main.tex");
+        let blg = root.join("build/main.blg");
+        let input = root.join("styles/local.bst.bst");
+        std::fs::write(&input, "Selected style").unwrap();
+        std::fs::write(root.join("build/local.bst.bst"), "Fallback namesake").unwrap();
+        let log = "The top-level auxiliary file: main.aux\nThe style file: local.bst.bst.bst\n";
+        let paths = BibliographyPaths::new(&main, &blg, log)
+            .with_search_output("BSTINPUTS='../styles:'.\n");
+        assert_eq!(paths.resolve("local.bst.bst.bst"), Some(input));
     }
 }
