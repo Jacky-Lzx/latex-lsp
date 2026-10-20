@@ -233,7 +233,12 @@ fn target<'a>(workspace: &'a Workspace, uri: &Url, offset: usize) -> Option<Targ
     {
         return raw;
     }
-    if doc.syntax.is_ignored(offset) && raw.is_none() {
+    let counter_operand = doc
+        .syntax
+        .name_counter_references
+        .iter()
+        .any(|entry| entry.span.start <= offset && offset <= entry.span.end);
+    if doc.syntax.is_ignored(offset) && raw.is_none() && !counter_operand {
         return None;
     }
     if raw

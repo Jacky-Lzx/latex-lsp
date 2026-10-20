@@ -216,6 +216,19 @@ pub(crate) struct Reference {
 pub(crate) fn references(doc: &Document, name: &str, environment: Generated) -> Vec<Reference> {
     let mut result = Vec::new();
     let generated = generated_names(name, environment);
+    if environment.owns_counter {
+        result.extend(
+            doc.syntax
+                .name_counter_references
+                .iter()
+                .filter(|entry| entry.name == name)
+                .map(|entry| Reference {
+                    span: entry.span.clone(),
+                    selection_span: entry.span.clone(),
+                    control_word: false,
+                }),
+        );
+    }
     for entry in &doc.syntax.name_command_references {
         if let Some((_, prefix)) = generated
             .iter()

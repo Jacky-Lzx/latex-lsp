@@ -68,8 +68,9 @@ fn command_reference(name: &str, span: Span<usize>) -> Entry {
 
 /// Name arguments expand control words but do not execute LaTeX declarations.
 /// Literal conversion primitives consume data, which must remain untouched.
-fn name_commands(source: &str, span: Span<usize>) -> Vec<Entry> {
+fn name_references(source: &str, span: Span<usize>) -> (Vec<Entry>, Vec<Entry>) {
     let mut result = Vec::new();
+    let mut counters = Vec::new();
     let mut at = span.start;
     while at < span.end {
         match source.as_bytes()[at] {
@@ -92,6 +93,26 @@ fn name_commands(source: &str, span: Span<usize>) -> Vec<Entry> {
                 result.push(command_reference(name, word.clone()));
                 at = word.end;
                 match name {
+                    "value" | "arabic" | "roman" | "Roman" | "alph" | "Alph" | "fnsymbol" => {
+                        let start = syntax::skip_space(source, at);
+                        if let Some((argument, _)) =
+                            fancyvrb::name_argument(source, start).filter(|(argument, end)| {
+                                *end <= span.end
+                                    && syntax::is_static_key(&argument.value)
+                                    && (argument.span != argument.outer_span
+                                        || argument.value.is_ascii())
+                            })
+                        {
+                            counters.push(Entry {
+                                name: argument.value,
+                                span: argument.span,
+                                detail: format!(
+                                    "Counter expanded with \\{name} in a saved-text name"
+                                ),
+                                is_variable: false,
+                            });
+                        }
+                    }
                     "detokenize" => {
                         let open = syntax::skip_space(source, at);
                         if let Some((_, end)) = syntax::group(source, open, b'{', b'}')
@@ -156,7 +177,7 @@ fn name_commands(source: &str, span: Span<usize>) -> Vec<Entry> {
             _ => at += source[at..].chars().next().unwrap().len_utf8(),
         }
     }
-    result
+    (result, counters)
 }
 
 pub(crate) fn index(source: &str, parsed: &mut Syntax) {
@@ -167,9 +188,9 @@ pub(crate) fn index(source: &str, parsed: &mut Syntax) {
         let Some(argument) = argument(source, command) else {
             continue;
         };
-        parsed
-            .name_command_references
-            .extend(name_commands(source, argument.span.clone()));
+        let (commands, counters) = name_references(source, argument.span.clone());
+        parsed.name_command_references.extend(commands);
+        parsed.name_counter_references.extend(counters);
         if !literal_name(&argument.value) {
             continue;
         }

@@ -133,6 +133,20 @@ pub(crate) fn replacement_edit(
     range: tower_lsp::lsp_types::Range,
     name: &str,
 ) -> TextEdit {
+    if doc.syntax.name_counter_references.iter().any(|entry| {
+        doc.text.range(entry.span.start, entry.span.end) == range
+            && doc
+                .text
+                .source
+                .as_bytes()
+                .get(entry.span.start.saturating_sub(1))
+                != Some(&b'{')
+    }) {
+        return TextEdit {
+            range,
+            new_text: format!("{{{name}}}"),
+        };
+    }
     for command in &doc.syntax.commands {
         if let Some((argument, passes)) = optional_field(&doc.text.source, command) {
             if doc.text.range(argument.span.start, argument.span.end) == range {

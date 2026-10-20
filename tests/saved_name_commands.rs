@@ -645,3 +645,248 @@ fn real_owning_symbol_renames_keep_expanded_saved_names_working() {
         }
     }
 }
+
+fn counter_operands() -> Vec<(&'static str, &'static str, &'static str, u32)> {
+    vec![
+        (r"\arabic{keycounter}", "1", "keycounter", 1),
+        (r"\roman{keycounter}", "i", "keycounter", 1),
+        (r"\Roman{keycounter}", "I", "keycounter", 1),
+        (r"\alph{keycounter}", "a", "keycounter", 1),
+        (r"\Alph{keycounter}", "A", "keycounter", 1),
+        (r"\number\value{keycounter}", "1", "keycounter", 1),
+        (r"prefix\fnsymbol{keycounter}", "prefix", "keycounter", 0),
+        (r"\arabic x", "1", "x", 1),
+        (r"\number\value x", "1", "x", 1),
+    ]
+}
+
+fn renamed_operand(operand: &str, name: &str, new_name: &str) -> String {
+    if operand.ends_with('}') {
+        operand.replace(name, new_name)
+    } else {
+        format!("{}{{{new_name}}}", &operand[..operand.len() - name.len()])
+    }
+}
+
+#[test]
+fn counter_format_operands_in_saved_names_navigate_and_rename_with_bare_argument_grouping() {
+    for (operand, key, name, value) in counter_operands() {
+        for saving in [true, false] {
+            let body = if saving {
+                format!("\\SaveVerb{{{operand}}}|MarkerUnique|\\UseVerb{{{key}}}")
+            } else {
+                format!("\\SaveVerb{{{key}}}|MarkerUnique|\\UseVerb{{{operand}}}")
+            };
+            let source = format!(
+                "% 😀\r\n\\newcounter{{{name}}}\\setcounter{{{name}}}{{{value}}}\r\n{body}"
+            );
+            let (workspace, uri) = setup(&source);
+            let doc = &workspace.documents[&uri];
+            assert_eq!(doc.syntax.name_counter_references.len(), 1, "{body}");
+            let entry = &doc.syntax.name_counter_references[0];
+            let at = doc.text.position(entry.span.start);
+            assert_eq!(
+                features::definitions(&workspace, &uri, at).len(),
+                1,
+                "{body}"
+            );
+            assert_eq!(
+                features::references(&workspace, &uri, at, true).len(),
+                3,
+                "{body}"
+            );
+            assert_eq!(
+                features::references(&workspace, &uri, at, false).len(),
+                2,
+                "{body}"
+            );
+            assert!(features::hover(&workspace, &uri, at).is_some(), "{body}");
+            assert!(
+                matches!(features::prepare_rename(&workspace, &uri, at).unwrap(), Some(PrepareRenameResponse::RangeWithPlaceholder { placeholder, range }) if placeholder == name && range == doc.text.range(entry.span.start, entry.span.end)),
+                "{body}"
+            );
+            let result = changed(
+                &source,
+                features::rename(&workspace, &uri, at, "renamed-counter")
+                    .unwrap()
+                    .unwrap(),
+                &uri,
+            );
+            let expected = source
+                .replacen(&format!("{{{name}}}"), "{renamed-counter}", 2)
+                .replace(operand, &renamed_operand(operand, name, "renamed-counter"));
+            assert_eq!(result, expected, "{body}");
+            let parsed = Document::new(&uri, result, Some(8));
+            assert_eq!(
+                parsed.syntax.name_counter_references[0].name,
+                "renamed-counter"
+            );
+        }
+    }
+}
+
+#[test]
+fn counter_operands_respect_literal_conversion_comments_dynamic_names_and_exact_spaces() {
+    let source = concat!(
+        "\\newcounter{keycounter}\\setcounter{keycounter}{1}\r\n",
+        "\\SaveVerb{\\detokenize{\\arabic{keycounter}}}|\\arabic{keycounter}|\r\n",
+        "\\UseVerb{\\string\\arabic{keycounter}}\r\n",
+        "\\UseVerb{% \\arabic{keycounter}\r\n\\arabic{keycounter}}\r\n",
+        "\\UseVerb{\\arabic{ keycounter}\\value{keycounter }\\arabic{\\dynamic}\\newcounter{phantom}}",
+    );
+    let (workspace, uri) = setup(source);
+    let doc = &workspace.documents[&uri];
+    assert_eq!(doc.syntax.name_counter_references.len(), 1);
+    assert_eq!(doc.syntax.counters.len(), 1);
+    assert!(doc
+        .syntax
+        .name_command_references
+        .iter()
+        .any(|entry| entry.name == "dynamic"));
+    let at = doc.text.position(source.find("keycounter").unwrap());
+    assert_eq!(features::references(&workspace, &uri, at, true).len(), 3);
+    let result = changed(
+        source,
+        features::rename(&workspace, &uri, at, "renamedcounter")
+            .unwrap()
+            .unwrap(),
+        &uri,
+    );
+    assert_eq!(
+        result,
+        source.replacen("keycounter", "renamedcounter", 2).replacen(
+            "\r\n\\arabic{keycounter}",
+            "\r\n\\arabic{renamedcounter}",
+            1
+        )
+    );
+    for prefix in [
+        r"\detokenize{\arabic{",
+        r"|\arabic{",
+        r"\string\arabic{",
+        "% \\arabic{",
+        r"\arabic{ ",
+        r"\value{",
+    ] {
+        let start = source.find(&format!("{prefix}keycounter")).unwrap() + prefix.len();
+        let at = doc.text.position(start + 2);
+        assert!(
+            features::definitions(&workspace, &uri, at).is_empty(),
+            "{prefix}"
+        );
+        assert!(
+            features::prepare_rename(&workspace, &uri, at)
+                .unwrap()
+                .is_none(),
+            "{prefix}"
+        );
+    }
+}
+
+#[test]
+fn formatting_a_theorem_counter_still_targets_the_environment_owner() {
+    let source = r"\newtheorem{claim}{Title}\begin{claim}Text\end{claim}\SaveVerb{1}|MarkerUnique|\UseVerb{\arabic{claim}}";
+    let (workspace, uri) = setup(source);
+    let doc = &workspace.documents[&uri];
+    let at = doc.text.position(source.rfind("claim").unwrap());
+    assert_eq!(features::definitions(&workspace, &uri, at).len(), 1);
+    assert_eq!(features::references(&workspace, &uri, at, true).len(), 4);
+    let result = changed(
+        source,
+        features::rename(&workspace, &uri, at, "renamedclaim")
+            .unwrap()
+            .unwrap(),
+        &uri,
+    );
+    assert_eq!(result, source.replace("claim", "renamedclaim"));
+}
+
+#[test]
+fn shared_formatter_operands_expand_rename_scope_and_check_other_consumers() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let paper = r"\documentclass{article}\usepackage{common}\begin{document}\UseVerb{\arabic{keycounter}}\end{document}";
+    for name in ["a", "b"] {
+        std::fs::write(root.join(format!("{name}.tex")), paper).unwrap();
+    }
+    std::fs::write(
+        root.join("common.sty"),
+        r"\newcounter{keycounter}\setcounter{keycounter}{1}",
+    )
+    .unwrap();
+    let main = Url::from_file_path(root.join("a.tex")).unwrap();
+    let other = Url::from_file_path(root.join("b.tex")).unwrap();
+    let shared = Url::from_file_path(root.join("common.sty")).unwrap();
+    let mut workspace = Workspace::default();
+    workspace.add_root(root.into());
+    let at = workspace.documents[&main]
+        .text
+        .position(paper.find("keycounter").unwrap());
+    assert_eq!(features::references(&workspace, &main, at, true).len(), 4);
+    let edits = features::rename(&workspace, &main, at, "renamedcounter")
+        .unwrap()
+        .unwrap()
+        .changes
+        .unwrap();
+    assert_eq!(
+        edits.keys().cloned().collect::<BTreeSet<_>>(),
+        [main.clone(), other.clone(), shared].into()
+    );
+    workspace.documents.insert(
+        other.clone(),
+        Document::new(
+            &other,
+            format!("{paper}\\newcounter{{renamedcounter}}"),
+            None,
+        ),
+    );
+    assert!(features::rename(&workspace, &main, at, "renamedcounter").is_err());
+}
+
+#[test]
+#[ignore = "requires pdflatex and xelatex"]
+fn real_counter_format_operand_renames_keep_saved_names_and_bare_arguments_working() {
+    for engine in ["pdflatex", "xelatex"] {
+        for (operand, key, name, value) in counter_operands() {
+            for saving in [true, false] {
+                let directory = tempfile::tempdir().unwrap();
+                let root = directory.path();
+                let body = if saving {
+                    format!("\\SaveVerb{{{operand}}}|MarkerUnique|\\UseVerb{{{key}}}")
+                } else {
+                    format!("\\SaveVerb{{{key}}}|MarkerUnique|\\UseVerb{{{operand}}}")
+                };
+                let source = format!("\\documentclass{{article}}\r\n\\usepackage{{fancyvrb}}\r\n\\newcounter{{{name}}}\\setcounter{{{name}}}{{{value}}}\r\n\\begin{{document}}\r\n{body}\r\n\\end{{document}}\r\n");
+                let (workspace, uri) = setup(&source);
+                let doc = &workspace.documents[&uri];
+                let at = doc
+                    .text
+                    .position(doc.syntax.name_counter_references[0].span.start);
+                let result = changed(
+                    &source,
+                    features::rename(&workspace, &uri, at, "renamed-counter")
+                        .unwrap()
+                        .unwrap(),
+                    &uri,
+                );
+                for content in [&source, &result] {
+                    std::fs::write(root.join("main.tex"), content).unwrap();
+                    let outcome = build::run(
+                        &root.join("main.tex"),
+                        &BuildConfig {
+                            executable: engine.into(),
+                            ..Default::default()
+                        },
+                        &AtomicBool::new(false),
+                    );
+                    assert_eq!(
+                        outcome.status, "success",
+                        "{engine}/{body}: {}",
+                        outcome.output
+                    );
+                    assert!(root.join("build/latex-lsp/main.pdf").is_file());
+                }
+            }
+        }
+    }
+}
