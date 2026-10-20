@@ -441,6 +441,7 @@ pub fn will_rename(workspace: &Workspace, files: &[FileRename]) -> Result<Option
             let commands: Vec<_> = calls
                 .into_iter()
                 .chain(inputs.loaders.remove(uri).unwrap_or_default())
+                .chain(inputs.forwarders.remove(uri).unwrap_or_default())
                 .filter(|call| call.certain)
                 .map(|call| call.command)
                 .collect();

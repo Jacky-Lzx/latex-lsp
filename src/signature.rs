@@ -1793,6 +1793,21 @@ impl<'a> CommandSignatures<'a> {
         )
     }
 
+    /// Option forwarding refers to a file without importing its declarations.
+    pub(crate) fn indirect_option_invocations(
+        &self,
+        source: &str,
+        parsed: &syntax::Syntax,
+        positions: &BTreeSet<usize>,
+    ) -> Vec<SourceCall> {
+        self.indirect_file_invocations(
+            source,
+            parsed,
+            positions,
+            &["PassOptionsToPackage", "PassOptionsToClass"],
+        )
+    }
+
     fn indirect_file_invocations(
         &self,
         source: &str,

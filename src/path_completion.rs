@@ -1,5 +1,6 @@
 use crate::{syntax, workspace::Workspace};
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, BTreeSet},
     ops::Range,
     path::Path,
@@ -21,13 +22,17 @@ pub(crate) fn complete_source(
     command: &syntax::Command,
     span: Range<usize>,
 ) -> Vec<CompletionItem> {
-    complete_with_argument(
-        workspace,
-        uri,
-        &command.name,
-        span,
-        command.argument.as_ref(),
-    )
+    // Forwarding stores options in command.argument; its filename follows in
+    // the second group. An unfinished filename uses the suffix scanner below.
+    let argument = if syntax::passes_options(&command.name) {
+        workspace
+            .documents
+            .get(uri)
+            .and_then(|doc| syntax::file_argument(&doc.text.source, command))
+    } else {
+        command.argument.as_ref().map(Cow::Borrowed)
+    };
+    complete_with_argument(workspace, uri, &command.name, span, argument.as_deref())
 }
 
 fn complete_with_argument(
@@ -43,7 +48,9 @@ fn complete_with_argument(
     let Some(extensions) = syntax::file_extensions(command) else {
         return vec![];
     };
-    let raw_prefix = &doc.text.source[span.clone()];
+    let Some(raw_prefix) = doc.text.source.get(span.clone()) else {
+        return vec![];
+    };
     let compact = syntax::file_name_ignores_spaces(command);
     let normalized_prefix = compact.then(|| syntax::loader_name(raw_prefix));
     let prefix = normalized_prefix.as_deref().unwrap_or(raw_prefix);
@@ -68,7 +75,9 @@ fn complete_with_argument(
             .flatten()
     });
     let argument_end = input_argument.map_or(doc.text.source.len(), |argument| argument.span.end);
-    let suffix = &doc.text.source[span.end..argument_end];
+    let Some(suffix) = doc.text.source.get(span.end..argument_end) else {
+        return vec![];
+    };
     let suffix_length = suffix
         .find(|ch| {
             matches!(ch, '/' | '{' | '}' | '\\' | '%')

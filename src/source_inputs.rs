@@ -14,6 +14,7 @@ const MAX_SOURCES: usize = 1024;
 pub(crate) struct Index {
     pub calls: BTreeMap<Url, Vec<SourceCall>>,
     pub loaders: BTreeMap<Url, Vec<SourceCall>>,
+    pub forwarders: BTreeMap<Url, Vec<SourceCall>>,
     pub incomplete: bool,
     literal: Option<BTreeMap<Url, Vec<Url>>>,
 }
@@ -35,6 +36,7 @@ impl Index {
             }));
             let mut literal = BTreeMap::new();
             let mut loader_calls = BTreeMap::new();
+            let mut forwarders = BTreeMap::new();
             index.calls = scope
                 .iter()
                 .filter_map(|uri| {
@@ -62,6 +64,14 @@ impl Index {
                     if !loaders.is_empty() {
                         loader_calls.insert(uri.clone(), loaders);
                     }
+                    let options = signatures.indirect_option_invocations(
+                        &doc.text.source,
+                        &doc.syntax,
+                        &positions,
+                    );
+                    if !options.is_empty() {
+                        forwarders.insert(uri.clone(), options);
+                    }
                     let calls = signatures.indirect_source_invocations(
                         &doc.text.source,
                         &doc.syntax,
@@ -71,6 +81,7 @@ impl Index {
                 })
                 .collect();
             index.loaders = loader_calls;
+            index.forwarders = forwarders;
             index.literal = Some(literal);
             let next = index.scope(workspace, root);
             if !index.incomplete && next == scope {
@@ -83,6 +94,7 @@ impl Index {
         Self {
             calls: BTreeMap::new(),
             loaders: BTreeMap::new(),
+            forwarders: BTreeMap::new(),
             incomplete: true,
             literal: None,
         }
