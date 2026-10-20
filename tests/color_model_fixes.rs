@@ -113,6 +113,52 @@ fn calls() -> Vec<(&'static str, &'static str)> {
 }
 
 #[test]
+fn model_diagnostics_distinguish_bare_callback_operands_from_completed_calls() {
+    for (prefix, direct) in [
+        (
+            r"\NewDocumentCommand{\wrapped}{m O{rgb} m m}{\textcolor[rbg]{.2,.4,.6}{MarkerUnique}}\wrapped",
+            false,
+        ),
+        (
+            r"\NewDocumentCommand{\wrapped}{m m O{rgb} m m}{\textcolor[rbg]{.2,.4,.6}{MarkerUnique}}\wrapped{Unused}",
+            false,
+        ),
+        (
+            r"\NewDocumentCommand{\wrapped}{s t+ m O{rgb} m m}{\textcolor[rbg]{.2,.4,.6}{MarkerUnique}}\wrapped*+",
+            false,
+        ),
+        (r"\unknown{Unused}", false),
+        (r"\relax\noindent\bfseries", true),
+        (r"\newcommand{\done}[1]{}\done{Unused}", true),
+        (r"\newcommand{\done}{}\done", true),
+        (r"\extractcolorspecs{red}\model\spec", true),
+    ] {
+        let source = format!("{prefix}\\textcolor[rbg]{{.2,.4,.6}}{{MarkerUnique}}");
+        let error = diagnostic(&source, &format!("l.1 {source}"), false);
+        let (mut workspace, uri) = setup(&source, "");
+        store(&mut workspace, &uri, error.clone());
+        if direct {
+            let start = source.rfind("rbg").unwrap();
+            assert_eq!(
+                error.range,
+                Text::new(source.clone()).range(start, start + 3),
+                "{source}"
+            );
+            assert!(
+                repair(&workspace, &uri, &error, "rgb").is_some(),
+                "{source}"
+            );
+        } else {
+            assert!(
+                error.code.is_none() && error.data.is_none(),
+                "{source}: {error:?}"
+            );
+            assert!(actions(&workspace, &uri, &error).is_empty(), "{source}");
+        }
+    }
+}
+
+#[test]
 fn model_errors_select_only_the_misspelled_model_and_restore_literal_color_previews() {
     for (call, rest) in calls() {
         let source = format!("😀 {call}{rest} % rbg\r\n");

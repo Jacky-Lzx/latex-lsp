@@ -119,6 +119,72 @@ fn direct_calls() -> Vec<(&'static str, &'static str)> {
 }
 
 #[test]
+fn color_commands_consumed_as_unbraced_macro_arguments_are_not_error_sites() {
+    for prefix in [
+        r"\newcommand{\wrapped}[3]{\textcolor{accnet}{#3}}\wrapped",
+        r"\newcommand{\wrapped}[4]{\textcolor{accnet}{#4}}\wrapped{Unused}",
+        r"\newcommand{\wrapped}[4][default]{\textcolor{accnet}{#4}}\wrapped[note]",
+        r"\newcommand{\wrapped}[4][default]{\textcolor{accnet}{#4}}\wrapped",
+        r"\def\wrapped#1#2#3{\textcolor{accnet}{#3}}\wrapped",
+        r"\NewDocumentCommand{\wrapped}{O{default} m m m}{\textcolor{accnet}{#4}}\wrapped[note]",
+        r"\NewDocumentCommand{\wrapped}{s t+ m m m}{\textcolor{accnet}{#5}}\wrapped*+",
+        r"\NewDocumentCommand{\wrapped}{d() m m m}{\textcolor{accnet}{#4}}\wrapped(note)",
+        r"\unknown{Unused}",
+        r"\unknown[note]{Unused}",
+        r"\expandafter",
+        r"\newcommand{\noindent}[3]{\textcolor{accnet}{#3}}\noindent",
+        r"\newcommand{\wrapped}[3]{\textcolor{accnet}{#3}}\renewcommand{\wrapped}[3]{\textcolor{accnet}{#3}}\wrapped",
+    ] {
+        let source = format!("{prefix}\\textcolor{{accnet}}{{MarkerUnique}}");
+        let error = diagnostic(&source, &format!("l.1 {source}"), false);
+        assert!(
+            error.code.is_none() && error.data.is_none(),
+            "{source}: {error:?}"
+        );
+        let (mut workspace, uri) = setup(&source, r"\definecolor{accent}{HTML}{123456}");
+        store(&mut workspace, &uri, error.clone());
+        assert!(actions(&workspace, &uri, &error).is_empty());
+    }
+}
+
+#[test]
+fn completed_macro_calls_and_argument_free_switches_keep_exact_color_fixes() {
+    for prefix in [
+        r"\newcommand{\done}{}\done",
+        r"\def\done{}\done",
+        r"\NewDocumentCommand{\done}{}{}\done",
+        r"\newcommand{\done}[1]{}\done{Unused}",
+        r"\newcommand{\done}[1][default]{}\done[note]",
+        r"\newcommand{\done}[1][default]{}\done",
+        r"\NewDocumentCommand{\done}{s t+ O{default} m}{}\done*+[note]{Unused}",
+        r"\NewDocumentCommand{\done}{d() m}{}\done(note){Unused}",
+        r"\NewDocumentCommand{\done}{t\flag}{}\done\flag",
+        r"\NewDocumentCommand{\done}{d\open\close}{}\done\open note\close",
+        r"\relax\noindent\bfseries\itshape",
+        r"\textbf{Heading}",
+        r"\typeout{\detokenize{😀}}",
+        r"\extractcolorspec{red}\spec",
+        r"\extractcolorspecs{red}\model\spec",
+        r"\convertcolorspec{named}{red}{rgb}\out",
+    ] {
+        let source = format!("{prefix}\\textcolor{{accnet}}{{MarkerUnique}}");
+        let error = diagnostic(&source, &format!("l.1 {source}"), false);
+        let start = source.rfind("accnet").unwrap();
+        assert_eq!(
+            error.range,
+            Text::new(source.clone()).range(start, start + 6),
+            "{source}"
+        );
+        let (mut workspace, uri) = setup(&source, r"\definecolor{accent}{HTML}{123456}");
+        store(&mut workspace, &uri, error.clone());
+        assert_eq!(
+            repair(&workspace, &uri, &error, "accent").unwrap(),
+            source.replacen("{accnet}", "{accent}", 1)
+        );
+    }
+}
+
+#[test]
 fn multiline_consumed_color_operands_require_more_than_the_final_line_echo() {
     for source in [
         "\\textcolor{% before\naccnet% after\n}{MarkerUnique}",

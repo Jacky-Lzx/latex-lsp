@@ -389,8 +389,12 @@ pub(crate) fn error_invocations(source: &str, syntax: &Syntax) -> Vec<(Span<usiz
     {
         return vec![];
     }
+    let operands = crate::signature::command_argument_tokens(source, syntax);
     let mut result = vec![];
     for command in &syntax.commands {
+        if operands.contains(&command.span.start) {
+            continue;
+        }
         let (body, outputs) = match command.name.as_str() {
             "color" | "pagecolor" | "colorlet" | "definecolor" | "providecolor"
             | "xdefinecolor" | "maskcolors" => (false, 0),
@@ -456,8 +460,12 @@ pub(crate) fn model_error_invocations(
         }
         Ok(())
     }
+    let operands = crate::signature::command_argument_tokens(source, syntax);
     let mut result = vec![];
     for command in &syntax.commands {
+        if operands.contains(&command.span.start) {
+            continue;
+        }
         let mut reader = Reader {
             source,
             at: command.span.end,

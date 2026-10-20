@@ -4,7 +4,7 @@ use crate::{
     syntax::{self, Entry},
     workspace::{Document, DocumentKind, Workspace},
 };
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use tower_lsp::lsp_types::*;
 
 #[derive(Clone)]
@@ -378,6 +378,25 @@ fn builtin(name: &str) -> Option<Signature> {
         "textbf" | "textit" | "texttt" | "emph" | "title" | "author" | "date" => {
             (&[("text", false)], false)
         }
+        "typeout" | "message" => (&[("text", false)], false),
+        "extractcolorspec" => (&[("color", false), ("specification command", false)], false),
+        "extractcolorspecs" => (
+            &[
+                ("color", false),
+                ("model command", false),
+                ("specification command", false),
+            ],
+            false,
+        ),
+        "convertcolorspec" => (
+            &[
+                ("source model", false),
+                ("color specification", false),
+                ("target model", false),
+                ("output command", false),
+            ],
+            false,
+        ),
         "begin" | "end" => (&[("environment", false)], false),
         "label" => (&[("key", false)], false),
         "hyperref" => (&[("key", true), ("text", false)], false),
@@ -713,15 +732,32 @@ fn builtin(name: &str) -> Option<Signature> {
 }
 
 fn definition(uri: &Url, doc: &Document, entry: &Entry, environment: bool) -> Option<Signature> {
-    let source = &doc.text.source;
+    let mut signature = source_definition(&doc.text.source, &doc.syntax, entry, environment)?;
+    if signature.parameters.is_empty() || environment && signature.parameters.len() == 1 {
+        return None;
+    }
+    signature.documentation = format!(
+        "{}\n{}:{}",
+        entry.detail,
+        uri.path(),
+        doc.text.position(entry.span.start).line + 1
+    );
+    Some(signature)
+}
+
+fn source_definition(
+    source: &str,
+    parsed: &syntax::Syntax,
+    entry: &Entry,
+    environment: bool,
+) -> Option<Signature> {
     let declaration = entry.detail.strip_prefix("Defined with \\")?;
     let mut i = syntax::skip_space(source, entry.span.end);
     if !environment
         && !crate::named_commands::declares(declaration)
         && source.as_bytes().get(entry.span.start) != Some(&b'\\')
     {
-        let end = doc
-            .syntax
+        let end = parsed
             .commands
             .iter()
             .find(|command| command.span.start == i && command.name == "endcsname")?;
@@ -796,6 +832,18 @@ fn definition(uri: &Url, doc: &Document, entry: &Entry, environment: bool) -> Op
         | "NewEnviron"
         | "RenewEnviron" => {
             nested_brackets = false;
+            // A traditional declaration without a count has no arguments.
+            // Keep this information for operand analysis; signature help
+            // still omits empty signatures.
+            if source.as_bytes().get(i) == Some(&b'{') {
+                return Some(Signature {
+                    name: entry.name.clone(),
+                    parameters,
+                    documentation: entry.detail.clone(),
+                    starred: false,
+                    nested_brackets,
+                });
+            }
             let (count, end) = syntax::group(source, i, b'[', b']')?;
             let count: usize = count.value.trim().parse().ok()?;
             if !(1..=9).contains(&count) {
@@ -942,9 +990,6 @@ fn definition(uri: &Url, doc: &Document, entry: &Entry, environment: bool) -> Op
         }
         _ => return None,
     }
-    if parameters.is_empty() {
-        return None;
-    }
     if environment {
         parameters.insert(
             0,
@@ -962,12 +1007,7 @@ fn definition(uri: &Url, doc: &Document, entry: &Entry, environment: bool) -> Op
             entry.name.clone()
         },
         parameters,
-        documentation: format!(
-            "{}\n{}:{}",
-            entry.detail,
-            uri.path(),
-            doc.text.position(entry.span.start).line + 1
-        ),
+        documentation: entry.detail.clone(),
         starred: false,
         nested_brackets,
     })
@@ -1027,6 +1067,212 @@ fn required_token(source: &str, start: usize) -> Option<&str> {
         }
     }
     Some(value)
+}
+
+/// Control words read as bare arguments are data, rather than direct calls.
+/// Reuse signature grammars for local declarations and built-ins. Unknown or
+/// ambiguous commands cannot certify how many leading groups they consume.
+pub(crate) fn command_argument_tokens(source: &str, parsed: &syntax::Syntax) -> BTreeSet<usize> {
+    let mut local = BTreeMap::new();
+    for entry in &parsed.definitions {
+        let signature = source_definition(source, parsed, entry, false);
+        match local.entry(entry.name.as_str()) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(signature);
+            }
+            std::collections::btree_map::Entry::Occupied(mut entry) => {
+                entry.insert(None);
+            }
+        }
+    }
+    let mut result = BTreeSet::new();
+    for command in &parsed.commands {
+        if result.contains(&command.span.start) {
+            continue;
+        }
+        let signature = local.get(command.name.as_str()).and_then(Option::as_ref);
+        let builtin = (!local.contains_key(command.name.as_str()))
+            .then(|| builtin(&command.name))
+            .flatten();
+        if let Some(signature) = signature.or(builtin.as_ref()) {
+            argument_tokens(source, command.span.end, signature, &mut result);
+        } else if !local.contains_key(command.name.as_str())
+            && matches!(
+                command.name.as_str(),
+                "relax"
+                    | "noindent"
+                    | "indent"
+                    | "normalfont"
+                    | "bfseries"
+                    | "mdseries"
+                    | "itshape"
+                    | "upshape"
+                    | "slshape"
+                    | "scshape"
+                    | "rmfamily"
+                    | "sffamily"
+                    | "ttfamily"
+            )
+        {
+            // These standard switches consume no argument. Local redefinitions
+            // take precedence, including declarations we cannot interpret.
+        } else {
+            unknown_argument_token(source, command.span.end, &mut result);
+        }
+    }
+    result
+}
+
+fn unknown_argument_token(source: &str, mut at: usize, result: &mut BTreeSet<usize>) {
+    loop {
+        at = syntax::skip_space(source, at);
+        let grouped = match source.as_bytes().get(at) {
+            Some(b'{') => syntax::group(source, at, b'{', b'}'),
+            Some(b'[') => syntax::bracket_argument(source, at),
+            Some(b'*') => {
+                at += 1;
+                continue;
+            }
+            _ => None,
+        };
+        if let Some((_, end)) = grouped {
+            at = end;
+        } else {
+            if syntax::control_word(source, at).is_some() {
+                result.insert(at);
+            }
+            return;
+        }
+    }
+}
+
+fn operand_delimited_end(source: &str, at: usize, open: &str, close: &str) -> Option<usize> {
+    let mut at = at + open.len();
+    loop {
+        at = syntax::skip_space(source, at);
+        let value = token(source, at)?;
+        if value == close {
+            return Some(at + close.len());
+        }
+        if value == "{" {
+            at = syntax::group(source, at, b'{', b'}')?.1;
+        } else {
+            at += value.len();
+        }
+    }
+}
+
+fn argument_tokens(
+    source: &str,
+    mut at: usize,
+    signature: &Signature,
+    result: &mut BTreeSet<usize>,
+) {
+    let mut control_spaces = true;
+    let mut starred = false;
+    if signature.starred {
+        at = optional_start(source, at, true);
+        if source.as_bytes().get(at) == Some(&b'*') {
+            at += 1;
+            starred = true;
+            control_spaces = false;
+        }
+    }
+    for parameter in &signature.parameters {
+        if starred && matches!(parameter.kind, Kind::UnstarredOptional) {
+            continue;
+        }
+        let before = at;
+        at = optional_start(source, at, !parameter.obey_spaces || control_spaces);
+        let bracket = match &parameter.kind {
+            Kind::Optional | Kind::UnstarredOptional | Kind::RequiredBracket => {
+                if source.as_bytes().get(at) != Some(&b'[') {
+                    if matches!(parameter.kind, Kind::RequiredBracket) {
+                        return;
+                    }
+                    at = before;
+                    continue;
+                }
+                true
+            }
+            Kind::Star => {
+                if source.as_bytes().get(at) == Some(&b'*') {
+                    at += 1;
+                    starred = true;
+                    control_spaces = false;
+                } else {
+                    at = before;
+                }
+                continue;
+            }
+            Kind::Flag(flag) => {
+                if token(source, at) == Some(flag.as_str()) {
+                    if syntax::control_word(flag, 0).is_some() {
+                        result.insert(at);
+                    }
+                    at += flag.len();
+                    control_spaces = syntax::control_word(flag, 0).is_some();
+                } else {
+                    at = before;
+                }
+                continue;
+            }
+            Kind::Delimited {
+                open,
+                close,
+                optional,
+            } => {
+                if token(source, at) != Some(open.as_str()) {
+                    if *optional {
+                        at = before;
+                        continue;
+                    }
+                    return;
+                }
+                let Some(end) = operand_delimited_end(source, at, open, close) else {
+                    return;
+                };
+                if syntax::control_word(open, 0).is_some() {
+                    result.insert(at);
+                }
+                if syntax::control_word(close, 0).is_some() {
+                    result.insert(end - close.len());
+                }
+                at = end;
+                control_spaces = syntax::control_word(close, 0).is_some();
+                continue;
+            }
+            _ => false,
+        };
+        if bracket || source.as_bytes().get(at) == Some(&b'{') {
+            let group = if bracket && !signature.nested_brackets {
+                syntax::bracket_argument(source, at)
+            } else {
+                syntax::group(
+                    source,
+                    at,
+                    if bracket { b'[' } else { b'{' },
+                    if bracket { b']' } else { b'}' },
+                )
+            };
+            let Some((_, end)) = group else { return };
+            at = end;
+            control_spaces = false;
+        } else {
+            if matches!(parameter.kind, Kind::RequiredGroup) {
+                return;
+            }
+            let Some(value) = required_token(source, at) else {
+                return;
+            };
+            let word = syntax::control_word(source, at).is_some();
+            if word {
+                result.insert(at);
+            }
+            at += value.len();
+            control_spaces = word || value == "\\ ";
+        }
+    }
 }
 
 /// Preserve an existing bare argument on this logical line. A normal newline
