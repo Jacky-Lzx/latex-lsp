@@ -2267,3 +2267,105 @@ fn real_verbatim_inputs_preserve_arbitrary_file_names_and_code_roles() {
         }
     }
 }
+
+#[test]
+#[ignore = "requires pdflatex, xelatex and fancyvrb"]
+fn real_fancyverb_inputs_read_quoted_and_detokenized_file_names() {
+    for engine in ["pdflatex", "xelatex"] {
+        for (name, value) in [
+            ("sample.rs", "sample.rs"),
+            ("sample.unknown", "sample.unknown"),
+            ("README", "README"),
+            ("sample one.rs", "\"sample one.rs\""),
+            ("样例 one.rs", "\\detokenize{\"样例 one.rs\"}"),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let main = root.join("main.tex");
+            std::fs::write(root.join(name), "Original code.\n\\label{code-only}\n").unwrap();
+            std::fs::write(&main, format!("\\documentclass{{article}}\\usepackage{{fancyvrb}}\\begin{{document}}\\VerbatimInput *[frame=single]{{{value}}}\\end{{document}}\n")).unwrap();
+            let outcome = build::run(
+                &main,
+                &BuildConfig {
+                    executable: engine.into(),
+                    ..Default::default()
+                },
+                &Default::default(),
+            );
+            assert_eq!(
+                outcome.status, "success",
+                "{engine}/{name}: {}",
+                outcome.output
+            );
+            let recorder = std::fs::read_to_string(root.join("build/latex-lsp/main.fls")).unwrap();
+            assert!(
+                recorder
+                    .lines()
+                    .filter_map(|line| line.strip_prefix("INPUT "))
+                    .any(|path| root
+                        .join(path.trim_matches('"'))
+                        .canonicalize()
+                        .ok()
+                        .as_ref()
+                        == Some(&root.join(name))),
+                "{engine}/{name}: {recorder}"
+            );
+            let mut workspace = Workspace::default();
+            workspace.add_root(root.into());
+            let main_uri = Url::from_file_path(&main).unwrap();
+            let data = Url::from_file_path(root.join(name)).unwrap();
+            assert!(workspace.project_files(&main_uri).contains(&data));
+            assert!(!workspace.project_documents(&main_uri).contains(&data));
+            assert!(outcome.pdf.is_some());
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex, xelatex and fancyvrb"]
+fn real_fancyverb_internal_customizations_keep_executed_labels_as_source() {
+    for engine in ["pdflatex", "xelatex"] {
+        for customization in [
+            r"\def\FV@@Input{\catcode92=0\catcode123=1\catcode125=2\csname input\endcsname{commands.tex}}",
+            r"\FV@AddToHook\FV@CatCodesHook{\catcode92=0\catcode123=1\catcode125=2}",
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let main = root.join("main.tex");
+            std::fs::write(root.join("commands.tex"), r"Executed.\label{executedlabel}").unwrap();
+            let source = format!(
+                r"\documentclass{{article}}\usepackage{{fancyvrb}}\makeatletter{customization}\makeatother\begin{{document}}\VerbatimInput{{commands.tex}}\ref{{executedlabel}}\end{{document}}"
+            );
+            std::fs::write(&main, &source).unwrap();
+            let outcome = build::run(
+                &main,
+                &BuildConfig {
+                    executable: engine.into(),
+                    ..Default::default()
+                },
+                &Default::default(),
+            );
+            assert_eq!(outcome.status, "success", "{engine}: {}", outcome.output);
+            assert!(
+                std::fs::read_to_string(root.join("build/latex-lsp/main.aux"))
+                    .unwrap()
+                    .contains("newlabel{executedlabel}")
+            );
+            let main_uri = Url::from_file_path(&main).unwrap();
+            let code = Url::from_file_path(root.join("commands.tex")).unwrap();
+            let mut workspace = Workspace::default();
+            workspace.add_root(root.into());
+            workspace
+                .recorded_inputs
+                .insert(main_uri.clone(), outcome.inputs.unwrap());
+            assert!(workspace.project_documents(&main_uri).contains(&code));
+            assert!(latex_lsp::navigation::document_links(&workspace, &main_uri).is_empty());
+            workspace.open(main_uri.clone(), source.clone(), 7);
+            let position = latex_lsp::text::Text::new(source.clone())
+                .position(source.rfind("executedlabel").unwrap());
+            let definitions = latex_lsp::features::definitions(&workspace, &main_uri, position);
+            assert_eq!(definitions.len(), 1, "{engine}: {definitions:?}");
+            assert_eq!(definitions[0].uri, code);
+        }
+    }
+}

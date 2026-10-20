@@ -739,6 +739,11 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
         "Include a TeX file with page breaks.",
     ),
     (
+        "VerbatimInput",
+        "VerbatimInput{${1:file}}",
+        "Display a literal file as code, with optional formatting and visible-space star. Requires fancyvrb.",
+    ),
+    (
         "verbatiminput",
         "verbatiminput{${1:file}}",
         "Display a file verbatim; the starred form shows spaces. Requires verbatim.",

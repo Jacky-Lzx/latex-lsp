@@ -44,6 +44,7 @@ pub fn complete(
         .find(|ch| {
             matches!(ch, '/' | '{' | '}' | '\\' | '%')
                 || ch == ',' && syntax::file_list(command)
+                || command == "VerbatimInput" && ch == '"'
                 || !compact && matches!(ch, '\n' | '\r')
         })
         .unwrap_or(suffix.len());
@@ -55,7 +56,7 @@ pub fn complete(
     let raw_name = &doc.text.source[span.start + raw_separator..span.end + suffix_length];
     let normalized_name = compact.then(|| syntax::loader_name(raw_name));
     let existing_name = normalized_name.as_deref().unwrap_or(raw_name);
-    let Some((range, additional_edits)) =
+    let Some((range, mut additional_edits)) =
         syntax::name_completion_ranges(&doc.text, span.start..span.end + suffix_length, span.end)
     else {
         return vec![];
@@ -68,8 +69,13 @@ pub fn complete(
     if syntax::code_input_command(command)
         && !doc.syntax.commands.iter().any(|candidate| {
             candidate.name == command
-                && syntax::file_name_argument_start(&doc.text.source, command, candidate.span.end)
-                    == Some(span.start.saturating_sub(1))
+                && (if command == "VerbatimInput" {
+                    crate::fancyvrb::prefix(&doc.text.source, candidate, span.end)
+                        == Some(span.clone())
+                } else {
+                    syntax::file_name_argument_start(&doc.text.source, command, candidate.span.end)
+                        == Some(span.start.saturating_sub(1))
+                })
                 && roots
                     .iter()
                     .all(|root| crate::code_inputs::supported(workspace, uri, root, candidate))
@@ -84,7 +90,7 @@ pub fn complete(
         .chain(std::iter::once(uri).filter(|uri| {
             !matches!(
                 command,
-                "includegraphics" | "lstinputlisting" | "verbatiminput"
+                "includegraphics" | "lstinputlisting" | "verbatiminput" | "VerbatimInput"
             ) && !roots.contains(uri)
         }))
         .filter_map(|origin| {
@@ -133,7 +139,7 @@ pub fn complete(
             if !folder
                 && !matches!(
                     command,
-                    "IfFileExists" | "lstinputlisting" | "verbatiminput"
+                    "IfFileExists" | "lstinputlisting" | "verbatiminput" | "VerbatimInput"
                 )
                 && !extensions
                     .iter()
@@ -152,7 +158,11 @@ pub fn complete(
                 }
             } else if !matches!(
                 command,
-                "includegraphics" | "addbibresource" | "lstinputlisting" | "verbatiminput"
+                "includegraphics"
+                    | "addbibresource"
+                    | "lstinputlisting"
+                    | "verbatiminput"
+                    | "VerbatimInput"
             ) {
                 let explicit_extension = existing_name
                     .rsplit_once('.')
@@ -198,6 +208,36 @@ pub fn complete(
                         filter_start = &doc.text.source[argument.outer_span.start..span.start];
                     }
                 }
+            }
+            if command == "VerbatimInput" {
+                let candidate = doc.syntax.commands.iter().find(|candidate| {
+                    candidate.name == command
+                        && crate::fancyvrb::prefix(&doc.text.source, candidate, span.end)
+                            == Some(span.clone())
+                });
+                let Some(edit) = candidate.and_then(|candidate| {
+                    crate::fancyvrb::completion_edit(
+                        &doc.text,
+                        candidate,
+                        new_text.clone(),
+                        span.end + suffix_length,
+                    )
+                }) else {
+                    continue;
+                };
+                let Some((range, extra)) = syntax::name_completion_ranges(
+                    &doc.text,
+                    doc.text.offset(edit.range.start).unwrap()
+                        ..doc.text.offset(edit.range.end).unwrap(),
+                    span.end,
+                ) else {
+                    continue;
+                };
+                edit_range = range;
+                additional_edits = extra;
+                new_text = edit.new_text;
+                let from = doc.text.offset(edit_range.start).unwrap();
+                filter_start = &doc.text.source[from..span.start];
             }
             candidates.insert(
                 label.clone(),

@@ -11,6 +11,7 @@ mod counters;
 pub mod diagnostic;
 pub mod dispatch;
 pub mod editing;
+mod fancyvrb;
 pub mod features;
 mod file_checks;
 mod file_fixes;

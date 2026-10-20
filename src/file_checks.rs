@@ -1563,6 +1563,46 @@ mod listing_conditions {
     }
 
     #[test]
+    fn fancyverb_candidates_watch_literal_quoted_and_detokenized_names() {
+        for value in [
+            "sample.unknown",
+            "\"sample one.rs\"",
+            "\\detokenize{\"样例 one.rs\"}",
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let name = value
+                .strip_prefix("\\detokenize{")
+                .and_then(|v| v.strip_suffix('}'))
+                .unwrap_or(value)
+                .trim_matches('"');
+            let source = format!("\\VerbatimInput *[frame=single]{{{value}}}");
+            let snapshot = capture(root, &source);
+            assert!(
+                snapshot.paths.contains_key(&root.join(name)),
+                "{value}: {snapshot:?}"
+            );
+            std::fs::write(root.join(name), "Code.").unwrap();
+            assert!(snapshot.changed_path().is_some());
+            let snapshot = capture(root, &source);
+            std::fs::write(root.join(format!("{name}.tex")), "Shadow.").unwrap();
+            assert!(snapshot.changed_path().is_some());
+        }
+        for source in [
+            r"\VerbatimInput[commandchars=abc]{missing.rs}",
+            r"\fvset{commandchars=abc}\VerbatimInput{missing.rs}",
+            r"\VerbatimInput{missing file.rs}",
+            r"\def\detokenize#1{}\VerbatimInput{missing.rs}",
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            assert!(
+                capture(directory.path(), source).paths.is_empty(),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
     fn unsupported_listing_searches_do_not_invent_conditions() {
         for source in [
             r"\lstinputlisting*{missing.rs}",
@@ -1581,7 +1621,7 @@ mod listing_conditions {
     #[test]
     #[cfg(unix)]
     fn code_aliases_watch_both_opened_paths_and_their_physical_targets() {
-        for command in ["lstinputlisting", "verbatiminput *"] {
+        for command in ["lstinputlisting", "verbatiminput *", "VerbatimInput *"] {
             check_code_alias(command);
         }
     }

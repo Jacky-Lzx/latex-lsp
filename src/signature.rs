@@ -302,6 +302,7 @@ fn builtin(name: &str) -> Option<Signature> {
             false,
         ),
         "includegraphics" => (&[("options", true), ("file", false)], true),
+        "VerbatimInput" => (&[("options", true), ("file", false)], true),
         "verbatiminput" => (&[("file", false)], true),
         "lstinputlisting" => (&[("options", true), ("file", false)], false),
         "documentclass" | "usepackage" | "RequirePackage" | "LoadClass" => (
@@ -657,7 +658,7 @@ fn builtin(name: &str) -> Option<Signature> {
         parameters,
         documentation,
         starred,
-        nested_brackets: !(name == "lstinputlisting"
+        nested_brackets: !(matches!(name, "lstinputlisting" | "VerbatimInput")
             || syntax::is_citation(name)
             || syntax::loader_extension(name).is_some()
             || syntax::declares_traditional_command(name)

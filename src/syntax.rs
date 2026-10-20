@@ -731,12 +731,12 @@ pub(crate) fn file_name_argument_start(
 ) -> Option<usize> {
     let mut start = skip_space(source, command_end);
     if source.as_bytes().get(start) == Some(&b'*') {
-        if name != "verbatiminput" {
+        if !matches!(name, "verbatiminput" | "VerbatimInput") {
             return None;
         }
         start = skip_space(source, start + 1);
     }
-    if (loader_extension(name).is_some() || name == "lstinputlisting")
+    if (loader_extension(name).is_some() || matches!(name, "lstinputlisting" | "VerbatimInput"))
         && !loader_forwards_options(name)
         && source.as_bytes().get(start) == Some(&b'[')
     {
@@ -875,7 +875,7 @@ pub(crate) fn active_key_list_prefix(
 
 /// Files displayed as literal code, rather than executed as TeX source.
 pub(crate) fn code_input_command(name: &str) -> bool {
-    matches!(name, "lstinputlisting" | "verbatiminput")
+    matches!(name, "lstinputlisting" | "verbatiminput" | "VerbatimInput")
 }
 
 pub fn file_extensions(name: &str) -> Option<&'static [&'static str]> {
@@ -883,7 +883,7 @@ pub fn file_extensions(name: &str) -> Option<&'static [&'static str]> {
         "input" | "InputIfFileExists" => &["tex", "ltx", "sty", "cls", "def", "clo"],
         "IfFileExists" => &["tex"],
         // Empty suffix means an exact arbitrary file, never an appended dot.
-        "lstinputlisting" | "verbatiminput" => &[""],
+        "lstinputlisting" | "verbatiminput" | "VerbatimInput" => &[""],
         "include" | "includeonly" | "subfile" => &["tex"],
         "bibliography" | "nobibliography" | "addbibresource" => &["bib"],
         "bibliographystyle" => &["bst"],
@@ -976,7 +976,7 @@ pub(crate) fn file_argument<'a>(
     } else if loader_extension(&command.name) == Some("cls")
         || matches!(
             command.name.as_str(),
-            "bibliographystyle" | "lstinputlisting" | "verbatiminput"
+            "bibliographystyle" | "lstinputlisting" | "verbatiminput" | "VerbatimInput"
         )
     {
         let start = file_name_argument_start(source, &command.name, command.span.end)?;
@@ -984,7 +984,9 @@ pub(crate) fn file_argument<'a>(
             .argument
             .as_ref()
             .filter(|argument| argument.outer_span.start == start)?;
-        let span = if code_input_command(&command.name) {
+        let span = if command.name == "VerbatimInput" {
+            crate::fancyvrb::filename(source, argument.span.clone(), false)?
+        } else if code_input_command(&command.name) {
             is_literal_file_path(&argument.value).then_some(argument.span.clone())?
         } else if command.name == "bibliographystyle" {
             bibliography_style_span(source, argument.span.clone())
@@ -1041,7 +1043,7 @@ pub(crate) fn file_lookup_names<'a>(
         && match command {
             "include" | "includeonly" => !value.ends_with(".tex"),
             "input" | "InputIfFileExists" | "IfFileExists" | "lstinputlisting"
-            | "verbatiminput" => !recognized,
+            | "verbatiminput" | "VerbatimInput" => !recognized,
             "bibliography" | "nobibliography" | "bibliographystyle" => {
                 !literal.ends_with(&format!(".{extension}"))
             }
@@ -1069,6 +1071,7 @@ pub(crate) fn file_lookup_names<'a>(
                     | "IfFileExists"
                     | "lstinputlisting"
                     | "verbatiminput"
+                    | "VerbatimInput"
             ) && append)
                 .then_some(std::borrow::Cow::Borrowed(value)),
         )
@@ -1699,7 +1702,10 @@ impl Syntax {
                     } else if loader_extension(name).is_some()
                         || matches!(
                             name,
-                            "bibliographystyle" | "lstinputlisting" | "verbatiminput"
+                            "bibliographystyle"
+                                | "lstinputlisting"
+                                | "verbatiminput"
+                                | "VerbatimInput"
                         )
                     {
                         arg_start = file_name_argument_start(source, name, command_end)

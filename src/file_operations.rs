@@ -553,7 +553,17 @@ pub fn will_rename(workspace: &Workspace, files: &[FileRename]) -> Result<Option
                                 &new_text,
                             )
                     });
-                let edit = if let Some(argument) = input {
+                let fancy = doc.syntax.commands.iter().find(|command| {
+                    command.name == "VerbatimInput"
+                        && syntax::file_argument(&doc.text.source, command).is_some_and(
+                            |argument| argument.span.start == start && argument.span.end == end,
+                        )
+                });
+                let edit = if let Some(command) = fancy {
+                    crate::fancyvrb::filename_edit(&doc.text, command, new_text).ok_or_else(
+                        || Error::invalid_params("Cannot safely update FancyVerb filename"),
+                    )?
+                } else if let Some(argument) = input {
                     syntax::input_filename_edit(&doc.text, argument, new_text)
                 } else {
                     TextEdit {

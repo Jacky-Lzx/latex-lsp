@@ -6,10 +6,11 @@ use crate::{
 use std::collections::BTreeSet;
 use tower_lsp::lsp_types::Url;
 
-const COMMANDS: [&str; 2] = ["lstinputlisting", "verbatiminput"];
+const COMMANDS: [&str; 3] = ["lstinputlisting", "verbatiminput", "VerbatimInput"];
 
 pub(crate) fn safe_syntax(source: &str, parsed: &syntax::Syntax, name: &str) -> bool {
     match name {
+        "VerbatimInput" => crate::fancyvrb::safe_syntax(source, parsed),
         "lstinputlisting" => listings::safe_syntax(source, parsed),
         "verbatiminput" => !parsed.definitions.iter().any(|definition| {
             matches!(
@@ -29,7 +30,11 @@ fn safe_project(workspace: &Workspace, sources: &BTreeSet<Url>, name: &str) -> b
 }
 
 fn safe_call(source: &str, command: &syntax::Command) -> bool {
-    command.name != "lstinputlisting" || listings::safe_call(source, command)
+    match command.name.as_str() {
+        "lstinputlisting" => listings::safe_call(source, command),
+        "VerbatimInput" => crate::fancyvrb::safe_call(source, command),
+        _ => true,
+    }
 }
 
 fn literal_inputs(
