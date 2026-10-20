@@ -136,12 +136,184 @@ fn color_rename_refuses_macro_callback_tokens_that_can_print_names_as_plain_text
 }
 
 #[test]
+fn static_alias_chains_reject_color_callback_renames_across_files() {
+    let aliases = [
+        r"\newcommand{\bridge}{\wrapped}",
+        r"\newcommand*{\bridge}[0]{\wrapped}",
+        r"\def\bridge{\wrapped}",
+        r"\gdef\bridge{\wrapped}",
+        r"\csdef{bridge}{\wrapped}",
+        r"\csgdef{bridge}{\wrapped}",
+        r"\NewDocumentCommand{\bridge}{}{\wrapped}",
+        r"\DeclareRobustCommand{\bridge}{\wrapped}",
+        r"\DeclareTextCommandDefault{\bridge}{\wrapped}",
+        "\\newcommand{\\bridge}{% before\r\n \\aliasstep % after\r\n}\r\n\\def\\aliasstep{\\wrapped}",
+    ];
+    let targets = [
+        (r"\newcommand{\wrapped}[3]{#2}", ""),
+        (r"\newcommand{\wrapped}[4][default]{#3}", "[note]"),
+        (r"\NewDocumentCommand{\wrapped}{s t+ m m m}{#4}", "*+"),
+        (r"\NewDocumentCommand{\wrapped}{d() m m m}{#3}", "(note)"),
+    ];
+    for alias in aliases {
+        for (target, arguments) in targets {
+            let body = format!("\\textcolor{{accent}}{{MarkerUnique}} \\bridge{arguments}\\textcolor{{accent}}{{Unused}}");
+            let (mut workspace, uri) = setup(&body);
+            let palette = insert(
+                &mut workspace,
+                "palette.sty",
+                r"\definecolor{accent}{HTML}{123456}",
+                Some(3),
+            );
+            insert(&mut workspace, "target.sty", target, None);
+            insert(&mut workspace, "alias.sty", alias, None);
+            for from in [&uri, &palette] {
+                let at = position(&workspace, from, "accent}");
+                assert!(
+                    features::prepare_rename(&workspace, from, at).is_err(),
+                    "{alias}/{target}"
+                );
+                assert!(
+                    features::rename(&workspace, from, at, "theme").is_err(),
+                    "{alias}/{target}"
+                );
+            }
+            let source = format!("\\definecolor{{accent}}{{HTML}}{{123456}}{target}{alias}{body}");
+            let (workspace, uri) = setup(&source);
+            assert!(
+                features::rename(
+                    &workspace,
+                    &uri,
+                    position(&workspace, &uri, "accent}"),
+                    "theme"
+                )
+                .is_err(),
+                "local {alias}/{target}"
+            );
+        }
+    }
+}
+
+#[test]
+fn unresolved_aliases_remain_conservative_and_deep_chains_do_not_recurse() {
+    for definitions in [
+        r"\newcommand{\bridge}{\missing}",
+        r"\newcommand{\bridge}{\bridge}",
+        r"\def\bridge{\aliasstep}\def\aliasstep{\bridge}",
+        r"\def\bridge{\aliasstep}\def\aliasstep{\missing}",
+        r"\newcommand{\bridge}{\relax}\renewcommand{\bridge}{\textbf}",
+        r"\newcommand{\bridge}{\aliasstep}\newcommand{\aliasstep}{}\renewcommand{\aliasstep}[1]{}",
+        r"\edef\bridge{\textbf}",
+        r"\xdef\bridge{\textbf}",
+        r"\csedef{bridge}{\textbf}",
+        r"\csxdef{bridge}{\textbf}",
+    ] {
+        let source = format!("\\definecolor{{accent}}{{HTML}}{{123456}}{definitions}\\bridge\\textcolor{{accent}}{{Unused}}");
+        let (workspace, uri) = setup(&source);
+        let at = position(&workspace, &uri, "accent}");
+        assert!(
+            features::rename(&workspace, &uri, at, "theme").is_err(),
+            "{definitions}"
+        );
+    }
+    // Control words contain letters, so use a unique alphabetic suffix per node.
+    let name = |mut n: usize| {
+        let mut result = String::from("alias");
+        loop {
+            result.push((b'a' + (n % 26) as u8) as char);
+            n /= 26;
+            if n == 0 {
+                break result;
+            }
+        }
+    };
+    let mut source = String::from(r"\definecolor{accent}{HTML}{123456}");
+    for n in 0..4096 {
+        source.push_str(&format!("\\def\\{}{{\\{}}}", name(n), name(n + 1)));
+    }
+    source.push_str(&format!(
+        "\\def\\{}{{\\textbf}}\\{}\\textcolor{{accent}}{{Unused}}",
+        name(4096),
+        name(0)
+    ));
+    let (workspace, uri) = setup(&source);
+    assert!(features::rename(
+        &workspace,
+        &uri,
+        position(&workspace, &uri, "accent}"),
+        "theme"
+    )
+    .is_err());
+}
+
+#[test]
+fn completed_alias_targets_keep_versioned_color_renames_available() {
+    for (definition, call) in [
+        (
+            r"\newcommand{\done}{}\newcommand{\bridge}{\done}",
+            r"\bridge",
+        ),
+        (r"\def\done{}\newcommand{\bridge}[0]{\done}", r"\bridge"),
+        (
+            r"\NewDocumentCommand{\done}{}{}\NewDocumentCommand{\bridge}{}{\done}",
+            r"\bridge",
+        ),
+        (r"\newcommand{\bridge}{\relax}", r"\bridge"),
+        (r"\newcommand{\bridge}{\bfseries}", r"\bridge"),
+        (r"\newcommand{\bridge}{\textbf}", r"\bridge{Heading}"),
+        (
+            r"\newcommand{\done}[1][default]{}\def\bridge{\done}",
+            r"\bridge",
+        ),
+        (
+            r"\newcommand{\done}[1][default]{}\def\bridge{\done}",
+            r"\bridge[note]",
+        ),
+        (
+            r"\NewDocumentCommand{\done}{s t+ O{default} m}{}\def\bridge{\done}",
+            r"\bridge*+[note]{Unused}",
+        ),
+        (
+            r"\NewDocumentCommand{\done}{d() m}{}\def\bridge{\done}",
+            r"\bridge(note){Unused}",
+        ),
+    ] {
+        let body = format!("😀 {call}\\textcolor{{accent}}{{MarkerUnique}} % accent\r\n");
+        let (mut workspace, uri) = setup(&body);
+        let palette = format!("\\definecolor{{accent}}{{HTML}}{{123456}}{definition}");
+        let declaration = insert(&mut workspace, "palette.sty", &palette, Some(3));
+        let at = position(&workspace, &uri, "accent}");
+        assert!(
+            features::prepare_rename(&workspace, &uri, at)
+                .unwrap()
+                .is_some(),
+            "{definition}"
+        );
+        let edits = changes(
+            &workspace,
+            features::rename(&workspace, &uri, at, "theme")
+                .unwrap()
+                .unwrap(),
+        );
+        assert_eq!(edits.len(), 2);
+        assert_eq!(
+            apply(&body, &edits[&uri]),
+            body.replacen("{accent}", "{theme}", 1)
+        );
+        assert_eq!(
+            apply(&palette, &edits[&declaration]),
+            palette.replacen("{accent}", "{theme}", 1)
+        );
+    }
+}
+
+#[test]
 fn color_rename_resolves_macro_arities_only_inside_the_current_project() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
-    let main = r"\documentclass{article}\usepackage{palette}\begin{document}\done\textcolor{accent}{MarkerUnique}\end{document}";
-    let palette = r"\NeedsTeXFormat{LaTeX2e}\ProvidesPackage{palette}[2026/10/20 Test]\definecolor{accent}{HTML}{123456}\newcommand{\done}{}";
-    let other = r"\documentclass{article}\newcommand{\done}[1]{#1}\begin{document}OtherUnique\end{document}";
+    let main = r"\documentclass{article}\usepackage{palette}\begin{document}\bridge\textcolor{accent}{MarkerUnique}\end{document}";
+    let palette = r"\NeedsTeXFormat{LaTeX2e}\ProvidesPackage{palette}[2026/10/20 Test]\definecolor{accent}{HTML}{123456}\newcommand{\done}{}\newcommand{\bridge}{\done}";
+    let other = r"\documentclass{article}\newcommand{\done}[1]{#1}\def\bridge{\textbf}\begin{document}OtherUnique\end{document}";
     for (name, source) in [
         ("main.tex", main),
         ("palette.sty", palette),

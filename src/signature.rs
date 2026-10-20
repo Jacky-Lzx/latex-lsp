@@ -24,12 +24,14 @@ enum Kind {
     },
 }
 
+#[derive(Clone)]
 struct Parameter {
     obey_spaces: bool,
     kind: Kind,
     label: String,
 }
 
+#[derive(Clone)]
 struct Signature {
     name: String,
     parameters: Vec<Parameter>,
@@ -771,12 +773,12 @@ fn definition(uri: &Url, doc: &Document, entry: &Entry, environment: bool) -> Op
     Some(signature)
 }
 
-fn source_definition(
+fn definition_arguments_start(
     source: &str,
     parsed: &syntax::Syntax,
     entry: &Entry,
     environment: bool,
-) -> Option<Signature> {
+) -> Option<usize> {
     let declaration = entry.detail.strip_prefix("Defined with \\")?;
     let mut i = syntax::skip_space(source, entry.span.end);
     if !environment
@@ -797,6 +799,17 @@ fn source_definition(
         let (_, end) = syntax::group(source, i, b'{', b'}')?;
         i = syntax::skip_space(source, end);
     }
+    Some(i)
+}
+
+fn source_definition(
+    source: &str,
+    parsed: &syntax::Syntax,
+    entry: &Entry,
+    environment: bool,
+) -> Option<Signature> {
+    let declaration = entry.detail.strip_prefix("Defined with \\")?;
+    let mut i = definition_arguments_start(source, parsed, entry, environment)?;
     let mut parameters = Vec::new();
     let mut nested_brackets = true;
     match declaration {
@@ -872,11 +885,14 @@ fn source_definition(
             }
             let (count, end) = syntax::group(source, i, b'[', b']')?;
             let count: usize = count.value.trim().parse().ok()?;
-            if !(1..=9).contains(&count) {
+            if count > 9 {
                 return None;
             }
             i = syntax::skip_space(source, end);
             let default = syntax::bracket_argument(source, i).map(|(argument, _)| argument.value);
+            if count == 0 && default.is_some() {
+                return None;
+            }
             for number in 1..=count {
                 let optional = number == 1 && default.is_some();
                 let label = if optional {
@@ -1039,6 +1055,38 @@ fn source_definition(
     })
 }
 
+/// A body containing exactly one control word forwards to its current meaning.
+/// This recognizes lexical aliases without evaluating arbitrary replacement text.
+fn source_alias(source: &str, parsed: &syntax::Syntax, entry: &Entry) -> Option<String> {
+    let declaration = entry.detail.strip_prefix("Defined with \\")?;
+    let mut at = definition_arguments_start(source, parsed, entry, false)?;
+    if syntax::declares_traditional_command(declaration)
+        || matches!(
+            declaration,
+            "DeclareTextCommand"
+                | "ProvideTextCommand"
+                | "DeclareTextCommandDefault"
+                | "ProvideTextCommandDefault"
+        )
+    {
+        if let Some((_, end)) = syntax::bracket_argument(source, at) {
+            at = syntax::skip_space(source, end);
+        }
+    } else if syntax::declares_document_command(declaration) {
+        at = syntax::group(source, at, b'{', b'}')?.1;
+    } else if !matches!(
+        declaration,
+        "def" | "gdef" | "edef" | "xdef" | "csdef" | "csgdef" | "csedef" | "csxdef"
+    ) {
+        return None;
+    }
+    let body = syntax::group(source, syntax::skip_space(source, at), b'{', b'}')?.0;
+    let start = syntax::skip_space(source, body.span.start);
+    let word = syntax::control_word(source, start)?;
+    (syntax::skip_space(source, word.end) == body.span.end)
+        .then(|| source[word.start + 1..word.end].into())
+}
+
 fn short(value: &str) -> String {
     value
         .split_whitespace()
@@ -1110,19 +1158,38 @@ pub(crate) struct CommandSignatures<'a> {
 impl<'a> CommandSignatures<'a> {
     pub(crate) fn new(documents: impl IntoIterator<Item = (&'a str, &'a syntax::Syntax)>) -> Self {
         let mut local = BTreeMap::new();
+        let mut aliases = BTreeMap::new();
         for (source, parsed) in documents {
             for entry in &parsed.definitions {
-                let signature = source_definition(source, parsed, entry, false);
+                let mut signature = source_definition(source, parsed, entry, false);
+                let alias = signature
+                    .as_ref()
+                    .filter(|s| s.parameters.is_empty())
+                    .and_then(|_| source_alias(source, parsed, entry));
+                // Expanded definitions capture a meaning at definition time;
+                // their lexical body cannot establish a late-bound alias.
+                let expanded = matches!(
+                    entry.detail.strip_prefix("Defined with \\"),
+                    Some("edef" | "xdef" | "csedef" | "csxdef")
+                );
+                if expanded && alias.is_some() {
+                    signature = None;
+                }
                 match local.entry(entry.name.as_str()) {
                     std::collections::btree_map::Entry::Vacant(entry) => {
+                        if let Some(target) = alias.filter(|_| !expanded) {
+                            aliases.insert(*entry.key(), target);
+                        }
                         entry.insert(signature);
                     }
                     std::collections::btree_map::Entry::Occupied(mut entry) => {
+                        aliases.remove(entry.key());
                         entry.insert(None);
                     }
                 }
             }
         }
+        local.extend(resolve_aliases(&local, &aliases));
         Self { local }
     }
 
@@ -1135,62 +1202,124 @@ impl<'a> CommandSignatures<'a> {
             }
             let signature = local.get(command.name.as_str()).and_then(Option::as_ref);
             let builtin = (!local.contains_key(command.name.as_str()))
-                .then(|| builtin(&command.name))
+                .then(|| operand_builtin(&command.name))
                 .flatten();
             if let Some(signature) = signature.or(builtin.as_ref()) {
                 argument_tokens(source, command.span.end, signature, &mut result);
-            } else if !local.contains_key(command.name.as_str())
-                && matches!(
-                    command.name.as_str(),
-                    "relax"
-                        | "noindent"
-                        | "indent"
-                        | "normalfont"
-                        | "bfseries"
-                        | "mdseries"
-                        | "itshape"
-                        | "upshape"
-                        | "slshape"
-                        | "scshape"
-                        | "rmfamily"
-                        | "sffamily"
-                        | "ttfamily"
-                        | "begingroup"
-                        | "endgroup"
-                        | "bgroup"
-                        | "egroup"
-                        | "hline"
-                        | "par"
-                        | "newline"
-                        | "hfill"
-                        | "vfill"
-                        | "hfil"
-                        | "vfil"
-                        | "iftrue"
-                        | "iffalse"
-                        | "else"
-                        | "fi"
-                        | "or"
-                        | "tiny"
-                        | "scriptsize"
-                        | "footnotesize"
-                        | "small"
-                        | "normalsize"
-                        | "large"
-                        | "Large"
-                        | "LARGE"
-                        | "huge"
-                        | "Huge"
-                )
-            {
-                // These standard switches consume no argument. Local redefinitions
-                // take precedence, including declarations we cannot interpret.
             } else {
                 unknown_argument_token(source, command.span.end, &mut result);
             }
         }
         result
     }
+}
+
+fn argument_free(name: &str) -> bool {
+    matches!(
+        name,
+        "relax"
+            | "noindent"
+            | "indent"
+            | "normalfont"
+            | "bfseries"
+            | "mdseries"
+            | "itshape"
+            | "upshape"
+            | "slshape"
+            | "scshape"
+            | "rmfamily"
+            | "sffamily"
+            | "ttfamily"
+            | "begingroup"
+            | "endgroup"
+            | "bgroup"
+            | "egroup"
+            | "hline"
+            | "par"
+            | "newline"
+            | "hfill"
+            | "vfill"
+            | "hfil"
+            | "vfil"
+            | "iftrue"
+            | "iffalse"
+            | "else"
+            | "fi"
+            | "or"
+            | "tiny"
+            | "scriptsize"
+            | "footnotesize"
+            | "small"
+            | "normalsize"
+            | "large"
+            | "Large"
+            | "LARGE"
+            | "huge"
+            | "Huge"
+    )
+}
+
+fn operand_builtin(name: &str) -> Option<Signature> {
+    builtin(name).or_else(|| {
+        let parameters = if argument_free(name) {
+            vec![]
+        } else if matches!(name, "csdef" | "csgdef" | "csedef" | "csxdef") {
+            // Grouped destinations and replacement text do not consume the
+            // following command. Parameter text stops this group-only reader.
+            ["{name}", "{definition}"]
+                .into_iter()
+                .map(|label| Parameter {
+                    obey_spaces: false,
+                    kind: Kind::RequiredGroup,
+                    label: label.into(),
+                })
+                .collect()
+        } else {
+            return None;
+        };
+        Some(Signature {
+            name: name.into(),
+            parameters,
+            documentation: String::new(),
+            starred: false,
+            nested_brackets: true,
+        })
+    })
+}
+
+/// Walk and memoize alias chains iteratively, including unknown targets and
+/// cycles. The source graph may be arbitrarily deep without using Rust's stack.
+fn resolve_aliases<'a>(
+    local: &BTreeMap<&'a str, Option<Signature>>,
+    aliases: &BTreeMap<&'a str, String>,
+) -> BTreeMap<&'a str, Option<Signature>> {
+    let mut resolved: BTreeMap<&'a str, Option<Signature>> = BTreeMap::new();
+    for &name in aliases.keys() {
+        let mut at = name;
+        let mut chain = vec![];
+        let mut seen = BTreeSet::new();
+        let signature = loop {
+            if let Some(signature) = resolved.get(at) {
+                break signature.clone();
+            }
+            if !seen.insert(at) {
+                break None;
+            }
+            if let Some((&key, target)) = aliases.get_key_value(at) {
+                chain.push(key);
+                at = target;
+            } else {
+                break local
+                    .get(at)
+                    .cloned()
+                    .unwrap_or_else(|| operand_builtin(at));
+            }
+        };
+        for name in chain {
+            resolved.insert(name, signature.clone());
+        }
+    }
+    resolved
 }
 
 fn unknown_argument_token(source: &str, mut at: usize, result: &mut BTreeSet<usize>) {

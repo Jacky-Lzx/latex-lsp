@@ -185,6 +185,69 @@ fn completed_macro_calls_and_argument_free_switches_keep_exact_color_fixes() {
 }
 
 #[test]
+fn single_control_word_aliases_inherit_argument_rules_for_color_diagnostics() {
+    for alias in [
+        r"\newcommand{\bridge}{\wrapped}",
+        r"\newcommand*{\bridge}[0]{\wrapped}",
+        r"\def\bridge{\wrapped}",
+        r"\gdef\bridge{\wrapped}",
+        r"\csdef{bridge}{\wrapped}",
+        r"\NewDocumentCommand{\bridge}{}{\wrapped}",
+        r"\def\bridge{\aliasstep}\def\aliasstep{\wrapped}",
+    ] {
+        for (target, arguments) in [
+            (r"\newcommand{\wrapped}[3]{\textcolor{accnet}{#3}}", ""),
+            (
+                r"\newcommand{\wrapped}[4][default]{\textcolor{accnet}{#4}}",
+                "[note]",
+            ),
+            (
+                r"\NewDocumentCommand{\wrapped}{s t+ m m m}{\textcolor{accnet}{#5}}",
+                "*+",
+            ),
+            (
+                r"\NewDocumentCommand{\wrapped}{d() m m m}{\textcolor{accnet}{#4}}",
+                "(note)",
+            ),
+        ] {
+            let source =
+                format!("{target}{alias}\\bridge{arguments}\\textcolor{{accnet}}{{MarkerUnique}}");
+            let error = diagnostic(&source, &format!("l.1 {source}"), false);
+            assert!(
+                error.code.is_none() && error.data.is_none(),
+                "{source}: {error:?}"
+            );
+            let (mut workspace, uri) = setup(&source, r"\definecolor{accent}{HTML}{123456}");
+            store(&mut workspace, &uri, error.clone());
+            assert!(actions(&workspace, &uri, &error).is_empty());
+        }
+    }
+    for prefix in [
+        r"\newcommand{\done}{}\newcommand{\bridge}{\done}\bridge",
+        r"\def\bridge{\relax}\bridge",
+        r"\newcommand{\bridge}[0]{\bfseries}\bridge",
+        r"\def\bridge{\textbf}\bridge{Heading}",
+        r"\NewDocumentCommand{\done}{s t+ O{default} m}{}\NewDocumentCommand{\bridge}{}{\done}\bridge*+[note]{Unused}",
+        r"\NewDocumentCommand{\done}{d() m}{}\def\bridge{\done}\bridge(note){Unused}",
+    ] {
+        let source = format!("{prefix}\\textcolor{{accnet}}{{MarkerUnique}}");
+        let error = diagnostic(&source, &format!("l.1 {source}"), false);
+        let start = source.rfind("accnet").unwrap();
+        assert_eq!(
+            error.range,
+            Text::new(source.clone()).range(start, start + 6),
+            "{source}"
+        );
+        let (mut workspace, uri) = setup(&source, r"\definecolor{accent}{HTML}{123456}");
+        store(&mut workspace, &uri, error.clone());
+        assert_eq!(
+            repair(&workspace, &uri, &error, "accent").unwrap(),
+            source.replacen("{accnet}", "{accent}", 1)
+        );
+    }
+}
+
+#[test]
 fn multiline_consumed_color_operands_require_more_than_the_final_line_echo() {
     for source in [
         "\\textcolor{% before\naccnet% after\n}{MarkerUnique}",
