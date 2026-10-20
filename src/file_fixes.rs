@@ -121,20 +121,24 @@ pub(crate) fn fixes(
     let Some(reported) = reported else {
         return vec![];
     };
-    let indirect = if let Some(signatures) =
-        signatures.filter(|_| matches!(command_name, "input" | "include"))
-    {
-        let commands = build_log::source_error_commands(&doc.text.source, &doc.syntax, signatures);
+    let indirect = if let Some(signatures) = signatures.filter(|_| {
+        matches!(command_name, "input" | "include")
+            || syntax::loader_extension(command_name) == Some("sty")
+    }) {
+        let commands = build_log::file_error_commands(&doc.text.source, &doc.syntax, signatures);
         let index =
             (!commands.is_empty()).then(|| crate::source_inputs::Index::new(workspace, root));
         commands
             .into_iter()
             .filter(|command| {
-                index
-                    .as_ref()
-                    .and_then(|index| index.calls.get(uri))
-                    .is_some_and(|calls| {
-                        calls.iter().any(|call| {
+                index.as_ref().is_some_and(|index| {
+                    index
+                        .calls
+                        .get(uri)
+                        .into_iter()
+                        .flatten()
+                        .chain(index.packages.get(uri).into_iter().flatten())
+                        .any(|call| {
                             call.certain
                                 && call.command.name == command.name
                                 && call.command.span == command.span
@@ -149,7 +153,7 @@ pub(crate) fn fixes(
                                             && a.value == b.value
                                     })
                         })
-                    })
+                })
             })
             .collect::<Vec<_>>()
     } else {

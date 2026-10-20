@@ -1,4 +1,4 @@
-//! Root-specific discovery of static indirect input/include calls.
+//! Root-specific discovery of static indirect source and package loads.
 use crate::{
     signature::{CommandSignatures, SourceCall},
     syntax,
@@ -13,6 +13,7 @@ const MAX_SOURCES: usize = 1024;
 #[derive(Default)]
 pub(crate) struct Index {
     pub calls: BTreeMap<Url, Vec<SourceCall>>,
+    pub packages: BTreeMap<Url, Vec<SourceCall>>,
     pub incomplete: bool,
     literal: Option<BTreeMap<Url, Vec<Url>>>,
 }
@@ -33,6 +34,7 @@ impl Index {
                 })
             }));
             let mut literal = BTreeMap::new();
+            let mut packages = BTreeMap::new();
             index.calls = scope
                 .iter()
                 .filter_map(|uri| {
@@ -52,6 +54,14 @@ impl Index {
                             .map(|(uri, _)| uri)
                             .collect(),
                     );
+                    let loaders = signatures.indirect_package_invocations(
+                        &doc.text.source,
+                        &doc.syntax,
+                        &positions,
+                    );
+                    if !loaders.is_empty() {
+                        packages.insert(uri.clone(), loaders);
+                    }
                     let calls = signatures.indirect_source_invocations(
                         &doc.text.source,
                         &doc.syntax,
@@ -60,6 +70,7 @@ impl Index {
                     (!calls.is_empty()).then_some((uri.clone(), calls))
                 })
                 .collect();
+            index.packages = packages;
             index.literal = Some(literal);
             let next = index.scope(workspace, root);
             if !index.incomplete && next == scope {
@@ -71,6 +82,7 @@ impl Index {
         // Do not select an arbitrary interpretation of an oscillating graph.
         Self {
             calls: BTreeMap::new(),
+            packages: BTreeMap::new(),
             incomplete: true,
             literal: None,
         }
@@ -98,17 +110,28 @@ impl Index {
                         .map(|(uri, _)| uri),
                 );
             }
-            pending.extend(self.dependencies(&uri, root));
+            pending.extend(self.dependencies(workspace, &uri, root));
         }
         result
     }
 
-    pub fn dependencies(&self, uri: &Url, root: &Url) -> Vec<Url> {
+    pub fn dependencies(&self, workspace: &Workspace, uri: &Url, root: &Url) -> Vec<Url> {
         self.calls
             .get(uri)
             .into_iter()
             .flatten()
             .filter_map(|call| target(uri, root, call))
+            .chain(
+                self.packages
+                    .get(uri)
+                    .into_iter()
+                    .flatten()
+                    .flat_map(|call| {
+                        workspace.documents.get(uri).map_or_else(Vec::new, |doc| {
+                            package_targets(&doc.text.source, uri, root, call)
+                        })
+                    }),
+            )
             .collect()
     }
 }
@@ -120,4 +143,20 @@ pub(crate) fn target(uri: &Url, root: &Url, call: &SourceCall) -> Option<Url> {
     }
     resolve_file_path(root, &call.command.name, &argument.value, &["tex"])
         .or_else(|| resolve_file_path(uri, &call.command.name, &argument.value, &["tex"]))
+}
+
+/// Resolve only complete literal lists; an unknown sibling can load definitions
+/// that change the meaning of the other calls in this project.
+fn package_targets(source: &str, uri: &Url, root: &Url, call: &SourceCall) -> Vec<Url> {
+    if !call.certain {
+        return vec![];
+    }
+    syntax::complete_file_list_spans(source, &call.command)
+        .into_iter()
+        .flatten()
+        .filter_map(|span| {
+            resolve_file_path(root, &call.command.name, &source[span.clone()], &["sty"])
+                .or_else(|| resolve_file_path(uri, &call.command.name, &source[span], &["sty"]))
+        })
+        .collect()
 }

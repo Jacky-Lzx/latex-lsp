@@ -349,7 +349,7 @@ impl Workspace {
         let mut dependencies = self.literal_source_dependencies_with_kinds(uri, root);
         dependencies.extend(
             crate::source_inputs::Index::new(self, root)
-                .dependencies(uri, root)
+                .dependencies(self, uri, root)
                 .into_iter()
                 .map(|uri| (uri, DocumentKind::Latex)),
         );

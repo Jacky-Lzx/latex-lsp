@@ -297,7 +297,7 @@ fn missing_reported_file(
         return None;
     }
     let indirect = if command_name == "include" {
-        source_commands_for_text(&text, &syntax, cached, project_stale)
+        file_commands_for_text(&text, &syntax, cached, project_stale)
     } else {
         vec![]
     };
@@ -420,7 +420,7 @@ pub(crate) fn missing_include_key(message: &str) -> Option<&str> {
         .strip_suffix("` not found")
 }
 
-fn source_commands_for_text(
+fn file_commands_for_text(
     text: &Text,
     parsed: &crate::syntax::Syntax,
     cached: Option<&InvocationCalls<'_>>,
@@ -431,12 +431,12 @@ fn source_commands_for_text(
     }
     if let Some(cached) = cached {
         return if cached.source == text.source {
-            cached.source_commands.clone()
+            cached.file_commands.clone()
         } else {
             vec![]
         };
     }
-    source_error_commands(
+    file_error_commands(
         &text.source,
         parsed,
         &crate::signature::CommandSignatures::new([(text.source.as_str(), parsed)]),
@@ -450,7 +450,7 @@ fn missing_include_ranges(
     project_stale: bool,
 ) -> Vec<Range> {
     let parsed = crate::syntax::Syntax::latex(text);
-    let indirect = source_commands_for_text(text, &parsed, cached, project_stale);
+    let indirect = file_commands_for_text(text, &parsed, cached, project_stale);
     parsed
         .commands
         .iter()
@@ -1026,10 +1026,10 @@ fn missing_input_range(
         if cached.source != text.source {
             return None;
         }
-        &cached.source_commands
+        &cached.file_commands
     } else {
         let parsed = crate::syntax::Syntax::latex(text);
-        local = source_error_commands(
+        local = file_error_commands(
             &text.source,
             &parsed,
             &crate::signature::CommandSignatures::new([(text.source.as_str(), &parsed)]),
@@ -1052,6 +1052,7 @@ fn loader_failure_range(
     line: u32,
     context: &str,
     name: &str,
+    indirect: &[crate::syntax::Command],
 ) -> Option<(Range, &'static str)> {
     if !name.ends_with(".sty") && !name.ends_with(".cls") {
         return None;
@@ -1061,7 +1062,7 @@ fn loader_failure_range(
     let start = text.offset(Position::new(line, 0))?;
     let syntax = crate::syntax::Syntax::latex(text);
     let mut matches = Vec::new();
-    for command in &syntax.commands {
+    for command in syntax.commands.iter().chain(indirect) {
         let command_name = match command.name.as_str() {
             "usepackage" => "usepackage",
             "RequirePackage" => "RequirePackage",
@@ -1326,8 +1327,8 @@ pub(crate) fn environment_error_invocations_with_signatures(
         .collect()
 }
 
-/// Certain indirect source calls in the compiler-confirmed macro scope.
-pub(crate) fn source_error_commands(
+/// Certain indirect file loads in the compiler-confirmed macro scope.
+pub(crate) fn file_error_commands(
     source: &str,
     parsed: &crate::syntax::Syntax,
     signatures: &crate::signature::CommandSignatures<'_>,
@@ -1336,6 +1337,7 @@ pub(crate) fn source_error_commands(
     signatures
         .indirect_source_invocations(source, parsed, &positions)
         .into_iter()
+        .chain(signatures.indirect_package_invocations(source, parsed, &positions))
         .filter(|call| call.certain)
         .map(|call| call.command)
         .collect()
@@ -1353,7 +1355,7 @@ pub(crate) fn file_error_invocations_with_signatures(
         return vec![];
     }
     let operands = signatures.argument_tokens(source, parsed);
-    let indirect = source_error_commands(source, parsed, signatures);
+    let indirect = file_error_commands(source, parsed, signatures);
     parsed
         .commands
         .iter()
@@ -1764,12 +1766,16 @@ fn emit_with_context(
     ranges.extend(fancyverb_range);
     let loader_range = missing_file
         .filter(|_| !project_stale)
-        .and_then(|name| loader_failure_range(&text, line, context?, name))
+        .and_then(|name| {
+            let parsed = crate::syntax::Syntax::latex(&text);
+            let indirect = file_commands_for_text(&text, &parsed, cached_calls, project_stale);
+            loader_failure_range(&text, line, context?, name, &indirect)
+        })
         .filter(|(range, _)| confirmed_file_invocation(&text, *range, cached_calls));
     ranges.extend(loader_range.map(|(range, _)| range));
     let package_clash = package_option_clash_name(&message);
     let clash_range = package_clash
-        .and_then(|name| loader_failure_range(&text, line, context?, &format!("{name}.sty")))
+        .and_then(|name| loader_failure_range(&text, line, context?, &format!("{name}.sty"), &[]))
         // WithOptions does not supply a new explicit options list. Do not
         // attribute a clash to a forwarding call based on its name alone.
         .filter(|(_, command)| matches!(*command, "usepackage" | "RequirePackage"));
@@ -2512,7 +2518,7 @@ impl InvocationKind {
 struct InvocationCalls<'a> {
     source: &'a str,
     invocations: Vec<(ByteRange<usize>, ByteRange<usize>)>,
-    source_commands: Vec<crate::syntax::Command>,
+    file_commands: Vec<crate::syntax::Command>,
 }
 
 struct InvocationContext<'a> {
@@ -2550,10 +2556,8 @@ impl ProjectSources {
         let dynamic_sources = documents
             .iter()
             .filter(|(uri, doc)| {
-                let alias_bodies = crate::signature::source_input_alias_body_positions(
-                    &doc.text.source,
-                    &doc.syntax,
-                );
+                let alias_bodies =
+                    crate::signature::file_load_alias_body_positions(&doc.text.source, &doc.syntax);
                 source_calls.incomplete
                     || doc
                         .syntax
@@ -2565,6 +2569,7 @@ impl ProjectSources {
                                 .get(*uri)
                                 .into_iter()
                                 .flatten()
+                                .chain(source_calls.packages.get(*uri).into_iter().flatten())
                                 .map(|call| &call.command),
                         )
                         .any(|command| {
@@ -2700,8 +2705,8 @@ impl<'a> ProjectAnalysis<'a> {
                 Rc::new(InvocationCalls {
                     source,
                     invocations,
-                    source_commands: if kind == InvocationKind::File {
-                        source_error_commands(source, &document.syntax, &macros.signatures)
+                    file_commands: if kind == InvocationKind::File {
+                        file_error_commands(source, &document.syntax, &macros.signatures)
                     } else {
                         vec![]
                     },
@@ -7872,7 +7877,20 @@ mod alias_load_snapshot_tests {
             (r"\def\reader{\include}", false),
             (r"\def\reader{\subfile}", true),
             (r"\def\reader{\InputIfFileExists}", true),
-            (r"\def\reader{\usepackage}", true),
+            (r"\def\reader{\usepackage}", false),
+            (r"\def\reader{\RequirePackage}", false),
+            (r"\def\reader{\RequirePackageWithOptions}", false),
+            (r"\def\reader{\documentclass}", true),
+            (r"\edef\reader{\usepackage}", true),
+            (r"\xdef\reader{\RequirePackage}", true),
+            (r"\newcommand{\reader}[1]{\usepackage{#1}}", true),
+            (r"\csuse{usepackage}{\filename}", true),
+            (r"\csname RequirePackage\endcsname{known,\filename}", true),
+            (r"\def\reader{\usepackage}\reader{\filename}", true),
+            (
+                r"\def\reader{\RequirePackage}\reader{known,\filename}",
+                true,
+            ),
             (r"\csuse{input}{\filename}", true),
             (r"\csname input\endcsname{\filename}", true),
             (r"\def\reader{\input}\reader{\filename}", true),
@@ -7903,7 +7921,7 @@ mod alias_load_snapshot_tests {
                     .contains(&Url::from_file_path(&root).unwrap()),
                 dynamic,
                 "{definition}; alias tokens: {:?}; commands: {:?}",
-                crate::signature::source_input_alias_body_positions(
+                crate::signature::file_load_alias_body_positions(
                     definition,
                     &snapshot.documents[&Url::from_file_path(&root).unwrap()].syntax
                 ),
@@ -7988,5 +8006,97 @@ mod indirect_include_warning_tests {
                 .any(|d| d.code == Some(NumberOrString::String("missing-include".into()))),
             "{diagnostics:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod indirect_package_scope_tests {
+    use super::*;
+
+    #[test]
+    fn missing_packages_use_only_loaded_unchanged_indirect_dependencies() {
+        for loader in ["usepackage", "RequirePackage", "RequirePackageWithOptions"] {
+            for call in [
+                r"\loadpkg",
+                r"\csuse{loadpkg}",
+                r"\csname loadpkg\endcsname",
+            ] {
+                for case in ["loaded", "not-loaded", "changed", "shadowed", "dynamic"] {
+                    let directory = tempfile::tempdir().unwrap();
+                    let root = directory.path().join("main.tex");
+                    let package = directory.path().join("local.sty");
+                    let source = format!(
+                        "\\csname usepackage\\endcsname{{local}}\n{call}{{fixtuer}}\\relax\n"
+                    );
+                    std::fs::write(&root, &source).unwrap();
+                    let declaration = format!("\\def\\loadpkg{{\\{loader}}}");
+                    std::fs::write(
+                        &package,
+                        match case {
+                            "shadowed" => format!("{declaration}\\def\\{loader}#1{{}}"),
+                            "dynamic" => format!("{declaration}\\input{{\\filename}}"),
+                            _ => declaration,
+                        },
+                    )
+                    .unwrap();
+                    let project = ProjectSources::capture(&root);
+                    let root_uri = Url::from_file_path(&root).unwrap();
+                    let package_uri = Url::from_file_path(&package).unwrap();
+                    // Redefining usepackage in the very package discovered
+                    // through it makes the dependency graph oscillate. That
+                    // file must not enter the saved signature scope.
+                    assert_eq!(
+                        project.documents.contains_key(&package_uri),
+                        case != "shadowed" || loader != "usepackage",
+                        "{case}/{loader}/{call}"
+                    );
+                    if case == "changed" {
+                        std::fs::write(&package, r"\def\loadpkg#1{}").unwrap();
+                    }
+                    let loaded = if case == "not-loaded" {
+                        ""
+                    } else {
+                        "(./local.sty)"
+                    };
+                    let log = format!("(./main.tex\n{loaded}\n! LaTeX Error: File `fixtuer.sty' not found.\n! Emergency stop.\n<read *>\nl.2 {call}{{fixtuer}}\\relax\n");
+                    let diagnostics = parse_with_project_sources(&root, &log, &project).0;
+                    let diagnostic = diagnostics[&root_uri]
+                        .iter()
+                        .find(|d| d.message.contains("not found"))
+                        .unwrap();
+                    assert_eq!(
+                        diagnostic.code,
+                        (case == "loaded")
+                            .then(|| NumberOrString::String("missing-package".into())),
+                        "{case}/{loader}/{call}: {diagnostic:?}"
+                    );
+                    if case == "loaded" {
+                        let data = diagnostic.data.as_ref().unwrap();
+                        assert_eq!(data["loaderCommand"], loader);
+                        assert!(data["macroSources"]
+                            .as_array()
+                            .unwrap()
+                            .contains(&serde_json::json!(package_uri)));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn paused_parent_declarations_cannot_certify_a_child_package_alias() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("main.tex");
+        let child = directory.path().join("content.tex");
+        std::fs::write(&root, r"\def\loadpkg{\usepackage}\input{content}").unwrap();
+        std::fs::write(&child, "\\loadpkg{fixtuer}\\relax\n").unwrap();
+        let project = ProjectSources::capture(&root);
+        let log = "(./main.tex (./content.tex\n! LaTeX Error: File `fixtuer.sty' not found.\n! Emergency stop.\n<read *>\nl.1 \\loadpkg{fixtuer}\\relax\n";
+        let diagnostics = parse_with_project_sources(&root, log, &project).0;
+        let diagnostic = diagnostics[&Url::from_file_path(&child).unwrap()]
+            .iter()
+            .find(|d| d.message.contains("not found"))
+            .unwrap();
+        assert!(diagnostic.code.is_none(), "{diagnostic:?}");
     }
 }

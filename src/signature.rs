@@ -1164,9 +1164,9 @@ fn source_alias(source: &str, parsed: &syntax::Syntax, entry: &Entry) -> Option<
     body_alias(source, &source_alias_body(source, parsed, entry)?)
 }
 
-/// Tokens declaring an unexpanded, argument-free input/include alias.
-/// A bare input in such a body is not itself a dynamic file load.
-pub(crate) fn source_input_alias_body_positions(
+/// Tokens declaring an unexpanded, argument-free input/include/package alias.
+/// Its body forwards the loader rather than performing a dynamic file load.
+pub(crate) fn file_load_alias_body_positions(
     source: &str,
     parsed: &syntax::Syntax,
 ) -> BTreeSet<usize> {
@@ -1186,8 +1186,9 @@ pub(crate) fn source_input_alias_body_positions(
             }
             let body = source_alias_body(source, parsed, entry)?;
             let target = body_alias(source, &body)?;
-            matches!(target.as_str(), "input" | "include")
-                .then(|| syntax::skip_space(source, body.span.start))
+            (matches!(target.as_str(), "input" | "include")
+                || syntax::loader_extension(&target) == Some("sty"))
+            .then(|| syntax::skip_space(source, body.span.start))
         })
         .collect()
 }
@@ -1766,11 +1767,37 @@ impl<'a> CommandSignatures<'a> {
         parsed: &syntax::Syntax,
         positions: &BTreeSet<usize>,
     ) -> Vec<SourceCall> {
+        self.indirect_file_invocations(source, parsed, positions, &["input", "include"])
+    }
+
+    /// Static package loaders share source-call token boundaries, including
+    /// options and comma-separated names, without executing macro bodies.
+    pub(crate) fn indirect_package_invocations(
+        &self,
+        source: &str,
+        parsed: &syntax::Syntax,
+        positions: &BTreeSet<usize>,
+    ) -> Vec<SourceCall> {
+        self.indirect_file_invocations(
+            source,
+            parsed,
+            positions,
+            &["usepackage", "RequirePackage", "RequirePackageWithOptions"],
+        )
+    }
+
+    fn indirect_file_invocations(
+        &self,
+        source: &str,
+        parsed: &syntax::Syntax,
+        positions: &BTreeSet<usize>,
+        builtins: &[&str],
+    ) -> Vec<SourceCall> {
         let aliased = self
             .local
             .values()
             .flatten()
-            .any(|signature| matches!(signature.name.as_str(), "input" | "include"));
+            .any(|signature| builtins.contains(&signature.name.as_str()));
         if !aliased
             && !parsed
                 .commands
@@ -1795,7 +1822,7 @@ impl<'a> CommandSignatures<'a> {
             .iter()
             .enumerate()
             .filter_map(|(index, command)| {
-                if matches!(command.name.as_str(), "input" | "include")
+                if builtins.contains(&command.name.as_str())
                     || declarations.contains(&(command.span.start, command.span.end))
                 {
                     return None;
@@ -1805,7 +1832,7 @@ impl<'a> CommandSignatures<'a> {
                 if !positions.contains(&start) || !positions.contains(&command.span.start) {
                     return None;
                 }
-                let builtin = ["input", "include"].into_iter().find(|builtin| {
+                let builtin = builtins.iter().copied().find(|builtin| {
                     name == *builtin
                         || self
                             .local
@@ -1817,7 +1844,13 @@ impl<'a> CommandSignatures<'a> {
                     command: syntax::Command {
                         name: builtin.into(),
                         span: start..end,
-                        argument: syntax::source_input_argument(source, builtin, end),
+                        argument: if syntax::loader_extension(builtin).is_some() {
+                            syntax::file_name_argument_start(source, builtin, end)
+                                .and_then(|start| syntax::group(source, start, b'{', b'}'))
+                                .map(|(argument, _)| argument)
+                        } else {
+                            syntax::source_input_argument(source, builtin, end)
+                        },
                     },
                     certain: self.invokes_builtin(name, builtin),
                 })
