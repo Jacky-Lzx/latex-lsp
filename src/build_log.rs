@@ -285,6 +285,8 @@ fn missing_reported_file(
     lines: &[&str],
     index: &mut usize,
     command_name: &str,
+    cached: Option<&InvocationCalls<'_>>,
+    project_stale: bool,
 ) -> Option<String> {
     let line = lines[*index];
     let text = Text::new(std::fs::read_to_string(path).ok()?);
@@ -294,11 +296,17 @@ fn missing_reported_file(
     {
         return None;
     }
+    let indirect = if command_name == "include" {
+        source_commands_for_text(&text, &syntax, cached, project_stale)
+    } else {
+        vec![]
+    };
     let mut candidates = Vec::new();
     let mut matched = None;
     for command in syntax
         .commands
         .iter()
+        .chain(&indirect)
         .filter(|command| command.name == command_name)
         .take(1024)
     {
@@ -412,17 +420,48 @@ pub(crate) fn missing_include_key(message: &str) -> Option<&str> {
         .strip_suffix("` not found")
 }
 
-fn missing_include_ranges(text: &Text, name: &str) -> Vec<Range> {
-    crate::syntax::Syntax::latex(text)
+fn source_commands_for_text(
+    text: &Text,
+    parsed: &crate::syntax::Syntax,
+    cached: Option<&InvocationCalls<'_>>,
+    project_stale: bool,
+) -> Vec<crate::syntax::Command> {
+    if project_stale {
+        return vec![];
+    }
+    if let Some(cached) = cached {
+        return if cached.source == text.source {
+            cached.source_commands.clone()
+        } else {
+            vec![]
+        };
+    }
+    source_error_commands(
+        &text.source,
+        parsed,
+        &crate::signature::CommandSignatures::new([(text.source.as_str(), parsed)]),
+    )
+}
+
+fn missing_include_ranges(
+    text: &Text,
+    name: &str,
+    cached: Option<&InvocationCalls<'_>>,
+    project_stale: bool,
+) -> Vec<Range> {
+    let parsed = crate::syntax::Syntax::latex(text);
+    let indirect = source_commands_for_text(text, &parsed, cached, project_stale);
+    parsed
         .commands
         .iter()
+        .chain(&indirect)
         .filter(|command| command.name == "include")
         .filter_map(|command| {
-            let argument = command.argument.as_ref()?;
+            let argument = crate::syntax::file_argument(&text.source, command)?;
             let span = crate::syntax::trimmed_span(&text.source, argument.span.clone());
-            crate::syntax::file_lookup_names("include", argument.value.trim())
-                .any(|candidate| candidate == name)
-                .then(|| text.range(span.start, span.end))
+            let matched = crate::syntax::file_lookup_names("include", argument.value.trim())
+                .any(|candidate| candidate == name);
+            matched.then(|| text.range(span.start, span.end))
         })
         .collect()
 }
@@ -558,7 +597,7 @@ impl<'a> ErrorContext<'a> {
     }
 
     fn with_project(
-        mut self,
+        self,
         message: &str,
         project: Option<&mut ProjectAnalysis<'a>>,
         loaded: &BTreeSet<Url>,
@@ -566,40 +605,52 @@ impl<'a> ErrorContext<'a> {
         path: &Path,
     ) -> Self {
         if let Some(kind) = InvocationKind::for_message(message) {
-            if let Some(analysis) = project {
-                let project = analysis.project;
-                // Open ancestors are paused at their input command. Their
-                // remaining declarations have not executed in this child.
-                let anchor = path.canonicalize().unwrap_or_else(|_| path.into());
-                let Ok(uri) = Url::from_file_path(&anchor) else {
-                    self.project_stale = true;
-                    return self;
-                };
-                // Dynamically loaded sources may be confirmed by the log but
-                // absent from the pre-build graph. A partial signature set
-                // must not hide declarations in the file reporting the error.
-                if !project.dynamic_sources.is_disjoint(loaded)
-                    || !project.documents.contains_key(&uri)
-                {
-                    self.project_stale = true;
-                    return self;
+            self.with_project_kind(kind, project, loaded, stack, path)
+        } else {
+            self
+        }
+    }
+
+    fn with_project_kind(
+        mut self,
+        kind: InvocationKind,
+        project: Option<&mut ProjectAnalysis<'a>>,
+        loaded: &BTreeSet<Url>,
+        stack: &[Option<LogSource>],
+        path: &Path,
+    ) -> Self {
+        if let Some(analysis) = project {
+            let project = analysis.project;
+            // Open ancestors are paused at their input command. Their
+            // remaining declarations have not executed in this child.
+            let anchor = path.canonicalize().unwrap_or_else(|_| path.into());
+            let Ok(uri) = Url::from_file_path(&anchor) else {
+                self.project_stale = true;
+                return self;
+            };
+            // Dynamically loaded sources may be confirmed by the log but
+            // absent from the pre-build graph. A partial signature set
+            // must not hide declarations in the file reporting the error.
+            if !project.dynamic_sources.is_disjoint(loaded) || !project.documents.contains_key(&uri)
+            {
+                self.project_stale = true;
+                return self;
+            }
+            let mut available = loaded.clone();
+            let mut paused = BTreeSet::new();
+            for source in stack
+                .iter()
+                .flatten()
+                .filter(|source| source.path != anchor)
+            {
+                if let Ok(uri) = Url::from_file_path(&source.path) {
+                    available.remove(&uri);
+                    paused.insert(uri);
                 }
-                let mut available = loaded.clone();
-                let mut paused = BTreeSet::new();
-                for source in stack
-                    .iter()
-                    .flatten()
-                    .filter(|source| source.path != anchor)
-                {
-                    if let Ok(uri) = Url::from_file_path(&source.path) {
-                        available.remove(&uri);
-                        paused.insert(uri);
-                    }
-                }
-                match analysis.context(&available, &paused, &uri, kind) {
-                    Ok(context) => self.macro_context = context,
-                    Err(()) => self.project_stale = true,
-                }
+            }
+            match analysis.context(&available, &paused, &uri, kind) {
+                Ok(context) => self.macro_context = context,
+                Err(()) => self.project_stale = true,
             }
         }
         self
@@ -1285,7 +1336,7 @@ pub(crate) fn source_error_commands(
     signatures
         .indirect_source_invocations(source, parsed, &positions)
         .into_iter()
-        .filter(|call| call.certain && call.command.name == "input")
+        .filter(|call| call.certain)
         .map(|call| call.command)
         .collect()
 }
@@ -1734,7 +1785,12 @@ fn emit_with_context(
         text.source[start..end].strip_prefix('\\')
     });
     if let Some(name) = missing_include_key(&message) {
-        ranges.extend(missing_include_ranges(&text, name));
+        ranges.extend(missing_include_ranges(
+            &text,
+            name,
+            cached_calls,
+            project_stale,
+        ));
         // Optional package inputs also print "No file". Report chapter
         // omissions only when the source identifies the corresponding include.
         if ranges.is_empty() {
@@ -1812,8 +1868,9 @@ fn emit_with_context(
                         data
                     }))
                     .or_else(|| graphic_range.and(missing_graphic).map(|name| serde_json::json!({"file":name})))
+                    .or_else(|| missing_include_key(&message).map(|name| serde_json::json!({"file":name})))
                     .map(|mut data| {
-                        if color_range.is_some() || model_range.is_some() || counter_range.is_some() || environment_range.is_some() || input_range.is_some() || loader_range.is_some() {
+                        if missing_include_key(&message).is_some() || color_range.is_some() || model_range.is_some() || counter_range.is_some() || environment_range.is_some() || input_range.is_some() || loader_range.is_some() {
                             if let Some(context) = macro_context {
                                 data["macroSources"] = serde_json::json!(context.macros.sources);
                                 if !context.macros.paused_sources.is_empty() {
@@ -2923,22 +2980,47 @@ fn parse_in_project<'a>(
         } else if line.starts_with("No file ") {
             let path = current();
             if path.confirmed {
+                let context = ErrorContext::source("").with_project_kind(
+                    InvocationKind::File,
+                    analysis.as_mut(),
+                    &sources,
+                    &stack,
+                    &path.path,
+                );
+                let calls = context
+                    .macro_context
+                    .as_ref()
+                    .map(|context| context.calls.as_ref());
                 // Both commands can print the same text. Match independently
                 // and prefer the complete longest message across families.
                 let mut include_end = i;
-                let include =
-                    missing_reported_file(&path.path, &lines, &mut include_end, "include");
+                let include = missing_reported_file(
+                    &path.path,
+                    &lines,
+                    &mut include_end,
+                    "include",
+                    calls,
+                    context.project_stale,
+                );
                 let mut verbatim_end = i;
-                let verbatim =
-                    missing_reported_file(&path.path, &lines, &mut verbatim_end, "verbatiminput");
+                let verbatim = missing_reported_file(
+                    &path.path,
+                    &lines,
+                    &mut verbatim_end,
+                    "verbatiminput",
+                    None,
+                    false,
+                );
                 i = include_end.max(verbatim_end);
                 if let Some(name) = include.filter(|_| include_end == i) {
-                    emit(
+                    emit_with_context(
                         &mut result,
                         &path.path,
                         1,
                         format!("Included file `{name}` not found"),
                         DiagnosticSeverity::WARNING,
+                        Some(context),
+                        true,
                     );
                 }
                 if let Some(name) = verbatim.filter(|_| verbatim_end == i) {
@@ -7830,5 +7912,81 @@ mod alias_load_snapshot_tests {
                     .commands
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod indirect_include_warning_tests {
+    use super::*;
+
+    #[test]
+    fn indirect_chapter_warnings_use_loaded_unchanged_aliases_and_record_their_scope() {
+        for call in [
+            r"\readpart{chapte}",
+            r"\csuse{readpart}{chapte}",
+            r"\csname readpart\endcsname{chapte}",
+        ] {
+            for case in ["loaded", "not-loaded", "changed", "shadowed"] {
+                let directory = tempfile::tempdir().unwrap();
+                let root = directory.path().join("main.tex");
+                let package = directory.path().join("local.sty");
+                let source = format!("\\usepackage{{local}}\n{call}\n");
+                std::fs::write(
+                    &root,
+                    if case == "shadowed" {
+                        format!("\\usepackage{{local}}\\def\\include#1{{}}\n{call}\n")
+                    } else {
+                        source
+                    },
+                )
+                .unwrap();
+                std::fs::write(&package, r"\newcommand{\readpart}{\include}").unwrap();
+                let project = ProjectSources::capture(&root);
+                if case == "changed" {
+                    std::fs::write(&package, r"\def\readpart#1{}").unwrap();
+                }
+                let loaded = if case == "not-loaded" {
+                    ""
+                } else {
+                    "(./local.sty)"
+                };
+                let log = format!("(./main.tex\n{loaded}\nNo file main.aux.\nNo file chapte.aux.\nNo file chapte.tex.\n)");
+                let diagnostics = parse_with_project_sources(&root, &log, &project).0;
+                let warnings: Vec<_> = diagnostics
+                    .values()
+                    .flatten()
+                    .filter(|d| d.code == Some(NumberOrString::String("missing-include".into())))
+                    .collect();
+                assert_eq!(
+                    warnings.len(),
+                    usize::from(case == "loaded"),
+                    "{case}/{call}: {warnings:?}"
+                );
+                if case == "loaded" {
+                    let data = warnings[0].data.as_ref().unwrap();
+                    assert_eq!(data["file"], "chapte.tex");
+                    assert_eq!(data["macroSources"].as_array().unwrap().len(), 2);
+                    assert_eq!(warnings[0].severity, Some(DiagnosticSeverity::WARNING));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn paused_parent_aliases_do_not_certify_indirect_chapter_warnings_in_children() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("main.tex");
+        std::fs::write(&root, r"\def\readpart{\include}\input{child}").unwrap();
+        std::fs::write(directory.path().join("child.tex"), r"\readpart{chapte}").unwrap();
+        let project = ProjectSources::capture(&root);
+        let log = "(./main.tex\n(./child.tex\nNo file chapte.tex.\n)\n)";
+        let diagnostics = parse_with_project_sources(&root, log, &project).0;
+        assert!(
+            !diagnostics
+                .values()
+                .flatten()
+                .any(|d| d.code == Some(NumberOrString::String("missing-include".into()))),
+            "{diagnostics:?}"
+        );
     }
 }

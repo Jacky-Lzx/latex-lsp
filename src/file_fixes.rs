@@ -121,10 +121,9 @@ pub(crate) fn fixes(
     let Some(reported) = reported else {
         return vec![];
     };
-    let indirect = if command_name == "input" {
-        let Some(signatures) = signatures else {
-            return vec![];
-        };
+    let indirect = if let Some(signatures) =
+        signatures.filter(|_| matches!(command_name, "input" | "include"))
+    {
         let commands = build_log::source_error_commands(&doc.text.source, &doc.syntax, signatures);
         let index =
             (!commands.is_empty()).then(|| crate::source_inputs::Index::new(workspace, root));

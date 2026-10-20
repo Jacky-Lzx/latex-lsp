@@ -369,7 +369,7 @@ pub fn fixes(
             if examined > 64 {
                 return result;
             }
-            let invocation_scope = if matches!(diagnostic.code.as_ref(), Some(NumberOrString::String(code)) if matches!(code.as_str(), "undefined-color" | "undefined-color-model" | "undefined-counter" | "undefined-environment" | "mismatched-environment-end" | "missing-input" | "missing-package" | "missing-class"))
+            let invocation_scope = if matches!(diagnostic.code.as_ref(), Some(NumberOrString::String(code)) if matches!(code.as_str(), "undefined-color" | "undefined-color-model" | "undefined-counter" | "undefined-environment" | "mismatched-environment-end" | "missing-input" | "missing-include" | "missing-package" | "missing-class"))
             {
                 let confirmed = workspace.build_diagnostic_sources.get(root);
                 let scope = if let Some(value) = diagnostic
