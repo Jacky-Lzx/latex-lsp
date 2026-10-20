@@ -355,7 +355,15 @@ pub(crate) fn document_links_in(workspace: &Workspace, uri: &Url, root: &Url) ->
             });
         }
     }
-    for command in &doc.syntax.commands {
+    for command in doc.syntax.commands.iter().chain(
+        inputs
+            .packages
+            .get(uri)
+            .into_iter()
+            .flatten()
+            .filter(|call| call.certain)
+            .map(|call| &call.command),
+    ) {
         if syntax::code_input_command(&command.name)
             && !crate::code_inputs::supported(workspace, uri, root, command)
         {

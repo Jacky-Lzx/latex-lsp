@@ -693,7 +693,13 @@ fn indirect_source_context(
     let mut selected: Option<(Command, Span<usize>)> = None;
     for root in roots {
         let inputs = crate::source_inputs::Index::new(workspace, &root);
-        let (command, span) = inputs.calls.get(uri)?.iter().rev().find_map(|call| {
+        let calls = inputs
+            .calls
+            .get(uri)
+            .into_iter()
+            .flatten()
+            .chain(inputs.packages.get(uri).into_iter().flatten());
+        let (command, span) = calls.rev().find_map(|call| {
             (call.certain && call.command.span.end <= offset)
                 .then(|| argument_span(doc, &call.command, offset))
                 .flatten()

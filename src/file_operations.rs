@@ -336,6 +336,14 @@ fn replacement(
             }
         }
     }
+    // A comma in a list argument changes one filename into multiple items.
+    // Resolving the raw spelling as one filesystem path would miss that
+    // change in TeX semantics. Single-file commands keep literal commas.
+    if command.is_some_and(syntax::file_list) && value.contains(',') {
+        return Err(Error::invalid_params(
+            "Renamed path contains a comma that would split the file list",
+        ));
+    }
     Ok(value)
 }
 
@@ -432,6 +440,7 @@ pub fn will_rename(workspace: &Workspace, files: &[FileRename]) -> Result<Option
             let calls = inputs.calls.remove(uri).unwrap_or_default();
             let commands: Vec<_> = calls
                 .into_iter()
+                .chain(inputs.packages.remove(uri).unwrap_or_default())
                 .filter(|call| call.certain)
                 .map(|call| call.command)
                 .collect();
