@@ -68,6 +68,178 @@ fn changes(workspace: &Workspace, edit: WorkspaceEdit) -> BTreeMap<Url, Vec<Text
 }
 
 #[test]
+fn commented_color_names_preserve_comments_and_utf16_ranges_in_cross_file_edits() {
+    let palette = "\\definecolor[% class\r\n named]{% 中文😀\r\n\taccent% tail\r\n}[% prefix\r\n prefix]{% model\r\n HTML% end\r\n}{123456}";
+    let body = concat!(
+        "\\typeout{\\detokenize{😀}}\\textcolor[% model\r\n named% end\r\n]{--accent% tail\r\n!35!% head\r\n -red!50!% last\r\n\taccent}{accent}\r\n",
+        "\\blendcolors{!% ratio\r\n30!% name\r\naccent}\\blendcolors{}",
+        "\\maskcolors{% name\r\naccent% end\r\n}\\maskcolors{}",
+        "\r\n% \\color{accent}\r\n\\verb|\\color{accent}|"
+    );
+    let (mut workspace, uri) = setup(body);
+    let declaration = insert(&mut workspace, "palette.sty", palette, Some(3));
+    let at = position(&workspace, &uri, "accent% tail");
+    let definitions = features::definitions(&workspace, &uri, at);
+    assert_eq!(definitions.len(), 1);
+    assert_eq!(definitions[0].uri, declaration);
+    assert_eq!(features::references(&workspace, &uri, at, true).len(), 5);
+    assert_eq!(editing::highlights(&workspace, &uri, at).len(), 4);
+    assert!(features::hover(&workspace, &uri, at).is_some());
+    assert!(features::symbols(&workspace.documents[&declaration])
+        .iter()
+        .any(|s| s.name == "accent"));
+    for doc in [
+        &workspace.documents[&uri],
+        &workspace.documents[&declaration],
+    ] {
+        let mut at = Position::default();
+        let tokens: Vec<_> = semantic::tokens(doc, None)
+            .unwrap()
+            .data
+            .into_iter()
+            .map(|token| {
+                at = Position::new(
+                    at.line + token.delta_line,
+                    if token.delta_line == 0 {
+                        at.character + token.delta_start
+                    } else {
+                        token.delta_start
+                    },
+                );
+                (at, token)
+            })
+            .collect();
+        for entry in doc.syntax.colors.iter().chain(&doc.syntax.color_references) {
+            assert!(tokens
+                .iter()
+                .any(|(at, token)| *at == doc.text.position(entry.span.start)
+                    && token.token_type == 1
+                    && token.length == entry.name.len() as u32));
+        }
+    }
+    let edits = changes(
+        &workspace,
+        features::rename(&workspace, &uri, at, "theme-2.dark")
+            .unwrap()
+            .unwrap(),
+    );
+    assert_eq!(edits.len(), 2);
+    assert_eq!(
+        apply(palette, &edits[&declaration]),
+        palette.replace("accent", "theme-2.dark")
+    );
+    let changed = apply(body, &edits[&uri]);
+    assert_eq!(
+        changed,
+        body.replacen("accent% tail", "theme-2.dark% tail", 1)
+            .replacen("accent}{accent}", "theme-2.dark}{accent}", 1)
+            .replacen("accent}\\blendcolors", "theme-2.dark}\\blendcolors", 1)
+            .replacen("accent% end", "theme-2.dark% end", 1)
+    );
+}
+
+#[test]
+fn commented_color_completion_preserves_comments_and_rejects_discontinuous_names() {
+    for marked in [
+        "\\textcolor{% head\r\n\tac¦cent% tail\r\n}{Text}",
+        "\\textcolor{-ac¦cent% tail\n!35!% head\n -red}{Text}",
+        "\\textcolor{red% tail\n!35!% head\n -ac¦cent}{Text}",
+        "\\blendcolors{!% ratio\n30!% head\nac¦cent% tail\n}",
+        "\\color{% head\nac¦cent",
+        "\\color{red!35!% head\nac¦cent",
+        "\\color{% head\n¦}",
+        "\\color{¦}",
+    ] {
+        let offset = marked.find('¦').unwrap();
+        let source = marked.replace('¦', "");
+        let (mut workspace, uri) = setup(&source);
+        insert(
+            &mut workspace,
+            "palette.tex",
+            "\\definecolor{% head\naccent% tail\n}{HTML}{123456}",
+            None,
+        );
+        let items = features::completion(
+            &workspace,
+            &uri,
+            workspace.documents[&uri].text.position(offset),
+        );
+        let item = items
+            .iter()
+            .find(|i| i.label == "accent")
+            .unwrap_or_else(|| panic!("{marked}: {items:?}"));
+        let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+            panic!()
+        };
+        let text = &workspace.documents[&uri].text;
+        assert!(text.offset(edit.range.start).unwrap() <= offset);
+        assert!(text.offset(edit.range.end).unwrap() >= offset);
+        let expected = if source.contains("accent") {
+            source.clone()
+        } else {
+            marked.replace('¦', "accent")
+        };
+        assert_eq!(
+            apply(&source, std::slice::from_ref(edit)),
+            expected,
+            "{marked}"
+        );
+    }
+    for marked in [
+        "\\color{ac% split\nce¦nt}",
+        "\\color{ac¦% split\ncent}",
+        "\\color{% co¦mment\naccent}",
+        "\\color{% head\n ¦ accent}",
+        "\\color{ac¦cent % tail\n}",
+        "\\color{ ac¦cent}",
+        "\\color{ac¦\\%cent}",
+        "\\color{red!3¦5!% head\naccent}",
+    ] {
+        let offset = marked.find('¦').unwrap();
+        let (mut workspace, uri) = setup(&marked.replace('¦', ""));
+        insert(
+            &mut workspace,
+            "palette.tex",
+            r"\definecolor{accent}{HTML}{123456}",
+            None,
+        );
+        let items = features::completion(
+            &workspace,
+            &uri,
+            workspace.documents[&uri].text.position(offset),
+        );
+        assert!(!items.iter().any(|i| i.label == "accent"), "{marked}");
+    }
+}
+
+#[test]
+fn commented_colors_keep_literal_whitespace_dynamic_and_split_name_rename_guards() {
+    for extra in [
+        "\\color{ac% split\ncent}",
+        "\\definecolor{ac% split\ncent}{HTML}{123456}",
+        "\\color{accent % trailing\n}",
+        "\\color{ % leading\naccent}",
+        "\\color{\naccent}",
+        "\\color{ac\\%cent}",
+        "\\color{% head\n\\dynamic}",
+        "\\color{% head\naccent!% ratio\n101!red}",
+    ] {
+        let source = format!("\\definecolor{{accent}}{{HTML}}{{123456}}\\color{{accent}}{extra}");
+        let (workspace, uri) = setup(&source);
+        assert!(
+            features::rename(
+                &workspace,
+                &uri,
+                position(&workspace, &uri, "accent}"),
+                "renamed"
+            )
+            .is_err(),
+            "{extra}"
+        );
+    }
+}
+
+#[test]
 fn cross_file_color_navigation_and_versioned_rename_keep_mixing_operators_and_namespaces() {
     let declarations = "\\definecolor[named]% type\r\n{accent}[prefix]{HTML}{123456}\r\n\\newcommand{\\accent}{Macro}\\label{accent}";
     let body = concat!("😀 \\textcolor{--accent!35!-red!50!accent}{accent}\\ref{accent}\\accent\r\n",

@@ -119,6 +119,37 @@ fn direct_calls() -> Vec<(&'static str, &'static str)> {
 }
 
 #[test]
+fn multiline_consumed_color_operands_require_more_than_the_final_line_echo() {
+    for source in [
+        "\\textcolor{% before\naccnet% after\n}{MarkerUnique}",
+        "\\newcommand{\\wrapped}[3]{\\textcolor{accnet}{#3}}\n\\wrapped\\textcolor{% before\naccnet% after\n}{MarkerUnique}",
+        "\\textcolor{accnet}\n{MarkerUnique}",
+    ] {
+        let line = source.lines().count();
+        let echo = source.lines().last().unwrap();
+        let error = diagnostic(source, &format!("l.{line} {echo}"), false);
+        assert!(error.code.is_none() && error.data.is_none(), "{source}: {error:?}");
+        assert_eq!(error.range.start, Position::new(line as u32 - 1, 0));
+        let (mut workspace, uri) = setup(source, r"\definecolor{accent}{HTML}{123456}");
+        store(&mut workspace, &uri, error.clone());
+        assert!(actions(&workspace, &uri, &error).is_empty());
+    }
+    // A command can start on an earlier line when all consumed operands are
+    // still fully present in the echo.
+    let source = "\\textcolor\n{accnet}{MarkerUnique}";
+    let error = diagnostic(source, "l.2 {accnet}{MarkerUnique}", false);
+    let start = source.find("accnet").unwrap();
+    assert_eq!(
+        error.range,
+        Text::new(source.into()).range(start, start + 6)
+    );
+    assert_eq!(
+        error.code,
+        Some(NumberOrString::String("undefined-color".into()))
+    );
+}
+
+#[test]
 fn direct_color_errors_select_literal_name_in_full_and_unique_shortened_contexts() {
     for (call, rest) in direct_calls() {
         let source = format!("😀 {call}{rest} % accnet\r\n");

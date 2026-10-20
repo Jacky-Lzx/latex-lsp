@@ -1095,7 +1095,13 @@ fn color_error_range(
         crate::named_colors::error_invocations(&text.source, &syntax)
     };
     let mut matches = invocations.into_iter().filter_map(|(span, tail)| {
-        if text.source[span.clone()] != *name || text.position(tail.end).line != line {
+        // TeX only echoes the final source line. When consumed operands start
+        // earlier, that echo cannot establish which command received them
+        // (a wrapper may have consumed the apparent color command as an arg).
+        if text.source[span.clone()] != *name
+            || text.position(tail.end).line != line
+            || tail.start < start
+        {
             return None;
         }
         let consumed = &text.source[start..tail.end];

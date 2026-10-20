@@ -57,6 +57,70 @@ struct Field {
     role: Role,
 }
 
+/// TeX discards a comment's line ending and the following line's indentation.
+/// Keep every other byte, including literal whitespace, and retain source
+/// positions so edits never consume a comment embedded in a color operand.
+struct Tokens {
+    value: String,
+    positions: Vec<usize>,
+}
+
+impl Tokens {
+    fn new(source: &str, span: Span<usize>) -> Self {
+        let bytes = source.as_bytes();
+        let mut positions = vec![];
+        let mut at = span.start;
+        while at < span.end {
+            if bytes[at] == b'%' {
+                while at < span.end && !matches!(bytes[at], b'\r' | b'\n') {
+                    at += 1;
+                }
+                if at < span.end && bytes[at] == b'\r' {
+                    at += 1;
+                }
+                if at < span.end && bytes[at] == b'\n' {
+                    at += 1;
+                }
+                while at < span.end && matches!(bytes[at], b' ' | b'\t') {
+                    at += 1;
+                }
+            } else {
+                positions.push(at);
+                // Escaped percent signs are tokens, never comments. Keeping
+                // the backslash also makes dynamic operands fail validation.
+                if bytes[at] == b'\\' && at + 1 < span.end {
+                    at += 1;
+                    positions.push(at);
+                }
+                at += 1;
+            }
+        }
+        let value = String::from_utf8(positions.iter().map(|p| bytes[*p]).collect())
+            .expect("comment removal preserves UTF-8");
+        Self { value, positions }
+    }
+
+    fn span(&self, span: Span<usize>) -> Option<Span<usize>> {
+        let positions = self.positions.get(span)?;
+        let first = *positions.first()?;
+        positions
+            .iter()
+            .enumerate()
+            .all(|(i, p)| *p == first + i)
+            .then_some(first..first + positions.len())
+    }
+
+    fn cursor(&self, offset: usize) -> Option<usize> {
+        let at = self.positions.partition_point(|p| *p < offset);
+        (self.positions.get(at) == Some(&offset) || at > 0 && self.positions[at - 1] + 1 == offset)
+            .then_some(at)
+    }
+}
+
+fn tokens(source: &str, argument: &Argument) -> String {
+    Tokens::new(source, argument.span.clone()).value
+}
+
 struct Reader<'a> {
     source: &'a str,
     at: usize,
@@ -95,14 +159,14 @@ impl Reader<'_> {
     fn class(&mut self) -> Result<(), ()> {
         if self
             .optional()?
-            .is_some_and(|a| !matches!(a.value.as_str(), "" | "named" | "ps"))
+            .is_some_and(|a| !matches!(tokens(self.source, &a).as_str(), "" | "named" | "ps"))
         {
             return Err(());
         }
         Ok(())
     }
     fn model(&mut self) -> Result<Option<String>, ()> {
-        let model = self.optional()?.map(|a| a.value);
+        let model = self.optional()?.map(|a| tokens(self.source, &a));
         if model.as_deref().is_some_and(|m| !known_model(m)) {
             return Err(());
         }
@@ -160,17 +224,18 @@ fn read(reader: &mut Reader<'_>, name: &str) -> Result<(), ()> {
         "definecolor" | "providecolor" | "xdefinecolor" => {
             reader.class()?;
             reader.field(Role::Definition)?;
-            if reader
-                .optional()?
-                .is_some_and(|a| !a.value.is_empty() && !syntax::is_static_key(&a.value))
-            {
+            if reader.optional()?.is_some_and(|a| {
+                let value = tokens(reader.source, &a);
+                !value.is_empty() && !syntax::is_static_key(&value)
+            }) {
                 return Err(());
             }
-            let model = reader.group()?;
-            if !known_model(&model.value) || model.value.is_empty() {
+            let argument = reader.group()?;
+            let model = tokens(reader.source, &argument);
+            if !known_model(&model) || model.is_empty() {
                 return Err(());
             }
-            if model.value == "named" {
+            if model == "named" {
                 reader.field(Role::Expression)?;
             } else {
                 reader.group()?;
@@ -192,12 +257,14 @@ fn read(reader: &mut Reader<'_>, name: &str) -> Result<(), ()> {
             reader.field(Role::Expression)?;
         }
         "convertcolorspec" => {
-            let model = reader.group()?;
-            if !known_model(&model.value) || model.value.is_empty() {
+            let argument = reader.group()?;
+            let model = tokens(reader.source, &argument);
+            if !known_model(&model) || model.is_empty() {
                 return Err(());
             }
-            reader.color(Some(&model.value))?;
-            if !known_model(&reader.group()?.value) {
+            reader.color(Some(&model))?;
+            let target = reader.group()?;
+            if !known_model(&tokens(reader.source, &target)) {
                 return Err(());
             }
         }
@@ -293,17 +360,19 @@ fn occurrences(source: &str, command: &Command) -> Option<Vec<(bool, Span<usize>
     let mut result = vec![];
     for field in fields {
         let (argument, _) = syntax::group(source, field.start, b'{', b'}')?;
+        let tokens = Tokens::new(source, argument.span);
         match field.role {
             Role::Definition => {
-                if !literal_name(&argument.value) {
+                if !literal_name(&tokens.value) {
                     return None;
                 }
-                result.push((true, argument.span));
+                result.push((true, tokens.span(0..tokens.value.len())?));
             }
             role => result.extend(
-                field_expression(source, argument.span, role)?
+                field_expression(&tokens.value, 0..tokens.value.len(), role)?
                     .into_iter()
-                    .map(|span| (false, span)),
+                    .map(|span| tokens.span(span).map(|span| (false, span)))
+                    .collect::<Option<Vec<_>>>()?,
             ),
         }
     }
@@ -596,6 +665,29 @@ pub(crate) fn validate(workspace: &Workspace, scope: &BTreeSet<Url>) -> jsonrpc:
     Ok(())
 }
 
+fn incomplete_end(source: &str, mut at: usize) -> usize {
+    let bytes = source.as_bytes();
+    while at < bytes.len() {
+        match bytes[at] {
+            b'\n' | b'\r' | b'}' => break,
+            b'%' => {
+                while at < bytes.len() && !matches!(bytes[at], b'\r' | b'\n') {
+                    at += 1;
+                }
+                if bytes.get(at) == Some(&b'\r') {
+                    at += 1;
+                }
+                if bytes.get(at) == Some(&b'\n') {
+                    at += 1;
+                }
+            }
+            b'\\' if at + 1 < bytes.len() => at += 2,
+            _ => at += 1,
+        }
+    }
+    at
+}
+
 pub(crate) fn completion(
     workspace: &Workspace,
     uri: &Url,
@@ -612,17 +704,25 @@ pub(crate) fn completion(
         .filter(|c| known(&c.name) && c.span.end <= offset)
     {
         for field in fields(source, command).0 {
-            let mut start = field.start + 1;
+            let raw_start = field.start + 1;
             let end = syntax::group(source, field.start, b'{', b'}')
                 .map(|(a, _)| a.span.end)
-                .unwrap_or_else(|| {
-                    source[start..]
-                        .find(['\n', '\r', '}'])
-                        .map_or(source.len(), |n| start + n)
-                });
-            if offset < start || offset > end {
+                .unwrap_or_else(|| incomplete_end(source, raw_start));
+            if offset < raw_start || offset > end {
                 continue;
             }
+            let tokens = Tokens::new(source, raw_start..end);
+            let Some(cursor) = tokens
+                .cursor(offset)
+                .or_else(|| (tokens.value.is_empty() && offset == end).then_some(0))
+            else {
+                return Some(vec![]);
+            };
+            let raw_offset = offset;
+            let source = tokens.value.as_str();
+            let offset = cursor;
+            let end = source.len();
+            let mut start = 0;
             if field.role == Role::Blend {
                 if source.as_bytes().get(start) != Some(&b'!') {
                     return Some(vec![]);
@@ -666,6 +766,14 @@ pub(crate) fn completion(
             {
                 return Some(vec![]);
             }
+            let range = if at == segment_end {
+                doc.text.range(raw_offset, raw_offset)
+            } else {
+                let Some(span) = tokens.span(at..segment_end) else {
+                    return Some(vec![]);
+                };
+                doc.text.range(span.start, span.end)
+            };
             let mut names: BTreeMap<String, String> = BUILTINS
                 .iter()
                 .map(|n| (n.to_string(), "Built-in xcolor name".into()))
@@ -688,7 +796,7 @@ pub(crate) fn completion(
                         kind: Some(CompletionItemKind::COLOR),
                         detail: Some(detail),
                         text_edit: Some(CompletionTextEdit::Edit(TextEdit {
-                            range: doc.text.range(at, segment_end),
+                            range,
                             new_text: name,
                         })),
                         ..Default::default()
