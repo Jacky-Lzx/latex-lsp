@@ -152,9 +152,8 @@ fn raw_target(doc: &Document, offset: usize) -> Option<Target<'_>> {
             }
         }
         let environment_argument = matches!(command.name.as_str(), "begin" | "end")
-            .then(|| command.argument.clone())
-            .flatten()
-            .map(|argument| syntax::single_key_argument(&doc.text.source, argument));
+            .then(|| syntax::environment_name_argument(&doc.text.source, command.span.end))
+            .flatten();
         if let Some(arg) = environment_argument.as_ref().or(command.argument.as_ref()) {
             let kind = if syntax::is_reference(&command.name) || command.name == "label" {
                 Some(TargetKind::Label)
@@ -518,6 +517,8 @@ pub fn rename(
             crate::generated::validate(workspace, &scope, target.name, new_name, model)?;
         }
     }
+    let environment_calls = (target.kind == TargetKind::Environment)
+        .then(|| crate::environment_calls::Index::new(workspace));
     let mut changes: std::collections::BTreeMap<Url, Vec<TextEdit>> =
         std::collections::BTreeMap::new();
     for location in all_references(workspace, uri, position, true)
@@ -543,14 +544,18 @@ pub fn rename(
             continue;
         }
         if matches!(target.kind, TargetKind::Counter | TargetKind::Environment) {
-            changes
-                .entry(location.uri)
-                .or_default()
-                .push(crate::counters::replacement_edit(
-                    document,
-                    location.range,
-                    new_name,
-                ));
+            let edit = if environment_calls
+                .as_ref()
+                .is_some_and(|calls| calls.is_bare_name(&location.uri, document, location.range))
+            {
+                TextEdit {
+                    range: location.range,
+                    new_text: format!("{{{new_name}}}"),
+                }
+            } else {
+                crate::counters::replacement_edit(document, location.range, new_name)
+            };
+            changes.entry(location.uri).or_default().push(edit);
             continue;
         }
         let control_word = target.kind == TargetKind::Command
@@ -1437,9 +1442,17 @@ fn all_references(
             }
             let separate_label = syntax::separate_label_argument(&doc.text.source, command);
             let environment_argument = (target.kind == TargetKind::Environment)
-                .then(|| command.argument.clone())
-                .flatten()
-                .map(|argument| syntax::single_key_argument(&doc.text.source, argument));
+                .then(|| {
+                    if matches!(command.name.as_str(), "begin" | "end") {
+                        syntax::environment_name_argument(&doc.text.source, command.span.end)
+                    } else {
+                        command
+                            .argument
+                            .clone()
+                            .map(|argument| syntax::single_key_argument(&doc.text.source, argument))
+                    }
+                })
+                .flatten();
             let argument = if syntax::has_separate_label_argument(&command.name) {
                 separate_label.as_ref()
             } else {

@@ -503,6 +503,27 @@ pub(crate) fn single_key_argument(source: &str, mut argument: Argument) -> Argum
     argument
 }
 
+/// A begin/end name is a required TeX argument: either a group or one token.
+/// Only ASCII literal tokens have the same ungrouped boundary across engines.
+pub(crate) fn environment_name_argument(source: &str, end: usize) -> Option<Argument> {
+    let at = skip_space(source, end);
+    let argument = if source.as_bytes().get(at) == Some(&b'{') {
+        single_key_argument(source, group(source, at, b'{', b'}')?.0)
+    } else {
+        let byte = *source.as_bytes().get(at)?;
+        if !byte.is_ascii() || byte.is_ascii_control() {
+            return None;
+        }
+        let span = at..at + 1;
+        Argument {
+            value: source[span.clone()].into(),
+            outer_span: span.clone(),
+            span,
+        }
+    };
+    is_static_key(&argument.value).then_some(argument)
+}
+
 /// Literal runs separated by TeX comments, preserving each comment's newline.
 fn name_literal_pieces(source: &str, span: Range<usize>) -> Vec<Range<usize>> {
     let bytes = source.as_bytes();
@@ -1916,7 +1937,10 @@ impl Syntax {
                             is_variable: declares_register(name),
                         });
                     }
-                    if let Some(arg) = &command.argument {
+                    let environment_argument = matches!(name, "begin" | "end")
+                        .then(|| environment_name_argument(source, command.span.end))
+                        .flatten();
+                    if let Some(arg) = environment_argument.as_ref().or(command.argument.as_ref()) {
                         let entry = || Entry {
                             name: arg.value.trim().into(),
                             span: trimmed_span(source, arg.span.clone()),
@@ -1943,7 +1967,7 @@ impl Syntax {
                             "begin" => {
                                 let env = arg.value.as_str();
                                 if is_verbatim_environment(env) {
-                                    let body_start = parsed.as_ref().unwrap().1;
+                                    let body_start = arg.outer_span.end;
                                     let ending = format!("\\end{{{env}}}");
                                     let end = if crate::fancyvrb::is_environment(env) {
                                         crate::fancyvrb::environment_end(source, body_start, env)
@@ -2000,7 +2024,7 @@ impl Syntax {
                                         format!("Unexpected \\end{{{env}}}"),
                                         format!("Remove unexpected \\end{{{env}}}"),
                                         TextEdit {
-                                            range: text.range(start, arg.span.end + 1),
+                                            range: text.range(start, arg.outer_span.end),
                                             new_text: String::new(),
                                         },
                                     );
@@ -2397,6 +2421,24 @@ mod tests {
             .diagnostics
             .iter()
             .any(|d| d.message.contains("environment `b`")));
+    }
+
+    #[test]
+    fn bare_environment_names_balance_and_unexpected_end_fixes_keep_following_text() {
+        for (begin, end) in [("x", "x"), ("x", "{x}"), ("{x}", "x")] {
+            let source = format!("\\begin% name\r\n{begin}Body\\end {end}Tail");
+            let syntax = Syntax::latex(&Text::new(source));
+            assert!(syntax.diagnostics.is_empty(), "{:?}", syntax.diagnostics);
+        }
+        for end in ["x", "{% name\r\nx% keep\r\n}"] {
+            let source = format!("\\end {end}Tail");
+            let text = Text::new(source);
+            let syntax = Syntax::latex(&text);
+            assert_eq!(syntax.diagnostics.len(), 1);
+            let edit = &syntax.fixes[0].edit;
+            assert_eq!(&text.source[text.offset(edit.range.end).unwrap()..], "Tail");
+            assert_eq!(edit.new_text, "");
+        }
     }
 
     #[test]

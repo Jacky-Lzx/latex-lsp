@@ -1633,11 +1633,8 @@ impl<'a> CommandSignatures<'a> {
                 if !self.invokes_builtin(name, "begin") && !self.invokes_builtin(name, "end") {
                     return None;
                 }
-                let (argument, _) =
-                    syntax::group(source, syntax::skip_space(source, end), b'{', b'}')?;
-                let argument = syntax::single_key_argument(source, argument);
-                syntax::is_static_key(&argument.value)
-                    .then_some((argument, operands.contains(&command.span.start)))
+                let argument = syntax::environment_name_argument(source, end)?;
+                Some((argument, operands.contains(&command.span.start)))
             })
             .collect()
     }
@@ -1672,11 +1669,7 @@ impl<'a> CommandSignatures<'a> {
             // command (whose first group may instead contain "begin").
             let begin = self
                 .invokes_builtin(name, "begin")
-                .then(|| {
-                    syntax::group(source, syntax::skip_space(source, end), b'{', b'}')
-                        .map(|(argument, _)| syntax::single_key_argument(source, argument))
-                        .filter(|argument| syntax::is_static_key(&argument.value))
-                })
+                .then(|| syntax::environment_name_argument(source, end))
                 .flatten();
             let environment = begin
                 .as_ref()
@@ -2634,6 +2627,72 @@ pub fn help(workspace: &Workspace, uri: &Url, position: Position) -> Option<Sign
 mod tex_operand_tests {
     use super::*;
     use crate::text::Text;
+
+    #[test]
+    fn bare_environment_names_dispatch_the_actual_environment_parameters() {
+        for call in [
+            r"\begin x",
+            r"\csuse{begin}x",
+            r"\csname begin\endcsname x",
+            r"\start x",
+            r"\csuse{start}x",
+            r"\csname start\endcsname x",
+            "\\begin% name\r\nx",
+        ] {
+            for (definition, prefix, tail) in [
+                (r"\newenvironment{x}[3]{}{}", r"\relax", ""),
+                (r"\newenvironment{x}[4][default]{}{}", r"[note]\relax", ""),
+                (
+                    r"\NewDocumentEnvironment{x}{O{default} m m m}{}{}",
+                    r"[note]\relax",
+                    "",
+                ),
+                (r"\newenvironment{x}[1]{}{}", "{", "}"),
+                (r"\NewDocumentEnvironment{x}{d()}{}{}", "(", ")"),
+                (r"\NewDocumentEnvironment{x}{t\mark m}{}{}", r"\mark", ""),
+            ] {
+                let source = format!(
+                    r"{definition}\def\start{{\begin}}{call}{prefix}\input{{wrong}}{tail}\input{{right}}"
+                );
+                let parsed = syntax::Syntax::latex(&Text::new(source.clone()));
+                let signatures = CommandSignatures::new([(source.as_str(), &parsed)]);
+                let operands = signatures.argument_tokens(&source, &parsed);
+                for command in parsed
+                    .commands
+                    .iter()
+                    .filter(|command| command.name == "input")
+                {
+                    assert_eq!(
+                        operands.contains(&command.span.start),
+                        command.argument.as_ref().unwrap().value == "wrong",
+                        "{source}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn bare_environment_names_require_an_engine_independent_literal_token() {
+        for value in ["x", "7", "-", "[", "]"] {
+            let source = format!("% name\r\n{value}tail");
+            let argument = syntax::environment_name_argument(&source, 0).unwrap();
+            assert_eq!(argument.value, value);
+            assert_eq!(argument.span, argument.outer_span);
+            assert_eq!(&source[argument.span], value);
+        }
+        for value in [r"\which", "é", "😀", "^^78", "{x", "}", "#1", "", "% end"] {
+            assert!(
+                syntax::environment_name_argument(value, 0).is_none(),
+                "{value}"
+            );
+        }
+        let source = "{% name\r\nx% keep\r\n}";
+        let argument = syntax::environment_name_argument(source, 0).unwrap();
+        assert_eq!(argument.value, "x");
+        assert_eq!(&source[argument.span.clone()], "x");
+        assert_ne!(argument.span, argument.outer_span);
+    }
 
     #[test]
     fn environment_arguments_are_operands_through_begin_direct_and_named_calls() {

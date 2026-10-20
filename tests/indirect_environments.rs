@@ -229,3 +229,258 @@ fn redefined_begin_does_not_turn_literal_arguments_into_environment_names() {
         .position(source.rfind("panel").unwrap() + 1);
     assert!(features::definitions(&workspace, &main, literal).is_empty());
 }
+
+#[test]
+fn bare_environment_names_are_braced_when_renamed_to_longer_names() {
+    for (begin, end) in [
+        (r"\begin ", r"\end "),
+        (r"\csuse{begin}", r"\csuse{end}"),
+        (r"\csname begin\endcsname ", r"\csname end\endcsname "),
+        (r"\start ", r"\finish "),
+        (r"\csuse{start}", r"\csuse{finish}"),
+        (r"\csname start\endcsname ", r"\csname finish\endcsname "),
+    ] {
+        for (start_name, end_name) in [("x", "x"), ("{x}", "x"), ("x", "{x}")] {
+            for external in [false, true] {
+                let temp = tempfile::tempdir().unwrap();
+                let root = temp.path();
+                let declaration = r"\newenvironment{x}[1]{#1}{}\def\start{\begin}\def\finish{\end}";
+                let preamble = if external {
+                    r"\usepackage{aliases}"
+                } else {
+                    declaration
+                };
+                let head = format!(
+                    "\\documentclass{{article}}{preamble}\\begin{{document}}😀 {begin}% name\r\n"
+                );
+                let source = format!("{head}{start_name}{{Text}}{end}{end_name} Body\\end{{document}}% ignored \\start x\n\\verb|\\start x|\n");
+                let other = r"\documentclass{article}\newenvironment{x}{}{}\begin{document}\begin{x}Other\end{x}\end{document}";
+                let workspace = project(
+                    root,
+                    &[
+                        ("main.tex", &source),
+                        ("aliases.sty", if external { declaration } else { "" }),
+                        ("other.tex", other),
+                    ],
+                );
+                let main = uri(root, "main.tex");
+                let defs = if external {
+                    uri(root, "aliases.sty")
+                } else {
+                    main.clone()
+                };
+                let declaration_offset =
+                    workspace.documents[&defs].text.source.find("{x}").unwrap() + 1;
+                let start = head.len() + usize::from(start_name.starts_with('{'));
+                let finish = head.len()
+                    + start_name.len()
+                    + "{Text}".len()
+                    + end.len()
+                    + usize::from(end_name.starts_with('{'));
+                for (target, offset) in
+                    [(&defs, declaration_offset), (&main, start), (&main, finish)]
+                {
+                    let position = workspace.documents[target].text.position(offset);
+                    assert_eq!(
+                        features::definitions(&workspace, target, position).len(),
+                        1,
+                        "{source}"
+                    );
+                    assert_eq!(
+                        features::references(&workspace, target, position, true).len(),
+                        3,
+                        "{source}"
+                    );
+                    assert!(
+                        features::hover(&workspace, target, position).is_some(),
+                        "{source}"
+                    );
+                    assert!(
+                        matches!(features::prepare_rename(&workspace, target, position).unwrap(), Some(PrepareRenameResponse::RangeWithPlaceholder { placeholder, .. }) if placeholder == "x"),
+                        "{source}"
+                    );
+                    let edited = changes(
+                        &workspace,
+                        features::rename(&workspace, target, position, "renamed")
+                            .unwrap()
+                            .unwrap(),
+                    );
+                    let expected = format!("{}{{renamed}}{{Text}}{end}{{renamed}} Body\\end{{document}}% ignored \\start x\n\\verb|\\start x|\n", head.replace("{x}", "{renamed}"));
+                    assert_eq!(edited[&main], expected, "{source}");
+                    assert!(!edited.contains_key(&uri(root, "other.tex")));
+                    if external {
+                        assert_eq!(edited[&defs], declaration.replace("{x}", "{renamed}"));
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn bare_environment_arguments_block_unsafe_literal_color_renames() {
+    for begin in [
+        r"\begin ",
+        r"\csuse{begin}",
+        r"\csname begin\endcsname ",
+        r"\start ",
+        r"\csuse{start}",
+        r"\csname start\endcsname ",
+    ] {
+        for declaration in [
+            r"\newenvironment{x}[4]{#3 LiteralUnique}{}",
+            r"\NewDocumentEnvironment{x}{m m m m}{#3 LiteralUnique}{}",
+        ] {
+            for external in [false, true] {
+                let temp = tempfile::tempdir().unwrap();
+                let root = temp.path();
+                let definitions = format!(
+                    r"\definecolor{{accent}}{{HTML}}{{123456}}{declaration}\def\start{{\begin}}"
+                );
+                let preamble = if external {
+                    r"\usepackage{aliases}"
+                } else {
+                    &definitions
+                };
+                let head = format!(
+                    r"\documentclass{{article}}\usepackage{{xcolor,etoolbox}}{preamble}\begin{{document}}\textcolor{{accent}}{{Before}} "
+                );
+                let literal = format!(r"{begin}x\relax\textcolor{{accent}}{{LiteralUnique}}");
+                let tail = r"\textcolor{accent}{After}\end{x}\end{document}";
+                let source = format!("{head}{literal}{tail}");
+                let workspace = project(
+                    root,
+                    &[
+                        ("main.tex", &source),
+                        ("aliases.sty", if external { &definitions } else { "" }),
+                    ],
+                );
+                let main = uri(root, "main.tex");
+                let defs = if external {
+                    uri(root, "aliases.sty")
+                } else {
+                    main.clone()
+                };
+                let position = workspace.documents[&defs].text.position(
+                    workspace.documents[&defs]
+                        .text
+                        .source
+                        .find("accent")
+                        .unwrap(),
+                );
+                let error = features::rename(&workspace, &defs, position, "theme").unwrap_err();
+                assert!(
+                    error.message.contains("passed as macro arguments"),
+                    "{source}: {error}"
+                );
+                assert!(
+                    features::prepare_rename(&workspace, &defs, position).is_err(),
+                    "{source}"
+                );
+                assert_eq!(workspace.documents[&main].text.source, source);
+            }
+        }
+    }
+}
+
+#[test]
+fn completed_bare_environment_arguments_leave_body_color_references_editable() {
+    for begin in [
+        r"\begin ",
+        r"\csuse{begin}",
+        r"\csname begin\endcsname ",
+        r"\start ",
+        r"\csuse{start}",
+        r"\csname start\endcsname ",
+    ] {
+        for (declaration, arguments) in [
+            (r"\newenvironment{x}{}{}", ""),
+            (r"\newenvironment{x}[1]{}{}", "{Unused}"),
+            (r"\newenvironment{x}[1][default]{}{}", ""),
+            (r"\NewDocumentEnvironment{x}{!s}{}{}", " "),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let root = temp.path();
+            let source = format!(
+                r"\documentclass{{article}}\usepackage{{xcolor,etoolbox}}\definecolor{{accent}}{{HTML}}{{123456}}{declaration}\def\start{{\begin}}\begin{{document}}{begin}x{arguments}\textcolor{{accent}}{{Body}}\end{{x}}\end{{document}}"
+            );
+            let workspace = project(root, &[("main.tex", &source)]);
+            let main = uri(root, "main.tex");
+            let position = workspace.documents[&main]
+                .text
+                .position(source.find("accent").unwrap());
+            let edited = changes(
+                &workspace,
+                features::rename(&workspace, &main, position, "theme")
+                    .unwrap()
+                    .unwrap(),
+            );
+            assert_eq!(edited[&main], source.replace("accent", "theme"), "{source}");
+        }
+    }
+}
+
+#[test]
+fn generated_environment_csname_names_are_not_wrapped_as_bare_arguments() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let source = r"\documentclass{article}\newenvironment{x}{}{}\begin{document}\csname x\endcsname Body\csname endx\endcsname\end{document}";
+    let workspace = project(root, &[("main.tex", source)]);
+    let main = uri(root, "main.tex");
+    let position = workspace.documents[&main]
+        .text
+        .position(source.find("{x}").unwrap() + 1);
+    let edited = changes(
+        &workspace,
+        features::rename(&workspace, &main, position, "renamed")
+            .unwrap()
+            .unwrap(),
+    );
+    assert_eq!(
+        edited[&main],
+        source
+            .replace("{x}", "{renamed}")
+            .replace("csname x", "csname renamed")
+            .replace("csname endx", "csname endrenamed")
+    );
+}
+
+#[test]
+fn bare_indirect_environment_names_inside_macro_data_block_rename() {
+    for call in [
+        r"\csuse{begin}",
+        r"\csname begin\endcsname ",
+        r"\start ",
+        r"\csuse{start}",
+        r"\csname start\endcsname ",
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let source = format!(
+            r"\documentclass{{article}}\newenvironment{{x}}{{}}{{}}\def\start{{\begin}}\newcommand{{\take}}[1]{{\detokenize{{#1}}}}\begin{{document}}\take{{{call}x}}\end{{document}}"
+        );
+        let workspace = project(root, &[("main.tex", &source)]);
+        let main = uri(root, "main.tex");
+        let position = workspace.documents[&main]
+            .text
+            .position(source.find("{x}").unwrap() + 1);
+        assert_eq!(
+            features::references(&workspace, &main, position, true).len(),
+            1,
+            "{source}"
+        );
+        assert!(
+            features::rename(&workspace, &main, position, "renamed").is_err(),
+            "{source}"
+        );
+        let data = workspace.documents[&main]
+            .text
+            .position(source.rfind('x').unwrap());
+        assert!(
+            features::prepare_rename(&workspace, &main, data)
+                .unwrap()
+                .is_none(),
+            "{source}"
+        );
+    }
+}

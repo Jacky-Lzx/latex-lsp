@@ -5,7 +5,10 @@ use crate::{
     workspace::{Document, DocumentKind, Workspace},
 };
 use std::collections::{BTreeMap, BTreeSet};
-use tower_lsp::{jsonrpc, lsp_types::Url};
+use tower_lsp::{
+    jsonrpc,
+    lsp_types::{Range, Url},
+};
 
 type Calls = BTreeMap<usize, (Argument, bool)>;
 
@@ -116,6 +119,26 @@ impl Index {
             .map(|argument| argument.span.clone())
     }
 
+    pub(crate) fn is_bare_name(&self, uri: &Url, doc: &Document, range: Range) -> bool {
+        let (Some(start), Some(end)) = (doc.text.offset(range.start), doc.text.offset(range.end))
+        else {
+            return false;
+        };
+        let bare = |argument: &Argument| {
+            argument.span == (start..end) && argument.span == argument.outer_span
+        };
+        self.certain
+            .get(uri)
+            .and_then(|calls| calls.get(&start))
+            .is_some_and(bare)
+            || doc.syntax.commands.iter().any(|command| {
+                matches!(command.name.as_str(), "begin" | "end")
+                    && syntax::environment_name_argument(&doc.text.source, command.span.end)
+                        .as_ref()
+                        .is_some_and(bare)
+            })
+    }
+
     pub(crate) fn validate(&self, scope: &BTreeSet<Url>, name: &str) -> jsonrpc::Result<()> {
         if self
             .ambiguous
@@ -133,21 +156,17 @@ impl Index {
 /// Avoid building a project index for ordinary text and command-name requests.
 pub(crate) fn may_contain_name(doc: &Document, offset: usize) -> bool {
     doc.syntax.commands.iter().any(|command| {
-        let Some(first) = &command.argument else {
-            return false;
-        };
-        if first.span.start <= offset && offset <= first.span.end {
+        let contains =
+            |argument: Argument| argument.span.start <= offset && offset <= argument.span.end;
+        if syntax::environment_name_argument(&doc.text.source, command.span.end)
+            .is_some_and(contains)
+        {
             return true;
         }
         command.name == "csuse"
-            && syntax::group(
-                &doc.text.source,
-                syntax::skip_space(&doc.text.source, first.outer_span.end),
-                b'{',
-                b'}',
-            )
-            .is_some_and(|(argument, _)| {
-                argument.span.start <= offset && offset <= argument.span.end
+            && command.argument.as_ref().is_some_and(|first| {
+                syntax::environment_name_argument(&doc.text.source, first.outer_span.end)
+                    .is_some_and(contains)
             })
     })
 }
