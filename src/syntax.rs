@@ -106,6 +106,9 @@ pub struct Syntax {
     /// Actual comments, distinguished from ignored URLs and verbatim text.
     pub comments: Vec<Range<usize>>,
     pub fixes: Vec<QuickFix>,
+    /// Ordinary environment-stack fixes, replaceable by project-aware analysis.
+    /// Verbatim closing-marker errors remain in the general diagnostics.
+    pub environment_fixes: Vec<QuickFix>,
 }
 
 #[derive(Clone, Debug)]
@@ -1630,15 +1633,9 @@ impl Syntax {
         title: String,
         edit: TextEdit,
     ) {
-        let mut diagnostic = diagnostic(text, span, message);
-        diagnostic.code = Some(NumberOrString::String("syntax".into()));
-        self.diagnostics.push(diagnostic.clone());
-        self.fixes.push(QuickFix {
-            title,
-            diagnostic,
-            edit,
-            additional_edits: vec![],
-        });
+        let fix = syntax_fix(text, span, message, title, edit);
+        self.diagnostics.push(fix.diagnostic.clone());
+        self.fixes.push(fix);
     }
 
     pub fn latex(text: &Text) -> Self {
@@ -1646,7 +1643,7 @@ impl Syntax {
         let bytes = source.as_bytes();
         let mut result = Self::default();
         let mut braces = Vec::new();
-        let mut environments: Vec<(String, Range<usize>)> = Vec::new();
+        let mut environments = Vec::new();
         let mut literal_arguments = std::collections::BTreeMap::new();
         let mut control_operands = std::collections::BTreeSet::new();
         let mut conversion_arguments = std::collections::BTreeMap::new();
@@ -2005,30 +2002,15 @@ impl Syntax {
                                         i = after;
                                     }
                                 } else {
-                                    environments.push((env.into(), arg.span.clone()));
+                                    environments.push((
+                                        true,
+                                        arg.clone(),
+                                        start..arg.outer_span.end,
+                                    ));
                                 }
                             }
                             "end" => {
-                                let env = arg.value.as_str();
-                                if let Some(index) =
-                                    environments.iter().rposition(|(name, _)| name == env)
-                                {
-                                    for (name, span) in environments.drain(index + 1..) {
-                                        result.fix(text, span, format!("Unclosed environment `{name}` before \\end{{{env}}}"), format!("Close environment `{name}` before `{env}`"), TextEdit { range:text.range(start, start), new_text:format!("\\end{{{name}}}{}", text.newline()) });
-                                    }
-                                    environments.pop();
-                                } else {
-                                    result.fix(
-                                        text,
-                                        arg.span.clone(),
-                                        format!("Unexpected \\end{{{env}}}"),
-                                        format!("Remove unexpected \\end{{{env}}}"),
-                                        TextEdit {
-                                            range: text.range(start, arg.outer_span.end),
-                                            new_text: String::new(),
-                                        },
-                                    );
-                                }
+                                environments.push((false, arg.clone(), start..arg.outer_span.end));
                             }
                             _ => {}
                         }
@@ -2064,15 +2046,16 @@ impl Syntax {
                 },
             );
         }
-        for (name, span) in environments {
-            result.fix(
-                text,
-                span,
-                format!("Unclosed environment `{name}`"),
-                format!("Close environment `{name}`"),
-                environment_end(text, &name),
-            );
-        }
+        result.environment_fixes = environment_stack_fixes(text, environments);
+        result.diagnostics.extend(
+            result
+                .environment_fixes
+                .iter()
+                .map(|fix| fix.diagnostic.clone()),
+        );
+        result
+            .fixes
+            .extend(result.environment_fixes.iter().cloned());
         for (index, commands) in result.commands.windows(3).enumerate() {
             let [expand, declaration, target] = commands else {
                 unreachable!()
@@ -2260,6 +2243,74 @@ impl Syntax {
             .iter()
             .any(|span| span.start <= offset && offset < span.end)
     }
+}
+
+fn syntax_fix(
+    text: &Text,
+    span: Range<usize>,
+    message: String,
+    title: String,
+    edit: TextEdit,
+) -> QuickFix {
+    let mut diagnostic = diagnostic(text, span, message);
+    diagnostic.code = Some(NumberOrString::String("syntax".into()));
+    QuickFix {
+        title,
+        diagnostic,
+        edit,
+        additional_edits: vec![],
+    }
+}
+
+/// Match ordered environment calls. The invocation span includes an indirect
+/// command's complete spelling so removing an unexpected end never leaves it behind.
+pub(crate) fn environment_stack_fixes(
+    text: &Text,
+    calls: impl IntoIterator<Item = (bool, Argument, Range<usize>)>,
+) -> Vec<QuickFix> {
+    let mut stack: Vec<(String, Range<usize>)> = Vec::new();
+    let mut fixes = Vec::new();
+    for (begin, argument, invocation) in calls {
+        let env = argument.value;
+        if begin {
+            stack.push((env, argument.span));
+        } else if let Some(index) = stack.iter().rposition(|(name, _)| *name == env) {
+            for (name, span) in stack.drain(index + 1..) {
+                fixes.push(syntax_fix(
+                    text,
+                    span,
+                    format!("Unclosed environment `{name}` before \\end{{{env}}}"),
+                    format!("Close environment `{name}` before `{env}`"),
+                    TextEdit {
+                        range: text.range(invocation.start, invocation.start),
+                        new_text: format!("\\end{{{name}}}{}", text.newline()),
+                    },
+                ));
+            }
+            stack.pop();
+        } else {
+            fixes.push(syntax_fix(
+                text,
+                argument.span,
+                format!("Unexpected \\end{{{env}}}"),
+                format!("Remove unexpected \\end{{{env}}}"),
+                TextEdit {
+                    range: text.range(invocation.start, invocation.end),
+                    new_text: String::new(),
+                },
+            ));
+        }
+    }
+    for (name, span) in stack {
+        fixes.push(syntax_fix(
+            text,
+            span,
+            format!("Unclosed environment `{name}`"),
+            format!("Close environment `{name}`"),
+            environment_end(text, &name),
+        ));
+    }
+    fixes
 }
 
 fn environment_end(text: &Text, name: &str) -> TextEdit {

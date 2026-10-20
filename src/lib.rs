@@ -12,6 +12,7 @@ pub mod diagnostic;
 pub mod dispatch;
 pub mod editing;
 mod environment_calls;
+mod environment_diagnostics;
 mod fancyvrb;
 pub mod features;
 mod file_checks;

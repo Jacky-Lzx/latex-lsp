@@ -24,7 +24,7 @@ pub fn code_actions(
     let Some(doc) = workspace.documents.get(uri) else {
         return vec![];
     };
-    let mut fixes = doc.syntax.fixes.clone();
+    let mut fixes = crate::environment_diagnostics::fixes(workspace, uri, doc);
     fixes.extend(spelling_fixes::fixes(
         workspace,
         uri,
@@ -80,7 +80,7 @@ pub fn resolve_fix(workspace: &Workspace, request: FixRequest) -> Option<Workspa
     if doc.version != request.version {
         return None;
     }
-    let mut fixes = doc.syntax.fixes.clone();
+    let mut fixes = crate::environment_diagnostics::fixes(workspace, &request.uri, doc);
     fixes.extend(spelling_fixes::fixes(
         workspace,
         &request.uri,

@@ -20,24 +20,8 @@ pub(crate) struct Index {
 
 impl Index {
     pub(crate) fn new(workspace: &Workspace) -> Self {
-        let mut contexts: BTreeMap<BTreeSet<Url>, BTreeSet<Url>> = BTreeMap::new();
-        let mut covered = BTreeSet::new();
-        for scope in workspace.saved_projects().into_values() {
-            covered.extend(scope.iter().cloned());
-            contexts.entry(scope.clone()).or_default().extend(scope);
-        }
-        for uri in workspace
-            .documents
-            .keys()
-            .filter(|uri| !covered.contains(*uri))
-        {
-            contexts
-                .entry(workspace.symbol_scope(uri))
-                .or_default()
-                .insert(uri.clone());
-        }
         let mut interpretations: BTreeMap<Url, Vec<Calls>> = BTreeMap::new();
-        for (scope, consumers) in contexts {
+        for (scope, consumers) in project_contexts(workspace) {
             let signatures = CommandSignatures::new(
                 workspace
                     .documents
@@ -169,4 +153,24 @@ pub(crate) fn may_contain_name(doc: &Document, offset: usize) -> bool {
                     .is_some_and(contains)
             })
     })
+}
+
+pub(crate) fn project_contexts(workspace: &Workspace) -> BTreeMap<BTreeSet<Url>, BTreeSet<Url>> {
+    let mut contexts: BTreeMap<BTreeSet<Url>, BTreeSet<Url>> = BTreeMap::new();
+    let mut covered = BTreeSet::new();
+    for scope in workspace.saved_projects().into_values() {
+        covered.extend(scope.iter().cloned());
+        contexts.entry(scope.clone()).or_default().extend(scope);
+    }
+    for uri in workspace
+        .documents
+        .keys()
+        .filter(|uri| !covered.contains(*uri))
+    {
+        contexts
+            .entry(workspace.symbol_scope(uri))
+            .or_default()
+            .insert(uri.clone());
+    }
+    contexts
 }

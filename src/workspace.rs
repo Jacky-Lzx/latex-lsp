@@ -270,10 +270,14 @@ impl Workspace {
     ) -> Vec<(Url, Vec<tower_lsp::lsp_types::Diagnostic>, Option<i32>)> {
         let uris: BTreeSet<_> = uris.into_iter().collect();
         let mut duplicates = crate::project_diagnostics::duplicates(self, &uris);
+        let environments = crate::environment_diagnostics::Index::new(self, &uris);
         uris.into_iter()
             .map(|uri| {
                 let version = self.documents.get(&uri).and_then(|doc| doc.version);
                 let mut diagnostics = self.local_and_build_diagnostics(&uri);
+                if let Some(doc) = self.documents.get(&uri) {
+                    environments.replace_diagnostics(&uri, doc, &mut diagnostics);
+                }
                 diagnostics.extend(duplicates.remove(&uri).unwrap_or_default());
                 diagnostics
                     .sort_by_key(|diagnostic| (diagnostic.range.start, diagnostic.message.clone()));

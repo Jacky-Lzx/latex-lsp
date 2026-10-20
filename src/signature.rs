@@ -1187,6 +1187,46 @@ fn source_alias(source: &str, parsed: &syntax::Syntax, entry: &Entry) -> Option<
     body_alias(source, &body)
 }
 
+/// Definition bodies are not executed where they occur. Keep their names
+/// uncertain during environment matching without excluding rename references.
+pub(crate) fn definition_body_spans(
+    source: &str,
+    parsed: &syntax::Syntax,
+) -> Vec<std::ops::Range<usize>> {
+    let mut spans = Vec::new();
+    for entry in &parsed.definitions {
+        let body = (|| {
+            if TexOperands::declares(entry) {
+                let (_, at) = TexOperands::definition(source, parsed, entry)?;
+                return syntax::group(source, at, b'{', b'}').map(|(body, _)| body);
+            }
+            let declaration = entry.detail.strip_prefix("Defined with \\")?;
+            let mut at = definition_arguments_start(source, parsed, entry, false)?;
+            if syntax::declares_traditional_command(declaration) {
+                for _ in 0..2 {
+                    if let Some((_, end)) = syntax::bracket_argument(source, at) {
+                        at = syntax::skip_space(source, end);
+                    }
+                }
+            } else if syntax::declares_document_command(declaration) {
+                at = syntax::group(source, at, b'{', b'}')?.1;
+            } else {
+                return None;
+            }
+            syntax::group(source, syntax::skip_space(source, at), b'{', b'}').map(|(body, _)| body)
+        })();
+        if let Some(body) = body {
+            spans.push(body.span);
+        }
+    }
+    for entry in &parsed.environments {
+        if let Some((begin, end)) = environment_bodies(source, parsed, entry) {
+            spans.extend([begin.span, end.span]);
+        }
+    }
+    spans
+}
+
 fn short(value: &str) -> String {
     value
         .split_whitespace()
@@ -1434,6 +1474,15 @@ pub(crate) struct CommandSignatures<'a> {
     tex_operands: BTreeMap<Cow<'a, str>, Option<TexOperands>>,
 }
 
+pub(crate) struct EnvironmentCall {
+    pub argument: syntax::Argument,
+    pub span: std::ops::Range<usize>,
+    pub begin: bool,
+    pub direct: bool,
+    pub operand: bool,
+    pub deferred: bool,
+}
+
 impl<'a> CommandSignatures<'a> {
     pub(crate) fn names(&self) -> impl Iterator<Item = &str> {
         self.local.keys().map(|name| name.as_ref())
@@ -1565,7 +1614,7 @@ impl<'a> CommandSignatures<'a> {
         index: usize,
         operands: &BTreeSet<usize>,
         declarations: &BTreeSet<(usize, usize)>,
-    ) -> Option<(&'b str, usize, bool)> {
+    ) -> Option<(&'b str, usize, usize, bool)> {
         let command = parsed.commands.get(index)?;
         let local = &self.local;
         // Grouped csuse names leave following spaces intact; a literal
@@ -1597,7 +1646,10 @@ impl<'a> CommandSignatures<'a> {
             .or_else(|| literal.as_ref().map(|span| &source[span.clone()]))
             .unwrap_or(command.name.as_str());
         let end = named.map_or(command.span.end, |argument| argument.outer_span.end);
-        Some((name, end, named.is_none()))
+        let start = literal.as_ref().map_or(command.span.start, |_| {
+            parsed.commands[index - 1].span.start
+        });
+        Some((name, start, end, named.is_none()))
     }
 
     fn invokes_builtin(&self, name: &str, builtin: &str) -> bool {
@@ -1612,7 +1664,24 @@ impl<'a> CommandSignatures<'a> {
         source: &str,
         parsed: &syntax::Syntax,
     ) -> Vec<(syntax::Argument, bool)> {
+        self.environment_invocations(source, parsed)
+            .into_iter()
+            .filter(|call| !call.direct)
+            .map(|call| (call.argument, call.operand))
+            .collect()
+    }
+
+    pub(crate) fn environment_primitives_unchanged(&self) -> bool {
+        !self.local.contains_key("begin") && !self.local.contains_key("end")
+    }
+
+    pub(crate) fn environment_invocations(
+        &self,
+        source: &str,
+        parsed: &syntax::Syntax,
+    ) -> Vec<EnvironmentCall> {
         let operands = self.argument_tokens(source, parsed);
+        let bodies = definition_body_spans(source, parsed);
         let declarations = parsed
             .definitions
             .iter()
@@ -1622,19 +1691,23 @@ impl<'a> CommandSignatures<'a> {
             .commands
             .iter()
             .enumerate()
-            // Lexical begin/end already have semantic references. Here we add
-            // the indirect calls whose name groups are absent from that index.
-            .filter(|(_, command)| !matches!(command.name.as_str(), "begin" | "end"))
             .filter_map(|(index, command)| {
                 // Retain potential names inside data for rename validation;
                 // they must never become editable environment references.
-                let (name, end, _) =
+                let (name, start, end, _) =
                     self.invocation(source, parsed, index, &BTreeSet::new(), &declarations)?;
                 if !self.invokes_builtin(name, "begin") && !self.invokes_builtin(name, "end") {
                     return None;
                 }
                 let argument = syntax::environment_name_argument(source, end)?;
-                Some((argument, operands.contains(&command.span.start)))
+                Some(EnvironmentCall {
+                    span: start..argument.outer_span.end,
+                    begin: self.invokes_builtin(name, "begin"),
+                    direct: matches!(command.name.as_str(), "begin" | "end"),
+                    operand: operands.contains(&start) || operands.contains(&command.span.start),
+                    deferred: bodies.iter().any(|span| span.contains(&start)),
+                    argument,
+                })
             })
             .collect()
     }
@@ -1659,7 +1732,7 @@ impl<'a> CommandSignatures<'a> {
             if result.contains(&command.span.start) {
                 continue;
             }
-            let Some((name, end, control_spaces)) =
+            let Some((name, _, end, control_spaces)) =
                 self.invocation(source, parsed, index, &result, &declarations)
             else {
                 continue;
