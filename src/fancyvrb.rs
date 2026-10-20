@@ -8,7 +8,73 @@ pub(crate) fn is_input(name: &str) -> bool {
 }
 
 pub(crate) fn is_use(name: &str) -> bool {
-    matches!(name, "UseVerbatim" | "LUseVerbatim" | "BUseVerbatim")
+    matches!(
+        name,
+        "UseVerb" | "UseVerbatim" | "LUseVerbatim" | "BUseVerbatim"
+    )
+}
+
+pub(crate) fn is_inline(name: &str) -> bool {
+    matches!(name, "Verb" | "SaveVerb")
+}
+
+/// Saved names are ordinary TeX arguments, including a single unbraced token.
+pub(crate) fn name_argument(source: &str, at: usize) -> Option<(syntax::Argument, usize)> {
+    if source.as_bytes().get(at) == Some(&b'{') {
+        return syntax::group(source, at, b'{', b'}');
+    }
+    let ch = source.get(at..)?.chars().next()?;
+    if ch.is_whitespace() || ch == '}' {
+        return None;
+    }
+    let end = if ch == '\\' {
+        syntax::control_word(source, at)
+            .map(|span| span.end)
+            .or_else(|| {
+                source[at + 1..]
+                    .chars()
+                    .next()
+                    .map(|ch| at + 1 + ch.len_utf8())
+            })?
+    } else {
+        at + ch.len_utf8()
+    };
+    Some((
+        syntax::Argument {
+            value: source[at..end].into(),
+            span: at..end,
+            outer_span: at..end,
+        },
+        end,
+    ))
+}
+
+/// The delimiter is read with ordinary catcodes; only the following text is
+/// verbatim. In particular, comments before the delimiter still continue lines.
+pub(crate) fn inline_span(source: &str, at: usize) -> Option<Range<usize>> {
+    let start = syntax::skip_space(source, at);
+    let (delimiter, body) = if source.as_bytes().get(start) == Some(&b'{') {
+        let (argument, end) = syntax::group(source, start, b'{', b'}')?;
+        let mut chars = argument.value.chars();
+        let delimiter = chars.next()?;
+        if chars.next().is_some() {
+            return None;
+        }
+        (delimiter, end)
+    } else {
+        let delimiter = source.get(start..)?.chars().next()?;
+        (delimiter, start + delimiter.len_utf8())
+    };
+    if delimiter.is_whitespace() || matches!(delimiter, '{' | '}' | '\\' | '%') {
+        return None;
+    }
+    let line_end = source[body..]
+        .find(['\r', '\n'])
+        .map_or(source.len(), |offset| body + offset);
+    let end = source[body..line_end]
+        .find(delimiter)
+        .map_or(line_end, |offset| body + offset + delimiter.len_utf8());
+    Some(start..end)
 }
 
 pub(crate) fn is_environment(name: &str) -> bool {

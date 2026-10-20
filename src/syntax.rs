@@ -734,6 +734,7 @@ pub(crate) fn file_name_argument_start(
         if name != "verbatiminput"
             && !crate::fancyvrb::is_input(name)
             && !crate::fancyvrb::is_use(name)
+            && !crate::fancyvrb::is_inline(name)
         {
             return None;
         }
@@ -742,7 +743,8 @@ pub(crate) fn file_name_argument_start(
     if (loader_extension(name).is_some()
         || name == "lstinputlisting"
         || crate::fancyvrb::is_input(name)
-        || crate::fancyvrb::is_use(name))
+        || crate::fancyvrb::is_use(name)
+        || crate::fancyvrb::is_inline(name))
         && !loader_forwards_options(name)
         && source.as_bytes().get(start) == Some(&b'[')
     {
@@ -1611,13 +1613,13 @@ impl Syntax {
         let mut result = Self::default();
         let mut braces = Vec::new();
         let mut environments: Vec<(String, Range<usize>)> = Vec::new();
-        let mut literal_names = std::collections::BTreeMap::new();
+        let mut literal_arguments = std::collections::BTreeMap::new();
         let mut i = 0;
         while i < bytes.len() {
-            // Saved FancyVerb names are data, while their preceding formatting
-            // options may still contain actual commands. Skip only the name
-            // when the normal scan reaches its group.
-            if let Some((span, end)) = literal_names.remove(&i) {
+            // FancyVerb names and inline bodies are data, while preceding
+            // formatting options may contain actual commands. Skip each data
+            // argument only when the normal scan reaches it.
+            if let Some((span, end)) = literal_arguments.remove(&i) {
                 result.ignored.push(span);
                 i = end;
                 continue;
@@ -1710,6 +1712,7 @@ impl Syntax {
                         || name == "bibliographystyle"
                         || code_input_command(name)
                         || crate::fancyvrb::is_use(name)
+                        || crate::fancyvrb::is_inline(name)
                     {
                         arg_start = file_name_argument_start(source, name, command_end)
                             .unwrap_or(source.len());
@@ -1745,13 +1748,19 @@ impl Syntax {
                     let url_argument = matches!(name, "url" | "href")
                         || name == "hyperref"
                             && bytes.get(skip_space(source, command_end)) == Some(&b'{');
-                    let parsed = group_mode(source, arg_start, b'{', b'}', !url_argument, true)
-                        .or_else(|| {
-                            (name == "input" && bytes.get(arg_start) != Some(&b'{'))
-                                .then(|| input_argument(source, arg_start))
-                                .flatten()
-                        })
-                        .filter(|_| !(starred && loader_extension(name).is_some()));
+                    let parsed = if name == "Verb" {
+                        None
+                    } else if name == "SaveVerb" || crate::fancyvrb::is_use(name) {
+                        crate::fancyvrb::name_argument(source, arg_start)
+                    } else {
+                        group_mode(source, arg_start, b'{', b'}', !url_argument, true)
+                            .or_else(|| {
+                                (name == "input" && bytes.get(arg_start) != Some(&b'{'))
+                                    .then(|| input_argument(source, arg_start))
+                                    .flatten()
+                            })
+                            .filter(|_| !(starred && loader_extension(name).is_some()))
+                    };
                     let argument = parsed.as_ref().map(|(argument, _)| {
                         if matches!(name, "label" | "bibitem")
                             || is_single_reference(name)
@@ -1767,10 +1776,22 @@ impl Syntax {
                         span: start..command_end,
                         argument,
                     };
-                    if crate::fancyvrb::is_use(name) {
+                    if name == "SaveVerb" || crate::fancyvrb::is_use(name) {
                         if let Some((argument, end)) = &parsed {
-                            literal_names
+                            literal_arguments
                                 .insert(argument.outer_span.start, (argument.span.clone(), *end));
+                        }
+                    }
+                    if crate::fancyvrb::is_inline(name) {
+                        let start = if name == "SaveVerb" {
+                            parsed.as_ref().map(|(_, end)| *end)
+                        } else {
+                            Some(arg_start)
+                        };
+                        if let Some(span) =
+                            start.and_then(|at| crate::fancyvrb::inline_span(source, at))
+                        {
+                            literal_arguments.insert(span.start, (span.clone(), span.end));
                         }
                     }
                     if let Some((declaration, entry)) = crate::anchors::entry(source, &command) {
