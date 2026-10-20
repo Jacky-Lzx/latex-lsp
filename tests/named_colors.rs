@@ -71,6 +71,30 @@ fn changes(workspace: &Workspace, edit: WorkspaceEdit) -> BTreeMap<Url, Vec<Text
 fn color_rename_refuses_macro_callback_tokens_that_can_print_names_as_plain_text() {
     for (definition, call) in [
         (
+            r"\newcommand{\wrapped}[4]{#3}",
+            r"\csuse{wrapped}\relax\textcolor{accent}{Unused}",
+        ),
+        (
+            r"\newcommand{\wrapped}[4]{#3}",
+            r"\csname wrapped\endcsname\relax\textcolor{accent}{Unused}",
+        ),
+        (
+            r"\newcommand{\wrapped}[1]{\detokenize{#1}}",
+            r"\csuse{wrapped}{\textcolor{accent}{Unused}}",
+        ),
+        (
+            r"\newcommand{\wrapped}[1]{\detokenize{#1}}",
+            r"\csname wrapped\endcsname{\textcolor{accent}{Unused}}",
+        ),
+        (
+            r"\def\wrapped#1 #2#3#4\stop{#3}",
+            r"\csuse{wrapped}Unused \textcolor{accent}{Unused}\stop",
+        ),
+        (
+            r"\def\wrapped#1 #2#3#4\stop{#3}",
+            r"\csname wrapped\endcsname Unused \textcolor{accent}{Unused}\stop",
+        ),
+        (
             r"\def\wrapped#1 #2#3#4\stop{#3}",
             r"\wrapped Unused \textcolor{accent}{Unused}\stop",
         ),
@@ -171,6 +195,11 @@ fn color_rename_refuses_macro_callback_tokens_that_can_print_names_as_plain_text
 #[test]
 fn builtin_grouped_formatters_and_their_aliases_keep_color_renames_available() {
     for (definition, call) in [
+        ("", r"\csuse{textbf}{\textcolor{accent}{MarkerUnique}}"),
+        (
+            "",
+            r"\csname textbf\endcsname{\textcolor{accent}{MarkerUnique}}",
+        ),
         ("", r"\textbf{\textcolor{accent}{MarkerUnique}}"),
         (
             r"\def\bridge{\textbf}",
@@ -339,6 +368,21 @@ fn unresolved_aliases_remain_conservative_and_deep_chains_do_not_recurse() {
 #[test]
 fn completed_alias_targets_keep_versioned_color_renames_available() {
     for (definition, call) in [
+        (r"\newcommand{\wrapped}{}", r"\csuse{wrapped}"),
+        (r"\newcommand{\wrapped}{}", r"\csname wrapped\endcsname"),
+        (r"\newcommand{\wrapped}[1]{}", r"\csuse{wrapped}{Unused}"),
+        (
+            r"\newcommand{\wrapped}[1]{}",
+            r"\csname wrapped\endcsname{Unused}",
+        ),
+        (
+            r"\def\wrapped#1 #2\stop{}",
+            r"\csuse{wrapped}Unused payload\stop",
+        ),
+        (
+            r"\def\wrapped#1 #2\stop{}",
+            r"\csname wrapped\endcsname Unused payload\stop",
+        ),
         (
             r"\def\done#1 #2\stop{}\def\bridge{\done}",
             r"\bridge Unused payload\stop",

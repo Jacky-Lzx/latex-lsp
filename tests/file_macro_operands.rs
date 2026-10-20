@@ -28,6 +28,32 @@ fn file_errors_distinguish_macro_operands_from_completed_calls() {
         "LoadClassWithOptions",
     ] {
         for (declaration, prefix, precise) in [
+            (
+                r"\newcommand{\wrapped}[3]{}",
+                r"\csuse{wrapped}\relax",
+                false,
+            ),
+            (
+                r"\newcommand{\wrapped}[3]{}",
+                r"\csname wrapped\endcsname\relax",
+                false,
+            ),
+            (r"\newcommand{\wrapped}{}", r"\csuse{wrapped}", true),
+            (
+                r"\newcommand{\wrapped}{}",
+                r"\csname wrapped\endcsname",
+                true,
+            ),
+            (
+                r"\newcommand{\wrapped}[1]{}",
+                r"\csuse{wrapped}{Unused}",
+                true,
+            ),
+            (
+                r"\newcommand{\wrapped}[1]{}",
+                r"\csname wrapped\endcsname{Unused}",
+                true,
+            ),
             (r"\newcommand{\wrapped}[2]{}", r"\wrapped", false),
             (r"\newcommand{\wrapped}[3]{}", r"\wrapped{Unused}", false),
             (
@@ -231,6 +257,14 @@ fn delimited_tex_macros_consume_file_commands_until_their_actual_delimiter() {
 fn file_repairs_recheck_delimited_tex_macros_and_their_aliases() {
     for command in ["input", "usepackage", "documentclass"] {
         for (declaration, prefix) in [
+            (
+                r"\newcommand{\wrapped}[3]{}\def\bridge{\wrapped}",
+                r"\csuse{bridge}\relax",
+            ),
+            (
+                r"\newcommand{\wrapped}[3]{}\def\bridge{\wrapped}",
+                r"\csname bridge\endcsname\relax",
+            ),
             (
                 r"\def\wrapped#1#2#3\stop{}\def\bridge{\wrapped}",
                 r"\bridge\relax",

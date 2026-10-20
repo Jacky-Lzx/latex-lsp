@@ -1249,8 +1249,12 @@ impl TexOperands {
         Some((Self { prefix, delimiters }, at))
     }
 
-    fn end(&self, source: &str, at: usize) -> Option<usize> {
-        let mut at = tex_operand_match(source, optional_start(source, at, true), &self.prefix)?;
+    fn end(&self, source: &str, at: usize, control_spaces: bool) -> Option<usize> {
+        let mut at = tex_operand_match(
+            source,
+            optional_start(source, at, control_spaces),
+            &self.prefix,
+        )?;
         for delimiter in &self.delimiters {
             if delimiter.is_empty() {
                 at = tex_operand_skip_spaces(source, at)?;
@@ -1424,6 +1428,11 @@ impl<'a> CommandSignatures<'a> {
     pub(crate) fn argument_tokens(&self, source: &str, parsed: &syntax::Syntax) -> BTreeSet<usize> {
         let local = &self.local;
         let mut result = BTreeSet::new();
+        let declarations: BTreeSet<_> = parsed
+            .definitions
+            .iter()
+            .map(|entry| (entry.span.start, entry.span.end))
+            .collect();
         for entry in &parsed.definitions {
             if let Some((_, end)) = TexOperands::definition(source, parsed, entry) {
                 // Parameter-text delimiters are data at declaration time.
@@ -1432,24 +1441,54 @@ impl<'a> CommandSignatures<'a> {
                 mark_operand_commands(parsed, entry.span.start, end, &mut result);
             }
         }
-        for command in &parsed.commands {
+        for (index, command) in parsed.commands.iter().enumerate() {
             if result.contains(&command.span.start) {
                 continue;
             }
+            // Grouped csuse names leave following spaces intact; a literal
+            // endcsname, like an ordinary control word, discards lexical blanks.
+            let named = command.argument.as_ref().filter(|argument| {
+                command.name == "csuse"
+                    && !local.contains_key("csuse")
+                    && syntax::is_static_key(&argument.value)
+            });
+            let literal = (command.name == "endcsname"
+                && !local.contains_key("csname")
+                && !local.contains_key("endcsname"))
+            .then(|| {
+                index.checked_sub(1).and_then(|index| {
+                    (!result.contains(&parsed.commands[index].span.start))
+                        .then(|| syntax::literal_csname(source, &parsed.commands, index))
+                        .flatten()
+                })
+            })
+            .flatten();
+            if literal
+                .as_ref()
+                .is_some_and(|span| declarations.contains(&(span.start, span.end)))
+            {
+                continue;
+            }
+            let name = named
+                .map(|argument| argument.value.as_str())
+                .or_else(|| literal.as_ref().map(|span| &source[span.clone()]))
+                .unwrap_or(command.name.as_str());
+            let end = named.map_or(command.span.end, |argument| argument.outer_span.end);
+            let control_spaces = named.is_none();
             if let Some(end) = self
                 .tex_operands
-                .get(command.name.as_str())
+                .get(name)
                 .and_then(Option::as_ref)
-                .and_then(|operands| operands.end(source, command.span.end))
+                .and_then(|operands| operands.end(source, end, control_spaces))
             {
                 // Delimited TeX arguments are read without executing any of
                 // their tokens, including controls inside balanced groups.
                 mark_operand_commands(parsed, command.span.end, end, &mut result);
                 continue;
             }
-            let signature = local.get(command.name.as_str()).and_then(Option::as_ref);
-            let builtin = (!local.contains_key(command.name.as_str()))
-                .then(|| operand_builtin(&command.name))
+            let signature = local.get(name).and_then(Option::as_ref);
+            let builtin = (!local.contains_key(name))
+                .then(|| operand_builtin(name))
                 .flatten();
             if let Some(signature) = signature.or(builtin.as_ref()) {
                 // Resolved aliases retain their leaf's name. Builtin
@@ -1458,9 +1497,9 @@ impl<'a> CommandSignatures<'a> {
                 let opaque = local
                     .contains_key(signature.name.as_str())
                     .then_some(parsed);
-                argument_tokens(source, command.span.end, signature, opaque, &mut result);
+                argument_tokens(source, end, control_spaces, signature, opaque, &mut result);
             } else {
-                unknown_argument_token(source, command.span.end, parsed, &mut result);
+                unknown_argument_token(source, end, parsed, &mut result);
             }
         }
         result
@@ -1654,11 +1693,11 @@ fn operand_delimited_end(source: &str, at: usize, open: &str, close: &str) -> Op
 fn argument_tokens(
     source: &str,
     mut at: usize,
+    mut control_spaces: bool,
     signature: &Signature,
     opaque: Option<&syntax::Syntax>,
     result: &mut BTreeSet<usize>,
 ) {
-    let mut control_spaces = true;
     let mut starred = false;
     if signature.starred {
         at = optional_start(source, at, true);
@@ -2329,6 +2368,65 @@ mod tex_operand_tests {
     use crate::text::Text;
 
     #[test]
+    fn named_macro_invocations_preserve_operand_boundaries_and_following_commands() {
+        for named in [r"\csuse{wrapped}", r"\csname wrapped\endcsname"] {
+            for (definition, prefix, tail) in [
+                (r"\newcommand{\wrapped}[3]{}", r"\relax", ""),
+                (r"\newcommand{\wrapped}[4][default]{}", r"[note]\relax", ""),
+                (r"\def\wrapped#1#2#3{}", r"\relax", ""),
+                (r"\def\wrapped#1#2#3\stop{}", r"\relax", r"\stop"),
+                (r"\def\wrapped#1 #2#3#4\stop{}", r" Unused \relax", r"\stop"),
+                (
+                    r"\NewDocumentCommand{\wrapped}{s t+ O{default} m m m}{}",
+                    r"*+[note]\relax",
+                    "",
+                ),
+                (r"\newcommand{\wrapped}[1]{}", "{", "}"),
+                (r"\NewDocumentCommand{\wrapped}{d()}{}", "(", ")"),
+            ] {
+                let source =
+                    format!(r"{definition}{named}{prefix}\input{{wrong}}{tail}\input{{right}}");
+                let parsed = syntax::Syntax::latex(&Text::new(source.clone()));
+                let signatures = CommandSignatures::new([(source.as_str(), &parsed)]);
+                let operands = signatures.argument_tokens(&source, &parsed);
+                let calls: Vec<_> = parsed
+                    .commands
+                    .iter()
+                    .filter(|command| command.name == "input")
+                    .collect();
+                assert_eq!(calls.len(), 2);
+                assert!(operands.contains(&calls[0].span.start), "{source}");
+                assert!(!operands.contains(&calls[1].span.start), "{source}");
+            }
+        }
+    }
+
+    #[test]
+    fn named_invocations_keep_name_group_spaces_and_literal_definitions_distinct() {
+        for source in [
+            r"\csdef{wrapped} #1\stop{}\csuse{wrapped} \input{wrong}\stop\input{right}",
+            r"\expandafter\def\csname wrapped\endcsname#1{\input{right}}",
+            r"\newcommand{\wrapped}[1]{}\renewcommand{\csuse}[1]{}\csuse{wrapped}\input{right}",
+            r"\newcommand{\wrapped}[1]{}\newcommand{\discard}[1]{}\discard\csname wrapped\endcsname\relax\input{right}",
+        ] {
+            let parsed = syntax::Syntax::latex(&Text::new(source.into()));
+            let signatures = CommandSignatures::new([(source, &parsed)]);
+            let operands = signatures.argument_tokens(source, &parsed);
+            for command in parsed
+                .commands
+                .iter()
+                .filter(|command| command.name == "input")
+            {
+                assert_eq!(
+                    operands.contains(&command.span.start),
+                    command.argument.as_ref().unwrap().value == "wrong",
+                    "{source}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn tex_delimiters_skip_groups_match_whole_tokens_and_preserve_completed_calls() {
         for (definition, call) in [
             (
@@ -2488,13 +2586,13 @@ mod tex_operand_tests {
             " Unused\n\npayload\\stop",
             " Unused % keep\r\n \r\npayload\\stop",
         ] {
-            assert!(operands.end(call, 0).is_none(), "{call}");
+            assert!(operands.end(call, 0, true).is_none(), "{call}");
         }
         let source = r"\csdef{wrapped} #1\stop{}";
         let parsed = syntax::Syntax::latex(&Text::new(source.into()));
         let (operands, _) =
             TexOperands::definition(source, &parsed, &parsed.definitions[0]).unwrap();
-        assert!(operands.end(r" Unused\stop", 0).is_none());
+        assert!(operands.end(r" Unused\stop", 0, true).is_none());
     }
 
     #[test]
