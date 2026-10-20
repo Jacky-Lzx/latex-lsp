@@ -900,6 +900,7 @@ fn missing_path_range(
     context: &str,
     name: &str,
     command_name: &str,
+    indirect: &[crate::syntax::Command],
 ) -> Option<Range> {
     let prefix = context.trim_end();
     let shortened = shortened_context(prefix);
@@ -914,47 +915,77 @@ fn missing_path_range(
     {
         return None;
     }
-    let mut matches = syntax.commands.iter().filter_map(|command| {
-        if !(if fancyverb {
-            crate::fancyvrb::is_input(&command.name)
-        } else {
-            command.name == command_name
-        }) {
-            return None;
-        }
-        let argument = crate::syntax::file_argument(&text.source, command)?;
-        if crate::syntax::code_input_command(command_name)
-            && !crate::code_inputs::safe_call(&text.source, command)
-        {
-            return None;
-        }
-        let span = crate::syntax::trimmed_span(&text.source, argument.span.clone());
-        let value = &text.source[span.clone()];
-        let matches_report = if command_name == "lstinputlisting" {
-            crate::listings::missing_report(value) == name
-        } else if fancyverb {
-            value == name
-        } else {
-            crate::syntax::file_lookup_names(command_name, value).any(|candidate| candidate == name)
-        };
-        if !crate::syntax::is_literal_file_path(value)
-            || !matches_report
-            || text.position(argument.outer_span.end).line != line
-            || text.source[argument.outer_span.clone()].starts_with('"')
-                && !text.source[argument.outer_span.clone()].ends_with('"')
-        {
-            return None;
-        }
-        let consumed = &text.source[start..argument.outer_span.end];
-        let matched = shortened.map_or(consumed == prefix, |suffix| {
-            (fancyverb && !suffix.is_empty()
-                || suffix.ends_with(&text.source[argument.outer_span.clone()]))
-                && consumed.ends_with(suffix)
+    let mut matches = syntax
+        .commands
+        .iter()
+        .chain(indirect)
+        .filter_map(|command| {
+            if !(if fancyverb {
+                crate::fancyvrb::is_input(&command.name)
+            } else {
+                command.name == command_name
+            }) {
+                return None;
+            }
+            let argument = crate::syntax::file_argument(&text.source, command)?;
+            if crate::syntax::code_input_command(command_name)
+                && !crate::code_inputs::safe_call(&text.source, command)
+            {
+                return None;
+            }
+            let span = crate::syntax::trimmed_span(&text.source, argument.span.clone());
+            let value = &text.source[span.clone()];
+            let matches_report = if command_name == "lstinputlisting" {
+                crate::listings::missing_report(value) == name
+            } else if fancyverb {
+                value == name
+            } else {
+                crate::syntax::file_lookup_names(command_name, value)
+                    .any(|candidate| candidate == name)
+            };
+            if !crate::syntax::is_literal_file_path(value)
+                || !matches_report
+                || text.position(argument.outer_span.end).line != line
+                || text.source[argument.outer_span.clone()].starts_with('"')
+                    && !text.source[argument.outer_span.clone()].ends_with('"')
+            {
+                return None;
+            }
+            let consumed = &text.source[start..argument.outer_span.end];
+            let matched = shortened.map_or(consumed == prefix, |suffix| {
+                (fancyverb && !suffix.is_empty()
+                    || suffix.ends_with(&text.source[argument.outer_span.clone()]))
+                    && consumed.ends_with(suffix)
+            });
+            matched.then(|| text.range(span.start, span.end))
         });
-        matched.then(|| text.range(span.start, span.end))
-    });
     let range = matches.next()?;
     matches.next().is_none().then_some(range)
+}
+
+fn missing_input_range(
+    text: &Text,
+    line: u32,
+    context: &str,
+    name: &str,
+    cached: Option<&InvocationCalls<'_>>,
+) -> Option<Range> {
+    let local;
+    let commands = if let Some(cached) = cached {
+        if cached.source != text.source {
+            return None;
+        }
+        &cached.source_commands
+    } else {
+        let parsed = crate::syntax::Syntax::latex(text);
+        local = source_error_commands(
+            &text.source,
+            &parsed,
+            &crate::signature::CommandSignatures::new([(text.source.as_str(), &parsed)]),
+        );
+        &local
+    };
+    missing_path_range(text, line, context, name, "input", commands)
 }
 
 fn package_option_clash_name(message: &str) -> Option<&str> {
@@ -1244,6 +1275,21 @@ pub(crate) fn environment_error_invocations_with_signatures(
         .collect()
 }
 
+/// Certain indirect source calls in the compiler-confirmed macro scope.
+pub(crate) fn source_error_commands(
+    source: &str,
+    parsed: &crate::syntax::Syntax,
+    signatures: &crate::signature::CommandSignatures<'_>,
+) -> Vec<crate::syntax::Command> {
+    let positions = signatures.source_command_positions(source, parsed);
+    signatures
+        .indirect_source_invocations(source, parsed, &positions)
+        .into_iter()
+        .filter(|call| call.certain && call.command.name == "input")
+        .map(|call| call.command)
+        .collect()
+}
+
 pub(crate) fn file_error_invocations_with_signatures(
     source: &str,
     parsed: &crate::syntax::Syntax,
@@ -1256,9 +1302,11 @@ pub(crate) fn file_error_invocations_with_signatures(
         return vec![];
     }
     let operands = signatures.argument_tokens(source, parsed);
+    let indirect = source_error_commands(source, parsed, signatures);
     parsed
         .commands
         .iter()
+        .chain(&indirect)
         .filter_map(|command| {
             if (command.name != "input" && crate::syntax::loader_extension(&command.name).is_none())
                 || operands.contains(&command.span.start)
@@ -1651,17 +1699,17 @@ fn emit_with_context(
     let input_range = missing_file
         .filter(|_| !project_stale)
         .filter(|_| reported_line.checked_sub(1) == Some(line))
-        .and_then(|name| missing_path_range(&text, line, context?, name, "input"))
+        .and_then(|name| missing_input_range(&text, line, context?, name, cached_calls))
         .filter(|range| confirmed_file_invocation(&text, *range, cached_calls));
     ranges.extend(input_range);
     let missing_listing = missing_listing_name(&message);
     let listing_range = missing_listing
         .filter(|_| reported_line.checked_sub(1) == Some(line))
-        .and_then(|name| missing_path_range(&text, line, context?, name, "lstinputlisting"));
+        .and_then(|name| missing_path_range(&text, line, context?, name, "lstinputlisting", &[]));
     ranges.extend(listing_range);
     let fancyverb_range = missing_fancyverb_name(&message)
         .filter(|_| reported_line.checked_sub(1) == Some(line))
-        .and_then(|name| missing_path_range(&text, line, context?, name, "VerbatimInput"));
+        .and_then(|name| missing_path_range(&text, line, context?, name, "VerbatimInput", &[]));
     ranges.extend(fancyverb_range);
     let loader_range = missing_file
         .filter(|_| !project_stale)
@@ -1678,7 +1726,7 @@ fn emit_with_context(
     let missing_graphic = missing_graphic_name(&message);
     let graphic_range = missing_graphic
         .filter(|_| reported_line.checked_sub(1) == Some(line))
-        .and_then(|name| missing_path_range(&text, line, context?, name, "includegraphics"));
+        .and_then(|name| missing_path_range(&text, line, context?, name, "includegraphics", &[]));
     ranges.extend(graphic_range);
     let command_name = command_range.and_then(|range| {
         let start = text.offset(range.start)?;
@@ -2407,6 +2455,7 @@ impl InvocationKind {
 struct InvocationCalls<'a> {
     source: &'a str,
     invocations: Vec<(ByteRange<usize>, ByteRange<usize>)>,
+    source_commands: Vec<crate::syntax::Command>,
 }
 
 struct InvocationContext<'a> {
@@ -2425,10 +2474,12 @@ impl ProjectSources {
     pub(crate) fn capture(root: &Path) -> Self {
         let mut workspace = crate::workspace::Workspace::default();
         let mut sources = BTreeSet::new();
+        let mut source_calls = crate::source_inputs::Index::default();
         if let Ok(uri) = Url::from_file_path(root.canonicalize().unwrap_or_else(|_| root.into())) {
             workspace.reload(&uri);
             workspace.load_dependencies(&uri, 0);
             sources = workspace.source_documents_from(&uri, &uri);
+            source_calls = crate::source_inputs::Index::new(&workspace, &uri);
         }
         let documents: BTreeMap<_, _> = workspace
             .documents
@@ -2441,27 +2492,52 @@ impl ProjectSources {
         // even after it has returned to a file included in the snapshot.
         let dynamic_sources = documents
             .iter()
-            .filter(|(_, doc)| {
-                doc.syntax.commands.iter().any(|command| {
-                    if !matches!(
-                        command.name.as_str(),
-                        "input" | "InputIfFileExists" | "include" | "subfile"
-                    ) && crate::syntax::loader_extension(&command.name).is_none()
-                    {
-                        return false;
-                    }
-                    if crate::syntax::file_list(&command.name) {
-                        return crate::syntax::complete_file_list_spans(&doc.text.source, command)
-                            .is_none();
-                    }
-                    crate::syntax::file_argument(&doc.text.source, command).is_none_or(|argument| {
-                        let mut name = argument.value.trim().to_owned();
-                        for character in ['_', '%', '#', '&', '$', ' '] {
-                            name = name.replace(&format!("\\{character}"), "_");
-                        }
-                        !crate::syntax::is_literal_file_path(&name)
-                    })
-                })
+            .filter(|(uri, doc)| {
+                let alias_bodies = crate::signature::source_input_alias_body_positions(
+                    &doc.text.source,
+                    &doc.syntax,
+                );
+                source_calls.incomplete
+                    || doc
+                        .syntax
+                        .commands
+                        .iter()
+                        .chain(
+                            source_calls
+                                .calls
+                                .get(*uri)
+                                .into_iter()
+                                .flatten()
+                                .map(|call| &call.command),
+                        )
+                        .any(|command| {
+                            if alias_bodies.contains(&command.span.start) {
+                                return false;
+                            }
+                            if !matches!(
+                                command.name.as_str(),
+                                "input" | "InputIfFileExists" | "include" | "subfile"
+                            ) && crate::syntax::loader_extension(&command.name).is_none()
+                            {
+                                return false;
+                            }
+                            if crate::syntax::file_list(&command.name) {
+                                return crate::syntax::complete_file_list_spans(
+                                    &doc.text.source,
+                                    command,
+                                )
+                                .is_none();
+                            }
+                            crate::syntax::file_argument(&doc.text.source, command).is_none_or(
+                                |argument| {
+                                    let mut name = argument.value.trim().to_owned();
+                                    for character in ['_', '%', '#', '&', '$', ' '] {
+                                        name = name.replace(&format!("\\{character}"), "_");
+                                    }
+                                    !crate::syntax::is_literal_file_path(&name)
+                                },
+                            )
+                        })
             })
             .map(|(uri, _)| uri.clone())
             .collect();
@@ -2567,6 +2643,11 @@ impl<'a> ProjectAnalysis<'a> {
                 Rc::new(InvocationCalls {
                     source,
                     invocations,
+                    source_commands: if kind == InvocationKind::File {
+                        source_error_commands(source, &document.syntax, &macros.signatures)
+                    } else {
+                        vec![]
+                    },
                 }),
             )
         });
@@ -7633,6 +7714,121 @@ mod project_color_tests {
                     "{model}/{deleted}: {diagnostic:?}"
                 );
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod indirect_file_error_tests {
+    use super::*;
+
+    #[test]
+    fn indirect_input_errors_use_only_loaded_unchanged_alias_definitions() {
+        for call in [
+            r"\readpart{chapte}",
+            r"\csuse{readpart}{chapte}",
+            r"\csname readpart\endcsname{chapte}",
+        ] {
+            for case in ["loaded", "not-loaded", "changed", "shadowed"] {
+                let directory = tempfile::tempdir().unwrap();
+                let root = directory.path().join("main.tex");
+                let package = directory.path().join("local.sty");
+                std::fs::write(&root, format!("\\usepackage{{local}}\n{call}\n")).unwrap();
+                std::fs::write(&package, r"\def\readpart{\input}").unwrap();
+                if case == "shadowed" {
+                    std::fs::write(
+                        &root,
+                        format!("\\usepackage{{local}}\\def\\input#1{{}}\n{call}\n"),
+                    )
+                    .unwrap();
+                }
+                let project = ProjectSources::capture(&root);
+                if case == "changed" {
+                    std::fs::write(&package, r"\def\readpart#1{}").unwrap();
+                }
+                let loaded = if case == "not-loaded" {
+                    ""
+                } else {
+                    "(./local.sty)"
+                };
+                let log = format!("(./main.tex\n{loaded}\n! LaTeX Error: File `chapte.tex' not found.\n./main.tex:2: Emergency stop.\n<read *>\nl.2 {call}\n)");
+                let diagnostics = parse_with_project_sources(&root, &log, &project).0;
+                let diagnostic = diagnostics[&Url::from_file_path(&root).unwrap()]
+                    .iter()
+                    .find(|d| d.message.contains("not found"))
+                    .unwrap();
+                assert_eq!(
+                    diagnostic.code
+                        == Some(tower_lsp::lsp_types::NumberOrString::String(
+                            "missing-input".into()
+                        )),
+                    case == "loaded",
+                    "{case}/{call}: {diagnostic:?}"
+                );
+                if case == "loaded" {
+                    assert_eq!(
+                        diagnostic.data.as_ref().unwrap()["macroSources"]
+                            .as_array()
+                            .unwrap()
+                            .len(),
+                        2
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod alias_load_snapshot_tests {
+    use super::*;
+
+    #[test]
+    fn alias_declarations_do_not_mask_dynamic_or_expanded_input_definitions() {
+        for (definition, dynamic) in [
+            (r"\def\reader{\input}", false),
+            (r"\def\reader{\include}", false),
+            (r"\def\reader{\subfile}", true),
+            (r"\def\reader{\InputIfFileExists}", true),
+            (r"\def\reader{\usepackage}", true),
+            (r"\csuse{input}{\filename}", true),
+            (r"\csname input\endcsname{\filename}", true),
+            (r"\def\reader{\input}\reader{\filename}", true),
+            (r"\def\reader{\include}\reader{\filename}", true),
+            (r"\gdef\reader{\input}", false),
+            (r"\newcommand{\reader}{\input}", false),
+            (r"\newcommand{\reader}[0]{\input}", false),
+            (r"\NewDocumentCommand{\reader}{}{\input}", false),
+            (r"\csdef{reader}{\input}", false),
+            (r"\def\reader#1{\input}", true),
+            (r"\newcommand{\reader}[1]{\input}", true),
+            (r"\NewDocumentCommand{\reader}{m}{\input}", true),
+            (r"\edef\reader{\input}", true),
+            (r"\xdef\reader{\input}", true),
+            (r"\csedef{reader}{\input}", true),
+            (r"\csxdef{reader}{\input}", true),
+            (r"\def\reader{\relax\input}", true),
+            (r"\def\reader{\input{\filename}}", true),
+            (r"\newcommand{\reader}[1]{\input{#1}}", true),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path().join("main.tex");
+            std::fs::write(&root, definition).unwrap();
+            let snapshot = ProjectSources::capture(&root);
+            assert_eq!(
+                snapshot
+                    .dynamic_sources
+                    .contains(&Url::from_file_path(&root).unwrap()),
+                dynamic,
+                "{definition}; alias tokens: {:?}; commands: {:?}",
+                crate::signature::source_input_alias_body_positions(
+                    definition,
+                    &snapshot.documents[&Url::from_file_path(&root).unwrap()].syntax
+                ),
+                snapshot.documents[&Url::from_file_path(&root).unwrap()]
+                    .syntax
+                    .commands
+            );
         }
     }
 }

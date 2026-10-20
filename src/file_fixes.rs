@@ -121,10 +121,46 @@ pub(crate) fn fixes(
     let Some(reported) = reported else {
         return vec![];
     };
+    let indirect = if command_name == "input" {
+        let Some(signatures) = signatures else {
+            return vec![];
+        };
+        let commands = build_log::source_error_commands(&doc.text.source, &doc.syntax, signatures);
+        let index =
+            (!commands.is_empty()).then(|| crate::source_inputs::Index::new(workspace, root));
+        commands
+            .into_iter()
+            .filter(|command| {
+                index
+                    .as_ref()
+                    .and_then(|index| index.calls.get(uri))
+                    .is_some_and(|calls| {
+                        calls.iter().any(|call| {
+                            call.certain
+                                && call.command.name == command.name
+                                && call.command.span == command.span
+                                && call
+                                    .command
+                                    .argument
+                                    .as_ref()
+                                    .zip(command.argument.as_ref())
+                                    .is_some_and(|(a, b)| {
+                                        a.span == b.span
+                                            && a.outer_span == b.outer_span
+                                            && a.value == b.value
+                                    })
+                        })
+                    })
+            })
+            .collect::<Vec<_>>()
+    } else {
+        vec![]
+    };
     let argument = doc
         .syntax
         .commands
         .iter()
+        .chain(&indirect)
         .filter(|command| {
             command.name == command_name || fancyverb && crate::fancyvrb::is_input(&command.name)
         })

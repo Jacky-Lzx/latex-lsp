@@ -1161,6 +1161,42 @@ fn environment_bodies(
 /// A body containing exactly one control word forwards to its current meaning.
 /// This recognizes lexical aliases without evaluating arbitrary replacement text.
 fn source_alias(source: &str, parsed: &syntax::Syntax, entry: &Entry) -> Option<String> {
+    body_alias(source, &source_alias_body(source, parsed, entry)?)
+}
+
+/// Tokens declaring an unexpanded, argument-free input/include alias.
+/// A bare input in such a body is not itself a dynamic file load.
+pub(crate) fn source_input_alias_body_positions(
+    source: &str,
+    parsed: &syntax::Syntax,
+) -> BTreeSet<usize> {
+    parsed
+        .definitions
+        .iter()
+        .filter_map(|entry| {
+            if matches!(
+                entry.detail.strip_prefix("Defined with \\"),
+                Some("edef" | "xdef" | "csedef" | "csxdef")
+            ) {
+                return None;
+            }
+            let signature = source_definition(source, parsed, entry, false)?;
+            if !signature.parameters.is_empty() {
+                return None;
+            }
+            let body = source_alias_body(source, parsed, entry)?;
+            let target = body_alias(source, &body)?;
+            matches!(target.as_str(), "input" | "include")
+                .then(|| syntax::skip_space(source, body.span.start))
+        })
+        .collect()
+}
+
+fn source_alias_body(
+    source: &str,
+    parsed: &syntax::Syntax,
+    entry: &Entry,
+) -> Option<syntax::Argument> {
     let declaration = entry.detail.strip_prefix("Defined with \\")?;
     let mut at = definition_arguments_start(source, parsed, entry, false)?;
     if syntax::declares_traditional_command(declaration)
@@ -1183,8 +1219,7 @@ fn source_alias(source: &str, parsed: &syntax::Syntax, entry: &Entry) -> Option<
     ) {
         return None;
     }
-    let body = syntax::group(source, syntax::skip_space(source, at), b'{', b'}')?.0;
-    body_alias(source, &body)
+    syntax::group(source, syntax::skip_space(source, at), b'{', b'}').map(|(body, _)| body)
 }
 
 /// Definition bodies are not executed where they occur. Keep their names
@@ -1750,7 +1785,7 @@ impl<'a> CommandSignatures<'a> {
             .filter(|command| !positions.contains(&command.span.start))
             .map(|command| command.span.start)
             .collect();
-        let declarations = parsed
+        let declarations: BTreeSet<_> = parsed
             .definitions
             .iter()
             .map(|entry| (entry.span.start, entry.span.end))
@@ -1760,7 +1795,9 @@ impl<'a> CommandSignatures<'a> {
             .iter()
             .enumerate()
             .filter_map(|(index, command)| {
-                if matches!(command.name.as_str(), "input" | "include") {
+                if matches!(command.name.as_str(), "input" | "include")
+                    || declarations.contains(&(command.span.start, command.span.end))
+                {
                     return None;
                 }
                 let (name, start, end, _) =

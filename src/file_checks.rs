@@ -147,6 +147,7 @@ impl Snapshot {
             return Self::default();
         };
         let sources = workspace.project_documents(root);
+        let inputs = crate::source_inputs::Index::new(workspace, root);
         let redefined_file_commands: BTreeSet<_> = sources
             .iter()
             .filter_map(|uri| workspace.documents.get(uri))
@@ -226,9 +227,18 @@ impl Snapshot {
                         .syntax
                         .commands
                         .iter()
+                        .chain(
+                            inputs
+                                .calls
+                                .get(source)
+                                .into_iter()
+                                .flatten()
+                                .filter(|call| call.certain)
+                                .map(|call| &call.command),
+                        )
                         .filter(|command| command.name == "include")
                     {
-                        if let Some(argument) = &command.argument {
+                        if let Some(argument) = syntax::file_argument(&doc.text.source, command) {
                             let name = argument.value.trim();
                             if syntax::is_literal_file_path(name) {
                                 let base = name.strip_suffix(".tex").unwrap_or(name);
@@ -267,7 +277,15 @@ impl Snapshot {
                     .any(|command| command.name == "includegraphics"))
             .then(|| graphics::condition_directories_in(workspace, &source, root))
             .flatten();
-            for command in &doc.syntax.commands {
+            for command in doc.syntax.commands.iter().chain(
+                inputs
+                    .calls
+                    .get(&source)
+                    .into_iter()
+                    .flatten()
+                    .filter(|call| call.certain)
+                    .map(|call| &call.command),
+            ) {
                 if paths.borrow().len() >= MAX_PATHS {
                     break 'sources;
                 }
@@ -368,7 +386,7 @@ impl Snapshot {
                 ) {
                     continue;
                 }
-                let Some(argument) = &command.argument else {
+                let Some(argument) = syntax::file_argument(&doc.text.source, command) else {
                     continue;
                 };
                 let name = argument.value.trim();
@@ -1659,5 +1677,45 @@ mod listing_conditions {
         std::fs::remove_file(&alias).unwrap();
         std::os::unix::fs::symlink(&second, &alias).unwrap();
         assert!(snapshot.changed_path().is_some());
+    }
+}
+
+#[cfg(test)]
+mod indirect_source_checks_tests {
+    use super::*;
+
+    #[test]
+    fn missing_indirect_input_files_are_observed_without_tracking_include_outputs() {
+        for call in [
+            r"\csuse{input}{chapte}",
+            r"\csname input\endcsname{chapte}",
+            r"\readpart{chapte}",
+            r"\csuse{readpart}{chapte}",
+            r"\csname readpart\endcsname{chapte}",
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path().join("main.tex");
+            let uri = Url::from_file_path(&root).unwrap();
+            std::fs::write(
+                &root,
+                format!(r"\def\readpart{{\input}}{call}\csuse{{include}}{{sub/chapter}}\IfFileExists{{build/latex-lsp/sub/chapter.aux}}{{}}{{}}"),
+            )
+            .unwrap();
+            let mut workspace = Workspace::default();
+            workspace.refresh_project(&uri);
+            let snapshot = Snapshot::capture(&workspace, &uri, &BuildConfig::default());
+            assert!(
+                snapshot
+                    .paths
+                    .contains_key(&directory.path().join("chapte.tex")),
+                "{call}: {snapshot:?}"
+            );
+            assert!(!snapshot
+                .paths
+                .contains_key(&directory.path().join("build/latex-lsp/sub/chapter.aux")));
+            assert!(snapshot.changed_path().is_none());
+            std::fs::write(directory.path().join("chapte.tex"), "Chapter").unwrap();
+            assert!(snapshot.changed_path().is_some(), "{call}");
+        }
     }
 }
