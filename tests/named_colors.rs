@@ -71,6 +71,14 @@ fn changes(workspace: &Workspace, edit: WorkspaceEdit) -> BTreeMap<Url, Vec<Text
 fn color_rename_refuses_macro_callback_tokens_that_can_print_names_as_plain_text() {
     for (definition, call) in [
         (
+            r"\def\wrapped#1 #2#3#4\stop{#3}",
+            r"\wrapped Unused \textcolor{accent}{Unused}\stop",
+        ),
+        (
+            "\\def\\wrapped#1 % keep\r\n #2#3#4\\stop{#3}\\def\\bridge{\\wrapped}",
+            r"\bridge Unused \textcolor{accent}{Unused}\stop",
+        ),
+        (
             r"\newcommand{\wrapped}[1]{\detokenize{#1}}",
             r"\wrapped{\textcolor{accent}{Unused}}",
         ),
@@ -331,6 +339,10 @@ fn unresolved_aliases_remain_conservative_and_deep_chains_do_not_recurse() {
 #[test]
 fn completed_alias_targets_keep_versioned_color_renames_available() {
     for (definition, call) in [
+        (
+            r"\def\done#1 #2\stop{}\def\bridge{\done}",
+            r"\bridge Unused payload\stop",
+        ),
         (
             r"\newcommand{\done}{}\newcommand{\bridge}{\done}",
             r"\bridge",

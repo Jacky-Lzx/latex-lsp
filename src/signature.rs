@@ -1177,14 +1177,46 @@ struct TexOperands {
 }
 
 impl TexOperands {
-    fn definition(source: &str, parsed: &syntax::Syntax, entry: &Entry) -> Option<(Self, usize)> {
-        if !matches!(
+    fn declares(entry: &Entry) -> bool {
+        matches!(
             entry.detail.strip_prefix("Defined with \\"),
             Some("def" | "gdef" | "edef" | "xdef" | "csdef" | "csgdef" | "csedef" | "csxdef")
-        ) {
+        )
+    }
+
+    fn delimited(&self) -> bool {
+        !self.prefix.is_empty()
+            || self
+                .delimiters
+                .iter()
+                .any(|delimiter| !delimiter.is_empty())
+    }
+
+    fn definition(source: &str, parsed: &syntax::Syntax, entry: &Entry) -> Option<(Self, usize)> {
+        if !Self::declares(entry) {
             return None;
         }
-        let mut at = definition_arguments_start(source, parsed, entry, false)?;
+        let mut at = entry.span.end;
+        let named = entry.detail.starts_with("Defined with \\cs");
+        if named {
+            // A closing name group leaves the mouth in mid-line state.
+            // Unlike a literal control word, it does not discard a prefix space.
+            if source.as_bytes().get(at) != Some(&b'}') {
+                return None;
+            }
+            at += 1;
+        } else {
+            if source.as_bytes().get(entry.span.start) != Some(&b'\\') {
+                let start = syntax::skip_space(source, at);
+                at = parsed
+                    .commands
+                    .iter()
+                    .find(|command| command.span.start == start && command.name == "endcsname")?
+                    .span
+                    .end;
+            }
+            at = optional_start(source, at, true);
+        }
         let mut prefix = vec![];
         let mut delimiters: Vec<Vec<String>> = vec![];
         let mut tokens = 0;
@@ -1194,51 +1226,38 @@ impl TexOperands {
                 b'{' => break,
                 b'#' => {
                     let number = delimiters.len() + 1;
-                    if number > 9 || source.as_bytes().get(at + 1) != Some(&(b'0' + number as u8)) {
+                    let (digit, end) = tex_operand_token(source, at + 1)?;
+                    if number > 9 || digit.as_bytes() != [b'0' + number as u8] {
                         return None;
                     }
                     delimiters.push(vec![]);
-                    at += 2;
+                    at = end;
                 }
                 _ => {
-                    // Literal spaces, non-ASCII tokens and catcode-changing
-                    // spellings require more than this lexical analysis.
-                    let value = required_token(source, at)?;
+                    let (value, end) = tex_operand_token(source, at)?;
                     tokens += 1;
                     if tokens > 64 {
                         return None;
                     }
                     let target = delimiters.last_mut().unwrap_or(&mut prefix);
                     target.push(value.to_owned());
-                    at += value.len();
-                    if syntax::control_word(value, 0).is_some() {
-                        at = optional_start(source, at, true);
-                    }
+                    at = end;
                 }
             }
-        }
-        if prefix.is_empty() && delimiters.iter().all(Vec::is_empty) {
-            return None;
         }
         syntax::group(source, at, b'{', b'}')?;
         Some((Self { prefix, delimiters }, at))
     }
 
     fn end(&self, source: &str, at: usize) -> Option<usize> {
-        let mut at = tex_operand_match(source, syntax::skip_space(source, at), &self.prefix)?;
+        let mut at = tex_operand_match(source, optional_start(source, at, true), &self.prefix)?;
         for delimiter in &self.delimiters {
             if delimiter.is_empty() {
-                at = syntax::skip_space(source, at);
+                at = tex_operand_skip_spaces(source, at)?;
                 at = if source.as_bytes().get(at) == Some(&b'{') {
                     syntax::group(source, at, b'{', b'}')?.1
                 } else {
-                    let value = required_token(source, at)?;
-                    let end = at + value.len();
-                    if syntax::control_word(value, 0).is_some() {
-                        optional_start(source, end, true)
-                    } else {
-                        end
-                    }
+                    tex_operand_token(source, at)?.1
                 };
             } else {
                 loop {
@@ -1249,16 +1268,7 @@ impl TexOperands {
                     }
                     at = match source.as_bytes().get(at)? {
                         b'{' => syntax::group(source, at, b'{', b'}')?.1,
-                        b' ' | b'\t' | b'\r' | b'\n' => syntax::skip_space(source, at),
-                        _ => {
-                            let value = required_token(source, at)?;
-                            let end = at + value.len();
-                            if syntax::control_word(value, 0).is_some() {
-                                optional_start(source, end, true)
-                            } else {
-                                end
-                            }
-                        }
+                        _ => tex_operand_token(source, at)?.1,
                     };
                 }
             }
@@ -1272,24 +1282,69 @@ fn tex_operand_comments(source: &str, mut at: usize) -> usize {
         at = source[at..]
             .find('\n')
             .map_or(source.len(), |end| at + end + 1);
-        while matches!(source.as_bytes().get(at), Some(b' ' | b'\t' | b'\r')) {
+        while matches!(source.as_bytes().get(at), Some(b' ' | b'\t')) {
             at += 1;
         }
     }
     at
 }
 
+fn tex_operand_blank_line(source: &str, at: usize) -> bool {
+    let horizontal = |byte: &u8| matches!(byte, b' ' | b'\t');
+    let before = source.as_bytes()[..at]
+        .iter()
+        .rev()
+        .find(|byte| !horizontal(byte));
+    let after = source.as_bytes()[at..]
+        .iter()
+        .find(|byte| !horizontal(byte));
+    matches!(before, None | Some(b'\r' | b'\n')) && matches!(after, Some(b'\r' | b'\n'))
+}
+
+/// Normalize one ordinary TeX space token, retaining its source end. Comments
+/// remove the endline and indentation; lexical blanks after a control word (or
+/// control-space) disappear. Paragraph tokens and catcode spellings stay unknown.
+fn tex_operand_token(source: &str, at: usize) -> Option<(&str, usize)> {
+    let at = tex_operand_comments(source, at);
+    if matches!(
+        source.as_bytes().get(at),
+        Some(b' ' | b'\t' | b'\r' | b'\n')
+    ) {
+        if tex_operand_blank_line(source, at) {
+            return None;
+        }
+        return Some((" ", optional_start(source, at, true)));
+    }
+    let value = required_token(source, at)?;
+    let end = at + value.len();
+    let end = if syntax::control_word(value, 0).is_some() || value == "\\ " {
+        optional_start(source, end, true)
+    } else {
+        end
+    };
+    Some((value, end))
+}
+
+fn tex_operand_skip_spaces(source: &str, mut at: usize) -> Option<usize> {
+    loop {
+        at = tex_operand_comments(source, at);
+        if !matches!(
+            source.as_bytes().get(at),
+            Some(b' ' | b'\t' | b'\r' | b'\n')
+        ) {
+            return Some(at);
+        }
+        at = tex_operand_token(source, at)?.1;
+    }
+}
+
 fn tex_operand_match(source: &str, mut at: usize, pattern: &[String]) -> Option<usize> {
     for expected in pattern {
-        at = tex_operand_comments(source, at);
-        let value = required_token(source, at)?;
+        let (value, end) = tex_operand_token(source, at)?;
         if value != expected {
             return None;
         }
-        at += value.len();
-        if syntax::control_word(value, 0).is_some() {
-            at = optional_start(source, at, true);
-        }
+        at = end;
     }
     Some(at)
 }
@@ -1319,6 +1374,16 @@ impl<'a> CommandSignatures<'a> {
         for (source, parsed) in documents {
             for entry in &parsed.definitions {
                 let mut signature = source_definition(source, parsed, entry, false);
+                let tex_definition = TexOperands::definition(source, parsed, entry);
+                let tex_known = tex_definition.is_some();
+                let tex = tex_definition
+                    .filter(|(operands, _)| operands.delimited() || signature.is_none())
+                    .map(|(operands, _)| operands);
+                if TexOperands::declares(entry) && (tex.is_some() || !tex_known) {
+                    // The help reader deliberately has fewer TeX token rules.
+                    // Never fall back to its arity for unrecognized parameter text.
+                    signature = None;
+                }
                 let alias = signature
                     .as_ref()
                     .filter(|s| s.parameters.is_empty())
@@ -1332,11 +1397,6 @@ impl<'a> CommandSignatures<'a> {
                 if expanded && alias.is_some() {
                     signature = None;
                 }
-                let tex = signature
-                    .is_none()
-                    .then(|| TexOperands::definition(source, parsed, entry))
-                    .flatten()
-                    .map(|(operands, _)| operands);
                 match local.entry(entry.name.as_str()) {
                     std::collections::btree_map::Entry::Vacant(entry) => {
                         if let Some(target) = alias.filter(|_| !expanded) {
@@ -2272,6 +2332,38 @@ mod tex_operand_tests {
     fn tex_delimiters_skip_groups_match_whole_tokens_and_preserve_completed_calls() {
         for (definition, call) in [
             (
+                r"\def\wrapped#1 #2#3#4\stop{}",
+                r"\wrapped Unused \relax\input{wrong}\stop",
+            ),
+            (
+                "\\def\\wrapped#1 \t  #2#3#4\\stop{}",
+                "\\wrapped Unused\t\\relax\\input{wrong}\\stop",
+            ),
+            (
+                "\\def\\wrapped#1\r\n #2#3#4\\stop{}",
+                "\\wrapped Unused\r\n \\relax\\input{wrong}\\stop",
+            ),
+            (
+                "\\def\\wrapped#1 % keep\r\n #2#3#4\\stop{}",
+                "\\wrapped Unused % keep\r\n \\relax\\input{wrong}\\stop",
+            ),
+            (
+                r"\def\wrapped#1a #2\stop{}",
+                r"\wrapped\input{wrong}a \relax\stop",
+            ),
+            (
+                r"\def\wrapped#1\marker   #2\stop{}",
+                r"\wrapped\input{wrong}\marker payload\stop",
+            ),
+            (
+                r"\def\wrapped#1\% #2\stop{}",
+                r"\wrapped\input{wrong}\% payload\stop",
+            ),
+            (
+                r"\def\wrapped#1\    #2\stop{}",
+                r"\wrapped\input{wrong}\ payload\stop",
+            ),
+            (
                 r"\def\wrapped#1#2#3\stop{}",
                 r"\wrapped\relax\input{wrong}\stop",
             ),
@@ -2343,7 +2435,8 @@ mod tex_operand_tests {
         for source in [
             r"\def\wrapped#2\stop{}",
             r"\def\wrapped#1#1\stop{}",
-            r"\def\wrapped#1 #2\stop{}",
+            "\\def\\wrapped#1\n\n#2\\stop{}",
+            "\\def\\wrapped\n\n#1{}",
             r"\def\wrapped#1^^41{}",
             r"\def\wrapped#1é{}",
             r"\def\wrapped#1#{}",
@@ -2355,6 +2448,53 @@ mod tex_operand_tests {
                 "{source}"
             );
         }
+    }
+
+    #[test]
+    fn tex_space_tokens_do_not_confuse_named_prefixes_comments_and_paragraphs() {
+        for (source, prefix, delimiters) in [
+            (
+                r"\def\wrapped#1   #2\stop{}",
+                vec![],
+                vec![vec![" "], vec![r"\stop"]],
+            ),
+            (
+                r"\csdef{wrapped} #1\stop{}",
+                vec![" "],
+                vec![vec![r"\stop"]],
+            ),
+            (
+                "\\def\\wrapped#1% join\r\n #2{}",
+                vec![],
+                vec![vec![], vec![]],
+            ),
+            (
+                "\\def\\wrapped#% join\r\n 1 #2{}",
+                vec![],
+                vec![vec![" "], vec![]],
+            ),
+        ] {
+            let parsed = syntax::Syntax::latex(&Text::new(source.into()));
+            let (operands, _) =
+                TexOperands::definition(source, &parsed, &parsed.definitions[0]).unwrap();
+            assert_eq!(operands.prefix, prefix, "{source}");
+            assert_eq!(operands.delimiters, delimiters, "{source}");
+        }
+        let source = r"\def\wrapped#1 #2\stop{}";
+        let parsed = syntax::Syntax::latex(&Text::new(source.into()));
+        let (operands, _) =
+            TexOperands::definition(source, &parsed, &parsed.definitions[0]).unwrap();
+        for call in [
+            " Unused\n\npayload\\stop",
+            " Unused % keep\r\n \r\npayload\\stop",
+        ] {
+            assert!(operands.end(call, 0).is_none(), "{call}");
+        }
+        let source = r"\csdef{wrapped} #1\stop{}";
+        let parsed = syntax::Syntax::latex(&Text::new(source.into()));
+        let (operands, _) =
+            TexOperands::definition(source, &parsed, &parsed.definitions[0]).unwrap();
+        assert!(operands.end(r" Unused\stop", 0).is_none());
     }
 
     #[test]

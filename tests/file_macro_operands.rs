@@ -142,6 +142,30 @@ fn delimited_tex_macros_consume_file_commands_until_their_actual_delimiter() {
     for command in ["usepackage", "RequirePackage", "LoadClass"] {
         for (declaration, prefix, tail, precise) in [
             (
+                r"\def\wrapped#1 #2#3#4\stop{}",
+                r"\wrapped Unused \relax",
+                r"\stop",
+                false,
+            ),
+            (
+                "\\def\\wrapped#1 \t #2#3#4\\stop{}",
+                "\\wrapped Unused\t\\relax",
+                r"\stop",
+                false,
+            ),
+            (
+                "\\def\\wrapped#1 % keep\r\n #2#3#4\\stop{}\\def\\bridge{\\wrapped}",
+                r"\bridge Unused \relax",
+                r"\stop",
+                false,
+            ),
+            (
+                r"\def\wrapped#1 #2\stop{}",
+                r"\wrapped Unused payload\stop",
+                r"\relax",
+                true,
+            ),
+            (
                 r"\def\wrapped#1#2#3\stop{}",
                 r"\wrapped\relax",
                 r"\stop",
@@ -180,8 +204,9 @@ fn delimited_tex_macros_consume_file_commands_until_their_actual_delimiter() {
                 "LaTeX Error: File `palete.{}' not found.",
                 extension(command)
             );
+            let line = declaration.lines().count() + 1;
             let log =
-                format!("(./main.tex\n! {message}\n! Emergency stop.\n<read *>\nl.2 {call}\n");
+                format!("(./main.tex\n! {message}\n! Emergency stop.\n<read *>\nl.{line} {call}\n");
             let result = build_log::parse(&root, &log);
             let error = result[&Url::from_file_path(&root).unwrap()]
                 .iter()
@@ -205,31 +230,38 @@ fn delimited_tex_macros_consume_file_commands_until_their_actual_delimiter() {
 #[test]
 fn file_repairs_recheck_delimited_tex_macros_and_their_aliases() {
     for command in ["input", "usepackage", "documentclass"] {
-        let (_temp, mut workspace, uri, definitions, mut error) = fixture(command);
-        let source = format!(r"\bridge\relax\{command}{{palete}}\stop\relax");
-        let at = source.find("palete").unwrap();
-        let doc = Document::new(&uri, source, Some(8));
-        error.range = doc.text.range(at, at + 6);
-        workspace.documents.insert(uri.clone(), doc);
-        workspace.documents.insert(
-            definitions.clone(),
-            Document::new(
-                &definitions,
-                r"\def\wrapped#1#2#3\stop{}\def\bridge{\wrapped}".into(),
-                Some(4),
+        for (declaration, prefix) in [
+            (
+                r"\def\wrapped#1#2#3\stop{}\def\bridge{\wrapped}",
+                r"\bridge\relax",
             ),
-        );
-        store(&mut workspace, &uri, &uri, &error);
-        assert!(actions(&workspace, &uri, &error).is_empty(), "{command}");
-        workspace.documents.insert(
-            definitions.clone(),
-            Document::new(
-                &definitions,
-                r"\newcommand{\done}{}\def\bridge{\done}".into(),
-                Some(5),
+            (
+                r"\def\wrapped#1 #2#3#4\stop{}\def\bridge{\wrapped}",
+                r"\bridge Unused \relax",
             ),
-        );
-        assert_eq!(actions(&workspace, &uri, &error).len(), 1, "{command}");
+        ] {
+            let (_temp, mut workspace, uri, definitions, mut error) = fixture(command);
+            let source = format!(r"{prefix}\{command}{{palete}}\stop\relax");
+            let at = source.find("palete").unwrap();
+            let doc = Document::new(&uri, source, Some(8));
+            error.range = doc.text.range(at, at + 6);
+            workspace.documents.insert(uri.clone(), doc);
+            workspace.documents.insert(
+                definitions.clone(),
+                Document::new(&definitions, declaration.into(), Some(4)),
+            );
+            store(&mut workspace, &uri, &uri, &error);
+            assert!(actions(&workspace, &uri, &error).is_empty(), "{command}");
+            workspace.documents.insert(
+                definitions.clone(),
+                Document::new(
+                    &definitions,
+                    r"\newcommand{\done}{}\def\bridge{\done}".into(),
+                    Some(5),
+                ),
+            );
+            assert_eq!(actions(&workspace, &uri, &error).len(), 1, "{command}");
+        }
     }
 }
 
