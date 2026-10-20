@@ -239,3 +239,121 @@ fn real_key_macro_repairs_restore_successful_compilation() {
         }
     }
 }
+
+#[test]
+fn additional_key_interfaces_pinpoint_direct_macros_with_their_own_argument_grammar() {
+    for call in [
+        "\\autoref{\\keynme}",
+        "\\autoref*{\\keynme}",
+        "\\nameref{\\keynme}",
+        "\\nameref*{\\keynme}",
+        "\\vref{\\keynme}",
+        "\\Vref{\\keynme}",
+        "\\citet{\\keynme}",
+        "\\citep{\\keynme}",
+        "\\citeauthor{\\keynme}",
+        "\\citeyear{\\keynme}",
+        "\\citenum{\\keynme}",
+        "\\hyperref[\\keynme]{Text}",
+    ] {
+        let consumed = if call.starts_with(r"\hyperref[") {
+            &call[..call.find(']').unwrap() + 1]
+        } else {
+            call
+        };
+        let source = format!("\\typeout{{😀}} {call} Remains\r\n");
+        let start = source.find(r"\keynme").unwrap();
+        for numbered in [false, true] {
+            let diagnostic = parse(
+                &source,
+                &format!("<argument> \\keynme\nl.1 \\typeout{{😀}} {consumed}"),
+                numbered,
+            );
+            assert_eq!(
+                diagnostic.range,
+                Text::new(source.clone()).range(start, start + 7),
+                "{call}: {diagnostic:?}"
+            );
+            assert_eq!(diagnostic.data.as_ref().unwrap()["command"], "keynme");
+        }
+    }
+    for call in [
+        r"\autoref{prefix\keynme}",
+        r"\nameref{\keynme }",
+        r"\citep{payload,\keynme}",
+        r"\citenum*[see]{\keynme}",
+        r"\hyperref*[\keynme]{Text}",
+        r"\hyperref[{\keynme}]{Text}",
+        r"\hyperref{\keynme}{category}{name}{Text}",
+    ] {
+        let diagnostic = parse(call, &format!("<argument> \\keynme\nl.1 {call}"), true);
+        assert!(diagnostic.code.is_none(), "{call}: {diagnostic:?}");
+    }
+    let diagnostic = parse(
+        r"\vpageref{\keynme}",
+        "<argument> r@\\keynme\nl.1 \\vpageref{\\keynme}",
+        true,
+    );
+    assert!(diagnostic.code.is_none());
+}
+
+#[test]
+#[ignore = "requires pdflatex and xelatex"]
+fn real_additional_key_macro_repairs_restore_successful_compilation() {
+    for engine in ["pdflatex", "xelatex"] {
+        for (packages, call) in [
+            ("\\usepackage{hyperref}\n", "\\autoref{\\keynme}"),
+            ("\\usepackage{hyperref}\n", "\\autoref*{\\keynme}"),
+            ("\\usepackage{hyperref}\n", "\\nameref{\\keynme}"),
+            ("\\usepackage{hyperref}\n", "\\nameref*{\\keynme}"),
+            ("\\usepackage{varioref}\n", "\\vref{\\keynme}"),
+            ("\\usepackage{varioref}\n", "\\Vref{\\keynme}"),
+            ("\\usepackage[numbers]{natbib}\n", "\\citet{\\keynme}"),
+            ("\\usepackage[numbers]{natbib}\n", "\\citep{\\keynme}"),
+            ("\\usepackage[numbers]{natbib}\n", "\\citeauthor{\\keynme}"),
+            ("\\usepackage[numbers]{natbib}\n", "\\citeyear{\\keynme}"),
+            ("\\usepackage[numbers]{natbib}\n", "\\citenum{\\keynme}"),
+            ("\\usepackage{hyperref}\n", "\\hyperref[\\keynme]{Text}"),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let main = directory.path().join("main.tex");
+            let uri = Url::from_file_path(&main).unwrap();
+            let source = format!("\\documentclass{{article}}\r\n\\usepackage{{amsmath}}\r\n{packages}\\newcommand{{\\keyname}}{{payload}}\r\n\\begin{{document}}\r\n\\section{{MarkerUnique}}\\label{{payload}}\r\n\\begin{{thebibliography}}{{1}}\\bibitem{{payload}}Entry\\end{{thebibliography}}\r\n{call}\r\n\\end{{document}}\r\n");
+            std::fs::write(&main, &source).unwrap();
+            let config = BuildConfig {
+                executable: engine.into(),
+                ..Default::default()
+            };
+            let before = build::run(&main, &config, &AtomicBool::new(false));
+            assert_eq!(before.status, "error", "{engine}/{call}: {}", before.output);
+            let start = source.find(r"\keynme").unwrap();
+            let range = Text::new(source.clone()).range(start, start + 7);
+            let diagnostic = before.diagnostics[&uri]
+                .iter()
+                .find(|item| item.message == "Undefined control sequence." && item.range == range)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{engine}/{call}: {}\n{:?}",
+                        before.output, before.diagnostics
+                    )
+                });
+            let mut workspace = Workspace {
+                versioned_edits: true,
+                code_action_literals: true,
+                ..Default::default()
+            };
+            workspace.open(uri.clone(), source, 7);
+            workspace
+                .build_diagnostics
+                .insert(uri.clone(), before.diagnostics.clone());
+            std::fs::write(&main, repaired(&workspace, &uri, diagnostic)).unwrap();
+            let after = build::run(&main, &config, &AtomicBool::new(false));
+            assert_eq!(after.status, "success", "{engine}/{call}: {}", after.output);
+            assert!(main
+                .parent()
+                .unwrap()
+                .join("build/latex-lsp/main.pdf")
+                .is_file());
+        }
+    }
+}

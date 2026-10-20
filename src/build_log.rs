@@ -1159,16 +1159,26 @@ fn reference_macro_error_invocation(
     command: &crate::syntax::Command,
     frame: &str,
 ) -> Option<(ByteRange<usize>, ByteRange<usize>)> {
-    let start = match command.name.as_str() {
-        "ref" | "pageref" | "eqref" => {
-            crate::syntax::reference_argument_start(source, &command.name, command.span.end)?
-        }
-        "cite" | "nocite" => {
-            crate::syntax::citation_argument_start(source, &command.name, command.span.end)?
+    let (start, open) = match command.name.as_str() {
+        "ref" | "pageref" | "eqref" | "autoref" | "nameref" | "vref" | "Vref" => (
+            crate::syntax::reference_argument_start(source, &command.name, command.span.end)?,
+            b'{',
+        ),
+        "cite" | "nocite" | "citet" | "citep" | "citeauthor" | "citeyear" | "citenum" => (
+            crate::syntax::citation_argument_start(source, &command.name, command.span.end)?,
+            b'{',
+        ),
+        "hyperref" => {
+            let (start, open) = crate::syntax::separate_label_argument_start(source, command)?;
+            if open != b'[' {
+                return None;
+            }
+            (start, open)
         }
         _ => return None,
     };
-    let (argument, _) = crate::syntax::group(source, start, b'{', b'}')?;
+    let close = if open == b'[' { b']' } else { b'}' };
+    let (argument, _) = crate::syntax::group(source, start, open, close)?;
     if argument.value != frame
         || crate::syntax::control_word(&argument.value, 0)? != (0..argument.value.len())
     {
