@@ -12,6 +12,31 @@ pub fn complete(
     command: &str,
     span: Range<usize>,
 ) -> Vec<CompletionItem> {
+    complete_with_argument(workspace, uri, command, span, None)
+}
+
+pub(crate) fn complete_source(
+    workspace: &Workspace,
+    uri: &Url,
+    command: &syntax::Command,
+    span: Range<usize>,
+) -> Vec<CompletionItem> {
+    complete_with_argument(
+        workspace,
+        uri,
+        &command.name,
+        span,
+        command.argument.as_ref(),
+    )
+}
+
+fn complete_with_argument(
+    workspace: &Workspace,
+    uri: &Url,
+    command: &str,
+    span: Range<usize>,
+    argument: Option<&syntax::Argument>,
+) -> Vec<CompletionItem> {
     let Some(doc) = workspace.documents.get(uri) else {
         return vec![];
     };
@@ -28,16 +53,20 @@ pub fn complete(
     let separator = prefix.rfind('/').map_or(0, |index| index + 1);
     let directory = &prefix[..separator];
     let name_prefix = &prefix[separator..];
-    let input_argument = matches!(command, "input" | "InputIfFileExists" | "IfFileExists")
-        .then(|| {
-            doc.syntax
-                .commands
-                .iter()
-                .filter(|candidate| candidate.name == command)
-                .filter_map(|command| command.argument.as_ref())
-                .find(|argument| argument.span.start == span.start && span.end <= argument.span.end)
-        })
-        .flatten();
+    let input_argument = argument.or_else(|| {
+        matches!(command, "input" | "InputIfFileExists" | "IfFileExists")
+            .then(|| {
+                doc.syntax
+                    .commands
+                    .iter()
+                    .filter(|candidate| candidate.name == command)
+                    .filter_map(|command| command.argument.as_ref())
+                    .find(|argument| {
+                        argument.span.start == span.start && span.end <= argument.span.end
+                    })
+            })
+            .flatten()
+    });
     let argument_end = input_argument.map_or(doc.text.source.len(), |argument| argument.span.end);
     let suffix = &doc.text.source[span.end..argument_end];
     let suffix_length = suffix

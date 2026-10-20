@@ -1054,6 +1054,23 @@ pub(crate) fn file_argument<'a>(
         // into a different forwarding declaration.
         (is_literal_file_path(&argument.value) && !argument.value.chars().any(char::is_whitespace))
             .then_some(std::borrow::Cow::Owned(argument))
+    } else if matches!(command.name.as_str(), "input" | "include") {
+        let argument = command.argument.as_ref()?;
+        let span = (source.as_bytes().get(argument.outer_span.start) == Some(&b'{'))
+            .then(|| literal_file_span(source, argument.span.clone(), false))
+            .flatten();
+        // Normalize literal names surrounded by comments, retaining the raw
+        // argument for dynamic-name diagnostics and primitive quoted scanning.
+        Some(span.map_or_else(
+            || std::borrow::Cow::Borrowed(argument),
+            |span| {
+                std::borrow::Cow::Owned(Argument {
+                    value: source[span.clone()].into(),
+                    span,
+                    outer_span: argument.outer_span.clone(),
+                })
+            },
+        ))
     } else if loader_extension(&command.name) == Some("cls")
         || command.name == "bibliographystyle"
         || code_input_command(&command.name)

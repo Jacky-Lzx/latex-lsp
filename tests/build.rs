@@ -1036,6 +1036,75 @@ fn auxiliary_directory_preparation_skips_comments_macros_and_paths_outside_the_o
 }
 
 #[test]
+#[cfg(unix)]
+fn auxiliary_directories_follow_static_include_aliases_in_nested_project_sources() {
+    for invocation in [
+        r"\csuse{include}",
+        r"\csname include\endcsname",
+        r"\readpart",
+        r"\csuse{readpart}",
+        r"\csname readpart\endcsname",
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        std::fs::write(root.join("main.tex"), r"\documentclass{article}\usepackage{defs}\begin{document}\csuse{input}{plan}\end{document}").unwrap();
+        std::fs::write(
+            root.join("defs.sty"),
+            r"\ProvidesPackage{defs}\def\readpart{\include}",
+        )
+        .unwrap();
+        std::fs::write(root.join("plan.tex"),format!("{invocation}% before\r\n{{% name\r\nchapters/新 dir/part% keep\r\n}}\n\\newcommand{{\\unused}}{{\\csuse{{include}}{{deferred/part}}}}\n\\newcommand{{\\take}}[1]{{\\detokenize{{#1}}}}\\take{{\\csuse{{include}}{{data/part}}}}\n\\csuse{{include}}{{../escape/part}}\n\\csuse{{include}}{{dynamic/\\unknown}}\n\\endinput\n\\csuse{{include}}{{after/part}}\n")).unwrap();
+        let wrapper = script(
+            root,
+            "[ -d \"$1/chapters/新 dir\" ] || exit 13\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"",
+        );
+        let compiler = root.join("pdflatex");
+        std::fs::rename(wrapper, &compiler).unwrap();
+        let config = BuildConfig {
+            executable: compiler.to_string_lossy().into_owned(),
+            arguments: Some(vec!["%o".into()]),
+            ..Default::default()
+        };
+        let outcome = build::run(&root.join("main.tex"), &config, &AtomicBool::new(false));
+        assert_eq!(
+            outcome.status, "success",
+            "{invocation}: {}",
+            outcome.output
+        );
+        for name in [
+            "build/escape",
+            "build/latex-lsp/deferred",
+            "build/latex-lsp/data",
+            "build/latex-lsp/dynamic",
+            "build/latex-lsp/after",
+        ] {
+            assert!(!root.join(name).exists(), "{invocation}: {name}");
+        }
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn auxiliary_directory_preparation_does_not_guess_redefined_indirect_includes() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::write(root.join("main.tex"),r"\documentclass{article}\renewcommand{\include}[1]{}\def\readpart{\include}\begin{document}\csuse{include}{uncertain/part}\readpart{aliased/part}\csname include\endcsname{named/part}\end{document}").unwrap();
+    let wrapper = script(root, "printf '%%PDF-1.4\\n' > \"$1/main.pdf\"");
+    let compiler = root.join("pdflatex");
+    std::fs::rename(wrapper, &compiler).unwrap();
+    let config = BuildConfig {
+        executable: compiler.to_string_lossy().into_owned(),
+        arguments: Some(vec!["%o".into()]),
+        ..Default::default()
+    };
+    let outcome = build::run(&root.join("main.tex"), &config, &AtomicBool::new(false));
+    assert_eq!(outcome.status, "success", "{}", outcome.output);
+    for name in ["uncertain", "aliased", "named"] {
+        assert!(!root.join("build/latex-lsp").join(name).exists());
+    }
+}
+
+#[test]
 fn engine_directives_use_the_root_comment_and_respect_explicit_configuration() {
     use latex_lsp::{config::Engine, workspace::Document};
     let directory = tempfile::tempdir().unwrap();

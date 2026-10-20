@@ -1482,16 +1482,25 @@ fn prepare_include_directories(root: &Path, output: &Path) -> std::io::Result<()
     };
     let mut workspace = Workspace::default();
     workspace.refresh_project(&uri);
+    let inputs = crate::source_inputs::Index::new(&workspace, &uri);
     let mut directories = BTreeSet::new();
-    for doc in workspace.documents.values() {
+    for (uri, doc) in &workspace.documents {
+        let indirect = inputs
+            .calls
+            .get(uri)
+            .into_iter()
+            .flatten()
+            .filter(|call| call.certain)
+            .map(|call| &call.command);
         for command in doc
             .syntax
             .commands
             .iter()
+            .chain(indirect)
             .filter(|command| command.name == "include")
             .take(4096)
         {
-            let Some(argument) = &command.argument else {
+            let Some(argument) = crate::syntax::file_argument(&doc.text.source, command) else {
                 continue;
             };
             let name = argument.value.trim();

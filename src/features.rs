@@ -680,6 +680,35 @@ fn argument_context(doc: &Document, offset: usize) -> Option<(&Command, Span<usi
         .find_map(|command| argument_span(doc, command, offset).map(|span| (command, span)))
 }
 
+fn indirect_source_context(
+    workspace: &Workspace,
+    uri: &Url,
+    doc: &Document,
+    offset: usize,
+) -> Option<(Command, Span<usize>)> {
+    let roots = workspace
+        .root_document(uri)
+        .map(|root| vec![root])
+        .unwrap_or_else(|_| workspace.source_roots(uri));
+    let mut selected: Option<(Command, Span<usize>)> = None;
+    for root in roots {
+        let inputs = crate::source_inputs::Index::new(workspace, &root);
+        let (command, span) = inputs.calls.get(uri)?.iter().rev().find_map(|call| {
+            (call.certain && call.command.span.end <= offset)
+                .then(|| argument_span(doc, &call.command, offset))
+                .flatten()
+                .map(|span| (&call.command, span))
+        })?;
+        if selected.as_ref().is_some_and(|(previous, prefix)| {
+            previous.name != command.name || previous.span != command.span || *prefix != span
+        }) {
+            return None;
+        }
+        selected = Some((command.clone(), span));
+    }
+    selected
+}
+
 fn argument_span(doc: &Document, command: &Command, offset: usize) -> Option<Span<usize>> {
     let source = &doc.text.source;
     if !(matches!(command.name.as_str(), "begin" | "end" | "hyperlink")
@@ -690,6 +719,19 @@ fn argument_span(doc: &Document, command: &Command, offset: usize) -> Option<Spa
         || syntax::file_extensions(&command.name).is_some())
     {
         return None;
+    }
+    if matches!(command.name.as_str(), "input" | "include") {
+        let start = syntax::skip_space(source, command.span.end);
+        if source.as_bytes().get(start) == Some(&b'{') {
+            return syntax::active_file_prefix(source, start, offset, false, false);
+        }
+        if command.name == "include" {
+            return None;
+        }
+        return command.argument.as_ref().and_then(|argument| {
+            (argument.span.start <= offset && offset <= argument.span.end)
+                .then_some(argument.span.start..offset)
+        });
     }
     if syntax::passes_options(&command.name) {
         let start = syntax::forwarded_file_argument_start(source, command)?;
@@ -758,10 +800,7 @@ fn argument_span(doc: &Document, command: &Command, offset: usize) -> Option<Spa
         let prefix = source[span.start..offset].trim_start();
         return Some(offset - prefix.len()..offset);
     }
-    if matches!(
-        command.name.as_str(),
-        "input" | "InputIfFileExists" | "IfFileExists"
-    ) {
+    if matches!(command.name.as_str(), "InputIfFileExists" | "IfFileExists") {
         if let Some(argument) = &command.argument {
             if argument.span.start <= offset && offset <= argument.span.end {
                 let start = if source.as_bytes().get(argument.outer_span.start) == Some(&b'{') {
@@ -852,6 +891,11 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
     }
     if let Some(items) = crate::named_commands::completion(workspace, uri, offset, &scope) {
         return items;
+    }
+    if !name_command {
+        if let Some((command, span)) = indirect_source_context(workspace, uri, doc, offset) {
+            return crate::path_completion::complete_source(workspace, uri, &command, span);
+        }
     }
     if let Some((command, span)) = argument_context(doc, offset).filter(|_| !name_command) {
         if syntax::file_extensions(&command.name).is_some() {
