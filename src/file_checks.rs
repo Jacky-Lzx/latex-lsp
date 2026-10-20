@@ -1,7 +1,7 @@
 //! Captured file conditions and content fingerprints for build validity.
 use crate::{
     config::BuildConfig,
-    syntax,
+    graphics, syntax,
     workspace::{normalize_path, resolve_file_path_with, Workspace},
 };
 use std::{
@@ -155,11 +155,27 @@ impl Snapshot {
                 syntax::loader_extension(&entry.name).is_some()
                     || matches!(
                         entry.name.as_str(),
-                        "bibliography" | "nobibliography" | "bibliographystyle"
+                        "bibliography"
+                            | "nobibliography"
+                            | "bibliographystyle"
+                            | "includegraphics"
+                            | "graphicspath"
                     )
             })
             .map(|entry| entry.name.as_str())
             .collect();
+        let track_images = !redefined_file_commands.contains("includegraphics")
+            && !redefined_file_commands.contains("graphicspath")
+            && !sources
+                .iter()
+                .filter_map(|uri| workspace.documents.get(uri))
+                .flat_map(|doc| &doc.syntax.commands)
+                .any(|command| {
+                    matches!(
+                        command.name.as_str(),
+                        "DeclareGraphicsExtensions" | "DeclareGraphicsRule"
+                    )
+                });
         // A missing chapter is meaningful only when it can be selected.
         // Unknown or conflicting filters must not guess that TeX reads it.
         let include_filters: Option<Vec<BTreeSet<_>>> = sources
@@ -228,23 +244,49 @@ impl Snapshot {
             }
         }
         let paths = RefCell::new(BTreeMap::new());
+        let observe_path = |path: &Path| {
+            let before = file(path);
+            let mut paths = paths.borrow_mut();
+            if paths.len() < MAX_PATHS && !outputs.contains(&normalize_path(path)) {
+                paths.insert(path.to_path_buf(), before.clone());
+            }
+            before
+        };
         let observe = |origin: &Url, command: &str, name: &str, extension: &str| {
-            resolve_file_path_with(origin, command, name, &[extension], |path| {
-                let before = file(path);
-                let mut paths = paths.borrow_mut();
-                if paths.len() < MAX_PATHS && !outputs.contains(&normalize_path(path)) {
-                    paths.insert(path.to_path_buf(), before.clone());
-                }
-                before
-            })
+            resolve_file_path_with(origin, command, name, &[extension], observe_path)
         };
         'sources: for source in sources {
             let Some(doc) = workspace.documents.get(&source) else {
                 continue;
             };
+            let image_directories = (track_images
+                && doc
+                    .syntax
+                    .commands
+                    .iter()
+                    .any(|command| command.name == "includegraphics"))
+            .then(|| graphics::condition_directories_in(workspace, &source, root))
+            .flatten();
             for command in &doc.syntax.commands {
                 if paths.borrow().len() >= MAX_PATHS {
                     break 'sources;
+                }
+                if command.name == "includegraphics" {
+                    if let (Some(directories), Some(argument)) =
+                        (&image_directories, &command.argument)
+                    {
+                        let name = argument.value.trim();
+                        if syntax::is_literal_file_path(name) {
+                            graphics::resolve_with(
+                                root,
+                                name,
+                                syntax::file_extensions("includegraphics").unwrap(),
+                                directories,
+                                observe_path,
+                            );
+                        }
+                    }
+                    continue;
                 }
                 let loader_extension = syntax::loader_extension(&command.name);
                 if loader_extension.is_some()
@@ -1159,5 +1201,279 @@ mod loader_conditions {
                 .contains_key(&root.join(format!("overflow.{extension}"))));
             assert!(snapshot.changed_path().is_none());
         }
+    }
+}
+
+#[cfg(test)]
+mod graphic_conditions {
+    use super::*;
+
+    fn capture(root: &Path, source: &str) -> Snapshot {
+        std::fs::write(root.join("main.tex"), source).unwrap();
+        let mut workspace = Workspace::default();
+        workspace.add_root(root.into());
+        Snapshot::capture(
+            &workspace,
+            &Url::from_file_path(root.join("main.tex")).unwrap(),
+            &BuildConfig::default(),
+        )
+    }
+
+    #[test]
+    fn missing_graphics_watch_root_and_declared_directories_even_before_they_exist() {
+        for (declaration, actual) in [
+            ("", "missing.png"),
+            (r"\graphicspath{{assets/}}", "assets/missing.png"),
+            (
+                r"\graphicspath{% before\n{assets/}% after\n}",
+                "assets/missing.png",
+            ),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let source = format!(
+                "{}\\includegraphics*[width=1cm]{{ missing.png }}",
+                declaration.replace("\\n", "\n")
+            );
+            let snapshot = capture(root, &source);
+            let actual = root.join(actual);
+            assert!(
+                snapshot
+                    .watched()
+                    .contains(&Url::from_file_path(&actual).unwrap()),
+                "{source}\n{snapshot:?}"
+            );
+            assert!(snapshot.changed_path().is_none());
+            std::fs::create_dir_all(actual.parent().unwrap()).unwrap();
+            std::fs::write(actual, b"PNG existence fixture").unwrap();
+            assert!(snapshot.changed_path().is_some(), "{source}");
+        }
+    }
+
+    #[test]
+    fn graphic_conditions_follow_extension_precedence_and_stop_after_the_selected_input() {
+        for (argument, changed, expected) in [
+            ("plot", "plot.pdf", true),
+            ("plot", "assets/plot.pdf", true),
+            ("plot", "plot.png", true),
+            ("plot", "assets/plot.jpg", false),
+            ("plot.png", "plot.pdf", false),
+            ("plot.png", "plot.png", true),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            std::fs::create_dir(root.join("assets")).unwrap();
+            std::fs::write(root.join("assets/plot.png"), "Selected input.").unwrap();
+            let snapshot = capture(
+                root,
+                &format!("\\graphicspath{{{{assets/}}}}\\includegraphics{{{argument}}}"),
+            );
+            std::fs::write(root.join(changed), "New candidate.").unwrap();
+            assert_eq!(
+                snapshot.changed_path().is_some(),
+                expected,
+                "{argument}: {changed}\n{snapshot:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn dotted_image_names_retain_graphicx_extension_fallbacks() {
+        for (argument, actual) in [
+            ("plot.v1", "assets/plot.v1.png"),
+            ("plot.png", "assets/plot.png.pdf"),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            std::fs::create_dir(root.join("assets")).unwrap();
+            let snapshot = capture(
+                root,
+                &format!("\\graphicspath{{{{assets/}}}}\\includegraphics{{{argument}}}"),
+            );
+            std::fs::write(root.join(actual), "New input.").unwrap();
+            assert!(snapshot.changed_path().is_some(), "{argument}: {actual}");
+        }
+    }
+
+    #[test]
+    fn graphics_use_the_build_root_and_preserve_static_source_directory_declarations() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        std::fs::create_dir(root.join("sub")).unwrap();
+        std::fs::write(
+            root.join("sub/child.tex"),
+            r"\graphicspath{{assets/}}\includegraphics{missing.png}",
+        )
+        .unwrap();
+        let snapshot = capture(root, r"\input{sub/child}");
+        assert!(snapshot
+            .paths
+            .contains_key(&root.join("assets/missing.png")));
+        assert!(!snapshot.paths.contains_key(&root.join("sub/missing.png")));
+        std::fs::write(root.join("sub/missing.png"), "Inaccessible input.").unwrap();
+        assert!(snapshot.changed_path().is_none());
+        std::fs::create_dir(root.join("assets")).unwrap();
+        std::fs::write(root.join("assets/missing.png"), "New input.").unwrap();
+        assert!(snapshot.changed_path().is_some());
+    }
+
+    #[test]
+    fn dynamic_redefined_and_incomplete_graphic_searches_do_not_invent_conditions() {
+        for source in [
+            r"\includegraphics{\chosen}",
+            "\\includegraphics{mi% split\nssing.png}",
+            r"\includegraphics{missing.png",
+            r"\verb|\includegraphics{missing.png}|",
+            r"% \includegraphics{missing.png}",
+            r"\newcommand{\includegraphics}[1]{}\includegraphics{missing.png}",
+            r"\newcommand{\graphicspath}[1]{}\includegraphics{missing.png}",
+            r"\DeclareGraphicsExtensions{.png,.pdf}\includegraphics{missing.png}",
+            r"\DeclareGraphicsRule{.png}{png}{.png}{}\includegraphics{missing.png}",
+            r"\graphicspath{{assets/}{\unknown/}}\includegraphics{missing.png}",
+            r"\graphicspath{{assets/}garbage}\includegraphics{missing.png}",
+            r"\graphicspath{{assets/}{missing}}\includegraphics{missing.png}",
+            r"\graphicspath*{{assets/}}\includegraphics{missing.png}",
+            r"\graphicspath[option]{{assets/}}\includegraphics{missing.png}",
+            r"\graphicspath\includegraphics{missing.png}",
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let snapshot = capture(root, source);
+            assert!(snapshot.paths.is_empty(), "{source}\n{snapshot:?}");
+            std::fs::write(root.join("missing.png"), "New input.").unwrap();
+            assert!(snapshot.changed_path().is_none(), "{source}");
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn first_image_and_search_directory_aliases_detect_retargets_without_recorder_history() {
+        use std::os::unix::fs::symlink;
+        for directory_alias in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            for name in ["old", "new"] {
+                std::fs::create_dir(root.join(name)).unwrap();
+                std::fs::write(root.join(name).join("plot.png"), "Image fixture.").unwrap();
+            }
+            let (alias, old, new, source) = if directory_alias {
+                (
+                    root.join("alias"),
+                    root.join("old"),
+                    root.join("new"),
+                    r"\graphicspath{{alias/}}\includegraphics{plot.png}",
+                )
+            } else {
+                (
+                    root.join("alias.png"),
+                    root.join("old/plot.png"),
+                    root.join("new/plot.png"),
+                    r"\includegraphics{alias.png}",
+                )
+            };
+            symlink(&old, &alias).unwrap();
+            let snapshot = capture(root, source);
+            assert!(snapshot.changed_path().is_none());
+            std::fs::remove_file(&alias).unwrap();
+            symlink(&new, &alias).unwrap();
+            assert!(snapshot.changed_path().is_some(), "{source}\n{snapshot:?}");
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn missing_graphics_under_directory_aliases_watch_external_physical_creation() {
+        use std::os::unix::fs::symlink;
+        for path_argument in [false, true] {
+            let project = tempfile::tempdir().unwrap();
+            let external = tempfile::tempdir().unwrap();
+            symlink(external.path(), project.path().join("alias")).unwrap();
+            let source = if path_argument {
+                r"\includegraphics{alias/nested/图 片.png}"
+            } else {
+                r"\graphicspath{{alias/nested/}}\includegraphics{图 片.png}"
+            };
+            let snapshot = capture(project.path(), source);
+            let actual = external.path().join("nested/图 片.png");
+            assert!(
+                snapshot
+                    .watched()
+                    .contains(&Url::from_file_path(&actual).unwrap()),
+                "{source}\n{snapshot:?}"
+            );
+            std::fs::create_dir(actual.parent().unwrap()).unwrap();
+            std::fs::write(actual, "New image.").unwrap();
+            assert!(snapshot.changed_path().is_some());
+        }
+    }
+
+    #[test]
+    fn graphic_candidates_share_the_path_budget_and_exclude_known_build_outputs() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let names = (0..MAX_PATHS - 1)
+            .map(|n| format!("db{n}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let snapshot = capture(
+            root,
+            &format!("\\bibliography{{{names}}}\\includegraphics{{last}}"),
+        );
+        assert_eq!(snapshot.paths.len(), MAX_PATHS);
+        assert!(snapshot.paths.contains_key(&root.join("last.pdf")));
+        assert!(!snapshot.paths.contains_key(&root.join("last.png")));
+        let snapshot = capture(root, r"\includegraphics{build/latex-lsp/main.pdf}");
+        let output = root.join("build/latex-lsp/main.pdf");
+        assert!(!snapshot.paths.contains_key(&output));
+        std::fs::create_dir_all(output.parent().unwrap()).unwrap();
+        std::fs::write(output, b"%PDF-1.4\n").unwrap();
+        assert!(snapshot.changed_path().is_none());
+    }
+
+    #[test]
+    fn incomplete_project_graphic_searches_and_excessive_directory_lists_are_skipped() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        std::fs::write(
+            root.join("settings.tex"),
+            r"\graphicspath{{assets/}{\unknown/}}",
+        )
+        .unwrap();
+        let snapshot = capture(root, r"\input{settings}\includegraphics{missing.png}");
+        assert!(!snapshot.paths.contains_key(&root.join("missing.png")));
+        let names = (0..257)
+            .map(|n| format!("{{assets{n}/}}"))
+            .collect::<String>();
+        let snapshot = capture(
+            root,
+            &format!("\\graphicspath{{{names}}}\\includegraphics{{missing.png}}"),
+        );
+        assert!(snapshot.paths.is_empty());
+        // A declaration in a separate project does not affect this build.
+        let snapshot = capture(root, r"\includegraphics{missing.png}");
+        assert!(snapshot.paths.contains_key(&root.join("missing.png")));
+    }
+
+    #[test]
+    fn repeated_graphic_path_declarations_do_not_guess_execution_order_or_scope() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        for source in [
+            r"\graphicspath{{first/}}\graphicspath{{second/}}\includegraphics{missing.png}",
+            r"\graphicspath{{first/}}\graphicspath{{first/}}\includegraphics{missing.png}",
+            r"\graphicspath{{first/}}\graphicspath{}\includegraphics{missing.png}",
+        ] {
+            assert!(capture(root, source).paths.is_empty(), "{source}");
+        }
+        std::fs::write(root.join("settings.tex"), r"\graphicspath{{first/}}").unwrap();
+        let snapshot = capture(
+            root,
+            r"\input{settings}\graphicspath{{second/}}\includegraphics{missing.png}",
+        );
+        assert!(!snapshot.paths.contains_key(&root.join("missing.png")));
+        assert!(!snapshot.paths.contains_key(&root.join("first/missing.png")));
+        assert!(!snapshot
+            .paths
+            .contains_key(&root.join("second/missing.png")));
     }
 }

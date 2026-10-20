@@ -91,17 +91,29 @@ pub fn declarations(workspace: &Workspace, uri: &Url) -> Vec<Directory> {
 }
 
 pub(crate) fn declarations_in(workspace: &Workspace, uri: &Url, origin: &Url) -> Vec<Directory> {
+    declarations_with(workspace, uri, origin, false).0
+}
+
+// Navigation uses canonical destinations; build conditions must retain the
+// lexical directory alias and include directories which do not exist yet.
+fn declarations_with(
+    workspace: &Workspace,
+    uri: &Url,
+    origin: &Url,
+    for_conditions: bool,
+) -> (Vec<Directory>, bool) {
     let Some(doc) = workspace.documents.get(uri) else {
-        return vec![];
+        return (vec![], true);
     };
     let Some(parent) = origin
         .to_file_path()
         .ok()
         .and_then(|path| path.parent().map(|parent| parent.to_path_buf()))
     else {
-        return vec![];
+        return (vec![], false);
     };
     let mut directories = Vec::new();
+    let mut complete = true;
     for command in doc
         .syntax
         .commands
@@ -109,12 +121,23 @@ pub(crate) fn declarations_in(workspace: &Workspace, uri: &Url, origin: &Url) ->
         .filter(|command| command.name == "graphicspath")
     {
         let Some(argument) = &command.argument else {
+            complete = false;
             continue;
         };
+        if for_conditions
+            && argument.outer_span.start != syntax::skip_space(&doc.text.source, command.span.end)
+        {
+            complete = false;
+            continue;
+        }
         let mut i = 0;
         while i < argument.value.len() {
             i = syntax::skip_space(&argument.value, i);
+            if i == argument.value.len() {
+                break;
+            }
             let Some((directory, end)) = syntax::group(&argument.value, i, b'{', b'}') else {
+                complete = false;
                 break;
             };
             i = end;
@@ -127,23 +150,72 @@ pub(crate) fn declarations_in(workspace: &Workspace, uri: &Url, origin: &Url) ->
             if !value.ends_with('/')
                 || value.contains(['\\', '{', '}', '%', '#', '$', '&', '^', '~', '\n', '\r'])
             {
+                complete = false;
                 continue;
             }
             let path = parent.join(value);
-            let path = path
-                .canonicalize()
-                .unwrap_or_else(|_| normalize_path(&path));
+            let path = if !for_conditions {
+                path.canonicalize()
+                    .unwrap_or_else(|_| normalize_path(&path))
+            } else {
+                path
+            };
             directories.push(Directory {
                 path,
                 span,
                 origin: origin.clone(),
             });
             if directories.len() >= 256 {
-                return directories;
+                return (directories, false);
             }
         }
     }
-    directories
+    (directories, complete)
+}
+
+/// Potential static search directories, including missing paths and lexical
+/// aliases. Dynamic, incomplete or repeated declarations cannot define a safe
+/// search without inferring macro execution order and scope.
+pub(crate) fn condition_directories_in(
+    workspace: &Workspace,
+    uri: &Url,
+    root: &Url,
+) -> Option<Vec<PathBuf>> {
+    let project = workspace.project_documents(root);
+    let mut seen = BTreeSet::new();
+    let mut result = Vec::new();
+    let mut declarations = 0;
+    for document in std::iter::once(uri)
+        .chain(std::iter::once(root))
+        .chain(project.iter())
+    {
+        if !seen.insert(document.clone()) {
+            continue;
+        }
+        declarations += workspace.documents.get(document).map_or(0, |doc| {
+            doc.syntax
+                .commands
+                .iter()
+                .filter(|command| command.name == "graphicspath")
+                .count()
+        });
+        if declarations > 1 {
+            return None;
+        }
+        let (directories, complete) = declarations_with(workspace, document, root, true);
+        if !complete {
+            return None;
+        }
+        for directory in directories {
+            if !result.contains(&directory.path) {
+                result.push(directory.path);
+            }
+            if result.len() >= 256 {
+                return None;
+            }
+        }
+    }
+    Some(result)
 }
 
 pub fn directories(workspace: &Workspace, uri: &Url) -> Vec<PathBuf> {

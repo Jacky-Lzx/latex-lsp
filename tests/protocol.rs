@@ -10547,3 +10547,211 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
         }
     }
 }
+
+#[test]
+#[cfg(unix)]
+fn graphic_files_created_during_compilation_discard_or_cancel_obsolete_missing_errors() {
+    use std::os::unix::fs::symlink;
+    for location in ["root", "nested", "search", "alias-search", "alias-path"] {
+        for explicit in [false, true] {
+            for change in ["none", "silent", "file-event", "directory-event"] {
+                let script = r#"cp diagnostic.log "$1/main.log"
+printf 'PWD %s\nINPUT %s/main.tex\n' "$PWD" "$PWD" > "$1/main.fls"
+touch "$1/ready"
+while [ ! -f "$1/release" ]; do sleep 0.02; done
+exit 1
+"#;
+                let (mut server, directory, main) = fake_build_server_capabilities(
+                    script,
+                    false,
+                    json!({"textDocument":{"diagnostic":{}}}),
+                );
+                let external = tempfile::tempdir().unwrap();
+                let root = directory.path();
+                if location.starts_with("alias-") {
+                    symlink(external.path(), root.join("alias")).unwrap();
+                }
+                let suffix = if explicit { ".png" } else { "" };
+                let (declaration, argument, parent) = match location {
+                    "root" => ("", format!("图 片{suffix}"), root.to_path_buf()),
+                    "nested" => ("", format!("nested/图 片{suffix}"), root.join("nested")),
+                    "search" => (
+                        "\\graphicspath{% before\n{assets/nested/}% after\n}\n",
+                        format!("图 片{suffix}"),
+                        root.join("assets/nested"),
+                    ),
+                    "alias-search" => (
+                        "\\graphicspath{{alias/nested/}}\n",
+                        format!("图 片{suffix}"),
+                        external.path().join("nested"),
+                    ),
+                    _ => (
+                        "",
+                        format!("alias/nested/图 片{suffix}"),
+                        external.path().join("nested"),
+                    ),
+                };
+                let prefix = format!("\\documentclass{{article}}\n\\usepackage{{graphicx}}\n{declaration}\\begin{{document}}\n");
+                let line = prefix.lines().count() + 1;
+                let call = format!("\\includegraphics*[width=1cm]{{{argument}}}");
+                let source = format!("{prefix}{call}\n\\end{{document}}\n");
+                std::fs::write(main.to_file_path().unwrap(), &source).unwrap();
+                let (message, documentation) = if explicit {
+                    (format!("Package pdftex.def Error: File `{argument}' not found: using draft setting."), "See the pdftex.def package documentation for explanation.")
+                } else {
+                    (
+                        format!("LaTeX Error: File `{argument}' not found."),
+                        "See the LaTeX manual or LaTeX Companion for explanation.",
+                    )
+                };
+                std::fs::write(root.join("diagnostic.log"), format!("(./main.tex\n! {message}\n{documentation}\nType  H <return>  for immediate help.\n ...\nl.{line} {call}\n)\n")).unwrap();
+                server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}));
+                server.request(
+                    2,
+                    "workspace/executeCommand",
+                    json!({"command":"latex.build","arguments":[main]}),
+                );
+                let output = root.join("build/latex-lsp");
+                let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                while !output.join("ready").exists() {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "compiler did not start"
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                let physical = parent.join("图 片.png");
+                if change != "none" {
+                    std::fs::create_dir_all(&parent).unwrap();
+                    std::fs::write(&physical, b"PNG existence fixture").unwrap();
+                }
+                if change.ends_with("event") {
+                    let changed = if change == "directory-event" {
+                        &parent
+                    } else {
+                        &physical
+                    };
+                    server.notify(
+                        "workspace/didChangeWatchedFiles",
+                        json!({"changes":[{"uri":Url::from_file_path(changed).unwrap(),"type":1}]}),
+                    );
+                    server.request(
+                        3,
+                        "textDocument/documentSymbol",
+                        json!({"textDocument":{"uri":main}}),
+                    );
+                }
+                std::fs::write(output.join("release"), "").unwrap();
+                let finished = server.until(|message| message["method"] == "latex/buildFinished");
+                if change.ends_with("event") {
+                    assert_eq!(
+                        finished["params"]["status"], "cancelled",
+                        "{location} explicit={explicit}: {finished}"
+                    );
+                } else {
+                    assert_eq!(finished["params"]["status"], "error", "{finished}");
+                    assert_eq!(
+                        finished["params"]["stale"],
+                        change == "silent",
+                        "{location} explicit={explicit}: {finished}"
+                    );
+                }
+                let diagnostics = server.request(
+                    4,
+                    "textDocument/diagnostic",
+                    json!({"textDocument":{"uri":main}}),
+                );
+                let items = diagnostics["items"].as_array().unwrap();
+                if change == "none" {
+                    assert!(
+                        items.iter().any(|item| item["code"] == "missing-image"),
+                        "{location} explicit={explicit}: {diagnostics}"
+                    );
+                } else {
+                    assert!(
+                        !items.iter().any(|item| item["source"] == "latex-build"),
+                        "{location} explicit={explicit}: {diagnostics}"
+                    );
+                }
+                server.request(5, "shutdown", Value::Null);
+                server.notify("exit", Value::Null);
+                server.wait_exit(0);
+            }
+        }
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn first_static_graphic_alias_retargets_invalidate_builds_without_prior_recorder_history() {
+    use std::os::unix::fs::symlink;
+    for directory_alias in [false, true] {
+        for explicit in [false, true] {
+            let name = if directory_alias { "plot" } else { "alias" };
+            let argument = format!("{name}{}", if explicit { ".png" } else { "" });
+            let input = if directory_alias {
+                "alias/plot.png"
+            } else {
+                "alias.png"
+            };
+            let script = format!(
+                r#"printf '(./main.tex\n)\n' > "$1/main.log"
+printf 'PWD %s\nINPUT %s/main.tex\nINPUT %s/{input}\n' "$PWD" "$PWD" "$PWD" > "$1/main.fls"
+touch "$1/ready"
+while [ ! -f "$1/release" ]; do sleep 0.02; done
+printf '%%PDF-1.4\n' > "$1/main.pdf"
+"#
+            );
+            let (mut server, directory, main) = fake_build_server(&script, false);
+            let root = directory.path();
+            for name in ["old", "new"] {
+                std::fs::create_dir(root.join(name)).unwrap();
+                std::fs::write(root.join(name).join("plot.png"), b"PNG existence fixture").unwrap();
+            }
+            let (alias, old, new) = if directory_alias {
+                (root.join("alias"), root.join("old"), root.join("new"))
+            } else {
+                (
+                    root.join("alias.png"),
+                    root.join("old/plot.png"),
+                    root.join("new/plot.png"),
+                )
+            };
+            symlink(&old, &alias).unwrap();
+            let declaration = if directory_alias {
+                "\\graphicspath{{alias/}}\n"
+            } else {
+                ""
+            };
+            let source = format!("{declaration}\\includegraphics{{{argument}}}\n");
+            std::fs::write(main.to_file_path().unwrap(), &source).unwrap();
+            server.notify(
+                "textDocument/didChange",
+                json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+            );
+            server.request(
+                2,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            let output = root.join("build/latex-lsp");
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while !output.join("ready").exists() {
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            std::fs::remove_file(&alias).unwrap();
+            symlink(&new, &alias).unwrap();
+            std::fs::write(output.join("release"), "").unwrap();
+            let finished = server.until(|message| message["method"] == "latex/buildFinished");
+            assert_eq!(finished["params"]["status"], "success", "{finished}");
+            assert_eq!(
+                finished["params"]["stale"], true,
+                "directory_alias={directory_alias} explicit={explicit}: {finished}"
+            );
+            server.request(3, "shutdown", Value::Null);
+            server.notify("exit", Value::Null);
+            server.wait_exit(0);
+        }
+    }
+}
