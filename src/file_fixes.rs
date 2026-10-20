@@ -26,6 +26,7 @@ pub(crate) fn fixes(
         "missing-input" => "input",
         "missing-listing" => "lstinputlisting",
         "missing-verbatim-input" => "verbatiminput",
+        "missing-fancyverb-input" => "VerbatimInput",
         "missing-include" => "include",
         "missing-bibliography-style" => "bibliographystyle",
         "missing-bibliography-database" => {
@@ -68,11 +69,13 @@ pub(crate) fn fixes(
     let extension = loader_extension.unwrap_or(match command_name {
         "bibliographystyle" => "bst",
         "bibliography" | "nobibliography" => "bib",
-        "lstinputlisting" | "verbatiminput" => "",
+        "lstinputlisting" | "verbatiminput" | "VerbatimInput" => "",
         _ => "tex",
     });
     let compact = syntax::file_name_ignores_spaces(command_name);
-    let reported = if command_name == "verbatiminput" {
+    let reported = if command_name == "VerbatimInput" {
+        build_log::missing_fancyverb_name(&diagnostic.message)
+    } else if command_name == "verbatiminput" {
         build_log::missing_verbatim_name(&diagnostic.message)
     } else if listing {
         build_log::missing_listing_name(&diagnostic.message)
@@ -137,7 +140,7 @@ pub(crate) fn fixes(
             }
             for span in spans {
                 let value = &doc.text.source[span.clone()];
-                let matches_report = if command_name == "verbatiminput" {
+                let matches_report = if matches!(command_name, "verbatiminput" | "VerbatimInput") {
                     value == reported
                 } else if listing {
                     crate::listings::missing_report(value) == reported
@@ -147,12 +150,12 @@ pub(crate) fn fixes(
                     syntax::file_lookup_names(command_name, value).any(|name| name == reported)
                 };
                 if doc.text.range(span.start, span.end) == diagnostic.range && matches_report {
-                    return Some((argument.into_owned(), span));
+                    return Some((argument.into_owned(), span, command));
                 }
             }
             None
         });
-    let Some((argument, span)) = argument else {
+    let Some((argument, span, command)) = argument else {
         return vec![];
     };
     let value = &doc.text.source[span];
@@ -305,7 +308,14 @@ pub(crate) fn fixes(
                 continue;
             }
         }
-        let edit = if command_name == "input"
+        let edit = if command_name == "VerbatimInput" {
+            let Some(edit) =
+                crate::fancyvrb::filename_edit(&doc.text, command, replacement.clone())
+            else {
+                continue;
+            };
+            edit
+        } else if command_name == "input"
             && syntax::input_filename_needs_braces(&doc.text.source, &argument, &replacement)
         {
             syntax::input_filename_edit(&doc.text, &argument, replacement.clone())

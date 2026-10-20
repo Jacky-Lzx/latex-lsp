@@ -29,7 +29,7 @@ fn safe_project(workspace: &Workspace, sources: &BTreeSet<Url>, name: &str) -> b
         .all(|doc| safe_syntax(&doc.text.source, &doc.syntax, name))
 }
 
-fn safe_call(source: &str, command: &syntax::Command) -> bool {
+pub(crate) fn safe_call(source: &str, command: &syntax::Command) -> bool {
     match command.name.as_str() {
         "lstinputlisting" => listings::safe_call(source, command),
         "VerbatimInput" => crate::fancyvrb::safe_call(source, command),

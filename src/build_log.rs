@@ -691,6 +691,21 @@ fn error_context<'a>(
         }
         (index, line) = context.next()?;
     }
+    // FancyVerb always expands this internal error macro, even for a direct
+    // call. Accept only the frames printed by pdfTeX and XeTeX; an additional
+    // user expansion frame must still prevent attribution to a literal path.
+    if missing_fancyverb_name(message).is_some() && line.starts_with("\\FV@Error ") {
+        match line.trim_end() {
+            "\\FV@Error ... {FancyVerb Error:" => {
+                if context.next()?.1 != "\\space \\space #1" || context.next()?.1 != "}" {
+                    return None;
+                }
+            }
+            "\\FV@Error ...ncyVerb Error:^^J\\space \\space #1^^J}" => {}
+            _ => return None,
+        }
+        (index, line) = context.next()?;
+    }
     let tail = line.trim_start().strip_prefix("l.")?;
     let digits = tail.bytes().take_while(u8::is_ascii_digit).count();
     if tail[..digits].parse::<u32>().ok()? != number {
@@ -730,6 +745,19 @@ pub(crate) fn missing_listing_name(message: &str) -> Option<&str> {
         .strip_prefix("Package Listings Error: File `")?
         .strip_suffix("' not found.")?;
     (!name.is_empty() && name.len() <= 8192).then_some(name)
+}
+
+pub(crate) fn missing_fancyverb_name(message: &str) -> Option<&str> {
+    let name = message
+        .strip_prefix("FancyVerb Error:")?
+        .trim_start()
+        .strip_prefix("No verbatim file ")?
+        .strip_suffix('.')?;
+    let name = name
+        .strip_prefix('"')
+        .and_then(|name| name.strip_suffix('"'))
+        .unwrap_or(name);
+    crate::syntax::is_literal_file_path(name).then_some(name)
 }
 
 fn missing_read_file(message: &str) -> bool {
@@ -800,7 +828,9 @@ fn missing_path_range(
     let shortened = shortened_context(prefix);
     let start = text.offset(Position::new(line, 0))?;
     let syntax = crate::syntax::Syntax::latex(text);
-    if command_name == "lstinputlisting" && !crate::listings::safe_syntax(&text.source, &syntax) {
+    if crate::syntax::code_input_command(command_name)
+        && !crate::code_inputs::safe_syntax(&text.source, &syntax, command_name)
+    {
         return None;
     }
     let mut matches = syntax.commands.iter().filter_map(|command| {
@@ -808,13 +838,17 @@ fn missing_path_range(
             return None;
         }
         let argument = crate::syntax::file_argument(&text.source, command)?;
-        if command_name == "lstinputlisting" && !crate::listings::safe_call(&text.source, command) {
+        if crate::syntax::code_input_command(command_name)
+            && !crate::code_inputs::safe_call(&text.source, command)
+        {
             return None;
         }
         let span = crate::syntax::trimmed_span(&text.source, argument.span.clone());
         let value = &text.source[span.clone()];
         let matches_report = if command_name == "lstinputlisting" {
             crate::listings::missing_report(value) == name
+        } else if command_name == "VerbatimInput" {
+            value == name
         } else {
             crate::syntax::file_lookup_names(command_name, value).any(|candidate| candidate == name)
         };
@@ -828,7 +862,8 @@ fn missing_path_range(
         }
         let consumed = &text.source[start..argument.outer_span.end];
         let matched = shortened.map_or(consumed == prefix, |suffix| {
-            suffix.ends_with(&text.source[argument.outer_span.clone()])
+            (command_name == "VerbatimInput" && !suffix.is_empty()
+                || suffix.ends_with(&text.source[argument.outer_span.clone()]))
                 && consumed.ends_with(suffix)
         });
         matched.then(|| text.range(span.start, span.end))
@@ -1221,6 +1256,10 @@ fn emit_with_context(
         .filter(|_| reported_line.checked_sub(1) == Some(line))
         .and_then(|name| missing_path_range(&text, line, context?, name, "lstinputlisting"));
     ranges.extend(listing_range);
+    let fancyverb_range = missing_fancyverb_name(&message)
+        .filter(|_| reported_line.checked_sub(1) == Some(line))
+        .and_then(|name| missing_path_range(&text, line, context?, name, "VerbatimInput"));
+    ranges.extend(fancyverb_range);
     let loader_range =
         missing_file.and_then(|name| loader_failure_range(&text, line, context?, name));
     ranges.extend(loader_range.map(|(range, _)| range));
@@ -1275,6 +1314,7 @@ fn emit_with_context(
                     .or_else(|| missing_include_key(&message).map(|_| "missing-include"))
                     .or_else(|| input_range.map(|_| "missing-input"))
                     .or_else(|| listing_range.map(|_| "missing-listing"))
+                    .or_else(|| fancyverb_range.map(|_| "missing-fancyverb-input"))
                     .or_else(|| loader_range.map(|(_, command)| if crate::syntax::loader_extension(command) == Some("sty") { "missing-package" } else { "missing-class" }))
                     .or_else(|| clash_range.map(|_| "package-option-clash"))
                     .or_else(|| graphic_range.map(|_| "missing-image"))
@@ -1296,6 +1336,11 @@ fn emit_with_context(
                     .or_else(|| counter_range.and(counter_name).map(|name| serde_json::json!({"counter":name})))
                     .or_else(|| input_range.and(missing_file).map(|name| serde_json::json!({"file":name})))
                     .or_else(|| listing_range.map(|range| {
+                        let start = text.offset(range.start).unwrap();
+                        let end = text.offset(range.end).unwrap();
+                        serde_json::json!({"file":&text.source[start..end]})
+                    }))
+                    .or_else(|| fancyverb_range.map(|range| {
                         let start = text.offset(range.start).unwrap();
                         let end = text.offset(range.end).unwrap();
                         serde_json::json!({"file":&text.source[start..end]})
@@ -1542,6 +1587,32 @@ fn wrapped_error_message(
     i: &mut usize,
     initial: &str,
 ) -> String {
+    if initial == "FancyVerb Error:"
+        && lines
+            .get(*i + 1)
+            .is_some_and(|line| line.starts_with("  No verbatim file "))
+    {
+        // The package deliberately puts its final period on a separate line.
+        // A period at a print-width boundary can instead belong to a filename.
+        // Do not consume an incomplete block or an adjacent diagnostic.
+        let mut message = initial.to_owned();
+        for (index, next) in lines.iter().enumerate().skip(*i + 1).take(64) {
+            if *next == "." && message.contains("  No verbatim file ") {
+                message.push('.');
+                *i = index;
+                return message;
+            }
+            if next.trim().is_empty()
+                || message_boundary(next)
+                || next.starts_with('\\')
+                || message.len() + next.len() > 8192
+            {
+                break;
+            }
+            message.push_str(next);
+        }
+        return initial.to_owned();
+    }
     let mut message = initial.to_owned();
     for _ in 0..64 {
         // A wrap can land on a period inside a driver or filename. It is only

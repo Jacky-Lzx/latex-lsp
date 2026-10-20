@@ -304,7 +304,7 @@ pub fn fixes(
             if examined > 64 {
                 return result;
             }
-            if matches!(diagnostic.code.as_ref(), Some(NumberOrString::String(code)) if matches!(code.as_str(), "missing-include" | "missing-input" | "missing-listing" | "missing-verbatim-input" | "missing-image" | "missing-package" | "missing-class" | "missing-bibliography-style" | "missing-bibliography-database"))
+            if matches!(diagnostic.code.as_ref(), Some(NumberOrString::String(code)) if matches!(code.as_str(), "missing-include" | "missing-input" | "missing-listing" | "missing-verbatim-input" | "missing-fancyverb-input" | "missing-image" | "missing-package" | "missing-class" | "missing-bibliography-style" | "missing-bibliography-database"))
             {
                 let fixes = if diagnostic.code
                     == Some(NumberOrString::String("missing-image".into()))
