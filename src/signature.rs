@@ -1558,6 +1558,90 @@ impl<'a> CommandSignatures<'a> {
         }
     }
 
+    fn invocation<'b>(
+        &self,
+        source: &'b str,
+        parsed: &'b syntax::Syntax,
+        index: usize,
+        operands: &BTreeSet<usize>,
+        declarations: &BTreeSet<(usize, usize)>,
+    ) -> Option<(&'b str, usize, bool)> {
+        let command = parsed.commands.get(index)?;
+        let local = &self.local;
+        // Grouped csuse names leave following spaces intact; a literal
+        // endcsname, like an ordinary control word, discards lexical blanks.
+        let named = command.argument.as_ref().filter(|argument| {
+            command.name == "csuse"
+                && !local.contains_key("csuse")
+                && syntax::is_static_key(&argument.value)
+        });
+        let literal = (command.name == "endcsname"
+            && !local.contains_key("csname")
+            && !local.contains_key("endcsname"))
+        .then(|| {
+            index.checked_sub(1).and_then(|index| {
+                (!operands.contains(&parsed.commands[index].span.start))
+                    .then(|| syntax::literal_csname(source, &parsed.commands, index))
+                    .flatten()
+            })
+        })
+        .flatten();
+        if literal
+            .as_ref()
+            .is_some_and(|span| declarations.contains(&(span.start, span.end)))
+        {
+            return None;
+        }
+        let name = named
+            .map(|argument| argument.value.as_str())
+            .or_else(|| literal.as_ref().map(|span| &source[span.clone()]))
+            .unwrap_or(command.name.as_str());
+        let end = named.map_or(command.span.end, |argument| argument.outer_span.end);
+        Some((name, end, named.is_none()))
+    }
+
+    fn invokes_builtin(&self, name: &str, builtin: &str) -> bool {
+        !self.local.contains_key(builtin)
+            && self.local.get(name).map_or(name == builtin, |signature| {
+                signature.as_ref().is_some_and(|s| s.name == builtin)
+            })
+    }
+
+    pub(crate) fn environment_calls(
+        &self,
+        source: &str,
+        parsed: &syntax::Syntax,
+    ) -> Vec<(syntax::Argument, bool)> {
+        let operands = self.argument_tokens(source, parsed);
+        let declarations = parsed
+            .definitions
+            .iter()
+            .map(|entry| (entry.span.start, entry.span.end))
+            .collect();
+        parsed
+            .commands
+            .iter()
+            .enumerate()
+            // Lexical begin/end already have semantic references. Here we add
+            // the indirect calls whose name groups are absent from that index.
+            .filter(|(_, command)| !matches!(command.name.as_str(), "begin" | "end"))
+            .filter_map(|(index, command)| {
+                // Retain potential names inside data for rename validation;
+                // they must never become editable environment references.
+                let (name, end, _) =
+                    self.invocation(source, parsed, index, &BTreeSet::new(), &declarations)?;
+                if !self.invokes_builtin(name, "begin") && !self.invokes_builtin(name, "end") {
+                    return None;
+                }
+                let (argument, _) =
+                    syntax::group(source, syntax::skip_space(source, end), b'{', b'}')?;
+                let argument = syntax::single_key_argument(source, argument);
+                syntax::is_static_key(&argument.value)
+                    .then_some((argument, operands.contains(&command.span.start)))
+            })
+            .collect()
+    }
+
     pub(crate) fn argument_tokens(&self, source: &str, parsed: &syntax::Syntax) -> BTreeSet<usize> {
         let local = &self.local;
         let mut result = BTreeSet::new();
@@ -1578,54 +1662,28 @@ impl<'a> CommandSignatures<'a> {
             if result.contains(&command.span.start) {
                 continue;
             }
-            // Grouped csuse names leave following spaces intact; a literal
-            // endcsname, like an ordinary control word, discards lexical blanks.
-            let named = command.argument.as_ref().filter(|argument| {
-                command.name == "csuse"
-                    && !local.contains_key("csuse")
-                    && syntax::is_static_key(&argument.value)
-            });
-            let literal = (command.name == "endcsname"
-                && !local.contains_key("csname")
-                && !local.contains_key("endcsname"))
-            .then(|| {
-                index.checked_sub(1).and_then(|index| {
-                    (!result.contains(&parsed.commands[index].span.start))
-                        .then(|| syntax::literal_csname(source, &parsed.commands, index))
-                        .flatten()
-                })
-            })
-            .flatten();
-            if literal
-                .as_ref()
-                .is_some_and(|span| declarations.contains(&(span.start, span.end)))
-            {
+            let Some((name, end, control_spaces)) =
+                self.invocation(source, parsed, index, &result, &declarations)
+            else {
                 continue;
-            }
-            let name = named
-                .map(|argument| argument.value.as_str())
-                .or_else(|| literal.as_ref().map(|span| &source[span.clone()]))
-                .unwrap_or(command.name.as_str());
-            let end = named.map_or(command.span.end, |argument| argument.outer_span.end);
+            };
             // A named call or a pure alias can invoke begin. Its environment
             // name follows the resolved invocation, rather than the lexical
             // command (whose first group may instead contain "begin").
-            let begin = (!local.contains_key("begin")
-                && local.get(name).map_or(name == "begin", |signature| {
-                    signature.as_ref().is_some_and(|s| s.name == "begin")
-                }))
-            .then(|| {
-                syntax::group(source, syntax::skip_space(source, end), b'{', b'}')
-                    .map(|(argument, _)| syntax::single_key_argument(source, argument))
-                    .filter(|argument| syntax::is_static_key(&argument.value))
-            })
-            .flatten();
+            let begin = self
+                .invokes_builtin(name, "begin")
+                .then(|| {
+                    syntax::group(source, syntax::skip_space(source, end), b'{', b'}')
+                        .map(|(argument, _)| syntax::single_key_argument(source, argument))
+                        .filter(|argument| syntax::is_static_key(&argument.value))
+                })
+                .flatten();
             let environment = begin
                 .as_ref()
                 .filter(|argument| local.contains_key(argument.value.as_str()));
             let name = environment.map_or(name, |argument| argument.value.as_str());
             let end = environment.map_or(end, |argument| argument.outer_span.end);
-            let control_spaces = environment.is_none() && named.is_none();
+            let control_spaces = environment.is_none() && control_spaces;
             if let Some(end) = self
                 .tex_operands
                 .get(name)

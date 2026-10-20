@@ -151,7 +151,11 @@ fn raw_target(doc: &Document, offset: usize) -> Option<Target<'_>> {
                 });
             }
         }
-        if let Some(arg) = &command.argument {
+        let environment_argument = matches!(command.name.as_str(), "begin" | "end")
+            .then(|| command.argument.clone())
+            .flatten()
+            .map(|argument| syntax::single_key_argument(&doc.text.source, argument));
+        if let Some(arg) = environment_argument.as_ref().or(command.argument.as_ref()) {
             let kind = if syntax::is_reference(&command.name) || command.name == "label" {
                 Some(TargetKind::Label)
             } else if syntax::is_citation(&command.name) || command.name == "bibitem" {
@@ -268,6 +272,16 @@ fn target<'a>(workspace: &'a Workspace, uri: &Url, offset: usize) -> Option<Targ
         .is_some_and(|target| target.kind != TargetKind::Command)
     {
         return raw;
+    }
+    if crate::environment_calls::may_contain_name(doc, offset) {
+        if let Some(span) = crate::environment_calls::Index::new(workspace).target(uri, offset) {
+            return Some(Target {
+                kind: TargetKind::Environment,
+                name: &doc.text.source[span.clone()],
+                span,
+                control_word: false,
+            });
+        }
     }
     for (target_kind, generated_kind) in [
         (TargetKind::Environment, crate::generated::Kind::Environment),
@@ -395,6 +409,9 @@ fn rename_target<'a>(
         return Err(tower_lsp::jsonrpc::Error::invalid_params(
             "Rename is ambiguous: projects sharing this definition contain multiple definitions",
         ));
+    }
+    if target.kind == TargetKind::Environment {
+        crate::environment_calls::Index::new(workspace).validate(&scope, target.name)?;
     }
     if target.kind == TargetKind::Color {
         crate::named_colors::validate(workspace, &scope)?;
@@ -1234,8 +1251,16 @@ fn all_references(
     let generated = target.kind.generated_kind().and_then(|kind| {
         crate::generated::in_scope(workspace, &workspace.symbol_scope(uri), target.name, kind)
     });
+    let environment_calls = (target.kind == TargetKind::Environment)
+        .then(|| crate::environment_calls::Index::new(workspace));
     let mut result = Vec::new();
     for (uri, doc) in &workspace.documents {
+        if let Some(calls) = &environment_calls {
+            result.extend(calls.references(uri, target.name).map(|argument| Location {
+                uri: uri.clone(),
+                range: doc.text.range(argument.span.start, argument.span.end),
+            }));
+        }
         if let Some(model) = generated {
             result.extend(
                 crate::generated::references(doc, target.name, model)
@@ -1411,10 +1436,14 @@ fn all_references(
                 }
             }
             let separate_label = syntax::separate_label_argument(&doc.text.source, command);
+            let environment_argument = (target.kind == TargetKind::Environment)
+                .then(|| command.argument.clone())
+                .flatten()
+                .map(|argument| syntax::single_key_argument(&doc.text.source, argument));
             let argument = if syntax::has_separate_label_argument(&command.name) {
                 separate_label.as_ref()
             } else {
-                command.argument.as_ref()
+                environment_argument.as_ref().or(command.argument.as_ref())
             };
             if let Some(arg) = argument {
                 if target.kind == TargetKind::Environment
