@@ -4,6 +4,9 @@ pub(crate) use crate::primitives::PRIMITIVES;
 /// Templates retain literal TeX backslashes; completion escapes them for the client.
 pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("definecolor", "definecolor{${1:name}}{${2:rgb}}{${3:0,0,0}}", "Define a named color using a color model and specification. Optional type and name prefix arguments are available. Requires xcolor."),
+    ("providecolor", "providecolor{${1:name}}{${2:rgb}}{${3:0,0,0}}", "Define a named color unless it already exists. Supports the same optional type and prefix as definecolor. Requires xcolor."),
+    ("xdefinecolor", "xdefinecolor{${1:name}}{${2:rgb}}{${3:0,0,0}}", "Define a named color using xcolor's extended declaration. Supports optional type and prefix arguments. Requires xcolor."),
+    ("colorlet", "colorlet{${1:name}}{${2:color}}", "Define a named color from another color or mixing expression. Optional type and output model arguments are available. Requires xcolor."),
     ("color", "color{${1:color}}", "Select a text color within the current group. An optional model allows a literal color specification. Requires color or xcolor."),
     ("textcolor", "textcolor{${1:color}}{${2:text}}", "Typeset text using a color. An optional model allows a literal color specification. Requires color or xcolor."),
     ("colorbox", "colorbox{${1:color}}{${2:text}}", "Place text in a box with a colored background. An optional model allows a literal color specification. Requires color or xcolor."),

@@ -95,6 +95,8 @@ pub struct Syntax {
     pub saved_text_references: Vec<Entry>,
     pub moving_text: Vec<Entry>,
     pub moving_text_references: Vec<Entry>,
+    pub colors: Vec<Entry>,
+    pub color_references: Vec<Entry>,
     /// Command identities used while expanding otherwise opaque name arguments.
     pub name_command_references: Vec<Entry>,
     /// Static counter operands expanded inside otherwise opaque name arguments.
@@ -2103,6 +2105,7 @@ impl Syntax {
         }
         result.definitions.sort_by_key(|entry| entry.span.start);
         crate::saved_text::index(source, &mut result);
+        crate::named_colors::index(source, &mut result);
         result
     }
 

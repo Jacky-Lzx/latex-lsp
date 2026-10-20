@@ -21,6 +21,7 @@ enum TargetKind {
     Toggle,
     SavedText,
     MovingText,
+    Color,
 }
 
 impl TargetKind {
@@ -81,6 +82,20 @@ fn raw_target(doc: &Document, offset: usize) -> Option<Target<'_>> {
     }
     if doc.syntax.is_ignored(offset) {
         return None;
+    }
+    if let Some(entry) = doc
+        .syntax
+        .colors
+        .iter()
+        .chain(&doc.syntax.color_references)
+        .find(|entry| entry.span.start <= offset && offset <= entry.span.end)
+    {
+        return Some(Target {
+            kind: TargetKind::Color,
+            name: &entry.name,
+            span: entry.span.clone(),
+            control_word: false,
+        });
     }
     if let Some(entry) = doc
         .syntax
@@ -302,6 +317,7 @@ fn entries(doc: &Document, kind: TargetKind) -> &[Entry] {
         TargetKind::Toggle => &doc.syntax.toggles,
         TargetKind::SavedText => &doc.syntax.saved_text,
         TargetKind::MovingText => &doc.syntax.moving_text,
+        TargetKind::Color => &doc.syntax.colors,
     }
 }
 
@@ -323,6 +339,12 @@ fn rename_target<'a>(
     let crate::workspace::SymbolProjects { mut scope, regions } = workspace.symbol_projects(uri);
     if let Some(kind) = target.kind.saved_kind() {
         crate::saved_text::validate(workspace, &scope, kind)?;
+    }
+    if target.kind == TargetKind::Color {
+        if crate::named_colors::builtin(target.name) {
+            return Ok(None);
+        }
+        crate::named_colors::validate(workspace, &scope)?;
     }
     let declarations = |scope: &BTreeSet<Url>| -> Vec<Url> {
         workspace
@@ -374,6 +396,9 @@ fn rename_target<'a>(
             "Rename is ambiguous: projects sharing this definition contain multiple definitions",
         ));
     }
+    if target.kind == TargetKind::Color {
+        crate::named_colors::validate(workspace, &scope)?;
+    }
     if let Some(kind) = target.kind.saved_kind() {
         crate::saved_text::validate(workspace, &scope, kind)?;
     }
@@ -414,6 +439,8 @@ pub fn rename(
         && !(target.kind == TargetKind::Citation && new_name == "*")
         && if target.kind.saved_kind().is_some() {
             crate::saved_text::literal_name(new_name)
+        } else if target.kind == TargetKind::Color {
+            crate::named_colors::literal_name(new_name)
         } else {
             syntax::is_static_key(new_name)
         };
@@ -421,6 +448,8 @@ pub fn rename(
         return Err(tower_lsp::jsonrpc::Error::invalid_params(
             if target.kind.saved_kind().is_some() {
                 "Invalid saved-text name: use a nonempty literal name without TeX expansion or comments"
+            } else if target.kind == TargetKind::Color {
+                "Invalid color name: start with an ASCII letter, digit or underscore; use only letters, digits, underscore, hyphen and dot"
             } else {
                 "Invalid name: use a single TeX command name or a reference key without separators"
             },
@@ -443,8 +472,15 @@ pub fn rename(
                     })
                 || target.kind == TargetKind::Command
                     && crate::generated::generated_command_exists(doc, new_name)
+                || target.kind == TargetKind::Color
+                    && doc
+                        .syntax
+                        .color_references
+                        .iter()
+                        .any(|entry| entry.name == new_name)
         });
     let builtin = match target.kind {
+        TargetKind::Color => crate::named_colors::builtin(new_name),
         TargetKind::Command | TargetKind::Environment => {
             COMMANDS.iter().any(|(name, _, _)| *name == new_name)
                 || syntax::declares_register(new_name)
@@ -784,6 +820,9 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
         return vec![];
     }
     if let Some(items) = crate::counters::completion(workspace, uri, offset, &scope) {
+        return items;
+    }
+    if let Some(items) = crate::named_colors::completion(workspace, uri, offset, &scope) {
         return items;
     }
     if let Some(items) = crate::conditionals::completion(workspace, uri, offset, &scope) {
@@ -1229,6 +1268,18 @@ fn all_references(
                     }),
             );
         }
+        if target.kind == TargetKind::Color {
+            result.extend(
+                doc.syntax
+                    .color_references
+                    .iter()
+                    .filter(|entry| entry.name == target.name)
+                    .map(|entry| Location {
+                        uri: uri.clone(),
+                        range: doc.text.range(entry.span.start, entry.span.end),
+                    }),
+            );
+        }
         if include_declaration {
             result.extend(
                 entries(doc, target.kind)
@@ -1345,7 +1396,7 @@ fn all_references(
                         || syntax::has_separate_label_argument(&command.name)
                 }
                 TargetKind::Citation => syntax::is_citation(&command.name),
-                TargetKind::Command | TargetKind::Anchor => false,
+                TargetKind::Command | TargetKind::Anchor | TargetKind::Color => false,
                 TargetKind::Counter | TargetKind::Conditional | TargetKind::Toggle => false,
                 TargetKind::SavedText | TargetKind::MovingText => false,
                 TargetKind::Environment => matches!(command.name.as_str(), "begin" | "end"),
@@ -1528,6 +1579,7 @@ pub fn symbols(doc: &Document) -> Vec<DocumentSymbol> {
         (&doc.syntax.toggles, SymbolKind::BOOLEAN),
         (&doc.syntax.saved_text, SymbolKind::CONSTANT),
         (&doc.syntax.moving_text, SymbolKind::CONSTANT),
+        (&doc.syntax.colors, SymbolKind::CONSTANT),
     ] {
         result.extend(entries.iter().map(|entry| DocumentSymbol {
             name: entry.name.clone(),

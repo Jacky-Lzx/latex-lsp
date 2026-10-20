@@ -20,6 +20,7 @@ mod generated;
 pub mod graphics;
 mod image_fixes;
 mod listings;
+mod named_colors;
 mod named_commands;
 pub mod navigation;
 mod output;

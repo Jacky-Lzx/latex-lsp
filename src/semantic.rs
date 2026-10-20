@@ -130,6 +130,7 @@ fn candidates(doc: &Document) -> Vec<Token> {
         (&doc.syntax.toggles, VARIABLE),
         (&doc.syntax.labels, KEY),
         (&doc.syntax.citations, KEY),
+        (&doc.syntax.colors, VARIABLE),
     ] {
         for entry in entries {
             push(&mut tokens, entry.span.clone(), kind, true);
@@ -137,6 +138,9 @@ fn candidates(doc: &Document) -> Vec<Token> {
     }
     for entry in &doc.syntax.citation_references {
         push(&mut tokens, entry.span.clone(), KEY, false);
+    }
+    for entry in &doc.syntax.color_references {
+        push(&mut tokens, entry.span.clone(), VARIABLE, false);
     }
     let comments: BTreeSet<_> = doc
         .syntax

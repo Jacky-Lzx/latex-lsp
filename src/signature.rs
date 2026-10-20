@@ -279,13 +279,22 @@ fn builtin(name: &str) -> Option<Signature> {
         }
         "href" => (&[("url", false), ("text", false)], false),
         "url" => (&[("url", false)], false),
-        "definecolor" => (
+        "definecolor" | "providecolor" | "xdefinecolor" => (
             &[
                 ("type", true),
                 ("name", false),
                 ("prefix", true),
                 ("model", false),
                 ("specification", false),
+            ],
+            false,
+        ),
+        "colorlet" => (
+            &[
+                ("type", true),
+                ("name", false),
+                ("model", true),
+                ("color", false),
             ],
             false,
         ),
@@ -630,7 +639,16 @@ fn builtin(name: &str) -> Option<Signature> {
                 Kind::CommandToken
             } else if name == "verbatiminput"
                 || syntax::is_range_reference(name)
-                || index == 1 && matches!(name, "definecolor" | "textcolor" | "colorbox")
+                || index == 1
+                    && matches!(
+                        name,
+                        "definecolor"
+                            | "providecolor"
+                            | "xdefinecolor"
+                            | "colorlet"
+                            | "textcolor"
+                            | "colorbox"
+                    )
                 || name == "fcolorbox" && matches!(index, 1 | 3)
             {
                 // Keep range endpoints aligned with reference navigation and
@@ -668,6 +686,9 @@ fn builtin(name: &str) -> Option<Signature> {
                 name,
                 "hyperref"
                     | "definecolor"
+                    | "providecolor"
+                    | "xdefinecolor"
+                    | "colorlet"
                     | "color"
                     | "textcolor"
                     | "colorbox"
