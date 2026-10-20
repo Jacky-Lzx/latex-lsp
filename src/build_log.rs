@@ -2036,25 +2036,76 @@ pub fn parse_bibliography_log(
     let mut result = parse_bibliography_in(root, &paths, log);
     if !crate::output::truncated(log) {
         if let Ok(uri) = Url::from_file_path(root) {
-            locate_missing_bibliography_styles(&BTreeSet::from([uri]), &mut result);
+            let sources = BTreeSet::from([uri]);
+            locate_missing_bibliography_styles(&sources, &mut result);
+            locate_missing_bibliography_databases(&sources, &mut result);
         }
     }
     result
 }
 
+#[derive(Clone, Copy)]
+enum MissingBibliographyKind {
+    Style,
+    Database,
+}
+
+impl MissingBibliographyKind {
+    fn code(self) -> &'static str {
+        match self {
+            Self::Style => "missing-bibliography-style",
+            Self::Database => "missing-bibliography-database",
+        }
+    }
+
+    fn commands(self) -> &'static [&'static str] {
+        match self {
+            Self::Style => &["bibliographystyle"],
+            Self::Database => &["bibliography", "nobibliography"],
+        }
+    }
+
+    fn name(self, message: &str) -> Option<&str> {
+        let (prefix, suffix) = match self {
+            Self::Style => ("BibTeX: I couldn't open style file ", ".bst"),
+            Self::Database => ("BibTeX: I couldn't open database file ", ".bib"),
+        };
+        let name = message.strip_prefix(prefix)?;
+        let stem = name.strip_suffix(suffix)?;
+        (!stem.is_empty()
+            && crate::syntax::is_literal_file_path(name)
+            && !name.chars().any(char::is_whitespace))
+        .then_some(name)
+    }
+}
+
 pub(crate) fn missing_bibliography_style_name(message: &str) -> Option<&str> {
-    let name = message.strip_prefix("BibTeX: I couldn't open style file ")?;
-    let stem = name.strip_suffix(".bst")?;
-    (!stem.is_empty()
-        && crate::syntax::is_literal_file_path(name)
-        && !name.chars().any(char::is_whitespace))
-    .then_some(name)
+    MissingBibliographyKind::Style.name(message)
+}
+
+pub(crate) fn missing_bibliography_database_name(message: &str) -> Option<&str> {
+    MissingBibliographyKind::Database.name(message)
+}
+
+pub(crate) fn locate_missing_bibliography_styles(
+    sources: &BTreeSet<Url>,
+    diagnostics: &mut BTreeMap<Url, Vec<Diagnostic>>,
+) {
+    locate_missing_bibliography_files(MissingBibliographyKind::Style, sources, diagnostics);
+}
+
+pub(crate) fn locate_missing_bibliography_databases(
+    sources: &BTreeSet<Url>,
+    diagnostics: &mut BTreeMap<Url, Vec<Diagnostic>>,
+) {
+    locate_missing_bibliography_files(MissingBibliographyKind::Database, sources, diagnostics);
 }
 
 /// Auxiliary line numbers identify generated data, not the originating TeX
 /// declaration. Only a unique static declaration in confirmed sources can
 /// provide a source range; unread namesakes must not participate.
-pub(crate) fn locate_missing_bibliography_styles(
+fn locate_missing_bibliography_files(
+    kind: MissingBibliographyKind,
     sources: &BTreeSet<Url>,
     diagnostics: &mut BTreeMap<Url, Vec<Diagnostic>>,
 ) {
@@ -2064,15 +2115,15 @@ pub(crate) fn locate_missing_bibliography_styles(
         .values()
         .flatten()
         .filter(|item| {
-            item.code == Some(NumberOrString::String("missing-bibliography-style".into()))
+            item.code == Some(NumberOrString::String(kind.code().into()))
                 && item.severity == Some(DiagnosticSeverity::ERROR)
         })
-        .filter_map(|item| missing_bibliography_style_name(&item.message).map(str::to_owned))
+        .filter_map(|item| kind.name(&item.message).map(str::to_owned))
         .collect();
     if requested.is_empty() || requested.len() > 64 {
         return;
     }
-    let mut occurrences: BTreeMap<String, Vec<(Url, Range)>> = BTreeMap::new();
+    let mut occurrences: BTreeMap<String, Vec<(Url, Range, String)>> = BTreeMap::new();
     let mut total = 0usize;
     let mut count = 0usize;
     for uri in sources {
@@ -2111,28 +2162,57 @@ pub(crate) fn locate_missing_bibliography_styles(
         if syntax
             .definitions
             .iter()
-            .any(|entry| entry.name == "bibliographystyle")
+            .any(|entry| kind.commands().contains(&entry.name.as_str()))
         {
             return;
         }
         for command in syntax
             .commands
             .iter()
-            .filter(|command| command.name == "bibliographystyle")
+            .filter(|command| kind.commands().contains(&command.name.as_str()))
         {
-            // An expanded or spliced name might be the actual failed style.
+            // An expanded or spliced name might be the actual failed file.
             // Do not choose a static namesake by guessing execution order.
-            let Some(argument) = crate::syntax::file_argument(&text.source, command) else {
-                return;
+            let spans = match kind {
+                MissingBibliographyKind::Style => {
+                    let Some(argument) = crate::syntax::file_argument(&text.source, command) else {
+                        return;
+                    };
+                    vec![argument.span.clone()]
+                }
+                MissingBibliographyKind::Database => {
+                    let Some(spans) =
+                        crate::syntax::complete_file_list_spans(&text.source, command)
+                    else {
+                        return;
+                    };
+                    spans
+                }
             };
-            let name = format!("{}.bst", argument.value);
-            if requested.contains(&name) {
-                let entries = occurrences.entry(name).or_default();
-                if entries.len() < 2 {
-                    entries.push((
-                        uri.clone(),
-                        text.range(argument.span.start, argument.span.end),
-                    ));
+            for span in spans {
+                let value = &text.source[span.clone()];
+                let name = match kind {
+                    // BibTeX prints an extra suffix for explicit style suffixes,
+                    // whereas database names are reported with just one .bib.
+                    MissingBibliographyKind::Style => format!("{value}.bst"),
+                    MissingBibliographyKind::Database => {
+                        let Some(name) =
+                            crate::syntax::file_lookup_names(&command.name, value).next()
+                        else {
+                            return;
+                        };
+                        name.into_owned()
+                    }
+                };
+                if requested.contains(&name) {
+                    let entries = occurrences.entry(name).or_default();
+                    if entries.len() < 2 {
+                        entries.push((
+                            uri.clone(),
+                            text.range(span.start, span.end),
+                            command.name.clone(),
+                        ));
+                    }
                 }
             }
         }
@@ -2140,12 +2220,12 @@ pub(crate) fn locate_missing_bibliography_styles(
     let mut relocated = Vec::new();
     for entries in diagnostics.values_mut() {
         entries.retain(|item| {
-            if item.code != Some(NumberOrString::String("missing-bibliography-style".into()))
+            if item.code != Some(NumberOrString::String(kind.code().into()))
                 || item.severity != Some(DiagnosticSeverity::ERROR)
             {
                 return true;
             }
-            let Some(name) = missing_bibliography_style_name(&item.message) else {
+            let Some(name) = kind.name(&item.message) else {
                 return true;
             };
             if item
@@ -2161,10 +2241,15 @@ pub(crate) fn locate_missing_bibliography_styles(
             else {
                 return true;
             };
-            let (uri, range) = &candidates[0];
+            let (uri, range, command) = &candidates[0];
             let mut item = item.clone();
             item.range = *range;
-            item.data = Some(serde_json::json!({"file":name}));
+            item.data = Some(match kind {
+                MissingBibliographyKind::Style => serde_json::json!({"file":name}),
+                MissingBibliographyKind::Database => {
+                    serde_json::json!({"file":name,"bibliographyCommand":command})
+                }
+            });
             relocated.push((uri.clone(), item));
             false
         });
@@ -2216,11 +2301,18 @@ pub(crate) fn parse_bibliography_in(
                         message
                     };
                     let message = format!("BibTeX: {}", message.trim());
-                    let missing_style = (Path::new(name.trim().trim_matches('"'))
+                    let missing_file = (Path::new(name.trim().trim_matches('"'))
                         .extension()
                         .and_then(|extension| extension.to_str())
                         == Some("aux"))
-                    .then(|| missing_bibliography_style_name(&message))
+                    .then(|| {
+                        [
+                            MissingBibliographyKind::Style,
+                            MissingBibliographyKind::Database,
+                        ]
+                        .into_iter()
+                        .find_map(|kind| kind.name(&message).map(|name| (kind, name)))
+                    })
                     .flatten();
                     emit(
                         &mut result,
@@ -2229,15 +2321,14 @@ pub(crate) fn parse_bibliography_in(
                         message.clone(),
                         DiagnosticSeverity::ERROR,
                     );
-                    if let (Some(file), Ok(uri)) = (missing_style, Url::from_file_path(root)) {
+                    if let (Some((kind, file)), Ok(uri)) = (missing_file, Url::from_file_path(root))
+                    {
                         if let Some(entries) = result.get_mut(&uri) {
                             for entry in entries.iter_mut().filter(|entry| {
                                 entry.message == message
                                     && entry.severity == Some(DiagnosticSeverity::ERROR)
                             }) {
-                                entry.code = Some(NumberOrString::String(
-                                    "missing-bibliography-style".into(),
-                                ));
+                                entry.code = Some(NumberOrString::String(kind.code().into()));
                                 entry.data =
                                     Some(serde_json::json!({"file":file,"unresolvedSource":true}));
                             }
@@ -5319,5 +5410,127 @@ mod bibliography_style_locations {
             diagnostics[&main_uri][0].data.as_ref().unwrap()["unresolvedSource"],
             true
         );
+    }
+}
+
+#[cfg(test)]
+mod bibliography_database_locations {
+    use super::*;
+
+    fn missing(root: &Path) -> BTreeMap<Url, Vec<Diagnostic>> {
+        parse_bibliography(
+            root,
+            "I couldn't open database file reffs.bib\n---line 3 of file main.aux\n",
+        )
+    }
+
+    #[test]
+    fn databases_use_confirmed_sources_including_local_packages_and_reject_ambiguity() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let main = root.join("main.tex");
+        std::fs::write(&main, r"\usepackage{settings}").unwrap();
+        let source = "\\bibliography{first,% before\r\n re ffs.bib% after\r\n,second}";
+        let settings = root.join("settings.sty");
+        let unread = root.join("unread.tex");
+        std::fs::write(&settings, source).unwrap();
+        std::fs::write(&unread, source).unwrap();
+        let main_uri = Url::from_file_path(&main).unwrap();
+        let settings_uri = Url::from_file_path(&settings).unwrap();
+        let unread_uri = Url::from_file_path(&unread).unwrap();
+        let mut sources = BTreeSet::from([main_uri.clone(), settings_uri.clone()]);
+        let mut diagnostics = missing(&main);
+        locate_missing_bibliography_databases(&sources, &mut diagnostics);
+        assert!(!diagnostics.contains_key(&main_uri));
+        let item = &diagnostics[&settings_uri][0];
+        let start = source.find("re ffs").unwrap();
+        assert_eq!(
+            item.range,
+            Text::new(source.into()).range(start, start + "re ffs.bib".len())
+        );
+        assert_eq!(
+            item.data,
+            Some(serde_json::json!({"file":"reffs.bib","bibliographyCommand":"bibliography"}))
+        );
+        sources.insert(unread_uri);
+        for source in [
+            source,
+            r"\nobibliography{\chosen}",
+            r"\renewcommand{\bibliography}[1]{}",
+        ] {
+            std::fs::write(&unread, source).unwrap();
+            let mut diagnostics = missing(&main);
+            locate_missing_bibliography_databases(&sources, &mut diagnostics);
+            assert_eq!(
+                diagnostics[&main_uri][0].data.as_ref().unwrap()["unresolvedSource"],
+                true
+            );
+        }
+    }
+
+    #[test]
+    fn incomplete_database_sources_keep_unresolved_errors() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let main = root.join("main.tex");
+        let settings = root.join("settings.tex");
+        let other = root.join("other.tex");
+        std::fs::write(&main, "Main.\n").unwrap();
+        std::fs::write(&settings, r"\bibliography{reffs}").unwrap();
+        let main_uri = Url::from_file_path(&main).unwrap();
+        let sources = [&main, &settings, &other]
+            .into_iter()
+            .map(|path| Url::from_file_path(path).unwrap())
+            .collect();
+        let assert_unresolved = |diagnostics: &BTreeMap<Url, Vec<Diagnostic>>| {
+            assert_eq!(
+                diagnostics[&main_uri][0].data.as_ref().unwrap()["unresolvedSource"],
+                true
+            )
+        };
+        let mut diagnostics = missing(&main);
+        locate_missing_bibliography_databases(&sources, &mut diagnostics);
+        assert_unresolved(&diagnostics);
+        std::fs::write(&other, "%".repeat(2 * 1024 * 1024 + 1)).unwrap();
+        let mut diagnostics = missing(&main);
+        locate_missing_bibliography_databases(&sources, &mut diagnostics);
+        assert_unresolved(&diagnostics);
+        std::fs::write(&main, r"\bibliography{reffs}").unwrap();
+        let log = format!(
+            "I couldn't open database file reffs.bib\n---line 3 of file main.aux\n{}\n",
+            crate::output::TRUNCATED
+        );
+        assert_unresolved(&parse_bibliography(&main, &log));
+    }
+
+    #[test]
+    fn style_and_database_uncertainty_is_independent() {
+        let directory = tempfile::tempdir().unwrap();
+        let main = directory.path().join("main.tex");
+        let log="I couldn't open database file reffs.bib\n---line 3 of file main.aux\nI couldn't open style file styel.bst\n---line 2 of file main.aux\n";
+        for (source, precise, unresolved) in [
+            (
+                r"\bibliographystyle{styel}\bibliography{\chosen}",
+                "missing-bibliography-style",
+                "missing-bibliography-database",
+            ),
+            (
+                r"\bibliographystyle{\chosen}\bibliography{reffs}",
+                "missing-bibliography-database",
+                "missing-bibliography-style",
+            ),
+        ] {
+            std::fs::write(&main, source).unwrap();
+            let diagnostics = parse_bibliography(&main, log);
+            let find = |code: &str| {
+                diagnostics
+                    .values()
+                    .flatten()
+                    .find(|item| item.code == Some(NumberOrString::String(code.into())))
+                    .unwrap()
+            };
+            assert!(!unresolved_location(find(precise)));
+            assert!(unresolved_location(find(unresolved)));
+        }
     }
 }

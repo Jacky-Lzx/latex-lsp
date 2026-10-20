@@ -595,6 +595,15 @@ impl BuildManager {
                 .cloned()
                 .collect();
             if !stale {
+                // System package implementations are not user declarations.
+                // Use the confirmed project inputs, including local .sty/.cls
+                // and indexed external sources, for database source lookup.
+                if !outcome.diagnostics_truncated {
+                    build_log::locate_missing_bibliography_databases(
+                        &diagnostic_sources,
+                        &mut outcome.diagnostics,
+                    );
+                }
                 crate::anchors::resolve_diagnostics(
                     &current,
                     &diagnostic_sources,

@@ -26,6 +26,18 @@ pub(crate) fn fixes(
         "missing-input" => "input",
         "missing-include" => "include",
         "missing-bibliography-style" => "bibliographystyle",
+        "missing-bibliography-database" => {
+            let Some(command) = diagnostic
+                .data
+                .as_ref()
+                .and_then(|data| data.get("bibliographyCommand"))
+                .and_then(|value| value.as_str())
+                .filter(|command| matches!(*command, "bibliography" | "nobibliography"))
+            else {
+                return vec![];
+            };
+            command
+        }
         "missing-package" | "missing-class" => {
             let Some(command) = diagnostic
                 .data
@@ -48,33 +60,34 @@ pub(crate) fn fixes(
         _ => return vec![],
     };
     let loader_extension = syntax::loader_extension(command_name);
-    let extension = loader_extension.unwrap_or(if command_name == "bibliographystyle" {
-        "bst"
-    } else {
-        "tex"
+    let database = matches!(command_name, "bibliography" | "nobibliography");
+    let extension = loader_extension.unwrap_or(match command_name {
+        "bibliographystyle" => "bst",
+        "bibliography" | "nobibliography" => "bib",
+        _ => "tex",
     });
     let compact = syntax::file_name_ignores_spaces(command_name);
     let reported = if command_name == "bibliographystyle" {
-        build_log::missing_bibliography_style_name(&diagnostic.message).filter(|name| {
-            diagnostic
-                .data
-                .as_ref()
-                .and_then(|data| data.get("file"))
-                .and_then(|name| name.as_str())
-                == Some(*name)
-        })
+        build_log::missing_bibliography_style_name(&diagnostic.message)
+    } else if database {
+        build_log::missing_bibliography_database_name(&diagnostic.message)
     } else if command_name != "include" {
-        build_log::missing_file_name(&diagnostic.message).filter(|name| {
-            diagnostic
-                .data
-                .as_ref()
-                .and_then(|data| data.get("file"))
-                .and_then(|name| name.as_str())
-                == Some(*name)
-        })
+        build_log::missing_file_name(&diagnostic.message)
     } else {
         build_log::missing_include_key(&diagnostic.message)
     };
+    let reported = reported.filter(|name| {
+        if command_name == "include" {
+            return true;
+        }
+
+        diagnostic
+            .data
+            .as_ref()
+            .and_then(|data| data.get("file"))
+            .and_then(|name| name.as_str())
+            == Some(*name)
+    });
     let Some(reported) = reported else {
         return vec![];
     };
@@ -196,7 +209,9 @@ pub(crate) fn fixes(
         };
         if !syntax::is_literal_file_path(&name)
             || name.starts_with('.') && !original.starts_with('.')
-            || command_name == "bibliographystyle" && name.chars().any(char::is_whitespace)
+            || (command_name == "bibliographystyle" || database)
+                && name.chars().any(char::is_whitespace)
+            || database && name.contains(',')
         {
             continue;
         }
@@ -219,7 +234,7 @@ pub(crate) fn fixes(
         }
         let replacement = format!(
             "{prefix}{}",
-            if loader_extension.is_none() && value.ends_with(&format!(".{extension}")) {
+            if loader_extension.is_none() && lookup.ends_with(&format!(".{extension}")) {
                 &name
             } else {
                 stem
@@ -283,6 +298,8 @@ pub(crate) fn fixes(
                     "class"
                 } else if command_name == "bibliographystyle" {
                     "bibliography style"
+                } else if database {
+                    "bibliography database"
                 } else {
                     "included"
                 }

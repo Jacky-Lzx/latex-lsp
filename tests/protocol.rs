@@ -9864,3 +9864,157 @@ fn color_picker_edits_track_incremental_changes_and_validate_context_over_stdio(
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+#[cfg(unix)]
+fn missing_bibliography_databases_use_confirmed_project_sources_and_versioned_corrections() {
+    use latex_lsp::text::Text;
+    for (name, uncertain, truncated) in [
+        ("settings.tex", false, false),
+        ("settings.sty", false, false),
+        ("settings.cls", false, false),
+        ("../shared/settings.tex", false, false),
+        ("settings.tex", true, false),
+        ("settings.tex", false, true),
+    ] {
+        for pull in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let project = directory.path().join("project");
+            std::fs::create_dir(&project).unwrap();
+            std::fs::create_dir(directory.path().join("shared")).unwrap();
+            let main_path = project.join("main.tex");
+            let settings_path = project.join(name);
+            let system_path = directory.path().join("system.sty");
+            let main = Url::from_file_path(&main_path).unwrap();
+            let source = "\\bibliography{first,% 😀 before,\r\n re ffs.bib% after,\r\n,second}\r\n";
+            std::fs::write(&settings_path, source).unwrap();
+            let settings = Url::from_file_path(settings_path.canonicalize().unwrap()).unwrap();
+            std::fs::write(project.join("unread.tex"), source).unwrap();
+            std::fs::write(project.join("refs.bib"), "@book{one,title={Title}}\n").unwrap();
+            // A system package implementation is not a user declaration;
+            // local .sty/.cls sources and indexed external inputs still are.
+            std::fs::write(
+                &system_path,
+                r"\renewcommand{\bibliography}[1]{}\bibliography{#1}",
+            )
+            .unwrap();
+            let main_source = format!(
+                "\\documentclass{{article}}\n\\input{{{name}}}\n{}",
+                if uncertain {
+                    r"\bibliography{\chosen}"
+                } else {
+                    ""
+                }
+            );
+            std::fs::write(&main_path, &main_source).unwrap();
+            let script = format!(
+                r#"printf '(./main.tex\n(./{name})\n({system})\n)\n{trailer}' > "$1/main.log"
+printf 'PWD {project}\nINPUT {main}\nINPUT {settings}\nINPUT {system}\n' > "$1/main.fls"
+printf "I couldn't open database file reffs.bib\n---line 3 of file main.aux\n" > "$1/main.blg"
+exit 1
+"#,
+                system = system_path.display(),
+                project = project.display(),
+                main = main_path.display(),
+                settings = settings_path.display(),
+                trailer = if truncated {
+                    "[latex-lsp: middle of compiler output omitted]"
+                } else {
+                    ""
+                }
+            );
+            let compiler = project.join("compiler.sh");
+            std::fs::write(&compiler, script).unwrap();
+            let mut server = Server::start();
+            let mut capabilities = json!({"workspace":{"workspaceEdit":{"documentChanges":true}},"textDocument":{"codeAction":{"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix"]}}}}});
+            if pull {
+                capabilities["textDocument"]["diagnostic"] = json!({});
+            }
+            server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(&project).unwrap(),"capabilities":capabilities,"initializationOptions":{"build":{"executable":"/bin/sh","arguments":[compiler,"%o","%f"]}}}));
+            server.notify("initialized", json!({}));
+            for (uri, text) in [(&main, main_source.as_str()), (&settings, source)] {
+                server.notify("textDocument/didOpen",json!({"textDocument":{"uri":uri,"languageId":"latex","version":7,"text":text}}));
+            }
+            server.request(
+                2,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            let finished = server.until(|message| message["method"] == "latex/buildFinished");
+            assert_eq!(finished["params"]["status"], "error", "{finished}");
+            assert_eq!(finished["params"]["diagnosticsTruncated"], truncated);
+            let destination = if uncertain || truncated {
+                &main
+            } else {
+                &settings
+            };
+            let diagnostics = if pull {
+                server.request(
+                    3,
+                    "textDocument/diagnostic",
+                    json!({"textDocument":{"uri":destination}}),
+                )["items"]
+                    .clone()
+            } else {
+                server.until(|message| {
+                    message["method"] == "textDocument/publishDiagnostics"
+                        && message["params"]["uri"] == destination.as_str()
+                        && message["params"]["diagnostics"]
+                            .as_array()
+                            .is_some_and(|items| {
+                                items
+                                    .iter()
+                                    .any(|item| item["code"] == "missing-bibliography-database")
+                            })
+                })["params"]["diagnostics"]
+                    .clone()
+            };
+            let diagnostic = diagnostics
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|item| item["code"] == "missing-bibliography-database")
+                .unwrap();
+            if uncertain || truncated {
+                assert_eq!(diagnostic["data"]["unresolvedSource"], true);
+            } else {
+                let start = source.find("re ffs.bib").unwrap();
+                assert_eq!(
+                    diagnostic["range"],
+                    json!(Text::new(source.into()).range(start, start + "re ffs.bib".len()))
+                );
+                assert_eq!(
+                    diagnostic["data"],
+                    json!({"file":"reffs.bib","bibliographyCommand":"bibliography"})
+                );
+            }
+            let params = json!({"textDocument":{"uri":destination},"range":diagnostic["range"],"context":{"diagnostics":[diagnostic],"only":["quickfix"]}});
+            let actions = server.request(4, "textDocument/codeAction", params.clone());
+            if uncertain || truncated {
+                assert_eq!(actions, json!([]));
+            } else {
+                assert_eq!(
+                    actions.as_array().unwrap().len(),
+                    1,
+                    "{name}, pull={pull}: {actions}"
+                );
+                assert_eq!(
+                    actions[0]["edit"]["documentChanges"][0]["textDocument"],
+                    json!({"uri":settings,"version":7})
+                );
+                assert_eq!(
+                    actions[0]["edit"]["documentChanges"][0]["edits"],
+                    json!([{"range":diagnostic["range"],"newText":"refs.bib"}])
+                );
+                server.notify("textDocument/didChange",json!({"textDocument":{"uri":settings,"version":8},"contentChanges":[{"text":source.replace("re ffs.bib","refs.bib")}]}));
+                assert_eq!(
+                    server.request(5, "textDocument/codeAction", params),
+                    json!([])
+                );
+            }
+            server.request(6, "shutdown", Value::Null);
+            server.notify("exit", Value::Null);
+            server.wait_exit(0);
+        }
+    }
+}
