@@ -1230,6 +1230,7 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool, rebuild: bo
             return Outcome::error(format!("Cannot replace compiler log: {error}"));
         }
     }
+    let diagnostic_project = build_log::ProjectSources::capture(root);
     let mut command = Command::new(&config.executable);
     command
         .args(arguments)
@@ -1338,7 +1339,7 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool, rebuild: bo
     let diagnostic_log = if log.is_empty() { &output } else { &log };
     outcome.diagnostics_truncated = crate::output::truncated(diagnostic_log);
     (outcome.diagnostics, outcome.diagnostic_sources) =
-        build_log::parse_with_sources(root, diagnostic_log);
+        build_log::parse_with_project_sources(root, diagnostic_log, &diagnostic_project);
     // A failed PDF driver may report its cause only on stderr. Retain the final
     // TeX log's authority: fill an unexplained failure, without reviving an old
     // backend error after a successful pass or a different final TeX error.

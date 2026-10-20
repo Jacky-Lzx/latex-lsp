@@ -1168,21 +1168,25 @@ fn required_token(source: &str, start: usize) -> Option<&str> {
     Some(value)
 }
 
-/// Control words read as bare arguments are data, rather than direct calls.
-/// Reuse signature grammars for local declarations and built-ins. Unknown or
-/// ambiguous commands cannot certify how many leading groups they consume.
-pub(crate) fn command_argument_tokens(source: &str, parsed: &syntax::Syntax) -> BTreeSet<usize> {
-    CommandSignatures::new([(source, parsed)]).argument_tokens(source, parsed)
-}
-
 /// Resolve command arities once across the documents in the analyzed project.
 pub(crate) struct CommandSignatures<'a> {
     local: BTreeMap<&'a str, Option<Signature>>,
 }
 
 impl<'a> CommandSignatures<'a> {
+    pub(crate) fn names(&self) -> impl Iterator<Item = &str> {
+        self.local.keys().copied()
+    }
+
     pub(crate) fn new(documents: impl IntoIterator<Item = (&'a str, &'a syntax::Syntax)>) -> Self {
-        let mut local = BTreeMap::new();
+        Self::with_ambiguous_names(documents, std::iter::empty())
+    }
+
+    pub(crate) fn with_ambiguous_names(
+        documents: impl IntoIterator<Item = (&'a str, &'a syntax::Syntax)>,
+        ambiguous: impl IntoIterator<Item = &'a str>,
+    ) -> Self {
+        let mut local: BTreeMap<_, _> = ambiguous.into_iter().map(|name| (name, None)).collect();
         let mut aliases = BTreeMap::new();
         for (source, parsed) in documents {
             for entry in &parsed.definitions {

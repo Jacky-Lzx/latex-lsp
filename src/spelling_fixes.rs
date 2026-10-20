@@ -20,6 +20,7 @@ enum Kind {
 fn target<'a>(
     doc: &'a crate::workspace::Document,
     diagnostic: &'a Diagnostic,
+    signatures: Option<&crate::signature::CommandSignatures<'_>>,
 ) -> Option<(Kind, &'a str)> {
     if diagnostic.code == Some(NumberOrString::String("undefined-pdf-destination".into())) {
         let name = diagnostic.data.as_ref()?.get("destination")?.as_str()?;
@@ -107,15 +108,17 @@ fn target<'a>(
         if build_log::undefined_color_name(&diagnostic.message) != Some(name) {
             return None;
         }
-        return doc
-            .syntax
-            .color_references
-            .iter()
-            .any(|entry| {
-                entry.name == name
-                    && doc.text.range(entry.span.start, entry.span.end) == diagnostic.range
-            })
-            .then_some((Kind::Color, name));
+        return crate::named_colors::error_invocations_with_signatures(
+            &doc.text.source,
+            &doc.syntax,
+            signatures?,
+        )
+        .iter()
+        .any(|(span, _)| {
+            doc.text.source[span.clone()] == *name
+                && doc.text.range(span.start, span.end) == diagnostic.range
+        })
+        .then_some((Kind::Color, name));
     }
 
     if diagnostic.code == Some(NumberOrString::String("undefined-color-model".into())) {
@@ -123,13 +126,17 @@ fn target<'a>(
         if build_log::undefined_color_model_name(&diagnostic.message) != Some(model) {
             return None;
         }
-        return crate::named_colors::model_error_invocations(&doc.text.source, &doc.syntax)
-            .iter()
-            .any(|(span, _)| {
-                doc.text.source[span.clone()] == *model
-                    && doc.text.range(span.start, span.end) == diagnostic.range
-            })
-            .then_some((Kind::ColorModel, model));
+        return crate::named_colors::model_error_invocations_with_signatures(
+            &doc.text.source,
+            &doc.syntax,
+            signatures?,
+        )
+        .iter()
+        .any(|(span, _)| {
+            doc.text.source[span.clone()] == *model
+                && doc.text.range(span.start, span.end) == diagnostic.range
+        })
+        .then_some((Kind::ColorModel, model));
     }
     if diagnostic.message != "Undefined control sequence."
         || diagnostic.code != Some(NumberOrString::String("undefined-control-sequence".into()))
@@ -320,6 +327,7 @@ pub fn fixes(
             continue;
         };
         let project = workspace.project_documents(root);
+        let mut signatures = BTreeMap::new();
         for diagnostic in diagnostics {
             // Match the selected warning before deduplicating edits. Hyperref
             // can report both Hyper reference and Reference for the same key.
@@ -379,7 +387,86 @@ pub fn fixes(
                 }
                 continue;
             }
-            let Some((kind, key)) = target(doc, diagnostic) else {
+            let color_scope = if matches!(diagnostic.code.as_ref(), Some(NumberOrString::String(code)) if matches!(code.as_str(), "undefined-color" | "undefined-color-model"))
+            {
+                let confirmed = workspace.build_diagnostic_sources.get(root);
+                let scope = if let Some(value) = diagnostic
+                    .data
+                    .as_ref()
+                    .and_then(|data| data.get("macroSources"))
+                {
+                    let Ok(scope) = serde_json::from_value::<BTreeSet<Url>>(value.clone()) else {
+                        continue;
+                    };
+                    if !scope.contains(uri)
+                        || !scope.is_subset(&project)
+                        || confirmed.is_some_and(|confirmed| !scope.is_subset(confirmed))
+                    {
+                        continue;
+                    }
+                    scope
+                } else {
+                    project
+                        .iter()
+                        .filter(|uri| confirmed.is_none_or(|sources| sources.contains(*uri)))
+                        .cloned()
+                        .collect()
+                };
+                let paused = if let Some(value) = diagnostic
+                    .data
+                    .as_ref()
+                    .and_then(|data| data.get("macroPausedSources"))
+                {
+                    let Ok(paused) = serde_json::from_value::<BTreeSet<Url>>(value.clone()) else {
+                        continue;
+                    };
+                    if !paused.is_subset(&project)
+                        || !paused.is_disjoint(&scope)
+                        || confirmed.is_some_and(|confirmed| !paused.is_subset(confirmed))
+                    {
+                        continue;
+                    }
+                    paused
+                } else {
+                    BTreeSet::new()
+                };
+                Some((scope, paused))
+            } else {
+                None
+            };
+            let color_signatures = color_scope
+                .as_ref()
+                .map(|(scope, paused)| {
+                    signatures
+                        .entry((scope.clone(), paused.clone()))
+                        .or_insert_with(|| {
+                            crate::signature::CommandSignatures::with_ambiguous_names(
+                                workspace
+                                    .documents
+                                    .iter()
+                                    .filter(|(uri, doc)| {
+                                        scope.contains(*uri)
+                                            && doc.kind == crate::workspace::DocumentKind::Latex
+                                    })
+                                    .map(|(_, doc)| (doc.text.source.as_str(), &doc.syntax)),
+                                workspace
+                                    .documents
+                                    .iter()
+                                    .filter(|(uri, doc)| {
+                                        paused.contains(*uri)
+                                            && doc.kind == crate::workspace::DocumentKind::Latex
+                                    })
+                                    .flat_map(|(_, doc)| {
+                                        doc.syntax
+                                            .definitions
+                                            .iter()
+                                            .map(|entry| entry.name.as_str())
+                                    }),
+                            )
+                        })
+                })
+                .map(|signatures| &*signatures);
+            let Some((kind, key)) = target(doc, diagnostic, color_signatures) else {
                 continue;
             };
             let counter_conflicts = if kind == Kind::Counter {

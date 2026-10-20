@@ -365,3 +365,120 @@ fn real_model_spelling_repairs_compile_and_preserve_color_specifications() {
         }
     }
 }
+
+#[test]
+fn project_macro_arities_revalidate_cross_file_color_fixes_and_reject_changed_targets() {
+    let source = "\\bridge\\textcolor[rbg]{.2,.4,.6}{MarkerUnique}";
+    let (mut workspace, uri) = setup(
+        source,
+        "\\definecolor{accent}{HTML}{123456}\\newcommand{\\done}{}\\def\\bridge{\\done}",
+    );
+    let palette = Url::parse("file:///model-fixes/palette.tex").unwrap();
+    let start = source.find("rbg").unwrap();
+    let mut error = Diagnostic {
+        range: Text::new(source.into()).range(start, start + "rbg".len()),
+        source: Some("latex-build".into()),
+        message: MESSAGE.into(),
+        code: Some(NumberOrString::String("undefined-color-model".into())),
+        data: Some(serde_json::json!({"model":"rbg"})),
+        ..Default::default()
+    };
+    store(&mut workspace, &uri, error.clone());
+    workspace
+        .build_diagnostic_sources
+        .insert(uri.clone(), [uri.clone()].into());
+    assert!(actions(&workspace, &uri, &error).is_empty());
+    workspace
+        .build_diagnostic_sources
+        .insert(uri.clone(), [uri.clone(), palette.clone()].into());
+    assert_eq!(
+        repair(&workspace, &uri, &error, "rgb").unwrap(),
+        source.replacen("rbg", "rgb", 1)
+    );
+
+    let later = uri.join("later.sty").unwrap();
+    workspace.documents.insert(
+        later.clone(),
+        Document::new(&later, r"\renewcommand{\bridge}[3]{}".into(), Some(9)),
+    );
+    workspace
+        .recorded_inputs
+        .get_mut(&uri)
+        .unwrap()
+        .insert(later.clone());
+    workspace
+        .build_diagnostic_sources
+        .get_mut(&uri)
+        .unwrap()
+        .insert(later);
+    error.data.as_mut().unwrap()["macroSources"] = serde_json::json!([uri, palette]);
+    store(&mut workspace, &uri, error.clone());
+    assert!(repair(&workspace, &uri, &error, "rgb").is_some());
+    let mut malformed = error.clone();
+    malformed.data.as_mut().unwrap()["macroSources"] = serde_json::json!("invalid");
+    store(&mut workspace, &uri, malformed.clone());
+    assert!(actions(&workspace, &uri, &malformed).is_empty());
+    store(&mut workspace, &uri, error.clone());
+    workspace.documents.insert(
+        palette.clone(),
+        Document::new(
+            &palette,
+            r"\definecolor{accent}{HTML}{123456}\newcommand{\done}[3]{}\def\bridge{\done}".into(),
+            Some(4),
+        ),
+    );
+    assert!(actions(&workspace, &uri, &error).is_empty());
+}
+
+#[test]
+fn paused_parent_declarations_are_rechecked_without_lending_signatures_to_children() {
+    let source = r"\bridge\textcolor[rbg]{.2,.4,.6}{MarkerUnique}";
+    let (mut workspace, root) = setup(
+        r"\input{content}",
+        r"\newcommand{\done}{}\def\bridge{\done}",
+    );
+    let child = root.join("content.tex").unwrap();
+    let palette = root.join("palette.tex").unwrap();
+    workspace
+        .documents
+        .insert(child.clone(), Document::new(&child, source.into(), Some(7)));
+    workspace
+        .recorded_inputs
+        .get_mut(&root)
+        .unwrap()
+        .insert(child.clone());
+    workspace.build_diagnostic_sources.insert(
+        root.clone(),
+        [root.clone(), child.clone(), palette.clone()].into(),
+    );
+    let start = source.find("rbg").unwrap();
+    let error = Diagnostic {
+        range: Text::new(source.into()).range(start, start + 3),
+        source: Some("latex-build".into()),
+        message: MESSAGE.into(),
+        code: Some(NumberOrString::String("undefined-color-model".into())),
+        data: Some(
+            serde_json::json!({"model":"rbg", "macroSources":[child,palette], "macroPausedSources":[root]}),
+        ),
+        ..Default::default()
+    };
+    workspace.build_diagnostics.insert(
+        root.clone(),
+        BTreeMap::from([(child.clone(), vec![error.clone()])]),
+    );
+    assert!(repair(&workspace, &child, &error, "rgb").is_some());
+    for declaration in [
+        r"\renewcommand{\bridge}[3]{}",
+        r"\renewcommand{\done}[3]{}",
+        r"\renewcommand{\textcolor}[2]{}",
+    ] {
+        workspace.documents.insert(
+            root.clone(),
+            Document::new(&root, format!("{declaration}\\input{{content}}"), Some(8)),
+        );
+        assert!(
+            actions(&workspace, &child, &error).is_empty(),
+            "{declaration}"
+        );
+    }
+}

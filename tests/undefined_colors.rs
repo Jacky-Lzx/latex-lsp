@@ -485,3 +485,125 @@ fn real_undefined_color_repairs_compile_all_direct_call_forms() {
         }
     }
 }
+
+#[test]
+fn project_macro_arities_revalidate_cross_file_color_fixes_and_reject_changed_targets() {
+    let source = "\\bridge\\textcolor{accnet}{MarkerUnique}";
+    let (mut workspace, uri) = setup(
+        source,
+        "\\definecolor{accent}{HTML}{123456}\\newcommand{\\done}{}\\def\\bridge{\\done}",
+    );
+    let palette = Url::parse("file:///color-fixes/palette.tex").unwrap();
+    let start = source.find("accnet").unwrap();
+    let mut error = Diagnostic {
+        range: Text::new(source.into()).range(start, start + "accnet".len()),
+        source: Some("latex-build".into()),
+        message: MESSAGE.into(),
+        code: Some(NumberOrString::String("undefined-color".into())),
+        data: Some(serde_json::json!({"color":"accnet"})),
+        ..Default::default()
+    };
+    store(&mut workspace, &uri, error.clone());
+    workspace
+        .build_diagnostic_sources
+        .insert(uri.clone(), [uri.clone()].into());
+    assert!(actions(&workspace, &uri, &error).is_empty());
+    workspace
+        .build_diagnostic_sources
+        .insert(uri.clone(), [uri.clone(), palette.clone()].into());
+    assert_eq!(
+        repair(&workspace, &uri, &error, "accent").unwrap(),
+        source.replacen("accnet", "accent", 1)
+    );
+
+    let later = uri.join("later.sty").unwrap();
+    workspace.documents.insert(
+        later.clone(),
+        Document::new(&later, r"\renewcommand{\bridge}[3]{}".into(), Some(9)),
+    );
+    workspace
+        .recorded_inputs
+        .get_mut(&uri)
+        .unwrap()
+        .insert(later.clone());
+    workspace
+        .build_diagnostic_sources
+        .get_mut(&uri)
+        .unwrap()
+        .insert(later);
+    error.data.as_mut().unwrap()["macroSources"] = serde_json::json!([uri, palette]);
+    store(&mut workspace, &uri, error.clone());
+    assert!(repair(&workspace, &uri, &error, "accent").is_some());
+    let mut malformed = error.clone();
+    malformed.data.as_mut().unwrap()["macroSources"] = serde_json::json!("invalid");
+    store(&mut workspace, &uri, malformed.clone());
+    assert!(actions(&workspace, &uri, &malformed).is_empty());
+    store(&mut workspace, &uri, error.clone());
+    workspace.documents.insert(
+        palette.clone(),
+        Document::new(
+            &palette,
+            r"\definecolor{accent}{HTML}{123456}\newcommand{\done}[3]{}\def\bridge{\done}".into(),
+            Some(4),
+        ),
+    );
+    assert!(actions(&workspace, &uri, &error).is_empty());
+}
+
+#[test]
+fn a_child_error_retains_color_candidates_from_its_paused_parent() {
+    let source = r"\textcolor{accnet}{MarkerUnique}";
+    let (mut workspace, root) = setup(r"\definecolor{accent}{HTML}{123456}\input{content}", "");
+    let child = root.join("content.tex").unwrap();
+    workspace
+        .documents
+        .insert(child.clone(), Document::new(&child, source.into(), Some(7)));
+    workspace
+        .recorded_inputs
+        .get_mut(&root)
+        .unwrap()
+        .insert(child.clone());
+    workspace
+        .build_diagnostic_sources
+        .insert(root.clone(), [root.clone(), child.clone()].into());
+    let mut error = diagnostic(source, &format!("l.1 {source}"), true);
+    error.data.as_mut().unwrap()["macroSources"] = serde_json::json!([child]);
+    error.data.as_mut().unwrap()["macroPausedSources"] = serde_json::json!([root]);
+    workspace.build_diagnostics.insert(
+        root.clone(),
+        BTreeMap::from([(child.clone(), vec![error.clone()])]),
+    );
+    assert_eq!(
+        repair(&workspace, &child, &error, "accent").unwrap(),
+        source.replace("accnet", "accent")
+    );
+    for value in [
+        serde_json::json!("invalid"),
+        serde_json::json!([child]),
+        serde_json::json!(["file:///outside-project.tex"]),
+    ] {
+        let mut malformed = error.clone();
+        malformed.data.as_mut().unwrap()["macroPausedSources"] = value;
+        workspace
+            .build_diagnostics
+            .get_mut(&root)
+            .unwrap()
+            .insert(child.clone(), vec![malformed.clone()]);
+        assert!(actions(&workspace, &child, &malformed).is_empty());
+    }
+    workspace
+        .build_diagnostics
+        .get_mut(&root)
+        .unwrap()
+        .insert(child.clone(), vec![error.clone()]);
+    workspace.documents.insert(
+        root.clone(),
+        Document::new(
+            &root,
+            r"\definecolor{accent}{HTML}{123456}\renewcommand{\textcolor}[2]{}\input{content}"
+                .into(),
+            Some(8),
+        ),
+    );
+    assert!(actions(&workspace, &child, &error).is_empty());
+}

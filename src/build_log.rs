@@ -541,6 +541,8 @@ struct ErrorContext<'a> {
     source: &'a str,
     package_options: Option<PackageOptions>,
     name_frame: Option<&'a str>,
+    macro_context: Option<MacroContext<'a>>,
+    project_stale: bool,
 }
 
 impl<'a> ErrorContext<'a> {
@@ -549,7 +551,55 @@ impl<'a> ErrorContext<'a> {
             source,
             package_options: None,
             name_frame: None,
+            macro_context: None,
+            project_stale: false,
         }
+    }
+
+    fn with_project(
+        mut self,
+        message: &str,
+        project: Option<&'a ProjectSources>,
+        loaded: &BTreeSet<Url>,
+        stack: &[Option<LogSource>],
+        path: &Path,
+    ) -> Self {
+        if undefined_color_name(message).is_some() || undefined_color_model_name(message).is_some()
+        {
+            if let Some(project) = project {
+                // Open ancestors are paused at their input command. Their
+                // remaining declarations have not executed in this child.
+                let anchor = path.canonicalize().unwrap_or_else(|_| path.into());
+                // Dynamically loaded sources may be confirmed by the log but
+                // absent from the pre-build graph. A partial signature set
+                // must not hide declarations in the file reporting the error.
+                if !project.dynamic_sources.is_disjoint(loaded)
+                    || !Url::from_file_path(&anchor)
+                        .ok()
+                        .is_some_and(|uri| project.documents.contains_key(&uri))
+                {
+                    self.project_stale = true;
+                    return self;
+                }
+                let mut available = loaded.clone();
+                let mut paused = BTreeSet::new();
+                for source in stack
+                    .iter()
+                    .flatten()
+                    .filter(|source| source.path != anchor)
+                {
+                    if let Ok(uri) = Url::from_file_path(&source.path) {
+                        available.remove(&uri);
+                        paused.insert(uri);
+                    }
+                }
+                match project.context(&available, &paused) {
+                    Ok(context) => self.macro_context = context,
+                    Err(()) => self.project_stale = true,
+                }
+            }
+        }
+        self
     }
 }
 
@@ -739,6 +789,8 @@ fn error_context<'a>(
             source: prefix,
             package_options: package_option_details(lines, index + 1, message),
             name_frame,
+            macro_context: None,
+            project_stale: false,
         })
 }
 
@@ -1081,6 +1133,7 @@ fn color_error_range(
     context: &str,
     name: &str,
     model: bool,
+    signatures: Option<&crate::signature::CommandSignatures<'_>>,
 ) -> Option<Range> {
     let prefix = context.trim_end();
     let shortened = shortened_context(prefix);
@@ -1089,7 +1142,21 @@ fn color_error_range(
         return None;
     }
     let syntax = crate::syntax::Syntax::latex(text);
-    let invocations = if model {
+    let invocations = if let Some(signatures) = signatures {
+        if model {
+            crate::named_colors::model_error_invocations_with_signatures(
+                &text.source,
+                &syntax,
+                signatures,
+            )
+        } else {
+            crate::named_colors::error_invocations_with_signatures(
+                &text.source,
+                &syntax,
+                signatures,
+            )
+        }
+    } else if model {
         crate::named_colors::model_error_invocations(&text.source, &syntax)
     } else {
         crate::named_colors::error_invocations(&text.source, &syntax)
@@ -1488,14 +1555,21 @@ fn emit_with_context(
         .and_then(|name| undefined_counter_range(&text, line, context?, name));
     ranges.extend(counter_range);
     let color_name = undefined_color_name(&message);
+    let project_stale = error.as_ref().is_some_and(|context| context.project_stale);
+    let macro_context = error
+        .as_ref()
+        .and_then(|context| context.macro_context.as_ref());
+    let signatures = macro_context.map(|context| &context.signatures);
     let color_range = color_name
+        .filter(|_| !project_stale)
         .filter(|_| reported_line.checked_sub(1) == Some(line))
-        .and_then(|name| color_error_range(&text, line, context?, name, false));
+        .and_then(|name| color_error_range(&text, line, context?, name, false, signatures));
     ranges.extend(color_range);
     let color_model = undefined_color_model_name(&message);
     let model_range = color_model
+        .filter(|_| !project_stale)
         .filter(|_| reported_line.checked_sub(1) == Some(line))
-        .and_then(|name| color_error_range(&text, line, context?, name, true));
+        .and_then(|name| color_error_range(&text, line, context?, name, true, signatures));
     ranges.extend(model_range);
     let missing_file = missing_file_name(&message);
     let input_range = missing_file
@@ -1609,7 +1683,18 @@ fn emit_with_context(
                         }
                         data
                     }))
-                    .or_else(|| graphic_range.and(missing_graphic).map(|name| serde_json::json!({"file":name}))),
+                    .or_else(|| graphic_range.and(missing_graphic).map(|name| serde_json::json!({"file":name})))
+                    .map(|mut data| {
+                        if color_range.is_some() || model_range.is_some() {
+                            if let Some(context) = macro_context {
+                                data["macroSources"] = serde_json::json!(context.sources);
+                                if !context.paused_sources.is_empty() {
+                                    data["macroPausedSources"] = serde_json::json!(context.paused_sources);
+                                }
+                            }
+                        }
+                        data
+                    }),
                 ..Default::default()
             }
         }));
@@ -2166,6 +2251,129 @@ pub(crate) fn parse_with_sources(
     root: &Path,
     log: &str,
 ) -> (BTreeMap<Url, Vec<Diagnostic>>, BTreeSet<Url>) {
+    parse_in_project(root, log, None)
+}
+
+struct MacroContext<'a> {
+    signatures: crate::signature::CommandSignatures<'a>,
+    sources: Vec<Url>,
+    paused_sources: Vec<Url>,
+}
+
+/// Saved explicit source dependencies, captured before TeX starts. No directory
+/// scan or distribution-package lookup participates in this snapshot.
+pub(crate) struct ProjectSources {
+    documents: BTreeMap<Url, crate::workspace::Document>,
+    dynamic_sources: BTreeSet<Url>,
+}
+
+impl ProjectSources {
+    pub(crate) fn capture(root: &Path) -> Self {
+        let mut workspace = crate::workspace::Workspace::default();
+        let mut sources = BTreeSet::new();
+        if let Ok(uri) = Url::from_file_path(root.canonicalize().unwrap_or_else(|_| root.into())) {
+            workspace.reload(&uri);
+            workspace.load_dependencies(&uri, 0);
+            sources = workspace.source_documents_from(&uri, &uri);
+        }
+        let documents: BTreeMap<_, _> = workspace
+            .documents
+            .into_iter()
+            .filter(|(uri, doc)| {
+                sources.contains(uri) && doc.kind == crate::workspace::DocumentKind::Latex
+            })
+            .collect();
+        // An unresolved source load can redefine previously known commands,
+        // even after it has returned to a file included in the snapshot.
+        let dynamic_sources = documents
+            .iter()
+            .filter(|(_, doc)| {
+                doc.syntax.commands.iter().any(|command| {
+                    if !matches!(
+                        command.name.as_str(),
+                        "input" | "InputIfFileExists" | "include" | "subfile"
+                    ) && crate::syntax::loader_extension(&command.name).is_none()
+                    {
+                        return false;
+                    }
+                    if crate::syntax::file_list(&command.name) {
+                        return crate::syntax::complete_file_list_spans(&doc.text.source, command)
+                            .is_none();
+                    }
+                    crate::syntax::file_argument(&doc.text.source, command).is_none_or(|argument| {
+                        let mut name = argument.value.trim().to_owned();
+                        for character in ['_', '%', '#', '&', '$', ' '] {
+                            name = name.replace(&format!("\\{character}"), "_");
+                        }
+                        !crate::syntax::is_literal_file_path(&name)
+                    })
+                })
+            })
+            .map(|(uri, _)| uri.clone())
+            .collect();
+        Self {
+            documents,
+            dynamic_sources,
+        }
+    }
+
+    fn context(
+        &self,
+        loaded: &BTreeSet<Url>,
+        paused: &BTreeSet<Url>,
+    ) -> Result<Option<MacroContext<'_>>, ()> {
+        let documents: Vec<_> = self
+            .documents
+            .iter()
+            .filter(|(uri, _)| loaded.contains(*uri))
+            .collect();
+        let ancestors: Vec<_> = self
+            .documents
+            .iter()
+            .filter(|(uri, _)| paused.contains(*uri))
+            .collect();
+        if documents.iter().chain(&ancestors).any(|(uri, doc)| {
+            uri.to_file_path()
+                .ok()
+                .and_then(|path| std::fs::read_to_string(path).ok())
+                .as_deref()
+                != Some(doc.text.source.as_str())
+        }) {
+            return Err(());
+        }
+        Ok((!documents.is_empty()).then(|| MacroContext {
+            sources: documents.iter().map(|(uri, _)| (*uri).clone()).collect(),
+            paused_sources: ancestors.iter().map(|(uri, _)| (*uri).clone()).collect(),
+            signatures: crate::signature::CommandSignatures::with_ambiguous_names(
+                documents
+                    .into_iter()
+                    .map(|(_, doc)| (doc.text.source.as_str(), &doc.syntax)),
+                // Parent declarations may precede or follow the paused input.
+                // They can shadow existing meanings, but cannot certify arity.
+                ancestors.into_iter().flat_map(|(_, doc)| {
+                    doc.syntax
+                        .definitions
+                        .iter()
+                        .map(|entry| entry.name.as_str())
+                }),
+            ),
+        }))
+    }
+}
+
+pub(crate) fn parse_with_project_sources(
+    root: &Path,
+    log: &str,
+    project: &ProjectSources,
+) -> (BTreeMap<Url, Vec<Diagnostic>>, BTreeSet<Url>) {
+    parse_in_project(root, log, Some(project))
+}
+
+fn parse_in_project<'a>(
+    root: &Path,
+    log: &'a str,
+    project: Option<&'a ProjectSources>,
+) -> (BTreeMap<Url, Vec<Diagnostic>>, BTreeSet<Url>) {
     let mut result = BTreeMap::new();
     let mut sources = BTreeSet::new();
     let root_path = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
@@ -2316,7 +2524,8 @@ pub(crate) fn parse_with_sources(
             // Its context must not identify coincidentally matching root text.
             let context = confirmed_path
                 .then(|| error_context(&lines, i + 1, number, &message))
-                .flatten();
+                .flatten()
+                .map(|context| context.with_project(&message, project, &sources, &stack, &path));
             emit_with_context(
                 &mut result,
                 &path,
@@ -2359,7 +2568,10 @@ pub(crate) fn parse_with_sources(
                 let context = path
                     .confirmed
                     .then(|| error_context(&lines, context_start, number, &message))
-                    .flatten();
+                    .flatten()
+                    .map(|context| {
+                        context.with_project(&message, project, &sources, &stack, &path.path)
+                    });
                 emit_with_context(
                     &mut result,
                     &path.path,
@@ -6247,5 +6459,359 @@ mod latexmk_database_warnings {
         let name = format!("{}.bib", "r".repeat(8193));
         let output = inspect("out (local)/main's.log", &section(&[&name], &[&name]));
         assert!(parse_latexmk_missing_databases(&root, &log, &output).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod project_color_tests {
+    use super::*;
+
+    const HELP: &str = "See the xcolor package documentation for explanation.\nType  H <return>  for immediate help.\n ...\n\n";
+
+    fn fixture(definitions: &str, call: &str) -> (tempfile::TempDir, PathBuf, String) {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("main.tex");
+        let source = format!("\\usepackage{{palette}}\n{call}\n");
+        std::fs::write(&root, &source).unwrap();
+        std::fs::write(temp.path().join("palette.sty"), definitions).unwrap();
+        (temp, root, source)
+    }
+
+    fn log(call: &str, model: bool, before: &str, after: &str) -> String {
+        let message = if model {
+            "Undefined color model `rbg'."
+        } else {
+            "Undefined color `accnet'."
+        };
+        format!("(./main.tex\n{before}\n./main.tex:2: Package xcolor Error: {message}\n{HELP}l.2 {call}\n{after}\n)\n")
+    }
+
+    fn error(root: &Path, log: &str, project: &ProjectSources) -> Diagnostic {
+        parse_with_project_sources(root, log, project).0[&Url::from_file_path(root).unwrap()]
+            .iter()
+            .find(|d| d.message.starts_with("Package xcolor Error:"))
+            .unwrap()
+            .clone()
+    }
+
+    #[test]
+    fn loaded_saved_dependencies_supply_arities_and_alias_target_grammars() {
+        for (definitions, prefix) in [
+            (r"\newcommand{\bridge}{}", r"\bridge"),
+            (r"\newcommand{\done}{}\def\bridge{\done}", r"\bridge"),
+            (
+                r"\NewDocumentCommand{\done}{}{}\NewDocumentCommand{\bridge}{}{\done}",
+                r"\bridge",
+            ),
+            (
+                r"\newcommand{\done}[1]{}\def\bridge{\done}",
+                r"\bridge{Unused}",
+            ),
+            (
+                r"\newcommand{\done}[1][default]{}\def\bridge{\done}",
+                r"\bridge[note]",
+            ),
+            (
+                r"\NewDocumentCommand{\done}{s t+ O{default} m}{}\def\bridge{\done}",
+                r"\bridge*+[note]{Unused}",
+            ),
+            (
+                r"\NewDocumentCommand{\done}{d() m}{}\def\bridge{\done}",
+                r"\bridge(note){Unused}",
+            ),
+        ] {
+            for model in [false, true] {
+                let call = format!(
+                    "{prefix}{}",
+                    if model {
+                        r"\textcolor[rbg]{.2,.4,.6}{MarkerUnique}"
+                    } else {
+                        r"\textcolor{accnet}{MarkerUnique}"
+                    }
+                );
+                let (_temp, root, source) = fixture(definitions, &call);
+                let project = ProjectSources::capture(&root);
+                let log = log(&call, model, "(./palette.sty)", "");
+                let diagnostic = error(&root, &log, &project);
+                let name = if model { "rbg" } else { "accnet" };
+                let start = source.find(name).unwrap();
+                assert_eq!(
+                    diagnostic.range,
+                    Text::new(source).range(start, start + name.len()),
+                    "{definitions}/{call}"
+                );
+                assert_eq!(
+                    diagnostic.code,
+                    Some(NumberOrString::String(
+                        if model {
+                            "undefined-color-model"
+                        } else {
+                            "undefined-color"
+                        }
+                        .into()
+                    ))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn callbacks_and_redefinitions_in_other_files_cannot_become_direct_color_sites() {
+        for definitions in [
+            r"\newcommand{\wrapped}[3]{}\def\bridge{\wrapped}",
+            r"\newcommand{\bridge}{}\renewcommand{\bridge}[3]{}",
+            r"\def\bridge{\missing}",
+            r"\def\bridge{\bridge}",
+            r"\newcommand{\bridge}{}\renewcommand{\textcolor}[2]{}",
+        ] {
+            for model in [false, true] {
+                let call = format!(
+                    r"\bridge{}",
+                    if model {
+                        r"\textcolor[rbg]{.2,.4,.6}{MarkerUnique}"
+                    } else {
+                        r"\textcolor{accnet}{MarkerUnique}"
+                    }
+                );
+                let (_temp, root, _) = fixture(definitions, &call);
+                let project = ProjectSources::capture(&root);
+                let diagnostic = error(&root, &log(&call, model, "(./palette.sty)", ""), &project);
+                assert!(
+                    diagnostic.code.is_none() && diagnostic.data.is_none(),
+                    "{definitions}/{call}: {diagnostic:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn source_graph_requires_prior_log_entry_and_ignores_unrelated_files() {
+        for (before, after) in [("", ""), ("", "(./palette.sty)"), ("(./unrelated.sty)", "")] {
+            let call = r"\bridge\textcolor{accnet}{MarkerUnique}";
+            let (temp, root, _) = fixture(r"\def\bridge{}", call);
+            std::fs::write(temp.path().join("unrelated.sty"), r"\def\bridge{}").unwrap();
+            let project = ProjectSources::capture(&root);
+            let diagnostic = error(&root, &log(call, false, before, after), &project);
+            assert!(
+                diagnostic.code.is_none(),
+                "{before}/{after}: {diagnostic:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn later_inputs_and_displayed_code_do_not_override_the_error_time_signature_scope() {
+        for displayed in [false, true] {
+            let call = r"\bridge\textcolor{accnet}{MarkerUnique}";
+            let (temp, root, source) = fixture(r"\def\bridge{}", call);
+            let extra = temp.path().join("extra.tex");
+            std::fs::write(&extra, r"\renewcommand{\bridge}[3]{}").unwrap();
+            let source = if displayed {
+                format!("\\usepackage{{palette}}\\lstinputlisting{{extra.tex}}\n{call}\n")
+            } else {
+                format!("{source}\\input{{extra}}\n")
+            };
+            std::fs::write(&root, source).unwrap();
+            let project = ProjectSources::capture(&root);
+            let before = if displayed {
+                "(./palette.sty)\n(./extra.tex)"
+            } else {
+                "(./palette.sty)"
+            };
+            let after = if displayed { "" } else { "(./extra.tex)" };
+            let log = log(call, false, before, after);
+            let (diagnostics, loaded) = parse_with_project_sources(&root, &log, &project);
+            let uri = Url::from_file_path(&root).unwrap();
+            let diagnostic = &diagnostics[&uri][0];
+            assert_eq!(
+                diagnostic.code,
+                Some(NumberOrString::String("undefined-color".into())),
+                "{displayed}: {diagnostic:?}"
+            );
+            let sources: BTreeSet<Url> =
+                serde_json::from_value(diagnostic.data.as_ref().unwrap()["macroSources"].clone())
+                    .unwrap();
+            let extra = Url::from_file_path(extra).unwrap();
+            assert!(loaded.contains(&extra));
+            assert!(!sources.contains(&extra));
+            assert!(sources.contains(&uri));
+            assert_eq!(sources.len(), 2);
+        }
+    }
+
+    #[test]
+    fn a_paused_parent_cannot_lend_future_definitions_to_a_child_error() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("main.tex");
+        let class = temp.path().join("local.cls");
+        let call = r"\bridge\textcolor{accnet}{MarkerUnique}";
+        std::fs::write(&root, r"\documentclass{local}\newcommand{\bridge}{}").unwrap();
+        std::fs::write(&class, call).unwrap();
+        let project = ProjectSources::capture(&root);
+        let log = format!("(./main.tex\n(./local.cls\n./local.cls:1: Package xcolor Error: Undefined color `accnet'.\n{HELP}l.1 {call}\n)\n)\n");
+        let result = parse_with_project_sources(&root, &log, &project).0;
+        let diagnostic = &result[&Url::from_file_path(class).unwrap()][0];
+        assert!(
+            diagnostic.code.is_none() && diagnostic.data.is_none(),
+            "{diagnostic:?}"
+        );
+    }
+
+    #[test]
+    fn paused_parent_declarations_invalidate_existing_signatures_and_alias_targets() {
+        for model in [false, true] {
+            for (parent, prefix, precise) in [
+                (r"\renewcommand{\bridge}[3]{}", r"\bridge", false),
+                (r"\renewcommand{\done}[3]{}", r"\bridge", false),
+                (r"\def\relax#1#2#3{}", r"\relax", false),
+                (r"\renewcommand{\textcolor}[2]{}", "", false),
+                (r"\newcommand{\unrelated}[3]{}", r"\bridge", true),
+            ] {
+                let temp = tempfile::tempdir().unwrap();
+                let root = temp.path().join("main.tex");
+                let child = temp.path().join("content.tex");
+                let palette = temp.path().join("palette.sty");
+                let call = format!(
+                    "{prefix}{}",
+                    if model {
+                        r"\textcolor[rbg]{.2,.4,.6}{MarkerUnique}"
+                    } else {
+                        r"\textcolor{accnet}{MarkerUnique}"
+                    }
+                );
+                std::fs::write(
+                    &root,
+                    format!("\\usepackage{{palette}}{parent}\\input{{content}}"),
+                )
+                .unwrap();
+                std::fs::write(&palette, r"\newcommand{\done}{}\def\bridge{\done}").unwrap();
+                std::fs::write(&child, &call).unwrap();
+                let project = ProjectSources::capture(&root);
+                let message = if model {
+                    "Undefined color model `rbg'."
+                } else {
+                    "Undefined color `accnet'."
+                };
+                let log = format!("(./main.tex\n(./palette.sty)\n(./content.tex\n./content.tex:1: Package xcolor Error: {message}\n{HELP}l.1 {call}\n)\n)\n");
+                let result = parse_with_project_sources(&root, &log, &project).0;
+                let diagnostic = &result[&Url::from_file_path(&child).unwrap()][0];
+                assert_eq!(
+                    diagnostic.code.is_some(),
+                    precise,
+                    "{parent}: {diagnostic:?}"
+                );
+                if precise {
+                    let data = diagnostic.data.as_ref().unwrap();
+                    assert_eq!(
+                        data["macroPausedSources"],
+                        serde_json::json!([Url::from_file_path(&root).unwrap()])
+                    );
+                    // A changed paused source must also invalidate the snapshot.
+                    std::fs::write(&root, "changed parent").unwrap();
+                    let result = parse_with_project_sources(&root, &log, &project).0;
+                    assert!(result[&Url::from_file_path(&child).unwrap()][0]
+                        .code
+                        .is_none());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn dynamically_loaded_children_cannot_borrow_an_incomplete_signature_set() {
+        for model in [false, true] {
+            let call = if model {
+                r"\bridge\textcolor[rbg]{.2,.4,.6}{MarkerUnique}"
+            } else {
+                r"\bridge\textcolor{accnet}{MarkerUnique}"
+            };
+            let (temp, root, _) = fixture(r"\newcommand{\bridge}{}", "");
+            let child = temp.path().join("dynamic.tex");
+            std::fs::write(
+                &root,
+                r"\usepackage{palette}\def\filename{dynamic}\input{\filename}",
+            )
+            .unwrap();
+            std::fs::write(&child, format!("\\renewcommand{{\\bridge}}[3]{{}}\n{call}")).unwrap();
+            let project = ProjectSources::capture(&root);
+            assert!(!project
+                .documents
+                .contains_key(&Url::from_file_path(&child).unwrap()));
+            let message = if model {
+                "Undefined color model `rbg'."
+            } else {
+                "Undefined color `accnet'."
+            };
+            let log = format!("(./main.tex\n(./palette.sty)\n(./dynamic.tex\n./dynamic.tex:2: Package xcolor Error: {message}\n{HELP}l.2 {call}\n)\n)\n");
+            let result = parse_with_project_sources(&root, &log, &project).0;
+            let diagnostic = &result[&Url::from_file_path(child).unwrap()][0];
+            assert!(
+                diagnostic.code.is_none() && diagnostic.data.is_none(),
+                "{diagnostic:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn dynamic_loads_can_change_signatures_after_returning_to_the_saved_parent() {
+        for loader in [
+            r"\input{\filename}",
+            r"\InputIfFileExists{\filename}{}{}",
+            r"\include{\filename}",
+            r"\subfile{\filename}",
+            r"\usepackage{palette,\filename}",
+            r"\LoadClass{\filename}",
+        ] {
+            let call = r"\bridge\textcolor{accnet}{MarkerUnique}";
+            let (temp, root, _) = fixture(r"\newcommand{\bridge}{}", call);
+            std::fs::write(&root, format!("\\usepackage{{palette}}{loader}\n{call}\n")).unwrap();
+            std::fs::write(
+                temp.path().join("dynamic.tex"),
+                r"\renewcommand{\bridge}[3]{}",
+            )
+            .unwrap();
+            let project = ProjectSources::capture(&root);
+            let diagnostic = error(
+                &root,
+                &log(call, false, "(./palette.sty)\n(./dynamic.tex)", ""),
+                &project,
+            );
+            assert!(
+                diagnostic.code.is_none() && diagnostic.data.is_none(),
+                "{loader}: {diagnostic:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn changed_or_deleted_dependency_invalidates_precise_color_attribution() {
+        for model in [false, true] {
+            for deleted in [false, true] {
+                let call = format!(
+                    r"\bridge{}",
+                    if model {
+                        r"\textcolor[rbg]{.2,.4,.6}{MarkerUnique}"
+                    } else {
+                        r"\textcolor{accnet}{MarkerUnique}"
+                    }
+                );
+                let (temp, root, _) = fixture(r"\def\bridge{}", &call);
+                let project = ProjectSources::capture(&root);
+                if deleted {
+                    std::fs::remove_file(temp.path().join("palette.sty")).unwrap();
+                } else {
+                    std::fs::write(
+                        temp.path().join("palette.sty"),
+                        r"\newcommand{\bridge}[3]{}",
+                    )
+                    .unwrap();
+                }
+                let diagnostic = error(&root, &log(&call, model, "(./palette.sty)", ""), &project);
+                assert!(
+                    diagnostic.code.is_none(),
+                    "{model}/{deleted}: {diagnostic:?}"
+                );
+            }
+        }
     }
 }

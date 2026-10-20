@@ -382,14 +382,25 @@ fn occurrences(source: &str, command: &Command) -> Option<Vec<(bool, Span<usize>
 /// Direct calls whose complete consumed arguments can be checked against TeX's
 /// source echo. Blend settings are evaluated later, so they have no direct site.
 pub(crate) fn error_invocations(source: &str, syntax: &Syntax) -> Vec<(Span<usize>, Span<usize>)> {
-    if syntax
-        .definitions
-        .iter()
-        .any(|entry| known(&entry.name) || unsupported(&entry.name))
+    error_invocations_with_signatures(
+        source,
+        syntax,
+        &crate::signature::CommandSignatures::new([(source, syntax)]),
+    )
+}
+
+pub(crate) fn error_invocations_with_signatures(
+    source: &str,
+    syntax: &Syntax,
+    signatures: &crate::signature::CommandSignatures<'_>,
+) -> Vec<(Span<usize>, Span<usize>)> {
+    if signatures
+        .names()
+        .any(|name| known(name) || unsupported(name))
     {
         return vec![];
     }
-    let operands = crate::signature::command_argument_tokens(source, syntax);
+    let operands = signatures.argument_tokens(source, syntax);
     let mut result = vec![];
     for command in &syntax.commands {
         if operands.contains(&command.span.start) {
@@ -446,10 +457,21 @@ pub(crate) fn model_error_invocations(
     source: &str,
     syntax: &Syntax,
 ) -> Vec<(Span<usize>, Span<usize>)> {
-    if syntax
-        .definitions
-        .iter()
-        .any(|entry| known(&entry.name) || unsupported(&entry.name))
+    model_error_invocations_with_signatures(
+        source,
+        syntax,
+        &crate::signature::CommandSignatures::new([(source, syntax)]),
+    )
+}
+
+pub(crate) fn model_error_invocations_with_signatures(
+    source: &str,
+    syntax: &Syntax,
+    signatures: &crate::signature::CommandSignatures<'_>,
+) -> Vec<(Span<usize>, Span<usize>)> {
+    if signatures
+        .names()
+        .any(|name| known(name) || unsupported(name))
     {
         return vec![];
     }
@@ -460,7 +482,7 @@ pub(crate) fn model_error_invocations(
         }
         Ok(())
     }
-    let operands = crate::signature::command_argument_tokens(source, syntax);
+    let operands = signatures.argument_tokens(source, syntax);
     let mut result = vec![];
     for command in &syntax.commands {
         if operands.contains(&command.span.start) {
