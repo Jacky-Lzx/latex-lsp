@@ -5,6 +5,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     ops::Range as ByteRange,
     path::{Path, PathBuf},
+    rc::Rc,
 };
 use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range, Url};
 
@@ -541,7 +542,7 @@ struct ErrorContext<'a> {
     source: &'a str,
     package_options: Option<PackageOptions>,
     name_frame: Option<&'a str>,
-    macro_context: Option<MacroContext<'a>>,
+    macro_context: Option<ColorContext<'a>>,
     project_stale: bool,
 }
 
@@ -559,24 +560,27 @@ impl<'a> ErrorContext<'a> {
     fn with_project(
         mut self,
         message: &str,
-        project: Option<&'a ProjectSources>,
+        project: Option<&mut ProjectAnalysis<'a>>,
         loaded: &BTreeSet<Url>,
         stack: &[Option<LogSource>],
         path: &Path,
     ) -> Self {
         if undefined_color_name(message).is_some() || undefined_color_model_name(message).is_some()
         {
-            if let Some(project) = project {
+            if let Some(analysis) = project {
+                let project = analysis.project;
                 // Open ancestors are paused at their input command. Their
                 // remaining declarations have not executed in this child.
                 let anchor = path.canonicalize().unwrap_or_else(|_| path.into());
+                let Ok(uri) = Url::from_file_path(&anchor) else {
+                    self.project_stale = true;
+                    return self;
+                };
                 // Dynamically loaded sources may be confirmed by the log but
                 // absent from the pre-build graph. A partial signature set
                 // must not hide declarations in the file reporting the error.
                 if !project.dynamic_sources.is_disjoint(loaded)
-                    || !Url::from_file_path(&anchor)
-                        .ok()
-                        .is_some_and(|uri| project.documents.contains_key(&uri))
+                    || !project.documents.contains_key(&uri)
                 {
                     self.project_stale = true;
                     return self;
@@ -593,7 +597,12 @@ impl<'a> ErrorContext<'a> {
                         paused.insert(uri);
                     }
                 }
-                match project.context(&available, &paused) {
+                match analysis.context(
+                    &available,
+                    &paused,
+                    &uri,
+                    undefined_color_model_name(message).is_some(),
+                ) {
                     Ok(context) => self.macro_context = context,
                     Err(()) => self.project_stale = true,
                 }
@@ -1133,7 +1142,7 @@ fn color_error_range(
     context: &str,
     name: &str,
     model: bool,
-    signatures: Option<&crate::signature::CommandSignatures<'_>>,
+    cached: Option<&ColorCalls<'_>>,
 ) -> Option<Range> {
     let prefix = context.trim_end();
     let shortened = shortened_context(prefix);
@@ -1141,27 +1150,22 @@ fn color_error_range(
     if shortened.is_some_and(|suffix| !unique_context_on_line(text, start, suffix)) {
         return None;
     }
-    let syntax = crate::syntax::Syntax::latex(text);
-    let invocations = if let Some(signatures) = signatures {
-        if model {
-            crate::named_colors::model_error_invocations_with_signatures(
-                &text.source,
-                &syntax,
-                signatures,
-            )
-        } else {
-            crate::named_colors::error_invocations_with_signatures(
-                &text.source,
-                &syntax,
-                signatures,
-            )
+    let local;
+    let invocations = if let Some(cached) = cached {
+        if cached.source != text.source {
+            return None;
         }
-    } else if model {
-        crate::named_colors::model_error_invocations(&text.source, &syntax)
+        &cached.invocations
     } else {
-        crate::named_colors::error_invocations(&text.source, &syntax)
+        let syntax = crate::syntax::Syntax::latex(text);
+        local = if model {
+            crate::named_colors::model_error_invocations(&text.source, &syntax)
+        } else {
+            crate::named_colors::error_invocations(&text.source, &syntax)
+        };
+        &local
     };
-    let mut matches = invocations.into_iter().filter_map(|(span, tail)| {
+    let mut matches = invocations.iter().filter_map(|(span, tail)| {
         // TeX only echoes the final source line. When consumed operands start
         // earlier, that echo cannot establish which command received them
         // (a wrapper may have consumed the apparent color command as an arg).
@@ -1173,7 +1177,7 @@ fn color_error_range(
         }
         let consumed = &text.source[start..tail.end];
         let matched = shortened.map_or(consumed == prefix, |suffix| {
-            suffix.ends_with(&text.source[tail]) && consumed.ends_with(suffix)
+            suffix.ends_with(&text.source[tail.clone()]) && consumed.ends_with(suffix)
         });
         matched.then(|| text.range(span.start, span.end))
     });
@@ -1559,17 +1563,17 @@ fn emit_with_context(
     let macro_context = error
         .as_ref()
         .and_then(|context| context.macro_context.as_ref());
-    let signatures = macro_context.map(|context| &context.signatures);
+    let cached_calls = macro_context.map(|context| context.calls.as_ref());
     let color_range = color_name
         .filter(|_| !project_stale)
         .filter(|_| reported_line.checked_sub(1) == Some(line))
-        .and_then(|name| color_error_range(&text, line, context?, name, false, signatures));
+        .and_then(|name| color_error_range(&text, line, context?, name, false, cached_calls));
     ranges.extend(color_range);
     let color_model = undefined_color_model_name(&message);
     let model_range = color_model
         .filter(|_| !project_stale)
         .filter(|_| reported_line.checked_sub(1) == Some(line))
-        .and_then(|name| color_error_range(&text, line, context?, name, true, signatures));
+        .and_then(|name| color_error_range(&text, line, context?, name, true, cached_calls));
     ranges.extend(model_range);
     let missing_file = missing_file_name(&message);
     let input_range = missing_file
@@ -1687,9 +1691,9 @@ fn emit_with_context(
                     .map(|mut data| {
                         if color_range.is_some() || model_range.is_some() {
                             if let Some(context) = macro_context {
-                                data["macroSources"] = serde_json::json!(context.sources);
-                                if !context.paused_sources.is_empty() {
-                                    data["macroPausedSources"] = serde_json::json!(context.paused_sources);
+                                data["macroSources"] = serde_json::json!(context.macros.sources);
+                                if !context.macros.paused_sources.is_empty() {
+                                    data["macroPausedSources"] = serde_json::json!(context.macros.paused_sources);
                                 }
                             }
                         }
@@ -2260,6 +2264,16 @@ struct MacroContext<'a> {
     paused_sources: Vec<Url>,
 }
 
+struct ColorCalls<'a> {
+    source: &'a str,
+    invocations: Vec<(ByteRange<usize>, ByteRange<usize>)>,
+}
+
+struct ColorContext<'a> {
+    macros: Rc<MacroContext<'a>>,
+    calls: Rc<ColorCalls<'a>>,
+}
+
 /// Saved explicit source dependencies, captured before TeX starts. No directory
 /// scan or distribution-package lookup participates in this snapshot.
 pub(crate) struct ProjectSources {
@@ -2316,18 +2330,40 @@ impl ProjectSources {
             dynamic_sources,
         }
     }
+}
+
+/// Keep only the latest macro scope and one document per error kind. The cache
+/// lasts for this log parse; source contents are still checked on every error.
+struct ProjectAnalysis<'a> {
+    project: &'a ProjectSources,
+    macros: Option<Rc<MacroContext<'a>>>,
+    calls: [Option<(Url, Rc<ColorCalls<'a>>)>; 2],
+}
+
+impl<'a> ProjectAnalysis<'a> {
+    fn new(project: &'a ProjectSources) -> Self {
+        Self {
+            project,
+            macros: None,
+            calls: [None, None],
+        }
+    }
 
     fn context(
-        &self,
+        &mut self,
         loaded: &BTreeSet<Url>,
         paused: &BTreeSet<Url>,
-    ) -> Result<Option<MacroContext<'_>>, ()> {
+        uri: &Url,
+        model: bool,
+    ) -> Result<Option<ColorContext<'a>>, ()> {
         let documents: Vec<_> = self
+            .project
             .documents
             .iter()
             .filter(|(uri, _)| loaded.contains(*uri))
             .collect();
         let ancestors: Vec<_> = self
+            .project
             .documents
             .iter()
             .filter(|(uri, _)| paused.contains(*uri))
@@ -2341,22 +2377,68 @@ impl ProjectSources {
         }) {
             return Err(());
         }
-        Ok((!documents.is_empty()).then(|| MacroContext {
-            sources: documents.iter().map(|(uri, _)| (*uri).clone()).collect(),
-            paused_sources: ancestors.iter().map(|(uri, _)| (*uri).clone()).collect(),
-            signatures: crate::signature::CommandSignatures::with_ambiguous_names(
-                documents
-                    .into_iter()
-                    .map(|(_, doc)| (doc.text.source.as_str(), &doc.syntax)),
-                // Parent declarations may precede or follow the paused input.
-                // They can shadow existing meanings, but cannot certify arity.
-                ancestors.into_iter().flat_map(|(_, doc)| {
-                    doc.syntax
-                        .definitions
-                        .iter()
-                        .map(|entry| entry.name.as_str())
+        if documents.is_empty() {
+            return Ok(None);
+        }
+        let sources: Vec<_> = documents.iter().map(|(uri, _)| (*uri).clone()).collect();
+        let paused_sources: Vec<_> = ancestors.iter().map(|(uri, _)| (*uri).clone()).collect();
+        if self.macros.as_ref().is_none_or(|cached| {
+            cached.sources != sources || cached.paused_sources != paused_sources
+        }) {
+            self.macros = Some(Rc::new(MacroContext {
+                sources,
+                paused_sources,
+                signatures: crate::signature::CommandSignatures::with_ambiguous_names(
+                    documents
+                        .into_iter()
+                        .map(|(_, doc)| (doc.text.source.as_str(), &doc.syntax)),
+                    // Parent declarations may precede or follow the paused input.
+                    // They can shadow existing meanings, but cannot certify arity.
+                    ancestors.into_iter().flat_map(|(_, doc)| {
+                        doc.syntax
+                            .definitions
+                            .iter()
+                            .map(|entry| entry.name.as_str())
+                    }),
+                ),
+            }));
+            self.calls = [None, None];
+        }
+        let macros = self.macros.as_ref().expect("nonempty macro scope");
+        let document = self.project.documents.get(uri).ok_or(())?;
+        let cached_calls = &mut self.calls[usize::from(model)];
+        if cached_calls
+            .as_ref()
+            .is_some_and(|(cached, _)| cached != uri)
+        {
+            *cached_calls = None;
+        }
+        let (_, calls) = cached_calls.get_or_insert_with(|| {
+            let source = document.text.source.as_str();
+            let invocations = if model {
+                crate::named_colors::model_error_invocations_with_signatures(
+                    source,
+                    &document.syntax,
+                    &macros.signatures,
+                )
+            } else {
+                crate::named_colors::error_invocations_with_signatures(
+                    source,
+                    &document.syntax,
+                    &macros.signatures,
+                )
+            };
+            (
+                uri.clone(),
+                Rc::new(ColorCalls {
+                    source,
+                    invocations,
                 }),
-            ),
+            )
+        });
+        Ok(Some(ColorContext {
+            macros: Rc::clone(macros),
+            calls: Rc::clone(calls),
         }))
     }
 }
@@ -2376,6 +2458,7 @@ fn parse_in_project<'a>(
 ) -> (BTreeMap<Url, Vec<Diagnostic>>, BTreeSet<Url>) {
     let mut result = BTreeMap::new();
     let mut sources = BTreeSet::new();
+    let mut analysis = project.map(ProjectAnalysis::new);
     let root_path = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     if let Ok(uri) = Url::from_file_path(root_path) {
         sources.insert(uri);
@@ -2525,7 +2608,9 @@ fn parse_in_project<'a>(
             let context = confirmed_path
                 .then(|| error_context(&lines, i + 1, number, &message))
                 .flatten()
-                .map(|context| context.with_project(&message, project, &sources, &stack, &path));
+                .map(|context| {
+                    context.with_project(&message, analysis.as_mut(), &sources, &stack, &path)
+                });
             emit_with_context(
                 &mut result,
                 &path,
@@ -2570,7 +2655,13 @@ fn parse_in_project<'a>(
                     .then(|| error_context(&lines, context_start, number, &message))
                     .flatten()
                     .map(|context| {
-                        context.with_project(&message, project, &sources, &stack, &path.path)
+                        context.with_project(
+                            &message,
+                            analysis.as_mut(),
+                            &sources,
+                            &stack,
+                            &path.path,
+                        )
                     });
                 emit_with_context(
                     &mut result,
@@ -6552,6 +6643,183 @@ mod project_color_tests {
                     ))
                 );
             }
+        }
+    }
+
+    #[test]
+    fn repeated_color_and_model_errors_follow_changes_in_the_loaded_macro_scope() {
+        let color = r"\bridge\textcolor{accnet}{MarkerUnique}";
+        let model = r"\bridge\textcolor[rbg]{.2,.4,.6}{MarkerUnique}";
+        let (temp, root, _) = fixture(r"\newcommand{\done}{}\def\bridge{\done}", "");
+        let calls = [color, model, color, model, r"\input{later}", color, model];
+        let source = format!("\\usepackage{{palette}}\n{}\n", calls.join("\n"));
+        std::fs::write(&root, &source).unwrap();
+        std::fs::write(temp.path().join("later.tex"), r"\renewcommand{\done}[3]{}").unwrap();
+        let project = ProjectSources::capture(&root);
+        let mut log = "(./main.tex\n(./palette.sty)\n".to_owned();
+        for (index, call) in calls.iter().enumerate() {
+            if index == 4 {
+                log.push_str("(./later.tex)\n");
+                continue;
+            }
+            let line = index + 2;
+            let name = if *call == color {
+                "color `accnet'"
+            } else {
+                "color model `rbg'"
+            };
+            log.push_str(&format!("./main.tex:{line}: Package xcolor Error: Undefined {name}.\n{HELP}l.{line} {call}\n"));
+        }
+        log.push_str(")\n");
+        let result = parse_with_project_sources(&root, &log, &project).0;
+        let diagnostics = &result[&Url::from_file_path(&root).unwrap()];
+        assert_eq!(diagnostics.len(), 6);
+        let text = Text::new(source);
+        for diagnostic in diagnostics {
+            if diagnostic.range.start.line < 5 {
+                let name = if diagnostic.range.start.line % 2 == 1 {
+                    "accnet"
+                } else {
+                    "rbg"
+                };
+                let line_start = text
+                    .offset(Position::new(diagnostic.range.start.line, 0))
+                    .unwrap();
+                let start = line_start + text.source[line_start..].find(name).unwrap();
+                assert_eq!(diagnostic.range, text.range(start, start + name.len()));
+                assert!(diagnostic.code.is_some());
+                let sources = diagnostic.data.as_ref().unwrap()["macroSources"]
+                    .as_array()
+                    .unwrap();
+                assert_eq!(sources.len(), 2);
+            } else {
+                assert!(
+                    diagnostic.code.is_none() && diagnostic.data.is_none(),
+                    "{diagnostic:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn returning_to_a_loaded_file_keeps_each_documents_color_ranges() {
+        let (temp, root, _) = fixture(r"\newcommand{\done}{}\def\bridge{\done}", "");
+        std::fs::write(
+            &root,
+            r"\usepackage{palette}\input{first}\input{second}\input{first}",
+        )
+        .unwrap();
+        let color = r"\bridge\textcolor{accnet}{MarkerUnique}";
+        let model = r"\bridge\textcolor[rbg]{.2,.4,.6}{MarkerUnique}";
+        let mut documents = BTreeMap::new();
+        for (name, prefix) in [("first", ""), ("second", r"\typeout{😀} ")] {
+            let source = format!("{prefix}{color}\n{prefix}{model}\n");
+            let path = temp.path().join(format!("{name}.tex"));
+            std::fs::write(&path, &source).unwrap();
+            documents.insert(name, Text::new(source));
+        }
+        let project = ProjectSources::capture(&root);
+        let mut log = "(./main.tex\n(./palette.sty)\n".to_owned();
+        for name in ["first", "second", "first"] {
+            log.push_str(&format!("(./{name}.tex\n"));
+            for (index, (call, message)) in
+                [(color, "color `accnet'"), (model, "color model `rbg'")]
+                    .into_iter()
+                    .enumerate()
+            {
+                let prefix = if name == "first" {
+                    ""
+                } else {
+                    r"\typeout{😀} "
+                };
+                let line = index + 1;
+                log.push_str(&format!("./{name}.tex:{line}: Package xcolor Error: Undefined {message}.\n{HELP}l.{line} {prefix}{call}\n"));
+            }
+            log.push_str(")\n");
+        }
+        log.push_str(")\n");
+        let result = parse_with_project_sources(&root, &log, &project).0;
+        for (name, expected_count) in [("first", 4), ("second", 2)] {
+            let uri = Url::from_file_path(temp.path().join(format!("{name}.tex"))).unwrap();
+            let diagnostics = &result[&uri];
+            assert_eq!(diagnostics.len(), expected_count);
+            let text = &documents[name];
+            for diagnostic in diagnostics {
+                let name = if diagnostic.range.start.line == 0 {
+                    "accnet"
+                } else {
+                    "rbg"
+                };
+                let start = text.source.find(name).unwrap();
+                assert_eq!(diagnostic.range, text.range(start, start + name.len()));
+                assert!(diagnostic.code.is_some());
+            }
+        }
+    }
+
+    #[test]
+    fn reused_analysis_rechecks_sources_and_rejects_a_different_emission_text() {
+        let call = r"\bridge\textcolor{accnet}{MarkerUnique}";
+        for paused_parent in [false, true] {
+            let (temp, root, original) = fixture(r"\newcommand{\done}{}\def\bridge{\done}", call);
+            let child = temp.path().join("content.tex");
+            std::fs::write(&child, call).unwrap();
+            if paused_parent {
+                std::fs::write(&root, r"\usepackage{palette}\input{content}").unwrap();
+            }
+            let project = ProjectSources::capture(&root);
+            let mut analysis = ProjectAnalysis::new(&project);
+            let root_uri = Url::from_file_path(&root).unwrap();
+            let uri = if paused_parent {
+                Url::from_file_path(&child).unwrap()
+            } else {
+                root_uri.clone()
+            };
+            let palette_uri = Url::from_file_path(temp.path().join("palette.sty")).unwrap();
+            let loaded = [uri.clone(), palette_uri].into();
+            let paused = if paused_parent {
+                [root_uri].into()
+            } else {
+                BTreeSet::new()
+            };
+            let context = analysis
+                .context(&loaded, &paused, &uri, false)
+                .unwrap()
+                .unwrap();
+            let source = if paused_parent { call } else { &original };
+            let line = u32::from(!paused_parent);
+            assert!(color_error_range(
+                &Text::new(source.into()),
+                line,
+                call,
+                "accnet",
+                false,
+                Some(&context.calls)
+            )
+            .is_some());
+            assert!(color_error_range(
+                &Text::new(format!("{source}\n% changed")),
+                line,
+                call,
+                "accnet",
+                false,
+                Some(&context.calls)
+            )
+            .is_none());
+            let saved_root = std::fs::read_to_string(&root).unwrap();
+            std::fs::write(
+                &root,
+                format!("{saved_root}\n\\renewcommand{{\\done}}[3]{{}}"),
+            )
+            .unwrap();
+            assert!(analysis.context(&loaded, &paused, &uri, false).is_err());
+            std::fs::write(&root, saved_root).unwrap();
+            assert!(analysis
+                .context(&loaded, &paused, &uri, false)
+                .unwrap()
+                .is_some());
+            std::fs::remove_file(temp.path().join("palette.sty")).unwrap();
+            assert!(analysis.context(&loaded, &paused, &uri, false).is_err());
         }
     }
 
