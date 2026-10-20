@@ -1156,12 +1156,13 @@ fn invocation_error_range(
         &local
     };
     let mut matches = invocations.iter().filter_map(|(span, tail)| {
-        // Keep the stricter single-line color echo rule. Counter readers also
-        // support earlier name groups followed by a value on the echoed line;
-        // their candidates have already passed the macro-operand check.
+        // Color calls require a single-line echo. Counters may have a value
+        // on a later line; environment names may follow a command newline.
+        // All candidates have already passed the macro-operand check.
         if text.source[span.clone()] != *name
             || text.position(tail.end).line != line
-            || kind != InvocationKind::Counter && tail.start < start
+            || matches!(kind, InvocationKind::Color | InvocationKind::ColorModel)
+                && tail.start < start
         {
             return None;
         }
@@ -1217,36 +1218,30 @@ pub(crate) fn mismatched_environment_names(message: &str) -> Option<(&str, &str)
         .then_some((name, expected))
 }
 
-fn environment_name_range(
-    text: &Text,
-    line: u32,
-    context: &str,
-    error: &EnvironmentError<'_>,
-) -> Option<Range> {
-    let prefix = context.trim_end();
-    let shortened = shortened_context(prefix);
-    let start = text.offset(Position::new(line, 0))?;
-    let syntax = crate::syntax::Syntax::latex(text);
-    let mut matches = syntax.commands.iter().filter_map(|command| {
-        if command.name != error.command {
-            return None;
-        }
-        let argument = command.argument.as_ref()?;
-        let span = argument.span.clone();
-        if text.source[span.clone()] != *error.name
-            || text.position(argument.outer_span.end).line != line
-        {
-            return None;
-        }
-        let consumed = &text.source[start..argument.outer_span.end];
-        let matched = shortened.map_or(consumed == prefix, |suffix| {
-            suffix.ends_with(&text.source[argument.outer_span.clone()])
-                && consumed.ends_with(suffix)
-        });
-        matched.then(|| text.range(span.start, span.end))
-    });
-    let range = matches.next()?;
-    matches.next().is_none().then_some(range)
+pub(crate) fn environment_error_invocations_with_signatures(
+    source: &str,
+    parsed: &crate::syntax::Syntax,
+    signatures: &crate::signature::CommandSignatures<'_>,
+    command_name: &str,
+) -> Vec<(ByteRange<usize>, ByteRange<usize>)> {
+    if signatures
+        .names()
+        .any(|name| matches!(name, "begin" | "end"))
+    {
+        return vec![];
+    }
+    let operands = signatures.argument_tokens(source, parsed);
+    parsed
+        .commands
+        .iter()
+        .filter_map(|command| {
+            if command.name != command_name || operands.contains(&command.span.start) {
+                return None;
+            }
+            let argument = command.argument.as_ref()?;
+            Some((argument.span.clone(), argument.outer_span.clone()))
+        })
+        .collect()
 }
 
 fn shortened_context(prefix: &str) -> Option<&str> {
@@ -1537,17 +1532,31 @@ fn emit_with_context(
     })
     .flatten();
     ranges.extend(command_range);
-    let environment = environment_error(&message);
-    let environment_range = environment
-        .as_ref()
-        .filter(|_| reported_line.checked_sub(1) == Some(line))
-        .and_then(|error| environment_name_range(&text, line, context?, error));
-    ranges.extend(environment_range);
     let project_stale = error.as_ref().is_some_and(|context| context.project_stale);
     let macro_context = error
         .as_ref()
         .and_then(|context| context.macro_context.as_ref());
     let cached_calls = macro_context.map(|context| context.calls.as_ref());
+    let environment = environment_error(&message);
+    let environment_range = environment
+        .as_ref()
+        .filter(|_| !project_stale)
+        .filter(|_| reported_line.checked_sub(1) == Some(line))
+        .and_then(|error| {
+            invocation_error_range(
+                &text,
+                line,
+                context?,
+                error.name,
+                if error.command == "begin" {
+                    InvocationKind::EnvironmentBegin
+                } else {
+                    InvocationKind::EnvironmentEnd
+                },
+                cached_calls,
+            )
+        });
+    ranges.extend(environment_range);
     let counter_name = undefined_counter_name(&message);
     let counter_range = counter_name
         .filter(|_| !project_stale)
@@ -1689,7 +1698,7 @@ fn emit_with_context(
                     }))
                     .or_else(|| graphic_range.and(missing_graphic).map(|name| serde_json::json!({"file":name})))
                     .map(|mut data| {
-                        if color_range.is_some() || model_range.is_some() || counter_range.is_some() {
+                        if color_range.is_some() || model_range.is_some() || counter_range.is_some() || environment_range.is_some() {
                             if let Some(context) = macro_context {
                                 data["macroSources"] = serde_json::json!(context.macros.sources);
                                 if !context.macros.paused_sources.is_empty() {
@@ -2269,6 +2278,8 @@ enum InvocationKind {
     Color,
     ColorModel,
     Counter,
+    EnvironmentBegin,
+    EnvironmentEnd,
 }
 
 impl InvocationKind {
@@ -2277,8 +2288,16 @@ impl InvocationKind {
             Some(Self::Color)
         } else if undefined_color_model_name(message).is_some() {
             Some(Self::ColorModel)
+        } else if undefined_counter_name(message).is_some() {
+            Some(Self::Counter)
         } else {
-            undefined_counter_name(message).map(|_| Self::Counter)
+            environment_error(message).map(|error| {
+                if error.command == "begin" {
+                    Self::EnvironmentBegin
+                } else {
+                    Self::EnvironmentEnd
+                }
+            })
         }
     }
 
@@ -2297,6 +2316,18 @@ impl InvocationKind {
             ),
             Self::Counter => {
                 crate::counters::error_invocations_with_signatures(source, syntax, signatures)
+            }
+            Self::EnvironmentBegin | Self::EnvironmentEnd => {
+                environment_error_invocations_with_signatures(
+                    source,
+                    syntax,
+                    signatures,
+                    if self == Self::EnvironmentBegin {
+                        "begin"
+                    } else {
+                        "end"
+                    },
+                )
             }
         }
     }
@@ -2375,7 +2406,7 @@ impl ProjectSources {
 struct ProjectAnalysis<'a> {
     project: &'a ProjectSources,
     macros: Option<Rc<MacroContext<'a>>>,
-    calls: [Option<(Url, Rc<InvocationCalls<'a>>)>; 3],
+    calls: [Option<(Url, Rc<InvocationCalls<'a>>)>; 5],
 }
 
 impl<'a> ProjectAnalysis<'a> {
@@ -2383,7 +2414,7 @@ impl<'a> ProjectAnalysis<'a> {
         Self {
             project,
             macros: None,
-            calls: [None, None, None],
+            calls: [None, None, None, None, None],
         }
     }
 
@@ -2440,7 +2471,7 @@ impl<'a> ProjectAnalysis<'a> {
                     }),
                 ),
             }));
-            self.calls = [None, None, None];
+            self.calls = [None, None, None, None, None];
         }
         let macros = self.macros.as_ref().expect("nonempty macro scope");
         let document = self.project.documents.get(uri).ok_or(())?;
@@ -6831,6 +6862,130 @@ mod project_color_tests {
         let text = Text::new(source);
         for (index, error) in errors.iter().enumerate() {
             let (_, _, name) = calls[index % 3];
+            let line_start = text.offset(Position::new(index as u32 + 1, 0)).unwrap();
+            let start = line_start + text.source[line_start..].find(name).unwrap();
+            assert_eq!(error.range, text.range(start, start + name.len()));
+            assert!(error.code.is_some(), "{error:?}");
+        }
+    }
+
+    #[test]
+    fn project_environment_errors_require_error_time_macro_sources() {
+        for command in ["begin", "end"] {
+            let call = format!(r"\bridge\{command}{{algin}}");
+            let message = if command == "begin" {
+                "LaTeX Error: Environment algin undefined."
+            } else {
+                r"LaTeX Error: \begin{equation} ended by \end{algin}."
+            };
+            for case in [
+                "direct",
+                "callback",
+                "not-loaded",
+                "later",
+                "displayed",
+                "dynamic",
+            ] {
+                let declarations = if case == "callback" {
+                    r"\newcommand{\done}[2]{}\def\bridge{\done}"
+                } else {
+                    r"\newcommand{\done}{}\def\bridge{\done}"
+                };
+                let (temp, root, _) = fixture(declarations, &call);
+                let prefix = match case {
+                    "displayed" => r"\usepackage{palette}\lstinputlisting{later.tex}",
+                    "dynamic" => r"\usepackage{palette}\input{\filename}",
+                    _ => r"\usepackage{palette}",
+                };
+                let source = if case == "displayed" {
+                    format!("{prefix}\n{call}\n")
+                } else {
+                    format!("{prefix}\n{call}\n\\input{{later}}\n")
+                };
+                std::fs::write(&root, source).unwrap();
+                std::fs::write(temp.path().join("later.tex"), r"\renewcommand{\done}[2]{}")
+                    .unwrap();
+                let project = ProjectSources::capture(&root);
+                let before = if case == "not-loaded" {
+                    ""
+                } else {
+                    "(./palette.sty)"
+                };
+                let display = if case == "displayed" {
+                    "(./later.tex)"
+                } else {
+                    ""
+                };
+                let log = format!("(./main.tex\n{before}\n{display}\n./main.tex:2: {message}\n{COUNTER_HELP}l.2 {call}\n(./later.tex)\n)\n");
+                let result = parse_with_project_sources(&root, &log, &project).0;
+                let error = &result[&Url::from_file_path(&root).unwrap()][0];
+                let precise = matches!(case, "direct" | "later" | "displayed");
+                assert_eq!(error.code.is_some(), precise, "{command}/{case}: {error:?}");
+                if precise {
+                    let sources: Vec<Url> = serde_json::from_value(
+                        error.data.as_ref().unwrap()["macroSources"].clone(),
+                    )
+                    .unwrap();
+                    assert_eq!(sources.len(), 2);
+                    assert!(!sources
+                        .contains(&Url::from_file_path(temp.path().join("later.tex")).unwrap()));
+                } else {
+                    assert!(error.data.is_none(), "{command}/{case}: {error:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn interleaved_invocation_errors_keep_five_independent_call_caches() {
+        let calls = [
+            (
+                r"\bridge\textcolor{accnet}{MarkerUnique}",
+                "Package xcolor Error: Undefined color `accnet'.",
+                "accnet",
+            ),
+            (
+                r"\bridge\textcolor[rbg]{.2,.4,.6}{MarkerUnique}",
+                "Package xcolor Error: Undefined color model `rbg'.",
+                "rbg",
+            ),
+            (
+                r"\bridge\setcounter{equatoin}{7}",
+                "LaTeX Error: No counter 'equatoin' defined.",
+                "equatoin",
+            ),
+            (
+                r"\bridge\begin{panle}",
+                "LaTeX Error: Environment panle undefined.",
+                "panle",
+            ),
+            (
+                r"\bridge\end{algin}",
+                r"LaTeX Error: \begin{document} ended by \end{algin}.",
+                "algin",
+            ),
+        ];
+        let (_temp, root, _) = fixture(r"\newcommand{\done}{}\def\bridge{\done}", "");
+        let mut source = "\\usepackage{palette}\n".to_owned();
+        let mut log = "(./main.tex\n(./palette.sty)\n".to_owned();
+        for index in 0..15 {
+            let (call, message, _) = calls[index % 5];
+            let line = index + 2;
+            let help = if index % 5 < 2 { HELP } else { COUNTER_HELP };
+            source.push_str(&format!("{call}\n"));
+            log.push_str(&format!(
+                "./main.tex:{line}: {message}\n{help}l.{line} {call}\n"
+            ));
+        }
+        log.push_str(")\n");
+        std::fs::write(&root, &source).unwrap();
+        let project = ProjectSources::capture(&root);
+        let result = parse_with_project_sources(&root, &log, &project).0;
+        let errors = &result[&Url::from_file_path(root).unwrap()];
+        assert_eq!(errors.len(), 15);
+        let text = Text::new(source);
+        for (index, error) in errors.iter().enumerate() {
+            let (_, _, name) = calls[index % 5];
             let line_start = text.offset(Position::new(index as u32 + 1, 0)).unwrap();
             let start = line_start + text.source[line_start..].find(name).unwrap();
             assert_eq!(error.range, text.range(start, start + name.len()));

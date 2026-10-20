@@ -69,19 +69,18 @@ fn target<'a>(
         if build_log::undefined_environment_name(&diagnostic.message) != Some(name) {
             return None;
         }
-        return doc
-            .syntax
-            .commands
-            .iter()
-            .any(|command| {
-                command.name == "begin"
-                    && command.argument.as_ref().is_some_and(|argument| {
-                        let span = argument.span.clone();
-                        doc.text.source[span.clone()] == *name
-                            && doc.text.range(span.start, span.end) == diagnostic.range
-                    })
-            })
-            .then_some((Kind::Environment, name));
+        return build_log::environment_error_invocations_with_signatures(
+            &doc.text.source,
+            &doc.syntax,
+            signatures?,
+            "begin",
+        )
+        .iter()
+        .any(|(span, _)| {
+            doc.text.source[span.clone()] == *name
+                && doc.text.range(span.start, span.end) == diagnostic.range
+        })
+        .then_some((Kind::Environment, name));
     }
     if diagnostic.code == Some(NumberOrString::String("undefined-counter".into())) {
         let name = diagnostic.data.as_ref()?.get("counter")?.as_str()?;
@@ -174,11 +173,18 @@ fn opaque_environment(
         .then_some(true)
 }
 
-fn environment_end(doc: &crate::workspace::Document, begin: Range) -> Option<Range> {
+fn environment_end(
+    doc: &crate::workspace::Document,
+    begin: Range,
+    signatures: &crate::signature::CommandSignatures<'_>,
+) -> Option<Range> {
+    let operands = signatures.argument_tokens(&doc.text.source, &doc.syntax);
     let mut started = false;
     let mut stack = Vec::new();
     for command in &doc.syntax.commands {
-        if !matches!(command.name.as_str(), "begin" | "end") {
+        if !matches!(command.name.as_str(), "begin" | "end")
+            || operands.contains(&command.span.start)
+        {
             continue;
         }
         if !started {
@@ -220,6 +226,7 @@ fn environment_end(doc: &crate::workspace::Document, begin: Range) -> Option<Ran
 fn closing_environment_fix(
     doc: &crate::workspace::Document,
     diagnostic: &Diagnostic,
+    signatures: &crate::signature::CommandSignatures<'_>,
 ) -> Option<QuickFix> {
     let (name, expected) = build_log::mismatched_environment_names(&diagnostic.message)?;
     let data = diagnostic.data.as_ref()?;
@@ -229,9 +236,25 @@ fn closing_environment_fix(
     {
         return None;
     }
+    if !build_log::environment_error_invocations_with_signatures(
+        &doc.text.source,
+        &doc.syntax,
+        signatures,
+        "end",
+    )
+    .iter()
+    .any(|(span, _)| {
+        doc.text.source[span.clone()] == *name
+            && doc.text.range(span.start, span.end) == diagnostic.range
+    }) {
+        return None;
+    }
+    let operands = signatures.argument_tokens(&doc.text.source, &doc.syntax);
     let mut stack = Vec::new();
     for command in &doc.syntax.commands {
-        if !matches!(command.name.as_str(), "begin" | "end") {
+        if !matches!(command.name.as_str(), "begin" | "end")
+            || operands.contains(&command.span.start)
+        {
             continue;
         }
         let argument = command.argument.as_ref()?;
@@ -369,23 +392,7 @@ pub fn fixes(
                 }
                 continue;
             }
-            if diagnostic.code == Some(NumberOrString::String("mismatched-environment-end".into()))
-            {
-                if let Some(fix) = closing_environment_fix(doc, diagnostic) {
-                    if seen.insert((
-                        diagnostic.range.start,
-                        diagnostic.range.end,
-                        fix.edit.new_text.clone(),
-                    )) {
-                        result.push(fix);
-                        if result.len() >= 256 {
-                            return result;
-                        }
-                    }
-                }
-                continue;
-            }
-            let invocation_scope = if matches!(diagnostic.code.as_ref(), Some(NumberOrString::String(code)) if matches!(code.as_str(), "undefined-color" | "undefined-color-model" | "undefined-counter"))
+            let invocation_scope = if matches!(diagnostic.code.as_ref(), Some(NumberOrString::String(code)) if matches!(code.as_str(), "undefined-color" | "undefined-color-model" | "undefined-counter" | "undefined-environment" | "mismatched-environment-end"))
             {
                 let confirmed = workspace.build_diagnostic_sources.get(root);
                 let scope = if let Some(value) = diagnostic
@@ -464,6 +471,26 @@ pub fn fixes(
                         })
                 })
                 .map(|signatures| &*signatures);
+            if diagnostic.code == Some(NumberOrString::String("mismatched-environment-end".into()))
+            {
+                if let Some(fix) = closing_environment_fix(
+                    doc,
+                    diagnostic,
+                    invocation_signatures.expect("environment signature scope"),
+                ) {
+                    if seen.insert((
+                        diagnostic.range.start,
+                        diagnostic.range.end,
+                        fix.edit.new_text.clone(),
+                    )) {
+                        result.push(fix);
+                        if result.len() >= 256 {
+                            return result;
+                        }
+                    }
+                }
+                continue;
+            }
             let Some((kind, key)) = target(doc, diagnostic, invocation_signatures) else {
                 continue;
             };
@@ -473,7 +500,11 @@ pub fn fixes(
                 BTreeSet::new()
             };
             let paired_end = if kind == Kind::Environment {
-                let Some(end) = environment_end(doc, diagnostic.range) else {
+                let Some(end) = environment_end(
+                    doc,
+                    diagnostic.range,
+                    invocation_signatures.expect("environment signature scope"),
+                ) else {
                     continue;
                 };
                 Some(end)

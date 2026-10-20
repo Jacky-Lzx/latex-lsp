@@ -335,3 +335,115 @@ fn real_engines_pinpoint_environment_names_and_keep_macro_expansion_errors_on_th
         }
     }
 }
+
+#[test]
+fn environment_commands_consumed_by_macros_keep_line_diagnostics() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("main.tex");
+    for command in ["begin", "end"] {
+        for (declaration, prefix) in [
+            (r"\newcommand{\wrapped}[2]{}", r"\wrapped"),
+            (r"\newcommand{\wrapped}[3]{}", r"\wrapped{Unused}"),
+            (r"\newcommand{\wrapped}[3][default]{}", r"\wrapped[note]"),
+            (r"\def\wrapped#1#2{}", r"\wrapped"),
+            (
+                r"\NewDocumentCommand{\wrapped}{s t+ O{default} m m}{}",
+                r"\wrapped*+[note]",
+            ),
+            (
+                r"\NewDocumentCommand{\wrapped}{d() m m}{}",
+                r"\wrapped(note)",
+            ),
+            (
+                r"\newcommand{\wrapped}[2]{}\def\bridge{\wrapped}",
+                r"\bridge",
+            ),
+            (r"\def\bridge{\missingtarget}", r"\bridge"),
+            (r"\def\bridge{\bridge}", r"\bridge"),
+            ("", r"\unknown{Unused}"),
+            (r"\renewcommand{\begin}[1]{}", ""),
+            (r"\renewcommand{\end}[1]{}", ""),
+        ] {
+            let call = format!("{prefix}\\{command}{{algin}}");
+            let source = format!("{declaration}\n{call}\n");
+            std::fs::write(&root, source).unwrap();
+            let message = if command == "begin" {
+                "LaTeX Error: Environment algin undefined."
+            } else {
+                r"LaTeX Error: \begin{equation} ended by \end{algin}."
+            };
+            let log = format!("(./main.tex\n./main.tex:2: {message}\n{HELP}l.2 {call}\n)\n");
+            let result = build_log::parse(&root, &log);
+            let error = &result[&Url::from_file_path(&root).unwrap()][0];
+            assert!(
+                error.code.is_none() && error.data.is_none(),
+                "{declaration}/{call}: {error:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn completed_macro_calls_preserve_environment_error_ranges() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("main.tex");
+    for command in ["begin", "end"] {
+        for (declaration, prefix) in [
+            (r"\newcommand{\done}{}", r"\done"),
+            (r"\newcommand{\done}{}\def\bridge{\done}", r"\bridge"),
+            (r"\newcommand{\done}[1]{}", r"\done{Unused}"),
+            (r"\newcommand{\done}[1][default]{}", r"\done[note]"),
+            (
+                r"\NewDocumentCommand{\done}{s t+ O{default} m}{}",
+                r"\done*+[note]{Unused}",
+            ),
+            (
+                r"\NewDocumentCommand{\done}{d() m}{}",
+                r"\done(note){Unused}",
+            ),
+            ("", r"\relax\noindent\bfseries"),
+        ] {
+            let call = format!("{prefix}\\{command}{{algin}}");
+            let source = format!("{declaration}\n{call}\n");
+            std::fs::write(&root, &source).unwrap();
+            let message = if command == "begin" {
+                "LaTeX Error: Environment algin undefined."
+            } else {
+                r"LaTeX Error: \begin{equation} ended by \end{algin}."
+            };
+            let log = format!("(./main.tex\n./main.tex:2: {message}\n{HELP}l.2 {call}\n)\n");
+            let result = build_log::parse(&root, &log);
+            let error = &result[&Url::from_file_path(&root).unwrap()][0];
+            let start = source.rfind("algin").unwrap();
+            assert_eq!(
+                error.range,
+                Text::new(source).range(start, start + 5),
+                "{declaration}/{call}: {error:?}"
+            );
+            assert!(error.code.is_some());
+        }
+    }
+}
+
+#[test]
+fn shortened_environment_echoes_cannot_borrow_a_suffix_from_another_command() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("main.tex");
+    for command in ["begin", "end"] {
+        let source =
+            format!("\\iffalse\\{command}{{algin}}\\fi\\unknownwrapper{command}{{algin}}\n");
+        std::fs::write(&root, &source).unwrap();
+        let message = if command == "begin" {
+            "LaTeX Error: Environment algin undefined."
+        } else {
+            r"LaTeX Error: \begin{equation} ended by \end{algin}."
+        };
+        let log = format!("(./main.tex\n./main.tex:1: {message}\n{HELP}l.1 ...{{algin}}\n)\n");
+        let result = build_log::parse(&root, &log);
+        let error = &result[&Url::from_file_path(&root).unwrap()][0];
+        assert!(
+            error.code.is_none() && error.data.is_none(),
+            "{command}: {error:?}"
+        );
+    }
+}

@@ -536,3 +536,168 @@ fn paired_environment_spelling_fixes_turn_a_real_failed_build_into_a_successful_
     assert_eq!(after.status, "success", "{}", after.output);
     assert_eq!(after.pages, Some(1));
 }
+
+#[test]
+fn environment_repairs_recheck_error_time_project_macro_sources() {
+    for closing in [false, true] {
+        let source = if closing {
+            r"\begin{equation}x\bridge\end{algin}"
+        } else {
+            r"\bridge\begin{panle}x\end{panle}"
+        };
+        let declarations = r"\newenvironment{panel}{}{}\newcommand{\done}{}\def\bridge{\done}";
+        let (mut workspace, uri, definitions) = setup(source, declarations);
+        let mut error = if closing {
+            closing_diagnostic(&mut workspace, &uri, "algin", "equation")
+        } else {
+            diagnostic(&mut workspace, &uri, "panle")
+        };
+        workspace
+            .build_diagnostic_sources
+            .insert(uri.clone(), [uri.clone()].into());
+        assert!(actions(&workspace, &uri, &error).is_empty());
+        workspace
+            .build_diagnostic_sources
+            .insert(uri.clone(), [uri.clone(), definitions.clone()].into());
+        assert!(!actions(&workspace, &uri, &error).is_empty(), "{closing}");
+        let later = uri.join("later.sty").unwrap();
+        workspace.documents.insert(
+            later.clone(),
+            Document::new(&later, r"\renewcommand{\done}[2]{}".into(), None),
+        );
+        workspace
+            .recorded_inputs
+            .get_mut(&uri)
+            .unwrap()
+            .insert(later.clone());
+        workspace
+            .build_diagnostic_sources
+            .get_mut(&uri)
+            .unwrap()
+            .insert(later);
+        error.data.as_mut().unwrap()["macroSources"] = serde_json::json!([uri, definitions]);
+        store(&mut workspace, &uri, error.clone());
+        assert!(!actions(&workspace, &uri, &error).is_empty());
+        workspace.documents.insert(
+            definitions.clone(),
+            Document::new(
+                &definitions,
+                r"\newenvironment{panel}{}{}\newcommand{\done}[2]{}\def\bridge{\done}".into(),
+                Some(4),
+            ),
+        );
+        assert!(actions(&workspace, &uri, &error).is_empty());
+    }
+}
+
+#[test]
+fn environment_pairing_ignores_begin_and_end_tokens_consumed_by_macros() {
+    let (mut workspace, uri, _) = setup(
+        r"\begin{panle}\gobble\end{other}x\end{panle}",
+        r"\newenvironment{panel}{}{}\newcommand{\gobble}[2]{}",
+    );
+    let error = diagnostic(&mut workspace, &uri, "panle");
+    let edit = action(&actions(&workspace, &uri, &error), "panel")
+        .edit
+        .unwrap();
+    assert_eq!(
+        apply(&workspace, &uri, edit),
+        r"\begin{panel}\gobble\end{other}x\end{panel}"
+    );
+    let (mut workspace, uri, _) = setup(
+        r"\begin{equation}\gobble\end{equation}x\end{algin}",
+        r"\newcommand{\gobble}[2]{}",
+    );
+    let error = closing_diagnostic(&mut workspace, &uri, "algin", "equation");
+    let response = actions(&workspace, &uri, &error);
+    let edit = response
+        .iter()
+        .find_map(|action| match action {
+            CodeActionOrCommand::CodeAction(action)
+                if action.title == "Close environment `equation`" =>
+            {
+                action.edit.clone()
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        apply_count(&workspace, &uri, edit, 1),
+        r"\begin{equation}\gobble\end{equation}x\end{equation}"
+    );
+}
+
+#[test]
+fn environment_repairs_recheck_paused_ancestors_and_reject_callback_metadata() {
+    for closing in [false, true] {
+        let source = if closing {
+            r"\begin{equation}x\bridge\end{algin}"
+        } else {
+            r"\bridge\begin{panle}x\end{panle}"
+        };
+        let (mut workspace, root, definitions) = setup(
+            r"\input{content}",
+            r"\newenvironment{panel}{}{}\newcommand{\done}{}\def\bridge{\done}",
+        );
+        let child = root.join("content.tex").unwrap();
+        workspace
+            .documents
+            .insert(child.clone(), Document::new(&child, source.into(), Some(3)));
+        workspace
+            .recorded_inputs
+            .get_mut(&root)
+            .unwrap()
+            .insert(child.clone());
+        workspace.build_diagnostic_sources.insert(
+            root.clone(),
+            [root.clone(), child.clone(), definitions.clone()].into(),
+        );
+        let mut error = if closing {
+            closing_diagnostic(&mut workspace, &child, "algin", "equation")
+        } else {
+            diagnostic(&mut workspace, &child, "panle")
+        };
+        workspace.build_diagnostics.remove(&child);
+        error.data.as_mut().unwrap()["macroSources"] = serde_json::json!([child, definitions]);
+        error.data.as_mut().unwrap()["macroPausedSources"] = serde_json::json!([root]);
+        workspace.build_diagnostics.insert(
+            root.clone(),
+            BTreeMap::from([(child.clone(), vec![error.clone()])]),
+        );
+        assert!(!actions(&workspace, &child, &error).is_empty());
+        for value in [
+            serde_json::json!("invalid"),
+            serde_json::json!([child]),
+            serde_json::json!(["file:///outside.tex"]),
+        ] {
+            let mut malformed = error.clone();
+            malformed.data.as_mut().unwrap()["macroPausedSources"] = value;
+            workspace
+                .build_diagnostics
+                .get_mut(&root)
+                .unwrap()
+                .insert(child.clone(), vec![malformed.clone()]);
+            assert!(actions(&workspace, &child, &malformed).is_empty());
+        }
+        workspace
+            .build_diagnostics
+            .get_mut(&root)
+            .unwrap()
+            .insert(child.clone(), vec![error.clone()]);
+        for declaration in [
+            r"\renewcommand{\done}[2]{}",
+            r"\renewcommand{\bridge}[2]{}",
+            r"\renewcommand{\begin}[1]{}",
+            r"\renewcommand{\end}[1]{}",
+        ] {
+            workspace.documents.insert(
+                root.clone(),
+                Document::new(&root, format!("{declaration}\\input{{content}}"), Some(10)),
+            );
+            assert!(
+                actions(&workspace, &child, &error).is_empty(),
+                "{closing}: {declaration}"
+            );
+        }
+    }
+}
