@@ -147,15 +147,16 @@ impl Snapshot {
             return Self::default();
         };
         let sources = workspace.project_documents(root);
-        let redefined_bibliography_commands: BTreeSet<_> = sources
+        let redefined_file_commands: BTreeSet<_> = sources
             .iter()
             .filter_map(|uri| workspace.documents.get(uri))
             .flat_map(|doc| &doc.syntax.definitions)
             .filter(|entry| {
-                matches!(
-                    entry.name.as_str(),
-                    "bibliography" | "nobibliography" | "bibliographystyle"
-                )
+                syntax::loader_extension(&entry.name).is_some()
+                    || matches!(
+                        entry.name.as_str(),
+                        "bibliography" | "nobibliography" | "bibliographystyle"
+                    )
             })
             .map(|entry| entry.name.as_str())
             .collect();
@@ -245,45 +246,62 @@ impl Snapshot {
                 if paths.borrow().len() >= MAX_PATHS {
                     break 'sources;
                 }
-                if matches!(
-                    command.name.as_str(),
-                    "bibliography" | "nobibliography" | "bibliographystyle"
-                ) {
-                    let (names, extension) = if command.name == "bibliographystyle" {
-                        if redefined_bibliography_commands.contains("bibliographystyle") {
-                            continue;
-                        }
-                        let Some(argument) = syntax::file_argument(&doc.text.source, command)
-                        else {
-                            continue;
-                        };
-                        (vec![argument.value.clone()], "bst")
-                    } else {
-                        if redefined_bibliography_commands.contains("bibliography")
-                            || redefined_bibliography_commands.contains("nobibliography")
+                let loader_extension = syntax::loader_extension(&command.name);
+                if loader_extension.is_some()
+                    || matches!(
+                        command.name.as_str(),
+                        "bibliography" | "nobibliography" | "bibliographystyle"
+                    )
+                {
+                    if let Some(extension) = loader_extension {
+                        // The public loaders forward to others of the same
+                        // kind. A project override can change their lookup.
+                        if redefined_file_commands
+                            .iter()
+                            .any(|name| syntax::loader_extension(name) == Some(extension))
                         {
                             continue;
                         }
-                        let Some(spans) =
-                            syntax::complete_file_list_spans(&doc.text.source, command)
-                        else {
+                    } else if command.name == "bibliographystyle" {
+                        if redefined_file_commands.contains("bibliographystyle") {
                             continue;
+                        }
+                    } else if redefined_file_commands.contains("bibliography")
+                        || redefined_file_commands.contains("nobibliography")
+                    {
+                        continue;
+                    }
+                    let (names, extension) =
+                        if loader_extension == Some("cls") || command.name == "bibliographystyle" {
+                            let Some(argument) = syntax::file_argument(&doc.text.source, command)
+                            else {
+                                continue;
+                            };
+                            (
+                                vec![argument.value.clone()],
+                                loader_extension.unwrap_or("bst"),
+                            )
+                        } else {
+                            let Some(spans) =
+                                syntax::complete_file_list_spans(&doc.text.source, command)
+                            else {
+                                continue;
+                            };
+                            (
+                                spans
+                                    .into_iter()
+                                    .map(|span| doc.text.source[span].to_owned())
+                                    .collect(),
+                                loader_extension.unwrap_or("bib"),
+                            )
                         };
-                        (
-                            spans
-                                .into_iter()
-                                .map(|span| doc.text.source[span].to_owned())
-                                .collect(),
-                            "bib",
-                        )
-                    };
                     for name in names {
                         if paths.borrow().len() >= MAX_PATHS {
                             break 'sources;
                         }
-                        // These names use the real input suffix, including an
-                        // explicit .bst; BibTeX's doubled display suffix is
-                        // only a log convention, not a second file candidate.
+                        // Shared lookup keeps real suffix rules: package and
+                        // class loaders always append theirs; bibliography
+                        // commands accept an explicit single .bib or .bst.
                         for origin in [root, &source] {
                             if observe(origin, &command.name, &name, extension).is_some()
                                 || source == *root
@@ -901,5 +919,245 @@ mod bibliography_conditions {
         let snapshot = capture(root, &format!("\\bibliography{{{names}}}"));
         assert_eq!(snapshot.paths.len(), MAX_PATHS);
         assert!(snapshot.changed_path().is_none());
+    }
+}
+
+#[cfg(test)]
+mod loader_conditions {
+    use super::*;
+
+    const LOADERS: [(&str, &str); 6] = [
+        ("usepackage", "sty"),
+        ("RequirePackage", "sty"),
+        ("RequirePackageWithOptions", "sty"),
+        ("documentclass", "cls"),
+        ("LoadClass", "cls"),
+        ("LoadClassWithOptions", "cls"),
+    ];
+
+    fn capture(root: &Path, source: &str) -> Snapshot {
+        std::fs::write(root.join("main.tex"), source).unwrap();
+        let mut workspace = Workspace::default();
+        workspace.add_root(root.into());
+        Snapshot::capture(
+            &workspace,
+            &Url::from_file_path(root.join("main.tex")).unwrap(),
+            &BuildConfig::default(),
+        )
+    }
+
+    #[test]
+    fn loader_conditions_share_name_parsing_and_always_append_the_loading_suffix() {
+        for (command, extension) in LOADERS {
+            for explicit in [false, true] {
+                let directory = tempfile::tempdir().unwrap();
+                let root = directory.path();
+                std::fs::create_dir(root.join("local")).unwrap();
+                let stem = if extension == "sty" {
+                    "mi ssing类"
+                } else {
+                    "mi ssing,类"
+                };
+                let argument = format!(
+                    "local/{stem}{}",
+                    if explicit {
+                        format!(".{extension}")
+                    } else {
+                        String::new()
+                    }
+                );
+                let item = if extension == "sty" {
+                    format!("first,% 😀 before\r\n {argument}% after,\r\n,second")
+                } else {
+                    format!("% 😀 before\r\n {argument}% after\r\n")
+                };
+                let options = if syntax::loader_forwards_options(command) {
+                    ""
+                } else {
+                    "[dummy [literal]"
+                };
+                let source = format!("\\{command}{options}{{{item}}}[2020/01/01]\r\n");
+                let snapshot = capture(root, &source);
+                assert!(snapshot.changed_path().is_none(), "{source}");
+                let literal = if extension == "sty" {
+                    syntax::loader_name(&argument)
+                } else {
+                    argument.clone()
+                };
+                let actual = root.join(format!("{literal}.{extension}"));
+                assert!(
+                    snapshot
+                        .watched()
+                        .contains(&Url::from_file_path(&actual).unwrap()),
+                    "{source}\n{snapshot:?}"
+                );
+                // Even an explicitly suffixed loader argument is a base name.
+                // A file at the unappended name must not satisfy this lookup.
+                std::fs::write(root.join(&literal), "Decoy.\n").unwrap();
+                assert!(snapshot.changed_path().is_none(), "{source}");
+                std::fs::write(&actual, "\\endinput\n").unwrap();
+                assert!(snapshot.changed_path().is_some(), "{source}");
+            }
+        }
+    }
+
+    #[test]
+    fn dynamic_incomplete_or_ignored_loader_arguments_do_not_invent_conditions() {
+        for (command, extension) in LOADERS {
+            let mut sources = vec![
+                format!("\\{command}{{\\chosen}}"),
+                format!("\\{command}*{{missing}}"),
+                format!("\\{command}{{mi% split\nssing}}"),
+                format!("\\{command}{{missing"),
+                format!("\\{command}[first][second]{{missing}}"),
+                format!("\\verb|\\{command}{{missing}}|"),
+                format!("% \\{command}{{missing}}"),
+                format!("\\newcommand{{\\{command}}}[1]{{}}\\{command}{{missing}}"),
+            ];
+            if extension == "sty" {
+                sources.push(format!("\\{command}{{missing,\\chosen}}"));
+            }
+            if syntax::loader_forwards_options(command) {
+                sources.push(format!("\\{command}[bad]{{missing}}"));
+            }
+            for source in sources {
+                let directory = tempfile::tempdir().unwrap();
+                let root = directory.path();
+                let snapshot = capture(root, &source);
+                assert!(snapshot.paths.is_empty(), "{source}\n{snapshot:?}");
+                std::fs::write(root.join(format!("missing.{extension}")), "\\endinput\n").unwrap();
+                assert!(snapshot.changed_path().is_none(), "{source}");
+            }
+        }
+        for source in [
+            r"\PassOptionsToPackage{option}{missing}",
+            r"\PassOptionsToClass{option}{missing}",
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            assert!(capture(directory.path(), source).paths.is_empty());
+        }
+    }
+
+    #[test]
+    fn project_loader_redefinitions_disable_only_their_own_loading_family() {
+        for (redefined, extension) in LOADERS {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            std::fs::write(
+                root.join("settings.tex"),
+                format!("\\renewcommand{{\\{redefined}}}[1]{{}}\n"),
+            )
+            .unwrap();
+            let source = r"\input{settings}\usepackage{missing}\RequirePackage{missing}\RequirePackageWithOptions{missing}\documentclass{missing}\LoadClass{missing}\LoadClassWithOptions{missing}\bibliography{missing}\bibliographystyle{missing}";
+            let snapshot = capture(root, source);
+            assert!(
+                !snapshot
+                    .paths
+                    .contains_key(&root.join(format!("missing.{extension}"))),
+                "{redefined}\n{snapshot:?}"
+            );
+            for other in ["sty", "cls", "bib", "bst"]
+                .into_iter()
+                .filter(|other| *other != extension)
+            {
+                let actual = root.join(format!("missing.{other}"));
+                assert!(
+                    snapshot.paths.contains_key(&actual),
+                    "{redefined}\n{snapshot:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn loader_conditions_watch_root_before_source_relative_fallbacks() {
+        for (command, extension) in LOADERS {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            std::fs::create_dir(root.join("sub")).unwrap();
+            std::fs::write(
+                root.join("sub/settings.tex"),
+                format!("\\{command}{{missing}}\n"),
+            )
+            .unwrap();
+            std::fs::write(
+                root.join(format!("sub/missing.{extension}")),
+                "\\endinput\n",
+            )
+            .unwrap();
+            let snapshot = capture(root, r"\input{sub/settings}");
+            assert!(snapshot.changed_path().is_none());
+            std::fs::write(
+                root.join(format!("missing.{extension}")),
+                "Higher priority.\n",
+            )
+            .unwrap();
+            assert!(snapshot.changed_path().is_some(), "{command}");
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn first_loader_aliases_detect_retargets_without_recorder_history() {
+        use std::os::unix::fs::symlink;
+        for (command, extension) in LOADERS {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            for name in ["old", "new"] {
+                std::fs::write(root.join(format!("{name}.{extension}")), "\\endinput\n").unwrap();
+            }
+            let alias = root.join(format!("alias.{extension}"));
+            symlink(root.join(format!("old.{extension}")), &alias).unwrap();
+            let snapshot = capture(root, &format!("\\{command}{{alias}}"));
+            assert!(snapshot.changed_path().is_none());
+            std::fs::remove_file(&alias).unwrap();
+            symlink(root.join(format!("new.{extension}")), &alias).unwrap();
+            assert!(snapshot.changed_path().is_some(), "{command}");
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn missing_loaders_under_directory_aliases_watch_physical_paths() {
+        use std::os::unix::fs::symlink;
+        for (command, extension) in LOADERS {
+            let project = tempfile::tempdir().unwrap();
+            let shared = tempfile::tempdir().unwrap();
+            symlink(shared.path(), project.path().join("alias")).unwrap();
+            let snapshot = capture(project.path(), &format!("\\{command}{{alias/missing}}"));
+            let physical = shared.path().join(format!("missing.{extension}"));
+            assert!(
+                snapshot
+                    .watched()
+                    .contains(&Url::from_file_path(&physical).unwrap()),
+                "{command}\n{snapshot:?}"
+            );
+            std::fs::write(physical, "\\endinput\n").unwrap();
+            assert!(snapshot.changed_path().is_some(), "{command}");
+        }
+    }
+
+    #[test]
+    fn loaders_and_bibliography_share_the_existing_candidate_budget() {
+        for (command, extension) in LOADERS {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let names = (0..MAX_PATHS - 1)
+                .map(|n| format!("db{n}"))
+                .collect::<Vec<_>>()
+                .join(",");
+            let snapshot = capture(
+                root,
+                &format!("\\bibliography{{{names}}}\\{command}{{last}}\\{command}{{overflow}}"),
+            );
+            assert_eq!(snapshot.paths.len(), MAX_PATHS, "{command}");
+            assert!(snapshot
+                .paths
+                .contains_key(&root.join(format!("last.{extension}"))));
+            assert!(!snapshot
+                .paths
+                .contains_key(&root.join(format!("overflow.{extension}"))));
+            assert!(snapshot.changed_path().is_none());
+        }
     }
 }

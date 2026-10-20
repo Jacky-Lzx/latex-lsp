@@ -10344,3 +10344,206 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
         }
     }
 }
+
+#[test]
+#[cfg(unix)]
+fn loader_files_created_during_compilation_discard_or_cancel_obsolete_missing_errors() {
+    use std::os::unix::fs::symlink;
+    for (command, extension, code) in [
+        ("usepackage", "sty", "missing-package"),
+        ("RequirePackage", "sty", "missing-package"),
+        ("RequirePackageWithOptions", "sty", "missing-package"),
+        ("documentclass", "cls", "missing-class"),
+        ("LoadClass", "cls", "missing-class"),
+        ("LoadClassWithOptions", "cls", "missing-class"),
+    ] {
+        for explicit in [false, true] {
+            for alias in [false, true] {
+                for change in ["none", "silent", "event"] {
+                    let stem = if alias {
+                        "alias/missing"
+                    } else {
+                        "local/missing"
+                    };
+                    let argument = format!(
+                        "{stem}{}",
+                        if explicit {
+                            format!(".{extension}")
+                        } else {
+                            String::new()
+                        }
+                    );
+                    let reported = format!("{argument}.{extension}");
+                    let script = r#"cp diagnostic.log "$1/main.log"
+printf 'PWD %s\nINPUT %s/main.tex\n' "$PWD" "$PWD" > "$1/main.fls"
+touch "$1/ready"
+while [ ! -f "$1/release" ]; do sleep 0.02; done
+exit 1
+"#;
+                    let (mut server, directory, main) = fake_build_server_capabilities(
+                        script,
+                        false,
+                        json!({"textDocument":{"diagnostic":{}}}),
+                    );
+                    let external = tempfile::tempdir().unwrap();
+                    let parent = if alias {
+                        symlink(external.path(), directory.path().join("alias")).unwrap();
+                        external.path().to_path_buf()
+                    } else {
+                        let parent = directory.path().join("local");
+                        std::fs::create_dir(&parent).unwrap();
+                        parent
+                    };
+                    let physical = parent.join(format!(
+                        "missing{}.{extension}",
+                        if explicit {
+                            format!(".{extension}")
+                        } else {
+                            String::new()
+                        }
+                    ));
+                    let prefix = if extension == "sty" {
+                        "\\documentclass{article}\n"
+                    } else {
+                        ""
+                    };
+                    let line = if extension == "sty" { 2 } else { 1 };
+                    let source = format!("{prefix}\\{command}{{{argument}}}\\begin{{document}}\nExpected.\\end{{document}}\n");
+                    std::fs::write(main.to_file_path().unwrap(), &source).unwrap();
+                    std::fs::write(directory.path().join("diagnostic.log"), format!("(./main.tex\n! LaTeX Error: File `{reported}' not found.\n\nType X to quit or <RETURN> to proceed,\nor enter new name.\n\nEnter file name:\n! Emergency stop.\n<read *>\n\nl.{line} \\{command}{{{argument}}}\\begin\n")).unwrap();
+                    server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}));
+                    server.request(
+                        2,
+                        "workspace/executeCommand",
+                        json!({"command":"latex.build","arguments":[main]}),
+                    );
+                    let output = directory.path().join("build/latex-lsp");
+                    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                    while !output.join("ready").exists() {
+                        assert!(
+                            std::time::Instant::now() < deadline,
+                            "compiler did not start"
+                        );
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    if change != "none" {
+                        std::fs::write(&physical, "\\endinput\n").unwrap();
+                    }
+                    if change == "event" {
+                        server.notify("workspace/didChangeWatchedFiles", json!({"changes":[{"uri":Url::from_file_path(&physical).unwrap(),"type":1}]}));
+                        server.request(
+                            3,
+                            "textDocument/documentSymbol",
+                            json!({"textDocument":{"uri":main}}),
+                        );
+                    }
+                    std::fs::write(output.join("release"), "").unwrap();
+                    let finished =
+                        server.until(|message| message["method"] == "latex/buildFinished");
+                    if change == "event" {
+                        assert_eq!(
+                            finished["params"]["status"], "cancelled",
+                            "{command} explicit={explicit} alias={alias}: {finished}"
+                        );
+                    } else {
+                        assert_eq!(finished["params"]["status"], "error", "{finished}");
+                        assert_eq!(
+                            finished["params"]["stale"],
+                            change == "silent",
+                            "{command} explicit={explicit} alias={alias}: {finished}"
+                        );
+                    }
+                    let diagnostics = server.request(
+                        4,
+                        "textDocument/diagnostic",
+                        json!({"textDocument":{"uri":main}}),
+                    );
+                    let items = diagnostics["items"].as_array().unwrap();
+                    if change == "none" {
+                        assert!(
+                            items.iter().any(|item| item["code"] == code),
+                            "{command} explicit={explicit} alias={alias}: {diagnostics}"
+                        );
+                    } else {
+                        assert!(
+                            !items.iter().any(|item| item["source"] == "latex-build"),
+                            "{command} explicit={explicit} alias={alias}: {diagnostics}"
+                        );
+                    }
+                    server.request(5, "shutdown", Value::Null);
+                    server.notify("exit", Value::Null);
+                    server.wait_exit(0);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn first_static_loader_alias_retargets_invalidate_builds_without_prior_recorder_history() {
+    use std::os::unix::fs::symlink;
+    for (command, extension) in [
+        ("usepackage", "sty"),
+        ("RequirePackage", "sty"),
+        ("RequirePackageWithOptions", "sty"),
+        ("documentclass", "cls"),
+        ("LoadClass", "cls"),
+        ("LoadClassWithOptions", "cls"),
+    ] {
+        for explicit in [false, true] {
+            let argument = format!(
+                "alias{}",
+                if explicit {
+                    format!(".{extension}")
+                } else {
+                    String::new()
+                }
+            );
+            let script = format!(
+                r#"printf '(./main.tex\n)\n' > "$1/main.log"
+printf 'PWD %s\nINPUT %s/main.tex\nINPUT %s/{argument}.{extension}\n' "$PWD" "$PWD" "$PWD" > "$1/main.fls"
+touch "$1/ready"
+while [ ! -f "$1/release" ]; do sleep 0.02; done
+printf '%%PDF-1.4\n' > "$1/main.pdf"
+"#
+            );
+            let (mut server, directory, main) = fake_build_server(&script, false);
+            let root = directory.path();
+            for name in ["old", "new"] {
+                std::fs::write(root.join(format!("{name}.{extension}")), "\\endinput\n").unwrap();
+            }
+            let alias = root.join(format!("{argument}.{extension}"));
+            symlink(root.join(format!("old.{extension}")), &alias).unwrap();
+            let source = format!("\\{command}{{{argument}}}\n");
+            std::fs::write(main.to_file_path().unwrap(), &source).unwrap();
+            server.notify(
+                "textDocument/didChange",
+                json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+            );
+            server.request(
+                2,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            let output = root.join("build/latex-lsp");
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while !output.join("ready").exists() {
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            std::fs::remove_file(&alias).unwrap();
+            symlink(root.join(format!("new.{extension}")), &alias).unwrap();
+            std::fs::write(output.join("release"), "").unwrap();
+            let finished = server.until(|message| message["method"] == "latex/buildFinished");
+            assert_eq!(finished["params"]["status"], "success", "{finished}");
+            assert_eq!(
+                finished["params"]["stale"], true,
+                "{command} explicit={explicit}: {finished}"
+            );
+            server.request(3, "shutdown", Value::Null);
+            server.notify("exit", Value::Null);
+            server.wait_exit(0);
+        }
+    }
+}
