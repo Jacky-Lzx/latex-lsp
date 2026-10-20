@@ -185,11 +185,14 @@ impl Renames {
 
     fn source(&self, uri: &Url, root: &Url, command: &str, name: &str) -> Option<Url> {
         let extensions = syntax::inferred_file_extensions(command)?;
-        [root, uri].into_iter().find_map(|origin| {
-            resolve_file_path_with(&self.uri(origin), command, name, extensions, |path| {
-                self.file(path)
+        [root, uri]
+            .into_iter()
+            .filter(|origin| command != "lstinputlisting" || *origin == root)
+            .find_map(|origin| {
+                resolve_file_path_with(&self.uri(origin), command, name, extensions, |path| {
+                    self.file(path)
+                })
             })
-        })
     }
 
     pub fn affects(&self, uri: &Url) -> bool {

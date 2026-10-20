@@ -65,13 +65,25 @@ pub fn complete(
         .root_document(uri)
         .map(|root| vec![root])
         .unwrap_or_else(|_| workspace.source_roots(uri));
+    if command == "lstinputlisting"
+        && !doc.syntax.commands.iter().any(|candidate| {
+            candidate.name == command
+                && syntax::file_name_argument_start(&doc.text.source, command, candidate.span.end)
+                    == Some(span.start.saturating_sub(1))
+                && roots
+                    .iter()
+                    .all(|root| crate::listings::supported(workspace, uri, root, candidate))
+        })
+    {
+        return vec![];
+    }
     let mut candidates = BTreeMap::new();
     let mut insertions = BTreeSet::new();
     let mut directories = roots
         .iter()
-        .chain(
-            std::iter::once(uri).filter(|uri| command != "includegraphics" && !roots.contains(uri)),
-        )
+        .chain(std::iter::once(uri).filter(|uri| {
+            !matches!(command, "includegraphics" | "lstinputlisting") && !roots.contains(uri)
+        }))
         .filter_map(|origin| {
             origin
                 .to_file_path()
@@ -116,7 +128,7 @@ pub fn complete(
                 .and_then(|ext| ext.to_str())
                 .unwrap_or("");
             if !folder
-                && command != "IfFileExists"
+                && !matches!(command, "IfFileExists" | "lstinputlisting")
                 && !extensions
                     .iter()
                     .any(|ext| extension.eq_ignore_ascii_case(ext))
@@ -132,7 +144,10 @@ pub fn complete(
                 if !existing_slash {
                     new_text.push('/');
                 }
-            } else if !matches!(command, "includegraphics" | "addbibresource") {
+            } else if !matches!(
+                command,
+                "includegraphics" | "addbibresource" | "lstinputlisting"
+            ) {
                 let explicit_extension = existing_name
                     .rsplit_once('.')
                     .is_some_and(|(_, typed)| extension.starts_with(typed));

@@ -302,6 +302,7 @@ fn builtin(name: &str) -> Option<Signature> {
             false,
         ),
         "includegraphics" => (&[("options", true), ("file", false)], true),
+        "lstinputlisting" => (&[("options", true), ("file", false)], false),
         "documentclass" | "usepackage" | "RequirePackage" | "LoadClass" => (
             &[
                 ("options", true),
@@ -654,7 +655,8 @@ fn builtin(name: &str) -> Option<Signature> {
         parameters,
         documentation,
         starred,
-        nested_brackets: !(syntax::is_citation(name)
+        nested_brackets: !(name == "lstinputlisting"
+            || syntax::is_citation(name)
             || syntax::loader_extension(name).is_some()
             || syntax::declares_traditional_command(name)
             || syntax::reference_note_count(name) > 0

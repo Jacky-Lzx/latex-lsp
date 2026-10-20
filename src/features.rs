@@ -574,6 +574,14 @@ fn argument_span(doc: &Document, command: &Command, offset: usize) -> Option<Spa
             offset,
         );
     }
+    if command.name == "lstinputlisting" {
+        let start = syntax::file_name_argument_start(source, &command.name, command.span.end)?;
+        let value = source.get(start..offset)?.strip_prefix('{')?;
+        if value.is_empty() || syntax::is_literal_file_path(value) {
+            return Some(start + 1..offset);
+        }
+        return None;
+    }
     if syntax::file_list(&command.name) || syntax::loader_extension(&command.name) == Some("cls") {
         return syntax::active_file_prefix(
             source,

@@ -973,7 +973,9 @@ fn resolve_path_with(
     let parent = uri.to_file_path().ok()?.parent()?.to_path_buf();
     let path = parent.join(&value);
     let selected = file(&path).or_else(|| {
-        if path.extension().and_then(|value| value.to_str()) == Some(extension) {
+        if extension.is_empty()
+            || path.extension().and_then(|value| value.to_str()) == Some(extension)
+        {
             return None;
         }
         let mut name = path.as_os_str().to_os_string();

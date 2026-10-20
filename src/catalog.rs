@@ -739,6 +739,11 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
         "Include a TeX file with page breaks.",
     ),
     (
+        "lstinputlisting",
+        "lstinputlisting[language=${1:Rust}]{${2:file}}",
+        "Insert a source file as code without importing LaTeX symbols. Requires listings.",
+    ),
+    (
         "includegraphics",
         "includegraphics[width=${1:\\linewidth}]{${2:file}}",
         "Insert an image. Requires graphicx.",

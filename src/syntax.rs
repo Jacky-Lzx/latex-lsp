@@ -582,7 +582,7 @@ pub(crate) fn is_static_key(value: &str) -> bool {
 
 /// Split a TeX key list without interpreting commas inside comments, groups,
 /// or control symbols. Ranges always refer to the original document.
-fn key_list_segments(source: &str, span: Range<usize>) -> Vec<Range<usize>> {
+pub(crate) fn key_list_segments(source: &str, span: Range<usize>) -> Vec<Range<usize>> {
     let bytes = source.as_bytes();
     let mut result = Vec::new();
     let mut start = span.start;
@@ -733,7 +733,7 @@ pub(crate) fn file_name_argument_start(
     if source.as_bytes().get(start) == Some(&b'*') {
         return None;
     }
-    if loader_extension(name).is_some()
+    if (loader_extension(name).is_some() || name == "lstinputlisting")
         && !loader_forwards_options(name)
         && source.as_bytes().get(start) == Some(&b'[')
     {
@@ -874,6 +874,8 @@ pub fn file_extensions(name: &str) -> Option<&'static [&'static str]> {
     Some(match name {
         "input" | "InputIfFileExists" => &["tex", "ltx", "sty", "cls", "def", "clo"],
         "IfFileExists" => &["tex"],
+        // Empty suffix means an exact arbitrary file, never an appended dot.
+        "lstinputlisting" => &[""],
         "include" | "includeonly" | "subfile" => &["tex"],
         "bibliography" | "nobibliography" | "addbibresource" => &["bib"],
         "bibliographystyle" => &["bst"],
@@ -963,14 +965,20 @@ pub(crate) fn file_argument<'a>(
         // into a different forwarding declaration.
         (is_literal_file_path(&argument.value) && !argument.value.chars().any(char::is_whitespace))
             .then_some(std::borrow::Cow::Owned(argument))
-    } else if loader_extension(&command.name) == Some("cls") || command.name == "bibliographystyle"
+    } else if loader_extension(&command.name) == Some("cls")
+        || matches!(
+            command.name.as_str(),
+            "bibliographystyle" | "lstinputlisting"
+        )
     {
         let start = file_name_argument_start(source, &command.name, command.span.end)?;
         let argument = command
             .argument
             .as_ref()
             .filter(|argument| argument.outer_span.start == start)?;
-        let span = if command.name == "bibliographystyle" {
+        let span = if command.name == "lstinputlisting" {
+            is_literal_file_path(&argument.value).then_some(argument.span.clone())?
+        } else if command.name == "bibliographystyle" {
             bibliography_style_span(source, argument.span.clone())
                 .filter(|span| !span.is_empty())?
         } else {
@@ -1024,7 +1032,7 @@ pub(crate) fn file_lookup_names<'a>(
     let append = !empty
         && match command {
             "include" | "includeonly" => !value.ends_with(".tex"),
-            "input" | "InputIfFileExists" | "IfFileExists" => !recognized,
+            "input" | "InputIfFileExists" | "IfFileExists" | "lstinputlisting" => !recognized,
             "bibliography" | "nobibliography" | "bibliographystyle" => {
                 !literal.ends_with(&format!(".{extension}"))
             }
@@ -1045,7 +1053,10 @@ pub(crate) fn file_lookup_names<'a>(
     std::iter::once(preferred)
         .filter(move |_| !empty && valid_style && valid_forward)
         .chain(
-            (matches!(command, "input" | "InputIfFileExists" | "IfFileExists") && append)
+            (matches!(
+                command,
+                "input" | "InputIfFileExists" | "IfFileExists" | "lstinputlisting"
+            ) && append)
                 .then_some(std::borrow::Cow::Borrowed(value)),
         )
 }
@@ -1672,7 +1683,9 @@ impl Syntax {
                     } else if is_citation(name) {
                         arg_start = citation_argument_start(source, name, command_end)
                             .unwrap_or(source.len());
-                    } else if loader_extension(name).is_some() || name == "bibliographystyle" {
+                    } else if loader_extension(name).is_some()
+                        || matches!(name, "bibliographystyle" | "lstinputlisting")
+                    {
                         arg_start = file_name_argument_start(source, name, command_end)
                             .unwrap_or(source.len());
                     } else if name == "nobibliography" {

@@ -276,6 +276,9 @@ fn file_link(
     if command == "includegraphics" {
         return crate::graphics::resolve_in(root, name, extensions, graphics);
     }
+    if command == "lstinputlisting" {
+        return resolve_file_path(root, command, name, extensions);
+    }
     for origin in std::iter::once(root).chain(std::iter::once(uri).filter(|uri| *uri != root)) {
         if let Some(target) = resolve_file_path(origin, command, name, extensions) {
             return Some(target);
@@ -339,6 +342,11 @@ pub(crate) fn document_links_in(workspace: &Workspace, uri: &Url, root: &Url) ->
         }
     }
     for command in &doc.syntax.commands {
+        if command.name == "lstinputlisting"
+            && !crate::listings::supported(workspace, uri, root, command)
+        {
+            continue;
+        }
         if command.name == "hyperref" {
             links.extend(hyperref_url_link(doc, command));
             continue;
