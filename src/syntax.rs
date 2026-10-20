@@ -88,6 +88,10 @@ pub struct Syntax {
     pub counters: Vec<Entry>,
     pub conditionals: Vec<Entry>,
     pub toggles: Vec<Entry>,
+    pub saved_text: Vec<Entry>,
+    pub saved_text_references: Vec<Entry>,
+    pub moving_text: Vec<Entry>,
+    pub moving_text_references: Vec<Entry>,
     pub diagnostics: Vec<Diagnostic>,
     pub ignored: Vec<Range<usize>>,
     /// Actual comments, distinguished from ignored URLs and verbatim text.
@@ -2032,6 +2036,7 @@ impl Syntax {
             }
         }
         result.definitions.sort_by_key(|entry| entry.span.start);
+        crate::saved_text::index(source, &mut result);
         result
     }
 

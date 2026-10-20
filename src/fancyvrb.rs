@@ -158,6 +158,25 @@ fn environment_body_start(source: &str, header_start: usize, name: &str) -> Opti
     source[at..].find('\n').map(|newline| at + newline + 1)
 }
 
+/// A saved block's name is read before the literal body, with active EOL
+/// during optional-argument lookahead. Do not treat an ordinary newline as
+/// optional-header whitespace when there are no options.
+pub(crate) fn saved_environment_argument(
+    source: &str,
+    header_start: usize,
+) -> Option<syntax::Argument> {
+    let mut at = header_space(source, header_start);
+    if source.as_bytes().get(at) == Some(&b'[') {
+        at = syntax::skip_space(source, syntax::bracket_argument(source, at)?.1);
+    }
+    name_argument(source, at).map(|(argument, _)| argument)
+}
+
+pub(crate) fn environment_options(source: &str, header_start: usize) -> Option<syntax::Argument> {
+    syntax::bracket_argument(source, header_space(source, header_start))
+        .map(|(argument, _)| argument)
+}
+
 fn safe_options(source: &str) -> bool {
     if source.contains(['\\', '%']) {
         return false;

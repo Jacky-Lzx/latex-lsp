@@ -19,9 +19,19 @@ enum TargetKind {
     Counter,
     Conditional,
     Toggle,
+    SavedText,
+    MovingText,
 }
 
 impl TargetKind {
+    fn saved_kind(self) -> Option<crate::saved_text::Kind> {
+        match self {
+            Self::SavedText => Some(crate::saved_text::Kind::Saved),
+            Self::MovingText => Some(crate::saved_text::Kind::Moving),
+            _ => None,
+        }
+    }
+
     fn generated_kind(self) -> Option<crate::generated::Kind> {
         match self {
             Self::Environment => Some(crate::generated::Kind::Environment),
@@ -41,6 +51,21 @@ struct Target<'a> {
 }
 
 fn raw_target(doc: &Document, offset: usize) -> Option<Target<'_>> {
+    for kind in [TargetKind::SavedText, TargetKind::MovingText] {
+        let saved_kind = kind.saved_kind().unwrap();
+        if let Some(entry) = crate::saved_text::declarations(doc, saved_kind)
+            .iter()
+            .chain(crate::saved_text::references(doc, saved_kind))
+            .find(|entry| entry.span.start <= offset && offset <= entry.span.end)
+        {
+            return Some(Target {
+                kind,
+                name: &entry.name,
+                span: entry.span.clone(),
+                control_word: false,
+            });
+        }
+    }
     if doc.syntax.is_ignored(offset) {
         return None;
     }
@@ -188,10 +213,16 @@ fn raw_target(doc: &Document, offset: usize) -> Option<Target<'_>> {
 
 fn target<'a>(workspace: &'a Workspace, uri: &Url, offset: usize) -> Option<Target<'a>> {
     let doc = workspace.documents.get(uri)?;
+    let raw = raw_target(doc, offset);
+    if raw
+        .as_ref()
+        .is_some_and(|target| target.kind.saved_kind().is_some())
+    {
+        return raw;
+    }
     if doc.syntax.is_ignored(offset) {
         return None;
     }
-    let raw = raw_target(doc, offset);
     if raw
         .as_ref()
         .is_some_and(|target| target.kind != TargetKind::Command)
@@ -244,6 +275,8 @@ fn entries(doc: &Document, kind: TargetKind) -> &[Entry] {
         TargetKind::Counter => &doc.syntax.counters,
         TargetKind::Conditional => &doc.syntax.conditionals,
         TargetKind::Toggle => &doc.syntax.toggles,
+        TargetKind::SavedText => &doc.syntax.saved_text,
+        TargetKind::MovingText => &doc.syntax.moving_text,
     }
 }
 
@@ -263,6 +296,9 @@ fn rename_target<'a>(
         return Ok(None);
     };
     let crate::workspace::SymbolProjects { mut scope, regions } = workspace.symbol_projects(uri);
+    if let Some(kind) = target.kind.saved_kind() {
+        crate::saved_text::validate(workspace, &scope, kind)?;
+    }
     let declarations = |scope: &BTreeSet<Url>| -> Vec<Url> {
         workspace
             .documents
@@ -313,6 +349,9 @@ fn rename_target<'a>(
             "Rename is ambiguous: projects sharing this definition contain multiple definitions",
         ));
     }
+    if let Some(kind) = target.kind.saved_kind() {
+        crate::saved_text::validate(workspace, &scope, kind)?;
+    }
     Ok(Some((target, scope)))
 }
 
@@ -348,10 +387,18 @@ pub fn rename(
     };
     let valid = !new_name.is_empty()
         && !(target.kind == TargetKind::Citation && new_name == "*")
-        && syntax::is_static_key(new_name);
+        && if target.kind.saved_kind().is_some() {
+            crate::saved_text::literal_name(new_name)
+        } else {
+            syntax::is_static_key(new_name)
+        };
     if !valid {
         return Err(tower_lsp::jsonrpc::Error::invalid_params(
-            "Invalid name: use a single TeX command name or a reference key without separators",
+            if target.kind.saved_kind().is_some() {
+                "Invalid saved-text name: use a nonempty literal name without TeX expansion or comments"
+            } else {
+                "Invalid name: use a single TeX command name or a reference key without separators"
+            },
         ));
     }
     if new_name == target.name {
@@ -401,6 +448,17 @@ pub fn rename(
     {
         let document = &workspace.documents[&location.uri];
         let text = &document.text;
+        if target.kind.saved_kind().is_some() {
+            changes
+                .entry(location.uri)
+                .or_default()
+                .push(crate::saved_text::replacement_edit(
+                    document,
+                    location.range,
+                    new_name,
+                ));
+            continue;
+        }
         if target.kind == TargetKind::Anchor {
             let edits = crate::anchors::rename_edits(document, location.range, new_name)?;
             changes.entry(location.uri).or_default().extend(edits);
@@ -685,6 +743,9 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
     }
     if doc.kind == DocumentKind::Bibtex {
         return bibliography_completion(workspace, doc, offset, &scope);
+    }
+    if let Some(items) = crate::saved_text::completion(workspace, uri, offset, &scope) {
+        return items;
     }
     if doc.syntax.is_ignored(offset.saturating_sub(1)) {
         return vec![];
@@ -1024,9 +1085,6 @@ pub fn definitions(workspace: &Workspace, uri: &Url, position: Position) -> Vec<
             }
         }
     }
-    if doc.syntax.is_ignored(offset) {
-        return vec![];
-    }
     let Some(target) = target(workspace, uri, offset) else {
         return vec![];
     };
@@ -1149,6 +1207,18 @@ fn all_references(
                     }),
             );
         }
+        if let Some(kind) = target.kind.saved_kind() {
+            result.extend(
+                crate::saved_text::references(doc, kind)
+                    .iter()
+                    .filter(|entry| entry.name == target.name)
+                    .map(|entry| Location {
+                        uri: uri.clone(),
+                        range: doc.text.range(entry.span.start, entry.span.end),
+                    }),
+            );
+            continue;
+        }
         if target.kind == TargetKind::Anchor {
             result.extend(
                 doc.syntax
@@ -1232,6 +1302,7 @@ fn all_references(
                 TargetKind::Citation => syntax::is_citation(&command.name),
                 TargetKind::Command | TargetKind::Anchor => false,
                 TargetKind::Counter | TargetKind::Conditional | TargetKind::Toggle => false,
+                TargetKind::SavedText | TargetKind::MovingText => false,
                 TargetKind::Environment => matches!(command.name.as_str(), "begin" | "end"),
             };
             if !matches {
@@ -1410,6 +1481,8 @@ pub fn symbols(doc: &Document) -> Vec<DocumentSymbol> {
         (&doc.syntax.counters, SymbolKind::VARIABLE),
         (&doc.syntax.conditionals, SymbolKind::BOOLEAN),
         (&doc.syntax.toggles, SymbolKind::BOOLEAN),
+        (&doc.syntax.saved_text, SymbolKind::CONSTANT),
+        (&doc.syntax.moving_text, SymbolKind::CONSTANT),
     ] {
         result.extend(entries.iter().map(|entry| DocumentSymbol {
             name: entry.name.clone(),

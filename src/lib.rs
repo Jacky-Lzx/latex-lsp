@@ -27,6 +27,7 @@ pub mod path_completion;
 mod primitives;
 mod project_diagnostics;
 pub mod recorder;
+mod saved_text;
 pub mod semantic;
 mod semantic_cache;
 pub mod signature;
