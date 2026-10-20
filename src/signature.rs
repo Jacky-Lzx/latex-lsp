@@ -4,7 +4,10 @@ use crate::{
     syntax::{self, Entry},
     workspace::{Document, DocumentKind, Workspace},
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    cell::OnceCell,
+    collections::{BTreeMap, BTreeSet},
+};
 use tower_lsp::lsp_types::*;
 
 #[derive(Clone)]
@@ -93,55 +96,67 @@ pub fn completion(
     name: &str,
     scope: &BTreeSet<Url>,
 ) -> Option<(String, Option<String>)> {
-    completion_at(workspace, name, scope, "")
+    CompletionSignatures::new(workspace, scope).at(name, "")
 }
 
-pub(crate) fn completion_at(
-    workspace: &Workspace,
-    name: &str,
-    scope: &BTreeSet<Url>,
-    following: &str,
-) -> Option<(String, Option<String>)> {
-    let signature = signature(workspace, name, scope)?;
-    if existing_arguments(&signature, following) {
-        return Some((signature.label(), None));
-    }
-    let mut snippet = name.to_owned();
-    let mut tabstop = 0;
-    for (index, parameter) in signature.parameters.iter().enumerate() {
-        let (open, close) = match &parameter.kind {
-            Kind::Required | Kind::RequiredGroup | Kind::CommandToken => ("{", "}"),
-            Kind::RequiredBracket => ("[", "]"),
-            Kind::Delimited {
-                open,
-                close,
-                optional: false,
-            } => (open.as_str(), close.as_str()),
-            _ => continue,
-        };
-        let number = parameter
-            .label
-            .strip_prefix("{#")
-            .and_then(|label| label.strip_suffix('}'))
-            .and_then(|number| number.parse::<usize>().ok())
-            .unwrap_or(index + 1);
-        tabstop += 1;
-        if tabstop == 1 && starts_letter(open) {
-            snippet.push(' ');
-        }
-        if matches!(parameter.kind, Kind::Delimited { .. }) {
-            push_delimiter(&mut snippet, open);
-        } else {
-            snippet.push_str(open);
-        }
-        snippet.push_str(&format!("${{{tabstop}:arg{number}}}"));
-        if matches!(parameter.kind, Kind::Delimited { .. }) {
-            push_delimiter(&mut snippet, close);
-        } else {
-            snippet.push_str(close);
+/// Reuse lazy alias resolution across all candidates of one completion request.
+pub(crate) struct CompletionSignatures<'a> {
+    workspace: &'a Workspace,
+    scope: &'a BTreeSet<Url>,
+    aliases: OnceCell<CommandSignatures<'a>>,
+}
+
+impl<'a> CompletionSignatures<'a> {
+    pub(crate) fn new(workspace: &'a Workspace, scope: &'a BTreeSet<Url>) -> Self {
+        Self {
+            workspace,
+            scope,
+            aliases: OnceCell::new(),
         }
     }
-    Some((signature.label(), (tabstop > 0).then_some(snippet)))
+
+    pub(crate) fn at(&self, name: &str, following: &str) -> Option<(String, Option<String>)> {
+        let signature = lookup(self.workspace, name, false, self.scope, Some(&self.aliases))?;
+        if existing_arguments(&signature, following) {
+            return Some((signature.label(), None));
+        }
+        let mut snippet = name.to_owned();
+        let mut tabstop = 0;
+        for (index, parameter) in signature.parameters.iter().enumerate() {
+            let (open, close) = match &parameter.kind {
+                Kind::Required | Kind::RequiredGroup | Kind::CommandToken => ("{", "}"),
+                Kind::RequiredBracket => ("[", "]"),
+                Kind::Delimited {
+                    open,
+                    close,
+                    optional: false,
+                } => (open.as_str(), close.as_str()),
+                _ => continue,
+            };
+            let number = parameter
+                .label
+                .strip_prefix("{#")
+                .and_then(|label| label.strip_suffix('}'))
+                .and_then(|number| number.parse::<usize>().ok())
+                .unwrap_or(index + 1);
+            tabstop += 1;
+            if tabstop == 1 && starts_letter(open) {
+                snippet.push(' ');
+            }
+            if matches!(parameter.kind, Kind::Delimited { .. }) {
+                push_delimiter(&mut snippet, open);
+            } else {
+                snippet.push_str(open);
+            }
+            snippet.push_str(&format!("${{{tabstop}:arg{number}}}"));
+            if matches!(parameter.kind, Kind::Delimited { .. }) {
+                push_delimiter(&mut snippet, close);
+            } else {
+                snippet.push_str(close);
+            }
+        }
+        Some((signature.label(), (tabstop > 0).then_some(snippet)))
+    }
 }
 
 pub(crate) fn has_existing_arguments(
@@ -760,7 +775,17 @@ fn builtin(name: &str) -> Option<Signature> {
 }
 
 fn definition(uri: &Url, doc: &Document, entry: &Entry, environment: bool) -> Option<Signature> {
-    let mut signature = source_definition(&doc.text.source, &doc.syntax, entry, environment)?;
+    let signature = source_definition(&doc.text.source, &doc.syntax, entry, environment)?;
+    describe_definition(uri, doc, entry, environment, signature)
+}
+
+fn describe_definition(
+    uri: &Url,
+    doc: &Document,
+    entry: &Entry,
+    environment: bool,
+    mut signature: Signature,
+) -> Option<Signature> {
     if signature.parameters.is_empty() || environment && signature.parameters.len() == 1 {
         return None;
     }
@@ -1529,14 +1554,15 @@ fn delimiter_spec(source: &str, start: usize) -> Option<(String, usize)> {
 }
 
 fn signature(workspace: &Workspace, name: &str, scope: &BTreeSet<Url>) -> Option<Signature> {
-    lookup(workspace, name, false, scope)
+    lookup(workspace, name, false, scope, None)
 }
 
-fn lookup(
-    workspace: &Workspace,
+fn lookup<'a>(
+    workspace: &'a Workspace,
     name: &str,
     environment: bool,
     scope: &BTreeSet<Url>,
+    aliases: Option<&OnceCell<CommandSignatures<'a>>>,
 ) -> Option<Signature> {
     let mut definitions = workspace
         .documents
@@ -1556,7 +1582,25 @@ fn lookup(
         if definitions.next().is_some() {
             return None;
         }
-        definition(uri, doc, entry, environment)
+        let mut signature = source_definition(&doc.text.source, &doc.syntax, entry, environment)?;
+        if !environment
+            && signature.parameters.is_empty()
+            && source_alias(&doc.text.source, &doc.syntax, entry).is_some()
+        {
+            let local = OnceCell::new();
+            let signatures = aliases.unwrap_or(&local).get_or_init(|| {
+                CommandSignatures::new(
+                    workspace
+                        .documents
+                        .iter()
+                        .filter(|(uri, _)| scope.contains(*uri))
+                        .map(|(_, doc)| (doc.text.source.as_str(), &doc.syntax)),
+                )
+            });
+            signature = signatures.local.get(name)?.as_ref()?.clone();
+            signature.name = name.into();
+        }
+        describe_definition(uri, doc, entry, environment, signature)
     } else if environment {
         builtin_environment(name)
     } else {
@@ -1988,7 +2032,7 @@ pub fn help(workspace: &Workspace, uri: &Url, position: Position) -> Option<Sign
             )
             .map(|(argument, _)| argument)
             .filter(|argument| cursor > argument.span.end)
-            .and_then(|argument| lookup(workspace, &argument.value, true, &scope))
+            .and_then(|argument| lookup(workspace, &argument.value, true, &scope, None))
             .or_else(|| signature(workspace, name, &scope))
         } else {
             signature(workspace, name, &scope)

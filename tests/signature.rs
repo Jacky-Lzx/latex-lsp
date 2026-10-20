@@ -2325,6 +2325,338 @@ fn custom_macro_completions_insert_required_tabstops_and_preserve_existing_argum
 }
 
 #[test]
+fn static_forwarding_aliases_offer_target_parameters_with_the_called_name() {
+    for alias in [
+        r"\newcommand{\bridge}{\wrapped}",
+        r"\newcommand*\bridge[0]{\wrapped}",
+        r"\DeclareRobustCommand{\bridge}{\wrapped}",
+        r"\def\bridge{\wrapped}",
+        r"\gdef\bridge{\wrapped}",
+        r"\csdef{bridge}{\wrapped}",
+        r"\csgdef{bridge}{\wrapped}",
+        r"\NewDocumentCommand{\bridge}{}{\wrapped}",
+        r"\DeclareTextCommandDefault{\bridge}{\wrapped}",
+        r"\expandafter\newcommand\csname bridge\endcsname{\wrapped}",
+        "\\newcommand{\\bridge}{% before\r\n \\aliasstep % after\r\n}\r\n\\def\\aliasstep{\\wrapped}",
+    ] {
+        let definitions = format!("\\newcommand{{\\wrapped}}[2][default]{{#1#2}}\r\n{alias}");
+        for call in [r"\bridge", r"\csuse{bridge}", r"\csname bridge\endcsname"] {
+            for (arguments, active) in [("[no¦te]{Content}", 0), ("{Con¦tent}", 1), ("[note]{Con¦tent}", 1)] {
+                check(&definitions, &format!("{call}{arguments}"), &format!("{call}[#1=default]{{#2}}"), active);
+            }
+            let (workspace, uri, at) = setup(&definitions, &format!("{call}[note]{{Content}}¦"));
+            assert!(signature::help(&workspace, &uri, at).is_none());
+        }
+        let (workspace, uri, at) = setup(&definitions, r"\bridge{Con¦tent}");
+        let help = signature::help(&workspace, &uri, at).unwrap();
+        let Some(Documentation::String(documentation)) = &help.signatures[0].documentation else { panic!() };
+        assert!(documentation.contains("/signature/macros.sty:2"), "{documentation}");
+    }
+}
+
+#[test]
+fn alias_signatures_preserve_builtin_and_custom_argument_readers() {
+    for (target, call, label, active) in [
+        (
+            r"\newcommand{\wrapped}[2][x[y]{#1#2}",
+            r"\bridge[x[y]{Con¦tent}",
+            r"\bridge[#1=x[y]{#2}",
+            1,
+        ),
+        (
+            r"\NewDocumentCommand{\wrapped}{O{default}m}{}",
+            r"\bridge[one[two]]{Con¦tent}",
+            r"\bridge[#1=default]{#2}",
+            1,
+        ),
+        (
+            r"\NewDocumentCommand{\wrapped}{s t+ m m}{}",
+            r"\bridge*+{one}{tw¦o}",
+            r"\bridge*+{#3}{#4}",
+            3,
+        ),
+        (
+            r"\NewDocumentCommand{\wrapped}{t\FLAG m}{}",
+            r"\bridge\FLAG{Con¦tent}",
+            r"\bridge\FLAG{#2}",
+            1,
+        ),
+        (
+            r"\NewDocumentCommand{\wrapped}{d() r<>}{}",
+            r"\bridge(note)<Con¦tent>",
+            r"\bridge(#1)<#2>",
+            1,
+        ),
+        (
+            r"\NewDocumentCommand{\wrapped}{d\OPEN\CLOSE m}{}",
+            r"\bridge\OPEN note\CLOSE{Con¦tent}",
+            r"\bridge\OPEN#1\CLOSE{#2}",
+            1,
+        ),
+        (
+            r"\NewDocumentCommand{\wrapped}{m !o}{}",
+            r"\bridge{Content}[no¦te]",
+            r"\bridge{#1}[#2]",
+            1,
+        ),
+        (
+            r"\def\wrapped#1#2{#1#2}",
+            "😀 \\bridge% ignored\r\n{one}{tw¦o}",
+            r"\bridge{#1}{#2}",
+            1,
+        ),
+    ] {
+        check(
+            &format!("{target}\\def\\bridge{{\\wrapped}}"),
+            call,
+            label,
+            active,
+        );
+    }
+    for (target, call, label, active) in [
+        (
+            "frac",
+            r"\bridge{one}{tw¦o}",
+            r"\bridge{numerator}{denominator}",
+            1,
+        ),
+        (
+            "section",
+            r"\bridge*{Head¦ing}",
+            r"\bridge[short title]{title}",
+            1,
+        ),
+        (
+            "textcolor",
+            r"\bridge[named]{red}{Con¦tent}",
+            r"\bridge[model]{color}{text}",
+            2,
+        ),
+    ] {
+        check(&format!("\\def\\bridge{{\\{target}}}"), call, label, active);
+    }
+    let (workspace, uri, at) = setup(
+        r"\NewDocumentCommand{\wrapped}{m !o}{}\def\bridge{\wrapped}",
+        r"\bridge{Content} [no¦te]",
+    );
+    assert!(signature::help(&workspace, &uri, at).is_none());
+    // A parameterized macro retains its own contract even when its body is one control word.
+    check(
+        r"\newcommand{\bridge}[1]{\frac}",
+        r"\bridge{Con¦tent}",
+        r"\bridge{#1}",
+        0,
+    );
+}
+
+#[test]
+fn alias_completions_insert_only_required_arguments_and_preserve_existing_calls() {
+    for (definitions, label, snippet) in [
+        (
+            r"\newcommand{\wrapped}[2][default]{#1#2}\def\bridge{\wrapped}",
+            r"\bridge[#1=default]{#2}",
+            "bridge{${1:arg2}}",
+        ),
+        (
+            r"\NewDocumentCommand{\wrapped}{s t+ d() r<> m}{}\def\bridge{\wrapped}",
+            r"\bridge*+(#3)<#4>{#5}",
+            "bridge<${1:arg4}>{${2:arg5}}",
+        ),
+        (
+            r"\def\bridge{\frac}",
+            r"\bridge{numerator}{denominator}",
+            "bridge{${1:arg1}}{${2:arg2}}",
+        ),
+    ] {
+        let (mut workspace, uri, at) = setup(definitions, "😀 \\bri¦");
+        let scope = workspace.documents.keys().cloned().collect();
+        assert_eq!(
+            signature::completion(&workspace, "bridge", &scope),
+            Some((label.into(), Some(snippet.into())))
+        );
+        workspace.snippets = true;
+        let items = latex_lsp::features::completion(&workspace, &uri, at);
+        let item = items.iter().find(|i| i.label == "bridge").unwrap();
+        assert_eq!(item.detail.as_deref(), Some(label));
+        assert_eq!(item.insert_text_format, Some(InsertTextFormat::SNIPPET));
+        let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+            panic!()
+        };
+        assert_eq!(edit.new_text, snippet);
+        assert_eq!(edit.range.start, Position::new(0, 4));
+    }
+    for (definitions, suffix) in [
+        (
+            r"\newcommand{\wrapped}[2][default]{#1#2}\def\bridge{\wrapped}",
+            "[note]{Content}",
+        ),
+        (
+            r"\NewDocumentCommand{\wrapped}{s t+ d() r<> m}{}\def\bridge{\wrapped}",
+            "*+(note)<Value>{Content}",
+        ),
+        (
+            r"\NewDocumentCommand{\wrapped}{r<> m}{}\def\bridge{\wrapped}",
+            "<Value>{Content}",
+        ),
+        (
+            r"\NewDocumentCommand{\wrapped}{t\FLAG m}{}\def\bridge{\wrapped}",
+            r"\FLAG{Content}",
+        ),
+    ] {
+        let (mut workspace, uri, at) = setup(definitions, &format!("\\bri¦dge{suffix}"));
+        workspace.snippets = true;
+        let item = latex_lsp::features::completion(&workspace, &uri, at)
+            .into_iter()
+            .find(|i| i.label == "bridge")
+            .unwrap();
+        assert_eq!(item.insert_text_format, Some(InsertTextFormat::PLAIN_TEXT));
+        let Some(CompletionTextEdit::Edit(edit)) = item.text_edit else {
+            panic!()
+        };
+        assert_eq!(edit.new_text, "bridge");
+        assert_eq!(
+            edit.range,
+            Range::new(Position::new(0, 1), Position::new(0, 7))
+        );
+    }
+}
+
+#[test]
+fn alias_completions_follow_changed_target_and_alias_definitions() {
+    let (mut workspace, uri, at) = setup("", r"\bri¦");
+    workspace.snippets = true;
+    let definitions_uri = Url::parse("file:///signature/macros.sty").unwrap();
+    for (version, definitions, expected) in [
+        (
+            1,
+            r"\newcommand{\wrapped}[2][default]{#2}\def\bridge{\wrapped}",
+            "bridge{${1:arg2}}",
+        ),
+        (
+            2,
+            r"\newcommand{\wrapped}[3]{#3}\def\bridge{\wrapped}",
+            "bridge{${1:arg1}}{${2:arg2}}{${3:arg3}}",
+        ),
+        (
+            3,
+            r"\newcommand{\wrapped}[3]{#3}\def\bridge{\textbf}",
+            "bridge{${1:arg1}}",
+        ),
+        (4, r"\def\wrapped{\bridge}\def\bridge{\wrapped}", "bridge"),
+        (
+            5,
+            r"\newcommand{\wrapped}[2][default]{#2}\def\bridge{\wrapped}",
+            "bridge{${1:arg2}}",
+        ),
+    ] {
+        workspace.documents.insert(
+            definitions_uri.clone(),
+            Document::new(&definitions_uri, definitions.into(), Some(version)),
+        );
+        let item = latex_lsp::features::completion(&workspace, &uri, at)
+            .into_iter()
+            .find(|i| i.label == "bridge")
+            .unwrap();
+        let Some(CompletionTextEdit::Edit(edit)) = item.text_edit else {
+            panic!()
+        };
+        assert_eq!(edit.new_text, expected, "version {version}");
+        assert_eq!(
+            item.insert_text_format,
+            Some(if version == 4 {
+                InsertTextFormat::PLAIN_TEXT
+            } else {
+                InsertTextFormat::SNIPPET
+            })
+        );
+    }
+}
+
+#[test]
+fn uncertain_and_argument_free_aliases_do_not_invent_signature_or_snippet_parameters() {
+    for definitions in [
+        r"\def\bridge{\missing}",
+        r"\def\bridge{\bridge}",
+        r"\def\bridge{\aliasstep}\def\aliasstep{\bridge}",
+        r"\def\bridge{\aliasstep}\def\aliasstep{\missing}",
+        r"\def\bridge{\frac}\def\bridge{\textbf}",
+        r"\def\bridge{\wrapped}\newcommand{\wrapped}[1]{}\renewcommand{\wrapped}[2]{}",
+        r"\edef\bridge{\frac}",
+        r"\xdef\bridge{\frac}",
+        r"\csedef{bridge}{\frac}",
+        r"\csxdef{bridge}{\frac}",
+        r"\def\bridge{\wrapped}\def\wrapped{}",
+        r"\def\bridge{\relax}",
+        r"\def\bridge{\bfseries}",
+        r"\def\bridge{\frac{one}}",
+        r"\def\bridge{\relax\frac}",
+        r"\newcommand{\bridge}[0][invalid]{\frac}",
+    ] {
+        let (workspace, uri, at) = setup(definitions, r"\bridge{one}{tw¦o}");
+        assert!(
+            signature::help(&workspace, &uri, at).is_none(),
+            "{definitions}"
+        );
+        let scope = workspace.documents.keys().cloned().collect();
+        assert!(
+            signature::completion(&workspace, "bridge", &scope).is_none(),
+            "{definitions}"
+        );
+    }
+}
+
+#[test]
+fn alias_signature_resolution_uses_only_the_current_project_and_alias_provenance() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let main = r"\documentclass{article}\usepackage{aliases}\begin{document}\bridge[note]{Content}\end{document}";
+    let aliases = "\\ProvidesPackage{aliases}\r\n\\newcommand{\\bridge}{\\wrapped}";
+    let target = r"\ProvidesPackage{target}\newcommand{\wrapped}[2][default]{#1#2}";
+    let other = r"\documentclass{article}\usepackage{othermacros}\begin{document}\bridge{one}{two}{OtherContent}\end{document}";
+    for (name, source) in [
+        ("main.tex", main),
+        (
+            "aliases.sty",
+            &format!("\\RequirePackage{{target}}{aliases}"),
+        ),
+        ("target.sty", target),
+        ("other.tex", other),
+        (
+            "othermacros.sty",
+            r"\ProvidesPackage{othermacros}\def\bridge{\wrapped}\newcommand{\wrapped}[3]{#1#2#3}",
+        ),
+    ] {
+        std::fs::write(root.join(name), source).unwrap();
+    }
+    let mut workspace = Workspace::default();
+    workspace.add_root(root.into());
+    for (file, source, marker, label, active) in [
+        ("main.tex", main, "Content", r"\bridge[#1=default]{#2}", 1),
+        (
+            "other.tex",
+            other,
+            "OtherContent",
+            r"\bridge{#1}{#2}{#3}",
+            2,
+        ),
+    ] {
+        let uri = Url::from_file_path(root.join(file)).unwrap();
+        let at = workspace.documents[&uri]
+            .text
+            .position(source.find(marker).unwrap() + 3);
+        let help = signature::help(&workspace, &uri, at).unwrap();
+        assert_eq!(help.signatures[0].label, label);
+        assert_eq!(help.active_parameter, Some(active));
+        if file == "main.tex" {
+            let Some(Documentation::String(doc)) = &help.signatures[0].documentation else {
+                panic!()
+            };
+            assert!(doc.contains("/aliases.sty:2"), "{doc}");
+        }
+    }
+}
+
+#[test]
 fn custom_newcommand_and_robust_command_signatures_follow_cross_file_declarations() {
     for declaration in [
         r"\newcommand{\pair}[2][blue]{#1:#2}",

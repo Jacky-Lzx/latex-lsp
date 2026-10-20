@@ -966,6 +966,7 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
         workspace.snippets && !doc.text.source[after_command..].starts_with(['{', '[', '*']);
     let mut seen = BTreeSet::new();
     let mut result = Vec::new();
+    let signatures = crate::signature::CompletionSignatures::new(workspace, &scope);
     // User definitions take precedence over built-in documentation and snippets.
     for entry in workspace
         .documents
@@ -988,12 +989,7 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
         })
     {
         if entry.name.starts_with(prefix) && seen.insert(entry.name.clone()) {
-            let signature = crate::signature::completion_at(
-                workspace,
-                &entry.name,
-                &scope,
-                &doc.text.source[command_end..],
-            );
+            let signature = signatures.at(&entry.name, &doc.text.source[command_end..]);
             let snippet = signature
                 .as_ref()
                 .and_then(|(_, snippet)| snippet.as_ref())
