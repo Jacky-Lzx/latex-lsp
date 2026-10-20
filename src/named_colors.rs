@@ -9,7 +9,7 @@ use std::{
 };
 use tower_lsp::{jsonrpc, lsp_types::*};
 
-const BUILTINS: &[&str] = &[
+pub(crate) const BUILTINS: &[&str] = &[
     "black",
     "blue",
     "brown",
@@ -318,6 +318,63 @@ fn occurrences(source: &str, command: &Command) -> Option<Vec<(bool, Span<usize>
         }
     }
     Some(result)
+}
+
+/// Direct calls whose complete consumed arguments can be checked against TeX's
+/// source echo. Blend settings are evaluated later, so they have no direct site.
+pub(crate) fn error_invocations(source: &str, syntax: &Syntax) -> Vec<(Span<usize>, Span<usize>)> {
+    if syntax
+        .definitions
+        .iter()
+        .any(|entry| known(&entry.name) || unsupported(&entry.name))
+    {
+        return vec![];
+    }
+    let mut result = vec![];
+    for command in &syntax.commands {
+        let (body, outputs) = match command.name.as_str() {
+            "color" | "pagecolor" | "colorlet" | "definecolor" | "providecolor"
+            | "xdefinecolor" | "maskcolors" => (false, 0),
+            "textcolor" | "colorbox" | "fcolorbox" => (true, 0),
+            "extractcolorspec" | "convertcolorspec" => (false, 1),
+            "extractcolorspecs" => (false, 2),
+            _ => continue,
+        };
+        let mut reader = Reader {
+            source,
+            at: command.span.end,
+            fields: vec![],
+        };
+        if read(&mut reader, &command.name).is_err() {
+            continue;
+        }
+        let complete = if body {
+            reader.group().is_ok()
+        } else {
+            (0..outputs).all(|_| {
+                let start = syntax::skip_space(source, reader.at);
+                if let Some(word) = syntax::control_word(source, start) {
+                    reader.at = word.end;
+                    true
+                } else {
+                    false
+                }
+            })
+        };
+        if !complete {
+            continue;
+        }
+        let tail = syntax::skip_space(source, command.span.end)..reader.at;
+        if let Some(entries) = occurrences(source, command) {
+            result.extend(
+                entries
+                    .into_iter()
+                    .filter(|(definition, _)| !definition)
+                    .map(|(_, span)| (span, tail.clone())),
+            );
+        }
+    }
+    result
 }
 
 pub(crate) fn index(source: &str, syntax: &mut Syntax) {

@@ -13,6 +13,7 @@ enum Kind {
     Environment,
     Counter,
     Anchor,
+    Color,
 }
 
 fn target<'a>(
@@ -98,6 +99,22 @@ fn target<'a>(
                     })
             })
             .then_some((Kind::Counter, name));
+    }
+
+    if diagnostic.code == Some(NumberOrString::String("undefined-color".into())) {
+        let name = diagnostic.data.as_ref()?.get("color")?.as_str()?;
+        if build_log::undefined_color_name(&diagnostic.message) != Some(name) {
+            return None;
+        }
+        return doc
+            .syntax
+            .color_references
+            .iter()
+            .any(|entry| {
+                entry.name == name
+                    && doc.text.range(entry.span.start, entry.span.end) == diagnostic.range
+            })
+            .then_some((Kind::Color, name));
     }
     if diagnostic.message != "Undefined control sequence."
         || diagnostic.code != Some(NumberOrString::String("undefined-control-sequence".into()))
@@ -233,7 +250,9 @@ fn closing_environment_fix(
 }
 
 fn valid_name(kind: Kind, name: &str) -> bool {
-    if kind == Kind::Command {
+    if kind == Kind::Color {
+        crate::named_colors::literal_name(name)
+    } else if kind == Kind::Command {
         !name.is_empty()
             && name
                 .bytes()
@@ -385,6 +404,7 @@ pub fn fixes(
                     Kind::Environment => &document.syntax.environments,
                     Kind::Counter => &document.syntax.counters,
                     Kind::Anchor => &document.syntax.anchors,
+                    Kind::Color => &document.syntax.colors,
                 };
                 for entry in entries {
                     *candidates.entry(entry.name.clone()).or_default() += 1;
@@ -434,6 +454,11 @@ pub fn fixes(
                     candidates.entry((*name).into()).or_insert(1);
                 }
             }
+            if kind == Kind::Color {
+                for name in crate::named_colors::BUILTINS {
+                    candidates.entry((*name).into()).or_insert(1);
+                }
+            }
             // A known key can be unresolved because of build order or macros.
             if total_entries >= 4096 || candidates.contains_key(key) {
                 continue;
@@ -467,6 +492,7 @@ pub fn fixes(
                     Kind::Command => ("command", format!("\\{name}")),
                     Kind::Environment => ("environment", name.clone()),
                     Kind::Counter => ("counter", name.clone()),
+                    Kind::Color => ("color", name.clone()),
                     Kind::Anchor => {
                         let Some(replacement) =
                             crate::anchors::replacement_text(doc, diagnostic.range, &name)
