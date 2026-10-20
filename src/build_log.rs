@@ -674,6 +674,8 @@ fn error_context<'a>(
         let token = frame
             .strip_prefix("FV@SVG@")
             .or_else(|| frame.strip_prefix("FV@SV@"))
+            .or_else(|| frame.strip_prefix("r@"))
+            .or_else(|| frame.strip_prefix("sub@"))
             .unwrap_or(frame);
         if crate::syntax::control_word(token, 0)? != (0..token.len()) {
             return None;
@@ -1159,9 +1161,14 @@ fn reference_macro_error_invocation(
     command: &crate::syntax::Command,
     frame: &str,
 ) -> Option<(ByteRange<usize>, ByteRange<usize>)> {
+    let frame = match command.name.as_str() {
+        "vpageref" | "getrefnumber" | "getpagerefnumber" | "refused" => frame.strip_prefix("r@")?,
+        "subref" => frame.strip_prefix("sub@")?,
+        _ => frame,
+    };
     let (start, open) = match command.name.as_str() {
         "ref" | "pageref" | "eqref" | "Ref" | "autoref" | "autopageref" | "nameref" | "vref"
-        | "Vref" => (
+        | "Vref" | "vpageref" | "getrefnumber" | "getpagerefnumber" | "refused" | "subref" => (
             crate::syntax::reference_argument_start(source, &command.name, command.span.end)?,
             b'{',
         ),

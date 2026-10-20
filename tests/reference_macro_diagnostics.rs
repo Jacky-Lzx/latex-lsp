@@ -290,7 +290,7 @@ fn additional_key_interfaces_pinpoint_direct_macros_with_their_own_argument_gram
     }
     let diagnostic = parse(
         r"\vpageref{\keynme}",
-        "<argument> r@\\keynme\nl.1 \\vpageref{\\keynme}",
+        "<argument> sub@\\keynme\nl.1 \\vpageref{\\keynme}",
         true,
     );
     assert!(diagnostic.code.is_none());
@@ -411,7 +411,7 @@ fn remaining_direct_key_interfaces_and_braced_hyperref_macros_keep_precise_range
     }
     let diagnostic = parse(
         r"\vpageref{\keynme}",
-        "<argument> r@\\keynme\nl.1 \\vpageref{\\keynme}",
+        "<argument> sub@\\keynme\nl.1 \\vpageref{\\keynme}",
         true,
     );
     assert!(diagnostic.code.is_none());
@@ -440,6 +440,146 @@ fn real_remaining_direct_key_macro_repairs_restore_successful_compilation() {
             ("\\usepackage[numbers]{natbib}\n", "\\Citeauthor{\\keynme}"),
             ("\\usepackage[numbers]{natbib}\n", "\\citetalias{\\keynme}"),
             ("\\usepackage[numbers]{natbib}\n", "\\citepalias{\\keynme}"),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let main = directory.path().join("main.tex");
+            let uri = Url::from_file_path(&main).unwrap();
+            let source = format!("\\documentclass{{article}}\r\n\\usepackage{{amsmath}}\r\n{packages}\\newcommand{{\\keyname}}{{payload}}\r\n\\begin{{document}}\r\n\\section{{MarkerUnique}}\\label{{payload}}\r\n\\begin{{thebibliography}}{{1}}\\bibitem{{payload}}Entry\\end{{thebibliography}}\r\n{call}\r\n\\end{{document}}\r\n");
+            std::fs::write(&main, &source).unwrap();
+            let config = BuildConfig {
+                executable: engine.into(),
+                ..Default::default()
+            };
+            let before = build::run(&main, &config, &AtomicBool::new(false));
+            assert_eq!(before.status, "error", "{engine}/{call}: {}", before.output);
+            let start = source.find(r"\keynme").unwrap();
+            let range = Text::new(source.clone()).range(start, start + 7);
+            let diagnostic = before.diagnostics[&uri]
+                .iter()
+                .find(|item| item.message == "Undefined control sequence." && item.range == range)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{engine}/{call}: {}\n{:?}",
+                        before.output, before.diagnostics
+                    )
+                });
+            let mut workspace = Workspace {
+                versioned_edits: true,
+                code_action_literals: true,
+                ..Default::default()
+            };
+            workspace.open(uri.clone(), source, 7);
+            workspace
+                .build_diagnostics
+                .insert(uri.clone(), before.diagnostics.clone());
+            std::fs::write(&main, repaired(&workspace, &uri, diagnostic)).unwrap();
+            let after = build::run(&main, &config, &AtomicBool::new(false));
+            assert_eq!(after.status, "success", "{engine}/{call}: {}", after.output);
+            assert!(main
+                .parent()
+                .unwrap()
+                .join("build/latex-lsp/main.pdf")
+                .is_file());
+        }
+    }
+}
+
+#[test]
+fn prefixed_reference_frames_require_matching_interfaces_and_exact_macro_operands() {
+    for call in [
+        "\\vpageref{\\keynme}",
+        "\\vpageref*{\\keynme}",
+        "\\vpageref[here]{\\keynme}",
+        "\\vpageref[here][prefix]{\\keynme}",
+        "\\vpageref*[here][prefix]{\\keynme}",
+        "\\getrefnumber{\\keynme}",
+        "\\getpagerefnumber{\\keynme}",
+        "\\refused{\\keynme}",
+        "\\subref{\\keynme}",
+        "\\subref*{\\keynme}",
+    ] {
+        let prefix = if call.starts_with(r"\subref") {
+            "sub@"
+        } else {
+            "r@"
+        };
+        let source = format!("\\typeout{{😀}} {call} Remains\r\n");
+        let start = source.find(r"\keynme").unwrap();
+        for numbered in [false, true] {
+            let diagnostic = parse(
+                &source,
+                &format!("<argument> {prefix}\\keynme\nl.1 \\typeout{{😀}} {call}"),
+                numbered,
+            );
+            assert_eq!(
+                diagnostic.range,
+                Text::new(source.clone()).range(start, start + 7),
+                "{call}: {diagnostic:?}"
+            );
+            assert_eq!(
+                diagnostic.code,
+                Some(NumberOrString::String("undefined-control-sequence".into()))
+            );
+            assert_eq!(diagnostic.data.as_ref().unwrap()["command"], "keynme");
+        }
+    }
+    for (call, frame) in [
+        (r"\ref{\keynme}", r"r@\keynme"),
+        (r"\vpageref{\keynme}", r"sub@\keynme"),
+        (r"\subref{\keynme}", r"r@\keynme"),
+        (r"\subref{\keynme}", r"\keynme"),
+        (r"\vpageref{\keynme}", r"\keynme"),
+        (r"\getrefnumber{prefix\keynme}", r"r@prefix\keynme"),
+        (r"\getrefnumber{\keynme\other}", r"r@\keynme"),
+        (r"\getrefnumber*{\keynme}", r"r@\keynme"),
+        (r"\getpagerefnumber[note]{\keynme}", r"r@\keynme"),
+        (r"\vpageref[a][b][c]{\keynme}", r"r@\keynme"),
+        (r"\subref{\keynme}", r"sub@\other"),
+        (r"\unknown{\keynme}", r"r@\keynme"),
+        (r"\setcounterref{counter}{\keynme}", r"r@\keynme"),
+        (r"\def\wrapper{\subref{\keynme}}\wrapper", r"sub@\keynme"),
+        (r"\subref{\keynme}", r"r@sub@\keynme"),
+    ] {
+        for numbered in [false, true] {
+            let diagnostic = parse(call, &format!("<argument> {frame}\nl.1 {call}"), numbered);
+            assert!(diagnostic.code.is_none(), "{call}/{frame}: {diagnostic:?}");
+        }
+    }
+    let diagnostic = parse(
+        r"\vpageref{\keynme}\getrefnumber{\keynme}",
+        "<argument> r@\\keynme\nl.1 ...{\\keynme}",
+        true,
+    );
+    assert!(diagnostic.code.is_none());
+    let diagnostic = parse(
+        r"\subref{\keynme}",
+        "<argument> sub@\\keynme\n\\wrapper -> \\subref {\\keynme}\nl.1 \\subref{\\keynme}",
+        true,
+    );
+    assert!(diagnostic.code.is_none());
+}
+
+#[test]
+#[ignore = "requires pdflatex and xelatex"]
+fn real_prefixed_key_macro_repairs_restore_successful_compilation() {
+    for engine in ["pdflatex", "xelatex"] {
+        for (packages, call) in [
+            ("\\usepackage{varioref}\n", "\\vpageref{\\keynme}"),
+            ("\\usepackage{varioref}\n", "\\vpageref*{\\keynme}"),
+            ("\\usepackage{varioref}\n", "\\vpageref[here]{\\keynme}"),
+            (
+                "\\usepackage{varioref}\n",
+                "\\vpageref[here][prefix]{\\keynme}",
+            ),
+            (
+                "\\usepackage{varioref}\n",
+                "\\vpageref*[here][prefix]{\\keynme}",
+            ),
+            ("\\usepackage{hyperref}\n", "\\getrefnumber{\\keynme}"),
+            ("\\usepackage{hyperref}\n", "\\getpagerefnumber{\\keynme}"),
+            ("\\usepackage{hyperref}\n", "\\refused{\\keynme}"),
+            ("\\usepackage{subcaption}\n", "\\subref{\\keynme}"),
+            ("\\usepackage{subcaption}\n", "\\subref*{\\keynme}"),
         ] {
             let directory = tempfile::tempdir().unwrap();
             let main = directory.path().join("main.tex");
