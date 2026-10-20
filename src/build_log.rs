@@ -1775,10 +1775,16 @@ fn emit_with_context(
     ranges.extend(loader_range.map(|(range, _)| range));
     let package_clash = package_option_clash_name(&message);
     let clash_range = package_clash
-        .and_then(|name| loader_failure_range(&text, line, context?, &format!("{name}.sty"), &[]))
+        .filter(|_| !project_stale)
+        .and_then(|name| {
+            let parsed = crate::syntax::Syntax::latex(&text);
+            let indirect = file_commands_for_text(&text, &parsed, cached_calls, project_stale);
+            loader_failure_range(&text, line, context?, &format!("{name}.sty"), &indirect)
+        })
         // WithOptions does not supply a new explicit options list. Do not
         // attribute a clash to a forwarding call based on its name alone.
-        .filter(|(_, command)| matches!(*command, "usepackage" | "RequirePackage"));
+        .filter(|(_, command)| matches!(*command, "usepackage" | "RequirePackage"))
+        .filter(|(range, _)| confirmed_file_invocation(&text, *range, cached_calls));
     ranges.extend(clash_range.map(|(range, _)| range));
     let missing_graphic = missing_graphic_name(&message);
     let graphic_range = missing_graphic
@@ -1876,7 +1882,7 @@ fn emit_with_context(
                     .or_else(|| graphic_range.and(missing_graphic).map(|name| serde_json::json!({"file":name})))
                     .or_else(|| missing_include_key(&message).map(|name| serde_json::json!({"file":name})))
                     .map(|mut data| {
-                        if missing_include_key(&message).is_some() || color_range.is_some() || model_range.is_some() || counter_range.is_some() || environment_range.is_some() || input_range.is_some() || loader_range.is_some() {
+                        if missing_include_key(&message).is_some() || color_range.is_some() || model_range.is_some() || counter_range.is_some() || environment_range.is_some() || input_range.is_some() || loader_range.is_some() || clash_range.is_some() {
                             if let Some(context) = macro_context {
                                 data["macroSources"] = serde_json::json!(context.macros.sources);
                                 if !context.macros.paused_sources.is_empty() {
@@ -2478,7 +2484,11 @@ impl InvocationKind {
                         Self::EnvironmentEnd
                     }
                 })
-                .or_else(|| missing_file_name(message).map(|_| Self::File))
+                .or_else(|| {
+                    (missing_file_name(message).is_some()
+                        || package_option_clash_name(message).is_some())
+                    .then_some(Self::File)
+                })
         }
     }
 
@@ -8184,5 +8194,126 @@ mod indirect_class_scope_tests {
             .find(|d| d.message.contains("not found"))
             .unwrap();
         assert!(diagnostic.code.is_none(), "{diagnostic:?}");
+    }
+}
+
+#[cfg(test)]
+mod indirect_option_clash_scope_tests {
+    use super::*;
+
+    fn error(echo: &str, line: usize) -> String {
+        format!("! LaTeX Error: Option clash for package local.\n\nSee the LaTeX manual or LaTeX Companion for explanation.\nType  H <return>  for immediate help.\n ...                                              \n                                                  \nl.{line} {echo}\n                                                  \nThe package local has already been loaded with options:\n  [draft]\nThere has now been an attempt to load it with options\n  [final]\nAdding the global options:\n")
+    }
+
+    #[test]
+    fn option_clashes_use_only_loaded_and_unchanged_alias_definitions() {
+        for loader in ["usepackage", "RequirePackage"] {
+            for call in [
+                r"\loadpkg",
+                r"\csuse{loadpkg}",
+                r"\csname loadpkg\endcsname",
+            ] {
+                for case in [
+                    "loaded",
+                    "not-loaded",
+                    "changed",
+                    "root-changed",
+                    "shadowed",
+                    "dynamic",
+                ] {
+                    let directory = tempfile::tempdir().unwrap();
+                    let root = directory.path().join("main.tex");
+                    let package = directory.path().join("definitions.sty");
+                    let echo = format!("{call}[final]{{local}}\\relax");
+                    std::fs::write(&root, format!("\\RequirePackage{{definitions}}\n{echo}\n"))
+                        .unwrap();
+                    let declaration = format!("\\def\\loadpkg{{\\{loader}}}");
+                    std::fs::write(
+                        &package,
+                        match case {
+                            "shadowed" => format!("{declaration}\\def\\{loader}#1{{}}"),
+                            "dynamic" => format!("{declaration}\\input{{\\filename}}"),
+                            _ => declaration,
+                        },
+                    )
+                    .unwrap();
+                    let project = ProjectSources::capture(&root);
+                    if case == "changed" {
+                        std::fs::write(&package, r"\def\loadpkg#1{}").unwrap();
+                    }
+                    if case == "root-changed" {
+                        std::fs::write(
+                            &root,
+                            format!("\\RequirePackage{{definitions}}\n{echo}\n\\relax\n"),
+                        )
+                        .unwrap();
+                    }
+                    let loaded = if case == "not-loaded" {
+                        ""
+                    } else {
+                        "(./definitions.sty)"
+                    };
+                    let log = format!("(./main.tex\n{loaded}\n{}", error(&echo, 2));
+                    let diagnostics = parse_with_project_sources(&root, &log, &project).0;
+                    let diagnostic = &diagnostics[&Url::from_file_path(&root).unwrap()][0];
+                    assert_eq!(
+                        diagnostic.code,
+                        (case == "loaded")
+                            .then(|| NumberOrString::String("package-option-clash".into())),
+                        "{case}/{loader}/{call}: {diagnostic:?}"
+                    );
+                    if case == "loaded" {
+                        let data = diagnostic.data.as_ref().unwrap();
+                        assert_eq!(data["loaderCommand"], loader);
+                        assert_eq!(data["loadedOptions"], "draft");
+                        assert_eq!(data["requestedOptions"], "final");
+                        assert!(data["macroSources"]
+                            .as_array()
+                            .unwrap()
+                            .contains(&serde_json::json!(Url::from_file_path(&package).unwrap())));
+                    } else {
+                        assert!(diagnostic
+                            .data
+                            .as_ref()
+                            .is_none_or(|data| data.get("loadedOptions").is_none()));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn paused_parents_only_allow_independent_child_loader_aliases() {
+        for conflict in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path().join("main.tex");
+            let child = directory.path().join("content.tex");
+            std::fs::write(
+                &root,
+                if conflict {
+                    r"\def\loadpkg{\usepackage}\input{content}"
+                } else {
+                    r"\input{content}"
+                },
+            )
+            .unwrap();
+            let echo = r"\loadpkg[final]{local}\relax";
+            std::fs::write(&child, format!("\\def\\loadpkg{{\\usepackage}}\n{echo}\n")).unwrap();
+            let project = ProjectSources::capture(&root);
+            let log = format!("(./main.tex (./content.tex\n{}", error(echo, 2));
+            let diagnostics = parse_with_project_sources(&root, &log, &project).0;
+            let diagnostic = &diagnostics[&Url::from_file_path(&child).unwrap()][0];
+            assert_eq!(
+                diagnostic.code,
+                (!conflict).then(|| NumberOrString::String("package-option-clash".into())),
+                "{conflict}: {diagnostic:?}"
+            );
+            if !conflict {
+                assert_eq!(
+                    diagnostic.data.as_ref().unwrap()["macroPausedSources"],
+                    serde_json::json!([Url::from_file_path(&root).unwrap()])
+                );
+            }
+        }
     }
 }

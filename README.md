@@ -160,7 +160,7 @@ PDF 驱动失败时，XeLaTeX 的 `xdvipdfmx` 和独立 `dvipdfmx` 的 fatal 消
 
 这类诊断最多提供 5 个本地文件名建议，只在该次编译根目录及名称中显式指定的子目录查找 `.sty` / `.cls`，不推断系统宏包是否安装。修复保留其他宏包、选项、版本条件及参数外的空白；误写 `\usepackage{local.sty}` 而本地存在 `local.sty` 时，可改成正确的加载名称 `local`。版本、诊断、候选或原文件变化后，旧修复会失效；兼容版本化编辑和旧客户端命令。
 
-重复加载宏包造成的 `Option clash for package ...` 错误也会定位到冲突的 `\usepackage` / `\RequirePackage` 名称，兼容包列表、跨行参数、可选版本和 UTF-16；即使 TeX 报告的是下一行的命令，仍会核对实际加载位置。确认来源后使用 `package-option-clash` 代码，并以 `data.package` / `data.loaderCommand` 提供包名和命令。动态名称、宏展开栈、歧义或无法验证的来源保留整行诊断。
+重复加载宏包造成的 `Option clash for package ...` 错误也会定位到冲突的 `\usepackage` / `\RequirePackage` 名称，兼容包列表、跨行参数、可选版本和 UTF-16；即使 TeX 报告的是下一行的命令，仍会核对实际加载位置。确认来源后使用 `package-option-clash` 代码，并以 `data.package` / `data.loaderCommand` 提供包名和命令。静态命名调用和纯别名也使用同样的定位及已加载／请求选项详情，且按错误时刻已载入、未变化的宏来源核对调用；诊断记录 `macroSources` 和暂停的父文件来源。宏实参、未执行正文、动态列表及重定义的加载器不推断具体名称。动态名称、宏展开栈、歧义或无法验证的来源保留整行诊断。
 
 日志中的冲突帮助块完整时，诊断还会显示已加载选项及本次请求选项，并在 `data.loadedOptions` / `data.requestedOptions` 中保存其原样字符串；空选项为 `""`，嵌套括号、逗号和空白保持不变。长包名、选项及帮助标题在词中换行时会拼回实际字符。详情必须紧邻本次源码上下文并匹配包名，读取受行数和字节限制；残缺帮助、其他错误、来源切换或截断标记不会被拼成选项详情。
 
