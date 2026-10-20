@@ -1337,7 +1337,7 @@ pub(crate) fn file_error_commands(
     signatures
         .indirect_source_invocations(source, parsed, &positions)
         .into_iter()
-        .chain(signatures.indirect_package_invocations(source, parsed, &positions))
+        .chain(signatures.indirect_loader_invocations(source, parsed, &positions))
         .filter(|call| call.certain)
         .map(|call| call.command)
         .collect()
@@ -2569,7 +2569,7 @@ impl ProjectSources {
                                 .get(*uri)
                                 .into_iter()
                                 .flatten()
-                                .chain(source_calls.packages.get(*uri).into_iter().flatten())
+                                .chain(source_calls.loaders.get(*uri).into_iter().flatten())
                                 .map(|call| &call.command),
                         )
                         .any(|command| {
@@ -7880,7 +7880,12 @@ mod alias_load_snapshot_tests {
             (r"\def\reader{\usepackage}", false),
             (r"\def\reader{\RequirePackage}", false),
             (r"\def\reader{\RequirePackageWithOptions}", false),
-            (r"\def\reader{\documentclass}", true),
+            (r"\def\reader{\documentclass}", false),
+            (r"\def\reader{\LoadClass}", false),
+            (r"\def\reader{\LoadClassWithOptions}", false),
+            (r"\def\reader{\documentclass}\reader{\filename}", true),
+            (r"\edef\reader{\LoadClass}", true),
+            (r"\newcommand{\reader}[1]{\LoadClass{#1}}", true),
             (r"\edef\reader{\usepackage}", true),
             (r"\xdef\reader{\RequirePackage}", true),
             (r"\newcommand{\reader}[1]{\usepackage{#1}}", true),
@@ -8092,6 +8097,87 @@ mod indirect_package_scope_tests {
         std::fs::write(&child, "\\loadpkg{fixtuer}\\relax\n").unwrap();
         let project = ProjectSources::capture(&root);
         let log = "(./main.tex (./content.tex\n! LaTeX Error: File `fixtuer.sty' not found.\n! Emergency stop.\n<read *>\nl.1 \\loadpkg{fixtuer}\\relax\n";
+        let diagnostics = parse_with_project_sources(&root, log, &project).0;
+        let diagnostic = diagnostics[&Url::from_file_path(&child).unwrap()]
+            .iter()
+            .find(|d| d.message.contains("not found"))
+            .unwrap();
+        assert!(diagnostic.code.is_none(), "{diagnostic:?}");
+    }
+}
+#[cfg(test)]
+mod indirect_class_scope_tests {
+    use super::*;
+
+    #[test]
+    fn class_errors_use_only_loaded_unchanged_alias_definitions() {
+        for loader in ["documentclass", "LoadClass", "LoadClassWithOptions"] {
+            for call in [
+                r"\loadclass",
+                r"\csuse{loadclass}",
+                r"\csname loadclass\endcsname",
+            ] {
+                for case in ["loaded", "not-loaded", "changed", "shadowed", "dynamic"] {
+                    let directory = tempfile::tempdir().unwrap();
+                    let root = directory.path().join("main.tex");
+                    let package = directory.path().join("definitions.sty");
+                    let source =
+                        format!("\\RequirePackage{{definitions}}\n{call}{{fixtuer}}\\relax\n");
+                    std::fs::write(&root, &source).unwrap();
+                    let declaration = format!("\\def\\loadclass{{\\{loader}}}");
+                    std::fs::write(
+                        &package,
+                        match case {
+                            "shadowed" => format!("{declaration}\\def\\{loader}#1{{}}"),
+                            "dynamic" => format!("{declaration}\\input{{\\filename}}"),
+                            _ => declaration,
+                        },
+                    )
+                    .unwrap();
+                    let project = ProjectSources::capture(&root);
+                    let package_uri = Url::from_file_path(&package).unwrap();
+                    assert!(project.documents.contains_key(&package_uri));
+                    if case == "changed" {
+                        std::fs::write(&package, r"\def\loadclass#1{}").unwrap();
+                    }
+                    let loaded = if case == "not-loaded" {
+                        ""
+                    } else {
+                        "(./definitions.sty)"
+                    };
+                    let log=format!("(./main.tex\n{loaded}\n! LaTeX Error: File `fixtuer.cls' not found.\n! Emergency stop.\n<read *>\nl.2 {call}{{fixtuer}}\\relax\n");
+                    let diagnostics = parse_with_project_sources(&root, &log, &project).0;
+                    let diagnostic = diagnostics[&Url::from_file_path(&root).unwrap()]
+                        .iter()
+                        .find(|d| d.message.contains("not found"))
+                        .unwrap();
+                    assert_eq!(
+                        diagnostic.code,
+                        (case == "loaded").then(|| NumberOrString::String("missing-class".into())),
+                        "{case}/{loader}/{call}: {diagnostic:?}"
+                    );
+                    if case == "loaded" {
+                        let data = diagnostic.data.as_ref().unwrap();
+                        assert_eq!(data["loaderCommand"], loader);
+                        assert!(data["macroSources"]
+                            .as_array()
+                            .unwrap()
+                            .contains(&serde_json::json!(package_uri)));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn paused_parent_declarations_do_not_certify_child_class_aliases() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("main.tex");
+        let child = directory.path().join("content.tex");
+        std::fs::write(&root, r"\def\loadclass{\documentclass}\input{content}").unwrap();
+        std::fs::write(&child, "\\loadclass{fixtuer}\\relax\n").unwrap();
+        let project = ProjectSources::capture(&root);
+        let log="(./main.tex (./content.tex\n! LaTeX Error: File `fixtuer.cls' not found.\n! Emergency stop.\n<read *>\nl.1 \\loadclass{fixtuer}\\relax\n";
         let diagnostics = parse_with_project_sources(&root, log, &project).0;
         let diagnostic = diagnostics[&Url::from_file_path(&child).unwrap()]
             .iter()

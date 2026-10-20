@@ -357,7 +357,7 @@ pub(crate) fn document_links_in(workspace: &Workspace, uri: &Url, root: &Url) ->
     }
     for command in doc.syntax.commands.iter().chain(
         inputs
-            .packages
+            .loaders
             .get(uri)
             .into_iter()
             .flatten()

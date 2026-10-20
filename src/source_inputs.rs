@@ -1,4 +1,4 @@
-//! Root-specific discovery of static indirect source and package loads.
+//! Root-specific discovery of static indirect source, package and class loads.
 use crate::{
     signature::{CommandSignatures, SourceCall},
     syntax,
@@ -13,7 +13,7 @@ const MAX_SOURCES: usize = 1024;
 #[derive(Default)]
 pub(crate) struct Index {
     pub calls: BTreeMap<Url, Vec<SourceCall>>,
-    pub packages: BTreeMap<Url, Vec<SourceCall>>,
+    pub loaders: BTreeMap<Url, Vec<SourceCall>>,
     pub incomplete: bool,
     literal: Option<BTreeMap<Url, Vec<Url>>>,
 }
@@ -34,7 +34,7 @@ impl Index {
                 })
             }));
             let mut literal = BTreeMap::new();
-            let mut packages = BTreeMap::new();
+            let mut loader_calls = BTreeMap::new();
             index.calls = scope
                 .iter()
                 .filter_map(|uri| {
@@ -54,13 +54,13 @@ impl Index {
                             .map(|(uri, _)| uri)
                             .collect(),
                     );
-                    let loaders = signatures.indirect_package_invocations(
+                    let loaders = signatures.indirect_loader_invocations(
                         &doc.text.source,
                         &doc.syntax,
                         &positions,
                     );
                     if !loaders.is_empty() {
-                        packages.insert(uri.clone(), loaders);
+                        loader_calls.insert(uri.clone(), loaders);
                     }
                     let calls = signatures.indirect_source_invocations(
                         &doc.text.source,
@@ -70,7 +70,7 @@ impl Index {
                     (!calls.is_empty()).then_some((uri.clone(), calls))
                 })
                 .collect();
-            index.packages = packages;
+            index.loaders = loader_calls;
             index.literal = Some(literal);
             let next = index.scope(workspace, root);
             if !index.incomplete && next == scope {
@@ -82,7 +82,7 @@ impl Index {
         // Do not select an arbitrary interpretation of an oscillating graph.
         Self {
             calls: BTreeMap::new(),
-            packages: BTreeMap::new(),
+            loaders: BTreeMap::new(),
             incomplete: true,
             literal: None,
         }
@@ -122,13 +122,13 @@ impl Index {
             .flatten()
             .filter_map(|call| target(uri, root, call))
             .chain(
-                self.packages
+                self.loaders
                     .get(uri)
                     .into_iter()
                     .flatten()
                     .flat_map(|call| {
                         workspace.documents.get(uri).map_or_else(Vec::new, |doc| {
-                            package_targets(&doc.text.source, uri, root, call)
+                            loader_targets(&doc.text.source, uri, root, call)
                         })
                     }),
             )
@@ -145,18 +145,31 @@ pub(crate) fn target(uri: &Url, root: &Url, call: &SourceCall) -> Option<Url> {
         .or_else(|| resolve_file_path(uri, &call.command.name, &argument.value, &["tex"]))
 }
 
-/// Resolve only complete literal lists; an unknown sibling can load definitions
-/// that change the meaning of the other calls in this project.
-fn package_targets(source: &str, uri: &Url, root: &Url, call: &SourceCall) -> Vec<Url> {
+/// Resolve complete literal package lists or a single literal class name.
+fn loader_targets(source: &str, uri: &Url, root: &Url, call: &SourceCall) -> Vec<Url> {
     if !call.certain {
         return vec![];
     }
-    syntax::complete_file_list_spans(source, &call.command)
+    let Some(extension) = syntax::loader_extension(&call.command.name) else {
+        return vec![];
+    };
+    let names = if syntax::file_list(&call.command.name) {
+        syntax::complete_file_list_spans(source, &call.command)
+            .into_iter()
+            .flatten()
+            .map(|span| source[span].to_owned())
+            .collect::<Vec<_>>()
+    } else {
+        syntax::file_argument(source, &call.command)
+            .filter(|argument| syntax::is_literal_file_path(&argument.value))
+            .map(|argument| vec![argument.value.to_string()])
+            .unwrap_or_default()
+    };
+    names
         .into_iter()
-        .flatten()
-        .filter_map(|span| {
-            resolve_file_path(root, &call.command.name, &source[span.clone()], &["sty"])
-                .or_else(|| resolve_file_path(uri, &call.command.name, &source[span], &["sty"]))
+        .filter_map(|name| {
+            resolve_file_path(root, &call.command.name, &name, &[extension])
+                .or_else(|| resolve_file_path(uri, &call.command.name, &name, &[extension]))
         })
         .collect()
 }

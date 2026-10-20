@@ -1164,7 +1164,7 @@ fn source_alias(source: &str, parsed: &syntax::Syntax, entry: &Entry) -> Option<
     body_alias(source, &source_alias_body(source, parsed, entry)?)
 }
 
-/// Tokens declaring an unexpanded, argument-free input/include/package alias.
+/// Tokens declaring an unexpanded, argument-free file loader alias.
 /// Its body forwards the loader rather than performing a dynamic file load.
 pub(crate) fn file_load_alias_body_positions(
     source: &str,
@@ -1187,7 +1187,7 @@ pub(crate) fn file_load_alias_body_positions(
             let body = source_alias_body(source, parsed, entry)?;
             let target = body_alias(source, &body)?;
             (matches!(target.as_str(), "input" | "include")
-                || syntax::loader_extension(&target) == Some("sty"))
+                || syntax::loader_extension(&target).is_some())
             .then(|| syntax::skip_space(source, body.span.start))
         })
         .collect()
@@ -1770,9 +1770,9 @@ impl<'a> CommandSignatures<'a> {
         self.indirect_file_invocations(source, parsed, positions, &["input", "include"])
     }
 
-    /// Static package loaders share source-call token boundaries, including
+    /// Static package and class loaders share source-call token boundaries, including
     /// options and comma-separated names, without executing macro bodies.
-    pub(crate) fn indirect_package_invocations(
+    pub(crate) fn indirect_loader_invocations(
         &self,
         source: &str,
         parsed: &syntax::Syntax,
@@ -1782,7 +1782,14 @@ impl<'a> CommandSignatures<'a> {
             source,
             parsed,
             positions,
-            &["usepackage", "RequirePackage", "RequirePackageWithOptions"],
+            &[
+                "usepackage",
+                "RequirePackage",
+                "RequirePackageWithOptions",
+                "documentclass",
+                "LoadClass",
+                "LoadClassWithOptions",
+            ],
         )
     }
 

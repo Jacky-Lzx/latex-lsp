@@ -123,7 +123,7 @@ pub(crate) fn fixes(
     };
     let indirect = if let Some(signatures) = signatures.filter(|_| {
         matches!(command_name, "input" | "include")
-            || syntax::loader_extension(command_name) == Some("sty")
+            || syntax::loader_extension(command_name).is_some()
     }) {
         let commands = build_log::file_error_commands(&doc.text.source, &doc.syntax, signatures);
         let index =
@@ -137,7 +137,7 @@ pub(crate) fn fixes(
                         .get(uri)
                         .into_iter()
                         .flatten()
-                        .chain(index.packages.get(uri).into_iter().flatten())
+                        .chain(index.loaders.get(uri).into_iter().flatten())
                         .any(|call| {
                             call.certain
                                 && call.command.name == command.name
