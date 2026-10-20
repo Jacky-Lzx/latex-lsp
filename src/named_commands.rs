@@ -42,6 +42,38 @@ pub(crate) fn declaration(source: &str, command: &syntax::Command) -> Option<Ran
     syntax::is_static_key(&source[span.clone()]).then_some(span)
 }
 
+/// Attribute a generic argument frame only to a known single-name interface
+/// whose complete name argument is the exact control word reported by TeX.
+pub(crate) fn name_error_invocation(
+    source: &str,
+    command: &syntax::Command,
+    frame: &str,
+) -> Option<(Range<usize>, Range<usize>)> {
+    if arguments(&command.name) != [true] {
+        return None;
+    }
+    let start = syntax::skip_space(source, command.span.end);
+    let (argument, mut end) = syntax::group(source, start, b'{', b'}')?;
+    if argument.value != frame
+        || syntax::control_word(&argument.value, 0)? != (0..argument.value.len())
+    {
+        return None;
+    }
+    // cslet reads both the name and the source token before expanding the name.
+    if command.name == "cslet" {
+        let at = syntax::skip_space(source, end);
+        end = if let Some((target, end)) = syntax::group(source, at, b'{', b'}') {
+            if syntax::control_word(&target.value, 0)? != (0..target.value.len()) {
+                return None;
+            }
+            end
+        } else {
+            syntax::control_word(source, at)?.end
+        };
+    }
+    Some((argument.span, start..end))
+}
+
 /// Respect the explicit expansion before letcs's destination. Without it,
 /// csname itself is the token argument; never scan ahead to guess a name.
 pub(crate) fn control_argument_end(

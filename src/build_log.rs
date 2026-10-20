@@ -540,7 +540,7 @@ struct PackageOptions {
 struct ErrorContext<'a> {
     source: &'a str,
     package_options: Option<PackageOptions>,
-    saved_name_frame: Option<&'a str>,
+    name_frame: Option<&'a str>,
 }
 
 impl<'a> ErrorContext<'a> {
@@ -548,7 +548,7 @@ impl<'a> ErrorContext<'a> {
         Self {
             source,
             package_options: None,
-            saved_name_frame: None,
+            name_frame: None,
         }
     }
 }
@@ -666,11 +666,11 @@ fn error_context<'a>(
         }
         (index, line) = context.next()?;
     }
-    let saved_name_frame = (message == "Undefined control sequence." && recent.is_none())
+    let name_frame = (message == "Undefined control sequence." && recent.is_none())
         .then(|| line.trim_start().strip_prefix("<argument> "))
         .flatten()
         .map(str::trim_end);
-    if let Some(frame) = saved_name_frame {
+    if let Some(frame) = name_frame {
         let token = frame
             .strip_prefix("FV@SVG@")
             .or_else(|| frame.strip_prefix("FV@SV@"))
@@ -733,7 +733,7 @@ fn error_context<'a>(
         .then(|| ErrorContext {
             source: prefix,
             package_options: package_option_details(lines, index + 1, message),
-            saved_name_frame,
+            name_frame,
         })
 }
 
@@ -1154,7 +1154,7 @@ fn undefined_command_range(text: &Text, line: u32, context: &str) -> Option<Rang
     Some(text.range(command.span.start, command.span.end))
 }
 
-fn undefined_saved_name_command_range(
+fn undefined_name_command_range(
     text: &Text,
     line: u32,
     context: &str,
@@ -1165,12 +1165,16 @@ fn undefined_saved_name_command_range(
     let start = text.offset(Position::new(line, 0))?;
     let syntax = crate::syntax::Syntax::latex(text);
     let mut matches = syntax.commands.iter().filter_map(|command| {
-        let (span, tail) = crate::saved_text::name_error_invocation(&text.source, command, frame)?;
+        let (span, tail) = crate::saved_text::name_error_invocation(&text.source, command, frame)
+            .or_else(|| {
+            crate::named_commands::name_error_invocation(&text.source, command, frame)
+        })?;
         if text.position(tail.end).line != line
-            || !syntax
+            || !(syntax
                 .name_command_references
                 .iter()
                 .any(|entry| entry.span == span)
+                || syntax.commands.iter().any(|command| command.span == span))
         {
             return None;
         }
@@ -1195,7 +1199,7 @@ fn emit_with_context(
 ) {
     let context = error
         .as_ref()
-        .filter(|context| context.saved_name_frame.is_none())
+        .filter(|context| context.name_frame.is_none())
         .map(|context| context.source);
     let package_options = error
         .as_ref()
@@ -1289,8 +1293,8 @@ fn emit_with_context(
         && reported_line.checked_sub(1) == Some(line))
     .then(|| {
         let error = error.as_ref()?;
-        if let Some(frame) = error.saved_name_frame {
-            undefined_saved_name_command_range(&text, line, error.source, frame)
+        if let Some(frame) = error.name_frame {
+            undefined_name_command_range(&text, line, error.source, frame)
         } else {
             undefined_command_range(&text, line, error.source)
         }
