@@ -1033,6 +1033,9 @@ fn undefined_counter_range(text: &Text, line: u32, context: &str, name: &str) ->
     let prefix = context.trim_end();
     let shortened = shortened_context(prefix);
     let start = text.offset(Position::new(line, 0))?;
+    if shortened.is_some_and(|suffix| !unique_context_on_line(text, start, suffix)) {
+        return None;
+    }
     let syntax = crate::syntax::Syntax::latex(text);
     let mut matches = syntax
         .commands
@@ -1133,6 +1136,20 @@ fn shortened_context(prefix: &str) -> Option<&str> {
     prefix
         .strip_prefix("...")
         .map(|suffix| suffix.trim_start_matches('\u{fffd}'))
+}
+
+fn unique_context_on_line(text: &Text, start: usize, context: &str) -> bool {
+    // Unknown callers and opaque text can duplicate a supported invocation's
+    // suffix. Check the whole source line before filtering candidate calls.
+    let Some(line) = text
+        .source
+        .get(start..)
+        .and_then(|tail| tail.lines().next())
+    else {
+        return false;
+    };
+    line.find(context)
+        .is_some_and(|first| line.rfind(context) == Some(first))
 }
 
 fn undefined_command_range(text: &Text, line: u32, context: &str) -> Option<Range> {
@@ -1260,14 +1277,8 @@ fn undefined_name_command_range(
     let prefix = context.trim_end();
     let shortened = shortened_context(prefix);
     let start = text.offset(Position::new(line, 0))?;
-    if let Some(suffix) = shortened {
-        // Unknown callers can have the same suffix as a supported invocation.
-        // Uniqueness must hold across the source line before filtering calls.
-        let source_line = text.source[start..].lines().next()?;
-        let first = source_line.find(suffix)?;
-        if source_line.rfind(suffix) != Some(first) {
-            return None;
-        }
+    if shortened.is_some_and(|suffix| !unique_context_on_line(text, start, suffix)) {
+        return None;
     }
     let syntax = crate::syntax::Syntax::latex(text);
     let mut matches = syntax.commands.iter().filter_map(|command| {
