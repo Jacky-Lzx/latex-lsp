@@ -11,6 +11,7 @@ enum Model {
     ByteRgb,
     Html,
     Gray,
+    Cmyk,
 }
 
 impl Model {
@@ -20,6 +21,7 @@ impl Model {
             Self::ByteRgb => "RGB",
             Self::Html => "HTML",
             Self::Gray => "gray",
+            Self::Cmyk => "cmyk",
         }
     }
 }
@@ -59,13 +61,12 @@ fn byte(value: &str) -> Option<f32> {
     Some(f32::from(value.parse::<u8>().ok()?) / 255.0)
 }
 
-fn triple(value: &str, parse: fn(&str) -> Option<f32>) -> Option<[f32; 3]> {
+fn components<const N: usize>(value: &str, parse: fn(&str) -> Option<f32>) -> Option<[f32; N]> {
     let mut values = value.split(',');
-    let result = [
-        parse(values.next()?)?,
-        parse(values.next()?)?,
-        parse(values.next()?)?,
-    ];
+    let mut result = [0.0; N];
+    for component in &mut result {
+        *component = parse(values.next()?)?;
+    }
     values.next().is_none().then_some(result)
 }
 
@@ -110,12 +111,13 @@ fn literal_arguments(model: &Argument, argument: &Argument) -> Option<Literal> {
         "RGB" => Model::ByteRgb,
         "HTML" => Model::Html,
         "gray" => Model::Gray,
+        "cmyk" => Model::Cmyk,
         _ => return None,
     };
     let value = trim(&argument.value);
     let [red, green, blue] = match model_kind {
-        Model::Rgb => triple(value, fraction)?,
-        Model::ByteRgb => triple(value, byte)?,
+        Model::Rgb => components::<3>(value, fraction)?,
+        Model::ByteRgb => components::<3>(value, byte)?,
         Model::Html => {
             if value.len() != 6 || !value.bytes().all(|ch| ch.is_ascii_hexdigit()) {
                 return None;
@@ -124,6 +126,12 @@ fn literal_arguments(model: &Argument, argument: &Argument) -> Option<Literal> {
             [16, 8, 0].map(|shift| ((packed >> shift) & 255) as f32 / 255.0)
         }
         Model::Gray => [fraction(value)?; 3],
+        Model::Cmyk => {
+            let [cyan, magenta, yellow, black] = components::<4>(value, fraction)?;
+            // xcolor converts through cmy by adding black and clipping, rather
+            // than multiplying the complementary CMY and black components.
+            [cyan, magenta, yellow].map(|ink| (1.0 - (ink + black)).max(0.0))
+        }
     };
     let start = argument.span.start + argument.value.len()
         - argument
@@ -251,6 +259,24 @@ pub fn presentations(doc: &Document, range: Range, color: Color) -> Vec<ColorPre
             .map(|value| format!("{:02X}", (value * 255.0).round() as u8))
             .join(""),
         Model::Gray => decimal(color.red),
+        Model::Cmyk => {
+            let values = if color == literal.color {
+                // Equal RGB values can have different CMYK separations. A
+                // no-op picker request must retain the original black value.
+                let Some(values) =
+                    components::<4>(&doc.text.source[literal.value_span.clone()], fraction)
+                else {
+                    return vec![];
+                };
+                values
+            } else {
+                let black = 1.0 - channels.into_iter().fold(0.0, f32::max);
+                let [cyan, magenta, yellow] =
+                    channels.map(|channel| (1.0 - channel - black).clamp(0.0, 1.0));
+                [cyan, magenta, yellow, black]
+            };
+            values.map(decimal).join(",")
+        }
     };
     vec![ColorPresentation {
         label: format!("{} {{{value}}}", model.name()),

@@ -55,6 +55,7 @@ fn literal_models_in_all_supported_commands_have_precise_utf16_ranges() {
             ("RGB", "0, 128, 255", color(0.0, 128.0 / 255.0, 1.0)),
             ("HTML", "aB10ff", color(171.0 / 255.0, 16.0 / 255.0, 1.0)),
             ("gray", ".5", color(0.5, 0.5, 0.5)),
+            ("cmyk", ".25,.5,.75,.125", color(0.625, 0.375, 0.125)),
         ] {
             let model = if command == "definecolor" {
                 format!("{{paint}}% keep😀\r\n{{{model}}}")
@@ -93,7 +94,7 @@ fn malformed_dynamic_named_and_unsupported_colors_are_not_editable_literals() {
     for source in [
         r"\color{red}",
         r"\color[rgb]{red!50!blue}",
-        r"\color[cmyk]{0,1,1,0}",
+        r"\color[cmy]{0,1,1}",
         r"\color[rGb]{1,0,0}",
         r"\color[rgb]{1,0}",
         r"\color[rgb]{1,0,0,0}",
@@ -137,6 +138,7 @@ fn definition_options_keep_exact_color_ranges_and_survive_picker_edits() {
                 ("RGB", "255,0,0", color(1.0, 0.0, 0.0)),
                 ("HTML", "FF0000", color(1.0, 0.0, 0.0)),
                 ("gray", ".5", color(0.5, 0.5, 0.5)),
+                ("cmyk", "0,1,1,0", color(1.0, 0.0, 0.0)),
             ] {
                 let source = format!("% emoji😀\r\n\\definecolor{kind}% before name\r\n{{paint}}% before prefix\r\n{prefix}% before model\r\n{{{model}}}% before value\r\n{{ {value} }}% tail\r\n\\textcolor{{paint}}{{Body}}\r\n");
                 let doc = document(&source);
@@ -151,6 +153,7 @@ fn definition_options_keep_exact_color_ranges_and_survive_picker_edits() {
                 let replacement = match model {
                     "RGB" => "0,255,0",
                     "HTML" => "00FF00",
+                    "cmyk" => "1,0,1,0",
                     _ => "0,1,0",
                 };
                 let expected = source
@@ -207,6 +210,7 @@ fn picker_edits_preserve_model_syntax_whitespace_comments_names_and_body() {
             ("RGB", "255,0,0", "0,255,0"),
             ("HTML", "FF0000", "00FF00"),
             ("gray", ".5", "0,1,0"),
+            ("cmyk", "0,1,1,0", "1,0,1,0"),
         ] {
             let model_argument = if command == "definecolor" {
                 format!("{{paint}}{{{model}}}")
@@ -406,6 +410,151 @@ fn applied_picker_edits_remain_compilable_with_pdftex_and_xetex() {
             };
             let outcome = build::run(&main, &config, &Default::default());
             assert_eq!(outcome.status, "success", "{engine}: {}", outcome.output);
+        }
+    }
+}
+
+#[test]
+fn cmyk_previews_use_xcolor_black_addition_and_clip_saturated_channels() {
+    for (value, expected) in [
+        ("0,0,0,0", color(1.0, 1.0, 1.0)),
+        ("0,0,0,1", color(0.0, 0.0, 0.0)),
+        ("1,1,1,1", color(0.0, 0.0, 0.0)),
+        (".25,.5,.75,.125", color(0.625, 0.375, 0.125)),
+        ("1,0,.25,.5", color(0.0, 0.5, 0.25)),
+        ("+.5, -0, .25, 0.", color(0.5, 1.0, 0.75)),
+    ] {
+        let doc = document(&format!("\\textcolor[cmyk]{{{value}}}{{Paint}}"));
+        let found = colors::document_colors(&doc);
+        assert_eq!(found.len(), 1, "{value}");
+        assert_eq!(found[0].color, expected, "{value}");
+    }
+}
+
+#[test]
+fn malformed_cmyk_components_never_offer_color_ranges_or_picker_edits() {
+    for value in [
+        "",
+        "0,1,1",
+        "0,1,1,0,0",
+        "0,,1,0",
+        "0,1,1,",
+        "0,1,1,NaN",
+        "0,1,1,inf",
+        "0,1,1,1e0",
+        "0,1,1,-.1",
+        "0,1,1,1.1",
+        "-.1,1,1,0",
+        "0,1.1,1,0",
+        "0,1,-1,0",
+        "0,1,1,\\blackpart",
+        "{0},1,1,0",
+        "0,1,% comment\n1,0",
+        "0,1,1,0!50!white",
+    ] {
+        let source = format!("\\color[cmyk]{{{value}}}");
+        let doc = document(&source);
+        assert!(colors::document_colors(&doc).is_empty(), "{value}");
+        let start = source.find('{').unwrap() + 1;
+        assert!(
+            colors::presentations(
+                &doc,
+                doc.text.range(start, start + value.len()),
+                color(0.0, 1.0, 0.0)
+            )
+            .is_empty(),
+            "{value}"
+        );
+    }
+}
+
+#[test]
+fn unchanged_cmyk_picker_requests_preserve_black_separation_and_clipped_components() {
+    for (value, normalized) in [
+        (".2, .4, .8, .1", "0.2,0.4,0.8,0.1"),
+        ("1,1,1,1", "1,1,1,1"),
+        ("0,0,0,.5", "0,0,0,0.5"),
+    ] {
+        let source = format!("% 😀\r\n\\textcolor[cmyk]% keep\r\n{{ {value} }}{{Paint}}\r\n");
+        let doc = document(&source);
+        let original = colors::document_colors(&doc)[0].clone();
+        let presentations = colors::presentations(&doc, original.range, original.color);
+        assert_eq!(presentations.len(), 1);
+        assert!(presentations[0].additional_text_edits.is_none());
+        assert_eq!(presentations[0].label, format!("cmyk {{{normalized}}}"));
+        assert_eq!(
+            apply(&doc, presentations),
+            source.replace(value, normalized)
+        );
+    }
+}
+
+#[test]
+fn cmyk_picker_edits_round_trip_rgb_without_changing_the_color_model() {
+    let doc = document(r"\definecolor{paint}{cmyk}{0,1,1,0}");
+    let range = colors::document_colors(&doc)[0].range;
+    for red in [0.0, 0.125, 0.5, 0.875, 1.0] {
+        for green in [0.0, 0.125, 0.5, 0.875, 1.0] {
+            for blue in [0.0, 0.125, 0.5, 0.875, 1.0] {
+                let requested = color(red, green, blue);
+                let presentations = colors::presentations(&doc, range, requested);
+                assert_eq!(presentations.len(), 1);
+                assert!(presentations[0].additional_text_edits.is_none());
+                let updated = apply(&doc, presentations);
+                assert!(updated.contains("{cmyk}"));
+                let actual = colors::document_colors(&document(&updated))[0].color;
+                for (actual, expected) in [
+                    (actual.red, red),
+                    (actual.green, green),
+                    (actual.blue, blue),
+                ] {
+                    assert!((actual - expected).abs() < 0.000002, "{updated}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex, xelatex and xcolor"]
+fn cmyk_preview_and_picker_values_match_real_xcolor_conversions() {
+    for engine in ["pdflatex", "xelatex"] {
+        let directory = tempfile::tempdir().unwrap();
+        let main = directory.path().join("main.tex");
+        for value in [".2,.4,.8,.1", "1,0,.25,.5", "1,1,1,1", "0,0,0,0"] {
+            let source = format!("\\documentclass{{article}}\n\\usepackage{{xcolor}}\n\\definecolor[named]{{paint}}[pre]{{cmyk}}{{{value}}}\n\\begin{{document}}\n\\textcolor{{paint}}{{Paint}}\n\\extractcolorspec{{paint}}\\extracted\n\\expandafter\\convertcolorspec\\extracted{{rgb}}\\converted\n\\typeout{{CMYKRGB:\\converted}}\n\\end{{document}}\n");
+            let doc = document(&source);
+            let found = colors::document_colors(&doc)[0].clone();
+            for requested in [found.color, color(0.25, 0.5, 0.75), color(0.0, 0.0, 0.0)] {
+                let updated = apply(&doc, colors::presentations(&doc, found.range, requested));
+                std::fs::write(&main, &updated).unwrap();
+                let config = latex_lsp::config::BuildConfig {
+                    executable: engine.into(),
+                    ..Default::default()
+                };
+                let outcome = build::run(&main, &config, &Default::default());
+                assert_eq!(outcome.status, "success", "{engine}: {}", outcome.output);
+                let actual: Vec<f32> = outcome
+                    .output
+                    .lines()
+                    .find_map(|line| line.strip_prefix("CMYKRGB:"))
+                    .unwrap()
+                    .split(',')
+                    .map(|value| value.parse().unwrap())
+                    .collect();
+                assert_eq!(actual.len(), 3);
+                for (actual, expected) in
+                    actual
+                        .into_iter()
+                        .zip([requested.red, requested.green, requested.blue])
+                {
+                    assert!(
+                        (actual - expected).abs() < 0.00005,
+                        "{engine} {value} => {updated}\n{}",
+                        outcome.output
+                    );
+                }
+            }
         }
     }
 }

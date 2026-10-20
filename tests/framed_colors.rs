@@ -55,6 +55,13 @@ fn pick(doc: &Document, index: usize, value: Color) -> String {
 fn shared_models_report_two_precise_colors_and_preserve_the_other_specification() {
     for (model, frame, background, expected_frame, expected_background) in [
         (
+            "cmyk",
+            "0,1,1,0",
+            ".25,.5,.75,.125",
+            color(1.0, 0.0, 0.0),
+            color(0.625, 0.375, 0.125),
+        ),
+        (
             "rgb",
             "1,0,0",
             "0,0,1",
@@ -123,6 +130,10 @@ fn explicit_background_models_are_independent_and_named_frames_do_not_hide_liter
         (r"{red}[rgb]{0,0,1}{Body}", vec![color(0.0, 0.0, 1.0)]),
         (
             r"[cmyk]{0,1,1,0}[rgb]{0,0,1}{Body}",
+            vec![color(1.0, 0.0, 0.0), color(0.0, 0.0, 1.0)],
+        ),
+        (
+            r"[cmy]{0,1,1}[rgb]{0,0,1}{Body}",
             vec![color(0.0, 0.0, 1.0)],
         ),
         (
@@ -369,6 +380,56 @@ fn real_framed_gray_conversions_preserve_the_other_driver_color() {
                     }
                 };
                 assert!(outcome.output.contains(other), "{}", outcome.output);
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex, xelatex and xcolor"]
+fn real_shared_cmyk_picker_edits_preserve_the_other_driver_separation() {
+    for engine in ["pdflatex", "xelatex"] {
+        for first in 0..2 {
+            let directory = tempfile::tempdir().unwrap();
+            let main = directory.path().join("main.tex");
+            let source = r"\documentclass{article}\usepackage{xcolor}\makeatletter\let\savedsetcolor\set@color\def\set@color{\typeout{DRIVER:\current@color}\savedsetcolor}\makeatother\begin{document}\fcolorbox[cmyk]{.2,.4,.8,.1}{.25,.5,.75,.125}{Paint}\end{document}";
+            let updated = pick(&document(source), first, color(0.0, 1.0, 0.0));
+            let final_source = pick(&document(&updated), 1 - first, color(0.0, 0.0, 1.0));
+            for (stage, source) in [updated, final_source].into_iter().enumerate() {
+                assert!(source.contains("\\fcolorbox[cmyk]"));
+                assert!(!source.contains("[rgb]"));
+                std::fs::write(&main, source).unwrap();
+                let config = latex_lsp::config::BuildConfig {
+                    executable: engine.into(),
+                    ..Default::default()
+                };
+                let outcome = build::run(&main, &config, &Default::default());
+                assert_eq!(outcome.status, "success", "{engine}: {}", outcome.output);
+                let separations: Vec<Vec<f32>> = outcome
+                    .output
+                    .lines()
+                    .filter_map(|line| line.strip_prefix("DRIVER:"))
+                    .map(|line| {
+                        line.split_whitespace()
+                            .filter_map(|part| part.parse().ok())
+                            .take(4)
+                            .collect::<Vec<_>>()
+                    })
+                    .filter(|values| values.len() == 4)
+                    .collect();
+                assert!(
+                    separations.contains(&vec![1.0, 0.0, 1.0, 0.0]),
+                    "{engine}: {}",
+                    outcome.output
+                );
+                let other = if stage == 1 {
+                    vec![1.0, 1.0, 0.0, 0.0]
+                } else if first == 0 {
+                    vec![0.25, 0.5, 0.75, 0.125]
+                } else {
+                    vec![0.2, 0.4, 0.8, 0.1]
+                };
+                assert!(separations.contains(&other), "{engine}: {}", outcome.output);
             }
         }
     }

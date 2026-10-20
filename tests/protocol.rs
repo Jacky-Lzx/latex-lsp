@@ -10755,3 +10755,113 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
         }
     }
 }
+
+#[test]
+fn cmyk_color_picker_preserves_separations_and_independent_frame_colors_over_stdio() {
+    use latex_lsp::text::Text;
+    use tower_lsp::lsp_types::{ColorPresentation, TextDocumentContentChangeEvent};
+    let mut server = Server::start();
+    let uri = Url::parse("file:///cmyk-protocol/main.tex").unwrap();
+    let initialized = server.request(1, "initialize", json!({"processId":null,"capabilities":{}}));
+    assert_eq!(initialized["capabilities"]["colorProvider"], true);
+    server.notify("initialized", json!({}));
+    let source = "% emoji😀\r\n\\fcolorbox[cmyk]{ .2,.4,.8,.1 }% keep\r\n{ .25,.5,.75,.125 }{Body}\r\n\\definecolor[named]{paint}[pre]{cmyk}{ 0,1,1,0 }\r\n";
+    let mut text = Text::new(source.into());
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"latex","version":7,"text":source}}),
+    );
+    let found = server.request(
+        2,
+        "textDocument/documentColor",
+        json!({"textDocument":{"uri":uri}}),
+    );
+    assert_eq!(found.as_array().unwrap().len(), 3);
+    assert_eq!(
+        found[1]["color"],
+        json!({"red":0.625,"green":0.375,"blue":0.125,"alpha":1.0})
+    );
+    let no_op = server.request(
+        3,
+        "textDocument/colorPresentation",
+        json!({"textDocument":{"uri":uri},"range":found[0]["range"],"color":found[0]["color"]}),
+    );
+    assert_eq!(no_op[0]["textEdit"]["newText"], "0.2,0.4,0.8,0.1");
+    assert!(no_op[0]["additionalTextEdits"].is_null());
+    let green = json!({"red":0.0,"green":1.0,"blue":0.0,"alpha":1.0});
+    let presented = server.request(
+        4,
+        "textDocument/colorPresentation",
+        json!({"textDocument":{"uri":uri},"range":found[0]["range"],"color":green}),
+    );
+    let presentations: Vec<ColorPresentation> = serde_json::from_value(presented).unwrap();
+    assert_eq!(presentations.len(), 1);
+    assert_eq!(presentations[0].label, "cmyk {1,0,1,0}");
+    assert!(presentations[0].additional_text_edits.is_none());
+    let edit = presentations[0].text_edit.clone().unwrap();
+    let changes = vec![TextDocumentContentChangeEvent {
+        range: Some(edit.range),
+        range_length: None,
+        text: edit.new_text,
+    }];
+    text = text.changed(changes.clone()).unwrap();
+    assert_eq!(text.source, source.replace(".2,.4,.8,.1", "1,0,1,0"));
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":uri,"version":8},"contentChanges":changes}),
+    );
+    let updated = server.request(
+        5,
+        "textDocument/documentColor",
+        json!({"textDocument":{"uri":uri}}),
+    );
+    assert_eq!(updated[0]["color"], green);
+    assert_eq!(updated[1]["color"], found[1]["color"]);
+    assert_eq!(updated[1]["range"], found[1]["range"]);
+    assert_eq!(updated[2]["color"], found[2]["color"]);
+    let blue = json!({"red":0.0,"green":0.0,"blue":1.0,"alpha":1.0});
+    let stale = server.request(
+        6,
+        "textDocument/colorPresentation",
+        json!({"textDocument":{"uri":uri},"range":found[0]["range"],"color":blue}),
+    );
+    assert_eq!(stale, json!([]));
+    let presented = server.request(
+        7,
+        "textDocument/colorPresentation",
+        json!({"textDocument":{"uri":uri},"range":updated[1]["range"],"color":blue}),
+    );
+    let presentations: Vec<ColorPresentation> = serde_json::from_value(presented).unwrap();
+    assert_eq!(presentations.len(), 1);
+    assert!(presentations[0].additional_text_edits.is_none());
+    let edit = presentations[0].text_edit.clone().unwrap();
+    let changes = vec![TextDocumentContentChangeEvent {
+        range: Some(edit.range),
+        range_length: None,
+        text: edit.new_text,
+    }];
+    text = text.changed(changes.clone()).unwrap();
+    assert_eq!(
+        text.source,
+        source
+            .replace(".2,.4,.8,.1", "1,0,1,0")
+            .replace(".25,.5,.75,.125", "1,1,0,0")
+    );
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":uri,"version":9},"contentChanges":changes}),
+    );
+    let final_colors = server.request(
+        8,
+        "textDocument/documentColor",
+        json!({"textDocument":{"uri":uri}}),
+    );
+    assert_eq!(final_colors[0]["color"], green);
+    assert_eq!(final_colors[1]["color"], blue);
+    assert_eq!(final_colors[2]["color"], found[2]["color"]);
+    let transparent = server.request(9, "textDocument/colorPresentation", json!({"textDocument":{"uri":uri},"range":final_colors[1]["range"],"color":{"red":0,"green":0,"blue":1,"alpha":0.5}}));
+    assert_eq!(transparent, json!([]));
+    server.request(10, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
