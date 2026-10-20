@@ -1580,14 +1580,9 @@ impl<'a> CommandSignatures<'a> {
             }
             // Grouped csuse names leave following spaces intact; a literal
             // endcsname, like an ordinary control word, discards lexical blanks.
-            let begin = command.argument.as_ref().filter(|argument| {
-                command.name == "begin"
-                    && !local.contains_key("begin")
-                    && syntax::is_static_key(&argument.value)
-            });
             let named = command.argument.as_ref().filter(|argument| {
-                (command.name == "csuse" && !local.contains_key("csuse")
-                    || begin.is_some() && local.contains_key(argument.value.as_str()))
+                command.name == "csuse"
+                    && !local.contains_key("csuse")
                     && syntax::is_static_key(&argument.value)
             });
             let literal = (command.name == "endcsname"
@@ -1612,7 +1607,25 @@ impl<'a> CommandSignatures<'a> {
                 .or_else(|| literal.as_ref().map(|span| &source[span.clone()]))
                 .unwrap_or(command.name.as_str());
             let end = named.map_or(command.span.end, |argument| argument.outer_span.end);
-            let control_spaces = named.is_none();
+            // A named call or a pure alias can invoke begin. Its environment
+            // name follows the resolved invocation, rather than the lexical
+            // command (whose first group may instead contain "begin").
+            let begin = (!local.contains_key("begin")
+                && local.get(name).map_or(name == "begin", |signature| {
+                    signature.as_ref().is_some_and(|s| s.name == "begin")
+                }))
+            .then(|| {
+                syntax::group(source, syntax::skip_space(source, end), b'{', b'}')
+                    .map(|(argument, _)| syntax::single_key_argument(source, argument))
+                    .filter(|argument| syntax::is_static_key(&argument.value))
+            })
+            .flatten();
+            let environment = begin
+                .as_ref()
+                .filter(|argument| local.contains_key(argument.value.as_str()));
+            let name = environment.map_or(name, |argument| argument.value.as_str());
+            let end = environment.map_or(end, |argument| argument.outer_span.end);
+            let control_spaces = environment.is_none() && named.is_none();
             if let Some(end) = self
                 .tex_operands
                 .get(name)
@@ -1625,14 +1638,18 @@ impl<'a> CommandSignatures<'a> {
                 continue;
             }
             let signature = local.get(name).and_then(Option::as_ref);
-            let builtin = (!local.contains_key(name))
-                .then(|| {
-                    begin
-                        .and_then(|argument| builtin_environment(&argument.value))
-                        .or_else(|| operand_builtin(name))
-                })
-                .flatten();
-            if let Some(signature) = signature.or(builtin.as_ref()) {
+            let builtin = begin
+                .as_ref()
+                .filter(|_| environment.is_none())
+                .and_then(|argument| builtin_environment(&argument.value))
+                .or_else(|| {
+                    (!local.contains_key(name))
+                        .then(|| operand_builtin(name))
+                        .flatten()
+                });
+            // A builtin environment has additional parameters beyond begin's
+            // name group, including when begin was reached through an alias.
+            if let Some(signature) = builtin.as_ref().or(signature) {
                 // Resolved aliases retain their leaf's name. Builtin
                 // formatters and their pure aliases execute grouped contents;
                 // a user macro can instead discard or detokenize its argument.
@@ -2564,6 +2581,12 @@ mod tex_operand_tests {
     fn environment_arguments_are_operands_through_begin_direct_and_named_calls() {
         for call in [
             r"\begin{wrapped}",
+            r"\csuse{begin}{wrapped}",
+            r"\csname begin\endcsname{wrapped}",
+            r"\start{wrapped}",
+            r"\csuse{start}{wrapped}",
+            r"\csname start\endcsname{wrapped}",
+            "\\csuse{begin}{% name\r\nwrapped% keep\r\n}",
             r"\wrapped",
             r"\csuse{wrapped}",
             r"\csname wrapped\endcsname",
@@ -2582,9 +2605,15 @@ mod tex_operand_tests {
                 ),
                 (r"\newenvironment{wrapped}[1]{}{}", "{", "}"),
                 (r"\NewDocumentEnvironment{wrapped}{d()}{}{}", "(", ")"),
+                (
+                    r"\NewDocumentEnvironment{wrapped}{t\mark m}{}{}",
+                    r"\mark",
+                    "",
+                ),
             ] {
-                let source =
-                    format!(r"{definition}{call}{prefix}\input{{wrong}}{tail}\input{{right}}");
+                let source = format!(
+                    r"{definition}\def\start{{\begin}}{call}{prefix}\input{{wrong}}{tail}\input{{right}}"
+                );
                 let parsed = syntax::Syntax::latex(&Text::new(source.clone()));
                 let signatures = CommandSignatures::new([(source.as_str(), &parsed)]);
                 let operands = signatures.argument_tokens(&source, &parsed);
@@ -2600,6 +2629,57 @@ mod tex_operand_tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn indirect_begins_preserve_completed_arguments_and_builtin_environment_bodies() {
+        for begin in [
+            r"\begin",
+            r"\csuse{begin}",
+            r"\csname begin\endcsname",
+            r"\start",
+            r"\csuse{start}",
+            r"\csname start\endcsname",
+        ] {
+            for (declaration, call) in [
+                (r"\newenvironment{wrapped}{}{}", "{wrapped}"),
+                (r"\newenvironment{wrapped}[1]{}{}", "{wrapped}{Unused}"),
+                (r"\newenvironment{wrapped}[1][default]{}{}", "{wrapped}"),
+                (
+                    r"\NewDocumentEnvironment{wrapped}{d()}{}{}",
+                    "{wrapped}(note)",
+                ),
+                (r"\NewDocumentEnvironment{wrapped}{!s}{}{}", "{wrapped} "),
+                ("", "{document}"),
+                ("", "{minipage}{3cm}"),
+                ("", "{figure}[ht]"),
+                // A replacement begin consumes only its own arguments.
+                (
+                    r"\newenvironment{wrapped}[3]{}{}\renewcommand{\begin}[1]{}",
+                    "{wrapped}",
+                ),
+            ] {
+                let source =
+                    format!(r"{declaration}\def\start{{\begin}}{begin}{call}\input{{right}}");
+                let parsed = syntax::Syntax::latex(&Text::new(source.clone()));
+                let signatures = CommandSignatures::new([(source.as_str(), &parsed)]);
+                let operands = signatures.argument_tokens(&source, &parsed);
+                for command in parsed
+                    .commands
+                    .iter()
+                    .filter(|command| command.name == "input")
+                {
+                    assert!(!operands.contains(&command.span.start), "{source}");
+                }
+            }
+        }
+        let source = r"\newenvironment{wrapped}[3]{}{}\def\start{\begin}";
+        let parsed = syntax::Syntax::latex(&Text::new(source.into()));
+        for ambiguous in ["begin", "start"] {
+            let signatures =
+                CommandSignatures::with_ambiguous_names([(source, &parsed)], [ambiguous]);
+            assert!(signatures.local["start"].is_none(), "{ambiguous}");
         }
     }
 

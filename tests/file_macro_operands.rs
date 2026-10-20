@@ -29,6 +29,36 @@ fn file_errors_distinguish_macro_operands_from_completed_calls() {
     ] {
         for (declaration, prefix, precise) in [
             (
+                r"\newenvironment{wrapped}[3]{}{}",
+                r"\csuse{begin}{wrapped}\relax",
+                false,
+            ),
+            (
+                r"\newenvironment{wrapped}[3]{}{}",
+                r"\csname begin\endcsname{wrapped}\relax",
+                false,
+            ),
+            (
+                r"\newenvironment{wrapped}[3]{}{}\def\start{\begin}",
+                r"\start{wrapped}\relax",
+                false,
+            ),
+            (
+                r"\newenvironment{wrapped}[1]{}{}",
+                r"\csuse{begin}{wrapped}{Unused}",
+                true,
+            ),
+            (
+                r"\newenvironment{wrapped}[1]{}{}",
+                r"\csname begin\endcsname{wrapped}{Unused}",
+                true,
+            ),
+            (
+                r"\newenvironment{wrapped}[1]{}{}\def\start{\begin}",
+                r"\start{wrapped}{Unused}",
+                true,
+            ),
+            (
                 r"\newenvironment{wrapped}{}{}",
                 r"\wrapped\endwrapped",
                 true,

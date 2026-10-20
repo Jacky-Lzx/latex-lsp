@@ -71,6 +71,18 @@ fn changes(workspace: &Workspace, edit: WorkspaceEdit) -> BTreeMap<Url, Vec<Text
 fn color_rename_refuses_macro_callback_tokens_that_can_print_names_as_plain_text() {
     for (definition, call) in [
         (
+            r"\newenvironment{wrapped}[4]{#3}{}",
+            r"\csuse{begin}{wrapped}\relax\textcolor{accent}{Unused}\end{wrapped}",
+        ),
+        (
+            r"\newenvironment{wrapped}[4]{#3}{}",
+            r"\csname begin\endcsname{wrapped}\relax\textcolor{accent}{Unused}\end{wrapped}",
+        ),
+        (
+            r"\newenvironment{wrapped}[4]{#3}{}\def\start{\begin}",
+            r"\start{wrapped}\relax\textcolor{accent}{Unused}\end{wrapped}",
+        ),
+        (
             r"\newenvironment{wrapped}{\detokenize}{}",
             r"\wrapped{\textcolor{accent}{Unused}}",
         ),
@@ -400,6 +412,18 @@ fn unresolved_aliases_remain_conservative_and_deep_chains_do_not_recurse() {
 #[test]
 fn completed_alias_targets_keep_versioned_color_renames_available() {
     for (definition, call) in [
+        (
+            r"\newenvironment{wrapped}[1]{}{}",
+            r"\csuse{begin}{wrapped}{Unused}",
+        ),
+        (
+            r"\newenvironment{wrapped}[1]{}{}",
+            r"\csname begin\endcsname{wrapped}{Unused}",
+        ),
+        (
+            r"\newenvironment{wrapped}[1]{}{}\def\start{\begin}",
+            r"\start{wrapped}{Unused}",
+        ),
         (r"\newenvironment{wrapped}{}{}", r"\wrapped\endwrapped"),
         (
             r"\newenvironment{wrapped}{}{}",

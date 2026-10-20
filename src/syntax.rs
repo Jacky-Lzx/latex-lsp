@@ -485,7 +485,7 @@ fn skip_comments(source: &str, mut at: usize) -> usize {
 
 /// Comments have no tokens, whereas literal spaces belong to a single key's
 /// name. Keep only a contiguous name bounded by comments, without trimming it.
-fn single_key_argument(source: &str, mut argument: Argument) -> Argument {
+pub(crate) fn single_key_argument(source: &str, mut argument: Argument) -> Argument {
     if !argument.value.contains('%') {
         return argument;
     }
