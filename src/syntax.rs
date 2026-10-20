@@ -1625,11 +1625,18 @@ impl Syntax {
         let mut braces = Vec::new();
         let mut environments: Vec<(String, Range<usize>)> = Vec::new();
         let mut literal_arguments = std::collections::BTreeMap::new();
+        let mut control_operands = std::collections::BTreeSet::new();
+        let mut conversion_arguments = std::collections::BTreeMap::new();
         let mut i = 0;
         while i < bytes.len() {
-            // FancyVerb names and inline bodies are data, while preceding
-            // formatting options may contain actual commands. Skip each data
-            // argument only when the normal scan reaches it.
+            // Literal conversions suppress command indexing but retain source
+            // ranges for consumers such as quoted filename completion.
+            if let Some(end) = conversion_arguments.remove(&i) {
+                i = end;
+                continue;
+            }
+            // Data arguments stay opaque while the normal scan still visits
+            // preceding options and comments.
             if let Some((span, end)) = literal_arguments.remove(&i) {
                 result.ignored.push(span);
                 i = end;
@@ -1678,8 +1685,10 @@ impl Syntax {
                     }
                     let name = &source[name_start..i];
                     let command_end = i;
-                    let starred = !matches!(name, "input" | "InputIfFileExists" | "IfFileExists")
-                        && !passes_options(name)
+                    let starred = !matches!(
+                        name,
+                        "input" | "InputIfFileExists" | "IfFileExists" | "detokenize" | "string"
+                    ) && !passes_options(name)
                         && bytes.get(i) == Some(&b'*');
                     if starred {
                         i += 1;
@@ -1788,6 +1797,30 @@ impl Syntax {
                         span: start..command_end,
                         argument,
                     };
+                    if name == "detokenize" && !control_operands.contains(&start) {
+                        if let Some((argument, end)) =
+                            group(source, skip_space(source, command_end), b'{', b'}')
+                        {
+                            conversion_arguments.insert(argument.outer_span.start, end);
+                        }
+                    } else if name == "string" && !control_operands.contains(&start) {
+                        let at = skip_space(source, command_end);
+                        if at < source.len() {
+                            let end = control_word(source, at).map_or_else(
+                                || {
+                                    let first = source[at..].chars().next().unwrap();
+                                    let after = at + first.len_utf8();
+                                    if first == '\\' && after < source.len() {
+                                        after + source[after..].chars().next().unwrap().len_utf8()
+                                    } else {
+                                        after
+                                    }
+                                },
+                                |word| word.end,
+                            );
+                            conversion_arguments.insert(at, end);
+                        }
+                    }
                     if crate::fancyvrb::is_inline_save(name) || crate::fancyvrb::is_use(name) {
                         if let Some((argument, end)) = &parsed {
                             literal_arguments
@@ -1847,6 +1880,32 @@ impl Syntax {
                                     && skip_space(source, previous.span.end) == command.span.start
                             }))
                     });
+                    if let Some(span) = &declaration {
+                        control_operands.insert(span.start);
+                    }
+                    if name == "let" || declares_command_copy(name) || name == "cslet" {
+                        let after_target = parsed
+                            .as_ref()
+                            .map(|(_, end)| *end)
+                            .or_else(|| declaration.as_ref().map(|span| span.end))
+                            .or_else(|| {
+                                (name == "cslet")
+                                    .then(|| control_word(source, arg_start).map(|span| span.end))
+                                    .flatten()
+                            });
+                        if let Some(after_target) = after_target {
+                            let mut at = skip_space(source, after_target);
+                            if name == "let" && bytes.get(at) == Some(&b'=') {
+                                at = skip_space(source, at + 1);
+                            }
+                            let operand = group(source, at, b'{', b'}')
+                                .map(|(argument, _)| argument.span.start)
+                                .unwrap_or(at);
+                            if let Some(word) = control_word(source, operand) {
+                                control_operands.insert(word.start);
+                            }
+                        }
+                    }
                     if let Some(span) = declaration {
                         result.definitions.push(Entry {
                             name: source[span.start + 1..span.end].into(),

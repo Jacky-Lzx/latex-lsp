@@ -126,7 +126,7 @@ fn raw_target(doc: &Document, offset: usize) -> Option<Target<'_>> {
         {
             if argument.span.start <= offset && offset <= argument.span.end {
                 if !syntax::is_static_key(&argument.value) {
-                    return None;
+                    continue;
                 }
                 return Some(Target {
                     kind: TargetKind::Label,
@@ -157,9 +157,12 @@ fn raw_target(doc: &Document, offset: usize) -> Option<Target<'_>> {
                         || syntax::is_reference(&command.name)
                             && !syntax::is_single_reference(&command.name)
                     {
-                        let span = syntax::key_list_spans(&doc.text.source, arg.span.clone())
+                        let Some(span) = syntax::key_list_spans(&doc.text.source, arg.span.clone())
                             .into_iter()
-                            .find(|span| span.start <= offset && offset <= span.end)?;
+                            .find(|span| span.start <= offset && offset <= span.end)
+                        else {
+                            continue;
+                        };
                         return Some(Target {
                             kind,
                             name: &doc.text.source[span.clone()],
@@ -176,6 +179,10 @@ fn raw_target(doc: &Document, offset: usize) -> Option<Target<'_>> {
                                 || command.name == "bibitem"))
                         && !syntax::is_static_key(&arg.value)
                     {
+                        // Dynamic keys can still contain ordinary indexed macro calls.
+                        if matches!(kind, TargetKind::Label | TargetKind::Citation) {
+                            continue;
+                        }
                         return None;
                     }
                     let local = offset - arg.span.start;
