@@ -68,7 +68,8 @@ fn raw_environment_delimiters_link_without_pairing_fake_commands_in_the_body() {
         "comment",
         "Verbatim",
     ] {
-        let source = format!("\\begin{{quote}}\\begin{{{name}}}\r\n\\begin{{quote}}Fake\\end{{quote}}\r\n\\end{{{name}}}\\end{{quote}}");
+        let gap = if name == "Verbatim" { "\r\n" } else { "" };
+        let source = format!("\\begin{{quote}}\\begin{{{name}}}\r\n\\begin{{quote}}Fake\\end{{quote}}\r\n\\end{{{name}}}{gap}\\end{{quote}}");
         let doc = document(&source, "tex");
         let raw_begin = source.find(&format!("{{{name}}}")).unwrap() + 1;
         let raw_end = source.rfind(&format!("{{{name}}}")).unwrap() + 1;

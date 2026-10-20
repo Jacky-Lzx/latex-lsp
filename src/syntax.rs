@@ -1854,6 +1854,18 @@ impl Syntax {
                                     if env == "comment" {
                                         result.comments.push(body_start..i);
                                     }
+                                    if end.is_some() && crate::fancyvrb::is_environment(env) {
+                                        // FancyVerb discards the rest of its closing line.
+                                        // Keep the marker boundary in the first raw span
+                                        // for folding and linked editing of delimiters.
+                                        let after = source[i..]
+                                            .find('\n')
+                                            .map_or(source.len(), |newline| i + newline + 1);
+                                        if i < after {
+                                            result.ignored.push(i..after);
+                                        }
+                                        i = after;
+                                    }
                                 } else {
                                     environments.push((env.into(), arg.span.clone()));
                                 }

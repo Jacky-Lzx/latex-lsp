@@ -262,6 +262,142 @@ fn only_the_first_end_marker_on_a_fancyverb_line_can_close_the_environment() {
 }
 
 #[test]
+fn closing_line_suffixes_are_discarded_without_losing_delimiters_or_the_next_source_line() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::write(root.join("chapter.tex"), r"\label{chapterlabel}").unwrap();
+    std::fs::write(root.join("discarded.tex"), r"\label{discardedinputlabel}").unwrap();
+    let main = uri(root, "main.tex");
+    let tail = concat!(
+        "\\label{kept}\\label{discarded}\\newcommand{\\hidden}{Text}\\say",
+        "\\input{chapter}\\input{discarded}\\ref{kept}\\end{document}{",
+        "% 😀 literal percent \\label{afterpercent}",
+    );
+    for environment in ENVIRONMENTS {
+        for newline in ["\n", "\r\n"] {
+            let before = format!("\\documentclass{{article}}\\newcommand{{\\say}}{{Text}}\\label{{kept}}\\begin{{document}}{newline}");
+            let after = format!("\\input{{chapter}}\\say\\ref{{kept}}\\ref{{discarded}}\\ref{{discardedinputlabel}}{newline}\\end{{document}}{newline}");
+            let source = format!(
+                "{before}\\begin{{{environment}}}{}{newline}Literal.{newline}\\end{{{environment}}}{tail}{newline}{after}",
+                argument(environment)
+            );
+            std::fs::write(root.join("main.tex"), &source).unwrap();
+            let mut workspace = Workspace {
+                versioned_edits: true,
+                ..Default::default()
+            };
+            workspace.add_root(root.into());
+            workspace.open(main.clone(), source.clone(), 7);
+            let doc = &workspace.documents[&main];
+            assert!(
+                doc.syntax.diagnostics.is_empty(),
+                "{environment}: {:?}",
+                doc.syntax.diagnostics
+            );
+            assert_eq!(doc.syntax.labels.len(), 1);
+            assert_eq!(doc.syntax.definitions.len(), 1);
+            assert_eq!(
+                workspace.dependencies(&main),
+                vec![uri(root, "chapter.tex")]
+            );
+            let links = navigation::document_links(&workspace, &main);
+            assert_eq!(links.len(), 1);
+            assert_eq!(links[0].target, Some(uri(root, "chapter.tex")));
+            for key in ["discarded", "discardedinputlabel"] {
+                assert!(features::definitions(
+                    &workspace,
+                    &main,
+                    doc.text.position(source.rfind(key).unwrap())
+                )
+                .is_empty());
+            }
+            for (old, new) in [("kept", "renamedlabel"), ("say", "renamedcommand")] {
+                let at = doc.text.position(source.rfind(old).unwrap());
+                assert_eq!(features::references(&workspace, &main, at, true).len(), 2);
+                let updated = apply(
+                    &source,
+                    versioned(
+                        features::rename(&workspace, &main, at, new)
+                            .unwrap()
+                            .unwrap(),
+                        &main,
+                    ),
+                );
+                assert_eq!(updated, format!(
+                    "{}\\begin{{{environment}}}{}{newline}Literal.{newline}\\end{{{environment}}}{tail}{newline}{}",
+                    before.replace(old, new), argument(environment), after.replace(old, new)
+                ));
+            }
+            let edit = file_operations::will_rename(
+                &workspace,
+                &[FileRename {
+                    old_uri: uri(root, "chapter.tex").into(),
+                    new_uri: uri(root, "renamed.tex").into(),
+                }],
+            )
+            .unwrap()
+            .unwrap();
+            let updated = apply(&source, versioned(edit, &main));
+            assert!(updated.contains(tail));
+            assert!(updated.ends_with(&after.replace("chapter", "renamed")));
+            let ending_offset = source.find(&format!("\\end{{{environment}}}")).unwrap();
+            let marker_end = ending_offset + format!("\\end{{{environment}}}").len();
+            assert!(doc.syntax.ignored.iter().any(|span| span.end == marker_end));
+            assert!(doc
+                .syntax
+                .is_ignored(source.find("literal percent").unwrap()));
+            assert!(!doc
+                .syntax
+                .comments
+                .iter()
+                .any(|span| span.contains(&source.find("literal percent").unwrap())));
+            let linked =
+                editing::linked_editing_ranges(doc, doc.text.position(ending_offset + 6)).unwrap();
+            assert_eq!(linked.ranges.len(), 2);
+            assert_eq!(
+                linked.ranges[1],
+                doc.text.range(ending_offset + 5, marker_end - 1)
+            );
+            assert!(navigation::folding_ranges(doc, None)
+                .iter()
+                .any(|fold| fold.start_line == 1 && fold.end_line == 3));
+            let mut at = Position::new(0, 0);
+            let mut covered = false;
+            for token in semantic::tokens(doc, None).unwrap().data {
+                at = Position::new(
+                    at.line + token.delta_line,
+                    if token.delta_line == 0 {
+                        at.character + token.delta_start
+                    } else {
+                        token.delta_start
+                    },
+                );
+                if at.line == 3 {
+                    assert_eq!(
+                        semantic::options().legend.token_types[token.token_type as usize],
+                        SemanticTokenType::STRING
+                    );
+                    let end = Position::new(at.line, at.character + token.length);
+                    let value =
+                        &source[doc.text.offset(at).unwrap()..doc.text.offset(end).unwrap()];
+                    covered |= value.contains("literal percent");
+                }
+            }
+            assert!(covered);
+        }
+        let at_eof = format!(
+            "\\begin{{{environment}}}{}\nLiteral.\n\\end{{{environment}}}\\label{{discarded}}{{",
+            argument(environment)
+        );
+        let doc = Document::new(&main, at_eof, Some(7));
+        assert!(doc.syntax.labels.is_empty() && doc.syntax.diagnostics.is_empty());
+    }
+    let source = "\\begin{verbatim}\nLiteral.\n\\end{verbatim}\\label{retained}\n";
+    let doc = Document::new(&main, source.into(), Some(7));
+    assert_eq!(doc.syntax.labels[0].name, "retained");
+}
+
+#[test]
 fn incomplete_raw_environments_offer_one_versioned_close_fix_without_parsing_the_body() {
     let main = Url::parse("file:///fancy-environments/incomplete.tex").unwrap();
     for environment in ENVIRONMENTS {
@@ -345,6 +481,82 @@ fn environment_names_require_exact_case_spaces_and_one_star_and_completion_reser
             features::rename(&workspace, &main, at, environment).is_err(),
             "{environment}"
         );
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex and xelatex"]
+fn real_discarded_closing_suffix_preserves_the_compiler_error_and_safe_rename() {
+    for engine in ["pdflatex", "xelatex"] {
+        for environment in ENVIRONMENTS {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let main = uri(root, "main.tex");
+            let discarded = uri(root, "discarded.tex");
+            std::fs::write(root.join("discarded.tex"), r"\label{discardedinputlabel}").unwrap();
+            let tail = "\\label{kept}\\label{discarded}\\newcommand{\\hidden}{Oops}\\input{discarded}% literal";
+            let use_saved = if environment.starts_with("SaveVerbatim") {
+                "\\UseVerbatim{saved}\n"
+            } else {
+                ""
+            };
+            let source = format!(
+                "\\documentclass{{article}}\n\\usepackage{{fancyvrb}}\n\\begin{{document}}\n\\label{{kept}}\n\\begin{{{environment}}}{}\nLiteral.\n\\end{{{environment}}}{tail}\n{use_saved}\\ref{{kept}}\\ref{{discarded}}\\ref{{discardedinputlabel}}\n\\end{{document}}\n",
+                argument(environment)
+            );
+            std::fs::write(root.join("main.tex"), &source).unwrap();
+            let mut workspace = Workspace::default();
+            workspace.add_root(root.into());
+            workspace.config.build.executable = engine.into();
+            let at = workspace.documents[&main]
+                .text
+                .position(source.rfind("kept").unwrap());
+            let changes = features::rename(&workspace, &main, at, "renamedlabel")
+                .unwrap()
+                .unwrap()
+                .changes
+                .unwrap();
+            let updated = apply(&source, changes[&main].clone());
+            assert!(updated.contains(tail));
+            for (contents, key) in [(&source, "kept"), (&updated, "renamedlabel")] {
+                std::fs::write(root.join("main.tex"), contents).unwrap();
+                workspace.open(main.clone(), contents.clone(), 7);
+                let outcome = build::run(
+                    &root.join("main.tex"),
+                    &workspace.config.build,
+                    &AtomicBool::new(false),
+                );
+                assert_eq!(
+                    outcome.status, "error",
+                    "{engine}/{environment}: {}",
+                    outcome.output
+                );
+                assert_eq!(outcome.exit_code, Some(1));
+                let diagnostic = outcome.diagnostics[&main]
+                    .iter()
+                    .find(|diagnostic| {
+                        diagnostic.severity == Some(DiagnosticSeverity::ERROR)
+                            && diagnostic.message.contains("Extraneous input")
+                    })
+                    .unwrap_or_else(|| panic!("{engine}/{environment}: {:?}", outcome.diagnostics));
+                assert_eq!(diagnostic.range.start.line, 6, "{diagnostic:?}");
+                assert!(diagnostic.message.contains("line end"), "{diagnostic:?}");
+                let inputs = outcome.inputs.unwrap();
+                assert!(!inputs.contains(&discarded));
+                workspace.recorded_inputs.insert(main.clone(), inputs);
+                assert!(!workspace.project_documents(&main).contains(&discarded));
+                let aux = std::fs::read_to_string(root.join("build/latex-lsp/main.aux")).unwrap();
+                assert!(aux.contains(&format!("newlabel{{{key}}}")), "{aux}");
+                assert!(
+                    !aux.contains("newlabel{discarded}")
+                        && !aux.contains("newlabel{discardedinputlabel}"),
+                    "{aux}"
+                );
+                if key == "renamedlabel" {
+                    assert!(!aux.contains("newlabel{kept}"), "{aux}");
+                }
+            }
+        }
     }
 }
 
