@@ -7,6 +7,10 @@ pub(crate) fn is_input(name: &str) -> bool {
     matches!(name, "VerbatimInput" | "LVerbatimInput" | "BVerbatimInput")
 }
 
+pub(crate) fn is_use(name: &str) -> bool {
+    matches!(name, "UseVerbatim" | "LUseVerbatim" | "BUseVerbatim")
+}
+
 pub(crate) fn is_environment(name: &str) -> bool {
     matches!(
         name.strip_suffix('*').unwrap_or(name),
@@ -16,7 +20,8 @@ pub(crate) fn is_environment(name: &str) -> bool {
 
 /// FancyVerb checks the first literal end marker on each line. A different
 /// environment there makes the complete line data, including later markers.
-pub(crate) fn environment_end(source: &str, body_start: usize, name: &str) -> Option<usize> {
+pub(crate) fn environment_end(source: &str, header_start: usize, name: &str) -> Option<usize> {
+    let body_start = environment_body_start(source, header_start, name)?;
     let ending = format!("\\end{{{name}}}");
     let mut offset = body_start;
     for line in source[body_start..].split_inclusive('\n') {
@@ -28,6 +33,59 @@ pub(crate) fn environment_end(source: &str, body_start: usize, name: &str) -> Op
         offset += line.len();
     }
     None
+}
+
+fn header_space(source: &str, mut at: usize) -> usize {
+    loop {
+        while matches!(source.as_bytes().get(at), Some(b' ' | b'\t')) {
+            at += 1;
+        }
+        if source.as_bytes().get(at) != Some(&b'%') {
+            return at;
+        }
+        let Some(newline) = source[at..].find('\n') else {
+            return source.len();
+        };
+        at += newline + 1;
+    }
+}
+
+fn environment_body_start(source: &str, header_start: usize, name: &str) -> Option<usize> {
+    // FV@Environment makes end-of-line active before looking for an optional
+    // argument. Comments may continue the header; a plain newline cannot.
+    let mut at = header_space(source, header_start);
+    let options = source.as_bytes().get(at) == Some(&b'[');
+    if options {
+        at = syntax::bracket_argument(source, at)?.1;
+    }
+    if matches!(
+        name.strip_suffix('*').unwrap_or(name),
+        "SaveVerbatim" | "VerbatimOut"
+    ) {
+        // Reading options restores ordinary line endings before the required
+        // argument. Without options, a peeked active newline is itself a token.
+        at = if options {
+            syntax::skip_space(source, at)
+        } else {
+            header_space(source, at)
+        };
+        at = match source.as_bytes().get(at)? {
+            b'{' => syntax::group(source, at, b'{', b'}')?.1,
+            b'\\' => syntax::control_word(source, at)
+                .map(|span| span.end)
+                .or_else(|| {
+                    source[at + 1..]
+                        .chars()
+                        .next()
+                        .map(|ch| at + 1 + ch.len_utf8())
+                })?,
+            b'\r' if source[at..].starts_with("\r\n") => at + 2,
+            _ => at + source[at..].chars().next()?.len_utf8(),
+        };
+    }
+    // FV@BeginScanning discards the remainder of the header line. Markers in
+    // options, saved names and extraneous header text never close the body.
+    source[at..].find('\n').map(|newline| at + newline + 1)
 }
 
 fn safe_options(source: &str) -> bool {

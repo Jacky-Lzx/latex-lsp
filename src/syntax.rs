@@ -731,14 +731,18 @@ pub(crate) fn file_name_argument_start(
 ) -> Option<usize> {
     let mut start = skip_space(source, command_end);
     if source.as_bytes().get(start) == Some(&b'*') {
-        if name != "verbatiminput" && !crate::fancyvrb::is_input(name) {
+        if name != "verbatiminput"
+            && !crate::fancyvrb::is_input(name)
+            && !crate::fancyvrb::is_use(name)
+        {
             return None;
         }
         start = skip_space(source, start + 1);
     }
     if (loader_extension(name).is_some()
         || name == "lstinputlisting"
-        || crate::fancyvrb::is_input(name))
+        || crate::fancyvrb::is_input(name)
+        || crate::fancyvrb::is_use(name))
         && !loader_forwards_options(name)
         && source.as_bytes().get(start) == Some(&b'[')
     {
@@ -1607,8 +1611,17 @@ impl Syntax {
         let mut result = Self::default();
         let mut braces = Vec::new();
         let mut environments: Vec<(String, Range<usize>)> = Vec::new();
+        let mut literal_names = std::collections::BTreeMap::new();
         let mut i = 0;
         while i < bytes.len() {
+            // Saved FancyVerb names are data, while their preceding formatting
+            // options may still contain actual commands. Skip only the name
+            // when the normal scan reaches its group.
+            if let Some((span, end)) = literal_names.remove(&i) {
+                result.ignored.push(span);
+                i = end;
+                continue;
+            }
             match bytes[i] {
                 b'%' => {
                     let start = i;
@@ -1696,6 +1709,7 @@ impl Syntax {
                     } else if loader_extension(name).is_some()
                         || name == "bibliographystyle"
                         || code_input_command(name)
+                        || crate::fancyvrb::is_use(name)
                     {
                         arg_start = file_name_argument_start(source, name, command_end)
                             .unwrap_or(source.len());
@@ -1753,6 +1767,12 @@ impl Syntax {
                         span: start..command_end,
                         argument,
                     };
+                    if crate::fancyvrb::is_use(name) {
+                        if let Some((argument, end)) = &parsed {
+                            literal_names
+                                .insert(argument.outer_span.start, (argument.span.clone(), *end));
+                        }
+                    }
                     if let Some((declaration, entry)) = crate::anchors::entry(source, &command) {
                         if declaration {
                             result.anchors.push(entry);

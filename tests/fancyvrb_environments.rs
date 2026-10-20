@@ -398,6 +398,153 @@ fn closing_line_suffixes_are_discarded_without_losing_delimiters_or_the_next_sou
 }
 
 #[test]
+fn header_markers_never_close_the_body_and_preserve_real_source_renames() {
+    let main = Url::parse("file:///fancy-environments/header.tex").unwrap();
+    for environment in ENVIRONMENTS {
+        for newline in ["\n", "\r\n"] {
+            let marker = format!("\\end{{{environment}}}");
+            let label = format!("label={{\\detokenize{{{marker}}}}}");
+            for options in [
+                format!("[frame=single,{label}]"),
+                format!("[frame=single,{newline}{label}{newline}]"),
+                format!("% keep header{newline}[frame=single,{label}]"),
+            ] {
+                let header = format!("\\begin{{{environment}}}{options}{}", argument(environment));
+                let body = "\\label{kept}\\label{fake}\\newcommand{\\hidden}{Text}\\input{fake}\\begin{fake}{";
+                let before = format!("\\label{{kept}}{newline}");
+                let after = format!("\\ref{{kept}}\\ref{{fake}}{newline}");
+                let source =
+                    format!("{before}{header}{newline}{body}{newline}{marker}{newline}{after}");
+                let mut workspace = Workspace {
+                    versioned_edits: true,
+                    ..Default::default()
+                };
+                workspace.open(main.clone(), source.clone(), 7);
+                let doc = &workspace.documents[&main];
+                assert!(
+                    doc.syntax.diagnostics.is_empty(),
+                    "{environment}/{options}: {:?}",
+                    doc.syntax.diagnostics
+                );
+                assert_eq!(doc.syntax.labels.len(), 1);
+                assert!(doc.syntax.definitions.is_empty());
+                assert!(workspace.dependencies(&main).is_empty());
+                let at = doc.text.position(source.rfind("kept").unwrap());
+                assert_eq!(features::references(&workspace, &main, at, true).len(), 2);
+                let updated = apply(
+                    &source,
+                    versioned(
+                        features::rename(&workspace, &main, at, "renamed")
+                            .unwrap()
+                            .unwrap(),
+                        &main,
+                    ),
+                );
+                assert_eq!(
+                    updated,
+                    format!(
+                        "{}{header}{newline}{body}{newline}{marker}{newline}{}",
+                        before.replace("kept", "renamed"),
+                        after.replace("kept", "renamed")
+                    )
+                );
+                let real_end = source.rfind(&marker).unwrap();
+                let expected = doc.text.range(real_end + 5, real_end + marker.len() - 1);
+                for start in [source.find(environment).unwrap(), real_end + 5] {
+                    let linked =
+                        editing::linked_editing_ranges(doc, doc.text.position(start + 1)).unwrap();
+                    assert_eq!(linked.ranges[1], expected);
+                }
+                let endline = doc.text.position(real_end).line;
+                assert!(navigation::folding_ranges(doc, None)
+                    .iter()
+                    .any(|fold| fold.start_line == 1 && fold.end_line == endline));
+                let incomplete = source[..real_end].to_owned();
+                let doc = Document::new(&main, incomplete, Some(8));
+                assert_eq!(doc.syntax.diagnostics.len(), 1);
+                assert!(doc.syntax.fixes[0].edit.new_text.contains(&marker));
+                assert_eq!(doc.syntax.labels.len(), 1);
+            }
+        }
+    }
+}
+
+#[test]
+fn required_header_names_and_begin_line_text_are_separate_from_raw_body_lines() {
+    let main = Url::parse("file:///fancy-environments/header-arguments.tex").unwrap();
+    for environment in ENVIRONMENTS {
+        let marker = format!("\\end{{{environment}}}");
+        let mut headers = vec![
+            format!("{} {marker}", argument(environment)),
+            format!("[frame=single]{} {marker}", argument(environment)),
+        ];
+        if environment.starts_with("SaveVerbatim") || environment.starts_with("VerbatimOut") {
+            headers.extend([
+                "x".into(),
+                format!("[frame=single]\n{}", argument(environment)),
+                format!("% keep\n{}", argument(environment)),
+            ]);
+        }
+        if environment.starts_with("SaveVerbatim") {
+            headers.push(format!("{{saved\\detokenize{{{marker}}}}}"));
+        }
+        for header in headers {
+            let source = format!(
+                "\\begin{{{environment}}}{header}\n\\label{{fake}}\n{marker}\n\\label{{real}}"
+            );
+            let doc = Document::new(&main, source, Some(7));
+            assert!(
+                doc.syntax.diagnostics.is_empty(),
+                "{environment}/{header}: {:?}",
+                doc.syntax.diagnostics
+            );
+            assert_eq!(doc.syntax.labels.len(), 1);
+            assert_eq!(doc.syntax.labels[0].name, "real");
+        }
+        // An un-commented newline stops option detection. The first body
+        // line closes the environment even when it starts with a bracket.
+        let source = format!(
+            "\\begin{{{environment}}}{}\n[raw] {marker}\n\\label{{real}}",
+            argument(environment)
+        );
+        let doc = Document::new(&main, source, Some(7));
+        assert_eq!(doc.syntax.labels.len(), 1);
+        assert_eq!(doc.syntax.labels[0].name, "real");
+    }
+}
+
+#[test]
+fn saved_names_are_literal_but_formatting_options_remain_normal_source() {
+    let main = Url::parse("file:///fancy-environments/saved-names.tex").unwrap();
+    for command in ["UseVerbatim", "LUseVerbatim", "BUseVerbatim"] {
+        let source = format!(
+            "\\{command} *[label={{\\label{{live}}}}]{{saved\\detokenize{{\\end{{Verbatim}}}}\\label{{fake}}\\input{{fake}}}}\\label{{real}}"
+        );
+        let doc = Document::new(&main, source.clone(), Some(7));
+        assert!(
+            doc.syntax.diagnostics.is_empty(),
+            "{command}: {:?}",
+            doc.syntax.diagnostics
+        );
+        assert_eq!(
+            doc.syntax
+                .labels
+                .iter()
+                .map(|label| label.name.as_str())
+                .collect::<Vec<_>>(),
+            ["live", "real"]
+        );
+        assert!(doc.syntax.is_ignored(source.find("\\end").unwrap()));
+        assert!(!doc.syntax.is_ignored(source.find("\\label{live}").unwrap()));
+        assert!(doc
+            .syntax
+            .commands
+            .iter()
+            .all(|command| command.name != "input"));
+    }
+}
+
+#[test]
 fn incomplete_raw_environments_offer_one_versioned_close_fix_without_parsing_the_body() {
     let main = Url::parse("file:///fancy-environments/incomplete.tex").unwrap();
     for environment in ENVIRONMENTS {
@@ -481,6 +628,102 @@ fn environment_names_require_exact_case_spaces_and_one_star_and_completion_reser
             features::rename(&workspace, &main, at, environment).is_err(),
             "{environment}"
         );
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex and xelatex"]
+fn real_header_markers_keep_body_literal_after_versioned_label_rename() {
+    for engine in ["pdflatex", "xelatex"] {
+        for environment in ENVIRONMENTS {
+            let marker = format!("\\end{{{environment}}}");
+            let label = format!("label={{\\detokenize{{{marker}}}}}");
+            let use_saved = if environment.starts_with("SaveVerbatim") {
+                "\\UseVerbatim{saved}\n"
+            } else {
+                ""
+            };
+            let mut cases: Vec<_> = [
+                format!("[frame=single,{label}]"),
+                format!("[frame=single,\n{label}\n]"),
+                format!("% keep header\n[frame=single,{label}]"),
+            ]
+            .into_iter()
+            .map(|options| {
+                (
+                    format!("{options}{}", argument(environment)),
+                    use_saved.to_owned(),
+                )
+            })
+            .collect();
+            if environment.starts_with("SaveVerbatim") {
+                let name = format!("saved\\detokenize{{{marker}}}");
+                cases.push((format!("{{{name}}}"), format!("\\UseVerbatim{{{name}}}\n")));
+            }
+            if environment.starts_with("SaveVerbatim") || environment.starts_with("VerbatimOut") {
+                let use_token = if environment.starts_with("SaveVerbatim") {
+                    "\\UseVerbatim{x}\n"
+                } else {
+                    ""
+                };
+                cases.push(("x".into(), use_token.into()));
+            }
+            for (header, use_saved) in cases {
+                let directory = tempfile::tempdir().unwrap();
+                let root = directory.path();
+                let main = uri(root, "main.tex");
+                let fake = uri(root, "fake.tex");
+                std::fs::write(root.join("fake.tex"), r"\label{fakeinput}").unwrap();
+                let body = "\\label{kept}\\label{fake}\\newcommand{\\hidden}{Text}\\input{fake}";
+                let source = format!(
+                    "\\documentclass{{article}}\n\\usepackage{{fancyvrb}}\n\\begin{{document}}\n\\label{{kept}}\n\\begin{{{environment}}}{header}\n{body}\n{marker}\n{use_saved}Real.\\ref{{kept}}\n\\end{{document}}\n"
+                );
+                std::fs::write(root.join("main.tex"), &source).unwrap();
+                let mut workspace = Workspace {
+                    versioned_edits: true,
+                    ..Default::default()
+                };
+                workspace.add_root(root.into());
+                workspace.open(main.clone(), source.clone(), 7);
+                let doc = &workspace.documents[&main];
+                assert!(
+                    doc.syntax.diagnostics.is_empty(),
+                    "{environment}/{header}: {:?}",
+                    doc.syntax.diagnostics
+                );
+                let at = doc.text.position(source.rfind("kept").unwrap());
+                let updated = apply(
+                    &source,
+                    versioned(
+                        features::rename(&workspace, &main, at, "renamedlabel")
+                            .unwrap()
+                            .unwrap(),
+                        &main,
+                    ),
+                );
+                assert!(updated.contains(&header) && updated.contains(body));
+                std::fs::write(root.join("main.tex"), &updated).unwrap();
+                let outcome = build::run(
+                    &root.join("main.tex"),
+                    &latex_lsp::config::BuildConfig {
+                        executable: engine.into(),
+                        ..Default::default()
+                    },
+                    &AtomicBool::new(false),
+                );
+                assert_eq!(
+                    outcome.status, "success",
+                    "{engine}/{environment}/{header}: {}",
+                    outcome.output
+                );
+                assert!(!outcome.inputs.unwrap().contains(&fake));
+                let aux = std::fs::read_to_string(root.join("build/latex-lsp/main.aux")).unwrap();
+                assert!(aux.contains("newlabel{renamedlabel}"), "{aux}");
+                for key in ["kept", "fake", "fakeinput"] {
+                    assert!(!aux.contains(&format!("newlabel{{{key}}}")), "{aux}");
+                }
+            }
+        }
     }
 }
 
