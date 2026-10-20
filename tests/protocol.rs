@@ -10865,3 +10865,331 @@ fn cmyk_color_picker_preserves_separations_and_independent_frame_colors_over_std
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[cfg(unix)]
+fn configure_rebuild(
+    server: &mut Server,
+    directory: &tempfile::TempDir,
+    on_save: bool,
+    extra: &str,
+) {
+    let script = directory.path().join("compiler.sh");
+    server.notify(
+        "workspace/didChangeConfiguration",
+        json!({"settings":{"build":{
+            "executable":"/bin/sh", "arguments":[script,"%o","%f","normal"],
+            "rebuildArguments":[script,"%o","%f",extra],"onSave":on_save,"timeoutSeconds":5
+        }}}),
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn rebuild_requests_coalesce_and_saves_preserve_force_with_fresh_configuration_and_versions() {
+    for on_save in [false, true] {
+        for initial_force in [false, true] {
+            let script = r#"count=0
+[ ! -f "$1/count" ] || count=$(cat "$1/count")
+count=$((count + 1))
+printf '%s' "$count" > "$1/count"
+printf '%s' "$3" > "$1/mode$count"
+touch "$1/ready$count"
+while [ ! -f "$1/release$count" ]; do sleep 0.02; done
+printf '%%PDF-1.4\n%s\n' "$count" > "$1/main.pdf"
+printf '%s:2: LaTeX Warning: build %s.\n' "$2" "$count" > "$1/main.log"
+"#;
+            let (mut server, directory, uri) = fake_build_server(script, on_save);
+            configure_rebuild(&mut server, &directory, on_save, "force-old");
+            let started = server.request(2,"workspace/executeCommand",json!({"command":if initial_force {"latex.rebuild"} else {"latex.build"},"arguments":[{"uri":uri}]}));
+            assert_eq!(started["rebuild"], initial_force);
+            let output = directory.path().join("build/latex-lsp");
+            let deadline = std::time::Instant::now() + Duration::from_secs(3);
+            while !output.join("ready1").exists() {
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            for id in [3, 4, 5] {
+                let queued = server.request(
+                    id,
+                    "workspace/executeCommand",
+                    json!({"command":"latex.rebuild","arguments":[uri]}),
+                );
+                assert_eq!(queued["buildId"], started["buildId"]);
+                assert_eq!(queued["queuedRebuild"], true);
+                assert_eq!(queued["rebuild"], initial_force);
+            }
+            configure_rebuild(&mut server, &directory, on_save, "force-new");
+            for version in [2, 3] {
+                let source = format!("\\documentclass{{article}}\n\\section{{Saved {version}}}\n");
+                std::fs::write(uri.to_file_path().unwrap(), &source).unwrap();
+                server.notify("textDocument/didChange",json!({"textDocument":{"uri":uri,"version":version},"contentChanges":[{"text":source}]}));
+                server.notify("textDocument/didSave", json!({"textDocument":{"uri":uri}}));
+            }
+            let status = server.request(
+                6,
+                "workspace/executeCommand",
+                json!({"command":"latex.buildStatus","arguments":[uri]}),
+            );
+            assert_eq!(status["queuedRebuild"], true);
+            std::fs::write(output.join("release1"), "").unwrap();
+            let first = server.until(|m| {
+                m["method"] == "latex/buildFinished" && m["params"]["buildId"] == started["buildId"]
+            });
+            assert_eq!(first["params"]["stale"], true);
+            let second_started = server.until(|m| {
+                m["method"] == "latex/buildStarted" && m["params"]["buildId"] != started["buildId"]
+            });
+            assert_eq!(second_started["params"]["rebuild"], true);
+            assert_eq!(second_started["params"]["engine"], Value::Null);
+            let status = server.request(
+                7,
+                "workspace/executeCommand",
+                json!({"command":"latex.buildStatus","arguments":[uri]}),
+            );
+            assert_eq!(status["rebuild"], true);
+            assert_eq!(status["queued"], false);
+            std::fs::write(output.join("release2"), "").unwrap();
+            let second = server.until(|m| {
+                m["method"] == "latex/buildFinished"
+                    && m["params"]["buildId"] == second_started["params"]["buildId"]
+            });
+            assert_eq!(second["params"]["status"], "success", "{second}");
+            assert_eq!(second["params"]["stale"], false);
+            assert_eq!(second["params"]["rebuild"], true);
+            assert_eq!(
+                std::fs::read_to_string(output.join("mode2")).unwrap(),
+                "force-new"
+            );
+            assert_eq!(
+                std::fs::read_to_string(output.join("mode1")).unwrap(),
+                if initial_force { "force-old" } else { "normal" }
+            );
+            let diagnostics = server.until(|m| {
+                m["method"] == "textDocument/publishDiagnostics"
+                    && m["params"]["diagnostics"].as_array().is_some_and(|items| {
+                        items
+                            .iter()
+                            .any(|d| d["message"].as_str().is_some_and(|s| s.contains("build 2")))
+                    })
+            });
+            assert_eq!(diagnostics["params"]["version"], 3);
+            std::thread::sleep(Duration::from_millis(100));
+            assert_eq!(std::fs::read_to_string(output.join("count")).unwrap(), "2");
+            let final_status = server.request(
+                8,
+                "workspace/executeCommand",
+                json!({"command":"latex.buildStatus","arguments":[uri]}),
+            );
+            assert_eq!(final_status, second["params"]);
+            server.request(9, "shutdown", Value::Null);
+            server.notify("exit", Value::Null);
+            server.wait_exit(0);
+        }
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn cancellation_file_events_and_shutdown_discard_queued_rebuilds() {
+    for action in ["command", "progress", "watched", "created", "shutdown"] {
+        let (mut server, directory, uri) = fake_build_server_capabilities(
+            "printf 'run\\n' >> runs\nsleep 30\n",
+            false,
+            json!({"window":{"workDoneProgress":true}}),
+        );
+        // Track a missing conditional file so creating it cancels this build.
+        let source = "\\documentclass{article}\n\\IfFileExists{choice.dat}{}{}\n";
+        std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"text":source}]}),
+        );
+        configure_rebuild(&mut server, &directory, false, "force");
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.rebuild","arguments":[uri]}),
+        );
+        let create = server.until(|m| m["method"] == "window/workDoneProgress/create");
+        server.send(json!({"jsonrpc":"2.0","id":create["id"],"result":null}));
+        server.until(|m| m["method"] == "$/progress" && m["params"]["value"]["kind"] == "begin");
+        let queued = server.request(
+            3,
+            "workspace/executeCommand",
+            json!({"command":"latex.rebuild","arguments":[uri]}),
+        );
+        assert_eq!(queued["queuedRebuild"], true);
+        match action {
+            "command" => {
+                server.request(
+                    4,
+                    "workspace/executeCommand",
+                    json!({"command":"latex.cancelBuild","arguments":[uri]}),
+                );
+            }
+            "progress" => server.notify(
+                "window/workDoneProgress/cancel",
+                json!({"token":create["params"]["token"]}),
+            ),
+            "watched" => {
+                std::fs::write(uri.to_file_path().unwrap(), format!("{source}Changed.\n")).unwrap();
+                server.notify(
+                    "workspace/didChangeWatchedFiles",
+                    json!({"changes":[{"uri":uri,"type":2}]}),
+                );
+            }
+            "created" => {
+                let choice = directory.path().join("choice.dat");
+                std::fs::write(&choice, "data").unwrap();
+                server.notify(
+                    "workspace/didCreateFiles",
+                    json!({"files":[{"uri":Url::from_file_path(choice).unwrap()}]}),
+                );
+            }
+            "shutdown" => {
+                server.request(4, "shutdown", Value::Null);
+            }
+            _ => unreachable!(),
+        }
+        let finished = server.until(|m| m["method"] == "latex/buildFinished");
+        assert_eq!(
+            finished["params"]["status"], "cancelled",
+            "{action}: {finished}"
+        );
+        if action != "shutdown" {
+            let status = server.request(
+                5,
+                "workspace/executeCommand",
+                json!({"command":"latex.buildStatus","arguments":[uri]}),
+            );
+            assert_eq!(status["status"], "cancelled");
+            std::thread::sleep(Duration::from_millis(100));
+            server.request(6, "shutdown", Value::Null);
+        }
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+        let runs = std::fs::read_to_string(directory.path().join("runs")).unwrap_or_default();
+        assert!(runs.lines().count() <= 1, "{action}: {runs}");
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn unsupported_rebuild_commands_fail_before_touching_previous_artifacts() {
+    let (mut server, directory, uri) = fake_build_server("touch invoked\n", false);
+    let output = directory.path().join("build/latex-lsp");
+    std::fs::create_dir_all(&output).unwrap();
+    for extension in ["log", "pdf"] {
+        std::fs::write(output.join(format!("main.{extension}")), "previous").unwrap();
+    }
+    server.send(json!({"jsonrpc":"2.0","id":2,"method":"workspace/executeCommand","params":{"command":"latex.rebuild","arguments":[uri]}}));
+    let error = server.until(|m| m["id"] == 2);
+    assert_eq!(error["error"]["code"], -32602);
+    assert!(error["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("build.rebuildArguments"));
+    assert!(!directory.path().join("invoked").exists());
+    for extension in ["log", "pdf"] {
+        assert_eq!(
+            std::fs::read_to_string(output.join(format!("main.{extension}"))).unwrap(),
+            "previous"
+        );
+    }
+    let status = server.request(
+        3,
+        "workspace/executeCommand",
+        json!({"command":"latex.buildStatus","arguments":[uri]}),
+    );
+    assert_eq!(status["status"], "idle");
+    server.request(4, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+fn rebuild_cancellation_before_progress_acknowledgement_preserves_existing_artifacts() {
+    for existing in [false, true] {
+        let (mut server, directory, uri) = fake_build_server_capabilities(
+            "touch invoked\n",
+            false,
+            json!({"window":{"workDoneProgress":true}}),
+        );
+        configure_rebuild(&mut server, &directory, false, "force");
+        let output = directory.path().join("build/latex-lsp");
+        if existing {
+            std::fs::create_dir_all(&output).unwrap();
+            for extension in ["log", "pdf", "aux", "fls"] {
+                std::fs::write(output.join(format!("main.{extension}")), "previous").unwrap();
+            }
+        }
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.rebuild","arguments":[uri]}),
+        );
+        let create = server.until(|m| m["method"] == "window/workDoneProgress/create");
+        server.request(
+            3,
+            "workspace/executeCommand",
+            json!({"command":"latex.rebuild","arguments":[uri]}),
+        );
+        server.notify(
+            "window/workDoneProgress/cancel",
+            json!({"token":create["params"]["token"]}),
+        );
+        server.request(4, "workspace/symbol", json!({"query":"Title"}));
+        server.send(json!({"jsonrpc":"2.0","id":create["id"],"result":null}));
+        let finished = server.until(|m| m["method"] == "latex/buildFinished");
+        assert_eq!(finished["params"]["status"], "cancelled");
+        assert_eq!(finished["params"]["rebuild"], true);
+        assert_eq!(finished["params"]["pdfUri"], Value::Null);
+        assert_eq!(finished["params"]["logUri"], Value::Null);
+        assert_eq!(output.exists(), existing);
+        if existing {
+            for extension in ["log", "pdf", "aux", "fls"] {
+                assert_eq!(
+                    std::fs::read_to_string(output.join(format!("main.{extension}"))).unwrap(),
+                    "previous"
+                );
+            }
+        }
+        server.request(5, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+        assert!(!directory.path().join("invoked").exists());
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn rebuilds_keep_shared_output_conflict_protection() {
+    let (mut server, directory, uri) = fake_build_server("sleep 30\n", false);
+    let other = directory.path().join("other.tex");
+    std::fs::write(&other, "\\documentclass{report}\n").unwrap();
+    let other = Url::from_file_path(other).unwrap();
+    server.notify("workspace/didChangeConfiguration",json!({"settings":{"build":{"executable":"/bin/sh","arguments":[directory.path().join("compiler.sh"),"%o","%f"],"rebuildArguments":[directory.path().join("compiler.sh"),"%o","%f"],"jobName":"shared"}}}));
+    let started = server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.rebuild","arguments":[uri]}),
+    );
+    server.send(json!({"jsonrpc":"2.0","id":3,"method":"workspace/executeCommand","params":{"command":"latex.rebuild","arguments":[other]}}));
+    let error = server.until(|m| m["id"] == 3);
+    assert_eq!(error["error"]["code"], -32602);
+    assert!(error["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("same output file"));
+    let status = server.request(
+        4,
+        "workspace/executeCommand",
+        json!({"command":"latex.buildStatus","arguments":[uri]}),
+    );
+    assert_eq!(status["buildId"], started["buildId"]);
+    assert_eq!(status["queued"], false);
+    server.request(5, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

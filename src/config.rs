@@ -42,6 +42,7 @@ pub struct Config {
 pub struct BuildConfig {
     pub executable: String,
     pub arguments: Option<Vec<String>>,
+    pub rebuild_arguments: Option<Vec<String>>,
     pub engine: Option<Engine>,
     pub output_directory: String,
     pub root_file: Option<String>,
@@ -55,6 +56,7 @@ impl Default for BuildConfig {
         Self {
             executable: "latexmk".into(),
             arguments: None,
+            rebuild_arguments: None,
             engine: None,
             output_directory: "build/latex-lsp".into(),
             root_file: None,
@@ -116,12 +118,21 @@ impl BuildConfig {
     /// Substitute only template placeholders, never text inserted by another
     /// placeholder (a real source directory can itself contain `%o` or `%j`).
     pub fn expanded_arguments(&self, root: &Path) -> Option<Vec<String>> {
+        self.expand_arguments(root, self.arguments())
+    }
+
+    pub fn expanded_rebuild_arguments(&self, root: &Path) -> Result<Vec<String>, String> {
+        self.expand_arguments(root, self.rebuild_arguments()?)
+            .ok_or_else(|| "Invalid root filename".into())
+    }
+
+    fn expand_arguments(&self, root: &Path, arguments: Vec<String>) -> Option<Vec<String>> {
         let output = root.parent()?.join(&self.output_directory);
         let root_name = root.to_string_lossy();
         let output_name = output.to_string_lossy();
         let job_name = self.job_name(root)?.to_string_lossy();
         Some(
-            self.arguments()
+            arguments
                 .into_iter()
                 .map(|argument| {
                     let mut expanded = String::new();
@@ -161,6 +172,28 @@ impl BuildConfig {
         } else {
             Engine::from_program(executable)
         }
+    }
+
+    pub fn rebuild_arguments(&self) -> Result<Vec<String>, String> {
+        if let Some(arguments) = &self.rebuild_arguments {
+            return Ok(arguments.clone());
+        }
+        if self.arguments.is_none() {
+            let executable = Path::new(&self.executable)
+                .file_stem()
+                .and_then(|name| name.to_str());
+            let mut arguments = self.arguments();
+            match executable {
+                Some("latexmk") => arguments.insert(0, "-g".into()),
+                // These compilers run the document each time they are invoked.
+                Some("pdflatex" | "xelatex" | "lualatex" | "tectonic") => {}
+                _ => {
+                    return Err("Configure build.rebuildArguments for custom build commands".into())
+                }
+            }
+            return Ok(arguments);
+        }
+        Err("Configure build.rebuildArguments for custom build commands".into())
     }
 
     pub fn arguments(&self) -> Vec<String> {
@@ -236,6 +269,64 @@ impl BuildConfig {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn rebuild_defaults_force_latexmk_and_preserve_engine_and_job_arguments() {
+        for engine in ["pdflatex", "xelatex", "lualatex"] {
+            let config = Config::parse(json!({"build":{"executable":"/tools/latexmk","engine":engine,"jobName":"draft.v2"}})).unwrap().build;
+            let normal = config.arguments();
+            let forced = config.rebuild_arguments().unwrap();
+            assert_eq!(forced[0], "-g");
+            assert_eq!(&forced[1..], normal);
+            assert!(config
+                .expanded_rebuild_arguments(Path::new("/tmp/main.tex"))
+                .unwrap()
+                .contains(&"-jobname=draft.v2".into()));
+            assert!(!normal.contains(&"-g".into()));
+        }
+        for executable in ["pdflatex", "xelatex", "lualatex", "tectonic"] {
+            let config = BuildConfig {
+                executable: executable.into(),
+                ..Default::default()
+            };
+            assert_eq!(config.rebuild_arguments().unwrap(), config.arguments());
+        }
+    }
+
+    #[test]
+    fn custom_rebuild_arguments_are_explicit_and_expand_placeholders_once() {
+        for executable in ["latexmk", "pdflatex", "custom"] {
+            let config = BuildConfig {
+                executable: executable.into(),
+                arguments: Some(vec!["normal".into()]),
+                ..Default::default()
+            };
+            assert!(config
+                .rebuild_arguments()
+                .unwrap_err()
+                .contains("build.rebuildArguments"));
+        }
+        assert!(BuildConfig {
+            executable: "custom".into(),
+            ..Default::default()
+        }
+        .rebuild_arguments()
+        .is_err());
+        let config = Config::parse(json!({"build":{"executable":"custom","arguments":["normal"],"rebuildArguments":["force;$(false)","%f","%o","%j","%unknown%%"],"outputDirectory":"out%f"}})).unwrap().build;
+        assert_eq!(config.arguments(), vec!["normal"]);
+        assert_eq!(
+            config
+                .expanded_rebuild_arguments(Path::new("/tmp/%o project/main%j.tex"))
+                .unwrap(),
+            vec![
+                "force;$(false)",
+                "/tmp/%o project/main%j.tex",
+                "/tmp/%o project/out%f",
+                "main%j",
+                "%unknown%%"
+            ]
+        );
+    }
 
     #[test]
     fn job_names_use_consistent_artifact_paths_and_validate_supported_tool_arguments() {

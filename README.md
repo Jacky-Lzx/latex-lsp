@@ -314,8 +314,9 @@ etoolbox 的 `newtoggle` / `providetoggle` 使用独立命名空间，支持 `se
 通过 `workspace/executeCommand` 调用以下命令，第一个参数为当前文档 URI（也可使用 `{ "uri": "file:///..." }`）：
 
 - `latex.build`：立即返回 `{status: "started", buildId, rootUri}`，编译在后台运行。同一根文件已有任务时返回 `running` 和原任务 ID。
+- `latex.rebuild`：强制重新编译；默认 latexmk 增加 `-g`，直接 TeX 引擎和 Tectonic 每次直接运行。用于恢复被修改的产物或需要跳过 latexmk 增量判断的情况。同一根文件正在编译时，将重复请求合并为一次后续强制编译，即使 `onSave` 为 `false` 也会执行；保存事件保留已排队的强制请求，后续任务使用最新配置和已保存内容。取消、相关文件事件和关闭服务器会清除队列。
 - `latex.cancelBuild`：取消该文档对应的编译；省略参数时取消全部编译。Unix 上同时终止 latexmk 启动的子进程。
-- `latex.buildStatus`：查询当前任务或最近一次编译结果，未编译时返回 `idle`；运行中的 `queued` 表示是否还有保存触发的后续编译。
+- `latex.buildStatus`：查询当前任务或最近一次编译结果，未编译时返回 `idle`；运行中的 `queued` 表示是否还有后续编译，`queuedRebuild` 表示后续任务是否为强制编译。启动响应、运行状态及开始/完成通知的 `rebuild` 表示当前任务是否为强制编译。
 
 任务在编译工作线程启动前已被取消时，不会调用编译器、创建输出目录或替换旧日志，已有 PDF、日志和辅助文件会保留。取消结果不把这些旧文件作为本次编译产物返回。
 
@@ -452,6 +453,7 @@ end
   "build": {
     "executable": "latexmk",
     "arguments": null,
+    "rebuildArguments": null,
     "engine": null,
     "outputDirectory": "build/latex-lsp",
     "rootFile": null,
@@ -462,6 +464,8 @@ end
 ```
 
 `rootFile` 相对于当前工作区根目录，`outputDirectory` 相对于主文档所在目录。`executable` 可改为 `pdflatex`、`xelatex`、`lualatex` 或 `tectonic`，省略 `arguments` 时自动选择对应的默认参数。自定义参数中的 `%f` 替换为根文件绝对路径，`%o` 替换为输出目录，`%j` 替换为产物名称（未配置时为主文件名去掉扩展名）；参数直接传给进程，不经过 shell。默认 TeX/latexmk 参数关闭 shell escape。超时范围为 1–3600 秒。
+
+`build.rebuildArguments` 单独指定强制编译的完整参数列表，也支持 `%f`、`%o`、`%j`；普通 `latex.build` 仍使用 `arguments`。自定义了 `arguments` 或使用未知编译工具时，必须显式设置 `rebuildArguments` 才能调用 `latex.rebuild`，否则在修改旧日志前报错。例如自定义 latexmk 参数时，可设 `"rebuildArguments": ["-g", "-pdf", "-interaction=nonstopmode", "-file-line-error", "-synctex=1", "-no-shell-escape", "-outdir=%o", "%f"]`；参数应包含工具所需的完整编译选项，设置 `jobName` 时也需自行传入 `%j`。使用这份自定义参数的重编译通知中，`engine` 为 `null`。
 
 例如 Neovim 配置中可加入 `init_options = { build = { executable = 'xelatex', onSave = true } }`。手动使用 XeLaTeX/pdfLaTeX 时只运行一遍，需要多遍处理文献和交叉引用的项目建议使用 latexmk，并自行配置对应引擎参数。
 

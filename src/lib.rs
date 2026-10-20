@@ -335,6 +335,7 @@ impl LanguageServer for Backend {
                 execute_command_provider: Some(ExecuteCommandOptions {
                     commands: vec![
                         "latex.build".into(),
+                        "latex.rebuild".into(),
                         "latex.cancelBuild".into(),
                         "latex.buildStatus".into(),
                         "latex.forwardSearch".into(),
@@ -560,6 +561,7 @@ impl LanguageServer for Backend {
                 Ok(Some(serde_json::to_value(response).unwrap()))
             }
             "latex.build" => self.builds.start(uri).await.map(Some),
+            "latex.rebuild" => self.builds.rebuild(uri).await.map(Some),
             "latex.forwardSearch" | "latex.inverseSearch" => {
                 let project = synctex::prepare(&*self.workspace.read().await, &uri)?;
                 let available = |root: &Url| {

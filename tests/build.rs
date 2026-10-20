@@ -2062,3 +2062,123 @@ fn partial_bibliography_log_sets_discard_all_new_bindings_including_complete_sib
         }
     }
 }
+
+#[test]
+fn invalid_or_cancelled_rebuilds_preserve_previous_artifacts() {
+    for existing in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let main = directory.path().join("main.tex");
+        std::fs::write(&main, "source").unwrap();
+        let config = BuildConfig {
+            executable: "unavailable-custom-compiler".into(),
+            ..Default::default()
+        };
+        let output = directory.path().join(&config.output_directory);
+        if existing {
+            std::fs::create_dir_all(&output).unwrap();
+            for extension in ["pdf", "log", "aux", "fls"] {
+                std::fs::write(config.artifact_path(&main, extension).unwrap(), "previous")
+                    .unwrap();
+            }
+        }
+        for cancelled in [false, true] {
+            let outcome = build::rebuild(&main, &config, &AtomicBool::new(cancelled));
+            assert_eq!(
+                outcome.status,
+                if cancelled { "cancelled" } else { "error" }
+            );
+            assert!(outcome.pdf.is_none());
+            assert!(outcome.log.is_none());
+            assert_eq!(output.exists(), existing);
+            if existing {
+                for extension in ["pdf", "log", "aux", "fls"] {
+                    assert_eq!(
+                        std::fs::read_to_string(config.artifact_path(&main, extension).unwrap())
+                            .unwrap(),
+                        "previous"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn custom_rebuild_invokes_only_explicit_arguments_and_parses_its_log() {
+    let directory = tempfile::Builder::new()
+        .prefix("force %o 中文 ")
+        .tempdir()
+        .unwrap();
+    let main = directory.path().join("main%j.tex");
+    std::fs::write(&main, "source\n").unwrap();
+    let executable = script(
+        directory.path(),
+        r#"[ "$1" = 'force;$(false)' ] || exit 99
+printf '%%PDF-1.4\n' > "$2/$4.pdf"
+printf '%s:1: LaTeX Warning: rebuilt.\n' "$3" > "$2/$4.log"
+"#,
+    );
+    let config = BuildConfig {
+        executable,
+        arguments: Some(vec!["normal".into()]),
+        rebuild_arguments: Some(vec![
+            "force;$(false)".into(),
+            "%o".into(),
+            "%f".into(),
+            "%j".into(),
+        ]),
+        ..Default::default()
+    };
+    let outcome = build::rebuild(&main, &config, &Default::default());
+    assert_eq!(outcome.status, "success", "{}", outcome.message);
+    assert!(outcome.pdf.unwrap().ends_with("main%j.pdf"));
+    assert!(outcome.diagnostics[&Url::from_file_path(main).unwrap()]
+        .iter()
+        .any(|item| item.message.contains("rebuilt")));
+    assert_eq!(config.arguments(), vec!["normal"]);
+}
+
+#[test]
+#[ignore = "requires latexmk, pdflatex and xelatex"]
+fn real_forced_latexmk_rebuild_replaces_an_existing_pdf_after_a_noop() {
+    for engine in [
+        latex_lsp::config::Engine::PdfLatex,
+        latex_lsp::config::Engine::XeLatex,
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let main = directory.path().join("main.tex");
+        std::fs::write(
+            &main,
+            "\\documentclass{article}\\begin{document}Expected.\\end{document}\n",
+        )
+        .unwrap();
+        let config = BuildConfig {
+            engine: Some(engine),
+            job_name: Some("draft.v2".into()),
+            ..Default::default()
+        };
+        let initial = build::run(&main, &config, &Default::default());
+        assert_eq!(initial.status, "success", "{}", initial.output);
+        let pdf = config.artifact_path(&main, "pdf").unwrap();
+        let modified = std::fs::metadata(&pdf).unwrap().modified().unwrap();
+        let mut corrupted = std::fs::read(&pdf).unwrap();
+        let last = corrupted.last_mut().unwrap();
+        *last = if *last == b' ' { b'\n' } else { b' ' };
+        std::fs::write(&pdf, &corrupted).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&pdf)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+        let normal = build::run(&main, &config, &Default::default());
+        assert!(normal.output.contains("Nothing to do"), "{}", normal.output);
+        assert_eq!(std::fs::read(&pdf).unwrap(), corrupted);
+        let forced = build::rebuild(&main, &config, &Default::default());
+        assert_eq!(forced.status, "success", "{}", forced.output);
+        assert!(forced.output.contains("applying rule"), "{}", forced.output);
+        assert_ne!(std::fs::read(&pdf).unwrap(), corrupted);
+        assert!(forced.pdf_updated);
+    }
+}

@@ -42,11 +42,17 @@ impl notification::Notification for BuildFinished {
 struct Record {
     active: Option<(u64, Arc<AtomicBool>)>,
     result: Option<Value>,
-    queued: Option<Url>,
+    queued: Option<QueuedBuild>,
+    rebuild: bool,
     cancel_generation: u64,
     inputs: BTreeMap<Url, InputSnapshot>,
     checks: Arc<crate::file_checks::Snapshot>,
     artifact: Option<PathBuf>,
+}
+
+struct QueuedBuild {
+    uri: Url,
+    rebuild: bool,
 }
 
 #[derive(Clone)]
@@ -70,6 +76,7 @@ struct BuildInput {
     progress_supported: bool,
     project: BTreeSet<Url>,
     checks: Arc<crate::file_checks::Snapshot>,
+    rebuild: bool,
 }
 
 struct TaskGuard {
@@ -99,7 +106,11 @@ impl BuildManager {
     }
 
     pub async fn start(&self, uri: Url) -> Result<Value> {
-        self.start_request(uri, None).await
+        self.start_request(uri, None, false).await
+    }
+
+    pub async fn rebuild(&self, uri: Url) -> Result<Value> {
+        self.start_request(uri, None, true).await
     }
 
     async fn while_open<F: Future>(&self, action: F) -> Option<F::Output> {
@@ -127,6 +138,7 @@ impl BuildManager {
         &self,
         uri: Url,
         queued_generation: Option<(Url, u64)>,
+        rebuild: bool,
     ) -> Result<Value> {
         let mut workspace = self.workspace.write().await;
         let root = workspace
@@ -181,6 +193,9 @@ impl BuildManager {
             }
         }
         let config = workspace.build_config(&root);
+        if rebuild {
+            config.rebuild_arguments().map_err(Error::invalid_params)?;
+        }
         let checks = Arc::new(crate::file_checks::Snapshot::capture(
             &workspace, &root, &config,
         ));
@@ -203,10 +218,10 @@ impl BuildManager {
             if self.closing.load(Ordering::SeqCst) {
                 return Err(Error::invalid_request());
             }
-            if let Some((previous_root, generation)) = queued_generation {
+            if let Some((previous_root, generation)) = &queued_generation {
                 if state
-                    .get(&previous_root)
-                    .is_none_or(|record| record.cancel_generation != generation)
+                    .get(previous_root)
+                    .is_none_or(|record| record.cancel_generation != *generation)
                 {
                     return Ok(json!({"status":"cancelled", "rootUri":root}));
                 }
@@ -224,11 +239,26 @@ impl BuildManager {
             }
             let record = state.entry(root.clone()).or_default();
             if let Some((id, _)) = &record.active {
+                // A fresh manual request asks for a follow-up even when the
+                // current build is forced. An older queued request is already
+                // satisfied by a newer forced build which captured its inputs.
+                if rebuild && (queued_generation.is_none() || !record.rebuild) {
+                    record.queued = Some(QueuedBuild { uri, rebuild: true });
+                }
                 return Ok(
-                    json!({"status":"running", "buildId":id, "rootUri":root, "queued":record.queued.is_some()}),
+                    json!({"status":"running", "buildId":id, "rootUri":root, "queued":record.queued.is_some(), "rebuild":record.rebuild, "queuedRebuild":record.queued.as_ref().is_some_and(|queued| queued.rebuild)}),
                 );
             }
+            if rebuild {
+                record.queued = None;
+                if queued_generation.is_none() {
+                    // Consume older pending force requests before releasing
+                    // the wire-order barrier; their callbacks must not revive.
+                    record.cancel_generation = record.cancel_generation.wrapping_add(1);
+                }
+            }
             record.active = Some((build_id, cancel.clone()));
+            record.rebuild = rebuild;
             record.inputs = project
                 .iter()
                 .map(|uri| {
@@ -258,11 +288,12 @@ impl BuildManager {
                 progress_supported,
                 project,
                 checks,
+                rebuild,
             },
             build_id,
             cancel,
         );
-        Ok(json!({"status":"started", "buildId":build_id, "rootUri":root}))
+        Ok(json!({"status":"started", "buildId":build_id, "rootUri":root, "rebuild":rebuild}))
     }
 
     /// Coalesce repeated saves into one follow-up build using the newest files.
@@ -278,7 +309,8 @@ impl BuildManager {
             if let Some(record) = state.get_mut(&root) {
                 if let Some((_, cancel)) = &record.active {
                     if !cancel.load(Ordering::Relaxed) {
-                        record.queued = Some(uri);
+                        let rebuild = record.queued.as_ref().is_some_and(|queued| queued.rebuild);
+                        record.queued = Some(QueuedBuild { uri, rebuild });
                     }
                     return Ok(());
                 }
@@ -297,6 +329,7 @@ impl BuildManager {
             progress_supported,
             mut project,
             checks,
+            rebuild,
         } = input;
         let manager = self.clone();
         let guard = TaskGuard {
@@ -309,7 +342,11 @@ impl BuildManager {
         tokio::spawn(async move {
             let _guard = guard;
             let executable = config.executable.clone();
-            let engine = config.effective_engine();
+            let engine = if rebuild && config.rebuild_arguments.is_some() {
+                None
+            } else {
+                config.effective_engine()
+            };
             let job_name = config
                 .job_name(&root_path)
                 .map(|name| name.to_string_lossy().into_owned());
@@ -320,6 +357,7 @@ impl BuildManager {
                     "executable": executable,
                     "engine": engine,
                     "jobName": job_name,
+                    "rebuild": rebuild,
                 })))
                 .await;
             let started = Instant::now();
@@ -362,8 +400,10 @@ impl BuildManager {
             }
             let worker_root = root_path.clone();
             let wall_started = std::time::SystemTime::now();
-            let outcome =
-                tokio::task::spawn_blocking(move || run(&worker_root, &config, &cancel)).await;
+            let outcome = tokio::task::spawn_blocking(move || {
+                run_with_mode(&worker_root, &config, &cancel, rebuild)
+            })
+            .await;
             let mut outcome = outcome
                 .unwrap_or_else(|error| Outcome::error(format!("Compiler task failed: {error}")));
             let mut current = workspace.write().await;
@@ -640,6 +680,7 @@ impl BuildManager {
                 "dependenciesCount":project.len(),
                 "executable":executable, "engine":engine,
                 "jobName":job_name,
+                "rebuild":rebuild,
                 "output":outcome.output,
             });
             // Preserve the inputs which produced the PDF even when this run
@@ -808,14 +849,14 @@ impl BuildManager {
                 record
                     .queued
                     .take()
-                    .map(|uri| (uri, record.cancel_generation))
+                    .map(|queued| (queued, record.cancel_generation))
             });
-            if let Some((uri, generation)) = queued {
+            if let Some((queued, generation)) = queued {
                 if !manager.closing.load(Ordering::SeqCst)
-                    && workspace.read().await.config.build.on_save
+                    && (queued.rebuild || workspace.read().await.config.build.on_save)
                 {
                     if let Err(error) = manager
-                        .start_request(uri, Some((root_uri, generation)))
+                        .start_request(queued.uri, Some((root_uri, generation)), queued.rebuild)
                         .await
                     {
                         let _ = manager
@@ -873,9 +914,10 @@ impl BuildManager {
             Some(Record {
                 active: Some((id, _)),
                 queued,
+                rebuild,
                 ..
             }) => {
-                json!({"status":"running", "buildId":id, "rootUri":root, "queued":queued.is_some()})
+                json!({"status":"running", "buildId":id, "rootUri":root, "queued":queued.is_some(), "rebuild":rebuild, "queuedRebuild":queued.as_ref().is_some_and(|queued| queued.rebuild)})
             }
             Some(Record {
                 result: Some(result),
@@ -1017,6 +1059,14 @@ pub(crate) fn kill_group(child: &mut Child) {
 }
 
 pub fn run(root: &Path, config: &BuildConfig, cancel: &AtomicBool) -> Outcome {
+    run_with_mode(root, config, cancel, false)
+}
+
+pub fn rebuild(root: &Path, config: &BuildConfig, cancel: &AtomicBool) -> Outcome {
+    run_with_mode(root, config, cancel, true)
+}
+
+fn run_with_mode(root: &Path, config: &BuildConfig, cancel: &AtomicBool, rebuild: bool) -> Outcome {
     // A task can be cancelled while waiting for client progress registration,
     // before its worker starts. Preserve existing artifacts in that case.
     if cancel.load(Ordering::Relaxed) {
@@ -1025,7 +1075,7 @@ pub fn run(root: &Path, config: &BuildConfig, cancel: &AtomicBool) -> Outcome {
             ..Outcome::error("Compilation cancelled".into())
         };
     }
-    let mut outcome = run_inner(root, config, cancel);
+    let mut outcome = run_inner(root, config, cancel, rebuild);
     reject_outdated_pdf(root, &mut outcome, std::iter::once(root.to_path_buf()));
     if outcome.status == "error"
         && !outcome
@@ -1093,9 +1143,21 @@ fn reject_outdated_pdf(root: &Path, outcome: &mut Outcome, sources: impl Iterato
     }
 }
 
-fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool) -> Outcome {
+fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool, rebuild: bool) -> Outcome {
     let Some(parent) = root.parent() else {
         return Outcome::error("Invalid root path".into());
+    };
+    // Validate custom rebuild arguments before touching logs or artifacts.
+    let arguments = if rebuild {
+        match config.expanded_rebuild_arguments(root) {
+            Ok(arguments) => arguments,
+            Err(message) => return Outcome::error(message),
+        }
+    } else {
+        let Some(arguments) = config.expanded_arguments(root) else {
+            return Outcome::error("Invalid root filename".into());
+        };
+        arguments
     };
     let output_dir = parent.join(&config.output_directory);
     if let Err(error) = std::fs::create_dir_all(&output_dir) {
@@ -1127,7 +1189,6 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool) -> Outcome 
             return Outcome::error(format!("Cannot replace compiler log: {error}"));
         }
     }
-    let arguments = config.expanded_arguments(root).unwrap();
     let mut command = Command::new(&config.executable);
     command
         .args(arguments)
@@ -1447,4 +1508,107 @@ fn bibliography_logs(directory: &Path) -> BTreeMap<PathBuf, ArtifactFingerprint>
         })
         .take(64)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn delayed_force_callbacks_preserve_newer_builds_saves_and_cancellations() {
+        let directory = tempfile::tempdir().unwrap();
+        let main = directory.path().join("main.tex");
+        let source = "\\documentclass{article}\n";
+        std::fs::write(&main, source).unwrap();
+        let uri = Url::from_file_path(main).unwrap();
+        let mut workspace = Workspace::default();
+        workspace.open(uri.clone(), source.into(), 1);
+        let workspace = Arc::new(RwLock::new(workspace));
+        let mut manager = None;
+        let (_service, _socket) = tower_lsp::LspService::new(|client| {
+            manager = Some(BuildManager::new(client.clone(), workspace));
+            crate::Backend::new(client)
+        });
+        let manager = manager.unwrap();
+        manager.state.lock().unwrap().insert(
+            uri.clone(),
+            Record {
+                active: Some((99, Arc::default())),
+                rebuild: true,
+                queued: Some(QueuedBuild {
+                    uri: uri.clone(),
+                    rebuild: false,
+                }),
+                ..Default::default()
+            },
+        );
+        // A force callback from an earlier completion is satisfied by a newer
+        // forced build, and must leave that build's ordinary save queue intact.
+        let delayed = manager
+            .start_request(uri.clone(), Some((uri.clone(), 0)), true)
+            .await
+            .unwrap();
+        assert_eq!(delayed["queuedRebuild"], false);
+        assert_eq!(delayed["queued"], true);
+        // A new user request still asks for another force after the active one.
+        let manual = manager.rebuild(uri.clone()).await.unwrap();
+        assert_eq!(manual["queuedRebuild"], true);
+        // If an ordinary build overtook the old callback, retain the force.
+        {
+            let mut state = manager.state.lock().unwrap();
+            let record = state.get_mut(&uri).unwrap();
+            record.rebuild = false;
+            record.queued = None;
+        }
+        let delayed = manager
+            .start_request(uri.clone(), Some((uri.clone(), 0)), true)
+            .await
+            .unwrap();
+        assert_eq!(delayed["queuedRebuild"], true);
+        assert_eq!(delayed["rebuild"], false);
+        manager.cancel(Some(&uri));
+        let delayed = manager
+            .start_request(uri.clone(), Some((uri.clone(), 0)), true)
+            .await
+            .unwrap();
+        assert_eq!(delayed["status"], "cancelled");
+        assert!(manager.state.lock().unwrap()[&uri].queued.is_none());
+        assert_eq!(manager.tasks.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn a_new_manual_rebuild_invalidates_a_detached_force_callback() {
+        let directory = tempfile::tempdir().unwrap();
+        let main = directory.path().join("main.tex");
+        let source = "\\documentclass{article}\n";
+        std::fs::write(&main, source).unwrap();
+        let uri = Url::from_file_path(main).unwrap();
+        let mut workspace = Workspace::default();
+        workspace.open(uri.clone(), source.into(), 1);
+        workspace.config.build.executable = "unavailable-custom-compiler".into();
+        workspace.config.build.rebuild_arguments = Some(vec![]);
+        let workspace = Arc::new(RwLock::new(workspace));
+        let mut manager = None;
+        let (_service, _socket) = tower_lsp::LspService::new(|client| {
+            manager = Some(BuildManager::new(client.clone(), workspace));
+            crate::Backend::new(client)
+        });
+        let manager = manager.unwrap();
+        manager
+            .state
+            .lock()
+            .unwrap()
+            .insert(uri.clone(), Record::default());
+        let manual = manager.rebuild(uri.clone()).await.unwrap();
+        assert_eq!(manual["status"], "started");
+        let delayed = manager
+            .start_request(uri.clone(), Some((uri.clone(), 0)), true)
+            .await
+            .unwrap();
+        assert_eq!(delayed["status"], "cancelled");
+        assert!(manager.state.lock().unwrap()[&uri].queued.is_none());
+        manager.disconnect();
+        manager.shutdown().await;
+        assert_eq!(manager.tasks.load(Ordering::SeqCst), 0);
+    }
 }
