@@ -774,7 +774,7 @@ fn loader_failure_range(
             "LoadClassWithOptions" => "LoadClassWithOptions",
             _ => continue,
         };
-        let Some(argument) = &command.argument else {
+        let Some(argument) = crate::syntax::file_argument(&text.source, command) else {
             continue;
         };
         let next = crate::syntax::skip_space(&text.source, argument.outer_span.end);
@@ -843,9 +843,7 @@ fn loader_failure_range(
             spans
         } else {
             let span = crate::syntax::trimmed_span(&text.source, argument.span.clone());
-            if !crate::syntax::is_literal_file_path(&crate::syntax::loader_name(
-                &text.source[span.clone()],
-            )) {
+            if !crate::syntax::is_literal_file_path(&text.source[span.clone()]) {
                 continue;
             }
             vec![span]

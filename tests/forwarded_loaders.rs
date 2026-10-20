@@ -42,9 +42,17 @@ fn option_forwarding_loaders_resolve_complete_and_rename_compiler_load_names() {
     ] {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();
-        let name = format!("local.{extension}.{extension}");
+        let literal = if extension == "cls" {
+            "lo cal"
+        } else {
+            "local"
+        };
+        let name = format!("{literal}.{extension}.{extension}");
         std::fs::write(root.join(&name), "Expected source.").unwrap();
         std::fs::write(root.join(format!("local.{extension}")), "Decoy source.").unwrap();
+        if extension == "cls" {
+            std::fs::write(root.join("local.cls.cls"), "Compact-name decoy.").unwrap();
+        }
         let source = format!("\\{command}{{lo cal.{extension}}}[2020/01/01]");
         std::fs::write(root.join("main.tex"), &source).unwrap();
         let mut workspace = Workspace::default();
@@ -75,7 +83,7 @@ fn option_forwarding_loaders_resolve_complete_and_rename_compiler_load_names() {
         .unwrap_err()
         .message
         .contains(&format!(".{extension}")));
-        let source = format!("\\{command}{{loc");
+        let source = format!("\\{command}{{lo");
         workspace.open(main.clone(), source.clone(), 1);
         let items = features::completion(
             &workspace,
@@ -86,7 +94,7 @@ fn option_forwarding_loaders_resolve_complete_and_rename_compiler_load_names() {
         let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
             panic!()
         };
-        assert_eq!(edit.new_text, format!("local.{extension}"));
+        assert_eq!(edit.new_text, format!("{literal}.{extension}"));
     }
 }
 

@@ -567,12 +567,13 @@ fn argument_span(doc: &Document, command: &Command, offset: usize) -> Option<Spa
         }
         return Some(start + 1..offset);
     }
-    if syntax::file_list(&command.name) {
-        return syntax::active_file_list_prefix(
+    if syntax::file_list(&command.name) || syntax::loader_extension(&command.name) == Some("cls") {
+        return syntax::active_file_prefix(
             source,
-            syntax::file_list_argument_start(source, &command.name, command.span.end)?,
+            syntax::file_name_argument_start(source, &command.name, command.span.end)?,
             offset,
             syntax::file_name_ignores_spaces(&command.name),
+            syntax::file_list(&command.name),
         );
     }
     // A completed inner call in an optional note must not hide the outer key.

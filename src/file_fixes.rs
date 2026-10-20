@@ -48,6 +48,7 @@ pub(crate) fn fixes(
     };
     let loader_extension = syntax::loader_extension(command_name);
     let extension = loader_extension.unwrap_or("tex");
+    let compact = syntax::file_name_ignores_spaces(command_name);
     let reported = if command_name != "include" {
         build_log::missing_file_name(&diagnostic.message).filter(|name| {
             diagnostic
@@ -69,7 +70,7 @@ pub(crate) fn fixes(
         .iter()
         .filter(|command| command.name == command_name)
         .find_map(|command| {
-            let argument = command.argument.as_ref()?;
+            let argument = syntax::file_argument(&doc.text.source, command)?;
             let spans = if syntax::file_list(command_name) {
                 syntax::complete_file_list_spans(&doc.text.source, command)?
             } else {
@@ -80,9 +81,13 @@ pub(crate) fn fixes(
             };
             if loader_extension.is_some()
                 && spans.iter().any(|span| {
-                    !syntax::is_literal_file_path(&syntax::loader_name(
-                        &doc.text.source[span.clone()],
-                    ))
+                    let raw = &doc.text.source[span.clone()];
+                    let literal = if compact {
+                        syntax::loader_name(raw)
+                    } else {
+                        raw.into()
+                    };
+                    !syntax::is_literal_file_path(&literal)
                 })
             {
                 return None;
@@ -92,7 +97,7 @@ pub(crate) fn fixes(
                 if doc.text.range(span.start, span.end) == diagnostic.range
                     && syntax::file_lookup_names(command_name, value).any(|name| name == reported)
                 {
-                    return Some((argument, span));
+                    return Some((argument.into_owned(), span));
                 }
             }
             None
@@ -101,7 +106,7 @@ pub(crate) fn fixes(
         return vec![];
     };
     let value = &doc.text.source[span];
-    let literal = loader_extension.map(|_| syntax::loader_name(value));
+    let literal = compact.then(|| syntax::loader_name(value));
     if !syntax::is_literal_file_path(literal.as_deref().unwrap_or(value))
         || workspace::resolve_file_path(root, command_name, value, &[extension]).is_some()
         || command_name == "input"
@@ -117,7 +122,7 @@ pub(crate) fn fixes(
     else {
         return vec![];
     };
-    let normalized = loader_extension.map(|_| syntax::loader_name(value));
+    let normalized = compact.then(|| syntax::loader_name(value));
     let lookup = normalized.as_deref().unwrap_or(value);
     let separator = lookup.rfind('/').map_or(0, |index| index + 1);
     let prefix = &lookup[..separator];
@@ -240,9 +245,9 @@ pub(crate) fn fixes(
             continue;
         }
         let edit = if command_name == "input"
-            && syntax::input_filename_needs_braces(&doc.text.source, argument, &replacement)
+            && syntax::input_filename_needs_braces(&doc.text.source, &argument, &replacement)
         {
-            syntax::input_filename_edit(&doc.text, argument, replacement.clone())
+            syntax::input_filename_edit(&doc.text, &argument, replacement.clone())
         } else {
             TextEdit {
                 range: diagnostic.range,

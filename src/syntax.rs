@@ -638,7 +638,7 @@ pub(crate) fn key_list_spans(source: &str, span: Range<usize>) -> Vec<Range<usiz
         .collect()
 }
 
-fn file_list_span(source: &str, segment: Range<usize>, compact: bool) -> Option<Range<usize>> {
+fn literal_file_span(source: &str, segment: Range<usize>, compact: bool) -> Option<Range<usize>> {
     let mut pieces = name_literal_pieces(source, segment)
         .into_iter()
         .map(|span| trimmed_span(source, span))
@@ -661,9 +661,9 @@ fn file_list_span(source: &str, segment: Range<usize>, compact: bool) -> Option<
     is_literal_file_path(&literal).then_some(span)
 }
 
-/// Package loaders accept one optional options argument, while bibliography
+/// Package and class loaders accept one optional options argument; bibliography
 /// and chapter-selection lists start directly with their mandatory group.
-pub(crate) fn file_list_argument_start(
+pub(crate) fn file_name_argument_start(
     source: &str,
     name: &str,
     command_end: usize,
@@ -672,7 +672,7 @@ pub(crate) fn file_list_argument_start(
     if source.as_bytes().get(start) == Some(&b'*') {
         return None;
     }
-    if loader_extension(name) == Some("sty")
+    if loader_extension(name).is_some()
         && !loader_forwards_options(name)
         && source.as_bytes().get(start) == Some(&b'[')
     {
@@ -685,7 +685,7 @@ fn file_list_argument<'a>(source: &str, command: &'a Command) -> Option<&'a Argu
     if !file_list(&command.name) {
         return None;
     }
-    let start = file_list_argument_start(source, &command.name, command.span.end)?;
+    let start = file_name_argument_start(source, &command.name, command.span.end)?;
     command
         .argument
         .as_ref()
@@ -706,7 +706,7 @@ pub(crate) fn file_list_spans(source: &str, command: &Command) -> Option<Vec<Ran
         key_list_segments(source, argument.span.clone())
             .into_iter()
             .filter_map(|segment| {
-                file_list_span(source, segment, file_name_ignores_spaces(&command.name))
+                literal_file_span(source, segment, file_name_ignores_spaces(&command.name))
             })
             .collect(),
     )
@@ -729,7 +729,7 @@ pub(crate) fn complete_file_list_spans(
                 .any(|span| !source[span.clone()].trim().is_empty())
         })
         .map(|segment| {
-            let span = file_list_span(source, segment, compact)?;
+            let span = literal_file_span(source, segment, compact)?;
             let raw = &source[span.clone()];
             let literal = if compact {
                 loader_name(raw)
@@ -756,21 +756,27 @@ pub(crate) fn includeonly_names(source: &str, command: &Command) -> Option<Vec<S
     )
 }
 
-pub(crate) fn active_file_list_prefix(
+pub(crate) fn active_file_prefix(
     source: &str,
     start: usize,
     cursor: usize,
     compact: bool,
+    multiple: bool,
 ) -> Option<Range<usize>> {
     if source.as_bytes().get(start) != Some(&b'{') {
         return None;
     }
     let span = group(source, start, b'{', b'}')
         .map_or(start + 1..source.len(), |(argument, _)| argument.span);
-    let segment = key_list_segments(source, span)
+    let segments = if multiple {
+        key_list_segments(source, span)
+    } else {
+        vec![span]
+    };
+    let segment = segments
         .into_iter()
         .find(|segment| segment.start <= cursor && cursor <= segment.end)?;
-    if let Some(span) = file_list_span(source, segment.clone(), compact) {
+    if let Some(span) = literal_file_span(source, segment.clone(), compact) {
         // The path completer does not decode TeX escapes. Replacing only the
         // prefix before an escape would leave a duplicate filename suffix.
         if source[span.clone()].contains('\\') {
@@ -892,10 +898,22 @@ pub(crate) fn file_argument<'a>(
     if passes_options(&command.name) {
         let start = forwarded_file_argument_start(source, command)?;
         let (argument, _) = group(source, start, b'{', b'}')?;
-        // These names are option-table keys, unlike the loaders' space-free
-        // names. Do not trim them into a different forwarding declaration.
+        // These names are exact option-table keys. Do not trim whitespace
+        // into a different forwarding declaration.
         (is_literal_file_path(&argument.value) && !argument.value.chars().any(char::is_whitespace))
             .then_some(std::borrow::Cow::Owned(argument))
+    } else if loader_extension(&command.name) == Some("cls") {
+        let start = file_name_argument_start(source, &command.name, command.span.end)?;
+        let argument = command
+            .argument
+            .as_ref()
+            .filter(|argument| argument.outer_span.start == start)?;
+        let span = literal_file_span(source, argument.span.clone(), false)?;
+        Some(std::borrow::Cow::Owned(Argument {
+            value: source[span.clone()].into(),
+            span,
+            outer_span: argument.outer_span.clone(),
+        }))
     } else {
         command.argument.as_ref().map(std::borrow::Cow::Borrowed)
     }
@@ -908,13 +926,13 @@ pub(crate) fn loader_forwards_options(command: &str) -> bool {
     )
 }
 
-/// Package/class loaders and bibliography database declarations discard TeX spaces.
+/// Package lists and bibliography database declarations discard TeX spaces.
 pub(crate) fn loader_name(value: &str) -> String {
     value.replace([' ', '\t', '\n', '\r'], "")
 }
 
 pub(crate) fn file_name_ignores_spaces(command: &str) -> bool {
-    loader_extension(command).is_some() || matches!(command, "bibliography" | "nobibliography")
+    loader_extension(command) == Some("sty") || matches!(command, "bibliography" | "nobibliography")
 }
 
 pub(crate) fn file_lookup_names<'a>(
@@ -1587,8 +1605,8 @@ impl Syntax {
                     } else if is_citation(name) {
                         arg_start = citation_argument_start(source, name, command_end)
                             .unwrap_or(source.len());
-                    } else if loader_extension(name) == Some("sty") {
-                        arg_start = file_list_argument_start(source, name, command_end)
+                    } else if loader_extension(name).is_some() {
+                        arg_start = file_name_argument_start(source, name, command_end)
                             .unwrap_or(source.len());
                     } else if name == "nobibliography" {
                         // The starred form reads the existing bibliography

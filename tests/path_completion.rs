@@ -375,7 +375,7 @@ fn file_completions_filter_types_hidden_files_and_ignored_regions_and_bound_resu
 }
 
 #[test]
-fn loader_and_database_completions_match_compacted_names_and_replace_raw_utf16_ranges() {
+fn package_and_database_completions_match_compacted_names_and_replace_raw_utf16_ranges() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     std::fs::create_dir(root.join("mydir")).unwrap();
@@ -388,9 +388,6 @@ fn loader_and_database_completions_match_compacted_names_and_replace_raw_utf16_r
         ("usepackage", "sty"),
         ("RequirePackage", "sty"),
         ("RequirePackageWithOptions", "sty"),
-        ("documentclass", "cls"),
-        ("LoadClass", "cls"),
-        ("LoadClassWithOptions", "cls"),
         ("bibliography", "bib"),
     ] {
         for whitespace in [" ", "\t", "\n", "\r\n"] {
@@ -442,8 +439,6 @@ fn compacting_loaders_exclude_unrepresentable_directory_completions() {
     for command in [
         "usepackage",
         "RequirePackageWithOptions",
-        "documentclass",
-        "LoadClassWithOptions",
         "bibliography",
         "bibliographystyle",
     ] {
@@ -463,7 +458,13 @@ fn compacting_loaders_exclude_unrepresentable_directory_completions() {
             "{command}: {items:?}"
         );
     }
-    for command in ["input", "addbibresource"] {
+    for command in [
+        "input",
+        "addbibresource",
+        "documentclass",
+        "LoadClass",
+        "LoadClassWithOptions",
+    ] {
         assert_eq!(
             apply_completion(
                 &mut workspace,

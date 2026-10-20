@@ -100,6 +100,8 @@ fn missing_loader_diagnostics_follow_static_names_and_the_consumed_lookahead_tok
             "\\RequirePackageWithOptions{% head, phantom, }\n local% first\n,locla% missing\n}\n\\endinput",
             r"\endinput", 5, "locla.sty", "RequirePackageWithOptions", "locla",
         ),
+        ("\\documentclass[draft [literal]{% head, phantom, }\r\n my class,nmae% missing\r\n}\r\n\\begin{document}", r"\begin", 4, "my class,nmae.cls", "documentclass", "my class,nmae"),
+        ("\\LoadClassWithOptions{% head, phantom, }\n my class,nmae% missing\n}\n\\endinput", r"\endinput", 4, "my class,nmae.cls", "LoadClassWithOptions", "my class,nmae"),
     ] {
         for numbered in [false, true] {
             let directory = tempfile::tempdir().unwrap();
@@ -237,7 +239,14 @@ fn warning(workspace: &mut Workspace, uri: &Url, loader: &str, name: &str) -> Di
     } else {
         "cls"
     };
-    let file = format!("{}.{extension}", name.replace([' ', '\t', '\r', '\n'], ""));
+    let file = format!(
+        "{}.{extension}",
+        if extension == "sty" {
+            name.replace([' ', '\t', '\r', '\n'], "")
+        } else {
+            name.into()
+        }
+    );
     let diagnostic = Diagnostic {
         range: source.range(start, start + name.len()),
         source: Some("latex-build".into()),
@@ -275,6 +284,8 @@ fn actions(workspace: &Workspace, uri: &Url, diagnostic: Diagnostic) -> CodeActi
 #[test]
 fn loader_repairs_preserve_options_lists_versions_and_fix_redundant_suffixes() {
     for (source, loader, name, filename, replacement) in [
+        ("\\documentclass[draft [literal]{% keep, phantom, }\r\n my class,nmae% typo\r\n}", "documentclass", "my class,nmae", "my class,name.cls", "my class,name"),
+        ("\\LoadClassWithOptions{% keep, phantom\n my class,nmae% typo\n}", "LoadClassWithOptions", "my class,nmae", "my class,name.cls", "my class,name"),
         ("\\usepackage[draft [literal]{% keep, phantom, }\r\n graphicx% first\r\n, lcoal% typo\r\n}", "usepackage", "lcoal", "local.sty", "local"),
         ("\\RequirePackageWithOptions{% keep, phantom\n lcoal% typo\n}", "RequirePackageWithOptions", "lcoal", "local.sty", "local"),
         (
@@ -400,7 +411,7 @@ fn loader_repairs_revalidate_legacy_versions_metadata_and_file_existence() {
 }
 
 #[test]
-fn loader_paths_discard_tex_spaces_without_selecting_spaced_filename_lookalikes() {
+fn package_names_discard_tex_spaces_while_class_names_preserve_internal_spaces() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     let source = "\\documentclass{my local}\\usepackage{my\tlocal}\n\\RequirePackage{ }";
@@ -421,7 +432,7 @@ fn loader_paths_discard_tex_spaces_without_selecting_spaced_filename_lookalikes(
     assert_eq!(links.len(), 2, "{links:?}");
     assert_eq!(
         links[0].target,
-        Some(Url::from_file_path(root.join("mylocal.cls")).unwrap())
+        Some(Url::from_file_path(root.join("my local.cls")).unwrap())
     );
     assert_eq!(
         links[1].target,
@@ -433,7 +444,7 @@ fn loader_paths_discard_tex_spaces_without_selecting_spaced_filename_lookalikes(
     };
     assert!(latex_lsp::file_operations::will_rename(
         &workspace,
-        &[rename("my local.cls", "decoy.cls")]
+        &[rename("mylocal.cls", "decoy.cls")]
     )
     .unwrap()
     .is_none());
@@ -442,6 +453,16 @@ fn loader_paths_discard_tex_spaces_without_selecting_spaced_filename_lookalikes(
         &[rename("mylocal.sty", "new package.sty")]
     )
     .is_err());
+    let class_edit = latex_lsp::file_operations::will_rename(
+        &workspace,
+        &[rename("my local.cls", "new class.cls")],
+    )
+    .unwrap()
+    .unwrap()
+    .changes
+    .unwrap();
+    assert_eq!(class_edit[&uri].len(), 1);
+    assert_eq!(class_edit[&uri][0].new_text, "new class");
     let edit = latex_lsp::file_operations::will_rename(
         &workspace,
         &[rename("mylocal.sty", "renamed.sty")],

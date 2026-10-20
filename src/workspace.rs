@@ -354,9 +354,7 @@ impl Workspace {
                         None => return vec![],
                     },
                 };
-                command
-                    .argument
-                    .as_ref()
+                crate::syntax::file_argument(&doc.text.source, command)
                     .map(|arg| {
                         let multiple = crate::syntax::file_list(&command.name);
                         let values = if let Some(spans) =
