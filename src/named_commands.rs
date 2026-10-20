@@ -42,49 +42,62 @@ pub(crate) fn declaration(source: &str, command: &syntax::Command) -> Option<Ran
     syntax::is_static_key(&source[span.clone()]).then_some(span)
 }
 
-/// Attribute a generic argument frame only to a known single-name interface
-/// whose complete name argument is the exact control word reported by TeX.
+fn error_argument(source: &str, start: usize) -> Option<syntax::Argument> {
+    if let Some((argument, _)) = syntax::group(source, start, b'{', b'}') {
+        return Some(argument);
+    }
+    let span = syntax::control_word(source, start)?;
+    Some(syntax::Argument {
+        value: source[span.clone()].into(),
+        span: span.clone(),
+        outer_span: span,
+    })
+}
+
+/// Attribute a generic frame to one exact macro operand of a known interface.
+/// Other named operands must be static; control-token operands are never blamed.
 pub(crate) fn name_error_invocation(
     source: &str,
     command: &syntax::Command,
     frame: &str,
 ) -> Option<(Range<usize>, Range<usize>)> {
-    if arguments(&command.name) != [true] {
+    let operands = arguments(&command.name);
+    if operands.is_empty() {
         return None;
     }
     let start = syntax::skip_space(source, command.span.end);
-    let (argument, mut end) = if let Some(group) = syntax::group(source, start, b'{', b'}') {
-        group
-    } else {
-        let span = syntax::control_word(source, start)?;
-        let end = span.end;
-        (
-            syntax::Argument {
-                value: source[span.clone()].into(),
-                span: span.clone(),
-                outer_span: span,
-            },
-            end,
-        )
-    };
-    if argument.value != frame
-        || syntax::control_word(&argument.value, 0)? != (0..argument.value.len())
+    let mut end = start;
+    let mut selected = None;
+    // cslet also consumes its source control token before expanding the name.
+    for (index, named) in operands
+        .iter()
+        .copied()
+        .chain((command.name == "cslet").then_some(false))
+        .enumerate()
     {
-        return None;
-    }
-    // cslet reads both the name and the source token before expanding the name.
-    if command.name == "cslet" {
-        let at = syntax::skip_space(source, end);
-        end = if let Some((target, end)) = syntax::group(source, at, b'{', b'}') {
-            if syntax::control_word(&target.value, 0)? != (0..target.value.len()) {
+        let argument = error_argument(source, syntax::skip_space(source, end))?;
+        end = argument.outer_span.end;
+        let word = syntax::control_word(&argument.value, 0)
+            .is_some_and(|span| span == (0..argument.value.len()));
+        if !named {
+            if !word {
                 return None;
             }
-            end
-        } else {
-            syntax::control_word(source, at)?.end
-        };
+        } else if word {
+            // The copy destination uses an internal let/csname frame rather
+            // than the simple source-name frame verified by this matcher.
+            if command.name == "csletcs" && index == 0
+                || selected.is_some()
+                || argument.value != frame
+            {
+                return None;
+            }
+            selected = Some(argument.span);
+        } else if !syntax::is_static_key(&argument.value) {
+            return None;
+        }
     }
-    Some((argument.span, start..end))
+    Some((selected?, start..end))
 }
 
 /// Respect the explicit expansion before letcs's destination. Without it,

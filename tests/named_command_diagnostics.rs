@@ -88,8 +88,8 @@ fn dynamic_lists_unknown_interfaces_wrappers_and_opaque_text_keep_line_diagnosti
         ),
         (r"\csletcs{\keynme}{source}", r"\csletcs{\keynme}{source}"),
         (
-            r"\ifcsequal{\keynme}{source}{Yes}{No}",
-            r"\ifcsequal{\keynme}{source}",
+            r"\ifcsequal{\keynme}{\other}{Yes}{No}",
+            r"\ifcsequal{\keynme}{\other}",
         ),
         (r"\unknown{\keynme}", r"\unknown{\keynme}"),
         (
@@ -139,6 +139,80 @@ fn dynamic_lists_unknown_interfaces_wrappers_and_opaque_text_keep_line_diagnosti
         true,
     );
     assert!(diagnostic.code.is_some());
+}
+
+#[test]
+fn multiple_name_interfaces_require_one_dynamic_operand_and_static_peer_names() {
+    for (call, consumed) in [
+        (
+            r"\csletcs{alias}{\keynme}\alias",
+            r"\csletcs{alias}{\keynme}",
+        ),
+        (
+            r"\ifcsequal{\keynme}{payload}{Yes}{No}",
+            r"\ifcsequal{\keynme}{payload}",
+        ),
+        (
+            r"\ifcsequal{payload}{\keynme}{Yes}{No}",
+            r"\ifcsequal{payload}{\keynme}",
+        ),
+        (
+            r"\ifcsstrequal{\keynme}{payload}{Yes}{No}",
+            r"\ifcsstrequal{\keynme}{payload}",
+        ),
+        (
+            r"\ifcsstrequal{payload}{\keynme}{Yes}{No}",
+            r"\ifcsstrequal{payload}{\keynme}",
+        ),
+        (r"\letcs\alias{\keynme}\alias", r"\letcs\alias{\keynme}"),
+        (r"\letcs{\alias}{\keynme}\alias", r"\letcs{\alias}{\keynme}"),
+        (r"\letcs\keynme{\keynme}", r"\letcs\keynme{\keynme}"),
+    ]
+    .into_iter()
+    .flat_map(|(call, consumed)| {
+        [
+            (call.to_owned(), consumed.to_owned()),
+            (
+                call.replace(r"{\keynme}", "\\keynme "),
+                consumed.replace(r"{\keynme}", "\\keynme "),
+            ),
+        ]
+    }) {
+        let source = format!("\\typeout{{😀}} {call} Rest\r\n");
+        for numbered in [false, true] {
+            let diagnostic = parse(
+                &source,
+                &format!("<argument> \\keynme\nl.1 \\typeout{{😀}} {consumed}"),
+                numbered,
+            );
+            let start = source.rfind(r"\keynme").unwrap();
+            assert_eq!(
+                diagnostic.range,
+                Text::new(source.clone()).range(start, start + 7),
+                "{call}: {diagnostic:?}"
+            );
+            assert_eq!(
+                diagnostic.code,
+                Some(NumberOrString::String("undefined-control-sequence".into()))
+            );
+        }
+    }
+    for call in [
+        r"\ifcsequal{\keynme}{\keynme}",
+        r"\ifcsequal{\keynme}{\other}",
+        r"\ifcsequal{\keynme}{prefix\other}",
+        r"\ifcsequal{\keynme}",
+        r"\ifcsequal*{\keynme}{payload}",
+        r"\csletcs{\keynme}{payload}",
+        r"\csletcs{\other}{\keynme}",
+        r"\letcs{\csname alias\endcsname}{\keynme}",
+    ] {
+        let diagnostic = parse(call, &format!("<argument> \\keynme\nl.1 {call}"), true);
+        assert!(
+            diagnostic.code.is_none() && diagnostic.data.is_none(),
+            "{call}: {diagnostic:?}"
+        );
+    }
 }
 
 fn repaired(workspace: &Workspace, uri: &Url, diagnostic: &Diagnostic) -> String {
@@ -248,6 +322,64 @@ fn real_named_argument_macro_fixes_restore_successful_compilation() {
                 "{engine}/{call}: {}",
                 before.output
             );
+            let mut workspace = Workspace {
+                versioned_edits: true,
+                code_action_literals: true,
+                ..Default::default()
+            };
+            workspace.open(uri.clone(), source, 7);
+            workspace
+                .build_diagnostics
+                .insert(uri.clone(), before.diagnostics.clone());
+            std::fs::write(&main, repaired(&workspace, &uri, diagnostic)).unwrap();
+            let after = build::run(&main, &config, &AtomicBool::new(false));
+            assert_eq!(after.status, "success", "{engine}/{call}: {}", after.output);
+            assert!(main
+                .parent()
+                .unwrap()
+                .join("build/latex-lsp/main.pdf")
+                .is_file());
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex and xelatex"]
+fn real_multiple_name_operand_repairs_restore_successful_compilation() {
+    for engine in ["pdflatex", "xelatex"] {
+        for call in [
+            r"\csletcs{alias}{\keynme}\alias",
+            r"\ifcsequal{\keynme}{payload}{MarkerUnique}{Other}",
+            r"\ifcsequal{payload}{\keynme}{MarkerUnique}{Other}",
+            r"\ifcsstrequal{\keynme}{payload}{MarkerUnique}{Other}",
+            r"\ifcsstrequal{payload}{\keynme}{MarkerUnique}{Other}",
+            r"\letcs\alias{\keynme}\alias",
+        ]
+        .into_iter()
+        .flat_map(|call| [call.to_owned(), call.replace(r"{\keynme}", "\\keynme ")])
+        {
+            let directory = tempfile::tempdir().unwrap();
+            let main = directory.path().join("main.tex");
+            let uri = Url::from_file_path(&main).unwrap();
+            let source = format!("\\documentclass{{article}}\r\n\\usepackage{{etoolbox}}\r\n\\newcommand{{\\keyname}}{{payload}}\\newcommand{{\\payload}}{{MarkerUnique}}\r\n\\begin{{document}}\r\n{call}\r\n\\end{{document}}\r\n");
+            std::fs::write(&main, &source).unwrap();
+            let config = BuildConfig {
+                executable: engine.into(),
+                ..Default::default()
+            };
+            let before = build::run(&main, &config, &AtomicBool::new(false));
+            assert_eq!(before.status, "error", "{engine}/{call}: {}", before.output);
+            let start = source.find(r"\keynme").unwrap();
+            let range = Text::new(source.clone()).range(start, start + 7);
+            let diagnostic = before.diagnostics[&uri]
+                .iter()
+                .find(|item| item.message == "Undefined control sequence." && item.range == range)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{engine}/{call}: {}\n{:?}",
+                        before.output, before.diagnostics
+                    )
+                });
             let mut workspace = Workspace {
                 versioned_edits: true,
                 code_action_literals: true,
