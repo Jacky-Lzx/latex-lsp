@@ -1211,6 +1211,15 @@ fn undefined_name_command_range(
     let prefix = context.trim_end();
     let shortened = shortened_context(prefix);
     let start = text.offset(Position::new(line, 0))?;
+    if let Some(suffix) = shortened {
+        // Unknown callers can have the same suffix as a supported invocation.
+        // Uniqueness must hold across the source line before filtering calls.
+        let source_line = text.source[start..].lines().next()?;
+        let first = source_line.find(suffix)?;
+        if source_line.rfind(suffix) != Some(first) {
+            return None;
+        }
+    }
     let syntax = crate::syntax::Syntax::latex(text);
     let mut matches = syntax.commands.iter().filter_map(|command| {
         let (span, tail) = crate::saved_text::name_error_invocation(&text.source, command, frame)
