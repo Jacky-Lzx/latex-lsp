@@ -188,7 +188,14 @@ fn real_shortened_path_contexts_reject_wrong_repairs_and_preserve_unique_repairs
                 } else {
                     format!("\\usepackage{{{package}}}\n")
                 };
-                let source = format!("\\documentclass{{article}}\n{packages}\\newcommand{{\\verylongcustomwrapper{command}}}[1]{{\\{command}{{#1}}}}\n\\begin{{document}}\n\\section{{MarkerUnique}}\n{call}\n\\end{{document}}\n");
+                // Keep the unique echo independent of an unused macro whose
+                // dynamic input makes the project's source scope uncertain.
+                let declaration = if command == "input" && !ambiguous {
+                    "% Direct input without an unresolved source loader.\n".to_owned()
+                } else {
+                    format!("\\newcommand{{\\verylongcustomwrapper{command}}}[1]{{\\{command}{{#1}}}}\n")
+                };
+                let source = format!("\\documentclass{{article}}\n{packages}{declaration}\\begin{{document}}\n\\section{{MarkerUnique}}\n{call}\n\\end{{document}}\n");
                 let directory = tempfile::tempdir().unwrap();
                 let main = directory.path().join("main.tex");
                 let uri = Url::from_file_path(&main).unwrap();

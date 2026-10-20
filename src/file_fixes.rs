@@ -10,6 +10,7 @@ pub(crate) fn fixes(
     root: &Url,
     uri: &Url,
     diagnostic: &Diagnostic,
+    signatures: Option<&crate::signature::CommandSignatures<'_>>,
     comparisons: &mut usize,
 ) -> Vec<syntax::QuickFix> {
     if *comparisons >= spelling_fixes::MAX_COMPARISONS {
@@ -21,6 +22,18 @@ pub(crate) fn fixes(
     let code = match diagnostic.code.as_ref() {
         Some(NumberOrString::String(code)) => code.as_str(),
         _ => return vec![],
+    };
+    let confirmed = if matches!(code, "missing-input" | "missing-package" | "missing-class") {
+        let Some(signatures) = signatures else {
+            return vec![];
+        };
+        Some(build_log::file_error_invocations_with_signatures(
+            &doc.text.source,
+            &doc.syntax,
+            signatures,
+        ))
+    } else {
+        None
     };
     let command_name = match code {
         "missing-input" => "input",
@@ -152,7 +165,12 @@ pub(crate) fn fixes(
                 } else {
                     syntax::file_lookup_names(command_name, value).any(|name| name == reported)
                 };
-                if doc.text.range(span.start, span.end) == diagnostic.range && matches_report {
+                if doc.text.range(span.start, span.end) == diagnostic.range
+                    && matches_report
+                    && confirmed
+                        .as_ref()
+                        .is_none_or(|calls| calls.iter().any(|(candidate, _)| candidate == &span))
+                {
                     return Some((argument.into_owned(), span, command));
                 }
             }
@@ -382,9 +400,9 @@ mod tests {
             ..Default::default()
         };
         let mut comparisons = spelling_fixes::MAX_COMPARISONS - 1;
-        let _ = fixes(&workspace, &uri, &uri, &diagnostic, &mut comparisons);
+        let _ = fixes(&workspace, &uri, &uri, &diagnostic, None, &mut comparisons);
         assert_eq!(comparisons, spelling_fixes::MAX_COMPARISONS);
-        assert!(fixes(&workspace, &uri, &uri, &diagnostic, &mut comparisons).is_empty());
+        assert!(fixes(&workspace, &uri, &uri, &diagnostic, None, &mut comparisons).is_empty());
         assert_eq!(comparisons, spelling_fixes::MAX_COMPARISONS);
     }
 }

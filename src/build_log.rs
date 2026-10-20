@@ -1244,6 +1244,69 @@ pub(crate) fn environment_error_invocations_with_signatures(
         .collect()
 }
 
+pub(crate) fn file_error_invocations_with_signatures(
+    source: &str,
+    parsed: &crate::syntax::Syntax,
+    signatures: &crate::signature::CommandSignatures<'_>,
+) -> Vec<(ByteRange<usize>, ByteRange<usize>)> {
+    if signatures
+        .names()
+        .any(|name| name == "input" || crate::syntax::loader_extension(name).is_some())
+    {
+        return vec![];
+    }
+    let operands = signatures.argument_tokens(source, parsed);
+    parsed
+        .commands
+        .iter()
+        .filter_map(|command| {
+            if (command.name != "input" && crate::syntax::loader_extension(&command.name).is_none())
+                || operands.contains(&command.span.start)
+            {
+                return None;
+            }
+            let argument = crate::syntax::file_argument(source, command)?;
+            let spans = if crate::syntax::file_list(&command.name) {
+                crate::syntax::complete_file_list_spans(source, command)?
+            } else {
+                vec![crate::syntax::trimmed_span(source, argument.span.clone())]
+            };
+            Some(
+                spans
+                    .into_iter()
+                    .map(|span| (span, argument.outer_span.clone()))
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .flatten()
+        .collect()
+}
+
+fn confirmed_file_invocation(
+    text: &Text,
+    range: Range,
+    cached: Option<&InvocationCalls<'_>>,
+) -> bool {
+    let local;
+    let calls = if let Some(cached) = cached {
+        if cached.source != text.source {
+            return false;
+        }
+        &cached.invocations
+    } else {
+        let parsed = crate::syntax::Syntax::latex(text);
+        local = file_error_invocations_with_signatures(
+            &text.source,
+            &parsed,
+            &crate::signature::CommandSignatures::new([(text.source.as_str(), &parsed)]),
+        );
+        &local
+    };
+    calls
+        .iter()
+        .any(|(span, _)| text.range(span.start, span.end) == range)
+}
+
 fn shortened_context(prefix: &str) -> Option<&str> {
     // TeX may cut the leading scalar in half when shortening error context.
     // Discard only its undecodable leading bytes; matching still requires a
@@ -1586,8 +1649,10 @@ fn emit_with_context(
     ranges.extend(model_range);
     let missing_file = missing_file_name(&message);
     let input_range = missing_file
+        .filter(|_| !project_stale)
         .filter(|_| reported_line.checked_sub(1) == Some(line))
-        .and_then(|name| missing_path_range(&text, line, context?, name, "input"));
+        .and_then(|name| missing_path_range(&text, line, context?, name, "input"))
+        .filter(|range| confirmed_file_invocation(&text, *range, cached_calls));
     ranges.extend(input_range);
     let missing_listing = missing_listing_name(&message);
     let listing_range = missing_listing
@@ -1598,8 +1663,10 @@ fn emit_with_context(
         .filter(|_| reported_line.checked_sub(1) == Some(line))
         .and_then(|name| missing_path_range(&text, line, context?, name, "VerbatimInput"));
     ranges.extend(fancyverb_range);
-    let loader_range =
-        missing_file.and_then(|name| loader_failure_range(&text, line, context?, name));
+    let loader_range = missing_file
+        .filter(|_| !project_stale)
+        .and_then(|name| loader_failure_range(&text, line, context?, name))
+        .filter(|(range, _)| confirmed_file_invocation(&text, *range, cached_calls));
     ranges.extend(loader_range.map(|(range, _)| range));
     let package_clash = package_option_clash_name(&message);
     let clash_range = package_clash
@@ -1698,7 +1765,7 @@ fn emit_with_context(
                     }))
                     .or_else(|| graphic_range.and(missing_graphic).map(|name| serde_json::json!({"file":name})))
                     .map(|mut data| {
-                        if color_range.is_some() || model_range.is_some() || counter_range.is_some() || environment_range.is_some() {
+                        if color_range.is_some() || model_range.is_some() || counter_range.is_some() || environment_range.is_some() || input_range.is_some() || loader_range.is_some() {
                             if let Some(context) = macro_context {
                                 data["macroSources"] = serde_json::json!(context.macros.sources);
                                 if !context.macros.paused_sources.is_empty() {
@@ -2280,6 +2347,7 @@ enum InvocationKind {
     Counter,
     EnvironmentBegin,
     EnvironmentEnd,
+    File,
 }
 
 impl InvocationKind {
@@ -2291,13 +2359,15 @@ impl InvocationKind {
         } else if undefined_counter_name(message).is_some() {
             Some(Self::Counter)
         } else {
-            environment_error(message).map(|error| {
-                if error.command == "begin" {
-                    Self::EnvironmentBegin
-                } else {
-                    Self::EnvironmentEnd
-                }
-            })
+            environment_error(message)
+                .map(|error| {
+                    if error.command == "begin" {
+                        Self::EnvironmentBegin
+                    } else {
+                        Self::EnvironmentEnd
+                    }
+                })
+                .or_else(|| missing_file_name(message).map(|_| Self::File))
         }
     }
 
@@ -2317,6 +2387,7 @@ impl InvocationKind {
             Self::Counter => {
                 crate::counters::error_invocations_with_signatures(source, syntax, signatures)
             }
+            Self::File => file_error_invocations_with_signatures(source, syntax, signatures),
             Self::EnvironmentBegin | Self::EnvironmentEnd => {
                 environment_error_invocations_with_signatures(
                     source,
@@ -2406,7 +2477,7 @@ impl ProjectSources {
 struct ProjectAnalysis<'a> {
     project: &'a ProjectSources,
     macros: Option<Rc<MacroContext<'a>>>,
-    calls: [Option<(Url, Rc<InvocationCalls<'a>>)>; 5],
+    calls: [Option<(Url, Rc<InvocationCalls<'a>>)>; 6],
 }
 
 impl<'a> ProjectAnalysis<'a> {
@@ -2414,7 +2485,7 @@ impl<'a> ProjectAnalysis<'a> {
         Self {
             project,
             macros: None,
-            calls: [None, None, None, None, None],
+            calls: [None, None, None, None, None, None],
         }
     }
 
@@ -2471,7 +2542,7 @@ impl<'a> ProjectAnalysis<'a> {
                     }),
                 ),
             }));
-            self.calls = [None, None, None, None, None];
+            self.calls = [None, None, None, None, None, None];
         }
         let macros = self.macros.as_ref().expect("nonempty macro scope");
         let document = self.project.documents.get(uri).ok_or(())?;
@@ -2639,13 +2710,22 @@ fn parse_in_project<'a>(
                         .flatten()
                         .filter(|(line, _)| *line == number)
                         .and_then(|(_, context)| context);
+                    let context = context.map(|source| {
+                        ErrorContext::source(source).with_project(
+                            &cause,
+                            analysis.as_mut(),
+                            &sources,
+                            &stack,
+                            &cause_path.path,
+                        )
+                    });
                     emit_with_context(
                         &mut result,
                         &cause_path.path,
                         cause_line,
                         cause,
                         DiagnosticSeverity::ERROR,
-                        context.map(ErrorContext::source),
+                        context,
                         cause_path.confirmed,
                     );
                 }
@@ -2690,13 +2770,22 @@ fn parse_in_project<'a>(
                 } else {
                     (1, None)
                 };
+                let context = context.map(|source| {
+                    ErrorContext::source(source).with_project(
+                        &cause,
+                        analysis.as_mut(),
+                        &sources,
+                        &stack,
+                        &path.path,
+                    )
+                });
                 emit_with_context(
                     &mut result,
                     &path.path,
                     cause_line,
                     cause,
                     DiagnosticSeverity::ERROR,
-                    context.map(ErrorContext::source),
+                    context,
                     path.confirmed,
                 );
             }
@@ -6989,6 +7078,165 @@ mod project_color_tests {
             let line_start = text.offset(Position::new(index as u32 + 1, 0)).unwrap();
             let start = line_start + text.source[line_start..].find(name).unwrap();
             assert_eq!(error.range, text.range(start, start + name.len()));
+            assert!(error.code.is_some(), "{error:?}");
+        }
+    }
+
+    #[test]
+    fn project_file_errors_require_macros_loaded_before_the_failure() {
+        for command in ["input", "usepackage"] {
+            let call = format!(r"\bridge\{command}{{palete}}\relax");
+            let echo = if command == "input" {
+                call.strip_suffix(r"\relax").unwrap()
+            } else {
+                &call
+            };
+            let extension = if command == "input" { "tex" } else { "sty" };
+            for case in [
+                "direct",
+                "callback",
+                "not-loaded",
+                "later",
+                "displayed",
+                "dynamic",
+                "dynamic-definition",
+            ] {
+                let declarations = if case == "callback" {
+                    r"\newcommand{\done}[2]{}\def\bridge{\done}"
+                } else {
+                    r"\newcommand{\done}{}\def\bridge{\done}"
+                };
+                let (temp, root, _) = fixture(declarations, &call);
+                let prefix = match case {
+                    "displayed" => r"\usepackage{palette}\lstinputlisting{later.tex}",
+                    "dynamic" => r"\usepackage{palette}\input{\filename}",
+                    "dynamic-definition" => {
+                        r"\usepackage{palette}\newcommand{\unused}[1]{\input{#1}}"
+                    }
+                    _ => r"\usepackage{palette}",
+                };
+                let source = if case == "displayed" {
+                    format!("{prefix}\n{call}\n")
+                } else {
+                    format!("{prefix}\n{call}\n\\input{{later}}\n")
+                };
+                std::fs::write(&root, source).unwrap();
+                std::fs::write(temp.path().join("later.tex"), r"\renewcommand{\done}[2]{}")
+                    .unwrap();
+                let project = ProjectSources::capture(&root);
+                let before = if case == "not-loaded" {
+                    ""
+                } else {
+                    "(./palette.sty)"
+                };
+                let display = if case == "displayed" {
+                    "(./later.tex)"
+                } else {
+                    ""
+                };
+                let log = format!("(./main.tex\n{before}\n{display}\n! LaTeX Error: File `palete.{extension}' not found.\n./main.tex:2: Emergency stop.\n<read *>\nl.2 {echo}\n(./later.tex)\n)\n");
+                let result = parse_with_project_sources(&root, &log, &project).0;
+                let error = result[&Url::from_file_path(&root).unwrap()]
+                    .iter()
+                    .find(|e| e.message.contains("not found"))
+                    .unwrap();
+                let precise = matches!(case, "direct" | "later" | "displayed");
+                assert_eq!(error.code.is_some(), precise, "{command}/{case}: {error:?}");
+                if precise {
+                    let sources: Vec<Url> = serde_json::from_value(
+                        error.data.as_ref().unwrap()["macroSources"].clone(),
+                    )
+                    .unwrap();
+                    assert_eq!(sources.len(), 2);
+                    assert!(!sources
+                        .contains(&Url::from_file_path(temp.path().join("later.tex")).unwrap()));
+                } else {
+                    assert!(error.data.is_none());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn file_input_and_loader_errors_share_only_the_file_call_cache() {
+        let calls = [
+            (
+                r"\bridge\input{palete}",
+                "LaTeX Error: File `palete.tex' not found.",
+                "palete",
+            ),
+            (
+                r"\bridge\textcolor{accnet}{MarkerUnique}",
+                "Package xcolor Error: Undefined color `accnet'.",
+                "accnet",
+            ),
+            (
+                r"\bridge\usepackage{palete}\relax",
+                "LaTeX Error: File `palete.sty' not found.",
+                "palete",
+            ),
+            (
+                r"\bridge\setcounter{equatoin}{7}",
+                "LaTeX Error: No counter 'equatoin' defined.",
+                "equatoin",
+            ),
+            (
+                r"\bridge\begin{panle}",
+                "LaTeX Error: Environment panle undefined.",
+                "panle",
+            ),
+            (
+                r"\bridge\end{algin}",
+                r"LaTeX Error: \begin{document} ended by \end{algin}.",
+                "algin",
+            ),
+            (
+                r"\bridge\textcolor[rbg]{.2,.4,.6}{MarkerUnique}",
+                "Package xcolor Error: Undefined color model `rbg'.",
+                "rbg",
+            ),
+        ];
+        let (_temp, root, _) = fixture(r"\newcommand{\done}{}\def\bridge{\done}", "");
+        let mut source = "\\usepackage{palette}\n".to_owned();
+        let mut log = "(./main.tex\n(./palette.sty)\n".to_owned();
+        for index in 0..14 {
+            let (call, message, _) = calls[index % 7];
+            let line = index + 2;
+            source.push_str(&format!("{call}\n"));
+            if matches!(index % 7, 0 | 2) {
+                log.push_str(&format!(
+                    "! {message}\n./main.tex:{line}: Emergency stop.\n<read *>\nl.{line} {call}\n"
+                ));
+            } else {
+                let help = if matches!(index % 7, 1 | 6) {
+                    HELP
+                } else {
+                    COUNTER_HELP
+                };
+                log.push_str(&format!(
+                    "./main.tex:{line}: {message}\n{help}l.{line} {call}\n"
+                ));
+            }
+        }
+        log.push_str(")\n");
+        std::fs::write(&root, &source).unwrap();
+        let project = ProjectSources::capture(&root);
+        let result = parse_with_project_sources(&root, &log, &project).0;
+        let errors: Vec<_> = result[&Url::from_file_path(root).unwrap()]
+            .iter()
+            .filter(|e| e.message != "Emergency stop.")
+            .collect();
+        assert_eq!(errors.len(), 14);
+        let text = Text::new(source);
+        for (index, error) in errors.iter().enumerate() {
+            let (_, _, name) = calls[index % 7];
+            let line_start = text.offset(Position::new(index as u32 + 1, 0)).unwrap();
+            let start = line_start + text.source[line_start..].find(name).unwrap();
+            assert_eq!(
+                error.range,
+                text.range(start, start + name.len()),
+                "{index}: {error:?}"
+            );
             assert!(error.code.is_some(), "{error:?}");
         }
     }

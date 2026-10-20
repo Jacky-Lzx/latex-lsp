@@ -369,30 +369,7 @@ pub fn fixes(
             if examined > 64 {
                 return result;
             }
-            if matches!(diagnostic.code.as_ref(), Some(NumberOrString::String(code)) if matches!(code.as_str(), "missing-include" | "missing-input" | "missing-listing" | "missing-verbatim-input" | "missing-fancyverb-input" | "missing-image" | "missing-package" | "missing-class" | "missing-bibliography-style" | "missing-bibliography-database"))
-            {
-                let fixes = if diagnostic.code
-                    == Some(NumberOrString::String("missing-image".into()))
-                {
-                    crate::image_fixes::fixes(workspace, root, uri, diagnostic, &mut comparisons)
-                } else {
-                    crate::file_fixes::fixes(workspace, root, uri, diagnostic, &mut comparisons)
-                };
-                for fix in fixes {
-                    if seen.insert((
-                        diagnostic.range.start,
-                        diagnostic.range.end,
-                        fix.edit.new_text.clone(),
-                    )) {
-                        result.push(fix);
-                        if result.len() >= 256 {
-                            return result;
-                        }
-                    }
-                }
-                continue;
-            }
-            let invocation_scope = if matches!(diagnostic.code.as_ref(), Some(NumberOrString::String(code)) if matches!(code.as_str(), "undefined-color" | "undefined-color-model" | "undefined-counter" | "undefined-environment" | "mismatched-environment-end"))
+            let invocation_scope = if matches!(diagnostic.code.as_ref(), Some(NumberOrString::String(code)) if matches!(code.as_str(), "undefined-color" | "undefined-color-model" | "undefined-counter" | "undefined-environment" | "mismatched-environment-end" | "missing-input" | "missing-package" | "missing-class"))
             {
                 let confirmed = workspace.build_diagnostic_sources.get(root);
                 let scope = if let Some(value) = diagnostic
@@ -471,6 +448,36 @@ pub fn fixes(
                         })
                 })
                 .map(|signatures| &*signatures);
+            if matches!(diagnostic.code.as_ref(), Some(NumberOrString::String(code)) if matches!(code.as_str(), "missing-include" | "missing-input" | "missing-listing" | "missing-verbatim-input" | "missing-fancyverb-input" | "missing-image" | "missing-package" | "missing-class" | "missing-bibliography-style" | "missing-bibliography-database"))
+            {
+                let fixes = if diagnostic.code
+                    == Some(NumberOrString::String("missing-image".into()))
+                {
+                    crate::image_fixes::fixes(workspace, root, uri, diagnostic, &mut comparisons)
+                } else {
+                    crate::file_fixes::fixes(
+                        workspace,
+                        root,
+                        uri,
+                        diagnostic,
+                        invocation_signatures,
+                        &mut comparisons,
+                    )
+                };
+                for fix in fixes {
+                    if seen.insert((
+                        diagnostic.range.start,
+                        diagnostic.range.end,
+                        fix.edit.new_text.clone(),
+                    )) {
+                        result.push(fix);
+                        if result.len() >= 256 {
+                            return result;
+                        }
+                    }
+                }
+                continue;
+            }
             if diagnostic.code == Some(NumberOrString::String("mismatched-environment-end".into()))
             {
                 if let Some(fix) = closing_environment_fix(
