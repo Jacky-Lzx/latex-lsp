@@ -2065,12 +2065,26 @@ impl MissingBibliographyKind {
         }
     }
 
+    fn matches(self, diagnostic: &Diagnostic) -> bool {
+        diagnostic.code == Some(NumberOrString::String(self.code().into()))
+            && (diagnostic.severity == Some(DiagnosticSeverity::ERROR)
+                || matches!(self, Self::Database)
+                    && diagnostic.severity == Some(DiagnosticSeverity::WARNING)
+                    && diagnostic
+                        .message
+                        .starts_with("Latexmk: Bibliography database not found: "))
+    }
+
     fn name(self, message: &str) -> Option<&str> {
         let (prefix, suffix) = match self {
             Self::Style => ("BibTeX: I couldn't open style file ", ".bst"),
             Self::Database => ("BibTeX: I couldn't open database file ", ".bib"),
         };
-        let name = message.strip_prefix(prefix)?;
+        let name = message.strip_prefix(prefix).or_else(|| {
+            matches!(self, Self::Database)
+                .then(|| message.strip_prefix("Latexmk: Bibliography database not found: "))
+                .flatten()
+        })?;
         let stem = name.strip_suffix(suffix)?;
         (!stem.is_empty()
             && crate::syntax::is_literal_file_path(name)
@@ -2114,10 +2128,7 @@ fn locate_missing_bibliography_files(
     let requested: BTreeSet<_> = diagnostics
         .values()
         .flatten()
-        .filter(|item| {
-            item.code == Some(NumberOrString::String(kind.code().into()))
-                && item.severity == Some(DiagnosticSeverity::ERROR)
-        })
+        .filter(|item| kind.matches(item))
         .filter_map(|item| kind.name(&item.message).map(str::to_owned))
         .collect();
     if requested.is_empty() || requested.len() > 64 {
@@ -2220,9 +2231,7 @@ fn locate_missing_bibliography_files(
     let mut relocated = Vec::new();
     for entries in diagnostics.values_mut() {
         entries.retain(|item| {
-            if item.code != Some(NumberOrString::String(kind.code().into()))
-                || item.severity != Some(DiagnosticSeverity::ERROR)
-            {
+            if !kind.matches(item) {
                 return true;
             }
             let Some(name) = kind.name(&item.message) else {
@@ -2258,6 +2267,111 @@ fn locate_missing_bibliography_files(
     for (uri, item) in relocated {
         diagnostics.entry(uri).or_default().push(item);
     }
+}
+
+/// latexmk can skip BibTeX when a database is absent, even with a successful
+/// exit and a prebuilt .bbl. Read only its final log-inspection block, so TeX
+/// messages and earlier passes cannot revive an already repaired failure.
+pub(crate) fn parse_latexmk_missing_databases(
+    root: &Path,
+    log_path: &Path,
+    output: &str,
+) -> BTreeMap<Url, Vec<Diagnostic>> {
+    let mut result = BTreeMap::new();
+    if crate::output::truncated(output) {
+        return result;
+    }
+    let Ok(expected) = log_path.canonicalize() else {
+        return result;
+    };
+    let parent = root.parent().unwrap_or_else(|| Path::new("."));
+    let lines: Vec<_> = output.lines().collect();
+    let Some(start) = lines.iter().rposition(|line| {
+        line.strip_prefix("Latexmk: Getting log file '")
+            .and_then(|name| name.strip_suffix('\''))
+            .is_some_and(|name| {
+                parent
+                    .join(name)
+                    .canonicalize()
+                    .is_ok_and(|path| path == expected)
+            })
+    }) else {
+        return result;
+    };
+    let tail = &lines[start + 1..];
+    let end = tail
+        .iter()
+        .position(|line| {
+            line.starts_with("Latexmk: applying rule ")
+                || line.starts_with("Running '")
+                || line.starts_with("Latexmk: Getting log file ")
+        })
+        .unwrap_or(tail.len());
+    let driver = &tail[..end];
+    let Some(header) = driver
+        .iter()
+        .rposition(|line| *line == "Latexmk: Found bibliography file(s):")
+    else {
+        return result;
+    };
+    let mut index = header + 1;
+    let mut found = BTreeSet::new();
+    while let Some(name) = driver.get(index).and_then(|line| line.strip_prefix("  ")) {
+        if found.len() == 4096 || name.len() > 8192 {
+            return result;
+        }
+        found.insert(name);
+        index += 1;
+    }
+    if found.is_empty() || driver.get(index) != Some(&"Bib file(s) not found in search path:") {
+        return result;
+    }
+    index += 1;
+    let mut missing = BTreeSet::new();
+    while let Some(name) = driver.get(index).and_then(|line| line.strip_prefix("  ")) {
+        let message = format!("Latexmk: Bibliography database not found: {name}");
+        if missing.len() == 64
+            || name.len() > 8192
+            || !found.contains(name)
+            || missing_bibliography_database_name(&message).is_none()
+        {
+            return result;
+        }
+        missing.insert(name);
+        index += 1;
+    }
+    // A process can stop midway through an otherwise literal filename. A
+    // following driver event confirms that the entire list was printed.
+    if !tail
+        .iter()
+        .skip(index)
+        .take(16)
+        .find(|line| !line.trim().is_empty())
+        .is_some_and(|line| line.starts_with("Latexmk:") || line.starts_with("Running '"))
+    {
+        return result;
+    }
+    for name in missing {
+        let message = format!("Latexmk: Bibliography database not found: {name}");
+        emit(
+            &mut result,
+            root,
+            1,
+            message.clone(),
+            DiagnosticSeverity::WARNING,
+        );
+        if let Ok(uri) = Url::from_file_path(root) {
+            if let Some(entries) = result.get_mut(&uri) {
+                for item in entries.iter_mut().filter(|item| item.message == message) {
+                    item.code = Some(NumberOrString::String(
+                        "missing-bibliography-database".into(),
+                    ));
+                    item.data = Some(serde_json::json!({"file":name,"unresolvedSource":true}));
+                }
+            }
+        }
+    }
+    result
 }
 
 pub(crate) fn parse_bibliography_in(
@@ -5532,5 +5646,162 @@ mod bibliography_database_locations {
             assert!(!unresolved_location(find(precise)));
             assert!(unresolved_location(find(unresolved)));
         }
+    }
+}
+
+#[cfg(test)]
+mod latexmk_database_warnings {
+    use super::*;
+
+    fn section(found: &[&str], missing: &[&str]) -> String {
+        let mut output = "Latexmk: Found bibliography file(s):\n".to_string();
+        for name in found {
+            output.push_str(&format!("  {name}\n"));
+        }
+        if !missing.is_empty() {
+            output.push_str("Bib file(s) not found in search path:\n");
+            for name in missing {
+                output.push_str(&format!("  {name}\n"));
+            }
+        }
+        output.push_str("Latexmk: All targets are up-to-date\n");
+        output
+    }
+    fn setup() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("main.tex");
+        let log = directory.path().join("out (local)");
+        std::fs::create_dir(&log).unwrap();
+        let log = log.join("main's.log");
+        std::fs::write(
+            &root,
+            "% 😀 before\r\n\\bibliography{first, re ffs.bib,second}\r\n",
+        )
+        .unwrap();
+        std::fs::write(&log, "Current TeX log.\n").unwrap();
+        (directory, root, log)
+    }
+    fn inspect(log: &str, tail: &str) -> String {
+        format!("Transcript written on {log}.\nLatexmk: Getting log file '{log}'\nLatexmk: Examining '{log}'\n{tail}")
+    }
+
+    #[test]
+    fn final_driver_lists_create_bounded_warnings_and_support_exact_source_lookup() {
+        let (_directory, root, log) = setup();
+        let tail = section(
+            &["first.bib", "reffs.bib", "second.bib"],
+            &["reffs.bib", "reffs.bib"],
+        );
+        let with_blank_line = tail.replace("\nLatexmk: All targets", "\n\nLatexmk: All targets");
+        assert!(!parse_latexmk_missing_databases(
+            &root,
+            &log,
+            &inspect("out (local)/main's.log", &with_blank_line)
+        )
+        .is_empty());
+        for printed in [
+            "out (local)/main's.log".to_string(),
+            log.display().to_string(),
+        ] {
+            let mut diagnostics =
+                parse_latexmk_missing_databases(&root, &log, &inspect(&printed, &tail));
+            let uri = Url::from_file_path(&root).unwrap();
+            assert_eq!(diagnostics[&uri].len(), 1);
+            let item = &diagnostics[&uri][0];
+            assert_eq!(
+                item.message,
+                "Latexmk: Bibliography database not found: reffs.bib"
+            );
+            assert_eq!(item.severity, Some(DiagnosticSeverity::WARNING));
+            assert!(unresolved_location(item));
+            locate_missing_bibliography_databases(&BTreeSet::from([uri.clone()]), &mut diagnostics);
+            let item = &diagnostics[&uri][0];
+            let source = std::fs::read_to_string(&root).unwrap();
+            let start = source.find("re ffs.bib").unwrap();
+            assert_eq!(
+                item.range,
+                Text::new(source).range(start, start + "re ffs.bib".len())
+            );
+            assert_eq!(
+                item.data,
+                Some(serde_json::json!({"file":"reffs.bib","bibliographyCommand":"bibliography"}))
+            );
+        }
+    }
+
+    #[test]
+    fn earlier_passes_user_messages_other_jobs_and_child_tool_output_do_not_supply_warnings() {
+        let (_directory, root, log) = setup();
+        let missing = section(&["reffs.bib"], &["reffs.bib"]);
+        let recovered = section(&["./refs.bib"], &[]);
+        let marker = inspect("out (local)/main's.log", "");
+        for output in [
+            missing.clone(),
+            format!("{marker}Latexmk: Found bibliography file(s):\n  reffs.bib\nBib file(s) not found in search path:\n  reffs.bib"),
+            format!("{marker}Latexmk: Found bibliography file(s):\n  reffs.bib\nBib file(s) not found in search path:\n  reffs.bib\n"),
+            format!("{marker}Latexmk: Found bibliography file(s):\n  reffs.bib\nBib file(s) not found in search path:\n  reffs.bib\nUnexpected tool output\n"),
+            format!("{missing}{marker}Latexmk: All targets are up-to-date\n"),
+            format!("{marker}{missing}{marker}{recovered}"),
+            format!("{marker}{missing}{recovered}"),
+            inspect("other.log",&missing),
+            format!("{marker}Latexmk: Getting log file 'other.log'\n{missing}"),
+            format!("{marker}Latexmk: applying rule 'bibtex main'...\n{missing}"),
+            format!("{marker}Running 'unrelated compiler'\n{missing}"),
+            format!("{marker}Latexmk: Bibliography file(s) from .bcf file:\n  reffs.bib\nBib file(s) not found in search path:\n  reffs.bib\n"),
+            format!("{marker}Bib file(s) not found in search path:\n  reffs.bib\n"),
+        ] {
+            assert!(parse_latexmk_missing_databases(&root,&log,&output).is_empty(),"{output}");
+        }
+    }
+
+    #[test]
+    fn incomplete_invalid_or_unconfirmed_driver_names_do_not_create_partial_warnings() {
+        let (_directory, root, log) = setup();
+        for (found, missing) in [
+            (vec!["reffs.bib"], vec!["other.bib"]),
+            (
+                vec!["reffs.bib", "wrong.tex"],
+                vec!["reffs.bib", "wrong.tex"],
+            ),
+            (
+                vec!["reffs.bib", "spaced name.bib"],
+                vec!["reffs.bib", "spaced name.bib"],
+            ),
+            (
+                vec!["reffs.bib", r"\chosen.bib"],
+                vec!["reffs.bib", r"\chosen.bib"],
+            ),
+            (vec![".bib"], vec![".bib"]),
+            (vec![], vec!["reffs.bib"]),
+        ] {
+            let output = inspect("out (local)/main's.log", &section(&found, &missing));
+            assert!(
+                parse_latexmk_missing_databases(&root, &log, &output).is_empty(),
+                "{output}"
+            );
+        }
+        let output = inspect(
+            "out (local)/main's.log",
+            &section(&["reffs.bib"], &["reffs.bib"]),
+        );
+        let truncated = format!("{output}{}\n", crate::output::TRUNCATED);
+        assert!(parse_latexmk_missing_databases(&root, &log, &truncated).is_empty());
+        std::fs::remove_file(&log).unwrap();
+        assert!(parse_latexmk_missing_databases(&root, &log, &output).is_empty());
+    }
+
+    #[test]
+    fn driver_database_lists_reject_excessive_counts_and_names() {
+        let (_directory, root, log) = setup();
+        for (count, limit) in [(65, 64), (4097, 0)] {
+            let names: Vec<_> = (0..count).map(|n| format!("refs{n}.bib")).collect();
+            let found: Vec<_> = names.iter().map(String::as_str).collect();
+            let missing = if limit == 0 { &found[..1] } else { &found[..] };
+            let output = inspect("out (local)/main's.log", &section(&found, missing));
+            assert!(parse_latexmk_missing_databases(&root, &log, &output).is_empty());
+        }
+        let name = format!("{}.bib", "r".repeat(8193));
+        let output = inspect("out (local)/main's.log", &section(&[&name], &[&name]));
+        assert!(parse_latexmk_missing_databases(&root, &log, &output).is_empty());
     }
 }

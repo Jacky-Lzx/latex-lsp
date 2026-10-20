@@ -10018,3 +10018,130 @@ exit 1
         }
     }
 }
+
+#[test]
+#[cfg(unix)]
+fn default_latexmk_missing_database_warnings_offer_fixes_without_hiding_native_errors() {
+    use std::os::unix::fs::PermissionsExt;
+    for (program, native) in [
+        ("latexmk", false),
+        ("latexmk", true),
+        ("other-driver", false),
+    ] {
+        for pull in [false, true] {
+            let script = format!(
+                r#"printf '%%PDF-1.4\n' > "$1/main.pdf"
+printf '(./main.tex\n(./settings.tex)\n)\n' > "$1/main.log"
+printf 'PWD %s\nINPUT %s/main.tex\nINPUT %s/settings.tex\n' "$PWD" "$PWD" "$PWD" > "$1/main.fls"
+{native_log}
+printf "Latexmk: Getting log file '%s/main.log'\nLatexmk: Found bibliography file(s):\n  first.bib\n  reffs.bib\nBib file(s) not found in search path:\n  reffs.bib\nLatexmk: All targets are up-to-date\n" "$1"
+exit {exit}
+"#,
+                native_log = if native {
+                    "printf \"I couldn't open database file reffs.bib\\n---line 3 of file main.aux\\n\" > \"$1/main.blg\""
+                } else {
+                    ""
+                },
+                exit = if native { 1 } else { 0 }
+            );
+            let mut capabilities = json!({"workspace":{"workspaceEdit":{"documentChanges":true}},"textDocument":{"codeAction":{"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix"]}}}}});
+            if pull {
+                capabilities["textDocument"]["diagnostic"] = json!({});
+            }
+            let (mut server, directory, main) =
+                fake_build_server_capabilities(&script, false, capabilities);
+            let root = directory.path();
+            let executable = root.join(program);
+            std::fs::write(&executable, script).unwrap();
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+            // The configured executable is invoked directly.
+            let bytes = std::fs::read(&executable).unwrap();
+            std::fs::write(
+                &executable,
+                [b"#!/bin/sh\n".as_slice(), bytes.as_slice()].concat(),
+            )
+            .unwrap();
+            std::fs::write(root.join("refs.bib"), "@book{one,title={Title}}\n").unwrap();
+            let settings = Url::from_file_path(root.join("settings.tex")).unwrap();
+            let source = "\\bibliography{first,% before\r\n re ffs.bib% after\r\n}\r\n";
+            std::fs::write(settings.to_file_path().unwrap(), source).unwrap();
+            let main_source = "\\documentclass{article}\n\\input{settings}\n";
+            std::fs::write(main.to_file_path().unwrap(), main_source).unwrap();
+            server.notify("textDocument/didChange",json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":main_source}]}));
+            server.notify("textDocument/didOpen",json!({"textDocument":{"uri":settings,"languageId":"latex","version":7,"text":source}}));
+            server.notify(
+                "workspace/didChangeConfiguration",
+                json!({"settings":{"build":{"executable":executable,"arguments":["%o","%f"]}}}),
+            );
+            server.request(
+                2,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            let finished = server.until(|message| message["method"] == "latex/buildFinished");
+            assert_eq!(
+                finished["params"]["status"],
+                if native { "error" } else { "success" },
+                "{finished}"
+            );
+            if program == "other-driver" {
+                assert_eq!(finished["params"]["diagnosticsCount"], 0, "{finished}");
+            } else {
+                assert_eq!(finished["params"]["diagnosticsCount"], 1, "{finished}");
+                assert_eq!(
+                    finished["params"]["errorsCount"],
+                    if native { 1 } else { 0 }
+                );
+                assert_eq!(
+                    finished["params"]["warningsCount"],
+                    if native { 0 } else { 1 }
+                );
+                let diagnostics = if pull {
+                    server.request(
+                        3,
+                        "textDocument/diagnostic",
+                        json!({"textDocument":{"uri":settings}}),
+                    )["items"]
+                        .clone()
+                } else {
+                    server.until(|message| {
+                        message["method"] == "textDocument/publishDiagnostics"
+                            && message["params"]["uri"] == settings.as_str()
+                            && message["params"]["diagnostics"]
+                                .as_array()
+                                .is_some_and(|items| {
+                                    items
+                                        .iter()
+                                        .any(|item| item["code"] == "missing-bibliography-database")
+                                })
+                    })["params"]["diagnostics"]
+                        .clone()
+                };
+                let diagnostic = diagnostics
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|item| item["code"] == "missing-bibliography-database")
+                    .unwrap();
+                assert_eq!(diagnostic["severity"], if native { 1 } else { 2 });
+                assert_eq!(
+                    diagnostic["data"],
+                    json!({"file":"reffs.bib","bibliographyCommand":"bibliography"})
+                );
+                let actions=server.request(4,"textDocument/codeAction",json!({"textDocument":{"uri":settings},"range":diagnostic["range"],"context":{"diagnostics":[diagnostic],"only":["quickfix"]}}));
+                assert_eq!(actions.as_array().unwrap().len(), 1, "{actions}");
+                assert_eq!(
+                    actions[0]["edit"]["documentChanges"][0]["textDocument"],
+                    json!({"uri":settings,"version":7})
+                );
+                assert_eq!(
+                    actions[0]["edit"]["documentChanges"][0]["edits"][0]["newText"],
+                    "refs.bib"
+                );
+            }
+            server.request(5, "shutdown", Value::Null);
+            server.notify("exit", Value::Null);
+            server.wait_exit(0);
+        }
+    }
+}

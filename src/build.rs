@@ -1305,6 +1305,32 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool) -> Outcome 
         outcome.bibliography_bindings.clear();
         outcome.bibliography_unresolved_bindings.clear();
     }
+    if Path::new(&config.executable)
+        .file_stem()
+        .and_then(|name| name.to_str())
+        == Some("latexmk")
+    {
+        for (uri, diagnostics) in
+            build_log::parse_latexmk_missing_databases(root, &log_path, &output)
+        {
+            for diagnostic in diagnostics {
+                // An actual BibTeX error is more useful than the driver's
+                // warning about the same missing database.
+                let duplicate = outcome.diagnostics.values().flatten().any(|item| {
+                    item.code == diagnostic.code
+                        && item.data.as_ref().and_then(|data| data.get("file"))
+                            == diagnostic.data.as_ref().and_then(|data| data.get("file"))
+                });
+                if !duplicate {
+                    outcome
+                        .diagnostics
+                        .entry(uri.clone())
+                        .or_default()
+                        .push(diagnostic);
+                }
+            }
+        }
+    }
     if outcome.status == "success"
         && outcome
             .diagnostics

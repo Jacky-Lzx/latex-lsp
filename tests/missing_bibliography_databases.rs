@@ -290,3 +290,81 @@ fn database_candidates_are_bounded_and_cannot_introduce_commas_spaces_or_wrong_e
         assert!(actions(&workspace, &main, &mismatch).is_empty());
     }
 }
+
+#[test]
+#[ignore = "requires latexmk, pdflatex, xelatex and BibTeX"]
+fn default_latexmk_preserves_prebuilt_bibliographies_and_reports_missing_databases_as_warnings() {
+    for engine in ["pdflatex", "xelatex"] {
+        for suffix in ["", ".bib"] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let output = root.join("build/latex-lsp");
+            std::fs::create_dir_all(&output).unwrap();
+            let source = format!("\\documentclass{{article}}\n\\begin{{document}}\n\\cite{{one}}\\bibliographystyle{{plain}}\\bibliography{{reffs{suffix}}}\n\\end{{document}}\n");
+            std::fs::write(root.join("main.tex"), &source).unwrap();
+            let bbl =
+                "\\begin{thebibliography}{1}\n\\bibitem{one}Expected.\n\\end{thebibliography}\n";
+            std::fs::write(output.join("main.bbl"), bbl).unwrap();
+            let config = latex_lsp::config::BuildConfig {
+                engine: latex_lsp::config::Engine::from_program(engine),
+                ..Default::default()
+            };
+            let run =
+                || latex_lsp::build::run(&root.join("main.tex"), &config, &Default::default());
+            let outcome = run();
+            assert_eq!(outcome.status, "success", "{}", outcome.output);
+            assert!(outcome.pdf.as_ref().is_some_and(|pdf| pdf.is_file()));
+            let missing: Vec<_> = outcome
+                .diagnostics
+                .values()
+                .flatten()
+                .filter(|item| {
+                    item.code
+                        == Some(NumberOrString::String(
+                            "missing-bibliography-database".into(),
+                        ))
+                })
+                .collect();
+            assert_eq!(
+                missing.len(),
+                1,
+                "{:?}\n{}",
+                outcome.diagnostics,
+                outcome.output
+            );
+            assert_eq!(missing[0].severity, Some(DiagnosticSeverity::WARNING));
+            assert_eq!(
+                missing[0].data,
+                Some(serde_json::json!({"file":"reffs.bib","unresolvedSource":true}))
+            );
+            assert_eq!(
+                std::fs::read_to_string(output.join("main.bbl")).unwrap(),
+                bbl
+            );
+            assert!(!output.join("main.blg").exists());
+            let outcome = run();
+            assert_eq!(outcome.status, "success", "{}", outcome.output);
+            assert!(outcome.output.contains("Nothing to do"));
+            assert!(!outcome.diagnostics.values().flatten().any(|item| item.code
+                == Some(NumberOrString::String(
+                    "missing-bibliography-database".into()
+                ))));
+            std::fs::write(
+                root.join("refs.bib"),
+                "@book{one,title={Expected.},author={Author},publisher={Publisher},year={2026}}\n",
+            )
+            .unwrap();
+            std::fs::write(root.join("main.tex"), source.replace("reffs", "refs")).unwrap();
+            let outcome = run();
+            assert_eq!(outcome.status, "success", "{}", outcome.output);
+            assert!(outcome.diagnostics.is_empty(), "{:?}", outcome.diagnostics);
+            assert!(outcome
+                .bibliography_inputs
+                .as_ref()
+                .is_some_and(|inputs| inputs.contains(&uri(root, "refs.bib"))));
+            assert!(std::fs::read_to_string(output.join("main.bbl"))
+                .unwrap()
+                .contains("Expected"));
+        }
+    }
+}
