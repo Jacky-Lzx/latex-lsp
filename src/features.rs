@@ -567,6 +567,13 @@ fn argument_span(doc: &Document, command: &Command, offset: usize) -> Option<Spa
         }
         return Some(start + 1..offset);
     }
+    if command.name == "bibliographystyle" {
+        return syntax::active_bibliography_style_prefix(
+            source,
+            syntax::file_name_argument_start(source, &command.name, command.span.end)?,
+            offset,
+        );
+    }
     if syntax::file_list(&command.name) || syntax::loader_extension(&command.name) == Some("cls") {
         return syntax::active_file_prefix(
             source,
@@ -645,12 +652,6 @@ fn argument_span(doc: &Document, command: &Command, offset: usize) -> Option<Spa
     let value = source.get(at..offset)?.strip_prefix('{')?;
     if value.contains(['{', '}', '%'])
         || value.contains('\n') && !syntax::file_name_ignores_spaces(&command.name)
-        || command.name == "bibliographystyle"
-            && (value.contains([' ', '\t', '\r', '\n'])
-                || command
-                    .argument
-                    .as_ref()
-                    .is_some_and(|argument| argument.value.contains([' ', '\t', '\r', '\n'])))
     {
         return None;
     }

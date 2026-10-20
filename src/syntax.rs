@@ -661,6 +661,67 @@ fn literal_file_span(source: &str, segment: Range<usize>, compact: bool) -> Opti
     is_literal_file_path(&literal).then_some(span)
 }
 
+/// BibTeX rejects spaces written to `bibstyle`. Only indentation after a
+/// comment is ignored by TeX: trimming ordinary leading/trailing whitespace
+/// would create a link to a style the compiler cannot use. Return an empty
+/// span for an empty argument so completion can insert a name there.
+fn bibliography_style_span(source: &str, span: Range<usize>) -> Option<Range<usize>> {
+    let bytes = source.as_bytes();
+    let mut name: Option<Range<usize>> = None;
+    let mut new_line = false;
+    let mut continuous = true;
+    let mut at = span.start;
+    while at < span.end {
+        match bytes[at] {
+            b'%' => {
+                while at < span.end && bytes[at] != b'\n' {
+                    at += 1;
+                }
+                if at < span.end {
+                    at += 1;
+                }
+                new_line = true;
+                continuous = false;
+            }
+            b' ' | b'\t' if new_line => at += 1,
+            b' ' | b'\t' | b'\r' | b'\n' => return None,
+            _ => {
+                if name.is_some() && !continuous {
+                    return None;
+                }
+                let end = at + source[at..].chars().next()?.len_utf8();
+                name.get_or_insert(at..end).end = end;
+                new_line = false;
+                continuous = true;
+                at = end;
+            }
+        }
+    }
+    let name = name.unwrap_or(span.start..span.start);
+    (name.is_empty() || is_literal_file_path(&source[name.clone()])).then_some(name)
+}
+
+pub(crate) fn active_bibliography_style_prefix(
+    source: &str,
+    start: usize,
+    cursor: usize,
+) -> Option<Range<usize>> {
+    if source.as_bytes().get(start) != Some(&b'{') {
+        return None;
+    }
+    let span = group(source, start, b'{', b'}')
+        .map_or(start + 1..source.len(), |(argument, _)| argument.span);
+    if cursor < span.start || cursor > span.end {
+        return None;
+    }
+    let name = bibliography_style_span(source, span)?;
+    if name.is_empty() {
+        Some(cursor..cursor)
+    } else {
+        (name.start <= cursor && cursor <= name.end).then_some(name.start..cursor)
+    }
+}
+
 /// Package and class loaders accept one optional options argument; bibliography
 /// and chapter-selection lists start directly with their mandatory group.
 pub(crate) fn file_name_argument_start(
@@ -902,13 +963,19 @@ pub(crate) fn file_argument<'a>(
         // into a different forwarding declaration.
         (is_literal_file_path(&argument.value) && !argument.value.chars().any(char::is_whitespace))
             .then_some(std::borrow::Cow::Owned(argument))
-    } else if loader_extension(&command.name) == Some("cls") {
+    } else if loader_extension(&command.name) == Some("cls") || command.name == "bibliographystyle"
+    {
         let start = file_name_argument_start(source, &command.name, command.span.end)?;
         let argument = command
             .argument
             .as_ref()
             .filter(|argument| argument.outer_span.start == start)?;
-        let span = literal_file_span(source, argument.span.clone(), false)?;
+        let span = if command.name == "bibliographystyle" {
+            bibliography_style_span(source, argument.span.clone())
+                .filter(|span| !span.is_empty())?
+        } else {
+            literal_file_span(source, argument.span.clone(), false)?
+        };
         Some(std::borrow::Cow::Owned(Argument {
             value: source[span.clone()].into(),
             span,
@@ -1605,7 +1672,7 @@ impl Syntax {
                     } else if is_citation(name) {
                         arg_start = citation_argument_start(source, name, command_end)
                             .unwrap_or(source.len());
-                    } else if loader_extension(name).is_some() {
+                    } else if loader_extension(name).is_some() || name == "bibliographystyle" {
                         arg_start = file_name_argument_start(source, name, command_end)
                             .unwrap_or(source.len());
                     } else if name == "nobibliography" {
