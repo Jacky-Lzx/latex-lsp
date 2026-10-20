@@ -8,7 +8,7 @@ use tower_lsp::lsp_types::Url;
 
 const COMMANDS: [&str; 2] = ["lstinputlisting", "verbatiminput"];
 
-fn safe_document(source: &str, parsed: &syntax::Syntax, name: &str) -> bool {
+pub(crate) fn safe_syntax(source: &str, parsed: &syntax::Syntax, name: &str) -> bool {
     match name {
         "lstinputlisting" => listings::safe_syntax(source, parsed),
         "verbatiminput" => !parsed.definitions.iter().any(|definition| {
@@ -25,7 +25,7 @@ fn safe_project(workspace: &Workspace, sources: &BTreeSet<Url>, name: &str) -> b
     sources
         .iter()
         .filter_map(|uri| workspace.documents.get(uri))
-        .all(|doc| safe_document(&doc.text.source, &doc.syntax, name))
+        .all(|doc| safe_syntax(&doc.text.source, &doc.syntax, name))
 }
 
 fn safe_call(source: &str, command: &syntax::Command) -> bool {

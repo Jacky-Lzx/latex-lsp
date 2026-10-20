@@ -279,39 +279,64 @@ fn box_range(text: &Text, message: &str) -> Option<Range> {
     ))
 }
 
-fn missing_include_file(path: &Path, lines: &[&str], index: &mut usize) -> Option<String> {
+fn missing_reported_file(
+    path: &Path,
+    lines: &[&str],
+    index: &mut usize,
+    command_name: &str,
+) -> Option<String> {
     let line = lines[*index];
     let text = Text::new(std::fs::read_to_string(path).ok()?);
     let syntax = crate::syntax::Syntax::latex(&text);
+    if command_name == "verbatiminput"
+        && !crate::code_inputs::safe_syntax(&text.source, &syntax, command_name)
+    {
+        return None;
+    }
     let mut candidates = Vec::new();
+    let mut matched = None;
     for command in syntax
         .commands
         .iter()
-        .filter(|command| command.name == "include")
+        .filter(|command| command.name == command_name)
         .take(1024)
     {
-        let Some(argument) = &command.argument else {
+        let Some(argument) = crate::syntax::file_argument(&text.source, command) else {
             continue;
         };
-        let value = argument.value.trim();
+        let value = if command_name == "include" {
+            argument.value.trim()
+        } else {
+            argument.value.as_str()
+        };
         if value.is_empty() || value.contains(['\\', '{', '}', '%', '#', '$', '\r', '\n']) {
             continue;
         }
-        for name in crate::syntax::file_lookup_names("include", value) {
-            for message in [format!("No file {name}."), format!("No file \"{name}\".")] {
+        let names = if command_name == "include" {
+            crate::syntax::file_lookup_names(command_name, value).collect::<Vec<_>>()
+        } else {
+            vec![Cow::Borrowed(value)]
+        };
+        for name in names {
+            let mut messages = vec![format!("No file {name}.")];
+            if command_name == "include" {
+                messages.push(format!("No file \"{name}\"."));
+            }
+            for message in messages {
                 if message.len() <= 8192 && message.starts_with(line) {
                     if message == line {
-                        return Some(name.into_owned());
+                        matched = Some((name.to_string(), *index));
+                    } else {
+                        candidates.push((message, name.to_string()));
                     }
-                    candidates.push((message, name.to_string()));
                 }
             }
         }
     }
-    // Join only prefixes of a known static include. This avoids swallowing
-    // adjacent diagnostics or inventing chapter warnings for optional files.
+    // Join only prefixes of a known literal call. This avoids swallowing
+    // adjacent diagnostics or interpreting ordinary optional-file messages.
     if candidates.is_empty() {
-        return None;
+        return matched.map(|(name, _)| name);
     }
     let mut joined = line.to_owned();
     for (next_index, next) in lines.iter().enumerate().skip(*index + 1).take(64) {
@@ -321,14 +346,63 @@ fn missing_include_file(path: &Path, lines: &[&str], index: &mut usize) -> Optio
         joined.push_str(next);
         candidates.retain(|(message, _)| message.starts_with(&joined));
         if let Some((_, name)) = candidates.iter().find(|(message, _)| message == &joined) {
-            *index = next_index;
-            return Some(name.clone());
+            matched = Some((name.clone(), next_index));
+            candidates.retain(|(message, _)| message != &joined);
         }
         if candidates.is_empty() {
             break;
         }
     }
-    None
+    matched.map(|(name, last)| {
+        *index = last;
+        name
+    })
+}
+
+pub(crate) fn missing_verbatim_name(message: &str) -> Option<&str> {
+    message
+        .strip_prefix("Verbatim input file `")?
+        .strip_suffix("` not found")
+}
+
+fn emit_missing_verbatim(result: &mut BTreeMap<Url, Vec<Diagnostic>>, path: &Path, name: &str) {
+    let (Ok(uri), Ok(source)) = (Url::from_file_path(path), std::fs::read_to_string(path)) else {
+        return;
+    };
+    let text = Text::new(source);
+    let parsed = crate::syntax::Syntax::latex(&text);
+    if !crate::code_inputs::safe_syntax(&text.source, &parsed, "verbatiminput") {
+        return;
+    }
+    let message = format!("Verbatim input file `{name}` not found");
+    for command in parsed
+        .commands
+        .iter()
+        .filter(|command| command.name == "verbatiminput")
+        .take(1024)
+    {
+        let Some(argument) = crate::syntax::file_argument(&text.source, command)
+            .filter(|argument| argument.value == name)
+        else {
+            continue;
+        };
+        let range = text.range(argument.span.start, argument.span.end);
+        let items = result.entry(uri.clone()).or_default();
+        if !items
+            .iter()
+            .any(|item| item.range == range && item.message == message)
+        {
+            items.push(Diagnostic {
+                range,
+                severity: Some(DiagnosticSeverity::WARNING),
+                source: Some("latex-build".into()),
+                code: Some(NumberOrString::String("missing-verbatim-input".into())),
+                message: message.clone(),
+                data: Some(serde_json::json!({"file":name})),
+                ..Default::default()
+            });
+        }
+    }
 }
 
 pub(crate) fn missing_include_key(message: &str) -> Option<&str> {
@@ -1986,18 +2060,28 @@ pub(crate) fn parse_with_sources(
             );
         } else if line.starts_with("No file ") {
             let path = current();
-            if let Some(name) = path
-                .confirmed
-                .then(|| missing_include_file(&path.path, &lines, &mut i))
-                .flatten()
-            {
-                emit(
-                    &mut result,
-                    &path.path,
-                    1,
-                    format!("Included file `{name}` not found"),
-                    DiagnosticSeverity::WARNING,
-                );
+            if path.confirmed {
+                // Both commands can print the same text. Match independently
+                // and prefer the complete longest message across families.
+                let mut include_end = i;
+                let include =
+                    missing_reported_file(&path.path, &lines, &mut include_end, "include");
+                let mut verbatim_end = i;
+                let verbatim =
+                    missing_reported_file(&path.path, &lines, &mut verbatim_end, "verbatiminput");
+                i = include_end.max(verbatim_end);
+                if let Some(name) = include.filter(|_| include_end == i) {
+                    emit(
+                        &mut result,
+                        &path.path,
+                        1,
+                        format!("Included file `{name}` not found"),
+                        DiagnosticSeverity::WARNING,
+                    );
+                }
+                if let Some(name) = verbatim.filter(|_| verbatim_end == i) {
+                    emit_missing_verbatim(&mut result, &path.path, &name);
+                }
             }
         } else if line.starts_with("Overfull ") || line.starts_with("Underfull ") {
             let path = current();

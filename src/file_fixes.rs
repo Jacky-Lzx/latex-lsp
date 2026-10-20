@@ -25,6 +25,7 @@ pub(crate) fn fixes(
     let command_name = match code {
         "missing-input" => "input",
         "missing-listing" => "lstinputlisting",
+        "missing-verbatim-input" => "verbatiminput",
         "missing-include" => "include",
         "missing-bibliography-style" => "bibliographystyle",
         "missing-bibliography-database" => {
@@ -62,15 +63,18 @@ pub(crate) fn fixes(
     };
     let loader_extension = syntax::loader_extension(command_name);
     let listing = command_name == "lstinputlisting";
+    let code_input = syntax::code_input_command(command_name);
     let database = matches!(command_name, "bibliography" | "nobibliography");
     let extension = loader_extension.unwrap_or(match command_name {
         "bibliographystyle" => "bst",
         "bibliography" | "nobibliography" => "bib",
-        "lstinputlisting" => "",
+        "lstinputlisting" | "verbatiminput" => "",
         _ => "tex",
     });
     let compact = syntax::file_name_ignores_spaces(command_name);
-    let reported = if listing {
+    let reported = if command_name == "verbatiminput" {
+        build_log::missing_verbatim_name(&diagnostic.message)
+    } else if listing {
         build_log::missing_listing_name(&diagnostic.message)
     } else if command_name == "bibliographystyle" {
         build_log::missing_bibliography_style_name(&diagnostic.message)
@@ -106,7 +110,7 @@ pub(crate) fn fixes(
         .iter()
         .filter(|command| command.name == command_name)
         .find_map(|command| {
-            if listing && !crate::code_inputs::supported(workspace, uri, root, command) {
+            if code_input && !crate::code_inputs::supported(workspace, uri, root, command) {
                 return None;
             }
             let argument = syntax::file_argument(&doc.text.source, command)?;
@@ -133,7 +137,9 @@ pub(crate) fn fixes(
             }
             for span in spans {
                 let value = &doc.text.source[span.clone()];
-                let matches_report = if listing {
+                let matches_report = if command_name == "verbatiminput" {
+                    value == reported
+                } else if listing {
                     crate::listings::missing_report(value) == reported
                 } else if command_name == "bibliographystyle" {
                     format!("{value}.bst") == reported
@@ -170,7 +176,7 @@ pub(crate) fn fixes(
     let lookup = normalized.as_deref().unwrap_or(value);
     let separator = lookup.rfind('/').map_or(0, |index| index + 1);
     let prefix = &lookup[..separator];
-    let original = if listing || loader_extension.is_some() {
+    let original = if code_input || loader_extension.is_some() {
         &lookup[separator..]
     } else {
         lookup[separator..]
@@ -218,7 +224,7 @@ pub(crate) fn fixes(
         let Ok(name) = entry.file_name().into_string() else {
             continue;
         };
-        let Some(stem) = (if listing {
+        let Some(stem) = (if code_input {
             Some(name.as_str())
         } else {
             name.strip_suffix(&format!(".{extension}"))
@@ -252,7 +258,9 @@ pub(crate) fn fixes(
         }
         let replacement = format!(
             "{prefix}{}",
-            if listing || loader_extension.is_none() && lookup.ends_with(&format!(".{extension}")) {
+            if code_input
+                || loader_extension.is_none() && lookup.ends_with(&format!(".{extension}"))
+            {
                 &name
             } else {
                 stem
@@ -278,7 +286,7 @@ pub(crate) fn fixes(
         if candidate.as_ref() != Some(&target) {
             continue;
         }
-        if !listing && (target == source || target == main) {
+        if !code_input && (target == source || target == main) {
             continue;
         }
         candidates.push((score, replacement, target));
@@ -287,7 +295,7 @@ pub(crate) fn fixes(
     let mut fixes = Vec::new();
     // Check the nearest candidates only; retain a bound on dependency traversals.
     for (_, replacement, target) in candidates.into_iter().take(32) {
-        if !listing {
+        if !code_input {
             let dependencies = workspace.project_documents_from(&target, root);
             if dependencies.contains(uri)
                 || dependencies.contains(root)
@@ -312,7 +320,7 @@ pub(crate) fn fixes(
                 "Replace with {} file `{replacement}`",
                 if command_name == "input" {
                     "input"
-                } else if listing {
+                } else if code_input {
                     "code"
                 } else if loader_extension == Some("sty") {
                     "package"
