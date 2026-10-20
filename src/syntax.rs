@@ -1750,7 +1750,8 @@ impl Syntax {
                             && bytes.get(skip_space(source, command_end)) == Some(&b'{');
                     let parsed = if name == "Verb" {
                         None
-                    } else if name == "SaveVerb" || crate::fancyvrb::is_use(name) {
+                    } else if crate::fancyvrb::is_inline_save(name) || crate::fancyvrb::is_use(name)
+                    {
                         crate::fancyvrb::name_argument(source, arg_start)
                     } else {
                         group_mode(source, arg_start, b'{', b'}', !url_argument, true)
@@ -1776,14 +1777,14 @@ impl Syntax {
                         span: start..command_end,
                         argument,
                     };
-                    if name == "SaveVerb" || crate::fancyvrb::is_use(name) {
+                    if crate::fancyvrb::is_inline_save(name) || crate::fancyvrb::is_use(name) {
                         if let Some((argument, end)) = &parsed {
                             literal_arguments
                                 .insert(argument.outer_span.start, (argument.span.clone(), *end));
                         }
                     }
                     if crate::fancyvrb::is_inline(name) {
-                        let start = if name == "SaveVerb" {
+                        let start = if crate::fancyvrb::is_inline_save(name) {
                             parsed.as_ref().map(|(_, end)| *end)
                         } else {
                             Some(arg_start)

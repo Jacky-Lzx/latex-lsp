@@ -10,12 +10,16 @@ pub(crate) fn is_input(name: &str) -> bool {
 pub(crate) fn is_use(name: &str) -> bool {
     matches!(
         name,
-        "UseVerb" | "UseVerbatim" | "LUseVerbatim" | "BUseVerbatim"
+        "UseVerb" | "UseVerbatim" | "LUseVerbatim" | "BUseVerbatim" | "UseMVerb" | "pUseMVerb"
     )
 }
 
+pub(crate) fn is_inline_save(name: &str) -> bool {
+    matches!(name, "SaveVerb" | "SaveGVerb")
+}
+
 pub(crate) fn is_inline(name: &str) -> bool {
-    matches!(name, "Verb" | "SaveVerb")
+    name == "Verb" || is_inline_save(name)
 }
 
 /// Saved names are ordinary TeX arguments, including a single unbraced token.

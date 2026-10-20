@@ -48,7 +48,7 @@ fn literal_bodies_do_not_import_symbols_files_or_rename_edits() {
         r"\label{kept}\label{phantom}\newcommand{\hidden}{Oops}\say",
         r"\input{chapter}\input{fake}\ref{kept}\begin{unmatched}{% 😀",
     );
-    for command in ["Verb", "SaveVerb"] {
+    for command in ["Verb", "SaveVerb", "SaveGVerb"] {
         for header in [
             "",
             "*",
@@ -58,7 +58,7 @@ fn literal_bodies_do_not_import_symbols_files_or_rename_edits() {
             for delimiter in ['|', '!', 'Q', '§', '😀'] {
                 // The delimiter itself cannot occur in the literal body.
                 let body = body.replace(delimiter, "");
-                let name = if command == "SaveVerb" { "{saved}" } else { "" };
+                let name = if command != "Verb" { "{saved}" } else { "" };
                 let before = "\\documentclass{article}\\newcommand{\\say}{Text}\\label{kept}\r\n";
                 let after = "\\input{chapter}\\say\\ref{kept}\\ref{phantom}\\ref{fakelabel}\r\n";
                 let literal = format!("\\{command}{header}{name} {delimiter}{body}{delimiter}");
@@ -197,8 +197,50 @@ fn names_are_data_but_formatting_and_aftersave_commands_are_live() {
 }
 
 #[test]
+fn global_saved_names_are_data_while_moving_use_options_remain_source() {
+    let main = Url::parse("file:///fancy-inline/main.tex").unwrap();
+    for used in ["UseMVerb", "pUseMVerb"] {
+        for name in ["{saved\\detokenize{\\end{fake}}}", " x", "\\slot"] {
+            let body = r"\label{active}\label{phantom}\newcommand{\hidden}{Oops}\input{example}";
+            let source = format!("\\SaveGVerb *[showspaces=true]% name\r\n{name}{{|}}{body}|\\{used} *[formatcom={{\\label{{active}}\\newcommand{{\\visible}}{{Text}}}}]{name}\\ref{{active}}");
+            let mut workspace = Workspace {
+                versioned_edits: true,
+                ..Default::default()
+            };
+            workspace.open(main.clone(), source.clone(), 7);
+            let doc = &workspace.documents[&main];
+            assert!(
+                doc.syntax.diagnostics.is_empty(),
+                "{source}: {:?}",
+                doc.syntax.diagnostics
+            );
+            assert_eq!(doc.syntax.labels.len(), 1, "{source}");
+            assert_eq!(doc.syntax.labels[0].name, "active");
+            assert_eq!(doc.syntax.definitions.len(), 1);
+            assert_eq!(doc.syntax.definitions[0].name, "visible");
+            assert!(workspace.dependencies(&main).is_empty());
+            assert!(!doc.syntax.commands.iter().any(|command| matches!(
+                command.name.as_str(),
+                "slot" | "detokenize" | "end" | "input"
+            )));
+            let at = doc.text.position(source.rfind("active").unwrap());
+            assert_eq!(features::references(&workspace, &main, at, true).len(), 2);
+            let updated = apply(
+                &source,
+                features::rename(&workspace, &main, at, "renamedlabel")
+                    .unwrap()
+                    .unwrap(),
+                &main,
+            );
+            assert!(updated.contains(body) && updated.contains(name));
+            assert_eq!(updated.matches("renamedlabel").count(), 2);
+        }
+    }
+}
+
+#[test]
 fn unclosed_bodies_recover_at_line_end_or_eof_with_valid_utf16_highlighting() {
-    for command in ["Verb", "SaveVerb{saved}"] {
+    for command in ["Verb", "SaveVerb{saved}", "SaveGVerb{saved}"] {
         for newline in ["\n", "\r\n"] {
             for delimiter in ['|', '§', '😀'] {
                 for closed in [false, true] {
@@ -251,9 +293,101 @@ fn unclosed_bodies_recover_at_line_end_or_eof_with_valid_utf16_highlighting() {
 }
 
 #[test]
+#[ignore = "requires pdflatex and xelatex"]
+fn real_global_saved_bodies_and_moving_use_options_survive_versioned_rename() {
+    for engine in ["pdflatex", "xelatex"] {
+        for used in ["UseMVerb", "pUseMVerb"] {
+            for form in [
+                "basic",
+                "star",
+                "comment",
+                "token",
+                "grouped-delimiter",
+                "saved-name",
+            ] {
+                let directory = tempfile::tempdir().unwrap();
+                let root = directory.path();
+                let main = Url::from_file_path(root.join("main.tex")).unwrap();
+                let header = match form {
+                    "star" => " *",
+                    "comment" => "% header\r\n*[showspaces=true]% name\r\n",
+                    _ => "",
+                };
+                let name = match form {
+                    "token" => " x",
+                    "saved-name" => "{saved\\detokenize{\\end{fake}}}",
+                    _ => "{saved}",
+                };
+                let delimiter = if form == "grouped-delimiter" {
+                    "{|}"
+                } else {
+                    "|"
+                };
+                let body = r"\label{kept}\label{phantom}\newcommand{\hidden}{Oops}\input{example}";
+                let source = format!("\\documentclass{{article}}\r\n\\usepackage{{fancyvrb}}\r\n\\begin{{document}}\r\n\\label{{kept}}\\SaveGVerb{header}{name}{delimiter}{body}|\\{used} *[formatcom={{\\label{{active}}}}]{name}\r\nReal.\\ref{{kept}}\\end{{document}}\r\n");
+                let mut workspace = Workspace {
+                    versioned_edits: true,
+                    ..Default::default()
+                };
+                workspace.add_root(root.into());
+                workspace.open(main.clone(), source.clone(), 7);
+                let doc = &workspace.documents[&main];
+                assert!(
+                    doc.syntax.diagnostics.is_empty(),
+                    "{used}/{form}: {:?}",
+                    doc.syntax.diagnostics
+                );
+                assert_eq!(doc.syntax.labels.len(), 2);
+                assert!(
+                    doc.syntax.definitions.is_empty() && workspace.dependencies(&main).is_empty()
+                );
+                let at = doc.text.position(source.rfind("kept").unwrap());
+                let updated = apply(
+                    &source,
+                    features::rename(&workspace, &main, at, "renamedlabel")
+                        .unwrap()
+                        .unwrap(),
+                    &main,
+                );
+                assert!(updated.contains(body) && updated.contains(name));
+                for (content, expected, absent) in [
+                    (&source, "kept", "renamedlabel"),
+                    (&updated, "renamedlabel", "kept"),
+                ] {
+                    std::fs::write(root.join("main.tex"), content).unwrap();
+                    let outcome = build::run(
+                        &root.join("main.tex"),
+                        &latex_lsp::config::BuildConfig {
+                            executable: engine.into(),
+                            ..Default::default()
+                        },
+                        &AtomicBool::new(false),
+                    );
+                    assert_eq!(
+                        outcome.status, "success",
+                        "{engine}/{used}/{form}: {}",
+                        outcome.output
+                    );
+                    let aux =
+                        std::fs::read_to_string(root.join("build/latex-lsp/main.aux")).unwrap();
+                    assert!(
+                        aux.contains(&format!("newlabel{{{expected}}}"))
+                            && aux.contains("newlabel{active}"),
+                        "{aux}"
+                    );
+                    for key in [absent, "phantom"] {
+                        assert!(!aux.contains(&format!("newlabel{{{key}}}")), "{aux}");
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn ordinary_and_grouped_delimiters_end_at_the_first_literal_character() {
     let main = Url::parse("file:///fancy-inline/main.tex").unwrap();
-    for command in ["Verb", "SaveVerb{saved}"] {
+    for command in ["Verb", "SaveVerb{saved}", "SaveGVerb{saved}"] {
         for (opening, closing) in [
             ("|", "|"),
             ("{|}", "|"),
