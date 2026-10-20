@@ -7,6 +7,13 @@ pub(crate) fn is_input(name: &str) -> bool {
     matches!(name, "VerbatimInput" | "LVerbatimInput" | "BVerbatimInput")
 }
 
+pub(crate) fn is_environment(name: &str) -> bool {
+    matches!(
+        name.strip_suffix('*').unwrap_or(name),
+        "Verbatim" | "LVerbatim" | "BVerbatim" | "SaveVerbatim" | "VerbatimOut"
+    )
+}
+
 fn safe_options(source: &str) -> bool {
     if source.contains(['\\', '%']) {
         return false;

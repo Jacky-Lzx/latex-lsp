@@ -1229,8 +1229,8 @@ pub(crate) fn environment_copy_source(source: &str, command: &Command) -> Option
 pub(crate) fn is_verbatim_environment(name: &str) -> bool {
     matches!(
         name,
-        "verbatim" | "verbatim*" | "lstlisting" | "minted" | "comment" | "Verbatim"
-    )
+        "verbatim" | "verbatim*" | "lstlisting" | "minted" | "comment"
+    ) || crate::fancyvrb::is_environment(name)
 }
 
 pub(crate) fn active_static_argument(
