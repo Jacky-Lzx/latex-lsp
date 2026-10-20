@@ -1474,6 +1474,7 @@ pub(crate) struct CommandSignatures<'a> {
     tex_operands: BTreeMap<Cow<'a, str>, Option<TexOperands>>,
 }
 
+#[derive(Clone)]
 pub(crate) struct EnvironmentCall {
     pub argument: syntax::Argument,
     pub span: std::ops::Range<usize>,
@@ -1673,6 +1674,10 @@ impl<'a> CommandSignatures<'a> {
 
     pub(crate) fn environment_primitives_unchanged(&self) -> bool {
         !self.local.contains_key("begin") && !self.local.contains_key("end")
+    }
+
+    pub(crate) fn command_unchanged(&self, name: &str) -> bool {
+        !self.local.contains_key(name)
     }
 
     pub(crate) fn environment_invocations(

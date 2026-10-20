@@ -87,6 +87,9 @@ impl Index {
             index.replacements.insert(uri, agreed);
         }
         index
+            .replacements
+            .extend(crate::project_environments::fixes(workspace, requested));
+        index
     }
 
     pub(crate) fn replace_diagnostics(

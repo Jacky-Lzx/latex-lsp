@@ -29,6 +29,7 @@ mod output;
 pub mod path_completion;
 mod primitives;
 mod project_diagnostics;
+mod project_environments;
 pub mod recorder;
 mod saved_text;
 pub mod semantic;

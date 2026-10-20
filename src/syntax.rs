@@ -2245,7 +2245,7 @@ impl Syntax {
     }
 }
 
-fn syntax_fix(
+pub(crate) fn syntax_fix(
     text: &Text,
     span: Range<usize>,
     message: String,
