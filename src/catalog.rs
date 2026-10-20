@@ -7,6 +7,7 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("color", "color{${1:color}}", "Select a text color within the current group. An optional model allows a literal color specification. Requires color or xcolor."),
     ("textcolor", "textcolor{${1:color}}{${2:text}}", "Typeset text using a color. An optional model allows a literal color specification. Requires color or xcolor."),
     ("colorbox", "colorbox{${1:color}}{${2:text}}", "Place text in a box with a colored background. An optional model allows a literal color specification. Requires color or xcolor."),
+    ("fcolorbox", "fcolorbox{${1:frame color}}{${2:background color}}{${3:text}}", "Place text in a box with colored frame and background. With xcolor, an optional background model overrides the optional frame model; otherwise the background inherits the frame model. Requires color or xcolor."),
     ("pagecolor", "pagecolor{${1:color}}", "Set the page background color. An optional model allows a literal color specification. Requires color or xcolor."),
     ("epsilon", "epsilon", "Greek lowercase epsilon (math mode)."),
     ("zeta", "zeta", "Greek lowercase zeta (math mode)."),

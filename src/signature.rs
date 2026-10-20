@@ -291,6 +291,16 @@ fn builtin(name: &str) -> Option<Signature> {
         ),
         "color" | "pagecolor" => (&[("model", true), ("color", false)], false),
         "textcolor" | "colorbox" => (&[("model", true), ("color", false), ("text", false)], false),
+        "fcolorbox" => (
+            &[
+                ("frame model", true),
+                ("frame color", false),
+                ("background model", true),
+                ("background color", false),
+                ("text", false),
+            ],
+            false,
+        ),
         "includegraphics" => (&[("options", true), ("file", false)], true),
         "documentclass" | "usepackage" | "RequirePackage" | "LoadClass" => (
             &[
@@ -617,6 +627,7 @@ fn builtin(name: &str) -> Option<Signature> {
                 Kind::CommandToken
             } else if syntax::is_range_reference(name)
                 || index == 1 && matches!(name, "definecolor" | "textcolor" | "colorbox")
+                || name == "fcolorbox" && matches!(index, 1 | 3)
             {
                 // Keep range endpoints aligned with reference navigation and
                 // color names aligned with their grouped declaration/wrappers.
@@ -654,6 +665,7 @@ fn builtin(name: &str) -> Option<Signature> {
                     | "color"
                     | "textcolor"
                     | "colorbox"
+                    | "fcolorbox"
                     | "pagecolor"
                     | "bibitem"
                     | "newenvironment"

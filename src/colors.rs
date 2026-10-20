@@ -1,5 +1,5 @@
 use crate::{
-    syntax::{self, Command},
+    syntax::{self, Argument, Command},
     workspace::{Document, DocumentKind},
 };
 use std::ops::Range as Span;
@@ -26,7 +26,9 @@ impl Model {
 
 struct Literal {
     model: Model,
+    // An empty span inserts an independent model before an inherited color.
     model_span: Span<usize>,
+    inherited_background: Option<usize>,
     value_span: Span<usize>,
     color: Color,
 }
@@ -97,6 +99,11 @@ fn literal(source: &str, command: &Command) -> Option<Literal> {
         "color" | "textcolor" | "colorbox" | "pagecolor" => syntax::bracket_argument(source, at)?,
         _ => return None,
     };
+    let (argument, _) = syntax::group(source, syntax::skip_space(source, after), b'{', b'}')?;
+    literal_arguments(&model, &argument)
+}
+
+fn literal_arguments(model: &Argument, argument: &Argument) -> Option<Literal> {
     // Models are exact names. Do not expand macros, model lists or expressions.
     let model_kind = match model.value.as_str() {
         "rgb" => Model::Rgb,
@@ -105,7 +112,6 @@ fn literal(source: &str, command: &Command) -> Option<Literal> {
         "gray" => Model::Gray,
         _ => return None,
     };
-    let (argument, _) = syntax::group(source, syntax::skip_space(source, after), b'{', b'}')?;
     let value = trim(&argument.value);
     let [red, green, blue] = match model_kind {
         Model::Rgb => triple(value, fraction)?,
@@ -126,7 +132,8 @@ fn literal(source: &str, command: &Command) -> Option<Literal> {
             .len();
     Some(Literal {
         model: model_kind,
-        model_span: model.span,
+        model_span: model.span.clone(),
+        inherited_background: None,
         value_span: start..start + value.len(),
         color: Color {
             red,
@@ -137,12 +144,58 @@ fn literal(source: &str, command: &Command) -> Option<Literal> {
     })
 }
 
+fn framed_colors(source: &str, command: &Command) -> Option<[Option<Literal>; 2]> {
+    let mut at = syntax::skip_space(source, command.span.end);
+    let frame_model = if source.as_bytes().get(at) == Some(&b'[') {
+        let (model, after) = syntax::bracket_argument(source, at)?;
+        at = syntax::skip_space(source, after);
+        Some(model)
+    } else {
+        None
+    };
+    let (frame, after) = syntax::group(source, at, b'{', b'}')?;
+    at = syntax::skip_space(source, after);
+    let background_model = if source.as_bytes().get(at) == Some(&b'[') {
+        let (model, after) = syntax::bracket_argument(source, at)?;
+        at = syntax::skip_space(source, after);
+        Some(model)
+    } else {
+        None
+    };
+    let (background, _) = syntax::group(source, at, b'{', b'}')?;
+    let mut frame_color = frame_model
+        .as_ref()
+        .and_then(|model| literal_arguments(model, &frame));
+    let mut background_color = background_model
+        .as_ref()
+        .or(frame_model.as_ref())
+        .and_then(|model| literal_arguments(model, &background));
+    if background_model.is_none() {
+        // The background inherits the frame model. Either picker must leave
+        // the other color unchanged when converting gray to rgb.
+        if let Some(frame) = &mut frame_color {
+            frame.inherited_background = Some(background.outer_span.start);
+        }
+        if let Some(color) = &mut background_color {
+            color.model_span = background.outer_span.start..background.outer_span.start;
+        }
+    }
+    Some([frame_color, background_color])
+}
+
 fn literals(doc: &Document) -> impl Iterator<Item = Literal> + '_ {
     doc.syntax
         .commands
         .iter()
         .filter(|_| doc.kind == DocumentKind::Latex)
-        .filter_map(|command| literal(&doc.text.source, command))
+        .flat_map(|command| {
+            if command.name == "fcolorbox" {
+                framed_colors(&doc.text.source, command).unwrap_or_default()
+            } else {
+                [literal(&doc.text.source, command), None]
+            }
+        })
+        .flatten()
 }
 
 pub fn document_colors(doc: &Document) -> Vec<ColorInformation> {
@@ -206,12 +259,23 @@ pub fn presentations(doc: &Document, range: Range, color: Color) -> Vec<ColorPre
             new_text: value,
         }),
         additional_text_edits: (model != literal.model).then(|| {
-            vec![TextEdit {
+            let mut edits = vec![TextEdit {
                 range: doc
                     .text
                     .range(literal.model_span.start, literal.model_span.end),
-                new_text: model.name().into(),
-            }]
+                new_text: if literal.model_span.is_empty() {
+                    format!("[{}]", model.name())
+                } else {
+                    model.name().into()
+                },
+            }];
+            if let Some(at) = literal.inherited_background {
+                edits.push(TextEdit {
+                    range: doc.text.range(at, at),
+                    new_text: format!("[{}]", literal.model.name()),
+                });
+            }
+            edits
         }),
     }]
 }
