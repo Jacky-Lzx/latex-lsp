@@ -68,14 +68,31 @@ fn triple(value: &str, parse: fn(&str) -> Option<f32>) -> Option<[f32; 3]> {
 }
 
 fn literal(source: &str, command: &Command) -> Option<Literal> {
-    let at = syntax::skip_space(source, command.span.end);
+    let mut at = syntax::skip_space(source, command.span.end);
     let (model, after) = match command.name.as_str() {
         "definecolor" => {
+            if source.as_bytes().get(at) == Some(&b'[') {
+                let (kind, after) = syntax::bracket_argument(source, at)?;
+                // PostScript definitions display the model's white value, not
+                // the supplied components. Unknown types can use custom drivers.
+                if !matches!(kind.value.as_str(), "" | "named") {
+                    return None;
+                }
+                at = syntax::skip_space(source, after);
+            }
             let (name, after) = syntax::group(source, at, b'{', b'}')?;
             if !syntax::is_static_key(&name.value) {
                 return None;
             }
-            syntax::group(source, syntax::skip_space(source, after), b'{', b'}')?
+            at = syntax::skip_space(source, after);
+            if source.as_bytes().get(at) == Some(&b'[') {
+                let (prefix, after) = syntax::bracket_argument(source, at)?;
+                if !prefix.value.is_empty() && !syntax::is_static_key(&prefix.value) {
+                    return None;
+                }
+                at = syntax::skip_space(source, after);
+            }
+            syntax::group(source, at, b'{', b'}')?
         }
         "color" | "textcolor" | "colorbox" | "pagecolor" => syntax::bracket_argument(source, at)?,
         _ => return None,

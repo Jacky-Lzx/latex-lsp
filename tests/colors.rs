@@ -116,7 +116,7 @@ fn malformed_dynamic_named_and_unsupported_colors_are_not_editable_literals() {
         r"\color[HTML]{#FF0000}",
         r"\color[HTML]{FFF}",
         r"\color[HTML]{FF00GG}",
-        r"\definecolor[named]{paint}{rgb}{1,0,0}",
+        r"\definecolor[ps]{paint}{rgb}{1,0,0}",
         r"\definecolor{\paint}{rgb}{1,0,0}",
         r"\definecolor{paint}{rgb/HTML}{1,0,0/FF0000}",
         r"\definecolor*{paint}{rgb}{1,0,0}",
@@ -125,6 +125,77 @@ fn malformed_dynamic_named_and_unsupported_colors_are_not_editable_literals() {
             colors::document_colors(&document(source)).is_empty(),
             "{source}"
         );
+    }
+}
+
+#[test]
+fn definition_options_keep_exact_color_ranges_and_survive_picker_edits() {
+    for kind in ["", "[]", "[named]"] {
+        for prefix in ["", "[]", "[prefix]", "[prefix[literal]"] {
+            for (model, value, expected) in [
+                ("rgb", "1,0,0", color(1.0, 0.0, 0.0)),
+                ("RGB", "255,0,0", color(1.0, 0.0, 0.0)),
+                ("HTML", "FF0000", color(1.0, 0.0, 0.0)),
+                ("gray", ".5", color(0.5, 0.5, 0.5)),
+            ] {
+                let source = format!("% emoji😀\r\n\\definecolor{kind}% before name\r\n{{paint}}% before prefix\r\n{prefix}% before model\r\n{{{model}}}% before value\r\n{{ {value} }}% tail\r\n\\textcolor{{paint}}{{Body}}\r\n");
+                let doc = document(&source);
+                let found = colors::document_colors(&doc);
+                assert_eq!(found.len(), 1, "{source}");
+                assert_eq!(found[0].color, expected);
+                let start = source.find(value).unwrap();
+                assert_eq!(found[0].range, doc.text.range(start, start + value.len()));
+                let presentations =
+                    colors::presentations(&doc, found[0].range, color(0.0, 1.0, 0.0));
+                assert_eq!(presentations.len(), 1);
+                let replacement = match model {
+                    "RGB" => "0,255,0",
+                    "HTML" => "00FF00",
+                    _ => "0,1,0",
+                };
+                let expected = source
+                    .replace(value, replacement)
+                    .replace("{gray}", "{rgb}");
+                let updated = apply(&doc, presentations);
+                assert_eq!(updated, expected);
+                assert_eq!(
+                    colors::document_colors(&document(&updated))[0].color,
+                    color(0.0, 1.0, 0.0)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn unknown_dynamic_or_malformed_definition_options_do_not_offer_picker_edits() {
+    for arguments in [
+        r"[ps]{paint}{rgb}{1,0,0}",
+        r"[custom]{paint}{rgb}{1,0,0}",
+        r"[ named ]{paint}{rgb}{1,0,0}",
+        r"[\kind]{paint}{rgb}{1,0,0}",
+        r"[named][extra]{paint}{rgb}{1,0,0}",
+        r"[named{paint}{rgb}{1,0,0}",
+        r"{paint}[prefix{rgb}{1,0,0}",
+        r"{paint}[\prefix]{rgb}{1,0,0}",
+        r"{paint}[{prefix]}]{rgb}{1,0,0}",
+        r"{paint}[prefix][extra]{rgb}{1,0,0}",
+        r"[named]{\paint}[prefix]{rgb}{1,0,0}",
+        r"[named]{paint}[prefix]{rgb}{\component,0,0}",
+        r"[named]{paint}[prefix]{rgb}{1,0,0",
+        "[named% uncertain\n]{paint}{rgb}{1,0,0}",
+        "{paint}[prefix% uncertain\n]{rgb}{1,0,0}",
+    ] {
+        let source = format!("\\definecolor{arguments}");
+        let doc = document(&source);
+        assert!(colors::document_colors(&doc).is_empty(), "{source}");
+        let at = source.find("1,0,0").unwrap_or(0);
+        assert!(colors::presentations(
+            &doc,
+            doc.text.range(at, (at + 5).min(source.len())),
+            color(0.0, 1.0, 0.0)
+        )
+        .is_empty());
     }
 }
 
@@ -168,6 +239,67 @@ fn picker_edits_preserve_model_syntax_whitespace_comments_names_and_body() {
                 colors::document_colors(&document(&updated))[0].color,
                 color(0.0, 1.0, 0.0)
             );
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex, xelatex and xcolor"]
+fn optional_color_definitions_keep_real_components_after_picker_edits() {
+    for engine in ["pdflatex", "xelatex"] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let main = root.join("main.tex");
+        let mut source = String::from("\\documentclass{article}\n\\usepackage{xcolor}\n");
+        let mut names = Vec::new();
+        for kind in ["", "[]", "[named]"] {
+            for prefix in ["", "[]", "[prefix]", "[prefix[literal]"] {
+                for (model, value) in [
+                    ("rgb", "1,0,0"),
+                    ("RGB", "255,0,0"),
+                    ("HTML", "FF0000"),
+                    ("gray", ".5"),
+                ] {
+                    let name = format!("paint{}", names.len());
+                    source.push_str(&format!(
+                        "\\definecolor{kind}{{{name}}}{prefix}{{{model}}}{{{value}}}\n"
+                    ));
+                    names.push(name);
+                }
+            }
+        }
+        source.push_str("\\definecolor[ps]{postscript}[pre]{rgb}{1,0,0}\n\\begin{document}\n");
+        for name in &names {
+            source.push_str(&format!("\\textcolor{{{name}}}{{Paint}}\\extractcolorspec{{{name}}}\\tone\\typeout{{COLOR:{name}:\\meaning\\tone}}\n"));
+        }
+        source.push_str("\\extractcolorspec{postscript}\\tone\\typeout{POSTSCRIPT:\\meaning\\tone}\n\\end{document}\n");
+        let doc = document(&source);
+        let found = colors::document_colors(&doc);
+        assert_eq!(found.len(), names.len());
+        let presentations = found
+            .iter()
+            .flat_map(|item| colors::presentations(&doc, item.range, color(0.0, 1.0, 0.0)))
+            .collect();
+        for (index, source) in [source, apply(&doc, presentations)].into_iter().enumerate() {
+            std::fs::write(&main, source).unwrap();
+            let config = latex_lsp::config::BuildConfig {
+                executable: engine.into(),
+                ..Default::default()
+            };
+            let outcome = build::run(&main, &config, &Default::default());
+            assert_eq!(outcome.status, "success", "{engine}: {}", outcome.output);
+            assert!(outcome.output.contains("POSTSCRIPT:macro:->{rgb}{1,1,1}"));
+            if index == 1 {
+                for name in &names {
+                    assert!(
+                        outcome
+                            .output
+                            .contains(&format!("COLOR:{name}:macro:->{{rgb}}{{0,1,0}}")),
+                        "{engine}: {}",
+                        outcome.output
+                    );
+                }
+            }
         }
     }
 }
