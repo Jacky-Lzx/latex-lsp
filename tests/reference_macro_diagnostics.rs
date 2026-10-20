@@ -536,7 +536,7 @@ fn prefixed_reference_frames_require_matching_interfaces_and_exact_macro_operand
         (r"\vpageref[a][b][c]{\keynme}", r"r@\keynme"),
         (r"\subref{\keynme}", r"sub@\other"),
         (r"\unknown{\keynme}", r"r@\keynme"),
-        (r"\setcounterref{counter}{\keynme}", r"r@\keynme"),
+        (r"\setcounterref{counter}{\keynme}", r"\keynme"),
         (r"\def\wrapper{\subref{\keynme}}\wrapper", r"sub@\keynme"),
         (r"\subref{\keynme}", r"r@sub@\keynme"),
     ] {
@@ -580,6 +580,265 @@ fn real_prefixed_key_macro_repairs_restore_successful_compilation() {
             ("\\usepackage{hyperref}\n", "\\refused{\\keynme}"),
             ("\\usepackage{subcaption}\n", "\\subref{\\keynme}"),
             ("\\usepackage{subcaption}\n", "\\subref*{\\keynme}"),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let main = directory.path().join("main.tex");
+            let uri = Url::from_file_path(&main).unwrap();
+            let source = format!("\\documentclass{{article}}\r\n\\usepackage{{amsmath}}\r\n{packages}\\newcommand{{\\keyname}}{{payload}}\r\n\\begin{{document}}\r\n\\section{{MarkerUnique}}\\label{{payload}}\r\n\\begin{{thebibliography}}{{1}}\\bibitem{{payload}}Entry\\end{{thebibliography}}\r\n{call}\r\n\\end{{document}}\r\n");
+            std::fs::write(&main, &source).unwrap();
+            let config = BuildConfig {
+                executable: engine.into(),
+                ..Default::default()
+            };
+            let before = build::run(&main, &config, &AtomicBool::new(false));
+            assert_eq!(before.status, "error", "{engine}/{call}: {}", before.output);
+            let start = source.find(r"\keynme").unwrap();
+            let range = Text::new(source.clone()).range(start, start + 7);
+            let diagnostic = before.diagnostics[&uri]
+                .iter()
+                .find(|item| item.message == "Undefined control sequence." && item.range == range)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{engine}/{call}: {}\n{:?}",
+                        before.output, before.diagnostics
+                    )
+                });
+            let mut workspace = Workspace {
+                versioned_edits: true,
+                code_action_literals: true,
+                ..Default::default()
+            };
+            workspace.open(uri.clone(), source, 7);
+            workspace
+                .build_diagnostics
+                .insert(uri.clone(), before.diagnostics.clone());
+            std::fs::write(&main, repaired(&workspace, &uri, diagnostic)).unwrap();
+            let after = build::run(&main, &config, &AtomicBool::new(false));
+            assert_eq!(after.status, "success", "{engine}/{call}: {}", after.output);
+            assert!(main
+                .parent()
+                .unwrap()
+                .join("build/latex-lsp/main.pdf")
+                .is_file());
+        }
+    }
+}
+
+#[test]
+fn refcount_macro_errors_follow_each_interfaces_actual_consumption_boundary() {
+    for (call, consumed, frame) in [
+        (
+            r"\getrefbykeydefault{\keynme}{page}{0}",
+            r"\getrefbykeydefault{\keynme}{page}",
+            r"\keynme",
+        ),
+        (
+            r"\getrefbykeydefault{\keynme}{anchor}{Missing}",
+            r"\getrefbykeydefault{\keynme}{anchor}",
+            r"\keynme",
+        ),
+        (
+            r"\IfRefUndefinedExpandable{\keynme}{Missing}{Found}",
+            r"\IfRefUndefinedExpandable{\keynme}",
+            r"r@\keynme",
+        ),
+        (
+            r"\IfRefUndefinedBabel{\keynme}{Missing}{Found}",
+            r"\IfRefUndefinedBabel{\keynme}",
+            r"\keynme",
+        ),
+        (
+            r"\setcounterref{counter}{\keynme}",
+            r"\setcounterref{counter}{\keynme}",
+            r"r@\keynme",
+        ),
+        (
+            r"\addtocounterref{counter}{\keynme}",
+            r"\addtocounterref{counter}{\keynme}",
+            r"r@\keynme",
+        ),
+        (
+            r"\setcounterpageref{counter}{\keynme}",
+            r"\setcounterpageref{counter}{\keynme}",
+            r"r@\keynme",
+        ),
+        (
+            r"\addtocounterpageref{counter}{\keynme}",
+            r"\addtocounterpageref{counter}{\keynme}",
+            r"r@\keynme",
+        ),
+        (
+            r"\getrefbykeydefault {\keynme} {page} {\other}",
+            r"\getrefbykeydefault {\keynme} {page}",
+            r"\keynme",
+        ),
+        (
+            r"\IfRefUndefinedBabel {\keynme}{\other}{\other}",
+            r"\IfRefUndefinedBabel {\keynme}",
+            r"\keynme",
+        ),
+    ] {
+        let source = format!("\\typeout{{😀}} {call} Remains\r\n");
+        let start = source.find(r"\keynme").unwrap();
+        for numbered in [false, true] {
+            let diagnostic = parse(
+                &source,
+                &format!("<argument> {frame}\nl.1 \\typeout{{😀}} {consumed}"),
+                numbered,
+            );
+            assert_eq!(
+                diagnostic.range,
+                Text::new(source.clone()).range(start, start + 7),
+                "{call}: {diagnostic:?}"
+            );
+            assert_eq!(
+                diagnostic.code,
+                Some(NumberOrString::String("undefined-control-sequence".into()))
+            );
+            assert_eq!(diagnostic.data.as_ref().unwrap()["command"], "keynme");
+        }
+    }
+}
+
+#[test]
+fn refcount_macro_errors_reject_dynamic_peers_wrong_frames_and_inexact_contexts() {
+    for (call, echo, frame) in [
+        (
+            r"\getrefbykeydefault{\keynme}{\selector}{0}",
+            r"\getrefbykeydefault{\keynme}{\selector}",
+            r"\keynme",
+        ),
+        (
+            r"\getrefbykeydefault{\keynme}{ page}{0}",
+            r"\getrefbykeydefault{\keynme}{ page}",
+            r"\keynme",
+        ),
+        (
+            r"\getrefbykeydefault{\keynme}{page}{0}",
+            r"\getrefbykeydefault{\keynme}",
+            r"\keynme",
+        ),
+        (
+            r"\getrefbykeydefault{\keynme}{page}{0}",
+            r"\getrefbykeydefault{\keynme}{page}{0}",
+            r"\keynme",
+        ),
+        (
+            r"\getrefbykeydefault{\keynme}{page}{0}",
+            r"\getrefbykeydefault{\keynme}{page}",
+            r"r@\keynme",
+        ),
+        (
+            r"\getrefbykeydefault*{\keynme}{page}{0}",
+            r"\getrefbykeydefault*{\keynme}{page}",
+            r"\keynme",
+        ),
+        (
+            r"\IfRefUndefinedExpandable{\keynme}{Missing}{Found}",
+            r"\IfRefUndefinedExpandable{\keynme}",
+            r"\keynme",
+        ),
+        (
+            r"\IfRefUndefinedBabel{\keynme}{Missing}{Found}",
+            r"\IfRefUndefinedBabel{\keynme}",
+            r"r@\keynme",
+        ),
+        (
+            r"\IfRefUndefinedBabel{\keynme}{Missing}{Found}",
+            r"\IfRefUndefinedBabel{\keynme}{Missing}{Found}",
+            r"\keynme",
+        ),
+        (
+            r"\IfRefUndefinedBabel[note]{\keynme}{Missing}{Found}",
+            r"\IfRefUndefinedBabel[note]{\keynme}",
+            r"\keynme",
+        ),
+        (
+            r"\IfRefUndefinedExpandable{prefix\keynme}{Missing}{Found}",
+            r"\IfRefUndefinedExpandable{prefix\keynme}",
+            r"r@prefix\keynme",
+        ),
+        (
+            r"\setcounterref{\counter}{\keynme}",
+            r"\setcounterref{\counter}{\keynme}",
+            r"r@\keynme",
+        ),
+        (
+            r"\addtocounterref{ counter}{\keynme}",
+            r"\addtocounterref{ counter}{\keynme}",
+            r"r@\keynme",
+        ),
+        (
+            r"\setcounterpageref{counter}{\keynme\other}",
+            r"\setcounterpageref{counter}{\keynme\other}",
+            r"r@\keynme",
+        ),
+        (
+            r"\addtocounterpageref{counter}{\keynme}",
+            r"\addtocounterpageref{counter}{\keynme}",
+            r"sub@\keynme",
+        ),
+        (
+            r"\setcounterref*{counter}{\keynme}",
+            r"\setcounterref*{counter}{\keynme}",
+            r"r@\keynme",
+        ),
+        (
+            r"\def\wrapper{\setcounterref{counter}{\keynme}}\wrapper",
+            r"\def\wrapper{\setcounterref{counter}{\keynme}}\wrapper",
+            r"r@\keynme",
+        ),
+    ] {
+        for numbered in [false, true] {
+            let diagnostic = parse(call, &format!("<argument> {frame}\nl.1 {echo}"), numbered);
+            assert!(
+                diagnostic.code.is_none() && diagnostic.data.is_none(),
+                "{call}/{echo}/{frame}: {diagnostic:?}"
+            );
+        }
+    }
+    let source = r"\IfRefUndefinedExpandable{\keynme}{}{}\IfRefUndefinedExpandable{\keynme}{}{}";
+    let diagnostic = parse(source, "<argument> r@\\keynme\nl.1 ...{\\keynme}", true);
+    assert!(diagnostic.code.is_none() && diagnostic.data.is_none());
+}
+
+#[test]
+#[ignore = "requires pdflatex and xelatex"]
+fn real_refcount_key_macro_repairs_restore_successful_compilation() {
+    for engine in ["pdflatex", "xelatex"] {
+        for (packages, call) in [
+            (
+                "\\usepackage{hyperref}\n\\newcounter{mycounter}\n",
+                "\\getrefbykeydefault{\\keynme}{page}{0}",
+            ),
+            (
+                "\\usepackage{hyperref}\n\\newcounter{mycounter}\n",
+                "\\getrefbykeydefault{\\keynme}{anchor}{Missing}",
+            ),
+            (
+                "\\usepackage{hyperref}\n\\newcounter{mycounter}\n",
+                "\\IfRefUndefinedExpandable{\\keynme}{Missing}{Found}",
+            ),
+            (
+                "\\usepackage{hyperref}\n\\newcounter{mycounter}\n",
+                "\\IfRefUndefinedBabel{\\keynme}{Missing}{Found}",
+            ),
+            (
+                "\\usepackage{hyperref}\n\\newcounter{mycounter}\n",
+                "\\setcounterref{mycounter}{\\keynme}",
+            ),
+            (
+                "\\usepackage{hyperref}\n\\newcounter{mycounter}\n",
+                "\\addtocounterref{mycounter}{\\keynme}",
+            ),
+            (
+                "\\usepackage{hyperref}\n\\newcounter{mycounter}\n",
+                "\\setcounterpageref{mycounter}{\\keynme}",
+            ),
+            (
+                "\\usepackage{hyperref}\n\\newcounter{mycounter}\n",
+                "\\addtocounterpageref{mycounter}{\\keynme}",
+            ),
         ] {
             let directory = tempfile::tempdir().unwrap();
             let main = directory.path().join("main.tex");

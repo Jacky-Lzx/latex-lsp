@@ -1162,13 +1162,36 @@ fn reference_macro_error_invocation(
     frame: &str,
 ) -> Option<(ByteRange<usize>, ByteRange<usize>)> {
     let frame = match command.name.as_str() {
-        "vpageref" | "getrefnumber" | "getpagerefnumber" | "refused" => frame.strip_prefix("r@")?,
+        "vpageref"
+        | "getrefnumber"
+        | "getpagerefnumber"
+        | "refused"
+        | "IfRefUndefinedExpandable"
+        | "setcounterref"
+        | "addtocounterref"
+        | "setcounterpageref"
+        | "addtocounterpageref" => frame.strip_prefix("r@")?,
         "subref" => frame.strip_prefix("sub@")?,
         _ => frame,
     };
     let (start, open) = match command.name.as_str() {
-        "ref" | "pageref" | "eqref" | "Ref" | "autoref" | "autopageref" | "nameref" | "vref"
-        | "Vref" | "vpageref" | "getrefnumber" | "getpagerefnumber" | "refused" | "subref" => (
+        "ref"
+        | "pageref"
+        | "eqref"
+        | "Ref"
+        | "autoref"
+        | "autopageref"
+        | "nameref"
+        | "vref"
+        | "Vref"
+        | "vpageref"
+        | "getrefnumber"
+        | "getpagerefnumber"
+        | "refused"
+        | "subref"
+        | "getrefbykeydefault"
+        | "IfRefUndefinedExpandable"
+        | "IfRefUndefinedBabel" => (
             crate::syntax::reference_argument_start(source, &command.name, command.span.end)?,
             b'{',
         ),
@@ -1182,11 +1205,37 @@ fn reference_macro_error_invocation(
             crate::syntax::separate_label_argument_start(source, command)?;
             (crate::syntax::skip_space(source, command.span.end), b'[')
         }
+        "setcounterref" | "addtocounterref" | "setcounterpageref" | "addtocounterpageref" => {
+            let (counter, end) = crate::syntax::group(
+                source,
+                crate::syntax::skip_space(source, command.span.end),
+                b'{',
+                b'}',
+            )?;
+            if !crate::syntax::is_static_key(&counter.value) {
+                return None;
+            }
+            (crate::syntax::skip_space(source, end), b'{')
+        }
         _ => return None,
     };
     let close = if open == b'[' { b']' } else { b'}' };
     let (mut argument, _) = crate::syntax::group(source, start, open, close)?;
-    let tail = argument.outer_span.clone();
+    let mut tail = argument.outer_span.clone();
+    if command.name == "getrefbykeydefault" {
+        // refcount consumes the selector before expanding the key, but has
+        // not read the default yet. Dynamic selectors cannot identify a peer.
+        let (selector, end) = crate::syntax::group(
+            source,
+            crate::syntax::skip_space(source, tail.end),
+            b'{',
+            b'}',
+        )?;
+        if !crate::syntax::is_static_key(&selector.value) {
+            return None;
+        }
+        tail.end = end;
+    }
     if command.name == "hyperref" && argument.value.starts_with('{') {
         let (inner, end) = crate::syntax::group(source, argument.span.start, b'{', b'}')?;
         if end != argument.span.end {
