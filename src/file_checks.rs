@@ -147,6 +147,18 @@ impl Snapshot {
             return Self::default();
         };
         let sources = workspace.project_documents(root);
+        let redefined_bibliography_commands: BTreeSet<_> = sources
+            .iter()
+            .filter_map(|uri| workspace.documents.get(uri))
+            .flat_map(|doc| &doc.syntax.definitions)
+            .filter(|entry| {
+                matches!(
+                    entry.name.as_str(),
+                    "bibliography" | "nobibliography" | "bibliographystyle"
+                )
+            })
+            .map(|entry| entry.name.as_str())
+            .collect();
         // A missing chapter is meaningful only when it can be selected.
         // Unknown or conflicting filters must not guess that TeX reads it.
         let include_filters: Option<Vec<BTreeSet<_>>> = sources
@@ -215,6 +227,16 @@ impl Snapshot {
             }
         }
         let paths = RefCell::new(BTreeMap::new());
+        let observe = |origin: &Url, command: &str, name: &str, extension: &str| {
+            resolve_file_path_with(origin, command, name, &[extension], |path| {
+                let before = file(path);
+                let mut paths = paths.borrow_mut();
+                if paths.len() < MAX_PATHS && !outputs.contains(&normalize_path(path)) {
+                    paths.insert(path.to_path_buf(), before.clone());
+                }
+                before
+            })
+        };
         'sources: for source in sources {
             let Some(doc) = workspace.documents.get(&source) else {
                 continue;
@@ -222,6 +244,55 @@ impl Snapshot {
             for command in &doc.syntax.commands {
                 if paths.borrow().len() >= MAX_PATHS {
                     break 'sources;
+                }
+                if matches!(
+                    command.name.as_str(),
+                    "bibliography" | "nobibliography" | "bibliographystyle"
+                ) {
+                    let (names, extension) = if command.name == "bibliographystyle" {
+                        if redefined_bibliography_commands.contains("bibliographystyle") {
+                            continue;
+                        }
+                        let Some(argument) = syntax::file_argument(&doc.text.source, command)
+                        else {
+                            continue;
+                        };
+                        (vec![argument.value.clone()], "bst")
+                    } else {
+                        if redefined_bibliography_commands.contains("bibliography")
+                            || redefined_bibliography_commands.contains("nobibliography")
+                        {
+                            continue;
+                        }
+                        let Some(spans) =
+                            syntax::complete_file_list_spans(&doc.text.source, command)
+                        else {
+                            continue;
+                        };
+                        (
+                            spans
+                                .into_iter()
+                                .map(|span| doc.text.source[span].to_owned())
+                                .collect(),
+                            "bib",
+                        )
+                    };
+                    for name in names {
+                        if paths.borrow().len() >= MAX_PATHS {
+                            break 'sources;
+                        }
+                        // These names use the real input suffix, including an
+                        // explicit .bst; BibTeX's doubled display suffix is
+                        // only a log convention, not a second file candidate.
+                        for origin in [root, &source] {
+                            if observe(origin, &command.name, &name, extension).is_some()
+                                || source == *root
+                            {
+                                break;
+                            }
+                        }
+                    }
+                    continue;
                 }
                 if !matches!(
                     command.name.as_str(),
@@ -251,15 +322,7 @@ impl Snapshot {
                     }
                 }
                 for origin in [root, &source] {
-                    let selected =
-                        resolve_file_path_with(origin, &command.name, name, &["tex"], |path| {
-                            let before = file(path);
-                            let mut paths = paths.borrow_mut();
-                            if paths.len() < MAX_PATHS && !outputs.contains(&normalize_path(path)) {
-                                paths.insert(path.to_path_buf(), before.clone());
-                            }
-                            before
-                        });
+                    let selected = observe(origin, &command.name, name, "tex");
                     if selected.is_some() || source == *root {
                         break;
                     }
@@ -641,5 +704,202 @@ mod tests {
         assert!(complete.changed_path().is_none());
         std::fs::write(&condition, "new\n").unwrap();
         assert_eq!(complete.changed_path(), Some(condition.as_path()));
+    }
+}
+
+#[cfg(test)]
+mod bibliography_conditions {
+    use super::*;
+
+    fn capture(root: &Path, source: &str) -> Snapshot {
+        std::fs::write(root.join("main.tex"), source).unwrap();
+        let mut workspace = Workspace::default();
+        workspace.add_root(root.into());
+        Snapshot::capture(
+            &workspace,
+            &Url::from_file_path(root.join("main.tex")).unwrap(),
+            &BuildConfig::default(),
+        )
+    }
+
+    #[test]
+    fn static_bibliography_conditions_watch_real_suffixes_comments_lists_and_compacted_names() {
+        for (command, extension, stem) in [
+            ("bibliography", "bib", "mi ssing"),
+            ("nobibliography", "bib", "mi ssing"),
+            ("bibliographystyle", "bst", "missing,style"),
+        ] {
+            for explicit in [false, true] {
+                let directory = tempfile::tempdir().unwrap();
+                let root = directory.path();
+                std::fs::create_dir(root.join("db")).unwrap();
+                let suffix = if explicit {
+                    format!(".{extension}")
+                } else {
+                    String::new()
+                };
+                let name = format!("db/{stem}{suffix}");
+                let item = if extension == "bib" {
+                    format!("first,% 😀 before\r\n {name}% after,\r\n,second")
+                } else {
+                    format!("% 😀 before\r\n {name}% after\r\n")
+                };
+                let source = format!("\\{command}{{{item}}}\r\n");
+                let snapshot = capture(root, &source);
+                assert!(snapshot.changed_path().is_none(), "{source}");
+                let actual = root.join(format!("db/{}.{extension}", stem.replace(' ', "")));
+                assert!(
+                    snapshot
+                        .watched()
+                        .contains(&Url::from_file_path(&actual).unwrap()),
+                    "{snapshot:?}"
+                );
+                let doubled = actual.with_file_name(format!(
+                    "{}.{extension}",
+                    actual.file_name().unwrap().to_str().unwrap()
+                ));
+                std::fs::write(doubled, "Decoy.").unwrap();
+                assert!(snapshot.changed_path().is_none(), "{source}");
+                std::fs::write(&actual, "New input.\n").unwrap();
+                assert!(snapshot.changed_path().is_some(), "{source}");
+            }
+        }
+    }
+
+    #[test]
+    fn dynamic_incomplete_ignored_and_redefined_declarations_do_not_invent_conditions() {
+        for source in [
+            r"\bibliography{missing,\chosen}",
+            r"\nobibliography{missing,\chosen}",
+            r"\bibliography*{missing}",
+            r"\nobibliography*{missing}",
+            r"\bibliography[note]{missing}",
+            "\\bibliography{mi% split\nssing}",
+            r"\bibliographystyle{\chosen}",
+            r"\bibliographystyle*{missing}",
+            r"\bibliographystyle{ missing}",
+            r"\newcommand{\bibliography}[1]{}\bibliography{missing}",
+            r"\newcommand{\nobibliography}[1]{}\bibliography{missing}",
+            r"\newcommand{\bibliographystyle}[1]{}\bibliographystyle{missing}",
+            r"\verb|\bibliography{missing}|",
+            r"% \bibliographystyle{missing}",
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let snapshot = capture(root, source);
+            assert!(snapshot.paths.is_empty(), "{source}\n{snapshot:?}");
+            for extension in ["bib", "bst"] {
+                std::fs::write(root.join(format!("missing.{extension}")), "New input.").unwrap();
+            }
+            assert!(snapshot.changed_path().is_none(), "{source}");
+        }
+    }
+
+    #[test]
+    fn database_and_style_redefinitions_only_disable_their_own_conditions() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        for (source, extension) in [
+            (
+                r"\newcommand{\bibliographystyle}[1]{}\bibliography{missing}",
+                "bib",
+            ),
+            (
+                r"\newcommand{\bibliography}[1]{}\bibliographystyle{missing}",
+                "bst",
+            ),
+        ] {
+            let snapshot = capture(root, source);
+            let actual = root.join(format!("missing.{extension}"));
+            std::fs::write(&actual, "New input.").unwrap();
+            assert!(snapshot.changed_path().is_some(), "{source}");
+            std::fs::remove_file(actual).unwrap();
+        }
+    }
+
+    #[test]
+    fn bibliography_lookups_watch_root_candidates_before_source_relative_fallbacks() {
+        for (command, extension) in [("bibliography", "bib"), ("bibliographystyle", "bst")] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            std::fs::create_dir(root.join("sub")).unwrap();
+            std::fs::write(
+                root.join("sub/settings.tex"),
+                format!("\\{command}{{missing}}\n"),
+            )
+            .unwrap();
+            std::fs::write(
+                root.join(format!("sub/missing.{extension}")),
+                "Existing input.\n",
+            )
+            .unwrap();
+            let snapshot = capture(root, r"\input{sub/settings}");
+            assert!(snapshot.changed_path().is_none());
+            std::fs::write(
+                root.join(format!("missing.{extension}")),
+                "Higher priority input.\n",
+            )
+            .unwrap();
+            assert!(snapshot.changed_path().is_some());
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn first_static_bibliography_aliases_detect_retargets_without_tool_history() {
+        use std::os::unix::fs::symlink;
+        for (command, extension) in [("bibliography", "bib"), ("bibliographystyle", "bst")] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let old = root.join(format!("old.{extension}"));
+            let new = root.join(format!("new.{extension}"));
+            std::fs::write(&old, "Old input.\n").unwrap();
+            std::fs::write(&new, "New input.\n").unwrap();
+            let alias = root.join(format!("alias.{extension}"));
+            symlink(&old, &alias).unwrap();
+            let snapshot = capture(root, &format!("\\{command}{{alias}}"));
+            assert!(snapshot.changed_path().is_none());
+            std::fs::remove_file(&alias).unwrap();
+            symlink(&new, &alias).unwrap();
+            assert!(snapshot.changed_path().is_some());
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn missing_bibliography_files_under_directory_aliases_watch_physical_paths() {
+        use std::os::unix::fs::symlink;
+        for (command, extension) in [("bibliography", "bib"), ("bibliographystyle", "bst")] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let project = root.join("project");
+            let shared = root.join("shared");
+            std::fs::create_dir(&project).unwrap();
+            std::fs::create_dir(&shared).unwrap();
+            symlink(&shared, project.join("alias")).unwrap();
+            let snapshot = capture(&project, &format!("\\{command}{{alias/missing}}"));
+            let physical = shared.join(format!("missing.{extension}"));
+            assert!(
+                snapshot
+                    .watched()
+                    .contains(&Url::from_file_path(&physical).unwrap()),
+                "{snapshot:?}"
+            );
+            std::fs::write(physical, "New input.\n").unwrap();
+            assert!(snapshot.changed_path().is_some());
+        }
+    }
+
+    #[test]
+    fn bibliography_conditions_share_the_existing_candidate_budget() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let names = (0..MAX_PATHS + 10)
+            .map(|n| format!("missing{n}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let snapshot = capture(root, &format!("\\bibliography{{{names}}}"));
+        assert_eq!(snapshot.paths.len(), MAX_PATHS);
+        assert!(snapshot.changed_path().is_none());
     }
 }

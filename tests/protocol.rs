@@ -10145,3 +10145,202 @@ exit {exit}
         }
     }
 }
+
+#[test]
+#[cfg(unix)]
+fn bibliography_files_created_during_compilation_discard_or_cancel_obsolete_missing_errors() {
+    use std::os::unix::fs::symlink;
+    for (command, extension, role) in [
+        ("bibliography", "bib", "database"),
+        ("nobibliography", "bib", "database"),
+        ("bibliographystyle", "bst", "style"),
+    ] {
+        for explicit in [false, true] {
+            for (event, alias) in [(false, false), (true, false), (false, true), (true, true)] {
+                let stem = if alias { "alias/missing" } else { "db/missing" };
+                let argument = format!(
+                    "{stem}{}",
+                    if explicit {
+                        format!(".{extension}")
+                    } else {
+                        String::new()
+                    }
+                );
+                let reported = if role == "style" {
+                    format!("{argument}.bst")
+                } else {
+                    format!("{stem}.bib")
+                };
+                let script = format!(
+                    r#"printf '(./main.tex\n)\n' > "$1/main.log"
+printf 'PWD %s\nINPUT %s/main.tex\n' "$PWD" "$PWD" > "$1/main.fls"
+printf "I couldn't open {role} file {reported}\n---line 2 of file main.aux\n" > "$1/main.blg"
+touch "$1/ready"
+while [ ! -f "$1/release" ]; do sleep 0.02; done
+exit 1
+"#
+                );
+                let (mut server, directory, main) = fake_build_server_capabilities(
+                    &script,
+                    false,
+                    json!({"textDocument":{"diagnostic":{}}}),
+                );
+                let external = tempfile::tempdir().unwrap();
+                let physical = if alias {
+                    symlink(external.path(), directory.path().join("alias")).unwrap();
+                    external.path().join(format!("missing.{extension}"))
+                } else {
+                    std::fs::create_dir(directory.path().join("db")).unwrap();
+                    directory.path().join(format!("db/missing.{extension}"))
+                };
+                let source = format!("\\documentclass{{article}}\n\\{command}{{{argument}}}\n");
+                std::fs::write(main.to_file_path().unwrap(), &source).unwrap();
+                server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}));
+                server.request(
+                    2,
+                    "workspace/executeCommand",
+                    json!({"command":"latex.build","arguments":[main]}),
+                );
+                let output = directory.path().join("build/latex-lsp");
+                let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                while !output.join("ready").exists() {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "compiler did not start"
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                std::fs::write(
+                    &physical,
+                    if extension == "bib" {
+                        "@book{one,title={Title}}\n"
+                    } else {
+                        "READ\n"
+                    },
+                )
+                .unwrap();
+                if event {
+                    // Report the physical path outside the workspace when the
+                    // declaration uses a directory alias inside the project.
+                    server.notify("workspace/didChangeWatchedFiles", json!({"changes":[{"uri":Url::from_file_path(&physical).unwrap(),"type":1}]}));
+                    server.request(
+                        3,
+                        "textDocument/documentSymbol",
+                        json!({"textDocument":{"uri":main}}),
+                    );
+                }
+                std::fs::write(output.join("release"), "").unwrap();
+                let finished = server.until(|message| message["method"] == "latex/buildFinished");
+                if event {
+                    assert_eq!(
+                        finished["params"]["status"], "cancelled",
+                        "{command} explicit={explicit} alias={alias}: {finished}"
+                    );
+                } else {
+                    assert_eq!(finished["params"]["status"], "error", "{finished}");
+                    assert_eq!(
+                        finished["params"]["stale"], true,
+                        "{command} explicit={explicit} alias={alias}: {finished}"
+                    );
+                }
+                let diagnostics = server.request(
+                    4,
+                    "textDocument/diagnostic",
+                    json!({"textDocument":{"uri":main}}),
+                );
+                assert!(
+                    !diagnostics["items"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|item| item["code"] == "missing-bibliography-database"
+                            || item["code"] == "missing-bibliography-style"),
+                    "{diagnostics}"
+                );
+                server.request(5, "shutdown", Value::Null);
+                server.notify("exit", Value::Null);
+                server.wait_exit(0);
+            }
+        }
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn first_static_bibliography_alias_retargets_invalidate_builds_without_prior_tool_history() {
+    use std::os::unix::fs::symlink;
+    for (command, extension) in [
+        ("bibliography", "bib"),
+        ("nobibliography", "bib"),
+        ("bibliographystyle", "bst"),
+    ] {
+        for explicit in [false, true] {
+            let argument = format!(
+                "alias{}",
+                if explicit {
+                    format!(".{extension}")
+                } else {
+                    String::new()
+                }
+            );
+            let metadata = if extension == "bib" {
+                "Database file #1: alias.bib".to_string()
+            } else {
+                format!("The style file: {argument}.bst")
+            };
+            let script = format!(
+                r#"printf '(./main.tex\n)\n' > "$1/main.log"
+printf 'PWD %s\nINPUT %s/main.tex\n' "$PWD" "$PWD" > "$1/main.fls"
+printf '%s\n' '{metadata}' > "$1/main.blg"
+touch "$1/ready"
+while [ ! -f "$1/release" ]; do sleep 0.02; done
+printf '%%PDF-1.4\n' > "$1/main.pdf"
+"#
+            );
+            let (mut server, directory, main) = fake_build_server(&script, false);
+            let root = directory.path();
+            for name in ["old", "new"] {
+                std::fs::write(
+                    root.join(format!("{name}.{extension}")),
+                    if extension == "bib" {
+                        format!("@book{{{name},title={{Title}}}}\n")
+                    } else {
+                        "READ\n".into()
+                    },
+                )
+                .unwrap();
+            }
+            let alias = root.join(format!("alias.{extension}"));
+            symlink(root.join(format!("old.{extension}")), &alias).unwrap();
+            let source = format!("\\documentclass{{article}}\n\\{command}{{{argument}}}\n");
+            std::fs::write(main.to_file_path().unwrap(), &source).unwrap();
+            server.notify(
+                "textDocument/didChange",
+                json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+            );
+            server.request(
+                2,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            let output = root.join("build/latex-lsp");
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while !output.join("ready").exists() {
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            std::fs::remove_file(&alias).unwrap();
+            symlink(root.join(format!("new.{extension}")), &alias).unwrap();
+            std::fs::write(output.join("release"), "").unwrap();
+            let finished = server.until(|message| message["method"] == "latex/buildFinished");
+            assert_eq!(finished["params"]["status"], "success", "{finished}");
+            assert_eq!(
+                finished["params"]["stale"], true,
+                "{command} explicit={explicit}: {finished}"
+            );
+            server.request(3, "shutdown", Value::Null);
+            server.notify("exit", Value::Null);
+            server.wait_exit(0);
+        }
+    }
+}
