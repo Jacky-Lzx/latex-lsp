@@ -1292,6 +1292,22 @@ fn operand_builtin(name: &str) -> Option<Signature> {
     builtin(name).or_else(|| {
         let parameters = if argument_free(name) {
             vec![]
+        } else if name == "newtheorem" {
+            // Both numbered forms end after the title and possible reset
+            // counter; the starred form has no optional counter operands.
+            [
+                (Kind::Required, "{name}"),
+                (Kind::UnstarredOptional, "[shared]"),
+                (Kind::Required, "{title}"),
+                (Kind::UnstarredOptional, "[within]"),
+            ]
+            .into_iter()
+            .map(|(kind, label)| Parameter {
+                obey_spaces: false,
+                kind,
+                label: label.into(),
+            })
+            .collect()
         } else if matches!(name, "csdef" | "csgdef" | "csedef" | "csxdef") {
             // Grouped destinations and replacement text do not consume the
             // following command. Parameter text stops this group-only reader.
@@ -1310,8 +1326,8 @@ fn operand_builtin(name: &str) -> Option<Signature> {
             name: name.into(),
             parameters,
             documentation: String::new(),
-            starred: false,
-            nested_brackets: true,
+            starred: name == "newtheorem",
+            nested_brackets: name != "newtheorem",
         })
     })
 }

@@ -381,14 +381,6 @@ fn occurrences(source: &str, command: &Command) -> Option<Vec<(bool, Span<usize>
 
 /// Direct calls whose complete consumed arguments can be checked against TeX's
 /// source echo. Blend settings are evaluated later, so they have no direct site.
-pub(crate) fn error_invocations(source: &str, syntax: &Syntax) -> Vec<(Span<usize>, Span<usize>)> {
-    error_invocations_with_signatures(
-        source,
-        syntax,
-        &crate::signature::CommandSignatures::new([(source, syntax)]),
-    )
-}
-
 pub(crate) fn error_invocations_with_signatures(
     source: &str,
     syntax: &Syntax,
@@ -453,17 +445,6 @@ pub(crate) fn error_invocations_with_signatures(
 
 /// Parse model operands even when their spelling is invalid. Keep this separate
 /// from symbol indexing, which must reject unknown color models.
-pub(crate) fn model_error_invocations(
-    source: &str,
-    syntax: &Syntax,
-) -> Vec<(Span<usize>, Span<usize>)> {
-    model_error_invocations_with_signatures(
-        source,
-        syntax,
-        &crate::signature::CommandSignatures::new([(source, syntax)]),
-    )
-}
-
 pub(crate) fn model_error_invocations_with_signatures(
     source: &str,
     syntax: &Syntax,

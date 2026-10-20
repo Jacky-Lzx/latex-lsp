@@ -88,19 +88,17 @@ fn target<'a>(
         if build_log::undefined_counter_name(&diagnostic.message) != Some(name) {
             return None;
         }
-        return doc
-            .syntax
-            .commands
-            .iter()
-            .any(|command| {
-                crate::counters::invocations(&doc.text.source, command)
-                    .into_iter()
-                    .any(|(span, _)| {
-                        doc.text.source[span.clone()] == *name
-                            && doc.text.range(span.start, span.end) == diagnostic.range
-                    })
-            })
-            .then_some((Kind::Counter, name));
+        return crate::counters::error_invocations_with_signatures(
+            &doc.text.source,
+            &doc.syntax,
+            signatures?,
+        )
+        .iter()
+        .any(|(span, _)| {
+            doc.text.source[span.clone()] == *name
+                && doc.text.range(span.start, span.end) == diagnostic.range
+        })
+        .then_some((Kind::Counter, name));
     }
 
     if diagnostic.code == Some(NumberOrString::String("undefined-color".into())) {
@@ -387,7 +385,7 @@ pub fn fixes(
                 }
                 continue;
             }
-            let color_scope = if matches!(diagnostic.code.as_ref(), Some(NumberOrString::String(code)) if matches!(code.as_str(), "undefined-color" | "undefined-color-model"))
+            let invocation_scope = if matches!(diagnostic.code.as_ref(), Some(NumberOrString::String(code)) if matches!(code.as_str(), "undefined-color" | "undefined-color-model" | "undefined-counter"))
             {
                 let confirmed = workspace.build_diagnostic_sources.get(root);
                 let scope = if let Some(value) = diagnostic
@@ -434,7 +432,7 @@ pub fn fixes(
             } else {
                 None
             };
-            let color_signatures = color_scope
+            let invocation_signatures = invocation_scope
                 .as_ref()
                 .map(|(scope, paused)| {
                     signatures
@@ -466,7 +464,7 @@ pub fn fixes(
                         })
                 })
                 .map(|signatures| &*signatures);
-            let Some((kind, key)) = target(doc, diagnostic, color_signatures) else {
+            let Some((kind, key)) = target(doc, diagnostic, invocation_signatures) else {
                 continue;
             };
             let counter_conflicts = if kind == Kind::Counter {

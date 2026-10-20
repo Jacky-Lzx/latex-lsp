@@ -4,6 +4,126 @@ use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString, Url};
 const HELP: &str = "\nSee the LaTeX manual or LaTeX Companion for explanation.\nType  H <return>  for immediate help.\n ...                                              \n                                                  \n";
 
 #[test]
+fn counter_commands_passed_as_macro_operands_keep_line_diagnostics() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("main.tex");
+    let call = r"\setcounter{missing}{7}";
+    for (declaration, prefix) in [
+        (r"\newcommand{\wrapped}[3]{}", r"\wrapped"),
+        (r"\newcommand{\wrapped}[4]{}", r"\wrapped{Unused}"),
+        (r"\newcommand{\wrapped}[4][default]{}", r"\wrapped[note]"),
+        (r"\def\wrapped#1#2#3{}", r"\wrapped"),
+        (
+            r"\NewDocumentCommand{\wrapped}{s t+ O{default} m m m}{}",
+            r"\wrapped*+[note]",
+        ),
+        (
+            r"\NewDocumentCommand{\wrapped}{d() m m m}{}",
+            r"\wrapped(note)",
+        ),
+        (
+            r"\newcommand{\wrapped}[3]{}\def\bridge{\wrapped}",
+            r"\bridge",
+        ),
+        (r"\def\bridge{\missingtarget}", r"\bridge"),
+        (r"\def\bridge{\bridge}", r"\bridge"),
+        ("", r"\unknown{Unused}"),
+        (r"\renewcommand{\setcounter}[2]{}", ""),
+    ] {
+        let invocation = format!("{prefix}{call}");
+        let source = format!("{declaration}\n{invocation}\n");
+        std::fs::write(&root, source).unwrap();
+        let log = format!("(./main.tex\n./main.tex:2: LaTeX Error: No counter 'missing' defined.\n{HELP}l.2 {invocation}\n)\n");
+        let result = build_log::parse(&root, &log);
+        let error = &result[&Url::from_file_path(&root).unwrap()][0];
+        assert!(
+            error.code.is_none() && error.data.is_none(),
+            "{declaration}/{prefix}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn completed_macro_calls_and_empty_aliases_keep_counter_error_ranges() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("main.tex");
+    let call = r"\setcounter{missing}{7}";
+    for (declaration, prefix) in [
+        (r"\newcommand{\done}{}", r"\done"),
+        (r"\newcommand{\done}{}\def\bridge{\done}", r"\bridge"),
+        (r"\newcommand{\done}[1]{}", r"\done{Unused}"),
+        (r"\newcommand{\done}[1][default]{}", r"\done[note]"),
+        (
+            r"\NewDocumentCommand{\done}{s t+ O{default} m}{}",
+            r"\done*+[note]{Unused}",
+        ),
+        (
+            r"\NewDocumentCommand{\done}{d() m}{}",
+            r"\done(note){Unused}",
+        ),
+        ("", r"\relax\noindent\bfseries"),
+    ] {
+        let invocation = format!("{prefix}{call}");
+        let source = format!("{declaration}\n{invocation}\n");
+        std::fs::write(&root, &source).unwrap();
+        let log = format!("(./main.tex\n./main.tex:2: LaTeX Error: No counter 'missing' defined.\n{HELP}l.2 {invocation}\n)\n");
+        let result = build_log::parse(&root, &log);
+        let error = &result[&Url::from_file_path(&root).unwrap()][0];
+        let start = source.rfind("missing").unwrap();
+        assert_eq!(
+            error.range,
+            Text::new(source).range(start, start + 7),
+            "{declaration}/{prefix}"
+        );
+        assert_eq!(
+            error.code,
+            Some(NumberOrString::String("undefined-counter".into()))
+        );
+    }
+}
+
+#[test]
+fn theorem_declarations_do_not_consume_following_counter_commands() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("main.tex");
+    let call = r"\setcounter{missing}{7}";
+    for declaration in [
+        r"\newtheorem{claim}{Claim}",
+        r"\newtheorem{claim}[equation]{Claim}",
+        r"\newtheorem{claim}{Claim}[section]",
+        r"\newtheorem*{claim}{Claim}",
+        r"\newtheorem{claim}\Title",
+    ] {
+        let source = format!("{declaration}\n{call}\n");
+        std::fs::write(&root, &source).unwrap();
+        let log = format!("(./main.tex\n./main.tex:2: LaTeX Error: No counter 'missing' defined.\n{HELP}l.2 {call}\n)\n");
+        let result = build_log::parse(&root, &log);
+        let error = &result[&Url::from_file_path(&root).unwrap()][0];
+        let start = source.rfind("missing").unwrap();
+        assert_eq!(
+            error.range,
+            Text::new(source).range(start, start + 7),
+            "{declaration}: {error:?}"
+        );
+        assert_eq!(
+            error.code,
+            Some(NumberOrString::String("undefined-counter".into()))
+        );
+    }
+}
+
+#[test]
+fn counter_callbacks_starting_on_an_earlier_line_do_not_borrow_the_final_echo() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("main.tex");
+    std::fs::write(&root, "\\newcommand{\\wrapped}[3]{\\setcounter{missing}{7}}\n\\wrapped\\setcounter{missing}\n{7}\n").unwrap();
+    let log = format!("(./main.tex\n./main.tex:3: LaTeX Error: No counter 'missing' defined.\n{HELP}l.3 {{7}}\n)\n");
+    let result = build_log::parse(&root, &log);
+    let error = &result[&Url::from_file_path(&root).unwrap()][0];
+    assert!(error.code.is_none() && error.data.is_none(), "{error:?}");
+}
+
+#[test]
 fn counter_errors_do_not_normalize_significant_whitespace_inside_names() {
     let directory = tempfile::tempdir().unwrap();
     let main = directory.path().join("main.tex");

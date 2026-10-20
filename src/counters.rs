@@ -184,6 +184,44 @@ pub(crate) fn invocations(source: &str, command: &Command) -> Vec<(Range<usize>,
         .collect()
 }
 
+pub(crate) fn error_invocations_with_signatures(
+    source: &str,
+    parsed: &syntax::Syntax,
+    signatures: &crate::signature::CommandSignatures<'_>,
+) -> Vec<(Range<usize>, Range<usize>)> {
+    if signatures.names().any(error_command) {
+        return vec![];
+    }
+    let operands = signatures.argument_tokens(source, parsed);
+    parsed
+        .commands
+        .iter()
+        .filter(|command| !operands.contains(&command.span.start))
+        .flat_map(|command| invocations(source, command))
+        .collect()
+}
+
+fn error_command(name: &str) -> bool {
+    matches!(
+        name,
+        "setcounter"
+            | "addtocounter"
+            | "stepcounter"
+            | "refstepcounter"
+            | "usecounter"
+            | "newcounter"
+            | "newaliascnt"
+            | "newtheorem"
+            | "setcounterref"
+            | "addtocounterref"
+            | "setcounterpageref"
+            | "addtocounterpageref"
+            | "counterwithin"
+            | "counterwithout"
+            | "numberwithin"
+    )
+}
+
 fn invocation_arguments(
     source: &str,
     command: &Command,
@@ -202,23 +240,7 @@ fn invocation_arguments(
             at = syntax::skip_space(source, syntax::group(source, at, b'[', b']')?.1);
         }
     }
-    if !resetting
-        && !matches!(
-            command.name.as_str(),
-            "setcounter"
-                | "addtocounter"
-                | "stepcounter"
-                | "refstepcounter"
-                | "usecounter"
-                | "newcounter"
-                | "newaliascnt"
-                | "newtheorem"
-                | "setcounterref"
-                | "addtocounterref"
-                | "setcounterpageref"
-                | "addtocounterpageref"
-        )
-    {
+    if !error_command(&command.name) {
         return None;
     }
     let (first, mut end) = syntax::group(source, at, b'{', b'}')?;

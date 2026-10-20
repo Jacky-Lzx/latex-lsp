@@ -120,6 +120,154 @@ fn apply_count(workspace: &Workspace, uri: &Url, edit: WorkspaceEdit, count: usi
 }
 
 #[test]
+fn counter_spelling_repairs_recheck_macro_operands_across_project_sources() {
+    let source = r"\bridge\setcounter{equatoin}{7}";
+    let declarations = r"\newcommand{\done}{}\def\bridge{\done}";
+    let (mut workspace, uri, definitions) = setup(source, declarations);
+    let mut error = diagnostic(&mut workspace, &uri, "equatoin");
+    workspace
+        .build_diagnostic_sources
+        .insert(uri.clone(), [uri.clone()].into());
+    assert!(actions(&workspace, &uri, &error).is_empty());
+    workspace
+        .build_diagnostic_sources
+        .insert(uri.clone(), [uri.clone(), definitions.clone()].into());
+    assert_eq!(
+        apply(
+            &workspace,
+            &uri,
+            action(&actions(&workspace, &uri, &error), "equation")
+                .edit
+                .unwrap()
+        ),
+        source.replace("equatoin", "equation")
+    );
+    let later = uri.join("later.sty").unwrap();
+    workspace.documents.insert(
+        later.clone(),
+        Document::new(&later, r"\renewcommand{\done}[3]{}".into(), None),
+    );
+    workspace
+        .recorded_inputs
+        .get_mut(&uri)
+        .unwrap()
+        .insert(later.clone());
+    workspace
+        .build_diagnostic_sources
+        .get_mut(&uri)
+        .unwrap()
+        .insert(later);
+    error.data.as_mut().unwrap()["macroSources"] = serde_json::json!([uri, definitions]);
+    store(&mut workspace, &uri, error.clone());
+    assert!(!actions(&workspace, &uri, &error).is_empty());
+    workspace.documents.insert(
+        definitions.clone(),
+        Document::new(
+            &definitions,
+            r"\newcommand{\done}[3]{}\def\bridge{\done}".into(),
+            Some(4),
+        ),
+    );
+    assert!(actions(&workspace, &uri, &error).is_empty());
+    for (source, definitions) in [
+        (
+            r"\wrapped\setcounter{equatoin}{7}",
+            r"\newcommand{\wrapped}[3]{}",
+        ),
+        (
+            r"\wrapped{Unused}\setcounter{equatoin}{7}",
+            r"\newcommand{\wrapped}[4]{}",
+        ),
+        (
+            r"\bridge\setcounter{equatoin}{7}",
+            r"\newcommand{\wrapped}[3]{}\def\bridge{\wrapped}",
+        ),
+        (
+            r"\setcounter{equatoin}{7}",
+            r"\renewcommand{\setcounter}[2]{}",
+        ),
+    ] {
+        let (mut workspace, uri, _) = setup(source, definitions);
+        let error = diagnostic(&mut workspace, &uri, "equatoin");
+        assert!(
+            actions(&workspace, &uri, &error).is_empty(),
+            "{source}/{definitions}"
+        );
+    }
+}
+
+#[test]
+fn counter_fixes_recheck_paused_parent_declarations_and_metadata() {
+    let source = r"\bridge\setcounter{equatoin}{7}";
+    let (mut workspace, root, definitions) = setup(
+        r"\input{content}",
+        r"\newcommand{\done}{}\def\bridge{\done}",
+    );
+    let child = root.join("content.tex").unwrap();
+    workspace
+        .documents
+        .insert(child.clone(), Document::new(&child, source.into(), Some(3)));
+    workspace
+        .recorded_inputs
+        .get_mut(&root)
+        .unwrap()
+        .insert(child.clone());
+    workspace.build_diagnostic_sources.insert(
+        root.clone(),
+        [root.clone(), child.clone(), definitions.clone()].into(),
+    );
+    let start = source.find("equatoin").unwrap();
+    let error = Diagnostic {
+        range: workspace.documents[&child].text.range(start, start + 8),
+        message: "LaTeX Error: No counter 'equatoin' defined.".into(),
+        source: Some("latex-build".into()),
+        code: Some(NumberOrString::String("undefined-counter".into())),
+        data: Some(
+            serde_json::json!({"counter":"equatoin", "macroSources":[child,definitions],"macroPausedSources":[root]}),
+        ),
+        ..Default::default()
+    };
+    workspace.build_diagnostics.insert(
+        root.clone(),
+        BTreeMap::from([(child.clone(), vec![error.clone()])]),
+    );
+    assert!(!actions(&workspace, &child, &error).is_empty());
+    for value in [
+        serde_json::json!("invalid"),
+        serde_json::json!([child]),
+        serde_json::json!(["file:///outside.tex"]),
+    ] {
+        let mut malformed = error.clone();
+        malformed.data.as_mut().unwrap()["macroPausedSources"] = value;
+        workspace
+            .build_diagnostics
+            .get_mut(&root)
+            .unwrap()
+            .insert(child.clone(), vec![malformed.clone()]);
+        assert!(actions(&workspace, &child, &malformed).is_empty());
+    }
+    workspace
+        .build_diagnostics
+        .get_mut(&root)
+        .unwrap()
+        .insert(child.clone(), vec![error.clone()]);
+    for declaration in [
+        r"\renewcommand{\done}[3]{}",
+        r"\renewcommand{\bridge}[3]{}",
+        r"\renewcommand{\setcounter}[2]{}",
+    ] {
+        workspace.documents.insert(
+            root.clone(),
+            Document::new(&root, format!("{declaration}\\input{{content}}"), Some(10)),
+        );
+        assert!(
+            actions(&workspace, &child, &error).is_empty(),
+            "{declaration}"
+        );
+    }
+}
+
+#[test]
 fn optional_counter_repairs_protect_closing_brackets_without_changing_titles() {
     for (source, expected) in [
         (
