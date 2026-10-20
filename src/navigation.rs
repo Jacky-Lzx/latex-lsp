@@ -341,6 +341,20 @@ pub(crate) fn document_links_in(workspace: &Workspace, uri: &Url, root: &Url) ->
             });
         }
     }
+    let inputs = crate::source_inputs::Index::new(workspace, root);
+    for call in inputs.calls.get(uri).into_iter().flatten() {
+        if let (Some(argument), Some(target)) = (
+            call.command.argument.as_ref(),
+            crate::source_inputs::target(uri, root, call),
+        ) {
+            links.push(DocumentLink {
+                range: doc.text.range(argument.span.start, argument.span.end),
+                target: Some(target),
+                tooltip: None,
+                data: None,
+            });
+        }
+    }
     for command in &doc.syntax.commands {
         if syntax::code_input_command(&command.name)
             && !crate::code_inputs::supported(workspace, uri, root, command)

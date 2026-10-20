@@ -187,11 +187,11 @@ fn bare_input_renames_add_braces_for_spaces_and_preserve_existing_quotes() {
     let root = directory.path();
     let workspace = project(root);
     let source = changed(&workspace, &renames(root));
-    assert!(source.contains("\\input {new 中文.tex}\n"), "{source}");
+    assert!(source.contains("\\input {new 中文.tex}%\n"), "{source}");
     assert!(source.contains("\\input\"quoted new\"\n"), "{source}");
-    assert!(source.contains("{\\input {new 中文} }\n"), "{source}");
+    assert!(source.contains("{\\input {new 中文}}\n"), "{source}");
     assert!(
-        source.contains("\\input % comment before filename\n  {new 中文}\n"),
+        source.contains("\\input % comment before filename\n  {new 中文}%\n"),
         "{source}"
     );
     assert!(source.contains("% \\input ignored\n"));
@@ -307,8 +307,7 @@ fn unicode_input_filename_renames_read_the_moved_file_for_bare_and_quoted_forms(
                     new_uri: uri(root, &name).to_string(),
                 }];
                 let updated = changed(&workspace, &files);
-                let expected =
-                    format!("\\input{}{{{stem}}} \\relax", if quoted { "" } else { " " });
+                let expected = format!("\\input{}{{{stem}}}\\relax", if quoted { "" } else { " " });
                 assert!(updated.contains(&expected), "{updated}");
                 std::fs::write(root.join("main.tex"), updated).unwrap();
                 std::fs::rename(root.join("old.tex"), root.join(&name)).unwrap();

@@ -35,6 +35,7 @@ mod saved_text;
 pub mod semantic;
 mod semantic_cache;
 pub mod signature;
+mod source_inputs;
 mod spelling_fixes;
 pub mod synctex;
 pub mod syntax;

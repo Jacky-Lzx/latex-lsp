@@ -149,7 +149,7 @@ fn file_completions_replace_partial_names_preserve_lists_and_reuse_existing_slas
             "chapter.tex",
             r"\input chapter trailing",
         ),
-        (r"\input my| next", "my file.tex", r"\input {my file} next"),
+        (r"\input my| next", "my file.tex", r"\input {my file}next"),
         (
             r#"\input"my f|ile" next"#,
             "my file.tex",
@@ -158,7 +158,7 @@ fn file_completions_replace_partial_names_preserve_lists_and_reuse_existing_slas
         (
             r"\input my|/chapter next",
             "my dir/",
-            r"\input {my dir/chapter} next",
+            r"\input {my dir/chapter}next",
         ),
         (r"\input |", "chapter.tex", r"\input chapter"),
         (r"\input{ cha|pter }", "chapter.tex", r"\input{ chapter }"),

@@ -426,7 +426,15 @@ pub fn will_rename(workspace: &Workspace, files: &[FileRename]) -> Result<Option
             }
         }
         let mut links = BTreeMap::<(usize, usize), (String, usize)>::new();
+        let mut indirect_inputs = Vec::new();
         for root in &roots {
+            let mut inputs = crate::source_inputs::Index::new(workspace, root);
+            let calls = inputs.calls.remove(uri).unwrap_or_default();
+            let commands: Vec<_> = calls
+                .into_iter()
+                .filter(|call| call.certain)
+                .map(|call| call.command)
+                .collect();
             let graphics = graphics::directories_in(workspace, uri, root);
             for link in navigation::document_links_in(workspace, uri, root) {
                 let Some(target) = link.target.filter(|target| target.scheme() == "file") else {
@@ -445,7 +453,7 @@ pub fn will_rename(workspace: &Workspace, files: &[FileRename]) -> Result<Option
                     .is_some_and(|path| renames.path(&path) != path);
                 let document_changed = renames.affects(uri);
                 let root_changed = renames.affects(root);
-                let command = doc.syntax.commands.iter().find(|command| {
+                let command = doc.syntax.commands.iter().chain(&commands).find(|command| {
                     syntax::file_extensions(&command.name).is_some()
                         && syntax::file_argument(&doc.text.source, command).is_some_and(
                             |argument| argument.span.start <= start && argument.span.end >= end,
@@ -530,6 +538,7 @@ pub fn will_rename(workspace: &Workspace, files: &[FileRename]) -> Result<Option
                     links.insert((start, end), (new_text, 1));
                 }
             }
+            indirect_inputs.extend(commands);
         }
         for ((start, end), (new_text, count)) in links {
             if new_text != doc.text.source[start..end] {
@@ -542,6 +551,7 @@ pub fn will_rename(workspace: &Workspace, files: &[FileRename]) -> Result<Option
                     .syntax
                     .commands
                     .iter()
+                    .chain(&indirect_inputs)
                     .filter(|command| command.name == "input")
                     .filter_map(|command| command.argument.as_ref())
                     .find(|argument| {

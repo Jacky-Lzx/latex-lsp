@@ -346,12 +346,37 @@ impl Workspace {
     }
 
     fn source_dependencies_with_kinds(&self, uri: &Url, root: &Url) -> Vec<(Url, DocumentKind)> {
+        let mut dependencies = self.literal_source_dependencies_with_kinds(uri, root);
+        dependencies.extend(
+            crate::source_inputs::Index::new(self, root)
+                .dependencies(uri, root)
+                .into_iter()
+                .map(|uri| (uri, DocumentKind::Latex)),
+        );
+        dependencies
+    }
+
+    pub(crate) fn literal_source_dependencies_with_kinds(
+        &self,
+        uri: &Url,
+        root: &Url,
+    ) -> Vec<(Url, DocumentKind)> {
+        self.literal_source_dependencies_filtered(uri, root, |_| true)
+    }
+
+    pub(crate) fn literal_source_dependencies_filtered(
+        &self,
+        uri: &Url,
+        root: &Url,
+        include: impl Fn(&crate::syntax::Command) -> bool,
+    ) -> Vec<(Url, DocumentKind)> {
         let Some(doc) = self.documents.get(uri) else {
             return vec![];
         };
         doc.syntax
             .commands
             .iter()
+            .filter(|command| include(command))
             .flat_map(|command| {
                 let extension = match command.name.as_str() {
                     "input" | "InputIfFileExists" | "include" | "subfile" => "tex",
@@ -915,24 +940,39 @@ impl Workspace {
         if refresh {
             self.reload(uri);
         }
-        let dependencies = self.dependencies_from(uri, root);
-        let sources: BTreeMap<_, _> = self
-            .source_dependencies_with_kinds(uri, root)
-            .into_iter()
-            .collect();
-        for dependency in dependencies {
-            if let Some(kind) = sources.get(&dependency) {
-                if let Some(doc) = self.documents.get_mut(&dependency) {
-                    doc.set_kind_hint(*kind);
-                } else {
-                    self.reload_document_as(&dependency, true, Some(*kind));
-                }
-            } else if !self.documents.contains_key(&dependency) {
-                // Explicit source inclusion keeps working for unusual names
-                // such as input{notes.txt}; recorder-only data stays unparsed.
-                self.reload_document(&dependency, false);
+        let mut followed = BTreeSet::new();
+        loop {
+            let dependencies: Vec<_> = self
+                .dependencies_from(uri, root)
+                .into_iter()
+                .filter(|dependency| !followed.contains(dependency))
+                .collect();
+            if dependencies.is_empty() || followed.len() >= MAX_FILES {
+                break;
             }
-            self.load_dependencies_inner(&dependency, root, depth + 1, visited, refresh);
+            let sources: BTreeMap<_, _> = self
+                .source_dependencies_with_kinds(uri, root)
+                .into_iter()
+                .collect();
+            for dependency in dependencies {
+                if !followed.insert(dependency.clone()) {
+                    continue;
+                }
+                if let Some(kind) = sources.get(&dependency) {
+                    if let Some(doc) = self.documents.get_mut(&dependency) {
+                        doc.set_kind_hint(*kind);
+                    } else {
+                        self.reload_document_as(&dependency, true, Some(*kind));
+                    }
+                } else if !self.documents.contains_key(&dependency) {
+                    // Recorder-only data stays unparsed; explicit includes
+                    // retain their source role even for unusual extensions.
+                    self.reload_document(&dependency, false);
+                }
+                self.load_dependencies_inner(&dependency, root, depth + 1, visited, refresh);
+            }
+            // Newly loaded local declarations can expose another source alias
+            // in this parent, even when the parent itself did not change.
         }
     }
 }

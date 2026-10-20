@@ -20,18 +20,37 @@ pub(crate) fn input_filename_needs_braces(source: &str, argument: &Argument, val
 
 pub(crate) fn input_filename_edit(text: &Text, argument: &Argument, value: String) -> TextEdit {
     let grouped = input_filename_needs_braces(&text.source, argument, &value);
-    let span = if grouped {
-        &argument.outer_span
+    let mut span = if grouped {
+        argument.outer_span.clone()
     } else {
-        &argument.span
+        argument.span.clone()
     };
+    let mut new_text = if grouped {
+        format!("{{{value}}}")
+    } else {
+        value
+    };
+    if grouped {
+        // The primitive filename scanner consumes the terminating space and
+        // leaves TeX ignoring the rest of that line's blanks. A braced input
+        // would typeset them. Keep line endings, suppressing their space with
+        // a comment, or include horizontal delimiter blanks in the edit.
+        let blanks = text.source[span.end..]
+            .bytes()
+            .take_while(|byte| matches!(byte, b' ' | b'\t'))
+            .count();
+        if matches!(
+            text.source.as_bytes().get(span.end + blanks),
+            Some(b'\r' | b'\n')
+        ) {
+            new_text.push('%');
+        } else {
+            span.end += blanks;
+        }
+    }
     TextEdit {
         range: text.range(span.start, span.end),
-        new_text: if grouped {
-            format!("{{{value}}}")
-        } else {
-            value
-        },
+        new_text,
     }
 }
 
@@ -262,6 +281,23 @@ fn input_argument(source: &str, start: usize) -> Option<(Argument, usize)> {
         },
         after,
     ))
+}
+
+pub(crate) fn source_input_argument(source: &str, name: &str, end: usize) -> Option<Argument> {
+    let start = skip_space(source, end);
+    group(source, start, b'{', b'}')
+        .or_else(|| {
+            (name == "input" && source.as_bytes().get(start) != Some(&b'{'))
+                .then(|| input_argument(source, start))
+                .flatten()
+        })
+        .map(|(mut argument, _)| {
+            if let Some(span) = literal_file_span(source, argument.span.clone(), false) {
+                argument.value = source[span.clone()].into();
+                argument.span = span;
+            }
+            argument
+        })
 }
 
 pub fn is_reference(name: &str) -> bool {

@@ -1484,6 +1484,12 @@ pub(crate) struct EnvironmentCall {
     pub deferred: bool,
 }
 
+#[derive(Clone)]
+pub(crate) struct SourceCall {
+    pub command: syntax::Command,
+    pub certain: bool,
+}
+
 impl<'a> CommandSignatures<'a> {
     pub(crate) fn names(&self) -> impl Iterator<Item = &str> {
         self.local.keys().map(|name| name.as_ref())
@@ -1505,6 +1511,28 @@ impl<'a> CommandSignatures<'a> {
         ambiguous: impl IntoIterator<Item = &'a str>,
         environments: impl IntoIterator<Item = &'a str>,
     ) -> Self {
+        Self::collect(documents, ambiguous, environments, None)
+    }
+
+    pub(crate) fn source_context(
+        documents: impl IntoIterator<Item = (&'a str, &'a syntax::Syntax)>,
+    ) -> Self {
+        let documents: Vec<_> = documents.into_iter().collect();
+        let preliminary = Self::new(documents.iter().copied());
+        Self::collect(
+            documents,
+            std::iter::empty(),
+            std::iter::empty(),
+            Some(&preliminary),
+        )
+    }
+
+    fn collect(
+        documents: impl IntoIterator<Item = (&'a str, &'a syntax::Syntax)>,
+        ambiguous: impl IntoIterator<Item = &'a str>,
+        environments: impl IntoIterator<Item = &'a str>,
+        source_context: Option<&Self>,
+    ) -> Self {
         let mut local: BTreeMap<_, _> = ambiguous
             .into_iter()
             .map(|name| (Cow::Borrowed(name), None))
@@ -1517,11 +1545,26 @@ impl<'a> CommandSignatures<'a> {
             local.keys().map(|name| (name.clone(), None)).collect();
         let mut aliases = BTreeMap::new();
         for (source, parsed) in documents {
+            let positions = source_context
+                .map(|signatures| signatures.source_command_positions(source, parsed));
             for (entry, environment) in parsed
                 .definitions
                 .iter()
                 .map(|entry| (entry, false))
                 .chain(parsed.environments.iter().map(|entry| (entry, true)))
+                .filter(|(entry, _)| {
+                    positions.as_ref().is_none_or(|positions| {
+                        let declaration = entry.detail.strip_prefix("Defined with \\");
+                        let end = parsed
+                            .commands
+                            .partition_point(|command| command.span.start < entry.span.start);
+                        parsed.commands[..end]
+                            .iter()
+                            .rev()
+                            .find(|command| Some(command.name.as_str()) == declaration)
+                            .is_some_and(|command| positions.contains(&command.span.start))
+                    })
+                })
             {
                 // Environments and ordinary commands share their start control
                 // in TeX. Duplicates must invalidate both calls and aliases.
@@ -1678,6 +1721,100 @@ impl<'a> CommandSignatures<'a> {
 
     pub(crate) fn command_unchanged(&self, name: &str) -> bool {
         !self.local.contains_key(name)
+    }
+
+    /// Literal filenames following static named calls and pure source aliases.
+    /// Ordinary input/include commands retain their existing lexical handling.
+    pub(crate) fn indirect_source_invocations(
+        &self,
+        source: &str,
+        parsed: &syntax::Syntax,
+        positions: &BTreeSet<usize>,
+    ) -> Vec<SourceCall> {
+        let aliased = self
+            .local
+            .values()
+            .flatten()
+            .any(|signature| matches!(signature.name.as_str(), "input" | "include"));
+        if !aliased
+            && !parsed
+                .commands
+                .iter()
+                .any(|command| matches!(command.name.as_str(), "csuse" | "endcsname"))
+        {
+            return vec![];
+        }
+        let operands = parsed
+            .commands
+            .iter()
+            .filter(|command| !positions.contains(&command.span.start))
+            .map(|command| command.span.start)
+            .collect();
+        let declarations = parsed
+            .definitions
+            .iter()
+            .map(|entry| (entry.span.start, entry.span.end))
+            .collect();
+        parsed
+            .commands
+            .iter()
+            .enumerate()
+            .filter_map(|(index, command)| {
+                if matches!(command.name.as_str(), "input" | "include") {
+                    return None;
+                }
+                let (name, start, end, _) =
+                    self.invocation(source, parsed, index, &operands, &declarations)?;
+                if !positions.contains(&start) || !positions.contains(&command.span.start) {
+                    return None;
+                }
+                let builtin = ["input", "include"].into_iter().find(|builtin| {
+                    name == *builtin
+                        || self
+                            .local
+                            .get(name)
+                            .and_then(Option::as_ref)
+                            .is_some_and(|signature| signature.name == *builtin)
+                })?;
+                Some(SourceCall {
+                    command: syntax::Command {
+                        name: builtin.into(),
+                        span: start..end,
+                        argument: syntax::source_input_argument(source, builtin, end),
+                    },
+                    certain: self.invokes_builtin(name, builtin),
+                })
+            })
+            .collect()
+    }
+
+    pub(crate) fn source_command_positions(
+        &self,
+        source: &str,
+        parsed: &syntax::Syntax,
+    ) -> BTreeSet<usize> {
+        let operands = self.argument_tokens(source, parsed);
+        let bodies = definition_body_spans(source, parsed);
+        let active =
+            |start| !operands.contains(&start) && !bodies.iter().any(|span| span.contains(&start));
+        // A redefined endinput also ends the region we can interpret safely.
+        let stop = parsed
+            .commands
+            .iter()
+            .filter(|command| command.name == "endinput" && active(command.span.start))
+            .map(|command| {
+                source[command.span.end..]
+                    .find(['\r', '\n'])
+                    .map_or(source.len(), |after| command.span.end + after)
+            })
+            .min()
+            .unwrap_or(source.len());
+        parsed
+            .commands
+            .iter()
+            .filter(|command| command.span.start < stop && active(command.span.start))
+            .map(|command| command.span.start)
+            .collect()
     }
 
     pub(crate) fn environment_invocations(

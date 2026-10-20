@@ -140,10 +140,7 @@ fn input_spelling_fixes_protect_spaces_and_preserve_existing_delimiters_and_comm
             "\\input % keep\r\n{ mychapter } % keep",
             "\\input % keep\r\n{ my chapter } % keep",
         ),
-        (
-            "\\input mychapter trailing",
-            "\\input {my chapter} trailing",
-        ),
+        ("\\input mychapter trailing", "\\input {my chapter}trailing"),
         (
             "\\input\"mychapter\" trailing",
             "\\input\"my chapter\" trailing",
@@ -197,8 +194,8 @@ fn input_spelling_fixes_protect_spaces_and_preserve_existing_delimiters_and_comm
 #[test]
 fn unicode_input_fixes_group_paths_and_legacy_commands_revalidate_the_expanded_edit() {
     for (command, expected) in [
-        (r"\input cafe trailing", r"\input {café} trailing"),
-        (r#"\input"cafe" trailing"#, r"\input{café} trailing"),
+        (r"\input cafe trailing", r"\input {café}trailing"),
+        (r#"\input"cafe" trailing"#, r"\input{café}trailing"),
         (r"\input{ cafe } trailing", r"\input{ café } trailing"),
     ] {
         let directory = tempfile::tempdir().unwrap();

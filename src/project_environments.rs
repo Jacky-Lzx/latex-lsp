@@ -263,6 +263,7 @@ fn source(
     root: &Url,
     uri: &Url,
     signatures: &CommandSignatures<'_>,
+    inputs: &crate::source_inputs::Index,
 ) -> Source {
     let doc = &workspace.documents[uri];
     let mut result = Source::default();
@@ -279,6 +280,17 @@ fn source(
             .filter(|call| !call.operand && !call.deferred)
             .map(|call| (call.span.start, Operation::Environment(call))),
     );
+    for call in inputs.calls.get(uri).into_iter().flatten() {
+        let target = crate::source_inputs::target(uri, root, call).filter(|target| {
+            workspace
+                .documents
+                .get(target)
+                .is_some_and(|doc| doc.kind == DocumentKind::Latex)
+        });
+        result
+            .operations
+            .push((call.command.span.start, Operation::Input(target, false)));
+    }
     let operands = signatures.argument_tokens(&doc.text.source, &doc.syntax);
     let bodies = definition_body_spans(&doc.text.source, &doc.syntax);
     for command in &doc.syntax.commands {
@@ -407,6 +419,7 @@ pub(crate) fn fixes(
         if scope.is_disjoint(requested) {
             continue;
         }
+        let inputs = crate::source_inputs::Index::new(workspace, &root);
         let signatures = CommandSignatures::new(
             workspace
                 .documents
@@ -422,7 +435,12 @@ pub(crate) fn fixes(
                     .get(*uri)
                     .is_some_and(|doc| doc.kind == DocumentKind::Latex)
             })
-            .map(|uri| (uri.clone(), source(workspace, &root, uri, &signatures)))
+            .map(|uri| {
+                (
+                    uri.clone(),
+                    source(workspace, &root, uri, &signatures, &inputs),
+                )
+            })
             .collect();
         let mut walk = Walk {
             workspace,
@@ -433,8 +451,8 @@ pub(crate) fn fixes(
             occurrences: BTreeMap::new(),
             uncertain_names: BTreeSet::new(),
             events: vec![],
-            complete: signatures.environment_primitives_unchanged(),
-            has_inputs: false,
+            complete: signatures.environment_primitives_unchanged() && !inputs.incomplete,
+            has_inputs: inputs.incomplete,
             visits: 0,
         };
         walk.visit(&root, 0);
