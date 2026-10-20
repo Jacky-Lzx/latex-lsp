@@ -106,7 +106,7 @@ pub(crate) fn fixes(
         .iter()
         .filter(|command| command.name == command_name)
         .find_map(|command| {
-            if listing && !crate::listings::supported(workspace, uri, root, command) {
+            if listing && !crate::code_inputs::supported(workspace, uri, root, command) {
                 return None;
             }
             let argument = syntax::file_argument(&doc.text.source, command)?;

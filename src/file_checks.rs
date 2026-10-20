@@ -271,8 +271,8 @@ impl Snapshot {
                 if paths.borrow().len() >= MAX_PATHS {
                     break 'sources;
                 }
-                if command.name == "lstinputlisting" {
-                    if crate::listings::supported(workspace, &source, root, command) {
+                if syntax::code_input_command(&command.name) {
+                    if crate::code_inputs::supported(workspace, &source, root, command) {
                         if let Some(argument) = syntax::file_argument(&doc.text.source, command) {
                             observe(root, &command.name, &argument.value, "");
                         }
@@ -1524,6 +1524,45 @@ mod listing_conditions {
     }
 
     #[test]
+    fn verbatim_candidates_follow_starred_default_search_and_alias_changes() {
+        for name in [
+            "README",
+            "sample.rs",
+            "sample.unknown",
+            "sample.tex",
+            "样例, one.rs",
+        ] {
+            for star in ["", "*", " * % keep\n"] {
+                let directory = tempfile::tempdir().unwrap();
+                let root = directory.path();
+                let snapshot = capture(root, &format!("\\verbatiminput{star}{{{name}}}"));
+                assert!(
+                    snapshot.paths.contains_key(&root.join(name)),
+                    "{name}: {snapshot:?}"
+                );
+                std::fs::write(root.join(name), "Code.").unwrap();
+                assert!(snapshot.changed_path().is_some());
+                if !name.ends_with(".tex") {
+                    let snapshot = capture(root, &format!("\\verbatiminput{star}{{{name}}}"));
+                    std::fs::write(root.join(format!("{name}.tex")), "Shadowing code.").unwrap();
+                    assert!(snapshot.changed_path().is_some());
+                }
+            }
+        }
+        for source in [
+            r"\verbatiminput[x]{missing.rs}",
+            r"\verbatiminput**{missing.rs}",
+            r"\renewcommand{\verbatiminput}[1]{}\verbatiminput{missing.rs}",
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            assert!(
+                capture(directory.path(), source).paths.is_empty(),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
     fn unsupported_listing_searches_do_not_invent_conditions() {
         for source in [
             r"\lstinputlisting*{missing.rs}",
@@ -1541,7 +1580,14 @@ mod listing_conditions {
 
     #[test]
     #[cfg(unix)]
-    fn listing_aliases_watch_both_opened_paths_and_their_physical_targets() {
+    fn code_aliases_watch_both_opened_paths_and_their_physical_targets() {
+        for command in ["lstinputlisting", "verbatiminput *"] {
+            check_code_alias(command);
+        }
+    }
+
+    #[cfg(unix)]
+    fn check_code_alias(command: &str) {
         let directory = tempfile::tempdir().unwrap();
         let external = tempfile::tempdir().unwrap();
         let root = directory.path();
@@ -1551,7 +1597,7 @@ mod listing_conditions {
         std::fs::write(&second, "Code.").unwrap();
         let alias = root.join("sample.rs");
         std::os::unix::fs::symlink(&first, &alias).unwrap();
-        let snapshot = capture(root, r"\lstinputlisting{sample.rs}");
+        let snapshot = capture(root, &format!("\\{command}{{sample.rs}}"));
         assert!(snapshot
             .watched
             .contains(&Url::from_file_path(&first).unwrap()));

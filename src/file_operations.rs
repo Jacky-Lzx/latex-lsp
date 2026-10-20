@@ -187,7 +187,7 @@ impl Renames {
         let extensions = syntax::inferred_file_extensions(command)?;
         [root, uri]
             .into_iter()
-            .filter(|origin| command != "lstinputlisting" || *origin == root)
+            .filter(|origin| !syntax::code_input_command(command) || *origin == root)
             .find_map(|origin| {
                 resolve_file_path_with(&self.uri(origin), command, name, extensions, |path| {
                     self.file(path)

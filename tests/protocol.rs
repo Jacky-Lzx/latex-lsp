@@ -11209,8 +11209,11 @@ fn rebuilds_keep_shared_output_conflict_protection() {
 
 #[test]
 #[cfg(unix)]
-fn static_listing_inputs_keep_pdf_and_synctex_history_without_a_recorder_entry() {
-    for extension in ["unknown", "", "rs", "tex"] {
+fn static_code_inputs_keep_pdf_and_synctex_history_without_a_recorder_entry() {
+    for (command, extension) in ["lstinputlisting", "verbatiminput", "verbatiminput *"]
+        .into_iter()
+        .flat_map(|command| ["unknown", "", "rs", "tex"].map(|extension| (command, extension)))
+    {
         let external = tempfile::tempdir().unwrap();
         let data = external.path().join(if extension.is_empty() {
             "README".into()
@@ -11221,7 +11224,7 @@ fn static_listing_inputs_keep_pdf_and_synctex_history_without_a_recorder_entry()
         let modified = std::fs::metadata(&data).unwrap().modified().unwrap();
         let (mut server, directory, main) = fake_synctex_server("touch queried\nprintf 'SyncTeX result begin\\nPage:1\\nx:10\\ny:20\\nSyncTeX result end\\n'\n");
         let source = format!(
-            "\\documentclass{{article}}\n\\lstinputlisting{{{}}}\n",
+            "\\documentclass{{article}}\n\\{command}{{{}}}\n",
             data.display()
         );
         std::fs::write(main.to_file_path().unwrap(), &source).unwrap();
@@ -11303,10 +11306,15 @@ fn static_listing_inputs_keep_pdf_and_synctex_history_without_a_recorder_entry()
 
 #[test]
 #[cfg(unix)]
-fn static_listing_content_changes_invalidate_the_first_build_without_recorder_evidence() {
-    for (name, notify) in ["README", "example.unknown", "example.tex"]
-        .into_iter()
-        .flat_map(|name| [false, true].map(|notify| (name, notify)))
+fn static_code_content_changes_invalidate_the_first_build_without_recorder_evidence() {
+    for (command, name, notify) in
+        ["lstinputlisting", "verbatiminput *"]
+            .into_iter()
+            .flat_map(|command| {
+                ["README", "example.unknown", "example.tex"]
+                    .into_iter()
+                    .flat_map(move |name| [false, true].map(move |notify| (command, name, notify)))
+            })
     {
         let external = tempfile::tempdir().unwrap();
         let code = external.path().join(name);
@@ -11315,7 +11323,7 @@ fn static_listing_content_changes_invalidate_the_first_build_without_recorder_ev
         let script = "printf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf 'INPUT %s\\n' \"$2\" > \"$1/main.fls\"\ntouch \"$1/ready\"\nwhile [ ! -f \"$1/release\" ]; do sleep 0.02; done\n";
         let (mut server, directory, main) = fake_build_server(script, false);
         let source = format!(
-            "\\documentclass{{article}}\n\\lstinputlisting{{{}}}\n",
+            "\\documentclass{{article}}\n\\{command}{{{}}}\n",
             code.display()
         );
         std::fs::write(main.to_file_path().unwrap(), &source).unwrap();
@@ -11369,14 +11377,21 @@ fn static_listing_content_changes_invalidate_the_first_build_without_recorder_ev
 
 #[test]
 #[cfg(unix)]
-fn in_flight_listing_path_edits_do_not_erase_the_original_pdf_input_history() {
+fn in_flight_code_path_edits_do_not_erase_the_original_pdf_input_history() {
+    for command in ["lstinputlisting", "verbatiminput *"] {
+        check_in_flight_code_input_history(command);
+    }
+}
+
+#[cfg(unix)]
+fn check_in_flight_code_input_history(command: &str) {
     let script = "printf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf 'INPUT %s\\n' \"$2\" > \"$1/main.fls\"\ntouch \"$1/ready\"\nwhile [ ! -f \"$1/release\" ]; do sleep 0.02; done\n";
     let (mut server, directory, main) = fake_build_server(script, false);
     let root = directory.path();
     let code = root.join("first.unknown");
     std::fs::write(&code, "Original code.\n").unwrap();
     std::fs::write(root.join("second.unknown"), "Other code.\n").unwrap();
-    let source = "\\documentclass{article}\n\\lstinputlisting{first.unknown}\n";
+    let source = &format!("\\documentclass{{article}}\n\\{command}{{first.unknown}}\n");
     let main_path = main.to_file_path().unwrap();
     std::fs::write(&main_path, source).unwrap();
     let main_time = std::fs::metadata(&main_path).unwrap().modified().unwrap();

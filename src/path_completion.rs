@@ -65,14 +65,14 @@ pub fn complete(
         .root_document(uri)
         .map(|root| vec![root])
         .unwrap_or_else(|_| workspace.source_roots(uri));
-    if command == "lstinputlisting"
+    if syntax::code_input_command(command)
         && !doc.syntax.commands.iter().any(|candidate| {
             candidate.name == command
                 && syntax::file_name_argument_start(&doc.text.source, command, candidate.span.end)
                     == Some(span.start.saturating_sub(1))
                 && roots
                     .iter()
-                    .all(|root| crate::listings::supported(workspace, uri, root, candidate))
+                    .all(|root| crate::code_inputs::supported(workspace, uri, root, candidate))
         })
     {
         return vec![];
@@ -82,7 +82,10 @@ pub fn complete(
     let mut directories = roots
         .iter()
         .chain(std::iter::once(uri).filter(|uri| {
-            !matches!(command, "includegraphics" | "lstinputlisting") && !roots.contains(uri)
+            !matches!(
+                command,
+                "includegraphics" | "lstinputlisting" | "verbatiminput"
+            ) && !roots.contains(uri)
         }))
         .filter_map(|origin| {
             origin
@@ -128,7 +131,10 @@ pub fn complete(
                 .and_then(|ext| ext.to_str())
                 .unwrap_or("");
             if !folder
-                && !matches!(command, "IfFileExists" | "lstinputlisting")
+                && !matches!(
+                    command,
+                    "IfFileExists" | "lstinputlisting" | "verbatiminput"
+                )
                 && !extensions
                     .iter()
                     .any(|ext| extension.eq_ignore_ascii_case(ext))
@@ -146,7 +152,7 @@ pub fn complete(
                 }
             } else if !matches!(
                 command,
-                "includegraphics" | "addbibresource" | "lstinputlisting"
+                "includegraphics" | "addbibresource" | "lstinputlisting" | "verbatiminput"
             ) {
                 let explicit_extension = existing_name
                     .rsplit_once('.')

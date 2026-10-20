@@ -75,7 +75,7 @@ struct BuildInput {
     config: BuildConfig,
     progress_supported: bool,
     project: BTreeSet<Url>,
-    listing_inputs: BTreeSet<Url>,
+    static_code_inputs: BTreeSet<Url>,
     checks: Arc<crate::file_checks::Snapshot>,
     rebuild: bool,
 }
@@ -146,7 +146,7 @@ impl BuildManager {
             .root_document(&uri)
             .map_err(Error::invalid_params)?;
         workspace.refresh_project(&root);
-        let listing_inputs = crate::listings::inputs(&workspace, &root);
+        let static_code_inputs = crate::code_inputs::inputs(&workspace, &root);
         let mut project = workspace.project_files(&root);
         // Known opened paths remain build dependencies even when their current
         // targets are outside the source index. Capture the actual target now,
@@ -289,7 +289,7 @@ impl BuildManager {
                 config,
                 progress_supported,
                 project,
-                listing_inputs,
+                static_code_inputs,
                 checks,
                 rebuild,
             },
@@ -331,7 +331,7 @@ impl BuildManager {
             config,
             progress_supported,
             mut project,
-            listing_inputs,
+            static_code_inputs,
             checks,
             rebuild,
         } = input;
@@ -555,8 +555,8 @@ impl BuildManager {
             // Recorder classification cannot enumerate arbitrary code suffixes.
             // Retain static data inputs in the PDF's content history too.
             // An in-flight source edit must not erase the original data scope.
-            artifact_inputs.extend(listing_inputs);
-            artifact_inputs.extend(crate::listings::inputs(&current, &root_uri));
+            artifact_inputs.extend(static_code_inputs);
+            artifact_inputs.extend(crate::code_inputs::inputs(&current, &root_uri));
             artifact_inputs.extend(
                 current
                     .project_bindings(&root_uri)

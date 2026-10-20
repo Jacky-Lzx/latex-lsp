@@ -324,8 +324,8 @@ impl Workspace {
                 // Recorder suffixes cannot distinguish displayed TeX code
                 // from executed source. Explicit includes above retain their
                 // source role independently, including in another project.
-                let listings = crate::listings::inputs(self, root);
-                dependencies.extend(recorded.difference(&listings).cloned());
+                let displayed = crate::code_inputs::inputs(self, root);
+                dependencies.extend(recorded.difference(&displayed).cloned());
             }
             if let Some(recorded) = self.bibliography_inputs.get(root) {
                 dependencies.extend(recorded.iter().cloned());
@@ -560,7 +560,7 @@ impl Workspace {
     /// Saved sources and image dependencies used by builds and artifact checks.
     pub fn project_files(&self, root: &Url) -> BTreeSet<Url> {
         let mut files = self.project_documents(root);
-        files.extend(crate::listings::inputs(self, root));
+        files.extend(crate::code_inputs::inputs(self, root));
         let images: BTreeSet<_> = files
             .iter()
             .flat_map(|uri| crate::graphics::images_in(self, uri, root))
@@ -890,7 +890,7 @@ impl Workspace {
         self.load_dependencies_inner(root, root, 0, &mut BTreeSet::new(), true);
         // Displayed .tex files may already have been scanned as documents.
         // Refresh closed text without following its apparent LaTeX commands.
-        for uri in crate::listings::inputs(self, root) {
+        for uri in crate::code_inputs::inputs(self, root) {
             if self.documents.contains_key(&uri) {
                 self.reload(&uri);
             }

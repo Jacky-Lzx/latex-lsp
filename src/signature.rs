@@ -302,6 +302,7 @@ fn builtin(name: &str) -> Option<Signature> {
             false,
         ),
         "includegraphics" => (&[("options", true), ("file", false)], true),
+        "verbatiminput" => (&[("file", false)], true),
         "lstinputlisting" => (&[("options", true), ("file", false)], false),
         "documentclass" | "usepackage" | "RequirePackage" | "LoadClass" => (
             &[
@@ -626,7 +627,8 @@ fn builtin(name: &str) -> Option<Signature> {
                     && index == 0
             {
                 Kind::CommandToken
-            } else if syntax::is_range_reference(name)
+            } else if name == "verbatiminput"
+                || syntax::is_range_reference(name)
                 || index == 1 && matches!(name, "definecolor" | "textcolor" | "colorbox")
                 || name == "fcolorbox" && matches!(index, 1 | 3)
             {

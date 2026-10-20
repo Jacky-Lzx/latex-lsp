@@ -276,7 +276,7 @@ fn file_link(
     if command == "includegraphics" {
         return crate::graphics::resolve_in(root, name, extensions, graphics);
     }
-    if command == "lstinputlisting" {
+    if syntax::code_input_command(command) {
         return resolve_file_path(root, command, name, extensions);
     }
     for origin in std::iter::once(root).chain(std::iter::once(uri).filter(|uri| *uri != root)) {
@@ -342,8 +342,8 @@ pub(crate) fn document_links_in(workspace: &Workspace, uri: &Url, root: &Url) ->
         }
     }
     for command in &doc.syntax.commands {
-        if command.name == "lstinputlisting"
-            && !crate::listings::supported(workspace, uri, root, command)
+        if syntax::code_input_command(&command.name)
+            && !crate::code_inputs::supported(workspace, uri, root, command)
         {
             continue;
         }

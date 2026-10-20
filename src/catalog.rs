@@ -739,6 +739,11 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
         "Include a TeX file with page breaks.",
     ),
     (
+        "verbatiminput",
+        "verbatiminput{${1:file}}",
+        "Display a file verbatim; the starred form shows spaces. Requires verbatim.",
+    ),
+    (
         "lstinputlisting",
         "lstinputlisting[language=${1:Rust}]{${2:file}}",
         "Insert a source file as code without importing LaTeX symbols. Requires listings.",

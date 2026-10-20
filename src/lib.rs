@@ -2,6 +2,7 @@ mod anchors;
 pub mod build;
 pub mod build_log;
 pub mod catalog;
+mod code_inputs;
 pub mod code_lens;
 pub mod colors;
 mod conditionals;

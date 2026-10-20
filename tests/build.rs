@@ -2216,3 +2216,54 @@ fn real_listings_code_inputs_are_recorded_as_data_dependencies() {
         }
     }
 }
+
+#[test]
+#[ignore = "requires pdflatex, xelatex and verbatim"]
+fn real_verbatim_inputs_preserve_arbitrary_file_names_and_code_roles() {
+    for engine in ["pdflatex", "xelatex"] {
+        for (name, star) in [
+            ("sample.rs", ""),
+            ("sample.unknown", "*"),
+            ("README", " *"),
+            ("样例, one.rs", ""),
+            ("example.tex", "*"),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let main = root.join("main.tex");
+            let code_path = root.join(name);
+            std::fs::write(&code_path, "Before.\n\\label{code-only}\nAfter.\n").unwrap();
+            std::fs::write(&main, format!("\\documentclass{{article}}\\usepackage{{verbatim}}\\begin{{document}}\\verbatiminput{star}{{{name}}}\\end{{document}}\n")).unwrap();
+            let outcome = build::run(
+                &main,
+                &BuildConfig {
+                    executable: engine.into(),
+                    ..Default::default()
+                },
+                &Default::default(),
+            );
+            assert_eq!(
+                outcome.status, "success",
+                "{engine}/{name}: {}",
+                outcome.output
+            );
+            let code_uri = Url::from_file_path(&code_path).unwrap();
+            // Unknown and suffixless names are static data dependencies;
+            // recorder classification intentionally accepts known types only.
+            let recorder = std::fs::read_to_string(root.join("build/latex-lsp/main.fls")).unwrap();
+            assert!(
+                recorder
+                    .lines()
+                    .filter_map(|line| line.strip_prefix("INPUT "))
+                    .any(|path| root.join(path).canonicalize().ok().as_ref() == Some(&code_path)),
+                "{engine}/{name}: {recorder}"
+            );
+            let mut workspace = Workspace::default();
+            workspace.add_root(root.into());
+            let main_uri = Url::from_file_path(&main).unwrap();
+            assert!(workspace.project_files(&main_uri).contains(&code_uri));
+            assert!(!workspace.project_documents(&main_uri).contains(&code_uri));
+            assert!(outcome.pdf.is_some());
+        }
+    }
+}
