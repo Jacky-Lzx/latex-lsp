@@ -121,23 +121,13 @@ impl Reader<'_> {
     }
 }
 
+pub(crate) const MODELS: &[&str] = &[
+    "named", "rgb", "RGB", "HTML", "cmy", "cmyk", "gray", "Gray", "hsb", "Hsb", "tHsb", "HSB",
+    "wave",
+];
+
 fn known_model(model: &str) -> bool {
-    matches!(
-        model,
-        "" | "named"
-            | "rgb"
-            | "RGB"
-            | "HTML"
-            | "cmy"
-            | "cmyk"
-            | "gray"
-            | "Gray"
-            | "hsb"
-            | "Hsb"
-            | "tHsb"
-            | "HSB"
-            | "wave"
-    )
+    model.is_empty() || MODELS.contains(&model)
 }
 
 fn known(name: &str) -> bool {
@@ -372,6 +362,98 @@ pub(crate) fn error_invocations(source: &str, syntax: &Syntax) -> Vec<(Span<usiz
                     .filter(|(definition, _)| !definition)
                     .map(|(_, span)| (span, tail.clone())),
             );
+        }
+    }
+    result
+}
+
+/// Parse model operands even when their spelling is invalid. Keep this separate
+/// from symbol indexing, which must reject unknown color models.
+pub(crate) fn model_error_invocations(
+    source: &str,
+    syntax: &Syntax,
+) -> Vec<(Span<usize>, Span<usize>)> {
+    if syntax
+        .definitions
+        .iter()
+        .any(|entry| known(&entry.name) || unsupported(&entry.name))
+    {
+        return vec![];
+    }
+    fn value(reader: &mut Reader<'_>) -> Result<(), ()> {
+        let argument = reader.group()?;
+        if argument.value.contains(['\\', '#', '%']) {
+            return Err(());
+        }
+        Ok(())
+    }
+    let mut result = vec![];
+    for command in &syntax.commands {
+        let mut reader = Reader {
+            source,
+            at: command.span.end,
+            fields: vec![],
+        };
+        let parsed = (|| -> Result<Vec<Span<usize>>, ()> {
+            let mut models = vec![];
+            match command.name.as_str() {
+                "definecolor" | "providecolor" | "xdefinecolor" => {
+                    reader.class()?;
+                    if !literal_name(&reader.group()?.value) {
+                        return Err(());
+                    }
+                    if reader
+                        .optional()?
+                        .is_some_and(|a| !a.value.is_empty() && !syntax::is_static_key(&a.value))
+                    {
+                        return Err(());
+                    }
+                    models.push(reader.group()?.span);
+                    value(&mut reader)?;
+                }
+                "color" | "pagecolor" | "textcolor" | "colorbox" | "fcolorbox" => {
+                    if let Some(model) = reader.optional()? {
+                        models.push(model.span);
+                    }
+                    value(&mut reader)?;
+                    if command.name == "fcolorbox" {
+                        if let Some(model) = reader.optional()? {
+                            models.push(model.span);
+                        }
+                        value(&mut reader)?;
+                    }
+                    if matches!(
+                        command.name.as_str(),
+                        "textcolor" | "colorbox" | "fcolorbox"
+                    ) {
+                        reader.group()?;
+                    }
+                }
+                _ => return Err(()),
+            }
+            if models
+                .iter()
+                .any(|span| !literal_name(&source[span.clone()]))
+            {
+                return Err(());
+            }
+            let mut names = BTreeSet::new();
+            if models
+                .iter()
+                .any(|span| !names.insert(&source[span.clone()]))
+            {
+                return Err(());
+            }
+            Ok(models)
+        })();
+        if let Ok(models) = parsed {
+            // A background model may follow a long frame specification. The
+            // selected model and remaining consumed operands must survive the
+            // echo, while the full raw line still has to identify it uniquely.
+            result.extend(models.into_iter().map(|span| {
+                let tail = span.start - 1..reader.at;
+                (span, tail)
+            }));
         }
     }
     result

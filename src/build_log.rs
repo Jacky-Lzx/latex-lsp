@@ -684,7 +684,8 @@ fn error_context<'a>(
     }
     let graphics = missing_graphic_name(message).is_some() && missing_file_name(message).is_none();
     let documentation = line.trim() == "See the LaTeX manual or LaTeX Companion for explanation."
-        || undefined_color_name(message).is_some()
+        || (undefined_color_name(message).is_some()
+            || undefined_color_model_name(message).is_some())
             && line.trim() == "See the xcolor package documentation for explanation."
         || graphics
             && [
@@ -1067,7 +1068,20 @@ pub(crate) fn undefined_color_name(message: &str) -> Option<&str> {
     crate::named_colors::literal_name(name).then_some(name)
 }
 
-fn undefined_color_range(text: &Text, line: u32, context: &str, name: &str) -> Option<Range> {
+pub(crate) fn undefined_color_model_name(message: &str) -> Option<&str> {
+    let name = message
+        .strip_prefix("Package xcolor Error: Undefined color model `")?
+        .strip_suffix("'.")?;
+    crate::named_colors::literal_name(name).then_some(name)
+}
+
+fn color_error_range(
+    text: &Text,
+    line: u32,
+    context: &str,
+    name: &str,
+    model: bool,
+) -> Option<Range> {
     let prefix = context.trim_end();
     let shortened = shortened_context(prefix);
     let start = text.offset(Position::new(line, 0))?;
@@ -1075,18 +1089,21 @@ fn undefined_color_range(text: &Text, line: u32, context: &str, name: &str) -> O
         return None;
     }
     let syntax = crate::syntax::Syntax::latex(text);
-    let mut matches = crate::named_colors::error_invocations(&text.source, &syntax)
-        .into_iter()
-        .filter_map(|(span, tail)| {
-            if text.source[span.clone()] != *name || text.position(tail.end).line != line {
-                return None;
-            }
-            let consumed = &text.source[start..tail.end];
-            let matched = shortened.map_or(consumed == prefix, |suffix| {
-                suffix.ends_with(&text.source[tail]) && consumed.ends_with(suffix)
-            });
-            matched.then(|| text.range(span.start, span.end))
+    let invocations = if model {
+        crate::named_colors::model_error_invocations(&text.source, &syntax)
+    } else {
+        crate::named_colors::error_invocations(&text.source, &syntax)
+    };
+    let mut matches = invocations.into_iter().filter_map(|(span, tail)| {
+        if text.source[span.clone()] != *name || text.position(tail.end).line != line {
+            return None;
+        }
+        let consumed = &text.source[start..tail.end];
+        let matched = shortened.map_or(consumed == prefix, |suffix| {
+            suffix.ends_with(&text.source[tail]) && consumed.ends_with(suffix)
         });
+        matched.then(|| text.range(span.start, span.end))
+    });
     let range = matches.next()?;
     matches.next().is_none().then_some(range)
 }
@@ -1467,8 +1484,13 @@ fn emit_with_context(
     let color_name = undefined_color_name(&message);
     let color_range = color_name
         .filter(|_| reported_line.checked_sub(1) == Some(line))
-        .and_then(|name| undefined_color_range(&text, line, context?, name));
+        .and_then(|name| color_error_range(&text, line, context?, name, false));
     ranges.extend(color_range);
+    let color_model = undefined_color_model_name(&message);
+    let model_range = color_model
+        .filter(|_| reported_line.checked_sub(1) == Some(line))
+        .and_then(|name| color_error_range(&text, line, context?, name, true));
+    ranges.extend(model_range);
     let missing_file = missing_file_name(&message);
     let input_range = missing_file
         .filter(|_| reported_line.checked_sub(1) == Some(line))
@@ -1545,6 +1567,7 @@ fn emit_with_context(
                     .or_else(|| environment_range.and(environment.as_ref()).map(|error| error.code))
                     .or_else(|| counter_range.map(|_| "undefined-counter"))
                     .or_else(|| color_range.map(|_| "undefined-color"))
+                    .or_else(|| model_range.map(|_| "undefined-color-model"))
                     .map(|code| NumberOrString::String(code.into())),
                 message: displayed_message.clone(),
                 data: precise_destination.then(|| serde_json::json!({"destination":destination.map(|(_, name)| name)}))
@@ -1559,6 +1582,7 @@ fn emit_with_context(
                     })
                     .or_else(|| counter_range.and(counter_name).map(|name| serde_json::json!({"counter":name})))
                     .or_else(|| color_range.and(color_name).map(|name| serde_json::json!({"color":name})))
+                    .or_else(|| model_range.and(color_model).map(|name| serde_json::json!({"model":name})))
                     .or_else(|| input_range.and(missing_file).map(|name| serde_json::json!({"file":name})))
                     .or_else(|| listing_range.map(|range| {
                         let start = text.offset(range.start).unwrap();

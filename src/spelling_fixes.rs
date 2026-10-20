@@ -14,6 +14,7 @@ enum Kind {
     Counter,
     Anchor,
     Color,
+    ColorModel,
 }
 
 fn target<'a>(
@@ -115,6 +116,20 @@ fn target<'a>(
                     && doc.text.range(entry.span.start, entry.span.end) == diagnostic.range
             })
             .then_some((Kind::Color, name));
+    }
+
+    if diagnostic.code == Some(NumberOrString::String("undefined-color-model".into())) {
+        let model = diagnostic.data.as_ref()?.get("model")?.as_str()?;
+        if build_log::undefined_color_model_name(&diagnostic.message) != Some(model) {
+            return None;
+        }
+        return crate::named_colors::model_error_invocations(&doc.text.source, &doc.syntax)
+            .iter()
+            .any(|(span, _)| {
+                doc.text.source[span.clone()] == *model
+                    && doc.text.range(span.start, span.end) == diagnostic.range
+            })
+            .then_some((Kind::ColorModel, model));
     }
     if diagnostic.message != "Undefined control sequence."
         || diagnostic.code != Some(NumberOrString::String("undefined-control-sequence".into()))
@@ -250,7 +265,7 @@ fn closing_environment_fix(
 }
 
 fn valid_name(kind: Kind, name: &str) -> bool {
-    if kind == Kind::Color {
+    if matches!(kind, Kind::Color | Kind::ColorModel) {
         crate::named_colors::literal_name(name)
     } else if kind == Kind::Command {
         !name.is_empty()
@@ -397,7 +412,7 @@ pub fn fixes(
                 })
                 .filter_map(|uri| workspace.documents.get(uri))
             {
-                let entries = match kind {
+                let entries: &[crate::syntax::Entry] = match kind {
                     Kind::Citation => &document.syntax.citations,
                     Kind::Label => &document.syntax.labels,
                     Kind::Command => &document.syntax.definitions,
@@ -405,6 +420,7 @@ pub fn fixes(
                     Kind::Counter => &document.syntax.counters,
                     Kind::Anchor => &document.syntax.anchors,
                     Kind::Color => &document.syntax.colors,
+                    Kind::ColorModel => &[],
                 };
                 for entry in entries {
                     *candidates.entry(entry.name.clone()).or_default() += 1;
@@ -459,6 +475,11 @@ pub fn fixes(
                     candidates.entry((*name).into()).or_insert(1);
                 }
             }
+            if kind == Kind::ColorModel {
+                for model in crate::named_colors::MODELS {
+                    candidates.entry((*model).into()).or_insert(1);
+                }
+            }
             // A known key can be unresolved because of build order or macros.
             if total_entries >= 4096 || candidates.contains_key(key) {
                 continue;
@@ -493,6 +514,7 @@ pub fn fixes(
                     Kind::Environment => ("environment", name.clone()),
                     Kind::Counter => ("counter", name.clone()),
                     Kind::Color => ("color", name.clone()),
+                    Kind::ColorModel => ("color model", name.clone()),
                     Kind::Anchor => {
                         let Some(replacement) =
                             crate::anchors::replacement_text(doc, diagnostic.range, &name)
