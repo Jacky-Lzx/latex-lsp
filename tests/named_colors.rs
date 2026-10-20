@@ -68,6 +68,175 @@ fn changes(workspace: &Workspace, edit: WorkspaceEdit) -> BTreeMap<Url, Vec<Text
 }
 
 #[test]
+fn color_rename_refuses_macro_callback_tokens_that_can_print_names_as_plain_text() {
+    for (definition, call) in [
+        (
+            r"\newcommand{\wrapped}[3]{#2}",
+            r"\wrapped\textcolor{accent}{Unused}",
+        ),
+        (
+            r"\newcommand{\wrapped}[4]{#3}",
+            r"\wrapped{Unused}\textcolor{accent}{Unused}",
+        ),
+        (
+            r"\newcommand{\wrapped}[4][default]{#3}",
+            r"\wrapped[note]\textcolor{accent}{Unused}",
+        ),
+        (
+            r"\def\wrapped#1#2#3{#2}",
+            r"\wrapped\textcolor{accent}{Unused}",
+        ),
+        (
+            r"\NewDocumentCommand{\wrapped}{s t+ m m m}{#4}",
+            r"\wrapped*+\textcolor{accent}{Unused}",
+        ),
+        (
+            r"\NewDocumentCommand{\wrapped}{d() m m m}{#3}",
+            r"\wrapped(note)\textcolor{accent}{Unused}",
+        ),
+    ] {
+        for cross_file in [false, true] {
+            let palette = format!("\\definecolor{{accent}}{{HTML}}{{123456}}{definition}");
+            let body =
+                format!("\\textcolor{{accent}}{{MarkerUnique}} BeforeUnique {call} AfterUnique");
+            let (mut workspace, uri) = setup(&if cross_file {
+                body.clone()
+            } else {
+                format!("{palette}{body}")
+            });
+            let declaration = if cross_file {
+                insert(&mut workspace, "palette.sty", &palette, Some(3))
+            } else {
+                uri.clone()
+            };
+            for (from, reference) in [(&uri, true), (&declaration, false)] {
+                let doc = &workspace.documents[from];
+                let offset = if reference {
+                    doc.text.source.find("\\textcolor{accent}").unwrap() + "\\textcolor{".len()
+                } else {
+                    doc.text.source.find("accent}").unwrap()
+                };
+                let at = doc.text.position(offset);
+                for error in [
+                    features::prepare_rename(&workspace, from, at).unwrap_err(),
+                    features::rename(&workspace, from, at, "theme").unwrap_err(),
+                ] {
+                    assert!(
+                        error.message.contains("passed as macro arguments"),
+                        "{definition}/{call}: {error}"
+                    );
+                }
+            }
+            assert!(workspace.documents[&uri]
+                .text
+                .source
+                .ends_with("AfterUnique"));
+        }
+    }
+}
+
+#[test]
+fn color_rename_resolves_macro_arities_only_inside_the_current_project() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let main = r"\documentclass{article}\usepackage{palette}\begin{document}\done\textcolor{accent}{MarkerUnique}\end{document}";
+    let palette = r"\NeedsTeXFormat{LaTeX2e}\ProvidesPackage{palette}[2026/10/20 Test]\definecolor{accent}{HTML}{123456}\newcommand{\done}{}";
+    let other = r"\documentclass{article}\newcommand{\done}[1]{#1}\begin{document}OtherUnique\end{document}";
+    for (name, source) in [
+        ("main.tex", main),
+        ("palette.sty", palette),
+        ("other.tex", other),
+    ] {
+        std::fs::write(root.join(name), source).unwrap();
+    }
+    let mut workspace = Workspace::default();
+    workspace.add_root(root.into());
+    let uri = Url::from_file_path(root.join("main.tex")).unwrap();
+    let declaration = Url::from_file_path(root.join("palette.sty")).unwrap();
+    for (from, marker) in [(&uri, "accent}"), (&declaration, "accent}")] {
+        let edits = changes(
+            &workspace,
+            features::rename(
+                &workspace,
+                from,
+                position(&workspace, from, marker),
+                "theme",
+            )
+            .unwrap()
+            .unwrap(),
+        );
+        assert_eq!(edits.len(), 2);
+        assert_eq!(
+            apply(main, &edits[&uri]),
+            main.replace("{accent}", "{theme}")
+        );
+        assert_eq!(
+            apply(palette, &edits[&declaration]),
+            palette.replace("{accent}", "{theme}")
+        );
+        assert!(!edits.keys().any(|u| u.path().ends_with("other.tex")));
+    }
+}
+
+#[test]
+fn project_macro_arities_keep_genuine_cross_file_color_renames_available() {
+    for (definition, prefix) in [
+        (r"\newcommand{\done}{}", r"\done"),
+        (r"\def\done{}", r"\done"),
+        (r"\NewDocumentCommand{\done}{}{}", r"\done"),
+        (r"\newcommand{\done}[1]{}", r"\done{Unused}"),
+        (r"\newcommand{\done}[1][default]{}", r"\done"),
+        (
+            r"\NewDocumentCommand{\done}{s t+ O{default} m}{}",
+            r"\done*+[note]{Unused}",
+        ),
+        (
+            r"\NewDocumentCommand{\done}{d() m}{}",
+            r"\done(note){Unused}",
+        ),
+        (r"\NewDocumentCommand{\done}{t\flag}{}", r"\done\flag"),
+        (
+            r"\NewDocumentCommand{\done}{d\open\close}{}",
+            r"\done\open note\close",
+        ),
+        ("", r"\begingroup\small\noindent\bfseries"),
+        ("", r"\extractcolorspecs{red}\model\spec"),
+        (
+            "",
+            r"\blendcolors{!30!red}\maskcolors[rgb]{red}\maskcolors{}",
+        ),
+        ("", r"\hline\rowcolor{red}\columncolor{red}\cellcolor{red}"),
+    ] {
+        let palette = format!("\\NeedsTeXFormat{{LaTeX2e}}\\ProvidesPackage{{palette}}[2026/10/20 Test]\\definecolor{{accent}}{{HTML}}{{123456}}{definition}");
+        let body = format!("😀 {prefix}\\textcolor{{accent}}{{MarkerUnique}} % accent\r\n");
+        let (mut workspace, uri) = setup(&body);
+        let declaration = insert(&mut workspace, "palette.sty", &palette, Some(3));
+        let at = position(&workspace, &uri, "accent}");
+        assert!(
+            features::prepare_rename(&workspace, &uri, at)
+                .unwrap()
+                .is_some(),
+            "{prefix}"
+        );
+        let edits = changes(
+            &workspace,
+            features::rename(&workspace, &uri, at, "theme")
+                .unwrap()
+                .unwrap(),
+        );
+        assert_eq!(edits.len(), 2, "{prefix}");
+        assert_eq!(
+            apply(&palette, &edits[&declaration]),
+            palette.replacen("{accent}", "{theme}", 1)
+        );
+        assert_eq!(
+            apply(&body, &edits[&uri]),
+            body.replacen("{accent}", "{theme}", 1)
+        );
+    }
+}
+
+#[test]
 fn commented_color_names_preserve_comments_and_utf16_ranges_in_cross_file_edits() {
     let palette = "\\definecolor[% class\r\n named]{% 中文😀\r\n\taccent% tail\r\n}[% prefix\r\n prefix]{% model\r\n HTML% end\r\n}{123456}";
     let body = concat!(

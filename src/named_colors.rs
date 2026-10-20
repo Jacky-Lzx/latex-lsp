@@ -631,6 +631,13 @@ fn color_options(source: &str, command: &Command) -> bool {
 }
 
 pub(crate) fn validate(workspace: &Workspace, scope: &BTreeSet<Url>) -> jsonrpc::Result<()> {
+    let signatures = crate::signature::CommandSignatures::new(
+        workspace
+            .documents
+            .iter()
+            .filter(|(uri, _)| scope.contains(*uri))
+            .map(|(_, doc)| (doc.text.source.as_str(), &doc.syntax)),
+    );
     for (_, doc) in workspace
         .documents
         .iter()
@@ -646,7 +653,13 @@ pub(crate) fn validate(workspace: &Workspace, scope: &BTreeSet<Url>) -> jsonrpc:
                 "Color rename cannot resolve redefined color commands",
             ));
         }
+        let operands = signatures.argument_tokens(&doc.text.source, &doc.syntax);
         for (index, command) in doc.syntax.commands.iter().enumerate() {
+            if known(&command.name) && operands.contains(&command.span.start) {
+                return Err(jsonrpc::Error::invalid_params(
+                    "Color rename cannot resolve color commands passed as macro arguments",
+                ));
+            }
             let unsafe_name = |name: &str| known(name) || unsupported(name);
             let indirect = crate::named_commands::spans(doc, command)
                 .iter()

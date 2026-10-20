@@ -299,6 +299,19 @@ fn builtin(name: &str) -> Option<Signature> {
             false,
         ),
         "color" | "pagecolor" => (&[("model", true), ("color", false)], false),
+        "rowcolor" | "columncolor" => (
+            &[
+                ("model", true),
+                ("color", false),
+                ("left overhang", true),
+                ("right overhang", true),
+            ],
+            false,
+        ),
+        "cellcolor" | "arrayrulecolor" | "doublerulesepcolor" | "maskcolors" => {
+            (&[("model", true), ("color", false)], false)
+        }
+        "blendcolors" => (&[("color expression", false)], true),
         "textcolor" | "colorbox" => (&[("model", true), ("color", false), ("text", false)], false),
         "fcolorbox" => (
             &[
@@ -322,6 +335,9 @@ fn builtin(name: &str) -> Option<Signature> {
             ],
             false,
         ),
+        "ProvidesPackage" | "ProvidesClass" | "ProvidesFile" | "NeedsTeXFormat" => {
+            (&[("name", false), ("release information", true)], false)
+        }
         name if syntax::loader_forwards_options(name) => {
             (&[("name", false), ("minimum version", true)], false)
         }
@@ -713,6 +729,16 @@ fn builtin(name: &str) -> Option<Signature> {
                     | "colorbox"
                     | "fcolorbox"
                     | "pagecolor"
+                    | "rowcolor"
+                    | "columncolor"
+                    | "cellcolor"
+                    | "arrayrulecolor"
+                    | "doublerulesepcolor"
+                    | "maskcolors"
+                    | "ProvidesPackage"
+                    | "ProvidesClass"
+                    | "ProvidesFile"
+                    | "NeedsTeXFormat"
                     | "bibitem"
                     | "newenvironment"
                     | "renewenvironment"
@@ -1073,54 +1099,98 @@ fn required_token(source: &str, start: usize) -> Option<&str> {
 /// Reuse signature grammars for local declarations and built-ins. Unknown or
 /// ambiguous commands cannot certify how many leading groups they consume.
 pub(crate) fn command_argument_tokens(source: &str, parsed: &syntax::Syntax) -> BTreeSet<usize> {
-    let mut local = BTreeMap::new();
-    for entry in &parsed.definitions {
-        let signature = source_definition(source, parsed, entry, false);
-        match local.entry(entry.name.as_str()) {
-            std::collections::btree_map::Entry::Vacant(entry) => {
-                entry.insert(signature);
+    CommandSignatures::new([(source, parsed)]).argument_tokens(source, parsed)
+}
+
+/// Resolve command arities once across the documents in the analyzed project.
+pub(crate) struct CommandSignatures<'a> {
+    local: BTreeMap<&'a str, Option<Signature>>,
+}
+
+impl<'a> CommandSignatures<'a> {
+    pub(crate) fn new(documents: impl IntoIterator<Item = (&'a str, &'a syntax::Syntax)>) -> Self {
+        let mut local = BTreeMap::new();
+        for (source, parsed) in documents {
+            for entry in &parsed.definitions {
+                let signature = source_definition(source, parsed, entry, false);
+                match local.entry(entry.name.as_str()) {
+                    std::collections::btree_map::Entry::Vacant(entry) => {
+                        entry.insert(signature);
+                    }
+                    std::collections::btree_map::Entry::Occupied(mut entry) => {
+                        entry.insert(None);
+                    }
+                }
             }
-            std::collections::btree_map::Entry::Occupied(mut entry) => {
-                entry.insert(None);
+        }
+        Self { local }
+    }
+
+    pub(crate) fn argument_tokens(&self, source: &str, parsed: &syntax::Syntax) -> BTreeSet<usize> {
+        let local = &self.local;
+        let mut result = BTreeSet::new();
+        for command in &parsed.commands {
+            if result.contains(&command.span.start) {
+                continue;
+            }
+            let signature = local.get(command.name.as_str()).and_then(Option::as_ref);
+            let builtin = (!local.contains_key(command.name.as_str()))
+                .then(|| builtin(&command.name))
+                .flatten();
+            if let Some(signature) = signature.or(builtin.as_ref()) {
+                argument_tokens(source, command.span.end, signature, &mut result);
+            } else if !local.contains_key(command.name.as_str())
+                && matches!(
+                    command.name.as_str(),
+                    "relax"
+                        | "noindent"
+                        | "indent"
+                        | "normalfont"
+                        | "bfseries"
+                        | "mdseries"
+                        | "itshape"
+                        | "upshape"
+                        | "slshape"
+                        | "scshape"
+                        | "rmfamily"
+                        | "sffamily"
+                        | "ttfamily"
+                        | "begingroup"
+                        | "endgroup"
+                        | "bgroup"
+                        | "egroup"
+                        | "hline"
+                        | "par"
+                        | "newline"
+                        | "hfill"
+                        | "vfill"
+                        | "hfil"
+                        | "vfil"
+                        | "iftrue"
+                        | "iffalse"
+                        | "else"
+                        | "fi"
+                        | "or"
+                        | "tiny"
+                        | "scriptsize"
+                        | "footnotesize"
+                        | "small"
+                        | "normalsize"
+                        | "large"
+                        | "Large"
+                        | "LARGE"
+                        | "huge"
+                        | "Huge"
+                )
+            {
+                // These standard switches consume no argument. Local redefinitions
+                // take precedence, including declarations we cannot interpret.
+            } else {
+                unknown_argument_token(source, command.span.end, &mut result);
             }
         }
+        result
     }
-    let mut result = BTreeSet::new();
-    for command in &parsed.commands {
-        if result.contains(&command.span.start) {
-            continue;
-        }
-        let signature = local.get(command.name.as_str()).and_then(Option::as_ref);
-        let builtin = (!local.contains_key(command.name.as_str()))
-            .then(|| builtin(&command.name))
-            .flatten();
-        if let Some(signature) = signature.or(builtin.as_ref()) {
-            argument_tokens(source, command.span.end, signature, &mut result);
-        } else if !local.contains_key(command.name.as_str())
-            && matches!(
-                command.name.as_str(),
-                "relax"
-                    | "noindent"
-                    | "indent"
-                    | "normalfont"
-                    | "bfseries"
-                    | "mdseries"
-                    | "itshape"
-                    | "upshape"
-                    | "slshape"
-                    | "scshape"
-                    | "rmfamily"
-                    | "sffamily"
-                    | "ttfamily"
-            )
-        {
-            // These standard switches consume no argument. Local redefinitions
-            // take precedence, including declarations we cannot interpret.
-        } else {
-            unknown_argument_token(source, command.span.end, &mut result);
-        }
-    }
-    result
 }
 
 fn unknown_argument_token(source: &str, mut at: usize, result: &mut BTreeSet<usize>) {
