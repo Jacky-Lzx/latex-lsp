@@ -470,7 +470,7 @@ pub(crate) fn saved_name_completion(
     scope: &BTreeSet<Url>,
 ) -> Option<Vec<CompletionItem>> {
     let doc = workspace.documents.get(uri)?;
-    let context = doc
+    let (context, bare) = doc
         .syntax
         .name_command_references
         .iter()
@@ -482,7 +482,7 @@ pub(crate) fn saved_name_completion(
         })
         .take(128)
         .find_map(|entry| {
-            context(
+            if let Some(context) = context(
                 doc,
                 &Command {
                     name: entry.name.clone(),
@@ -490,9 +490,28 @@ pub(crate) fn saved_name_completion(
                     argument: None,
                 },
                 cursor,
-            )
+            ) {
+                return Some((context, false));
+            }
+            let start = syntax::skip_space(&doc.text.source, entry.span.end);
+            let operand = doc.syntax.name_counter_references.iter().find(|operand| {
+                operand.span.start == start
+                    && operand.span.end == start + 1
+                    && operand.name.is_ascii()
+                    && operand.span.start <= cursor
+                    && cursor <= operand.span.end
+            })?;
+            Some((
+                CompletionContext {
+                    span: operand.span.clone(),
+                    edit_span: operand.span.clone(),
+                    passes: 0,
+                    wrapped: 0,
+                },
+                true,
+            ))
         })?;
-    completion_items(workspace, doc, cursor, scope, context)
+    completion_items(workspace, doc, cursor, scope, context, bare)
 }
 
 pub(crate) fn completion(
@@ -510,7 +529,7 @@ pub(crate) fn completion(
         .filter(|command| command.span.end <= cursor)
         .take(128)
         .find_map(|command| context(doc, command, cursor))?;
-    completion_items(workspace, doc, cursor, scope, context)
+    completion_items(workspace, doc, cursor, scope, context, false)
 }
 
 fn completion_items(
@@ -519,6 +538,7 @@ fn completion_items(
     cursor: usize,
     scope: &BTreeSet<Url>,
     context: CompletionContext,
+    bare: bool,
 ) -> Option<Vec<CompletionItem>> {
     let prefix = doc.text.source[context.span.start..cursor].trim_start();
     let (range, additional_edits) =
@@ -533,7 +553,11 @@ fn completion_items(
                 detail: Some(detail),
                 text_edit: Some(CompletionTextEdit::Edit(TextEdit {
                     range,
-                    new_text: protected_name(&name, context.passes, context.wrapped),
+                    new_text: if bare {
+                        format!("{{{name}}}")
+                    } else {
+                        protected_name(&name, context.passes, context.wrapped)
+                    },
                 })),
                 additional_text_edits: (!additional_edits.is_empty())
                     .then(|| additional_edits.clone()),
