@@ -1160,31 +1160,39 @@ fn reference_macro_error_invocation(
     frame: &str,
 ) -> Option<(ByteRange<usize>, ByteRange<usize>)> {
     let (start, open) = match command.name.as_str() {
-        "ref" | "pageref" | "eqref" | "autoref" | "nameref" | "vref" | "Vref" => (
+        "ref" | "pageref" | "eqref" | "Ref" | "autoref" | "autopageref" | "nameref" | "vref"
+        | "Vref" => (
             crate::syntax::reference_argument_start(source, &command.name, command.span.end)?,
             b'{',
         ),
-        "cite" | "nocite" | "citet" | "citep" | "citeauthor" | "citeyear" | "citenum" => (
+        "cite" | "nocite" | "citet" | "citep" | "citeauthor" | "citeyear" | "citenum"
+        | "bibentry" | "citeyearpar" | "citealt" | "citealp" | "citefullauthor" | "Citet"
+        | "Citep" | "Citealt" | "Citealp" | "Citeauthor" | "citetalias" | "citepalias" => (
             crate::syntax::citation_argument_start(source, &command.name, command.span.end)?,
             b'{',
         ),
         "hyperref" => {
-            let (start, open) = crate::syntax::separate_label_argument_start(source, command)?;
-            if open != b'[' {
-                return None;
-            }
-            (start, open)
+            crate::syntax::separate_label_argument_start(source, command)?;
+            (crate::syntax::skip_space(source, command.span.end), b'[')
         }
         _ => return None,
     };
     let close = if open == b'[' { b']' } else { b'}' };
-    let (argument, _) = crate::syntax::group(source, start, open, close)?;
+    let (mut argument, _) = crate::syntax::group(source, start, open, close)?;
+    let tail = argument.outer_span.clone();
+    if command.name == "hyperref" && argument.value.starts_with('{') {
+        let (inner, end) = crate::syntax::group(source, argument.span.start, b'{', b'}')?;
+        if end != argument.span.end {
+            return None;
+        }
+        argument = inner;
+    }
     if argument.value != frame
         || crate::syntax::control_word(&argument.value, 0)? != (0..argument.value.len())
     {
         return None;
     }
-    Some((argument.span, argument.outer_span))
+    Some((argument.span, tail))
 }
 
 fn undefined_name_command_range(
