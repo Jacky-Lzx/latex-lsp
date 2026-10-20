@@ -158,7 +158,7 @@ PDF 驱动失败时，XeLaTeX 的 `xdvipdfmx` 和独立 `dvipdfmx` 的 fatal 消
 
 宏错误及未定义计数器错误的缩短源码回显必须在整行源码中对应唯一位置；相同后缀还出现在其他调用或逐字内容中时，保留整行错误，不提供可能改错调用的拼写修复。完整回显或唯一的缩短回显仍可区分重复名称。
 
-refcount 的 `\getrefbykeydefault`、`\IfRefUndefinedExpandable`、`\IfRefUndefinedBabel` 及四种 `setcounterref`/`addtocounterref`/`setcounterpageref`/`addtocounterpageref` 接口也支持键参数内单个宏的精确编译错误和拼写修复。匹配各接口实际的参数消费边界及内部错误前缀，保留默认值、条件分支和计数器名称；动态 selector 或计数器名称暂保留行级诊断。
+refcount 的 `\getrefbykeydefault`、`\IfRefUndefinedExpandable`、`\IfRefUndefinedBabel` 及四种 `setcounterref`/`addtocounterref`/`setcounterpageref`/`addtocounterpageref` 接口也支持键参数内单个宏的精确编译错误和拼写修复。匹配各接口实际的参数消费边界及内部错误前缀，保留默认值、条件分支和计数器名称。字段选择参数为空时可提取引用编号；动态字段选择参数或计数器名称暂保留行级诊断。
 
 精确定位的未定义环境提供内置环境与当前项目自定义环境的拼写建议，例如将 `algin` 改为 `align`。一次操作同时修改当前 `begin` 及同一文档内对应的 `end`，保留嵌套环境、其他同名调用、空白和正文。配对缺失、交叉闭合、动态嵌套或候选定义有歧义时不提供建议；支持版本化编辑及旧客户端操作，应用前重新检查版本、候选和配对关系。
 

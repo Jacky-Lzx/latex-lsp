@@ -628,6 +628,11 @@ fn real_prefixed_key_macro_repairs_restore_successful_compilation() {
 fn refcount_macro_errors_follow_each_interfaces_actual_consumption_boundary() {
     for (call, consumed, frame) in [
         (
+            r"\getrefbykeydefault{\keynme}{}{\other}",
+            r"\getrefbykeydefault{\keynme}{}",
+            r"\keynme",
+        ),
+        (
             r"\getrefbykeydefault{\keynme}{page}{0}",
             r"\getrefbykeydefault{\keynme}{page}",
             r"\keynme",
@@ -703,6 +708,11 @@ fn refcount_macro_errors_follow_each_interfaces_actual_consumption_boundary() {
 #[test]
 fn refcount_macro_errors_reject_dynamic_peers_wrong_frames_and_inexact_contexts() {
     for (call, echo, frame) in [
+        (
+            r"\getrefbykeydefault{\keynme}{ }{0}",
+            r"\getrefbykeydefault{\keynme}{ }",
+            r"\keynme",
+        ),
         (
             r"\getrefbykeydefault{\keynme}{\selector}{0}",
             r"\getrefbykeydefault{\keynme}{\selector}",
@@ -807,6 +817,10 @@ fn refcount_macro_errors_reject_dynamic_peers_wrong_frames_and_inexact_contexts(
 fn real_refcount_key_macro_repairs_restore_successful_compilation() {
     for engine in ["pdflatex", "xelatex"] {
         for (packages, call) in [
+            (
+                "\\usepackage{hyperref}\n",
+                "\\getrefbykeydefault{\\keynme}{}{0}",
+            ),
             (
                 "\\usepackage{hyperref}\n\\newcounter{mycounter}\n",
                 "\\getrefbykeydefault{\\keynme}{page}{0}",

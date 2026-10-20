@@ -1248,7 +1248,7 @@ fn reference_macro_error_invocation(
             b'{',
             b'}',
         )?;
-        if !crate::syntax::is_static_key(&selector.value) {
+        if !selector.value.is_empty() && !crate::syntax::is_static_key(&selector.value) {
             return None;
         }
         tail.end = end;
