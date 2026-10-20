@@ -846,6 +846,9 @@ fn missing_path_range(
     let prefix = context.trim_end();
     let shortened = shortened_context(prefix);
     let start = text.offset(Position::new(line, 0))?;
+    if shortened.is_some_and(|suffix| !unique_context_on_line(text, start, suffix)) {
+        return None;
+    }
     let syntax = crate::syntax::Syntax::latex(text);
     let fancyverb = crate::fancyvrb::is_input(command_name);
     if crate::syntax::code_input_command(command_name)
