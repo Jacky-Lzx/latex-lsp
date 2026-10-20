@@ -650,6 +650,7 @@ pub(crate) fn validate(workspace: &Workspace, scope: &BTreeSet<Url>) -> jsonrpc:
             .syntax
             .definitions
             .iter()
+            .chain(&doc.syntax.environments)
             .any(|e| known(&e.name) || unsupported(&e.name))
         {
             return Err(jsonrpc::Error::invalid_params(

@@ -122,7 +122,7 @@ fn traditional_command_declarations_offer_target_count_default_and_body_hints() 
 
 #[test]
 fn traditional_environment_declarations_distinguish_both_bodies_and_optional_defaults() {
-    for name in ["newenvironment", "renewenvironment"] {
+    for name in ["newenvironment", "renewenvironment", "provideenvironment"] {
         for command in [
             format!("\\{name}"),
             format!("\\csuse{{{name}}}"),
@@ -142,6 +142,68 @@ fn traditional_environment_declarations_distinguish_both_bodies_and_optional_def
             ] {
                 check("", &format!("{command}{arguments}"), &label, active);
             }
+        }
+    }
+}
+
+#[test]
+fn xparse_environment_declarations_offer_name_specification_and_both_bodies() {
+    for name in [
+        "NewDocumentEnvironment",
+        "RenewDocumentEnvironment",
+        "ProvideDocumentEnvironment",
+        "DeclareDocumentEnvironment",
+    ] {
+        for command in [
+            format!("\\{name}"),
+            format!("\\csuse{{{name}}}"),
+            format!("\\csname {name}\\endcsname"),
+        ] {
+            let label = format!("{command}{{environment}}{{arguments}}{{begin}}{{end}}");
+            for (arguments, active) in [
+                (r"{pan¦el}{O{default}m}{BEGIN}{END}", 0),
+                (r"{panel}{O{DEF¦AULT}m}{BEGIN}{END}", 1),
+                (r"{panel}{mm}{BE¦GIN}{END}", 2),
+                (r"{panel}{mm}{BEGIN}{EN¦D}", 3),
+                ("{% name😀\r\npanel% keep\r\n}{m}{BEGIN}{EN¦D}", 3),
+            ] {
+                check("", &format!("{command}{arguments}"), &label, active);
+            }
+            let call = format!("{command}{{panel}}{{m}}{{BEGIN}}{{END}} Text¦");
+            let (workspace, uri, position) = setup("", &call);
+            assert!(
+                signature::help(&workspace, &uri, position).is_none(),
+                "{call}"
+            );
+        }
+    }
+}
+
+#[test]
+fn environ_declarations_offer_optional_defaults_and_final_code() {
+    for name in ["NewEnviron", "RenewEnviron"] {
+        for command in [
+            format!("\\{name}"),
+            format!("\\csuse{{{name}}}"),
+            format!("\\csname {name}\\endcsname"),
+        ] {
+            let label =
+                format!("{command}{{environment}}[arguments][default]{{definition}}[final code]");
+            for (arguments, active) in [
+                (r"{pan¦el}[2][DEF]{BODY}[FINAL]", 0),
+                (r"{panel}[¦2][DEF]{BODY}[FINAL]", 1),
+                (r"{panel}[2][DE¦F]{BODY}[FINAL]", 2),
+                (r"{panel}[2][LEFT[RIGHT]{BO¦DY}[FINAL]", 3),
+                (r"{panel}{BODY}[FI¦NAL]", 4),
+            ] {
+                check("", &format!("{command}{arguments}"), &label, active);
+            }
+            let call = format!("{command}{{panel}}{{BODY}}[FINAL] Text¦");
+            let (workspace, uri, position) = setup("", &call);
+            assert!(
+                signature::help(&workspace, &uri, position).is_none(),
+                "{call}"
+            );
         }
     }
 }

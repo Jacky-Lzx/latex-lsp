@@ -422,7 +422,7 @@ pub fn fixes(
                     signatures
                         .entry((scope.clone(), paused.clone()))
                         .or_insert_with(|| {
-                            crate::signature::CommandSignatures::with_ambiguous_names(
+                            crate::signature::CommandSignatures::with_ambiguous_environments(
                                 workspace
                                     .documents
                                     .iter()
@@ -441,6 +441,19 @@ pub fn fixes(
                                     .flat_map(|(_, doc)| {
                                         doc.syntax
                                             .definitions
+                                            .iter()
+                                            .map(|entry| entry.name.as_str())
+                                    }),
+                                workspace
+                                    .documents
+                                    .iter()
+                                    .filter(|(uri, doc)| {
+                                        paused.contains(*uri)
+                                            && doc.kind == crate::workspace::DocumentKind::Latex
+                                    })
+                                    .flat_map(|(_, doc)| {
+                                        doc.syntax
+                                            .environments
                                             .iter()
                                             .map(|entry| entry.name.as_str())
                                     }),

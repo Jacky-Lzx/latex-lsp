@@ -29,6 +29,48 @@ fn file_errors_distinguish_macro_operands_from_completed_calls() {
     ] {
         for (declaration, prefix, precise) in [
             (
+                r"\newenvironment{wrapped}{}{}",
+                r"\wrapped\endwrapped",
+                true,
+            ),
+            (
+                r"\newenvironment{wrapped}{}{}\def\finish{\endwrapped}",
+                r"\wrapped\finish",
+                true,
+            ),
+            (
+                r"\newenvironment{wrapped}[3]{}{}",
+                r"\begin{wrapped}\relax",
+                false,
+            ),
+            (r"\newenvironment{wrapped}[3]{}{}", r"\wrapped\relax", false),
+            (
+                r"\newenvironment{wrapped}[3]{}{}",
+                r"\csuse{wrapped}\relax",
+                false,
+            ),
+            (
+                r"\newenvironment{wrapped}[4][default]{}{}",
+                r"\begin{wrapped}[note]\relax",
+                false,
+            ),
+            (
+                r"\NewDocumentEnvironment{wrapped}{O{default} m m m}{}{}",
+                r"\begin{wrapped}[note]\relax",
+                false,
+            ),
+            (r"\newenvironment{wrapped}{}{}", r"\begin{wrapped}", true),
+            (
+                r"\newenvironment{wrapped}[1]{}{}",
+                r"\begin{wrapped}{Unused}",
+                true,
+            ),
+            (
+                r"\newenvironment{wrapped}[1][default]{}{}",
+                r"\begin{wrapped}",
+                true,
+            ),
+            (
                 r"\newcommand{\wrapped}[3]{}",
                 r"\csuse{wrapped}\relax",
                 false,
@@ -258,6 +300,14 @@ fn file_repairs_recheck_delimited_tex_macros_and_their_aliases() {
     for command in ["input", "usepackage", "documentclass"] {
         for (declaration, prefix) in [
             (
+                r"\newenvironment{wrapped}[3]{}{}\def\bridge{\wrapped}",
+                r"\begin{wrapped}\relax",
+            ),
+            (
+                r"\newenvironment{wrapped}[3]{}{}\def\bridge{\wrapped}",
+                r"\csuse{bridge}\relax",
+            ),
+            (
                 r"\newcommand{\wrapped}[3]{}\def\bridge{\wrapped}",
                 r"\csuse{bridge}\relax",
             ),
@@ -290,7 +340,7 @@ fn file_repairs_recheck_delimited_tex_macros_and_their_aliases() {
                 definitions.clone(),
                 Document::new(
                     &definitions,
-                    r"\newcommand{\done}{}\def\bridge{\done}".into(),
+                    r"\newcommand{\done}{}\def\bridge{\done}\newenvironment{wrapped}{}{}".into(),
                     Some(5),
                 ),
             );
@@ -546,6 +596,8 @@ fn file_repairs_validate_paused_parent_metadata_and_current_signatures() {
         }
         store(&mut workspace, &root, &child, &error);
         for declaration in [
+            r"\newenvironment{done}[2]{}{}",
+            r"\newenvironment{bridge}[2]{}{}",
             r"\renewcommand{\done}[2]{}",
             r"\renewcommand{\bridge}[2]{}",
             r"\renewcommand{\input}[1]{}",

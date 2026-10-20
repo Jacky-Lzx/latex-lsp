@@ -2528,15 +2528,21 @@ impl<'a> ProjectAnalysis<'a> {
             self.macros = Some(Rc::new(MacroContext {
                 sources,
                 paused_sources,
-                signatures: crate::signature::CommandSignatures::with_ambiguous_names(
+                signatures: crate::signature::CommandSignatures::with_ambiguous_environments(
                     documents
                         .into_iter()
                         .map(|(_, doc)| (doc.text.source.as_str(), &doc.syntax)),
                     // Parent declarations may precede or follow the paused input.
                     // They can shadow existing meanings, but cannot certify arity.
-                    ancestors.into_iter().flat_map(|(_, doc)| {
+                    ancestors.iter().copied().flat_map(|(_, doc)| {
                         doc.syntax
                             .definitions
+                            .iter()
+                            .map(|entry| entry.name.as_str())
+                    }),
+                    ancestors.iter().copied().flat_map(|(_, doc)| {
+                        doc.syntax
+                            .environments
                             .iter()
                             .map(|entry| entry.name.as_str())
                     }),
@@ -7473,6 +7479,9 @@ mod project_color_tests {
     fn paused_parent_declarations_invalidate_existing_signatures_and_alias_targets() {
         for model in [false, true] {
             for (parent, prefix, precise) in [
+                (r"\newenvironment{bridge}[3]{}{}", r"\bridge", false),
+                (r"\newenvironment{done}[3]{}{}", r"\bridge", false),
+                (r"\newenvironment{unrelated}[3]{}{}", r"\bridge", true),
                 (r"\renewcommand{\bridge}[3]{}", r"\bridge", false),
                 (r"\renewcommand{\done}[3]{}", r"\bridge", false),
                 (r"\def\relax#1#2#3{}", r"\relax", false),

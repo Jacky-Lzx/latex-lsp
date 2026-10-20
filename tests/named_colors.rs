@@ -71,6 +71,38 @@ fn changes(workspace: &Workspace, edit: WorkspaceEdit) -> BTreeMap<Url, Vec<Text
 fn color_rename_refuses_macro_callback_tokens_that_can_print_names_as_plain_text() {
     for (definition, call) in [
         (
+            r"\newenvironment{wrapped}{\detokenize}{}",
+            r"\wrapped{\textcolor{accent}{Unused}}",
+        ),
+        (
+            r"\newenvironment{wrapped}{}{\detokenize}",
+            r"\endwrapped{\textcolor{accent}{Unused}}",
+        ),
+        (
+            r"\newenvironment{wrapped}[1][\textcolor{accent}{Unused}]{\detokenize{#1}}{}",
+            r"\begin{wrapped}\end{wrapped}",
+        ),
+        (
+            r"\NewDocumentEnvironment{wrapped}{O{\textcolor{accent}{Unused}}}{\detokenize{#1}}{}",
+            r"\begin{wrapped}\end{wrapped}",
+        ),
+        (
+            r"\newenvironment{wrapped}[4]{#3}{}",
+            r"\begin{wrapped}\relax\textcolor{accent}{Unused}\end{wrapped}",
+        ),
+        (
+            r"\newenvironment{wrapped}[4]{#3}{}",
+            r"\csuse{wrapped}\relax\textcolor{accent}{Unused}",
+        ),
+        (
+            r"\newenvironment{wrapped}[1]{\detokenize{#1}}{}",
+            r"\begin{wrapped}{\textcolor{accent}{Unused}}\end{wrapped}",
+        ),
+        (
+            r"\NewDocumentEnvironment{wrapped}{d()}{\detokenize{#1}}{}",
+            r"\begin{wrapped}(\textcolor{accent}{Unused})\end{wrapped}",
+        ),
+        (
             r"\newcommand{\wrapped}[4]{#3}",
             r"\csuse{wrapped}\relax\textcolor{accent}{Unused}",
         ),
@@ -368,6 +400,32 @@ fn unresolved_aliases_remain_conservative_and_deep_chains_do_not_recurse() {
 #[test]
 fn completed_alias_targets_keep_versioned_color_renames_available() {
     for (definition, call) in [
+        (r"\newenvironment{wrapped}{}{}", r"\wrapped\endwrapped"),
+        (
+            r"\newenvironment{wrapped}{}{}",
+            r"\csuse{wrapped}\csuse{endwrapped}",
+        ),
+        (
+            r"\newenvironment{wrapped}{}{}\def\finish{\endwrapped}",
+            r"\wrapped\finish",
+        ),
+        (r"\newenvironment{wrapped}{}{}", r"\begin{wrapped}"),
+        (
+            r"\newenvironment{wrapped}[1]{}{}",
+            r"\begin{wrapped}{Unused}",
+        ),
+        (
+            r"\newenvironment{wrapped}[1][default]{}{}",
+            r"\begin{wrapped}",
+        ),
+        (
+            r"\NewDocumentEnvironment{wrapped}{d()}{}{}",
+            r"\begin{wrapped}(Unused)",
+        ),
+        (
+            r"\newenvironment{wrapped}{}{}\def\bridge{\wrapped}",
+            r"\bridge",
+        ),
         (r"\newcommand{\wrapped}{}", r"\csuse{wrapped}"),
         (r"\newcommand{\wrapped}{}", r"\csname wrapped\endcsname"),
         (r"\newcommand{\wrapped}[1]{}", r"\csuse{wrapped}{Unused}"),
@@ -920,6 +978,8 @@ fn color_rename_rejects_dynamic_names_customization_and_unparsed_consumers() {
         r"\color[]{accent}",
         r"\newcommand{\colored}[1]{\textcolor{#1}{Text}}",
         r"\renewcommand{\color}[1]{}",
+        r"\newenvironment{color}[1]{}{}",
+        r"\NewDocumentEnvironment{textcolor}{m m}{}{}",
         r"\csuse{color}{accent}",
         r"\csname textcolor\endcsname{accent}{Text}",
         r"\csdef{color}{custom}",

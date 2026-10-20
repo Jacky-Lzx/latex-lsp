@@ -5,6 +5,7 @@ use crate::{
     workspace::{Document, DocumentKind, Workspace},
 };
 use std::{
+    borrow::Cow,
     cell::OnceCell,
     collections::{BTreeMap, BTreeSet},
 };
@@ -236,7 +237,7 @@ fn builtin(name: &str) -> Option<Signature> {
             ],
             true,
         ),
-        "newenvironment" | "renewenvironment" => (
+        "newenvironment" | "renewenvironment" | "provideenvironment" => (
             &[
                 ("environment", false),
                 ("arguments", true),
@@ -245,6 +246,28 @@ fn builtin(name: &str) -> Option<Signature> {
                 ("end", false),
             ],
             true,
+        ),
+        "NewDocumentEnvironment"
+        | "RenewDocumentEnvironment"
+        | "ProvideDocumentEnvironment"
+        | "DeclareDocumentEnvironment" => (
+            &[
+                ("environment", false),
+                ("arguments", false),
+                ("begin", false),
+                ("end", false),
+            ],
+            false,
+        ),
+        "NewEnviron" | "RenewEnviron" => (
+            &[
+                ("environment", false),
+                ("arguments", true),
+                ("default", true),
+                ("definition", false),
+                ("final code", true),
+            ],
+            false,
         ),
         "DeclareTextCommand" | "ProvideTextCommand" => (
             &[
@@ -759,6 +782,9 @@ fn builtin(name: &str) -> Option<Signature> {
                     | "bibitem"
                     | "newenvironment"
                     | "renewenvironment"
+                    | "provideenvironment"
+                    | "NewEnviron"
+                    | "RenewEnviron"
                     | "hyperdef"
                     | "newcounter"
                     | "sqrt"
@@ -1080,6 +1106,58 @@ fn source_definition(
     })
 }
 
+/// The start control of an environment reads its arguments after the name
+/// supplied to begin. Keep signature help's synthetic name parameter separate.
+fn environment_start_signature(
+    source: &str,
+    parsed: &syntax::Syntax,
+    entry: &Entry,
+) -> Option<Signature> {
+    let mut signature = source_definition(source, parsed, entry, true)?;
+    // A traditional declaration without a count returns an empty signature
+    // before the synthetic name parameter is inserted.
+    if signature.name == "begin" && !signature.parameters.is_empty() {
+        signature.parameters.remove(0);
+    }
+    signature.name = entry.name.clone();
+    Some(signature)
+}
+
+fn body_alias(source: &str, body: &syntax::Argument) -> Option<String> {
+    let start = syntax::skip_space(source, body.span.start);
+    let word = syntax::control_word(source, start)?;
+    (syntax::skip_space(source, word.end) == body.span.end)
+        .then(|| source[word.start + 1..word.end].into())
+}
+
+fn environment_bodies(
+    source: &str,
+    parsed: &syntax::Syntax,
+    entry: &Entry,
+) -> Option<(syntax::Argument, syntax::Argument)> {
+    let mut at = definition_arguments_start(source, parsed, entry, true)?;
+    match entry.detail.strip_prefix("Defined with \\")? {
+        "newenvironment" | "renewenvironment" | "provideenvironment" => {
+            if let Some((_, end)) = syntax::bracket_argument(source, at) {
+                at = syntax::skip_space(source, end);
+                if let Some((_, end)) = syntax::bracket_argument(source, at) {
+                    at = syntax::skip_space(source, end);
+                }
+            }
+        }
+        "NewDocumentEnvironment"
+        | "RenewDocumentEnvironment"
+        | "ProvideDocumentEnvironment"
+        | "DeclareDocumentEnvironment" => {
+            at = syntax::group(source, at, b'{', b'}')?.1;
+        }
+        _ => return None,
+    }
+    let (begin, end) = syntax::group(source, syntax::skip_space(source, at), b'{', b'}')?;
+    let (end, _) = syntax::group(source, syntax::skip_space(source, end), b'{', b'}')?;
+    Some((begin, end))
+}
+
 /// A body containing exactly one control word forwards to its current meaning.
 /// This recognizes lexical aliases without evaluating arbitrary replacement text.
 fn source_alias(source: &str, parsed: &syntax::Syntax, entry: &Entry) -> Option<String> {
@@ -1106,10 +1184,7 @@ fn source_alias(source: &str, parsed: &syntax::Syntax, entry: &Entry) -> Option<
         return None;
     }
     let body = syntax::group(source, syntax::skip_space(source, at), b'{', b'}')?.0;
-    let start = syntax::skip_space(source, body.span.start);
-    let word = syntax::control_word(source, start)?;
-    (syntax::skip_space(source, word.end) == body.span.end)
-        .then(|| source[word.start + 1..word.end].into())
+    body_alias(source, &body)
 }
 
 fn short(value: &str) -> String {
@@ -1355,13 +1430,13 @@ fn tex_operand_match(source: &str, mut at: usize, pattern: &[String]) -> Option<
 
 /// Resolve command arities once across the documents in the analyzed project.
 pub(crate) struct CommandSignatures<'a> {
-    local: BTreeMap<&'a str, Option<Signature>>,
-    tex_operands: BTreeMap<&'a str, Option<TexOperands>>,
+    local: BTreeMap<Cow<'a, str>, Option<Signature>>,
+    tex_operands: BTreeMap<Cow<'a, str>, Option<TexOperands>>,
 }
 
 impl<'a> CommandSignatures<'a> {
     pub(crate) fn names(&self) -> impl Iterator<Item = &str> {
-        self.local.keys().copied()
+        self.local.keys().map(|name| name.as_ref())
     }
 
     pub(crate) fn new(documents: impl IntoIterator<Item = (&'a str, &'a syntax::Syntax)>) -> Self {
@@ -1372,12 +1447,39 @@ impl<'a> CommandSignatures<'a> {
         documents: impl IntoIterator<Item = (&'a str, &'a syntax::Syntax)>,
         ambiguous: impl IntoIterator<Item = &'a str>,
     ) -> Self {
-        let mut local: BTreeMap<_, _> = ambiguous.into_iter().map(|name| (name, None)).collect();
-        let mut tex_operands: BTreeMap<_, _> = local.keys().map(|name| (*name, None)).collect();
+        Self::with_ambiguous_environments(documents, ambiguous, std::iter::empty())
+    }
+
+    pub(crate) fn with_ambiguous_environments(
+        documents: impl IntoIterator<Item = (&'a str, &'a syntax::Syntax)>,
+        ambiguous: impl IntoIterator<Item = &'a str>,
+        environments: impl IntoIterator<Item = &'a str>,
+    ) -> Self {
+        let mut local: BTreeMap<_, _> = ambiguous
+            .into_iter()
+            .map(|name| (Cow::Borrowed(name), None))
+            .collect();
+        for name in environments {
+            local.insert(Cow::Borrowed(name), None);
+            local.insert(Cow::Owned(format!("end{name}")), None);
+        }
+        let mut tex_operands: BTreeMap<_, _> =
+            local.keys().map(|name| (name.clone(), None)).collect();
         let mut aliases = BTreeMap::new();
         for (source, parsed) in documents {
-            for entry in &parsed.definitions {
-                let mut signature = source_definition(source, parsed, entry, false);
+            for (entry, environment) in parsed
+                .definitions
+                .iter()
+                .map(|entry| (entry, false))
+                .chain(parsed.environments.iter().map(|entry| (entry, true)))
+            {
+                // Environments and ordinary commands share their start control
+                // in TeX. Duplicates must invalidate both calls and aliases.
+                let mut signature = if environment {
+                    environment_start_signature(source, parsed, entry)
+                } else {
+                    source_definition(source, parsed, entry, false)
+                };
                 let tex_definition = TexOperands::definition(source, parsed, entry);
                 let tex_known = tex_definition.is_some();
                 let tex = tex_definition
@@ -1388,10 +1490,46 @@ impl<'a> CommandSignatures<'a> {
                     // Never fall back to its arity for unrecognized parameter text.
                     signature = None;
                 }
+                let bodies = environment
+                    .then(|| environment_bodies(source, parsed, entry))
+                    .flatten();
                 let alias = signature
                     .as_ref()
                     .filter(|s| s.parameters.is_empty())
-                    .and_then(|_| source_alias(source, parsed, entry));
+                    .and_then(|_| {
+                        if environment {
+                            bodies
+                                .as_ref()
+                                .and_then(|(begin, _)| body_alias(source, begin))
+                        } else {
+                            source_alias(source, parsed, entry)
+                        }
+                    });
+                if environment {
+                    let name = format!("end{}", entry.name);
+                    let ending = signature
+                        .as_ref()
+                        .filter(|_| bodies.is_some() || entry.detail == "Defined with \\newtheorem")
+                        .map(|_| Signature {
+                            name: name.clone(),
+                            parameters: vec![],
+                            documentation: entry.detail.clone(),
+                            starred: false,
+                            nested_brackets: true,
+                        });
+                    let alias = ending
+                        .as_ref()
+                        .and_then(|_| bodies.as_ref().and_then(|(_, end)| body_alias(source, end)));
+                    insert_command_signature(
+                        &mut local,
+                        &mut tex_operands,
+                        &mut aliases,
+                        Cow::Owned(name),
+                        ending,
+                        None,
+                        alias,
+                    );
+                }
                 // Expanded definitions capture a meaning at definition time;
                 // their lexical body cannot establish a late-bound alias.
                 let expanded = matches!(
@@ -1401,20 +1539,15 @@ impl<'a> CommandSignatures<'a> {
                 if expanded && alias.is_some() {
                     signature = None;
                 }
-                match local.entry(entry.name.as_str()) {
-                    std::collections::btree_map::Entry::Vacant(entry) => {
-                        if let Some(target) = alias.filter(|_| !expanded) {
-                            aliases.insert(*entry.key(), target);
-                        }
-                        tex_operands.insert(*entry.key(), tex);
-                        entry.insert(signature);
-                    }
-                    std::collections::btree_map::Entry::Occupied(mut entry) => {
-                        aliases.remove(entry.key());
-                        tex_operands.insert(*entry.key(), None);
-                        entry.insert(None);
-                    }
-                }
+                insert_command_signature(
+                    &mut local,
+                    &mut tex_operands,
+                    &mut aliases,
+                    Cow::Borrowed(entry.name.as_str()),
+                    signature,
+                    tex,
+                    alias.filter(|_| !expanded),
+                );
             }
         }
         local.extend(resolve_aliases(&local, &aliases, operand_builtin));
@@ -1447,9 +1580,14 @@ impl<'a> CommandSignatures<'a> {
             }
             // Grouped csuse names leave following spaces intact; a literal
             // endcsname, like an ordinary control word, discards lexical blanks.
+            let begin = command.argument.as_ref().filter(|argument| {
+                command.name == "begin"
+                    && !local.contains_key("begin")
+                    && syntax::is_static_key(&argument.value)
+            });
             let named = command.argument.as_ref().filter(|argument| {
-                command.name == "csuse"
-                    && !local.contains_key("csuse")
+                (command.name == "csuse" && !local.contains_key("csuse")
+                    || begin.is_some() && local.contains_key(argument.value.as_str()))
                     && syntax::is_static_key(&argument.value)
             });
             let literal = (command.name == "endcsname"
@@ -1488,21 +1626,56 @@ impl<'a> CommandSignatures<'a> {
             }
             let signature = local.get(name).and_then(Option::as_ref);
             let builtin = (!local.contains_key(name))
-                .then(|| operand_builtin(name))
+                .then(|| {
+                    begin
+                        .and_then(|argument| builtin_environment(&argument.value))
+                        .or_else(|| operand_builtin(name))
+                })
                 .flatten();
             if let Some(signature) = signature.or(builtin.as_ref()) {
                 // Resolved aliases retain their leaf's name. Builtin
                 // formatters and their pure aliases execute grouped contents;
                 // a user macro can instead discard or detokenize its argument.
-                let opaque = local
-                    .contains_key(signature.name.as_str())
-                    .then_some(parsed);
-                argument_tokens(source, end, control_spaces, signature, opaque, &mut result);
+                let opaque = local.contains_key(signature.name.as_str());
+                argument_tokens(
+                    source,
+                    end,
+                    control_spaces,
+                    signature,
+                    parsed,
+                    opaque,
+                    &mut result,
+                );
             } else {
                 unknown_argument_token(source, end, parsed, &mut result);
             }
         }
         result
+    }
+}
+
+fn insert_command_signature<'a>(
+    local: &mut BTreeMap<Cow<'a, str>, Option<Signature>>,
+    tex_operands: &mut BTreeMap<Cow<'a, str>, Option<TexOperands>>,
+    aliases: &mut BTreeMap<Cow<'a, str>, String>,
+    name: Cow<'a, str>,
+    signature: Option<Signature>,
+    tex: Option<TexOperands>,
+    alias: Option<String>,
+) {
+    match local.entry(name) {
+        std::collections::btree_map::Entry::Vacant(entry) => {
+            if let Some(target) = alias {
+                aliases.insert(entry.key().clone(), target);
+            }
+            tex_operands.insert(entry.key().clone(), tex);
+            entry.insert(signature);
+        }
+        std::collections::btree_map::Entry::Occupied(mut entry) => {
+            aliases.remove(entry.key());
+            tex_operands.insert(entry.key().clone(), None);
+            entry.insert(None);
+        }
     }
 }
 
@@ -1598,13 +1771,13 @@ fn operand_builtin(name: &str) -> Option<Signature> {
 /// Walk and memoize alias chains iteratively, including unknown targets and
 /// cycles. The source graph may be arbitrarily deep without using Rust's stack.
 fn resolve_aliases<'a, T: Clone>(
-    local: &BTreeMap<&'a str, Option<T>>,
-    aliases: &BTreeMap<&'a str, String>,
+    local: &BTreeMap<Cow<'a, str>, Option<T>>,
+    aliases: &BTreeMap<Cow<'a, str>, String>,
     builtin: impl Fn(&str) -> Option<T>,
-) -> BTreeMap<&'a str, Option<T>> {
-    let mut resolved: BTreeMap<&'a str, Option<T>> = BTreeMap::new();
-    for &name in aliases.keys() {
-        let mut at = name;
+) -> BTreeMap<Cow<'a, str>, Option<T>> {
+    let mut resolved: BTreeMap<Cow<'a, str>, Option<T>> = BTreeMap::new();
+    for name in aliases.keys() {
+        let mut at = name.as_ref();
         let mut chain = vec![];
         let mut seen = BTreeSet::new();
         let signature = loop {
@@ -1614,8 +1787,8 @@ fn resolve_aliases<'a, T: Clone>(
             if !seen.insert(at) {
                 break None;
             }
-            if let Some((&key, target)) = aliases.get_key_value(at) {
-                chain.push(key);
+            if let Some((key, target)) = aliases.get_key_value(at) {
+                chain.push(key.clone());
                 at = target;
             } else {
                 break local.get(at).cloned().unwrap_or_else(|| builtin(at));
@@ -1690,12 +1863,27 @@ fn operand_delimited_end(source: &str, at: usize, open: &str, close: &str) -> Op
     }
 }
 
+fn environment_declaration_operand(name: &str, parameter: usize) -> bool {
+    match name {
+        "newenvironment" | "renewenvironment" | "provideenvironment" | "NewEnviron"
+        | "RenewEnviron" => parameter < 3,
+        "NewDocumentEnvironment"
+        | "RenewDocumentEnvironment"
+        | "ProvideDocumentEnvironment"
+        | "DeclareDocumentEnvironment" => parameter < 2,
+        "newtheorem" => parameter != 2,
+        name if syntax::declares_environment_copy(name) => true,
+        _ => false,
+    }
+}
+
 fn argument_tokens(
     source: &str,
     mut at: usize,
     mut control_spaces: bool,
     signature: &Signature,
-    opaque: Option<&syntax::Syntax>,
+    parsed: &syntax::Syntax,
+    opaque: bool,
     result: &mut BTreeSet<usize>,
 ) {
     let mut starred = false;
@@ -1707,7 +1895,12 @@ fn argument_tokens(
             control_spaces = false;
         }
     }
-    for parameter in &signature.parameters {
+    for (index, parameter) in signature.parameters.iter().enumerate() {
+        // Defaults and parameter specifications are data; start/end code is
+        // indexed normally. A body may display its defaults without executing
+        // their tokens, so color renames must not rewrite those tokens.
+        let opaque =
+            (opaque || environment_declaration_operand(&signature.name, index)).then_some(parsed);
         if starred && matches!(parameter.kind, Kind::UnstarredOptional) {
             continue;
         }
@@ -2366,6 +2559,184 @@ pub fn help(workspace: &Workspace, uri: &Url, position: Position) -> Option<Sign
 mod tex_operand_tests {
     use super::*;
     use crate::text::Text;
+
+    #[test]
+    fn environment_arguments_are_operands_through_begin_direct_and_named_calls() {
+        for call in [
+            r"\begin{wrapped}",
+            r"\wrapped",
+            r"\csuse{wrapped}",
+            r"\csname wrapped\endcsname",
+        ] {
+            for (definition, prefix, tail) in [
+                (r"\newenvironment{wrapped}[3]{}{}", r"\relax", ""),
+                (
+                    r"\newenvironment{wrapped}[4][default]{}{}",
+                    r"[note]\relax",
+                    "",
+                ),
+                (
+                    r"\NewDocumentEnvironment{wrapped}{O{default} m m m}{}{}",
+                    r"[note]\relax",
+                    "",
+                ),
+                (r"\newenvironment{wrapped}[1]{}{}", "{", "}"),
+                (r"\NewDocumentEnvironment{wrapped}{d()}{}{}", "(", ")"),
+            ] {
+                let source =
+                    format!(r"{definition}{call}{prefix}\input{{wrong}}{tail}\input{{right}}");
+                let parsed = syntax::Syntax::latex(&Text::new(source.clone()));
+                let signatures = CommandSignatures::new([(source.as_str(), &parsed)]);
+                let operands = signatures.argument_tokens(&source, &parsed);
+                for command in parsed
+                    .commands
+                    .iter()
+                    .filter(|command| command.name == "input")
+                {
+                    assert_eq!(
+                        operands.contains(&command.span.start),
+                        command.argument.as_ref().unwrap().value == "wrong",
+                        "{source}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn completed_environment_arguments_preserve_the_body_and_following_commands() {
+        for source in [
+            r"\newenvironment{wrapped}{}{}\begin{wrapped}\input{right}\end{wrapped}",
+            r"\newenvironment{wrapped}[0]{}{}\begin{wrapped}\input{right}\end{wrapped}",
+            r"\newenvironment{wrapped}[1]{}{}\begin{wrapped}{Unused}\input{right}\end{wrapped}",
+            r"\newenvironment{wrapped}[1][default]{}{}\begin{wrapped}\input{right}\end{wrapped}",
+            r"\NewDocumentEnvironment{wrapped}{d()}{}{}\begin{wrapped}(Unused)\input{right}\end{wrapped}",
+            r"\newenvironment{wrapped}{}{}\def\bridge{\wrapped}\bridge\input{right}",
+            r"\begin{document}{\input{right}}\end{document}",
+            r"\begin{minipage}{3cm}\input{right}\end{minipage}",
+            r"\begin{figure}[ht]\input{right}\end{figure}",
+            r"\newcommand{\begin}[1]{}\begin{wrapped}\input{right}",
+            r"\newenvironment{begin}{}{}\input{right}",
+        ] {
+            let parsed = syntax::Syntax::latex(&Text::new(source.into()));
+            let signatures = CommandSignatures::new([(source, &parsed)]);
+            let operands = signatures.argument_tokens(source, &parsed);
+            for command in parsed
+                .commands
+                .iter()
+                .filter(|command| command.name == "input")
+            {
+                assert!(!operands.contains(&command.span.start), "{source}");
+            }
+        }
+    }
+
+    #[test]
+    fn generated_environment_end_controls_and_aliases_keep_real_following_commands_visible() {
+        for source in [
+            r"\newenvironment{wrapped}{}{}\wrapped\endwrapped\input{right}",
+            r"\newenvironment{wrapped}{}{}\csuse{wrapped}\csuse{endwrapped}\input{right}",
+            r"\newenvironment{wrapped}{}{}\csname wrapped\endcsname\csname endwrapped\endcsname\input{right}",
+            r"\newenvironment{wrapped}{}{}\def\finish{\endwrapped}\wrapped\finish\input{right}",
+            r"\newenvironment{wrapped}{\consume}{}\newcommand{\consume}[1]{}\wrapped\input{wrong}\input{right}",
+            r"\newenvironment{wrapped}{}{\consume}\newcommand{\consume}[1]{}\endwrapped\input{wrong}\input{right}",
+            r"\NewDocumentEnvironment{wrapped}{}{\consume}{}\newcommand{\consume}[1]{}\wrapped\input{wrong}\input{right}",
+            r"\NewDocumentEnvironment{wrapped}{}{}{\consume}\newcommand{\consume}[1]{}\endwrapped\input{wrong}\input{right}",
+        ] {
+            let parsed = syntax::Syntax::latex(&Text::new(source.into()));
+            let signatures = CommandSignatures::new([(source, &parsed)]);
+            let operands = signatures.argument_tokens(source, &parsed);
+            for command in parsed
+                .commands
+                .iter()
+                .filter(|command| command.name == "input")
+            {
+                assert_eq!(
+                    operands.contains(&command.span.start),
+                    command.argument.as_ref().unwrap().value == "wrong",
+                    "{source}"
+                );
+            }
+        }
+        let source = r"\newenvironment{wrapped}{}{}\def\finish{\endwrapped}";
+        let parsed = syntax::Syntax::latex(&Text::new(source.into()));
+        let paused =
+            CommandSignatures::with_ambiguous_environments([(source, &parsed)], [], ["wrapped"]);
+        assert!(paused.local["wrapped"].is_none());
+        assert!(paused.local["endwrapped"].is_none());
+        assert!(paused.local["finish"].is_none());
+        for source in [
+            r"\newenvironment{wrapped}{}{}\renewcommand{\endwrapped}[1]{}\def\finish{\endwrapped}",
+            r"\newenvironment{wrapped}{\endwrapped}{\wrapped}\def\finish{\endwrapped}",
+        ] {
+            let parsed = syntax::Syntax::latex(&Text::new(source.into()));
+            let signatures = CommandSignatures::new([(source, &parsed)]);
+            assert!(signatures.local["endwrapped"].is_none(), "{source}");
+            assert!(signatures.local["finish"].is_none(), "{source}");
+        }
+    }
+
+    #[test]
+    fn environment_declaration_metadata_is_data_while_start_and_end_code_stays_visible() {
+        for source in [
+            r"\newenvironment{wrapped}[1][\input{wrong}]{\input{right}}{\input{right}}",
+            r"\NewDocumentEnvironment{wrapped}{O{\input{wrong}}}{\input{right}}{\input{right}}",
+            r"\NewEnviron{wrapped}[1][\input{wrong}]{\input{right}}[\input{right}]",
+            r"\def\declare{\NewDocumentEnvironment}\declare{wrapped}{O{\input{wrong}}}{\input{right}}{\input{right}}",
+        ] {
+            let parsed = syntax::Syntax::latex(&Text::new(source.into()));
+            let signatures = CommandSignatures::new([(source, &parsed)]);
+            let operands = signatures.argument_tokens(source, &parsed);
+            for command in parsed
+                .commands
+                .iter()
+                .filter(|command| command.name == "input")
+            {
+                assert_eq!(
+                    operands.contains(&command.span.start),
+                    command.argument.as_ref().unwrap().value == "wrong",
+                    "{source}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn environment_start_signatures_preserve_namespace_conflicts_and_paused_aliases() {
+        let source = r"\newenvironment{wrapped}[3]{}{}\def\bridge{\wrapped}";
+        let parsed = syntax::Syntax::latex(&Text::new(source.into()));
+        let signatures = CommandSignatures::new([(source, &parsed)]);
+        assert_eq!(
+            signatures.local["wrapped"]
+                .as_ref()
+                .unwrap()
+                .parameters
+                .len(),
+            3
+        );
+        assert_eq!(
+            signatures.local["bridge"]
+                .as_ref()
+                .unwrap()
+                .parameters
+                .len(),
+            3
+        );
+        let paused = CommandSignatures::with_ambiguous_names([(source, &parsed)], ["wrapped"]);
+        assert!(paused.local["wrapped"].is_none());
+        assert!(paused.local["bridge"].is_none());
+        for source in [
+            r"\newenvironment{wrapped}[3]{}{}\renewcommand{\wrapped}[1]{}\def\bridge{\wrapped}",
+            r"\newenvironment{wrapped}[3]{}{}\renewenvironment{wrapped}[1]{}{}\def\bridge{\wrapped}",
+            r"\NewDocumentEnvironment{wrapped}{b}{}{}\def\bridge{\wrapped}",
+            r"\NewEnvironmentCopy{wrapped}{other}\def\bridge{\wrapped}",
+        ] {
+            let parsed = syntax::Syntax::latex(&Text::new(source.into()));
+            let signatures = CommandSignatures::new([(source, &parsed)]);
+            assert!(signatures.local["wrapped"].is_none(), "{source}");
+            assert!(signatures.local["bridge"].is_none(), "{source}");
+        }
+    }
 
     #[test]
     fn named_macro_invocations_preserve_operand_boundaries_and_following_commands() {
