@@ -655,11 +655,9 @@ fn argument_span(doc: &Document, command: &Command, offset: usize) -> Option<Spa
     {
         return None;
     }
-    let key = if matches!(command.name.as_str(), "InputIfFileExists" | "IfFileExists") {
-        value.trim_start()
-    } else {
-        value.rsplit(',').next()?.trim_start()
-    };
+    // Lists have their own parser above. A comma in a single filename is
+    // part of that filename, including directory names and image basenames.
+    let key = value.trim_start();
     Some(offset - key.len()..offset)
 }
 
