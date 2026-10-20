@@ -294,3 +294,130 @@ fn command_completion_and_signature_follow_one_optional_argument_without_a_star(
             .any(|item| item.label == "lstinputlisting")
     );
 }
+
+#[test]
+fn static_code_files_are_build_inputs_without_importing_apparent_source_dependencies() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = uri(root, "main.tex");
+    for name in ["README", "example.unknown", "example.tex"] {
+        std::fs::write(root.join(name), r"\label{code-only}\input{unread}").unwrap();
+    }
+    std::fs::write(root.join("unread.tex"), r"\label{unread-label}").unwrap();
+    let source = r"\documentclass{article}\lstinputlisting{README}\lstinputlisting{example.unknown}\lstinputlisting{example.tex}\ref{code-only}";
+    std::fs::write(root.join("main.tex"), source).unwrap();
+    let mut workspace = Workspace::default();
+    workspace.add_root(root.into());
+    workspace.open(main.clone(), source.into(), 1);
+    for recorded in [false, true] {
+        if recorded {
+            workspace
+                .recorded_inputs
+                .insert(main.clone(), [uri(root, "example.tex")].into());
+        }
+        let files = workspace.project_files(&main);
+        for name in ["README", "example.unknown", "example.tex"] {
+            assert!(files.contains(&uri(root, name)), "{name}: {files:?}");
+            assert!(!workspace
+                .project_documents(&main)
+                .contains(&uri(root, name)));
+        }
+        assert!(!files.contains(&uri(root, "unread.tex")));
+        let position = Text::new(source.into()).position(source.rfind("code-only").unwrap());
+        assert!(features::definitions(&workspace, &main, position).is_empty());
+    }
+    std::fs::write(root.join("example.tex"), "Changed closed code.").unwrap();
+    workspace.refresh_project(&main);
+    assert_eq!(
+        workspace.documents[&uri(root, "example.tex")].text.source,
+        "Changed closed code."
+    );
+    assert_eq!(workspace.root_document(&uri(root, "README")).unwrap(), main);
+}
+
+#[test]
+fn code_and_source_roles_are_independent_for_shared_files_and_explicit_inputs_win() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let code = uri(root, "example.tex");
+    std::fs::write(root.join("example.tex"), r"\label{shared-label}").unwrap();
+    let mut workspace = Workspace::default();
+    for (name, inclusion) in [
+        ("listing.tex", r"\lstinputlisting{example.tex}"),
+        ("source.tex", r"\input{example.tex}"),
+        (
+            "both.tex",
+            r"\lstinputlisting{example.tex}\input{example.tex}",
+        ),
+    ] {
+        std::fs::write(
+            root.join(name),
+            format!("\\documentclass{{article}}{inclusion}\\ref{{shared-label}}"),
+        )
+        .unwrap();
+    }
+    workspace.add_root(root.into());
+    for name in ["listing.tex", "source.tex", "both.tex"] {
+        let main = uri(root, name);
+        workspace
+            .recorded_inputs
+            .insert(main, [code.clone()].into());
+    }
+    for (name, is_source) in [
+        ("listing.tex", false),
+        ("source.tex", true),
+        ("both.tex", true),
+    ] {
+        let main = uri(root, name);
+        assert_eq!(
+            workspace.project_documents(&main).contains(&code),
+            is_source,
+            "{name}"
+        );
+        assert!(workspace.project_files(&main).contains(&code));
+        let source = &workspace.documents[&main].text;
+        let position = source.position(source.source.rfind("shared-label").unwrap());
+        assert_eq!(
+            !features::definitions(&workspace, &main, position).is_empty(),
+            is_source,
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn displayed_settings_do_not_override_the_project_but_real_source_settings_do() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = uri(root, "main.tex");
+    let code = uri(root, "example.tex");
+    let source = r"\documentclass{article}\lstinputlisting{example.tex}";
+    std::fs::write(root.join("main.tex"), source).unwrap();
+    std::fs::write(
+        root.join("example.tex"),
+        r"\lstset{inputpath=other}\lstinputlisting{not-read.rs}",
+    )
+    .unwrap();
+    let mut workspace = Workspace::default();
+    workspace.add_root(root.into());
+    workspace
+        .recorded_inputs
+        .insert(main.clone(), [code.clone()].into());
+    assert_eq!(
+        navigation::document_links(&workspace, &main)
+            .last()
+            .unwrap()
+            .target,
+        Some(code.clone())
+    );
+    assert!(workspace.project_files(&main).contains(&code));
+    let actual = uri(root, "dynamic.tex");
+    std::fs::write(root.join("dynamic.tex"), r"\lstset{inputpath=other}").unwrap();
+    workspace.open(actual.clone(), r"\lstset{inputpath=other}".into(), 1);
+    workspace
+        .recorded_inputs
+        .get_mut(&main)
+        .unwrap()
+        .insert(actual);
+    assert!(navigation::document_links(&workspace, &main).is_empty());
+}

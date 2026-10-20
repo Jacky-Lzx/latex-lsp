@@ -271,6 +271,14 @@ impl Snapshot {
                 if paths.borrow().len() >= MAX_PATHS {
                     break 'sources;
                 }
+                if command.name == "lstinputlisting" {
+                    if crate::listings::supported(workspace, &source, root, command) {
+                        if let Some(argument) = syntax::file_argument(&doc.text.source, command) {
+                            observe(root, &command.name, &argument.value, "");
+                        }
+                    }
+                    continue;
+                }
                 if command.name == "includegraphics" {
                     if let (Some(directories), Some(argument)) =
                         (&image_directories, &command.argument)
@@ -1475,5 +1483,83 @@ mod graphic_conditions {
         assert!(!snapshot
             .paths
             .contains_key(&root.join("second/missing.png")));
+    }
+}
+
+#[cfg(test)]
+mod listing_conditions {
+    use super::*;
+
+    fn capture(root: &Path, source: &str) -> Snapshot {
+        std::fs::write(root.join("main.tex"), source).unwrap();
+        let mut workspace = Workspace::default();
+        workspace.add_root(root.into());
+        Snapshot::capture(
+            &workspace,
+            &Url::from_file_path(root.join("main.tex")).unwrap(),
+            &BuildConfig::default(),
+        )
+    }
+
+    #[test]
+    fn missing_and_shadowing_listing_candidates_are_watched_before_the_first_build() {
+        for name in ["README", "sample.rs", "sample.unknown", "sample.tex"] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let snapshot = capture(root, &format!("\\lstinputlisting[title={{A,B}}]{{{name}}}"));
+            assert!(
+                snapshot.paths.contains_key(&root.join(name)),
+                "{name}: {snapshot:?}"
+            );
+            std::fs::write(root.join(name), "Code.").unwrap();
+            assert!(snapshot.changed_path().is_some(), "{name}");
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        std::fs::write(root.join("sample.rs"), "Code.").unwrap();
+        let snapshot = capture(root, r"\lstinputlisting{sample.rs}");
+        assert!(snapshot.paths.contains_key(&root.join("sample.rs.tex")));
+        std::fs::write(root.join("sample.rs.tex"), "Shadowing code.").unwrap();
+        assert!(snapshot.changed_path().is_some());
+    }
+
+    #[test]
+    fn unsupported_listing_searches_do_not_invent_conditions() {
+        for source in [
+            r"\lstinputlisting*{missing.rs}",
+            r"\lstinputlisting[a][b]{missing.rs}",
+            r"\lstinputlisting[inputpath=other]{missing.rs}",
+            r"\lstset{style=custom}\lstinputlisting{missing.rs}",
+            r"\renewcommand{\lstinputlisting}[1]{}\lstinputlisting{missing.rs}",
+            r"\lstinputlisting{\macro.rs}",
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let snapshot = capture(directory.path(), source);
+            assert!(snapshot.paths.is_empty(), "{source}: {snapshot:?}");
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn listing_aliases_watch_both_opened_paths_and_their_physical_targets() {
+        let directory = tempfile::tempdir().unwrap();
+        let external = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let first = external.path().join("first.unknown");
+        let second = external.path().join("second.tex");
+        std::fs::write(&first, "Code.").unwrap();
+        std::fs::write(&second, "Code.").unwrap();
+        let alias = root.join("sample.rs");
+        std::os::unix::fs::symlink(&first, &alias).unwrap();
+        let snapshot = capture(root, r"\lstinputlisting{sample.rs}");
+        assert!(snapshot
+            .watched
+            .contains(&Url::from_file_path(&first).unwrap()));
+        assert!(snapshot
+            .watched
+            .contains(&Url::from_file_path(&alias).unwrap()));
+        std::fs::remove_file(&alias).unwrap();
+        std::os::unix::fs::symlink(&second, &alias).unwrap();
+        assert!(snapshot.changed_path().is_some());
     }
 }

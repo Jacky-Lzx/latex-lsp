@@ -321,7 +321,11 @@ impl Workspace {
         let mut dependencies = self.source_dependencies_from(uri, root);
         if uri == root {
             if let Some(recorded) = self.recorded_inputs.get(root) {
-                dependencies.extend(recorded.iter().cloned());
+                // Recorder suffixes cannot distinguish displayed TeX code
+                // from executed source. Explicit includes above retain their
+                // source role independently, including in another project.
+                let listings = crate::listings::inputs(self, root);
+                dependencies.extend(recorded.difference(&listings).cloned());
             }
             if let Some(recorded) = self.bibliography_inputs.get(root) {
                 dependencies.extend(recorded.iter().cloned());
@@ -443,6 +447,18 @@ impl Workspace {
         self.project_documents_from(root, root)
     }
 
+    /// Explicit source traversal, independent of recorder and data inputs.
+    pub(crate) fn source_documents_from(&self, source: &Url, root: &Url) -> BTreeSet<Url> {
+        let mut visited = BTreeSet::new();
+        let mut pending = vec![source.clone()];
+        while let Some(uri) = pending.pop() {
+            if visited.insert(uri.clone()) {
+                pending.extend(self.source_dependencies_from(&uri, root));
+            }
+        }
+        visited
+    }
+
     pub(crate) fn project_documents_from(&self, source: &Url, root: &Url) -> BTreeSet<Url> {
         let mut visited = BTreeSet::new();
         let mut pending = vec![source.clone()];
@@ -544,6 +560,7 @@ impl Workspace {
     /// Saved sources and image dependencies used by builds and artifact checks.
     pub fn project_files(&self, root: &Url) -> BTreeSet<Url> {
         let mut files = self.project_documents(root);
+        files.extend(crate::listings::inputs(self, root));
         let images: BTreeSet<_> = files
             .iter()
             .flat_map(|uri| crate::graphics::images_in(self, uri, root))
@@ -636,7 +653,7 @@ impl Workspace {
             .filter(|(candidate, doc)| {
                 *candidate != uri
                     && is_saved_root(candidate, doc)
-                    && self.project_documents(candidate).contains(uri)
+                    && self.project_files(candidate).contains(uri)
             })
             .map(|(uri, _)| uri.clone())
             .collect::<Vec<_>>();
@@ -871,6 +888,13 @@ impl Workspace {
     /// files may have gained new dependencies since the previous build.
     pub fn refresh_project(&mut self, root: &Url) {
         self.load_dependencies_inner(root, root, 0, &mut BTreeSet::new(), true);
+        // Displayed .tex files may already have been scanned as documents.
+        // Refresh closed text without following its apparent LaTeX commands.
+        for uri in crate::listings::inputs(self, root) {
+            if self.documents.contains_key(&uri) {
+                self.reload(&uri);
+            }
+        }
     }
 
     fn load_dependencies_inner(
