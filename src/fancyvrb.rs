@@ -14,6 +14,22 @@ pub(crate) fn is_environment(name: &str) -> bool {
     )
 }
 
+/// FancyVerb checks the first literal end marker on each line. A different
+/// environment there makes the complete line data, including later markers.
+pub(crate) fn environment_end(source: &str, body_start: usize, name: &str) -> Option<usize> {
+    let ending = format!("\\end{{{name}}}");
+    let mut offset = body_start;
+    for line in source[body_start..].split_inclusive('\n') {
+        if let Some(start) = line.find("\\end{") {
+            if line[start..].starts_with(&ending) {
+                return Some(offset + start + ending.len());
+            }
+        }
+        offset += line.len();
+    }
+    None
+}
+
 fn safe_options(source: &str) -> bool {
     if source.contains(['\\', '%']) {
         return false;

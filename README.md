@@ -74,7 +74,7 @@
 
 相对 `build.rootFile` 可指向工作区外的主文档。编译事件返回的已配置根 URI 可直接用于状态查询、取消或再次编译，不会按根文件所在目录再次解释相对配置；兼容重叠的工作区文件夹。根文件删除后保留缺失错误，避免误用其他目录中的同名文件。
 
-解析时跳过 `%` 注释、`\verb`、`\lstinline` 和常见逐字环境（`verbatim`、`lstlisting`、`minted`、`comment`，以及 FancyVerb 的 `Verbatim`、`LVerbatim`、`BVerbatim`、`SaveVerbatim`、`VerbatimOut` 和各自的星号形式）。逐字环境中的示例标签、命令和文件包含不会进入源码索引，重命名保留其中的字面内容；支持环境名称补全、折叠、逐字高亮和未闭合环境修复。不模拟 `commandchars`、自定义环境或内部宏带来的执行行为。
+解析时跳过 `%` 注释、`\verb`、`\lstinline` 和常见逐字环境（`verbatim`、`lstlisting`、`minted`、`comment`，以及 FancyVerb 的 `Verbatim`、`LVerbatim`、`BVerbatim`、`SaveVerbatim`、`VerbatimOut` 和各自的星号形式）。逐字环境中的示例标签、命令和文件包含不会进入源码索引，重命名保留其中的字面内容；支持环境名称补全、折叠、逐字高亮和未闭合环境修复。不模拟 `commandchars`、自定义环境或内部宏带来的执行行为。FancyVerb 每行只核对第一个字面关闭标记；同一行先出现其他环境的关闭标记时，后续同名标记继续作为展示内容，不会提前恢复源码索引。
 
 LaTeX 内核的 `NewExpandableDocumentCommand`、`RenewExpandableDocumentCommand`、`ProvideExpandableDocumentCommand` 和 `DeclareExpandableDocumentCommand` 与普通文档命令共用宏导航、引用、重命名和补全，兼容带花括号或裸命令目标及静态 `csname` 形式。声明提供命令、参数规格、定义体的参数提示；调用支持 `m`、`o`、`O`、`s`、`t` 以及 `d/D/r/R` 分隔参数规格及修饰符，补全保留可选参数默认值。复杂规格继续保守回退，不执行宏展开。
 

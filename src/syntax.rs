@@ -1831,8 +1831,15 @@ impl Syntax {
                                 if is_verbatim_environment(env) {
                                     let body_start = parsed.as_ref().unwrap().1;
                                     let ending = format!("\\end{{{env}}}");
-                                    if let Some(relative) = source[body_start..].find(&ending) {
-                                        i = body_start + relative + ending.len();
+                                    let end = if crate::fancyvrb::is_environment(env) {
+                                        crate::fancyvrb::environment_end(source, body_start, env)
+                                    } else {
+                                        source[body_start..]
+                                            .find(&ending)
+                                            .map(|relative| body_start + relative + ending.len())
+                                    };
+                                    if let Some(end) = end {
+                                        i = end;
                                     } else {
                                         result.fix(
                                             text,
