@@ -1369,15 +1369,7 @@ impl<'a> CommandSignatures<'a> {
                 // Parameter-text delimiters are data at declaration time.
                 // In particular a delimiter control must
                 // not consume the first invocation following the definition.
-                let start = parsed
-                    .commands
-                    .partition_point(|command| command.span.start < entry.span.start);
-                result.extend(
-                    parsed.commands[start..]
-                        .iter()
-                        .take_while(|command| command.span.start < end)
-                        .map(|command| command.span.start),
-                );
+                mark_operand_commands(parsed, entry.span.start, end, &mut result);
             }
         }
         for command in &parsed.commands {
@@ -1392,15 +1384,7 @@ impl<'a> CommandSignatures<'a> {
             {
                 // Delimited TeX arguments are read without executing any of
                 // their tokens, including controls inside balanced groups.
-                let start = parsed
-                    .commands
-                    .partition_point(|candidate| candidate.span.start < command.span.end);
-                result.extend(
-                    parsed.commands[start..]
-                        .iter()
-                        .take_while(|candidate| candidate.span.start < end)
-                        .map(|candidate| candidate.span.start),
-                );
+                mark_operand_commands(parsed, command.span.end, end, &mut result);
                 continue;
             }
             let signature = local.get(command.name.as_str()).and_then(Option::as_ref);
@@ -1408,9 +1392,15 @@ impl<'a> CommandSignatures<'a> {
                 .then(|| operand_builtin(&command.name))
                 .flatten();
             if let Some(signature) = signature.or(builtin.as_ref()) {
-                argument_tokens(source, command.span.end, signature, &mut result);
+                // Resolved aliases retain their leaf's name. Builtin
+                // formatters and their pure aliases execute grouped contents;
+                // a user macro can instead discard or detokenize its argument.
+                let opaque = local
+                    .contains_key(signature.name.as_str())
+                    .then_some(parsed);
+                argument_tokens(source, command.span.end, signature, opaque, &mut result);
             } else {
-                unknown_argument_token(source, command.span.end, &mut result);
+                unknown_argument_token(source, command.span.end, parsed, &mut result);
             }
         }
         result
@@ -1539,7 +1529,29 @@ fn resolve_aliases<'a, T: Clone>(
     resolved
 }
 
-fn unknown_argument_token(source: &str, mut at: usize, result: &mut BTreeSet<usize>) {
+fn mark_operand_commands(
+    parsed: &syntax::Syntax,
+    start: usize,
+    end: usize,
+    result: &mut BTreeSet<usize>,
+) {
+    let first = parsed
+        .commands
+        .partition_point(|command| command.span.start < start);
+    result.extend(
+        parsed.commands[first..]
+            .iter()
+            .take_while(|command| command.span.start < end)
+            .map(|command| command.span.start),
+    );
+}
+
+fn unknown_argument_token(
+    source: &str,
+    mut at: usize,
+    parsed: &syntax::Syntax,
+    result: &mut BTreeSet<usize>,
+) {
     loop {
         at = syntax::skip_space(source, at);
         let grouped = match source.as_bytes().get(at) {
@@ -1552,6 +1564,7 @@ fn unknown_argument_token(source: &str, mut at: usize, result: &mut BTreeSet<usi
             _ => None,
         };
         if let Some((_, end)) = grouped {
+            mark_operand_commands(parsed, at, end, result);
             at = end;
         } else {
             if syntax::control_word(source, at).is_some() {
@@ -1582,6 +1595,7 @@ fn argument_tokens(
     source: &str,
     mut at: usize,
     signature: &Signature,
+    opaque: Option<&syntax::Syntax>,
     result: &mut BTreeSet<usize>,
 ) {
     let mut control_spaces = true;
@@ -1648,6 +1662,9 @@ fn argument_tokens(
                 let Some(end) = operand_delimited_end(source, at, open, close) else {
                     return;
                 };
+                if let Some(parsed) = opaque {
+                    mark_operand_commands(parsed, at, end, result);
+                }
                 if syntax::control_word(open, 0).is_some() {
                     result.insert(at);
                 }
@@ -1672,6 +1689,9 @@ fn argument_tokens(
                 )
             };
             let Some((_, end)) = group else { return };
+            if let Some(parsed) = opaque {
+                mark_operand_commands(parsed, at, end, result);
+            }
             at = end;
             control_spaces = false;
         } else {

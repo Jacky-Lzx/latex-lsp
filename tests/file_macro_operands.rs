@@ -233,6 +233,89 @@ fn file_repairs_recheck_delimited_tex_macros_and_their_aliases() {
     }
 }
 
+#[test]
+fn grouped_user_macro_arguments_are_not_file_error_sites() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("main.tex");
+    for command in ["usepackage", "RequirePackage", "LoadClass"] {
+        for (declaration, prefix, tail, precise) in [
+            (r"\newcommand{\wrapped}[1]{}", r"\wrapped{", "}", false),
+            (
+                r"\newcommand{\wrapped}[1][default]{}",
+                r"\wrapped[",
+                "]",
+                false,
+            ),
+            (
+                r"\NewDocumentCommand{\wrapped}{m}{}",
+                r"\wrapped{",
+                "}",
+                false,
+            ),
+            (
+                r"\NewDocumentCommand{\wrapped}{O{default}}{}",
+                r"\wrapped[",
+                "]",
+                false,
+            ),
+            (
+                r"\NewDocumentCommand{\wrapped}{d()}{}",
+                r"\wrapped(",
+                ")",
+                false,
+            ),
+            (
+                r"\newcommand{\wrapped}[1]{}\def\bridge{\wrapped}",
+                r"\bridge{",
+                "}",
+                false,
+            ),
+            ("", r"\unknown{", "}", false),
+            (
+                r"\newcommand{\wrapped}[1]{}\renewcommand{\wrapped}[2]{}",
+                r"\wrapped{",
+                "}",
+                false,
+            ),
+            (
+                r"\newcommand{\wrapped}[1]{}",
+                r"\wrapped{Unused}",
+                r"\relax",
+                true,
+            ),
+            (
+                r"\NewDocumentCommand{\wrapped}{d()}{}",
+                r"\wrapped(note)",
+                r"\relax",
+                true,
+            ),
+        ] {
+            let call = format!("{prefix}\\{command}{{palete}}{tail}");
+            let source = format!("{declaration}\n{call}\n");
+            std::fs::write(&root, &source).unwrap();
+            let message = format!(
+                "LaTeX Error: File `palete.{}' not found.",
+                extension(command)
+            );
+            let log =
+                format!("(./main.tex\n! {message}\n! Emergency stop.\n<read *>\nl.2 {call}\n");
+            let result = build_log::parse(&root, &log);
+            let error = result[&Url::from_file_path(&root).unwrap()]
+                .iter()
+                .find(|error| error.message == message)
+                .unwrap();
+            assert_eq!(
+                error.code.is_some(),
+                precise,
+                "{command}/{prefix}: {error:?}"
+            );
+            if !precise {
+                assert!(error.data.is_none());
+            }
+        }
+    }
+}
+
 fn fixture(command: &str) -> (tempfile::TempDir, Workspace, Url, Url, Diagnostic) {
     let temp = tempfile::tempdir().unwrap();
     let uri = Url::from_file_path(temp.path().join("main.tex")).unwrap();

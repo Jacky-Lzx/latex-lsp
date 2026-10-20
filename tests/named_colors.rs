@@ -71,6 +71,31 @@ fn changes(workspace: &Workspace, edit: WorkspaceEdit) -> BTreeMap<Url, Vec<Text
 fn color_rename_refuses_macro_callback_tokens_that_can_print_names_as_plain_text() {
     for (definition, call) in [
         (
+            r"\newcommand{\wrapped}[1]{\detokenize{#1}}",
+            r"\wrapped{\textcolor{accent}{Unused}}",
+        ),
+        (
+            r"\newcommand{\wrapped}[1][default]{\detokenize{#1}}",
+            r"\wrapped[\textcolor{accent}{Unused}]",
+        ),
+        (
+            r"\NewDocumentCommand{\wrapped}{m}{\detokenize{#1}}",
+            r"\wrapped{\textcolor{accent}{Unused}}",
+        ),
+        (
+            r"\NewDocumentCommand{\wrapped}{O{default}}{\detokenize{#1}}",
+            r"\wrapped[\textcolor{accent}{Unused}]",
+        ),
+        (
+            r"\NewDocumentCommand{\wrapped}{d()}{\detokenize{#1}}",
+            r"\wrapped(\textcolor{accent}{Unused})",
+        ),
+        (
+            r"\newcommand{\wrapped}[1]{\detokenize{#1}}\def\bridge{\wrapped}",
+            r"\bridge{\textcolor{accent}{Unused}}",
+        ),
+        ("", r"\unknown{\textcolor{accent}{Unused}}"),
+        (
             r"\newcommand{\wrapped}[3]{#2}",
             r"\wrapped\textcolor{accent}{Unused}",
         ),
@@ -131,6 +156,63 @@ fn color_rename_refuses_macro_callback_tokens_that_can_print_names_as_plain_text
                 .text
                 .source
                 .ends_with("AfterUnique"));
+        }
+    }
+}
+
+#[test]
+fn builtin_grouped_formatters_and_their_aliases_keep_color_renames_available() {
+    for (definition, call) in [
+        ("", r"\textbf{\textcolor{accent}{MarkerUnique}}"),
+        (
+            r"\def\bridge{\textbf}",
+            r"\bridge{\textcolor{accent}{MarkerUnique}}",
+        ),
+        (
+            r"\def\bridge{\step}\def\step{\textbf}",
+            r"\bridge{\textcolor{accent}{MarkerUnique}}",
+        ),
+        (
+            r"\newcommand{\done}[1]{}",
+            r"\done{Unused}\textcolor{accent}{MarkerUnique}",
+        ),
+    ] {
+        for cross_file in [false, true] {
+            let palette = format!(r"\definecolor{{accent}}{{HTML}}{{123456}}{definition}");
+            let body = format!("😀 {call} % accent\r\n");
+            let source = if cross_file {
+                body.clone()
+            } else {
+                format!("{palette}{body}")
+            };
+            let (mut workspace, uri) = setup(&source);
+            let declaration = if cross_file {
+                insert(&mut workspace, "palette.sty", &palette, Some(3))
+            } else {
+                uri.clone()
+            };
+            let offset = source.find(r"\textcolor{accent}").unwrap() + r"\textcolor{".len();
+            let at = workspace.documents[&uri].text.position(offset);
+            assert!(
+                features::prepare_rename(&workspace, &uri, at)
+                    .unwrap()
+                    .is_some(),
+                "{definition}"
+            );
+            let edit = features::rename(&workspace, &uri, at, "theme")
+                .unwrap()
+                .unwrap();
+            let edits = changes(&workspace, edit);
+            assert_eq!(
+                apply(&source, &edits[&uri]),
+                source.replace("{accent}", "{theme}")
+            );
+            if cross_file {
+                assert_eq!(
+                    apply(&palette, &edits[&declaration]),
+                    palette.replace("{accent}", "{theme}")
+                );
+            }
         }
     }
 }
