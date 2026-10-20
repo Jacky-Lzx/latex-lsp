@@ -1,4 +1,4 @@
-//! Bounded file spelling corrections for compiler-confirmed static source inputs.
+//! Bounded file spelling corrections for confirmed static source and code inputs.
 use crate::{
     build_log, spelling_fixes, syntax,
     workspace::{self, Workspace},
@@ -24,6 +24,7 @@ pub(crate) fn fixes(
     };
     let command_name = match code {
         "missing-input" => "input",
+        "missing-listing" => "lstinputlisting",
         "missing-include" => "include",
         "missing-bibliography-style" => "bibliographystyle",
         "missing-bibliography-database" => {
@@ -60,14 +61,18 @@ pub(crate) fn fixes(
         _ => return vec![],
     };
     let loader_extension = syntax::loader_extension(command_name);
+    let listing = command_name == "lstinputlisting";
     let database = matches!(command_name, "bibliography" | "nobibliography");
     let extension = loader_extension.unwrap_or(match command_name {
         "bibliographystyle" => "bst",
         "bibliography" | "nobibliography" => "bib",
+        "lstinputlisting" => "",
         _ => "tex",
     });
     let compact = syntax::file_name_ignores_spaces(command_name);
-    let reported = if command_name == "bibliographystyle" {
+    let reported = if listing {
+        build_log::missing_listing_name(&diagnostic.message)
+    } else if command_name == "bibliographystyle" {
         build_log::missing_bibliography_style_name(&diagnostic.message)
     } else if database {
         build_log::missing_bibliography_database_name(&diagnostic.message)
@@ -81,12 +86,16 @@ pub(crate) fn fixes(
             return true;
         }
 
-        diagnostic
+        let file = diagnostic
             .data
             .as_ref()
             .and_then(|data| data.get("file"))
-            .and_then(|name| name.as_str())
-            == Some(*name)
+            .and_then(|name| name.as_str());
+        if listing {
+            file.is_some_and(|file| crate::listings::missing_report(file) == *name)
+        } else {
+            file == Some(*name)
+        }
     });
     let Some(reported) = reported else {
         return vec![];
@@ -97,6 +106,9 @@ pub(crate) fn fixes(
         .iter()
         .filter(|command| command.name == command_name)
         .find_map(|command| {
+            if listing && !crate::listings::supported(workspace, uri, root, command) {
+                return None;
+            }
             let argument = syntax::file_argument(&doc.text.source, command)?;
             let spans = if syntax::file_list(command_name) {
                 syntax::complete_file_list_spans(&doc.text.source, command)?
@@ -121,7 +133,9 @@ pub(crate) fn fixes(
             }
             for span in spans {
                 let value = &doc.text.source[span.clone()];
-                let matches_report = if command_name == "bibliographystyle" {
+                let matches_report = if listing {
+                    crate::listings::missing_report(value) == reported
+                } else if command_name == "bibliographystyle" {
                     format!("{value}.bst") == reported
                 } else {
                     syntax::file_lookup_names(command_name, value).any(|name| name == reported)
@@ -156,7 +170,7 @@ pub(crate) fn fixes(
     let lookup = normalized.as_deref().unwrap_or(value);
     let separator = lookup.rfind('/').map_or(0, |index| index + 1);
     let prefix = &lookup[..separator];
-    let original = if loader_extension.is_some() {
+    let original = if listing || loader_extension.is_some() {
         &lookup[separator..]
     } else {
         lookup[separator..]
@@ -204,7 +218,11 @@ pub(crate) fn fixes(
         let Ok(name) = entry.file_name().into_string() else {
             continue;
         };
-        let Some(stem) = name.strip_suffix(&format!(".{extension}")) else {
+        let Some(stem) = (if listing {
+            Some(name.as_str())
+        } else {
+            name.strip_suffix(&format!(".{extension}"))
+        }) else {
             continue;
         };
         if !syntax::is_literal_file_path(&name)
@@ -234,7 +252,7 @@ pub(crate) fn fixes(
         }
         let replacement = format!(
             "{prefix}{}",
-            if loader_extension.is_none() && lookup.ends_with(&format!(".{extension}")) {
+            if listing || loader_extension.is_none() && lookup.ends_with(&format!(".{extension}")) {
                 &name
             } else {
                 stem
@@ -260,7 +278,7 @@ pub(crate) fn fixes(
         if candidate.as_ref() != Some(&target) {
             continue;
         }
-        if target == source || target == main {
+        if !listing && (target == source || target == main) {
             continue;
         }
         candidates.push((score, replacement, target));
@@ -269,13 +287,15 @@ pub(crate) fn fixes(
     let mut fixes = Vec::new();
     // Check the nearest candidates only; retain a bound on dependency traversals.
     for (_, replacement, target) in candidates.into_iter().take(32) {
-        let dependencies = workspace.project_documents_from(&target, root);
-        if dependencies.contains(uri)
-            || dependencies.contains(root)
-            || dependencies.contains(&source)
-            || dependencies.contains(&main)
-        {
-            continue;
+        if !listing {
+            let dependencies = workspace.project_documents_from(&target, root);
+            if dependencies.contains(uri)
+                || dependencies.contains(root)
+                || dependencies.contains(&source)
+                || dependencies.contains(&main)
+            {
+                continue;
+            }
         }
         let edit = if command_name == "input"
             && syntax::input_filename_needs_braces(&doc.text.source, &argument, &replacement)
@@ -292,6 +312,8 @@ pub(crate) fn fixes(
                 "Replace with {} file `{replacement}`",
                 if command_name == "input" {
                     "input"
+                } else if listing {
+                    "code"
                 } else if loader_extension == Some("sty") {
                     "package"
                 } else if loader_extension == Some("cls") {

@@ -52,7 +52,7 @@ fn safe_options(source: &str) -> bool {
         })
 }
 
-fn safe_call(source: &str, command: &syntax::Command) -> bool {
+pub(crate) fn safe_call(source: &str, command: &syntax::Command) -> bool {
     let start = syntax::skip_space(source, command.span.end);
     if source.as_bytes().get(start) != Some(&b'[') {
         return true;
@@ -90,25 +90,36 @@ fn context_sources(workspace: &Workspace, uri: &Url, root: &Url) -> BTreeSet<Url
     sources
 }
 
+pub(crate) fn safe_syntax(source: &str, parsed: &syntax::Syntax) -> bool {
+    !parsed.definitions.iter().any(|definition| {
+        matches!(
+            definition.name.as_str(),
+            "lstinputlisting" | "lstset" | "lst@inputpath"
+        )
+    }) && parsed.commands.iter().all(|command| {
+        command.name != "lstset"
+            || command.argument.as_ref().is_some_and(|argument| {
+                argument.outer_span.start == syntax::skip_space(source, command.span.end)
+                    && safe_options(&argument.value)
+            })
+    })
+}
+
 fn safe_project(workspace: &Workspace, sources: &BTreeSet<Url>) -> bool {
     sources
         .iter()
         .filter_map(|uri| workspace.documents.get(uri))
-        .all(|doc| {
-            !doc.syntax.definitions.iter().any(|definition| {
-                matches!(
-                    definition.name.as_str(),
-                    "lstinputlisting" | "lstset" | "lst@inputpath"
-                )
-            }) && doc.syntax.commands.iter().all(|command| {
-                command.name != "lstset"
-                    || command.argument.as_ref().is_some_and(|argument| {
-                        argument.outer_span.start
-                            == syntax::skip_space(&doc.text.source, command.span.end)
-                            && safe_options(&argument.value)
-                    })
-            })
-        })
+        .all(|doc| safe_syntax(&doc.text.source, &doc.syntax))
+}
+
+/// The package prints the last suffix separately, defaulting to tex for a
+/// suffixless basename. Dots in the directory never become file extensions.
+pub(crate) fn missing_report(value: &str) -> String {
+    let separator = value.rfind('/').map_or(0, |at| at + 1);
+    match value[separator..].rsplit_once('.') {
+        Some((base, extension)) => format!("{}{base}(.{extension})", &value[..separator]),
+        None => format!("{value}(.tex)"),
+    }
 }
 
 pub(crate) fn supported(

@@ -651,6 +651,17 @@ pub(crate) fn missing_file_name(message: &str) -> Option<&str> {
     (!name.is_empty()).then_some(name)
 }
 
+pub(crate) fn missing_listing_name(message: &str) -> Option<&str> {
+    let name = message
+        .strip_prefix("Package Listings Error: File `")?
+        .strip_suffix("' not found.")?;
+    (!name.is_empty() && name.len() <= 8192).then_some(name)
+}
+
+fn missing_read_file(message: &str) -> bool {
+    missing_file_name(message).is_some() || missing_listing_name(message).is_some()
+}
+
 pub(crate) fn missing_graphic_name(message: &str) -> Option<&str> {
     if let Some(name) = missing_file_name(message) {
         return Some(name);
@@ -715,16 +726,26 @@ fn missing_path_range(
     let shortened = shortened_context(prefix);
     let start = text.offset(Position::new(line, 0))?;
     let syntax = crate::syntax::Syntax::latex(text);
+    if command_name == "lstinputlisting" && !crate::listings::safe_syntax(&text.source, &syntax) {
+        return None;
+    }
     let mut matches = syntax.commands.iter().filter_map(|command| {
         if command.name != command_name {
             return None;
         }
-        let argument = command.argument.as_ref()?;
+        let argument = crate::syntax::file_argument(&text.source, command)?;
+        if command_name == "lstinputlisting" && !crate::listings::safe_call(&text.source, command) {
+            return None;
+        }
         let span = crate::syntax::trimmed_span(&text.source, argument.span.clone());
         let value = &text.source[span.clone()];
+        let matches_report = if command_name == "lstinputlisting" {
+            crate::listings::missing_report(value) == name
+        } else {
+            crate::syntax::file_lookup_names(command_name, value).any(|candidate| candidate == name)
+        };
         if !crate::syntax::is_literal_file_path(value)
-            || !crate::syntax::file_lookup_names(command_name, value)
-                .any(|candidate| candidate == name)
+            || !matches_report
             || text.position(argument.outer_span.end).line != line
             || text.source[argument.outer_span.clone()].starts_with('"')
                 && !text.source[argument.outer_span.clone()].ends_with('"')
@@ -1121,6 +1142,11 @@ fn emit_with_context(
         .filter(|_| reported_line.checked_sub(1) == Some(line))
         .and_then(|name| missing_path_range(&text, line, context?, name, "input"));
     ranges.extend(input_range);
+    let missing_listing = missing_listing_name(&message);
+    let listing_range = missing_listing
+        .filter(|_| reported_line.checked_sub(1) == Some(line))
+        .and_then(|name| missing_path_range(&text, line, context?, name, "lstinputlisting"));
+    ranges.extend(listing_range);
     let loader_range =
         missing_file.and_then(|name| loader_failure_range(&text, line, context?, name));
     ranges.extend(loader_range.map(|(range, _)| range));
@@ -1174,6 +1200,7 @@ fn emit_with_context(
                     .or_else(|| destination.filter(|_| precise_destination).map(|(kind, _)| kind.code()))
                     .or_else(|| missing_include_key(&message).map(|_| "missing-include"))
                     .or_else(|| input_range.map(|_| "missing-input"))
+                    .or_else(|| listing_range.map(|_| "missing-listing"))
                     .or_else(|| loader_range.map(|(_, command)| if crate::syntax::loader_extension(command) == Some("sty") { "missing-package" } else { "missing-class" }))
                     .or_else(|| clash_range.map(|_| "package-option-clash"))
                     .or_else(|| graphic_range.map(|_| "missing-image"))
@@ -1194,6 +1221,11 @@ fn emit_with_context(
                     })
                     .or_else(|| counter_range.and(counter_name).map(|name| serde_json::json!({"counter":name})))
                     .or_else(|| input_range.and(missing_file).map(|name| serde_json::json!({"file":name})))
+                    .or_else(|| listing_range.map(|range| {
+                        let start = text.offset(range.start).unwrap();
+                        let end = text.offset(range.end).unwrap();
+                        serde_json::json!({"file":&text.source[start..end]})
+                    }))
                     .or_else(|| loader_range.map(|(_, command)| serde_json::json!({"file":missing_file,"loaderCommand":command})))
                     .or_else(|| clash_range.map(|(_, command)| {
                         let mut data = serde_json::json!({"package":package_clash,"loaderCommand":command});
@@ -1445,11 +1477,13 @@ fn wrapped_error_message(
             "I can't find file ",
             "Package pdftex.def Error: File ",
             "Package luatex.def Error: File ",
+            "Package Listings Error: File ",
             "Unable to load picture or PDF file ",
         ]
         .iter()
         .any(|prefix| message.starts_with(prefix) || prefix.starts_with(&message))
             && missing_graphic_name(&message).is_none()
+            && missing_listing_name(&message).is_none()
             || incomplete_engine_file(&message);
         if message.trim_end().ends_with(['.', '!']) && !incomplete_file || message.len() >= 4096 {
             break;
@@ -1849,7 +1883,7 @@ pub(crate) fn parse_with_sources(
                         && cause_path.confirmed
                         && cause_path.path == path
                         && message == "Emergency stop."
-                        && missing_file_name(&cause).is_some()
+                        && missing_read_file(&cause)
                         && uninterrupted_file_prompt(&lines, context_start, diagnostic_start);
                     let cause_line = if associated { number } else { 1 };
                     let context = associated
@@ -1898,7 +1932,7 @@ pub(crate) fn parse_with_sources(
                 let (cause_line, context) = if path.confirmed
                     && path == current()
                     && message == "Emergency stop."
-                    && missing_file_name(&cause).is_some()
+                    && missing_read_file(&cause)
                     && uninterrupted_file_prompt(&lines, context_start, diagnostic_start)
                 {
                     following_error_location(&lines, i + 1).unwrap_or((1, None))
