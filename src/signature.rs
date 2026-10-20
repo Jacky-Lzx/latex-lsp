@@ -1168,9 +1168,136 @@ fn required_token(source: &str, start: usize) -> Option<&str> {
     Some(value)
 }
 
+/// Static TeX parameter text, used only to establish which tokens are operands.
+/// Signature help deliberately keeps its existing, smaller set of signatures.
+#[derive(Clone)]
+struct TexOperands {
+    prefix: Vec<String>,
+    delimiters: Vec<Vec<String>>,
+}
+
+impl TexOperands {
+    fn definition(source: &str, parsed: &syntax::Syntax, entry: &Entry) -> Option<(Self, usize)> {
+        if !matches!(
+            entry.detail.strip_prefix("Defined with \\"),
+            Some("def" | "gdef" | "edef" | "xdef" | "csdef" | "csgdef" | "csedef" | "csxdef")
+        ) {
+            return None;
+        }
+        let mut at = definition_arguments_start(source, parsed, entry, false)?;
+        let mut prefix = vec![];
+        let mut delimiters: Vec<Vec<String>> = vec![];
+        let mut tokens = 0;
+        loop {
+            at = tex_operand_comments(source, at);
+            match source.as_bytes().get(at)? {
+                b'{' => break,
+                b'#' => {
+                    let number = delimiters.len() + 1;
+                    if number > 9 || source.as_bytes().get(at + 1) != Some(&(b'0' + number as u8)) {
+                        return None;
+                    }
+                    delimiters.push(vec![]);
+                    at += 2;
+                }
+                _ => {
+                    // Literal spaces, non-ASCII tokens and catcode-changing
+                    // spellings require more than this lexical analysis.
+                    let value = required_token(source, at)?;
+                    tokens += 1;
+                    if tokens > 64 {
+                        return None;
+                    }
+                    let target = delimiters.last_mut().unwrap_or(&mut prefix);
+                    target.push(value.to_owned());
+                    at += value.len();
+                    if syntax::control_word(value, 0).is_some() {
+                        at = optional_start(source, at, true);
+                    }
+                }
+            }
+        }
+        if prefix.is_empty() && delimiters.iter().all(Vec::is_empty) {
+            return None;
+        }
+        syntax::group(source, at, b'{', b'}')?;
+        Some((Self { prefix, delimiters }, at))
+    }
+
+    fn end(&self, source: &str, at: usize) -> Option<usize> {
+        let mut at = tex_operand_match(source, syntax::skip_space(source, at), &self.prefix)?;
+        for delimiter in &self.delimiters {
+            if delimiter.is_empty() {
+                at = syntax::skip_space(source, at);
+                at = if source.as_bytes().get(at) == Some(&b'{') {
+                    syntax::group(source, at, b'{', b'}')?.1
+                } else {
+                    let value = required_token(source, at)?;
+                    let end = at + value.len();
+                    if syntax::control_word(value, 0).is_some() {
+                        optional_start(source, end, true)
+                    } else {
+                        end
+                    }
+                };
+            } else {
+                loop {
+                    at = tex_operand_comments(source, at);
+                    if let Some(end) = tex_operand_match(source, at, delimiter) {
+                        at = end;
+                        break;
+                    }
+                    at = match source.as_bytes().get(at)? {
+                        b'{' => syntax::group(source, at, b'{', b'}')?.1,
+                        b' ' | b'\t' | b'\r' | b'\n' => syntax::skip_space(source, at),
+                        _ => {
+                            let value = required_token(source, at)?;
+                            let end = at + value.len();
+                            if syntax::control_word(value, 0).is_some() {
+                                optional_start(source, end, true)
+                            } else {
+                                end
+                            }
+                        }
+                    };
+                }
+            }
+        }
+        Some(at)
+    }
+}
+
+fn tex_operand_comments(source: &str, mut at: usize) -> usize {
+    while source.as_bytes().get(at) == Some(&b'%') {
+        at = source[at..]
+            .find('\n')
+            .map_or(source.len(), |end| at + end + 1);
+        while matches!(source.as_bytes().get(at), Some(b' ' | b'\t' | b'\r')) {
+            at += 1;
+        }
+    }
+    at
+}
+
+fn tex_operand_match(source: &str, mut at: usize, pattern: &[String]) -> Option<usize> {
+    for expected in pattern {
+        at = tex_operand_comments(source, at);
+        let value = required_token(source, at)?;
+        if value != expected {
+            return None;
+        }
+        at += value.len();
+        if syntax::control_word(value, 0).is_some() {
+            at = optional_start(source, at, true);
+        }
+    }
+    Some(at)
+}
+
 /// Resolve command arities once across the documents in the analyzed project.
 pub(crate) struct CommandSignatures<'a> {
     local: BTreeMap<&'a str, Option<Signature>>,
+    tex_operands: BTreeMap<&'a str, Option<TexOperands>>,
 }
 
 impl<'a> CommandSignatures<'a> {
@@ -1187,6 +1314,7 @@ impl<'a> CommandSignatures<'a> {
         ambiguous: impl IntoIterator<Item = &'a str>,
     ) -> Self {
         let mut local: BTreeMap<_, _> = ambiguous.into_iter().map(|name| (name, None)).collect();
+        let mut tex_operands: BTreeMap<_, _> = local.keys().map(|name| (*name, None)).collect();
         let mut aliases = BTreeMap::new();
         for (source, parsed) in documents {
             for entry in &parsed.definitions {
@@ -1204,29 +1332,75 @@ impl<'a> CommandSignatures<'a> {
                 if expanded && alias.is_some() {
                     signature = None;
                 }
+                let tex = signature
+                    .is_none()
+                    .then(|| TexOperands::definition(source, parsed, entry))
+                    .flatten()
+                    .map(|(operands, _)| operands);
                 match local.entry(entry.name.as_str()) {
                     std::collections::btree_map::Entry::Vacant(entry) => {
                         if let Some(target) = alias.filter(|_| !expanded) {
                             aliases.insert(*entry.key(), target);
                         }
+                        tex_operands.insert(*entry.key(), tex);
                         entry.insert(signature);
                     }
                     std::collections::btree_map::Entry::Occupied(mut entry) => {
                         aliases.remove(entry.key());
+                        tex_operands.insert(*entry.key(), None);
                         entry.insert(None);
                     }
                 }
             }
         }
-        local.extend(resolve_aliases(&local, &aliases));
-        Self { local }
+        local.extend(resolve_aliases(&local, &aliases, operand_builtin));
+        tex_operands.extend(resolve_aliases(&tex_operands, &aliases, |_| None));
+        Self {
+            local,
+            tex_operands,
+        }
     }
 
     pub(crate) fn argument_tokens(&self, source: &str, parsed: &syntax::Syntax) -> BTreeSet<usize> {
         let local = &self.local;
         let mut result = BTreeSet::new();
+        for entry in &parsed.definitions {
+            if let Some((_, end)) = TexOperands::definition(source, parsed, entry) {
+                // Parameter-text delimiters are data at declaration time.
+                // In particular a delimiter control must
+                // not consume the first invocation following the definition.
+                let start = parsed
+                    .commands
+                    .partition_point(|command| command.span.start < entry.span.start);
+                result.extend(
+                    parsed.commands[start..]
+                        .iter()
+                        .take_while(|command| command.span.start < end)
+                        .map(|command| command.span.start),
+                );
+            }
+        }
         for command in &parsed.commands {
             if result.contains(&command.span.start) {
+                continue;
+            }
+            if let Some(end) = self
+                .tex_operands
+                .get(command.name.as_str())
+                .and_then(Option::as_ref)
+                .and_then(|operands| operands.end(source, command.span.end))
+            {
+                // Delimited TeX arguments are read without executing any of
+                // their tokens, including controls inside balanced groups.
+                let start = parsed
+                    .commands
+                    .partition_point(|candidate| candidate.span.start < command.span.end);
+                result.extend(
+                    parsed.commands[start..]
+                        .iter()
+                        .take_while(|candidate| candidate.span.start < end)
+                        .map(|candidate| candidate.span.start),
+                );
                 continue;
             }
             let signature = local.get(command.name.as_str()).and_then(Option::as_ref);
@@ -1334,11 +1508,12 @@ fn operand_builtin(name: &str) -> Option<Signature> {
 
 /// Walk and memoize alias chains iteratively, including unknown targets and
 /// cycles. The source graph may be arbitrarily deep without using Rust's stack.
-fn resolve_aliases<'a>(
-    local: &BTreeMap<&'a str, Option<Signature>>,
+fn resolve_aliases<'a, T: Clone>(
+    local: &BTreeMap<&'a str, Option<T>>,
     aliases: &BTreeMap<&'a str, String>,
-) -> BTreeMap<&'a str, Option<Signature>> {
-    let mut resolved: BTreeMap<&'a str, Option<Signature>> = BTreeMap::new();
+    builtin: impl Fn(&str) -> Option<T>,
+) -> BTreeMap<&'a str, Option<T>> {
+    let mut resolved: BTreeMap<&'a str, Option<T>> = BTreeMap::new();
     for &name in aliases.keys() {
         let mut at = name;
         let mut chain = vec![];
@@ -1354,10 +1529,7 @@ fn resolve_aliases<'a>(
                 chain.push(key);
                 at = target;
             } else {
-                break local
-                    .get(at)
-                    .cloned()
-                    .unwrap_or_else(|| operand_builtin(at));
+                break local.get(at).cloned().unwrap_or_else(|| builtin(at));
             }
         };
         for name in chain {
@@ -2069,4 +2241,138 @@ pub fn help(workspace: &Workspace, uri: &Url, position: Position) -> Option<Sign
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tex_operand_tests {
+    use super::*;
+    use crate::text::Text;
+
+    #[test]
+    fn tex_delimiters_skip_groups_match_whole_tokens_and_preserve_completed_calls() {
+        for (definition, call) in [
+            (
+                r"\def\wrapped#1#2#3\stop{}",
+                r"\wrapped\relax\input{wrong}\stop",
+            ),
+            (
+                r"\def\wrapped#1\stop{}",
+                r"\wrapped\relax\input{wrong}\stop",
+            ),
+            (
+                r"\def\wrapped#1\stop{}",
+                r"\wrapped{\stop\input{wrong}}\stopper\input{wrong}\stop",
+            ),
+            (
+                r"\def\wrapped\start#1\mid#2\stop{}",
+                r"\wrapped\start\relax\mid\input{wrong}\stop",
+            ),
+            (r"\def\wrapped#1aba{}", r"\wrapped ab\input{wrong}aaba"),
+            (r"\def\wrapped#1;!{}", r"\wrapped; !\input{wrong};!"),
+            (
+                "\\def\\wrapped#1a% keep\r\n b{}",
+                "\\wrapped a% keep\r\n \\input{wrong}ab",
+            ),
+            (
+                r"\def\wrapped#1\stop{}\def\bridge{\wrapped}",
+                r"\bridge\input{wrong}\stop",
+            ),
+        ] {
+            let source = format!("{definition}\n{call}\\input{{right}}");
+            let text = Text::new(source.clone());
+            let parsed = syntax::Syntax::latex(&text);
+            let signatures = CommandSignatures::new([(source.as_str(), &parsed)]);
+            let operands = signatures.argument_tokens(&source, &parsed);
+            let calls: Vec<_> = parsed
+                .commands
+                .iter()
+                .filter(|command| command.name == "input")
+                .collect();
+            assert!(calls.len() >= 2, "{source}");
+            for command in &calls[..calls.len() - 1] {
+                assert!(operands.contains(&command.span.start), "{source}");
+            }
+            assert!(
+                !operands.contains(&calls.last().unwrap().span.start),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn tex_operand_aliases_preserve_ambiguity_and_do_not_add_signature_help() {
+        let source = r"\def\wrapped#1\stop{}\def\bridge{\wrapped}";
+        let parsed = syntax::Syntax::latex(&Text::new(source.into()));
+        let signatures = CommandSignatures::new([(source, &parsed)]);
+        assert!(signatures.local["wrapped"].is_none());
+        assert!(signatures.local["bridge"].is_none());
+        assert!(signatures.tex_operands["wrapped"].is_some());
+        assert!(signatures.tex_operands["bridge"].is_some());
+        let paused = CommandSignatures::with_ambiguous_names([(source, &parsed)], ["wrapped"]);
+        assert!(paused.tex_operands["wrapped"].is_none());
+        assert!(paused.tex_operands["bridge"].is_none());
+        let duplicate = format!("{source}\\def\\wrapped#1#2\\stop{{}}");
+        let parsed = syntax::Syntax::latex(&Text::new(duplicate.clone()));
+        let signatures = CommandSignatures::new([(duplicate.as_str(), &parsed)]);
+        assert!(signatures.tex_operands["wrapped"].is_none());
+        assert!(signatures.tex_operands["bridge"].is_none());
+    }
+
+    #[test]
+    fn malformed_and_catcode_sensitive_tex_parameter_text_is_not_inferred() {
+        for source in [
+            r"\def\wrapped#2\stop{}",
+            r"\def\wrapped#1#1\stop{}",
+            r"\def\wrapped#1 #2\stop{}",
+            r"\def\wrapped#1^^41{}",
+            r"\def\wrapped#1é{}",
+            r"\def\wrapped#1#{}",
+        ] {
+            let parsed = syntax::Syntax::latex(&Text::new(source.into()));
+            assert!(!parsed.definitions.is_empty(), "{source}");
+            assert!(
+                TexOperands::definition(source, &parsed, &parsed.definitions[0]).is_none(),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn tex_definition_forms_share_bounded_operand_rules() {
+        for declaration in [
+            "def", "gdef", "edef", "xdef", "csdef", "csgdef", "csedef", "csxdef",
+        ] {
+            let target = if declaration.starts_with("cs") {
+                "{wrapped}"
+            } else {
+                r"\wrapped"
+            };
+            let source = format!(
+                r"\{declaration}{target}#1#2\stop{{}}\wrapped\relax\input{{wrong}}\stop\input{{right}}"
+            );
+            let parsed = syntax::Syntax::latex(&Text::new(source.clone()));
+            let signatures = CommandSignatures::new([(source.as_str(), &parsed)]);
+            assert!(
+                signatures.tex_operands["wrapped"].is_some(),
+                "{declaration}"
+            );
+            let operands = signatures.argument_tokens(&source, &parsed);
+            let calls: Vec<_> = parsed
+                .commands
+                .iter()
+                .filter(|command| command.name == "input")
+                .collect();
+            assert_eq!(calls.len(), 2);
+            assert!(operands.contains(&calls[0].span.start), "{declaration}");
+            assert!(!operands.contains(&calls[1].span.start), "{declaration}");
+        }
+        for count in [64, 65] {
+            let source = format!(r"\def\wrapped#1{}{{}}", "a".repeat(count));
+            let parsed = syntax::Syntax::latex(&Text::new(source.clone()));
+            assert_eq!(
+                TexOperands::definition(&source, &parsed, &parsed.definitions[0]).is_some(),
+                count == 64
+            );
+        }
+    }
 }
