@@ -456,6 +456,45 @@ fn context(doc: &Document, command: &Command, cursor: usize) -> Option<Completio
     })
 }
 
+pub(crate) fn is_formatter(name: &str) -> bool {
+    matches!(
+        name,
+        "value" | "arabic" | "roman" | "Roman" | "alph" | "Alph" | "fnsymbol"
+    )
+}
+
+pub(crate) fn saved_name_completion(
+    workspace: &Workspace,
+    uri: &Url,
+    cursor: usize,
+    scope: &BTreeSet<Url>,
+) -> Option<Vec<CompletionItem>> {
+    let doc = workspace.documents.get(uri)?;
+    let context = doc
+        .syntax
+        .name_command_references
+        .iter()
+        .rev()
+        .filter(|entry| {
+            entry.span.end <= cursor
+                && is_formatter(&entry.name)
+                && doc.text.source[entry.span.clone()].starts_with('\\')
+        })
+        .take(128)
+        .find_map(|entry| {
+            context(
+                doc,
+                &Command {
+                    name: entry.name.clone(),
+                    span: entry.span.clone(),
+                    argument: None,
+                },
+                cursor,
+            )
+        })?;
+    completion_items(workspace, doc, cursor, scope, context)
+}
+
 pub(crate) fn completion(
     workspace: &Workspace,
     uri: &Url,
@@ -471,6 +510,16 @@ pub(crate) fn completion(
         .filter(|command| command.span.end <= cursor)
         .take(128)
         .find_map(|command| context(doc, command, cursor))?;
+    completion_items(workspace, doc, cursor, scope, context)
+}
+
+fn completion_items(
+    workspace: &Workspace,
+    doc: &Document,
+    cursor: usize,
+    scope: &BTreeSet<Url>,
+    context: CompletionContext,
+) -> Option<Vec<CompletionItem>> {
     let prefix = doc.text.source[context.span.start..cursor].trim_start();
     let (range, additional_edits) =
         syntax::name_completion_ranges(&doc.text, context.edit_span, cursor)?;

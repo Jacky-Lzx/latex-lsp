@@ -765,6 +765,9 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
     if let Some(items) = crate::saved_text::completion(workspace, uri, offset, &scope) {
         return items;
     }
+    if let Some(items) = crate::counters::saved_name_completion(workspace, uri, offset, &scope) {
+        return items;
+    }
     let name_command = doc.syntax.name_command_references.iter().any(|entry| {
         doc.text.source[entry.span.clone()].starts_with('\\')
             && entry.span.start < offset

@@ -84,6 +84,8 @@
 
 保存名称内的 `\arabic`、`\roman`、`\Roman`、`\alph`、`\Alph`、`\fnsymbol` 和 `\value` 也跟踪其静态计数器参数，支持跳转、引用、悬停和重命名；定理计数器继续归属于原环境，裸参数改名时自动补花括号。参数按完整字面值匹配，动态参数及包含语义空白的参数不推断；注释和字面转换内容继续保持原样。
 
+这些命令的分组参数提供计数器名称补全，包含内置计数器、项目计数器和定理计数器；共享定义进入所属项目的候选，独立论文的名称保持隔离。选择补全会替换整个参数内容，跨行参数使用位于请求行的主编辑和必要的额外编辑；支持尚未闭合的名称输入。
+
 LaTeX 内核的 `NewExpandableDocumentCommand`、`RenewExpandableDocumentCommand`、`ProvideExpandableDocumentCommand` 和 `DeclareExpandableDocumentCommand` 与普通文档命令共用宏导航、引用、重命名和补全，兼容带花括号或裸命令目标及静态 `csname` 形式。声明提供命令、参数规格、定义体的参数提示；调用支持 `m`、`o`、`O`、`s`、`t` 以及 `d/D/r/R` 分隔参数规格及修饰符，补全保留可选参数默认值。复杂规格继续保守回退，不执行宏展开。
 
 `NewCommandCopy`、`RenewCommandCopy` 和 `DeclareCommandCopy` 支持复制目标的导航、引用、补全和重命名，并提供声明参数提示与片段。复制目标是独立宏；重命名原命令时维护复制声明的来源参数，重命名副本时只更新副本的声明与调用。兼容带花括号或裸命令参数，以及目标的静态 `csname` 写法，保留注释和逐字内容。

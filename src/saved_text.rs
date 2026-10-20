@@ -93,7 +93,7 @@ fn name_references(source: &str, span: Span<usize>) -> (Vec<Entry>, Vec<Entry>) 
                 result.push(command_reference(name, word.clone()));
                 at = word.end;
                 match name {
-                    "value" | "arabic" | "roman" | "Roman" | "alph" | "Alph" | "fnsymbol" => {
+                    name if crate::counters::is_formatter(name) => {
                         let start = syntax::skip_space(source, at);
                         if let Some((argument, _)) =
                             fancyvrb::name_argument(source, start).filter(|(argument, end)| {
