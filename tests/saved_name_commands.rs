@@ -381,3 +381,267 @@ fn real_macro_renames_in_expanded_names_preserve_successful_compilation() {
         }
     }
 }
+
+fn generated_cases() -> Vec<(&'static str, &'static str, &'static str, usize)> {
+    let counter = r"\newcounter{keycounter}\setcounter{keycounter}{1}";
+    vec![
+        (
+            counter,
+            r"\SaveVerb{1}|MarkerUnique|\UseVerb{\thekeycounter}",
+            "keycounter",
+            3,
+        ),
+        (
+            counter,
+            r"\SaveVerb{\thekeycounter}|MarkerUnique|\UseVerb{1}",
+            "keycounter",
+            3,
+        ),
+        (
+            counter,
+            r"\SaveVerb{1}|MarkerUnique|\UseVerb{\csname thekeycounter\endcsname}",
+            "keycounter",
+            3,
+        ),
+        (
+            counter,
+            r"\SaveVerb{1}|MarkerUnique|\UseVerb{\csuse{thekeycounter}}",
+            "keycounter",
+            3,
+        ),
+        (
+            counter,
+            r"\SaveVerb{1}|MarkerUnique|\UseVerb{\number\csname c@keycounter\endcsname}",
+            "keycounter",
+            3,
+        ),
+        (
+            counter,
+            r"\SaveVerb{example}|MarkerUnique|\UseVerb{example\csname p@keycounter\endcsname}",
+            "keycounter",
+            3,
+        ),
+        (
+            r"\newtheorem{keytheorem}{Title}",
+            r"\begin{keytheorem}Text\end{keytheorem}\SaveVerb{1}|MarkerUnique|\UseVerb{\thekeytheorem}",
+            "keytheorem",
+            4,
+        ),
+        (
+            r"\newenvironment{keyenv}{example}{}",
+            r"\SaveVerb{example}|MarkerUnique|\UseVerb{\keyenv}",
+            "keyenv",
+            2,
+        ),
+        (
+            r"\newenvironment{keyenv}{example}{}",
+            r"\SaveVerb{example}|MarkerUnique|\UseVerb{example\endkeyenv}",
+            "keyenv",
+            2,
+        ),
+        (
+            r"\newif\ifkeyflag\keyflagtrue",
+            r"\SaveVerb{example}|MarkerUnique|\UseVerb{\ifkeyflag example\else other\fi}",
+            "keyflag",
+            3,
+        ),
+        (
+            r"\newif\ifkeyflag\keyflagtrue",
+            r"\SaveVerb{example}|MarkerUnique|\UseVerb{\csname ifkeyflag\endcsname example\else other\fi}",
+            "keyflag",
+            3,
+        ),
+    ]
+}
+
+#[test]
+fn generated_commands_in_name_arguments_resolve_and_rename_their_owning_symbol() {
+    for (preamble, body, name, count) in generated_cases() {
+        let source = format!("% 😀\r\n{preamble}\r\n{body}");
+        let (workspace, uri) = setup(&source);
+        let doc = &workspace.documents[&uri];
+        let start = source.rfind(name).unwrap();
+        let at = doc.text.position(start + 2);
+        assert_eq!(
+            features::definitions(&workspace, &uri, at).len(),
+            1,
+            "{body}"
+        );
+        assert_eq!(
+            features::references(&workspace, &uri, at, true).len(),
+            count,
+            "{body}"
+        );
+        assert_eq!(
+            features::references(&workspace, &uri, at, false).len(),
+            count - 1,
+            "{body}"
+        );
+        assert!(features::hover(&workspace, &uri, at).is_some(), "{body}");
+        assert!(
+            matches!(features::prepare_rename(&workspace, &uri, at).unwrap(), Some(PrepareRenameResponse::RangeWithPlaceholder { range, placeholder }) if placeholder == name && range == doc.text.range(start, start + name.len())),
+            "{body}"
+        );
+        let result = changed(
+            &source,
+            features::rename(&workspace, &uri, at, "renamedkey")
+                .unwrap()
+                .unwrap(),
+            &uri,
+        );
+        assert_eq!(result, source.replace(name, "renamedkey"), "{body}");
+        // A cursor on the generated prefix must select the same owner.
+        let entry = doc
+            .syntax
+            .name_command_references
+            .iter()
+            .find(|entry| entry.name.contains(name))
+            .unwrap();
+        assert_eq!(
+            features::references(
+                &workspace,
+                &uri,
+                doc.text.position(entry.span.start + 1),
+                true
+            )
+            .len(),
+            count,
+            "{body}"
+        );
+    }
+}
+
+#[test]
+fn generated_reference_renames_preserve_literals_and_enforce_direct_command_letters() {
+    let source = concat!(
+        "\\newcounter{keycounter}\\setcounter{keycounter}{1}\r\n",
+        "\\SaveVerb{\\detokenize{\\thekeycounter}}|\\thekeycounter|\r\n",
+        "\\UseVerb{\\string\\thekeycounter\\space}\r\n",
+        "\\UseVerb{% \\thekeycounter\r\n\\thekeycounter}\r\n",
+    );
+    let (workspace, uri) = setup(source);
+    let doc = &workspace.documents[&uri];
+    let at = doc.text.position(source.find("keycounter").unwrap() + 2);
+    assert_eq!(features::references(&workspace, &uri, at, true).len(), 3);
+    let result = changed(
+        source,
+        features::rename(&workspace, &uri, at, "renamedcounter")
+            .unwrap()
+            .unwrap(),
+        &uri,
+    );
+    let expected = source.replacen("keycounter", "renamedcounter", 2).replacen(
+        "\r\n\\thekeycounter}",
+        "\r\n\\therenamedcounter}",
+        1,
+    );
+    assert_eq!(result, expected);
+    assert!(features::rename(&workspace, &uri, at, "counter-with-dash").is_err());
+    for prefix in [r"\detokenize{", "|", r"\string", "% "] {
+        let start = source.find(&format!("{prefix}\\thekeycounter")).unwrap() + prefix.len();
+        let at = doc.text.position(start + 5);
+        assert!(features::definitions(&workspace, &uri, at).is_empty());
+        assert!(features::prepare_rename(&workspace, &uri, at)
+            .unwrap()
+            .is_none());
+    }
+}
+
+#[test]
+fn named_generated_references_allow_unicode_and_preserve_the_generated_prefix() {
+    for name in ["key-counter", "计数"] {
+        let source = format!("\\newcounter{{{name}}}\\setcounter{{{name}}}{{1}}\n\\UseVerb{{\\csname the{name}\\endcsname}}");
+        let (workspace, uri) = setup(&source);
+        let doc = &workspace.documents[&uri];
+        let at = doc.text.position(source.rfind(name).unwrap());
+        assert_eq!(features::definitions(&workspace, &uri, at).len(), 1);
+        assert_eq!(features::references(&workspace, &uri, at, true).len(), 3);
+        let result = changed(
+            &source,
+            features::rename(&workspace, &uri, at, "新-计数")
+                .unwrap()
+                .unwrap(),
+            &uri,
+        );
+        assert_eq!(result, source.replace(name, "新-计数"));
+        assert!(result.contains(r"\csname the新-计数\endcsname"));
+    }
+}
+
+#[test]
+fn shared_generated_name_references_check_other_consumers_generated_command_conflicts() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let paper = r"\documentclass{article}\usepackage{common}\begin{document}\UseVerb{\thekeycounter}\end{document}";
+    for name in ["a", "b"] {
+        std::fs::write(root.join(format!("{name}.tex")), paper).unwrap();
+    }
+    std::fs::write(root.join("common.sty"), r"\newcounter{keycounter}").unwrap();
+    let main = Url::from_file_path(root.join("a.tex")).unwrap();
+    let other = Url::from_file_path(root.join("b.tex")).unwrap();
+    let shared = Url::from_file_path(root.join("common.sty")).unwrap();
+    let mut workspace = Workspace::default();
+    workspace.add_root(root.into());
+    let at = workspace.documents[&main]
+        .text
+        .position(paper.find("keycounter").unwrap() + 2);
+    assert_eq!(features::references(&workspace, &main, at, true).len(), 3);
+    let edits = features::rename(&workspace, &main, at, "renamedcounter")
+        .unwrap()
+        .unwrap()
+        .changes
+        .unwrap();
+    assert_eq!(
+        edits.keys().cloned().collect::<BTreeSet<_>>(),
+        [main.clone(), other.clone(), shared].into()
+    );
+    workspace.documents.insert(
+        other.clone(),
+        Document::new(
+            &other,
+            format!("{paper}\\newcommand{{\\therenamedcounter}}{{Taken}}"),
+            None,
+        ),
+    );
+    assert!(features::rename(&workspace, &main, at, "renamedcounter").is_err());
+}
+
+#[test]
+#[ignore = "requires pdflatex and xelatex"]
+fn real_owning_symbol_renames_keep_expanded_saved_names_working() {
+    for engine in ["pdflatex", "xelatex"] {
+        for (preamble, body, name, _) in generated_cases() {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let source = format!("\\documentclass{{article}}\r\n\\usepackage{{fancyvrb}}\r\n\\usepackage{{etoolbox}}\r\n{preamble}\r\n\\begin{{document}}\r\n{body}\r\n\\end{{document}}\r\n");
+            let (workspace, uri) = setup(&source);
+            let at = workspace.documents[&uri]
+                .text
+                .position(source.rfind(name).unwrap() + 2);
+            let result = changed(
+                &source,
+                features::rename(&workspace, &uri, at, "renamedkey")
+                    .unwrap()
+                    .unwrap(),
+                &uri,
+            );
+            for content in [&source, &result] {
+                std::fs::write(root.join("main.tex"), content).unwrap();
+                let outcome = build::run(
+                    &root.join("main.tex"),
+                    &BuildConfig {
+                        executable: engine.into(),
+                        ..Default::default()
+                    },
+                    &AtomicBool::new(false),
+                );
+                assert_eq!(
+                    outcome.status, "success",
+                    "{engine}/{body}: {}",
+                    outcome.output
+                );
+                assert!(root.join("build/latex-lsp/main.pdf").is_file());
+            }
+        }
+    }
+}

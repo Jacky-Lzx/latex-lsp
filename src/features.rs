@@ -233,8 +233,8 @@ fn target<'a>(workspace: &'a Workspace, uri: &Url, offset: usize) -> Option<Targ
     {
         return raw;
     }
-    if doc.syntax.is_ignored(offset) {
-        return raw;
+    if doc.syntax.is_ignored(offset) && raw.is_none() {
+        return None;
     }
     if raw
         .as_ref()

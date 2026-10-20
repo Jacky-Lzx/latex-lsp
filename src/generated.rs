@@ -216,6 +216,20 @@ pub(crate) struct Reference {
 pub(crate) fn references(doc: &Document, name: &str, environment: Generated) -> Vec<Reference> {
     let mut result = Vec::new();
     let generated = generated_names(name, environment);
+    for entry in &doc.syntax.name_command_references {
+        if let Some((_, prefix)) = generated
+            .iter()
+            .find(|(generated, _)| *generated == entry.name)
+        {
+            let control_word = doc.text.source[entry.span.clone()].starts_with('\\');
+            let start = entry.span.start + usize::from(control_word) + prefix;
+            result.push(Reference {
+                span: start..start + name.len(),
+                selection_span: entry.span.clone(),
+                control_word,
+            });
+        }
+    }
     for (index, command) in doc.syntax.commands.iter().enumerate() {
         if let Some((_, prefix)) = generated
             .iter()
