@@ -1470,7 +1470,7 @@ fn modern_and_unbraced_macro_declarations_support_navigation_completion_and_rena
         r"\DeclareRobustCommand\hello[1]{#1}",
         r"\newrobustcmd{\hello}[1]{Hello #1}",
         r"\csdef{hello}#1{Hello #1}",
-        r"\csgdef{ hello }#1{Hello #1}",
+        r"\csgdef{hello}#1{Hello #1}",
         r"\csedef{hello}#1{Hello #1}",
         r"\csxdef{hello}#1{Hello #1}",
         r"\renewrobustcmd* \hello [1] {Hello #1}",

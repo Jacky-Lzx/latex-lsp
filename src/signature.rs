@@ -1476,11 +1476,11 @@ pub fn help(workspace: &Workspace, uri: &Url, position: Position) -> Option<Sign
         let named = command.argument.as_ref().filter(|argument| {
             command.name == "csuse"
                 && cursor >= argument.outer_span.end
-                && syntax::is_static_key(argument.value.trim())
+                && syntax::is_static_key(&argument.value)
         });
         let end = named.map_or(command.span.end, |argument| argument.outer_span.end);
         let name = named
-            .map(|argument| argument.value.trim())
+            .map(|argument| argument.value.as_str())
             .or_else(|| literal.as_ref().map(|span| &doc.text.source[span.clone()]))
             .unwrap_or(command.name.as_str());
         let signature = if name == "hyperref"

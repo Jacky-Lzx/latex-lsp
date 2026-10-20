@@ -293,6 +293,8 @@ etoolbox 的静态 `csdef` / `csgdef` / `csedef` / `csxdef` 声明进入宏索�
 
 etoolbox 的 `csuse` / `csmeaning`、`ifcsdef` / `ifcsundef` / `ifcsvoid`、宏类型检测及名称比较命令中的静态控制序列名称支持补全、导航、引用与重命名；识别 `ifcsequal` / `ifcsstrequal` 的两个名称参数，保留 `ifcsstring` 的字符串和条件分支正文。派生的环境、计数器和布尔命令仍归属于原始声明。`csuse` 调用可显示被调用命令或环境的参数提示，包括可选参数默认值；动态名称不作推断。
 
+这些命名接口的名称参数按原样匹配；首尾空白属于命令名，含空白的名称不会归并到普通控制词。选择已知名称补全时替换整个名称参数，跨行空白通过额外编辑移除，保留后续参数。
+
 命名宏修改接口 `csappto` / `cspreto` 及其展开、全局变体（`cseappto`、`csgappto`、`csxappto`、`csepreto`、`csgpreto`、`csxpreto`），以及 `csundef` / `csgundef` 也支持片段、参数提示、名称补全、导航和跨文件重命名。只将名称参数关联到原始声明，保留追加或前插代码中的普通文本，并独立识别其中的宏调用；不将修改操作推断为新的声明。
 
 `cslet`、`letcs`、`csletcs` 的静态别名声明区分目标与来源：别名有独立的符号、导航和重命名，来源参数关联原宏；重命名原宏会维护这些引用。支持有花括号和无花括号的控制序列参数、名称补全、片段与声明参数提示。纯名称别名可改为中文名称；动态目标不会把来源误记为声明，不展开动态名称，也不根据来源推断别名调用的参数签名或模拟后续重新赋值。
@@ -541,7 +543,7 @@ cargo test --locked -- --include-ignored
 
 自定义环境支持 `\newenvironment` / `\renewenvironment`、xparse 的 `\NewDocumentEnvironment` 等声明、`\NewEnviron` / `\RenewEnviron` 和 `\newtheorem`，提供补全、定义跳转、引用、悬浮、符号及跨文件重命名。改名时同步维护 `\begin{panel}` / `\end{panel}`、直接调用的 `\panel` / `\endpanel` 和字面 `\csname panel\endcsname`；可从这些调用处跳转或发起重命名。检查环境生成的同名宏和 `\end...` 宏，避免与已有命令冲突；存在直接控制序列调用时，新名称须只含 TeX 命令字母。
 
-普通自定义宏也支持字面 `\csname hello\endcsname` 的定义跳转、悬浮、引用、高亮和重命名，与直接调用的 `\hello` 统一处理；保留名称前后的空白及调用参数。识别 `\expandafter\def\csname hello\endcsname#1{...}`、同样写法的 `gdef` / `edef` / `xdef`、`newcommand` / xparse 系列以及 `let` 别名定义；可从字面定义处发起重命名，参数提示与直接定义一致。字面调用可提示内置命令、自定义宏和环境参数，签名保留 `\csname ...\endcsname` 写法。名称中的宏展开、注释拼接、内部空白和未闭合的 `csname` 不作推断，也不会误记为重新定义 `csname` 原语；共享调用在不同项目里指向不同宏时拒绝重命名。
+普通自定义宏也支持字面 `\csname hello\endcsname` 的定义跳转、悬浮、引用、高亮和重命名，与直接调用的 `\hello` 统一处理；保留 `csname` 控制词后的词法分隔空白及调用参数。识别 `\expandafter\def\csname hello\endcsname#1{...}`、同样写法的 `gdef` / `edef` / `xdef`、`newcommand` / xparse 系列以及 `let` 别名定义；可从字面定义处发起重命名，参数提示与直接定义一致。字面调用可提示内置命令、自定义宏和环境参数，签名保留 `\csname ...\endcsname` 写法。名称中的宏展开、注释拼接、语义空白和未闭合的 `csname` 不作推断，也不会误记为重新定义 `csname` 原语；共享调用在不同项目里指向不同宏时拒绝重命名。
 
 用户宏参数提示识别 `\newcommand` 系列和 `\DeclareRobustCommand` 的参数数量/首个可选参数默认值，xparse 的 `m` / `o` / `O{...}` / `s` / `t+` / `d<>` / `D<>{默认值}` / `r()` / `R(){默认值}`，以及 `\def` 系列连续的 `#1#2...` 参数。传统宏及环境的可选参数和默认值在首个未受花括号保护的 `]` 处结束，保留字面量 `[`；xparse 调用仍匹配嵌套方括号。直接调用、`csuse` 和静态 `csname` 使用所调用命令的规则，支持星号、嵌套调用、转义和多行注释。`t` 标志支持字符、控制序列及 Unicode token，保留有无标志时的后续参数编号；分隔参数支持字符、控制序列和 Unicode 分隔符，匹配嵌套、花括号保护及完整 token；缺失必需分隔符时保守回退。不支持的参数规格、字符串求值或定义有歧义时暂不推断签名；不在注释和逐字文本中提示。
 

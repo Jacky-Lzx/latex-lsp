@@ -244,7 +244,7 @@ fn literal_macro_names_support_navigation_prepared_rename_references_and_highlig
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     let definitions = "\\newcommand{\\hello}[1]{Hello #1}\n";
-    let source = "\\documentclass{article}\r\n\\input{definitions}\r\n\\begin{document}\r\n😀 \\csname hello\\endcsname{World}\r\n\\hello{Direct}\\csname  hello  \\endcsname{Other}\r\n% \\csname hello\\endcsname\r\n\\verb|\\csname hello\\endcsname|\r\n\\end{document}\r\n";
+    let source = "\\documentclass{article}\r\n\\input{definitions}\r\n\\begin{document}\r\n😀 \\csname hello\\endcsname{World}\r\n\\hello{Direct}\\csname  hello\\endcsname{Other}\r\n% \\csname hello\\endcsname\r\n\\verb|\\csname hello\\endcsname|\r\n\\end{document}\r\n";
     let workspace = project(
         root,
         &[("main.tex", source), ("definitions.tex", definitions)],
@@ -375,7 +375,7 @@ fn expanded_literal_definitions_index_the_resulting_name_and_preserve_declaratio
         r"\expandafter\gdef\csname hello\endcsname#1{Hello #1}",
         r"\expandafter\edef\csname hello\endcsname#1{Hello #1}",
         r"\expandafter\xdef\csname hello\endcsname#1{Hello #1}",
-        "\\global\\expandafter % comment\n\\def % comment\n\\csname  hello  \\endcsname#1{Hello #1}",
+        "\\global\\expandafter % comment\n\\def % comment\n\\csname  hello\\endcsname#1{Hello #1}",
         r"\expandafter\newcommand\csname hello\endcsname[1]{Hello #1}",
         r"\expandafter\newrobustcmd\csname hello\endcsname[1]{Hello #1}",
         r"\expandafter\renewrobustcmd\csname hello\endcsname[1]{Hello #1}",
@@ -389,14 +389,19 @@ fn expanded_literal_definitions_index_the_resulting_name_and_preserve_declaratio
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();
         let main_source = "\\documentclass{article}\n\\input{definitions}\n\\begin{document}\n\\hello{World} \\csname hello\\endcsname{Other}\n\\end{document}\n";
-        let workspace = project(root, &[("main.tex", main_source), ("definitions.tex", declaration)]);
+        let workspace = project(
+            root,
+            &[("main.tex", main_source), ("definitions.tex", declaration)],
+        );
         let definitions = uri(root, "definitions.tex");
         let main = uri(root, "main.tex");
         let document = &workspace.documents[&definitions];
         assert_eq!(document.syntax.definitions.len(), 1, "{declaration}");
         assert_eq!(document.syntax.definitions[0].name, "hello");
         assert_eq!(features::symbols(document)[0].name, "hello");
-        let position = document.text.position(declaration.find("hello").unwrap() + 2);
+        let position = document
+            .text
+            .position(declaration.find("hello").unwrap() + 2);
         let references = features::references(&workspace, &definitions, position, false);
         assert_eq!(references.len(), 2, "{declaration}: {references:?}");
         assert!(references.iter().all(|entry| entry.uri == main));
@@ -404,15 +409,24 @@ fn expanded_literal_definitions_index_the_resulting_name_and_preserve_declaratio
         assert_eq!(highlights.len(), 1);
         assert_eq!(highlights[0].kind, Some(DocumentHighlightKind::WRITE));
         let changed = renamed(&workspace, &definitions, position);
-        assert_eq!(changed[&definitions], declaration.replace("hello", "greeting"));
+        assert_eq!(
+            changed[&definitions],
+            declaration.replace("hello", "greeting")
+        );
         assert_eq!(changed[&main], main_source.replace("hello", "greeting"));
         let text = &workspace.documents[&main].text;
         let call = text.position(main_source.find("World").unwrap() + 2);
         let help = signature::help(&workspace, &main, call).unwrap();
         assert_eq!(help.signatures[0].label, r"\hello{#1}");
         assert_eq!(help.active_parameter, Some(0));
-        let items = features::completion(&workspace, &main, text.position(main_source.find("\\hello").unwrap() + 3));
-        assert!(items.iter().any(|item| item.label == "hello" && item.detail.as_deref() == Some(r"\hello{#1}")));
+        let items = features::completion(
+            &workspace,
+            &main,
+            text.position(main_source.find("\\hello").unwrap() + 3),
+        );
+        assert!(items
+            .iter()
+            .any(|item| item.label == "hello" && item.detail.as_deref() == Some(r"\hello{#1}")));
     }
 }
 
@@ -571,7 +585,7 @@ fn named_command_apis_navigate_and_rename_only_control_sequence_arguments() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     let definitions = r"\newrobustcmd{\hello}[1]{#1}\newcommand{\other}{}";
-    let source = "\\documentclass{article}\\input{definitions}\n\\begin{document}\n\\csuse{hello}{hello}\\csmeaning{hello}\n\\ifcsdef{hello}{hello}{No}\\ifcsundef{hello}{No}{Yes}\\ifcsvoid{hello}{No}{Yes}\\ifcsmacro{hello}{Yes}{No}\\ifcsparam{hello}{Yes}{No}\\ifcsprotected{hello}{Yes}{No}\\ifcsltxprotect{hello}{Yes}{No}\n\\ifcsstring{hello}{hello}{Yes}{No}\\ifcsequal{hello}{hello}{Yes}{No}\\ifcsstrequal{other}{ hello }{Yes}{No}\n\\csuse{hello\\suffix}{Dynamic}\\ifcsdef{other}{hello}{No}\n% \\csuse{hello}\n\\verb|\\csuse{hello}|\\end{document}\n";
+    let source = "\\documentclass{article}\\input{definitions}\n\\begin{document}\n\\csuse{hello}{hello}\\csmeaning{hello}\n\\ifcsdef{hello}{hello}{No}\\ifcsundef{hello}{No}{Yes}\\ifcsvoid{hello}{No}{Yes}\\ifcsmacro{hello}{Yes}{No}\\ifcsparam{hello}{Yes}{No}\\ifcsprotected{hello}{Yes}{No}\\ifcsltxprotect{hello}{Yes}{No}\n\\ifcsstring{hello}{hello}{Yes}{No}\\ifcsequal{hello}{hello}{Yes}{No}\\ifcsstrequal{other}{hello}{Yes}{No}\n\\csuse{hello\\suffix}{Dynamic}\\ifcsdef{other}{hello}{No}\n% \\csuse{hello}\n\\verb|\\csuse{hello}|\\end{document}\n";
     let workspace = project(
         root,
         &[("main.tex", source), ("definitions.tex", definitions)],
@@ -581,7 +595,7 @@ fn named_command_apis_navigate_and_rename_only_control_sequence_arguments() {
         "csuse{hello}",
         "ifcsstring{hello}",
         "ifcsequal{hello}",
-        "{ hello }",
+        "ifcsstrequal{other}{hello}",
     ] {
         let text = &workspace.documents[&main].text;
         let offset = source.find(marker).unwrap() + marker.find("hello").unwrap() + 2;
@@ -619,7 +633,7 @@ fn named_command_completion_preserves_suffixes_and_skips_strings_dynamic_names_a
     for (marked, expected) in [
         (
             r"😀 \csuse{ he¦llo }{Existing}",
-            r"😀 \csuse{ hello }{Existing}",
+            r"😀 \csuse{hello}{Existing}",
         ),
         (
             r"\ifcsequal{other}{hel¦lo}{Yes}{No}",
@@ -630,7 +644,7 @@ fn named_command_completion_preserves_suffixes_and_skips_strings_dynamic_names_a
             r"\ifcsstrequal{hello}{other}{Yes}{No}",
         ),
         (r"\csmeaning{hel¦", r"\csmeaning{hello"),
-        (r"\csappto{ hel¦lo }{hello}", r"\csappto{ hello }{hello}"),
+        (r"\csappto{ hel¦lo }{hello}", r"\csappto{hello}{hello}"),
         (r"\csepreto{hel¦lo}{hello}", r"\csepreto{hello}{hello}"),
         (r"\csundef{hel¦", r"\csundef{hello"),
         (r"\csgundef{hel¦lo}", r"\csgundef{hello}"),
@@ -738,7 +752,7 @@ fn named_mutations_navigate_and_rename_without_treating_code_as_names_or_declara
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();
         let definitions = r"\csdef{hello}{A}";
-        let source = format!("\\documentclass{{article}}\\input{{definitions}}\n\\begin{{document}}😀 \\{command}{{ hello }}{{hello \\csuse{{hello}}}}\n\\{command}{{hello\\suffix}}{{hello}}\n% \\{command}{{hello}}\n\\verb|\\{command}{{hello}}|\\end{{document}}");
+        let source = format!("\\documentclass{{article}}\\input{{definitions}}\n\\begin{{document}}😀 \\{command}{{hello}}{{hello \\csuse{{hello}}}}\n\\{command}{{hello\\suffix}}{{hello}}\n% \\{command}{{hello}}\n\\verb|\\{command}{{hello}}|\\end{{document}}");
         let workspace = project(
             root,
             &[("main.tex", &source), ("definitions.tex", definitions)],
@@ -758,7 +772,7 @@ fn named_mutations_navigate_and_rename_without_treating_code_as_names_or_declara
         let changed = renamed_to(&workspace, &main, position, "发布-模式");
         assert_eq!(
             changed[&main],
-            source.replacen("{ hello }", "{ 发布-模式 }", 1).replacen(
+            source.replacen("{hello}", "{发布-模式}", 1).replacen(
                 "csuse{hello}",
                 "csuse{发布-模式}",
                 1
@@ -1225,7 +1239,7 @@ fn static_named_declarations_share_navigation_references_and_rename_with_direct_
     for command in ["csdef", "csgdef", "csedef", "csxdef"] {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();
-        let definitions = format!("\\{command}{{ hello }}#1{{Hello #1}}\\csdef{{hello-two}}#1{{#1}}\\csdef{{模式}}#1{{#1}}\n");
+        let definitions = format!("\\{command}{{hello}}#1{{Hello #1}}\\csdef{{hello-two}}#1{{#1}}\\csdef{{模式}}#1{{#1}}\n");
         let source = "\\documentclass{article}\\input{definitions}\n\\begin{document}\n\\hello{Direct}\\csuse{hello}{Named}\\csname hello\\endcsname{Literal}\\ifcsdef{hello}{Yes}{No}\n\\csuse{hello-two}{Other}\\csuse{模式}{Unicode}\\end{document}\n";
         let workspace = project(
             root,
@@ -1263,7 +1277,7 @@ fn static_named_declarations_share_navigation_references_and_rename_with_direct_
             );
             let changed = renamed(&workspace, document, position);
             assert!(
-                changed[&declaration].contains(&format!("\\{command}{{ greeting }}#1{{Hello #1}}"))
+                changed[&declaration].contains(&format!("\\{command}{{greeting}}#1{{Hello #1}}"))
             );
             assert!(changed[&main].contains("\\greeting{Direct}\\csuse{greeting}{Named}\\csname greeting\\endcsname{Literal}\\ifcsdef{greeting}"));
             assert!(changed[&main].contains("csuse{hello-two}"));

@@ -56,7 +56,10 @@ pub(crate) fn literal_csname(
     let end = commands
         .get(index + 1)
         .filter(|command| command.name == "endcsname")?;
-    let span = trimmed_span(source, command.span.end..end.span.start);
+    // Spaces after the control word delimit it and are discarded by TeX.
+    // Subsequent spaces, including those before endcsname, name a different
+    // command and must not be folded into an ordinary control word.
+    let span = skip_space(source, command.span.end).min(end.span.start)..end.span.start;
     is_static_key(&source[span.clone()]).then_some(span)
 }
 
