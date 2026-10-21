@@ -1808,6 +1808,16 @@ impl<'a> CommandSignatures<'a> {
         )
     }
 
+    /// Selection references name chapters without loading their declarations.
+    pub(crate) fn indirect_selection_invocations(
+        &self,
+        source: &str,
+        parsed: &syntax::Syntax,
+        positions: &BTreeSet<usize>,
+    ) -> Vec<SourceCall> {
+        self.indirect_file_invocations(source, parsed, positions, &["includeonly"])
+    }
+
     /// Bibliography resources provide data rather than LaTeX declarations.
     pub(crate) fn indirect_bibliography_invocations(
         &self,

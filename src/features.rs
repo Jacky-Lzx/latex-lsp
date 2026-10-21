@@ -700,7 +700,8 @@ fn indirect_source_context(
             .flatten()
             .chain(inputs.loaders.get(uri).into_iter().flatten())
             .chain(inputs.forwarders.get(uri).into_iter().flatten())
-            .chain(inputs.resources.get(uri).into_iter().flatten());
+            .chain(inputs.resources.get(uri).into_iter().flatten())
+            .chain(inputs.selectors.get(uri).into_iter().flatten());
         let (command, span) = calls.rev().find_map(|call| {
             (call.certain && call.command.span.end <= offset)
                 .then(|| argument_span(doc, &call.command, offset))

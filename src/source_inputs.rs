@@ -16,6 +16,7 @@ pub(crate) struct Index {
     pub loaders: BTreeMap<Url, Vec<SourceCall>>,
     pub forwarders: BTreeMap<Url, Vec<SourceCall>>,
     pub resources: BTreeMap<Url, Vec<SourceCall>>,
+    pub selectors: BTreeMap<Url, Vec<SourceCall>>,
     pub incomplete: bool,
     literal: Option<BTreeMap<Url, Vec<Url>>>,
 }
@@ -39,6 +40,7 @@ impl Index {
             let mut loader_calls = BTreeMap::new();
             let mut forwarders = BTreeMap::new();
             let mut resources = BTreeMap::new();
+            let mut selectors = BTreeMap::new();
             index.calls = scope
                 .iter()
                 .filter_map(|uri| {
@@ -74,6 +76,14 @@ impl Index {
                     if !options.is_empty() {
                         forwarders.insert(uri.clone(), options);
                     }
+                    let selection = signatures.indirect_selection_invocations(
+                        &doc.text.source,
+                        &doc.syntax,
+                        &positions,
+                    );
+                    if !selection.is_empty() {
+                        selectors.insert(uri.clone(), selection);
+                    }
                     let bibliography = signatures.indirect_bibliography_invocations(
                         &doc.text.source,
                         &doc.syntax,
@@ -93,6 +103,7 @@ impl Index {
             index.loaders = loader_calls;
             index.forwarders = forwarders;
             index.resources = resources;
+            index.selectors = selectors;
             index.literal = Some(literal);
             let next = index.scope(workspace, root);
             if !index.incomplete && next == scope {
@@ -107,6 +118,7 @@ impl Index {
             loaders: BTreeMap::new(),
             forwarders: BTreeMap::new(),
             resources: BTreeMap::new(),
+            selectors: BTreeMap::new(),
             incomplete: true,
             literal: None,
         }

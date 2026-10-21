@@ -443,6 +443,7 @@ pub fn will_rename(workspace: &Workspace, files: &[FileRename]) -> Result<Option
                 .chain(inputs.loaders.remove(uri).unwrap_or_default())
                 .chain(inputs.forwarders.remove(uri).unwrap_or_default())
                 .chain(inputs.resources.remove(uri).unwrap_or_default())
+                .chain(inputs.selectors.remove(uri).unwrap_or_default())
                 .filter(|call| call.certain)
                 .map(|call| call.command)
                 .collect();
