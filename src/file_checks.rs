@@ -272,6 +272,7 @@ impl Snapshot {
                     .flatten()
                     .chain(inputs.loaders.get(&source).into_iter().flatten())
                     .chain(inputs.resources.get(&source).into_iter().flatten())
+                    .chain(inputs.checks.get(&source).into_iter().flatten())
                     .filter(|call| call.certain)
                     .map(|call| &call.command),
             ) {
@@ -1981,6 +1982,50 @@ mod indirect_selection_conditions {
                 snapshot.changed_path().is_some(),
                 "{control}: restored selected chapter was missed"
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod indirect_conditional_file_conditions {
+    use super::*;
+
+    #[test]
+    fn static_indirect_conditional_files_track_creation_without_importing_check_only_sources() {
+        for loader in ["InputIfFileExists", "IfFileExists"] {
+            for control in [
+                format!("\\{loader}"),
+                format!("\\csuse{{{loader}}}"),
+                format!("\\csname {loader}\\endcsname"),
+                r"\readpart".into(),
+                r"\csuse{readpart}".into(),
+                r"\csname readpart\endcsname".into(),
+            ] {
+                let directory = tempfile::tempdir().unwrap();
+                let root = directory.path();
+                let main = root.join("main.tex");
+                let source = format!("\\documentclass{{article}}\\def\\readpart{{\\{loader}}}\\begin{{document}}{control}{{% file 😀\r\nchapter% tail\r\n}}{{Before}}{{Missing}}\\end{{document}}");
+                std::fs::write(&main, source).unwrap();
+                let main_uri = Url::from_file_path(&main).unwrap();
+                let mut workspace = Workspace::default();
+                workspace.add_root(root.into());
+                let snapshot = Snapshot::capture(&workspace, &main_uri, &BuildConfig::default());
+                assert!(snapshot.changed_path().is_none());
+                std::fs::write(root.join("unrelated.tex"), "Unrelated").unwrap();
+                assert!(snapshot.changed_path().is_none());
+                std::fs::write(root.join("chapter.tex"), "Chapter").unwrap();
+                assert!(
+                    snapshot.changed_path().is_some(),
+                    "{loader}/{control}: file restoration missed"
+                );
+                workspace.refresh_project(&main_uri);
+                let chapter = Url::from_file_path(root.join("chapter.tex")).unwrap();
+                assert_eq!(
+                    workspace.project_documents(&main_uri).contains(&chapter),
+                    loader == "InputIfFileExists",
+                    "{loader}/{control}"
+                );
+            }
         }
     }
 }

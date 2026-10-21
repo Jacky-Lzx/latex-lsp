@@ -1767,7 +1767,12 @@ impl<'a> CommandSignatures<'a> {
         parsed: &syntax::Syntax,
         positions: &BTreeSet<usize>,
     ) -> Vec<SourceCall> {
-        self.indirect_file_invocations(source, parsed, positions, &["input", "include"])
+        self.indirect_file_invocations(
+            source,
+            parsed,
+            positions,
+            &["input", "include", "InputIfFileExists"],
+        )
     }
 
     /// Static package and class loaders share source-call token boundaries, including
@@ -1883,6 +1888,16 @@ impl<'a> CommandSignatures<'a> {
                 syntax::includeonly_names(source, command).map(|names| names.into_iter().collect())
             })
             .collect()
+    }
+
+    /// Existence checks reference files without executing their contents.
+    pub(crate) fn indirect_conditional_checks(
+        &self,
+        source: &str,
+        parsed: &syntax::Syntax,
+        positions: &BTreeSet<usize>,
+    ) -> Vec<SourceCall> {
+        self.indirect_file_invocations(source, parsed, positions, &["IfFileExists"])
     }
 
     /// Selection references name chapters without loading their declarations.

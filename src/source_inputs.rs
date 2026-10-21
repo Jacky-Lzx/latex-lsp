@@ -17,6 +17,7 @@ pub(crate) struct Index {
     pub forwarders: BTreeMap<Url, Vec<SourceCall>>,
     pub resources: BTreeMap<Url, Vec<SourceCall>>,
     pub selectors: BTreeMap<Url, Vec<SourceCall>>,
+    pub checks: BTreeMap<Url, Vec<SourceCall>>,
     pub incomplete: bool,
     literal: Option<BTreeMap<Url, Vec<Url>>>,
 }
@@ -41,6 +42,7 @@ impl Index {
             let mut forwarders = BTreeMap::new();
             let mut resources = BTreeMap::new();
             let mut selectors = BTreeMap::new();
+            let mut checks = BTreeMap::new();
             index.calls = scope
                 .iter()
                 .filter_map(|uri| {
@@ -76,6 +78,14 @@ impl Index {
                     if !options.is_empty() {
                         forwarders.insert(uri.clone(), options);
                     }
+                    let conditional = signatures.indirect_conditional_checks(
+                        &doc.text.source,
+                        &doc.syntax,
+                        &positions,
+                    );
+                    if !conditional.is_empty() {
+                        checks.insert(uri.clone(), conditional);
+                    }
                     let selection = signatures.indirect_selection_invocations(
                         &doc.text.source,
                         &doc.syntax,
@@ -104,6 +114,7 @@ impl Index {
             index.forwarders = forwarders;
             index.resources = resources;
             index.selectors = selectors;
+            index.checks = checks;
             index.literal = Some(literal);
             let next = index.scope(workspace, root);
             if !index.incomplete && next == scope {
@@ -119,6 +130,7 @@ impl Index {
             forwarders: BTreeMap::new(),
             resources: BTreeMap::new(),
             selectors: BTreeMap::new(),
+            checks: BTreeMap::new(),
             incomplete: true,
             literal: None,
         }

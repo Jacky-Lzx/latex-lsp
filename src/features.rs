@@ -701,7 +701,8 @@ fn indirect_source_context(
             .chain(inputs.loaders.get(uri).into_iter().flatten())
             .chain(inputs.forwarders.get(uri).into_iter().flatten())
             .chain(inputs.resources.get(uri).into_iter().flatten())
-            .chain(inputs.selectors.get(uri).into_iter().flatten());
+            .chain(inputs.selectors.get(uri).into_iter().flatten())
+            .chain(inputs.checks.get(uri).into_iter().flatten());
         let (command, span) = calls.rev().find_map(|call| {
             (call.certain && call.command.span.end <= offset)
                 .then(|| argument_span(doc, &call.command, offset))
@@ -728,6 +729,15 @@ fn argument_span(doc: &Document, command: &Command, offset: usize) -> Option<Spa
         || syntax::file_extensions(&command.name).is_some())
     {
         return None;
+    }
+    if matches!(command.name.as_str(), "InputIfFileExists" | "IfFileExists") {
+        return syntax::active_file_prefix(
+            source,
+            syntax::skip_space(source, command.span.end),
+            offset,
+            false,
+            false,
+        );
     }
     if matches!(command.name.as_str(), "input" | "include") {
         let start = syntax::skip_space(source, command.span.end);
@@ -808,18 +818,6 @@ fn argument_span(doc: &Document, command: &Command, offset: usize) -> Option<Spa
         let (span, _) = completion_name_argument(source, command, offset)?;
         let prefix = source[span.start..offset].trim_start();
         return Some(offset - prefix.len()..offset);
-    }
-    if matches!(command.name.as_str(), "InputIfFileExists" | "IfFileExists") {
-        if let Some(argument) = &command.argument {
-            if argument.span.start <= offset && offset <= argument.span.end {
-                let start = if source.as_bytes().get(argument.outer_span.start) == Some(&b'{') {
-                    offset - source[argument.span.start..offset].trim_start().len()
-                } else {
-                    argument.span.start
-                };
-                return Some(start..offset);
-            }
-        }
     }
     let at = if syntax::is_citation(&command.name) {
         syntax::citation_argument_start(source, &command.name, command.span.end)?

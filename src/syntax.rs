@@ -1054,7 +1054,10 @@ pub(crate) fn file_argument<'a>(
         // into a different forwarding declaration.
         (is_literal_file_path(&argument.value) && !argument.value.chars().any(char::is_whitespace))
             .then_some(std::borrow::Cow::Owned(argument))
-    } else if matches!(command.name.as_str(), "input" | "include") {
+    } else if matches!(
+        command.name.as_str(),
+        "input" | "include" | "InputIfFileExists" | "IfFileExists"
+    ) {
         let argument = command.argument.as_ref()?;
         let span = (source.as_bytes().get(argument.outer_span.start) == Some(&b'{'))
             .then(|| literal_file_span(source, argument.span.clone(), false))

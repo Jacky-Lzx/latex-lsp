@@ -364,6 +364,7 @@ pub(crate) fn document_links_in(workspace: &Workspace, uri: &Url, root: &Url) ->
             .chain(inputs.forwarders.get(uri).into_iter().flatten())
             .chain(inputs.resources.get(uri).into_iter().flatten())
             .chain(inputs.selectors.get(uri).into_iter().flatten())
+            .chain(inputs.checks.get(uri).into_iter().flatten())
             .filter(|call| call.certain)
             .map(|call| &call.command),
     ) {
