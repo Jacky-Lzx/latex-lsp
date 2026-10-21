@@ -10,9 +10,6 @@ pub fn code_actions(
     range: Range,
     context: &CodeActionContext,
 ) -> CodeActionResponse {
-    if !workspace.code_action_literals && !workspace.apply_edits {
-        return vec![];
-    }
     if context.only.as_ref().is_some_and(|kinds| {
         !kinds.iter().any(|kind| {
             let kind = kind.as_str();
@@ -24,6 +21,10 @@ pub fn code_actions(
     let Some(doc) = workspace.documents.get(uri) else {
         return vec![];
     };
+    let mut actions = rebuild_actions(workspace, uri, range, context);
+    if !workspace.code_action_literals && !workspace.apply_edits {
+        return actions;
+    }
     let mut fixes = crate::environment_diagnostics::fixes(workspace, uri, doc);
     fixes.extend(spelling_fixes::fixes(
         workspace,
@@ -31,7 +32,7 @@ pub fn code_actions(
         range,
         &context.diagnostics,
     ));
-    fixes
+    actions.extend(fixes
         .iter()
         .filter(|fix| {
             let diagnostic = &fix.diagnostic;
@@ -64,6 +65,66 @@ pub fn code_actions(
                 ..Default::default()
             })
         })
+    );
+    actions
+}
+
+/// Rebuild the project that produced a current warning, even when the source
+/// belongs to multiple roots. Commands do not need workspace/applyEdit support.
+fn rebuild_actions(
+    workspace: &Workspace,
+    uri: &Url,
+    range: Range,
+    context: &CodeActionContext,
+) -> CodeActionResponse {
+    workspace
+        .build_diagnostics
+        .iter()
+        .filter_map(|(root, project)| {
+            let diagnostics: Vec<_> = project
+                .get(uri)?
+                .iter()
+                .filter(|diagnostic| {
+                    diagnostic.source.as_deref() == Some("latex-build")
+                        && crate::build_log::rerun_required(diagnostic)
+                        && diagnostic.range.start <= range.end
+                        && range.start <= diagnostic.range.end
+                        && (context.diagnostics.is_empty()
+                            || context.diagnostics.iter().any(|reported| {
+                                reported.range == diagnostic.range
+                                    && reported.message == diagnostic.message
+                                    && reported.source == diagnostic.source
+                            }))
+                })
+                .take(64)
+                .cloned()
+                .collect();
+            if diagnostics.is_empty()
+                || workspace.root_document(root).as_ref().ok() != Some(root)
+                || workspace.build_config(root).rebuild_arguments().is_err()
+            {
+                return None;
+            }
+            let path = root.to_file_path().ok().filter(|path| path.is_file())?;
+            let title = format!("Rebuild {}", path.display());
+            let command = Command {
+                title: title.clone(),
+                command: "latex.rebuild".into(),
+                arguments: Some(vec![serde_json::json!(root)]),
+            };
+            Some(if workspace.code_action_literals {
+                CodeActionOrCommand::CodeAction(CodeAction {
+                    title,
+                    kind: Some(CodeActionKind::QUICKFIX),
+                    diagnostics: Some(diagnostics),
+                    command: Some(command),
+                    ..Default::default()
+                })
+            } else {
+                CodeActionOrCommand::Command(command)
+            })
+        })
+        .take(32)
         .collect()
 }
 

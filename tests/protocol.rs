@@ -17,6 +17,115 @@ struct Server {
 }
 
 #[test]
+#[ignore = "requires pdflatex and xelatex"]
+fn real_rerun_warning_code_actions_rebuild_and_clear_through_stdio() {
+    for engine in ["pdflatex", "xelatex"] {
+        for literals in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let main = Url::from_file_path(root.join("main.tex")).unwrap();
+            let source = "\\documentclass{article}\n\\begin{document}\nSee \\ref{sec:intro}.\n\\section{Intro}\\label{sec:intro}\n\\end{document}\n";
+            std::fs::write(root.join("main.tex"), source).unwrap();
+            let mut server = Server::start();
+            let capabilities = if literals {
+                json!({"workspace":{"applyEdit":false},"textDocument":{"codeAction":{"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix"]}}}}})
+            } else {
+                json!({"workspace":{"applyEdit":false}})
+            };
+            server.request(
+                1,
+                "initialize",
+                json!({
+                    "processId":null,
+                    "rootUri":Url::from_directory_path(root).unwrap(),
+                    "capabilities":capabilities,
+                    "initializationOptions":{"build":{"executable":engine}}
+                }),
+            );
+            server.notify("initialized", json!({}));
+            server.notify(
+                "textDocument/didOpen",
+                json!({"textDocument":{
+                    "uri":main,"languageId":"latex","version":1,"text":source
+                }}),
+            );
+            let started = server.request(
+                2,
+                "workspace/executeCommand",
+                json!({
+                    "command":"latex.build","arguments":[main]
+                }),
+            );
+            let finished = server.until(|message| {
+                message["method"] == "latex/buildFinished"
+                    && message["params"]["buildId"] == started["buildId"]
+            });
+            assert_eq!(finished["params"]["status"], "success", "{finished}");
+            assert_eq!(finished["params"]["analysis"]["rerunRequired"], true);
+            let published = server.until(|message| {
+                message["method"] == "textDocument/publishDiagnostics"
+                    && message["params"]["uri"] == main.as_str()
+                    && message["params"]["diagnostics"]
+                        .as_array()
+                        .is_some_and(|diagnostics| {
+                            diagnostics.iter().any(|diagnostic| {
+                                diagnostic["message"].as_str().is_some_and(|message| {
+                                    message.starts_with("LaTeX Warning: Label(s) may have changed.")
+                                })
+                            })
+                        })
+            });
+            let diagnostic = published["params"]["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|diagnostic| {
+                    diagnostic["message"]
+                        .as_str()
+                        .unwrap()
+                        .starts_with("LaTeX Warning: Label(s) may have changed.")
+                })
+                .unwrap()
+                .clone();
+            let request = json!({
+                "textDocument":{"uri":main},"range":diagnostic["range"],
+                "context":{"diagnostics":[diagnostic],"only":["quickfix"]}
+            });
+            let actions = server.request(3, "textDocument/codeAction", request.clone());
+            assert_eq!(actions.as_array().unwrap().len(), 1, "{actions}");
+            let command = if literals {
+                assert_eq!(actions[0]["kind"], "quickfix");
+                assert!(actions[0].get("edit").is_none());
+                actions[0]["command"].clone()
+            } else {
+                actions[0].clone()
+            };
+            assert_eq!(command["command"], "latex.rebuild");
+            assert_eq!(command["arguments"], json!([main]));
+            let rebuilt = server.request(4, "workspace/executeCommand", command);
+            assert_eq!(rebuilt["status"], "started", "{rebuilt}");
+            let finished = server.until(|message| {
+                message["method"] == "latex/buildFinished"
+                    && message["params"]["buildId"] == rebuilt["buildId"]
+            });
+            assert_eq!(finished["params"]["status"], "success", "{finished}");
+            assert_eq!(finished["params"]["rebuild"], true);
+            assert_eq!(finished["params"]["analysis"]["rerunRequired"], false);
+            assert_eq!(
+                finished["params"]["analysis"]["unresolvedReferences"],
+                json!([])
+            );
+            assert_eq!(finished["params"]["diagnosticsCount"], 0);
+            let stale = server.request(5, "textDocument/codeAction", request);
+            assert_eq!(stale, json!([]));
+            server.request(6, "shutdown", Value::Null);
+            server.notify("exit", Value::Null);
+            server.wait_exit(0);
+        }
+    }
+}
+
+#[test]
 #[cfg(unix)]
 fn active_external_root_builds_can_be_queried_and_cancelled_by_the_reported_uri() {
     let directory = tempfile::tempdir().unwrap();

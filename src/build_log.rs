@@ -231,6 +231,35 @@ pub(crate) fn duplicate_label_key(message: &str) -> Option<&str> {
     (!key.is_empty()).then_some(key)
 }
 
+/// Share the confirmed rerun warning grammar with editor build actions.
+pub(crate) fn rerun_required(diagnostic: &Diagnostic) -> bool {
+    if diagnostic.severity != Some(DiagnosticSeverity::WARNING) {
+        return false;
+    }
+    let message = diagnostic
+        .message
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    matches!(message.as_str(),
+        "LaTeX Warning: Label(s) may have changed. Rerun to get cross-references right."
+        | "Package natbib Warning: Citation(s) may have changed. Rerun to get citations correct."
+        | "Package natbib Warning: Citation(s) may have changed."
+        | "Package longtable Warning: Table widths have changed. Rerun LaTeX."
+        | "Package hyperref Warning: Rerun to get /PageLabels entry."
+    ) || message
+        .strip_prefix("Package rerunfilecheck Warning: File `")
+        .and_then(|tail| tail.split_once("' has changed."))
+        .is_some_and(|(file, tail)| {
+            !file.is_empty()
+                && (tail.is_empty()
+                    || tail.trim_start().starts_with("Rerun to get outlines right")
+                    || tail
+                        .trim_start()
+                        .starts_with("(rerunfilecheck) Rerun to get outlines right"))
+        })
+}
+
 /// Summarize observed final-log warnings without multiplying repeated uses.
 pub fn compilation_analysis(
     diagnostics: &BTreeMap<Url, Vec<Diagnostic>>,
@@ -257,28 +286,7 @@ pub fn compilation_analysis(
         .flatten()
         .filter(|diagnostic| diagnostic.severity == Some(DiagnosticSeverity::WARNING))
     {
-        if !rerun {
-            let message = diagnostic
-                .message
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ");
-            rerun = matches!(message.as_str(),
-                "LaTeX Warning: Label(s) may have changed. Rerun to get cross-references right."
-                | "Package natbib Warning: Citation(s) may have changed. Rerun to get citations correct."
-                | "Package natbib Warning: Citation(s) may have changed."
-                | "Package longtable Warning: Table widths have changed. Rerun LaTeX."
-                | "Package hyperref Warning: Rerun to get /PageLabels entry."
-            ) || message
-                .strip_prefix("Package rerunfilecheck Warning: File `")
-                .and_then(|tail| tail.split_once("' has changed."))
-                .is_some_and(|(file, tail)| {
-                    !file.is_empty()
-                        && (tail.is_empty()
-                            || tail.trim_start().starts_with("Rerun to get outlines right")
-                            || tail.trim_start().starts_with("(rerunfilecheck) Rerun to get outlines right"))
-                });
-        }
+        rerun = rerun || rerun_required(diagnostic);
         if let Some((citation, key)) = undefined_reference_key(&diagnostic.message) {
             let keys = if citation {
                 &mut citations

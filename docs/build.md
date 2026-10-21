@@ -6,6 +6,7 @@
 
 - [工具与编译入口](#工具与编译入口)
 - [命令、状态与通知](#命令状态与通知)
+- [从诊断重新编译](#从诊断重新编译)
 - [结果分析](#结果分析)
 - [编译配置](#编译配置)
 - [保存、取消与输入快照](#保存取消与输入快照)
@@ -52,6 +53,14 @@ end
 任务在编译工作线程启动前已被取消时，不会调用编译器、创建输出目录或替换旧日志，已有 PDF、日志和辅助文件会保留。取消结果不把这些旧文件作为本次编译产物返回。
 
 服务器发出 `latex/buildStarted` 和 `latex/buildFinished` 通知，两者都包含实际 `executable` 和可推断的 `engine`（使用自定义参数或无法识别的工具时为 `null`）。完成通知还包含 `status`（`success` / `error` / `cancelled` / `timeout`）、`buildId`、`rootUri`、`pdfUri`、`logUri`、`exitCode`、`diagnosticsCount`、`errorsCount`、`warningsCount`、`dependenciesCount`（包含根文件的来源数量）、`durationMs`、`message` 和有长度限制的 `output` 摘要。成功结果的 `pages` 为最终 TeX 日志报告的页数（未知时为 `null`），`pdfSize` 为实际 PDF 的字节数；失败结果两者为 `null`。`latex.buildStatus` 保留相同摘要。若文档或已知输入选择在编译中变化，`stale` 为 `true`，不会发布这次编译的旧诊断，并清除该项目上一次编译的诊断，避免旧错误继续留在编辑器中。失败编译不把可能不完整的 PDF 标记为成功结果。
+
+## 从诊断重新编译
+
+编译器明确要求再次编译时，可在对应警告处请求快速修复，选择 `Rebuild …`。支持 LaTeX 交叉引用、natbib 文献、longtable 表格列宽、hyperref 页标签和 rerunfilecheck 文件变更警告；未定义引用本身不会产生这个操作。
+
+该操作调用 `latex.rebuild`，同一主文档的多条警告合并为一个入口。共享文件分别列出产生诊断的主文档，避免从共享来源猜测编译根；仅匹配当前保存的编译诊断与请求范围。诊断清除后不再提供入口，根文件缺失、根配置已改变为其他项目或自定义工具尚未配置 `rebuildArguments` 时也不提供。
+
+支持标准 CodeAction 和旧客户端的 Command 响应，不要求客户端支持工作区编辑。执行时沿用现有编译的保存检查、排队、取消和超时规则。
 
 ## 结果分析
 
