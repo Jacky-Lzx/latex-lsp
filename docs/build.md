@@ -56,7 +56,9 @@ end
 
 ## 从诊断重新编译
 
-编译器明确要求再次编译时，可在对应警告处请求快速修复，选择 `Rebuild …`。支持 LaTeX 交叉引用、natbib 文献、longtable 表格列宽、hyperref 页标签和 rerunfilecheck 文件变更警告；未定义引用本身不会产生这个操作。
+编译器明确要求再次编译时，可在对应警告处请求快速修复，选择 `Rebuild …`。支持 LaTeX 交叉引用、natbib 文献、biblatex 的 LaTeX 重运行提示、longtable 表格列宽、hyperref 页标签和 rerunfilecheck 文件变更警告；未定义引用本身不会产生这个操作。
+
+biblatex 明确要求先运行 BibTeX 或 Biber 时，默认参数的 latexmk 也提供该操作，由 latexmk 调度文献处理与后续 LaTeX 编译。直接 TeX 引擎及自定义 `arguments` / `rebuildArguments` 的流程保留提示和所需工具摘要，但不为这类提示提供重编译操作；请先完成对应的文献处理。切换为无法处理文献的配置后，旧菜单操作会失效。
 
 该操作调用 `latex.rebuild`，同一主文档的多条警告合并为一个入口。共享文件分别列出产生诊断的主文档，避免从共享来源猜测编译根；仅匹配当前保存的编译诊断与请求范围。诊断清除后不再提供入口，根文件缺失、根配置已改变为其他项目或自定义工具尚未配置 `rebuildArguments` 时也不提供。
 
@@ -67,6 +69,23 @@ end
 ## 结果分析
 
 结果的 `analysis` 汇总本次最终 TeX 日志中的已确认重复编译请求（`rerunRequired`）、未解析交叉引用键（`unresolvedReferences`）、文献引用键（`unresolvedCitations`）、缺失 PDF 目标（`unresolvedDestinations`）、重复 PDF 目标（`duplicateDestinations`）和重复标签键（`duplicateLabels`）。仅从标准 LaTeX、包或类告警正文开头识别未解析引用；普通告警示例或文件名中的同类文字仍保留为告警，不计入引用键。键去重并排序；PDF 目标名解码引擎输出的 PDF 字符串转义，引用、文献和重复标签键保留原文。日志折行不会在引用键的括号前添加空格或把括号误读为文件边界。缺少定义本身不视为重复编译请求。表格列宽需要更新时，识别 `longtable` 的明确重编译提示；列宽收敛后的最终日志不再保留该请求。也识别 hyperref 关于 PDF 页标签（`/PageLabels`）的明确重编译提示；例如 XeLaTeX 首次构建后需要补全页标签，后续日志不再请求时清除该标记。每类最多 128 个键，每个键最多 128 个 Unicode 字符；超出预算的键不截短身份，而是省略并设置 `truncated`。诊断输入被省略时该标记也为 `true`。取消、超时、无法观测最终日志或因输入变化而丢弃的结果返回 `analysis: null`；早期编译轮次已解决的警告不会进入分析。
+
+### 文献处理与重编译
+
+`analysis.requiredBibliographyTools` 汇总 biblatex 明确请求重新运行的文献工具，使用小写名称 `biber` / `bibtex`，去重并排序。完整的文献处理请求也会设置 `rerunRequired: true`，因为文献处理后还需要运行 LaTeX；仅出现未定义引用不会推断所需工具。
+
+例如，BibTeX 后端的首次编译可能返回：
+
+```json
+{
+  "rerunRequired": true,
+  "requiredBibliographyTools": ["bibtex"]
+}
+```
+
+运行 BibTeX 后，若 biblatex 只要求再运行 LaTeX，工具列表变为 `[]`，`rerunRequired` 仍为 `true`。最终日志不再请求时，两者分别为 `[]` 和 `false`。分页变化、语言加载的明确 LaTeX 重运行提示也参与分析；普通警告示例、不完整请求及其他宏包中的相似文字不会设置这些字段。
+
+摘要依据本次最终日志，不保留前一轮已满足的请求。`latex/buildFinished` 和 `latex.buildStatus` 返回相同字段；取消、超时和过期结果仍按原规则返回 `analysis: null`。重编译操作的工具适用范围见[从诊断重新编译](#从诊断重新编译)。
 
 ### 缺字摘要
 

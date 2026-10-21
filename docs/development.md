@@ -22,9 +22,10 @@ cargo test --locked -- --include-ignored
 
 测试包含 UTF-16/增量编辑、语法容错、跨文件导航、文献补全、磁盘/未保存内容同步，以及启动真实进程验证的 stdio 协议流程。
 
-真实 biblatex 单次、多组及卷号引用回归还需要安装 biblatex 和 logreq，使用 pdfLaTeX 与 BibTeX：
+真实 biblatex 引用及重编译请求回归还需要安装 biblatex 和 logreq，使用 pdfLaTeX 与 BibTeX：
 
 ```sh
+cargo test --locked --test biblatex_rerun real_biblatex -- --ignored
 cargo test --locked --test biblatex_commands real_biblatex -- --ignored
 cargo test --locked --test multicite real_biblatex -- --ignored
 cargo test --locked --test volume_citations real_volume -- --ignored

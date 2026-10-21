@@ -69,6 +69,13 @@ pub fn code_actions(
     actions
 }
 
+// A TeX-only invocation cannot satisfy a request for BibTeX or Biber.
+fn rebuild_warning(config: &crate::config::BuildConfig, diagnostic: &Diagnostic) -> bool {
+    crate::build_log::rerun_required(diagnostic)
+        && (crate::build_log::required_bibliography_tool(diagnostic).is_none()
+            || config.rebuilds_bibliography())
+}
+
 /// Rebuild the project that produced a current warning, even when the source
 /// belongs to multiple roots. Commands do not need workspace/applyEdit support.
 fn rebuild_actions(
@@ -81,12 +88,13 @@ fn rebuild_actions(
         .build_diagnostics
         .iter()
         .filter_map(|(root, project)| {
+            let config = workspace.build_config(root);
             let diagnostics: Vec<_> = project
                 .get(uri)?
                 .iter()
                 .filter(|diagnostic| {
                     diagnostic.source.as_deref() == Some("latex-build")
-                        && crate::build_log::rerun_required(diagnostic)
+                        && rebuild_warning(&config, diagnostic)
                         && diagnostic.range.start <= range.end
                         && range.start <= diagnostic.range.end
                         && (context.diagnostics.is_empty()
@@ -101,7 +109,7 @@ fn rebuild_actions(
                 .collect();
             if diagnostics.is_empty()
                 || workspace.root_document(root).as_ref().ok() != Some(root)
-                || workspace.build_config(root).rebuild_arguments().is_err()
+                || config.rebuild_arguments().is_err()
             {
                 return None;
             }
@@ -156,7 +164,7 @@ pub(crate) fn valid_rebuild_guard(workspace: &Workspace, root: &Url, guard: &Reb
             .is_some_and(|current| {
                 guard.diagnostics.iter().any(|diagnostic| {
                     diagnostic.source.as_deref() == Some("latex-build")
-                        && crate::build_log::rerun_required(diagnostic)
+                        && rebuild_warning(&workspace.build_config(root), diagnostic)
                         && current.contains(diagnostic)
                 })
             })

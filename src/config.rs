@@ -174,6 +174,14 @@ impl BuildConfig {
         }
     }
 
+    /// Only the known default driver promises a bibliography processing cycle.
+    /// Custom argument lists can disable it or invoke only a TeX engine.
+    pub(crate) fn rebuilds_bibliography(&self) -> bool {
+        self.arguments.is_none()
+            && self.rebuild_arguments.is_none()
+            && Path::new(&self.executable).file_stem() == Some(OsStr::new("latexmk"))
+    }
+
     pub fn rebuild_arguments(&self) -> Result<Vec<String>, String> {
         if let Some(arguments) = &self.rebuild_arguments {
             return Ok(arguments.clone());

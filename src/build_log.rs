@@ -231,10 +231,64 @@ pub(crate) fn duplicate_label_key(message: &str) -> Option<&str> {
     (!key.is_empty()).then_some(key)
 }
 
-/// Share the confirmed rerun warning grammar with editor build actions.
+enum BiblatexRerun {
+    Latex,
+    Bibliography(&'static str),
+}
+
+fn biblatex_rerun(diagnostic: &Diagnostic) -> Option<BiblatexRerun> {
+    if diagnostic.severity != Some(DiagnosticSeverity::WARNING) {
+        return None;
+    }
+    let body = diagnostic
+        .message
+        .strip_prefix("Package biblatex Warning:")?
+        .split_whitespace()
+        .filter(|word| *word != "(biblatex)")
+        .collect::<Vec<_>>()
+        .join(" ");
+    if matches!(
+        body.as_str(),
+        "Please rerun LaTeX." | "Please rerun LaTeX. Page breaks have changed."
+    ) || body
+        .strip_prefix("No localisation for language '")
+        .and_then(|tail| tail.rsplit_once("' loaded. "))
+        .is_some_and(|(language, tail)| {
+            !language.is_empty()
+                && tail == "Please rerun LaTeX to ensure languages can be requested properly."
+        })
+    {
+        return Some(BiblatexRerun::Latex);
+    }
+    for (tool, prefix) in [
+        ("biber", "Please (re)run Biber on the file: "),
+        ("bibtex", "Please (re)run BibTeX on the file(s): "),
+    ] {
+        if body
+            .strip_prefix(prefix)
+            .and_then(|tail| tail.strip_suffix(" and rerun LaTeX afterwards."))
+            .is_some_and(|files| !files.trim().is_empty())
+        {
+            return Some(BiblatexRerun::Bibliography(tool));
+        }
+    }
+    None
+}
+
+pub(crate) fn required_bibliography_tool(diagnostic: &Diagnostic) -> Option<&'static str> {
+    match biblatex_rerun(diagnostic)? {
+        BiblatexRerun::Bibliography(tool) => Some(tool),
+        BiblatexRerun::Latex => None,
+    }
+}
+
+/// Share the confirmed rerun warning grammar with analysis and editor actions.
 pub(crate) fn rerun_required(diagnostic: &Diagnostic) -> bool {
     if diagnostic.severity != Some(DiagnosticSeverity::WARNING) {
         return false;
+    }
+    if biblatex_rerun(diagnostic).is_some() {
+        return true;
     }
     let message = diagnostic
         .message
@@ -286,6 +340,7 @@ pub fn compilation_analysis(
     let mut duplicate_destinations = BTreeSet::new();
     let mut duplicate_labels = BTreeSet::new();
     let mut glyphs: BTreeMap<char, (DiagnosticSeverity, BTreeSet<String>)> = BTreeMap::new();
+    let mut bibliography_tools = BTreeSet::new();
     let mut rerun = false;
     let mut truncated = diagnostics_truncated;
     for diagnostic in diagnostics.values().flatten().filter(|diagnostic| {
@@ -330,6 +385,9 @@ pub fn compilation_analysis(
             continue;
         }
         rerun = rerun || rerun_required(diagnostic);
+        if let Some(tool) = required_bibliography_tool(diagnostic) {
+            bibliography_tools.insert(tool);
+        }
         if let Some((citation, key)) = undefined_reference_key(&diagnostic.message) {
             let keys = if citation {
                 &mut citations
@@ -362,6 +420,7 @@ pub fn compilation_analysis(
         .collect();
     serde_json::json!({
         "rerunRequired": rerun,
+        "requiredBibliographyTools": bibliography_tools,
         "unresolvedReferences": references,
         "unresolvedCitations": citations,
         "unresolvedDestinations": missing_destinations,
@@ -2507,7 +2566,15 @@ fn wrapped_message(
         lines[*i].trim().to_owned()
     };
     while (!message.ends_with(['.', '!'])
-        || (reference && lines[*i].len() >= 60 && undefined_reference_key(&message).is_none()))
+        || (reference && lines[*i].len() >= 60 && undefined_reference_key(&message).is_none())
+        // biblatex puts explanatory sentences after a complete first sentence.
+        // Keep its own continuation lines with the original warning.
+        || initial.starts_with("Package biblatex Warning:")
+            && lines.get(*i + 1).is_some_and(|line| {
+                line.trim_start()
+                    .strip_prefix("(biblatex)")
+                    .is_some_and(|tail| tail.starts_with(char::is_whitespace))
+            }))
         && *i + 1 < lines.len()
         && message.len() < 4096
     {

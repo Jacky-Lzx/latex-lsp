@@ -239,3 +239,66 @@ fn rerun_actions_do_not_offer_unavailable_or_redirected_builds() {
     std::fs::remove_file(project.root.to_file_path().unwrap()).unwrap();
     assert!(project.actions(vec![]).is_empty());
 }
+
+#[test]
+fn biblatex_latex_only_requests_can_rebuild_with_direct_engines() {
+    for executable in ["pdflatex", "xelatex", "lualatex", "tectonic", "latexmk"] {
+        let mut project = Project::new(true, false);
+        project.workspace.config.build.executable = executable.into();
+        for message in [
+            "Package biblatex Warning: Please rerun LaTeX.",
+            "Package biblatex Warning: Please rerun LaTeX. (biblatex) Page breaks have changed.",
+        ] {
+            let mut diagnostic = project.diagnostic.clone();
+            diagnostic.message = message.into();
+            project.workspace.build_diagnostics.insert(
+                project.root.clone(),
+                [(project.root.clone(), vec![diagnostic.clone()])].into(),
+            );
+            assert_eq!(
+                project.actions(vec![diagnostic]).len(),
+                1,
+                "{executable}: {message}"
+            );
+        }
+    }
+}
+
+#[test]
+fn bibliography_requests_offer_rebuild_only_for_the_known_latexmk_cycle() {
+    for executable in [
+        "latexmk",
+        "/tools/latexmk",
+        "pdflatex",
+        "xelatex",
+        "lualatex",
+        "tectonic",
+        "custom",
+    ] {
+        for custom_arguments in [false, true] {
+            for custom_rebuild in [false, true] {
+                for literals in [false, true] {
+                    let mut project = Project::new(literals, false);
+                    project.workspace.config.build.executable = executable.into();
+                    project.workspace.config.build.arguments =
+                        custom_arguments.then(|| vec!["%f".into()]);
+                    project.workspace.config.build.rebuild_arguments =
+                        custom_rebuild.then(|| vec!["%f".into()]);
+                    for (tool, field) in [("BibTeX", "file(s):"), ("Biber", "file:")] {
+                        let mut diagnostic = project.diagnostic.clone();
+                        diagnostic.message = format!("Package biblatex Warning: Please (re)run {tool} on the {field} main and rerun LaTeX afterwards.");
+                        project.workspace.build_diagnostics.insert(
+                            project.root.clone(),
+                            [(project.root.clone(), vec![diagnostic.clone()])].into(),
+                        );
+                        let actions = project.actions(vec![diagnostic]);
+                        assert_eq!(actions.len(), usize::from(executable.ends_with("latexmk") && !custom_arguments && !custom_rebuild), "{executable}/{custom_arguments}/{custom_rebuild}/{literals}: {actions:?}");
+                        if let Some(action) = actions.first() {
+                            assert_eq!(command(action).command, "latex.rebuild");
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
