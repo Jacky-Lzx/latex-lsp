@@ -3182,14 +3182,34 @@ pub(crate) fn locate_missing_bibliography_styles(
     sources: &BTreeSet<Url>,
     diagnostics: &mut BTreeMap<Url, Vec<Diagnostic>>,
 ) {
-    locate_missing_bibliography_files(MissingBibliographyKind::Style, sources, diagnostics);
+    locate_missing_bibliography_files(MissingBibliographyKind::Style, sources, diagnostics, false);
 }
 
 pub(crate) fn locate_missing_bibliography_databases(
     sources: &BTreeSet<Url>,
     diagnostics: &mut BTreeMap<Url, Vec<Diagnostic>>,
 ) {
-    locate_missing_bibliography_files(MissingBibliographyKind::Database, sources, diagnostics);
+    locate_missing_bibliography_files(
+        MissingBibliographyKind::Database,
+        sources,
+        diagnostics,
+        false,
+    );
+}
+
+/// Resolve resource calls only after the build manager has checked its input
+/// snapshots. These sources are both project inputs and final-log entries;
+/// distribution packages and unread alias providers cannot certify a call.
+pub(crate) fn locate_missing_bibliography_resources(
+    sources: &BTreeSet<Url>,
+    diagnostics: &mut BTreeMap<Url, Vec<Diagnostic>>,
+) {
+    for kind in [
+        MissingBibliographyKind::Style,
+        MissingBibliographyKind::Database,
+    ] {
+        locate_missing_bibliography_files(kind, sources, diagnostics, true);
+    }
 }
 
 /// Auxiliary line numbers identify generated data, not the originating TeX
@@ -3199,6 +3219,7 @@ fn locate_missing_bibliography_files(
     kind: MissingBibliographyKind,
     sources: &BTreeSet<Url>,
     diagnostics: &mut BTreeMap<Url, Vec<Diagnostic>>,
+    source_aware: bool,
 ) {
     use std::io::Read;
 
@@ -3211,7 +3232,29 @@ fn locate_missing_bibliography_files(
     if requested.is_empty() || requested.len() > 64 {
         return;
     }
-    let mut occurrences: BTreeMap<String, Vec<(Url, Range, String)>> = BTreeMap::new();
+    if source_aware {
+        // Earlier direct-only parsing may have selected a declaration in an
+        // unused macro body. Certify the location afresh in the full scope.
+        for item in diagnostics
+            .values_mut()
+            .flatten()
+            .filter(|item| kind.matches(item))
+        {
+            if let Some(name) = kind.name(&item.message) {
+                if item
+                    .data
+                    .as_ref()
+                    .and_then(|data| data.get("file"))
+                    .and_then(|value| value.as_str())
+                    == Some(name)
+                {
+                    item.data = Some(serde_json::json!({"file":name,"unresolvedSource":true}));
+                }
+            }
+        }
+    }
+    let mut occurrences: BTreeMap<String, Vec<(Url, Range, String, bool)>> = BTreeMap::new();
+    let mut documents = Vec::new();
     let mut total = 0usize;
     let mut count = 0usize;
     for uri in sources {
@@ -3254,9 +3297,47 @@ fn locate_missing_bibliography_files(
         {
             return;
         }
+        documents.push((uri.clone(), text, syntax));
+    }
+    let signatures = source_aware.then(|| {
+        crate::signature::CommandSignatures::source_context(
+            documents
+                .iter()
+                .map(|(_, text, parsed)| (text.source.as_str(), parsed)),
+        )
+    });
+    let macro_sources: BTreeSet<_> = documents.iter().map(|(uri, _, _)| uri.clone()).collect();
+    for (uri, text, syntax) in &documents {
+        let positions = signatures
+            .as_ref()
+            .map(|signatures| signatures.source_command_positions(&text.source, syntax));
+        let indirect = signatures.as_ref().map_or_else(Vec::new, |signatures| {
+            signatures.indirect_bibliography_invocations(
+                &text.source,
+                syntax,
+                positions.as_ref().expect("source-aware positions"),
+            )
+        });
+        if indirect
+            .iter()
+            .any(|call| !call.certain && kind.commands().contains(&call.command.name.as_str()))
+        {
+            return;
+        }
         for command in syntax
             .commands
             .iter()
+            .filter(|command| {
+                positions
+                    .as_ref()
+                    .is_none_or(|positions| positions.contains(&command.span.start))
+            })
+            .chain(
+                indirect
+                    .iter()
+                    .filter(|call| call.certain)
+                    .map(|call| &call.command),
+            )
             .filter(|command| kind.commands().contains(&command.name.as_str()))
         {
             // An expanded or spliced name might be the actual failed file.
@@ -3299,6 +3380,9 @@ fn locate_missing_bibliography_files(
                             uri.clone(),
                             text.range(span.start, span.end),
                             command.name.clone(),
+                            !syntax.commands.iter().any(|direct| {
+                                direct.name == command.name && direct.span == command.span
+                            }),
                         ));
                     }
                 }
@@ -3327,7 +3411,7 @@ fn locate_missing_bibliography_files(
             else {
                 return true;
             };
-            let (uri, range, command) = &candidates[0];
+            let (uri, range, command, indirect) = &candidates[0];
             let mut item = item.clone();
             item.range = *range;
             item.data = Some(match kind {
@@ -3336,6 +3420,10 @@ fn locate_missing_bibliography_files(
                     serde_json::json!({"file":name,"bibliographyCommand":command})
                 }
             });
+            if *indirect {
+                item.data.as_mut().expect("bibliography file data")["macroSources"] =
+                    serde_json::json!(macro_sources);
+            }
             relocated.push((uri.clone(), item));
             false
         });
@@ -8313,6 +8401,192 @@ mod indirect_option_clash_scope_tests {
                     diagnostic.data.as_ref().unwrap()["macroPausedSources"],
                     serde_json::json!([Url::from_file_path(&root).unwrap()])
                 );
+            }
+        }
+    }
+}
+#[cfg(test)]
+mod indirect_bibliography_error_scopes {
+    use super::*;
+
+    fn call(form: &str, command: &str) -> String {
+        match form {
+            "named" => format!("\\csuse{{{command}}}"),
+            "literal" => format!("\\csname {command}\\endcsname"),
+            "alias" => r"\loadbib".into(),
+            "named-alias" => r"\csuse{loadbib}".into(),
+            "literal-alias" => r"\csname loadbib\endcsname".into(),
+            _ => panic!(),
+        }
+    }
+
+    fn failure(main: &Path, command: &str) -> BTreeMap<Url, Vec<Diagnostic>> {
+        let (kind, name) = if command == "bibliographystyle" {
+            ("style", "local,styel.bst")
+        } else {
+            ("database", "reffs.bib")
+        };
+        parse_bibliography(
+            main,
+            &format!("I couldn't open {kind} file {name}\n---line 3 of file main.aux\n"),
+        )
+    }
+
+    #[test]
+    fn resource_errors_use_confirmed_alias_providers_and_record_the_full_scope() {
+        for command in ["bibliography", "nobibliography", "bibliographystyle"] {
+            for form in ["named", "literal", "alias", "named-alias", "literal-alias"] {
+                let directory = tempfile::tempdir().unwrap();
+                let main = directory.path().join("main.tex");
+                let provider = directory.path().join("definitions.sty");
+                let name = if command == "bibliographystyle" {
+                    "local,styel"
+                } else {
+                    "re ffs.bib"
+                };
+                let source = format!(
+                    "% 😀\r\n\\RequirePackage{{definitions}}\n{}{{% before\r\n{name}% tail\r\n}}",
+                    call(form, command)
+                );
+                std::fs::write(&main, &source).unwrap();
+                std::fs::write(&provider, format!("\\def\\loadbib{{\\{command}}}")).unwrap();
+                let main_uri = Url::from_file_path(&main).unwrap();
+                let provider_uri = Url::from_file_path(&provider).unwrap();
+                let sources = BTreeSet::from([main_uri.clone(), provider_uri]);
+                let mut diagnostics = failure(&main, command);
+                locate_missing_bibliography_resources(&sources, &mut diagnostics);
+                let diagnostic = &diagnostics[&main_uri][0];
+                let start = source.find(name).unwrap();
+                assert_eq!(
+                    diagnostic.range,
+                    Text::new(source.clone()).range(start, start + name.len()),
+                    "{command}/{form}"
+                );
+                assert!(
+                    !unresolved_location(diagnostic),
+                    "{command}/{form}: {diagnostic:?}"
+                );
+                assert_eq!(
+                    serde_json::from_value::<BTreeSet<Url>>(
+                        diagnostic.data.as_ref().unwrap()["macroSources"].clone()
+                    )
+                    .unwrap(),
+                    sources
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unread_alias_providers_do_not_certify_bibliography_failures() {
+        for command in ["bibliography", "nobibliography", "bibliographystyle"] {
+            let directory = tempfile::tempdir().unwrap();
+            let main = directory.path().join("main.tex");
+            let provider = directory.path().join("definitions.sty");
+            let name = if command == "bibliographystyle" {
+                "local,styel"
+            } else {
+                "reffs"
+            };
+            std::fs::write(&main, format!("\\loadbib{{{name}}}")).unwrap();
+            std::fs::write(provider, format!("\\def\\loadbib{{\\{command}}}")).unwrap();
+            let main_uri = Url::from_file_path(&main).unwrap();
+            let mut diagnostics = failure(&main, command);
+            locate_missing_bibliography_resources(
+                &BTreeSet::from([main_uri.clone()]),
+                &mut diagnostics,
+            );
+            assert!(unresolved_location(&diagnostics[&main_uri][0]));
+        }
+    }
+
+    #[test]
+    fn inactive_uncertain_and_ambiguous_resource_calls_keep_unresolved_locations() {
+        for command in ["bibliography", "nobibliography", "bibliographystyle"] {
+            let directory = tempfile::tempdir().unwrap();
+            let main = directory.path().join("main.tex");
+            let main_uri = Url::from_file_path(&main).unwrap();
+            let sources = BTreeSet::from([main_uri.clone()]);
+            let name = if command == "bibliographystyle" {
+                "local,styel"
+            } else {
+                "reffs"
+            };
+            for body in [
+                format!("\\newcommand{{\\hold}}[1]{{}}\\hold{{\\loadbib{{{name}}}}}"),
+                format!("\\newcommand{{\\later}}{{\\loadbib{{{name}}}}}"),
+                format!("\\endinput\n\\loadbib{{{name}}}"),
+                r"\loadbib{\chosen}".into(),
+                format!("\\renewcommand{{\\{command}}}[1]{{}}\\loadbib{{{name}}}"),
+                format!("\\loadbib{{{name}}}\\{command}{{{name}}}"),
+                format!("\\loadbib{{{name}}}\\loadbib{{\\chosen}}"),
+                // The old direct-only lookup must not preserve this unused
+                // declaration as a unique source occurrence.
+                format!("\\newcommand{{\\hold}}[1]{{}}\\hold{{\\{command}{{{name}}}}}"),
+            ] {
+                let source = format!("\\def\\loadbib{{\\{command}}}\n{body}");
+                std::fs::write(&main, source).unwrap();
+                let mut diagnostics = failure(&main, command);
+                locate_missing_bibliography_resources(&sources, &mut diagnostics);
+                assert!(
+                    unresolved_location(&diagnostics[&main_uri][0]),
+                    "{command}/{body}: {diagnostics:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unused_alias_bodies_do_not_hide_direct_bibliography_declarations() {
+        for command in ["bibliography", "nobibliography", "bibliographystyle"] {
+            let directory = tempfile::tempdir().unwrap();
+            let main = directory.path().join("main.tex");
+            let main_uri = Url::from_file_path(&main).unwrap();
+            let name = if command == "bibliographystyle" {
+                "local,styel"
+            } else {
+                "reffs"
+            };
+            let source = format!("\\def\\unused{{\\{command}}}\n\\{command}{{{name}}}");
+            std::fs::write(&main, &source).unwrap();
+            let mut diagnostics = failure(&main, command);
+            locate_missing_bibliography_resources(
+                &BTreeSet::from([main_uri.clone()]),
+                &mut diagnostics,
+            );
+            let item = &diagnostics[&main_uri][0];
+            assert!(!unresolved_location(item), "{command}: {item:?}");
+            let start = source.rfind(name).unwrap();
+            assert_eq!(
+                item.range,
+                Text::new(source.clone()).range(start, start + name.len())
+            );
+            assert!(item.data.as_ref().unwrap().get("macroSources").is_none());
+        }
+    }
+
+    #[test]
+    fn incomplete_source_scopes_revoke_old_direct_bibliography_locations() {
+        for command in ["bibliography", "nobibliography", "bibliographystyle"] {
+            let directory = tempfile::tempdir().unwrap();
+            let main = directory.path().join("main.tex");
+            let other = directory.path().join("other.tex");
+            let main_uri = Url::from_file_path(&main).unwrap();
+            let name = if command == "bibliographystyle" {
+                "local,styel"
+            } else {
+                "reffs"
+            };
+            std::fs::write(&main, format!("\\{command}{{{name}}}")).unwrap();
+            let sources = BTreeSet::from([main_uri.clone(), Url::from_file_path(&other).unwrap()]);
+            for oversized in [false, true] {
+                if oversized {
+                    std::fs::write(&other, "%".repeat(2 * 1024 * 1024 + 1)).unwrap();
+                }
+                let mut diagnostics = failure(&main, command);
+                assert!(!unresolved_location(&diagnostics[&main_uri][0]));
+                locate_missing_bibliography_resources(&sources, &mut diagnostics);
+                assert!(unresolved_location(&diagnostics[&main_uri][0]));
             }
         }
     }

@@ -656,7 +656,7 @@ impl BuildManager {
                 // Use the confirmed project inputs, including local .sty/.cls
                 // and indexed external sources, for database source lookup.
                 if !outcome.diagnostics_truncated {
-                    build_log::locate_missing_bibliography_databases(
+                    build_log::locate_missing_bibliography_resources(
                         &diagnostic_sources,
                         &mut outcome.diagnostics,
                     );

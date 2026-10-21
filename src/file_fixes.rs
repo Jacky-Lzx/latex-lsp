@@ -122,10 +122,22 @@ pub(crate) fn fixes(
         return vec![];
     };
     let indirect = if let Some(signatures) = signatures.filter(|_| {
-        matches!(command_name, "input" | "include")
-            || syntax::loader_extension(command_name).is_some()
+        matches!(
+            command_name,
+            "input" | "include" | "bibliography" | "nobibliography" | "bibliographystyle"
+        ) || syntax::loader_extension(command_name).is_some()
     }) {
-        let commands = build_log::file_error_commands(&doc.text.source, &doc.syntax, signatures);
+        let commands = if database || command_name == "bibliographystyle" {
+            let positions = signatures.source_command_positions(&doc.text.source, &doc.syntax);
+            signatures
+                .indirect_bibliography_invocations(&doc.text.source, &doc.syntax, &positions)
+                .into_iter()
+                .filter(|call| call.certain)
+                .map(|call| call.command)
+                .collect()
+        } else {
+            build_log::file_error_commands(&doc.text.source, &doc.syntax, signatures)
+        };
         let index =
             (!commands.is_empty()).then(|| crate::source_inputs::Index::new(workspace, root));
         commands
@@ -138,6 +150,7 @@ pub(crate) fn fixes(
                         .into_iter()
                         .flatten()
                         .chain(index.loaders.get(uri).into_iter().flatten())
+                        .chain(index.resources.get(uri).into_iter().flatten())
                         .any(|call| {
                             call.certain
                                 && call.command.name == command.name
