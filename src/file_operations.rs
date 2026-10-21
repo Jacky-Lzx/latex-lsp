@@ -229,6 +229,16 @@ fn replacement(
     let (command, inferred) = command.map_or((None, &["tex"][..]), |(name, extensions)| {
         (Some(name), extensions)
     });
+    let quoted_image = command == Some("includegraphics") && original.contains('"');
+    let decoded = if command == Some("includegraphics") {
+        Some(
+            graphics::unquote(original)
+                .ok_or_else(|| Error::invalid_params("Unbalanced image filename quotes"))?,
+        )
+    } else {
+        None
+    };
+    let original = decoded.as_deref().unwrap_or(original);
     let target_path = target
         .to_file_path()
         .map_err(|_| Error::invalid_params("Invalid linked file URI"))?;
@@ -352,6 +362,9 @@ fn replacement(
         return Err(Error::invalid_params(
             "Renamed path contains a comma that would split the file list",
         ));
+    }
+    if quoted_image {
+        value = format!("\"{value}\"");
     }
     Ok(value)
 }

@@ -1206,9 +1206,7 @@ pub(crate) fn file_argument<'a>(
             },
         ))
     } else if command.name == "includegraphics" {
-        let start = file_name_argument_start(source, &command.name, command.span.end)?;
-        let (argument, _) = group(source, start, b'{', b'}')?;
-        Some(std::borrow::Cow::Owned(argument))
+        crate::graphics::argument(source, command).map(std::borrow::Cow::Owned)
     } else if loader_extension(&command.name) == Some("cls")
         || command.name == "bibliographystyle"
         || code_input_command(&command.name)

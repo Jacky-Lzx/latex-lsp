@@ -1512,8 +1512,14 @@ fn missing_path_range(
                 return None;
             }
             let span = crate::syntax::trimmed_span(&text.source, argument.span.clone());
-            let value = &text.source[span.clone()];
-            let matches_report = if command_name == "lstinputlisting" {
+            let value = if command_name == "includegraphics" {
+                argument.value.as_str()
+            } else {
+                &text.source[span.clone()]
+            };
+            let matches_report = if command_name == "includegraphics" {
+                crate::graphics::unquote(name).is_some_and(|reported| value == reported)
+            } else if command_name == "lstinputlisting" {
                 crate::listings::missing_report(value) == name
             } else if fancyverb {
                 value == name

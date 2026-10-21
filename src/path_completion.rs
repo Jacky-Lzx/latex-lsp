@@ -60,7 +60,11 @@ fn complete_with_argument(
         return vec![];
     };
     let compact = syntax::file_name_ignores_spaces(command);
-    let normalized_prefix = compact.then(|| syntax::loader_name(raw_prefix));
+    let normalized_prefix = if command == "includegraphics" {
+        Some(crate::graphics::unquote_prefix(raw_prefix).into_owned())
+    } else {
+        compact.then(|| syntax::loader_name(raw_prefix))
+    };
     let prefix = normalized_prefix.as_deref().unwrap_or(raw_prefix);
     if prefix.contains(['\\', '{', '}'])
         || !crate::bib_resources::loads(command) && prefix.contains(['%', '#', '$', '&', '^', '~'])
@@ -94,7 +98,9 @@ fn complete_with_argument(
                 || ch == '%' && !crate::bib_resources::loads(command)
                 || ch == ',' && syntax::file_list(command)
                 || crate::fancyvrb::is_input(command) && ch == '"'
-                || !compact && matches!(ch, '\n' | '\r')
+                || !compact
+                    && !(command == "includegraphics" && input_argument.is_some())
+                    && matches!(ch, '\n' | '\r')
         })
         .unwrap_or(suffix.len());
     let suffix_length = suffix[..suffix_length].trim_end().len();
@@ -234,12 +240,21 @@ fn complete_with_argument(
                 }
             }
             if !folder {
-                let resolved = crate::workspace::resolve_file_path(
-                    &origin,
-                    command,
-                    &new_text,
-                    syntax::inferred_file_extensions(command).unwrap(),
-                );
+                let resolved = if command == "includegraphics" {
+                    crate::graphics::resolve_in(
+                        &origin,
+                        &new_text,
+                        syntax::inferred_file_extensions(command).unwrap(),
+                        &[],
+                    )
+                } else {
+                    crate::workspace::resolve_file_path(
+                        &origin,
+                        command,
+                        &new_text,
+                        syntax::inferred_file_extensions(command).unwrap(),
+                    )
+                };
                 let candidate = entry
                     .path()
                     .canonicalize()
@@ -297,6 +312,13 @@ fn complete_with_argument(
                 new_text = edit.new_text;
                 let from = doc.text.offset(edit_range.start).unwrap();
                 filter_start = &doc.text.source[from..span.start];
+            }
+            if command == "includegraphics" {
+                new_text = crate::graphics::quoted_replacement(
+                    new_text,
+                    &doc.text.source[span.start..span.end + suffix_length],
+                    folder && existing_slash,
+                );
             }
             candidates.insert(
                 label.clone(),

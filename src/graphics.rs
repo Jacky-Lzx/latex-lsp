@@ -4,6 +4,7 @@ use crate::{
     workspace::{normalize_path, resolve_path, Workspace},
 };
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, BTreeSet},
     ops::Range,
     path::{Path, PathBuf},
@@ -19,6 +20,99 @@ pub fn is_image(path: &std::path::Path) -> bool {
                 .iter()
                 .any(|supported| extension.eq_ignore_ascii_case(supported))
         })
+}
+
+/// graphicx removes balanced filename quotes, including quoted segments.
+/// The source span retains those quotes so edits can replace them together.
+pub(crate) fn unquote(value: &str) -> Option<Cow<'_, str>> {
+    let quotes = value.bytes().filter(|byte| *byte == b'"').count();
+    if quotes % 2 != 0 {
+        return None;
+    }
+    Some(normalize_name(value, false))
+}
+
+pub(crate) fn unquote_prefix(value: &str) -> Cow<'_, str> {
+    normalize_name(value, true)
+}
+
+fn normalize_name(value: &str, prefix: bool) -> Cow<'_, str> {
+    if !value.contains('"') && !value.bytes().any(|byte| byte.is_ascii_whitespace()) {
+        return Cow::Borrowed(value);
+    }
+    let mut normalized = String::new();
+    let mut space = false;
+    for character in value.chars().filter(|character| *character != '"') {
+        if matches!(character, ' ' | '\t' | '\r' | '\n') {
+            space = !normalized.is_empty();
+        } else {
+            if space {
+                normalized.push(' ');
+                space = false;
+            }
+            normalized.push(character);
+        }
+    }
+    if prefix && space {
+        normalized.push(' ');
+    }
+    if normalized == value {
+        Cow::Borrowed(value)
+    } else {
+        Cow::Owned(normalized)
+    }
+}
+
+fn has_paragraph(value: &str) -> bool {
+    let lines: Vec<_> = value.split('\n').collect();
+    lines.len() > 2
+        && lines[1..lines.len() - 1]
+            .iter()
+            .any(|line| line.trim().is_empty())
+}
+
+pub(crate) fn argument(source: &str, command: &syntax::Command) -> Option<syntax::Argument> {
+    let start = syntax::file_name_argument_start(source, "includegraphics", command.span.end)?;
+    let (mut argument, _) = syntax::group(source, start, b'{', b'}')?;
+    let raw = &source[argument.span.clone()];
+    if has_paragraph(raw)
+        || raw
+            .bytes()
+            .enumerate()
+            .any(|(index, byte)| byte == b'%' && (index == 0 || raw.as_bytes()[index - 1] != b'\\'))
+    {
+        return None;
+    }
+    argument.span = syntax::trimmed_span(source, argument.span);
+    argument.value = unquote(&source[argument.span.clone()])?.into_owned();
+    Some(argument)
+}
+
+pub(crate) fn prefix(
+    source: &str,
+    command: &syntax::Command,
+    cursor: usize,
+) -> Option<Range<usize>> {
+    let start = syntax::file_name_argument_start(source, "includegraphics", command.span.end)?;
+    let raw = source.get(start..cursor)?.strip_prefix('{')?;
+    if has_paragraph(raw) {
+        return None;
+    }
+    let raw = raw.trim_start();
+    let value = unquote_prefix(raw);
+    // A trailing space can be the start of the next word in a filename.
+    syntax::is_literal_file_path(&format!("{value}x")).then_some(cursor - raw.len()..cursor)
+}
+
+pub(crate) fn quoted_replacement(value: String, original: &str, following_path: bool) -> String {
+    if !original.contains('"') {
+        value
+    } else if following_path && original.bytes().filter(|byte| *byte == b'"').count() % 2 != 0 {
+        // The matching closing quote remains after an existing slash.
+        format!("\"{value}")
+    } else {
+        format!("\"{value}\"")
+    }
 }
 
 /// Normalize image calls in the full project, including recorder-only sources.
@@ -268,7 +362,7 @@ pub(crate) fn directories_in(workspace: &Workspace, uri: &Url, root: &Url) -> Ve
 
 pub fn resolve(directory: &std::path::Path, name: &str, extension: &str) -> Option<Url> {
     let origin = Url::from_file_path(directory.join("__latex_lsp_graphics__.tex")).ok()?;
-    resolve_path(&origin, name, extension)
+    resolve_path(&origin, &unquote(name)?, extension)
 }
 
 /// graphicx searches one extension across the root and its declared directories
@@ -294,7 +388,7 @@ pub(crate) fn resolve_with(
     directories: &[PathBuf],
     file: impl Fn(&Path) -> Option<PathBuf>,
 ) -> Option<Url> {
-    let mut literal = name.to_owned();
+    let mut literal = unquote(name)?.into_owned();
     for character in ['_', '%', '#', '&', '$', ' '] {
         literal = literal.replace(&format!("\\{character}"), &character.to_string());
     }

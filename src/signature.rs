@@ -2070,21 +2070,14 @@ impl<'a> CommandSignatures<'a> {
                 .filter(|command| {
                     command.name == "includegraphics" && positions.contains(&command.span.start)
                 })
-                .map(|command| {
-                    let mut command = command.clone();
-                    command.argument = syntax::file_name_argument_start(
-                        source,
-                        "includegraphics",
-                        command.span.end,
-                    )
-                    .and_then(|start| syntax::group(source, start, b'{', b'}'))
-                    .map(|(argument, _)| argument);
-                    SourceCall {
-                        command,
-                        certain: self.command_unchanged("includegraphics"),
-                    }
+                .map(|command| SourceCall {
+                    command: command.clone(),
+                    certain: self.command_unchanged("includegraphics"),
                 }),
         );
+        for call in &mut calls {
+            call.command.argument = crate::graphics::argument(source, &call.command);
+        }
         calls.sort_by_key(|call| call.command.span.start);
         calls
     }

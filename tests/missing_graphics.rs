@@ -62,6 +62,39 @@ fn missing_graphics_errors_select_static_paths_across_engine_messages_and_log_fo
 }
 
 #[test]
+fn quoted_graphics_errors_match_driver_names_and_select_raw_filename_spans() {
+    for argument in [
+        r#""plto image.png""#,
+        r#""plto image".png"#,
+        r#""plto" image.png"#,
+    ] {
+        for reported in ["plto image.png", argument] {
+            for numbered in [false, true] {
+                let marked = format!("😀 \\includegraphics*[width=2cm]{{ {argument} }}¦ after\n");
+                let message = format!(
+                    "Package pdftex.def Error: File `{reported}' not found: using draft setting."
+                );
+                let (_directory, _uri, text, diagnostics) = parsed(&marked, &message, "See the pdftex.def package documentation for explanation.\nType  H <return>  for immediate help.\n ...", numbered);
+                assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+                let diagnostic = &diagnostics[0];
+                let start = text.source.find(argument).unwrap();
+                assert_eq!(
+                    diagnostic.code,
+                    Some(NumberOrString::String("missing-image".into())),
+                    "{diagnostics:?}"
+                );
+                assert_eq!(diagnostic.range, text.range(start, start + argument.len()));
+                let reported = reported
+                    .strip_prefix('"')
+                    .and_then(|name| name.strip_suffix('"'))
+                    .unwrap_or(reported);
+                assert_eq!(diagnostic.data, Some(serde_json::json!({"file": reported})));
+            }
+        }
+    }
+}
+
+#[test]
 fn missing_graphics_errors_reject_expansion_frames_dynamic_names_and_unmatched_contexts() {
     let message = "LaTeX Error: File `imgae' not found.";
     for (marked, frames) in [

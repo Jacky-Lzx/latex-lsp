@@ -1385,6 +1385,39 @@ mod graphic_conditions {
     }
 
     #[test]
+    fn quoted_graphics_watch_normalized_names_and_respect_candidate_precedence() {
+        for (argument, changed, expected) in [
+            (r#""plot image""#, "plot image.pdf", true),
+            (r#""plot image""#, "plot image.jpg", false),
+            (r#""plot image".png"#, "plot image.pdf", false),
+            (r#""plot image".png"#, "assets/plot image.png", true),
+            ("\" plot\n image.png \"", "plot image.png", true),
+            (r#""plot  image.png""#, "assets/plot image.png", true),
+            (r#""plot  image.png""#, "assets/plot  image.png", false),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            std::fs::create_dir(root.join("assets")).unwrap();
+            std::fs::write(root.join("assets/plot image.png"), "selected").unwrap();
+            let snapshot = capture(
+                root,
+                &format!("\\graphicspath{{{{assets/}}}}\\includegraphics{{{argument}}}"),
+            );
+            assert!(snapshot.changed_path().is_none());
+            if changed == "assets/plot image.png" {
+                std::fs::remove_file(root.join(changed)).unwrap();
+            } else {
+                std::fs::write(root.join(changed), "new candidate").unwrap();
+            }
+            assert_eq!(
+                snapshot.changed_path().is_some(),
+                expected,
+                "{argument}: {changed}\n{snapshot:?}"
+            );
+        }
+    }
+
+    #[test]
     fn declared_graphics_extensions_track_only_earlier_and_selected_candidates() {
         for (argument, changed, expected) in [
             ("plot", "plot.png", true),

@@ -430,7 +430,9 @@ pub(crate) fn document_links_in(workspace: &Workspace, uri: &Url, root: &Url) ->
             None
         };
         let extensions = image_extensions.as_deref().unwrap_or(extensions);
-        let names = if let Some(spans) = syntax::file_list_spans(&doc.text.source, command) {
+        let names = if command.name == "includegraphics" {
+            vec![(argument.span.clone(), argument.value.as_str())]
+        } else if let Some(spans) = syntax::file_list_spans(&doc.text.source, command) {
             spans
                 .into_iter()
                 .map(|span| (span.clone(), &doc.text.source[span]))

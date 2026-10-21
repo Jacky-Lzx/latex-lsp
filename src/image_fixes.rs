@@ -28,6 +28,9 @@ pub(crate) fn fixes(
     {
         return vec![];
     }
+    let Some(reported_name) = graphics::unquote(reported) else {
+        return vec![];
+    };
     let images = graphics::calls(workspace, root);
     let argument = images
         .get(uri)
@@ -44,7 +47,7 @@ pub(crate) fn fixes(
         .find(|(_, argument)| {
             let span = syntax::trimmed_span(&doc.text.source, argument.span.clone());
             doc.text.range(span.start, span.end) == diagnostic.range
-                && argument.value.trim() == reported
+                && argument.value.trim() == reported_name
         });
     let Some((command, argument)) = argument else {
         return vec![];
@@ -148,7 +151,11 @@ pub(crate) fn fixes(
             diagnostic: diagnostic.clone(),
             edit: TextEdit {
                 range: diagnostic.range,
-                new_text: replacement,
+                new_text: graphics::quoted_replacement(
+                    replacement,
+                    &doc.text.source[argument.span.clone()],
+                    false,
+                ),
             },
             additional_edits: vec![],
         })
