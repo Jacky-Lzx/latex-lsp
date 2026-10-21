@@ -2228,14 +2228,20 @@ impl Syntax {
                 }
                 let span = trimmed_span(source, key_start..key_end);
                 if !span.is_empty() && bytes.get(key_end) == Some(&b',') {
+                    let body_end = if closed { end - 1 } else { end };
+                    let metadata = result.bibliography_fields(source, key_end + 1, body_end);
+                    let mut detail = format!("BibTeX {kind}");
+                    for (label, value) in ["Title", "Author", "Year"].into_iter().zip(metadata) {
+                        if let Some(value) = value {
+                            detail.push_str(&format!(" · {label}: {value}"));
+                        }
+                    }
                     result.citations.push(Entry {
                         name: source[span.clone()].into(),
                         span,
-                        detail: format!("BibTeX {kind}"),
+                        detail,
                         is_variable: false,
                     });
-                    let body_end = if closed { end - 1 } else { end };
-                    result.bibliography_fields(source, key_end + 1, body_end);
                 }
             }
             i = end;
@@ -2243,8 +2249,15 @@ impl Syntax {
         result
     }
 
-    fn bibliography_fields(&mut self, source: &str, mut i: usize, end: usize) {
+    fn bibliography_fields(
+        &mut self,
+        source: &str,
+        mut i: usize,
+        end: usize,
+    ) -> [Option<String>; 3] {
         let bytes = source.as_bytes();
+        let mut metadata = [None, None, None];
+        let mut seen = [false; 3];
         while i < end {
             i = skip_space(source, i);
             if bytes.get(i) == Some(&b',') {
@@ -2266,6 +2279,21 @@ impl Syntax {
             let start = skip_space(source, i + 1);
             let value_end = bib_value_end(source, start, end);
             i = value_end + 1;
+            let metadata_index = match name.as_str() {
+                "title" => Some(0),
+                "author" => Some(1),
+                "year" => Some(2),
+                _ => None,
+            };
+            if let Some(index) = metadata_index {
+                metadata[index] = if seen[index] {
+                    None
+                } else {
+                    bibliography_preview(source, start, value_end, name == "year")
+                };
+                seen[index] = true;
+                continue;
+            }
             if !matches!(
                 name.as_str(),
                 "crossref" | "xref" | "xdata" | "related" | "entryset"
@@ -2300,6 +2328,7 @@ impl Syntax {
             }
             self.citation_fields.push(CitationField { name, argument });
         }
+        metadata
     }
 
     pub fn is_ignored(&self, offset: usize) -> bool {
@@ -2444,10 +2473,19 @@ fn bib_value_end(source: &str, start: usize, end: usize) -> usize {
 }
 
 fn bib_literal(source: &str, start: usize, end: usize) -> Option<Argument> {
+    bib_literal_mode(source, start, end, true)
+}
+
+fn bib_literal_mode(
+    source: &str,
+    start: usize,
+    end: usize,
+    allow_incomplete: bool,
+) -> Option<Argument> {
     let bytes = source.as_bytes();
     let (argument, after) = match bytes.get(start)? {
         b'{' => group_mode(source, start, b'{', b'}', false, true).or_else(|| {
-            (end == source.len()).then(|| {
+            (allow_incomplete && end == source.len()).then(|| {
                 (
                     Argument {
                         value: source[start + 1..end].into(),
@@ -2474,7 +2512,7 @@ fn bib_literal(source: &str, start: usize, end: usize) -> Option<Argument> {
                 }
                 i += 1;
             }
-            if bytes.get(i) != Some(&b'"') && end != source.len() {
+            if bytes.get(i) != Some(&b'"') && (!allow_incomplete || end != source.len()) {
                 return None;
             }
             (
@@ -2489,6 +2527,26 @@ fn bib_literal(source: &str, start: usize, end: usize) -> Option<Argument> {
         _ => return None,
     };
     (after <= end && skip_space(source, after) >= end).then_some(argument)
+}
+
+/// Preview source literals without evaluating BibTeX strings or TeX commands.
+fn bibliography_preview(source: &str, start: usize, end: usize, numeric: bool) -> Option<String> {
+    let raw = source[start..end].trim();
+    let value = if numeric && !raw.is_empty() && raw.bytes().all(|byte| byte.is_ascii_digit()) {
+        raw.to_owned()
+    } else {
+        bib_literal_mode(source, start, end, false)?.value
+    };
+    let mut words = value.split_whitespace();
+    let first = words.next()?;
+    let mut characters = first
+        .chars()
+        .chain(words.flat_map(|word| std::iter::once(' ').chain(word.chars())));
+    let mut preview: String = characters.by_ref().take(200).collect();
+    if characters.next().is_some() {
+        preview.push('…');
+    }
+    Some(preview)
 }
 
 pub fn trimmed_span(source: &str, span: Range<usize>) -> Range<usize> {
