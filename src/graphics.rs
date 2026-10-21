@@ -75,14 +75,6 @@ pub struct Directory {
 }
 
 pub fn declarations(workspace: &Workspace, uri: &Url) -> Vec<Directory> {
-    if !workspace.documents.get(uri).is_some_and(|doc| {
-        doc.syntax
-            .commands
-            .iter()
-            .any(|command| command.name == "graphicspath")
-    }) {
-        return vec![];
-    }
     let origins = workspace.source_roots(uri);
     origins
         .iter()
@@ -91,133 +83,110 @@ pub fn declarations(workspace: &Workspace, uri: &Url) -> Vec<Directory> {
 }
 
 pub(crate) fn declarations_in(workspace: &Workspace, uri: &Url, origin: &Url) -> Vec<Directory> {
-    declarations_with(workspace, uri, origin, false).0
+    declarations_with(workspace, uri, origin)
 }
 
-// Navigation uses canonical destinations; build conditions must retain the
-// lexical directory alias and include directories which do not exist yet.
-fn declarations_with(
-    workspace: &Workspace,
-    uri: &Url,
-    origin: &Url,
-    for_conditions: bool,
-) -> (Vec<Directory>, bool) {
-    let Some(doc) = workspace.documents.get(uri) else {
-        return (vec![], true);
-    };
-    let Some(parent) = origin
-        .to_file_path()
-        .ok()
-        .and_then(|path| path.parent().map(|parent| parent.to_path_buf()))
-    else {
+/// Literal entries retain source spans so directory moves can update aliases too.
+pub(crate) fn path_entries(
+    source: &str,
+    command: &syntax::Command,
+) -> (Vec<(Range<usize>, String)>, bool) {
+    let Some(argument) = &command.argument else {
         return (vec![], false);
     };
-    let mut directories = Vec::new();
+    if argument.outer_span.start != syntax::skip_space(source, command.span.end) {
+        return (vec![], false);
+    }
+    let mut result = Vec::new();
     let mut complete = true;
-    for command in doc
-        .syntax
-        .commands
-        .iter()
-        .filter(|command| command.name == "graphicspath")
-    {
-        let Some(argument) = &command.argument else {
-            complete = false;
-            continue;
+    let mut at = 0;
+    while at < argument.value.len() {
+        at = syntax::skip_space(&argument.value, at);
+        if at == argument.value.len() {
+            break;
+        }
+        let Some((directory, end)) = syntax::group(&argument.value, at, b'{', b'}') else {
+            return (result, false);
         };
-        if for_conditions
-            && argument.outer_span.start != syntax::skip_space(&doc.text.source, command.span.end)
+        at = end;
+        let span = syntax::trimmed_span(
+            source,
+            argument.span.start + directory.span.start..argument.span.start + directory.span.end,
+        );
+        let value = &source[span.clone()];
+        if !value.ends_with('/')
+            || value.contains(['\\', '{', '}', '%', '#', '$', '&', '^', '~', '\n', '\r'])
         {
             complete = false;
             continue;
         }
-        let mut i = 0;
-        while i < argument.value.len() {
-            i = syntax::skip_space(&argument.value, i);
-            if i == argument.value.len() {
-                break;
-            }
-            let Some((directory, end)) = syntax::group(&argument.value, i, b'{', b'}') else {
-                complete = false;
-                break;
-            };
-            i = end;
-            let span = syntax::trimmed_span(
-                &doc.text.source,
-                argument.span.start + directory.span.start
-                    ..argument.span.start + directory.span.end,
-            );
-            let value = &doc.text.source[span.clone()];
-            if !value.ends_with('/')
-                || value.contains(['\\', '{', '}', '%', '#', '$', '&', '^', '~', '\n', '\r'])
-            {
-                complete = false;
-                continue;
-            }
+        result.push((span, value.to_owned()));
+        if result.len() >= 256 {
+            return (result, false);
+        }
+    }
+    (result, complete)
+}
+
+fn declarations_with(workspace: &Workspace, uri: &Url, origin: &Url) -> Vec<Directory> {
+    let Some(doc) = workspace.documents.get(uri) else {
+        return vec![];
+    };
+    let Some(parent) = origin
+        .to_file_path()
+        .ok()
+        .and_then(|path| path.parent().map(Path::to_owned))
+    else {
+        return vec![];
+    };
+    let mut scope = workspace.project_documents(origin);
+    scope.insert(uri.clone());
+    let signatures =
+        crate::signature::CommandSignatures::source_context(scope.iter().filter_map(|uri| {
+            workspace
+                .documents
+                .get(uri)
+                .map(|doc| (doc.text.source.as_str(), &doc.syntax))
+        }));
+    if !signatures.command_unchanged("graphicspath") {
+        return vec![];
+    }
+    let positions = signatures.source_command_positions(&doc.text.source, &doc.syntax);
+    let indirect =
+        signatures.indirect_graphics_path_invocations(&doc.text.source, &doc.syntax, &positions);
+    let mut directories = Vec::new();
+    for command in doc
+        .syntax
+        .commands
+        .iter()
+        .filter(|command| command.name == "graphicspath" && positions.contains(&command.span.start))
+        .chain(
+            indirect
+                .iter()
+                .filter(|call| call.certain)
+                .map(|call| &call.command),
+        )
+    {
+        let (entries, _) = path_entries(&doc.text.source, command);
+        for (span, value) in entries {
             let path = parent.join(value);
-            let path = if !for_conditions {
-                path.canonicalize()
-                    .unwrap_or_else(|_| normalize_path(&path))
-            } else {
-                path
-            };
+            let path = path
+                .canonicalize()
+                .unwrap_or_else(|_| normalize_path(&path));
             directories.push(Directory {
                 path,
                 span,
                 origin: origin.clone(),
             });
             if directories.len() >= 256 {
-                return (directories, false);
+                return directories;
             }
         }
     }
-    (directories, complete)
+    directories
 }
 
-/// Potential static search directories, including missing paths and lexical
-/// aliases. Dynamic, incomplete or repeated declarations cannot define a safe
-/// search without inferring macro execution order and scope.
-pub(crate) fn condition_directories_in(
-    workspace: &Workspace,
-    uri: &Url,
-    root: &Url,
-) -> Option<Vec<PathBuf>> {
-    let project = workspace.project_documents(root);
-    let mut seen = BTreeSet::new();
-    let mut result = Vec::new();
-    let mut declarations = 0;
-    for document in std::iter::once(uri)
-        .chain(std::iter::once(root))
-        .chain(project.iter())
-    {
-        if !seen.insert(document.clone()) {
-            continue;
-        }
-        declarations += workspace.documents.get(document).map_or(0, |doc| {
-            doc.syntax
-                .commands
-                .iter()
-                .filter(|command| command.name == "graphicspath")
-                .count()
-        });
-        if declarations > 1 {
-            return None;
-        }
-        let (directories, complete) = declarations_with(workspace, document, root, true);
-        if !complete {
-            return None;
-        }
-        for directory in directories {
-            if !result.contains(&directory.path) {
-                result.push(directory.path);
-            }
-            if result.len() >= 256 {
-                return None;
-            }
-        }
-    }
-    Some(result)
-}
-
+/// Potential declared directories for browsing; image resolution uses settings at the call position.
 pub fn directories(workspace: &Workspace, uri: &Url) -> Vec<PathBuf> {
     if let Ok(root) = workspace.root_document(uri) {
         return directories_in(workspace, uri, &root);

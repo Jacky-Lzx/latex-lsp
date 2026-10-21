@@ -456,3 +456,21 @@ fn graphics_error_messages_restore_wraps_at_driver_and_filename_periods() {
         assert_eq!(diagnostics[0].data, Some(serde_json::json!({"file":"im.gae.pdf"})));
     }
 }
+
+#[test]
+fn image_spelling_candidates_follow_the_paths_active_at_the_error() {
+    for (marked, expected) in [
+        ("\\graphicspath{{first/}}\n\\includegraphics{plto.pdf}¦\n\\graphicspath{{second/}}\n\\includegraphics{plto.pdf}\n", "plot.pdf"),
+        ("\\graphicspath{{first/}}\n\\includegraphics{plto.pdf}\n\\graphicspath{{second/}}\n\\includegraphics{plto.pdf}¦\n", "plum.pdf"),
+    ] {
+        let (directory, workspace, main, diagnostic) = fix_fixture(marked, "plto.pdf");
+        let root = directory.path();
+        for (path, file) in [("first", "plot.pdf"), ("second", "plum.pdf")] {
+            std::fs::create_dir(root.join(path)).unwrap();
+            std::fs::write(root.join(path).join(file), "image").unwrap();
+        }
+        let offered = actions(&workspace, &main, &diagnostic);
+        assert_eq!(offered.len(), 1, "{expected}: {offered:?}; {diagnostic:?}");
+        assert_eq!(action_edit(&offered[0], &main).new_text, expected);
+    }
+}

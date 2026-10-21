@@ -476,8 +476,8 @@ pub fn will_rename(workspace: &Workspace, files: &[FileRename]) -> Result<Option
                 .filter(|call| call.certain)
                 .map(|call| call.command)
                 .collect();
-            let graphics = graphics::directories_in(workspace, uri, root);
-            let image_extensions = crate::graphics_extensions::Index::new(workspace, root);
+            let image_directories = crate::graphics_settings::Index::directories(workspace, root);
+            let image_extensions = crate::graphics_settings::Index::new(workspace, root);
             for link in navigation::document_links_in(workspace, uri, root) {
                 let Some(target) = link.target.filter(|target| target.scheme() == "file") else {
                     continue;
@@ -501,6 +501,12 @@ pub fn will_rename(workspace: &Workspace, files: &[FileRename]) -> Result<Option
                             |argument| argument.span.start <= start && argument.span.end >= end,
                         )
                 });
+                let graphics = command
+                    .filter(|command| command.name == "includegraphics")
+                    .and_then(|command| {
+                        image_directories.paths_at(root, uri, command.span.start, true)
+                    })
+                    .unwrap_or_default();
                 let inferred = if let Some(command) = command {
                     if command.name == "includegraphics" {
                         image_extensions

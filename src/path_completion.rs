@@ -142,7 +142,17 @@ fn complete_with_argument(
         })
         .collect::<Vec<_>>();
     if command == "includegraphics" {
-        directories.extend(crate::graphics::directories(workspace, uri));
+        if let Some(command) = doc.syntax.commands.iter().rev().find(|candidate| {
+            candidate.name == "includegraphics" && candidate.span.end <= span.start
+        }) {
+            for root in &roots {
+                if let Some(paths) = crate::graphics_settings::Index::directories(workspace, root)
+                    .paths_at(root, uri, command.span.start, true)
+                {
+                    directories.extend(paths);
+                }
+            }
+        }
     }
     for parent in directories {
         let Ok(origin) = Url::from_file_path(parent.join("__latex_lsp_completion__.tex")) else {

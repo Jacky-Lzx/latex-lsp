@@ -1816,6 +1816,7 @@ impl<'a> CommandSignatures<'a> {
                 "global",
                 "globaldefs",
                 "DeclareGraphicsExtensions",
+                "graphicspath",
                 "begingroup",
                 "endgroup",
                 "bgroup",
@@ -2035,6 +2036,15 @@ impl<'a> CommandSignatures<'a> {
                 "addglobalbib",
             ],
         )
+    }
+
+    pub(crate) fn indirect_graphics_path_invocations(
+        &self,
+        source: &str,
+        parsed: &syntax::Syntax,
+        positions: &BTreeSet<usize>,
+    ) -> Vec<SourceCall> {
+        self.indirect_file_invocations(source, parsed, positions, &["graphicspath"])
     }
 
     fn indirect_file_invocations(

@@ -4,11 +4,25 @@
 
 ## 搜索目录与文件移动
 
-`\includegraphics` 还会搜索当前项目中 `\graphicspath{{figures/}{plots/}}` 声明的目录，支持图片跳转、子目录补全和文件重命名。移动图片目录或主文档时会同步更新目录声明，并尽量保留图片的简短名称和省略的扩展名。路径以当前编译主文档目录为基准，共享包里的声明也遵守这一规则。允许空格和中文，识别以 `/` 结尾的静态目录；移动主文档时也会重算尚不存在的目录。如果共享声明在不同项目中需要不同的替换路径，会拒绝该次文件移动编辑。这些目录声明不展开宏，也不模拟条件、局部作用域或多次声明的覆盖顺序。
+`\includegraphics` 还会搜索当前项目中 `\graphicspath{{figures/}{plots/}}` 声明的目录，支持图片跳转、子目录补全和文件重命名。移动图片目录或主文档时会同步更新目录声明，并尽量保留图片的简短名称和省略的扩展名。路径以当前编译主文档目录为基准，共享包里的声明也遵守这一规则。允许空格和中文，识别以 `/` 结尾的静态目录；移动主文档时也会重算尚不存在的目录。如果共享声明在不同项目中需要不同的替换路径，会拒绝该次文件移动编辑。目录值不展开任意宏；静态声明的覆盖和作用域规则如下。
 
 未声明扩展名顺序时，图片省略扩展名会按默认顺序逐个搜索编译根目录及声明目录；支持的显式扩展名先按原名查找。例如根目录有 `plot.png`、`figures/` 有 `plot.pdf` 时，`\includegraphics{plot}` 选中 PDF，显式 `plot.png` 选中 PNG。子文件所在目录不会提前覆盖这些图片；以子文件自身为根时才使用它的目录。跳转、补全、输入跟踪及文件重命名共用这一搜索基准。
 
 图片重命名会检查整批文件移动后的搜索结果，保留仍指向原图片的简写；简写将选中其他图片时，改用相对于新编译根目录的路径和实际扩展名。同批移动其他文件造成的同名遮蔽也会触发引用更新；无法安全保持目标时拒绝编辑，避免编译成功却使用了另一张图片。
+
+## 目录覆盖与作用域
+
+服务器按源码顺序跟踪每处 `\includegraphics` 的有效目录。后一次 `\graphicspath` 替换此前列表，空声明 `\graphicspath{}` 清除额外目录；花括号、分组原语和环境中的局部设置在分组结束后恢复：
+
+```tex
+\graphicspath{{figures/}}
+{\graphicspath{{drafts/}}\includegraphics{plot}} % 使用 drafts/
+\includegraphics{plot} % 恢复 figures/
+\graphicspath{{final/}}
+\includegraphics{plot} % 使用 final/，不再搜索 figures/
+```
+
+静态输入文件可重复执行，本地宏包和文档类只加载一次；共享源码在不同执行位置需要不同目录时，不提供单一图片目标。目录设置与扩展名设置分别保存和恢复，均遵循下面的全局赋值规则。跳转、补全、拼写建议、重命名和编译候选检查使用对应调用位置的设置，已被覆盖的目录不会参与后续图片的候选检查。
 
 ## 扩展名声明
 
@@ -20,9 +34,11 @@
 
 ## 静态别名与命名调用
 
-扩展名声明支持无参数、正文仅含单个控制序列的纯别名，包括别名链，以及静态 `\csuse` / `\csname` 调用。例如：
+目录和扩展名声明支持无参数、正文仅含单个控制序列的纯别名，包括别名链，以及静态 `\csuse` / `\csname` 调用。例如：
 
 ```tex
+\def\Paths{\graphicspath}
+\Paths{{figures/}{plots/}}
 \def\Extensions{\DeclareGraphicsExtensions}
 \Extensions{.png,.pdf}
 \csname DeclareGraphicsExtensions\endcsname{.pdf,.png}
@@ -32,7 +48,7 @@
 
 ## 全局设置与恢复
 
-`\global\DeclareGraphicsExtensions{.png}` 的设置保留到分组外。`\globaldefs` 为正数时，扩展名声明自动全局生效；为负数时，显式 `\global` 也按局部赋值处理；为零时遵循前缀。全局赋值会更新外层分组应恢复的值，后续局部修改结束后恢复最近的全局设置。
+`\global\graphicspath{{figures/}}` 和 `\global\DeclareGraphicsExtensions{.png}` 的设置保留到分组外。`\globaldefs` 为正数时，目录和扩展名声明自动全局生效；为负数时，显式 `\global` 也按局部赋值处理；为零时遵循前缀。全局赋值会更新外层分组应恢复的值，后续局部修改结束后恢复最近的全局设置。
 
 ```tex
 \DeclareGraphicsExtensions{.pdf}

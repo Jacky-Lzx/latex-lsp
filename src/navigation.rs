@@ -321,22 +321,18 @@ pub(crate) fn document_links_in(workspace: &Workspace, uri: &Url, root: &Url) ->
         return vec![];
     };
     let mut links = Vec::new();
-    let graphics = if doc
+    let graphic_directories = doc
         .syntax
         .commands
         .iter()
         .any(|command| command.name == "includegraphics")
-    {
-        crate::graphics::directories_in(workspace, uri, root)
-    } else {
-        vec![]
-    };
+        .then(|| crate::graphics_settings::Index::directories(workspace, root));
     let graphic_extensions = doc
         .syntax
         .commands
         .iter()
         .any(|command| command.name == "includegraphics")
-        .then(|| crate::graphics_extensions::Index::new(workspace, root));
+        .then(|| crate::graphics_settings::Index::new(workspace, root));
     if let Some(directive) = root_directive(doc) {
         if let Some(target) = resolve_path(uri, &directive.value, "tex") {
             links.push(DocumentLink {
@@ -412,6 +408,17 @@ pub(crate) fn document_links_in(workspace: &Workspace, uri: &Url, root: &Url) ->
             Some(extensions) => extensions,
             None if matches!(command.name.as_str(), "url" | "href") => &[],
             None => continue,
+        };
+        let graphics = if command.name == "includegraphics" {
+            let Some(paths) = graphic_directories
+                .as_ref()
+                .and_then(|index| index.paths_at(root, uri, command.span.start, true))
+            else {
+                continue;
+            };
+            paths
+        } else {
+            vec![]
         };
         let image_extensions = if command.name == "includegraphics" {
             let Some(extensions) = graphic_extensions

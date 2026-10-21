@@ -32,7 +32,13 @@ cargo test --locked --test file_operations real_file_url_renames -- --ignored
 cargo test --locked --test graphics_extensions real_ -- --ignored
 ```
 
-全局设置回归覆盖 `\global`、正负 `\globaldefs`、嵌套分组、声明与前缀的静态别名和命名调用，以及字面整数，逐项核对导航、改名前后实际读取的图片。默认回归另覆盖声明顺序、输入文件和本地包、共享源码歧义、候选图片的过期检查及版本化 stdio 文件移动。
+全局设置回归覆盖 `\global`、正负 `\globaldefs`、嵌套分组、声明与前缀的静态别名和命名调用，以及字面整数，逐项核对导航、改名前后实际读取的图片。目录作用域回归另验证多次覆盖、局部恢复、全局赋值、静态别名，以及图片目录和主文档同时移动前后的真实编译输入：
+
+```sh
+cargo test --locked --test graphics_paths real_ -- --ignored
+```
+
+默认回归还覆盖目录补全和缺图建议的作用域、输入文件和本地包、共享源码歧义、候选图片的过期检查及版本化 stdio 文件移动。
 
 ## 文献与编译诊断
 

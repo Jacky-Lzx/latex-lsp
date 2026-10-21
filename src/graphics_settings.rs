@@ -1,4 +1,4 @@
-//! Ordered graphicx extension settings, shared by navigation and build checks.
+//! Ordered graphicx settings, shared by navigation, editing and build checks.
 use crate::{
     signature::{definition_body_spans, CommandSignatures},
     source_inputs, syntax,
@@ -8,6 +8,21 @@ use std::collections::{BTreeMap, BTreeSet};
 use tower_lsp::lsp_types::Url;
 
 type Setting = Option<Vec<String>>;
+
+#[derive(Clone, Copy)]
+enum Kind {
+    Extensions,
+    Directories,
+}
+
+impl Kind {
+    fn command(self) -> &'static str {
+        match self {
+            Self::Extensions => "DeclareGraphicsExtensions",
+            Self::Directories => "graphicspath",
+        }
+    }
+}
 
 #[derive(Clone)]
 struct Group {
@@ -22,6 +37,7 @@ const SETTING_CONTROLS: &[&str] = &[
     "outer",
     "protected",
     "DeclareGraphicsExtensions",
+    "graphicspath",
 ];
 
 fn setting_call(
@@ -77,11 +93,26 @@ pub(crate) struct Index {
 
 impl Index {
     pub fn new(workspace: &Workspace, root: &Url) -> Self {
-        let defaults: Vec<_> = syntax::file_extensions("includegraphics")
-            .unwrap()
-            .iter()
-            .map(|extension| (*extension).to_owned())
-            .collect();
+        Self::build(workspace, root, Kind::Extensions)
+    }
+
+    pub fn directories(workspace: &Workspace, root: &Url) -> Self {
+        Self::build(workspace, root, Kind::Directories)
+    }
+
+    fn build(workspace: &Workspace, root: &Url, kind: Kind) -> Self {
+        let defaults = match kind {
+            Kind::Extensions => syntax::file_extensions("includegraphics")
+                .unwrap()
+                .iter()
+                .map(|extension| (*extension).to_owned())
+                .collect(),
+            Kind::Directories => Vec::new(),
+        };
+        let customized_commands = match kind {
+            Kind::Extensions => vec!["DeclareGraphicsExtensions", "DeclareGraphicsRule"],
+            Kind::Directories => vec!["graphicspath"],
+        };
         let scope = workspace.project_documents(root);
         let documents: Vec<_> = scope
             .iter()
@@ -89,22 +120,21 @@ impl Index {
             .filter(|(_, doc)| doc.kind == DocumentKind::Latex)
             .collect();
         let customized = documents.iter().any(|(_, doc)| {
-            doc.syntax.commands.iter().any(|command| {
-                matches!(
-                    command.name.as_str(),
-                    "DeclareGraphicsExtensions" | "DeclareGraphicsRule"
+            doc.syntax
+                .commands
+                .iter()
+                .any(|command| customized_commands.contains(&command.name.as_str()))
+                || doc
+                    .syntax
+                    .definitions
+                    .iter()
+                    .any(|entry| customized_commands.contains(&entry.name.as_str()))
+                || named_graphics_command(
+                    &doc.text.source,
+                    &doc.syntax.commands,
+                    &BTreeSet::new(),
+                    &customized_commands,
                 )
-            }) || doc.syntax.definitions.iter().any(|entry| {
-                matches!(
-                    entry.name.as_str(),
-                    "DeclareGraphicsExtensions" | "DeclareGraphicsRule"
-                )
-            }) || named_graphics_command(
-                &doc.text.source,
-                &doc.syntax.commands,
-                &BTreeSet::new(),
-                &["DeclareGraphicsExtensions", "DeclareGraphicsRule"],
-            )
         });
         let mut index = Self {
             defaults,
@@ -132,6 +162,7 @@ impl Index {
         );
         if [
             "DeclareGraphicsExtensions",
+            "graphicspath",
             "DeclareGraphicsRule",
             "includegraphics",
             "begingroup",
@@ -235,6 +266,7 @@ impl Index {
             return index;
         }
         let mut walk = Walk {
+            kind,
             workspace,
             root,
             signatures,
@@ -272,7 +304,7 @@ impl Index {
                                 index,
                                 &walk.signatures,
                             )
-                            .is_some_and(|(name, _)| name == "DeclareGraphicsExtensions")
+                            .is_some_and(|(name, _)| name == kind.command())
                     })
             }
         });
@@ -280,6 +312,31 @@ impl Index {
             index.settings = Some(walk.settings);
         }
         index
+    }
+    /// Keep lexical aliases for build snapshots; navigation and edits use canonical directories.
+    pub fn paths_at(
+        &self,
+        root: &Url,
+        uri: &Url,
+        offset: usize,
+        canonical: bool,
+    ) -> Option<Vec<std::path::PathBuf>> {
+        let root_path = root.to_file_path().ok()?;
+        let parent = root_path.parent()?;
+        Some(
+            self.at(uri, offset)?
+                .into_iter()
+                .map(|value| {
+                    let path = parent.join(value);
+                    if canonical {
+                        path.canonicalize()
+                            .unwrap_or_else(|_| crate::workspace::normalize_path(&path))
+                    } else {
+                        path
+                    }
+                })
+                .collect(),
+        )
     }
 
     pub fn at(&self, uri: &Url, offset: usize) -> Option<Vec<&str>> {
@@ -291,7 +348,11 @@ impl Index {
     }
 }
 
-fn declaration(source: &str, command: &syntax::Command) -> Setting {
+fn declaration(source: &str, command: &syntax::Command, kind: Kind) -> Setting {
+    if matches!(kind, Kind::Directories) {
+        let (entries, complete) = crate::graphics::path_entries(source, command);
+        return complete.then(|| entries.into_iter().map(|(_, value)| value).collect());
+    }
     let argument = command.argument.as_ref()?;
     if argument.outer_span.start != syntax::skip_space(source, command.span.end)
         || source.as_bytes().get(argument.outer_span.start) != Some(&b'{')
@@ -328,6 +389,7 @@ fn declaration(source: &str, command: &syntax::Command) -> Setting {
 }
 
 struct Walk<'a> {
+    kind: Kind,
     workspace: &'a Workspace,
     root: &'a Url,
     signatures: CommandSignatures<'a>,
@@ -427,7 +489,7 @@ impl Walk<'_> {
                 let mut normalized = command.clone();
                 normalized.name = name.to_owned();
                 normalized.span.end = end;
-                if name == "DeclareGraphicsExtensions" {
+                if matches!(name, "DeclareGraphicsExtensions" | "graphicspath") {
                     normalized.argument = syntax::group(
                         &doc.text.source,
                         syntax::skip_space(&doc.text.source, end),
@@ -499,6 +561,7 @@ impl Walk<'_> {
                         | "outer"
                         | "protected"
                         | "DeclareGraphicsExtensions"
+                        | "graphicspath"
                         | "input"
                 )
             {
@@ -540,16 +603,18 @@ impl Walk<'_> {
                 }
             }
             match command.name.as_str() {
-                "DeclareGraphicsExtensions" => {
+                "DeclareGraphicsExtensions" | "graphicspath" => {
                     let global = self.global_assignment();
-                    self.state = if self.conditional == 0 {
-                        declaration(&doc.text.source, &command)
-                    } else {
-                        None
-                    };
-                    if global {
-                        for group in &mut self.groups {
-                            group.setting = self.state.clone();
+                    if command.name == self.kind.command() {
+                        self.state = if self.conditional == 0 {
+                            declaration(&doc.text.source, &command, self.kind)
+                        } else {
+                            None
+                        };
+                        if global {
+                            for group in &mut self.groups {
+                                group.setting = self.state.clone();
+                            }
                         }
                     }
                     raw = command

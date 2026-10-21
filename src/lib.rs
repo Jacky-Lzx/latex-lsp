@@ -22,7 +22,7 @@ mod file_fixes;
 pub mod file_operations;
 mod generated;
 pub mod graphics;
-mod graphics_extensions;
+mod graphics_settings;
 mod image_fixes;
 mod label_diagnostics;
 mod listings;

@@ -58,10 +58,17 @@ pub(crate) fn fixes(
     else {
         return vec![];
     };
-    let search = graphics::directories_in(workspace, uri, root);
+    let Some(search) = crate::graphics_settings::Index::directories(workspace, root).paths_at(
+        root,
+        uri,
+        command.span.start,
+        true,
+    ) else {
+        return vec![];
+    };
     let mut directories = vec![parent];
     directories.extend(search.iter().cloned());
-    let index = crate::graphics_extensions::Index::new(workspace, root);
+    let index = crate::graphics_settings::Index::new(workspace, root);
     let Some(extensions) = index.at(uri, command.span.start) else {
         return vec![];
     };

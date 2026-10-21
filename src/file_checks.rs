@@ -1,7 +1,7 @@
 //! Captured file conditions and content fingerprints for build validity.
 use crate::{
     config::BuildConfig,
-    graphics, graphics_extensions, syntax,
+    graphics, graphics_settings, syntax,
     workspace::{normalize_path, resolve_file_path_with, Workspace},
 };
 use std::{
@@ -175,7 +175,9 @@ impl Snapshot {
                 .filter_map(|uri| workspace.documents.get(uri))
                 .flat_map(|doc| &doc.syntax.commands)
                 .any(|command| command.name == "DeclareGraphicsRule");
-        let image_extensions = graphics_extensions::Index::new(workspace, root);
+        let image_extensions = graphics_settings::Index::new(workspace, root);
+        let image_directories =
+            track_images.then(|| graphics_settings::Index::directories(workspace, root));
         // A missing chapter is meaningful only when it can be selected.
         // Unknown or conflicting filters must not guess that TeX reads it.
         let include_filters = crate::source_inputs::selection_filters(workspace, &sources);
@@ -256,14 +258,6 @@ impl Snapshot {
                 continue;
             };
             let quoted = inputs.quoted_file_positions(workspace, &source);
-            let image_directories = (track_images
-                && doc
-                    .syntax
-                    .commands
-                    .iter()
-                    .any(|command| command.name == "includegraphics"))
-            .then(|| graphics::condition_directories_in(workspace, &source, root))
-            .flatten();
             for command in doc
                 .syntax
                 .commands
@@ -332,7 +326,9 @@ impl Snapshot {
                 }
                 if command.name == "includegraphics" {
                     if let (Some(directories), Some(argument), Some(extensions)) = (
-                        &image_directories,
+                        image_directories.as_ref().and_then(|index| {
+                            index.paths_at(root, &source, command.span.start, false)
+                        }),
                         &command.argument,
                         image_extensions.at(&source, command.span.start),
                     ) {
@@ -342,7 +338,7 @@ impl Snapshot {
                                 root,
                                 name,
                                 &extensions,
-                                directories,
+                                &directories,
                                 observe_path,
                             );
                         }
@@ -1647,24 +1643,54 @@ mod graphic_conditions {
     }
 
     #[test]
-    fn repeated_graphic_path_declarations_do_not_guess_execution_order_or_scope() {
+    fn repeated_graphic_paths_track_only_the_active_directories() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();
-        for source in [
-            r"\graphicspath{{first/}}\graphicspath{{second/}}\includegraphics{missing.png}",
-            r"\graphicspath{{first/}}\graphicspath{{first/}}\includegraphics{missing.png}",
-            r"\graphicspath{{first/}}\graphicspath{}\includegraphics{missing.png}",
+        for (setting, selected) in [
+            (
+                r"\graphicspath{{first/}}\graphicspath{{second/}}",
+                Some("second"),
+            ),
+            (
+                r"\graphicspath{{first/}}\graphicspath{{first/}}",
+                Some("first"),
+            ),
+            (r"\graphicspath{{first/}}\graphicspath{}", None),
+            (
+                r"\graphicspath{{first/}}{\graphicspath{{second/}}}",
+                Some("first"),
+            ),
+            (
+                r"\graphicspath{{first/}}{\global\graphicspath{{second/}}}",
+                Some("second"),
+            ),
+            (
+                r"\graphicspath{{first/}}{\globaldefs=-1 \global\graphicspath{{second/}}}",
+                Some("first"),
+            ),
         ] {
-            assert!(capture(root, source).paths.is_empty(), "{source}");
+            let snapshot = capture(root, &format!("{setting}\\includegraphics{{missing.png}}"));
+            assert!(
+                snapshot.paths.contains_key(&root.join("missing.png")),
+                "{setting}"
+            );
+            for name in ["first", "second"] {
+                assert_eq!(
+                    snapshot
+                        .paths
+                        .contains_key(&root.join(format!("{name}/missing.png"))),
+                    selected == Some(name),
+                    "{setting}: {snapshot:?}"
+                );
+            }
         }
         std::fs::write(root.join("settings.tex"), r"\graphicspath{{first/}}").unwrap();
         let snapshot = capture(
             root,
             r"\input{settings}\graphicspath{{second/}}\includegraphics{missing.png}",
         );
-        assert!(!snapshot.paths.contains_key(&root.join("missing.png")));
         assert!(!snapshot.paths.contains_key(&root.join("first/missing.png")));
-        assert!(!snapshot
+        assert!(snapshot
             .paths
             .contains_key(&root.join("second/missing.png")));
     }

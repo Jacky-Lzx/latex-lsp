@@ -68,7 +68,7 @@ fn changed(workspace: &Workspace, files: &[FileRename]) -> BTreeMap<Url, String>
 }
 
 #[test]
-fn project_graphics_paths_resolve_nested_unicode_and_package_images() {
+fn project_graphics_paths_resolve_nested_unicode_and_ignore_overridden_package_paths() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     let mut workspace = project(root);
@@ -81,7 +81,6 @@ fn project_graphics_paths_resolve_nested_unicode_and_package_images() {
             uri(root, "assets.v1/plot.pdf"),
             uri(root, "图 片/中文 图.pdf"),
             uri(root, "assets.v1/nested/second.png"),
-            uri(root, "other/package.pdf")
         ]
     );
     std::fs::write(root.join("plot.pdf"), "root").unwrap();
