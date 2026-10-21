@@ -172,6 +172,77 @@ pub(crate) fn skip_space(source: &str, mut i: usize) -> usize {
     }
 }
 
+/// Read a literal TeX integer without expanding arbitrary controls. The caller
+/// identifies controls that prove the end of a numeric token sequence.
+pub(crate) fn literal_integer(
+    source: &str,
+    after: usize,
+    terminates: impl Fn(&str) -> bool,
+) -> Option<(i32, usize)> {
+    let bytes = source.as_bytes();
+    let mut at = skip_space(source, after);
+    if bytes.get(at) == Some(&b'=') {
+        at = skip_space(source, at + 1);
+    }
+    let mut negative = false;
+    while matches!(bytes.get(at), Some(b'+' | b'-')) {
+        negative ^= bytes[at] == b'-';
+        at = skip_space(source, at + 1);
+    }
+    if bytes.get(at) == Some(&b'`') {
+        at += 1;
+        let token = token(source, at)?;
+        let literal = token.strip_prefix('\\').unwrap_or(token);
+        if literal.len() != 1 || !literal.is_ascii() {
+            return None;
+        }
+        let value = i32::from(literal.as_bytes()[0]);
+        return Some((if negative { -value } else { value }, at + token.len()));
+    }
+    let radix = match bytes.get(at) {
+        Some(b'\'') => {
+            at += 1;
+            8
+        }
+        Some(b'"') => {
+            at += 1;
+            16
+        }
+        _ => 10,
+    };
+    let mut value = 0i32;
+    let mut digits = 0;
+    loop {
+        if bytes.get(at) == Some(&b'%') {
+            at = skip_space(source, at);
+        }
+        let digit = match bytes.get(at) {
+            Some(b'0'..=b'9') => u32::from(bytes[at] - b'0'),
+            Some(b'A'..=b'F') if radix == 16 => u32::from(bytes[at] - b'A') + 10,
+            _ => break,
+        };
+        if digit >= radix {
+            break;
+        }
+        value = value.checked_mul(radix as i32)?.checked_add(digit as i32)?;
+        digits += 1;
+        at += 1;
+    }
+    if digits == 0 {
+        return None;
+    }
+    // A macro following the digits can expand to more digits. Whitespace,
+    // ordinary characters and these known primitive boundaries end the number.
+    if bytes.get(at) == Some(&b'\\') {
+        let span = control_word(source, at)?;
+        let name = &source[span.start + 1..span.end];
+        if !terminates(name) {
+            return None;
+        }
+    }
+    Some((if negative { -value } else { value }, at))
+}
+
 /// Read a balanced group, ignoring comments and escaped delimiters.
 pub(crate) fn group(source: &str, i: usize, open: u8, close: u8) -> Option<(Argument, usize)> {
     group_mode(source, i, open, close, true, true)

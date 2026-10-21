@@ -1802,11 +1802,47 @@ impl<'a> CommandSignatures<'a> {
         Some((name, start, end, named.is_none()))
     }
 
-    fn invokes_builtin(&self, name: &str, builtin: &str) -> bool {
+    pub(crate) fn invokes_builtin(&self, name: &str, builtin: &str) -> bool {
         !self.local.contains_key(builtin)
             && self.local.get(name).map_or(name == builtin, |signature| {
                 signature.as_ref().is_some_and(|s| s.name == builtin)
             })
+    }
+
+    pub(crate) fn literal_integer_value(&self, source: &str, after: usize) -> Option<(i32, usize)> {
+        syntax::literal_integer(source, after, |name| {
+            [
+                "relax",
+                "global",
+                "globaldefs",
+                "DeclareGraphicsExtensions",
+                "begingroup",
+                "endgroup",
+                "bgroup",
+                "egroup",
+            ]
+            .iter()
+            .any(|builtin| self.invokes_builtin(name, builtin))
+        })
+    }
+
+    pub(crate) fn builtin_alias_body_positions(
+        &self,
+        source: &str,
+        parsed: &syntax::Syntax,
+        builtins: &[&str],
+    ) -> BTreeSet<usize> {
+        parsed
+            .definitions
+            .iter()
+            .filter(|entry| {
+                builtins
+                    .iter()
+                    .any(|builtin| self.invokes_builtin(&entry.name, builtin))
+            })
+            .filter_map(|entry| source_alias_body(source, parsed, entry))
+            .map(|body| syntax::skip_space(source, body.span.start))
+            .collect()
     }
 
     pub(crate) fn environment_calls(
@@ -2227,6 +2263,14 @@ impl<'a> CommandSignatures<'a> {
             else {
                 continue;
             };
+            if self.invokes_builtin(name, "globaldefs") {
+                if let Some((_, after)) = self.literal_integer_value(source, end) {
+                    // A backtick control is a character-code operand, not a
+                    // macro invocation that can consume the following call.
+                    mark_operand_commands(parsed, end, after, &mut result);
+                }
+                continue;
+            }
             // This primitive consumes exactly one balanced general-text
             // group. The unknown-macro fallback would also consume the next
             // control token after that group, hiding an independent file call.
@@ -2354,6 +2398,11 @@ fn argument_free(name: &str) -> bool {
             | "endgroup"
             | "bgroup"
             | "egroup"
+            | "global"
+            | "globaldefs"
+            | "long"
+            | "outer"
+            | "protected"
             | "hline"
             | "par"
             | "newline"

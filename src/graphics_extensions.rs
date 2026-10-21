@@ -9,6 +9,36 @@ use tower_lsp::lsp_types::Url;
 
 type Setting = Option<Vec<String>>;
 
+#[derive(Clone)]
+struct Group {
+    setting: Setting,
+    global_defs: i8,
+}
+
+const PREFIXES: &[&str] = &["global", "globaldefs", "long", "outer", "protected"];
+
+fn prefix_call(
+    source: &str,
+    commands: &[syntax::Command],
+    index: usize,
+    signatures: &CommandSignatures<'_>,
+) -> Option<(&'static str, usize)> {
+    let command = &commands[index];
+    let (name, end) = if command.name == "csuse" {
+        let argument = command.argument.as_ref()?;
+        (argument.value.as_str(), argument.outer_span.end)
+    } else if command.name == "csname" {
+        let span = syntax::literal_csname(source, commands, index)?;
+        (&source[span], commands[index + 1].span.end)
+    } else {
+        (command.name.as_str(), command.span.end)
+    };
+    PREFIXES
+        .iter()
+        .find(|prefix| signatures.invokes_builtin(name, prefix))
+        .map(|prefix| (*prefix, end))
+}
+
 fn named_declaration(source: &str, commands: &[syntax::Command], quoted: &BTreeSet<usize>) -> bool {
     commands.iter().enumerate().any(|(index, command)| {
         if quoted.contains(&command.span.start) {
@@ -93,19 +123,78 @@ impl Index {
             "egroup",
             "begin",
             "end",
+            "global",
+            "globaldefs",
+            "long",
+            "outer",
+            "protected",
+            "csuse",
+            "csname",
+            "endcsname",
         ]
         .iter()
         .any(|name| !signatures.command_unchanged(name))
             || documents.iter().any(|(_, doc)| {
                 let positions = signatures.source_command_positions(&doc.text.source, &doc.syntax);
                 let quoted = signatures.quoted_command_tokens(&doc.text.source, &doc.syntax);
-                named_declaration(&doc.text.source, &doc.syntax.commands, &quoted)
-                    || doc.syntax.commands.iter().any(|command| {
-                        !quoted.contains(&command.span.start)
-                            && (command.name == "DeclareGraphicsRule"
-                                || command.name == "DeclareGraphicsExtensions"
-                                    && !positions.contains(&command.span.start))
+                let alias_bodies = signatures.builtin_alias_body_positions(
+                    &doc.text.source,
+                    &doc.syntax,
+                    PREFIXES,
+                );
+                let declaration_targets: BTreeSet<_> = doc
+                    .syntax
+                    .definitions
+                    .iter()
+                    .map(|entry| entry.span.start)
+                    .collect();
+                let numeric_operands: Vec<_> = doc
+                    .syntax
+                    .commands
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, command)| positions.contains(&command.span.start))
+                    .filter_map(|(index, _)| {
+                        let (name, end) = prefix_call(
+                            &doc.text.source,
+                            &doc.syntax.commands,
+                            index,
+                            &signatures,
+                        )?;
+                        (name == "globaldefs")
+                            .then(|| {
+                                signatures
+                                    .literal_integer_value(&doc.text.source, end)
+                                    .map(|(_, after)| end..after)
+                            })
+                            .flatten()
                     })
+                    .collect();
+                named_declaration(&doc.text.source, &doc.syntax.commands, &quoted)
+                    || doc
+                        .syntax
+                        .commands
+                        .iter()
+                        .enumerate()
+                        .any(|(index, command)| {
+                            !quoted.contains(&command.span.start)
+                                && (command.name == "DeclareGraphicsRule"
+                                    || command.name == "DeclareGraphicsExtensions"
+                                        && !positions.contains(&command.span.start)
+                                    || prefix_call(
+                                        &doc.text.source,
+                                        &doc.syntax.commands,
+                                        index,
+                                        &signatures,
+                                    )
+                                    .is_some()
+                                        && !positions.contains(&command.span.start)
+                                        && !declaration_targets.contains(&command.span.start)
+                                        && !alias_bodies.contains(&command.span.start)
+                                        && !numeric_operands
+                                            .iter()
+                                            .any(|span| span.contains(&command.span.start)))
+                        })
             })
         {
             return index;
@@ -125,6 +214,8 @@ impl Index {
             packages: BTreeSet::new(),
             state: Some(index.defaults.clone()),
             groups: Vec::new(),
+            global_defs: 0,
+            global_prefix: false,
             conditional: 0,
             visits: 0,
             events: 0,
@@ -205,7 +296,9 @@ struct Walk<'a> {
     visited: BTreeSet<Url>,
     packages: BTreeSet<Url>,
     state: Setting,
-    groups: Vec<Setting>,
+    groups: Vec<Group>,
+    global_defs: i8,
+    global_prefix: bool,
     conditional: usize,
     visits: usize,
     events: usize,
@@ -214,6 +307,28 @@ struct Walk<'a> {
 }
 
 impl Walk<'_> {
+    fn open_group(&mut self) {
+        self.groups.push(Group {
+            setting: self.state.clone(),
+            global_defs: self.global_defs,
+        });
+    }
+
+    fn close_group(&mut self) {
+        if let Some(group) = self.groups.pop() {
+            self.state = group.setting;
+            self.global_defs = group.global_defs;
+        } else {
+            self.complete = false;
+        }
+    }
+
+    fn global_assignment(&mut self) -> bool {
+        let global = self.global_defs > 0 || self.global_defs == 0 && self.global_prefix;
+        self.global_prefix = false;
+        global
+    }
+
     fn source(&mut self, uri: &Url) {
         self.visits += 1;
         if self.visits > 4096 || self.active.len() >= 64 || !self.active.insert(uri.clone()) {
@@ -256,6 +371,24 @@ impl Walk<'_> {
                 self.complete = false;
             }
         }
+        // Prefixes and the globaldefs parameter may be reached through pure
+        // aliases or static named calls; their operands start after that call.
+        for (index, command) in doc.syntax.commands.iter().enumerate() {
+            if !positions.contains(&command.span.start) {
+                continue;
+            }
+            if let Some((prefix, end)) = prefix_call(
+                &doc.text.source,
+                &doc.syntax.commands,
+                index,
+                &self.signatures,
+            ) {
+                let mut normalized = command.clone();
+                normalized.name = prefix.to_owned();
+                normalized.span.end = end;
+                commands.insert(command.span.start, normalized);
+            }
+        }
         let mut ignored = doc.syntax.ignored.clone();
         ignored.extend(definition_body_spans(&doc.text.source, &doc.syntax));
         ignored.extend(
@@ -292,12 +425,12 @@ impl Walk<'_> {
                     continue;
                 }
                 match doc.text.source.as_bytes()[raw] {
-                    b'{' if self.groups.len() < 256 => self.groups.push(self.state.clone()),
+                    b'{' if self.groups.len() < 256 => self.open_group(),
                     b'{' => {
                         self.complete = false;
                         break;
                     }
-                    b'}' => self.state = self.groups.pop().unwrap_or(None),
+                    b'}' => self.close_group(),
                     _ => {}
                 }
                 raw += 1;
@@ -307,13 +440,68 @@ impl Walk<'_> {
                 continue;
             }
             raw = command.span.end;
+            if self.global_prefix
+                && !matches!(
+                    command.name.as_str(),
+                    "global"
+                        | "globaldefs"
+                        | "long"
+                        | "outer"
+                        | "protected"
+                        | "DeclareGraphicsExtensions"
+                        | "input"
+                )
+            {
+                // Other literal primitive assignments consume the prefix
+                // without changing graphics settings. Unknown expansion does
+                // not establish which assignment will receive it.
+                if matches!(
+                    command.name.as_str(),
+                    "def"
+                        | "gdef"
+                        | "edef"
+                        | "xdef"
+                        | "let"
+                        | "futurelet"
+                        | "count"
+                        | "dimen"
+                        | "skip"
+                        | "muskip"
+                        | "toks"
+                        | "advance"
+                        | "multiply"
+                        | "divide"
+                        | "chardef"
+                        | "mathchardef"
+                        | "countdef"
+                        | "dimendef"
+                        | "skipdef"
+                        | "muskipdef"
+                        | "toksdef"
+                ) {
+                    if !self.signatures.command_unchanged(&command.name) {
+                        self.complete = false;
+                        break;
+                    }
+                    self.global_prefix = false;
+                } else {
+                    self.complete = false;
+                    break;
+                }
+            }
             match command.name.as_str() {
                 "DeclareGraphicsExtensions" => {
+                    let global = self.global_assignment();
                     self.state = if self.conditional == 0 {
                         declaration(&doc.text.source, &command)
                     } else {
                         None
                     };
+                    if global {
+                        for group in &mut self.groups {
+                            group.setting = self.state.clone();
+                        }
+                    }
                     raw = command
                         .argument
                         .as_ref()
@@ -350,7 +538,7 @@ impl Walk<'_> {
                             continue;
                         }
                     }
-                    self.groups.push(self.state.clone());
+                    self.open_group();
                     if command.name == "begin" {
                         raw = command
                             .argument
@@ -359,7 +547,7 @@ impl Walk<'_> {
                     }
                 }
                 "endgroup" | "egroup" | "end" => {
-                    self.state = self.groups.pop().unwrap_or(None);
+                    self.close_group();
                     if command.name == "end" {
                         raw = command
                             .argument
@@ -367,9 +555,28 @@ impl Walk<'_> {
                             .map_or(raw, |argument| argument.outer_span.end);
                     }
                 }
-                "global" => {
-                    self.state = None;
-                    self.groups.fill(None);
+                "global" => self.global_prefix = true,
+                "long" | "outer" | "protected" => {}
+                "globaldefs" => {
+                    if self.conditional != 0 {
+                        self.complete = false;
+                        break;
+                    }
+                    let Some((value, end)) = self
+                        .signatures
+                        .literal_integer_value(&doc.text.source, command.span.end)
+                    else {
+                        self.complete = false;
+                        break;
+                    };
+                    let global = self.global_assignment();
+                    self.global_defs = value.signum() as i8;
+                    if global {
+                        for group in &mut self.groups {
+                            group.global_defs = self.global_defs;
+                        }
+                    }
+                    raw = end;
                 }
                 name if name.starts_with("if") => {
                     self.conditional += 1;
@@ -448,12 +655,12 @@ impl Walk<'_> {
                 continue;
             }
             match doc.text.source.as_bytes()[raw] {
-                b'{' if self.groups.len() < 256 => self.groups.push(self.state.clone()),
+                b'{' if self.groups.len() < 256 => self.open_group(),
                 b'{' => {
                     self.complete = false;
                     break;
                 }
-                b'}' => self.state = self.groups.pop().unwrap_or(None),
+                b'}' => self.close_group(),
                 _ => {}
             }
             raw += 1;

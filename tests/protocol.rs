@@ -1853,26 +1853,40 @@ fn fake_build_server_capabilities(
 #[test]
 #[cfg(unix)]
 fn declared_graphics_extensions_preserve_versioned_moves_and_build_input_precedence() {
-    for remove_selected in [false, true] {
+    for (setting, extension, remove_selected) in [
+        (r"{\global\DeclareGraphicsExtensions{.png,.pdf}}", "png"),
+        (
+            r"{\globaldefs=1 \DeclareGraphicsExtensions{.png,.pdf}\globaldefs=0 }",
+            "png",
+        ),
+        (
+            r"{\globaldefs=-1 \global\DeclareGraphicsExtensions{.png,.pdf}}",
+            "pdf",
+        ),
+    ]
+    .into_iter()
+    .flat_map(|(setting, extension)| [false, true].map(|removed| (setting, extension, removed)))
+    {
         let script = r#"printf '%%PDF-1.4\n' > "$1/main.pdf"
-printf 'PWD %s\nINPUT %s/main.tex\nINPUT %s/chart.png\n' "$PWD" "$PWD" "$PWD" > "$1/main.fls"
+printf 'PWD %s\nINPUT %s/main.tex\nINPUT %s/chart.EXT\n' "$PWD" "$PWD" "$PWD" > "$1/main.fls"
 touch "$1/ready"
 while [ ! -f "$1/release" ]; do sleep 0.02; done
-"#;
+"#
+        .replace("chart.EXT", &format!("chart.{extension}"));
         let (mut server, directory, main) = fake_build_server_capabilities(
-            script,
+            &script,
             false,
             json!({
                 "workspace":{"workspaceEdit":{"documentChanges":true},"fileOperations":{"willRename":true,"didRename":true}}
             }),
         );
         let root = directory.path();
-        let old = Url::from_file_path(root.join("plot.png")).unwrap();
-        let new = Url::from_file_path(root.join("chart.png")).unwrap();
-        std::fs::write(root.join("plot.png"), "selected PNG").unwrap();
-        std::fs::write(root.join("plot.pdf"), "unselected PDF").unwrap();
-        let source = "\\documentclass{article}\n\\DeclareGraphicsExtensions{.png,.pdf}\n\\includegraphics{plot}\n";
-        std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+        let old = Url::from_file_path(root.join(format!("plot.{extension}"))).unwrap();
+        let new = Url::from_file_path(root.join(format!("chart.{extension}"))).unwrap();
+        std::fs::write(root.join("plot.png"), "PNG image").unwrap();
+        std::fs::write(root.join("plot.pdf"), "PDF image").unwrap();
+        let source = format!("\\documentclass{{article}}\n\\DeclareGraphicsExtensions{{.pdf}}\n{setting}\n\\includegraphics{{plot}}\n");
+        std::fs::write(main.to_file_path().unwrap(), &source).unwrap();
         server.notify(
             "textDocument/didChange",
             json!({"textDocument":{"uri":main,"version":7},"contentChanges":[{"text":source}]}),
@@ -1913,8 +1927,9 @@ while [ ! -f "$1/release" ]; do sleep 0.02; done
         );
         let output = root.join("build/latex-lsp");
         wait_for_file(&output.join("ready"));
-        // A later extension must not make the already selected PNG stale.
-        std::fs::write(root.join("chart.pdf"), "lower priority PDF").unwrap();
+        // An excluded or later extension must not make the selected image stale.
+        let other = if extension == "png" { "pdf" } else { "png" };
+        std::fs::write(root.join(format!("chart.{other}")), "unselected image").unwrap();
         if remove_selected {
             std::fs::remove_file(new.to_file_path().unwrap()).unwrap();
         }

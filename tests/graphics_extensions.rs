@@ -4,6 +4,12 @@ use latex_lsp::{
 use std::{collections::BTreeMap, path::Path};
 use tower_lsp::lsp_types::*;
 
+const PNG: &[u8] = &[
+    137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0,
+    0, 0, 144, 119, 83, 222, 0, 0, 0, 12, 73, 68, 65, 84, 120, 156, 99, 96, 96, 96, 0, 0, 0, 4, 0,
+    1, 246, 23, 56, 85, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+];
+
 fn uri(root: &Path, name: &str) -> Url {
     Url::from_file_path(root.join(name)).unwrap()
 }
@@ -264,11 +270,6 @@ fn shared_roots_keep_their_own_settings_and_reject_conflicting_path_edits() {
 #[test]
 #[ignore = "requires pdflatex and graphicx"]
 fn real_declared_extensions_keep_the_selected_images_after_batched_moves() {
-    const PNG: &[u8] = &[
-        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 2,
-        0, 0, 0, 144, 119, 83, 222, 0, 0, 0, 12, 73, 68, 65, 84, 120, 156, 99, 96, 96, 96, 0, 0, 0,
-        4, 0, 1, 246, 23, 56, 85, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
-    ];
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     let config = latex_lsp::config::BuildConfig {
@@ -422,4 +423,227 @@ fn recorder_only_settings_without_a_proven_execution_order_do_not_assume_default
         .insert(main.clone(), [main.clone(), settings.clone()].into());
     assert!(workspace.project_documents(&main).contains(&settings));
     assert!(targets(&workspace, &main).is_empty());
+}
+
+#[test]
+fn global_extension_assignments_follow_tex_scope_rules() {
+    for (setting, expected) in [
+        (r"{\global\DeclareGraphicsExtensions{.png}}", "png"),
+        (
+            r"{\globaldefs=1 \DeclareGraphicsExtensions{.png}\globaldefs=0 }",
+            "png",
+        ),
+        (
+            r"{\globaldefs=-1 \global\DeclareGraphicsExtensions{.png}}",
+            "pdf",
+        ),
+        (
+            r"{{\global\DeclareGraphicsExtensions{.png}}\DeclareGraphicsExtensions{.pdf}}",
+            "png",
+        ),
+        (
+            r"{\globaldefs=1 \DeclareGraphicsExtensions{.png}\globaldefs=0 \DeclareGraphicsExtensions{.pdf}}",
+            "png",
+        ),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let source=format!("\\graphicspath{{{{assets/}}}}\\DeclareGraphicsExtensions{{.pdf}}{setting}\\includegraphics{{plot}}");
+        let workspace = project(root, &source);
+        let main = uri(root, "main.tex");
+        assert_eq!(
+            targets(&workspace, &main),
+            [uri(root, &format!("assets/plot.{expected}"))],
+            "{setting}"
+        );
+        let changed = changes(
+            &workspace,
+            &[rename(
+                root,
+                &format!("assets/plot.{expected}"),
+                &format!("assets/chart.{expected}"),
+            )],
+        );
+        assert_eq!(
+            changed[&main],
+            source.replace("{plot}", "{chart}"),
+            "{setting}"
+        );
+    }
+}
+
+#[test]
+fn literal_globaldefs_values_and_static_prefix_aliases_keep_their_operands() {
+    for value in ["1", "+ - - 1", "'1", "\"1", "`A", "`\\A", "0% join\n 1"] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let source=format!("\\graphicspath{{{{assets/}}}}\\DeclareGraphicsExtensions{{.pdf}}{{\\globaldefs={value} \\DeclareGraphicsExtensions{{.png}}\\globaldefs=0 }}\\includegraphics{{plot}}");
+        let workspace = project(root, &source);
+        assert_eq!(
+            targets(&workspace, &uri(root, "main.tex")),
+            [uri(root, "assets/plot.png")],
+            "{value}"
+        );
+    }
+    for (definitions, prefix, parameter) in [
+        (r"\def\G{\global}\def\D{\globaldefs}", r"\G", r"\D"),
+        ("", r"\csuse{global}", r"\csuse{globaldefs}"),
+        (
+            "",
+            r"\csname global\endcsname",
+            r"\csname globaldefs\endcsname",
+        ),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let source=format!("{definitions}\\graphicspath{{{{assets/}}}}\\DeclareGraphicsExtensions{{.pdf}}{{{prefix}\\DeclareGraphicsExtensions{{.png}}}}\\includegraphics{{plot}}{{{parameter}=-1 {prefix}\\DeclareGraphicsExtensions{{.pdf}}}}\\includegraphics{{plot}}");
+        let workspace = project(root, &source);
+        assert_eq!(
+            targets(&workspace, &uri(root, "main.tex")),
+            [uri(root, "assets/plot.png"), uri(root, "assets/plot.png")],
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn global_settings_cross_input_boundaries_and_unrelated_global_assignments() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let workspace = project(
+        root,
+        r"\graphicspath{{assets/}}\DeclareGraphicsExtensions{.pdf}{\global\input{settings}}\includegraphics{plot}\global\def\unrelated{Text}\includegraphics{plot}",
+    );
+    drop(workspace);
+    std::fs::write(
+        root.join("settings.tex"),
+        r"\DeclareGraphicsExtensions{.png}",
+    )
+    .unwrap();
+    let mut workspace = Workspace::default();
+    workspace.add_root(root.into());
+    assert_eq!(
+        targets(&workspace, &uri(root, "main.tex")),
+        [uri(root, "assets/plot.png"), uri(root, "assets/plot.png")]
+    );
+}
+
+#[test]
+fn uncertain_globaldefs_assignments_and_deferred_scope_changes_do_not_guess() {
+    for assignment in [
+        r"\globaldefs=\chosen",
+        r"\globaldefs=0\chosen",
+        r"\globaldefs=2147483648 ",
+        r"\globaldefs='9 ",
+        r"\iftrue\globaldefs=1 \fi",
+        r"\def\change{\globaldefs=1 }\change",
+        r"\newcommand{\change}{\globaldefs=1 }\change",
+        r"\def\csuse#1{}\csuse{global}",
+        r"\def\csname#1\endcsname{}\csname global\endcsname",
+        r"\def\endcsname{}\csname global\endcsname",
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let source=format!("\\graphicspath{{{{assets/}}}}\\DeclareGraphicsExtensions{{.pdf}}{{{assignment}\\DeclareGraphicsExtensions{{.png}}}}\\includegraphics{{plot}}");
+        let workspace = project(root, &source);
+        assert!(
+            targets(&workspace, &uri(root, "main.tex")).is_empty(),
+            "{assignment}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex and graphicx"]
+fn real_global_settings_match_tex_and_preserve_images_after_renaming() {
+    let drawing = tempfile::tempdir().unwrap();
+    let config = latex_lsp::config::BuildConfig {
+        executable: "pdflatex".into(),
+        ..Default::default()
+    };
+    std::fs::write(
+        drawing.path().join("drawing.tex"),
+        r"\documentclass{article}\begin{document}Figure\end{document}",
+    )
+    .unwrap();
+    let graphic = latex_lsp::build::run(
+        &drawing.path().join("drawing.tex"),
+        &config,
+        &Default::default(),
+    );
+    assert_eq!(graphic.status, "success", "{}", graphic.output);
+    let pdf = graphic.pdf.unwrap();
+    let mut cases = vec![
+        (
+            r"{\global\DeclareGraphicsExtensions{.png}}".to_owned(),
+            "png",
+        ),
+        (
+            r"{\globaldefs=-1 \global\DeclareGraphicsExtensions{.png}}".to_owned(),
+            "pdf",
+        ),
+        (
+            r"{{\global\DeclareGraphicsExtensions{.png}}\DeclareGraphicsExtensions{.pdf}}"
+                .to_owned(),
+            "png",
+        ),
+        (
+            r"\def\G{\global}{\G\DeclareGraphicsExtensions{.png}}".to_owned(),
+            "png",
+        ),
+        (
+            r"{\csname global\endcsname\DeclareGraphicsExtensions{.png}}".to_owned(),
+            "png",
+        ),
+    ];
+    for value in ["1", "+ - - 1", "'1", "\"1", "`A", "`\\A", "0% join\n 1"] {
+        cases.push((
+            format!("{{\\globaldefs={value} \\DeclareGraphicsExtensions{{.png}}\\globaldefs=0 }}"),
+            "png",
+        ));
+    }
+    for (setting, extension) in cases {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let source=format!("\\documentclass{{article}}\\usepackage{{graphicx}}\\graphicspath{{{{assets/}}}}\\DeclareGraphicsExtensions{{.pdf}}\\begin{{document}}\n{setting}\\includegraphics{{plot}}\\end{{document}}\n");
+        let mut workspace = project(root, &source);
+        std::fs::copy(&pdf, root.join("assets/plot.pdf")).unwrap();
+        std::fs::write(root.join("assets/plot.png"), PNG).unwrap();
+        let main = uri(root, "main.tex");
+        for moved in [false, true] {
+            let name = if moved { "chart" } else { "plot" };
+            let selected = uri(root, &format!("assets/{name}.{extension}"));
+            assert_eq!(
+                targets(&workspace, &main).as_slice(),
+                std::slice::from_ref(&selected),
+                "{setting}"
+            );
+            let outcome =
+                latex_lsp::build::run(&root.join("main.tex"), &config, &Default::default());
+            assert_eq!(outcome.status, "success", "{setting}: {}", outcome.output);
+            let inputs = outcome.inputs.unwrap();
+            assert!(inputs.contains(&selected), "{setting}: {inputs:?}");
+            let other = if extension == "png" { "pdf" } else { "png" };
+            assert!(
+                !inputs.contains(&uri(root, &format!("assets/plot.{other}"))),
+                "{setting}: {inputs:?}"
+            );
+            if !moved {
+                let files = [rename(
+                    root,
+                    &format!("assets/plot.{extension}"),
+                    &format!("assets/chart.{extension}"),
+                )];
+                for (document, source) in changes(&workspace, &files) {
+                    std::fs::write(document.to_file_path().unwrap(), source).unwrap();
+                }
+                std::fs::rename(
+                    root.join(format!("assets/plot.{extension}")),
+                    root.join(format!("assets/chart.{extension}")),
+                )
+                .unwrap();
+                file_operations::did_rename(&mut workspace, &files).unwrap();
+            }
+        }
+    }
 }

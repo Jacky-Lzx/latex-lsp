@@ -1424,6 +1424,40 @@ mod graphic_conditions {
     }
 
     #[test]
+    fn global_graphics_extensions_control_build_candidate_precedence() {
+        for (setting, selected) in [
+            (r"{\global\DeclareGraphicsExtensions{.png,.pdf}}", "png"),
+            (
+                r"{\globaldefs=1 \DeclareGraphicsExtensions{.png,.pdf}\globaldefs=0 }",
+                "png",
+            ),
+            (
+                r"{\globaldefs=-1 \global\DeclareGraphicsExtensions{.png,.pdf}}",
+                "pdf",
+            ),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            for extension in ["png", "pdf"] {
+                std::fs::write(root.join(format!("plot.{extension}")), "image").unwrap();
+            }
+            let snapshot = capture(
+                root,
+                &format!("\\DeclareGraphicsExtensions{{.pdf}}{setting}\\includegraphics{{plot}}"),
+            );
+            let other = if selected == "png" { "pdf" } else { "png" };
+            std::fs::write(
+                root.join(format!("plot.{other}")),
+                "unselected image changed",
+            )
+            .unwrap();
+            assert!(snapshot.changed_path().is_none(), "{setting}: {snapshot:?}");
+            std::fs::remove_file(root.join(format!("plot.{selected}"))).unwrap();
+            assert!(snapshot.changed_path().is_some(), "{setting}: {snapshot:?}");
+        }
+    }
+
+    #[test]
     fn dotted_image_names_retain_graphicx_extension_fallbacks() {
         for (argument, actual) in [
             ("plot.v1", "assets/plot.v1.png"),
