@@ -658,7 +658,7 @@ pub(crate) fn is_static_key(value: &str) -> bool {
         })
 }
 
-/// Parentheses are ordinary tokens in literal label and citation keys.
+/// Parentheses are ordinary tokens in literal reference keys and PDF destinations.
 /// General identifiers retain their stricter namespace rules.
 pub(crate) fn is_static_reference_key(key: &str) -> bool {
     !key.is_empty()

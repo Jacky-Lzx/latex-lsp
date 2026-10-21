@@ -20,7 +20,7 @@ pub(crate) fn resolve_diagnostics(
     sources: &BTreeSet<Url>,
     diagnostics: &mut BTreeMap<Url, Vec<Diagnostic>>,
 ) {
-    let mut names = BTreeMap::<DestinationWarningKind, BTreeSet<&str>>::new();
+    let mut names = BTreeMap::<DestinationWarningKind, BTreeSet<String>>::new();
     for (kind, name) in diagnostics
         .values()
         .flatten()
@@ -35,7 +35,7 @@ pub(crate) fn resolve_diagnostics(
     if names.is_empty() {
         return;
     }
-    let mut locations = BTreeMap::<(DestinationWarningKind, &str), Vec<(Url, LspRange)>>::new();
+    let mut locations = BTreeMap::<(DestinationWarningKind, String), Vec<(Url, LspRange)>>::new();
     for uri in sources {
         let Some(doc) = workspace.documents.get(uri) else {
             continue;
@@ -52,10 +52,13 @@ pub(crate) fn resolve_diagnostics(
             };
             for entry in entries {
                 if names.contains(entry.name.as_str()) {
-                    locations.entry((kind, &entry.name)).or_default().push((
-                        uri.clone(),
-                        doc.text.range(entry.span.start, entry.span.end),
-                    ));
+                    locations
+                        .entry((kind, entry.name.clone()))
+                        .or_default()
+                        .push((
+                            uri.clone(),
+                            doc.text.range(entry.span.start, entry.span.end),
+                        ));
                 }
             }
         }
@@ -71,8 +74,8 @@ pub(crate) fn resolve_diagnostics(
             .flatten()
             .and_then(|(kind, name)| {
                 locations
-                    .get(&(kind, name))
-                    .map(|locations| (kind, name, locations))
+                    .get_key_value(&(kind, name))
+                    .map(|((kind, name), locations)| (*kind, name, locations))
             });
             if let Some((kind, name, locations)) = mapped {
                 for (uri, range) in locations {
@@ -151,7 +154,7 @@ fn bookmark(source: &str, command: &Command) -> Option<Bookmark> {
     };
     let (_, after) = syntax::group(source, at, b'{', b'}')?;
     let (key, _) = syntax::group(source, syntax::skip_space(source, after), b'{', b'}')?;
-    if !syntax::is_static_key(&key.value) {
+    if !syntax::is_static_reference_key(&key.value) {
         return None;
     }
     let name = format!(
@@ -184,10 +187,9 @@ fn compound(source: &str, command: &Command) -> Option<Destination> {
     }
     let (category, after) = syntax::group(source, at, b'{', b'}')?;
     let (key, _) = syntax::group(source, syntax::skip_space(source, after), b'{', b'}')?;
-    if [&category, &key]
-        .iter()
-        .any(|argument| !argument.value.is_empty() && !syntax::is_static_key(&argument.value))
-    {
+    if [&category, &key].iter().any(|argument| {
+        !argument.value.is_empty() && !syntax::is_static_reference_key(&argument.value)
+    }) {
         return None;
     }
     let name = if category.value.is_empty() {
@@ -221,7 +223,7 @@ pub(crate) fn entry(source: &str, command: &Command) -> Option<(bool, Entry)> {
             b'{',
             b'}',
         )?;
-        if !syntax::is_static_key(&argument.value) {
+        if !syntax::is_static_reference_key(&argument.value) {
             return None;
         }
         (argument.value, argument.span)
@@ -271,7 +273,7 @@ pub(crate) fn rename_edits(
             {
                 continue;
             }
-            let (base, level) = new_name.rsplit_once('.').filter(|(base, level)| syntax::is_static_key(base) && literal_level(level)).ok_or_else(|| tower_lsp::jsonrpc::Error::invalid_params("A PDF bookmark destination must end with a supported literal numeric level (at least -3), for example `name.0`"))?;
+            let (base, level) = new_name.rsplit_once('.').filter(|(base, level)| syntax::is_static_reference_key(base) && literal_level(level)).ok_or_else(|| tower_lsp::jsonrpc::Error::invalid_params("A PDF bookmark destination must end with a supported literal numeric level (at least -3), for example `name.0`"))?;
             let mut edits = Vec::new();
             if bookmark.key.value != base {
                 edits.push(TextEdit {

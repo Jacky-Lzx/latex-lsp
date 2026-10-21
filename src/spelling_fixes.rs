@@ -24,7 +24,7 @@ fn target<'a>(
 ) -> Option<(Kind, &'a str)> {
     if diagnostic.code == Some(NumberOrString::String("undefined-pdf-destination".into())) {
         let name = diagnostic.data.as_ref()?.get("destination")?.as_str()?;
-        if build_log::undefined_destination_name(&diagnostic.message) != Some(name) {
+        if build_log::undefined_destination_name(&diagnostic.message).as_deref() != Some(name) {
             return None;
         }
         return doc
@@ -293,7 +293,7 @@ fn closing_environment_fix(
 }
 
 fn valid_name(kind: Kind, name: &str) -> bool {
-    if matches!(kind, Kind::Label | Kind::Citation) {
+    if matches!(kind, Kind::Label | Kind::Citation | Kind::Anchor) {
         crate::syntax::is_static_reference_key(name)
     } else if matches!(kind, Kind::Color | Kind::ColorModel) {
         crate::named_colors::literal_name(name)

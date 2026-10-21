@@ -45,7 +45,10 @@ impl TargetKind {
 }
 
 fn static_target_name(kind: TargetKind, name: &str) -> bool {
-    if matches!(kind, TargetKind::Label | TargetKind::Citation) {
+    if matches!(
+        kind,
+        TargetKind::Label | TargetKind::Citation | TargetKind::Anchor
+    ) {
         syntax::is_static_reference_key(name)
     } else {
         syntax::is_static_key(name)
@@ -662,7 +665,8 @@ fn completion_name_argument(
     let reference = syntax::is_single_citation(&command.name)
         || syntax::is_reference(&command.name)
         || syntax::has_separate_label_argument(&command.name)
-        || command.name == "hyperdef";
+        || command.name == "hyperdef"
+        || command.name == "hyperlink";
     let argument = |start, open| {
         let hyperlink = matches!(command.name.as_str(), "hyperref" | "hyperdef");
         if syntax::is_reference(&command.name)

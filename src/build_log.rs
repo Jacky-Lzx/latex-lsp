@@ -297,7 +297,26 @@ impl DestinationWarningKind {
     }
 }
 
-pub(crate) fn destination_warning(message: &str) -> Option<(DestinationWarningKind, &str)> {
+/// pdfTeX prints destination names as PDF string contents. Decode only the
+/// escaped parentheses supported by literal source keys; never interpret TeX
+/// control sequences or backend messages that use another representation.
+fn literal_destination_name(message: &str, name: &str) -> Option<String> {
+    let mut decoded = String::with_capacity(name.len());
+    let mut chars = name.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' && message.starts_with("pdfTeX warning (") {
+            match chars.next()? {
+                paren @ ('(' | ')') => decoded.push(paren),
+                _ => return None,
+            }
+        } else {
+            decoded.push(ch);
+        }
+    }
+    crate::syntax::is_static_reference_key(&decoded).then_some(decoded)
+}
+
+pub(crate) fn destination_warning(message: &str) -> Option<(DestinationWarningKind, String)> {
     let (kind, name) = if let Some(name) = destination_warning_name(message) {
         (DestinationWarningKind::Missing, name)
     } else {
@@ -306,12 +325,11 @@ pub(crate) fn destination_warning(message: &str) -> Option<(DestinationWarningKi
             duplicate_destination_warning_name(message)?,
         )
     };
-    crate::syntax::is_static_key(name).then_some((kind, name))
+    literal_destination_name(message, name).map(|name| (kind, name))
 }
 
-pub(crate) fn undefined_destination_name(message: &str) -> Option<&str> {
-    let name = destination_warning_name(message)?;
-    crate::syntax::is_static_key(name).then_some(name)
+pub(crate) fn undefined_destination_name(message: &str) -> Option<String> {
+    literal_destination_name(message, destination_warning_name(message)?)
 }
 
 fn box_code(message: &str) -> Option<&'static str> {
@@ -1754,6 +1772,7 @@ fn emit_with_context(
     let mut ranges = undefined_reference_ranges(&text, line, &message);
     let destination = destination_warning(&message);
     let destination_ranges: Vec<_> = destination
+        .as_ref()
         .into_iter()
         .flat_map(|(kind, name)| {
             let syntax = crate::syntax::Syntax::latex(&text);
@@ -1763,7 +1782,7 @@ fn emit_with_context(
             };
             entries
                 .into_iter()
-                .filter(move |entry| entry.name == name)
+                .filter(move |entry| entry.name == *name)
                 .map(|entry| text.range(entry.span.start, entry.span.end))
         })
         .collect();
@@ -1916,7 +1935,7 @@ fn emit_with_context(
                 severity: Some(severity),
                 source: Some("latex-build".into()),
                 code: box_code(&message)
-                    .or_else(|| destination.filter(|_| precise_destination).map(|(kind, _)| kind.code()))
+                    .or_else(|| destination.as_ref().filter(|_| precise_destination).map(|(kind, _)| kind.code()))
                     .or_else(|| missing_include_key(&message).map(|_| "missing-include"))
                     .or_else(|| input_range.map(|_| "missing-input"))
                     .or_else(|| listing_range.map(|_| "missing-listing"))
@@ -1931,7 +1950,7 @@ fn emit_with_context(
                     .or_else(|| model_range.map(|_| "undefined-color-model"))
                     .map(|code| NumberOrString::String(code.into())),
                 message: displayed_message.clone(),
-                data: precise_destination.then(|| serde_json::json!({"destination":destination.map(|(_, name)| name)}))
+                data: precise_destination.then(|| serde_json::json!({"destination":destination.as_ref().map(|(_, name)| name)}))
                     .or_else(|| command_name.map(|name| serde_json::json!({"command":name})))
                     .or_else(|| {
                         environment_range
@@ -2144,9 +2163,12 @@ fn wrapped_message(
                 .starts_with("pdfTeX warning (ext4): destination with the same identifier (name{")
                 && message.ends_with('}')
                 && next.starts_with(") has been already used");
+            let continues_escape = initial.starts_with("pdfTeX warning (")
+                && message.ends_with('\\')
+                && next.starts_with(['(', ')']);
             if next.trim().is_empty()
-                || (message_boundary(next) && !closes_destination)
-                || next.trim_start().starts_with(['<', '('])
+                || (message_boundary(next) && !closes_destination && !continues_escape)
+                || (next.trim_start().starts_with(['<', '(']) && !continues_escape)
                 || [
                     "Output written on ",
                     "Transcript written on ",
@@ -4741,10 +4763,89 @@ mod tests {
     }
 
     #[test]
+    fn pdftex_destination_string_escapes_map_exact_keys_across_all_byte_wraps() {
+        let directory = tempfile::tempdir().unwrap();
+        let main = directory.path().join("main.tex");
+        for name in ["dest(old)", "dest(old", "dest)old"] {
+            let source = format!("😀 \\hypertarget{{{name}}}{{Target}}\\label{{{name}}}\\hyperlink{{{name}}}{{Link}}\n");
+            std::fs::write(&main, &source).unwrap();
+            let text = Text::new(source.clone());
+            let encoded = name.replace('(', "\\(").replace(')', "\\)");
+            for (prefix, suffix, code, offset) in [
+                (
+                    "pdfTeX warning (dest): name{",
+                    "} has been referenced but does not exist, replaced by a fixed one",
+                    "undefined-pdf-destination",
+                    source.rfind(name).unwrap(),
+                ),
+                (
+                    "pdfTeX warning (ext4): destination with the same identifier (name{",
+                    "}) has been already used, duplicate ignored",
+                    "duplicate-pdf-destination",
+                    source.find(name).unwrap(),
+                ),
+            ] {
+                let message = format!("{prefix}{encoded}{suffix}");
+                assert_eq!(
+                    destination_warning(&message).map(|(_, key)| key),
+                    Some(name.to_owned())
+                );
+                for split in prefix.len()..message.len() {
+                    let log = format!(
+                        "{}\n{}\n</fonts/resource.otf>\nLaTeX Warning: Keep.\n",
+                        &message[..split],
+                        &message[split..]
+                    );
+                    let diagnostics = parse(&main, &log);
+                    let items = &diagnostics[&Url::from_file_path(&main).unwrap()];
+                    assert_eq!(items.len(), 2, "{name}: split {split}: {items:?}");
+                    let mapped: Vec<_> = items
+                        .iter()
+                        .filter(|item| item.code == Some(NumberOrString::String(code.into())))
+                        .collect();
+                    assert_eq!(mapped.len(), 1, "{name}: split {split}: {items:?}");
+                    assert_eq!(mapped[0].range, text.range(offset, offset + name.len()));
+                    assert_eq!(
+                        mapped[0].data,
+                        Some(serde_json::json!({"destination":name}))
+                    );
+                    assert_eq!(mapped[0].message, message);
+                }
+            }
+        }
+        for encoded in [
+            r"dest\",
+            r"dest\dynamic",
+            r"dest\050old\051",
+            r"dest\\(old)",
+            r"dest\( old\)",
+        ] {
+            for message in [
+                format!("pdfTeX warning (dest): name{{{encoded}}} has been referenced but does not exist, replaced by a fixed one"),
+                format!("pdfTeX warning (ext4): destination with the same identifier (name{{{encoded}}}) has been already used, duplicate ignored"),
+                format!("warning  (pdf backend): unreferenced destination with name '{encoded}'"),
+            ] {
+                assert!(destination_warning(&message).is_none(), "{message}");
+            }
+        }
+        assert!(destination_warning(
+            r"warning  (pdf backend): unreferenced destination with name 'dest\(old\)'"
+        )
+        .is_none());
+    }
+
+    #[test]
     fn destination_warning_names_preserve_semantic_spaces_and_reject_uncertain_messages() {
-        for name in ["lost", "section.foo", "章节.目标"] {
+        for name in [
+            "lost",
+            "section.foo",
+            "章节.目标",
+            "dest(old)",
+            "dest(old",
+            "dest)old",
+        ] {
             for message in [format!("pdfTeX warning (dest): name{{{name}}} has been referenced but does not exist , replaced by a fixed one"), format!("warning  (pdf backend): unreferenced destination with name '{name}'")] {
-                assert_eq!(undefined_destination_name(&message), Some(name));
+                assert_eq!(undefined_destination_name(&message).as_deref(), Some(name));
             }
         }
         for message in [
