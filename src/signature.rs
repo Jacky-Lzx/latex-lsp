@@ -1508,6 +1508,7 @@ fn tex_operand_match(source: &str, mut at: usize, pattern: &[String]) -> Option<
 pub(crate) struct CommandSignatures<'a> {
     local: BTreeMap<Cow<'a, str>, Option<Signature>>,
     tex_operands: BTreeMap<Cow<'a, str>, Option<TexOperands>>,
+    detokenize_boundary_known: bool,
 }
 
 #[derive(Clone)]
@@ -1569,6 +1570,58 @@ impl<'a> CommandSignatures<'a> {
         environments: impl IntoIterator<Item = &'a str>,
         source_context: Option<&Self>,
     ) -> Self {
+        let documents: Vec<_> = documents.into_iter().collect();
+        // Source-context filtering may omit definitions installed by a later
+        // macro call. Never infer the primitive's arity from that filtered map.
+        let mut raw_names = BTreeSet::new();
+        let detokenize_boundary_known = documents.iter().any(|(_, parsed)| {
+            parsed.commands.iter().any(|command| {
+                matches!(command.name.as_str(), "detokenize" | "csuse" | "endcsname")
+            })
+        }) && !documents.iter().any(|(source, parsed)| {
+            parsed.definitions.iter().any(|entry| {
+                matches!(
+                    entry.name.as_str(),
+                    "detokenize" | "csuse" | "csname" | "endcsname"
+                ) || !raw_names.insert(entry.name.as_str())
+            }) || parsed.commands.iter().enumerate().any(|(index, command)| {
+                let invoked = match command.name.as_str() {
+                    "csuse" => command
+                        .argument
+                        .as_ref()
+                        .filter(|argument| syntax::is_static_key(&argument.value))
+                        .map(|argument| argument.value.as_str()),
+                    "csname" => syntax::literal_csname(source, &parsed.commands, index)
+                        .map(|span| &source[span]),
+                    name => Some(name),
+                };
+                matches!(
+                    invoked,
+                    None | Some("@input" | "@input@" | "@@input" | "scantokens")
+                ) || matches!(
+                    command.name.as_str(),
+                    "let" | "futurelet" | "cslet" | "letcs" | "csletcs"
+                ) || syntax::code_input_command(&command.name)
+                    || invoked.is_some_and(|name| {
+                        name != command.name
+                            && (matches!(
+                                name,
+                                "input" | "include" | "subfile" | "InputIfFileExists"
+                            ) || syntax::loader_extension(name).is_some())
+                    })
+                    || (matches!(
+                        command.name.as_str(),
+                        "input" | "include" | "subfile" | "InputIfFileExists"
+                    ) || syntax::loader_extension(&command.name).is_some())
+                        && if syntax::file_list(&command.name) {
+                            syntax::complete_file_list_spans(source, command).is_none()
+                        } else {
+                            syntax::file_argument(source, command).is_none_or(|argument| {
+                                !syntax::is_literal_file_path(&argument.value)
+                            })
+                        }
+            })
+        });
         let mut local: BTreeMap<_, _> = ambiguous
             .into_iter()
             .map(|name| (Cow::Borrowed(name), None))
@@ -1580,7 +1633,7 @@ impl<'a> CommandSignatures<'a> {
         let mut tex_operands: BTreeMap<_, _> =
             local.keys().map(|name| (name.clone(), None)).collect();
         let mut aliases = BTreeMap::new();
-        for (source, parsed) in documents {
+        for &(source, parsed) in &documents {
             let positions = source_context
                 .map(|signatures| signatures.source_command_positions(source, parsed));
             for (entry, environment) in parsed
@@ -1681,10 +1734,30 @@ impl<'a> CommandSignatures<'a> {
         }
         local.extend(resolve_aliases(&local, &aliases, operand_builtin));
         tex_operands.extend(resolve_aliases(&tex_operands, &aliases, |_| None));
-        Self {
+        let mut signatures = Self {
             local,
             tex_operands,
+            detokenize_boundary_known,
+        };
+        // Deferred or forwarded providers can install an unseen definition.
+        // Proven displayed file commands cannot execute such a provider.
+        if signatures.detokenize_boundary_known
+            && documents.iter().any(|(source, parsed)| {
+                let active = signatures.source_command_positions(source, parsed);
+                let quoted = signatures.quoted_command_tokens(source, parsed);
+                parsed.commands.iter().any(|command| {
+                    (matches!(
+                        command.name.as_str(),
+                        "input" | "include" | "subfile" | "InputIfFileExists"
+                    ) || syntax::loader_extension(&command.name).is_some())
+                        && !active.contains(&command.span.start)
+                        && !quoted.contains(&command.span.start)
+                })
+            })
+        {
+            signatures.detokenize_boundary_known = false;
         }
+        signatures
     }
 
     fn invocation<'b>(
@@ -2133,6 +2206,22 @@ impl<'a> CommandSignatures<'a> {
             else {
                 continue;
             };
+            // This primitive consumes exactly one balanced general-text
+            // group. The unknown-macro fallback would also consume the next
+            // control token after that group, hiding an independent file call.
+            if self.invokes_builtin(name, "detokenize") {
+                if !self.detokenize_boundary_known {
+                    unknown_argument_token(source, end, parsed, &mut result);
+                    continue;
+                }
+                let at = syntax::skip_space(source, end);
+                if let Some((_, after)) = syntax::group(source, at, b'{', b'}') {
+                    mark_operand_commands(parsed, at, after, &mut result);
+                } else {
+                    unknown_argument_token(source, end, parsed, &mut result);
+                }
+                continue;
+            }
             // A named call or a pure alias can invoke begin. Its environment
             // name follows the resolved invocation, rather than the lexical
             // command (whose first group may instead contain "begin").
@@ -2269,6 +2358,13 @@ fn operand_builtin(name: &str) -> Option<Signature> {
     builtin(name).or_else(|| {
         let parameters = if argument_free(name) {
             vec![]
+        } else if name == "detokenize" {
+            // Give pure aliases the primitive's grouped operand boundary.
+            vec![Parameter {
+                obey_spaces: false,
+                kind: Kind::RequiredGroup,
+                label: "{tokens}".into(),
+            }]
         } else if name == "newtheorem" {
             // Both numbered forms end after the title and possible reset
             // counter; the starred form has no optional counter operands.
