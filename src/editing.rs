@@ -110,7 +110,14 @@ fn rebuild_actions(
             let command = Command {
                 title: title.clone(),
                 command: "latex.rebuild".into(),
-                arguments: Some(vec![serde_json::json!(root)]),
+                arguments: Some(vec![serde_json::json!({
+                    "uri":root,
+                    "rebuildGuard":{
+                        "uri":uri,
+                        "version":workspace.documents.get(uri)?.version,
+                        "diagnostics":diagnostics,
+                    },
+                })]),
             };
             Some(if workspace.code_action_literals {
                 CodeActionOrCommand::CodeAction(CodeAction {
@@ -126,6 +133,33 @@ fn rebuild_actions(
         })
         .take(32)
         .collect()
+}
+
+#[derive(serde::Deserialize)]
+pub(crate) struct RebuildGuard {
+    pub uri: Url,
+    pub version: Option<i32>,
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+/// Recheck the menu's original source and warning under the build's workspace
+/// lock. A cached editor action must not become an unqualified manual rebuild.
+pub(crate) fn valid_rebuild_guard(workspace: &Workspace, root: &Url, guard: &RebuildGuard) -> bool {
+    workspace
+        .documents
+        .get(&guard.uri)
+        .is_some_and(|doc| doc.version == guard.version)
+        && workspace
+            .build_diagnostics
+            .get(root)
+            .and_then(|project| project.get(&guard.uri))
+            .is_some_and(|current| {
+                guard.diagnostics.iter().any(|diagnostic| {
+                    diagnostic.source.as_deref() == Some("latex-build")
+                        && crate::build_log::rerun_required(diagnostic)
+                        && current.contains(diagnostic)
+                })
+            })
 }
 
 #[derive(serde::Deserialize)]

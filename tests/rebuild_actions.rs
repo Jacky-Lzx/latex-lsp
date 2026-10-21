@@ -81,7 +81,14 @@ fn confirmed_rerun_warnings_offer_rebuild_without_requiring_workspace_edit_suppo
             assert_eq!(command.command, "latex.rebuild");
             assert_eq!(
                 command.arguments,
-                Some(vec![serde_json::json!(project.root)])
+                Some(vec![serde_json::json!({
+                    "uri":project.root,
+                    "rebuildGuard":{
+                        "uri":project.root,
+                        "version":project.workspace.documents[&project.root].version,
+                        "diagnostics":[project.diagnostic],
+                    },
+                })])
             );
         }
     }
@@ -202,7 +209,7 @@ fn repeated_warnings_group_by_the_build_root_even_in_a_shared_source() {
     assert_eq!(actions.len(), 2, "{actions:?}");
     let mut selected: Vec<_> = actions
         .iter()
-        .map(|action| command(action).arguments.clone().unwrap()[0].clone())
+        .map(|action| command(action).arguments.clone().unwrap()[0]["uri"].clone())
         .collect();
     selected.sort_by_key(|uri| uri.to_string());
     roots.sort();

@@ -571,7 +571,20 @@ impl LanguageServer for Backend {
                 Ok(Some(serde_json::to_value(response).unwrap()))
             }
             "latex.build" => self.builds.start(uri).await.map(Some),
-            "latex.rebuild" => self.builds.rebuild(uri).await.map(Some),
+            "latex.rebuild" => {
+                if let Some(value) = argument.and_then(|value| value.get("rebuildGuard")) {
+                    let mut guard: editing::RebuildGuard = serde_json::from_value(value.clone())
+                        .map_err(|_| {
+                            tower_lsp::jsonrpc::Error::invalid_params(
+                                "Invalid rebuild action; request code actions again",
+                            )
+                        })?;
+                    guard.uri = document_uri(guard.uri);
+                    self.builds.rebuild_guarded(uri, guard).await.map(Some)
+                } else {
+                    self.builds.rebuild(uri).await.map(Some)
+                }
+            }
             "latex.forwardSearch" | "latex.inverseSearch" => {
                 let project = synctex::prepare(&*self.workspace.read().await, &uri)?;
                 let available = |root: &Url| {

@@ -107,11 +107,19 @@ impl BuildManager {
     }
 
     pub async fn start(&self, uri: Url) -> Result<Value> {
-        self.start_request(uri, None, false).await
+        self.start_request(uri, None, false, None).await
     }
 
     pub async fn rebuild(&self, uri: Url) -> Result<Value> {
-        self.start_request(uri, None, true).await
+        self.start_request(uri, None, true, None).await
+    }
+
+    pub(crate) async fn rebuild_guarded(
+        &self,
+        uri: Url,
+        guard: crate::editing::RebuildGuard,
+    ) -> Result<Value> {
+        self.start_request(uri, None, true, Some(guard)).await
     }
 
     async fn while_open<F: Future>(&self, action: F) -> Option<F::Output> {
@@ -140,11 +148,24 @@ impl BuildManager {
         uri: Url,
         queued_generation: Option<(Url, u64)>,
         rebuild: bool,
+        guard: Option<crate::editing::RebuildGuard>,
     ) -> Result<Value> {
         let mut workspace = self.workspace.write().await;
         let root = workspace
             .root_document(&uri)
             .map_err(Error::invalid_params)?;
+        if let Some((owner, _)) = &queued_generation {
+            if owner != &root {
+                return Ok(json!({"status":"cancelled", "rootUri":owner}));
+            }
+        }
+        if guard.as_ref().is_some_and(|guard| {
+            root != uri || !crate::editing::valid_rebuild_guard(&workspace, &root, guard)
+        }) {
+            return Err(Error::invalid_params(
+                "Rebuild action is outdated; request code actions again",
+            ));
+        }
         workspace.refresh_project(&root);
         let static_code_inputs = crate::code_inputs::inputs(&workspace, &root);
         let mut project = workspace.project_files(&root);
@@ -879,7 +900,12 @@ impl BuildManager {
                     && (queued.rebuild || workspace.read().await.config.build.on_save)
                 {
                     if let Err(error) = manager
-                        .start_request(queued.uri, Some((root_uri, generation)), queued.rebuild)
+                        .start_request(
+                            queued.uri,
+                            Some((root_uri, generation)),
+                            queued.rebuild,
+                            None,
+                        )
                         .await
                     {
                         let _ = manager
@@ -1581,6 +1607,46 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn queued_rebuilds_do_not_follow_a_changed_root_configuration() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("first.tex");
+        let second = directory.path().join("second.tex");
+        let source = "\\documentclass{article}\n";
+        std::fs::write(&first, source).unwrap();
+        std::fs::write(&second, source).unwrap();
+        let first = Url::from_file_path(first).unwrap();
+        let second = Url::from_file_path(second).unwrap();
+        let mut workspace = Workspace::default();
+        workspace.add_root(directory.path().into());
+        workspace.config.build.root_file = Some("second.tex".into());
+        workspace.config.build.executable = "unavailable-custom-compiler".into();
+        workspace.config.build.rebuild_arguments = Some(vec![]);
+        let workspace = Arc::new(RwLock::new(workspace));
+        let mut manager = None;
+        let (_service, _socket) = tower_lsp::LspService::new(|client| {
+            manager = Some(BuildManager::new(client.clone(), workspace));
+            crate::Backend::new(client)
+        });
+        let manager = manager.unwrap();
+        manager
+            .state
+            .lock()
+            .unwrap()
+            .insert(first.clone(), Record::default());
+        for rebuild in [false, true] {
+            let delayed = manager
+                .start_request(first.clone(), Some((first.clone(), 0)), rebuild, None)
+                .await
+                .unwrap();
+            assert_eq!(delayed["status"], "cancelled", "{delayed}");
+            assert_eq!(delayed["rootUri"], first.as_str());
+            assert_eq!(manager.status(&second)["status"], "idle");
+            assert_eq!(manager.tasks.load(Ordering::SeqCst), 0);
+            assert!(!directory.path().join("build").exists());
+        }
+    }
+
+    #[tokio::test]
     async fn delayed_force_callbacks_preserve_newer_builds_saves_and_cancellations() {
         let directory = tempfile::tempdir().unwrap();
         let main = directory.path().join("main.tex");
@@ -1611,7 +1677,7 @@ mod tests {
         // A force callback from an earlier completion is satisfied by a newer
         // forced build, and must leave that build's ordinary save queue intact.
         let delayed = manager
-            .start_request(uri.clone(), Some((uri.clone(), 0)), true)
+            .start_request(uri.clone(), Some((uri.clone(), 0)), true, None)
             .await
             .unwrap();
         assert_eq!(delayed["queuedRebuild"], false);
@@ -1627,14 +1693,14 @@ mod tests {
             record.queued = None;
         }
         let delayed = manager
-            .start_request(uri.clone(), Some((uri.clone(), 0)), true)
+            .start_request(uri.clone(), Some((uri.clone(), 0)), true, None)
             .await
             .unwrap();
         assert_eq!(delayed["queuedRebuild"], true);
         assert_eq!(delayed["rebuild"], false);
         manager.cancel(Some(&uri));
         let delayed = manager
-            .start_request(uri.clone(), Some((uri.clone(), 0)), true)
+            .start_request(uri.clone(), Some((uri.clone(), 0)), true, None)
             .await
             .unwrap();
         assert_eq!(delayed["status"], "cancelled");
@@ -1668,7 +1734,7 @@ mod tests {
         let manual = manager.rebuild(uri.clone()).await.unwrap();
         assert_eq!(manual["status"], "started");
         let delayed = manager
-            .start_request(uri.clone(), Some((uri.clone(), 0)), true)
+            .start_request(uri.clone(), Some((uri.clone(), 0)), true, None)
             .await
             .unwrap();
         assert_eq!(delayed["status"], "cancelled");

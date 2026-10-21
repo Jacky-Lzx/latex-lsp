@@ -17,6 +17,157 @@ struct Server {
 }
 
 #[test]
+#[cfg(unix)]
+fn stored_rebuild_actions_reject_changed_roots_versions_and_resolved_diagnostics() {
+    for literals in [false, true] {
+        for change in [
+            "root",
+            "version",
+            "resolved",
+            "malformed",
+            "foreign-warning",
+        ] {
+            let script = r#"build_file=${2##*/}
+build_name=${build_file%.*}
+printf '%s\n' "$2" >> compiler-calls
+printf '%%PDF-1.4\n' > "$1/$build_name.pdf"
+printf '(./%s\n' "$build_file" > "$1/$build_name.log"
+if [ ! -f clear-warning ]; then
+  printf 'LaTeX Warning: Label(s) may have changed. Rerun to get cross-references right.\n' >> "$1/$build_name.log"
+fi
+printf ')\n' >> "$1/$build_name.log"
+"#;
+            let capabilities = if literals {
+                json!({"textDocument":{"codeAction":{"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix"]}}}}})
+            } else {
+                json!({})
+            };
+            let (mut server, directory, main) =
+                fake_build_server_capabilities(script, false, capabilities);
+            let root = directory.path();
+            let arguments = json!([root.join("compiler.sh"), "%o", "%f"]);
+            let config = |root_file: Value| {
+                json!({"build":{
+                    "executable":"/bin/sh", "arguments":arguments,
+                    "rebuildArguments":arguments,"rootFile":root_file
+                }})
+            };
+            server.notify(
+                "workspace/didChangeConfiguration",
+                json!({"settings":config(Value::Null)}),
+            );
+            let started = server.request(
+                2,
+                "workspace/executeCommand",
+                json!({
+                    "command":"latex.build","arguments":[main]
+                }),
+            );
+            let finished = server.until(|message| {
+                message["method"] == "latex/buildFinished"
+                    && message["params"]["buildId"] == started["buildId"]
+            });
+            assert_eq!(finished["params"]["status"], "success", "{finished}");
+            let published = server.until(|message| {
+                message["method"] == "textDocument/publishDiagnostics"
+                    && message["params"]["uri"] == main.as_str()
+                    && message["params"]["diagnostics"]
+                        .as_array()
+                        .is_some_and(|items| {
+                            items.iter().any(|item| {
+                                item["message"].as_str().is_some_and(|message| {
+                                    message.starts_with("LaTeX Warning: Label(s) may have changed.")
+                                })
+                            })
+                        })
+            });
+            let diagnostic = published["params"]["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|item| item["source"] == "latex-build")
+                .unwrap();
+            let actions = server.request(
+                3,
+                "textDocument/codeAction",
+                json!({
+                    "textDocument":{"uri":main},"range":diagnostic["range"],
+                    "context":{"diagnostics":[diagnostic],"only":["quickfix"]}
+                }),
+            );
+            assert_eq!(actions.as_array().unwrap().len(), 1, "{actions}");
+            let mut command = if literals {
+                actions[0]["command"].clone()
+            } else {
+                actions[0].clone()
+            };
+            match change {
+                "root" => {
+                    std::fs::write(root.join("other.tex"), "\\documentclass{report}\n").unwrap();
+                    server.notify(
+                        "workspace/didChangeConfiguration",
+                        json!({
+                            "settings":config(json!("other.tex"))
+                        }),
+                    );
+                }
+                "version" => {
+                    server.notify("textDocument/didChange", json!({
+                        "textDocument":{"uri":main,"version":2},
+                        "contentChanges":[{"text":std::fs::read_to_string(main.to_file_path().unwrap()).unwrap()}]
+                    }));
+                }
+                "resolved" => {
+                    std::fs::write(root.join("clear-warning"), "").unwrap();
+                    let started = server.request(
+                        4,
+                        "workspace/executeCommand",
+                        json!({
+                            "command":"latex.rebuild","arguments":[main]
+                        }),
+                    );
+                    let finished = server.until(|message| {
+                        message["method"] == "latex/buildFinished"
+                            && message["params"]["buildId"] == started["buildId"]
+                    });
+                    assert_eq!(finished["params"]["status"], "success", "{finished}");
+                    assert_eq!(finished["params"]["analysis"]["rerunRequired"], false);
+                }
+                "malformed" => {
+                    command["arguments"][0]["rebuildGuard"] = Value::Null;
+                }
+                "foreign-warning" => {
+                    command["arguments"][0]["rebuildGuard"]["diagnostics"][0]["message"] =
+                        json!("Package natbib Warning: Citation(s) may have changed.");
+                }
+                _ => unreachable!(),
+            }
+            server.send(json!({"jsonrpc":"2.0","id":5,"method":"workspace/executeCommand","params":command}));
+            let rejected = server.until(|message| message["id"] == 5);
+            assert_eq!(
+                rejected["error"]["code"], -32602,
+                "{change}/{literals}: {rejected}"
+            );
+            assert!(rejected["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("code actions again"));
+            assert!(!root.join("build/latex-lsp/other.pdf").exists());
+            assert_eq!(
+                std::fs::read_to_string(root.join("compiler-calls"))
+                    .unwrap()
+                    .lines()
+                    .count(),
+                if change == "resolved" { 2 } else { 1 }
+            );
+            server.request(6, "shutdown", Value::Null);
+            server.notify("exit", Value::Null);
+            server.wait_exit(0);
+        }
+    }
+}
+
+#[test]
 #[ignore = "requires pdflatex and xelatex"]
 fn real_rerun_warning_code_actions_rebuild_and_clear_through_stdio() {
     for engine in ["pdflatex", "xelatex"] {
@@ -101,7 +252,9 @@ fn real_rerun_warning_code_actions_rebuild_and_clear_through_stdio() {
                 actions[0].clone()
             };
             assert_eq!(command["command"], "latex.rebuild");
-            assert_eq!(command["arguments"], json!([main]));
+            assert_eq!(command["arguments"][0]["uri"], json!(main));
+            assert_eq!(command["arguments"][0]["rebuildGuard"]["uri"], json!(main));
+            assert_eq!(command["arguments"][0]["rebuildGuard"]["version"], 1);
             let rebuilt = server.request(4, "workspace/executeCommand", command);
             assert_eq!(rebuilt["status"], "started", "{rebuilt}");
             let finished = server.until(|message| {
