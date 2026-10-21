@@ -567,3 +567,82 @@ fn bibtex_warnings_resolve_multiline_headers_to_the_complete_source_key() {
         }
     }
 }
+
+#[test]
+fn whitespace_after_bibtex_at_keeps_entries_metadata_and_rename_ranges() {
+    for gap in [" ", "\t", "\n", "\r\n  "] {
+        for (open, close) in [('{', '}'), ('(', ')')] {
+            for key in ["ordinary", "book(old)", "book(old", "book)old", "(中文)"] {
+                let mut workspace = Workspace::default();
+                let source = format!("% 😀\r\n@{gap}Book{open}{key}\r\n  , title={{Literal {key}}}, author={{A. Author}}, year=2026{close}\n@{gap}article{{child, crossref={{{key}}}}}");
+                let bib = insert(&mut workspace, "refs.bib", &source);
+                let main_source = format!("\\cite{{{key}}}");
+                let main = insert(&mut workspace, "main.tex", &main_source);
+                let doc = &workspace.documents[&bib];
+                assert_eq!(
+                    doc.syntax
+                        .citations
+                        .iter()
+                        .map(|e| e.name.as_str())
+                        .collect::<Vec<_>>(),
+                    [key, "child"],
+                    "{source}"
+                );
+                assert!(doc.syntax.citations[0]
+                    .detail
+                    .contains(&format!("Title: Literal {key}")));
+                let position = at(&main_source, key);
+                let definition = features::definitions(&workspace, &main, position);
+                assert_eq!(definition.len(), 1);
+                assert_eq!(definition[0].uri, bib);
+                assert_eq!(
+                    features::references(&workspace, &main, position, true).len(),
+                    3
+                );
+                let changes = features::rename(&workspace, &main, position, "book(next)")
+                    .unwrap()
+                    .unwrap()
+                    .changes
+                    .unwrap();
+                assert_eq!(changes.len(), 2);
+                assert_eq!(apply(&main_source, &changes[&main]), "\\cite{book(next)}");
+                let expected = format!("% 😀\r\n@{gap}Book{open}book(next)\r\n  , title={{Literal {key}}}, author={{A. Author}}, year=2026{close}\n@{gap}article{{child, crossref={{book(next)}}}}");
+                assert_eq!(apply(&source, &changes[&bib]), expected);
+            }
+        }
+    }
+}
+
+#[test]
+fn spaced_special_bibtex_entries_remain_opaque_and_comment_ranges_start_at_at_sign() {
+    for gap in [" ", "\n", "\r\n\t"] {
+        for (open, close) in [('{', '}'), ('(', ')')] {
+            let comment =
+                format!("@{gap}CoMmEnT{open}Ignored @book{{fake, title={{Hidden}}}}{close}");
+            let source = format!("% prefix\n{comment}\n@{gap}string{{macro=\"@book(fake, title={{Hidden}})\"}}\n@{gap}preamble{{\"@book{{fake, title={{Hidden}}}}\"}}\n@{gap}{{invalid, title={{@book{{fake,}}}}}}\n@{gap}book{{real, title={{Kept @article{{fake,}}}}}}");
+            let mut workspace = Workspace::default();
+            let uri = insert(&mut workspace, "refs.bib", &source);
+            let doc = &workspace.documents[&uri];
+            assert_eq!(
+                doc.syntax
+                    .citations
+                    .iter()
+                    .map(|e| e.name.as_str())
+                    .collect::<Vec<_>>(),
+                ["real"],
+                "{source}"
+            );
+            let span = doc
+                .syntax
+                .comments
+                .iter()
+                .find(|span| source[(*span).clone()].starts_with('@'))
+                .unwrap();
+            assert_eq!(&source[span.clone()], comment);
+            assert!(doc.syntax.ignored.contains(span));
+            assert!(doc.syntax.citations[0]
+                .detail
+                .contains("Title: Kept @article{fake,}"));
+        }
+    }
+}

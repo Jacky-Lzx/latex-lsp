@@ -2247,7 +2247,11 @@ impl Syntax {
                 i += 1;
                 continue;
             }
+            let entry_start = i;
             i += 1;
+            while bytes.get(i).is_some_and(u8::is_ascii_whitespace) {
+                i += 1;
+            }
             let kind_start = i;
             while i < bytes.len() && bytes[i].is_ascii_alphabetic() {
                 i += 1;
@@ -2259,10 +2263,11 @@ impl Syntax {
             };
             let close = if open == b'{' { b'}' } else { b')' };
             let content = i + 1;
-            let special = matches!(
-                kind.to_ascii_lowercase().as_str(),
-                "comment" | "string" | "preamble"
-            );
+            let special = kind.is_empty()
+                || matches!(
+                    kind.to_ascii_lowercase().as_str(),
+                    "comment" | "string" | "preamble"
+                );
             let header = (!special)
                 .then(|| bib_literal_header(source, content))
                 .flatten();
@@ -2272,8 +2277,8 @@ impl Syntax {
             let body_start = header.as_ref().map_or(content, |(_, comma)| comma + 1);
             let (end, closed) = bib_entry_end(source, body_start, close);
             if kind.eq_ignore_ascii_case("comment") {
-                result.ignored.push(kind_start - 1..end);
-                result.comments.push(kind_start - 1..end);
+                result.ignored.push(entry_start..end);
+                result.comments.push(entry_start..end);
             }
             if !special {
                 let key_start = skip_space(source, content);
