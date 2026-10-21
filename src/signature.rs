@@ -1521,6 +1521,29 @@ pub(crate) struct EnvironmentCall {
     pub deferred: bool,
 }
 
+/// Preserve dynamic name arguments as boundaries for ordered pairing.
+pub(crate) struct EnvironmentBoundary {
+    pub argument: Option<syntax::Argument>,
+    pub span: std::ops::Range<usize>,
+    pub begin: bool,
+    pub direct: bool,
+    pub operand: bool,
+    pub deferred: bool,
+}
+
+impl EnvironmentBoundary {
+    pub(crate) fn into_call(self) -> Option<EnvironmentCall> {
+        Some(EnvironmentCall {
+            argument: self.argument?,
+            span: self.span,
+            begin: self.begin,
+            direct: self.direct,
+            operand: self.operand,
+            deferred: self.deferred,
+        })
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct SourceCall {
     pub command: syntax::Command,
@@ -2106,6 +2129,17 @@ impl<'a> CommandSignatures<'a> {
         source: &str,
         parsed: &syntax::Syntax,
     ) -> Vec<EnvironmentCall> {
+        self.environment_boundaries(source, parsed)
+            .into_iter()
+            .filter_map(EnvironmentBoundary::into_call)
+            .collect()
+    }
+
+    pub(crate) fn environment_boundaries(
+        &self,
+        source: &str,
+        parsed: &syntax::Syntax,
+    ) -> Vec<EnvironmentBoundary> {
         let operands = self.argument_tokens(source, parsed);
         let bodies = definition_body_spans(source, parsed);
         let declarations = parsed
@@ -2125,9 +2159,9 @@ impl<'a> CommandSignatures<'a> {
                 if !self.invokes_builtin(name, "begin") && !self.invokes_builtin(name, "end") {
                     return None;
                 }
-                let argument = syntax::environment_name_argument(source, end)?;
-                Some(EnvironmentCall {
-                    span: start..argument.outer_span.end,
+                let argument = syntax::environment_name_argument(source, end);
+                Some(EnvironmentBoundary {
+                    span: start..argument.as_ref().map_or(end, |arg| arg.outer_span.end),
                     begin: self.invokes_builtin(name, "begin"),
                     direct: matches!(command.name.as_str(), "begin" | "end"),
                     operand: operands.contains(&start) || operands.contains(&command.span.start),

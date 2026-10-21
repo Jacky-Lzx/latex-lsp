@@ -878,10 +878,8 @@ impl LanguageServer for Backend {
     ) -> Result<Option<LinkedEditingRanges>> {
         let params = params.text_document_position_params;
         let workspace = self.workspace.read().await;
-        let Some(doc) = workspace
-            .documents
-            .get(&document_uri(params.text_document.uri))
-        else {
+        let uri = document_uri(params.text_document.uri);
+        let Some(doc) = workspace.documents.get(&uri) else {
             return Ok(None);
         };
         if doc.text.offset(params.position).is_none() {
@@ -889,7 +887,11 @@ impl LanguageServer for Backend {
                 "Invalid linked editing position",
             ));
         }
-        Ok(editing::linked_editing_ranges(doc, params.position))
+        Ok(editing::linked_editing_ranges_in_workspace(
+            &workspace,
+            &uri,
+            params.position,
+        ))
     }
 
     async fn selection_range(

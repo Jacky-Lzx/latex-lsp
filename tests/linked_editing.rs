@@ -1,4 +1,8 @@
-use latex_lsp::{editing, text::Text, workspace::Document};
+use latex_lsp::{
+    editing,
+    text::Text,
+    workspace::{Document, Workspace},
+};
 use tower_lsp::lsp_types::*;
 
 fn document(source: &str, extension: &str) -> Document {
@@ -114,8 +118,6 @@ fn unbalanced_dynamic_declaration_comment_inline_raw_and_body_positions_have_no_
         r"\begin{panel}Body\end*{pa¦nel}",
         r"\begin{panel}Body\end[Note]{pa¦nel}",
         r"\begin{pa¦nel}Body\end*{panel}",
-        r"\begin{panel}Body\end{panel¦% tail
-}",
         r"\begin{outer}\begin{inner}x\end{out¦er}\end{inner}",
         r"\begin{out¦er}\begin{\chosen}\end{panel}\end{outer}",
         r"\begin{\chosen}Text\end{pa¦nel}",
@@ -140,6 +142,238 @@ fn unbalanced_dynamic_declaration_comment_inline_raw_and_body_positions_have_no_
     }
 }
 
+fn project(files: &[(&str, &str)]) -> (tempfile::TempDir, Workspace) {
+    let temp = tempfile::tempdir().unwrap();
+    for (name, text) in files {
+        std::fs::write(temp.path().join(name), text).unwrap();
+    }
+    let mut workspace = Workspace::default();
+    workspace.add_root(temp.path().into());
+    (temp, workspace)
+}
+
+fn assert_project_pair(workspace: &Workspace, uri: &Url, name: &str, expected: bool) {
+    let doc = &workspace.documents[uri];
+    let offsets: Vec<_> = doc
+        .text
+        .source
+        .match_indices(name)
+        .map(|(at, _)| at)
+        .collect();
+    assert_eq!(offsets.len(), 2, "{}", doc.text.source);
+    let ranges: Vec<_> = offsets
+        .iter()
+        .map(|at| doc.text.range(*at, *at + name.len()))
+        .collect();
+    for at in offsets {
+        let found =
+            editing::linked_editing_ranges_in_workspace(workspace, uri, doc.text.position(at));
+        if expected {
+            assert_eq!(found.unwrap().ranges, ranges, "{}", doc.text.source);
+        } else {
+            assert!(found.is_none(), "{}", doc.text.source);
+        }
+    }
+}
+
+#[test]
+fn static_named_calls_and_aliases_link_comment_bounded_environment_names() {
+    for (begin, end) in [
+        (r"\begin", r"\end"),
+        (r"\csuse{begin}", r"\end"),
+        (r"\begin", r"\csname end\endcsname"),
+        (r"\start", r"\finish"),
+        (r"\csuse{start}", r"\csuse{finish}"),
+        (r"\csname start\endcsname", r"\csname finish\endcsname"),
+    ] {
+        for external in [false, true] {
+            let aliases = r"\def\start{\begin}\def\finish{\end}";
+            let preamble = if external {
+                r"\usepackage{aliases}"
+            } else {
+                aliases
+            };
+            let source = format!("\\documentclass{{article}}{preamble}\\begin{{document}}😀 {begin}{{% before\r\npanel% after\r\n}}Body{end}{{panel% tail\r\n}}\\end{{document}}");
+            let (temp, workspace) = project(&[
+                ("main.tex", &source),
+                ("aliases.sty", if external { aliases } else { "" }),
+                (
+                    "other.tex",
+                    r"\documentclass{article}\renewcommand{\begin}[1]{#1}",
+                ),
+            ]);
+            let uri = Url::from_file_path(temp.path().join("main.tex")).unwrap();
+            assert_project_pair(&workspace, &uri, "panel", true);
+        }
+    }
+}
+
+#[test]
+fn bare_names_and_dynamic_indirect_boundaries_never_borrow_an_outer_pair() {
+    for marked in [
+        r"\begin ¦x Body\end x",
+        r"\begin{¦x}Body\end x",
+        r"\begin x Body\end{¦x}",
+        r"\csuse{begin}¦x Body\csuse{end}x",
+        r"\def\start{\begin}\def\finish{\end}\start ¦x Body\finish x",
+        r"\begin{out¦er}\csuse{begin}{\chosen}\end{panel}\end{outer}",
+        r"\begin{out¦er}\csname end\endcsname{\chosen}\end{outer}",
+        r"\def\start{\begin}\begin{out¦er}\start{\chosen}\end{panel}\end{outer}",
+        r"\newcommand{\take}[1]{}\take{\csuse{begin}{pa¦nel}\csuse{end}{panel}}",
+        r"\def\saved{\csname begin\endcsname{pa¦nel}\csname end\endcsname{panel}}",
+    ] {
+        let offset = marked.find('¦').unwrap();
+        let source = marked.replace('¦', "");
+        let doc = document(&source, "tex");
+        assert!(
+            editing::linked_editing_ranges(&doc, doc.text.position(offset)).is_none(),
+            "{marked}"
+        );
+    }
+}
+
+#[test]
+fn input_order_determines_pairs_without_returning_cross_document_ranges() {
+    for (child, expected) in [
+        (r"Body", true),
+        (r"\begin{inner}Body\end{inner}", true),
+        (r"\end{quote}\begin{quote}", false),
+        (r"\end{quote}", false),
+        (r"\begin{quote}", false),
+        (r"\begin{\chosen}", false),
+        (r"\iftrue Body\fi", false),
+    ] {
+        let main = r"\documentclass{article}\begin{document}\begin{quote}\input{child}\end{quote}\end{document}";
+        let (temp, workspace) = project(&[("main.tex", main), ("child.tex", child)]);
+        let uri = Url::from_file_path(temp.path().join("main.tex")).unwrap();
+        assert_project_pair(&workspace, &uri, "quote", expected);
+    }
+}
+
+#[test]
+fn every_execution_and_consumer_must_agree_on_the_same_pair() {
+    let aliases = r"\def\start{\begin}\def\finish{\end}";
+    let a = r"\documentclass{article}\usepackage{aliases}\begin{document}\input{shared}\input{shared}\end{document}";
+    for agree in [true, false] {
+        let b = if agree {
+            a
+        } else {
+            r"\documentclass{article}\newcommand{\start}[1]{#1}\newcommand{\finish}[1]{#1}\begin{document}\input{shared}\end{document}"
+        };
+        let (temp, workspace) = project(&[
+            ("a.tex", a),
+            ("b.tex", b),
+            ("aliases.sty", aliases),
+            ("shared.tex", r"\start{quote}Body\finish{quote}"),
+        ]);
+        let uri = Url::from_file_path(temp.path().join("shared.tex")).unwrap();
+        assert_project_pair(&workspace, &uri, "quote", agree);
+    }
+    // The first execution closes an outer opener, and the second opens a new one.
+    let (temp, workspace) = project(&[
+        (
+            "main.tex",
+            r"\documentclass{article}\begin{document}\begin{quote}\input{shared}\input{shared}\end{quote}\end{document}",
+        ),
+        ("shared.tex", r"\end{quote}\begin{quote}"),
+    ]);
+    let uri = Url::from_file_path(temp.path().join("shared.tex")).unwrap();
+    assert_project_pair(&workspace, &uri, "quote", false);
+}
+
+#[test]
+fn uncertain_inputs_and_branches_do_not_produce_lexical_fallback_pairs() {
+    for input in [
+        r"\input{missing}",
+        r"\input{\chosen}",
+        r"\input{main}",
+        r"\IfFileExists{missing}{Yes}{No}",
+        r"\includeonly{child}",
+        r"\iftrue Text\else Other\fi",
+        r"\endinput",
+        r"\csuse{IfFileExists}{missing}{Yes}{No}",
+        r"\csname includeonly\endcsname{child}",
+    ] {
+        let source = format!(
+            r"\documentclass{{article}}\begin{{document}}\begin{{quote}}{input}\end{{quote}}\end{{document}}"
+        );
+        let (temp, workspace) = project(&[("main.tex", &source)]);
+        let uri = Url::from_file_path(temp.path().join("main.tex")).unwrap();
+        assert_project_pair(&workspace, &uri, "quote", false);
+    }
+}
+
+#[test]
+fn indirect_package_loads_participate_in_environment_execution_order() {
+    for loader in [
+        r"\csuse{RequirePackage}",
+        r"\csname RequirePackage\endcsname",
+        r"\load",
+    ] {
+        for (package, expected) in [("Body", true), (r"\end{quote}\begin{quote}", false)] {
+            let source = format!(
+                r"\documentclass{{article}}\def\load{{\RequirePackage}}\begin{{quote}}{loader}{{flip}}\end{{quote}}\begin{{document}}Text\end{{document}}"
+            );
+            let (temp, workspace) = project(&[("main.tex", &source), ("flip.sty", package)]);
+            let uri = Url::from_file_path(temp.path().join("main.tex")).unwrap();
+            assert_project_pair(&workspace, &uri, "quote", expected);
+        }
+    }
+}
+
+#[test]
+fn buffer_changes_recompute_aliases_and_discard_obsolete_pairs() {
+    let source = r"\documentclass{article}\usepackage{aliases}\begin{document}\start{quote}Body\finish{quote}\end{document}";
+    let aliases = r"\def\start{\begin}\def\finish{\end}";
+    let (temp, mut workspace) = project(&[("main.tex", source), ("aliases.sty", aliases)]);
+    let main = Url::from_file_path(temp.path().join("main.tex")).unwrap();
+    let defs = Url::from_file_path(temp.path().join("aliases.sty")).unwrap();
+    assert_project_pair(&workspace, &main, "quote", true);
+    workspace.open(
+        defs.clone(),
+        r"\newcommand{\start}[1]{#1}\newcommand{\finish}[1]{#1}".into(),
+        8,
+    );
+    assert_project_pair(&workspace, &main, "quote", false);
+    workspace.open(defs, aliases.into(), 9);
+    assert_project_pair(&workspace, &main, "quote", true);
+}
+
+#[test]
+fn incomplete_indirect_raw_bodies_and_hidden_macro_effects_are_not_linked() {
+    for marked in [
+        r"\def\start{\begin}\start{verb¦atim}\begin{quote}Fake\end{quote}\end{verbatim}",
+        r"\def\start{\begin}\start{verbatim}\begin{quo¦te}Fake\end{quote}\end{verbatim}",
+        r"\newenvironment{wrapper}{\begin{quote}}{\end{quote}}\begin{quo¦te}\begin{wrapper}Text\end{quote}\end{wrapper}",
+        r"\begin{quo¦te}\begin{verbatim}Unclosed",
+    ] {
+        let offset = marked.find('¦').unwrap();
+        let source = marked.replace('¦', "");
+        let doc = document(&source, "tex");
+        assert!(
+            editing::linked_editing_ranges(&doc, doc.text.position(offset)).is_none(),
+            "{marked}"
+        );
+    }
+}
+
+#[test]
+fn package_once_and_endinput_follow_the_same_order_as_source_inputs() {
+    let main = "\\documentclass{article}\\begin{quote}\\usepackage{opening}\\usepackage{opening}\n\\end{box}\n\\input{child}\\end{quote}\\begin{document}Text\\end{document}";
+    let (temp, workspace) = project(&[
+        ("main.tex", main),
+        ("opening.sty", "\\begin{box}\n"),
+        (
+            "child.tex",
+            "Body\\endinput % no more tokens\n\\end{quote}\\begin{quote}",
+        ),
+    ]);
+    let main_uri = Url::from_file_path(temp.path().join("main.tex")).unwrap();
+    assert_project_pair(&workspace, &main_uri, "quote", true);
+    let child = Url::from_file_path(temp.path().join("child.tex")).unwrap();
+    assert_project_pair(&workspace, &child, "quote", false);
+}
+
 #[test]
 fn linked_editing_refuses_non_tex_documents_and_invalid_utf16_positions() {
     let source = "😀 \\begin{quote}Body\\end{quote}";
@@ -158,5 +392,46 @@ fn linked_editing_refuses_non_tex_documents_and_invalid_utf16_positions() {
             Text::new(source.into()).position(source.find("quote").unwrap())
         )
         .is_none());
+    }
+}
+
+#[test]
+fn environment_names_inside_macro_data_and_definitions_are_not_linked() {
+    for source in [
+        r"\newcommand{\ignore}[1]{}\ignore{\begin{quote}Fake\end{quote}}",
+        r"\def\saved{\begin{quote}Fake\end{quote}}",
+        r"\renewcommand{\begin}[1]{#1}\begin{quote}Fake\end{quote}",
+    ] {
+        let doc = document(source, "tex");
+        for (offset, _) in source.match_indices("quote") {
+            assert!(
+                editing::linked_editing_ranges(&doc, doc.text.position(offset)).is_none(),
+                "{source}"
+            );
+        }
+    }
+}
+
+#[test]
+fn document_only_pairs_never_cross_inputs_but_preserve_independent_pairs() {
+    for input in [
+        r"\input{part}",
+        r"\csuse{input}{part}",
+        r"\usepackage{part}",
+    ] {
+        for (source, expected) in [
+            (format!(r"{input}\begin{{quote}}Text\end{{quote}}"), true),
+            (format!(r"\begin{{quote}}Text\end{{quote}}{input}"), true),
+            (format!(r"\begin{{quote}}{input}\end{{quote}}"), false),
+        ] {
+            let doc = document(&source, "tex");
+            for (offset, _) in source.match_indices("quote") {
+                assert_eq!(
+                    editing::linked_editing_ranges(&doc, doc.text.position(offset)).is_some(),
+                    expected,
+                    "{source}"
+                );
+            }
+        }
     }
 }

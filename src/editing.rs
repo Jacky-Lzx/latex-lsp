@@ -1,5 +1,5 @@
 use crate::{
-    features, navigation, spelling_fixes, syntax,
+    features, navigation, spelling_fixes,
     workspace::{Document, Workspace},
 };
 use tower_lsp::lsp_types::*;
@@ -353,78 +353,55 @@ pub fn selection_ranges(doc: &Document, positions: &[Position]) -> Option<Vec<Se
         .collect()
 }
 
-/// Link a single syntactically matched environment pair in this document.
+/// Link a matched environment pair with only this document as context.
+/// A local pair cannot cross an input or package-loading command.
+/// Use `linked_editing_ranges_in_workspace` when project documents are available.
 pub fn linked_editing_ranges(doc: &Document, position: Position) -> Option<LinkedEditingRanges> {
+    if doc.kind != crate::workspace::DocumentKind::Latex || doc.text.offset(position).is_none() {
+        return None;
+    }
+    let uri = Url::parse("untitled:linked-editing.tex").ok()?;
+    let mut workspace = Workspace::default();
+    workspace.documents.insert(uri.clone(), doc.clone());
+    linked_editing_ranges_with_context(&workspace, &uri, position, true)
+}
+
+/// Link a pair only when all executions and consuming projects agree.
+pub fn linked_editing_ranges_in_workspace(
+    workspace: &Workspace,
+    uri: &Url,
+    position: Position,
+) -> Option<LinkedEditingRanges> {
+    linked_editing_ranges_with_context(workspace, uri, position, false)
+}
+
+fn linked_editing_ranges_with_context(
+    workspace: &Workspace,
+    uri: &Url,
+    position: Position,
+    local: bool,
+) -> Option<LinkedEditingRanges> {
+    let doc = workspace.documents.get(uri)?;
     if doc.kind != crate::workspace::DocumentKind::Latex {
         return None;
     }
     let cursor = doc.text.offset(position)?;
-    let source = &doc.text.source;
-    let pair = |begin: &std::ops::Range<usize>, end: &std::ops::Range<usize>| {
-        [begin, end]
-            .iter()
-            .any(|span| span.start <= cursor && cursor <= span.end)
-            .then(|| LinkedEditingRanges {
-                ranges: vec![
-                    doc.text.range(begin.start, begin.end),
-                    doc.text.range(end.start, end.end),
-                ],
-                word_pattern: Some(r"[^\s{}\\%]+".into()),
-            })
+    let pairs = if local {
+        crate::project_environments::local_linked_pairs(workspace, uri)
+    } else {
+        crate::project_environments::linked_pairs(workspace, uri)
     };
-    let mut stack = Vec::new();
-    for command in &doc.syntax.commands {
-        if !matches!(command.name.as_str(), "begin" | "end") {
-            continue;
-        }
-        let argument = command.argument.as_ref().filter(|argument| {
-            argument.outer_span.start == syntax::skip_space(source, command.span.end)
-                && syntax::is_static_key(&argument.value)
-        });
-        if command.name == "begin" {
-            if let Some(begin) =
-                argument.filter(|argument| syntax::is_verbatim_environment(&argument.value))
-            {
-                // Raw bodies contain no indexed end command. The parser's raw
-                // region includes its exact literal terminator, if present.
-                if let Some(raw) = doc
-                    .syntax
-                    .ignored
-                    .iter()
-                    .find(|raw| raw.start == begin.outer_span.end)
-                {
-                    let ending = format!("\\end{{{}}}", begin.value);
-                    if let Some(start) = raw
-                        .end
-                        .checked_sub(ending.len())
-                        .filter(|start| *start >= raw.start)
-                    {
-                        if source.get(start..raw.end) == Some(ending.as_str()) {
-                            let end = start + "\\end{".len()..raw.end - 1;
-                            if let Some(linked) = pair(&begin.span, &end) {
-                                return Some(linked);
-                            }
-                        }
-                    }
-                }
-                continue;
-            }
-            // Unknown argument shapes remain opaque until a closing command;
-            // they must not borrow a known enclosing environment's name.
-            stack.push(argument);
-        } else {
-            let Some(Some(begin)) = stack.pop() else {
-                stack.clear();
-                continue;
-            };
-            let Some(end) = argument.filter(|end| end.value == begin.value) else {
-                stack.clear();
-                continue;
-            };
-            if let Some(linked) = pair(&begin.span, &end.span) {
-                return Some(linked);
-            }
-        }
-    }
-    None
+    pairs
+        .into_iter()
+        .find(|pair| {
+            pair.iter()
+                .any(|(start, end)| *start <= cursor && cursor <= *end)
+        })
+        .map(|pair| LinkedEditingRanges {
+            ranges: pair
+                .iter()
+                .map(|(start, end)| doc.text.range(*start, *end))
+                .collect(),
+            word_pattern: Some(r"[^\s{}\\%]+".into()),
+        })
 }

@@ -15,13 +15,15 @@ const MAX_DEPTH: usize = 64;
 enum Operation {
     Environment(EnvironmentCall),
     Input(Option<Url>, bool),
+    LinkedBarrier,
+    UnverifiedRaw,
+    UncertainName(String),
     Uncertain,
     Stop,
 }
 #[derive(Clone, Default)]
 struct Source {
     operations: Vec<(usize, Operation)>,
-    uncertain_names: BTreeSet<String>,
 }
 #[derive(Clone)]
 struct Event {
@@ -43,12 +45,54 @@ struct Walk<'a> {
     occurrences: BTreeMap<Url, usize>,
     uncertain_names: BTreeSet<String>,
     events: Vec<Event>,
+    linked_barriers: BTreeSet<usize>,
+    linked_complete: bool,
     complete: bool,
     has_inputs: bool,
     visits: usize,
 }
 
-impl Walk<'_> {
+impl<'a> Walk<'a> {
+    fn new(workspace: &'a Workspace, root: &'a Url, scope: &BTreeSet<Url>) -> Self {
+        let inputs = crate::source_inputs::Index::new(workspace, root);
+        let signatures = CommandSignatures::new(
+            workspace
+                .documents
+                .iter()
+                .filter(|(uri, doc)| scope.contains(*uri) && doc.kind == DocumentKind::Latex)
+                .map(|(_, doc)| (doc.text.source.as_str(), &doc.syntax)),
+        );
+        Self {
+            workspace,
+            root,
+            sources: scope
+                .iter()
+                .filter(|uri| {
+                    workspace
+                        .documents
+                        .get(*uri)
+                        .is_some_and(|doc| doc.kind == DocumentKind::Latex)
+                })
+                .map(|uri| {
+                    (
+                        uri.clone(),
+                        source(workspace, root, uri, &signatures, &inputs),
+                    )
+                })
+                .collect(),
+            active: BTreeSet::new(),
+            packages: BTreeSet::new(),
+            occurrences: BTreeMap::new(),
+            uncertain_names: BTreeSet::new(),
+            events: vec![],
+            linked_barriers: BTreeSet::new(),
+            linked_complete: true,
+            complete: signatures.environment_primitives_unchanged() && !inputs.incomplete,
+            has_inputs: inputs.incomplete,
+            visits: 0,
+        }
+    }
+
     fn visit(&mut self, uri: &Url, depth: usize) {
         if depth > MAX_DEPTH || self.visits >= MAX_VISITS || !self.active.insert(uri.clone()) {
             self.complete = false;
@@ -63,7 +107,6 @@ impl Walk<'_> {
         let count = self.occurrences.entry(uri.clone()).or_default();
         let occurrence = *count;
         *count += 1;
-        self.uncertain_names.extend(source.uncertain_names);
         for (_, operation) in source.operations {
             if self.events.len() >= MAX_EVENTS {
                 self.complete = false;
@@ -89,6 +132,13 @@ impl Walk<'_> {
                     }
                 }
                 Operation::Uncertain => self.complete = false,
+                Operation::LinkedBarrier => {
+                    self.linked_barriers.insert(self.events.len());
+                }
+                Operation::UnverifiedRaw => self.linked_complete = false,
+                Operation::UncertainName(name) => {
+                    self.uncertain_names.insert(name);
+                }
                 Operation::Stop => {
                     if uri == self.root {
                         self.complete = false;
@@ -98,6 +148,56 @@ impl Walk<'_> {
             }
         }
         self.active.remove(uri);
+    }
+
+    fn linked_pairs(&self, uri: &Url) -> Vec<NamePair> {
+        if !self.complete || !self.linked_complete {
+            return vec![];
+        }
+        let mut stack: Vec<&Event> = vec![];
+        let mut pairs: BTreeMap<NamePair, BTreeSet<usize>> = BTreeMap::new();
+        for (index, event) in self.events.iter().enumerate() {
+            if self.linked_barriers.contains(&index)
+                || self.uncertain_names.contains(&event.call.argument.value)
+            {
+                stack.clear();
+            }
+            if self.uncertain_names.contains(&event.call.argument.value) {
+                continue;
+            }
+            if event.call.begin {
+                stack.push(event);
+                continue;
+            }
+            let Some(open) = stack.pop() else {
+                continue;
+            };
+            if open.call.argument.value != event.call.argument.value {
+                stack.clear();
+                continue;
+            }
+            if open.uri != *uri
+                || event.uri != *uri
+                || open.occurrence != event.occurrence
+                // Linked editing cannot insert braces around a bare token.
+                || open.call.argument.span == open.call.argument.outer_span
+                || event.call.argument.span == event.call.argument.outer_span
+            {
+                continue;
+            }
+            pairs
+                .entry([
+                    (open.call.argument.span.start, open.call.argument.span.end),
+                    (event.call.argument.span.start, event.call.argument.span.end),
+                ])
+                .or_default()
+                .insert(event.occurrence);
+        }
+        pairs
+            .into_iter()
+            .filter(|(_, occurrences)| occurrences.len() == self.occurrences[uri])
+            .map(|(pair, _)| pair)
+            .collect()
     }
 
     fn pair(&self) -> BTreeMap<Url, Vec<QuickFix>> {
@@ -267,19 +367,70 @@ fn source(
 ) -> Source {
     let doc = &workspace.documents[uri];
     let mut result = Source::default();
-    let calls = signatures.environment_invocations(&doc.text.source, &doc.syntax);
-    result.uncertain_names.extend(
+    let boundaries = signatures.environment_boundaries(&doc.text.source, &doc.syntax);
+    result.operations.extend(
+        boundaries
+            .iter()
+            .filter(|call| call.argument.is_none() && !call.operand && !call.deferred)
+            .map(|call| (call.span.start, Operation::LinkedBarrier)),
+    );
+    let calls: Vec<_> = boundaries
+        .into_iter()
+        .filter_map(|call| call.into_call())
+        .collect();
+    result.operations.extend(
         calls
             .iter()
             .filter(|call| call.operand || call.deferred)
-            .map(|call| call.argument.value.clone()),
+            .map(|call| {
+                (
+                    call.span.start,
+                    Operation::UncertainName(call.argument.value.clone()),
+                )
+            }),
     );
-    result.operations.extend(
-        calls
-            .into_iter()
-            .filter(|call| !call.operand && !call.deferred)
-            .map(|call| (call.span.start, Operation::Environment(call))),
-    );
+    for call in calls
+        .into_iter()
+        .filter(|call| !call.operand && !call.deferred)
+    {
+        if call.begin && syntax::is_verbatim_environment(&call.argument.value) {
+            // Only the parser's actual raw region proves a literal terminator.
+            let ending = format!("\\end{{{}}}", call.argument.value);
+            let terminator = doc.syntax.ignored.iter().find_map(|raw| {
+                let start = raw.end.checked_sub(ending.len())?;
+                (call.direct
+                    && raw.start == call.argument.outer_span.end
+                    && start >= raw.start
+                    && doc.text.source.get(start..raw.end) == Some(ending.as_str()))
+                .then_some((start, raw.end))
+            });
+            if let Some((start, end)) = terminator {
+                result.operations.push((
+                    start,
+                    Operation::Environment(EnvironmentCall {
+                        argument: syntax::Argument {
+                            value: call.argument.value.clone(),
+                            span: start + "\\end{".len()..end - 1,
+                            outer_span: start + "\\end".len()..end,
+                        },
+                        span: start..end,
+                        begin: false,
+                        direct: true,
+                        operand: false,
+                        deferred: false,
+                    }),
+                ));
+            } else {
+                // An indirect raw opener does not make the parser ignore its body.
+                result
+                    .operations
+                    .push((call.span.start, Operation::UnverifiedRaw));
+            }
+        }
+        result
+            .operations
+            .push((call.span.start, Operation::Environment(call)));
+    }
     for call in inputs.calls.get(uri).into_iter().flatten() {
         let target = crate::source_inputs::target(uri, root, call).filter(|target| {
             workspace
@@ -293,7 +444,22 @@ fn source(
     }
     let operands = signatures.argument_tokens(&doc.text.source, &doc.syntax);
     let bodies = definition_body_spans(&doc.text.source, &doc.syntax);
-    for command in &doc.syntax.commands {
+    let indirect: Vec<_> = [&inputs.loaders, &inputs.checks, &inputs.selectors]
+        .into_iter()
+        .flat_map(|calls| calls.get(uri).into_iter().flatten())
+        .collect();
+    result.operations.extend(
+        indirect
+            .iter()
+            .filter(|call| !call.certain)
+            .map(|call| (call.command.span.start, Operation::Uncertain)),
+    );
+    for command in doc.syntax.commands.iter().chain(
+        indirect
+            .into_iter()
+            .filter(|call| call.certain)
+            .map(|call| &call.command),
+    ) {
         if operands.contains(&command.span.start)
             || bodies.iter().any(|span| span.contains(&command.span.start))
         {
@@ -409,6 +575,46 @@ fn source(
 }
 
 type Interpretations = Vec<(bool, Vec<QuickFix>)>;
+type NamePair = [(usize, usize); 2];
+
+/// Without project context, no pair may cross a source-loading boundary.
+pub(crate) fn local_linked_pairs(workspace: &Workspace, uri: &Url) -> Vec<NamePair> {
+    let mut walk = Walk::new(workspace, uri, &BTreeSet::from([uri.clone()]));
+    for source in walk.sources.values_mut() {
+        for (_, operation) in &mut source.operations {
+            if matches!(operation, Operation::Input(..)) {
+                *operation = Operation::LinkedBarrier;
+            }
+        }
+    }
+    walk.visit(uri, 0);
+    walk.linked_pairs(uri)
+}
+
+/// Every execution of the file, and every consuming project, must agree.
+pub(crate) fn linked_pairs(workspace: &Workspace, uri: &Url) -> Vec<NamePair> {
+    let mut projects = workspace.saved_projects();
+    projects.retain(|_, scope| scope.contains(uri));
+    if projects.is_empty() {
+        let root = workspace
+            .root_document(uri)
+            .ok()
+            .unwrap_or_else(|| uri.clone());
+        projects.insert(root, workspace.symbol_scope(uri));
+    }
+    let mut agreed: Option<Vec<NamePair>> = None;
+    for (root, scope) in projects {
+        let mut walk = Walk::new(workspace, &root, &scope);
+        walk.visit(&root, 0);
+        let pairs = walk.linked_pairs(uri);
+        if let Some(agreed) = &mut agreed {
+            agreed.retain(|pair| pairs.contains(pair));
+        } else {
+            agreed = Some(pairs);
+        }
+    }
+    agreed.unwrap_or_default()
+}
 
 pub(crate) fn fixes(
     workspace: &Workspace,
@@ -419,42 +625,7 @@ pub(crate) fn fixes(
         if scope.is_disjoint(requested) {
             continue;
         }
-        let inputs = crate::source_inputs::Index::new(workspace, &root);
-        let signatures = CommandSignatures::new(
-            workspace
-                .documents
-                .iter()
-                .filter(|(uri, doc)| scope.contains(*uri) && doc.kind == DocumentKind::Latex)
-                .map(|(_, doc)| (doc.text.source.as_str(), &doc.syntax)),
-        );
-        let sources = scope
-            .iter()
-            .filter(|uri| {
-                workspace
-                    .documents
-                    .get(*uri)
-                    .is_some_and(|doc| doc.kind == DocumentKind::Latex)
-            })
-            .map(|uri| {
-                (
-                    uri.clone(),
-                    source(workspace, &root, uri, &signatures, &inputs),
-                )
-            })
-            .collect();
-        let mut walk = Walk {
-            workspace,
-            root: &root,
-            sources,
-            active: BTreeSet::new(),
-            packages: BTreeSet::new(),
-            occurrences: BTreeMap::new(),
-            uncertain_names: BTreeSet::new(),
-            events: vec![],
-            complete: signatures.environment_primitives_unchanged() && !inputs.incomplete,
-            has_inputs: inputs.incomplete,
-            visits: 0,
-        };
+        let mut walk = Walk::new(workspace, &root, &scope);
         walk.visit(&root, 0);
         let mut found = walk.pair();
         for uri in scope.intersection(requested) {

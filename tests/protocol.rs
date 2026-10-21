@@ -10215,6 +10215,141 @@ fn environment_linked_editing_tracks_incremental_changes_and_validates_positions
 }
 
 #[test]
+fn environment_linked_editing_tracks_project_aliases_macro_data_and_input_changes() {
+    use latex_lsp::text::Text;
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = Url::from_file_path(root.join("main.tex")).unwrap();
+    let defs = Url::from_file_path(root.join("aliases.sty")).unwrap();
+    let child = Url::from_file_path(root.join("child.tex")).unwrap();
+    let aliases = r"\def\start{\begin}\def\finish{\end}\newcommand{\ignore}[1]{}";
+    let source = "\\documentclass{article}\\usepackage{aliases}\\begin{document}😀 \\csuse{start}{% before\r\nquote% after\r\n}\\input{child}\\csname finish\\endcsname{quote}\\ignore{\\begin{panel}Fake\\end{panel}}\\end{document}";
+    for (name, text) in [
+        ("main.tex", source),
+        ("aliases.sty", aliases),
+        ("child.tex", "Body"),
+    ] {
+        std::fs::write(root.join(name), text).unwrap();
+    }
+    let text = Text::new(source.into());
+    let ranges: Vec<_> = source
+        .match_indices("quote")
+        .map(|(at, _)| text.range(at, at + 5))
+        .collect();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(root).unwrap(),"capabilities":{}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":main,"languageId":"latex","version":1,"text":source}}),
+    );
+    let request = json!({"textDocument":{"uri":main},"position":ranges[0].start});
+    let linked = server.request(2, "textDocument/linkedEditingRange", request.clone());
+    assert_eq!(linked["ranges"], json!(ranges));
+    let fake = server.request(3, "textDocument/linkedEditingRange", json!({"textDocument":{"uri":main},"position":text.position(source.find("panel").unwrap())}));
+    assert!(fake.is_null(), "{fake}");
+    server.notify("textDocument/didOpen", json!({"textDocument":{"uri":defs,"languageId":"latex","version":1,"text":r"\newcommand{\start}[1]{#1}\newcommand{\finish}[1]{#1}\newcommand{\ignore}[1]{}"}}));
+    assert!(server
+        .request(4, "textDocument/linkedEditingRange", request.clone())
+        .is_null());
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":defs,"version":2},"contentChanges":[{"text":aliases}]}),
+    );
+    assert_eq!(
+        server.request(5, "textDocument/linkedEditingRange", request.clone())["ranges"],
+        json!(ranges)
+    );
+    server.notify("textDocument/didOpen", json!({"textDocument":{"uri":child,"languageId":"latex","version":1,"text":r"\end{quote}\begin{quote}"}}));
+    assert!(server
+        .request(6, "textDocument/linkedEditingRange", request.clone())
+        .is_null());
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":child}}),
+    );
+    assert_eq!(
+        server.request(7, "textDocument/linkedEditingRange", request)["ranges"],
+        json!(ranges)
+    );
+    server.request(8, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[ignore = "requires pdflatex and xelatex"]
+fn linked_environment_alias_edits_compile_over_stdio_with_native_engines() {
+    use latex_lsp::text::Text;
+    use tower_lsp::lsp_types::{LinkedEditingRanges, TextDocumentContentChangeEvent};
+    for engine in ["pdflatex", "xelatex"] {
+        for (begin, end) in [
+            (r"\start", r"\finish"),
+            (r"\csuse{start}", r"\csname finish\endcsname"),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let main = Url::from_file_path(root.join("main.tex")).unwrap();
+            let source = format!("\\documentclass{{article}}\\usepackage{{etoolbox,aliases}}\\begin{{document}}{begin}{{% before\nquote% keep\n}}Native body.{end}{{quote}}\\end{{document}}\n");
+            std::fs::write(root.join("main.tex"), &source).unwrap();
+            std::fs::write(
+                root.join("aliases.sty"),
+                "\\def\\start{\\begin}\\def\\finish{\\end}\n",
+            )
+            .unwrap();
+            let mut server = Server::start();
+            server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(root).unwrap(),"capabilities":{},"initializationOptions":{"build":{"executable":engine,"arguments":["-interaction=nonstopmode","-halt-on-error","-recorder","-output-directory=%o","%f"]}}}));
+            server.notify("initialized", json!({}));
+            server.notify(
+                "textDocument/didOpen",
+                json!({"textDocument":{"uri":main,"languageId":"latex","version":1,"text":source}}),
+            );
+            let text = Text::new(source.clone());
+            let found = server.request(2, "textDocument/linkedEditingRange", json!({"textDocument":{"uri":main},"position":text.position(source.find("quote").unwrap())}));
+            let linked: LinkedEditingRanges = serde_json::from_value(found).unwrap();
+            assert_eq!(linked.ranges.len(), 2);
+            let changes: Vec<_> = linked
+                .ranges
+                .into_iter()
+                .rev()
+                .map(|range| TextDocumentContentChangeEvent {
+                    range: Some(range),
+                    range_length: None,
+                    text: "center".into(),
+                })
+                .collect();
+            let changed = text.changed(changes.clone()).unwrap();
+            assert_eq!(changed.source, source.replace("quote", "center"));
+            server.notify(
+                "textDocument/didChange",
+                json!({"textDocument":{"uri":main,"version":2},"contentChanges":changes}),
+            );
+            std::fs::write(root.join("main.tex"), &changed.source).unwrap();
+            server.notify("textDocument/didSave", json!({"textDocument":{"uri":main}}));
+            let started = server.request(
+                3,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            let finished = server.until(|message| {
+                message["method"] == "latex/buildFinished"
+                    && message["params"]["buildId"] == started["buildId"]
+            });
+            assert_eq!(
+                finished["params"]["status"], "success",
+                "{engine}/{begin}: {finished}"
+            );
+            assert_eq!(finished["params"]["errorsCount"], 0, "{finished}");
+            assert_eq!(finished["params"]["stale"], false, "{finished}");
+            assert!(root.join("build/latex-lsp/main.pdf").is_file());
+            server.request(4, "shutdown", Value::Null);
+            server.notify("exit", Value::Null);
+            server.wait_exit(0);
+        }
+    }
+}
+
+#[test]
 fn color_picker_edits_track_incremental_changes_and_validate_context_over_stdio() {
     use latex_lsp::text::Text;
     use tower_lsp::lsp_types::{ColorPresentation, TextDocumentContentChangeEvent};
