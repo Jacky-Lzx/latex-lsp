@@ -148,25 +148,13 @@ pub fn root_directive(doc: &Document) -> Option<crate::syntax::Argument> {
     magic_directive(doc, &["root"])
 }
 
-pub(crate) fn is_root(doc: &Document) -> bool {
-    doc.syntax.commands.iter().any(|command| {
-        command.name == "documentclass"
-            || command.name == "begin"
-                && command
-                    .argument
-                    .as_ref()
-                    .is_some_and(|argument| argument.value == "document")
-    })
-}
-
-fn is_saved_root(uri: &Url, doc: &Document) -> bool {
-    is_root(doc)
-        && uri.to_file_path().is_ok_and(|path| {
-            matches!(
-                path.extension().and_then(|extension| extension.to_str()),
-                Some("tex" | "ltx")
-            ) && file_uri(&path).is_ok()
-        })
+fn root_marker(command: &crate::syntax::Command) -> bool {
+    command.name == "documentclass"
+        || command.name == "begin"
+            && command
+                .argument
+                .as_ref()
+                .is_some_and(|argument| argument.value == "document")
 }
 
 fn magic_directive(doc: &Document, fields: &[&str]) -> Option<crate::syntax::Argument> {
@@ -241,6 +229,55 @@ pub(crate) struct SymbolProjects {
 }
 
 impl Workspace {
+    /// A quoted document marker does not make an example a compilation root.
+    /// Resolve primitive meanings in this candidate's source context, without
+    /// invoking root selection while discovering that context.
+    pub(crate) fn is_root(&self, uri: &Url) -> bool {
+        let Some(doc) = self.documents.get(uri) else {
+            return false;
+        };
+        let Some(marker) = doc
+            .syntax
+            .commands
+            .iter()
+            .find(|command| root_marker(command))
+        else {
+            return false;
+        };
+        let preceding_quote = doc
+            .syntax
+            .commands
+            .iter()
+            .take_while(|command| command.span.start < marker.span.start)
+            .any(|command| {
+                matches!(
+                    command.name.as_str(),
+                    "detokenize" | "string" | "meaning" | "csuse" | "endcsname"
+                )
+            });
+        // Preserve ordinary declarations before any apparent quote without
+        // constructing another project index for common editor requests.
+        if !preceding_quote {
+            return true;
+        }
+        let index = crate::source_inputs::Index::new(self, uri);
+        let quoted = index.quoted_file_positions(self, uri);
+        doc.syntax
+            .commands
+            .iter()
+            .any(|command| root_marker(command) && !quoted.contains(&command.span.start))
+    }
+
+    fn is_saved_root(&self, uri: &Url) -> bool {
+        self.is_root(uri)
+            && uri.to_file_path().is_ok_and(|path| {
+                matches!(
+                    path.extension().and_then(|extension| extension.to_str()),
+                    Some("tex" | "ltx")
+                ) && file_uri(&path).is_ok()
+            })
+    }
+
     pub fn build_config(&self, root: &Url) -> crate::config::BuildConfig {
         let mut config = self.config.build.clone();
         let latexmk = Path::new(&config.executable)
@@ -504,7 +541,7 @@ impl Workspace {
     pub(crate) fn saved_projects(&self) -> BTreeMap<Url, BTreeSet<Url>> {
         self.documents
             .iter()
-            .filter(|(uri, doc)| is_saved_root(uri, doc))
+            .filter(|(uri, _)| self.is_saved_root(uri))
             .map(|(root, _)| (root.clone(), self.project_documents(root)))
             .collect()
     }
@@ -533,10 +570,7 @@ impl Workspace {
 
     pub(crate) fn symbol_scope(&self, uri: &Url) -> BTreeSet<Url> {
         if let Ok(root) = self.root_document(uri) {
-            if root != *uri
-                || self.config.build.root_file.is_some()
-                || self.documents.get(&root).is_some_and(is_root)
-            {
+            if root != *uri || self.config.build.root_file.is_some() || self.is_root(&root) {
                 let mut scope = self.project_documents(&root);
                 scope.insert(uri.clone());
                 return scope;
@@ -665,7 +699,7 @@ impl Workspace {
                 break;
             }
         }
-        if self.documents.get(uri).is_some_and(is_root) {
+        if self.is_root(uri) {
             let selected = file_uri(&path);
             if selected.is_ok()
                 || matches!(
@@ -681,9 +715,9 @@ impl Workspace {
         let candidates = self
             .documents
             .iter()
-            .filter(|(candidate, doc)| {
+            .filter(|(candidate, _)| {
                 *candidate != uri
-                    && is_saved_root(candidate, doc)
+                    && self.is_saved_root(candidate)
                     && self.project_files(candidate).contains(uri)
             })
             .map(|(uri, _)| uri.clone())

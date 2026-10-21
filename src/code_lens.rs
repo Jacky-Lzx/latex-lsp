@@ -13,7 +13,7 @@ pub fn lenses(workspace: &Workspace, uri: &Url) -> Vec<CodeLens> {
     let explicit =
         workspace.config.build.root_file.is_some() || workspace::root_directive(doc).is_some();
     let roots = match workspace.root_document(uri) {
-        Ok(root) if explicit || root != *uri || workspace::is_root(doc) => {
+        Ok(root) if explicit || root != *uri || workspace.is_root(uri) => {
             BTreeMap::from([(root, uri.clone())])
         }
         Ok(_) => return vec![],
@@ -21,12 +21,7 @@ pub fn lenses(workspace: &Workspace, uri: &Url) -> Vec<CodeLens> {
         Err(_) => {
             let mut roots = BTreeMap::new();
             for candidate in workspace.source_roots(uri) {
-                if candidate == *uri
-                    || !workspace
-                        .documents
-                        .get(&candidate)
-                        .is_some_and(workspace::is_root)
-                {
+                if candidate == *uri || !workspace.is_root(&candidate) {
                     continue;
                 }
                 if let Ok(root) = workspace.root_document(&candidate) {
