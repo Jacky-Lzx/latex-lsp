@@ -235,3 +235,128 @@ fn parsed_final_log_warnings_and_observation_limits_are_preserved() {
         json!({"rerunRequired":false,"unresolvedReferences":[],"unresolvedCitations":[],"truncated":true})
     );
 }
+
+#[test]
+fn parenthesized_wrapped_keys_preserve_identity_and_diagnostic_ranges() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("main.tex");
+    for (kind, command, citation) in [
+        ("Reference", "ref", false),
+        ("Hyper reference", "hyperref", false),
+        ("Citation", "cite", true),
+    ] {
+        for quote in ['`', '\''] {
+            let prefix = format!("LaTeX Warning: {kind} {quote}");
+            for width in [60, 79] {
+                for mark in ['(', ')'] {
+                    let key = format!(
+                        "{}{mark}{}",
+                        "a".repeat(width - prefix.len()),
+                        "b".repeat(60)
+                    );
+                    let source = if command == "hyperref" {
+                        format!("\\hyperref[{key}]{{Link}}\n")
+                    } else {
+                        format!("\\{command}{{{key}}}\n")
+                    };
+                    std::fs::write(&root, &source).unwrap();
+                    let message = format!("{prefix}{key}' on page 1 undefined on input line 1.");
+                    let wrapped = message
+                        .as_bytes()
+                        .chunks(width)
+                        .map(|part| std::str::from_utf8(part).unwrap())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    let parsed = parse(&root, &format!("(./main.tex\n{wrapped}\n)\n"));
+                    let items = &parsed[&Url::from_file_path(&root).unwrap()];
+                    assert_eq!(items.len(), 1, "{wrapped}");
+                    assert_eq!(items[0].message, message, "{wrapped}");
+                    let text = latex_lsp::text::Text::new(source.clone());
+                    assert_eq!(
+                        &source[text.offset(items[0].range.start).unwrap()
+                            ..text.offset(items[0].range.end).unwrap()],
+                        key,
+                        "{wrapped}"
+                    );
+                    let result = compilation_analysis(&parsed, false);
+                    assert_eq!(
+                        result["unresolvedReferences"],
+                        if citation { json!([]) } else { json!([key]) },
+                        "{wrapped}"
+                    );
+                    assert_eq!(
+                        result["unresolvedCitations"],
+                        if citation { json!([key]) } else { json!([]) },
+                        "{wrapped}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn incomplete_wrapped_references_preserve_real_file_and_message_boundaries() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("main.tex");
+    let child = directory.path().join("child.tex");
+    std::fs::write(&root, "\\ref{rootmissing}\n\\input{child}\n").unwrap();
+    std::fs::write(&child, "\\ref{childmissing}\n").unwrap();
+    let partial = format!("LaTeX Warning: Reference `{}", "a".repeat(53));
+    assert_eq!(partial.len(), 79);
+    let root_warning =
+        "LaTeX Warning: Reference `rootmissing' on page 1 undefined on input line 1.";
+    let child_warning =
+        "LaTeX Warning: Reference `childmissing' on page 1 undefined on input line 1.";
+    for (log, expected_file, expected_key) in [
+        (
+            format!("(./main.tex\n(./child.tex\n{partial}\n)\n{root_warning}\n)\n"),
+            &root,
+            "rootmissing",
+        ),
+        (
+            format!("(./main.tex\n{partial}\n(./child.tex\n{child_warning}\n)\n)\n"),
+            &child,
+            "childmissing",
+        ),
+        (
+            format!("(./main.tex\n{partial}\n! Other error.\nl.1 bad\n{root_warning}\n)\n"),
+            &root,
+            "rootmissing",
+        ),
+        (
+            format!(
+                "(./main.tex\n{partial}\nOutput written on main.pdf (1 page).\n{root_warning}\n)\n"
+            ),
+            &root,
+            "rootmissing",
+        ),
+    ] {
+        let parsed = parse(&root, &log);
+        assert!(
+            parsed
+                .values()
+                .flatten()
+                .any(|item| item.message == partial),
+            "{log}\n{parsed:?}"
+        );
+        let items = &parsed[&Url::from_file_path(expected_file).unwrap()];
+        let complete = items
+            .iter()
+            .find(|item| item.message.contains(expected_key))
+            .unwrap();
+        let source = std::fs::read_to_string(expected_file).unwrap();
+        let text = latex_lsp::text::Text::new(source.clone());
+        assert_eq!(
+            &source[text.offset(complete.range.start).unwrap()
+                ..text.offset(complete.range.end).unwrap()],
+            expected_key,
+            "{log}"
+        );
+        assert_eq!(
+            compilation_analysis(&parsed, false)["unresolvedReferences"],
+            json!([expected_key]),
+            "{log}"
+        );
+    }
+}

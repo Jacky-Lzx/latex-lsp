@@ -541,6 +541,16 @@ fn missing_include_ranges(
         .collect()
 }
 
+fn literal_reference_key(key: &str) -> bool {
+    // Parentheses are literal tokens in a label or citation. Keep the general
+    // identifier restrictions for each remaining fragment and other namespaces.
+    !key.is_empty()
+        && key
+            .split(['(', ')'])
+            .filter(|part| !part.is_empty())
+            .all(crate::syntax::is_static_key)
+}
+
 pub(crate) fn undefined_reference_ranges(text: &Text, line: u32, message: &str) -> Vec<Range> {
     let Some((citation, key)) = undefined_reference_key(message) else {
         return vec![];
@@ -611,7 +621,7 @@ pub(crate) fn undefined_reference_ranges(text: &Text, line: u32, message: &str) 
             } else {
                 Some(key)
             };
-            if let Some(key) = source_key.filter(|key| crate::syntax::is_static_key(key)) {
+            if let Some(key) = source_key.filter(|key| literal_reference_key(key)) {
                 for argument in std::iter::once(argument).chain(range_end.as_ref()) {
                     if argument.value == key {
                         ranges.push(text.range(argument.span.start, argument.span.end));
@@ -620,9 +630,17 @@ pub(crate) fn undefined_reference_ranges(text: &Text, line: u32, message: &str) 
             }
             continue;
         }
-        for span in crate::syntax::key_list_spans(&text.source, argument.span.clone()) {
-            if &text.source[span.clone()] == key {
-                ranges.push(text.range(span.start, span.end));
+        if !literal_reference_key(key) {
+            continue;
+        }
+        for segment in crate::syntax::key_list_segments(&text.source, argument.span.clone()) {
+            let bounded = &text.source[..segment.end];
+            let start = crate::syntax::skip_space(bounded, segment.start);
+            if bounded[start..].starts_with(key) {
+                let end = start + key.len();
+                if crate::syntax::skip_space(bounded, end) == segment.end {
+                    ranges.push(text.range(start, end));
+                }
             }
         }
     }
@@ -2050,6 +2068,55 @@ fn message_boundary(line: &str) -> bool {
         || line.starts_with(')')
 }
 
+/// Speculate across byte-width breaks without committing file-stack markers.
+/// A complete warning confirms that parentheses belong to its literal key.
+fn byte_wrapped_reference_message(
+    root: &Path,
+    lines: &[&str],
+    separator_lines: &[usize],
+    i: &mut usize,
+    initial: &str,
+) -> Option<String> {
+    undefined_reference_start(initial)?;
+    if undefined_reference_key(initial).is_some() {
+        return None;
+    }
+    let mut message = initial.to_owned();
+    let mut end = *i;
+    for _ in 0..64 {
+        if lines[end].len() < 60 || message.len() >= 4096 {
+            return None;
+        }
+        let next = *lines.get(end + 1)?;
+        if message.len() + next.len() > 4096
+            || next.trim().is_empty()
+            || (message_boundary(next) && !next.trim_start().starts_with(')'))
+            || next.trim_start().starts_with('<')
+            || next.trim_start().starts_with("Here is how much")
+        {
+            return None;
+        }
+        let mut next_index = end + 1;
+        if numbered_error(&continued_error_line(
+            root,
+            lines,
+            separator_lines,
+            &mut next_index,
+        ))
+        .is_some()
+        {
+            return None;
+        }
+        message.push_str(next);
+        end += 1;
+        if message.ends_with('.') && undefined_reference_key(&message).is_some() {
+            *i = end;
+            return Some(message);
+        }
+    }
+    None
+}
+
 fn wrapped_message(
     root: &Path,
     lines: &[&str],
@@ -2112,6 +2179,10 @@ fn wrapped_message(
             message.push_str(next);
             *i += 1;
         }
+        return message;
+    }
+    if let Some(message) = byte_wrapped_reference_message(root, lines, separator_lines, i, initial)
+    {
         return message;
     }
     let reference = undefined_reference_start(initial).is_some();
