@@ -149,7 +149,9 @@ impl Index {
     ) -> Vec<(Url, DocumentKind)> {
         let quoted = self.quoted_file_positions(workspace, uri);
         workspace.literal_source_dependencies_filtered(uri, root, |command| {
-            !editable_file_command(&command.name) || !quoted.contains(&command.span.start)
+            !(editable_file_command(&command.name)
+                || syntax::loader_extension(&command.name).is_some())
+                || !quoted.contains(&command.span.start)
         })
     }
 
