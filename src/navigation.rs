@@ -331,6 +331,12 @@ pub(crate) fn document_links_in(workspace: &Workspace, uri: &Url, root: &Url) ->
     } else {
         vec![]
     };
+    let graphic_extensions = doc
+        .syntax
+        .commands
+        .iter()
+        .any(|command| command.name == "includegraphics")
+        .then(|| crate::graphics_extensions::Index::new(workspace, root));
     if let Some(directive) = root_directive(doc) {
         if let Some(target) = resolve_path(uri, &directive.value, "tex") {
             links.push(DocumentLink {
@@ -407,6 +413,18 @@ pub(crate) fn document_links_in(workspace: &Workspace, uri: &Url, root: &Url) ->
             None if matches!(command.name.as_str(), "url" | "href") => &[],
             None => continue,
         };
+        let image_extensions = if command.name == "includegraphics" {
+            let Some(extensions) = graphic_extensions
+                .as_ref()
+                .and_then(|index| index.at(uri, command.span.start))
+            else {
+                continue;
+            };
+            Some(extensions)
+        } else {
+            None
+        };
+        let extensions = image_extensions.as_deref().unwrap_or(extensions);
         let names = if let Some(spans) = syntax::file_list_spans(&doc.text.source, command) {
             spans
                 .into_iter()
@@ -434,7 +452,7 @@ pub(crate) fn document_links_in(workspace: &Workspace, uri: &Url, root: &Url) ->
             } else {
                 name.trim()
             });
-            let target = if extensions.is_empty() {
+            let target = if matches!(command.name.as_str(), "url" | "href") {
                 external_url(&value)
             } else {
                 file_link(

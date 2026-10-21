@@ -224,8 +224,11 @@ fn replacement(
     original: &str,
     graphics: &[PathBuf],
     root: &Url,
-    command: Option<&str>,
+    command: Option<(&str, &[&str])>,
 ) -> Result<String> {
+    let (command, inferred) = command.map_or((None, &["tex"][..]), |(name, extensions)| {
+        (Some(name), extensions)
+    });
     let target_path = target
         .to_file_path()
         .map_err(|_| Error::invalid_params("Invalid linked file URI"))?;
@@ -248,9 +251,6 @@ fn replacement(
         .extension()
         .and_then(|ext| ext.to_str())
         .unwrap_or_default();
-    let inferred = command
-        .and_then(syntax::inferred_file_extensions)
-        .unwrap_or(&["tex"]);
     let resolve = |origin| match command {
         Some(command) => resolve_file_path(origin, command, original, inferred),
         None => resolve_path(origin, original, extension),
@@ -477,6 +477,7 @@ pub fn will_rename(workspace: &Workspace, files: &[FileRename]) -> Result<Option
                 .map(|call| call.command)
                 .collect();
             let graphics = graphics::directories_in(workspace, uri, root);
+            let image_extensions = crate::graphics_extensions::Index::new(workspace, root);
             for link in navigation::document_links_in(workspace, uri, root) {
                 let Some(target) = link.target.filter(|target| target.scheme() == "file") else {
                     continue;
@@ -500,16 +501,24 @@ pub fn will_rename(workspace: &Workspace, files: &[FileRename]) -> Result<Option
                             |argument| argument.span.start <= start && argument.span.end >= end,
                         )
                 });
+                let inferred = if let Some(command) = command {
+                    if command.name == "includegraphics" {
+                        image_extensions
+                            .at(uri, command.span.start)
+                            .unwrap_or_default()
+                    } else {
+                        syntax::inferred_file_extensions(&command.name)
+                            .unwrap_or_default()
+                            .to_vec()
+                    }
+                } else {
+                    vec!["tex"]
+                };
                 // An unrelated file can arrive ahead of this target in the
                 // search order even when neither source nor target moves.
                 let reference_redirected = command.is_some_and(|command| {
                     let selected = match command.name.as_str() {
-                        "includegraphics" => renames.image(
-                            root,
-                            original,
-                            syntax::inferred_file_extensions(&command.name).unwrap_or_default(),
-                            &graphics,
-                        ),
+                        "includegraphics" => renames.image(root, original, &inferred, &graphics),
                         name => renames.source(uri, root, name, original),
                     };
                     selected != Some(renames.uri(&target))
@@ -565,7 +574,7 @@ pub fn will_rename(workspace: &Workspace, files: &[FileRename]) -> Result<Option
                         } else {
                             root
                         },
-                        command.map(|command| command.name.as_str()),
+                        command.map(|command| (command.name.as_str(), inferred.as_slice())),
                     )?
                 } else {
                     original.into()

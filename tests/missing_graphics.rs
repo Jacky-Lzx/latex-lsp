@@ -110,6 +110,48 @@ fn action_edit(action: &CodeActionOrCommand, uri: &Url) -> TextEdit {
 }
 
 #[test]
+fn image_fixes_use_declared_extension_settings_and_skip_unknown_searches() {
+    for (setting, expected) in [
+        (r"\DeclareGraphicsExtensions{.png,.pdf}", true),
+        (r"\DeclareGraphicsExtensions{}", true),
+        (r"\DeclareGraphicsExtensions{\chosen}", false),
+        (r"\DeclareGraphicsRule{.png}{png}{.png}{}", false),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let main = uri(root, "main.tex");
+        let source =
+            format!("\\documentclass{{article}}\n{setting}\n\\includegraphics{{resutl}}\n");
+        std::fs::write(root.join("main.tex"), &source).unwrap();
+        std::fs::write(root.join("result.png"), "image").unwrap();
+        let mut workspace = Workspace {
+            code_action_literals: true,
+            ..Default::default()
+        };
+        workspace.add_root(root.into());
+        let start = source.find("resutl").unwrap();
+        let diagnostic = Diagnostic {
+            range: Text::new(source).range(start, start + "resutl".len()),
+            source: Some("latex-build".into()),
+            severity: Some(DiagnosticSeverity::ERROR),
+            code: Some(NumberOrString::String("missing-image".into())),
+            message: "LaTeX Error: File `resutl' not found.".into(),
+            data: Some(serde_json::json!({"file":"resutl"})),
+            ..Default::default()
+        };
+        workspace.build_diagnostics.insert(
+            main.clone(),
+            [(main.clone(), vec![diagnostic.clone()])].into(),
+        );
+        let fixes = actions(&workspace, &main, &diagnostic);
+        assert_eq!(fixes.len(), usize::from(expected), "{setting}: {fixes:?}");
+        if expected {
+            assert_eq!(action_edit(&fixes[0], &main).new_text, "result.png");
+        }
+    }
+}
+
+#[test]
 fn image_spelling_fixes_use_the_compilation_root_and_project_graphics_paths() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();

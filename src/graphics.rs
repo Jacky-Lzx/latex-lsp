@@ -309,7 +309,8 @@ pub(crate) fn resolve_with(
     let direct = explicit.and_then(|_| exact(name));
     let selected = if direct.is_some()
         && explicit.is_some_and(|extension| {
-            extensions
+            syntax::file_extensions("includegraphics")
+                .unwrap()
                 .iter()
                 .any(|supported| extension.eq_ignore_ascii_case(supported))
         }) {

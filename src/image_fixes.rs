@@ -33,13 +33,18 @@ pub(crate) fn fixes(
         .commands
         .iter()
         .filter(|command| command.name == "includegraphics")
-        .filter_map(|command| command.argument.as_ref())
-        .find(|argument| {
+        .filter_map(|command| {
+            command
+                .argument
+                .as_ref()
+                .map(|argument| (command, argument))
+        })
+        .find(|(_, argument)| {
             let span = syntax::trimmed_span(&doc.text.source, argument.span.clone());
             doc.text.range(span.start, span.end) == diagnostic.range
                 && argument.value.trim() == reported
         });
-    let Some(argument) = argument else {
+    let Some((command, argument)) = argument else {
         return vec![];
     };
     let value = argument.value.trim();
@@ -56,8 +61,11 @@ pub(crate) fn fixes(
     let search = graphics::directories_in(workspace, uri, root);
     let mut directories = vec![parent];
     directories.extend(search.iter().cloned());
-    let extensions = syntax::file_extensions("includegraphics").unwrap();
-    let resolve = |name: &str| graphics::resolve_in(root, name, extensions, &search);
+    let index = crate::graphics_extensions::Index::new(workspace, root);
+    let Some(extensions) = index.at(uri, command.span.start) else {
+        return vec![];
+    };
+    let resolve = |name: &str| graphics::resolve_in(root, name, &extensions, &search);
     // A compiler error that contradicts the current search paths may be stale.
     if resolve(value).is_some() {
         return vec![];

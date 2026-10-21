@@ -2286,7 +2286,11 @@ impl<'a> CommandSignatures<'a> {
                 let opaque = local.contains_key(signature.name.as_str())
                     || matches!(
                         signature.name.as_str(),
-                        "graphicspath" | "lstset" | "fvset" | "includeonly"
+                        "graphicspath"
+                            | "DeclareGraphicsExtensions"
+                            | "lstset"
+                            | "fvset"
+                            | "includeonly"
                     );
                 argument_tokens(
                     source,
@@ -2402,7 +2406,10 @@ fn operand_builtin(name: &str) -> Option<Signature> {
                 label: label.into(),
             })
             .collect()
-        } else if matches!(name, "graphicspath" | "lstset" | "fvset" | "includeonly") {
+        } else if matches!(
+            name,
+            "graphicspath" | "DeclareGraphicsExtensions" | "lstset" | "fvset" | "includeonly"
+        ) {
             // One configuration argument ends here; a following file call
             // is independent. Settings remain data, including through aliases.
             vec![Parameter {

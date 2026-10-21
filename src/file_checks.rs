@@ -1,7 +1,7 @@
 //! Captured file conditions and content fingerprints for build validity.
 use crate::{
     config::BuildConfig,
-    graphics, syntax,
+    graphics, graphics_extensions, syntax,
     workspace::{normalize_path, resolve_file_path_with, Workspace},
 };
 use std::{
@@ -174,12 +174,8 @@ impl Snapshot {
                 .iter()
                 .filter_map(|uri| workspace.documents.get(uri))
                 .flat_map(|doc| &doc.syntax.commands)
-                .any(|command| {
-                    matches!(
-                        command.name.as_str(),
-                        "DeclareGraphicsExtensions" | "DeclareGraphicsRule"
-                    )
-                });
+                .any(|command| command.name == "DeclareGraphicsRule");
+        let image_extensions = graphics_extensions::Index::new(workspace, root);
         // A missing chapter is meaningful only when it can be selected.
         // Unknown or conflicting filters must not guess that TeX reads it.
         let include_filters = crate::source_inputs::selection_filters(workspace, &sources);
@@ -335,15 +331,17 @@ impl Snapshot {
                     continue;
                 }
                 if command.name == "includegraphics" {
-                    if let (Some(directories), Some(argument)) =
-                        (&image_directories, &command.argument)
-                    {
+                    if let (Some(directories), Some(argument), Some(extensions)) = (
+                        &image_directories,
+                        &command.argument,
+                        image_extensions.at(&source, command.span.start),
+                    ) {
                         let name = argument.value.trim();
                         if syntax::is_literal_file_path(name) {
                             graphics::resolve_with(
                                 root,
                                 name,
-                                syntax::file_extensions("includegraphics").unwrap(),
+                                &extensions,
                                 directories,
                                 observe_path,
                             );
@@ -1384,6 +1382,48 @@ mod graphic_conditions {
     }
 
     #[test]
+    fn declared_graphics_extensions_track_only_earlier_and_selected_candidates() {
+        for (argument, changed, expected) in [
+            ("plot", "plot.png", true),
+            ("plot", "assets/plot.png", true),
+            ("plot", "plot.pdf", false),
+            ("plot", "assets/plot.jpg", false),
+            ("plot.pdf", "plot.png", false),
+            ("plot.pdf", "plot.pdf", true),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            std::fs::create_dir(root.join("assets")).unwrap();
+            for extension in ["png", "pdf"] {
+                std::fs::write(root.join(format!("assets/plot.{extension}")), "image").unwrap();
+            }
+            let snapshot = capture(root, &format!(
+                "\\graphicspath{{{{assets/}}}}\\DeclareGraphicsExtensions{{.png,.pdf}}\\includegraphics{{{argument}}}"
+            ));
+            if changed == "assets/plot.png" {
+                std::fs::remove_file(root.join(changed)).unwrap();
+            } else {
+                std::fs::write(root.join(changed), "new candidate").unwrap();
+            }
+            assert_eq!(
+                snapshot.changed_path().is_some(),
+                expected,
+                "{argument}: {changed}\n{snapshot:?}"
+            );
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let snapshot = capture(
+            root,
+            r"\DeclareGraphicsExtensions{.png}\includegraphics{missing}",
+        );
+        std::fs::write(root.join("missing.pdf"), "excluded input").unwrap();
+        assert!(snapshot.changed_path().is_none());
+        std::fs::write(root.join("missing.png"), "included input").unwrap();
+        assert!(snapshot.changed_path().is_some());
+    }
+
+    #[test]
     fn dotted_image_names_retain_graphicx_extension_fallbacks() {
         for (argument, actual) in [
             ("plot.v1", "assets/plot.v1.png"),
@@ -1433,7 +1473,7 @@ mod graphic_conditions {
             r"% \includegraphics{missing.png}",
             r"\newcommand{\includegraphics}[1]{}\includegraphics{missing.png}",
             r"\newcommand{\graphicspath}[1]{}\includegraphics{missing.png}",
-            r"\DeclareGraphicsExtensions{.png,.pdf}\includegraphics{missing.png}",
+            r"\DeclareGraphicsExtensions{\chosen}\includegraphics{missing.png}",
             r"\DeclareGraphicsRule{.png}{png}{.png}{}\includegraphics{missing.png}",
             r"\graphicspath{{assets/}{\unknown/}}\includegraphics{missing.png}",
             r"\graphicspath{{assets/}garbage}\includegraphics{missing.png}",

@@ -1852,6 +1852,83 @@ fn fake_build_server_capabilities(
 
 #[test]
 #[cfg(unix)]
+fn declared_graphics_extensions_preserve_versioned_moves_and_build_input_precedence() {
+    for remove_selected in [false, true] {
+        let script = r#"printf '%%PDF-1.4\n' > "$1/main.pdf"
+printf 'PWD %s\nINPUT %s/main.tex\nINPUT %s/chart.png\n' "$PWD" "$PWD" "$PWD" > "$1/main.fls"
+touch "$1/ready"
+while [ ! -f "$1/release" ]; do sleep 0.02; done
+"#;
+        let (mut server, directory, main) = fake_build_server_capabilities(
+            script,
+            false,
+            json!({
+                "workspace":{"workspaceEdit":{"documentChanges":true},"fileOperations":{"willRename":true,"didRename":true}}
+            }),
+        );
+        let root = directory.path();
+        let old = Url::from_file_path(root.join("plot.png")).unwrap();
+        let new = Url::from_file_path(root.join("chart.png")).unwrap();
+        std::fs::write(root.join("plot.png"), "selected PNG").unwrap();
+        std::fs::write(root.join("plot.pdf"), "unselected PDF").unwrap();
+        let source = "\\documentclass{article}\n\\DeclareGraphicsExtensions{.png,.pdf}\n\\includegraphics{plot}\n";
+        std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":7},"contentChanges":[{"text":source}]}),
+        );
+        let files = json!({"files":[{"oldUri":old,"newUri":new}]});
+        let edit = server.request(2, "workspace/willRenameFiles", files.clone());
+        assert_eq!(
+            edit["documentChanges"][0]["textDocument"]["uri"],
+            main.as_str()
+        );
+        assert_eq!(edit["documentChanges"][0]["textDocument"]["version"], 7);
+        assert_eq!(
+            edit["documentChanges"][0]["edits"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(edit["documentChanges"][0]["edits"][0]["newText"], "chart");
+        let source = source.replace("{plot}", "{chart}");
+        std::fs::write(main.to_file_path().unwrap(), &source).unwrap();
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":8},"contentChanges":[{"text":source}]}),
+        );
+        std::fs::rename(old.to_file_path().unwrap(), new.to_file_path().unwrap()).unwrap();
+        server.notify("workspace/didRenameFiles", files);
+        let links = server.request(
+            3,
+            "textDocument/documentLink",
+            json!({"textDocument":{"uri":main}}),
+        );
+        assert_eq!(links[0]["target"], new.as_str());
+        server.request(
+            4,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let output = root.join("build/latex-lsp");
+        wait_for_file(&output.join("ready"));
+        // A later extension must not make the already selected PNG stale.
+        std::fs::write(root.join("chart.pdf"), "lower priority PDF").unwrap();
+        if remove_selected {
+            std::fs::remove_file(new.to_file_path().unwrap()).unwrap();
+        }
+        std::fs::write(output.join("release"), "").unwrap();
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(finished["params"]["stale"], remove_selected, "{finished}");
+        server.request(5, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
 fn wrapped_box_warnings_publish_complete_child_ranges_and_clear_after_recompilation() {
     use latex_lsp::text::Text;
     let script =
