@@ -666,6 +666,11 @@ impl BuildManager {
                     &diagnostic_sources,
                     &mut outcome.diagnostics,
                 );
+                crate::label_diagnostics::resolve_diagnostics(
+                    &current,
+                    &diagnostic_sources,
+                    &mut outcome.diagnostics,
+                );
             }
             let count = outcome.diagnostics.values().map(Vec::len).sum::<usize>();
             let errors = outcome

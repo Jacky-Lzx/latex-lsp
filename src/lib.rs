@@ -21,6 +21,7 @@ pub mod file_operations;
 mod generated;
 pub mod graphics;
 mod image_fixes;
+mod label_diagnostics;
 mod listings;
 mod named_colors;
 mod named_commands;

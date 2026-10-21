@@ -195,7 +195,7 @@ fn duplicate_label_start(message: &str) -> Option<&str> {
         .or_else(|| message.strip_prefix("LaTeX Warning: Label '"))
 }
 
-fn duplicate_label_key(message: &str) -> Option<&str> {
+pub(crate) fn duplicate_label_key(message: &str) -> Option<&str> {
     let key = duplicate_label_start(message)?.strip_suffix("' multiply defined.")?;
     (!key.is_empty()).then_some(key)
 }
