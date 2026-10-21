@@ -2160,7 +2160,15 @@ fn byte_wrapped_destination_message(
         if destination_warning(&message).is_some() {
             // An apostrophe at the print width can still be part of the name.
             complete = Some((message.clone(), end));
-            if lines[end].len() < 79 {
+            // LuaTeX can wrap early to keep a whole UTF-8 character together.
+            // An apparent closing quote near the width still needs lookahead.
+            let unicode_continuation = lines
+                .get(end + 1)
+                .and_then(|line| line.chars().next())
+                .is_some_and(|character| !character.is_ascii());
+            let unicode_wrap =
+                unicode_continuation && lines[end].len() >= 79 - char::MAX.len_utf8();
+            if lines[end].len() < 79 && !unicode_wrap {
                 break;
             }
         }
@@ -5080,6 +5088,117 @@ mod tests {
                 assert!(main_items.iter().any(|item| item.message == "LaTeX Warning: Main sentinel."), "{log}: {diagnostics:?}");
                 let child_items = &diagnostics[&Url::from_file_path(&child).unwrap()];
                 assert!(child_items.iter().any(|item| item.message.contains("Child sentinel.") || item.message == partial), "{log}: {diagnostics:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn lua_unicode_early_wraps_do_not_diagnose_a_healthy_short_prefix() {
+        let directory = tempfile::tempdir().unwrap();
+        let main = directory.path().join("main.tex");
+        let missing = "warning  (pdf backend): unreferenced destination with name '";
+        let duplicate = "warning  (pdf backend): ignoring duplicate destination with the name '";
+        // Widths observed in successful native LuaTeX compilations, where the
+        // next whole Unicode character no longer fits on the physical line.
+        let cases: [(&str, char, &[usize], bool); 6] = [
+            (missing, 'é', &[77, 78], false),
+            (missing, '目', &[76, 77, 78], false),
+            (missing, '😀', &[75, 76, 77, 78], false),
+            (duplicate, 'é', &[76, 77, 78], true),
+            (duplicate, '目', &[75, 76, 77, 78], true),
+            (duplicate, '😀', &[75, 76, 77, 78], true),
+        ];
+        for (prefix, character, widths, declaration) in cases {
+            for width in widths {
+                let short = "x".repeat(width - prefix.len() - 1);
+                let name = format!("{short}'{character}tail");
+                let source = if declaration {
+                    format!("😀 \\hypertarget{{{short}}}{{Healthy}}\\hypertarget{{{name}}}{{One}}\\hypertarget{{{name}}}{{Two}}\\label{{{name}}}")
+                } else {
+                    format!("😀 \\hypertarget{{{short}}}{{Healthy}}\\hyperlink{{{short}}}{{Healthy}}\\hyperlink{{{name}}}{{Missing}}\\label{{{name}}}")
+                };
+                std::fs::write(&main, &source).unwrap();
+                let text = Text::new(source.clone());
+                let message = format!("{prefix}{name}'");
+                let log = format!(
+                "{prefix}{short}'\n{character}tail'\n</fonts/resource.otf>\nLaTeX Warning: Keep.\n"
+            );
+                let diagnostics = parse(&main, &log);
+                let items = &diagnostics[&Url::from_file_path(&main).unwrap()];
+                let code = if declaration {
+                    "duplicate-pdf-destination"
+                } else {
+                    "undefined-pdf-destination"
+                };
+                let mapped: Vec<_> = items
+                    .iter()
+                    .filter(|item| item.code == Some(NumberOrString::String(code.into())))
+                    .collect();
+                let count = if declaration { 2 } else { 1 };
+                assert_eq!(items.len(), count + 1, "{message}: {items:?}");
+                assert_eq!(mapped.len(), count, "{message}: {items:?}");
+                for (item, (at, _)) in mapped.iter().zip(source.match_indices(&name).take(count)) {
+                    assert_eq!(item.range, text.range(at, at + name.len()));
+                    assert_eq!(item.data, Some(serde_json::json!({"destination":name})));
+                    assert_eq!(item.message, message);
+                }
+                assert!(items
+                    .iter()
+                    .any(|item| item.message == "LaTeX Warning: Keep."));
+            }
+        }
+    }
+
+    #[test]
+    fn unicode_lookahead_after_a_complete_destination_keeps_independent_diagnostics() {
+        let directory = tempfile::tempdir().unwrap();
+        let main = directory.path().join("main.tex");
+        let child = directory.path().join("文件.tex");
+        std::fs::write(&child, "Child source\n").unwrap();
+        let prefix = "warning  (pdf backend): unreferenced destination with name '";
+        for width in [74, 75, 78] {
+            let name = "x".repeat(width - prefix.len() - 1);
+            let source = format!("😀 \\hyperlink{{{name}}}{{Link}}\n");
+            std::fs::write(&main, &source).unwrap();
+            let text = Text::new(source.clone());
+            let at = source.find(&name).unwrap();
+            let message = format!("{prefix}{name}'");
+            for (next, child_error) in [
+                ("文件.tex:1: LaTeX Error: Unicode sentinel.", true),
+                ("正文 without a closing apostrophe", false),
+            ] {
+                let log = format!("{message}\n{next}\nLaTeX Warning: Keep.\n");
+                let diagnostics = parse(&main, &log);
+                let items = &diagnostics[&Url::from_file_path(&main).unwrap()];
+                assert_eq!(items.len(), 2, "{log}: {diagnostics:?}");
+                let mapped: Vec<_> = items
+                    .iter()
+                    .filter(|item| {
+                        item.code
+                            == Some(NumberOrString::String("undefined-pdf-destination".into()))
+                    })
+                    .collect();
+                assert_eq!(mapped.len(), 1, "{log}: {diagnostics:?}");
+                assert_eq!(mapped[0].range, text.range(at, at + name.len()));
+                assert_eq!(mapped[0].message, message);
+                assert_eq!(
+                    mapped[0].data,
+                    Some(serde_json::json!({"destination":name}))
+                );
+                assert!(items
+                    .iter()
+                    .any(|item| item.message == "LaTeX Warning: Keep."));
+                let children = diagnostics
+                    .get(&Url::from_file_path(&child).unwrap())
+                    .map_or(&[][..], Vec::as_slice);
+                assert_eq!(
+                    children.len(),
+                    usize::from(child_error),
+                    "{log}: {diagnostics:?}"
+                );
+                if child_error {
+                    assert_eq!(children[0].message, "LaTeX Error: Unicode sentinel.");
+                }
             }
         }
     }
