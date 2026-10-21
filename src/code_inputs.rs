@@ -3,7 +3,7 @@ use crate::{
     listings, syntax,
     workspace::{resolve_file_path, Workspace},
 };
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use tower_lsp::lsp_types::Url;
 
 const COMMANDS: [&str; 5] = [
@@ -48,13 +48,17 @@ fn literal_inputs(
     sources: &BTreeSet<Url>,
     root: &Url,
     name: &str,
+    active: &BTreeMap<Url, BTreeSet<usize>>,
 ) -> BTreeSet<Url> {
     sources
         .iter()
-        .filter_map(|uri| workspace.documents.get(uri))
-        .flat_map(|doc| {
+        .filter_map(|uri| Some((workspace.documents.get(uri)?, active.get(uri)?)))
+        .flat_map(|(doc, positions)| {
             doc.syntax.commands.iter().filter_map(move |command| {
-                if command.name != name || !safe_call(&doc.text.source, command) {
+                if command.name != name
+                    || !positions.contains(&command.span.start)
+                    || !safe_call(&doc.text.source, command)
+                {
                     return None;
                 }
                 let argument = syntax::file_argument(&doc.text.source, command)?;
@@ -68,6 +72,7 @@ fn literal_inputs(
 /// A display call proves a data dependency, but not an exclusively data role:
 /// another call can execute the very same file using commandchars or escapes.
 fn displayed_inputs(workspace: &Workspace, sources: &BTreeSet<Url>, root: &Url) -> BTreeSet<Url> {
+    let active = crate::source_inputs::possible_direct_file_positions(workspace, sources);
     let safe: BTreeSet<_> = COMMANDS
         .iter()
         .copied()
@@ -75,14 +80,15 @@ fn displayed_inputs(workspace: &Workspace, sources: &BTreeSet<Url>, root: &Url) 
         .collect();
     let mut displayed: BTreeSet<_> = safe
         .iter()
-        .flat_map(|name| literal_inputs(workspace, sources, root, name))
+        .flat_map(|name| literal_inputs(workspace, sources, root, name, &active))
         .collect();
-    for doc in sources
+    for (doc, positions) in sources
         .iter()
-        .filter_map(|uri| workspace.documents.get(uri))
+        .filter_map(|uri| Some((workspace.documents.get(uri)?, active.get(uri)?)))
     {
         for command in &doc.syntax.commands {
-            if !syntax::code_input_command(&command.name)
+            if !positions.contains(&command.span.start)
+                || !syntax::code_input_command(&command.name)
                 || safe.contains(command.name.as_str()) && safe_call(&doc.text.source, command)
             {
                 continue;
@@ -141,9 +147,10 @@ pub(crate) fn supported(
 /// Uses the independent source walk so it is safe during project traversal.
 pub(crate) fn inputs(workspace: &Workspace, root: &Url) -> BTreeSet<Url> {
     let sources = context_sources(workspace, root, root);
+    let active = crate::source_inputs::possible_direct_file_positions(workspace, &sources);
     COMMANDS
         .iter()
         .filter(|name| safe_project(workspace, &sources, name))
-        .flat_map(|name| literal_inputs(workspace, &sources, root, name))
+        .flat_map(|name| literal_inputs(workspace, &sources, root, name, &active))
         .collect()
 }

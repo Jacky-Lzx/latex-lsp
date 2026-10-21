@@ -271,7 +271,7 @@ impl Snapshot {
                 .commands
                 .iter()
                 .filter(|command| {
-                    !matches!(
+                    !(matches!(
                         command.name.as_str(),
                         "input"
                             | "include"
@@ -279,9 +279,10 @@ impl Snapshot {
                             | "InputIfFileExists"
                             | "IfFileExists"
                             | "includegraphics"
-                    ) || active_sources
-                        .get(&source)
-                        .is_some_and(|positions| positions.contains(&command.span.start))
+                    ) || syntax::code_input_command(&command.name))
+                        || active_sources
+                            .get(&source)
+                            .is_some_and(|positions| positions.contains(&command.span.start))
                 })
                 .chain(
                     inputs
@@ -2285,6 +2286,61 @@ mod active_direct_graphic_conditions {
                 !provider,
                 "provider={provider}"
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod active_direct_code_conditions {
+    use super::*;
+
+    #[test]
+    fn code_conditions_require_active_calls_and_keep_completed_argument_boundaries() {
+        for loader in [
+            "verbatiminput",
+            "lstinputlisting",
+            "VerbatimInput",
+            "LVerbatimInput",
+            "BVerbatimInput",
+        ] {
+            for star in [false, true] {
+                if star && loader == "lstinputlisting" {
+                    continue;
+                }
+                let command = format!(
+                    "\\{loader}{}{}{{sample.rs}}",
+                    if star { "*" } else { "" },
+                    if loader == "verbatiminput" {
+                        ""
+                    } else {
+                        "[firstline=1]"
+                    }
+                );
+                for (body, active) in [
+                    (command.clone(), true),
+                    (format!("\\hold{{ignored}}{command}"), true),
+                    (format!("\\take ignoredSTOP{command}"), true),
+                    (format!("\\newcommand{{\\unused}}{{{command}}}"), false),
+                    (format!("\\hold{{{command}}}"), false),
+                    (format!("\\hold{command}"), false),
+                    (format!("\\take {command}STOP"), false),
+                    (format!("\\string{command}"), false),
+                    (format!("\\detokenize{{{command}}}"), false),
+                    (format!("\\endinput\n{command}"), false),
+                ] {
+                    let directory = tempfile::tempdir().unwrap();
+                    let root = directory.path();
+                    let main = root.join("main.tex");
+                    std::fs::write(&main, format!("\\documentclass{{article}}\\newcommand{{\\hold}}[1]{{}}\\def\\take#1STOP{{}}{}{body}", if matches!(loader, "VerbatimInput" | "LVerbatimInput" | "BVerbatimInput") { r"\fvset{numbers=none}" } else { r"\lstset{columns=fullflexible}" })).unwrap();
+                    let uri = Url::from_file_path(&main).unwrap();
+                    let mut workspace = Workspace::default();
+                    workspace.add_root(root.into());
+                    let snapshot = Snapshot::capture(&workspace, &uri, &BuildConfig::default());
+                    assert!(snapshot.changed_path().is_none());
+                    std::fs::write(root.join("sample.rs"), "CodeUnique\n").unwrap();
+                    assert_eq!(snapshot.changed_path().is_some(), active, "{body}");
+                }
+            }
         }
     }
 }

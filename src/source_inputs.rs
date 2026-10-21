@@ -248,11 +248,27 @@ pub(crate) fn selection_filters(
     Some(filters)
 }
 
-/// Direct source/check/image calls whose literal filenames can affect this build.
+/// Direct file calls that can certify lookup conditions or a displayed-data role.
 /// The caller includes recorder-discovered sources in this existing scope.
 pub(crate) fn active_direct_file_positions(
     workspace: &Workspace,
     scope: &BTreeSet<Url>,
+) -> BTreeMap<Url, BTreeSet<usize>> {
+    direct_file_positions(workspace, scope, true)
+}
+
+/// Include active overrides so data consumers can reject uncertain execution.
+pub(crate) fn possible_direct_file_positions(
+    workspace: &Workspace,
+    scope: &BTreeSet<Url>,
+) -> BTreeMap<Url, BTreeSet<usize>> {
+    direct_file_positions(workspace, scope, false)
+}
+
+fn direct_file_positions(
+    workspace: &Workspace,
+    scope: &BTreeSet<Url>,
+    require_original_meaning: bool,
 ) -> BTreeMap<Url, BTreeSet<usize>> {
     let Some(documents) = bounded_latex_sources(workspace, scope) else {
         return BTreeMap::new();
@@ -271,7 +287,7 @@ pub(crate) fn active_direct_file_positions(
                 .commands
                 .iter()
                 .filter(|command| {
-                    matches!(
+                    (matches!(
                         command.name.as_str(),
                         "input"
                             | "include"
@@ -279,7 +295,9 @@ pub(crate) fn active_direct_file_positions(
                             | "InputIfFileExists"
                             | "IfFileExists"
                             | "includegraphics"
-                    ) && signatures.command_unchanged(&command.name)
+                    ) || syntax::code_input_command(&command.name))
+                        && (!require_original_meaning
+                            || signatures.command_unchanged(&command.name))
                         && positions.contains(&command.span.start)
                 })
                 .map(|command| command.span.start)

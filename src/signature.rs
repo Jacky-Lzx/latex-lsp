@@ -2130,8 +2130,8 @@ impl<'a> CommandSignatures<'a> {
                 // Resolved aliases retain their leaf's name. Builtin
                 // formatters and their pure aliases execute grouped contents;
                 // a user macro can instead discard or detokenize its argument.
-                let opaque =
-                    local.contains_key(signature.name.as_str()) || signature.name == "graphicspath";
+                let opaque = local.contains_key(signature.name.as_str())
+                    || matches!(signature.name.as_str(), "graphicspath" | "lstset" | "fvset");
                 argument_tokens(
                     source,
                     end,
@@ -2239,13 +2239,13 @@ fn operand_builtin(name: &str) -> Option<Signature> {
                 label: label.into(),
             })
             .collect()
-        } else if name == "graphicspath" {
-            // One directory specification ends here; a following file call
-            // is independent. Directory tokens remain data, including aliases.
+        } else if matches!(name, "graphicspath" | "lstset" | "fvset") {
+            // One configuration argument ends here; a following file call
+            // is independent. Settings remain data, including through aliases.
             vec![Parameter {
                 obey_spaces: false,
                 kind: Kind::Required,
-                label: "{directories}".into(),
+                label: "{configuration}".into(),
             }]
         } else if matches!(name, "csdef" | "csgdef" | "csedef" | "csxdef") {
             // Grouped destinations and replacement text do not consume the
@@ -3669,6 +3669,48 @@ mod tex_operand_tests {
                 TexOperands::definition(&source, &parsed, &parsed.definitions[0]).is_some(),
                 count == 64
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod code_configuration_operand_tests {
+    use super::*;
+    use crate::text::Text;
+
+    #[test]
+    fn code_settings_stop_at_one_data_argument_before_independent_file_calls() {
+        for name in ["lstset", "fvset"] {
+            for call in [
+                format!("\\{name}"),
+                format!("\\csuse{{{name}}}"),
+                format!("\\csname {name}\\endcsname"),
+                r"\settings".into(),
+                r"\csuse{settings}".into(),
+                r"\csname settings\endcsname".into(),
+            ] {
+                for argument in [r"{\input{opaque}}", r"\input{opaque}"] {
+                    let source = format!(
+                        r"\def\settings{{\{name}}}{call}{argument}\verbatiminput{{code.txt}}\lstinputlisting{{code.txt}}\VerbatimInput{{code.txt}}\input{{right}}"
+                    );
+                    let parsed = syntax::Syntax::latex(&Text::new(source.clone()));
+                    let signatures =
+                        CommandSignatures::source_context([(source.as_str(), &parsed)]);
+                    let operands = signatures.argument_tokens(&source, &parsed);
+                    for command in parsed.commands.iter().filter(|command| {
+                        syntax::code_input_command(&command.name) || command.name == "input"
+                    }) {
+                        assert_eq!(
+                            operands.contains(&command.span.start),
+                            command
+                                .argument
+                                .as_ref()
+                                .is_some_and(|argument| argument.value == "opaque"),
+                            "{source}: {command:?}"
+                        );
+                    }
+                }
+            }
         }
     }
 }
