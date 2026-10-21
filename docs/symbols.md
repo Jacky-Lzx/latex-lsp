@@ -1,0 +1,110 @@
+# 符号与重命名
+
+[返回 README](../README.md)
+
+自定义宏、环境、计数器、字体、寄存器和条件开关的静态识别规则。通用编辑能力见[编辑功能](editing.md)，跨项目的作用域规则见[项目与文件](projects.md)。
+
+- [支持范围与参数签名](#支持范围与参数签名)
+- [环境与静态调用分析](#环境与静态调用分析)
+- [计数器、定理与寄存器](#计数器定理与寄存器)
+- [字体与数学命令](#字体与数学命令)
+- [布尔开关与 toggle](#布尔开关与-toggle)
+- [命名宏、复制与别名](#命名宏复制与别名)
+
+## 支持范围与参数签名
+
+这是可运行的基础版本，使用静态解析，不执行 TeX 宏展开或读取 TeX 发行版的包数据库。自定义命令支持 `\newcommand`、`\renewcommand`、`\providecommand`、`\DeclareMathOperator`、`\DeclareRobustCommand` 和 xparse 的 `\NewDocumentCommand` 等声明，包含花括号与直接控制序列形式；也识别 `\def` / `\gdef` / `\edef` / `\xdef` 和 `\let`。BibTeX 支持常见 `{...}` / `(...)` 条目和嵌套字段。
+
+用户宏参数提示识别 `\newcommand` 系列和 `\DeclareRobustCommand` 的参数数量/首个可选参数默认值，xparse 的 `m` / `o` / `O{...}` / `s` / `t+` / `d<>` / `D<>{默认值}` / `r()` / `R(){默认值}`，以及 `\def` 系列连续的 `#1#2...` 参数。传统宏及环境的可选参数和默认值在首个未受花括号保护的 `]` 处结束，保留字面量 `[`；xparse 调用仍匹配嵌套方括号。直接调用、`csuse` 和静态 `csname` 使用所调用命令的规则，支持星号、嵌套调用、转义和多行注释。`t` 标志支持字符、控制序列及 Unicode token，保留有无标志时的后续参数编号；分隔参数支持字符、控制序列和 Unicode 分隔符，匹配嵌套、花括号保护及完整 token；缺失必需分隔符时保守回退。不支持的参数规格、字符串求值或定义有歧义时暂不推断签名；不在注释和逐字文本中提示。
+
+零参数宏的分组正文若只含一个控制词，参数提示和命令补全也会沿当前项目内的静态别名链继承目标签名，显示所调用的别名及其声明位置。支持传统声明、TeX 定义、命名定义和 xparse 空参数规格，允许正文外围注释和空白；补全只插入必需参数，保留已有可选参数、标志和分隔参数。循环、未知目标、重定义、展开式定义及其他正文不推断转发签名；空宏和无参开关不生成参数片段。
+
+必需参数也支持未加花括号的单个 ASCII 字符、控制词、控制空格和转义符号，例如 `\pair a{body}`、`\pair\payload{body}` 和 `\frac12`。直接调用、`csuse`、静态 `csname` 和环境使用相同的 token 边界，并保留后续 `!` 参数的词法空白规则。未分组的 Unicode、`^^` 字符转义和显式 `\par` 暂不推断为单个实参；花括号内的 Unicode 正常支持，避免混淆 pdfTeX 的 UTF-8 字节与 XeTeX 的字符分词。引用范围的标签端点仍要求花括号分组，保持与导航、重命名的识别规则一致。
+
+普通 xparse 命令及环境的末尾可选参数支持 `!` 修饰符：有效空格会结束参数读取，紧邻注释及控制词后的词法空白按 TeX 规则处理，空行保留段落边界；`csuse`、直接环境调用及 `begin` 各自保持实际读取方式。无效的 `!` 位置和可展开声明中的该修饰符不推断签名。例如规格 `m !o` 下，`\probe{body}[note]` 会读取可选参数，而 `\probe{body} [note]` 的方括号属于正文。
+
+支持 snippet 的客户端补全用户宏时，还会按同一签名生成必选参数的 tabstop。例如 `\newcommand{\pair}[2][blue]{...}` 会补成 `\pair{...}`，保留首个可选参数的默认值；xparse 星号、`t` 标志及可选分隔参数也默认省略，必需分隔参数保留分隔符，并正确转义 snippet 特殊字符及隔开控制词。宏后已有分组、标志、分隔参数，或同一逻辑行上的无花括号 ASCII 实参时仅替换命令名，保留注释续行；普通换行后的正文不会抑制参数占位符。客户端不支持 snippet 或签名无法安全推断时，继续提供命令名补全。
+
+环境参数提示支持 `\newenvironment`、`\NewEnviron` 和 xparse 的 `\NewDocumentEnvironment` 系列定义，以及 `tabular`、`minipage`、`figure` 等常用环境；`\newtheorem` 定理提示可选标题 `[note]`。通过 `\begin{panel}` 或直接调用 `\panel` 均可查看参数，自定义环境的直接命令补全会插入必选参数的占位符并保留可选参数默认值。自定义命令与环境识别常规参数数量/默认值，以及 xparse 的 `m`、`o`、`O`、`s`、`t` 及 `d/D/r/R` 参数；不支持的参数规格和存在多个定义的名称不推断签名。 etoolbox 的 `newrobustcmd` / `renewrobustcmd` / `providerobustcmd` 也支持导航、符号、补全、参数提示和跨文件重命名，识别带星号、无花括号及经 `expandafter` 展开的字面 `csname` 声明；补全保留首个可选参数的默认值。
+
+LaTeX 内核的 `NewExpandableDocumentCommand`、`RenewExpandableDocumentCommand`、`ProvideExpandableDocumentCommand` 和 `DeclareExpandableDocumentCommand` 与普通文档命令共用宏导航、引用、重命名和补全，兼容带花括号或裸命令目标及静态 `csname` 形式。声明提供命令、参数规格、定义体的参数提示；调用支持 `m`、`o`、`O`、`s`、`t` 以及 `d/D/r/R` 分隔参数规格及修饰符，补全保留可选参数默认值。复杂规格继续保守回退，不执行宏展开。
+
+`NewCommandCopy`、`RenewCommandCopy` 和 `DeclareCommandCopy` 支持复制目标的导航、引用、补全和重命名，并提供声明参数提示与片段。复制目标是独立宏；重命名原命令时维护复制声明的来源参数，重命名副本时只更新副本的声明与调用。兼容带花括号或裸命令参数，以及目标的静态 `csname` 写法，保留注释和逐字内容。
+
+`NewEnvironmentCopy`、`RenewEnvironmentCopy` 和 `DeclareEnvironmentCopy` 支持环境导航、引用、重命名、语义高亮及声明参数提示。第二个参数按来源环境处理，支持完整、未完成和跨行名称的补全；重命名来源时同步更新该参数。副本的 `begin` / `end`、直接生成的命令和静态 `csname` 调用使用副本自己的名称；复制定理时继续使用原计数器，不推断副本拥有同名计数器。含语义空白或动态的来源名称不作静态匹配。
+
+`DeclareTextCommand` / `ProvideTextCommand` 及其 `Default` 形式支持文本宏的导航、引用、重命名、声明参数提示和调用参数推断。编码参数独立于宏实参；补全省略可选参数以保留默认值。`DeclareTextSymbol` 的零参数符号与 `DeclareTextAccent` 的单参数重音命令同样进入索引，兼容裸命令或花括号目标，保留编码、字符槽位和定义体。
+
+## 环境与静态调用分析
+
+- 宏实参分析也识别 TeX 定义中的静态 ASCII 前缀和分隔参数，兼容 `def`、`gdef`、`edef`、`xdef` 及对应的 etoolbox 命名定义。分隔控制词按完整 token 匹配，跳过受花括号保护的同名分隔符，支持普通空格、Tab、换行、注释续行、多 token 分隔符和静态别名；连续排版空白按 TeX 空格 token 归一化，控制词后的词法空白忽略，注释续行不产生空格。调用结束后的正常命令继续参与诊断和编辑。此规则仅用于识别被宏消费的命令，不增加这类宏的参数提示或补全片段；不推断含空段落、非 ASCII、`^^` 写法或超过 64 个分隔 token 的参数文本。
+
+- 静态 `\csuse{名称}` 和字面 `\csname 名称\endcsname` 调用也使用当前项目内的宏签名识别实参，覆盖分组、可选参数、xparse 标志、TeX 分隔参数及静态别名。保留名称组后具有语义的空格，并忽略 `endcsname` 后的词法空白；命名声明不当作调用，相关命名命令被重定义时不推断调用目标。调用结束后的正常文件修复和颜色重命名仍可使用；不执行动态名称或任意宏展开。
+
+- 自定义环境的起始命令也参与宏实参分析，支持传统与 xparse 声明的必选、可选和分隔参数，以及直接调用、静态命名调用和别名。`begin{环境名}` 按环境参数的实际边界读取，也识别静态 `\csuse{begin}`、字面 `\csname begin\endcsname` 和纯别名调用后的环境名；`begin` 被重定义或目标不确定时不推断环境参数。已完成参数后的正文继续参与文件修复和颜色重命名；环境起止命令的纯静态别名也继承目标的参数规则，结束调用后的正常命令继续参与分析；环境名、生成的结束命令与普通宏名发生冲突时保留歧义。暂停父文件中的环境声明也参与冲突检查，并在应用旧修复前重新校验。环境声明本身提供名称、参数规格及起止代码的参数提示。声明的参数规格和默认值也按数据处理，起止代码中的正常颜色引用仍可改名。此规则不执行环境正文或动态宏展开。
+
+- 环境名也支持未分组的 ASCII 单字符参数（例如 `\begin x`），兼容静态命名调用与别名；环境实参继续按该环境的参数规则分析。环境配对诊断、跳转、引用和重命名识别这一名称，重命名时自动补入花括号，以支持多字符新名称；不推断未分组的非 ASCII 字符、控制序列或 `^^` 写法。
+
+- 环境引用、跳转和重命名也识别静态 `\csuse{begin/end}`、字面 `\csname begin/end\endcsname` 及纯静态别名后的环境名组，保留注释与版本化编辑。别名按各主文档的项目范围解析；共享文件中的同一位置在不同项目中含义不一致，或间接环境调用被当作宏实参时，拒绝重命名以避免遗漏或误改。动态名称和任意宏正文不执行展开。
+
+- 环境配对诊断与修复也按项目解析静态命名调用及别名，普通与间接起止调用可以混用；意外结束调用的删除修复覆盖完整命令，缺失结束调用则在外层环境结束前补齐。共享文件只提供各项目一致的配对修复，宏数据与不确定执行的定义正文按名称保留不确定性，正文中的动态环境参数也不当作实际环境名；其他名称的真实配对错误、逐字环境错误和编译诊断仍保留。旧修复应用前重新解析依赖中的别名，避免别名变化后删除合法调用。配对按主文档中静态 `\input`、`\include` 的出现顺序跨文件执行，并支持嵌套输入；跨文件缺失结束调用的修复指向实际关闭位置，并关联起始文件。重复输入和共享文件的编辑必须在各次执行及各主文档中一致；循环、条件、动态输入或语义不确定的 `\endinput` 不使用不完整序列生成配对修复。不执行任意宏展开。
+
+自定义环境支持 `\newenvironment` / `\renewenvironment`、xparse 的 `\NewDocumentEnvironment` 等声明、`\NewEnviron` / `\RenewEnviron` 和 `\newtheorem`，提供补全、定义跳转、引用、悬浮、符号及跨文件重命名。改名时同步维护 `\begin{panel}` / `\end{panel}`、直接调用的 `\panel` / `\endpanel` 和字面 `\csname panel\endcsname`；可从这些调用处跳转或发起重命名。检查环境生成的同名宏和 `\end...` 宏，避免与已有命令冲突；存在直接控制序列调用时，新名称须只含 TeX 命令字母。
+
+环境和计数器名称内部的空白具有语义，例如 `panel` 与 ` panel ` 可以分别声明。导航、引用与重命名不会把它们合并，普通名称的重命名保留含空白的其他名称。含空白的名称暂不进入静态符号索引，也不提供精确编译诊断或拼写修复；参数外的排版空白不受影响。逐字环境只按其实际名称识别，不将 ` verbatim ` 当成 `verbatim`。
+
+## 计数器、定理与寄存器
+
+- 定理重命名：维护 `\newtheorem` 的共享编号与编号重置关系、计数器操作、派生命令及 cleveref 名称；区分自有计数器、共享计数器和无编号定理，可从关联命令跳转或发起重命名。
+
+计数器操作支持命令片段、参数提示和名称补全，包括 `setcounter` / `addtocounter`、`stepcounter` / `refstepcounter`、`value` / `arabic` 等格式化命令、`counterwithin` / `counterwithout` / `numberwithin`。名称候选来自内置计数器、当前项目的 `newcounter` / `newaliascnt` 和拥有计数器的定理声明；支持新计数器、别名及定理的共享/重置参数，保留已有名称后缀、空白和其他实参。不同论文之间的候选按依赖隔离，宏生成的名称不作推断。
+
+静态 `newcounter` / `newaliascnt` 声明支持跳转、悬停、引用、文档/工作区符号及跨文件重命名。重命名联动维护计数器操作、子计数器重置、定理共享编号、别名和格式化命令，包括字面 `csname`、`aliascntresetthe` 及别名元数据；同名的独立宏和 cleveref 的显示文字保持原样。名称冲突、共享引用在其他论文中指向独立声明、或同名定理与计数器对格式化命令的所有权有歧义时拒绝改动。
+
+`newlength`、`newsavebox`、`newcount` / `newdimen` / `newskip` / `newmuskip` / `newtoks` / `newbox` 等寄存器分配，以及 `chardef` / `mathchardef`、寄存器绑定和字体声明也进入符号索引，支持变量补全、导航、悬停和跨文件安全重命名；识别直接名称和经 `expandafter` 展开的字面 `csname` 声明。常用长度操作、保存盒命令提供片段及参数提示；重命名会检查已有宏、寄存器、计数器派生命令和常用内置长度/寄存器原语的冲突。
+
+`setcounterref` / `addtocounterref`、`setcounterpageref` / `addtocounterpageref` 分别识别首个计数器参数和第二个标签参数，提供各自的补全、导航、引用、重命名、编译诊断和拼写修复。同名计数器与标签仍属于不同的符号，修复和重命名只改动相应参数；支持命令片段、参数提示及跨行标签的补全。常用的带星号引用（如 `ref*`、`pageref*`）也支持名称补全和参数提示。
+
+重命名静态 `\newtheorem{claim}{Claim}` 时，同步维护 `\newtheorem{lemma}[claim]{Lemma}`、`\newtheorem{fact}{Fact}[claim]`、`\newcounter{inner}[claim]`、常见计数器操作与 `counterwithin` / `counterwithout` / `numberwithin`，以及 `\claim`、`\endclaim`、`\theclaim` 等派生命令；支持字面 `\csname theclaim\endcsname`，不展开动态宏。共享计数器的定理保留底层计数器，无编号定理不修改独立计数器。新名称与计数器或派生命令冲突、或共享引用属于其他项目中的独立计数器时拒绝改动；存在直接派生命令调用时，新名称需能组成 TeX 控制序列。
+
+## 字体与数学命令
+
+fontspec 的 `newfontfamily` / `renewfontfamily` / `providefontfamily` / `setfontfamily` 和对应的 `fontface` 声明也支持命令补全、导航、悬停、引用及跨文件安全重命名。识别裸命令与花括号包裹的命令目标；声明提供片段和参数提示，区分字体名前后的可选特性，生成的字体切换命令按零参数处理。沿用项目隔离、冲突与歧义检查，保留字体名称、特性、注释和逐字文本，不展开动态声明。
+
+LaTeX 标准的 `DeclareTextFontCommand`、`DeclareMathAlphabet`、`DeclareSymbolFontAlphabet` 也进入命令索引，生成的命令按单个正文参数提供提示及补全。`DeclareFixedFont` 和以命令为目标的 `DeclareMathSymbol` 作为零参数字体选择器或符号常量进入变量索引；字符目标不会误记为命令声明。五种声明均提供命令片段、字段参数提示及跨文件安全重命名，保留编码、字体族、字形、字号、数学类别和字符槽位。
+
+`DeclareMathAccent`、`DeclareMathRadical` 和以命令为目标的 `DeclareMathDelimiter` 也进入索引，支持导航、引用、语义高亮和跨文件安全重命名，并提供声明片段及字段参数提示。重音和根号命令按一个必选参数提供调用提示；根号不推断可选次数。定界符是零参数符号，可直接使用或跟随 `left` / `right` 伸缩；字符目标不会误记为命令声明。重命名保留数学类别、大小字体及槽位，不改动注释和逐字文本。
+
+常用标准数学重音和定界符（如 `hat`、`widehat`、`vec`、`langle` 和 `Vert`）提供补全、悬浮说明和命令拼写修复候选。重音、上下划线和 `sqrtsign` 按一个表达式参数提示及补全，定界符不追加参数；命令和环境重命名也会检查这些内置名称，避免覆盖已有数学命令。
+
+标准希腊字母及其变体、大小写形式和常用算子（如 `epsilon`、`varepsilon`、`Gamma`、`sin`、`log`）也提供补全、悬浮说明、拼写候选及重命名冲突保护。字母和算子不追加调用参数；amsmath 的 `operatorname` / `operatorname*` 和 `DeclareMathOperator` / `DeclareMathOperator*` 提供正文、命令目标等字段提示，兼容裸命令目标、注释和跨行星号。
+
+mathtools 的 `DeclarePairedDelimiter` / `DeclarePairedDelimiterX` / `DeclarePairedDelimiterXPP` 声明同样支持导航、引用、悬停、符号及跨文件重命名。参数提示识别星号自动缩放与 `[size]` 手动尺寸，X/XPP 的字面参数数量限于 1–9；补全只插入正文必选参数，保留其实际参数编号。声明本身提供命令片段及参数提示，X/XPP 的方括号参数数量为必填项；动态数量或定义有歧义时不推断调用签名，已有调用参数和声明的定界符、前后代码保持原样。
+
+## 布尔开关与 toggle
+
+直接 `\newif\ifdraft` 和字面 `\expandafter\newif\csname ifdraft\endcsname` 声明提供布尔符号、跳转、悬停和项目内的派生命令补全。从 `\ifdraft`、`\drafttrue`、`\draftfalse` 或对应字面 `csname` 引用发起重命名时，输入新的基础名称（例如 `release`），同步维护三种命令及声明；保留同名的独立 `\draft` 宏。只经字面 `csname` 使用的名称支持连字符和中文；存在直接控制序列时，新名称必须能组成 TeX 命令，不提供无法直接键入的补全。新名称与宏、寄存器、环境、其他开关或内置条件原语冲突，以及共享文件在其他项目中指向独立开关时拒绝修改；不展开动态声明。
+
+ifthen 的 `newboolean` / `provideboolean` 与 etoolbox 的 `newbool` / `providebool` 复用同一布尔索引；重命名同时维护 `boolean`、`setboolean`、`setbool`、`booltrue` / `boolfalse`、`ifbool` / `notbool` 中的名称参数，以及直接或字面派生命令。名称和值参数提供补全、片段及参数提示，保留后缀、空白与其他实参；只读条件支持内置 `true` / `false`，赋值命令只建议已声明的开关。`ifboolexpr` / `ifboolexpe` 和 `whileboolexpr` / `unlessboolexpr` 支持静态 `bool {名称}` 操作数的补全、导航、引用和重命名，包括嵌套逻辑与未闭合表达式中的补全；跳过 `test {...}` 的普通文本及动态名称，不展开宏。
+
+etoolbox 的 `newtoggle` / `providetoggle` 使用独立命名空间，支持 `settoggle`、`toggletrue` / `togglefalse`、`iftoggle` / `nottoggle` 和上述表达式中的 `togl {名称}` 操作数。提供名称和值补全、片段、参数提示、布尔符号、跨文件导航与安全重命名；同名 boolean 保持独立。重命名同时维护直接或字面的内部 `etb@tgl@名称` 控制序列，并检查生成命令冲突。
+
+## 命名宏、复制与别名
+
+普通自定义宏也支持字面 `\csname hello\endcsname` 的定义跳转、悬浮、引用、高亮和重命名，与直接调用的 `\hello` 统一处理；保留 `csname` 控制词后的词法分隔空白及调用参数。识别 `\expandafter\def\csname hello\endcsname#1{...}`、同样写法的 `gdef` / `edef` / `xdef`、`newcommand` / xparse 系列以及 `let` 别名定义；可从字面定义处发起重命名，参数提示与直接定义一致。字面调用可提示内置命令、自定义宏和环境参数，签名保留 `\csname ...\endcsname` 写法。名称中的宏展开、注释拼接、语义空白和未闭合的 `csname` 不作推断，也不会误记为重新定义 `csname` 原语；共享调用在不同项目里指向不同宏时拒绝重命名。
+
+etoolbox 的静态 `csdef` / `csgdef` / `csedef` / `csxdef` 声明进入宏索引，支持导航、符号、参数提示、补全和跨文件重命名，维护直接调用、`csuse` 及字面 `csname` 引用。识别连续的 `#1#2...` 参数和仅通过名称调用的中文或带连字符名称；不展开动态名称，不推断复杂分隔参数，不模拟局部作用域或重复定义的覆盖顺序。
+
+仅通过静态名称声明和调用的宏可以重命名为中文、连字符或数字名称，例如 `发布-模式`；同样适用于经 `expandafter` 展开的字面 `csname` 声明。任一使用该定义的项目中存在直接声明或直接调用时，新名称仍须仅包含 ASCII 字母或 `@`，避免破坏 TeX 控制序列。重命名保留普通字符串、注释和逐字文本，并检查内置原语与现有定义的冲突。
+
+宏和环境的重命名会保护 TeX/e-TeX 的核心原语，包括输入输出、字符类别与字符码、盒子、自动执行 token 列表及表达式运算，例如 `write`、`catcode`、`shipout`、`numexpr`。这些名称也用于静态名称补全和命令拼写建议；保留已有的引擎专用原语保护。
+
+etoolbox 的 `csuse` / `csmeaning`、`ifcsdef` / `ifcsundef` / `ifcsvoid`、宏类型检测及名称比较命令中的静态控制序列名称支持补全、导航、引用与重命名；识别 `ifcsequal` / `ifcsstrequal` 的两个名称参数，保留 `ifcsstring` 的字符串和条件分支正文。派生的环境、计数器和布尔命令仍归属于原始声明。`csuse` 调用可显示被调用命令或环境的参数提示，包括可选参数默认值；动态名称不作推断。
+
+这些命名接口的名称参数按原样匹配；首尾空白属于命令名，含空白的名称不会归并到普通控制词。选择已知名称补全时替换整个名称参数，跨行空白通过额外编辑移除，保留后续参数。
+
+命名宏修改接口 `csappto` / `cspreto` 及其展开、全局变体（`cseappto`、`csgappto`、`csxappto`、`csepreto`、`csgpreto`、`csxpreto`），以及 `csundef` / `csgundef` 也支持片段、参数提示、名称补全、导航和跨文件重命名。只将名称参数关联到原始声明，保留追加或前插代码中的普通文本，并独立识别其中的宏调用；不将修改操作推断为新的声明。
+
+`cslet`、`letcs`、`csletcs` 的静态别名声明区分目标与来源：别名有独立的符号、导航和重命名，来源参数关联原宏；重命名原宏会维护这些引用。支持有花括号和无花括号的控制序列参数、名称补全、片段与声明参数提示。纯名称别名可改为中文名称；动态目标不会把来源误记为声明，不展开动态名称，也不根据来源推断别名调用的参数签名或模拟后续重新赋值。
+
+`\expandafter\letcs\csname alias\endcsname{source}` 同时识别字面别名目标和展开后的来源名称，支持名称补全、参数提示、跨文件与共享项目重命名，以及环境、计数器、开关等派生命令作为来源的情况。只有相邻的显式 `expandafter` 和完整静态 `csname` 才沿用此规则；动态目标不推断来源参数的位置。
