@@ -13176,6 +13176,96 @@ fn biblatex_data_citations_publish_versioned_fixes_analysis_and_key_renames_over
 }
 
 #[test]
+fn bibliography_categories_support_key_editing_and_versioned_renames_over_stdio() {
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}}}}));
+    server.notify("initialized", json!({}));
+    let main = "file:///category-protocol/main.tex";
+    let bib = "file:///category-protocol/refs.bib";
+    let source = "😀 \\DeclareBibliographyCategory{alpha}\r\n\\addtocategory{alpha}{beta,% alpha\r\n alpha}\\cite{alpha}\\label{alpha}";
+    server.notify("textDocument/didOpen", json!({"textDocument":{"uri":bib,"languageId":"bibtex","version":8,"text":"@book{alpha,title={Alpha}}\n@book{beta,title={Beta}}"}}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":main,"languageId":"latex","version":12,"text":source}}),
+    );
+    let text = latex_lsp::text::Text::new(source.into());
+    let start = source.find(" alpha}").unwrap() + 1;
+    let position = text.position(start + 2);
+    let target = json!({"textDocument":{"uri":main},"position":position});
+    let definition = server.request(2, "textDocument/definition", target.clone());
+    assert_eq!(definition[0]["uri"], bib);
+    let prepare = server.request(3, "textDocument/prepareRename", target.clone());
+    assert_eq!(prepare["placeholder"], "alpha");
+    let help = server.request(4, "textDocument/signatureHelp", target.clone());
+    assert_eq!(help["activeParameter"], 1);
+    assert_eq!(
+        help["signatures"][0]["label"],
+        "\\addtocategory{category}{keys}"
+    );
+    let completions = server.request(5, "textDocument/completion", target.clone());
+    assert!(completions
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["label"] == "alpha"));
+    let references = server.request(6, "textDocument/references", json!({"textDocument":{"uri":main},"position":position,"context":{"includeDeclaration":true}}));
+    assert_eq!(references.as_array().unwrap().len(), 3);
+    let edit = server.request(
+        7,
+        "textDocument/rename",
+        json!({"textDocument":{"uri":main},"position":position,"newName":"renamed"}),
+    );
+    let changes = edit["documentChanges"].as_array().unwrap();
+    assert_eq!(changes.len(), 2);
+    for change in changes {
+        let is_main = change["textDocument"]["uri"] == main;
+        assert_eq!(
+            change["textDocument"]["version"],
+            if is_main { 12 } else { 8 }
+        );
+        assert_eq!(
+            change["edits"].as_array().unwrap().len(),
+            if is_main { 2 } else { 1 }
+        );
+        if is_main {
+            let mut edits: Vec<tower_lsp::lsp_types::TextEdit> =
+                serde_json::from_value(change["edits"].clone()).unwrap();
+            edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
+            let updated = text
+                .changed(
+                    edits
+                        .into_iter()
+                        .map(
+                            |edit| tower_lsp::lsp_types::TextDocumentContentChangeEvent {
+                                range: Some(edit.range),
+                                range_length: None,
+                                text: edit.new_text,
+                            },
+                        )
+                        .collect(),
+                )
+                .unwrap();
+            assert_eq!(
+                updated.source,
+                source
+                    .replace(" alpha}", " renamed}")
+                    .replace("\\cite{alpha}", "\\cite{renamed}")
+            );
+        }
+    }
+    let category_position = text.position(source.find("{alpha}{beta").unwrap() + 2);
+    let category = server.request(
+        8,
+        "textDocument/definition",
+        json!({"textDocument":{"uri":main},"position":category_position}),
+    );
+    assert_eq!(category, json!([]));
+    server.request(9, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
 #[cfg(unix)]
 fn missing_biblatex_resources_publish_versioned_fixes_and_recheck_alias_providers_over_stdio() {
     for loader in ["addbibresource", "addglobalbib"] {

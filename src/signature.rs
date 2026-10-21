@@ -235,12 +235,17 @@ fn builtin(name: &str) -> Option<Signature> {
         return Some(Signature {
             name: name.into(),
             parameters: citation_parameters(style, 1),
-            documentation: "Biblatex citation arguments. Repeated calls accept up to two overall notes in parentheses; volume citations separate the volume and optional pages from bibliography keys. Data citations select a field or list after an optional format. Requires biblatex.".into(),
+            documentation: if style.category_membership() {
+                "Assign bibliography keys to a declared category. This does not cite the entries. Requires biblatex."
+            } else {
+                "Biblatex citation arguments. Repeated calls accept up to two overall notes in parentheses; volume citations separate the volume and optional pages from bibliography keys. Data citations select a field or list after an optional format. Requires biblatex."
+            }.into(),
             starred: style.accepts_star(),
             nested_brackets: false,
         });
     }
     let (arguments, starred): (&[(&str, bool)], bool) = match name {
+        "DeclareBibliographyCategory" => (&[("category", false)], false),
         name if syntax::declares_traditional_command(name) => (
             &[
                 ("command", false),
@@ -3114,6 +3119,20 @@ fn active_parameter(
 }
 
 fn citation_parameters(style: crate::citations::Style, groups: usize) -> Vec<Parameter> {
+    if style.category_membership() {
+        return vec![
+            Parameter {
+                obey_spaces: false,
+                kind: Kind::Required,
+                label: "{category}".into(),
+            },
+            Parameter {
+                obey_spaces: false,
+                kind: Kind::CitationKeys(style),
+                label: "{keys}".into(),
+            },
+        ];
+    }
     let mut parameters = Vec::new();
     if style.repeated() {
         parameters.extend(
@@ -3187,6 +3206,13 @@ fn citation_parameter(
     role: crate::citations::Role,
 ) -> usize {
     use crate::citations::Role;
+    if style.category_membership() {
+        return match role {
+            Role::Category => 0,
+            Role::Keys => 1,
+            _ => unreachable!(),
+        };
+    }
     if let Role::Overall(index) = role {
         return index;
     }
@@ -3205,7 +3231,7 @@ fn citation_parameter(
         }
         Role::Format => 3,
         Role::Selector => 4,
-        Role::Overall(_) => unreachable!(),
+        Role::Overall(_) | Role::Category => unreachable!(),
     }
 }
 

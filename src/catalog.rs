@@ -761,6 +761,8 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
         "Select a BibTeX bibliography style.",
     ),
     ("citefield", "citefield{${1:keys}}{${2:field}}", "Print a bibliography field with an optional format. Requires biblatex."),
+    ("DeclareBibliographyCategory", "DeclareBibliographyCategory{${1:category}}", "Declare a bibliography category in the preamble. Requires biblatex."),
+    ("addtocategory", "addtocategory{${1:category}}{${2:keys}}", "Assign bibliography keys to a declared category without citing them. Requires biblatex."),
     ("citelist", "citelist{${1:keys}}{${2:literal list}}", "Print a bibliography literal list with an optional format. Requires biblatex."),
     ("citename", "citename{${1:keys}}{${2:name list}}", "Print a bibliography name list with an optional format. Requires biblatex."),
     ("addglobalbib", "addglobalbib{${1:references.bib}}", "Load a bibliography resource in every reference section. Use the full filename. Requires biblatex."),

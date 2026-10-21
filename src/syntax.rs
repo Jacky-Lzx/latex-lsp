@@ -1753,7 +1753,7 @@ pub(crate) fn is_single_citation(name: &str) -> bool {
 }
 
 pub(crate) fn warns_on_undefined_citation(name: &str) -> bool {
-    is_citation(name) && name != "defcitealias"
+    is_citation(name) && !matches!(name, "defcitealias" | "addtocategory")
 }
 
 pub(crate) fn citation_accepts_star(name: &str) -> bool {
@@ -1775,7 +1775,11 @@ pub(crate) fn citation_accepts_star(name: &str) -> bool {
 }
 
 pub(crate) fn citation_accepts_notes(name: &str) -> bool {
-    is_citation(name) && !matches!(name, "nocite" | "citenum" | "bibentry" | "defcitealias")
+    is_citation(name)
+        && !matches!(
+            name,
+            "nocite" | "citenum" | "bibentry" | "defcitealias" | "addtocategory"
+        )
 }
 
 /// Citation keys follow at most two optional notes. Leave any extra bracket

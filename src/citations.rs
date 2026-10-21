@@ -8,6 +8,7 @@ pub(crate) enum Style {
     Volume,
     MultiVolume,
     Data(&'static str),
+    Category,
 }
 
 impl Style {
@@ -24,12 +25,16 @@ impl Style {
         }
     }
     pub fn accepts_star(self) -> bool {
-        self.selector().is_none()
+        matches!(self, Self::Multi | Self::Volume | Self::MultiVolume)
+    }
+    pub fn category_membership(self) -> bool {
+        matches!(self, Self::Category)
     }
 }
 
 pub(crate) fn style(name: &str) -> Option<Style> {
     match name {
+        "addtocategory" => Some(Style::Category),
         "citefield" => Some(Style::Data("field")),
         "citelist" => Some(Style::Data("literal list")),
         "citename" => Some(Style::Data("name list")),
@@ -59,6 +64,7 @@ pub(crate) enum Role {
     Keys,
     Format,
     Selector,
+    Category,
 }
 
 pub(crate) struct Field {
@@ -193,6 +199,18 @@ pub(crate) fn arguments(source: &str, end: usize, style: Style) -> Arguments {
         }
         at = space(source, at + 1);
         result.end = at;
+    }
+    if style.category_membership() {
+        for role in [Role::Category, Role::Keys] {
+            if source.as_bytes().get(at) != Some(&b'{') {
+                wait_for(source, end, at, &mut result, 1, role);
+                break;
+            }
+            if !push(source, &mut result, &mut at, b'{', 1, role) {
+                return result;
+            }
+        }
+        return result;
     }
     if style.repeated() {
         for note in 0..2 {
