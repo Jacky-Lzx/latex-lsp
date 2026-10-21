@@ -14,6 +14,13 @@ cargo test --locked -- --include-ignored
 
 ## 排版日志与文件移动
 
+字体替换回归需要 pdfLaTeX、XeLaTeX、LuaLaTeX 和 Computer Modern 字体，在 60 / 79 列日志中验证长字体名、字体与字号替换，以及修复后摘要清空。缺字回归需要 XeLaTeX：
+
+```sh
+cargo test --locked --test font_substitutions -- --include-ignored
+cargo test --locked --test missing_characters -- --include-ignored
+```
+
 真实盒子警告回归需要 pdfLaTeX、XeLaTeX 和 LuaLaTeX，使用较窄的日志输出宽度验证 Overfull 警告的跨行恢复及完整段落范围：
 
 ```sh

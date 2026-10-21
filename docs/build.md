@@ -87,29 +87,13 @@ biblatex 明确要求先运行 BibTeX 或 Biber 时，默认参数的 latexmk �
 
 摘要依据本次最终日志，不保留前一轮已满足的请求。`latex/buildFinished` 和 `latex.buildStatus` 返回相同字段；取消、超时和过期结果仍按原规则返回 `analysis: null`。重编译操作的工具适用范围见[从诊断重新编译](#从诊断重新编译)。
 
+### 字体替换摘要
+
+`analysis.fontSubstitutions` 和 `analysis.fontSizeSubstitutions` 分别汇总最终日志中的字体与字号替换。字段、去重及预算规则见[字体诊断与结果分析](fonts.md#字体与字号替换)。
+
 ### 缺字摘要
 
-`analysis.missingCharacters` 汇总最终日志中的缺字错误和警告，按字符码点排序。兼容警告和错误的字节折行，不在字体名称中插入空格。同一字符在不同位置、文件或字体中出现时合并为一项；`fonts` 保留去重并排序后的引擎字体描述，去掉引擎添加的一枚结尾标点，保留字体本身的标点；服务器附加的辅助文件行号说明不进入字体描述。`severity` 使用 LSP 级别：`1` 为错误，`2` 为警告；同一字符兼有两种级别时保留错误。摘要不改变逐位置诊断及构建错误数。
-
-例如 `analysis` 中的相关字段：
-
-```json
-{
-  "missingCharacters": [
-    {
-      "character": "中",
-      "codepoint": "U+4E2D",
-      "severity": 1,
-      "fonts": ["[lmroman10-regular]:mapping=tex-text;"]
-    }
-  ],
-  "truncated": false
-}
-```
-
-仅收录字面字符与合法 Unicode 码点一致的缺字消息；无法确认源码位置时仍可汇总日志确认的字符和字体，定位是否可靠继续由诊断表达。每次编译重新生成摘要，缺字解决后返回空数组；较早编译轮次的输出不会保留到最终日志的摘要中。
-
-最多保留 128 个字符，每个字符最多 8 个字体描述，每个描述最多 256 个 Unicode 字符。超出限制的字符或字体描述会被省略，并设置 `analysis.truncated`；不会截短名称。某个字符的字体描述全部超长时，仍保留字符、级别及空的 `fonts` 数组。已收录字符的后续错误仍会提升其级别，即使新字体描述超出限制。
+`analysis.missingCharacters` 按字符与字体汇总缺字，并保留最高严重级别。字段示例、预算与定位规则见[缺字摘要](fonts.md#缺字摘要)。
 
 ## 编译配置
 
