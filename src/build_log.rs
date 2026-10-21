@@ -3723,7 +3723,12 @@ impl MissingBibliographyKind {
     fn commands(self) -> &'static [&'static str] {
         match self {
             Self::Style => &["bibliographystyle"],
-            Self::Database => &["bibliography", "nobibliography"],
+            Self::Database => &[
+                "bibliography",
+                "nobibliography",
+                "addbibresource",
+                "addglobalbib",
+            ],
         }
     }
 
@@ -3738,6 +3743,14 @@ impl MissingBibliographyKind {
     }
 
     fn name(self, message: &str) -> Option<&str> {
+        if matches!(self, Self::Database) {
+            if let Some(name) = message
+                .strip_prefix("Biber: Cannot find '")
+                .and_then(|tail| tail.strip_suffix("'!"))
+            {
+                return crate::bib_resources::literal_path(name).then_some(name);
+            }
+        }
         let (prefix, suffix) = match self {
             Self::Style => ("BibTeX: I couldn't open style file ", ".bst"),
             Self::Database => ("BibTeX: I couldn't open database file ", ".bib"),
@@ -3884,7 +3897,13 @@ fn locate_missing_bibliography_files(
         }
         documents.push((uri.clone(), text, syntax));
     }
-    let signatures = source_aware.then(|| {
+    let resource_calls = documents.iter().any(|(_, _, syntax)| {
+        syntax
+            .commands
+            .iter()
+            .any(|command| crate::bib_resources::loads(&command.name))
+    });
+    let signatures = (source_aware || resource_calls).then(|| {
         crate::signature::CommandSignatures::source_context(
             documents
                 .iter()
@@ -3896,13 +3915,17 @@ fn locate_missing_bibliography_files(
         let positions = signatures
             .as_ref()
             .map(|signatures| signatures.source_command_positions(&text.source, syntax));
-        let indirect = signatures.as_ref().map_or_else(Vec::new, |signatures| {
-            signatures.indirect_bibliography_invocations(
-                &text.source,
-                syntax,
-                positions.as_ref().expect("source-aware positions"),
-            )
-        });
+        let indirect =
+            signatures
+                .as_ref()
+                .filter(|_| source_aware)
+                .map_or_else(Vec::new, |signatures| {
+                    signatures.indirect_bibliography_invocations(
+                        &text.source,
+                        syntax,
+                        positions.as_ref().expect("source-aware positions"),
+                    )
+                });
         if indirect
             .iter()
             .any(|call| !call.certain && kind.commands().contains(&call.command.name.as_str()))
@@ -3913,9 +3936,10 @@ fn locate_missing_bibliography_files(
             .commands
             .iter()
             .filter(|command| {
-                positions
-                    .as_ref()
-                    .is_none_or(|positions| positions.contains(&command.span.start))
+                !(source_aware || crate::bib_resources::loads(&command.name))
+                    || positions
+                        .as_ref()
+                        .is_none_or(|positions| positions.contains(&command.span.start))
             })
             .chain(
                 indirect
@@ -3935,12 +3959,20 @@ fn locate_missing_bibliography_files(
                     vec![argument.span.clone()]
                 }
                 MissingBibliographyKind::Database => {
-                    let Some(spans) =
-                        crate::syntax::complete_file_list_spans(&text.source, command)
-                    else {
-                        return;
-                    };
-                    spans
+                    if crate::bib_resources::loads(&command.name) {
+                        let Some(argument) = crate::syntax::file_argument(&text.source, command)
+                        else {
+                            return;
+                        };
+                        vec![argument.span.clone()]
+                    } else {
+                        let Some(spans) =
+                            crate::syntax::complete_file_list_spans(&text.source, command)
+                        else {
+                            return;
+                        };
+                        spans
+                    }
                 }
             };
             for span in spans {
@@ -3950,12 +3982,16 @@ fn locate_missing_bibliography_files(
                     // whereas database names are reported with just one .bib.
                     MissingBibliographyKind::Style => format!("{value}.bst"),
                     MissingBibliographyKind::Database => {
-                        let Some(name) =
-                            crate::syntax::file_lookup_names(&command.name, value).next()
-                        else {
-                            return;
-                        };
-                        name.into_owned()
+                        if crate::bib_resources::loads(&command.name) {
+                            value.to_owned()
+                        } else {
+                            let Some(name) =
+                                crate::syntax::file_lookup_names(&command.name, value).next()
+                            else {
+                                return;
+                            };
+                            name.into_owned()
+                        }
                     }
                 };
                 if requested.contains(&name) {
@@ -4224,6 +4260,21 @@ pub(crate) fn parse_bibliography_in(
         } else {
             continue;
         };
+        if tool == "Biber" && severity == DiagnosticSeverity::ERROR {
+            let message = format!("Biber: {}", message.trim());
+            if let Some(file) = missing_bibliography_database_name(&message) {
+                emit(&mut result, root, 1, message.clone(), severity);
+                if let Ok(uri) = Url::from_file_path(root) {
+                    if let Some(item) = result.get_mut(&uri).and_then(|items| items.last_mut()) {
+                        item.code = Some(NumberOrString::String(
+                            "missing-bibliography-database".into(),
+                        ));
+                        item.data = Some(serde_json::json!({"file":file,"unresolvedSource":true}));
+                    }
+                }
+                continue;
+            }
+        }
         let location = bibliography_path(paths, message, tool == "Biber");
         let filename = match &location {
             BibliographyLocation::Named { span, .. } => Some(span),

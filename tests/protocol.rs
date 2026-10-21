@@ -13041,3 +13041,89 @@ fn biblatex_data_citations_publish_versioned_fixes_analysis_and_key_renames_over
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+#[cfg(unix)]
+fn missing_biblatex_resources_publish_versioned_fixes_and_recheck_alias_providers_over_stdio() {
+    for loader in ["addbibresource", "addglobalbib"] {
+        for form in ["direct", "named", "alias"] {
+            let script="printf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf '(./main.tex (./definitions.sty)\\n)\\n' > \"$1/main.log\"\nprintf \"[15] Utils.pm:395> ERROR - Cannot find 'reffs.bib'!\\n\" > \"$1/main.blg\"\n";
+            let (mut server, directory, main) = fake_build_server_capabilities(
+                script,
+                false,
+                json!({"workspace":{"workspaceEdit":{"documentChanges":true}},"textDocument":{"codeAction":{"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix"]}}}}}),
+            );
+            let provider = Url::from_file_path(directory.path().join("definitions.sty")).unwrap();
+            let definition = format!("\\def\\loadres{{\\{loader}}}");
+            std::fs::write(provider.to_file_path().unwrap(), &definition).unwrap();
+            std::fs::write(
+                directory.path().join("refs.bib"),
+                "@book{alpha,title={Alpha}}",
+            )
+            .unwrap();
+            let call = match form {
+                "direct" => format!("\\{loader}"),
+                "named" => format!("\\csuse{{{loader}}}"),
+                _ => "\\loadres".into(),
+            };
+            let source=format!("\\documentclass{{article}}\n\\RequirePackage{{definitions}}\n{call}[label=reffs]{{reffs.bib}}\n");
+            std::fs::write(main.to_file_path().unwrap(), &source).unwrap();
+            server.notify(
+                "textDocument/didChange",
+                json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+            );
+            server.request(
+                2,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            let finished = server.until(|m| m["method"] == "latex/buildFinished");
+            assert_eq!(
+                finished["params"]["status"], "error",
+                "{loader}/{form}: {finished}"
+            );
+            assert_eq!(finished["params"]["errorsCount"], 1);
+            assert!(finished["params"]["pdfUri"].is_null());
+            let published = server.until(|m| {
+                m["method"] == "textDocument/publishDiagnostics"
+                    && m["params"]["uri"] == main.as_str()
+                    && m["params"]["diagnostics"].as_array().is_some_and(|items| {
+                        items
+                            .iter()
+                            .any(|d| d["code"] == "missing-bibliography-database")
+                    })
+            });
+            let diagnostic = published["params"]["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|d| d["code"] == "missing-bibliography-database")
+                .unwrap();
+            let range: tower_lsp::lsp_types::Range =
+                serde_json::from_value(diagnostic["range"].clone()).unwrap();
+            let text = latex_lsp::text::Text::new(source.clone());
+            let start = text.offset(range.start).unwrap();
+            assert_eq!(&source[start..text.offset(range.end).unwrap()], "reffs.bib");
+            assert_eq!(&source[start - 1..start], "{");
+            let request = json!({"textDocument":{"uri":main},"range":range,"context":{"diagnostics":[diagnostic],"only":["quickfix"]}});
+            let fixes = server.request(3, "textDocument/codeAction", request.clone());
+            assert_eq!(
+                fixes.as_array().unwrap().len(),
+                1,
+                "{loader}/{form}: {fixes}"
+            );
+            let change = &fixes[0]["edit"]["documentChanges"][0];
+            assert_eq!(change["textDocument"]["version"], 2);
+            assert_eq!(change["edits"][0]["newText"], "refs.bib");
+            assert_eq!(change["edits"][0]["range"], diagnostic["range"]);
+            server.notify("textDocument/didOpen",json!({"textDocument":{"uri":provider,"languageId":"latex","version":4,"text":format!("\\renewcommand\\{loader}[1]{{}}\\def\\loadres[1]{{}}")}}));
+            assert_eq!(
+                server.request(4, "textDocument/codeAction", request),
+                json!([])
+            );
+            server.request(5, "shutdown", Value::Null);
+            server.notify("exit", Value::Null);
+            server.wait_exit(0);
+        }
+    }
+}

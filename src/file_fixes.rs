@@ -48,7 +48,10 @@ pub(crate) fn fixes(
                 .as_ref()
                 .and_then(|data| data.get("bibliographyCommand"))
                 .and_then(|value| value.as_str())
-                .filter(|command| matches!(*command, "bibliography" | "nobibliography"))
+                .filter(|command| {
+                    matches!(*command, "bibliography" | "nobibliography")
+                        || crate::bib_resources::loads(command)
+                })
             else {
                 return vec![];
             };
@@ -80,9 +83,11 @@ pub(crate) fn fixes(
     let fancyverb = crate::fancyvrb::is_input(command_name);
     let code_input = syntax::code_input_command(command_name);
     let database = matches!(command_name, "bibliography" | "nobibliography");
+    let resource = crate::bib_resources::loads(command_name);
     let extension = loader_extension.unwrap_or(match command_name {
         "bibliographystyle" => "bst",
         "bibliography" | "nobibliography" => "bib",
+        name if crate::bib_resources::loads(name) => "",
         name if syntax::code_input_command(name) => "",
         _ => "tex",
     });
@@ -95,7 +100,7 @@ pub(crate) fn fixes(
         build_log::missing_listing_name(&diagnostic.message)
     } else if command_name == "bibliographystyle" {
         build_log::missing_bibliography_style_name(&diagnostic.message)
-    } else if database {
+    } else if database || resource {
         build_log::missing_bibliography_database_name(&diagnostic.message)
     } else if command_name != "include" {
         build_log::missing_file_name(&diagnostic.message)
@@ -125,9 +130,10 @@ pub(crate) fn fixes(
         matches!(
             command_name,
             "input" | "include" | "bibliography" | "nobibliography" | "bibliographystyle"
-        ) || syntax::loader_extension(command_name).is_some()
+        ) || resource
+            || syntax::loader_extension(command_name).is_some()
     }) {
-        let commands = if database || command_name == "bibliographystyle" {
+        let commands = if database || resource || command_name == "bibliographystyle" {
             let positions = signatures.source_command_positions(&doc.text.source, &doc.syntax);
             signatures
                 .indirect_bibliography_invocations(&doc.text.source, &doc.syntax, &positions)
@@ -172,13 +178,29 @@ pub(crate) fn fixes(
     } else {
         vec![]
     };
+    let active_resource = if resource {
+        let Some(signatures) =
+            signatures.filter(|signatures| signatures.command_unchanged(command_name))
+        else {
+            return vec![];
+        };
+        Some(signatures.source_command_positions(&doc.text.source, &doc.syntax))
+    } else {
+        None
+    };
     let argument = doc
         .syntax
         .commands
         .iter()
         .chain(&indirect)
         .filter(|command| {
-            command.name == command_name || fancyverb && crate::fancyvrb::is_input(&command.name)
+            (command.name == command_name || fancyverb && crate::fancyvrb::is_input(&command.name))
+                && active_resource.as_ref().is_none_or(|positions| {
+                    positions.contains(&command.span.start)
+                        || indirect
+                            .iter()
+                            .any(|call| call.span == command.span && call.name == command.name)
+                })
         })
         .find_map(|command| {
             if code_input && !crate::code_inputs::supported(workspace, uri, root, command) {
@@ -208,7 +230,7 @@ pub(crate) fn fixes(
             }
             for span in spans {
                 let value = &doc.text.source[span.clone()];
-                let matches_report = if command_name == "verbatiminput" || fancyverb {
+                let matches_report = if command_name == "verbatiminput" || fancyverb || resource {
                     value == reported
                 } else if listing {
                     crate::listings::missing_report(value) == reported
@@ -234,8 +256,11 @@ pub(crate) fn fixes(
     let command_name = command.name.as_str();
     let value = &doc.text.source[span];
     let literal = compact.then(|| syntax::loader_name(value));
-    if !syntax::is_literal_file_path(literal.as_deref().unwrap_or(value))
-        || workspace::resolve_file_path(root, command_name, value, &[extension]).is_some()
+    if !(if resource {
+        crate::bib_resources::literal_path(value)
+    } else {
+        syntax::is_literal_file_path(literal.as_deref().unwrap_or(value))
+    }) || workspace::resolve_file_path(root, command_name, value, &[extension]).is_some()
         || command_name == "input"
             && doc.text.source[argument.outer_span.clone()].starts_with('"')
             && !doc.text.source[argument.outer_span.clone()].ends_with('"')
@@ -253,7 +278,7 @@ pub(crate) fn fixes(
     let lookup = normalized.as_deref().unwrap_or(value);
     let separator = lookup.rfind('/').map_or(0, |index| index + 1);
     let prefix = &lookup[..separator];
-    let original = if code_input || loader_extension.is_some() {
+    let original = if code_input || resource || loader_extension.is_some() {
         &lookup[separator..]
     } else {
         lookup[separator..]
@@ -291,15 +316,28 @@ pub(crate) fn fixes(
         let Ok(name) = entry.file_name().into_string() else {
             continue;
         };
-        let Some(stem) = (if code_input {
+        let Some(stem) = (if resource {
+            let expected = std::path::Path::new(original)
+                .extension()
+                .and_then(|value| value.to_str())
+                .unwrap_or("bib");
+            (std::path::Path::new(&name)
+                .extension()
+                .and_then(|value| value.to_str())
+                == Some(expected))
+            .then_some(name.as_str())
+        } else if code_input {
             Some(name.as_str())
         } else {
             name.strip_suffix(&format!(".{extension}"))
         }) else {
             continue;
         };
-        if !syntax::is_literal_file_path(&name)
-            || name.starts_with('.') && !original.starts_with('.')
+        if !(if resource {
+            crate::bib_resources::literal_path(&name)
+        } else {
+            syntax::is_literal_file_path(&name)
+        }) || name.starts_with('.') && !original.starts_with('.')
             || (command_name == "bibliographystyle" || database)
                 && name.chars().any(char::is_whitespace)
             || database && name.contains(',')
@@ -312,7 +350,9 @@ pub(crate) fn fixes(
         *comparisons += 1;
         // A frequent loader mistake is spelling the complete file name; the
         // loader then appends its suffix a second time.
-        let score = if loader_extension.is_some() && name == original {
+        let score = if loader_extension.is_some() && name == original
+            || resource && name == format!("{original}.bib")
+        {
             Some(1)
         } else {
             spelling_fixes::distance(original, stem, if length < 8 { 1 } else { 2 })
@@ -326,6 +366,7 @@ pub(crate) fn fixes(
         let replacement = format!(
             "{prefix}{}",
             if code_input
+                || resource
                 || loader_extension.is_none() && lookup.ends_with(&format!(".{extension}"))
             {
                 &name
@@ -402,7 +443,7 @@ pub(crate) fn fixes(
                     "class"
                 } else if command_name == "bibliographystyle" {
                     "bibliography style"
-                } else if database {
+                } else if database || resource {
                     "bibliography database"
                 } else {
                     "included"
