@@ -147,7 +147,15 @@ impl Index {
         uri: &Url,
         root: &Url,
     ) -> Vec<(Url, DocumentKind)> {
-        let fallback = || workspace.literal_source_dependencies_with_kinds(uri, root);
+        let quoted = self.quoted_file_positions(workspace, uri);
+        workspace.literal_source_dependencies_filtered(uri, root, |command| {
+            !editable_file_command(&command.name) || !quoted.contains(&command.span.start)
+        })
+    }
+
+    /// Tokens proven to be printed by unchanged primitives. An empty set
+    /// preserves potential file lookups when the execution context is uncertain.
+    pub fn quoted_file_positions(&self, workspace: &Workspace, uri: &Url) -> BTreeSet<usize> {
         if self.incomplete
             || !workspace.documents.get(uri).is_some_and(|doc| {
                 doc.syntax.commands.iter().any(|command| {
@@ -158,12 +166,12 @@ impl Index {
                 })
             })
         {
-            return fallback();
+            return BTreeSet::new();
         }
         let mut scope = self.context.clone();
         scope.insert(uri.clone());
         let Some(documents) = bounded_latex_sources(workspace, &scope) else {
-            return fallback();
+            return BTreeSet::new();
         };
         // A deferred rebinding or a dynamic source can change a primitive's
         // meaning before the apparent quote executes. Keep the established
@@ -220,10 +228,10 @@ impl Index {
             .flatten()
             .any(|call| dynamic(&call.command))
         {
-            return fallback();
+            return BTreeSet::new();
         }
         let Some(doc) = workspace.documents.get(uri) else {
-            return vec![];
+            return BTreeSet::new();
         };
         let signatures = CommandSignatures::source_context(
             documents
@@ -265,12 +273,9 @@ impl Index {
                             || !active.contains(&command.span.start))
                 })
         }) {
-            return fallback();
+            return BTreeSet::new();
         }
-        let quoted = signatures.quoted_command_tokens(&doc.text.source, &doc.syntax);
-        workspace.literal_source_dependencies_filtered(uri, root, |command| {
-            !editable_file_command(&command.name) || !quoted.contains(&command.span.start)
-        })
+        signatures.quoted_command_tokens(&doc.text.source, &doc.syntax)
     }
 
     pub fn resource_dependencies(

@@ -258,6 +258,7 @@ impl Snapshot {
             let Some(doc) = workspace.documents.get(&source) else {
                 continue;
             };
+            let quoted = inputs.quoted_file_positions(workspace, &source);
             let image_directories = (track_images
                 && doc
                     .syntax
@@ -270,6 +271,14 @@ impl Snapshot {
                 .syntax
                 .commands
                 .iter()
+                .filter(|command| {
+                    !(syntax::loader_extension(&command.name).is_some()
+                        || matches!(
+                            command.name.as_str(),
+                            "bibliography" | "nobibliography" | "bibliographystyle"
+                        ))
+                        || !quoted.contains(&command.span.start)
+                })
                 .filter(|command| {
                     !(matches!(
                         command.name.as_str(),
@@ -2341,6 +2350,136 @@ mod active_direct_code_conditions {
                     assert_eq!(snapshot.changed_path().is_some(), active, "{body}");
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod quoted_file_conditions {
+    use super::*;
+
+    const COMMANDS: [(&str, &str); 9] = [
+        ("usepackage", "sty"),
+        ("RequirePackage", "sty"),
+        ("RequirePackageWithOptions", "sty"),
+        ("documentclass", "cls"),
+        ("LoadClass", "cls"),
+        ("LoadClassWithOptions", "cls"),
+        ("bibliography", "bib"),
+        ("nobibliography", "bib"),
+        ("bibliographystyle", "bst"),
+    ];
+
+    fn capture(root: &Path, source: &str) -> Snapshot {
+        std::fs::write(root.join("main.tex"), source).unwrap();
+        let mut workspace = Workspace::default();
+        workspace.add_root(root.into());
+        Snapshot::capture(
+            &workspace,
+            &Url::from_file_path(root.join("main.tex")).unwrap(),
+            &BuildConfig::default(),
+        )
+    }
+
+    #[test]
+    fn quoted_bibliography_and_loader_tokens_do_not_watch_unread_candidates() {
+        for (name, extension) in COMMANDS {
+            for argument in ["{refs}", "% before 😀\r\n{refs}% after\r\n"] {
+                let command = format!("\\{name}{argument}");
+                for body in [
+                    format!("\\meaning{command}"),
+                    format!("\\string{command}"),
+                    format!("\\detokenize{{{command}}}"),
+                    format!("\\csuse{{meaning}}{command}"),
+                    format!("\\csname meaning\\endcsname{command}"),
+                    format!("\\newcommand{{\\future}}{{\\meaning{command}}}\\future"),
+                ] {
+                    let directory = tempfile::tempdir().unwrap();
+                    let root = directory.path();
+                    let snapshot = capture(root, &body);
+                    let actual = root.join(format!("refs.{extension}"));
+                    assert!(snapshot.changed_path().is_none(), "{body}: {snapshot:?}");
+                    assert!(
+                        !snapshot
+                            .watched()
+                            .contains(&Url::from_file_path(&actual).unwrap()),
+                        "{body}: {snapshot:?}"
+                    );
+                    std::fs::write(actual, "Unread input.\n").unwrap();
+                    assert!(snapshot.changed_path().is_none(), "{body}: {snapshot:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn real_direct_deferred_forwarded_and_conservatively_unknown_calls_keep_conditions() {
+        for (name, extension) in COMMANDS {
+            let command = format!("\\{name}{{refs}}");
+            for body in [
+                command.clone(),
+                format!("\\newcommand{{\\future}}{{{command}}}\\future"),
+                format!("\\newcommand{{\\execute}}[1]{{#1}}\\execute{{{command}}}"),
+                format!("\\unknown{{{command}}}"),
+                format!("\\newcommand{{\\future}}{{{command}}}"),
+                format!("\\meaning{command}{command}"),
+                format!("\\string{command}{command}"),
+                format!("\\detokenize{{{command}}}{command}"),
+                format!("\\meaning{{}}{command}"),
+            ] {
+                let directory = tempfile::tempdir().unwrap();
+                let root = directory.path();
+                let snapshot = capture(root, &body);
+                let actual = root.join(format!("refs.{extension}"));
+                assert!(snapshot.changed_path().is_none(), "{body}");
+                assert!(
+                    snapshot
+                        .watched()
+                        .contains(&Url::from_file_path(&actual).unwrap()),
+                    "{body}: {snapshot:?}"
+                );
+                std::fs::write(actual, "New input.\n").unwrap();
+                assert!(snapshot.changed_path().is_some(), "{body}: {snapshot:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn uncertain_primitive_meanings_and_dynamic_sources_preserve_potential_conditions() {
+        for (name, extension) in COMMANDS {
+            let command = format!("\\meaning\\{name}{{refs}}");
+            for body in [
+                format!("\\def\\meaning#1{{#1}}{command}"),
+                format!("\\newcommand{{\\install}}{{\\def\\meaning##1{{##1}}}}\\install{command}"),
+                format!("\\newcommand{{\\execute}}[1]{{#1}}\\let\\meaning\\execute{command}"),
+                format!("\\def\\picked{{provider}}\\input{{\\picked}}{command}"),
+                format!("\\makeatletter\\@input{{provider.tex}}\\makeatother{command}"),
+                format!("\\csname @input\\endcsname{{provider.tex}}{command}"),
+                format!("\\def\\readername{{@input}}\\csname\\readername\\endcsname{{provider.tex}}{command}"),
+                format!("\\newcommand{{\\execute}}[1]{{#1}}\\execute{{\\input{{provider.tex}}}}{command}"),
+                format!("\\newcommand{{\\future}}{{\\input{{provider.tex}}}}\\future{command}"),
+                format!("\\scantokens{{\\input{{provider.tex}}}}{command}"),
+            ] {
+                let directory = tempfile::tempdir().unwrap();
+                let root = directory.path();
+                let snapshot = capture(root, &body);
+                std::fs::write(root.join(format!("refs.{extension}")), "Potential input.\n")
+                    .unwrap();
+                assert!(snapshot.changed_path().is_some(), "{body}: {snapshot:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn cross_file_primitive_rebindings_keep_the_lookup_in_its_project_context() {
+        for (name, extension) in COMMANDS {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            std::fs::write(root.join("settings.tex"), r"\def\meaning#1{#1}").unwrap();
+            let source = format!("\\input{{settings}}\\meaning\\{name}{{refs}}");
+            let snapshot = capture(root, &source);
+            std::fs::write(root.join(format!("refs.{extension}")), "Potential input.\n").unwrap();
+            assert!(snapshot.changed_path().is_some(), "{source}: {snapshot:?}");
         }
     }
 }
