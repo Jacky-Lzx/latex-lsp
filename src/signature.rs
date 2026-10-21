@@ -2130,7 +2130,8 @@ impl<'a> CommandSignatures<'a> {
                 // Resolved aliases retain their leaf's name. Builtin
                 // formatters and their pure aliases execute grouped contents;
                 // a user macro can instead discard or detokenize its argument.
-                let opaque = local.contains_key(signature.name.as_str());
+                let opaque =
+                    local.contains_key(signature.name.as_str()) || signature.name == "graphicspath";
                 argument_tokens(
                     source,
                     end,
@@ -2238,6 +2239,14 @@ fn operand_builtin(name: &str) -> Option<Signature> {
                 label: label.into(),
             })
             .collect()
+        } else if name == "graphicspath" {
+            // One directory specification ends here; a following file call
+            // is independent. Directory tokens remain data, including aliases.
+            vec![Parameter {
+                obey_spaces: false,
+                kind: Kind::Required,
+                label: "{directories}".into(),
+            }]
         } else if matches!(name, "csdef" | "csgdef" | "csedef" | "csxdef") {
             // Grouped destinations and replacement text do not consume the
             // following command. Parameter text stops this group-only reader.
@@ -3053,6 +3062,41 @@ pub fn help(workspace: &Workspace, uri: &Url, position: Position) -> Option<Sign
 mod tex_operand_tests {
     use super::*;
     use crate::text::Text;
+
+    #[test]
+    fn graphicspath_consumes_only_its_data_argument_and_preserves_following_calls() {
+        for call in [
+            r"\graphicspath",
+            r"\csuse{graphicspath}",
+            r"\csname graphicspath\endcsname",
+            r"\setpaths",
+            r"\csuse{setpaths}",
+            r"\csname setpaths\endcsname",
+        ] {
+            for argument in [r"{\input{opaque}}", r"\input{opaque}"] {
+                let source = format!(
+                    r"\def\setpaths{{\graphicspath}}{call}{argument}\includegraphics{{picture}}\input{{right}}"
+                );
+                let parsed = syntax::Syntax::latex(&Text::new(source.clone()));
+                let signatures = CommandSignatures::source_context([(source.as_str(), &parsed)]);
+                let operands = signatures.argument_tokens(&source, &parsed);
+                for command in parsed
+                    .commands
+                    .iter()
+                    .filter(|command| matches!(command.name.as_str(), "input" | "includegraphics"))
+                {
+                    assert_eq!(
+                        operands.contains(&command.span.start),
+                        command
+                            .argument
+                            .as_ref()
+                            .is_some_and(|argument| argument.value == "opaque"),
+                        "{source}: {command:?}"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn bare_environment_names_dispatch_the_actual_environment_parameters() {

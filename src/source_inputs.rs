@@ -248,9 +248,9 @@ pub(crate) fn selection_filters(
     Some(filters)
 }
 
-/// Direct source/check calls whose literal filenames can affect this build.
+/// Direct source/check/image calls whose literal filenames can affect this build.
 /// The caller includes recorder-discovered sources in this existing scope.
-pub(crate) fn active_direct_source_positions(
+pub(crate) fn active_direct_file_positions(
     workspace: &Workspace,
     scope: &BTreeSet<Url>,
 ) -> BTreeMap<Url, BTreeSet<usize>> {
@@ -273,7 +273,12 @@ pub(crate) fn active_direct_source_positions(
                 .filter(|command| {
                     matches!(
                         command.name.as_str(),
-                        "input" | "include" | "subfile" | "InputIfFileExists" | "IfFileExists"
+                        "input"
+                            | "include"
+                            | "subfile"
+                            | "InputIfFileExists"
+                            | "IfFileExists"
+                            | "includegraphics"
                     ) && signatures.command_unchanged(&command.name)
                         && positions.contains(&command.span.start)
                 })

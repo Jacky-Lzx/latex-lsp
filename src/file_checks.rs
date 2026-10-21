@@ -149,7 +149,7 @@ impl Snapshot {
         let sources = workspace.project_documents(root);
         let inputs = crate::source_inputs::Index::new(workspace, root);
         let active_sources =
-            crate::source_inputs::active_direct_source_positions(workspace, &sources);
+            crate::source_inputs::active_direct_file_positions(workspace, &sources);
         let redefined_file_commands: BTreeSet<_> = sources
             .iter()
             .filter_map(|uri| workspace.documents.get(uri))
@@ -273,7 +273,12 @@ impl Snapshot {
                 .filter(|command| {
                     !matches!(
                         command.name.as_str(),
-                        "input" | "include" | "subfile" | "InputIfFileExists" | "IfFileExists"
+                        "input"
+                            | "include"
+                            | "subfile"
+                            | "InputIfFileExists"
+                            | "IfFileExists"
+                            | "includegraphics"
                     ) || active_sources
                         .get(&source)
                         .is_some_and(|positions| positions.contains(&command.span.start))
@@ -2198,6 +2203,88 @@ mod direct_include_argument_conditions {
                     "{modifier}/{argument}"
                 );
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod active_direct_graphic_conditions {
+    use super::*;
+    use crate::workspace::Document;
+
+    #[test]
+    fn graphic_conditions_skip_declarations_and_consumed_tokens_but_keep_executed_calls() {
+        for control in [r"\includegraphics", r"\includegraphics*"] {
+            let command = format!("{control}[width=1cm]{{picture}}");
+            for (body, active) in [
+                (command.clone(), true),
+                (format!("\\textbf{{{command}}}"), true),
+                (format!("\\hold{{ignored}}{command}"), true),
+                (format!("\\take ignoredSTOP{command}"), true),
+                (format!("\\newcommand{{\\unused}}{{{command}}}"), false),
+                (format!("\\hold{{{command}}}"), false),
+                (format!("\\hold{command}"), false),
+                (format!("\\take {command}STOP"), false),
+                (format!("\\string{command}"), false),
+                (format!("\\detokenize{{{command}}}"), false),
+                (format!("\\endinput\n{command}"), false),
+            ] {
+                let directory = tempfile::tempdir().unwrap();
+                let root = directory.path();
+                let main = root.join("main.tex");
+                std::fs::write(
+                    &main,
+                    format!("\\newcommand{{\\hold}}[1]{{}}\\def\\take#1STOP{{}}{body}"),
+                )
+                .unwrap();
+                let uri = Url::from_file_path(&main).unwrap();
+                let mut workspace = Workspace::default();
+                workspace.add_root(root.into());
+                let snapshot = Snapshot::capture(&workspace, &uri, &BuildConfig::default());
+                assert!(snapshot.changed_path().is_none());
+                std::fs::write(root.join("picture.png"), b"image").unwrap();
+                assert_eq!(snapshot.changed_path().is_some(), active, "{body}");
+            }
+        }
+    }
+
+    #[test]
+    fn graphic_activity_uses_recorder_sources_and_their_macro_signatures() {
+        for provider in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let main = root.join("main.tex");
+            let recorded = root.join("recorded.tex");
+            let source = if provider {
+                r"\documentclass{article}\hold{\includegraphics{picture}}"
+            } else {
+                r"\documentclass{article}Main"
+            };
+            let recorded_source = if provider {
+                r"\newcommand{\hold}[1]{}"
+            } else {
+                r"\includegraphics{picture}"
+            };
+            std::fs::write(&main, source).unwrap();
+            let main_uri = Url::from_file_path(&main).unwrap();
+            let mut workspace = Workspace::default();
+            workspace.add_root(root.into());
+            std::fs::write(&recorded, recorded_source).unwrap();
+            let recorded_uri = Url::from_file_path(&recorded).unwrap();
+            workspace.documents.insert(
+                recorded_uri.clone(),
+                Document::new(&recorded_uri, recorded_source.into(), None),
+            );
+            workspace
+                .recorded_inputs
+                .insert(main_uri.clone(), BTreeSet::from([recorded_uri]));
+            let snapshot = Snapshot::capture(&workspace, &main_uri, &BuildConfig::default());
+            std::fs::write(root.join("picture.png"), b"image").unwrap();
+            assert_eq!(
+                snapshot.changed_path().is_some(),
+                !provider,
+                "provider={provider}"
+            );
         }
     }
 }
