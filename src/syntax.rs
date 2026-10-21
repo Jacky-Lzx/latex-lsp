@@ -2253,9 +2253,7 @@ impl Syntax {
                 i += 1;
             }
             let kind_start = i;
-            while i < bytes.len() && bytes[i].is_ascii_alphabetic() {
-                i += 1;
-            }
+            i = bib_identifier_end(source, i);
             let kind = &source[kind_start..i];
             i = skip_space(source, i);
             let Some(&open @ (b'{' | b'(')) = bytes.get(i) else {
@@ -2264,6 +2262,7 @@ impl Syntax {
             let close = if open == b'{' { b'}' } else { b')' };
             let content = i + 1;
             let special = kind.is_empty()
+                || kind.as_bytes().first().is_some_and(u8::is_ascii_digit)
                 || matches!(
                     kind.to_ascii_lowercase().as_str(),
                     "comment" | "string" | "preamble"
@@ -2475,6 +2474,26 @@ fn environment_end(text: &Text, name: &str) -> TextEdit {
         range: text.range(source.len(), source.len()),
         new_text: format!("{prefix}\\end{{{name}}}{newline}"),
     }
+}
+
+/// BibTeX identifiers are byte tokens. Punctuation and non-ASCII bytes
+/// belong to a type name; a leading ASCII digit is rejected by the caller.
+fn bib_identifier_end(source: &str, start: usize) -> usize {
+    let bytes = source.as_bytes();
+    let mut end = start;
+    while let Some(&byte) = bytes.get(end) {
+        if byte.is_ascii_control()
+            || byte.is_ascii_whitespace()
+            || matches!(
+                byte,
+                b'"' | b'#' | b'%' | b'\'' | b'(' | b')' | b',' | b'=' | b'{' | b'}'
+            )
+        {
+            break;
+        }
+        end += 1;
+    }
+    end
 }
 
 /// Prove a contiguous literal key followed only by whitespace and a comma.

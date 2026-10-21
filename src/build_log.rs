@@ -3941,6 +3941,17 @@ enum BibliographyEntry {
 }
 
 fn bibliography_entry(message: &str, filename: Option<&ByteRange<usize>>) -> BibliographyEntry {
+    // BibTeX quotes the complete literal key in this standard warning. Match
+    // the whole message so ordinary examples cannot redirect diagnostics.
+    const TYPE_PREFIX: &str = "entry type for \"";
+    const TYPE_SUFFIX: &str = "\" isn't style-file defined";
+    if let Some(key) = message
+        .strip_prefix(TYPE_PREFIX)
+        .and_then(|tail| tail.strip_suffix(TYPE_SUFFIX))
+        .filter(|key| !key.is_empty())
+    {
+        return BibliographyEntry::Key(TYPE_PREFIX.len()..TYPE_PREFIX.len() + key.len());
+    }
     for (index, _) in bibliography_fields(message, filename) {
         let word_start = !message[..index].ends_with(|ch: char| ch.is_alphanumeric() || ch == '_');
         if !word_start
