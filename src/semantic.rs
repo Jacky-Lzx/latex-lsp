@@ -54,7 +54,7 @@ fn literal(tokens: &mut Vec<Token>, source: &str, span: Span<usize>, kind: u32) 
     }
 }
 
-fn label(tokens: &mut Vec<Token>, source: &str, span: Span<usize>) {
+fn reference(tokens: &mut Vec<Token>, source: &str, span: Span<usize>) {
     if syntax::is_static_reference_key(&source[span.clone()]) {
         push(tokens, span, KEY, false);
     }
@@ -89,18 +89,18 @@ fn candidates(doc: &Document) -> Vec<Token> {
                 literal(&mut tokens, source, argument.span.clone(), TYPE);
             } else if syntax::is_reference(&command.name) {
                 if syntax::is_single_reference(&command.name) {
-                    label(&mut tokens, source, argument.span.clone());
+                    reference(&mut tokens, source, argument.span.clone());
                 } else {
-                    for span in syntax::label_list_spans(source, argument.span.clone()) {
-                        label(&mut tokens, source, span);
+                    for span in syntax::reference_list_spans(source, argument.span.clone()) {
+                        reference(&mut tokens, source, span);
                     }
                 }
             } else if syntax::is_citation(&command.name) {
                 if syntax::is_single_citation(&command.name) {
-                    literal(&mut tokens, source, argument.span.clone(), KEY);
+                    reference(&mut tokens, source, argument.span.clone());
                 } else {
-                    for span in syntax::key_list_spans(source, argument.span.clone()) {
-                        literal(&mut tokens, source, span, KEY);
+                    for span in syntax::reference_list_spans(source, argument.span.clone()) {
+                        reference(&mut tokens, source, span);
                     }
                 }
             } else if syntax::boolean_reference(&command.name)
@@ -112,7 +112,7 @@ fn candidates(doc: &Document) -> Vec<Token> {
         if let Some(argument) = syntax::separate_label_argument(source, command)
             .or_else(|| syntax::range_reference_end(source, command))
         {
-            label(&mut tokens, source, argument.span);
+            reference(&mut tokens, source, argument.span);
         }
         for (declaration, span) in crate::anchors::name_spans(source, command) {
             push(&mut tokens, span, KEY, declaration);

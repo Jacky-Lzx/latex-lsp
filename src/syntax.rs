@@ -432,7 +432,7 @@ pub(crate) fn range_reference_end(source: &str, command: &Command) -> Option<Arg
         b'{',
         b'}',
     )
-    .map(|(argument, _)| single_label_argument(source, argument))
+    .map(|(argument, _)| single_reference_argument(source, argument))
 }
 
 pub(crate) fn is_counter_reference(name: &str) -> bool {
@@ -457,7 +457,7 @@ pub(crate) fn counter_reference_label(source: &str, command: &Command) -> Option
         b'{',
         b'}',
     )
-    .map(|(argument, _)| single_label_argument(source, argument))
+    .map(|(argument, _)| single_reference_argument(source, argument))
 }
 
 /// These commands keep their label outside the ordinary first required argument.
@@ -502,10 +502,10 @@ pub(crate) fn separate_label_argument(source: &str, command: &Command) -> Option
     {
         if skip_comments(source, end) == outer.span.end {
             inner.outer_span = outer.outer_span;
-            return Some(single_label_argument(source, inner));
+            return Some(single_reference_argument(source, inner));
         }
     }
-    Some(single_label_argument(source, outer))
+    Some(single_reference_argument(source, outer))
 }
 
 /// Drop only comments: literal spaces around a protected label remain tokens.
@@ -528,7 +528,7 @@ pub(crate) fn single_key_argument(source: &str, argument: Argument) -> Argument 
     literal_key_argument(source, argument, is_static_key)
 }
 
-fn single_label_argument(source: &str, argument: Argument) -> Argument {
+fn single_reference_argument(source: &str, argument: Argument) -> Argument {
     literal_key_argument(source, argument, is_static_reference_key)
 }
 
@@ -729,7 +729,7 @@ pub(crate) fn key_list_spans(source: &str, span: Range<usize>) -> Vec<Range<usiz
         .collect()
 }
 
-pub(crate) fn label_list_spans(source: &str, span: Range<usize>) -> Vec<Range<usize>> {
+pub(crate) fn reference_list_spans(source: &str, span: Range<usize>) -> Vec<Range<usize>> {
     key_list_segments(source, span)
         .into_iter()
         .filter_map(|segment| key_list_name(source, segment, is_static_reference_key))
@@ -1912,10 +1912,12 @@ impl Syntax {
                             .filter(|_| !(starred && loader_extension(name).is_some()))
                     };
                     let argument = parsed.as_ref().map(|(argument, _)| {
-                        if name == "label" || is_single_reference(name) {
-                            single_label_argument(source, argument.clone())
-                        } else if name == "bibitem" || is_single_citation(name) {
-                            single_key_argument(source, argument.clone())
+                        if name == "label"
+                            || is_single_reference(name)
+                            || name == "bibitem"
+                            || is_single_citation(name)
+                        {
+                            single_reference_argument(source, argument.clone())
                         } else {
                             argument.clone()
                         }
@@ -2068,7 +2070,7 @@ impl Syntax {
                             "label" if is_static_reference_key(&arg.value) => {
                                 result.labels.push(entry())
                             }
-                            "bibitem" if is_static_key(&arg.value) => {
+                            "bibitem" if is_static_reference_key(&arg.value) => {
                                 result.citations.push(entry())
                             }
                             "begin" => {
@@ -2257,23 +2259,31 @@ impl Syntax {
             };
             let close = if open == b'{' { b'}' } else { b')' };
             let content = i + 1;
-            // Skip the whole entry so @ signs in field values never become entries.
-            let (end, closed) = bib_entry_end(source, i, close);
+            let special = matches!(
+                kind.to_ascii_lowercase().as_str(),
+                "comment" | "string" | "preamble"
+            );
+            let header = (!special)
+                .then(|| bib_literal_header(source, content))
+                .flatten();
+            // A proven literal header can contain parentheses, including the
+            // entry's closing delimiter. Start balancing after its comma.
+            // Unproven headers keep the conservative delimiter recovery.
+            let body_start = header.as_ref().map_or(content, |(_, comma)| comma + 1);
+            let (end, closed) = bib_entry_end(source, body_start, close);
             if kind.eq_ignore_ascii_case("comment") {
                 result.ignored.push(kind_start - 1..end);
                 result.comments.push(kind_start - 1..end);
             }
-            if !matches!(
-                kind.to_ascii_lowercase().as_str(),
-                "comment" | "string" | "preamble"
-            ) {
+            if !special {
                 let key_start = skip_space(source, content);
                 let mut key_end = key_start;
                 while key_end < end && !matches!(bytes[key_end], b',' | b'}' | b')' | b'\n') {
                     key_end += 1;
                 }
-                let span = trimmed_span(source, key_start..key_end);
-                if !span.is_empty() && bytes.get(key_end) == Some(&b',') {
+                let (span, key_end) =
+                    header.unwrap_or_else(|| (trimmed_span(source, key_start..key_end), key_end));
+                if !span.is_empty() && key_end < end && bytes.get(key_end) == Some(&b',') {
                     let body_end = if closed { end - 1 } else { end };
                     let metadata = result.bibliography_fields(source, key_end + 1, body_end);
                     let mut detail = format!("BibTeX {kind}");
@@ -2462,11 +2472,24 @@ fn environment_end(text: &Text, name: &str) -> TextEdit {
     }
 }
 
+/// Require a complete literal name and comma before allowing a closing
+/// parenthesis to belong to a key. Never scan across a line or TeX group to
+/// find that comma: a malformed header must not swallow the next entry.
+fn bib_literal_header(source: &str, content: usize) -> Option<(Range<usize>, usize)> {
+    let start = skip_space(source, content);
+    let end = source[start..]
+        .find([',', '{', '}', '\n', '\r'])
+        .map(|offset| start + offset)?;
+    let span = trimmed_span(source, start..end);
+    (source.as_bytes()[end] == b',' && is_static_reference_key(&source[span.clone()]))
+        .then_some((span, end))
+}
+
 fn bib_entry_end(source: &str, start: usize, close: u8) -> (usize, bool) {
     let bytes = source.as_bytes();
     let mut depth = 0u32;
     let mut quoted = false;
-    let mut i = start + 1;
+    let mut i = start;
     while i < bytes.len() {
         match bytes[i] {
             b'\\' => {

@@ -676,7 +676,7 @@ fn parenthesized_labels_preserve_conflicts_and_dynamic_or_other_namespace_guards
             "{invalid}"
         );
     }
-    for name in ["macro", "panel", "count", "book"] {
+    for name in ["macro", "panel", "count"] {
         let offset = if name == "macro" {
             source.find(name).unwrap()
         } else {

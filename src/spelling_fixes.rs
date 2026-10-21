@@ -293,7 +293,7 @@ fn closing_environment_fix(
 }
 
 fn valid_name(kind: Kind, name: &str) -> bool {
-    if kind == Kind::Label {
+    if matches!(kind, Kind::Label | Kind::Citation) {
         crate::syntax::is_static_reference_key(name)
     } else if matches!(kind, Kind::Color | Kind::ColorModel) {
         crate::named_colors::literal_name(name)

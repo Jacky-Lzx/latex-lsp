@@ -45,7 +45,7 @@ impl TargetKind {
 }
 
 fn static_target_name(kind: TargetKind, name: &str) -> bool {
-    if kind == TargetKind::Label {
+    if matches!(kind, TargetKind::Label | TargetKind::Citation) {
         syntax::is_static_reference_key(name)
     } else {
         syntax::is_static_key(name)
@@ -53,8 +53,8 @@ fn static_target_name(kind: TargetKind, name: &str) -> bool {
 }
 
 fn target_key_spans(source: &str, span: Span<usize>, kind: TargetKind) -> Vec<Span<usize>> {
-    if kind == TargetKind::Label {
-        syntax::label_list_spans(source, span)
+    if matches!(kind, TargetKind::Label | TargetKind::Citation) {
+        syntax::reference_list_spans(source, span)
     } else {
         syntax::key_list_spans(source, span)
     }
@@ -659,7 +659,8 @@ fn completion_name_argument(
     } else {
         (syntax::skip_space(source, command.span.end), b'{')
     };
-    let label = syntax::is_reference(&command.name)
+    let reference = syntax::is_single_citation(&command.name)
+        || syntax::is_reference(&command.name)
         || syntax::has_separate_label_argument(&command.name)
         || command.name == "hyperdef";
     let argument = |start, open| {
@@ -675,7 +676,7 @@ fn completion_name_argument(
                 open,
                 offset,
                 !hyperlink || open != b'[',
-                if label {
+                if reference {
                     syntax::is_static_reference_key
                 } else {
                     syntax::is_static_key
@@ -684,7 +685,7 @@ fn completion_name_argument(
                 return Some(context);
             }
         }
-        let span = if label {
+        let span = if reference {
             syntax::active_reference_argument(source, start, open, offset)
         } else {
             syntax::active_name_argument(source, start, open, offset)
@@ -886,16 +887,7 @@ fn argument_span(doc: &Document, command: &Command, offset: usize) -> Option<Spa
         at
     };
     if syntax::is_reference(&command.name) || syntax::is_citation(&command.name) {
-        return syntax::active_key_list_prefix(
-            source,
-            at,
-            offset,
-            if syntax::is_reference(&command.name) {
-                syntax::is_static_reference_key
-            } else {
-                syntax::is_static_key
-            },
-        );
+        return syntax::active_key_list_prefix(source, at, offset, syntax::is_static_reference_key);
     }
     let value = source.get(at..offset)?.strip_prefix('{')?;
     if value.contains(['{', '}', '%'])
