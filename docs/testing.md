@@ -44,6 +44,12 @@ cargo test --locked --test graphics_paths real_ -- --ignored
 cargo test --locked --test indirect_graphics real_ -- --ignored
 ```
 
+带引号的图片文件名回归需要 pdfLaTeX、XeLaTeX、LuaLaTeX、graphicx 和 etoolbox，验证完整与分段引号、空白合并、图片移动后的 recorder 输入，以及缺图定位、拼写修复和重新编译：
+
+```sh
+cargo test --locked --test quoted_graphics real_ -- --ignored
+```
+
 默认回归另覆盖完整和未完成路径的别名补全、跨输入文件与本地宏包的别名、recorder 来源中的宏定义与参数边界、仅作代码展示的文件排除、共享根文件冲突、未执行和不确定调用的排除，以及目录补全和缺图建议的作用域、共享源码歧义、候选图片的过期检查及版本化 stdio 文件移动。
 
 ## 文献与编译诊断
