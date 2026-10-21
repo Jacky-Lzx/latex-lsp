@@ -1852,6 +1852,84 @@ fn fake_build_server_capabilities(
 
 #[test]
 #[cfg(unix)]
+fn missing_character_errors_publish_precise_ranges_and_correct_build_counts() {
+    use latex_lsp::text::Text;
+    for numbered in [false, true] {
+        let script = "printf '%%PDF-1.4\\n' > \"$1/main.pdf\"\ncat \"${2%/*}/fixture.log\" > \"$1/main.log\"\nif [ -f \"${2%/*}/fail\" ]; then exit 1; fi\n";
+        let (mut server, directory, main) = fake_build_server(script, false);
+        let source = "\\documentclass{article}\r\nBefore 中 and 😀 after.\r\n";
+        let text = Text::new(source.into());
+        std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+        );
+        let warning = "Missing character: There is no 中 (U+4E2D) in font nullfont!";
+        std::fs::write(
+            directory.path().join("fixture.log"),
+            format!("(./main.tex\n{warning}\n)\n"),
+        )
+        .unwrap();
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(finished["params"]["status"], "success", "{finished}");
+        assert_eq!(finished["params"]["errorsCount"], 0);
+        assert_eq!(finished["params"]["warningsCount"], 1);
+        let prefix = if numbered { "./main.tex:2:" } else { "!" };
+        let log = format!("(./main.tex\n{warning}\n{prefix} {warning}\nl.2 Before 中 \n             and 😀 after.\n\n{prefix} Missing character: There is no 😀 (U+1F600) in font nullfont!\nl.2 Before 中 and 😀 \n                   after.\n)\n");
+        std::fs::write(directory.path().join("fixture.log"), log).unwrap();
+        std::fs::write(directory.path().join("fail"), "").unwrap();
+        server.request(
+            3,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(finished["params"]["status"], "error", "{finished}");
+        assert_eq!(finished["params"]["errorsCount"], 2, "{finished}");
+        assert_eq!(finished["params"]["warningsCount"], 1, "{finished}");
+        let published = server.until(|message| {
+            message["method"] == "textDocument/publishDiagnostics"
+                && message["params"]["diagnostics"]
+                    .as_array()
+                    .is_some_and(|items| {
+                        items
+                            .iter()
+                            .filter(|item| {
+                                item["severity"] == 1 && item["code"] == "missing-character"
+                            })
+                            .count()
+                            == 2
+                    })
+        });
+        for character in ["中", "😀"] {
+            let item = published["params"]["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|item| item["severity"] == 1 && item["data"]["character"] == character)
+                .unwrap();
+            let at = source.find(character).unwrap();
+            assert_eq!(item["range"], json!(text.range(at, at + character.len())));
+        }
+        let status = server.request(
+            4,
+            "workspace/executeCommand",
+            json!({"command":"latex.buildStatus","arguments":[main]}),
+        );
+        assert_eq!(status, finished["params"]);
+        server.request(5, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
 fn unchanged_pdf_older_than_an_included_source_is_rejected_but_fresh_noop_builds_succeed() {
     let (mut server, directory, uri) = fake_build_server("exit 0\n", false);
     let source = "\\documentclass{article}\n\\input{chapter}\n";

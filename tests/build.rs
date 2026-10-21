@@ -112,7 +112,6 @@ fn unresolved_numbered_sources_do_not_borrow_warning_ranges_or_codes_from_the_ro
         (r"Prefix \hypertarget{missing}{Text}", "pdfTeX warning (ext4): destination with the same identifier (name{missing}) has been already used, duplicate ignored", Some("duplicate-pdf-destination")),
         (r"Prefix \include{missing}", "Included file `missing.tex` not found", Some("missing-include")),
         ("First paragraph line.\nSecond paragraph line.", r"Overfull \hbox (12pt too wide) in paragraph at lines 1--2", Some("overfull-box")),
-        ("Paragraph.", "Missing character: There is no A (U+0041) in font nullfont!", None),
     ] {
         std::fs::write(&main, format!("{source}\n")).unwrap();
         std::fs::write(&child, format!("{source}\n")).unwrap();

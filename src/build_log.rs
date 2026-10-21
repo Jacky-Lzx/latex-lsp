@@ -423,6 +423,56 @@ fn box_code(message: &str) -> Option<&'static str> {
     Some(code)
 }
 
+fn missing_character(message: &str) -> Option<char> {
+    let tail = message.strip_prefix("Missing character: There is no ")?;
+    let (printed, tail) = tail.split_once(" (U+")?;
+    let (hex, font) = tail.split_once(") in font ")?;
+    if !(4..=6).contains(&hex.len())
+        || !hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || font.trim().is_empty()
+    {
+        return None;
+    }
+    let character = char::from_u32(u32::from_str_radix(hex, 16).ok()?)?;
+    (printed == character.to_string()).then_some(character)
+}
+
+fn missing_character_range(
+    text: &Text,
+    line: u32,
+    context: &str,
+    character: char,
+) -> Option<Range> {
+    let prefix = context.trim_end();
+    if character.is_whitespace() || !prefix.ends_with(character) {
+        return None;
+    }
+    let start = text.offset(Position::new(line, 0))?;
+    let value = text.source[start..].lines().next()?;
+    let end = if let Some(suffix) = shortened_context(prefix) {
+        if suffix.is_empty() || !unique_context_on_line(text, start, suffix) {
+            return None;
+        }
+        start + value.find(suffix)? + suffix.len()
+    } else {
+        if !value.starts_with(prefix) {
+            return None;
+        }
+        start + prefix.len()
+    };
+    let at = end.checked_sub(character.len_utf8())?;
+    let parsed = crate::syntax::Syntax::latex(text);
+    if parsed.is_ignored(at)
+        || parsed
+            .commands
+            .iter()
+            .any(|command| command.span.contains(&at))
+    {
+        return None;
+    }
+    Some(text.range(at, end))
+}
+
 fn box_range(text: &Text, message: &str) -> Option<Range> {
     box_code(message)?;
     let tail = message.rsplit_once("at lines ")?.1;
@@ -1880,6 +1930,10 @@ fn emit_with_context(
     })
     .flatten();
     ranges.extend(command_range);
+    let character = missing_character(&message);
+    let character_range =
+        character.and_then(|character| missing_character_range(&text, line, context?, character));
+    ranges.extend(character_range);
     let project_stale = error.as_ref().is_some_and(|context| context.project_stale);
     let macro_context = error
         .as_ref()
@@ -2015,6 +2069,7 @@ fn emit_with_context(
                 severity: Some(severity),
                 source: Some("latex-build".into()),
                 code: box_code(&message)
+                    .or_else(|| character.map(|_| "missing-character"))
                     .or_else(|| destination.as_ref().filter(|_| precise_destination).map(|(kind, _)| kind.code()))
                     .or_else(|| missing_include_key(&message).map(|_| "missing-include"))
                     .or_else(|| input_range.map(|_| "missing-input"))
@@ -2031,6 +2086,7 @@ fn emit_with_context(
                     .map(|code| NumberOrString::String(code.into())),
                 message: displayed_message.clone(),
                 data: precise_destination.then(|| serde_json::json!({"destination":destination.as_ref().map(|(_, name)| name)}))
+                    .or_else(|| character.map(|character| serde_json::json!({"character":character.to_string(),"codepoint":format!("U+{:04X}", character as u32)})))
                     .or_else(|| command_name.map(|name| serde_json::json!({"command":name})))
                     .or_else(|| {
                         environment_range
@@ -3188,9 +3244,13 @@ fn parse_in_project<'a>(
                     );
                 }
             }
-            let severity = if message.contains("Warning:")
+            // XeTeX uses the numbered error form for tracinglostchars=3.
+            // Plain missing-character lines remain warnings below; font names
+            // containing warning-like prose must not downgrade this error.
+            let severity = if message.starts_with("Missing character:") {
+                DiagnosticSeverity::ERROR
+            } else if message.contains("Warning:")
                 || warning_start(&message)
-                || message.starts_with("Missing character:")
                 || box_code(&message).is_some()
                 || missing_include_key(&message).is_some()
             {
@@ -3389,9 +3449,19 @@ fn parse_in_project<'a>(
         result.retain(|_, diagnostics| !diagnostics.is_empty());
     }
     for diagnostics in result.values_mut() {
-        diagnostics.sort_by_key(|diagnostic| (diagnostic.range.start, diagnostic.message.clone()));
+        diagnostics.sort_by_key(|diagnostic| {
+            (
+                diagnostic.range.start,
+                diagnostic.message.clone(),
+                diagnostic.severity != Some(DiagnosticSeverity::ERROR),
+            )
+        });
         diagnostics.dedup_by(|a, b| {
-            a.range == b.range && a.message == b.message && a.code == b.code && a.data == b.data
+            a.range == b.range
+                && a.message == b.message
+                && a.severity == b.severity
+                && a.code == b.code
+                && a.data == b.data
         });
     }
     (result, sources)
