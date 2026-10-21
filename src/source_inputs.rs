@@ -201,22 +201,23 @@ impl Index {
     }
 }
 
-/// Shared interpretation of chapter selection for build conditions and repairs.
-/// Data resources cannot contribute executable selectors or macro declarations.
-pub(crate) fn selection_filters(
-    workspace: &Workspace,
+/// Bound project macro analysis before constructing its signature context.
+fn bounded_latex_sources<'a>(
+    workspace: &'a Workspace,
     scope: &BTreeSet<Url>,
-) -> Option<Vec<BTreeSet<String>>> {
+) -> Option<Vec<(Url, &'a crate::workspace::Document)>> {
     let documents: Vec<_> = scope
         .iter()
-        .filter_map(|uri| workspace.documents.get(uri))
-        .filter(|doc| doc.kind == DocumentKind::Latex)
+        .filter_map(|uri| {
+            let doc = workspace.documents.get(uri)?;
+            (doc.kind == DocumentKind::Latex).then_some((uri.clone(), doc))
+        })
         .collect();
     if documents.is_empty() || documents.len() > MAX_SOURCES {
         return None;
     }
     let mut bytes = 0usize;
-    for doc in &documents {
+    for (_, doc) in &documents {
         if doc.text.source.len() > 2 * 1024 * 1024 {
             return None;
         }
@@ -225,16 +226,62 @@ pub(crate) fn selection_filters(
             return None;
         }
     }
+    Some(documents)
+}
+
+/// Shared interpretation of chapter selection for build conditions and repairs.
+/// Data resources cannot contribute executable selectors or macro declarations.
+pub(crate) fn selection_filters(
+    workspace: &Workspace,
+    scope: &BTreeSet<Url>,
+) -> Option<Vec<BTreeSet<String>>> {
+    let documents = bounded_latex_sources(workspace, scope)?;
     let signatures = CommandSignatures::source_context(
         documents
             .iter()
-            .map(|doc| (doc.text.source.as_str(), &doc.syntax)),
+            .map(|(_, doc)| (doc.text.source.as_str(), &doc.syntax)),
     );
     let mut filters = Vec::new();
-    for doc in documents {
+    for (_, doc) in documents {
         filters.extend(signatures.selection_filters(&doc.text.source, &doc.syntax)?);
     }
     Some(filters)
+}
+
+/// Direct source/check calls whose literal filenames can affect this build.
+/// The caller includes recorder-discovered sources in this existing scope.
+pub(crate) fn active_direct_source_positions(
+    workspace: &Workspace,
+    scope: &BTreeSet<Url>,
+) -> BTreeMap<Url, BTreeSet<usize>> {
+    let Some(documents) = bounded_latex_sources(workspace, scope) else {
+        return BTreeMap::new();
+    };
+    let signatures = CommandSignatures::source_context(
+        documents
+            .iter()
+            .map(|(_, doc)| (doc.text.source.as_str(), &doc.syntax)),
+    );
+    documents
+        .into_iter()
+        .map(|(uri, doc)| {
+            let positions = signatures.source_command_positions(&doc.text.source, &doc.syntax);
+            let active = doc
+                .syntax
+                .commands
+                .iter()
+                .filter(|command| {
+                    matches!(
+                        command.name.as_str(),
+                        "input" | "include" | "subfile" | "InputIfFileExists" | "IfFileExists"
+                    ) && signatures.command_unchanged(&command.name)
+                        && positions.contains(&command.span.start)
+                })
+                .map(|command| command.span.start)
+                .collect();
+            (uri, active)
+        })
+        .collect()
 }
 
 pub(crate) fn target(uri: &Url, root: &Url, call: &SourceCall) -> Option<Url> {

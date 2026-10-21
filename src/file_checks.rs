@@ -148,6 +148,8 @@ impl Snapshot {
         };
         let sources = workspace.project_documents(root);
         let inputs = crate::source_inputs::Index::new(workspace, root);
+        let active_sources =
+            crate::source_inputs::active_direct_source_positions(workspace, &sources);
         let redefined_file_commands: BTreeSet<_> = sources
             .iter()
             .filter_map(|uri| workspace.documents.get(uri))
@@ -264,18 +266,31 @@ impl Snapshot {
                     .any(|command| command.name == "includegraphics"))
             .then(|| graphics::condition_directories_in(workspace, &source, root))
             .flatten();
-            for command in doc.syntax.commands.iter().chain(
-                inputs
-                    .calls
-                    .get(&source)
-                    .into_iter()
-                    .flatten()
-                    .chain(inputs.loaders.get(&source).into_iter().flatten())
-                    .chain(inputs.resources.get(&source).into_iter().flatten())
-                    .chain(inputs.checks.get(&source).into_iter().flatten())
-                    .filter(|call| call.certain)
-                    .map(|call| &call.command),
-            ) {
+            for command in doc
+                .syntax
+                .commands
+                .iter()
+                .filter(|command| {
+                    !matches!(
+                        command.name.as_str(),
+                        "input" | "include" | "subfile" | "InputIfFileExists" | "IfFileExists"
+                    ) || active_sources
+                        .get(&source)
+                        .is_some_and(|positions| positions.contains(&command.span.start))
+                })
+                .chain(
+                    inputs
+                        .calls
+                        .get(&source)
+                        .into_iter()
+                        .flatten()
+                        .chain(inputs.loaders.get(&source).into_iter().flatten())
+                        .chain(inputs.resources.get(&source).into_iter().flatten())
+                        .chain(inputs.checks.get(&source).into_iter().flatten())
+                        .filter(|call| call.certain)
+                        .map(|call| &call.command),
+                )
+            {
                 if paths.borrow().len() >= MAX_PATHS {
                     break 'sources;
                 }
@@ -2026,6 +2041,131 @@ mod indirect_conditional_file_conditions {
                     "{loader}/{control}"
                 );
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod active_direct_source_conditions {
+    use super::*;
+    use crate::workspace::Document;
+
+    fn call(loader: &str) -> String {
+        format!(
+            "\\{loader}{{chapter}}{}",
+            if matches!(loader, "InputIfFileExists" | "IfFileExists") {
+                "{Before}{Missing}"
+            } else {
+                ""
+            }
+        )
+    }
+
+    #[test]
+    fn direct_source_conditions_follow_active_calls_without_executing_macro_data() {
+        for loader in [
+            "input",
+            "include",
+            "subfile",
+            "InputIfFileExists",
+            "IfFileExists",
+        ] {
+            let command = call(loader);
+            for (body, active) in [
+                (command.clone(), true),
+                (format!("\\textbf{{{command}}}"), true),
+                (format!("\\hold{{ignored}}{command}"), true),
+                (format!("\\take ignoredSTOP{command}"), true),
+                (format!("\\newcommand{{\\unused}}{{{command}}}"), false),
+                (format!("\\hold{{{command}}}"), false),
+                (format!("\\hold{command}"), false),
+                (format!("\\take {command}STOP"), false),
+                (format!("\\string{command}"), false),
+                (format!("\\detokenize{{{command}}}"), false),
+            ] {
+                let directory = tempfile::tempdir().unwrap();
+                let root = directory.path();
+                let main = root.join("main.tex");
+                let source = format!("\\documentclass{{article}}\\newcommand{{\\hold}}[1]{{}}\\def\\take#1STOP{{}}\\begin{{document}}{body}\\end{{document}}");
+                std::fs::write(&main, source).unwrap();
+                let main_uri = Url::from_file_path(&main).unwrap();
+                let mut workspace = Workspace::default();
+                workspace.add_root(root.into());
+                let snapshot = Snapshot::capture(&workspace, &main_uri, &BuildConfig::default());
+                assert!(snapshot.changed_path().is_none());
+                std::fs::write(root.join("chapter.tex"), "Chapter").unwrap();
+                assert_eq!(snapshot.changed_path().is_some(), active, "{loader}/{body}");
+            }
+        }
+    }
+
+    #[test]
+    fn redefined_direct_source_commands_do_not_certify_file_lookup_conditions() {
+        for loader in [
+            "input",
+            "include",
+            "subfile",
+            "InputIfFileExists",
+            "IfFileExists",
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let main = root.join("main.tex");
+            let source = format!(
+                "\\documentclass{{article}}\\def\\{loader}#1{{}}{}",
+                call(loader)
+            );
+            std::fs::write(&main, source).unwrap();
+            let main_uri = Url::from_file_path(&main).unwrap();
+            let mut workspace = Workspace::default();
+            workspace.add_root(root.into());
+            let snapshot = Snapshot::capture(&workspace, &main_uri, &BuildConfig::default());
+            std::fs::write(root.join("chapter.tex"), "Chapter").unwrap();
+            assert!(snapshot.changed_path().is_none(), "{loader}");
+        }
+    }
+
+    #[test]
+    fn direct_conditions_keep_recorder_only_sources_and_use_their_macro_providers() {
+        for provider in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let main = root.join("main.tex");
+            let recorded = root.join("recorded.tex");
+            let source = if provider {
+                r"\documentclass{article}\hold{\IfFileExists{chapter}{Before}{Missing}}"
+            } else {
+                r"\documentclass{article}Main"
+            };
+            let recorded_source = if provider {
+                r"\newcommand{\hold}[1]{}"
+            } else {
+                r"\IfFileExists{chapter}{Before}{Missing}"
+            };
+            std::fs::write(&main, source).unwrap();
+            let main_uri = Url::from_file_path(&main).unwrap();
+            let mut workspace = Workspace::default();
+            workspace.add_root(root.into());
+            // Add after the static scan: only the previous recorder connects it.
+            std::fs::write(&recorded, recorded_source).unwrap();
+            let recorded_uri = Url::from_file_path(&recorded).unwrap();
+            workspace.documents.insert(
+                recorded_uri.clone(),
+                Document::new(&recorded_uri, recorded_source.into(), None),
+            );
+            workspace
+                .recorded_inputs
+                .insert(main_uri.clone(), BTreeSet::from([recorded_uri.clone()]));
+            assert!(workspace
+                .project_documents(&main_uri)
+                .contains(&recorded_uri));
+            let snapshot = Snapshot::capture(&workspace, &main_uri, &BuildConfig::default());
+            std::fs::write(root.join("chapter.tex"), "Chapter").unwrap();
+            assert_eq!(
+                snapshot.changed_path().is_some(),
+                !provider,
+                "provider={provider}"
+            );
         }
     }
 }
