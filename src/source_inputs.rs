@@ -468,9 +468,10 @@ pub(crate) fn source_file_command(name: &str) -> bool {
     )
 }
 
-/// Direct source and bibliography paths can share the same editing checks.
+/// Source, bibliography and package/class paths share editing checks.
 pub(crate) fn editable_file_command(name: &str) -> bool {
     source_file_command(name)
+        || syntax::package_class_extension(name).is_some()
         || matches!(
             name,
             "bibliography" | "nobibliography" | "addbibresource" | "bibliographystyle"
