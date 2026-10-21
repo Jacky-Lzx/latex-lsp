@@ -1757,6 +1757,9 @@ pub(crate) fn warns_on_undefined_citation(name: &str) -> bool {
 }
 
 pub(crate) fn citation_accepts_star(name: &str) -> bool {
+    if let Some(style) = crate::citations::style(name) {
+        return style.accepts_star();
+    }
     is_citation(name)
         && !matches!(
             name,

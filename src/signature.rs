@@ -235,8 +235,8 @@ fn builtin(name: &str) -> Option<Signature> {
         return Some(Signature {
             name: name.into(),
             parameters: citation_parameters(style, 1),
-            documentation: "Biblatex citation arguments. Repeated calls accept up to two overall notes in parentheses; volume citations separate the volume and optional pages from bibliography keys. Requires biblatex.".into(),
-            starred: true,
+            documentation: "Biblatex citation arguments. Repeated calls accept up to two overall notes in parentheses; volume citations separate the volume and optional pages from bibliography keys. Data citations select a field or list after an optional format. Requires biblatex.".into(),
+            starred: style.accepts_star(),
             nested_brackets: false,
         });
     }
@@ -3165,6 +3165,18 @@ fn citation_parameters(style: crate::citations::Style, groups: usize) -> Vec<Par
             kind: Kind::CitationKeys(style),
             label: format!("{{keys{suffix}}}"),
         });
+        if let Some(label) = style.selector() {
+            parameters.push(Parameter {
+                obey_spaces: false,
+                kind: Kind::Optional,
+                label: "[format]".into(),
+            });
+            parameters.push(Parameter {
+                obey_spaces: false,
+                kind: Kind::Required,
+                label: format!("{{{label}}}"),
+            });
+        }
     }
     parameters
 }
@@ -3191,6 +3203,8 @@ fn citation_parameter(
                 2
             }
         }
+        Role::Format => 3,
+        Role::Selector => 4,
         Role::Overall(_) => unreachable!(),
     }
 }

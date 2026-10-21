@@ -12950,3 +12950,94 @@ fn restoring_a_missing_biblatex_resource_during_compilation_discards_obsolete_re
         server.wait_exit(0);
     }
 }
+
+#[test]
+#[cfg(unix)]
+fn biblatex_data_citations_publish_versioned_fixes_analysis_and_key_renames_over_stdio() {
+    let script="printf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf \"Package biblatex Warning: Citation 'alphaa' on page 1 undefined on input line 4.\\nPackage biblatex Warning: Citation 'alphaa' on page 1 undefined on input line 6.\\nPackage biblatex Warning: Citation 'alphaa' on page 1 undefined on input line 8.\\n\" > \"$1/main.log\"\n";
+    let (mut server, directory, main) = fake_build_server_capabilities(
+        script,
+        false,
+        json!({"workspace":{"workspaceEdit":{"documentChanges":true}},"textDocument":{"codeAction":{"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix"]}}}}}),
+    );
+    let source="\\documentclass{article}\n\\addbibresource{refs.bib}\n\\citefield[alphaa][alphaa]\n{alphaa}[alphaa]{alphaa}\n\\citelist[alphaa][alphaa]\n{alphaa}[alphaa]{alphaa}\n\\citename[alphaa][alphaa]\n{alphaa}[alphaa]{alphaa}\n";
+    std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+    let bib = Url::from_file_path(directory.path().join("refs.bib")).unwrap();
+    std::fs::write(bib.to_file_path().unwrap(), "@book{alpha,title={Alpha}}\n").unwrap();
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+    );
+    server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let finished = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(finished["params"]["status"], "success", "{finished}");
+    assert_eq!(finished["params"]["diagnosticsCount"], 3, "{finished}");
+    assert_eq!(
+        finished["params"]["analysis"]["unresolvedCitations"],
+        json!(["alphaa"])
+    );
+    let published = server.until(|message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["uri"] == main.as_str()
+            && message["params"]["diagnostics"]
+                .as_array()
+                .is_some_and(|items| items.iter().any(|item| item["source"] == "latex-build"))
+    });
+    let diagnostics = published["params"]["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| item["source"] == "latex-build")
+        .collect::<Vec<_>>();
+    assert_eq!(diagnostics.len(), 3);
+    let text = latex_lsp::text::Text::new(source.into());
+    for (index, diagnostic) in diagnostics.into_iter().enumerate() {
+        let range: tower_lsp::lsp_types::Range =
+            serde_json::from_value(diagnostic["range"].clone()).unwrap();
+        let start = text.offset(range.start).unwrap();
+        assert_eq!(&source[start - 2..start], "\n{");
+        assert_eq!(&source[start..text.offset(range.end).unwrap()], "alphaa");
+        let actions=server.request(3+index as u64,"textDocument/codeAction",json!({"textDocument":{"uri":main},"range":range,"context":{"diagnostics":[diagnostic],"only":["quickfix"]}}));
+        assert_eq!(actions.as_array().unwrap().len(), 1, "{actions}");
+        let change = &actions[0]["edit"]["documentChanges"][0];
+        assert_eq!(change["textDocument"]["version"], 2);
+        assert_eq!(change["edits"].as_array().unwrap().len(), 1);
+        assert_eq!(change["edits"][0]["range"], diagnostic["range"]);
+        assert_eq!(change["edits"][0]["newText"], "alpha");
+    }
+    let corrected = source.replace("\n{alphaa}", "\n{alpha}");
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":3},"contentChanges":[{"text":corrected}]}),
+    );
+    let at = latex_lsp::text::Text::new(corrected.clone())
+        .position(corrected.find("\n{alpha}").unwrap() + 3);
+    let edit = server.request(
+        6,
+        "textDocument/rename",
+        json!({"textDocument":{"uri":main},"position":at,"newName":"renamed"}),
+    );
+    let changes = edit["documentChanges"].as_array().unwrap();
+    assert_eq!(changes.len(), 2);
+    let change = changes
+        .iter()
+        .find(|change| change["textDocument"]["uri"] == main.as_str())
+        .unwrap();
+    assert_eq!(change["textDocument"]["version"], 3);
+    assert_eq!(change["edits"].as_array().unwrap().len(), 3);
+    for edit in change["edits"].as_array().unwrap() {
+        let range: tower_lsp::lsp_types::Range =
+            serde_json::from_value(edit["range"].clone()).unwrap();
+        let text = latex_lsp::text::Text::new(corrected.clone());
+        let start = text.offset(range.start).unwrap();
+        assert_eq!(&corrected[start - 2..start], "\n{");
+        assert_eq!(edit["newText"], "renamed");
+    }
+    server.request(7, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

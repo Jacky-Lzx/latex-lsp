@@ -760,6 +760,9 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
         "bibliographystyle{${1:plain}}",
         "Select a BibTeX bibliography style.",
     ),
+    ("citefield", "citefield{${1:keys}}{${2:field}}", "Print a bibliography field with an optional format. Requires biblatex."),
+    ("citelist", "citelist{${1:keys}}{${2:literal list}}", "Print a bibliography literal list with an optional format. Requires biblatex."),
+    ("citename", "citename{${1:keys}}{${2:name list}}", "Print a bibliography name list with an optional format. Requires biblatex."),
     ("addglobalbib", "addglobalbib{${1:references.bib}}", "Load a bibliography resource in every reference section. Use the full filename. Requires biblatex."),
     (
         "addbibresource",

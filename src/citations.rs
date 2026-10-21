@@ -7,6 +7,7 @@ pub(crate) enum Style {
     Multi,
     Volume,
     MultiVolume,
+    Data(&'static str),
 }
 
 impl Style {
@@ -16,10 +17,22 @@ impl Style {
     pub fn volume(self) -> bool {
         matches!(self, Self::Volume | Self::MultiVolume)
     }
+    pub fn selector(self) -> Option<&'static str> {
+        match self {
+            Self::Data(label) => Some(label),
+            _ => None,
+        }
+    }
+    pub fn accepts_star(self) -> bool {
+        self.selector().is_none()
+    }
 }
 
 pub(crate) fn style(name: &str) -> Option<Style> {
     match name {
+        "citefield" => Some(Style::Data("field")),
+        "citelist" => Some(Style::Data("literal list")),
+        "citename" => Some(Style::Data("name list")),
         "cites" | "Cites" | "parencites" | "Parencites" | "footcites" | "Footcites"
         | "footcitetexts" | "Footcitetexts" | "smartcites" | "Smartcites" | "supercites"
         | "textcites" | "Textcites" | "autocites" | "Autocites" => Some(Style::Multi),
@@ -44,6 +57,8 @@ pub(crate) enum Role {
     Volume,
     Pages,
     Keys,
+    Format,
+    Selector,
 }
 
 pub(crate) struct Field {
@@ -167,14 +182,18 @@ fn wait_for(
 
 pub(crate) fn arguments(source: &str, end: usize, style: Style) -> Arguments {
     let mut at = space(source, end);
-    if source.as_bytes().get(at) == Some(&b'*') {
-        at = space(source, at + 1);
-    }
     let mut result = Arguments {
         fields: Vec::new(),
         end: at,
         waiting: None,
     };
+    if source.as_bytes().get(at) == Some(&b'*') {
+        if !style.accepts_star() {
+            return result;
+        }
+        at = space(source, at + 1);
+        result.end = at;
+    }
     if style.repeated() {
         for note in 0..2 {
             if source.as_bytes().get(at) != Some(&b'(') {
@@ -236,6 +255,20 @@ pub(crate) fn arguments(source: &str, end: usize, style: Style) -> Arguments {
         }
         if !push(source, &mut result, &mut at, b'{', group, Role::Keys) {
             return result;
+        }
+        if style.selector().is_some() {
+            if source.as_bytes().get(at) == Some(&b'[')
+                && !push(source, &mut result, &mut at, b'[', group, Role::Format)
+            {
+                return result;
+            }
+            if source.as_bytes().get(at) != Some(&b'{') {
+                wait_for(source, end, at, &mut result, group, Role::Selector);
+                break;
+            }
+            if !push(source, &mut result, &mut at, b'{', group, Role::Selector) {
+                return result;
+            }
         }
         if !style.repeated() {
             break;
