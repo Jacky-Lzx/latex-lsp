@@ -448,7 +448,8 @@ fn direct_file_positions(
                             | "InputIfFileExists"
                             | "IfFileExists"
                             | "includegraphics"
-                    ) || syntax::code_input_command(&command.name))
+                    ) || syntax::code_input_command(&command.name)
+                        || crate::bib_resources::loads(&command.name))
                         && (!require_original_meaning
                             || signatures.command_unchanged(&command.name))
                         && positions.contains(&command.span.start)
@@ -471,10 +472,11 @@ pub(crate) fn source_file_command(name: &str) -> bool {
 /// Source, bibliography and package/class paths share editing checks.
 pub(crate) fn editable_file_command(name: &str) -> bool {
     source_file_command(name)
+        || crate::bib_resources::loads(name)
         || syntax::package_class_extension(name).is_some()
         || matches!(
             name,
-            "bibliography" | "nobibliography" | "addbibresource" | "bibliographystyle"
+            "bibliography" | "nobibliography" | "bibliographystyle"
         )
 }
 
@@ -562,6 +564,7 @@ fn resource_targets(
     }
     let (extension, kind) = match call.command.name.as_str() {
         "bibliography" | "nobibliography" => ("bib", DocumentKind::Bibtex),
+        name if crate::bib_resources::loads(name) => ("bib", DocumentKind::Bibtex),
         "bibliographystyle" => ("bst", DocumentKind::BibtexStyle),
         _ => return vec![],
     };

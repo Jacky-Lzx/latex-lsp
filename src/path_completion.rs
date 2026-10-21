@@ -54,7 +54,9 @@ fn complete_with_argument(
     let compact = syntax::file_name_ignores_spaces(command);
     let normalized_prefix = compact.then(|| syntax::loader_name(raw_prefix));
     let prefix = normalized_prefix.as_deref().unwrap_or(raw_prefix);
-    if prefix.contains(['\\', '%', '#', '$', '&', '{', '}', '^', '~']) {
+    if prefix.contains(['\\', '{', '}'])
+        || !crate::bib_resources::loads(command) && prefix.contains(['%', '#', '$', '&', '^', '~'])
+    {
         return vec![];
     }
     let separator = prefix.rfind('/').map_or(0, |index| index + 1);
@@ -80,7 +82,8 @@ fn complete_with_argument(
     };
     let suffix_length = suffix
         .find(|ch| {
-            matches!(ch, '/' | '{' | '}' | '\\' | '%')
+            matches!(ch, '/' | '{' | '}' | '\\')
+                || ch == '%' && !crate::bib_resources::loads(command)
                 || ch == ',' && syntax::file_list(command)
                 || crate::fancyvrb::is_input(command) && ch == '"'
                 || !compact && matches!(ch, '\n' | '\r')
@@ -156,9 +159,9 @@ fn complete_with_argument(
                 || name.starts_with('.') && !name_prefix.starts_with('.')
                 || (compact || syntax::passes_options(command) || command == "bibliographystyle")
                     && name.contains([' ', '\t', '\r', '\n'])
-                || name.contains([
-                    '\\', '%', '#', '$', '&', '{', '}', '^', '~', '"', '\n', '\r',
-                ])
+                || name.contains(['\\', '{', '}', '"', '\n', '\r'])
+                || !crate::bib_resources::loads(command)
+                    && name.contains(['%', '#', '$', '&', '^', '~'])
             {
                 continue;
             }
@@ -191,7 +194,8 @@ fn complete_with_argument(
                 if !existing_slash {
                     new_text.push('/');
                 }
-            } else if !matches!(command, "includegraphics" | "addbibresource")
+            } else if command != "includegraphics"
+                && !crate::bib_resources::loads(command)
                 && !syntax::code_input_command(command)
             {
                 let explicit_extension = existing_name

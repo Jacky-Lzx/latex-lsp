@@ -1,4 +1,5 @@
 mod anchors;
+mod bib_resources;
 pub mod build;
 pub mod build_log;
 pub mod catalog;

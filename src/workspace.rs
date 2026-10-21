@@ -419,7 +419,8 @@ impl Workspace {
             .flat_map(|command| {
                 let extension = match command.name.as_str() {
                     "input" | "InputIfFileExists" | "include" | "subfile" => "tex",
-                    "bibliography" | "nobibliography" | "addbibresource" => "bib",
+                    "bibliography" | "nobibliography" => "bib",
+                    name if crate::bib_resources::loads(name) => "bib",
                     "bibliographystyle" => "bst",
                     name => match crate::syntax::loader_extension(name) {
                         Some(extension) => extension,
@@ -1045,6 +1046,11 @@ pub(crate) fn resolve_file_path_with(
     extensions: &[&str],
     file: impl Fn(&Path) -> Option<PathBuf>,
 ) -> Option<Url> {
+    let extensions = if crate::bib_resources::loads(command) {
+        &[""][..]
+    } else {
+        extensions
+    };
     crate::syntax::file_lookup_names(command, value).find_map(|name| {
         extensions
             .iter()

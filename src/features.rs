@@ -818,6 +818,9 @@ fn argument_span(doc: &Document, command: &Command, offset: usize) -> Option<Spa
         }
         return Some(start + 1..offset);
     }
+    if crate::bib_resources::loads(&command.name) {
+        return crate::bib_resources::prefix(source, command, offset);
+    }
     if command.name == "bibliographystyle" {
         return syntax::active_bibliography_style_prefix(
             source,

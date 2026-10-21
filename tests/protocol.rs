@@ -12840,3 +12840,113 @@ printf 'called\n' >> compiler-calls
         }
     }
 }
+
+#[test]
+#[cfg(unix)]
+fn biblatex_resources_reject_unsaved_databases_and_publish_versioned_key_renames_over_stdio() {
+    for loader in ["addbibresource", "addglobalbib"] {
+        let (mut server,directory,main)=fake_build_server_capabilities("touch invoked\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf '(./main.tex\\n)\\n' > \"$1/main.log\"\n",false,json!({"workspace":{"workspaceEdit":{"documentChanges":true}}}));
+        let bib = Url::from_file_path(directory.path().join("refs.bib")).unwrap();
+        std::fs::write(bib.to_file_path().unwrap(), "@book{alpha,title={Saved}}\n").unwrap();
+        let source = format!(
+            "\\documentclass{{article}}\\{loader}[label=refs]{{refs.bib}}\\cite{{alpha}}\n"
+        );
+        std::fs::write(main.to_file_path().unwrap(), &source).unwrap();
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+        );
+        let unsaved = "@book{alpha,title={Unsaved}}\n";
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":bib,"languageId":"bibtex","version":4,"text":unsaved}}),
+        );
+        server.send(json!({"jsonrpc":"2.0","id":2,"method":"workspace/executeCommand","params":{"command":"latex.build","arguments":[main]}}));
+        let rejected = server.until(|message| message["id"] == 2);
+        assert_eq!(rejected["error"]["code"], -32602, "{rejected}");
+        assert!(rejected["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("refs.bib"));
+        assert!(!directory.path().join("invoked").exists());
+        let at = latex_lsp::text::Text::new(source.clone())
+            .position(source.find("{alpha}").unwrap() + 2);
+        let definition = server.request(
+            3,
+            "textDocument/definition",
+            json!({"textDocument":{"uri":main},"position":at}),
+        );
+        assert_eq!(definition[0]["uri"], bib.as_str());
+        let edit = server.request(
+            4,
+            "textDocument/rename",
+            json!({"textDocument":{"uri":main},"position":at,"newName":"renamed"}),
+        );
+        let changes = edit["documentChanges"].as_array().unwrap();
+        assert_eq!(changes.len(), 2);
+        for change in changes {
+            assert_eq!(
+                change["textDocument"]["version"],
+                if change["textDocument"]["uri"] == main.as_str() {
+                    2
+                } else {
+                    4
+                }
+            );
+            assert_eq!(change["edits"].as_array().unwrap().len(), 1);
+        }
+        std::fs::write(bib.to_file_path().unwrap(), unsaved).unwrap();
+        server.notify("textDocument/didSave", json!({"textDocument":{"uri":bib}}));
+        server.request(
+            5,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(finished["params"]["status"], "success", "{finished}");
+        assert!(directory.path().join("invoked").exists());
+        server.request(6, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn restoring_a_missing_biblatex_resource_during_compilation_discards_obsolete_results() {
+    for loader in ["addbibresource", "addglobalbib"] {
+        let (mut server,directory,main)=fake_build_server("touch \"$1/ready\"\nwhile [ ! -f \"$1/release\" ]; do sleep 0.02; done\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf '(./main.tex\\nLaTeX Warning: Resource changed.\\n)\\n' > \"$1/main.log\"\n",false);
+        let source =
+            format!("\\documentclass{{article}}\\{loader}{{restored.bib}}\n\\cite{{alpha}}\n");
+        std::fs::write(main.to_file_path().unwrap(), &source).unwrap();
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+        );
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let output = directory.path().join("build/latex-lsp");
+        for _ in 0..500 {
+            if output.join("ready").exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(output.join("ready").exists());
+        std::fs::write(
+            directory.path().join("restored.bib"),
+            "@book{alpha,title={Restored}}\n",
+        )
+        .unwrap();
+        std::fs::write(output.join("release"), "").unwrap();
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(finished["params"]["stale"], true, "{finished}");
+        assert!(finished["params"]["analysis"].is_null());
+        server.request(3, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}

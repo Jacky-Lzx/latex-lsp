@@ -5,10 +5,11 @@ use latex_lsp::{
 use std::{collections::BTreeSet, path::Path};
 use tower_lsp::lsp_types::*;
 
-const COMMANDS: [&str; 4] = [
+const COMMANDS: [&str; 5] = [
     "bibliography",
     "nobibliography",
     "addbibresource",
+    "addglobalbib",
     "bibliographystyle",
 ];
 fn extension(name: &str) -> &str {
@@ -16,6 +17,13 @@ fn extension(name: &str) -> &str {
         "bst"
     } else {
         "bib"
+    }
+}
+fn resource_name(name: &str) -> &str {
+    if matches!(name, "addbibresource" | "addglobalbib") {
+        "refs.bib"
+    } else {
+        "refs"
     }
 }
 fn uri(root: &Path, name: &str) -> Url {
@@ -48,7 +56,7 @@ fn citation_position(workspace: &Workspace, main: &Url) -> Position {
 fn quoted_resource_tokens_do_not_import_saved_dependencies_or_citation_definitions() {
     for name in COMMANDS {
         for argument in [
-            "{refs}".to_string(),
+            format!("{{{}}}", resource_name(name)),
             format!("% before 😀\r\n{{refs.{}}}", extension(name)),
         ] {
             let command = format!("\\{name}{argument}");
@@ -89,7 +97,7 @@ fn quoted_resource_tokens_do_not_import_saved_dependencies_or_citation_definitio
 #[test]
 fn ordinary_deferred_and_forwarded_resource_calls_keep_their_data_roles_and_symbol_edits() {
     for name in COMMANDS {
-        let command = format!("\\{name}{{refs}}");
+        let command = format!("\\{name}{{{}}}", resource_name(name));
         for body in [
             command.clone(),
             format!("\\newcommand{{\\future}}{{{command}}}\\future"),
@@ -139,7 +147,7 @@ fn ordinary_deferred_and_forwarded_resource_calls_keep_their_data_roles_and_symb
 #[test]
 fn recorded_resources_and_uncertain_primitive_bindings_remain_potential_build_dependencies() {
     for name in COMMANDS {
-        let command = format!("\\{name}{{refs}}");
+        let command = format!("\\{name}{{{}}}", resource_name(name));
         for (body,recorded) in [
             (format!("\\meaning{command}"),true),
             (format!("\\def\\picked{{provider}}\\input{{\\picked}}\\meaning{command}"),false),

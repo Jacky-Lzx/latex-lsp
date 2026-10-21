@@ -5,10 +5,11 @@ use latex_lsp::{
 use std::{collections::BTreeSet, path::Path};
 use tower_lsp::lsp_types::*;
 
-const COMMANDS: [&str; 4] = [
+const COMMANDS: [&str; 5] = [
     "bibliography",
     "nobibliography",
     "addbibresource",
+    "addglobalbib",
     "bibliographystyle",
 ];
 fn extension(name: &str) -> &str {
@@ -16,6 +17,13 @@ fn extension(name: &str) -> &str {
         "bst"
     } else {
         "bib"
+    }
+}
+fn resource_name(name: &str) -> &str {
+    if matches!(name, "addbibresource" | "addglobalbib") {
+        "old/refs.bib"
+    } else {
+        "old/refs"
     }
 }
 fn uri(root: &Path, name: &str) -> Url {
@@ -99,7 +107,7 @@ fn rename(root: &Path, old: &str, new: &str) -> FileRename {
 fn builtin_resource_paths_keep_navigation_completion_and_versioned_moves_in_future_macro_code() {
     for name in COMMANDS {
         for argument in [
-            "{old/refs}".to_string(),
+            format!("{{{}}}", resource_name(name)),
             format!("% before 😀\r\n{{old/refs.{}}}", extension(name)),
         ] {
             let command = format!("\\{name}{argument}");
@@ -155,7 +163,7 @@ fn builtin_resource_paths_keep_navigation_completion_and_versioned_moves_in_futu
                         "old/renamed.txt",
                     )],
                 );
-                if name == "addbibresource" {
+                if matches!(name, "addbibresource" | "addglobalbib") {
                     // Explicit resource names keep their suffix, unlike the
                     // automatic suffix rules of traditional BibTeX commands.
                     let edit = suffix_change.unwrap().unwrap();
@@ -175,7 +183,7 @@ fn builtin_resource_paths_keep_navigation_completion_and_versioned_moves_in_futu
 fn overridden_and_consumed_resource_calls_keep_filename_text_out_of_automatic_file_edits() {
     for name in COMMANDS {
         for argument in [
-            "{old/refs}".to_string(),
+            format!("{{{}}}", resource_name(name)),
             format!("% before 😀\r\n{{old/refs.{}}}", extension(name)),
         ] {
             let command = format!("\\{name}{argument}");
@@ -229,7 +237,10 @@ fn recorded_source_providers_can_change_resource_file_reference_meaning() {
     for name in COMMANDS {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();
-        let source = format!(r"\documentclass{{article}}\{name}{{old/refs}}");
+        let source = format!(
+            r"\documentclass{{article}}\{name}{{{}}}",
+            resource_name(name)
+        );
         let mut workspace = project(root, &source, name);
         let main = uri(root, "main.tex");
         assert_eq!(navigation::document_links(&workspace, &main).len(), 1);
@@ -268,7 +279,7 @@ fn shared_resource_paths_require_the_same_file_meaning_in_every_project() {
                 "second.tex",
                 format!(r"\documentclass{{article}}\def\{name}#1{{}}\input{{shared}}"),
             ),
-            ("shared.tex", format!(r"\{name}{{old/refs}}")),
+            ("shared.tex", format!(r"\{name}{{{}}}", resource_name(name))),
         ] {
             std::fs::write(root.join(file), &source).unwrap();
             let target = uri(root, file);

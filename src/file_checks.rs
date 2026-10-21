@@ -156,6 +156,7 @@ impl Snapshot {
             .flat_map(|doc| &doc.syntax.definitions)
             .filter(|entry| {
                 syntax::loader_extension(&entry.name).is_some()
+                    || crate::bib_resources::loads(&entry.name)
                     || matches!(
                         entry.name.as_str(),
                         "bibliography"
@@ -273,6 +274,7 @@ impl Snapshot {
                 .iter()
                 .filter(|command| {
                     !(syntax::loader_extension(&command.name).is_some()
+                        || crate::bib_resources::loads(&command.name)
                         || matches!(
                             command.name.as_str(),
                             "bibliography" | "nobibliography" | "bibliographystyle"
@@ -288,7 +290,8 @@ impl Snapshot {
                             | "InputIfFileExists"
                             | "IfFileExists"
                             | "includegraphics"
-                    ) || syntax::code_input_command(&command.name))
+                    ) || syntax::code_input_command(&command.name)
+                        || crate::bib_resources::loads(&command.name))
                         || active_sources
                             .get(&source)
                             .is_some_and(|positions| positions.contains(&command.span.start))
@@ -313,6 +316,20 @@ impl Snapshot {
                     if crate::code_inputs::supported(workspace, &source, root, command) {
                         if let Some(argument) = syntax::file_argument(&doc.text.source, command) {
                             observe(root, &command.name, &argument.value, "");
+                        }
+                    }
+                    continue;
+                }
+                if crate::bib_resources::loads(&command.name) {
+                    if !redefined_file_commands.contains(command.name.as_str()) {
+                        if let Some(argument) = syntax::file_argument(&doc.text.source, command) {
+                            for origin in [root, &source] {
+                                if observe(origin, &command.name, &argument.value, "").is_some()
+                                    || source == *root
+                                {
+                                    break;
+                                }
+                            }
                         }
                     }
                     continue;
@@ -826,6 +843,49 @@ mod bibliography_conditions {
             &Url::from_file_path(root.join("main.tex")).unwrap(),
             &BuildConfig::default(),
         )
+    }
+
+    #[test]
+    fn biblatex_resource_conditions_track_exact_files_and_skip_unexecuted_or_nonlocal_calls() {
+        for name in ["addbibresource", "addglobalbib"] {
+            for call in [
+                format!("\\{name}"),
+                format!("\\csuse{{{name}}}"),
+                "\\load".into(),
+            ] {
+                let directory = tempfile::tempdir().unwrap();
+                let root = directory.path();
+                let source = format!("\\def\\load{{\\{name}}}{call}[label=refs]{{missing.bib}}");
+                let before = capture(root, &source);
+                assert!(
+                    before.paths.contains_key(&root.join("missing.bib")),
+                    "{source}: {:?}",
+                    before.paths
+                );
+                std::fs::write(root.join("missing.bib.bib"), "unrelated").unwrap();
+                assert!(before.changed_path().is_none());
+                std::fs::write(root.join("missing.bib"), "restored").unwrap();
+                assert!(before.changed_path().is_some());
+            }
+            for context in [
+                format!("\\newcommand\\later{{\\{name}{{missing.bib}}}}"),
+                format!("\\newcommand\\hold[1]{{}}\\hold\\{name}{{missing.bib}}"),
+                format!("\\renewcommand\\{name}[1]{{}}\\{name}{{missing.bib}}"),
+                format!("\\{name}[location=remote]{{missing.bib}}"),
+                format!("\\{name}[glob]{{missing.bib}}"),
+                format!("\\{name}*[label=x]{{missing.bib}}"),
+                format!("\\detokenize{{\\{name}{{missing.bib}}}}"),
+            ] {
+                let directory = tempfile::tempdir().unwrap();
+                let before = capture(directory.path(), &context);
+                assert!(
+                    !before
+                        .paths
+                        .contains_key(&directory.path().join("missing.bib")),
+                    "{context}"
+                );
+            }
+        }
     }
 
     #[test]

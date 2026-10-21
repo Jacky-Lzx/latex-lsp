@@ -440,7 +440,7 @@ fn builtin(name: &str) -> Option<Signature> {
             ],
             false,
         ),
-        "addbibresource" => (&[("options", true), ("file", false)], false),
+        "addbibresource" | "addglobalbib" => (&[("options", true), ("file", false)], false),
         "part" | "chapter" | "section" | "subsection" | "subsubsection" | "paragraph"
         | "subparagraph" | "caption" => (&[("short title", true), ("title", false)], true),
         "footnote" => (&[("number", true), ("text", false)], false),
@@ -1986,7 +1986,13 @@ impl<'a> CommandSignatures<'a> {
             source,
             parsed,
             positions,
-            &["bibliography", "nobibliography", "bibliographystyle"],
+            &[
+                "bibliography",
+                "nobibliography",
+                "bibliographystyle",
+                "addbibresource",
+                "addglobalbib",
+            ],
         )
     }
 
@@ -2050,9 +2056,16 @@ impl<'a> CommandSignatures<'a> {
                         span: start..end,
                         argument: if syntax::loader_extension(builtin).is_some()
                             || builtin == "bibliographystyle"
+                            || crate::bib_resources::loads(builtin)
                         {
                             syntax::file_name_argument_start(source, builtin, end)
-                                .and_then(|start| syntax::group(source, start, b'{', b'}'))
+                                .and_then(|start| {
+                                    if crate::bib_resources::loads(builtin) {
+                                        syntax::verbatim_file_group(source, start)
+                                    } else {
+                                        syntax::group(source, start, b'{', b'}')
+                                    }
+                                })
                                 .map(|(argument, _)| argument)
                         } else {
                             syntax::source_input_argument(source, builtin, end)

@@ -279,7 +279,7 @@ fn replacement(
             &new_target,
         )
     };
-    let mut value = safe_path(&path)?;
+    let mut value = reference_path(&path, command)?;
     if command.and_then(syntax::package_class_extension).is_some()
         || !original.ends_with(&format!(".{extension}"))
     {
@@ -320,7 +320,7 @@ fn replacement(
                     &new_target,
                 )
             };
-            value = safe_path(&explicit)?;
+            value = reference_path(&explicit, Some(command))?;
             if let Some(extension) = syntax::package_class_extension(command) {
                 if let Some(base) = value.strip_suffix(&format!(".{extension}")) {
                     value = base.to_owned();
@@ -345,6 +345,25 @@ fn replacement(
         ));
     }
     Ok(value)
+}
+
+fn reference_path(path: &Path, command: Option<&str>) -> Result<String> {
+    if !command.is_some_and(crate::bib_resources::loads) {
+        return safe_path(path);
+    }
+    let value = path
+        .to_str()
+        .ok_or_else(|| Error::invalid_params("File name is not valid UTF-8"))?;
+    #[cfg(windows)]
+    let normalized = value.replace('\\', "/");
+    #[cfg(windows)]
+    let value = normalized.as_str();
+    if !crate::bib_resources::literal_path(value) {
+        return Err(Error::invalid_params(
+            "Renamed biblatex resource is not a literal filename",
+        ));
+    }
+    Ok(value.to_string())
 }
 
 fn safe_path(path: &Path) -> Result<String> {

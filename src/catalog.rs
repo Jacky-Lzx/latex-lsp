@@ -760,6 +760,7 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
         "bibliographystyle{${1:plain}}",
         "Select a BibTeX bibliography style.",
     ),
+    ("addglobalbib", "addglobalbib{${1:references.bib}}", "Load a bibliography resource in every reference section. Use the full filename. Requires biblatex."),
     (
         "addbibresource",
         "addbibresource{${1:references.bib}}",
