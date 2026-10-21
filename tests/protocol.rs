@@ -2248,13 +2248,139 @@ fn unchanged_input_contents_allow_noop_builds_after_repeated_saves() {
 
 #[test]
 #[cfg(unix)]
+fn first_latexmk_build_refreshes_existing_artifacts_for_newer_root_or_child_inputs() {
+    use std::os::unix::fs::PermissionsExt;
+
+    for touched in ["main.tex", "chapter.tex"] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let main_path = root.join("main.tex");
+        let main = Url::from_file_path(&main_path).unwrap();
+        let source = "\\documentclass{article}\n\\input{chapter}\n";
+        std::fs::write(&main_path, source).unwrap();
+        std::fs::write(root.join("chapter.tex"), "Chapter\n").unwrap();
+        let output = root.join("build/latex-lsp");
+        std::fs::create_dir_all(&output).unwrap();
+        let pdf = output.join("main.pdf");
+        std::fs::write(&pdf, "%PDF-1.4\nExisting\n").unwrap();
+        let now = std::time::SystemTime::now();
+        for (path, age) in [
+            (main_path.clone(), 180),
+            (root.join("chapter.tex"), 180),
+            (pdf.clone(), 120),
+            (root.join(touched), 60),
+        ] {
+            std::fs::File::open(path)
+                .unwrap()
+                .set_modified(now - Duration::from_secs(age))
+                .unwrap();
+        }
+        let compiler = root.join("latexmk");
+        std::fs::write(
+            &compiler,
+            r#"#!/bin/sh
+force=false
+for arg do
+  printf '%s\n' "$arg" >> compiler-arguments
+  case "$arg" in
+    -g) force=true ;;
+    -outdir=*) out=${arg#-outdir=} ;;
+  esac
+done
+if "$force"; then
+  printf '%%PDF-1.4\nRefreshed\n' > "$out/main.pdf"
+  printf 'INPUT main.tex\nINPUT chapter.tex\n' > "$out/main.fls"
+else
+  printf 'Nothing to do\n'
+fi
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&compiler, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut server = Server::start();
+        server.request(
+            1,
+            "initialize",
+            json!({
+                "processId":null,
+                "rootUri":Url::from_directory_path(root).unwrap(),
+                "capabilities":{},
+                "initializationOptions":{"build":{"executable":compiler}}
+            }),
+        );
+        server.notify("initialized", json!({}));
+        server.notify(
+            "textDocument/didOpen",
+            json!({
+                "textDocument":{"uri":main,"languageId":"latex","version":1,"text":source}
+            }),
+        );
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({
+                "command":"latex.build","arguments":[main]
+            }),
+        );
+        let first = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(first["params"]["status"], "success", "{touched}: {first}");
+        assert_eq!(first["params"]["stale"], false, "{first}");
+        assert_eq!(first["params"]["diagnosticsCount"], 0, "{first}");
+        assert!(std::fs::read_to_string(&pdf).unwrap().contains("Refreshed"));
+        let pdf_modified = std::fs::metadata(&pdf).unwrap().modified().unwrap();
+        std::fs::File::open(root.join(touched))
+            .unwrap()
+            .set_modified(pdf_modified + Duration::from_secs(1))
+            .unwrap();
+        server.request(
+            3,
+            "workspace/executeCommand",
+            json!({
+                "command":"latex.build","arguments":[main]
+            }),
+        );
+        let noop = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(noop["params"]["status"], "success", "{touched}: {noop}");
+        assert_eq!(noop["params"]["stale"], false, "{noop}");
+        assert!(noop["params"]["output"]
+            .as_str()
+            .unwrap()
+            .contains("Nothing to do"));
+        assert_eq!(
+            std::fs::metadata(&pdf).unwrap().modified().unwrap(),
+            pdf_modified
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("compiler-arguments"))
+                .unwrap()
+                .lines()
+                .filter(|argument| *argument == "-g")
+                .count(),
+            1
+        );
+        server.request(4, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
 #[ignore = "requires latexmk and a TeX installation"]
-fn real_latexmk_reuses_the_pdf_after_saving_identical_source_contents() {
+fn real_latexmk_refreshes_preexisting_pdf_then_reuses_it_after_identical_saves() {
     let directory = tempfile::tempdir().unwrap();
     let main_path = directory.path().join("main.tex");
     let main = Url::from_file_path(&main_path).unwrap();
     let source = "\\documentclass{article}\n\\begin{document}\nHello, world.\n\\end{document}\n";
     std::fs::write(&main_path, source).unwrap();
+    let initial = latex_lsp::build::run(&main_path, &Default::default(), &Default::default());
+    assert_eq!(initial.status, "success", "{}", initial.output);
+    let existing_pdf = initial.pdf.unwrap();
+    let modified = std::fs::metadata(existing_pdf).unwrap().modified().unwrap();
+    std::fs::File::open(&main_path)
+        .unwrap()
+        .set_modified(modified + Duration::from_secs(1))
+        .unwrap();
     let mut server = Server::start();
     server.request(
         1,
@@ -2269,6 +2395,13 @@ fn real_latexmk_reuses_the_pdf_after_saving_identical_source_contents() {
     server.notify("textDocument/didSave", json!({"textDocument":{"uri":main}}));
     let first = server.until(|message| message["method"] == "latex/buildFinished");
     assert_eq!(first["params"]["status"], "success", "{first}");
+    assert!(
+        first["params"]["output"]
+            .as_str()
+            .unwrap()
+            .contains("applying rule"),
+        "{first}"
+    );
     let pdf = directory.path().join("build/latex-lsp/main.pdf");
     let pdf_before = std::fs::read(&pdf).unwrap();
     let pdf_modified = std::fs::metadata(&pdf).unwrap().modified().unwrap();

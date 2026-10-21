@@ -1144,6 +1144,39 @@ fn engine_directives_use_the_root_comment_and_respect_explicit_configuration() {
 
 #[test]
 #[cfg(unix)]
+fn initial_latexmk_refresh_still_rejects_a_compiler_leaving_the_pdf_outdated() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = root.join("main.tex");
+    std::fs::write(&main, "Source\n").unwrap();
+    let output = root.join("build/latex-lsp");
+    std::fs::create_dir_all(&output).unwrap();
+    let pdf = output.join("main.pdf");
+    std::fs::write(&pdf, "%PDF-1.4\n").unwrap();
+    std::fs::File::open(&pdf)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - Duration::from_secs(60))
+        .unwrap();
+    let wrapper = script(root, "printf '%s\\n' \"$@\" > compiler-arguments\n");
+    let compiler = root.join("latexmk");
+    std::fs::rename(wrapper, &compiler).unwrap();
+    let config = BuildConfig {
+        executable: compiler.to_string_lossy().into_owned(),
+        ..Default::default()
+    };
+    let outcome = build::run(&main, &config, &AtomicBool::new(false));
+    assert_eq!(outcome.status, "error", "{}", outcome.message);
+    assert!(outcome.message.contains("outdated PDF"));
+    assert!(outcome.pdf.is_none());
+    assert!(pdf.is_file());
+    assert!(std::fs::read_to_string(root.join("compiler-arguments"))
+        .unwrap()
+        .lines()
+        .any(|argument| argument == "-g"));
+}
+
+#[test]
+#[cfg(unix)]
 fn unchanged_pdf_is_accepted_only_when_it_is_not_older_than_the_source() {
     let directory = tempfile::tempdir().unwrap();
     let main = directory.path().join("main.tex");

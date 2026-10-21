@@ -425,6 +425,10 @@ impl BuildManager {
             }
             let worker_root = root_path.clone();
             let previous_pdf = workspace.read().await.pdf_checks.get(&root_uri).cloned();
+            let worker_inputs: Vec<_> = project
+                .iter()
+                .filter_map(|uri| uri.to_file_path().ok())
+                .collect();
             let wall_started = std::time::SystemTime::now();
             let outcome = tokio::task::spawn_blocking(move || {
                 run_with_mode(
@@ -433,6 +437,7 @@ impl BuildManager {
                     &cancel,
                     rebuild,
                     previous_pdf.as_deref(),
+                    worker_inputs.into_iter(),
                 )
             })
             .await;
@@ -1111,11 +1116,25 @@ pub(crate) fn kill_group(child: &mut Child) {
 }
 
 pub fn run(root: &Path, config: &BuildConfig, cancel: &AtomicBool) -> Outcome {
-    run_with_mode(root, config, cancel, false, None)
+    run_with_mode(
+        root,
+        config,
+        cancel,
+        false,
+        None,
+        std::iter::once(root.to_path_buf()),
+    )
 }
 
 pub fn rebuild(root: &Path, config: &BuildConfig, cancel: &AtomicBool) -> Outcome {
-    run_with_mode(root, config, cancel, true, None)
+    run_with_mode(
+        root,
+        config,
+        cancel,
+        true,
+        None,
+        std::iter::once(root.to_path_buf()),
+    )
 }
 
 fn run_with_mode(
@@ -1124,6 +1143,7 @@ fn run_with_mode(
     cancel: &AtomicBool,
     rebuild: bool,
     previous_pdf: Option<&Snapshot>,
+    inputs: impl Iterator<Item = PathBuf>,
 ) -> Outcome {
     // A task can be cancelled while waiting for client progress registration,
     // before its worker starts. Preserve existing artifacts in that case.
@@ -1133,7 +1153,21 @@ fn run_with_mode(
             ..Outcome::error("Compilation cancelled".into())
         };
     }
-    let mut outcome = run_inner(root, config, cancel, rebuild);
+    // On first opening a project there is no content history for its existing
+    // PDF. latexmk may skip a source saved with identical contents even though
+    // its timestamp is newer. Force one pass to establish a verified PDF and
+    // recorder instead of rejecting that legitimate incremental build.
+    let refresh = !rebuild
+        && config.arguments.is_none()
+        && config.rebuild_arguments.is_none()
+        && Path::new(&config.executable)
+            .file_stem()
+            .is_some_and(|name| name == "latexmk")
+        && config.artifact_path(root, "pdf").is_some_and(|pdf| {
+            previous_pdf.is_none_or(|previous| !previous.matches_pdf(&pdf))
+                && outdated_pdf_input(&pdf, inputs, None).is_some()
+        });
+    let mut outcome = run_inner(root, config, cancel, rebuild || refresh);
     reject_outdated_pdf(
         root,
         &mut outcome,
@@ -1176,26 +1210,7 @@ fn reject_outdated_pdf(
     let Some(pdf_path) = outcome.pdf.as_ref() else {
         return;
     };
-    let Some(pdf) = fingerprint(pdf_path).and_then(|(_, modified)| modified) else {
-        return;
-    };
-    // Editors can rewrite identical inputs after the PDF was produced, while
-    // latexmk correctly skips TeX. Only override the timestamp check using the
-    // input history of this exact, unmodified PDF; unknown inputs stay unsafe.
-    let previous_pdf =
-        previous_pdf.filter(|previous| previous.matches_pdf(pdf_path) && !previous.pdf_changed());
-    let outdated = sources.into_iter().find(|source| {
-        std::fs::metadata(source)
-            .ok()
-            .and_then(|metadata| metadata.modified().ok())
-            .is_none_or(|modified| {
-                modified > pdf
-                    && previous_pdf.is_none_or(|previous| {
-                        Url::from_file_path(source).map_or(true, |uri| previous.input_changed(&uri))
-                    })
-            })
-    });
-    if let Some(source) = outdated {
+    if let Some(source) = outdated_pdf_input(pdf_path, sources, previous_pdf) {
         outcome.status = "error";
         outcome.pdf = None;
         outcome.pages = None;
@@ -1217,6 +1232,30 @@ fn reject_outdated_pdf(
                 });
         }
     }
+}
+
+fn outdated_pdf_input(
+    pdf_path: &Path,
+    mut sources: impl Iterator<Item = PathBuf>,
+    previous_pdf: Option<&Snapshot>,
+) -> Option<PathBuf> {
+    let pdf = fingerprint(pdf_path).and_then(|(_, modified)| modified)?;
+    // Editors can rewrite identical inputs after the PDF was produced, while
+    // latexmk correctly skips TeX. Only override the timestamp check using the
+    // input history of this exact, unmodified PDF; unknown inputs stay unsafe.
+    let previous_pdf =
+        previous_pdf.filter(|previous| previous.matches_pdf(pdf_path) && !previous.pdf_changed());
+    sources.find(|source| {
+        std::fs::metadata(source)
+            .ok()
+            .and_then(|metadata| metadata.modified().ok())
+            .is_none_or(|modified| {
+                modified > pdf
+                    && previous_pdf.is_none_or(|previous| {
+                        Url::from_file_path(source).map_or(true, |uri| previous.input_changed(&uri))
+                    })
+            })
+    })
 }
 
 fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool, rebuild: bool) -> Outcome {
