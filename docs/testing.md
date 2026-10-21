@@ -26,13 +26,13 @@ cargo test --locked --test box_warnings real_ -- --ignored
 cargo test --locked --test file_operations real_file_url_renames -- --ignored
 ```
 
-真实图片扩展名声明回归需要 pdfLaTeX 和 graphicx，验证 PNG 优先、显式 PDF、局部与全局作用域，以及图片和主文档移动后的编译输入：
+真实图片扩展名声明回归需要 pdfLaTeX、graphicx 和 etoolbox，验证 PNG 优先、显式 PDF、局部与全局作用域，以及图片和主文档移动后的编译输入：
 
 ```sh
 cargo test --locked --test graphics_extensions real_ -- --ignored
 ```
 
-全局设置回归覆盖 `\global`、正负 `\globaldefs`、嵌套分组、静态别名和字面整数，逐项核对导航、改名前后实际读取的图片。默认回归另覆盖声明顺序、输入文件和本地包、共享源码歧义、候选图片的过期检查及版本化 stdio 文件移动。
+全局设置回归覆盖 `\global`、正负 `\globaldefs`、嵌套分组、声明与前缀的静态别名和命名调用，以及字面整数，逐项核对导航、改名前后实际读取的图片。默认回归另覆盖声明顺序、输入文件和本地包、共享源码歧义、候选图片的过期检查及版本化 stdio 文件移动。
 
 ## 文献与编译诊断
 

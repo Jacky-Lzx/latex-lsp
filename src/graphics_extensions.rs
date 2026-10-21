@@ -15,9 +15,16 @@ struct Group {
     global_defs: i8,
 }
 
-const PREFIXES: &[&str] = &["global", "globaldefs", "long", "outer", "protected"];
+const SETTING_CONTROLS: &[&str] = &[
+    "global",
+    "globaldefs",
+    "long",
+    "outer",
+    "protected",
+    "DeclareGraphicsExtensions",
+];
 
-fn prefix_call(
+fn setting_call(
     source: &str,
     commands: &[syntax::Command],
     index: usize,
@@ -33,13 +40,18 @@ fn prefix_call(
     } else {
         (command.name.as_str(), command.span.end)
     };
-    PREFIXES
+    SETTING_CONTROLS
         .iter()
-        .find(|prefix| signatures.invokes_builtin(name, prefix))
-        .map(|prefix| (*prefix, end))
+        .find(|builtin| signatures.invokes_builtin(name, builtin))
+        .map(|builtin| (*builtin, end))
 }
 
-fn named_declaration(source: &str, commands: &[syntax::Command], quoted: &BTreeSet<usize>) -> bool {
+fn named_graphics_command(
+    source: &str,
+    commands: &[syntax::Command],
+    quoted: &BTreeSet<usize>,
+    names: &[&str],
+) -> bool {
     commands.iter().enumerate().any(|(index, command)| {
         if quoted.contains(&command.span.start) {
             return false;
@@ -54,7 +66,7 @@ fn named_declaration(source: &str, commands: &[syntax::Command], quoted: &BTreeS
         } else {
             None
         };
-        name.is_some_and(|name| matches!(name, "DeclareGraphicsExtensions" | "DeclareGraphicsRule"))
+        name.is_some_and(|name| names.contains(&name))
     })
 }
 
@@ -87,7 +99,12 @@ impl Index {
                     entry.name.as_str(),
                     "DeclareGraphicsExtensions" | "DeclareGraphicsRule"
                 )
-            }) || named_declaration(&doc.text.source, &doc.syntax.commands, &BTreeSet::new())
+            }) || named_graphics_command(
+                &doc.text.source,
+                &doc.syntax.commands,
+                &BTreeSet::new(),
+                &["DeclareGraphicsExtensions", "DeclareGraphicsRule"],
+            )
         });
         let mut index = Self {
             defaults,
@@ -140,7 +157,7 @@ impl Index {
                 let alias_bodies = signatures.builtin_alias_body_positions(
                     &doc.text.source,
                     &doc.syntax,
-                    PREFIXES,
+                    SETTING_CONTROLS,
                 );
                 let declaration_targets: BTreeSet<_> = doc
                     .syntax
@@ -155,7 +172,7 @@ impl Index {
                     .enumerate()
                     .filter(|(_, command)| positions.contains(&command.span.start))
                     .filter_map(|(index, _)| {
-                        let (name, end) = prefix_call(
+                        let (name, end) = setting_call(
                             &doc.text.source,
                             &doc.syntax.commands,
                             index,
@@ -170,31 +187,45 @@ impl Index {
                             .flatten()
                     })
                     .collect();
-                named_declaration(&doc.text.source, &doc.syntax.commands, &quoted)
-                    || doc
-                        .syntax
-                        .commands
-                        .iter()
-                        .enumerate()
-                        .any(|(index, command)| {
-                            !quoted.contains(&command.span.start)
-                                && (command.name == "DeclareGraphicsRule"
-                                    || command.name == "DeclareGraphicsExtensions"
-                                        && !positions.contains(&command.span.start)
-                                    || prefix_call(
-                                        &doc.text.source,
-                                        &doc.syntax.commands,
-                                        index,
-                                        &signatures,
-                                    )
-                                    .is_some()
-                                        && !positions.contains(&command.span.start)
-                                        && !declaration_targets.contains(&command.span.start)
-                                        && !alias_bodies.contains(&command.span.start)
-                                        && !numeric_operands
-                                            .iter()
-                                            .any(|span| span.contains(&command.span.start)))
-                        })
+                named_graphics_command(
+                    &doc.text.source,
+                    &doc.syntax.commands,
+                    &quoted,
+                    &["DeclareGraphicsRule"],
+                ) || doc
+                    .syntax
+                    .commands
+                    .iter()
+                    .enumerate()
+                    .any(|(index, command)| {
+                        !quoted.contains(&command.span.start)
+                            && (command.name == "DeclareGraphicsRule"
+                                || positions.contains(&command.span.start)
+                                    && (command.name == "csuse"
+                                        && command.argument.as_ref().is_none_or(|argument| {
+                                            !syntax::is_static_key(&argument.value)
+                                        })
+                                        || command.name == "csname"
+                                            && syntax::literal_csname(
+                                                &doc.text.source,
+                                                &doc.syntax.commands,
+                                                index,
+                                            )
+                                            .is_none())
+                                || setting_call(
+                                    &doc.text.source,
+                                    &doc.syntax.commands,
+                                    index,
+                                    &signatures,
+                                )
+                                .is_some()
+                                    && !positions.contains(&command.span.start)
+                                    && !declaration_targets.contains(&command.span.start)
+                                    && !alias_bodies.contains(&command.span.start)
+                                    && !numeric_operands
+                                        .iter()
+                                        .any(|span| span.contains(&command.span.start)))
+                    })
             })
         {
             return index;
@@ -229,10 +260,20 @@ impl Index {
                 let quoted = walk
                     .signatures
                     .quoted_command_tokens(&doc.text.source, &doc.syntax);
-                !doc.syntax.commands.iter().any(|command| {
-                    command.name == "DeclareGraphicsExtensions"
-                        && !quoted.contains(&command.span.start)
-                })
+                !doc.syntax
+                    .commands
+                    .iter()
+                    .enumerate()
+                    .any(|(index, command)| {
+                        !quoted.contains(&command.span.start)
+                            && setting_call(
+                                &doc.text.source,
+                                &doc.syntax.commands,
+                                index,
+                                &walk.signatures,
+                            )
+                            .is_some_and(|(name, _)| name == "DeclareGraphicsExtensions")
+                    })
             }
         });
         if walk.complete && ordered {
@@ -371,21 +412,30 @@ impl Walk<'_> {
                 self.complete = false;
             }
         }
-        // Prefixes and the globaldefs parameter may be reached through pure
+        // Settings and assignment prefixes may be reached through pure
         // aliases or static named calls; their operands start after that call.
         for (index, command) in doc.syntax.commands.iter().enumerate() {
             if !positions.contains(&command.span.start) {
                 continue;
             }
-            if let Some((prefix, end)) = prefix_call(
+            if let Some((name, end)) = setting_call(
                 &doc.text.source,
                 &doc.syntax.commands,
                 index,
                 &self.signatures,
             ) {
                 let mut normalized = command.clone();
-                normalized.name = prefix.to_owned();
+                normalized.name = name.to_owned();
                 normalized.span.end = end;
+                if name == "DeclareGraphicsExtensions" {
+                    normalized.argument = syntax::group(
+                        &doc.text.source,
+                        syntax::skip_space(&doc.text.source, end),
+                        b'{',
+                        b'}',
+                    )
+                    .map(|(argument, _)| argument);
+                }
                 commands.insert(command.span.start, normalized);
             }
         }

@@ -1435,6 +1435,18 @@ mod graphic_conditions {
                 r"{\globaldefs=-1 \global\DeclareGraphicsExtensions{.png,.pdf}}",
                 "pdf",
             ),
+            (
+                r"\def\Ext{\DeclareGraphicsExtensions}{\global\Ext{.png,.pdf}}",
+                "png",
+            ),
+            (
+                r"{\global\csuse{DeclareGraphicsExtensions}{.png,.pdf}}",
+                "png",
+            ),
+            (
+                r"{\globaldefs=-1 \global\csname DeclareGraphicsExtensions\endcsname{.png,.pdf}}",
+                "pdf",
+            ),
         ] {
             let directory = tempfile::tempdir().unwrap();
             let root = directory.path();

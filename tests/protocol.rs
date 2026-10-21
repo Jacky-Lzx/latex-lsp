@@ -1863,6 +1863,18 @@ fn declared_graphics_extensions_preserve_versioned_moves_and_build_input_precede
             r"{\globaldefs=-1 \global\DeclareGraphicsExtensions{.png,.pdf}}",
             "pdf",
         ),
+        (
+            r"\def\Ext{\DeclareGraphicsExtensions}{\global\Ext{.png,.pdf}}",
+            "png",
+        ),
+        (
+            r"{\global\csuse{DeclareGraphicsExtensions}{.png,.pdf}}",
+            "png",
+        ),
+        (
+            r"{\globaldefs=-1 \global\csname DeclareGraphicsExtensions\endcsname{.png,.pdf}}",
+            "pdf",
+        ),
     ]
     .into_iter()
     .flat_map(|(setting, extension)| [false, true].map(|removed| (setting, extension, removed)))

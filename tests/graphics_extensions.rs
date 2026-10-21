@@ -199,8 +199,6 @@ fn dynamic_and_overridden_settings_do_not_create_speculative_links_or_moves() {
         r"\newcommand{\choose}{\DeclareGraphicsExtensions{.png}}\choose",
         r"\def\DeclareGraphicsExtensions#1{}\DeclareGraphicsExtensions{.png}",
         r"\DeclareGraphicsRule{.png}{png}{.png}{}",
-        r"\csuse{DeclareGraphicsExtensions}{.png}",
-        r"\csname DeclareGraphicsExtensions\endcsname{.png}",
         r"\DeclareGraphicsExtensions{.png,,.pdf}",
         r"\iftrue\DeclareGraphicsExtensions{.png}\fi",
     ] {
@@ -404,25 +402,28 @@ fn excessive_group_depth_and_recursive_inputs_stop_static_inference() {
 
 #[test]
 fn recorder_only_settings_without_a_proven_execution_order_do_not_assume_defaults() {
-    let directory = tempfile::tempdir().unwrap();
-    let root = directory.path();
-    let mut workspace = project(
-        root,
-        r"\documentclass{article}\graphicspath{{assets/}}\includegraphics{plot}",
-    );
-    let settings = uri(root, "generated.sty");
-    std::fs::write(
-        settings.to_file_path().unwrap(),
-        r"\DeclareGraphicsExtensions{.png}",
-    )
-    .unwrap();
-    workspace.reload(&settings);
-    let main = uri(root, "main.tex");
-    workspace
-        .recorded_inputs
-        .insert(main.clone(), [main.clone(), settings.clone()].into());
-    assert!(workspace.project_documents(&main).contains(&settings));
-    assert!(targets(&workspace, &main).is_empty());
+    for (definition, setting) in [
+        ("", r"\DeclareGraphicsExtensions{.png}"),
+        ("", r"\csuse{DeclareGraphicsExtensions}{.png}"),
+        ("", r"\csname DeclareGraphicsExtensions\endcsname{.png}"),
+        (r"\def\Ext{\DeclareGraphicsExtensions}", r"\Ext{.png}"),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let mut workspace = project(
+            root,
+            &format!("{definition}\\documentclass{{article}}\\graphicspath{{{{assets/}}}}\\includegraphics{{plot}}"),
+        );
+        let settings = uri(root, "generated.sty");
+        std::fs::write(settings.to_file_path().unwrap(), setting).unwrap();
+        workspace.reload(&settings);
+        let main = uri(root, "main.tex");
+        workspace
+            .recorded_inputs
+            .insert(main.clone(), [main.clone(), settings.clone()].into());
+        assert!(workspace.project_documents(&main).contains(&settings));
+        assert!(targets(&workspace, &main).is_empty(), "{setting}");
+    }
 }
 
 #[test]
@@ -554,7 +555,7 @@ fn uncertain_globaldefs_assignments_and_deferred_scope_changes_do_not_guess() {
 }
 
 #[test]
-#[ignore = "requires pdflatex and graphicx"]
+#[ignore = "requires pdflatex, graphicx and etoolbox"]
 fn real_global_settings_match_tex_and_preserve_images_after_renaming() {
     let drawing = tempfile::tempdir().unwrap();
     let config = latex_lsp::config::BuildConfig {
@@ -596,6 +597,42 @@ fn real_global_settings_match_tex_and_preserve_images_after_renaming() {
             "png",
         ),
     ];
+    cases.extend([
+        (
+            r"\def\Ext{\DeclareGraphicsExtensions}{\global\Ext{.png}}".to_owned(),
+            "png",
+        ),
+        (
+            r"\newcommand{\Ext}{\DeclareGraphicsExtensions}{\Ext{.png}}".to_owned(),
+            "pdf",
+        ),
+        (
+            r"{\global\csname DeclareGraphicsExtensions\endcsname{.png}}".to_owned(),
+            "png",
+        ),
+        (
+            r"{\globaldefs=1 \csname DeclareGraphicsExtensions\endcsname{.png}\globaldefs=0 }"
+                .to_owned(),
+            "png",
+        ),
+        (
+            r"{\globaldefs=-1 \global\csname DeclareGraphicsExtensions\endcsname{.png}}".to_owned(),
+            "pdf",
+        ),
+        (
+            r"{\global\csuse{DeclareGraphicsExtensions}{.png}}".to_owned(),
+            "png",
+        ),
+        (
+            r"\def\Ext{\DeclareGraphicsExtensions}\def\Chain{\Ext}{\global\csuse{Chain}{.png}}"
+                .to_owned(),
+            "png",
+        ),
+        (
+            r"\def\Ext{\DeclareGraphicsExtensions}{\global\csname Ext\endcsname{.png}}".to_owned(),
+            "png",
+        ),
+    ]);
     for value in ["1", "+ - - 1", "'1", "\"1", "`A", "`\\A", "0% join\n 1"] {
         cases.push((
             format!("{{\\globaldefs={value} \\DeclareGraphicsExtensions{{.png}}\\globaldefs=0 }}"),
@@ -605,7 +642,7 @@ fn real_global_settings_match_tex_and_preserve_images_after_renaming() {
     for (setting, extension) in cases {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();
-        let source=format!("\\documentclass{{article}}\\usepackage{{graphicx}}\\graphicspath{{{{assets/}}}}\\DeclareGraphicsExtensions{{.pdf}}\\begin{{document}}\n{setting}\\includegraphics{{plot}}\\end{{document}}\n");
+        let source=format!("\\documentclass{{article}}\\usepackage{{graphicx,etoolbox}}\\graphicspath{{{{assets/}}}}\\DeclareGraphicsExtensions{{.pdf}}\\begin{{document}}\n{setting}\\includegraphics{{plot}}\\end{{document}}\n");
         let mut workspace = project(root, &source);
         std::fs::copy(&pdf, root.join("assets/plot.pdf")).unwrap();
         std::fs::write(root.join("assets/plot.png"), PNG).unwrap();
@@ -646,4 +683,115 @@ fn real_global_settings_match_tex_and_preserve_images_after_renaming() {
             }
         }
     }
+}
+
+#[test]
+fn indirect_extension_declarations_follow_local_and_global_scope() {
+    for (definition, call) in [
+        (r"\def\Ext{\DeclareGraphicsExtensions}", r"\Ext"),
+        (r"\newcommand{\Ext}{\DeclareGraphicsExtensions}", r"\Ext"),
+        (
+            r"\def\Ext{\DeclareGraphicsExtensions}\def\Chain{\Ext}",
+            r"\Chain",
+        ),
+        ("", r"\csuse{DeclareGraphicsExtensions}"),
+        ("", r"\csname DeclareGraphicsExtensions\endcsname"),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let source = format!("{definition}\\graphicspath{{{{assets/}}}}\\DeclareGraphicsExtensions{{.pdf}}{{{call}{{.png}}\\includegraphics{{plot}}}}\\includegraphics{{plot}}{{\\global{call}{{.png}}}}\\includegraphics{{plot}}{{\\globaldefs=-1 \\global{call}{{.pdf}}}}\\includegraphics{{plot}}");
+        let workspace = project(root, &source);
+        let main = uri(root, "main.tex");
+        assert_eq!(
+            targets(&workspace, &main),
+            ["png", "pdf", "png", "png"].map(|ext| uri(root, &format!("assets/plot.{ext}"))),
+            "{source}"
+        );
+        let moved = changes(
+            &workspace,
+            &[rename(root, "assets/plot.png", "assets/chart.png")],
+        );
+        let expected = source.replacen("{plot}", "{chart}", 1);
+        let split = expected.find("\\global").unwrap();
+        let expected = format!(
+            "{}{}",
+            &expected[..split],
+            expected[split..].replace("{plot}", "{chart}")
+        );
+        assert_eq!(moved[&main], expected, "{source}");
+    }
+}
+
+#[test]
+fn indirect_extension_settings_cross_static_inputs_and_package_aliases() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let source = r"\graphicspath{{assets/}}\DeclareGraphicsExtensions{.pdf}\usepackage{local}\input{settings}\includegraphics{plot}";
+    drop(project(root, source));
+    std::fs::write(
+        root.join("local.sty"),
+        r"\ProvidesPackage{local}\def\Ext{\DeclareGraphicsExtensions}\def\Chain{\Ext}",
+    )
+    .unwrap();
+    std::fs::write(root.join("settings.tex"), r"{\global\csuse{Chain}{.png}}").unwrap();
+    let mut workspace = Workspace::default();
+    workspace.add_root(root.into());
+    let main = uri(root, "main.tex");
+    assert_eq!(targets(&workspace, &main), [uri(root, "assets/plot.png")]);
+    assert_eq!(
+        graphics::images(&workspace, &main),
+        [uri(root, "assets/plot.png")].into()
+    );
+    let moved = changes(
+        &workspace,
+        &[rename(root, "assets/plot.png", "assets/chart.png")],
+    );
+    assert_eq!(moved[&main], source.replace("{plot}", "{chart}"));
+}
+
+#[test]
+fn unresolved_indirect_extension_calls_do_not_select_or_move_images() {
+    for setting in [
+        r"\def\Ext#1{\DeclareGraphicsExtensions{#1}}\Ext{.png}",
+        r"\def\Ext{\DeclareGraphicsExtensions}\def\wrapper{\Ext{.png}}\wrapper",
+        r"\csuse{DeclareGraphicsExtensions}[bad]{.png}",
+        r"\csname DeclareGraphicsExtensions\endcsname*{.png}",
+        r"\csuse{DeclareGraphicsRule}{.png}{png}{.png}{}",
+        r"\def\csuse#1{}\csuse{DeclareGraphicsExtensions}{.png}",
+        r"\let\Ext\DeclareGraphicsExtensions\Ext{.png}",
+        r"\csuse{\chosen}{.png}",
+        r"\csname DeclareGraphics\chosen\endcsname{.png}",
+        r"\def\Ext{\DeclareGraphicsExtensions}\def\consume#1{}\consume\Ext{.png}",
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let source = format!("\\graphicspath{{{{assets/}}}}\\DeclareGraphicsExtensions{{.pdf}}{setting}\\includegraphics{{plot}}");
+        let workspace = project(root, &source);
+        assert!(
+            targets(&workspace, &uri(root, "main.tex")).is_empty(),
+            "{setting}"
+        );
+        assert!(
+            changes(
+                &workspace,
+                &[rename(root, "assets/plot.pdf", "assets/chart.pdf")]
+            )
+            .is_empty(),
+            "{setting}"
+        );
+    }
+}
+
+#[test]
+fn displayed_indirect_extension_tokens_do_not_change_settings() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let workspace = project(
+        root,
+        r"\def\Ext{\DeclareGraphicsExtensions}\graphicspath{{assets/}}\DeclareGraphicsExtensions{.pdf}\string\Ext\detokenize{\csuse{\chosen}{.png}\csname DeclareGraphics\chosen\endcsname{.png}}\includegraphics{plot}",
+    );
+    assert_eq!(
+        targets(&workspace, &uri(root, "main.tex")),
+        [uri(root, "assets/plot.pdf")]
+    );
 }
