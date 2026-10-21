@@ -11,7 +11,9 @@
 
 ## 构建、安装与进程协议
 
-安装当前稳定版 Rust，然后执行：
+安装当前稳定版 Rust。编辑功能无需 TeX 发行版；编译需要相应工具位于服务器的 `PATH` 中，默认使用 latexmk 与 pdfLaTeX，配置见[编译指南](build.md)。
+
+从源码构建并启动：
 
 ```sh
 cargo build --release --locked

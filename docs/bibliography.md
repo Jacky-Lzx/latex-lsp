@@ -6,6 +6,7 @@
 
 - [文献键与列表](#文献键与列表)
 - [引用命令](#引用命令)
+- [biblatex 文献资源](biblatex-resources.md)
 - [biblatex 引用](biblatex.md)
 - [手写文献](#手写文献)
 - [条目关系与重命名](#条目关系与重命名)

@@ -1,6 +1,6 @@
 # biblatex 引用
 
-[文档目录](README.md) · [文献键与重命名](bibliography.md) · [编译诊断](diagnostics.md)
+[文档目录](README.md) · [文献资源加载](biblatex-resources.md) · [文献键与重命名](bibliography.md) · [编译诊断](diagnostics.md)
 
 文献工具与 LaTeX 的重运行请求也会进入[编译结果分析](build.md#文献处理与重编译)。
 
