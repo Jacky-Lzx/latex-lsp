@@ -275,8 +275,34 @@ fn parenthesized_pdf_destination_spelling_fixes_preserve_compound_comments_and_l
             "dest(targte).2",
             r"\hyperlink{dest(target).2}{Link}",
         ),
+        (
+            r"\hypertarget{章节.target}{Target}",
+            r"\hyperlink{章节.targte}{Link}",
+            "章节.targte",
+            r"\hyperlink{章节.target}{Link}",
+        ),
+        (
+            r"\hyperdef{emoji😀}{target}{Target}",
+            "\\hyperref{}{emoji😀}% keep\r\n{targte}{Link}",
+            "emoji😀.targte",
+            "\\hyperref{}{emoji😀}% keep\r\n{target}{Link}",
+        ),
+        (
+            r"\pdfbookmark[2]{Title}{书签(😀).target}",
+            r"\hyperlink{书签(😀).targte.2}{Link}",
+            "书签(😀).targte.2",
+            r"\hyperlink{书签(😀).target.2}{Link}",
+        ),
     ] {
-        let encoded = missing.replace('(', "\\(").replace(')', "\\)");
+        let encoded: String = missing
+            .bytes()
+            .map(|byte| match byte {
+                b'(' => "\\(".to_owned(),
+                b')' => "\\)".to_owned(),
+                128..=255 => format!("\\{byte:03o}"),
+                _ => char::from(byte).to_string(),
+            })
+            .collect();
         for message in [
             format!("warning  (pdf backend): unreferenced destination with name '{missing}'"),
             format!("pdfTeX warning (dest): name{{{encoded}}} has been referenced but does not exist, replaced by a fixed one"),

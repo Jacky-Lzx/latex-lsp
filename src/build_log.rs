@@ -297,23 +297,40 @@ impl DestinationWarningKind {
     }
 }
 
-/// pdfTeX prints destination names as PDF string contents. Decode only the
-/// escaped parentheses supported by literal source keys; never interpret TeX
-/// control sequences or backend messages that use another representation.
+/// pdfTeX prints destination names as PDF string contents, using escaped
+/// parentheses and three-digit octal UTF-8 bytes. Other backends report raw
+/// names and must not inherit this representation.
 fn literal_destination_name(message: &str, name: &str) -> Option<String> {
-    let mut decoded = String::with_capacity(name.len());
-    let mut chars = name.chars();
-    while let Some(ch) = chars.next() {
-        if ch == '\\' && message.starts_with("pdfTeX warning (") {
-            match chars.next()? {
-                paren @ ('(' | ')') => decoded.push(paren),
+    let decoded = if message.starts_with("pdfTeX warning (") {
+        let mut decoded = Vec::with_capacity(name.len());
+        let mut bytes = name.bytes();
+        while let Some(byte) = bytes.next() {
+            if byte != b'\\' {
+                decoded.push(byte);
+                continue;
+            }
+            match bytes.next()? {
+                paren @ (b'(' | b')') => decoded.push(paren),
+                first @ b'0'..=b'7' => {
+                    let second = bytes.next()?;
+                    let third = bytes.next()?;
+                    if !matches!(second, b'0'..=b'7') || !matches!(third, b'0'..=b'7') {
+                        return None;
+                    }
+                    let value = u16::from(first - b'0') * 64
+                        + u16::from(second - b'0') * 8
+                        + u16::from(third - b'0');
+                    decoded.push(u8::try_from(value).ok()?);
+                }
                 _ => return None,
             }
-        } else {
-            decoded.push(ch);
         }
-    }
-    crate::syntax::is_static_reference_key(&decoded).then_some(decoded)
+        String::from_utf8(decoded).ok()?
+    } else {
+        name.to_owned()
+    };
+    (crate::syntax::is_static_reference_key(&decoded) && !decoded.chars().any(char::is_control))
+        .then_some(decoded)
 }
 
 pub(crate) fn destination_warning(message: &str) -> Option<(DestinationWarningKind, String)> {
@@ -4813,13 +4830,7 @@ mod tests {
                 }
             }
         }
-        for encoded in [
-            r"dest\",
-            r"dest\dynamic",
-            r"dest\050old\051",
-            r"dest\\(old)",
-            r"dest\( old\)",
-        ] {
+        for encoded in [r"dest\", r"dest\dynamic", r"dest\\(old)", r"dest\( old\)"] {
             for message in [
                 format!("pdfTeX warning (dest): name{{{encoded}}} has been referenced but does not exist, replaced by a fixed one"),
                 format!("pdfTeX warning (ext4): destination with the same identifier (name{{{encoded}}}) has been already used, duplicate ignored"),
@@ -4832,6 +4843,98 @@ mod tests {
             r"warning  (pdf backend): unreferenced destination with name 'dest\(old\)'"
         )
         .is_none());
+    }
+
+    #[test]
+    fn pdftex_octal_destination_bytes_preserve_unicode_and_reject_invalid_encodings() {
+        let directory = tempfile::tempdir().unwrap();
+        let main = directory.path().join("main.tex");
+        for (name, encoded) in [
+            (
+                "章节.目标",
+                r"\347\253\240\350\212\202.\347\233\256\346\240\207",
+            ),
+            ("emoji😀", r"emoji\360\237\230\200"),
+            (
+                "mix(目标😀)",
+                r"mix\(\347\233\256\346\240\207\360\237\230\200\)",
+            ),
+            ("dest(old)", r"dest\050old\051"),
+        ] {
+            let source = format!("😀 \\hypertarget{{{name}}}{{Target}}\\label{{{name}}}\\hyperlink{{{name}}}{{Link}}\r\n");
+            std::fs::write(&main, &source).unwrap();
+            let text = Text::new(source.clone());
+            for (prefix, suffix, code, offset) in [
+                (
+                    "pdfTeX warning (dest): name{",
+                    "} has been referenced but does not exist, replaced by a fixed one",
+                    "undefined-pdf-destination",
+                    source.rfind(name).unwrap(),
+                ),
+                (
+                    "pdfTeX warning (ext4): destination with the same identifier (name{",
+                    "}) has been already used, duplicate ignored",
+                    "duplicate-pdf-destination",
+                    source.find(name).unwrap(),
+                ),
+            ] {
+                let message = format!("{prefix}{encoded}{suffix}");
+                assert_eq!(
+                    destination_warning(&message).map(|(_, key)| key),
+                    Some(name.to_owned())
+                );
+                for split in prefix.len()..message.len() {
+                    let log = format!(
+                        "{}\n{}\n</fonts/resource.otf>\nLaTeX Warning: Keep.\n",
+                        &message[..split],
+                        &message[split..]
+                    );
+                    let diagnostics = parse(&main, &log);
+                    let items = &diagnostics[&Url::from_file_path(&main).unwrap()];
+                    assert_eq!(items.len(), 2, "{name}: split {split}: {items:?}");
+                    let mapped: Vec<_> = items
+                        .iter()
+                        .filter(|item| item.code == Some(NumberOrString::String(code.into())))
+                        .collect();
+                    assert_eq!(mapped.len(), 1, "{name}: split {split}: {items:?}");
+                    assert_eq!(mapped[0].range, text.range(offset, offset + name.len()));
+                    assert_eq!(
+                        mapped[0].data,
+                        Some(serde_json::json!({"destination":name}))
+                    );
+                    assert_eq!(mapped[0].message, message);
+                }
+            }
+        }
+        for encoded in [
+            r"dest\4",
+            r"dest\40",
+            r"dest\400",
+            r"dest\777",
+            r"dest\08a",
+            r"dest\999",
+            r"dest\300\257",
+            r"dest\355\240\200",
+            r"dest\377",
+            r"dest\000",
+            r"dest\012",
+            r"dest\177",
+            r"dest\302\237",
+            r"dest\134",
+            r"dest\173",
+            r"dest\175",
+            r"dest\045",
+            r"dest\043",
+            r"dest\040",
+        ] {
+            for message in [
+                format!("pdfTeX warning (dest): name{{{encoded}}} has been referenced but does not exist, replaced by a fixed one"),
+                format!("pdfTeX warning (ext4): destination with the same identifier (name{{{encoded}}}) has been already used, duplicate ignored"),
+                format!("warning  (pdf backend): unreferenced destination with name '{encoded}'"),
+            ] {
+                assert!(destination_warning(&message).is_none(), "{message}");
+            }
+        }
     }
 
     #[test]
