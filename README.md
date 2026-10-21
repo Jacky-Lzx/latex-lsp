@@ -2,6 +2,6 @@
 
 Rust 实现的 LaTeX 语言服务器，支持补全、导航、重命名、诊断和后台编译。
 
-使用 `cargo install --path . --locked` 安装，编辑器通过 `latex-lsp --stdio` 启动。
+安装：`cargo install --path . --locked`。编辑器启动命令：`latex-lsp --stdio`。
 
-[使用与开发文档](docs/README.md) · [MIT 许可证](LICENSE)
+[安装配置](docs/editors.md) · [功能与开发文档](docs/README.md) · [MIT 许可证](LICENSE)

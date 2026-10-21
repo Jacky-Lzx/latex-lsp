@@ -18,6 +18,22 @@
 
 声明支持注释、空白、重复设置，以及普通花括号、`begingroup` / `endgroup` 和环境中的局部设置。服务器按源码顺序跟踪静态输入文件和本地宏包、文档类的设置；包和类仅加载一次，普通输入可重复执行。局部分组结束后恢复此前顺序。相同源码位置在不同执行上下文中需要不同扩展名顺序时，不提供单一图片目标。
 
+## 全局设置与恢复
+
+`\global\DeclareGraphicsExtensions{.png}` 的设置保留到分组外。`\globaldefs` 为正数时，扩展名声明自动全局生效；为负数时，显式 `\global` 也按局部赋值处理；为零时遵循前缀。全局赋值会更新外层分组应恢复的值，后续局部修改结束后恢复最近的全局设置。
+
+```tex
+\DeclareGraphicsExtensions{.pdf}
+{\global\DeclareGraphicsExtensions{.png}}
+\includegraphics{plot} % 优先 PNG
+{\globaldefs=-1 \global\DeclareGraphicsExtensions{.pdf}}
+\includegraphics{plot} % 仍优先 PNG
+```
+
+`\globaldefs` 自身的赋值按赋值前的作用域规则保存和恢复。前缀可跨静态输入文件传递；前缀和 `\globaldefs` 可通过已证明的无参数纯别名及静态 `\csuse` / `\csname` 调用。支持十进制、八进制、十六进制、ASCII 字符代码及多重正负号形式的字面整数。条件中的赋值、动态整数、可能继续展开为数字的宏，以及重定义的前缀或调用原语，会停止相关推断。
+
+## 编译检查与支持边界
+
 跳转、图片依赖、文件移动时的目标校验和缺失图片拼写修复共用上述顺序。编译输入检查只观察选中图片及优先于它的候选：选中 PNG 后，新建低优先级 PDF 不会使结果过期；删除 PNG 或新增更早的候选会使结果过期。
 
 不执行任意宏展开。动态、间接或重定义的设置、自定义 `\DeclareGraphicsRule`、无法确定的条件分支和选章配置会跳过相关静态推断；循环输入或超过分析上限时也停止推断。编译器的 recorder 记录继续用于跟踪实际读取的文件。文件移动的客户端调用顺序见[文件操作](file-operations.md)。
