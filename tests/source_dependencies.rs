@@ -254,9 +254,14 @@ fn recorder_confirmed_dynamic_sources_and_redefined_primitives_keep_save_depende
     assert!(workspace.project_files(&main).contains(&chapter));
     for source in [
         r"\documentclass{article}\def\picked{provider}\begin{document}\input{\picked}\meaning\input{chapter}\end{document}",
-        r"\documentclass{article}\newcommand{\install}{\def\meaning#1{#1}}\begin{document}\install\meaning\input{chapter}\end{document}",
+        r"\documentclass{article}\newcommand{\install}{\def\meaning##1{##1}}\begin{document}\install\meaning\input{chapter}\end{document}",
         r"\documentclass{article}\newcommand{\execute}[1]{#1}\begin{document}\let\meaning\execute\meaning\input{chapter}\end{document}",
         r"\documentclass{article}\def\picked{provider}\def\readpart{\input}\begin{document}\readpart{\picked}\meaning\input{chapter}\end{document}",
+        r"\documentclass{article}\makeatletter\@input{provider.tex}\makeatother\begin{document}\meaning\input{chapter}\end{document}",
+        r"\documentclass{article}\csname @input\endcsname{provider.tex}\begin{document}\meaning\input{chapter}\end{document}",
+        r"\documentclass{article}\def\readername{@input}\csname\readername\endcsname{provider.tex}\begin{document}\meaning\input{chapter}\end{document}",
+        r"\documentclass{article}\newcommand{\execute}[1]{#1}\execute{\input{provider.tex}}\begin{document}\meaning\input{chapter}\end{document}",
+        r"\documentclass{article}\newcommand{\future}{\input{provider.tex}}\future\begin{document}\meaning\input{chapter}\end{document}",
     ] {
         workspace
             .documents

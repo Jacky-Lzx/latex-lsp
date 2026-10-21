@@ -179,16 +179,40 @@ impl Index {
                 .definitions
                 .iter()
                 .any(|entry| matches!(entry.name.as_str(), "detokenize" | "string" | "meaning"))
-                || doc.syntax.commands.iter().any(|command| {
-                    matches!(
-                        command.name.as_str(),
-                        "let" | "futurelet" | "cslet" | "letcs" | "csletcs"
-                    ) || (matches!(
-                        command.name.as_str(),
-                        "input" | "include" | "subfile" | "InputIfFileExists"
-                    ) || syntax::loader_extension(&command.name).is_some())
-                        && dynamic(command)
-                })
+                || doc
+                    .syntax
+                    .commands
+                    .iter()
+                    .enumerate()
+                    .any(|(index, command)| {
+                        // LaTeX's private input APIs are outside the static source
+                        // graph and can install a different quoting primitive.
+                        // Unresolved named calls can invoke those same APIs.
+                        let invoked = match command.name.as_str() {
+                            "csuse" => command
+                                .argument
+                                .as_ref()
+                                .filter(|argument| syntax::is_static_key(&argument.value))
+                                .map(|argument| argument.value.as_str()),
+                            "csname" => syntax::literal_csname(
+                                &doc.text.source,
+                                &doc.syntax.commands,
+                                index,
+                            )
+                            .map(|span| &doc.text.source[span]),
+                            name => Some(name),
+                        };
+                        matches!(invoked, None | Some("@input" | "@input@" | "@@input"))
+                            || matches!(
+                                command.name.as_str(),
+                                "let" | "futurelet" | "cslet" | "letcs" | "csletcs"
+                            )
+                            || (matches!(
+                                command.name.as_str(),
+                                "input" | "include" | "subfile" | "InputIfFileExists"
+                            ) || syntax::loader_extension(&command.name).is_some())
+                                && dynamic(command)
+                    })
         }) || self
             .calls
             .values()
@@ -206,9 +230,46 @@ impl Index {
                 .iter()
                 .map(|(_, doc)| (doc.text.source.as_str(), &doc.syntax)),
         );
+        // Potential input in deferred code or a macro operand may execute a
+        // provider which the active graph could not inspect. Retokenization
+        // and displayed-code APIs can also execute otherwise opaque input.
+        if documents.iter().any(|(_, source_doc)| {
+            let potential = |command: &&syntax::Command| {
+                matches!(
+                    command.name.as_str(),
+                    "input" | "include" | "subfile" | "InputIfFileExists" | "scantokens"
+                ) || syntax::loader_extension(&command.name).is_some()
+                    || syntax::code_input_command(&command.name)
+            };
+            if !source_doc
+                .syntax
+                .commands
+                .iter()
+                .any(|command| potential(&command))
+            {
+                return false;
+            }
+            let active =
+                signatures.source_command_positions(&source_doc.text.source, &source_doc.syntax);
+            let opaque =
+                signatures.quoted_command_tokens(&source_doc.text.source, &source_doc.syntax);
+            source_doc
+                .syntax
+                .commands
+                .iter()
+                .filter(potential)
+                .any(|command| {
+                    !opaque.contains(&command.span.start)
+                        && (command.name == "scantokens"
+                            || syntax::code_input_command(&command.name)
+                            || !active.contains(&command.span.start))
+                })
+        }) {
+            return fallback();
+        }
         let quoted = signatures.quoted_command_tokens(&doc.text.source, &doc.syntax);
         workspace.literal_source_dependencies_filtered(uri, root, |command| {
-            !source_file_command(&command.name) || !quoted.contains(&command.span.start)
+            !editable_file_command(&command.name) || !quoted.contains(&command.span.start)
         })
     }
 
