@@ -149,16 +149,28 @@ fn input_line(message: &str) -> Option<u32> {
 }
 
 fn undefined_reference_start(message: &str) -> Option<(bool, &str)> {
-    if let Some((_, tail)) = message
-        .split_once("Reference `")
-        .or_else(|| message.split_once("Reference '"))
-        .or_else(|| message.split_once("Hyper reference `"))
-        .or_else(|| message.split_once("Hyper reference '"))
+    // Reference-like text in a filename or an example is ordinary warning
+    // prose. Only classify the body of a standard LaTeX warning header.
+    let body = message
+        .strip_prefix("LaTeX Warning:")
+        .or_else(|| {
+            let named = message
+                .strip_prefix("Package ")
+                .or_else(|| message.strip_prefix("Class "))?;
+            let (name, body) = named.split_once(" Warning:")?;
+            (!name.is_empty()).then_some(body)
+        })?
+        .trim_start();
+    if let Some(tail) = body
+        .strip_prefix("Reference `")
+        .or_else(|| body.strip_prefix("Reference '"))
+        .or_else(|| body.strip_prefix("Hyper reference `"))
+        .or_else(|| body.strip_prefix("Hyper reference '"))
     {
         Some((false, tail))
-    } else if let Some((_, tail)) = message
-        .split_once("Citation `")
-        .or_else(|| message.split_once("Citation '"))
+    } else if let Some(tail) = body
+        .strip_prefix("Citation `")
+        .or_else(|| body.strip_prefix("Citation '"))
     {
         Some((true, tail))
     } else {

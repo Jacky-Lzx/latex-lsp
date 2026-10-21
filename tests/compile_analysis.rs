@@ -74,6 +74,89 @@ fn rerun_requests_require_explicit_known_warning_messages() {
 }
 
 #[test]
+fn reference_examples_remain_warnings_without_retargeting_real_source_uses() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("main.tex");
+    std::fs::write(&root, "\\ref{phantom}\n\\cite{phantom}\nwarning call\n").unwrap();
+    for prefix in [
+        "LaTeX Warning: The string",
+        "Package local Warning: The string",
+        "Class local Warning: The string",
+        "LaTeX Font Warning:",
+        "Package local Warning: LaTeX Warning:",
+        "Class local Warning: Package nested Warning:",
+        "Package local Warning: File example.tex contains",
+    ] {
+        for kind in ["Reference", "Hyper reference", "Citation"] {
+            let message =
+                format!("{prefix} {kind} `phantom' undefined is literal on input line 3.");
+            let parsed = parse(&root, &format!("(./main.tex\n{message}\n)\n"));
+            let items = &parsed[&Url::from_file_path(&root).unwrap()];
+            assert_eq!(items.len(), 1, "{message}");
+            assert_eq!(items[0].message, message);
+            assert_eq!(items[0].severity, Some(DiagnosticSeverity::WARNING));
+            assert_eq!(items[0].range.start.line, 2, "{message}");
+            assert_eq!(
+                compilation_analysis(&parsed, false),
+                json!({"rerunRequired":false,"unresolvedReferences":[],"unresolvedCitations":[],"truncated":false}),
+                "{message}"
+            );
+        }
+    }
+    for message in [
+        "Wrapper: LaTeX Warning: Reference `phantom' undefined.",
+        "Reference `phantom' undefined.tex:1: Example warning.",
+        "Package Reference `phantom' undefined Warning: File unavailable.",
+        "Class Citation `phantom' undefined Warning: Option ignored.",
+        "Package  Warning: Reference `phantom' undefined.",
+    ] {
+        let result = compilation_analysis(&diagnostics(vec![warning(message)]), false);
+        assert_eq!(result["unresolvedReferences"], json!([]), "{message}");
+        assert_eq!(result["unresolvedCitations"], json!([]), "{message}");
+    }
+}
+
+#[test]
+fn standard_warning_bodies_keep_package_class_and_quote_variants() {
+    for header in [
+        "LaTeX Warning:",
+        "Package custom Warning:",
+        "Class custom Warning:",
+    ] {
+        for quote in ['`', '\''] {
+            for (kind, citation) in [
+                ("Reference", false),
+                ("Hyper reference", false),
+                ("Citation", true),
+            ] {
+                let message = format!(
+                    "{header}  {kind} {quote}O'Connor' on page 1 undefined on input line 1."
+                );
+                let result = compilation_analysis(&diagnostics(vec![warning(&message)]), false);
+                assert_eq!(
+                    result["unresolvedReferences"],
+                    if citation {
+                        json!([])
+                    } else {
+                        json!(["O'Connor"])
+                    },
+                    "{message}"
+                );
+                assert_eq!(
+                    result["unresolvedCitations"],
+                    if citation {
+                        json!(["O'Connor"])
+                    } else {
+                        json!([])
+                    },
+                    "{message}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn key_budgets_skip_oversize_identities_and_report_partial_analysis() {
     let messages: Vec<_> = (0..130)
         .flat_map(|number| {
