@@ -799,3 +799,90 @@ fn duplicate_label_footer_at_the_print_width_cannot_hide_the_full_key_or_followi
         .iter()
         .any(|d| d.message == "LaTeX Warning: Main sentinel."));
 }
+
+#[test]
+fn undefined_words_in_keys_pages_and_prose_do_not_imply_unresolved_references() {
+    for header in [
+        "LaTeX Warning:",
+        "Package local Warning:",
+        "Class local Warning:",
+    ] {
+        for kind in ["Reference", "Hyper reference", "Citation"] {
+            for quote in ['`', '\''] {
+                for body in [
+                    "undefined' on page 1 is documented on input line 1.",
+                    "undefinedness' on page 1 is documented on input line 1.",
+                    "healthy' on page undefined is documented on input line 1.",
+                    "healthy' on page 1 without undefined behavior on input line 1.",
+                    "healthy' on page 1 undefinedness on input line 1.",
+                    "healthy' undefinedness on input line 1.",
+                    "healthy' undefined is an example on input line 1.",
+                    "healthy' on page 1 undefined on input line invalid.",
+                ] {
+                    let message = format!("{header} {kind} {quote}{body}");
+                    let analysis =
+                        compilation_analysis(&diagnostics(vec![warning(&message)]), false);
+                    assert_eq!(analysis["unresolvedReferences"], json!([]), "{message}");
+                    assert_eq!(analysis["unresolvedCitations"], json!([]), "{message}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn standard_undefined_status_tails_preserve_literal_keys_pages_and_package_continuations() {
+    for key in [
+        "undefined",
+        "O'Connor",
+        "chapter' on paper",
+        "chapter' undefined marker",
+        "章😀",
+    ] {
+        for status in [
+            "undefined.",
+            "undefined on input line 1.",
+            "undefined\n(biblatex) on input line 1.",
+            "on page 1 undefined on input line 1.",
+            "on page iv undefined on input line 1.",
+            "on page  undefined on input line 1.",
+            "on page Page 1 undefined on input line 1.",
+            "on page undefined undefined on input line 1.",
+        ] {
+            for (kind, field) in [
+                ("Reference", "unresolvedReferences"),
+                ("Hyper reference", "unresolvedReferences"),
+                ("Citation", "unresolvedCitations"),
+            ] {
+                let message = format!("Package local Warning: {kind} `{key}' {status}");
+                let analysis = compilation_analysis(&diagnostics(vec![warning(&message)]), false);
+                assert_eq!(analysis[field], json!([key]), "{message}");
+            }
+        }
+    }
+}
+
+#[test]
+fn ordinary_warning_status_text_keeps_line_ranges_without_borrowing_valid_use_locations() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("main.tex");
+    let source = "😀 \\ref{undefined} \\cite{undefined}\n";
+    std::fs::write(&root, source).unwrap();
+    for kind in ["Reference", "Citation"] {
+        let message = format!(
+            "Package local Warning: {kind} `undefined' on page 1 is documented on input line 1."
+        );
+        let parsed = parse(&root, &format!("(./main.tex\n{message}\n)\n"));
+        let items = &parsed[&Url::from_file_path(&root).unwrap()];
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].message, message);
+        assert_eq!(items[0].severity, Some(DiagnosticSeverity::WARNING));
+        assert_eq!(
+            items[0].range,
+            Range::new(Position::new(0, 0), Position::new(0, 35))
+        );
+        let analysis = compilation_analysis(&parsed, false);
+        assert_eq!(analysis["unresolvedReferences"], json!([]));
+        assert_eq!(analysis["unresolvedCitations"], json!([]));
+    }
+}

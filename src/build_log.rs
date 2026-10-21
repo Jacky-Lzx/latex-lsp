@@ -179,13 +179,44 @@ fn undefined_reference_start(message: &str) -> Option<(bool, &str)> {
 }
 
 pub(crate) fn undefined_reference_key(message: &str) -> Option<(bool, &str)> {
-    if !message.contains("undefined") {
-        return None;
+    fn undefined_tail(tail: &str) -> bool {
+        let normalized = tail.split_whitespace().collect::<Vec<_>>().join(" ");
+        let tail = normalized.as_str();
+        if tail.is_empty() || tail == "." {
+            return true;
+        }
+        // Some packages repeat their name on a continuation line.
+        let tail = if tail.starts_with('(') {
+            let Some((_, rest)) = tail.split_once(')') else {
+                return false;
+            };
+            rest.trim_start()
+        } else {
+            tail
+        };
+        let Some(line) = tail.strip_prefix("on input line ") else {
+            return false;
+        };
+        let number = line.strip_suffix('.').unwrap_or(line);
+        !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
     }
     let (citation, tail) = undefined_reference_start(message)?;
-    let (key, _) = tail
+    // The status must follow the closing key quote. A key or page name
+    // containing "undefined" is insufficient evidence of an unresolved use.
+    let key = tail
         .rsplit_once("' on ")
-        .or_else(|| tail.rsplit_once("' undefined"))?;
+        .filter(|(_, context)| {
+            context
+                .strip_prefix("page ")
+                .and_then(|page| page.rsplit_once(" undefined"))
+                .is_some_and(|(_, tail)| undefined_tail(tail))
+        })
+        .map(|(key, _)| key)
+        .or_else(|| {
+            tail.rsplit_once("' undefined")
+                .filter(|(_, tail)| undefined_tail(tail))
+                .map(|(key, _)| key)
+        })?;
     Some((citation, key))
 }
 
