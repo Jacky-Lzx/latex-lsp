@@ -318,6 +318,71 @@ fn generated_line_note(line: u32) -> String {
     format!(" (reported line {line} is no longer present in the generated file)")
 }
 
+enum FontSubstitution<'a> {
+    Shape(&'a str, &'a str),
+    Size(&'a str, &'a str, &'a str),
+}
+
+fn font_identity(value: &str) -> bool {
+    let fields: Vec<_> = value.split('/').collect();
+    fields.len() == 4
+        && fields.iter().all(|field| !field.is_empty())
+        && !value.chars().any(char::is_control)
+}
+
+fn font_size(value: &str) -> bool {
+    let value = value.strip_prefix(['+', '-']).unwrap_or(value);
+    let mut point = false;
+    let mut digit = false;
+    for byte in value.bytes() {
+        if byte.is_ascii_digit() {
+            digit = true;
+        } else if byte == b'.' && !point {
+            point = true;
+        } else {
+            return false;
+        }
+    }
+    digit
+}
+
+fn font_warning_body(message: &str) -> Option<&str> {
+    let body = message.strip_prefix("LaTeX Font Warning: Font shape ")?;
+    body.strip_prefix('`').or_else(|| body.strip_prefix('\''))
+}
+
+fn font_continuation(tail: &str) -> &str {
+    let tail = tail.trim_start();
+    tail.strip_prefix("(Font)").unwrap_or(tail).trim_start()
+}
+
+fn font_warning_end(tail: &str) -> bool {
+    let tail = tail.split_whitespace().collect::<Vec<_>>().join(" ");
+    tail.strip_prefix("on input line ")
+        .and_then(|line| line.strip_suffix('.'))
+        .is_some_and(|line| !line.is_empty() && line.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
+fn font_substitution(message: &str) -> Option<FontSubstitution<'_>> {
+    let body = font_warning_body(message)?;
+    if let Some((requested, tail)) = body.rsplit_once("' undefined") {
+        let tail = font_continuation(tail).strip_prefix("using ")?.trim_start();
+        let tail = tail.strip_prefix('`').or_else(|| tail.strip_prefix('\''))?;
+        let (replacement, tail) = tail.rsplit_once("' instead")?;
+        return (font_identity(requested) && font_identity(replacement) && font_warning_end(tail))
+            .then_some(FontSubstitution::Shape(requested, replacement));
+    }
+    let (font, tail) = body.rsplit_once("' in size <")?;
+    let (requested, tail) = tail.split_once("> not available")?;
+    let tail = font_continuation(tail).strip_prefix("size <")?;
+    let (replacement, tail) = tail.split_once("> substituted")?;
+    (font_identity(font)
+        && font_size(requested)
+        && font_size(replacement)
+        && font_warning_end(tail))
+    .then_some(FontSubstitution::Size(font, requested, replacement))
+}
+
 /// Summarize observed final-log diagnostics without multiplying repeated uses.
 pub fn compilation_analysis(
     diagnostics: &BTreeMap<Url, Vec<Diagnostic>>,
@@ -334,6 +399,13 @@ pub fn compilation_analysis(
             keys.insert(key.to_string());
         }
     }
+    fn record_substitution<T: Ord>(records: &mut BTreeSet<T>, item: T, truncated: &mut bool) {
+        if records.len() == MAX_KEYS && !records.contains(&item) {
+            *truncated = true;
+        } else {
+            records.insert(item);
+        }
+    }
     let mut references = BTreeSet::new();
     let mut citations = BTreeSet::new();
     let mut missing_destinations = BTreeSet::new();
@@ -341,6 +413,8 @@ pub fn compilation_analysis(
     let mut duplicate_labels = BTreeSet::new();
     let mut glyphs: BTreeMap<char, (DiagnosticSeverity, BTreeSet<String>)> = BTreeMap::new();
     let mut bibliography_tools = BTreeSet::new();
+    let mut font_substitutions = BTreeSet::new();
+    let mut font_size_substitutions = BTreeSet::new();
     let mut rerun = false;
     let mut truncated = diagnostics_truncated;
     for diagnostic in diagnostics.values().flatten().filter(|diagnostic| {
@@ -350,8 +424,8 @@ pub fn compilation_analysis(
         )
     }) {
         // Generated auxiliary files can have been rewritten since this error.
-        // The source-line explanation added for display is not part of the font.
-        let glyph_message = diagnostic
+        // The source-line explanation added for display is not compiler text.
+        let reported_message = diagnostic
             .data
             .as_ref()
             .filter(|data| data["unresolvedLine"] == true)
@@ -363,7 +437,7 @@ pub fn compilation_analysis(
                     .strip_suffix(generated_line_note(line).as_str())
             })
             .unwrap_or(&diagnostic.message);
-        if let Some((character, font)) = missing_character_details(glyph_message) {
+        if let Some((character, font)) = missing_character_details(reported_message) {
             if glyphs.len() == MAX_KEYS && !glyphs.contains_key(&character) {
                 truncated = true;
             } else {
@@ -383,6 +457,42 @@ pub fn compilation_analysis(
         }
         if diagnostic.severity != Some(DiagnosticSeverity::WARNING) {
             continue;
+        }
+        match font_substitution(reported_message) {
+            Some(FontSubstitution::Shape(requested, replacement)) => {
+                if [requested, replacement]
+                    .iter()
+                    .any(|name| name.chars().count() > MAX_FONT_CHARS)
+                {
+                    truncated = true;
+                } else {
+                    record_substitution(
+                        &mut font_substitutions,
+                        (requested.to_owned(), replacement.to_owned()),
+                        &mut truncated,
+                    );
+                }
+            }
+            Some(FontSubstitution::Size(font, requested, replacement)) => {
+                if font.chars().count() > MAX_FONT_CHARS
+                    || [requested, replacement]
+                        .iter()
+                        .any(|size| size.len() > MAX_KEY_CHARS)
+                {
+                    truncated = true;
+                } else {
+                    record_substitution(
+                        &mut font_size_substitutions,
+                        (
+                            font.to_owned(),
+                            requested.to_owned(),
+                            replacement.to_owned(),
+                        ),
+                        &mut truncated,
+                    );
+                }
+            }
+            None => {}
         }
         rerun = rerun || rerun_required(diagnostic);
         if let Some(tool) = required_bibliography_tool(diagnostic) {
@@ -418,6 +528,12 @@ pub fn compilation_analysis(
             })
         })
         .collect();
+    let font_substitutions: Vec<_> = font_substitutions.into_iter().map(|(requested, replacement)| {
+        serde_json::json!({"requested":requested, "replacement":replacement})
+    }).collect();
+    let font_size_substitutions: Vec<_> = font_size_substitutions.into_iter().map(|(font, requested, replacement)| {
+        serde_json::json!({"font":font, "requestedSize":requested, "replacementSize":replacement})
+    }).collect();
     serde_json::json!({
         "rerunRequired": rerun,
         "requiredBibliographyTools": bibliography_tools,
@@ -427,6 +543,8 @@ pub fn compilation_analysis(
         "duplicateDestinations": duplicate_destinations,
         "duplicateLabels": duplicate_labels,
         "missingCharacters": missing_characters,
+        "fontSubstitutions": font_substitutions,
+        "fontSizeSubstitutions": font_size_substitutions,
         "truncated": truncated,
     })
 }
@@ -2600,6 +2718,80 @@ fn byte_wrapped_literal_message(
     Some(message)
 }
 
+fn byte_wrapped_font_message(
+    root: &Path,
+    lines: &[&str],
+    separator_lines: &[usize],
+    i: &mut usize,
+    initial: &str,
+) -> Option<String> {
+    font_warning_body(initial)?;
+    let mut message = initial.to_owned();
+    let mut complete = None;
+    for end in (*i..).take(64) {
+        if font_substitution(&message).is_some() {
+            complete = Some((message.clone(), end));
+            // At a print-width boundary an apparent footer can still be
+            // literal font-name text. LuaTeX can stop before a UTF-8 scalar.
+            if lines[end].len() < 57 {
+                break;
+            }
+        }
+        let Some(next) = lines.get(end + 1) else {
+            break;
+        };
+        let semantic_line = next.trim_start().starts_with("(Font)")
+            && (message.ends_with("' undefined") || message.ends_with("> not available"));
+        // At narrow print widths the requested size can start a physical
+        // line. Its angle bracket belongs to the warning, not a font resource.
+        let size_continuation = next.starts_with('<')
+            && font_warning_body(&message)
+                .and_then(|body| body.rsplit_once("' in size "))
+                .is_some_and(|(_, tail)| tail.is_empty());
+        if !semantic_line && lines[end].len() < 57
+            || message.len() + next.len() + 1 > 4096
+            || next.trim().is_empty()
+            || message_boundary(next)
+            || next.trim_start().starts_with('<') && !size_continuation
+            || next.trim_start().starts_with("Here is how much")
+        {
+            break;
+        }
+        let mut next_index = end + 1;
+        if numbered_error(&continued_error_line(
+            root,
+            lines,
+            separator_lines,
+            &mut next_index,
+        ))
+        .is_some()
+        {
+            break;
+        }
+        if !semantic_line && next.trim_start().starts_with('(') {
+            let announcement = continued_file_line(root, lines, &mut next_index);
+            if announcement
+                .trim_start()
+                .strip_prefix('(')
+                .is_some_and(|tail| {
+                    stack_file(root, tail).is_some() || unresolved_file_opening(tail)
+                })
+            {
+                break;
+            }
+        }
+        if semantic_line {
+            message.push(' ');
+            message.push_str(next.trim_start());
+        } else {
+            message.push_str(next);
+        }
+    }
+    let (message, end) = complete?;
+    *i = end;
+    Some(message)
+}
+
 fn wrapped_message(
     root: &Path,
     lines: &[&str],
@@ -2607,6 +2799,12 @@ fn wrapped_message(
     i: &mut usize,
 ) -> String {
     let initial = lines[*i].trim_start();
+    if font_warning_body(initial).is_some() {
+        // Do not invent a name by adding spaces to an unconfirmed wrap, or
+        // consume an adjacent file/error while looking for a missing footer.
+        return byte_wrapped_font_message(root, lines, separator_lines, i, initial)
+            .unwrap_or_else(|| initial.to_owned());
+    }
     // Engines byte-wrap missing-glyph messages inside font descriptors too.
     // Use the same literal joining and source boundaries as their error form.
     if initial.starts_with("Missing character:") {

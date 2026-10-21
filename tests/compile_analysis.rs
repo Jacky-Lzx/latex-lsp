@@ -43,7 +43,7 @@ fn summary_keeps_distinct_literal_keys_without_counting_repeated_uses() {
         compilation_analysis(&items, false),
         json!({
             "rerunRequired":false,"unresolvedReferences":[" spaced ","O'Connor","章😀"],
-            "unresolvedCitations":["beta","章😀"],"unresolvedDestinations":[],"duplicateDestinations":[],"duplicateLabels":[],"requiredBibliographyTools":[],"missingCharacters":[],"truncated":false,
+            "unresolvedCitations":["beta","章😀"],"unresolvedDestinations":[],"duplicateDestinations":[],"duplicateLabels":[],"requiredBibliographyTools":[],"missingCharacters":[],"fontSubstitutions":[],"fontSizeSubstitutions":[],"truncated":false,
         })
     );
 }
@@ -111,7 +111,7 @@ fn reference_examples_remain_warnings_without_retargeting_real_source_uses() {
             assert_eq!(items[0].range.start.line, 2, "{message}");
             assert_eq!(
                 compilation_analysis(&parsed, false),
-                json!({"rerunRequired":false,"unresolvedReferences":[],"unresolvedCitations":[],"unresolvedDestinations":[],"duplicateDestinations":[],"duplicateLabels":[],"requiredBibliographyTools":[],"missingCharacters":[],"truncated":false}),
+                json!({"rerunRequired":false,"unresolvedReferences":[],"unresolvedCitations":[],"unresolvedDestinations":[],"duplicateDestinations":[],"duplicateLabels":[],"requiredBibliographyTools":[],"missingCharacters":[],"fontSubstitutions":[],"fontSizeSubstitutions":[],"truncated":false}),
                 "{message}"
             );
         }
@@ -214,7 +214,7 @@ fn parsed_final_log_warnings_and_observation_limits_are_preserved() {
     let log="(./main.tex\nLaTeX Warning: Reference `missing' on page 1 undefined on input line 1.\nLaTeX Warning: Citation `lost' on page 1 undefined on input line 1.\nLaTeX Warning: Label(s) may have changed. Rerun to get cross-references right.\n)\n";
     assert_eq!(
         compilation_analysis(&parse(&root, log), false),
-        json!({"rerunRequired":true,"unresolvedReferences":["missing"],"unresolvedCitations":["lost"],"unresolvedDestinations":[],"duplicateDestinations":[],"duplicateLabels":[],"requiredBibliographyTools":[],"missingCharacters":[],"truncated":false})
+        json!({"rerunRequired":true,"unresolvedReferences":["missing"],"unresolvedCitations":["lost"],"unresolvedDestinations":[],"duplicateDestinations":[],"duplicateLabels":[],"requiredBibliographyTools":[],"missingCharacters":[],"fontSubstitutions":[],"fontSizeSubstitutions":[],"truncated":false})
     );
     let package_log = "(./main.tex\nPackage natbib Warning: Citation(s) may have changed.\n(natbib) Rerun to get citations correct.\n)\n";
     assert_eq!(
@@ -245,7 +245,7 @@ fn parsed_final_log_warnings_and_observation_limits_are_preserved() {
             ),
             true
         ),
-        json!({"rerunRequired":false,"unresolvedReferences":[],"unresolvedCitations":[],"unresolvedDestinations":[],"duplicateDestinations":[],"duplicateLabels":[],"requiredBibliographyTools":[],"missingCharacters":[],"truncated":true})
+        json!({"rerunRequired":false,"unresolvedReferences":[],"unresolvedCitations":[],"unresolvedDestinations":[],"duplicateDestinations":[],"duplicateLabels":[],"requiredBibliographyTools":[],"missingCharacters":[],"fontSubstitutions":[],"fontSizeSubstitutions":[],"truncated":true})
     );
 }
 
@@ -406,7 +406,7 @@ fn longtable_requests_another_pass_without_inventing_missing_references() {
             .any(|diagnostic| diagnostic.message.contains("Column widths have changed")));
         assert_eq!(
             compilation_analysis(&parsed, false),
-            json!({"rerunRequired":rerun,"unresolvedReferences":[],"unresolvedCitations":[],"unresolvedDestinations":[],"duplicateDestinations":[],"duplicateLabels":[],"requiredBibliographyTools":[],"missingCharacters":[],"truncated":false})
+            json!({"rerunRequired":rerun,"unresolvedReferences":[],"unresolvedCitations":[],"unresolvedDestinations":[],"duplicateDestinations":[],"duplicateLabels":[],"requiredBibliographyTools":[],"missingCharacters":[],"fontSubstitutions":[],"fontSizeSubstitutions":[],"truncated":false})
         );
     }
 }
@@ -441,7 +441,7 @@ fn pdf_destination_summary_decodes_and_deduplicates_names_across_files_and_backe
         json!({
             "rerunRequired":false,"unresolvedReferences":["dest(old)"],
             "unresolvedCitations":["emoji😀"],"unresolvedDestinations":["dest(old)","emoji😀"],
-            "duplicateDestinations":["dest(old)"],"duplicateLabels":[],"requiredBibliographyTools":[],"missingCharacters":[],"truncated":false
+            "duplicateDestinations":["dest(old)"],"duplicateLabels":[],"requiredBibliographyTools":[],"missingCharacters":[],"fontSubstitutions":[],"fontSizeSubstitutions":[],"truncated":false
         })
     );
 }
@@ -485,7 +485,7 @@ fn pdf_destination_summary_rejects_uncertain_records_and_untrusted_diagnostic_da
         compilation_analysis(&diagnostics(messages), false),
         json!({
             "rerunRequired":false,"unresolvedReferences":[],"unresolvedCitations":[],
-            "unresolvedDestinations":[],"duplicateDestinations":[],"duplicateLabels":[],"requiredBibliographyTools":[],"missingCharacters":[],"truncated":false
+            "unresolvedDestinations":[],"duplicateDestinations":[],"duplicateLabels":[],"requiredBibliographyTools":[],"missingCharacters":[],"fontSubstitutions":[],"fontSizeSubstitutions":[],"truncated":false
         })
     );
 }
@@ -626,7 +626,7 @@ fn duplicate_label_summary_preserves_literal_names_and_keeps_other_key_categorie
         json!({
             "rerunRequired":false,"unresolvedReferences":["O'Connor"],"unresolvedCitations":["章😀"],
             "unresolvedDestinations":["lost"],"duplicateDestinations":["dup"],
-            "duplicateLabels":[" spaced ","O'Connor","章😀"],"requiredBibliographyTools":[],"missingCharacters":[],"truncated":false
+            "duplicateLabels":[" spaced ","O'Connor","章😀"],"requiredBibliographyTools":[],"missingCharacters":[],"fontSubstitutions":[],"fontSizeSubstitutions":[],"truncated":false
         })
     );
 }

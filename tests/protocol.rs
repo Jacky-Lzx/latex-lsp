@@ -2379,6 +2379,75 @@ fn missing_character_analysis_uses_final_logs_and_clears_resolved_fonts_and_glyp
 
 #[test]
 #[cfg(unix)]
+fn font_substitution_analysis_uses_final_logs_and_clears_repaired_shapes_and_sizes() {
+    let script = r#"cat <<'EARLY'
+LaTeX Font Warning: Font shape `OT1/early/m/n' undefined
+(Font) using `OT1/cmr/m/n' instead on input line 2.
+EARLY
+printf '%%PDF-1.4\n' > "$1/main.pdf"
+cat "${2%/*}/fixture.log" > "$1/main.log"
+"#;
+    let (mut server, directory, main) = fake_build_server(script, false);
+    let footer = "LaTeX Font Warning: Some font shapes were not available, defaults substituted.\n";
+    let font = format!("OT1/missing{}/m/n", "x".repeat(75));
+    let first = format!("LaTeX Font Warning: Font shape `{font}' undefined");
+    let wrapped = first
+        .as_bytes()
+        .chunks(79)
+        .map(|part| std::str::from_utf8(part).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mixed = format!("{wrapped}\n(Font) using `OT1/cmr/m/n' instead on input line 2.\n\nLaTeX Font Warning: Font shape `OT1/limited/m/n' in size <14.7> not available\n(Font) size <10> substituted on input line 2.\n\n{footer}");
+    for (id, warnings, shapes, sizes, count) in [
+        (
+            2,
+            mixed,
+            json!([{"requested":font,"replacement":"OT1/cmr/m/n"}]),
+            json!([{"font":"OT1/limited/m/n","requestedSize":"14.7","replacementSize":"10"}]),
+            3,
+        ),
+        (4, footer.into(), json!([]), json!([]), 1),
+        (6, String::new(), json!([]), json!([]), 0),
+    ] {
+        let log = format!("(./main.tex\n{warnings}\nOutput written on main.pdf (1 page).\n)\n");
+        std::fs::write(directory.path().join("fixture.log"), log).unwrap();
+        let started = server.request(
+            id,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let finished = server.until(|message| {
+            message["method"] == "latex/buildFinished"
+                && message["params"]["buildId"] == started["buildId"]
+        });
+        let result = &finished["params"];
+        assert_eq!(result["status"], "success", "{finished}");
+        assert_eq!(result["warningsCount"], count, "{finished}");
+        assert_eq!(result["errorsCount"], 0);
+        assert_eq!(
+            result["analysis"]["fontSubstitutions"], shapes,
+            "{finished}"
+        );
+        assert_eq!(
+            result["analysis"]["fontSizeSubstitutions"], sizes,
+            "{finished}"
+        );
+        assert_eq!(result["analysis"]["rerunRequired"], false);
+        assert_eq!(result["analysis"]["truncated"], false);
+        let saved = server.request(
+            id + 1,
+            "workspace/executeCommand",
+            json!({"command":"latex.buildStatus","arguments":[main]}),
+        );
+        assert_eq!(&saved, result);
+    }
+    server.request(8, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
 fn unchanged_pdf_older_than_an_included_source_is_rejected_but_fresh_noop_builds_succeed() {
     let (mut server, directory, uri) = fake_build_server("exit 0\n", false);
     let source = "\\documentclass{article}\n\\input{chapter}\n";
