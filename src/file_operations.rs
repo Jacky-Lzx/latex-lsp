@@ -231,8 +231,17 @@ fn replacement(
         .map_err(|_| Error::invalid_params("Invalid linked file URI"))?;
     let new_target = renames.path(&target_path);
     if original.starts_with("file:") {
+        // Use the source suffix: four-argument hyperref links add a destination
+        // to the navigation target that is not part of this editable argument.
+        // Retain TeX escapes and empty query/fragment delimiters verbatim too.
+        let suffix = original.find(['?', '#']).map_or("", |mut start| {
+            if start > 0 && original.as_bytes()[start - 1] == b'\\' {
+                start -= 1;
+            }
+            &original[start..]
+        });
         return Url::from_file_path(new_target)
-            .map(|uri| uri.to_string())
+            .map(|uri| format!("{uri}{suffix}"))
             .map_err(|_| Error::invalid_params("Invalid renamed file URI"));
     }
     let extension = target_path

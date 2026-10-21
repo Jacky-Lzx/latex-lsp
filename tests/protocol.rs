@@ -4706,6 +4706,91 @@ fn file_rename_requests_update_references_and_preserve_open_document_versions() 
 }
 
 #[test]
+fn file_url_rename_requests_preserve_destinations_in_versioned_edits() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = Url::from_directory_path(directory.path()).unwrap();
+    let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+    let old = Url::from_file_path(directory.path().join("manual.pdf")).unwrap();
+    let new = Url::from_file_path(directory.path().join("new manual.pdf")).unwrap();
+    std::fs::write(old.to_file_path().unwrap(), "pdf").unwrap();
+    let source = format!(
+        "\\href{{{old}?download=1#page=3}}{{Manual}}\n\
+         \\hyperref{{{old}?download=1}}{{chapter}}{{intro}}{{Chapter}}\n\
+         % \\url{{{old}#page=3}}\n"
+    );
+    let mut server = Server::start();
+    server.request(
+        1,
+        "initialize",
+        json!({
+            "processId":null,"rootUri":root,
+            "capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true},
+                "fileOperations":{"willRename":true,"didRename":true}}}
+        }),
+    );
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{
+            "uri":main,"languageId":"latex","version":17,"text":source
+        }}),
+    );
+    server.until(|message| message["method"] == "textDocument/publishDiagnostics");
+    let files = json!({"files":[{"oldUri":old,"newUri":new}]});
+    let result = server.request(2, "workspace/willRenameFiles", files.clone());
+    let documents = result["documentChanges"].as_array().unwrap();
+    assert_eq!(documents.len(), 1);
+    assert_eq!(documents[0]["textDocument"]["uri"], main.as_str());
+    assert_eq!(documents[0]["textDocument"]["version"], 17);
+    let edits = documents[0]["edits"].as_array().unwrap();
+    assert_eq!(edits.len(), 2);
+    for (line, expected) in [
+        (0, format!("{new}?download=1#page=3")),
+        (1, format!("{new}?download=1")),
+    ] {
+        let edit = edits
+            .iter()
+            .find(|edit| edit["range"]["start"]["line"] == line)
+            .unwrap();
+        assert_eq!(edit["newText"], expected);
+    }
+    let mut updated = source.clone();
+    let mut edits: Vec<tower_lsp::lsp_types::TextEdit> =
+        serde_json::from_value(documents[0]["edits"].clone()).unwrap();
+    edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
+    for edit in edits {
+        let text = latex_lsp::text::Text::new(source.clone());
+        updated.replace_range(
+            text.offset(edit.range.start).unwrap()..text.offset(edit.range.end).unwrap(),
+            &edit.new_text,
+        );
+    }
+    server.notify(
+        "textDocument/didChange",
+        json!({
+            "textDocument":{"uri":main,"version":18},"contentChanges":[{"text":updated}]
+        }),
+    );
+    std::fs::rename(old.to_file_path().unwrap(), new.to_file_path().unwrap()).unwrap();
+    server.notify("workspace/didRenameFiles", files);
+    let links = server.request(
+        3,
+        "textDocument/documentLink",
+        json!({"textDocument":{"uri":main}}),
+    );
+    let links = links.as_array().unwrap();
+    assert_eq!(links.len(), 2);
+    assert_eq!(links[0]["target"], format!("{new}?download=1#page=3"));
+    assert_eq!(
+        links[1]["target"],
+        format!("{new}?download=1#chapter.intro")
+    );
+    server.request(4, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
 fn command_only_code_actions_request_client_edits_and_reject_stale_versions() {
     let mut server = Server::start();
     let uri = Url::parse("file:///editing-protocol/legacy.tex").unwrap();

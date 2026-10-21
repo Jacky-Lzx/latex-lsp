@@ -536,6 +536,147 @@ fn file_urls_preserve_percent_encoding_when_assets_are_renamed() {
 }
 
 #[test]
+fn file_url_renames_preserve_source_queries_fragments_and_tex_escapes() {
+    for directory_move in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        std::fs::create_dir(root.join("assets")).unwrap();
+        let old = uri(root, "assets/original file#?.pdf");
+        std::fs::write(old.to_file_path().unwrap(), "pdf").unwrap();
+        let new = uri(
+            root,
+            if directory_move {
+                "新 assets/original file#?.pdf"
+            } else {
+                "assets/新 file#?.pdf"
+            },
+        );
+        let mut source = String::new();
+        let mut expected = String::new();
+        let tails = [
+            "",
+            "?download=1",
+            "#page=3",
+            "?download=1#section.2",
+            "?",
+            "#",
+            "?#",
+            "?q=some%20text%23%3F#part%202",
+            r"?q=some\%20text\&mode=1\#page=3",
+            r"\#page=3",
+        ];
+        for tail in tails {
+            for (command, rest) in [
+                ("url", ""),
+                ("href", "{Visible text}"),
+                ("hyperref", "{chapter}{intro}{Visible text}"),
+            ] {
+                source.push_str(&format!("\\{command}{{{old}{tail}}}{rest}\n"));
+                expected.push_str(&format!("\\{command}{{{new}{tail}}}{rest}\n"));
+            }
+        }
+        let protected = format!(
+            "% \\href{{{old}#page=3}}{{Comment}}\n\\verb|\\url{{{old}#page=3}}|\n\
+             \\href{{https://example.test/manual.pdf?download=1#page=3}}{{Remote}}\n\
+             Same text: {old}\n"
+        );
+        source.push_str(&protected);
+        expected.push_str(&protected);
+        let main = uri(root, "main.tex");
+        let mut workspace = Workspace::default();
+        workspace.add_root(root.into());
+        workspace.open(main.clone(), source.clone(), 7);
+        let file = if directory_move {
+            rename(root, "assets", "新 assets")
+        } else {
+            FileRename {
+                old_uri: old.to_string(),
+                new_uri: new.to_string(),
+            }
+        };
+        let changes = edits(
+            file_operations::will_rename(&workspace, &[file])
+                .unwrap()
+                .unwrap(),
+        );
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[&main].len(), tails.len() * 3);
+        assert_eq!(apply(&source, changes[&main].clone()), expected);
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex and hyperref"]
+fn real_file_url_renames_preserve_pdf_link_destinations() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let old = uri(root, "old manual.pdf");
+    let new = uri(root, "new manual#1.pdf");
+    std::fs::write(old.to_file_path().unwrap(), "pdf").unwrap();
+    let main = uri(root, "main.tex");
+    let source = format!(
+        "\\pdfobjcompresslevel=0\\pdfcompresslevel=0\n\
+         \\documentclass{{article}}\\usepackage{{hyperref}}\\begin{{document}}\n\
+         \\url{{{old}?download=1#page=3}}\n\
+         \\href{{{old}?download=1#page=4}}{{Manual}}\n\
+         \\hyperref{{{old}?download=1}}{{chapter}}{{intro}}{{Chapter}}\n\
+         \\end{{document}}\n"
+    );
+    std::fs::write(root.join("main.tex"), &source).unwrap();
+    let mut workspace = Workspace::default();
+    workspace.add_root(root.into());
+    let config = latex_lsp::config::BuildConfig {
+        executable: "pdflatex".into(),
+        ..Default::default()
+    };
+    for target in [&old, &new] {
+        let outcome = latex_lsp::build::run(&root.join("main.tex"), &config, &Default::default());
+        assert_eq!(outcome.status, "success", "{}", outcome.output);
+        let data =
+            std::fs::read(config.artifact_path(&root.join("main.tex"), "pdf").unwrap()).unwrap();
+        let pdf = String::from_utf8_lossy(&data);
+        let mut targets: Vec<_> = pdf
+            .split("/URI")
+            .skip(1)
+            .filter_map(|tail| {
+                tail.trim_start()
+                    .strip_prefix('(')?
+                    .split_once(')')
+                    .map(|(uri, _)| uri)
+            })
+            .collect();
+        // A URL that wraps across lines has one annotation per line.
+        targets.dedup();
+        assert_eq!(
+            targets,
+            [
+                format!("{target}?download=1#page=3"),
+                format!("{target}?download=1#page=4"),
+                format!("{target}?download=1#chapter.intro"),
+            ]
+        );
+        if target == &old {
+            let files = [FileRename {
+                old_uri: old.to_string(),
+                new_uri: new.to_string(),
+            }];
+            let changes = edits(
+                file_operations::will_rename(&workspace, &files)
+                    .unwrap()
+                    .unwrap(),
+            );
+            std::fs::write(
+                root.join("main.tex"),
+                apply(&source, changes[&main].clone()),
+            )
+            .unwrap();
+            std::fs::rename(old.to_file_path().unwrap(), new.to_file_path().unwrap()).unwrap();
+            file_operations::did_rename(&mut workspace, &files).unwrap();
+        }
+    }
+}
+
+#[test]
 fn directory_moves_rebase_references_inside_moved_documents() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
