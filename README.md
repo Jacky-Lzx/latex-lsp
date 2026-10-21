@@ -384,6 +384,8 @@ etoolbox 的 `newtoggle` / `providetoggle` 使用独立命名空间，支持 `se
 
 服务器发出 `latex/buildStarted` 和 `latex/buildFinished` 通知，两者都包含实际 `executable` 和可推断的 `engine`（使用自定义参数或无法识别的工具时为 `null`）。完成通知还包含 `status`（`success` / `error` / `cancelled` / `timeout`）、`buildId`、`rootUri`、`pdfUri`、`logUri`、`exitCode`、`diagnosticsCount`、`errorsCount`、`warningsCount`、`dependenciesCount`（包含根文件的来源数量）、`durationMs`、`message` 和有长度限制的 `output` 摘要。成功结果的 `pages` 为最终 TeX 日志报告的页数（未知时为 `null`），`pdfSize` 为实际 PDF 的字节数；失败结果两者为 `null`。`latex.buildStatus` 保留相同摘要。若文档或已知输入选择在编译中变化，`stale` 为 `true`，不会发布这次编译的旧诊断，并清除该项目上一次编译的诊断，避免旧错误继续留在编辑器中。失败编译不把可能不完整的 PDF 标记为成功结果。
 
+结果的 `analysis` 汇总本次最终 TeX 日志中的已确认重复编译请求（`rerunRequired`）、未解析交叉引用键（`unresolvedReferences`）和文献引用键（`unresolvedCitations`）。键去重并排序，保留原文；缺少定义本身不视为重复编译请求。每类最多 128 个键，每个键最多 128 个 Unicode 字符；超出预算的键不截短身份，而是省略并设置 `truncated`。诊断输入被省略时该标记也为 `true`。取消、超时、无法观测最终日志或因输入变化而丢弃的结果返回 `analysis: null`；早期编译轮次已解决的警告不会进入分析。
+
 编译管道输出超过 4 MiB、日志超过 8 MiB 时，分析缓冲区保留开头和结尾，省略中间部分；完整日志仍保留在磁盘。省略后清除文件栈，显式文件位置和新出现的文件上下文仍可定位，其他诊断回退到主文档。完成通知的 `diagnosticsTruncated` 标明 TeX 或文献诊断使用了省略后的内容，此时诊断数量仅统计已分析部分。部分 recorder 或文献依赖列表不会替换上一次完整记录。
 
 PDF、`.fls` recorder 和 `.blg` 文献日志的更新检测同时比较内容指纹与文件元数据。编译工具保留输出大小和修改时间时，实际改写的 PDF 仍能确认为新产物，新的 recorder 输入及文献警告也会正常读取；这适用于保留时间戳的文件复制或自定义编译驱动。

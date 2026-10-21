@@ -693,6 +693,7 @@ impl BuildManager {
                 "diagnosticsCount":count, "stale":stale, "durationMs":started.elapsed().as_millis() as u64,
                 "errorsCount":errors, "warningsCount":warnings,
                 "diagnosticsTruncated":outcome.diagnostics_truncated,
+                "analysis":if stale { None } else { outcome.analysis.as_ref() },
                 "pages":outcome.pages, "pdfSize":pdf_size,
                 "dependenciesCount":project.len(),
                 "executable":executable, "engine":engine,
@@ -1022,6 +1023,8 @@ pub struct Outcome {
     pub log: Option<PathBuf>,
     pub diagnostics: BTreeMap<Url, Vec<Diagnostic>>,
     pub diagnostics_truncated: bool,
+    /// Summary available only from this run's observed final TeX log.
+    pub analysis: Option<Value>,
     /// Sources whose file-entry events were present in the final TeX log.
     pub diagnostic_sources: BTreeSet<Url>,
     pub output: String,
@@ -1047,6 +1050,7 @@ impl Outcome {
             log: None,
             diagnostics: BTreeMap::new(),
             diagnostics_truncated: false,
+            analysis: None,
             diagnostic_sources: BTreeSet::new(),
             output: String::new(),
             inputs: None,
@@ -1470,6 +1474,12 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool, rebuild: bo
         .chars()
         .rev()
         .collect();
+    if !log.is_empty() && matches!(outcome.status, "success" | "error") {
+        outcome.analysis = Some(build_log::compilation_analysis(
+            &outcome.diagnostics,
+            outcome.diagnostics_truncated,
+        ));
+    }
     outcome
 }
 

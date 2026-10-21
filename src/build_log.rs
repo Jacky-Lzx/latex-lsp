@@ -148,29 +148,92 @@ fn input_line(message: &str) -> Option<u32> {
         .ok()
 }
 
-pub(crate) fn undefined_reference_key(message: &str) -> Option<(bool, &str)> {
-    if !message.contains("undefined") {
-        return None;
-    }
-    let (citation, tail) = if let Some((_, tail)) = message
+fn undefined_reference_start(message: &str) -> Option<(bool, &str)> {
+    if let Some((_, tail)) = message
         .split_once("Reference `")
         .or_else(|| message.split_once("Reference '"))
         .or_else(|| message.split_once("Hyper reference `"))
         .or_else(|| message.split_once("Hyper reference '"))
     {
-        (false, tail)
+        Some((false, tail))
     } else if let Some((_, tail)) = message
         .split_once("Citation `")
         .or_else(|| message.split_once("Citation '"))
     {
-        (true, tail)
+        Some((true, tail))
     } else {
+        None
+    }
+}
+
+pub(crate) fn undefined_reference_key(message: &str) -> Option<(bool, &str)> {
+    if !message.contains("undefined") {
         return None;
-    };
+    }
+    let (citation, tail) = undefined_reference_start(message)?;
     let (key, _) = tail
         .rsplit_once("' on ")
         .or_else(|| tail.rsplit_once("' undefined"))?;
     Some((citation, key))
+}
+
+/// Summarize observed final-log warnings without multiplying repeated uses.
+pub fn compilation_analysis(
+    diagnostics: &BTreeMap<Url, Vec<Diagnostic>>,
+    diagnostics_truncated: bool,
+) -> serde_json::Value {
+    const MAX_KEYS: usize = 128;
+    const MAX_KEY_CHARS: usize = 128;
+    let mut references = BTreeSet::new();
+    let mut citations = BTreeSet::new();
+    let mut rerun = false;
+    let mut truncated = diagnostics_truncated;
+    for diagnostic in diagnostics
+        .values()
+        .flatten()
+        .filter(|diagnostic| diagnostic.severity == Some(DiagnosticSeverity::WARNING))
+    {
+        if !rerun {
+            let message = diagnostic
+                .message
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            rerun = matches!(message.as_str(),
+                "LaTeX Warning: Label(s) may have changed. Rerun to get cross-references right."
+                | "Package natbib Warning: Citation(s) may have changed. Rerun to get citations correct."
+                | "Package natbib Warning: Citation(s) may have changed."
+            ) || message
+                .strip_prefix("Package rerunfilecheck Warning: File `")
+                .and_then(|tail| tail.split_once("' has changed."))
+                .is_some_and(|(file, tail)| {
+                    !file.is_empty()
+                        && (tail.is_empty()
+                            || tail.trim_start().starts_with("Rerun to get outlines right")
+                            || tail.trim_start().starts_with("(rerunfilecheck) Rerun to get outlines right"))
+                });
+        }
+        if let Some((citation, key)) = undefined_reference_key(&diagnostic.message) {
+            let keys = if citation {
+                &mut citations
+            } else {
+                &mut references
+            };
+            if key.chars().count() > MAX_KEY_CHARS
+                || (keys.len() == MAX_KEYS && !keys.contains(key))
+            {
+                truncated = true;
+            } else {
+                keys.insert(key.to_string());
+            }
+        }
+    }
+    serde_json::json!({
+        "rerunRequired": rerun,
+        "unresolvedReferences": references,
+        "unresolvedCitations": citations,
+        "truncated": truncated,
+    })
 }
 
 fn destination_warning_name(message: &str) -> Option<&str> {
@@ -2039,8 +2102,19 @@ fn wrapped_message(
         }
         return message;
     }
-    let mut message = lines[*i].trim().to_owned();
-    while !message.ends_with(['.', '!']) && *i + 1 < lines.len() && message.len() < 4096 {
+    let reference = undefined_reference_start(initial).is_some();
+    // TeX byte-wraps long warning lines, including inside a literal key.
+    // Keep blanks at those boundaries instead of inventing a separator.
+    let mut message = if reference {
+        initial.to_owned()
+    } else {
+        lines[*i].trim().to_owned()
+    };
+    while (!message.ends_with(['.', '!'])
+        || (reference && lines[*i].len() >= 60 && undefined_reference_key(&message).is_none()))
+        && *i + 1 < lines.len()
+        && message.len() < 4096
+    {
         let next = lines[*i + 1];
         if next.trim().is_empty() || message_boundary(next) {
             break;
@@ -2069,9 +2143,15 @@ fn wrapped_message(
                 break;
             }
         }
+        let byte_wrapped =
+            reference && lines[*i].len() >= 60 && !next.trim_start().starts_with('(');
         *i += 1;
-        message.push(' ');
-        message.push_str(next.trim());
+        if byte_wrapped {
+            message.push_str(next);
+        } else {
+            message.push(' ');
+            message.push_str(next.trim());
+        }
     }
     message
 }
