@@ -219,9 +219,12 @@ pub(crate) fn declarations_in(workspace: &Workspace, uri: &Url, origin: &Url) ->
 }
 
 /// Literal entries retain source spans so directory moves can update aliases too.
+/// Only pdfTeX confirms quoted directories: other graphicx drivers can check
+/// literal quotes during existence tests before stripping them for rendering.
 pub(crate) fn path_entries(
     source: &str,
     command: &syntax::Command,
+    quoted_directories: bool,
 ) -> (Vec<(Range<usize>, String)>, bool) {
     let Some(argument) = &command.argument else {
         return (vec![], false);
@@ -241,18 +244,34 @@ pub(crate) fn path_entries(
             return (result, false);
         };
         at = end;
-        let span = syntax::trimmed_span(
-            source,
-            argument.span.start + directory.span.start..argument.span.start + directory.span.end,
-        );
-        let value = &source[span.clone()];
+        let raw_span =
+            argument.span.start + directory.span.start..argument.span.start + directory.span.end;
+        let raw = &source[raw_span.clone()];
+        // The directory is concatenated with the filename. Trailing space
+        // therefore belongs between the slash and that filename, even inside
+        // quotes; trimming it would infer a directory TeX does not search.
+        if !quoted_directories && raw.contains('"')
+            || has_paragraph(raw)
+            || raw
+                .chars()
+                .rev()
+                .find(|character| *character != '"')
+                .is_some_and(|character| character.is_ascii_whitespace())
+        {
+            complete = false;
+            continue;
+        }
+        let Some(value) = unquote(raw) else {
+            complete = false;
+            continue;
+        };
         if !value.ends_with('/')
             || value.contains(['\\', '{', '}', '%', '#', '$', '&', '^', '~', '\n', '\r'])
         {
             complete = false;
             continue;
         }
-        result.push((span, value.to_owned()));
+        result.push((syntax::trimmed_span(source, raw_span), value.into_owned()));
         if result.len() >= 256 {
             return (result, false);
         }
@@ -299,7 +318,12 @@ fn declarations_with(workspace: &Workspace, uri: &Url, origin: &Url) -> Vec<Dire
                 .map(|call| &call.command),
         )
     {
-        let (entries, _) = path_entries(&doc.text.source, command);
+        let (entries, _) = path_entries(
+            &doc.text.source,
+            command,
+            workspace.build_config(origin).effective_engine()
+                == Some(crate::config::Engine::PdfLatex),
+        );
         for (span, value) in entries {
             let path = parent.join(value);
             let path = path

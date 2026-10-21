@@ -1418,6 +1418,52 @@ mod graphic_conditions {
     }
 
     #[test]
+    fn quoted_graphics_directories_watch_normalized_candidates_before_the_selected_image() {
+        for (entry, magic, supported) in [
+            (r#""figure files/""#, "", true),
+            (r#""figure files"/"#, "", true),
+            (r#""figure  files/""#, "", true),
+            (r#""figure files/""#, "% !TeX program = xelatex\n", false),
+            (r#""figure files"/"#, "% !TeX program = lualatex\n", false),
+        ] {
+            for (changed, expected) in [
+                ("plot.png", true),
+                ("figure files/plot.png", true),
+                ("plot.pdf", false),
+                ("figure  files/plot.png", false),
+                ("\"figure files\"/plot.png", false),
+            ] {
+                let directory = tempfile::tempdir().unwrap();
+                let root = directory.path();
+                for folder in ["figure files", "figure  files", "\"figure files\""] {
+                    std::fs::create_dir(root.join(folder)).unwrap();
+                }
+                std::fs::write(root.join("figure files/plot.png"), "selected").unwrap();
+                let source = format!("{magic}\\def\\Paths{{\\graphicspath}}\\Paths{{{{{entry}}}}}\\DeclareGraphicsExtensions{{.png,.pdf}}\\includegraphics{{plot}}");
+                let snapshot = capture(root, &source);
+                assert!(snapshot.changed_path().is_none());
+                assert_eq!(
+                    snapshot.watched().contains(
+                        &Url::from_file_path(root.join("figure files/plot.png")).unwrap()
+                    ),
+                    supported,
+                    "{source}"
+                );
+                if changed == "figure files/plot.png" {
+                    std::fs::remove_file(root.join(changed)).unwrap();
+                } else {
+                    std::fs::write(root.join(changed), "candidate").unwrap();
+                }
+                assert_eq!(
+                    snapshot.changed_path().is_some(),
+                    supported && expected,
+                    "{source}: {changed}\n{snapshot:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn declared_graphics_extensions_track_only_earlier_and_selected_candidates() {
         for (argument, changed, expected) in [
             ("plot", "plot.png", true),

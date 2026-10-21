@@ -348,9 +348,15 @@ impl Index {
     }
 }
 
-fn declaration(source: &str, command: &syntax::Command, kind: Kind) -> Setting {
+fn declaration(
+    source: &str,
+    command: &syntax::Command,
+    kind: Kind,
+    quoted_directories: bool,
+) -> Setting {
     if matches!(kind, Kind::Directories) {
-        let (entries, complete) = crate::graphics::path_entries(source, command);
+        let (entries, complete) =
+            crate::graphics::path_entries(source, command, quoted_directories);
         return complete.then(|| entries.into_iter().map(|(_, value)| value).collect());
     }
     let argument = command.argument.as_ref()?;
@@ -611,7 +617,13 @@ impl Walk<'_> {
                     let global = self.global_assignment();
                     if command.name == self.kind.command() {
                         self.state = if self.conditional == 0 {
-                            declaration(&doc.text.source, &command, self.kind)
+                            declaration(
+                                &doc.text.source,
+                                &command,
+                                self.kind,
+                                self.workspace.build_config(self.root).effective_engine()
+                                    == Some(crate::config::Engine::PdfLatex),
+                            )
                         } else {
                             None
                         };

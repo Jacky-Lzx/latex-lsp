@@ -411,12 +411,14 @@ fn directory_replacement(
     if renames.path(&directory.path) == directory.path && !renames.affects(&directory.origin) {
         return Ok(original.into());
     }
+    let decoded = graphics::unquote(original)
+        .ok_or_else(|| Error::invalid_params("Unbalanced graphics directory quotes"))?;
     let origin = renames
         .uri(&directory.origin)
         .to_file_path()
         .map_err(|_| Error::invalid_params("Invalid graphics search directory origin"))?;
     let target = renames.path(&directory.path);
-    let path = if Path::new(original).is_absolute() {
+    let path = if Path::new(decoded.as_ref()).is_absolute() {
         target
     } else {
         relative_path(
@@ -429,13 +431,18 @@ fn directory_replacement(
     let mut new_text = safe_path(&path)?;
     if new_text.is_empty() {
         new_text.push('.');
-    } else if original.starts_with("./") && !new_text.starts_with('.') {
+    } else if decoded.starts_with("./") && !new_text.starts_with('.') {
         new_text.insert_str(0, "./");
     }
     if !new_text.ends_with('/') {
         new_text.push('/');
     }
-    Ok(new_text)
+    if graphics::unquote(&new_text).as_deref() != Some(new_text.as_str()) {
+        return Err(Error::invalid_params(
+            "Renamed graphics directory would select a different path after TeX whitespace normalization",
+        ));
+    }
+    Ok(graphics::quoted_replacement(new_text, original, false))
 }
 
 /// Edits target the old URIs: the client applies them before moving the files.

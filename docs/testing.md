@@ -44,7 +44,7 @@ cargo test --locked --test graphics_paths real_ -- --ignored
 cargo test --locked --test indirect_graphics real_ -- --ignored
 ```
 
-带引号的图片文件名回归需要 pdfLaTeX、XeLaTeX、LuaLaTeX、graphicx 和 etoolbox，验证完整与分段引号、空白合并、图片移动后的 recorder 输入，以及缺图定位、拼写修复和重新编译：
+带引号的图片路径回归需要 pdfLaTeX、XeLaTeX、LuaLaTeX、graphicx 和 etoolbox，验证完整与分段引号、空白合并、图片移动后的 recorder 输入，以及缺图定位、拼写修复和重新编译。搜索目录回归另核对引擎对目录引号的差异、目录与主文档同时移动后的实际图片，以及缺图修复后的再次编译：
 
 ```sh
 cargo test --locked --test quoted_graphics real_ -- --ignored
