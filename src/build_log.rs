@@ -815,6 +815,23 @@ pub(crate) fn undefined_reference_ranges(text: &Text, line: u32, message: &str) 
         }) {
             continue;
         }
+        if citation && crate::citations::is_multi(&command.name) {
+            let arguments = crate::citations::arguments(&text.source, command.span.end);
+            if text.position(command.span.start).line <= line
+                && text.position(arguments.end.saturating_sub(1)).line >= line
+            {
+                for argument in arguments.keys() {
+                    for span in
+                        crate::syntax::reference_list_spans(&text.source, argument.span.clone())
+                    {
+                        if text.source[span.clone()] == *key {
+                            ranges.push(text.range(span.start, span.end));
+                        }
+                    }
+                }
+            }
+            continue;
+        }
         let separate_label = crate::syntax::separate_label_argument(&text.source, command);
         let argument = if crate::syntax::has_separate_label_argument(&command.name) {
             separate_label.as_ref()

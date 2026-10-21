@@ -176,7 +176,10 @@ fn raw_target(doc: &Document, offset: usize) -> Option<Target<'_>> {
         if let Some(arg) = environment_argument.as_ref().or(command.argument.as_ref()) {
             let kind = if syntax::is_reference(&command.name) || command.name == "label" {
                 Some(TargetKind::Label)
-            } else if syntax::is_citation(&command.name) || command.name == "bibitem" {
+            } else if (syntax::is_citation(&command.name)
+                && !crate::citations::is_multi(&command.name))
+                || command.name == "bibitem"
+            {
                 Some(TargetKind::Citation)
             } else if matches!(command.name.as_str(), "begin" | "end")
                 || syntax::declares_environment(&command.name)
@@ -841,6 +844,9 @@ fn argument_span(doc: &Document, command: &Command, offset: usize) -> Option<Spa
             syntax::file_name_ignores_spaces(&command.name),
             syntax::file_list(&command.name),
         );
+    }
+    if crate::citations::is_multi(&command.name) {
+        return crate::citations::prefix(source, command, offset);
     }
     // A completed inner call in an optional note must not hide the outer key.
     // Most calls also let us skip old, closed arguments without rescanning text.
@@ -1516,6 +1522,9 @@ fn all_references(
                         });
                     }
                 }
+                continue;
+            }
+            if target.kind == TargetKind::Citation && crate::citations::is_multi(&command.name) {
                 continue;
             }
             let matches = match target.kind {

@@ -187,6 +187,10 @@ pub(crate) fn bracket_argument(source: &str, at: usize) -> Option<(Argument, usi
     group_mode(source, at, b'[', b']', true, false)
 }
 
+pub(crate) fn parenthesis_note(source: &str, at: usize) -> Option<(Argument, usize)> {
+    group_mode(source, at, b'(', b')', true, false)
+}
+
 fn group_mode(
     source: &str,
     i: usize,
@@ -1634,35 +1638,36 @@ pub(crate) fn toggle_reference(name: &str) -> bool {
 }
 
 pub fn is_citation(name: &str) -> bool {
-    matches!(
-        name,
-        "cite"
-            | "bibentry"
-            | "citep"
-            | "citet"
-            | "citeauthor"
-            | "citeyear"
-            | "citealt"
-            | "citealp"
-            | "citenum"
-            | "citeyearpar"
-            | "citefullauthor"
-            | "Citet"
-            | "Citep"
-            | "Citealt"
-            | "Citealp"
-            | "Citeauthor"
-            | "citetalias"
-            | "citepalias"
-            | "defcitealias"
-            | "autocite"
-            | "parencite"
-            | "textcite"
-            | "fullcite"
-            | "footfullcite"
-            | "nocite"
-            | "footcite"
-    )
+    crate::citations::is_multi(name)
+        || matches!(
+            name,
+            "cite"
+                | "bibentry"
+                | "citep"
+                | "citet"
+                | "citeauthor"
+                | "citeyear"
+                | "citealt"
+                | "citealp"
+                | "citenum"
+                | "citeyearpar"
+                | "citefullauthor"
+                | "Citet"
+                | "Citep"
+                | "Citealt"
+                | "Citealp"
+                | "Citeauthor"
+                | "citetalias"
+                | "citepalias"
+                | "defcitealias"
+                | "autocite"
+                | "parencite"
+                | "textcite"
+                | "fullcite"
+                | "footfullcite"
+                | "nocite"
+                | "footcite"
+        )
 }
 
 /// Inline entries and alias definitions name one key rather than a key list.
@@ -1702,6 +1707,12 @@ pub(crate) fn citation_argument_start(
     name: &str,
     command_end: usize,
 ) -> Option<usize> {
+    if crate::citations::is_multi(name) {
+        return crate::citations::arguments(source, command_end)
+            .keys()
+            .next()
+            .map(|argument| argument.outer_span.start);
+    }
     let mut at = skip_space(source, command_end);
     if source.as_bytes().get(at) == Some(&b'*') {
         if !citation_accepts_star(name) {
@@ -1927,6 +1938,19 @@ impl Syntax {
                         span: start..command_end,
                         argument,
                     };
+                    if crate::citations::is_multi(name) {
+                        let arguments = crate::citations::arguments(source, command_end);
+                        for argument in arguments.keys() {
+                            for span in reference_list_spans(source, argument.span.clone()) {
+                                result.citation_references.push(Entry {
+                                    name: source[span.clone()].into(),
+                                    span,
+                                    detail: format!("\\{name}"),
+                                    is_variable: false,
+                                });
+                            }
+                        }
+                    }
                     if name == "detokenize" && !control_operands.contains(&start) {
                         if let Some((argument, end)) =
                             group(source, skip_space(source, command_end), b'{', b'}')

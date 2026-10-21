@@ -15,6 +15,7 @@ use tower_lsp::lsp_types::*;
 enum Kind {
     Required,
     RequiredGroup,
+    MultiKeys,
     CommandToken,
     RequiredBracket,
     Optional,
@@ -125,7 +126,9 @@ impl<'a> CompletionSignatures<'a> {
         let mut tabstop = 0;
         for (index, parameter) in signature.parameters.iter().enumerate() {
             let (open, close) = match &parameter.kind {
-                Kind::Required | Kind::RequiredGroup | Kind::CommandToken => ("{", "}"),
+                Kind::Required | Kind::RequiredGroup | Kind::MultiKeys | Kind::CommandToken => {
+                    ("{", "}")
+                }
                 Kind::RequiredBracket => ("[", "]"),
                 Kind::Delimited {
                     open,
@@ -227,6 +230,15 @@ fn push_delimiter(snippet: &mut String, delimiter: &str) {
 }
 
 fn builtin(name: &str) -> Option<Signature> {
+    if crate::citations::is_multi(name) {
+        return Some(Signature {
+            name: name.into(),
+            parameters: multicite_parameters(1),
+            documentation: "Biblatex repeated citation groups. Up to two overall notes in parentheses, followed by groups with up to two notes in brackets and bibliography keys in braces. Requires biblatex.".into(),
+            starred: true,
+            nested_brackets: false,
+        });
+    }
     let (arguments, starred): (&[(&str, bool)], bool) = match name {
         name if syntax::declares_traditional_command(name) => (
             &[
@@ -3106,8 +3118,12 @@ fn active_parameter(
                 control_word_spaces = word || argument == "\\ ";
                 continue;
             }
-            Kind::RequiredGroup if source.as_bytes().get(i) != Some(&b'{') => return None,
-            Kind::Required | Kind::RequiredGroup | Kind::CommandToken => (b'{', b'}'),
+            Kind::RequiredGroup | Kind::MultiKeys if source.as_bytes().get(i) != Some(&b'{') => {
+                return None
+            }
+            Kind::Required | Kind::RequiredGroup | Kind::MultiKeys | Kind::CommandToken => {
+                (b'{', b'}')
+            }
         };
         let end = if open == b'[' && !signature.nested_brackets {
             syntax::optional_note_end(&source[..cursor], i)
@@ -3123,6 +3139,75 @@ fn active_parameter(
         }
     }
     None
+}
+
+fn multicite_parameters(groups: usize) -> Vec<Parameter> {
+    let mut parameters = ["note / prenote", "postnote"]
+        .into_iter()
+        .map(|label| Parameter {
+            obey_spaces: false,
+            kind: Kind::Delimited {
+                open: "(".into(),
+                close: ")".into(),
+                optional: true,
+            },
+            label: format!("({label})"),
+        })
+        .collect::<Vec<_>>();
+    for group in 1..=groups {
+        for label in ["note / prenote", "postnote"] {
+            parameters.push(Parameter {
+                obey_spaces: false,
+                kind: Kind::Optional,
+                label: format!("[{label} {group}]"),
+            });
+        }
+        parameters.push(Parameter {
+            obey_spaces: false,
+            kind: Kind::MultiKeys,
+            label: format!("{{keys {group}}}"),
+        });
+    }
+    parameters
+}
+
+fn multicite_active(
+    source: &str,
+    end: usize,
+    cursor: usize,
+    signature: &mut Signature,
+) -> Option<usize> {
+    let parsed = crate::citations::arguments(source, end);
+    let groups = parsed.fields.last().map_or(1, |field| field.group.max(1));
+    signature.parameters = multicite_parameters(groups);
+    let mut global_notes = 0;
+    let mut local_notes = 0;
+    let mut group = 0;
+    for field in &parsed.fields {
+        if group != field.group {
+            group = field.group;
+            local_notes = 0;
+        }
+        let active = match field.open {
+            b'(' => {
+                let index = global_notes;
+                global_notes += 1;
+                index
+            }
+            b'[' => {
+                let index = 2 + 3 * (field.group - 1) + local_notes;
+                local_notes += 1;
+                index
+            }
+            _ => 4 + 3 * (field.group - 1),
+        };
+        if cursor < field.argument.outer_span.end
+            || (!field.complete && cursor == field.argument.outer_span.end)
+        {
+            return Some(active);
+        }
+    }
+    (cursor == end && parsed.fields.is_empty()).then_some(4)
 }
 
 pub fn help(workspace: &Workspace, uri: &Url, position: Position) -> Option<SignatureHelp> {
@@ -3225,6 +3310,18 @@ pub fn help(workspace: &Workspace, uri: &Url, position: Position) -> Option<Sign
                 signature.name = format!("csname {name}\\endcsname");
             } else if named.is_some() {
                 signature.name = format!("csuse{{{name}}}");
+            }
+            if signature
+                .parameters
+                .iter()
+                .any(|parameter| matches!(parameter.kind, Kind::MultiKeys))
+            {
+                if let Some(active) =
+                    multicite_active(&doc.text.source, end, cursor, &mut signature)
+                {
+                    return Some(signature.information(active));
+                }
+                continue;
             }
             if let Some(active) = active_parameter(doc, command, end, cursor, &signature) {
                 return Some(signature.information(active));

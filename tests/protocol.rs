@@ -12356,3 +12356,56 @@ fn indirect_loader_candidates_created_during_failure_discard_obsolete_diagnostic
         }
     }
 }
+
+#[test]
+fn multicite_groups_support_navigation_hints_completion_and_versioned_rename_over_stdio() {
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}}}}));
+    server.notify("initialized", json!({}));
+    let main = "file:///multicite-protocol/main.tex";
+    let bib = "file:///multicite-protocol/refs.bib";
+    let source = "😀 \\parencites(overall)[alpha]{alpha}[note]{beta}{alpha}";
+    server.notify("textDocument/didOpen", json!({"textDocument":{"uri":bib,"languageId":"bibtex","version":8,"text":"@book{alpha,title={Alpha}}\n@book{beta,title={Beta}}"}}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":main,"languageId":"latex","version":12,"text":source}}),
+    );
+    let position =
+        latex_lsp::text::Text::new(source.into()).position(source.rfind("{alpha}").unwrap() + 3);
+    let target = json!({"textDocument":{"uri":main},"position":position});
+    let definition = server.request(2, "textDocument/definition", target.clone());
+    assert_eq!(definition[0]["uri"], bib);
+    let prepare = server.request(3, "textDocument/prepareRename", target.clone());
+    assert_eq!(prepare["placeholder"], "alpha");
+    let help = server.request(4, "textDocument/signatureHelp", target.clone());
+    assert_eq!(help["activeParameter"], 10);
+    let completions = server.request(5, "textDocument/completion", target.clone());
+    assert!(completions
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["label"] == "alpha"));
+    let references = server.request(6, "textDocument/references", json!({"textDocument":{"uri":main},"position":position,"context":{"includeDeclaration":true}}));
+    assert_eq!(references.as_array().unwrap().len(), 3);
+    let edits = server.request(
+        7,
+        "textDocument/rename",
+        json!({"textDocument":{"uri":main},"position":position,"newName":"renamed"}),
+    );
+    let changes = edits["documentChanges"].as_array().unwrap();
+    assert_eq!(changes.len(), 2);
+    for change in changes {
+        let is_main = change["textDocument"]["uri"] == main;
+        assert_eq!(
+            change["textDocument"]["version"],
+            if is_main { 12 } else { 8 }
+        );
+        assert_eq!(
+            change["edits"].as_array().unwrap().len(),
+            if is_main { 2 } else { 1 }
+        );
+    }
+    server.request(8, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
