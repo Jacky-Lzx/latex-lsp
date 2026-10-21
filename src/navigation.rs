@@ -321,18 +321,15 @@ pub(crate) fn document_links_in(workspace: &Workspace, uri: &Url, root: &Url) ->
         return vec![];
     };
     let mut links = Vec::new();
-    let graphic_directories = doc
-        .syntax
-        .commands
-        .iter()
-        .any(|command| command.name == "includegraphics")
-        .then(|| crate::graphics_settings::Index::directories(workspace, root));
-    let graphic_extensions = doc
-        .syntax
-        .commands
-        .iter()
-        .any(|command| command.name == "includegraphics")
-        .then(|| crate::graphics_settings::Index::new(workspace, root));
+    let inputs = crate::source_inputs::Index::new(workspace, root);
+    let has_images = inputs
+        .images
+        .get(uri)
+        .is_some_and(|calls| calls.iter().any(|call| call.certain));
+    let graphic_directories =
+        has_images.then(|| crate::graphics_settings::Index::directories(workspace, root));
+    let graphic_extensions =
+        has_images.then(|| crate::graphics_settings::Index::new(workspace, root));
     if let Some(directive) = root_directive(doc) {
         if let Some(target) = resolve_path(uri, &directive.value, "tex") {
             links.push(DocumentLink {
@@ -343,7 +340,6 @@ pub(crate) fn document_links_in(workspace: &Workspace, uri: &Url, root: &Url) ->
             });
         }
     }
-    let inputs = crate::source_inputs::Index::new(workspace, root);
     for call in inputs.calls.get(uri).into_iter().flatten() {
         if let (Some(argument), Some(target)) = (
             call.command.argument.as_ref(),
@@ -372,11 +368,12 @@ pub(crate) fn document_links_in(workspace: &Workspace, uri: &Url, root: &Url) ->
         .commands
         .iter()
         .filter(|command| {
-            !crate::source_inputs::editable_file_command(&command.name)
-                || editable_sources
-                    .as_ref()
-                    .and_then(|sources| sources.get(uri))
-                    .is_some_and(|positions| positions.contains(&command.span.start))
+            command.name != "includegraphics"
+                && (!crate::source_inputs::editable_file_command(&command.name)
+                    || editable_sources
+                        .as_ref()
+                        .and_then(|sources| sources.get(uri))
+                        .is_some_and(|positions| positions.contains(&command.span.start)))
         })
         .chain(
             inputs
@@ -388,6 +385,7 @@ pub(crate) fn document_links_in(workspace: &Workspace, uri: &Url, root: &Url) ->
                 .chain(inputs.resources.get(uri).into_iter().flatten())
                 .chain(inputs.selectors.get(uri).into_iter().flatten())
                 .chain(inputs.checks.get(uri).into_iter().flatten())
+                .chain(inputs.images.get(uri).into_iter().flatten())
                 .filter(|call| call.certain)
                 .map(|call| &call.command),
         )
@@ -487,5 +485,6 @@ pub(crate) fn document_links_in(workspace: &Workspace, uri: &Url, root: &Url) ->
     }
     let mut seen = BTreeSet::new();
     links.retain(|link| seen.insert((link.range.start, link.range.end)));
+    links.sort_by_key(|link| (link.range.start, link.range.end));
     links
 }

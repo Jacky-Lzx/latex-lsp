@@ -1865,6 +1865,7 @@ pub(crate) fn file_error_commands(
         .indirect_source_invocations(source, parsed, &positions)
         .into_iter()
         .chain(signatures.indirect_loader_invocations(source, parsed, &positions))
+        .chain(signatures.indirect_graphics_invocations(source, parsed, &positions))
         .filter(|call| call.certain)
         .map(|call| call.command)
         .collect()
@@ -1875,20 +1876,26 @@ pub(crate) fn file_error_invocations_with_signatures(
     parsed: &crate::syntax::Syntax,
     signatures: &crate::signature::CommandSignatures<'_>,
 ) -> Vec<(ByteRange<usize>, ByteRange<usize>)> {
-    if signatures
+    let loaders_redefined = signatures
         .names()
-        .any(|name| name == "input" || crate::syntax::loader_extension(name).is_some())
-    {
-        return vec![];
-    }
+        .any(|name| name == "input" || crate::syntax::loader_extension(name).is_some());
     let operands = signatures.argument_tokens(source, parsed);
+    let positions = signatures.source_command_positions(source, parsed);
     let indirect = file_error_commands(source, parsed, signatures);
     parsed
         .commands
         .iter()
         .chain(&indirect)
         .filter_map(|command| {
-            if (command.name != "input" && crate::syntax::loader_extension(&command.name).is_none())
+            if (command.name != "input"
+                && command.name != "includegraphics"
+                && crate::syntax::loader_extension(&command.name).is_none())
+                || if command.name == "includegraphics" {
+                    !signatures.command_unchanged("includegraphics")
+                        || !positions.contains(&command.span.start)
+                } else {
+                    loaders_redefined
+                }
                 || operands.contains(&command.span.start)
             {
                 return None;
@@ -2318,8 +2325,14 @@ fn emit_with_context(
     ranges.extend(clash_range.map(|(range, _)| range));
     let missing_graphic = missing_graphic_name(&message);
     let graphic_range = missing_graphic
+        .filter(|_| !project_stale)
         .filter(|_| reported_line.checked_sub(1) == Some(line))
-        .and_then(|name| missing_path_range(&text, line, context?, name, "includegraphics", &[]));
+        .and_then(|name| {
+            let parsed = crate::syntax::Syntax::latex(&text);
+            let indirect = file_commands_for_text(&text, &parsed, cached_calls, project_stale);
+            missing_path_range(&text, line, context?, name, "includegraphics", &indirect)
+        })
+        .filter(|range| confirmed_file_invocation(&text, *range, cached_calls));
     ranges.extend(graphic_range);
     let command_name = command_range.and_then(|range| {
         let start = text.offset(range.start)?;
@@ -3158,7 +3171,8 @@ impl InvocationKind {
                 })
                 .or_else(|| {
                     (missing_file_name(message).is_some()
-                        || package_option_clash_name(message).is_some())
+                        || package_option_clash_name(message).is_some()
+                        || missing_graphic_name(message).is_some())
                     .then_some(Self::File)
                 })
         }

@@ -13,7 +13,7 @@ pub fn complete(
     command: &str,
     span: Range<usize>,
 ) -> Vec<CompletionItem> {
-    complete_with_argument(workspace, uri, command, span, None)
+    complete_with_argument(workspace, uri, command, span, None, None)
 }
 
 pub(crate) fn complete_source(
@@ -32,7 +32,14 @@ pub(crate) fn complete_source(
     } else {
         command.argument.as_ref().map(Cow::Borrowed)
     };
-    complete_with_argument(workspace, uri, &command.name, span, argument.as_deref())
+    complete_with_argument(
+        workspace,
+        uri,
+        &command.name,
+        span,
+        argument.as_deref(),
+        Some(command.span.start),
+    )
 }
 
 fn complete_with_argument(
@@ -41,6 +48,7 @@ fn complete_with_argument(
     command: &str,
     span: Range<usize>,
     argument: Option<&syntax::Argument>,
+    call_start: Option<usize>,
 ) -> Vec<CompletionItem> {
     let Some(doc) = workspace.documents.get(uri) else {
         return vec![];
@@ -142,12 +150,19 @@ fn complete_with_argument(
         })
         .collect::<Vec<_>>();
     if command == "includegraphics" {
-        if let Some(command) = doc.syntax.commands.iter().rev().find(|candidate| {
-            candidate.name == "includegraphics" && candidate.span.end <= span.start
+        if let Some(start) = call_start.or_else(|| {
+            doc.syntax
+                .commands
+                .iter()
+                .rev()
+                .find(|candidate| {
+                    candidate.name == "includegraphics" && candidate.span.end <= span.start
+                })
+                .map(|command| command.span.start)
         }) {
             for root in &roots {
                 if let Some(paths) = crate::graphics_settings::Index::directories(workspace, root)
-                    .paths_at(root, uri, command.span.start, true)
+                    .paths_at(root, uri, start, true)
                 {
                     directories.extend(paths);
                 }

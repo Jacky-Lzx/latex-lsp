@@ -474,3 +474,50 @@ fn image_spelling_candidates_follow_the_paths_active_at_the_error() {
         assert_eq!(action_edit(&offered[0], &main).new_text, expected);
     }
 }
+
+#[test]
+fn image_alias_errors_offer_precise_spelling_fixes_and_reject_stale_calls() {
+    for call in [
+        r"\Image",
+        r"\csuse{Image}",
+        r"\csname Image\endcsname",
+        r"\csuse{includegraphics}",
+    ] {
+        for numbered in [false, true] {
+            let marked = format!("\\def\\Image{{\\includegraphics}}\n{call}*[width=1cm]{{imgae}}¦");
+            let (directory, main, text, diagnostics) = parsed(
+                &marked,
+                "LaTeX Error: File `imgae' not found.",
+                "",
+                numbered,
+            );
+            assert_eq!(diagnostics.len(), 1);
+            let diagnostic = &diagnostics[0];
+            assert_eq!(
+                diagnostic.code,
+                Some(NumberOrString::String("missing-image".into())),
+                "{call}: {diagnostics:?}"
+            );
+            let start = text.source.find("imgae").unwrap();
+            assert_eq!(diagnostic.range, text.range(start, start + 5));
+            std::fs::write(directory.path().join("image.png"), "image").unwrap();
+            let mut workspace = Workspace {
+                code_action_literals: true,
+                ..Default::default()
+            };
+            workspace.add_root(directory.path().into());
+            workspace
+                .build_diagnostics
+                .insert(main.clone(), [(main.clone(), diagnostics.clone())].into());
+            let fixes = actions(&workspace, &main, diagnostic);
+            assert_eq!(fixes.len(), 1, "{call}: {fixes:?}");
+            assert_eq!(action_edit(&fixes[0], &main).new_text, "image.png");
+            workspace.open(
+                main.clone(),
+                format!("{}\\def\\includegraphics#1{{other}}", text.source),
+                8,
+            );
+            assert!(actions(&workspace, &main, diagnostic).is_empty());
+        }
+    }
+}

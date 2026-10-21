@@ -28,11 +28,14 @@ pub(crate) fn fixes(
     {
         return vec![];
     }
-    let argument = doc
-        .syntax
-        .commands
-        .iter()
-        .filter(|command| command.name == "includegraphics")
+    let inputs = crate::source_inputs::Index::new(workspace, root);
+    let argument = inputs
+        .images
+        .get(uri)
+        .into_iter()
+        .flatten()
+        .filter(|call| call.certain)
+        .map(|call| &call.command)
         .filter_map(|command| {
             command
                 .argument

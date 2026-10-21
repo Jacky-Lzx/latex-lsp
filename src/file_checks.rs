@@ -150,6 +150,33 @@ impl Snapshot {
         let inputs = crate::source_inputs::Index::new(workspace, root);
         let active_sources =
             crate::source_inputs::active_direct_file_positions(workspace, &sources);
+        // Recorder sources may be absent from static input discovery. Their
+        // declarations still determine which image tokens are executed.
+        let images: BTreeMap<_, _> =
+            crate::source_inputs::bounded_latex_sources(workspace, &sources)
+                .map(|documents| {
+                    let signatures = crate::signature::CommandSignatures::source_context(
+                        documents
+                            .iter()
+                            .map(|(_, doc)| (doc.text.source.as_str(), &doc.syntax)),
+                    );
+                    documents
+                        .iter()
+                        .map(|(uri, doc)| {
+                            let positions =
+                                signatures.source_command_positions(&doc.text.source, &doc.syntax);
+                            (
+                                uri.clone(),
+                                signatures.graphics_invocations(
+                                    &doc.text.source,
+                                    &doc.syntax,
+                                    &positions,
+                                ),
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
         let redefined_file_commands: BTreeSet<_> = sources
             .iter()
             .filter_map(|uri| workspace.documents.get(uri))
@@ -262,6 +289,7 @@ impl Snapshot {
                 .syntax
                 .commands
                 .iter()
+                .filter(|command| command.name != "includegraphics")
                 .filter(|command| {
                     !(syntax::loader_extension(&command.name).is_some()
                         || crate::bib_resources::loads(&command.name)
@@ -295,6 +323,7 @@ impl Snapshot {
                         .chain(inputs.loaders.get(&source).into_iter().flatten())
                         .chain(inputs.resources.get(&source).into_iter().flatten())
                         .chain(inputs.checks.get(&source).into_iter().flatten())
+                        .chain(images.get(&source).into_iter().flatten())
                         .filter(|call| call.certain)
                         .map(|call| &call.command),
                 )
@@ -2426,6 +2455,40 @@ mod active_direct_graphic_conditions {
                 assert!(snapshot.changed_path().is_none());
                 std::fs::write(root.join("picture.png"), b"image").unwrap();
                 assert_eq!(snapshot.changed_path().is_some(), active, "{body}");
+            }
+        }
+    }
+
+    #[test]
+    fn aliases_track_selected_and_earlier_candidates_but_skip_later_images() {
+        for call in [r"\Image", r"\csuse{Image}", r"\csname Image\endcsname"] {
+            for (changed, expected) in [
+                ("plot.pdf", false),
+                ("plot.png", true),
+                ("assets/plot.png", true),
+            ] {
+                let directory = tempfile::tempdir().unwrap();
+                let root = directory.path();
+                std::fs::create_dir(root.join("assets")).unwrap();
+                std::fs::write(root.join("assets/plot.png"), "selected").unwrap();
+                let source = format!("\\def\\Image{{\\includegraphics}}\\DeclareGraphicsExtensions{{.png,.pdf}}\\graphicspath{{{{assets/}}}}{call}{{plot}}");
+                let main = root.join("main.tex");
+                std::fs::write(&main, source).unwrap();
+                let uri = Url::from_file_path(main).unwrap();
+                let mut workspace = Workspace::default();
+                workspace.add_root(root.into());
+                let snapshot = Snapshot::capture(&workspace, &uri, &BuildConfig::default());
+                assert!(snapshot.changed_path().is_none());
+                if changed == "assets/plot.png" {
+                    std::fs::remove_file(root.join(changed)).unwrap();
+                } else {
+                    std::fs::write(root.join(changed), "new image").unwrap();
+                }
+                assert_eq!(
+                    snapshot.changed_path().is_some(),
+                    expected,
+                    "{call}/{changed}"
+                );
             }
         }
     }

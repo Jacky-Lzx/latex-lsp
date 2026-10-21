@@ -27,6 +27,7 @@ pub fn images(workspace: &Workspace, uri: &Url) -> BTreeSet<Url> {
         workspace,
         uri,
         crate::navigation::document_links(workspace, uri),
+        &workspace.source_roots(uri),
     )
 }
 
@@ -35,6 +36,7 @@ pub(crate) fn images_in(workspace: &Workspace, uri: &Url, root: &Url) -> BTreeSe
         workspace,
         uri,
         crate::navigation::document_links_in(workspace, uri, root),
+        std::slice::from_ref(root),
     )
 }
 
@@ -42,16 +44,21 @@ fn collect_images(
     workspace: &Workspace,
     uri: &Url,
     links: Vec<tower_lsp::lsp_types::DocumentLink>,
+    roots: &[Url],
 ) -> BTreeSet<Url> {
     let Some(doc) = workspace.documents.get(uri) else {
         return BTreeSet::new();
     };
-    let ranges: Vec<_> = doc
-        .syntax
-        .commands
+    let ranges: Vec<_> = roots
         .iter()
-        .filter(|command| command.name == "includegraphics")
-        .filter_map(|command| command.argument.as_ref())
+        .flat_map(|root| {
+            crate::source_inputs::Index::new(workspace, root)
+                .images
+                .remove(uri)
+                .unwrap_or_default()
+        })
+        .filter(|call| call.certain)
+        .filter_map(|call| call.command.argument)
         .map(|argument| doc.text.range(argument.span.start, argument.span.end))
         .collect();
     if ranges.is_empty() {

@@ -721,6 +721,14 @@ fn direct_file_context_allowed(workspace: &Workspace, uri: &Url, command: &Comma
         roots.push(uri.clone());
     }
     roots.iter().all(|root| {
+        if command.name == "includegraphics" {
+            return crate::source_inputs::Index::new(workspace, root)
+                .images
+                .get(uri)
+                .into_iter()
+                .flatten()
+                .any(|call| call.certain && call.command.span == command.span);
+        }
         let mut scope = workspace.project_documents(root);
         scope.insert(uri.clone());
         crate::source_inputs::editable_file_positions(workspace, &scope)
@@ -751,7 +759,8 @@ fn indirect_source_context(
             .chain(inputs.forwarders.get(uri).into_iter().flatten())
             .chain(inputs.resources.get(uri).into_iter().flatten())
             .chain(inputs.selectors.get(uri).into_iter().flatten())
-            .chain(inputs.checks.get(uri).into_iter().flatten());
+            .chain(inputs.checks.get(uri).into_iter().flatten())
+            .chain(inputs.images.get(uri).into_iter().flatten());
         let (command, span) = calls.rev().find_map(|call| {
             (call.certain && call.command.span.end <= offset)
                 .then(|| argument_span(doc, &call.command, offset))
@@ -831,7 +840,7 @@ fn argument_span(doc: &Document, command: &Command, offset: usize) -> Option<Spa
     if crate::fancyvrb::is_input(&command.name) {
         return crate::fancyvrb::prefix(source, command, offset);
     }
-    if syntax::code_input_command(&command.name) {
+    if command.name == "includegraphics" || syntax::code_input_command(&command.name) {
         let start = syntax::file_name_argument_start(source, &command.name, command.span.end)?;
         let value = source.get(start..offset)?.strip_prefix('{')?;
         if value.is_empty() || syntax::is_literal_file_path(value) {
@@ -961,7 +970,8 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
     }
     if let Some((command, span)) = argument_context(doc, offset).filter(|_| !name_command) {
         if syntax::file_extensions(&command.name).is_some() {
-            if crate::source_inputs::editable_file_command(&command.name)
+            if (command.name == "includegraphics"
+                || crate::source_inputs::editable_file_command(&command.name))
                 && !direct_file_context_allowed(workspace, uri, command)
             {
                 return vec![];

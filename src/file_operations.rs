@@ -473,6 +473,7 @@ pub fn will_rename(workspace: &Workspace, files: &[FileRename]) -> Result<Option
                 .chain(inputs.resources.remove(uri).unwrap_or_default())
                 .chain(inputs.selectors.remove(uri).unwrap_or_default())
                 .chain(inputs.checks.remove(uri).unwrap_or_default())
+                .chain(inputs.images.remove(uri).unwrap_or_default())
                 .filter(|call| call.certain)
                 .map(|call| call.command)
                 .collect();

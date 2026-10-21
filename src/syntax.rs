@@ -911,7 +911,8 @@ pub(crate) fn file_name_argument_start(
     }
     let mut start = skip_space(source, command_end);
     if source.as_bytes().get(start) == Some(&b'*') {
-        if name != "verbatiminput"
+        if name != "includegraphics"
+            && name != "verbatiminput"
             && !crate::fancyvrb::is_input(name)
             && !crate::fancyvrb::is_use(name)
             && !crate::fancyvrb::is_inline(name)
@@ -919,6 +920,14 @@ pub(crate) fn file_name_argument_start(
             return None;
         }
         start = skip_space(source, start + 1);
+    }
+    if name == "includegraphics" {
+        for _ in 0..2 {
+            if source.as_bytes().get(start) == Some(&b'[') {
+                start = skip_space(source, optional_note_end(source, start)?);
+            }
+        }
+        return Some(start);
     }
     if (loader_extension(name).is_some()
         || name == "lstinputlisting"
@@ -1196,6 +1205,10 @@ pub(crate) fn file_argument<'a>(
                 })
             },
         ))
+    } else if command.name == "includegraphics" {
+        let start = file_name_argument_start(source, &command.name, command.span.end)?;
+        let (argument, _) = group(source, start, b'{', b'}')?;
+        Some(std::borrow::Cow::Owned(argument))
     } else if loader_extension(&command.name) == Some("cls")
         || command.name == "bibliographystyle"
         || code_input_command(&command.name)

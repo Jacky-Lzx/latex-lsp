@@ -467,6 +467,7 @@ impl Walk<'_> {
             .into_iter()
             .flatten()
             .chain(self.inputs.loaders.get(uri).into_iter().flatten())
+            .chain(self.inputs.images.get(uri).into_iter().flatten())
         {
             if call.certain {
                 commands.insert(call.command.span.start, call.command.clone());

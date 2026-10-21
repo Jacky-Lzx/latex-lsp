@@ -2047,6 +2047,48 @@ impl<'a> CommandSignatures<'a> {
         self.indirect_file_invocations(source, parsed, positions, &["graphicspath"])
     }
 
+    pub(crate) fn indirect_graphics_invocations(
+        &self,
+        source: &str,
+        parsed: &syntax::Syntax,
+        positions: &BTreeSet<usize>,
+    ) -> Vec<SourceCall> {
+        self.indirect_file_invocations(source, parsed, positions, &["includegraphics"])
+    }
+
+    pub(crate) fn graphics_invocations(
+        &self,
+        source: &str,
+        parsed: &syntax::Syntax,
+        positions: &BTreeSet<usize>,
+    ) -> Vec<SourceCall> {
+        let mut calls = self.indirect_graphics_invocations(source, parsed, positions);
+        calls.extend(
+            parsed
+                .commands
+                .iter()
+                .filter(|command| {
+                    command.name == "includegraphics" && positions.contains(&command.span.start)
+                })
+                .map(|command| {
+                    let mut command = command.clone();
+                    command.argument = syntax::file_name_argument_start(
+                        source,
+                        "includegraphics",
+                        command.span.end,
+                    )
+                    .and_then(|start| syntax::group(source, start, b'{', b'}'))
+                    .map(|(argument, _)| argument);
+                    SourceCall {
+                        command,
+                        certain: self.command_unchanged("includegraphics"),
+                    }
+                }),
+        );
+        calls.sort_by_key(|call| call.command.span.start);
+        calls
+    }
+
     fn indirect_file_invocations(
         &self,
         source: &str,
@@ -2106,7 +2148,7 @@ impl<'a> CommandSignatures<'a> {
                         name: builtin.into(),
                         span: start..end,
                         argument: if syntax::loader_extension(builtin).is_some()
-                            || builtin == "bibliographystyle"
+                            || matches!(builtin, "bibliographystyle" | "includegraphics")
                             || crate::bib_resources::loads(builtin)
                         {
                             syntax::file_name_argument_start(source, builtin, end)
