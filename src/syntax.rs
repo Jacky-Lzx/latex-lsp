@@ -1711,6 +1711,26 @@ pub fn is_citation(name: &str) -> bool {
                 | "footfullcite"
                 | "nocite"
                 | "footcite"
+                | "Cite"
+                | "Parencite"
+                | "Footcite"
+                | "footcitetext"
+                | "Footcitetext"
+                | "smartcite"
+                | "Smartcite"
+                | "supercite"
+                | "Textcite"
+                | "Autocite"
+                | "citetitle"
+                | "Citetitle"
+                | "citedate"
+                | "citeurl"
+                | "notecite"
+                | "pnotecite"
+                | "fnotecite"
+                | "Notecite"
+                | "Pnotecite"
+                | "Fnotecite"
         )
 }
 
@@ -1735,8 +1755,6 @@ pub(crate) fn citation_accepts_star(name: &str) -> bool {
                 | "citetalias"
                 | "citepalias"
                 | "defcitealias"
-                | "fullcite"
-                | "footfullcite"
         )
 }
 

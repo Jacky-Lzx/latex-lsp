@@ -267,13 +267,13 @@ fn full_citation_commands_share_keys_with_ordinary_citations_and_preserve_notes(
                 "\\{command} % keep\r\n[see \\emph{{parent}}][p.~2]{{other, {key}}}\r\n"
             ));
         }
-        source.push_str("\\fullcite*{parent}\\footfullcite*{parent}\n% \\fullcite{parent}\n\\verb|\\footfullcite{parent}|\n");
+        source.push_str(&format!("\\fullcite*{{{key}}}\\footfullcite*{{{key}}}\n% \\fullcite{{parent}}\n\\verb|\\footfullcite{{parent}}|\n"));
         source
     };
     let source = make_source("parent");
     let main = insert(&mut workspace, "main.tex", &source);
     let at = position(&source, "\\cite{par");
-    assert_eq!(features::references(&workspace, &main, at, false).len(), 3);
+    assert_eq!(features::references(&workspace, &main, at, false).len(), 5);
     for command in ["fullcite", "footfullcite"] {
         let at = position(
             &source,
@@ -287,7 +287,7 @@ fn full_citation_commands_share_keys_with_ordinary_citations_and_preserve_notes(
             .iter()
             .any(|item| item.label == "parent"));
         let starred = position(&source, &format!("\\{command}*{{par"));
-        assert!(features::definitions(&workspace, &main, starred).is_empty());
+        assert_eq!(features::definitions(&workspace, &main, starred).len(), 1);
     }
     let changes = features::rename(&workspace, &main, at, "renamed")
         .unwrap()
@@ -305,7 +305,7 @@ fn full_citation_commands_share_keys_with_ordinary_citations_and_preserve_notes(
 }
 
 #[test]
-fn full_citation_warnings_select_keys_and_leave_notes_and_unsupported_stars_alone() {
+fn full_citation_warnings_select_keys_including_stars_and_preserve_notes() {
     let directory = tempfile::tempdir().unwrap();
     let main = directory.path().join("main.tex");
     let uri = Url::from_file_path(&main).unwrap();
@@ -315,9 +315,12 @@ fn full_citation_warnings_select_keys_and_leave_notes_and_unsupported_stars_alon
     let log = "(./main.tex\nPackage biblatex Warning: Citation 'paretn' on page 1 undefined on input line 1.\n)\n";
     let diagnostics = latex_lsp::build_log::parse(&main, log);
     let items = &diagnostics[&uri];
-    assert_eq!(items.len(), 2, "{items:?}");
+    assert_eq!(items.len(), 3, "{items:?}");
     let text = Text::new(source.into());
-    for (item, marker) in items.iter().zip(["[p.~2]{", "\\footfullcite{"]) {
+    for (item, marker) in items
+        .iter()
+        .zip(["[p.~2]{", "\\footfullcite{", "\\fullcite*{"])
+    {
         let start = source.find(marker).unwrap() + marker.len();
         assert_eq!(item.range, text.range(start, start + "paretn".len()));
     }
