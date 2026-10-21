@@ -307,6 +307,48 @@ fn direct_file_positions(
         .collect()
 }
 
+/// Source paths which retain their built-in file-reference meaning.
+pub(crate) fn source_file_command(name: &str) -> bool {
+    matches!(
+        name,
+        "input" | "include" | "subfile" | "InputIfFileExists" | "IfFileExists" | "includeonly"
+    )
+}
+
+/// Literal references remain editable inside deferred macro code, but not
+/// when consumed as opaque arguments or when the file command is overridden.
+pub(crate) fn editable_source_positions(
+    workspace: &Workspace,
+    scope: &BTreeSet<Url>,
+) -> BTreeMap<Url, BTreeSet<usize>> {
+    let Some(documents) = bounded_latex_sources(workspace, scope) else {
+        return BTreeMap::new();
+    };
+    let signatures = CommandSignatures::source_context(
+        documents
+            .iter()
+            .map(|(_, doc)| (doc.text.source.as_str(), &doc.syntax)),
+    );
+    documents
+        .into_iter()
+        .map(|(uri, doc)| {
+            let operands = signatures.argument_tokens(&doc.text.source, &doc.syntax);
+            let positions = doc
+                .syntax
+                .commands
+                .iter()
+                .filter(|command| {
+                    source_file_command(&command.name)
+                        && signatures.command_unchanged(&command.name)
+                        && !operands.contains(&command.span.start)
+                })
+                .map(|command| command.span.start)
+                .collect();
+            (uri, positions)
+        })
+        .collect()
+}
+
 pub(crate) fn target(uri: &Url, root: &Url, call: &SourceCall) -> Option<Url> {
     let argument = call.command.argument.as_ref()?;
     if !call.certain || !syntax::is_literal_file_path(&argument.value) {

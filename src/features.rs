@@ -680,6 +680,23 @@ fn argument_context(doc: &Document, offset: usize) -> Option<(&Command, Span<usi
         .find_map(|command| argument_span(doc, command, offset).map(|span| (command, span)))
 }
 
+fn direct_source_context_allowed(workspace: &Workspace, uri: &Url, command: &Command) -> bool {
+    let mut roots = workspace
+        .root_document(uri)
+        .map(|root| vec![root])
+        .unwrap_or_else(|_| workspace.source_roots(uri));
+    if roots.is_empty() {
+        roots.push(uri.clone());
+    }
+    roots.iter().all(|root| {
+        let mut scope = workspace.project_documents(root);
+        scope.insert(uri.clone());
+        crate::source_inputs::editable_source_positions(workspace, &scope)
+            .get(uri)
+            .is_some_and(|positions| positions.contains(&command.span.start))
+    })
+}
+
 fn indirect_source_context(
     workspace: &Workspace,
     uri: &Url,
@@ -906,6 +923,11 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
     }
     if let Some((command, span)) = argument_context(doc, offset).filter(|_| !name_command) {
         if syntax::file_extensions(&command.name).is_some() {
+            if crate::source_inputs::source_file_command(&command.name)
+                && !direct_source_context_allowed(workspace, uri, command)
+            {
+                return vec![];
+            }
             return crate::path_completion::complete(workspace, uri, &command.name, span);
         }
         let prefix = &doc.text.source[span.clone()];

@@ -355,19 +355,41 @@ pub(crate) fn document_links_in(workspace: &Workspace, uri: &Url, root: &Url) ->
             });
         }
     }
-    for command in doc.syntax.commands.iter().chain(
-        inputs
-            .loaders
-            .get(uri)
-            .into_iter()
-            .flatten()
-            .chain(inputs.forwarders.get(uri).into_iter().flatten())
-            .chain(inputs.resources.get(uri).into_iter().flatten())
-            .chain(inputs.selectors.get(uri).into_iter().flatten())
-            .chain(inputs.checks.get(uri).into_iter().flatten())
-            .filter(|call| call.certain)
-            .map(|call| &call.command),
-    ) {
+    let editable_sources = doc
+        .syntax
+        .commands
+        .iter()
+        .any(|command| crate::source_inputs::source_file_command(&command.name))
+        .then(|| {
+            let mut scope = workspace.project_documents(root);
+            scope.insert(uri.clone());
+            crate::source_inputs::editable_source_positions(workspace, &scope)
+        });
+    for command in doc
+        .syntax
+        .commands
+        .iter()
+        .filter(|command| {
+            !crate::source_inputs::source_file_command(&command.name)
+                || editable_sources
+                    .as_ref()
+                    .and_then(|sources| sources.get(uri))
+                    .is_some_and(|positions| positions.contains(&command.span.start))
+        })
+        .chain(
+            inputs
+                .loaders
+                .get(uri)
+                .into_iter()
+                .flatten()
+                .chain(inputs.forwarders.get(uri).into_iter().flatten())
+                .chain(inputs.resources.get(uri).into_iter().flatten())
+                .chain(inputs.selectors.get(uri).into_iter().flatten())
+                .chain(inputs.checks.get(uri).into_iter().flatten())
+                .filter(|call| call.certain)
+                .map(|call| &call.command),
+        )
+    {
         if syntax::code_input_command(&command.name)
             && !crate::code_inputs::supported(workspace, uri, root, command)
         {

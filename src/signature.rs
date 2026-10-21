@@ -2131,7 +2131,10 @@ impl<'a> CommandSignatures<'a> {
                 // formatters and their pure aliases execute grouped contents;
                 // a user macro can instead discard or detokenize its argument.
                 let opaque = local.contains_key(signature.name.as_str())
-                    || matches!(signature.name.as_str(), "graphicspath" | "lstset" | "fvset");
+                    || matches!(
+                        signature.name.as_str(),
+                        "graphicspath" | "lstset" | "fvset" | "includeonly"
+                    );
                 argument_tokens(
                     source,
                     end,
@@ -2239,7 +2242,7 @@ fn operand_builtin(name: &str) -> Option<Signature> {
                 label: label.into(),
             })
             .collect()
-        } else if matches!(name, "graphicspath" | "lstset" | "fvset") {
+        } else if matches!(name, "graphicspath" | "lstset" | "fvset" | "includeonly") {
             // One configuration argument ends here; a following file call
             // is independent. Settings remain data, including through aliases.
             vec![Parameter {
@@ -3710,6 +3713,45 @@ mod code_configuration_operand_tests {
                         );
                     }
                 }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod chapter_selector_operand_boundaries {
+    use super::*;
+    use crate::text::Text;
+
+    #[test]
+    fn chapter_selection_ends_before_following_inputs_and_keeps_its_names_as_data() {
+        for call in [
+            r"\includeonly",
+            r"\csuse{includeonly}",
+            r"\csname includeonly\endcsname",
+            r"\choose",
+            r"\csuse{choose}",
+            r"\csname choose\endcsname",
+        ] {
+            let source = format!(
+                r"\def\choose{{\includeonly}}{call}{{\input{{opaque}}}}\input{{settings}}\include{{chapter}}"
+            );
+            let parsed = syntax::Syntax::latex(&Text::new(source.clone()));
+            let signatures = CommandSignatures::source_context([(source.as_str(), &parsed)]);
+            let operands = signatures.argument_tokens(&source, &parsed);
+            for command in parsed
+                .commands
+                .iter()
+                .filter(|command| matches!(command.name.as_str(), "input" | "include"))
+            {
+                assert_eq!(
+                    operands.contains(&command.span.start),
+                    command
+                        .argument
+                        .as_ref()
+                        .is_some_and(|argument| argument.value == "opaque"),
+                    "{source}: {command:?}"
+                );
             }
         }
     }
