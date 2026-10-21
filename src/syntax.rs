@@ -1059,6 +1059,14 @@ pub(crate) fn file_argument<'a>(
         "input" | "include" | "InputIfFileExists" | "IfFileExists"
     ) {
         let argument = command.argument.as_ref()?;
+        // include takes its mandatory filename immediately. Generic command
+        // parsing may have skipped an unsupported star or optional note; the
+        // later group is ordinary body text, not a file reference.
+        if command.name == "include"
+            && argument.outer_span.start != skip_space(source, command.span.end)
+        {
+            return None;
+        }
         let span = (source.as_bytes().get(argument.outer_span.start) == Some(&b'{'))
             .then(|| literal_file_span(source, argument.span.clone(), false))
             .flatten();

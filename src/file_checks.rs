@@ -2169,3 +2169,35 @@ mod active_direct_source_conditions {
         }
     }
 }
+
+#[cfg(test)]
+mod direct_include_argument_conditions {
+    use super::*;
+
+    #[test]
+    fn include_body_groups_after_unsupported_modifiers_do_not_create_file_conditions() {
+        for modifier in ["", "*", "[note]", "*[note]", "[first][second]"] {
+            for argument in [
+                "{chapter}",
+                "% before 😀\r\n{% file\r\nchapter.tex% tail\r\n}",
+            ] {
+                let directory = tempfile::tempdir().unwrap();
+                let root = directory.path();
+                let main = root.join("main.tex");
+                let source = format!("\\documentclass{{article}}\\begin{{document}}Main\\include{modifier}{argument}\\end{{document}}");
+                std::fs::write(&main, source).unwrap();
+                let main_uri = Url::from_file_path(&main).unwrap();
+                let mut workspace = Workspace::default();
+                workspace.add_root(root.into());
+                let snapshot = Snapshot::capture(&workspace, &main_uri, &BuildConfig::default());
+                assert!(snapshot.changed_path().is_none());
+                std::fs::write(root.join("chapter.tex"), "Chapter").unwrap();
+                assert_eq!(
+                    snapshot.changed_path().is_some(),
+                    modifier.is_empty(),
+                    "{modifier}/{argument}"
+                );
+            }
+        }
+    }
+}
