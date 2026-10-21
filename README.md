@@ -21,33 +21,13 @@ cargo install --path . --locked
 latex-lsp --version
 ```
 
-将 `latex-lsp --stdio` 配置为编辑器的语言服务器。进程通过标准输入输出通信，直接运行后等待输入属于正常行为。
+将 `latex-lsp --stdio` 配置为编辑器的语言服务器，具体步骤见[安装与编辑器配置](docs/editors.md)。可用 [examples/demo/main.tex](examples/demo/main.tex) 试用跨文件导航、补全与重命名。
 
-Neovim 0.11+ 最小配置（确保 `latex-lsp` 在 `PATH` 中）：
-
-```lua
-vim.lsp.config('latex_lsp', {
-  cmd = { 'latex-lsp', '--stdio' },
-  filetypes = { 'tex', 'plaintex', 'bib', 'bst' },
-  root_markers = { '.latexmkrc', 'latexmkrc', '.git' },
-})
-vim.lsp.enable('latex_lsp')
-```
-
-诊断刷新配置及常用操作见[完整编辑器配置](docs/editors.md#neovim-011-完整配置)。打开 [examples/demo/main.tex](examples/demo/main.tex) 可试用跨文件跳转、补全与重命名。
-
-编译默认使用 `latexmk` 和 pdfLaTeX，输出到主文档旁的 `build/latex-lsp/`。先保存项目文件，再调用 `latex.build`；切换引擎和保存后编译见[编译配置](docs/build.md#编译配置)。
+编译需要 TeX 工具；安装、引擎切换和操作方式见[编译指南](docs/build.md)。
 
 ## 文档
 
-- [安装与编辑器配置](docs/editors.md)：构建、Neovim 配置及示例。
-- [编辑功能](docs/editing.md)：补全、导航、高亮、颜色和文献支持。
-- [符号与重命名](docs/symbols.md)：宏、环境、计数器等符号的支持范围。
-- [项目与文件](docs/projects.md)：根文件、依赖、路径和文件操作。
-- [编译](docs/build.md)：命令、配置、通知、结果分析和产物检查。
-- [编译诊断](docs/diagnostics.md)：错误定位、警告和拼写修复规则。
-- [SyncTeX 双向查询](docs/synctex.md)：源码与 PDF 的查询协议。
-- [开发与测试](docs/development.md)：检查命令和代码结构。
+[文档目录](docs/README.md)提供编辑功能、重命名、项目配置、编译诊断、SyncTeX 和开发测试的详细说明。
 
 ## 范围
 
