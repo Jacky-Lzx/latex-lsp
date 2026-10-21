@@ -43,7 +43,7 @@ fn summary_keeps_distinct_literal_keys_without_counting_repeated_uses() {
         compilation_analysis(&items, false),
         json!({
             "rerunRequired":false,"unresolvedReferences":[" spaced ","O'Connor","章😀"],
-            "unresolvedCitations":["beta","章😀"],"unresolvedDestinations":[],"duplicateDestinations":[],"truncated":false,
+            "unresolvedCitations":["beta","章😀"],"unresolvedDestinations":[],"duplicateDestinations":[],"duplicateLabels":[],"truncated":false,
         })
     );
 }
@@ -111,7 +111,7 @@ fn reference_examples_remain_warnings_without_retargeting_real_source_uses() {
             assert_eq!(items[0].range.start.line, 2, "{message}");
             assert_eq!(
                 compilation_analysis(&parsed, false),
-                json!({"rerunRequired":false,"unresolvedReferences":[],"unresolvedCitations":[],"unresolvedDestinations":[],"duplicateDestinations":[],"truncated":false}),
+                json!({"rerunRequired":false,"unresolvedReferences":[],"unresolvedCitations":[],"unresolvedDestinations":[],"duplicateDestinations":[],"duplicateLabels":[],"truncated":false}),
                 "{message}"
             );
         }
@@ -214,7 +214,7 @@ fn parsed_final_log_warnings_and_observation_limits_are_preserved() {
     let log="(./main.tex\nLaTeX Warning: Reference `missing' on page 1 undefined on input line 1.\nLaTeX Warning: Citation `lost' on page 1 undefined on input line 1.\nLaTeX Warning: Label(s) may have changed. Rerun to get cross-references right.\n)\n";
     assert_eq!(
         compilation_analysis(&parse(&root, log), false),
-        json!({"rerunRequired":true,"unresolvedReferences":["missing"],"unresolvedCitations":["lost"],"unresolvedDestinations":[],"duplicateDestinations":[],"truncated":false})
+        json!({"rerunRequired":true,"unresolvedReferences":["missing"],"unresolvedCitations":["lost"],"unresolvedDestinations":[],"duplicateDestinations":[],"duplicateLabels":[],"truncated":false})
     );
     let package_log = "(./main.tex\nPackage natbib Warning: Citation(s) may have changed.\n(natbib) Rerun to get citations correct.\n)\n";
     assert_eq!(
@@ -245,7 +245,7 @@ fn parsed_final_log_warnings_and_observation_limits_are_preserved() {
             ),
             true
         ),
-        json!({"rerunRequired":false,"unresolvedReferences":[],"unresolvedCitations":[],"unresolvedDestinations":[],"duplicateDestinations":[],"truncated":true})
+        json!({"rerunRequired":false,"unresolvedReferences":[],"unresolvedCitations":[],"unresolvedDestinations":[],"duplicateDestinations":[],"duplicateLabels":[],"truncated":true})
     );
 }
 
@@ -406,7 +406,7 @@ fn longtable_requests_another_pass_without_inventing_missing_references() {
             .any(|diagnostic| diagnostic.message.contains("Column widths have changed")));
         assert_eq!(
             compilation_analysis(&parsed, false),
-            json!({"rerunRequired":rerun,"unresolvedReferences":[],"unresolvedCitations":[],"unresolvedDestinations":[],"duplicateDestinations":[],"truncated":false})
+            json!({"rerunRequired":rerun,"unresolvedReferences":[],"unresolvedCitations":[],"unresolvedDestinations":[],"duplicateDestinations":[],"duplicateLabels":[],"truncated":false})
         );
     }
 }
@@ -441,7 +441,7 @@ fn pdf_destination_summary_decodes_and_deduplicates_names_across_files_and_backe
         json!({
             "rerunRequired":false,"unresolvedReferences":["dest(old)"],
             "unresolvedCitations":["emoji😀"],"unresolvedDestinations":["dest(old)","emoji😀"],
-            "duplicateDestinations":["dest(old)"],"truncated":false
+            "duplicateDestinations":["dest(old)"],"duplicateLabels":[],"truncated":false
         })
     );
 }
@@ -485,7 +485,7 @@ fn pdf_destination_summary_rejects_uncertain_records_and_untrusted_diagnostic_da
         compilation_analysis(&diagnostics(messages), false),
         json!({
             "rerunRequired":false,"unresolvedReferences":[],"unresolvedCitations":[],
-            "unresolvedDestinations":[],"duplicateDestinations":[],"truncated":false
+            "unresolvedDestinations":[],"duplicateDestinations":[],"duplicateLabels":[],"truncated":false
         })
     );
 }
@@ -600,4 +600,202 @@ fn parsed_hyperref_page_label_requests_clear_with_the_final_log() {
         )["rerunRequired"],
         false
     );
+}
+
+fn label_warning(key: &str) -> Diagnostic {
+    warning(format!("LaTeX Warning: Label `{key}' multiply defined."))
+}
+
+#[test]
+fn duplicate_label_summary_preserves_literal_names_and_keeps_other_key_categories_independent() {
+    let mut items = diagnostics(vec![
+        label_warning("章😀"),
+        label_warning("O'Connor"),
+        label_warning(" spaced "),
+        unresolved(false, "O'Connor"),
+        unresolved(true, "章😀"),
+        destination_warning(false, "lost"),
+        destination_warning(true, "dup"),
+    ]);
+    items.insert(
+        Url::parse("file:///tmp/latex-lsp-analysis/child.tex").unwrap(),
+        vec![label_warning("O'Connor"), label_warning("章😀")],
+    );
+    assert_eq!(
+        compilation_analysis(&items, false),
+        json!({
+            "rerunRequired":false,"unresolvedReferences":["O'Connor"],"unresolvedCitations":["章😀"],
+            "unresolvedDestinations":["lost"],"duplicateDestinations":["dup"],
+            "duplicateLabels":[" spaced ","O'Connor","章😀"],"truncated":false
+        })
+    );
+}
+
+#[test]
+fn duplicate_label_summary_requires_a_complete_standard_warning_body() {
+    for message in [
+        "Package local Warning: Label `phantom' multiply defined.",
+        "Class local Warning: Label `phantom' multiply defined.",
+        "LaTeX Warning: Example: Label `phantom' multiply defined.",
+        "LaTeX Warning: Label `phantom' multiply defined. Extra text.",
+        "LaTeX Warning: Label `phantom' multiply defined",
+        "LaTeX Warning: Label `' multiply defined.",
+        "LaTeX Warning: There were multiply-defined labels.",
+    ] {
+        let mut item = warning(message);
+        item.code = Some(NumberOrString::String("duplicate-label".into()));
+        item.data = Some(json!({"label":"phantom"}));
+        assert_eq!(
+            compilation_analysis(&diagnostics(vec![item]), false)["duplicateLabels"],
+            json!([]),
+            "{message}"
+        );
+    }
+    for quote in ['`', '\''] {
+        let message = format!("LaTeX Warning: Label {quote}O'Connor' multiply defined.");
+        assert_eq!(
+            compilation_analysis(&diagnostics(vec![warning(&message)]), false)["duplicateLabels"],
+            json!(["O'Connor"])
+        );
+        for severity in [
+            None,
+            Some(DiagnosticSeverity::ERROR),
+            Some(DiagnosticSeverity::INFORMATION),
+        ] {
+            let mut item = warning(&message);
+            item.severity = severity;
+            assert_eq!(
+                compilation_analysis(&diagnostics(vec![item]), false)["duplicateLabels"],
+                json!([])
+            );
+        }
+    }
+}
+
+#[test]
+fn duplicate_label_summary_applies_count_and_unicode_budgets_without_truncating_names() {
+    let mut messages: Vec<_> = (0..128)
+        .map(|i| label_warning(&format!("label{i:03}")))
+        .collect();
+    messages.push(label_warning("label000"));
+    messages.push(unresolved(false, "other"));
+    let result = compilation_analysis(&diagnostics(messages.clone()), false);
+    assert_eq!(result["duplicateLabels"].as_array().unwrap().len(), 128);
+    assert_eq!(result["duplicateLabels"][0], "label000");
+    assert_eq!(result["duplicateLabels"][127], "label127");
+    assert_eq!(result["unresolvedReferences"], json!(["other"]));
+    assert_eq!(result["truncated"], false);
+    messages.push(label_warning("overflow"));
+    assert_eq!(
+        compilation_analysis(&diagnostics(messages), false)["truncated"],
+        true
+    );
+    let accepted = "😀".repeat(128);
+    let rejected = "😀".repeat(129);
+    let items = diagnostics(vec![
+        label_warning(&rejected),
+        label_warning(&accepted),
+        label_warning(&accepted),
+    ]);
+    let result = compilation_analysis(&items, false);
+    assert_eq!(result["duplicateLabels"], json!([accepted]));
+    assert_eq!(result["truncated"], true);
+}
+
+#[test]
+fn duplicate_label_byte_wraps_preserve_parentheses_apostrophes_and_unicode_names() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("main.tex");
+    std::fs::write(&root, "Main source\n").unwrap();
+    let prefix = "LaTeX Warning: Label `";
+    for key in [
+        format!("{}(tail)", "x".repeat(79 - prefix.len())),
+        format!("{})tail", "x".repeat(79 - prefix.len())),
+        format!("{}'tail", "x".repeat(79 - prefix.len())),
+        "章节😀".repeat(20),
+    ] {
+        let message = format!("{prefix}{key}' multiply defined.");
+        let mut lines = vec![];
+        let mut start = 0;
+        while start < message.len() {
+            let mut end = (start + 79).min(message.len());
+            while !message.is_char_boundary(end) {
+                end -= 1;
+            }
+            lines.push(&message[start..end]);
+            start = end;
+        }
+        let parsed = parse(
+            &root,
+            &format!(
+                "(./main.tex\n{}\nLaTeX Warning: Keep.\n)\n",
+                lines.join("\n")
+            ),
+        );
+        let result = compilation_analysis(&parsed, false);
+        assert_eq!(result["duplicateLabels"], json!([key]), "{parsed:?}");
+        assert_eq!(result["rerunRequired"], false);
+        assert_eq!(result["truncated"], false);
+        assert!(
+            parsed.values().flatten().any(|d| d.message == message),
+            "{parsed:?}"
+        );
+        assert!(parsed
+            .values()
+            .flatten()
+            .any(|d| d.message == "LaTeX Warning: Keep."));
+        assert_eq!(compilation_analysis(&parsed, true)["truncated"], true);
+    }
+}
+
+#[test]
+fn duplicate_label_footer_at_the_print_width_cannot_hide_the_full_key_or_following_error() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("main.tex");
+    let child = directory.path().join("错误.tex");
+    std::fs::write(&root, "Main source\n").unwrap();
+    std::fs::write(&child, "Child source\n").unwrap();
+    let prefix = "LaTeX Warning: Label `";
+    let footer = "' multiply defined.";
+    let short = "x".repeat(79 - prefix.len() - footer.len());
+    for suffix in ["-tail", "😀tail"] {
+        let full = format!("{short}{footer}{suffix}");
+        let log = format!(
+            "{prefix}{short}{footer}\n{suffix}{footer}\n错误.tex:1: LaTeX Error: Boundary.\n"
+        );
+        let parsed = parse(&root, &log);
+        assert_eq!(
+            compilation_analysis(&parsed, false)["duplicateLabels"],
+            json!([full]),
+            "{parsed:?}"
+        );
+        assert_eq!(
+            parsed[&Url::from_file_path(&child).unwrap()][0].message,
+            "LaTeX Error: Boundary."
+        );
+    }
+    let parsed = parse(
+        &root,
+        &format!("{prefix}{short}{footer}\n错误.tex:1: LaTeX Error: Boundary.\n"),
+    );
+    assert_eq!(
+        compilation_analysis(&parsed, false)["duplicateLabels"],
+        json!([short])
+    );
+    assert_eq!(
+        parsed[&Url::from_file_path(&child).unwrap()][0].message,
+        "LaTeX Error: Boundary."
+    );
+    let partial = format!("{prefix}{}", "x".repeat(79 - prefix.len()));
+    let parsed=parse(&root,&format!("{partial}\n(./错误.tex\nLaTeX Warning: Child sentinel.\n)\nLaTeX Warning: Main sentinel.\n"));
+    assert_eq!(
+        compilation_analysis(&parsed, false)["duplicateLabels"],
+        json!([])
+    );
+    assert!(parsed[&Url::from_file_path(&child).unwrap()]
+        .iter()
+        .any(|d| d.message == "LaTeX Warning: Child sentinel."));
+    assert!(parsed[&Url::from_file_path(&root).unwrap()]
+        .iter()
+        .any(|d| d.message == "LaTeX Warning: Main sentinel."));
 }

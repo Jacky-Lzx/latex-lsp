@@ -189,6 +189,17 @@ pub(crate) fn undefined_reference_key(message: &str) -> Option<(bool, &str)> {
     Some((citation, key))
 }
 
+fn duplicate_label_start(message: &str) -> Option<&str> {
+    message
+        .strip_prefix("LaTeX Warning: Label `")
+        .or_else(|| message.strip_prefix("LaTeX Warning: Label '"))
+}
+
+fn duplicate_label_key(message: &str) -> Option<&str> {
+    let key = duplicate_label_start(message)?.strip_suffix("' multiply defined.")?;
+    (!key.is_empty()).then_some(key)
+}
+
 /// Summarize observed final-log warnings without multiplying repeated uses.
 pub fn compilation_analysis(
     diagnostics: &BTreeMap<Url, Vec<Diagnostic>>,
@@ -207,6 +218,7 @@ pub fn compilation_analysis(
     let mut citations = BTreeSet::new();
     let mut missing_destinations = BTreeSet::new();
     let mut duplicate_destinations = BTreeSet::new();
+    let mut duplicate_labels = BTreeSet::new();
     let mut rerun = false;
     let mut truncated = diagnostics_truncated;
     for diagnostic in diagnostics
@@ -244,6 +256,9 @@ pub fn compilation_analysis(
             };
             record_key(keys, key, &mut truncated);
         }
+        if let Some(key) = duplicate_label_key(&diagnostic.message) {
+            record_key(&mut duplicate_labels, key, &mut truncated);
+        }
         if let Some((kind, name)) = destination_warning(&diagnostic.message) {
             let keys = match kind {
                 DestinationWarningKind::Missing => &mut missing_destinations,
@@ -258,6 +273,7 @@ pub fn compilation_analysis(
         "unresolvedCitations": citations,
         "unresolvedDestinations": missing_destinations,
         "duplicateDestinations": duplicate_destinations,
+        "duplicateLabels": duplicate_labels,
         "truncated": truncated,
     })
 }
@@ -2153,23 +2169,24 @@ fn byte_wrapped_reference_message(
     None
 }
 
-/// Probe raw backend byte wraps without consuming possible file-stack lines.
-/// Commit the cursor only when the complete destination warning is confirmed.
-fn byte_wrapped_destination_message(
+/// Probe byte wraps in literal warning names without consuming file-stack lines.
+/// Commit the cursor only when a complete known warning is confirmed.
+fn byte_wrapped_literal_message(
     root: &Path,
     lines: &[&str],
     separator_lines: &[usize],
     i: &mut usize,
     initial: &str,
+    is_complete: impl Fn(&str) -> bool,
 ) -> Option<String> {
     let mut message = initial.to_owned();
     let mut complete = None;
     for end in (*i..).take(64) {
-        if destination_warning(&message).is_some() {
-            // An apostrophe at the print width can still be part of the name.
+        if is_complete(&message) {
+            // A complete warning suffix at the print width may belong to the name.
             complete = Some((message.clone(), end));
             // LuaTeX can wrap early to keep a whole UTF-8 character together.
-            // An apparent closing quote near the width still needs lookahead.
+            // An apparent complete warning near the width still needs lookahead.
             let unicode_continuation = lines
                 .get(end + 1)
                 .and_then(|line| line.chars().next())
@@ -2227,9 +2244,20 @@ fn wrapped_message(
                 .starts_with("(pdf backend): ignoring duplicate destination with the name '")
     });
     if let Some(message) = lua_destination
-        .then(|| byte_wrapped_destination_message(root, lines, separator_lines, i, initial))
+        .then(|| {
+            byte_wrapped_literal_message(root, lines, separator_lines, i, initial, |message| {
+                destination_warning(message).is_some()
+            })
+        })
         .flatten()
     {
+        return message;
+    }
+    if let Some(message) = duplicate_label_start(initial).and_then(|_| {
+        byte_wrapped_literal_message(root, lines, separator_lines, i, initial, |message| {
+            duplicate_label_key(message).is_some()
+        })
+    }) {
         return message;
     }
     if initial.starts_with("pdfTeX warning (dest): name{")
