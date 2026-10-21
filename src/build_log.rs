@@ -297,38 +297,33 @@ impl DestinationWarningKind {
     }
 }
 
-/// pdfTeX prints destination names as PDF string contents, using escaped
-/// parentheses and three-digit octal UTF-8 bytes. Other backends report raw
-/// names and must not inherit this representation.
-fn literal_destination_name(message: &str, name: &str) -> Option<String> {
-    let decoded = if message.starts_with("pdfTeX warning (") {
-        let mut decoded = Vec::with_capacity(name.len());
-        let mut bytes = name.bytes();
-        while let Some(byte) = bytes.next() {
-            if byte != b'\\' {
-                decoded.push(byte);
-                continue;
-            }
-            match bytes.next()? {
-                paren @ (b'(' | b')') => decoded.push(paren),
-                first @ b'0'..=b'7' => {
-                    let second = bytes.next()?;
-                    let third = bytes.next()?;
-                    if !matches!(second, b'0'..=b'7') || !matches!(third, b'0'..=b'7') {
-                        return None;
-                    }
-                    let value = u16::from(first - b'0') * 64
-                        + u16::from(second - b'0') * 8
-                        + u16::from(third - b'0');
-                    decoded.push(u8::try_from(value).ok()?);
-                }
-                _ => return None,
-            }
+/// Recognized pdfTeX and LuaTeX warnings can contain PDF string escapes.
+/// Decode only static names, preserving raw Unicode from unescaped backends.
+fn literal_destination_name(name: &str) -> Option<String> {
+    let mut decoded = Vec::with_capacity(name.len());
+    let mut bytes = name.bytes();
+    while let Some(byte) = bytes.next() {
+        if byte != b'\\' {
+            decoded.push(byte);
+            continue;
         }
-        String::from_utf8(decoded).ok()?
-    } else {
-        name.to_owned()
-    };
+        match bytes.next()? {
+            paren @ (b'(' | b')') => decoded.push(paren),
+            first @ b'0'..=b'7' => {
+                let second = bytes.next()?;
+                let third = bytes.next()?;
+                if !matches!(second, b'0'..=b'7') || !matches!(third, b'0'..=b'7') {
+                    return None;
+                }
+                let value = u16::from(first - b'0') * 64
+                    + u16::from(second - b'0') * 8
+                    + u16::from(third - b'0');
+                decoded.push(u8::try_from(value).ok()?);
+            }
+            _ => return None,
+        }
+    }
+    let decoded = String::from_utf8(decoded).ok()?;
     (crate::syntax::is_static_reference_key(&decoded) && !decoded.chars().any(char::is_control))
         .then_some(decoded)
 }
@@ -342,11 +337,11 @@ pub(crate) fn destination_warning(message: &str) -> Option<(DestinationWarningKi
             duplicate_destination_warning_name(message)?,
         )
     };
-    literal_destination_name(message, name).map(|name| (kind, name))
+    literal_destination_name(name).map(|name| (kind, name))
 }
 
 pub(crate) fn undefined_destination_name(message: &str) -> Option<String> {
-    literal_destination_name(message, destination_warning_name(message)?)
+    literal_destination_name(destination_warning_name(message)?)
 }
 
 fn box_code(message: &str) -> Option<&'static str> {
@@ -4845,7 +4840,7 @@ mod tests {
     }
 
     #[test]
-    fn pdftex_destination_string_escapes_map_exact_keys_across_all_byte_wraps() {
+    fn backend_destination_string_escapes_map_exact_keys_across_all_byte_wraps() {
         let directory = tempfile::tempdir().unwrap();
         let main = directory.path().join("main.tex");
         for name in ["dest(old)", "dest(old", "dest)old"] {
@@ -4863,6 +4858,18 @@ mod tests {
                 (
                     "pdfTeX warning (ext4): destination with the same identifier (name{",
                     "}) has been already used, duplicate ignored",
+                    "duplicate-pdf-destination",
+                    source.find(name).unwrap(),
+                ),
+                (
+                    "warning  (pdf backend): unreferenced destination with name '",
+                    "'",
+                    "undefined-pdf-destination",
+                    source.rfind(name).unwrap(),
+                ),
+                (
+                    "warning  (pdf backend): ignoring duplicate destination with the name '",
+                    "'",
                     "duplicate-pdf-destination",
                     source.find(name).unwrap(),
                 ),
@@ -4900,18 +4907,15 @@ mod tests {
                 format!("pdfTeX warning (dest): name{{{encoded}}} has been referenced but does not exist, replaced by a fixed one"),
                 format!("pdfTeX warning (ext4): destination with the same identifier (name{{{encoded}}}) has been already used, duplicate ignored"),
                 format!("warning  (pdf backend): unreferenced destination with name '{encoded}'"),
+                format!("warning  (pdf backend): ignoring duplicate destination with the name '{encoded}'"),
             ] {
                 assert!(destination_warning(&message).is_none(), "{message}");
             }
         }
-        assert!(destination_warning(
-            r"warning  (pdf backend): unreferenced destination with name 'dest\(old\)'"
-        )
-        .is_none());
     }
 
     #[test]
-    fn pdftex_octal_destination_bytes_preserve_unicode_and_reject_invalid_encodings() {
+    fn backend_octal_destination_bytes_preserve_unicode_and_reject_invalid_encodings() {
         let directory = tempfile::tempdir().unwrap();
         let main = directory.path().join("main.tex");
         for (name, encoded) in [
@@ -4939,6 +4943,18 @@ mod tests {
                 (
                     "pdfTeX warning (ext4): destination with the same identifier (name{",
                     "}) has been already used, duplicate ignored",
+                    "duplicate-pdf-destination",
+                    source.find(name).unwrap(),
+                ),
+                (
+                    "warning  (pdf backend): unreferenced destination with name '",
+                    "'",
+                    "undefined-pdf-destination",
+                    source.rfind(name).unwrap(),
+                ),
+                (
+                    "warning  (pdf backend): ignoring duplicate destination with the name '",
+                    "'",
                     "duplicate-pdf-destination",
                     source.find(name).unwrap(),
                 ),
@@ -4996,6 +5012,7 @@ mod tests {
                 format!("pdfTeX warning (dest): name{{{encoded}}} has been referenced but does not exist, replaced by a fixed one"),
                 format!("pdfTeX warning (ext4): destination with the same identifier (name{{{encoded}}}) has been already used, duplicate ignored"),
                 format!("warning  (pdf backend): unreferenced destination with name '{encoded}'"),
+                format!("warning  (pdf backend): ignoring duplicate destination with the name '{encoded}'"),
             ] {
                 assert!(destination_warning(&message).is_none(), "{message}");
             }
