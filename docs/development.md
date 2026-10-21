@@ -22,6 +22,12 @@ cargo test --locked -- --include-ignored
 
 测试包含 UTF-16/增量编辑、语法容错、跨文件导航、文献补全、磁盘/未保存内容同步，以及启动真实进程验证的 stdio 协议流程。
 
+真实盒子警告回归需要 pdfLaTeX、XeLaTeX 和 LuaLaTeX，使用较窄的日志输出宽度验证 Overfull 警告的跨行恢复及完整段落范围：
+
+```sh
+cargo test --locked --test box_warnings real_ -- --ignored
+```
+
 真实 biblatex 引用及重编译请求回归还需要安装 biblatex 和 logreq，使用 pdfLaTeX 与 BibTeX：
 
 ```sh

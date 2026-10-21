@@ -537,6 +537,123 @@ fn box_code(message: &str) -> Option<&'static str> {
     Some(code)
 }
 
+fn complete_box_header(message: &str) -> bool {
+    fn number(value: &str) -> bool {
+        !value.is_empty()
+            && value.bytes().all(|byte| byte.is_ascii_digit())
+            && value.parse::<u32>().is_ok()
+    }
+    let (overfull, tail) = if let Some(tail) = message.strip_prefix("Overfull ") {
+        (true, tail)
+    } else if let Some(tail) = message.strip_prefix("Underfull ") {
+        (false, tail)
+    } else {
+        return false;
+    };
+    let (horizontal, tail) = if let Some(tail) = tail.strip_prefix("\\hbox (") {
+        (true, tail)
+    } else if let Some(tail) = tail.strip_prefix("\\vbox (") {
+        (false, tail)
+    } else {
+        return false;
+    };
+    let Some((amount, context)) = tail.split_once(") ") else {
+        return false;
+    };
+    let valid_amount = if overfull {
+        amount
+            .strip_suffix(if horizontal {
+                "pt too wide"
+            } else {
+                "pt too high"
+            })
+            .is_some_and(|value| {
+                value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || byte == b'.')
+                    && value
+                        .parse::<f64>()
+                        .is_ok_and(|value| value.is_finite() && value >= 0.0)
+            })
+    } else {
+        amount.strip_prefix("badness ").is_some_and(number)
+    };
+    if !valid_amount {
+        return false;
+    }
+    let context = context.strip_suffix(" []").unwrap_or(context);
+    if let Some(lines) = context
+        .strip_prefix("in paragraph at lines ")
+        .or_else(|| context.strip_prefix("in alignment at lines "))
+    {
+        lines
+            .split_once("--")
+            .is_some_and(|(start, end)| number(start) && number(end))
+    } else if let Some(line) = context.strip_prefix("detected at line ") {
+        number(line)
+    } else {
+        context == "has occurred while \\output is active"
+    }
+}
+
+/// Recover only a complete engine box header. Box dumps and speculative source
+/// lines remain outside the diagnostic unless they complete this known grammar.
+fn wrapped_box_message(
+    root: &Path,
+    lines: &[&str],
+    separator_lines: &[usize],
+    i: &mut usize,
+    initial: &str,
+) -> String {
+    let mut message = initial.to_owned();
+    let mut complete = None;
+    for index in (*i..).take(16) {
+        if complete_box_header(&message) {
+            complete = Some((message.clone(), index));
+        }
+        // TeX permits max_print_line values starting at 60. Even a complete
+        // header at that width can end halfway through its final line number.
+        if lines[index].len() < 60 || message.len() >= 4096 {
+            break;
+        }
+        let Some(next) = lines.get(index + 1) else {
+            break;
+        };
+        let starts_header = message.is_empty()
+            && (next.trim_start().starts_with("Overfull ")
+                || next.trim_start().starts_with("Underfull "));
+        if next.trim().is_empty()
+            || (message_boundary(next) && !next.starts_with(") ") && !starts_header)
+            || next.trim_start().starts_with(['<', '['])
+            || message.len() + next.len() > 4096
+        {
+            break;
+        }
+        let mut next_index = index + 1;
+        if numbered_error(&continued_error_line(
+            root,
+            lines,
+            separator_lines,
+            &mut next_index,
+        ))
+        .is_some()
+        {
+            break;
+        }
+        message.push_str(if message.is_empty() {
+            next.trim_start()
+        } else {
+            next
+        });
+    }
+    if let Some((message, end)) = complete {
+        *i = end;
+        message
+    } else {
+        initial.to_owned()
+    }
+}
+
 fn missing_character(message: &str) -> Option<char> {
     missing_character_details(message).map(|(character, _)| character)
 }
@@ -2667,6 +2784,18 @@ fn wrapped_error_message(
     i: &mut usize,
     initial: &str,
 ) -> String {
+    let box_prefix = !initial.is_empty()
+        && ["Overfull ", "Underfull "]
+            .iter()
+            .any(|prefix| initial.starts_with(prefix) || prefix.starts_with(initial));
+    let box_after_location = initial.is_empty()
+        && lines.get(*i + 1).is_some_and(|line| {
+            line.trim_start().starts_with("Overfull ")
+                || line.trim_start().starts_with("Underfull ")
+        });
+    if box_prefix || box_after_location {
+        return wrapped_box_message(root, lines, separator_lines, i, initial);
+    }
     if initial == "FancyVerb Error:"
         && lines
             .get(*i + 1)
@@ -3619,11 +3748,12 @@ fn parse_in_project<'a>(
             }
         } else if line.starts_with("Overfull ") || line.starts_with("Underfull ") {
             let path = current();
+            let message = wrapped_box_message(root, &lines, &separator_lines, &mut i, line);
             emit(
                 &mut result,
                 &path.path,
-                input_line(line).unwrap_or(1),
-                line.into(),
+                input_line(&message).unwrap_or(1),
+                message,
                 DiagnosticSeverity::WARNING,
                 None,
                 path.confirmed,

@@ -1852,6 +1852,103 @@ fn fake_build_server_capabilities(
 
 #[test]
 #[cfg(unix)]
+fn wrapped_box_warnings_publish_complete_child_ranges_and_clear_after_recompilation() {
+    use latex_lsp::text::Text;
+    let script =
+        "printf '%%PDF-1.4\\n' > \"$1/main.pdf\"\ncat \"${2%/*}/fixture.log\" > \"$1/main.log\"\n";
+    let (mut server, directory, main) = fake_build_server(script, false);
+    let root = directory.path();
+    let child = Url::from_file_path(root.join("child.tex")).unwrap();
+    let source = "\\documentclass{article}\n\\begin{document}\\input{child}\\end{document}\n";
+    let child_source = "% Header\r\n  First 😀 paragraph line.\r\nLast paragraph line.\r\n";
+    std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+    std::fs::write(child.to_file_path().unwrap(), child_source).unwrap();
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+    );
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":child,"languageId":"latex","version":4,"text":child_source}}),
+    );
+    let message = "Overfull \\hbox (12.34567pt too wide) in paragraph at lines 2--3";
+    let wrapped = message
+        .as_bytes()
+        .chunks(60)
+        .map(|part| std::str::from_utf8(part).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(
+        root.join("fixture.log"),
+        format!("(./main.tex\n(./child.tex\n{wrapped}\n\\OT1/cmr/m/n/10 box dump\n []\n\n)\n)\n"),
+    )
+    .unwrap();
+    server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let finished = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(finished["params"]["status"], "success", "{finished}");
+    assert_eq!(finished["params"]["warningsCount"], 1);
+    assert_eq!(finished["params"]["errorsCount"], 0);
+    let published = server.until(|message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["uri"] == child.as_str()
+            && message["params"]["diagnostics"]
+                .as_array()
+                .is_some_and(|items| items.iter().any(|item| item["source"] == "latex-build"))
+    });
+    let items: Vec<_> = published["params"]["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| item["source"] == "latex-build")
+        .collect();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["message"], message);
+    assert_eq!(items[0]["code"], "overfull-box");
+    let text = Text::new(child_source.into());
+    assert_eq!(
+        items[0]["range"],
+        serde_json::to_value(text.range(
+            child_source.find("First").unwrap(),
+            child_source.trim_end().len()
+        ))
+        .unwrap()
+    );
+    std::fs::write(
+        root.join("fixture.log"),
+        "(./main.tex\n(./child.tex)\nOutput written on main.pdf (1 page).\n)\n",
+    )
+    .unwrap();
+    server.request(
+        3,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let finished = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(finished["params"]["status"], "success", "{finished}");
+    assert_eq!(finished["params"]["warningsCount"], 0);
+    assert_eq!(finished["params"]["pages"], 1);
+    server.until(|message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["uri"] == child.as_str()
+            && message["params"]["diagnostics"] == json!([])
+    });
+    let current = server.request(
+        4,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":child}}),
+    );
+    assert_eq!(current["items"], json!([]), "{current}");
+    server.request(5, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
 fn missing_character_errors_publish_precise_ranges_and_correct_build_counts() {
     use latex_lsp::text::Text;
     for numbered in [false, true] {
