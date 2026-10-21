@@ -20,6 +20,7 @@ pub(crate) struct Index {
     pub checks: BTreeMap<Url, Vec<SourceCall>>,
     pub incomplete: bool,
     literal: Option<BTreeMap<Url, Vec<Url>>>,
+    context: BTreeSet<Url>,
 }
 
 impl Index {
@@ -118,6 +119,7 @@ impl Index {
             index.literal = Some(literal);
             let next = index.scope(workspace, root);
             if !index.incomplete && next == scope {
+                index.context = scope;
                 return index;
             }
             scope = next;
@@ -133,7 +135,81 @@ impl Index {
             checks: BTreeMap::new(),
             incomplete: true,
             literal: None,
+            context: BTreeSet::new(),
         }
+    }
+
+    /// Potential literal source paths retain unknown and deferred execution,
+    /// while unchanged quoting primitives cannot import executable source.
+    pub fn literal_dependencies(
+        &self,
+        workspace: &Workspace,
+        uri: &Url,
+        root: &Url,
+    ) -> Vec<(Url, DocumentKind)> {
+        let fallback = || workspace.literal_source_dependencies_with_kinds(uri, root);
+        if self.incomplete
+            || !workspace.documents.get(uri).is_some_and(|doc| {
+                doc.syntax.commands.iter().any(|command| {
+                    matches!(
+                        command.name.as_str(),
+                        "detokenize" | "string" | "meaning" | "csuse" | "endcsname"
+                    )
+                })
+            })
+        {
+            return fallback();
+        }
+        let mut scope = self.context.clone();
+        scope.insert(uri.clone());
+        let Some(documents) = bounded_latex_sources(workspace, &scope) else {
+            return fallback();
+        };
+        // A deferred rebinding or a dynamic source can change a primitive's
+        // meaning before the apparent quote executes. Keep the established
+        // potential dependencies whenever that binding cannot be confirmed.
+        let dynamic = |command: &syntax::Command| {
+            command
+                .argument
+                .as_ref()
+                .is_none_or(|argument| !syntax::is_literal_file_path(&argument.value))
+        };
+        if documents.iter().any(|(_, doc)| {
+            doc.syntax
+                .definitions
+                .iter()
+                .any(|entry| matches!(entry.name.as_str(), "detokenize" | "string" | "meaning"))
+                || doc.syntax.commands.iter().any(|command| {
+                    matches!(
+                        command.name.as_str(),
+                        "let" | "futurelet" | "cslet" | "letcs" | "csletcs"
+                    ) || (matches!(
+                        command.name.as_str(),
+                        "input" | "include" | "subfile" | "InputIfFileExists"
+                    ) || syntax::loader_extension(&command.name).is_some())
+                        && dynamic(command)
+                })
+        }) || self
+            .calls
+            .values()
+            .chain(self.loaders.values())
+            .flatten()
+            .any(|call| dynamic(&call.command))
+        {
+            return fallback();
+        }
+        let Some(doc) = workspace.documents.get(uri) else {
+            return vec![];
+        };
+        let signatures = CommandSignatures::source_context(
+            documents
+                .iter()
+                .map(|(_, doc)| (doc.text.source.as_str(), &doc.syntax)),
+        );
+        let quoted = signatures.quoted_command_tokens(&doc.text.source, &doc.syntax);
+        workspace.literal_source_dependencies_filtered(uri, root, |command| {
+            !source_file_command(&command.name) || !quoted.contains(&command.span.start)
+        })
     }
 
     pub fn resource_dependencies(

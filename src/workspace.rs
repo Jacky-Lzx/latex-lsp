@@ -346,8 +346,8 @@ impl Workspace {
     }
 
     fn source_dependencies_with_kinds(&self, uri: &Url, root: &Url) -> Vec<(Url, DocumentKind)> {
-        let mut dependencies = self.literal_source_dependencies_with_kinds(uri, root);
         let inputs = crate::source_inputs::Index::new(self, root);
+        let mut dependencies = inputs.literal_dependencies(self, uri, root);
         dependencies.extend(
             inputs
                 .dependencies(self, uri, root)

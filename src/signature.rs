@@ -2065,6 +2065,49 @@ impl<'a> CommandSignatures<'a> {
             .collect()
     }
 
+    /// Tokens definitely rendered as characters by an unchanged TeX primitive.
+    /// Unknown user macros can execute their operands, so their argument tokens
+    /// are insufficient evidence for removing a build dependency.
+    pub(crate) fn quoted_command_tokens(
+        &self,
+        source: &str,
+        parsed: &syntax::Syntax,
+    ) -> BTreeSet<usize> {
+        let operands = self.argument_tokens(source, parsed);
+        let declarations = parsed
+            .definitions
+            .iter()
+            .map(|entry| (entry.span.start, entry.span.end))
+            .collect();
+        let mut result = BTreeSet::new();
+        for (index, command) in parsed.commands.iter().enumerate() {
+            if operands.contains(&command.span.start) {
+                continue;
+            }
+            let Some((name, _, end, control_spaces)) =
+                self.invocation(source, parsed, index, &operands, &declarations)
+            else {
+                continue;
+            };
+            let at = optional_start(source, end, control_spaces);
+            if self.invokes_builtin(name, "detokenize") {
+                if let Some((argument, end)) = syntax::group(source, at, b'{', b'}') {
+                    mark_operand_commands(parsed, argument.span.start, end, &mut result);
+                }
+            } else if self.invokes_builtin(name, "string") || self.invokes_builtin(name, "meaning")
+            {
+                // These primitives consume one token, including an opening
+                // brace itself; they do not consume a following whole group.
+                if required_token(source, at).is_some()
+                    && syntax::control_word(source, at).is_some()
+                {
+                    result.insert(at);
+                }
+            }
+        }
+        result
+    }
+
     pub(crate) fn argument_tokens(&self, source: &str, parsed: &syntax::Syntax) -> BTreeSet<usize> {
         let local = &self.local;
         let mut result = BTreeSet::new();
@@ -3750,6 +3793,44 @@ mod chapter_selector_operand_boundaries {
                         .argument
                         .as_ref()
                         .is_some_and(|argument| argument.value == "opaque"),
+                    "{source}: {command:?}"
+                );
+            }
+        }
+    }
+}
+#[cfg(test)]
+mod quoted_source_token_tests {
+    use super::*;
+    use crate::text::Text;
+
+    #[test]
+    fn meaning_quotes_one_control_token_without_consuming_groups_or_forwarded_operands() {
+        for source in [
+            r"\meaning\input{quoted}\input{real}",
+            "\\meaning% before 😀\r\n\\input{quoted}\\input{real}",
+            r"\meaning{\input{real}}\input{real}",
+            r"\meaning*\input{real}",
+            r"\def\meaning#1{#1}\meaning\input{real}",
+            r"\newcommand{\execute}[1]{#1}\execute{\meaning\input{real}}",
+            r"\csuse{meaning}\input{quoted}\input{real}",
+            r"\csname meaning\endcsname\input{quoted}\input{real}",
+            r"\meaning\include{quoted}\include{real}",
+        ] {
+            let parsed = syntax::Syntax::latex(&Text::new(source.into()));
+            let signatures = CommandSignatures::source_context([(source, &parsed)]);
+            let quoted = signatures.quoted_command_tokens(source, &parsed);
+            for command in parsed
+                .commands
+                .iter()
+                .filter(|command| matches!(command.name.as_str(), "input" | "include"))
+            {
+                assert_eq!(
+                    quoted.contains(&command.span.start),
+                    command
+                        .argument
+                        .as_ref()
+                        .is_some_and(|argument| argument.value == "quoted"),
                     "{source}: {command:?}"
                 );
             }
