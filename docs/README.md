@@ -9,6 +9,7 @@
 - [文献](bibliography.md)：文献键、natbib、手写文献和条目关系。
 - [biblatex 文献资源](biblatex-resources.md)：加载命令、路径编辑和静态支持范围。
 - [biblatex 引用](biblatex.md)：字段、列表、姓名、单次、多组和卷号引用。
+- [biblatex 文献分类](bibliography-categories.md)：分类分配、文献键编辑及重命名边界。
 - [符号与重命名](symbols.md)：宏、环境、计数器等符号的支持范围。
 - [项目与文件](projects.md)：根文件、依赖、路径和文件操作。
 - [编译](build.md)：命令、配置、通知、结果分析和产物检查。

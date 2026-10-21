@@ -29,11 +29,14 @@ cargo test --locked --test biblatex_resources real_ -- --ignored
 cargo test --locked --test biblatex_rerun real_biblatex -- --ignored
 cargo test --locked --test biblatex_commands real_biblatex -- --ignored
 cargo test --locked --test biblatex_data_citations real_ -- --ignored
+cargo test --locked --test biblatex_categories real_ -- --ignored
 cargo test --locked --test multicite real_biblatex -- --ignored
 cargo test --locked --test volume_citations real_volume -- --ignored
 ```
 
 文献资源回归验证全局资源在文件及文献键改名后的 pdfLaTeX / BibTeX 编译，以及 Biber 控制文件中的精确资源名称；后一项只生成 `.bcf`，无需运行 Biber。
+
+文献分类回归验证重命名文献键后，分类名保持不变、辅助文件中的分配同步更新，且按分类筛选的参考文献仍能生成 PDF。默认测试另覆盖分类键的编辑、参数提示、补全、诊断隔离、共享源码歧义及版本化 stdio 重命名。
 
 缺失文献资源修复另有两组真实工具回归：
 

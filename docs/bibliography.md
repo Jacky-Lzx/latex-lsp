@@ -8,6 +8,7 @@
 - [引用命令](#引用命令)
 - [biblatex 文献资源](biblatex-resources.md)
 - [biblatex 引用](biblatex.md)
+- [biblatex 文献分类](bibliography-categories.md)
 - [手写文献](#手写文献)
 - [条目关系与重命名](#条目关系与重命名)
 
