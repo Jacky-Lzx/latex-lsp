@@ -336,3 +336,290 @@ fn real_missing_alias_images_have_precise_diagnostics_and_repairable_names() {
             .contains(&uri(root, "assets/plot.png")));
     }
 }
+
+#[test]
+fn recorder_sources_keep_image_links_completion_and_file_rename_edits() {
+    for call in [
+        r"\includegraphics",
+        r"\Image",
+        r"\csuse{Image}",
+        r"\csname Image\endcsname",
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let source = r"\documentclass{article}\def\Image{\includegraphics}\def\Chapter{generated}\input{\Chapter}";
+        let mut workspace = project(root, source);
+        let main = uri(root, "main.tex");
+        let generated = uri(root, "generated.tex");
+        let body = format!("{call}*[width=1cm]{{plot.png}}");
+        std::fs::write(root.join("generated.tex"), &body).unwrap();
+        std::fs::write(root.join("plot.png"), PNG).unwrap();
+        workspace.reload(&generated);
+        workspace
+            .recorded_inputs
+            .insert(main.clone(), [main.clone(), generated.clone()].into());
+        assert_eq!(
+            targets(&workspace, &generated),
+            [uri(root, "plot.png")],
+            "{call}"
+        );
+        assert_eq!(
+            graphics::images(&workspace, &generated),
+            [uri(root, "plot.png")].into(),
+            "{call}"
+        );
+        let offset = body.find("plot.png").unwrap() + 2;
+        let items = features::completion(
+            &workspace,
+            &generated,
+            Text::new(body.clone()).position(offset),
+        );
+        assert!(
+            items.iter().any(|item| item.label == "plot.png"),
+            "{call}: {items:?}"
+        );
+        let changed = changes(&workspace, &[rename(root, "plot.png", "chart.png")]);
+        assert_eq!(
+            changed[&generated],
+            body.replace("plot.png", "chart.png"),
+            "{call}"
+        );
+        assert!(workspace
+            .project_files(&main)
+            .contains(&uri(root, "plot.png")));
+    }
+}
+
+#[test]
+fn recorder_definitions_determine_image_meaning_and_argument_boundaries() {
+    for (declarations, body, expected) in [
+        (
+            r"\def\Image{\includegraphics}\def\Chain{\Image}",
+            r"\Chain{plot.png}",
+            true,
+        ),
+        (
+            r"\def\Image{\includegraphics}",
+            r"\csuse{Image}{plot.png}",
+            true,
+        ),
+        (
+            r"\def\includegraphics#1{}",
+            r"\includegraphics{plot.png}",
+            false,
+        ),
+        (
+            r"\def\Hold#1{}",
+            r"\Hold{\includegraphics{plot.png}}",
+            false,
+        ),
+        (r"\def\Hold#1{}", r"\Hold\includegraphics{plot.png}", false),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let source = format!(
+            "\\documentclass{{article}}\\def\\Chapter{{generated}}\\input{{\\Chapter}}{body}"
+        );
+        let mut workspace = project(root, &source);
+        let main = uri(root, "main.tex");
+        let generated = uri(root, "generated.tex");
+        std::fs::write(root.join("generated.tex"), declarations).unwrap();
+        std::fs::write(root.join("plot.png"), PNG).unwrap();
+        workspace.reload(&generated);
+        workspace
+            .recorded_inputs
+            .insert(main.clone(), [main.clone(), generated].into());
+        assert_eq!(
+            targets(&workspace, &main).len(),
+            usize::from(expected),
+            "{declarations}: {body}"
+        );
+        let offset = source.find("plot.png").unwrap() + 2;
+        let items = features::completion(
+            &workspace,
+            &main,
+            Text::new(source.clone()).position(offset),
+        );
+        assert_eq!(
+            items.iter().any(|item| item.label == "plot.png"),
+            expected,
+            "{declarations}: {items:?}"
+        );
+        let changed = changes(&workspace, &[rename(root, "plot.png", "chart.png")]);
+        if expected {
+            assert_eq!(changed[&main], source.replace("plot.png", "chart.png"));
+        } else {
+            assert!(changed.is_empty(), "{declarations}: {changed:?}");
+        }
+    }
+}
+
+#[test]
+fn shared_recorded_sources_keep_root_specific_targets_and_reject_partial_moves() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    for name in ["a", "b"] {
+        std::fs::create_dir(root.join(name)).unwrap();
+        std::fs::write(
+            root.join(name).join("main.tex"),
+            r"\documentclass{article}\def\Image{\includegraphics}",
+        )
+        .unwrap();
+        std::fs::write(root.join(name).join("plot.png"), PNG).unwrap();
+    }
+    let body = r"\Image{plot.png}";
+    std::fs::write(root.join("shared.tex"), body).unwrap();
+    let mut workspace = Workspace::default();
+    workspace.add_root(root.into());
+    let shared = uri(root, "shared.tex");
+    for name in ["a", "b"] {
+        let main = uri(root, &format!("{name}/main.tex"));
+        workspace
+            .recorded_inputs
+            .insert(main.clone(), [main, shared.clone()].into());
+    }
+    assert!(targets(&workspace, &shared).is_empty());
+    assert!(graphics::images(&workspace, &shared).is_empty());
+    let error =
+        file_operations::will_rename(&workspace, &[rename(root, "a/plot.png", "a/chart.png")])
+            .unwrap_err();
+    assert!(error.message.contains("different replacements"), "{error}");
+}
+
+#[test]
+fn recorded_image_fixes_recheck_alias_definitions_before_editing() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let mut workspace = project(root, r"\documentclass{article}\def\Image{\includegraphics}");
+    let main = uri(root, "main.tex");
+    let generated = uri(root, "generated.tex");
+    let body = r"\Image[width=1cm]{plto.png}";
+    std::fs::write(root.join("generated.tex"), body).unwrap();
+    std::fs::write(root.join("plot.png"), PNG).unwrap();
+    workspace.reload(&generated);
+    workspace
+        .recorded_inputs
+        .insert(main.clone(), [main.clone(), generated.clone()].into());
+    workspace.code_action_literals = true;
+    let offset = body.find("plto.png").unwrap();
+    let diagnostic = Diagnostic {
+        range: Text::new(body.into()).range(offset, offset + 8),
+        source: Some("latex-build".into()),
+        severity: Some(DiagnosticSeverity::ERROR),
+        code: Some(NumberOrString::String("missing-image".into())),
+        message: "LaTeX Error: File `plto.png' not found.".into(),
+        data: Some(serde_json::json!({"file":"plto.png"})),
+        ..Default::default()
+    };
+    workspace.build_diagnostics.insert(
+        main.clone(),
+        [(generated.clone(), vec![diagnostic.clone()])].into(),
+    );
+    let fixes = |workspace: &Workspace| {
+        latex_lsp::editing::code_actions(
+            workspace,
+            &generated,
+            diagnostic.range,
+            &CodeActionContext {
+                diagnostics: vec![diagnostic.clone()],
+                ..Default::default()
+            },
+        )
+    };
+    assert_eq!(fixes(&workspace).len(), 1);
+    workspace.open(main, r"\documentclass{article}\def\Image#1{}".into(), 2);
+    assert!(fixes(&workspace).is_empty());
+}
+
+#[test]
+#[ignore = "requires pdflatex, graphicx and etoolbox"]
+fn real_dynamic_source_images_keep_navigation_and_build_inputs_after_moves() {
+    for call in [r"\Image", r"\csuse{Image}", r"\csname Image\endcsname"] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let source = r"\documentclass{article}\usepackage{graphicx,etoolbox}\def\Image{\includegraphics}\def\Chapter{generated}\begin{document}\input{\Chapter}\end{document}";
+        let mut workspace = project(root, source);
+        let main = uri(root, "main.tex");
+        let generated = uri(root, "generated.tex");
+        std::fs::write(
+            root.join("generated.tex"),
+            format!("{call}*[width=1cm]{{plot.png}}"),
+        )
+        .unwrap();
+        std::fs::write(root.join("plot.png"), PNG).unwrap();
+        workspace.reload(&generated);
+        let config = latex_lsp::config::BuildConfig {
+            executable: "pdflatex".into(),
+            ..Default::default()
+        };
+        for moved in [false, true] {
+            let image = uri(
+                root,
+                if moved {
+                    "assets/chart.png"
+                } else {
+                    "plot.png"
+                },
+            );
+            let outcome =
+                latex_lsp::build::run(&root.join("main.tex"), &config, &Default::default());
+            assert_eq!(outcome.status, "success", "{call}: {}", outcome.output);
+            let inputs = outcome.inputs.unwrap();
+            assert!(inputs.contains(&generated));
+            assert!(inputs.contains(&image));
+            workspace
+                .recorded_inputs
+                .insert(main.clone(), workspace.project_inputs(&main, &inputs));
+            assert_eq!(
+                targets(&workspace, &generated).as_slice(),
+                std::slice::from_ref(&image)
+            );
+            assert!(workspace.project_files(&main).contains(&image));
+            if !moved {
+                let files = [rename(root, "plot.png", "assets/chart.png")];
+                for (document, source) in changes(&workspace, &files) {
+                    std::fs::write(document.to_file_path().unwrap(), source).unwrap();
+                }
+                std::fs::rename(root.join("plot.png"), root.join("assets/chart.png")).unwrap();
+                file_operations::did_rename(&mut workspace, &files).unwrap();
+                workspace.reload(&generated);
+            }
+        }
+    }
+}
+
+#[test]
+fn displayed_recorder_files_do_not_define_image_aliases_until_input_as_source() {
+    for executed in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let loader = if executed { r"\input{generated}" } else { "" };
+        let source = format!("\\documentclass{{article}}\\lstinputlisting{{generated.tex}}{loader}\\Image{{plot.png}}");
+        std::fs::write(root.join("generated.tex"), r"\def\Image{\includegraphics}").unwrap();
+        let mut workspace = project(root, &source);
+        std::fs::write(root.join("plot.png"), PNG).unwrap();
+        let main = uri(root, "main.tex");
+        workspace.recorded_inputs.insert(
+            main.clone(),
+            [main.clone(), uri(root, "generated.tex")].into(),
+        );
+        assert_eq!(targets(&workspace, &main).len(), usize::from(executed));
+    }
+}
+
+#[test]
+fn incomplete_static_discovery_does_not_reintroduce_image_guesses() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::write(root.join("part.tex"), r"\def\input#1{}\end{x}").unwrap();
+    let source = r"\documentclass{article}\def\readpart{\input}\begin{document}\begin{x}\readpart{part}\includegraphics{plot.png}\end{document}";
+    let workspace = project(root, source);
+    std::fs::write(root.join("plot.png"), PNG).unwrap();
+    let main = uri(root, "main.tex");
+    assert!(targets(&workspace, &main).is_empty());
+    assert!(graphics::images(&workspace, &main).is_empty());
+    let offset = source.find("plot.png").unwrap() + 2;
+    let items = features::completion(&workspace, &main, Text::new(source.into()).position(offset));
+    assert!(!items.iter().any(|item| item.label == "plot.png"));
+    assert!(changes(&workspace, &[rename(root, "plot.png", "chart.png")]).is_empty());
+}

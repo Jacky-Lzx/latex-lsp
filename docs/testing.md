@@ -38,13 +38,13 @@ cargo test --locked --test graphics_extensions real_ -- --ignored
 cargo test --locked --test graphics_paths real_ -- --ignored
 ```
 
-图片调用别名回归同样需要 pdfLaTeX、graphicx 和 etoolbox，验证纯别名、静态命名调用、图片与主文档同时移动后的 recorder 输入，以及缺图定位、拼写修复和重新编译：
+图片调用别名回归同样需要 pdfLaTeX、graphicx 和 etoolbox，验证纯别名、静态命名调用、图片与主文档同时移动后的 recorder 输入，以及缺图定位、拼写修复和重新编译。另验证宏展开后动态载入的源码在 recorder 发现后恢复图片导航、依赖与改名，并在移动图片后继续编译成功：
 
 ```sh
 cargo test --locked --test indirect_graphics real_ -- --ignored
 ```
 
-默认回归另覆盖完整和未完成路径的别名补全、跨输入文件与本地宏包的别名、未执行和不确定调用的排除，以及目录补全和缺图建议的作用域、共享源码歧义、候选图片的过期检查及版本化 stdio 文件移动。
+默认回归另覆盖完整和未完成路径的别名补全、跨输入文件与本地宏包的别名、recorder 来源中的宏定义与参数边界、仅作代码展示的文件排除、共享根文件冲突、未执行和不确定调用的排除，以及目录补全和缺图建议的作用域、共享源码歧义、候选图片的过期检查及版本化 stdio 文件移动。
 
 ## 文献与编译诊断
 

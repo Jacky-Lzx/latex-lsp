@@ -322,8 +322,8 @@ pub(crate) fn document_links_in(workspace: &Workspace, uri: &Url, root: &Url) ->
     };
     let mut links = Vec::new();
     let inputs = crate::source_inputs::Index::new(workspace, root);
-    let has_images = inputs
-        .images
+    let images = crate::graphics::calls(workspace, root);
+    let has_images = images
         .get(uri)
         .is_some_and(|calls| calls.iter().any(|call| call.certain));
     let graphic_directories =
@@ -385,7 +385,7 @@ pub(crate) fn document_links_in(workspace: &Workspace, uri: &Url, root: &Url) ->
                 .chain(inputs.resources.get(uri).into_iter().flatten())
                 .chain(inputs.selectors.get(uri).into_iter().flatten())
                 .chain(inputs.checks.get(uri).into_iter().flatten())
-                .chain(inputs.images.get(uri).into_iter().flatten())
+                .chain(images.get(uri).into_iter().flatten())
                 .filter(|call| call.certain)
                 .map(|call| &call.command),
         )

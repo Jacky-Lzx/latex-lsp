@@ -150,33 +150,11 @@ impl Snapshot {
         let inputs = crate::source_inputs::Index::new(workspace, root);
         let active_sources =
             crate::source_inputs::active_direct_file_positions(workspace, &sources);
-        // Recorder sources may be absent from static input discovery. Their
-        // declarations still determine which image tokens are executed.
-        let images: BTreeMap<_, _> =
-            crate::source_inputs::bounded_latex_sources(workspace, &sources)
-                .map(|documents| {
-                    let signatures = crate::signature::CommandSignatures::source_context(
-                        documents
-                            .iter()
-                            .map(|(_, doc)| (doc.text.source.as_str(), &doc.syntax)),
-                    );
-                    documents
-                        .iter()
-                        .map(|(uri, doc)| {
-                            let positions =
-                                signatures.source_command_positions(&doc.text.source, &doc.syntax);
-                            (
-                                uri.clone(),
-                                signatures.graphics_invocations(
-                                    &doc.text.source,
-                                    &doc.syntax,
-                                    &positions,
-                                ),
-                            )
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
+        let images = if inputs.incomplete {
+            BTreeMap::new()
+        } else {
+            graphics::calls_in(workspace, &sources)
+        };
         let redefined_file_commands: BTreeSet<_> = sources
             .iter()
             .filter_map(|uri| workspace.documents.get(uri))
@@ -2491,6 +2469,21 @@ mod active_direct_graphic_conditions {
                 );
             }
         }
+    }
+
+    #[test]
+    fn incomplete_source_discovery_does_not_certify_image_candidates() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        std::fs::write(root.join("part.tex"), r"\def\input#1{}\end{x}").unwrap();
+        let main = root.join("main.tex");
+        std::fs::write(&main, r"\documentclass{article}\def\readpart{\input}\begin{document}\begin{x}\readpart{part}\includegraphics{plot.png}\end{document}").unwrap();
+        let uri = Url::from_file_path(main).unwrap();
+        let mut workspace = Workspace::default();
+        workspace.add_root(root.into());
+        let snapshot = Snapshot::capture(&workspace, &uri, &BuildConfig::default());
+        std::fs::write(root.join("plot.png"), "new image").unwrap();
+        assert!(snapshot.changed_path().is_none());
     }
 
     #[test]

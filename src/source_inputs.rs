@@ -18,7 +18,6 @@ pub(crate) struct Index {
     pub resources: BTreeMap<Url, Vec<SourceCall>>,
     pub selectors: BTreeMap<Url, Vec<SourceCall>>,
     pub checks: BTreeMap<Url, Vec<SourceCall>>,
-    pub images: BTreeMap<Url, Vec<SourceCall>>,
     pub incomplete: bool,
     literal: Option<BTreeMap<Url, Vec<Url>>>,
     context: BTreeSet<Url>,
@@ -45,7 +44,6 @@ impl Index {
             let mut resources = BTreeMap::new();
             let mut selectors = BTreeMap::new();
             let mut checks = BTreeMap::new();
-            let mut images = BTreeMap::new();
             index.calls = scope
                 .iter()
                 .filter_map(|uri| {
@@ -105,11 +103,6 @@ impl Index {
                     if !bibliography.is_empty() {
                         resources.insert(uri.clone(), bibliography);
                     }
-                    let graphics =
-                        signatures.graphics_invocations(&doc.text.source, &doc.syntax, &positions);
-                    if !graphics.is_empty() {
-                        images.insert(uri.clone(), graphics);
-                    }
                     let calls = signatures.indirect_source_invocations(
                         &doc.text.source,
                         &doc.syntax,
@@ -123,7 +116,6 @@ impl Index {
             index.resources = resources;
             index.selectors = selectors;
             index.checks = checks;
-            index.images = images;
             index.literal = Some(literal);
             let next = index.scope(workspace, root);
             if !index.incomplete && next == scope {
@@ -141,7 +133,6 @@ impl Index {
             resources: BTreeMap::new(),
             selectors: BTreeMap::new(),
             checks: BTreeMap::new(),
-            images: BTreeMap::new(),
             incomplete: true,
             literal: None,
             context: BTreeSet::new(),

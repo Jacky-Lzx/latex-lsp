@@ -28,9 +28,8 @@ pub(crate) fn fixes(
     {
         return vec![];
     }
-    let inputs = crate::source_inputs::Index::new(workspace, root);
-    let argument = inputs
-        .images
+    let images = graphics::calls(workspace, root);
+    let argument = images
         .get(uri)
         .into_iter()
         .flatten()

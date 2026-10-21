@@ -4,7 +4,7 @@ use crate::{
     workspace::{normalize_path, resolve_path, Workspace},
 };
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     ops::Range,
     path::{Path, PathBuf},
 };
@@ -19,6 +19,42 @@ pub fn is_image(path: &std::path::Path) -> bool {
                 .iter()
                 .any(|supported| extension.eq_ignore_ascii_case(supported))
         })
+}
+
+/// Normalize image calls in the full project, including recorder-only sources.
+/// This must remain separate from static input discovery to avoid recursion.
+pub(crate) fn calls(
+    workspace: &Workspace,
+    root: &Url,
+) -> BTreeMap<Url, Vec<crate::signature::SourceCall>> {
+    if crate::source_inputs::Index::new(workspace, root).incomplete {
+        return BTreeMap::new();
+    }
+    calls_in(workspace, &workspace.project_documents(root))
+}
+
+pub(crate) fn calls_in(
+    workspace: &Workspace,
+    sources: &BTreeSet<Url>,
+) -> BTreeMap<Url, Vec<crate::signature::SourceCall>> {
+    let Some(documents) = crate::source_inputs::bounded_latex_sources(workspace, sources) else {
+        return BTreeMap::new();
+    };
+    let signatures = crate::signature::CommandSignatures::source_context(
+        documents
+            .iter()
+            .map(|(_, doc)| (doc.text.source.as_str(), &doc.syntax)),
+    );
+    documents
+        .iter()
+        .map(|(uri, doc)| {
+            let positions = signatures.source_command_positions(&doc.text.source, &doc.syntax);
+            (
+                uri.clone(),
+                signatures.graphics_invocations(&doc.text.source, &doc.syntax, &positions),
+            )
+        })
+        .collect()
 }
 
 /// Keep binary dependencies out of the text index while sharing link resolution.
@@ -51,12 +87,7 @@ fn collect_images(
     };
     let ranges: Vec<_> = roots
         .iter()
-        .flat_map(|root| {
-            crate::source_inputs::Index::new(workspace, root)
-                .images
-                .remove(uri)
-                .unwrap_or_default()
-        })
+        .flat_map(|root| calls(workspace, root).remove(uri).unwrap_or_default())
         .filter(|call| call.certain)
         .filter_map(|call| call.command.argument)
         .map(|argument| doc.text.range(argument.span.start, argument.span.end))

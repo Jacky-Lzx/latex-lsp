@@ -460,6 +460,9 @@ impl Walk<'_> {
             .filter(|command| positions.contains(&command.span.start))
             .map(|command| (command.span.start, command.clone()))
             .collect();
+        let images =
+            self.signatures
+                .graphics_invocations(&doc.text.source, &doc.syntax, &positions);
         for call in self
             .inputs
             .calls
@@ -467,7 +470,7 @@ impl Walk<'_> {
             .into_iter()
             .flatten()
             .chain(self.inputs.loaders.get(uri).into_iter().flatten())
-            .chain(self.inputs.images.get(uri).into_iter().flatten())
+            .chain(&images)
         {
             if call.certain {
                 commands.insert(call.command.span.start, call.command.clone());
