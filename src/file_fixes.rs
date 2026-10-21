@@ -276,26 +276,16 @@ pub(crate) fn fixes(
     };
     let source = canonical_uri(uri);
     let main = canonical_uri(root);
-    let mut filters = Vec::new();
-    if command_name == "include" {
-        for document in workspace
-            .project_documents(root)
-            .iter()
-            .filter_map(|uri| workspace.documents.get(uri))
-        {
-            for command in document
-                .syntax
-                .commands
-                .iter()
-                .filter(|command| command.name == "includeonly")
-            {
-                let Some(names) = syntax::includeonly_names(&document.text.source, command) else {
-                    return vec![];
-                };
-                filters.push(names);
-            }
-        }
-    }
+    let filters = if command_name == "include" {
+        let Some(filters) =
+            crate::source_inputs::selection_filters(workspace, &workspace.project_documents(root))
+        else {
+            return vec![];
+        };
+        filters
+    } else {
+        vec![]
+    };
     let mut candidates = Vec::new();
     for entry in files.take(4096).flatten() {
         let Ok(name) = entry.file_name().into_string() else {

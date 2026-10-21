@@ -179,20 +179,7 @@ impl Snapshot {
                 });
         // A missing chapter is meaningful only when it can be selected.
         // Unknown or conflicting filters must not guess that TeX reads it.
-        let include_filters: Option<Vec<BTreeSet<_>>> = sources
-            .iter()
-            .filter_map(|source| workspace.documents.get(source))
-            .flat_map(|doc| {
-                doc.syntax
-                    .commands
-                    .iter()
-                    .filter(|command| command.name == "includeonly")
-                    .map(move |command| {
-                        syntax::includeonly_names(&doc.text.source, command)
-                            .map(|names| names.into_iter().collect())
-                    })
-            })
-            .collect();
+        let include_filters = crate::source_inputs::selection_filters(workspace, &sources);
         let mut outputs: BTreeSet<_> = [
             "pdf",
             "log",
@@ -1956,6 +1943,44 @@ mod indirect_bibliography_conditions {
                 std::fs::write(target, "Unrelated").unwrap();
                 assert!(snapshot.changed_path().is_none());
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod indirect_selection_conditions {
+    use super::*;
+
+    #[test]
+    fn only_selected_missing_chapters_change_conditions_with_static_indirect_filters() {
+        for control in [
+            r"\includeonly",
+            r"\csuse{includeonly}",
+            r"\csname includeonly\endcsname",
+            r"\choose",
+            r"\csuse{choose}",
+            r"\csname choose\endcsname",
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let main = root.join("main.tex");
+            let source=format!("\\documentclass{{article}}\\def\\choose{{\\includeonly}}{control}{{selected.tex}}\\begin{{document}}\\include{{selected}}\\include{{excluded}}\\end{{document}}");
+            std::fs::write(&main, source).unwrap();
+            let main_uri = Url::from_file_path(&main).unwrap();
+            let mut workspace = Workspace::default();
+            workspace.add_root(root.into());
+            let snapshot = Snapshot::capture(&workspace, &main_uri, &BuildConfig::default());
+            assert!(snapshot.changed_path().is_none());
+            std::fs::write(root.join("excluded.tex"), "Excluded").unwrap();
+            assert!(
+                snapshot.changed_path().is_none(),
+                "{control}: excluded chapter changed conditions"
+            );
+            std::fs::write(root.join("selected.tex"), "Selected").unwrap();
+            assert!(
+                snapshot.changed_path().is_some(),
+                "{control}: restored selected chapter was missed"
+            );
         }
     }
 }

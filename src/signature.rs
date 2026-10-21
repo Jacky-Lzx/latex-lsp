@@ -1808,6 +1808,83 @@ impl<'a> CommandSignatures<'a> {
         )
     }
 
+    /// A complete static selection scope, with unknown calls kept distinct
+    /// from an absence of filters. Pure alias bodies are declarations, not calls.
+    pub(crate) fn selection_filters(
+        &self,
+        source: &str,
+        parsed: &syntax::Syntax,
+    ) -> Option<Vec<BTreeSet<String>>> {
+        if ["includeonly", "csuse", "csname", "endcsname"]
+            .iter()
+            .any(|name| self.local.contains_key(*name))
+        {
+            return None;
+        }
+        let positions = self.source_command_positions(source, parsed);
+        let declarations: BTreeSet<_> = parsed
+            .definitions
+            .iter()
+            .map(|entry| (entry.span.start, entry.span.end))
+            .collect();
+        let alias_bodies: BTreeSet<_> = parsed
+            .definitions
+            .iter()
+            .filter(|entry| self.invokes_builtin(&entry.name, "includeonly"))
+            .filter_map(|entry| source_alias_body(source, parsed, entry))
+            .map(|body| syntax::skip_space(source, body.span.start))
+            .collect();
+        let empty_operands = BTreeSet::new();
+        for (index, command) in parsed.commands.iter().enumerate() {
+            if declarations.contains(&(command.span.start, command.span.end)) {
+                continue;
+            }
+            if positions.contains(&command.span.start) {
+                if command.name == "csuse"
+                    && command
+                        .argument
+                        .as_ref()
+                        .is_none_or(|argument| !syntax::is_static_key(&argument.value))
+                {
+                    return None;
+                }
+                if command.name == "csname"
+                    && syntax::literal_csname(source, &parsed.commands, index).is_none()
+                {
+                    return None;
+                }
+            }
+            let Some((name, start, _, _)) =
+                self.invocation(source, parsed, index, &empty_operands, &declarations)
+            else {
+                continue;
+            };
+            if self.invokes_builtin(name, "includeonly")
+                && !positions.contains(&start)
+                && !alias_bodies.contains(&start)
+            {
+                // An unsupported wrapper or operand can execute a selector.
+                // Its presence cannot certify that the document has no filter.
+                return None;
+            }
+        }
+        let indirect = self.indirect_selection_invocations(source, parsed, &positions);
+        if indirect.iter().any(|call| !call.certain) {
+            return None;
+        }
+        parsed
+            .commands
+            .iter()
+            .filter(|command| {
+                command.name == "includeonly" && positions.contains(&command.span.start)
+            })
+            .chain(indirect.iter().map(|call| &call.command))
+            .map(|command| {
+                syntax::includeonly_names(source, command).map(|names| names.into_iter().collect())
+            })
+            .collect()
+    }
+
     /// Selection references name chapters without loading their declarations.
     pub(crate) fn indirect_selection_invocations(
         &self,

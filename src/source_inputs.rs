@@ -1,4 +1,4 @@
-//! Root-specific discovery of static indirect source, package and class loads.
+//! Root-specific discovery of static source loads and file references.
 use crate::{
     signature::{CommandSignatures, SourceCall},
     syntax,
@@ -189,6 +189,42 @@ impl Index {
     }
 }
 
+/// Shared interpretation of chapter selection for build conditions and repairs.
+/// Data resources cannot contribute executable selectors or macro declarations.
+pub(crate) fn selection_filters(
+    workspace: &Workspace,
+    scope: &BTreeSet<Url>,
+) -> Option<Vec<BTreeSet<String>>> {
+    let documents: Vec<_> = scope
+        .iter()
+        .filter_map(|uri| workspace.documents.get(uri))
+        .filter(|doc| doc.kind == DocumentKind::Latex)
+        .collect();
+    if documents.is_empty() || documents.len() > MAX_SOURCES {
+        return None;
+    }
+    let mut bytes = 0usize;
+    for doc in &documents {
+        if doc.text.source.len() > 2 * 1024 * 1024 {
+            return None;
+        }
+        bytes += doc.text.source.len();
+        if bytes > 16 * 1024 * 1024 {
+            return None;
+        }
+    }
+    let signatures = CommandSignatures::source_context(
+        documents
+            .iter()
+            .map(|doc| (doc.text.source.as_str(), &doc.syntax)),
+    );
+    let mut filters = Vec::new();
+    for doc in documents {
+        filters.extend(signatures.selection_filters(&doc.text.source, &doc.syntax)?);
+    }
+    Some(filters)
+}
+
 pub(crate) fn target(uri: &Url, root: &Url, call: &SourceCall) -> Option<Url> {
     let argument = call.command.argument.as_ref()?;
     if !call.certain || !syntax::is_literal_file_path(&argument.value) {
@@ -261,4 +297,138 @@ fn resource_targets(
                 .map(|uri| (uri, kind))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod selection_filter_tests {
+    use super::*;
+    use crate::workspace::Document;
+
+    fn fixture(source: &str) -> (Workspace, BTreeSet<Url>) {
+        let main = Url::parse("file:///tmp/latex-lsp-selection-unit/main.tex").unwrap();
+        let mut workspace = Workspace::default();
+        workspace
+            .documents
+            .insert(main.clone(), Document::new(&main, source.into(), Some(7)));
+        (workspace, BTreeSet::from([main]))
+    }
+    fn call(form: &str) -> &'static str {
+        match form {
+            "direct" => r"\includeonly",
+            "named" => r"\csuse{includeonly}",
+            "literal" => r"\csname includeonly\endcsname",
+            "alias" => r"\choose",
+            "named-alias" => r"\csuse{choose}",
+            "literal-alias" => r"\csname choose\endcsname",
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn selection_filters_use_known_aliases_across_sources_and_ignore_data_declarations() {
+        for form in [
+            "direct",
+            "named",
+            "literal",
+            "alias",
+            "named-alias",
+            "literal-alias",
+        ] {
+            let source = format!("{}{{first,% keep 😀\r\nsecond.tex% tail\r\n}}", call(form));
+            let (mut workspace, mut scope) = fixture(&source);
+            let provider =
+                Url::parse("file:///tmp/latex-lsp-selection-unit/definitions.sty").unwrap();
+            workspace.documents.insert(
+                provider.clone(),
+                Document::new(&provider, r"\def\choose{\includeonly}".into(), None),
+            );
+            scope.insert(provider);
+            let data = Url::parse("file:///tmp/latex-lsp-selection-unit/resource.tex").unwrap();
+            let mut doc = Document::new(&data, r"\renewcommand{\includeonly}[1]{}".into(), None);
+            doc.kind = DocumentKind::BibtexStyle;
+            workspace.documents.insert(data.clone(), doc);
+            scope.insert(data.clone());
+            assert_eq!(
+                selection_filters(&workspace, &scope),
+                Some(vec![BTreeSet::from(["first".into(), "second".into()])]),
+                "{form}"
+            );
+            workspace.documents.get_mut(&data).unwrap().kind = DocumentKind::Latex;
+            assert!(selection_filters(&workspace, &scope).is_none());
+        }
+    }
+
+    #[test]
+    fn uncertain_or_unsupported_selectors_are_not_treated_as_an_absence_of_filters() {
+        for body in [
+            r"\includeonly{selected,\name}",
+            r"\includeonly*{selected}",
+            r"\includeonly[note]{selected}",
+            r"\csuse{\name}{selected}",
+            r"\csname \name\endcsname{selected}",
+            r"\renewcommand{\includeonly}[1]{}\choose{selected}",
+            r"\renewcommand{\csuse}[1]{}\includeonly{selected}",
+            r"\def\choose{\includeonly}\choose{selected}",
+            r"\edef\expanded{\includeonly}\expanded{selected}",
+            r"\newcommand{\wrapped}{\includeonly{selected}}\wrapped",
+            r"\newcommand{\hold}[1]{}\hold{\csuse{includeonly}{selected}}",
+        ] {
+            let source = format!("\\def\\choose{{\\includeonly}}\n{body}");
+            let (workspace, scope) = fixture(&source);
+            assert!(selection_filters(&workspace, &scope).is_none(), "{body}");
+        }
+    }
+
+    #[test]
+    fn selection_filters_preserve_empty_selection_and_multiple_static_constraints() {
+        for (source, expected) in [
+            (r"\def\choose{\includeonly}", vec![]),
+            (r"\def\choose{\includeonly}\choose{}", vec![BTreeSet::new()]),
+            (
+                r"\def\choose{\includeonly}\includeonly{first,second}\choose{second.tex,third}",
+                vec![
+                    BTreeSet::from(["first".into(), "second".into()]),
+                    BTreeSet::from(["second".into(), "third".into()]),
+                ],
+            ),
+        ] {
+            let (workspace, scope) = fixture(source);
+            assert_eq!(
+                selection_filters(&workspace, &scope),
+                Some(expected),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn selection_filter_analysis_respects_source_count_and_text_budgets() {
+        let (mut workspace, mut scope) = fixture(r"\includeonly{selected}");
+        for index in 0..MAX_SOURCES {
+            let uri = Url::parse(&format!(
+                "file:///tmp/latex-lsp-selection-unit/source-{index}.tex"
+            ))
+            .unwrap();
+            workspace
+                .documents
+                .insert(uri.clone(), Document::new(&uri, String::new(), None));
+            scope.insert(uri);
+        }
+        assert!(selection_filters(&workspace, &scope).is_none());
+        let (workspace, scope) = fixture(&"%".repeat(2 * 1024 * 1024 + 1));
+        assert!(selection_filters(&workspace, &scope).is_none());
+        let (mut workspace, mut scope) = fixture(r"\includeonly{selected}");
+        for index in 0..8 {
+            let uri = Url::parse(&format!(
+                "file:///tmp/latex-lsp-selection-unit/big-{index}.tex"
+            ))
+            .unwrap();
+            workspace.documents.insert(
+                uri.clone(),
+                Document::new(&uri, "%".repeat(2 * 1024 * 1024), None),
+            );
+            scope.insert(uri);
+        }
+        assert!(selection_filters(&workspace, &scope).is_none());
+    }
 }
