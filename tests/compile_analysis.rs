@@ -55,6 +55,8 @@ fn rerun_requests_require_explicit_known_warning_messages() {
         "LaTeX Warning: Label(s) may have changed.\r\n Rerun to get cross-references right.",
         "Package natbib Warning: Citation(s) may have changed. Rerun to get citations correct.",
         "Package natbib Warning: Citation(s) may have changed.",
+        "Package longtable Warning: Table widths have changed. Rerun LaTeX.",
+        "Package longtable Warning: Table widths have changed.\r\n Rerun LaTeX.",
         "Package rerunfilecheck Warning: File `main.out' has changed.",
         "Package rerunfilecheck Warning: File `main.out' has changed. (rerunfilecheck) Rerun to get outlines right or use package `bookmark'.",
     ] {
@@ -68,6 +70,10 @@ fn rerun_requests_require_explicit_known_warning_messages() {
         "Package local Warning: Rerun to get outlines right.",
         "Package rerunfilecheck Warning: File `Rerun to get outlines right' could not open.",
         "Package local Warning: LaTeX Warning: Label(s) may have changed. Rerun to get cross-references right.",
+        "Package longtable Warning: Column widths have changed in table 1 on input line 1.",
+        "Package longtable Warning: Table widths have changed.",
+        "Class longtable Warning: Table widths have changed. Rerun LaTeX.",
+        "Package local Warning: Package longtable Warning: Table widths have changed. Rerun LaTeX.",
     ] {
         assert_eq!(compilation_analysis(&diagnostics(vec![warning(message)]),false)["rerunRequired"],false,"{message}");
     }
@@ -357,6 +363,43 @@ fn incomplete_wrapped_references_preserve_real_file_and_message_boundaries() {
             compilation_analysis(&parsed, false)["unresolvedReferences"],
             json!([expected_key]),
             "{log}"
+        );
+    }
+}
+
+#[test]
+fn longtable_requests_another_pass_without_inventing_missing_references() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("main.tex");
+    std::fs::write(
+        &root,
+        "\\begin{longtable}{ll}One & Two\\\\\\end{longtable}\n",
+    )
+    .unwrap();
+    let columns = "Package longtable Warning: Column widths have changed\n(longtable) in table 1 on input line 1.\n";
+    for (summary, rerun) in [
+        (
+            "Package longtable Warning: Table widths have changed. Rerun LaTeX.\n",
+            true,
+        ),
+        (
+            "Package longtable Warning: Table widths have changed. Rerun\n LaTeX.\n",
+            true,
+        ),
+        ("", false),
+        (
+            "Package local Warning: Example: Table widths have changed. Rerun LaTeX.\n",
+            false,
+        ),
+    ] {
+        let parsed = parse(&root, &format!("(./main.tex\n{columns}\n{summary}\n)\n"));
+        assert!(parsed
+            .values()
+            .flatten()
+            .any(|diagnostic| diagnostic.message.contains("Column widths have changed")));
+        assert_eq!(
+            compilation_analysis(&parsed, false),
+            json!({"rerunRequired":rerun,"unresolvedReferences":[],"unresolvedCitations":[],"truncated":false})
         );
     }
 }
