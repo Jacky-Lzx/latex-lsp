@@ -542,16 +542,6 @@ fn missing_include_ranges(
         .collect()
 }
 
-fn literal_reference_key(key: &str) -> bool {
-    // Parentheses are literal tokens in a label or citation. Keep the general
-    // identifier restrictions for each remaining fragment and other namespaces.
-    !key.is_empty()
-        && key
-            .split(['(', ')'])
-            .filter(|part| !part.is_empty())
-            .all(crate::syntax::is_static_key)
-}
-
 pub(crate) fn undefined_reference_ranges(text: &Text, line: u32, message: &str) -> Vec<Range> {
     let Some((citation, key)) = undefined_reference_key(message) else {
         return vec![];
@@ -622,7 +612,8 @@ pub(crate) fn undefined_reference_ranges(text: &Text, line: u32, message: &str) 
             } else {
                 Some(key)
             };
-            if let Some(key) = source_key.filter(|key| literal_reference_key(key)) {
+            if let Some(key) = source_key.filter(|key| crate::syntax::is_static_reference_key(key))
+            {
                 for argument in std::iter::once(argument).chain(range_end.as_ref()) {
                     if argument.value == key {
                         ranges.push(text.range(argument.span.start, argument.span.end));
@@ -631,7 +622,7 @@ pub(crate) fn undefined_reference_ranges(text: &Text, line: u32, message: &str) 
             }
             continue;
         }
-        if !literal_reference_key(key) {
+        if !crate::syntax::is_static_reference_key(key) {
             continue;
         }
         for segment in crate::syntax::key_list_segments(&text.source, argument.span.clone()) {

@@ -432,7 +432,7 @@ pub(crate) fn range_reference_end(source: &str, command: &Command) -> Option<Arg
         b'{',
         b'}',
     )
-    .map(|(argument, _)| single_key_argument(source, argument))
+    .map(|(argument, _)| single_label_argument(source, argument))
 }
 
 pub(crate) fn is_counter_reference(name: &str) -> bool {
@@ -457,7 +457,7 @@ pub(crate) fn counter_reference_label(source: &str, command: &Command) -> Option
         b'{',
         b'}',
     )
-    .map(|(argument, _)| single_key_argument(source, argument))
+    .map(|(argument, _)| single_label_argument(source, argument))
 }
 
 /// These commands keep their label outside the ordinary first required argument.
@@ -502,10 +502,10 @@ pub(crate) fn separate_label_argument(source: &str, command: &Command) -> Option
     {
         if skip_comments(source, end) == outer.span.end {
             inner.outer_span = outer.outer_span;
-            return Some(single_key_argument(source, inner));
+            return Some(single_label_argument(source, inner));
         }
     }
-    Some(single_key_argument(source, outer))
+    Some(single_label_argument(source, outer))
 }
 
 /// Drop only comments: literal spaces around a protected label remain tokens.
@@ -524,16 +524,21 @@ fn skip_comments(source: &str, mut at: usize) -> usize {
 
 /// Comments have no tokens, whereas literal spaces belong to a single key's
 /// name. Keep only a contiguous name bounded by comments, without trimming it.
-pub(crate) fn single_key_argument(source: &str, mut argument: Argument) -> Argument {
+pub(crate) fn single_key_argument(source: &str, argument: Argument) -> Argument {
+    literal_key_argument(source, argument, is_static_key)
+}
+
+fn single_label_argument(source: &str, argument: Argument) -> Argument {
+    literal_key_argument(source, argument, is_static_reference_key)
+}
+
+fn literal_key_argument(source: &str, mut argument: Argument, valid: fn(&str) -> bool) -> Argument {
     if !argument.value.contains('%') {
         return argument;
     }
     let pieces = name_literal_pieces(source, argument.span.clone());
     let mut names = pieces.into_iter().filter(|span| !span.is_empty());
-    if let Some(span) = names
-        .next()
-        .filter(|span| is_static_key(&source[span.clone()]))
-    {
+    if let Some(span) = names.next().filter(|span| valid(&source[span.clone()])) {
         if names.next().is_none() {
             argument.value = source[span.clone()].into();
             argument.span = span;
@@ -653,6 +658,16 @@ pub(crate) fn is_static_key(value: &str) -> bool {
         })
 }
 
+/// Parentheses are ordinary tokens in literal label and citation keys.
+/// General identifiers retain their stricter namespace rules.
+pub(crate) fn is_static_reference_key(key: &str) -> bool {
+    !key.is_empty()
+        && key
+            .split(['(', ')'])
+            .filter(|part| !part.is_empty())
+            .all(is_static_key)
+}
+
 /// Split a TeX key list without interpreting commas inside comments, groups,
 /// or control symbols. Ranges always refer to the original document.
 pub(crate) fn key_list_segments(source: &str, span: Range<usize>) -> Vec<Range<usize>> {
@@ -690,15 +705,18 @@ pub(crate) fn key_list_segments(source: &str, span: Range<usize>) -> Vec<Range<u
     result
 }
 
-fn key_list_name(source: &str, segment: Range<usize>) -> Option<Range<usize>> {
+fn key_list_name(
+    source: &str,
+    segment: Range<usize>,
+    valid: fn(&str) -> bool,
+) -> Option<Range<usize>> {
     let bounded = &source[..segment.end];
     let start = skip_space(bounded, segment.start);
     let end = source[start..segment.end]
         .char_indices()
         .find(|(_, ch)| ch.is_whitespace() || *ch == '%')
         .map_or(segment.end, |(offset, _)| start + offset);
-    (skip_space(bounded, end) == segment.end && is_static_key(&source[start..end]))
-        .then_some(start..end)
+    (skip_space(bounded, end) == segment.end && valid(&source[start..end])).then_some(start..end)
 }
 
 /// Only contiguous literal names can be edited. Comments surrounding a key
@@ -707,7 +725,14 @@ fn key_list_name(source: &str, segment: Range<usize>) -> Option<Range<usize>> {
 pub(crate) fn key_list_spans(source: &str, span: Range<usize>) -> Vec<Range<usize>> {
     key_list_segments(source, span)
         .into_iter()
-        .filter_map(|segment| key_list_name(source, segment))
+        .filter_map(|segment| key_list_name(source, segment, is_static_key))
+        .collect()
+}
+
+pub(crate) fn label_list_spans(source: &str, span: Range<usize>) -> Vec<Range<usize>> {
+    key_list_segments(source, span)
+        .into_iter()
+        .filter_map(|segment| key_list_name(source, segment, is_static_reference_key))
         .collect()
 }
 
@@ -939,6 +964,7 @@ pub(crate) fn active_key_list_prefix(
     source: &str,
     start: usize,
     cursor: usize,
+    valid: fn(&str) -> bool,
 ) -> Option<Range<usize>> {
     if source.as_bytes().get(start) != Some(&b'{') {
         return None;
@@ -948,7 +974,7 @@ pub(crate) fn active_key_list_prefix(
     let segment = key_list_segments(source, span)
         .into_iter()
         .find(|segment| segment.start <= cursor && cursor <= segment.end)?;
-    if let Some(name) = key_list_name(source, segment.clone()) {
+    if let Some(name) = key_list_name(source, segment.clone(), valid) {
         return (name.start <= cursor && cursor <= name.end).then_some(name.start..cursor);
     }
     (skip_space(&source[..segment.end], segment.start) == segment.end).then_some(cursor..cursor)
@@ -1346,7 +1372,7 @@ pub(crate) fn active_static_argument(
     open: u8,
     cursor: usize,
 ) -> Option<Range<usize>> {
-    active_static_argument_mode(source, start, open, cursor, true)
+    active_static_argument_mode(source, start, open, cursor, true, is_static_key)
 }
 
 fn active_static_argument_mode(
@@ -1355,6 +1381,7 @@ fn active_static_argument_mode(
     open: u8,
     cursor: usize,
     nested_delimiters: bool,
+    valid: fn(&str) -> bool,
 ) -> Option<Range<usize>> {
     if source.as_bytes().get(start) != Some(&open) || cursor <= start {
         return None;
@@ -1371,7 +1398,7 @@ fn active_static_argument_mode(
         return None;
     }
     let prefix = source[span.start..cursor].trim_start();
-    if !prefix.is_empty() && !is_static_key(prefix) {
+    if !prefix.is_empty() && !valid(prefix) {
         return None;
     }
     let value = &source[span.clone()];
@@ -1381,7 +1408,7 @@ fn active_static_argument_mode(
         value.split(['\r', '\n']).next().unwrap_or_default()
     }
     .trim();
-    if !value.is_empty() && !is_static_key(value) {
+    if !value.is_empty() && !valid(value) {
         return None;
     }
     let start = cursor - prefix.len();
@@ -1408,7 +1435,7 @@ pub(crate) fn active_name_argument(
     open: u8,
     cursor: usize,
 ) -> Option<Range<usize>> {
-    active_name_argument_mode(source, start, open, cursor, true)
+    active_name_argument_mode(source, start, open, cursor, true, is_static_key)
 }
 
 pub(crate) fn active_label_argument(
@@ -1417,7 +1444,23 @@ pub(crate) fn active_label_argument(
     open: u8,
     cursor: usize,
 ) -> Option<Range<usize>> {
-    active_name_argument_mode(source, start, open, cursor, open != b'[')
+    active_name_argument_mode(source, start, open, cursor, open != b'[', is_static_key)
+}
+
+pub(crate) fn active_reference_argument(
+    source: &str,
+    start: usize,
+    open: u8,
+    cursor: usize,
+) -> Option<Range<usize>> {
+    active_name_argument_mode(
+        source,
+        start,
+        open,
+        cursor,
+        open != b'[',
+        is_static_reference_key,
+    )
 }
 
 /// Complete a single key without deleting comments. Whitespace outside the
@@ -1429,6 +1472,7 @@ pub(crate) fn active_commented_name_argument(
     open: u8,
     cursor: usize,
     nested_delimiters: bool,
+    valid: fn(&str) -> bool,
 ) -> Option<(Range<usize>, Vec<Range<usize>>)> {
     if source.as_bytes().get(start) != Some(&open) || cursor <= start {
         return None;
@@ -1445,7 +1489,7 @@ pub(crate) fn active_commented_name_argument(
         .enumerate()
         .filter(|(_, piece)| !source[(*piece).clone()].trim().is_empty());
     let selected = if let Some((index, name)) = nonempty.next() {
-        if !is_static_key(source[name.clone()].trim()) || nonempty.next().is_some() {
+        if !valid(source[name.clone()].trim()) || nonempty.next().is_some() {
             return None;
         }
         index
@@ -1459,7 +1503,7 @@ pub(crate) fn active_commented_name_argument(
         return None;
     }
     let prefix = source[name.start..cursor].trim_start();
-    if !prefix.is_empty() && !is_static_key(prefix) {
+    if !prefix.is_empty() && !valid(prefix) {
         return None;
     }
     let removals = pieces
@@ -1477,8 +1521,9 @@ fn active_name_argument_mode(
     open: u8,
     cursor: usize,
     nested_delimiters: bool,
+    valid: fn(&str) -> bool,
 ) -> Option<Range<usize>> {
-    active_static_argument_mode(source, start, open, cursor, nested_delimiters)?;
+    active_static_argument_mode(source, start, open, cursor, nested_delimiters, valid)?;
     let close = if open == b'{' { b'}' } else { b']' };
     let span = group_mode(source, start, open, close, true, nested_delimiters).map_or_else(
         || {
@@ -1490,7 +1535,7 @@ fn active_name_argument_mode(
         |(argument, _)| argument.span,
     );
     let value = source[span.clone()].trim();
-    (value.is_empty() || is_static_key(value)).then_some(span)
+    (value.is_empty() || valid(value)).then_some(span)
 }
 
 /// LSP requires a completion's main edit to stay on the request line.
@@ -1867,10 +1912,9 @@ impl Syntax {
                             .filter(|_| !(starred && loader_extension(name).is_some()))
                     };
                     let argument = parsed.as_ref().map(|(argument, _)| {
-                        if matches!(name, "label" | "bibitem")
-                            || is_single_reference(name)
-                            || is_single_citation(name)
-                        {
+                        if name == "label" || is_single_reference(name) {
+                            single_label_argument(source, argument.clone())
+                        } else if name == "bibitem" || is_single_citation(name) {
                             single_key_argument(source, argument.clone())
                         } else {
                             argument.clone()
@@ -1932,7 +1976,7 @@ impl Syntax {
                     }
                     if name == "hyperdef" {
                         if let Some(argument) = separate_label_argument(source, &command)
-                            .filter(|argument| is_static_key(&argument.value))
+                            .filter(|argument| is_static_reference_key(&argument.value))
                         {
                             result.labels.push(Entry {
                                 name: argument.value,
@@ -2021,7 +2065,9 @@ impl Syntax {
                                     ..entry()
                                 });
                             }
-                            "label" if is_static_key(&arg.value) => result.labels.push(entry()),
+                            "label" if is_static_reference_key(&arg.value) => {
+                                result.labels.push(entry())
+                            }
                             "bibitem" if is_static_key(&arg.value) => {
                                 result.citations.push(entry())
                             }

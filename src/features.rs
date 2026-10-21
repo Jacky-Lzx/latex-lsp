@@ -44,6 +44,22 @@ impl TargetKind {
     }
 }
 
+fn static_target_name(kind: TargetKind, name: &str) -> bool {
+    if kind == TargetKind::Label {
+        syntax::is_static_reference_key(name)
+    } else {
+        syntax::is_static_key(name)
+    }
+}
+
+fn target_key_spans(source: &str, span: Span<usize>, kind: TargetKind) -> Vec<Span<usize>> {
+    if kind == TargetKind::Label {
+        syntax::label_list_spans(source, span)
+    } else {
+        syntax::key_list_spans(source, span)
+    }
+}
+
 struct Target<'a> {
     kind: TargetKind,
     name: &'a str,
@@ -140,7 +156,7 @@ fn raw_target(doc: &Document, offset: usize) -> Option<Target<'_>> {
             .or_else(|| syntax::range_reference_end(&doc.text.source, command))
         {
             if argument.span.start <= offset && offset <= argument.span.end {
-                if !syntax::is_static_key(&argument.value) {
+                if !syntax::is_static_reference_key(&argument.value) {
                     continue;
                 }
                 return Some(Target {
@@ -175,7 +191,7 @@ fn raw_target(doc: &Document, offset: usize) -> Option<Target<'_>> {
                         || syntax::is_reference(&command.name)
                             && !syntax::is_single_reference(&command.name)
                     {
-                        let Some(span) = syntax::key_list_spans(&doc.text.source, arg.span.clone())
+                        let Some(span) = target_key_spans(&doc.text.source, arg.span.clone(), kind)
                             .into_iter()
                             .find(|span| span.start <= offset && offset <= span.end)
                         else {
@@ -195,7 +211,7 @@ fn raw_target(doc: &Document, offset: usize) -> Option<Target<'_>> {
                         || kind == TargetKind::Citation
                             && (syntax::is_single_citation(&command.name)
                                 || command.name == "bibitem"))
-                        && !syntax::is_static_key(&arg.value)
+                        && !static_target_name(kind, &arg.value)
                     {
                         // Dynamic keys can still contain ordinary indexed macro calls.
                         if matches!(kind, TargetKind::Label | TargetKind::Citation) {
@@ -458,7 +474,7 @@ pub fn rename(
         } else if target.kind == TargetKind::Color {
             crate::named_colors::literal_name(new_name)
         } else {
-            syntax::is_static_key(new_name)
+            static_target_name(target.kind, new_name)
         };
     if !valid {
         return Err(tower_lsp::jsonrpc::Error::invalid_params(
@@ -643,6 +659,9 @@ fn completion_name_argument(
     } else {
         (syntax::skip_space(source, command.span.end), b'{')
     };
+    let label = syntax::is_reference(&command.name)
+        || syntax::has_separate_label_argument(&command.name)
+        || command.name == "hyperdef";
     let argument = |start, open| {
         let hyperlink = matches!(command.name.as_str(), "hyperref" | "hyperdef");
         if syntax::is_reference(&command.name)
@@ -656,12 +675,17 @@ fn completion_name_argument(
                 open,
                 offset,
                 !hyperlink || open != b'[',
+                if label {
+                    syntax::is_static_reference_key
+                } else {
+                    syntax::is_static_key
+                },
             ) {
                 return Some(context);
             }
         }
-        let span = if hyperlink {
-            syntax::active_label_argument(source, start, open, offset)
+        let span = if label {
+            syntax::active_reference_argument(source, start, open, offset)
         } else {
             syntax::active_name_argument(source, start, open, offset)
         }?;
@@ -862,7 +886,16 @@ fn argument_span(doc: &Document, command: &Command, offset: usize) -> Option<Spa
         at
     };
     if syntax::is_reference(&command.name) || syntax::is_citation(&command.name) {
-        return syntax::active_key_list_prefix(source, at, offset);
+        return syntax::active_key_list_prefix(
+            source,
+            at,
+            offset,
+            if syntax::is_reference(&command.name) {
+                syntax::is_static_reference_key
+            } else {
+                syntax::is_static_key
+            },
+        );
     }
     let value = source.get(at..offset)?.strip_prefix('{')?;
     if value.contains(['{', '}', '%'])
@@ -1547,7 +1580,7 @@ fn all_references(
                     }
                     continue;
                 }
-                for span in syntax::key_list_spans(&doc.text.source, arg.span.clone()) {
+                for span in target_key_spans(&doc.text.source, arg.span.clone(), target.kind) {
                     if doc.text.source[span.clone()] == *target.name {
                         result.push(Location {
                             uri: uri.clone(),

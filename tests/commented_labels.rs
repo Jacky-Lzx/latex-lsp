@@ -509,3 +509,296 @@ fn semantic_tokens_and_symbols_use_the_actual_commented_label_name_ranges() {
     }
     assert_eq!(keys, ["章节😀", "章节😀", "other", "章节😀", "章节😀"]);
 }
+
+#[test]
+fn parenthesized_labels_rename_across_commented_single_list_and_separate_arguments() {
+    for old in ["sec:(old)", "sec:old(", "sec:old)", "章节(😀)"] {
+        for call in [
+            "\\ref{% before\r\nKEY% tail\r\n}",
+            "\\pageref*{KEY}",
+            "\\autoref{KEY}",
+            "\\cref{other,% before\r\nKEY% tail\r\n}",
+            "\\cpageref*{KEY,other}",
+            "\\crefrange{KEY}{other}",
+            "\\vrefrange{other}{KEY}",
+            "\\setcounterref{section}{KEY}",
+            "\\getrefbykeydefault{KEY}{page}{0}",
+            "\\hyperref[% before\r\nKEY% tail\r\n]{Text}",
+            "\\hyperref[{KEY}]{Text}",
+        ] {
+            for declaration in [
+                "\\label{% before\r\nKEY% tail\r\n}",
+                "\\hyperdef[{KEY}]{cat}{dest}{Text}",
+            ] {
+                let mut workspace = Workspace::default();
+                let declarations = format!("{}\\label{{other}}", declaration.replace("KEY", old));
+                let labels = insert(&mut workspace, "labels.tex", &declarations);
+                let source = format!(
+                    "😀 {}\r\n\\ref{{{old}}}\r\nOrdinary {old}\r\n% {old}\r\n\\verb|{old}|\r\n",
+                    call.replace("KEY", old)
+                );
+                let main = insert(&mut workspace, "main.tex", &source);
+                let at = Text::new(source.clone()).position(source.find(old).unwrap() + 1);
+                assert_eq!(
+                    features::definitions(&workspace, &main, at)
+                        .iter()
+                        .map(|d| &d.uri)
+                        .collect::<Vec<_>>(),
+                    vec![&labels],
+                    "{source}"
+                );
+                assert!(features::prepare_rename(&workspace, &main, at)
+                    .unwrap()
+                    .is_some());
+                assert!(features::hover(&workspace, &main, at).is_some());
+                assert_eq!(
+                    features::references(&workspace, &main, at, true).len(),
+                    3,
+                    "{declaration}: {source}"
+                );
+                let next = "sec:(renamed)";
+                let changes = features::rename(&workspace, &main, at, next)
+                    .unwrap()
+                    .unwrap()
+                    .changes
+                    .unwrap();
+                assert_eq!(changes.values().map(Vec::len).sum::<usize>(), 3);
+                for (uri, name, original) in [
+                    (&main, "main.tex", &source),
+                    (&labels, "labels.tex", &declarations),
+                ] {
+                    let text = Text::new(original.clone());
+                    for edit in &changes[uri] {
+                        assert_eq!(
+                            &original[text.offset(edit.range.start).unwrap()
+                                ..text.offset(edit.range.end).unwrap()],
+                            old
+                        );
+                    }
+                    let updated = apply(original, &changes[uri]);
+                    if uri == &main {
+                        assert!(updated
+                            .contains(&format!("Ordinary {old}\r\n% {old}\r\n\\verb|{old}|")));
+                    }
+                    insert(&mut workspace, name, &updated);
+                }
+                let updated = &workspace.documents[&main].text;
+                let at = updated.position(updated.source.find(next).unwrap() + 1);
+                assert_eq!(features::references(&workspace, &main, at, true).len(), 3);
+            }
+        }
+    }
+}
+
+#[test]
+fn parenthesized_label_completion_and_semantics_use_complete_literal_keys() {
+    let key = "sec:(target)";
+    let mut workspace = Workspace::default();
+    insert(&mut workspace, "labels.tex", &format!("\\label{{{key}}}"));
+    for marked in [
+        "\\ref{sec:(t¦BAD)}",
+        "\\ref{% before\r\n sec:(t¦BAD) % tail\r\n}",
+        "\\hyperref[{sec:(t¦BAD)}]{Body}",
+        "\\crefrange{other}{sec:(t¦BAD)}",
+        "\\cref{other, sec:(t¦BAD)}",
+    ] {
+        let offset = marked.find('¦').unwrap();
+        let source = marked.replace('¦', "");
+        let main = insert(&mut workspace, "main.tex", &source);
+        let item = features::completion(
+            &workspace,
+            &main,
+            Text::new(source.clone()).position(offset),
+        )
+        .into_iter()
+        .find(|i| i.label == key)
+        .unwrap_or_else(|| panic!("{marked}"));
+        let Some(CompletionTextEdit::Edit(edit)) = item.text_edit else {
+            panic!("missing edit")
+        };
+        let mut edits = item.additional_text_edits.unwrap_or_default();
+        edits.push(edit);
+        let updated = apply(&source, &edits);
+        assert!(updated.contains(key));
+        assert!(!updated.contains("BAD"));
+        if source.contains("% before") {
+            assert!(updated.contains("% before\r\n"));
+            assert!(updated.contains("% tail\r\n"));
+        }
+        insert(&mut workspace, "main.tex", &updated);
+        let at = Text::new(updated.clone()).position(updated.find(key).unwrap() + 1);
+        assert_eq!(features::definitions(&workspace, &main, at).len(), 1);
+    }
+    let source=format!("% 😀\r\n\\label{{{key}}}\\ref{{{key}}}\\cref{{{key},other}}\\hyperref[{{{key}}}]{{Body}}\\crefrange{{other}}{{{key}}}");
+    let main = insert(&mut workspace, "main.tex", &source);
+    let doc = &workspace.documents[&main];
+    let legend = semantic::options().legend;
+    let mut position = Position::default();
+    let mut keys = Vec::new();
+    for token in semantic::tokens(doc, None).unwrap().data {
+        position = Position::new(
+            position.line + token.delta_line,
+            if token.delta_line == 0 {
+                position.character + token.delta_start
+            } else {
+                token.delta_start
+            },
+        );
+        if legend.token_types[token.token_type as usize].as_str() == "enumMember" {
+            let end = Position::new(position.line, position.character + token.length);
+            keys.push(&source[doc.text.offset(position).unwrap()..doc.text.offset(end).unwrap()]);
+        }
+    }
+    assert_eq!(keys, vec![key, key, key, "other", key, "other", key]);
+    assert!(features::symbols(doc)
+        .iter()
+        .any(|symbol| symbol.name.contains(key)));
+}
+
+#[test]
+fn parenthesized_labels_preserve_conflicts_and_dynamic_or_other_namespace_guards() {
+    let mut workspace = Workspace::default();
+    let source="\\label{sec:(old)}\\label{sec:(used)}\\newcommand{\\macro}{}\\newenvironment{panel}{}{}\\newcounter{count}\\bibitem{book} Text\n\\ref{sec:(old)}";
+    let main = insert(&mut workspace, "main.tex", source);
+    let text = Text::new(source.into());
+    let at = text.position(source.rfind("sec:(old)").unwrap() + 1);
+    for invalid in [
+        "sec:(used)",
+        "bad name",
+        "bad=key",
+        "\\chosen",
+        "a,b",
+        "a%comment",
+        "a{b}",
+    ] {
+        assert!(
+            features::rename(&workspace, &main, at, invalid).is_err(),
+            "{invalid}"
+        );
+    }
+    for name in ["macro", "panel", "count", "book"] {
+        let offset = if name == "macro" {
+            source.find(name).unwrap()
+        } else {
+            source.find(&format!("{{{name}}}")).unwrap() + 1
+        };
+        let at = text.position(offset + 1);
+        assert!(
+            features::rename(&workspace, &main, at, "name(paren)").is_err(),
+            "{name}"
+        );
+    }
+    for argument in [
+        "{ sec:(old)}",
+        "{sec:(old) }",
+        "{sec:(o% splice\nld)}",
+        "{\\chosen(old)}",
+        "{{sec:(old)}}",
+    ] {
+        let source = format!("\\ref{argument}");
+        let main = insert(&mut workspace, "uses.tex", &source);
+        let at = Text::new(source.clone())
+            .position(source.find("old").or_else(|| source.find("sec:")).unwrap() + 1);
+        assert!(
+            features::prepare_rename(&workspace, &main, at)
+                .unwrap()
+                .is_none(),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn parenthesized_label_rename_respects_projects_and_shared_reference_conflicts() {
+    for shared in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        std::fs::write(root.join("shared.tex"), r"\ref{sec:(old)}").unwrap();
+        for name in ["a", "b"] {
+            std::fs::create_dir(root.join(name)).unwrap();
+            let included = if shared { "../shared" } else { "child" };
+            std::fs::write(
+                root.join(format!("{name}/main.tex")),
+                format!(
+                    "\\documentclass{{article}}\\label{{sec:(old)}}\\input{{{included}}}{}",
+                    if name == "b" {
+                        r"\label{sec:(new)}"
+                    } else {
+                        ""
+                    }
+                ),
+            )
+            .unwrap();
+            std::fs::write(root.join(format!("{name}/child.tex")), r"\ref{sec:(old)}").unwrap();
+        }
+        let mut workspace = Workspace::default();
+        workspace.add_root(root.into());
+        let other = Url::from_file_path(root.join("b/main.tex")).unwrap();
+        workspace.refresh_project(&other);
+        assert!(workspace.documents.contains_key(&other));
+        let main = Url::from_file_path(root.join("a/main.tex")).unwrap();
+        workspace.refresh_project(&main);
+        let doc = &workspace.documents[&main];
+        let at = doc
+            .text
+            .position(doc.text.source.find("sec:(old)").unwrap() + 1);
+        let result = features::rename(&workspace, &main, at, "sec:(new)");
+        if shared {
+            assert!(result.is_err());
+        } else {
+            let changes = result.unwrap().unwrap().changes.unwrap();
+            assert_eq!(changes.len(), 2);
+            assert!(changes.keys().all(|uri| uri.path().contains("/a/")));
+        }
+    }
+}
+
+#[test]
+fn parenthesized_label_spelling_fixes_preserve_the_compilers_exact_key_range() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    let uri = Url::from_file_path(&main).unwrap();
+    for (call, kind) in [
+        ("\\ref{sec:(targte)}", "Reference"),
+        ("\\hyperref[{sec:(targte)}]{Body}", "Hyper reference"),
+    ] {
+        let source = format!("\\label{{sec:(target)}}\n{call}\n");
+        std::fs::write(&main, &source).unwrap();
+        let diagnostics = build_log::parse(&main, &format!("(./main.tex\nLaTeX Warning: {kind} `sec:(targte)' on page 1 undefined on input line 2.\n)\n"));
+        let diagnostic = diagnostics[&uri][0].clone();
+        let mut workspace = Workspace {
+            code_action_literals: true,
+            ..Workspace::default()
+        };
+        workspace.open(uri.clone(), source.clone(), 7);
+        workspace.build_diagnostics.insert(uri.clone(), diagnostics);
+        let actions = editing::code_actions(
+            &workspace,
+            &uri,
+            diagnostic.range,
+            &CodeActionContext {
+                diagnostics: vec![diagnostic],
+                only: None,
+                trigger_kind: None,
+            },
+        );
+        let edits = actions
+            .into_iter()
+            .filter_map(|action| match action {
+                CodeActionOrCommand::CodeAction(action) => action.edit,
+                _ => None,
+            })
+            .flat_map(|edit| {
+                edit.changes
+                    .unwrap_or_default()
+                    .remove(&uri)
+                    .unwrap_or_default()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(edits.len(), 1, "{call}: {edits:?}");
+        assert_eq!(
+            apply(&source, &edits),
+            source.replace("sec:(targte)", "sec:(target)")
+        );
+    }
+}
