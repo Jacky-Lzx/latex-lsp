@@ -637,3 +637,5 @@ cargo test --locked -- --include-ignored
 [MIT](LICENSE)
 
 文献键支持普通圆括号，包括不配对括号，例如 `book(old)`、`book(old` 和 `book)old`。`\bibitem`、引用命令及两种条目定界形式的 BibTeX 数据库统一支持补全、跳转、语义标记和重命名；跨条目引用与元数据使用完整键，编辑保留注释及正文。
+
+BibTeX 条目键后的逗号可以另起一行；支持 LF、CRLF 和缩进，导航与重命名保留键后的原始空白及元数据。

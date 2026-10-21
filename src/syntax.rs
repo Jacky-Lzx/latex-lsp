@@ -2472,17 +2472,24 @@ fn environment_end(text: &Text, name: &str) -> TextEdit {
     }
 }
 
-/// Require a complete literal name and comma before allowing a closing
-/// parenthesis to belong to a key. Never scan across a line or TeX group to
-/// find that comma: a malformed header must not swallow the next entry.
+/// Prove a contiguous literal key followed only by whitespace and a comma.
+/// A closing parenthesis may belong to the key; a line break may separate it
+/// from the comma. Never cross another token, group or comment to find it.
 fn bib_literal_header(source: &str, content: usize) -> Option<(Range<usize>, usize)> {
     let start = skip_space(source, content);
     let end = source[start..]
-        .find([',', '{', '}', '\n', '\r'])
+        .find(|ch: char| ch.is_ascii_whitespace() || matches!(ch, ',' | '{' | '}'))
         .map(|offset| start + offset)?;
     let span = trimmed_span(source, start..end);
-    (source.as_bytes()[end] == b',' && is_static_reference_key(&source[span.clone()]))
-        .then_some((span, end))
+    if !is_static_reference_key(&source[span.clone()]) {
+        return None;
+    }
+    let bytes = source.as_bytes();
+    let mut comma = end;
+    while bytes.get(comma).is_some_and(u8::is_ascii_whitespace) {
+        comma += 1;
+    }
+    (bytes.get(comma) == Some(&b',')).then_some((span, comma))
 }
 
 fn bib_entry_end(source: &str, start: usize, close: u8) -> (usize, bool) {

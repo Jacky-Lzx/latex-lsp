@@ -417,3 +417,153 @@ fn parenthesized_citation_rename_respects_independent_projects_and_shared_uses()
         }
     }
 }
+
+#[test]
+fn multiline_bibtex_headers_keep_metadata_navigation_and_exact_rename_ranges() {
+    for old in ["ordinary", "book(old)", "book(old", "book)old", "(中文)"] {
+        for gap in ["\n", "\r\n  ", " \t\n\t", "\n\n"] {
+            for (open, close) in [('{', '}'), ('(', ')')] {
+                let mut workspace = Workspace {
+                    versioned_edits: true,
+                    ..Default::default()
+                };
+                let source = format!("% 😀\r\n@book{open}{old}{gap},title={{Literal {old}}}, author={{A. Author}}, year=2026{close}\r\n@article{{child, crossref={{{old}}}}}");
+                let bib = insert(&mut workspace, "refs.bib", &source);
+                let main_source = format!("\\cite{{{old}}}");
+                let main = insert(&mut workspace, "main.tex", &main_source);
+                let doc = &workspace.documents[&bib];
+                assert_eq!(
+                    doc.syntax
+                        .citations
+                        .iter()
+                        .map(|e| e.name.as_str())
+                        .collect::<Vec<_>>(),
+                    [old, "child"],
+                    "{source}"
+                );
+                let entry = &doc.syntax.citations[0];
+                assert_eq!(&source[entry.span.clone()], old);
+                for expected in [
+                    format!("Title: Literal {old}"),
+                    "Author: A. Author".into(),
+                    "Year: 2026".into(),
+                ] {
+                    assert!(entry.detail.contains(&expected), "{}", entry.detail);
+                }
+                let pos = at(&main_source, old);
+                let definitions = features::definitions(&workspace, &main, pos);
+                assert_eq!(definitions.len(), 1);
+                assert_eq!(definitions[0].uri, bib);
+                assert_eq!(
+                    definitions[0].range,
+                    doc.text.range(entry.span.start, entry.span.end)
+                );
+                assert!(features::hover(&workspace, &main, pos).is_some());
+                assert_eq!(features::references(&workspace, &main, pos, true).len(), 3);
+                let edit = features::rename(&workspace, &main, pos, "book(next)")
+                    .unwrap()
+                    .unwrap();
+                let Some(DocumentChanges::Edits(changes)) = edit.document_changes else {
+                    panic!()
+                };
+                assert_eq!(changes.len(), 2);
+                for change in changes {
+                    assert_eq!(change.text_document.version, Some(7));
+                    let uri = change.text_document.uri;
+                    let original = &workspace.documents[&uri].text;
+                    let edits = change
+                        .edits
+                        .into_iter()
+                        .map(|e| {
+                            let OneOf::Left(e) = e else { panic!() };
+                            e
+                        })
+                        .collect::<Vec<_>>();
+                    for e in &edits {
+                        assert_eq!(
+                            &original.source[original.offset(e.range.start).unwrap()
+                                ..original.offset(e.range.end).unwrap()],
+                            old
+                        );
+                    }
+                    let expected = if uri == main {
+                        "\\cite{book(next)}".into()
+                    } else {
+                        assert_eq!(uri, bib);
+                        format!("% 😀\r\n@book{open}book(next){gap},title={{Literal {old}}}, author={{A. Author}}, year=2026{close}\r\n@article{{child, crossref={{book(next)}}}}")
+                    };
+                    assert_eq!(apply(&original.source, &edits), expected);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn multiline_header_proof_rejects_spliced_names_and_recovers_following_entries() {
+    for malformed in [
+        "@book(broken)\n",
+        "@book(broken)\r\n\t",
+        "@book(broken\n other, title={Invalid})\n",
+        "@book(broken\n% comment\n, title={Invalid})\n",
+        "@book(broken\n\\macro, title={Invalid})\n",
+        "@book(broken\n{group}, title={Invalid})\n",
+        "@book(broken\n=other, title={Invalid})\n",
+        "@book(broken)\n@comment{Ignored, @book(fake,)}\n",
+    ] {
+        let mut workspace = Workspace::default();
+        let source = format!("{malformed}@book(next, title={{Kept}})");
+        let uri = insert(&mut workspace, "refs.bib", &source);
+        assert_eq!(
+            workspace.documents[&uri]
+                .syntax
+                .citations
+                .iter()
+                .map(|e| e.name.as_str())
+                .collect::<Vec<_>>(),
+            ["next"],
+            "{source}"
+        );
+    }
+    for incomplete in [
+        "@book(broken\n",
+        "@book{broken\r\n  ",
+        "@book(broken\n% comment\n",
+    ] {
+        let mut workspace = Workspace::default();
+        let uri = insert(&mut workspace, "refs.bib", incomplete);
+        assert!(workspace.documents[&uri].syntax.citations.is_empty());
+    }
+}
+
+#[test]
+fn bibtex_warnings_resolve_multiline_headers_to_the_complete_source_key() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    let bib = directory.path().join("refs.bib");
+    let bib_uri = Url::from_file_path(&bib).unwrap();
+    std::fs::write(&main, "\\documentclass{article}").unwrap();
+    for key in ["ordinary", "book(old)", "book(old", "book)old", "(中文)"] {
+        for gap in ["\n", "\r\n  "] {
+            for (open, close) in [('{', '}'), ('(', ')')] {
+                let source = format!("% 😀\r\n@book{open}{key}{gap},title={{Example}},publisher={{Press}},year=2026{close}");
+                std::fs::write(&bib, &source).unwrap();
+                let diagnostics = build_log::parse_bibliography(
+                    &main,
+                    &format!(
+                        "Database file #1: refs.bib\nWarning--empty author and editor in {key}\n"
+                    ),
+                );
+                assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+                let diagnostic = &diagnostics[&bib_uri][0];
+                let start = source.find(key).unwrap();
+                assert_eq!(
+                    diagnostic.range,
+                    Text::new(source.clone()).range(start, start + key.len()),
+                    "{source}"
+                );
+                assert_eq!(diagnostic.severity, Some(DiagnosticSeverity::WARNING));
+            }
+        }
+    }
+}
