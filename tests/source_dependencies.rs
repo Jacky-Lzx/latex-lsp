@@ -43,7 +43,12 @@ fn command_position(workspace: &Workspace, main: &Url, name: &str) -> Position {
 #[test]
 fn quoted_source_paths_do_not_import_dependencies_or_symbols() {
     for loader in LOADERS {
-        for argument in ["{chapter}", "% before 😀\r\n{chapter.tex}"] {
+        for argument in [
+            "{chapter}",
+            "% before 😀\r\n{chapter.tex}",
+            "{chapter% filename 😀\r\n}",
+            "{% before 😀\r\nchapter% filename 😀\r\n}",
+        ] {
             let command = call(loader, argument);
             for body in [
                 format!("\\detokenize{{{command}}}"),
@@ -270,5 +275,62 @@ fn recorder_confirmed_dynamic_sources_and_redefined_primitives_keep_save_depende
             workspace.project_files(&main).contains(&chapter),
             "{source}"
         );
+    }
+}
+
+#[test]
+fn commented_providers_keep_primitive_rebindings_in_the_dependency_context() {
+    for (loader, extension) in [
+        ("input", "tex"),
+        ("include", "tex"),
+        ("InputIfFileExists", "tex"),
+        ("usepackage", "sty"),
+        ("RequirePackage", "sty"),
+        ("RequirePackageWithOptions", "sty"),
+        ("documentclass", "cls"),
+        ("LoadClass", "cls"),
+        ("LoadClassWithOptions", "cls"),
+    ] {
+        for argument in ["{provider% filename 😀\r\n}", "{% before\nprovider}"] {
+            let suffix = if loader == "InputIfFileExists" {
+                "{}{}"
+            } else {
+                ""
+            };
+            for invocation in [
+                format!("\\{loader}{argument}{suffix}"),
+                format!("\\csname {loader}\\endcsname{argument}{suffix}"),
+                format!(
+                    "\\newcommand{{\\readprovider}}{{\\{loader}}}\\readprovider{argument}{suffix}"
+                ),
+            ] {
+                let directory = tempfile::tempdir().unwrap();
+                let root = directory.path();
+                let source = format!("{invocation}\\meaning\\input{{chapter}}\\fromchapter");
+                let provider = format!("provider.{extension}");
+                let workspace = workspace(
+                    root,
+                    &[
+                        ("main.tex", &source),
+                        (&provider, r"\def\meaning#1{#1}"),
+                        ("chapter.tex", r"\newcommand{\fromchapter}{Real}"),
+                    ],
+                );
+                let main = uri(root, "main.tex");
+                let project = workspace.project_files(&main);
+                assert!(
+                    project.contains(&uri(root, &provider)),
+                    "{source}: {project:?}"
+                );
+                let chapter = uri(root, "chapter.tex");
+                assert!(project.contains(&chapter), "{source}: {project:?}");
+                let at = command_position(&workspace, &main, r"\fromchapter");
+                assert_eq!(
+                    features::definitions(&workspace, &main, at)[0].uri,
+                    chapter,
+                    "{source}"
+                );
+            }
+        }
     }
 }

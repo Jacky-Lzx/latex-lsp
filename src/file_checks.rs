@@ -2384,7 +2384,12 @@ mod quoted_file_conditions {
     #[test]
     fn quoted_bibliography_and_loader_tokens_do_not_watch_unread_candidates() {
         for (name, extension) in COMMANDS {
-            for argument in ["{refs}", "% before 😀\r\n{refs}% after\r\n"] {
+            for argument in [
+                "{refs}",
+                "% before 😀\r\n{refs}% after\r\n",
+                "{refs% filename 😀\r\n}",
+                "{% before 😀\r\nrefs% filename 😀\r\n}",
+            ] {
                 let command = format!("\\{name}{argument}");
                 for body in [
                     format!("\\meaning{command}"),

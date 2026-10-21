@@ -178,11 +178,15 @@ impl Index {
         // A deferred rebinding or a dynamic source can change a primitive's
         // meaning before the apparent quote executes. Keep the established
         // potential dependencies whenever that binding cannot be confirmed.
-        let dynamic = |command: &syntax::Command| {
-            command
-                .argument
-                .as_ref()
-                .is_none_or(|argument| !syntax::is_literal_file_path(&argument.value))
+        // Use the source graph's literal-name rules. Comments around a name
+        // are harmless, while every package-list item must remain static.
+        let dynamic = |source: &str, command: &syntax::Command| {
+            if syntax::file_list(&command.name) {
+                syntax::complete_file_list_spans(source, command).is_none()
+            } else {
+                syntax::file_argument(source, command)
+                    .is_none_or(|argument| !syntax::is_literal_file_path(&argument.value))
+            }
         };
         if documents.iter().any(|(_, doc)| {
             doc.syntax
@@ -221,14 +225,19 @@ impl Index {
                                 command.name.as_str(),
                                 "input" | "include" | "subfile" | "InputIfFileExists"
                             ) || syntax::loader_extension(&command.name).is_some())
-                                && dynamic(command)
+                                && dynamic(&doc.text.source, command)
                     })
         }) || self
             .calls
-            .values()
-            .chain(self.loaders.values())
-            .flatten()
-            .any(|call| dynamic(&call.command))
+            .iter()
+            .chain(self.loaders.iter())
+            .any(|(uri, calls)| {
+                workspace.documents.get(uri).is_none_or(|doc| {
+                    calls
+                        .iter()
+                        .any(|call| dynamic(&doc.text.source, &call.command))
+                })
+            })
         {
             return BTreeSet::new();
         }

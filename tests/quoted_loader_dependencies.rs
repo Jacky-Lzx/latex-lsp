@@ -44,7 +44,12 @@ fn at(workspace: &Workspace, main: &Url) -> Position {
 #[test]
 fn quoted_loader_tokens_do_not_import_packages_classes_or_their_symbols() {
     for (name, extension) in LOADERS {
-        for argument in ["{refs}", "% before 😀\r\n{refs}% after\r\n"] {
+        for argument in [
+            "{refs}",
+            "% before 😀\r\n{refs}% after\r\n",
+            "{refs% filename 😀\r\n}",
+            "{% before 😀\r\nrefs% filename 😀\r\n}",
+        ] {
             let command = format!("\\{name}{argument}");
             for body in [
                 format!("\\meaning{command}"),
@@ -174,6 +179,32 @@ fn recorder_sources_dynamic_inputs_and_primitive_rebindings_keep_potential_loade
             assert!(
                 workspace.project_files(&main).contains(&target),
                 "{name}/{body}"
+            );
+        }
+    }
+}
+
+#[test]
+fn dynamic_siblings_and_fragmented_provider_names_keep_potential_loader_dependencies() {
+    for (name, extension) in LOADERS {
+        for provider in [
+            r"\def\picked{provider}\usepackage{known,\picked}",
+            "\\usepackage{pro% split 😀\r\nvider}",
+            "\\input{pro% split 😀\r\nvider}",
+            "\\csname input\\endcsname{pro% split 😀\r\nvider}",
+            "\\newcommand{\\readprovider}{\\input}\\readprovider{pro% split 😀\r\nvider}",
+            "\\documentclass{pro% split 😀\r\nvider}",
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let source = format!("{provider}\\meaning\\{name}{{refs}}");
+            let workspace = project(root, &source, extension);
+            let main = uri(root, "main.tex");
+            assert!(
+                workspace
+                    .project_files(&main)
+                    .contains(&uri(root, &format!("refs.{extension}"))),
+                "{source}"
             );
         }
     }
