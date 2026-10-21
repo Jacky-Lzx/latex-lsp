@@ -229,6 +229,22 @@ fn native_xelatex_missing_glyph_levels_preserve_warnings_errors_and_child_positi
                 })
                 .collect();
             assert_eq!(glyphs.len(), 2, "{numbered}/{level}: {items:?}");
+            let summary = &outcome.analysis.as_ref().unwrap()["missingCharacters"];
+            assert_eq!(summary.as_array().unwrap().len(), 2, "{summary}");
+            for (glyph, codepoint) in [("中", "U+4E2D"), ("😀", "U+1F600")] {
+                let entry = summary
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|entry| entry["character"] == glyph)
+                    .unwrap();
+                assert_eq!(entry["codepoint"], codepoint);
+                assert_eq!(entry["severity"], if level == 3 { 1 } else { 2 });
+                let fonts = entry["fonts"].as_array().unwrap();
+                assert_eq!(fonts.len(), 1, "{summary}");
+                let font = fonts[0].as_str().unwrap();
+                assert_eq!(font, "[lmroman10-regular]:mapping=tex-text;", "{summary}");
+            }
             let text = Text::new(source.into());
             for glyph in glyphs {
                 assert_eq!(

@@ -260,13 +260,19 @@ pub(crate) fn rerun_required(diagnostic: &Diagnostic) -> bool {
         })
 }
 
-/// Summarize observed final-log warnings without multiplying repeated uses.
+fn generated_line_note(line: u32) -> String {
+    format!(" (reported line {line} is no longer present in the generated file)")
+}
+
+/// Summarize observed final-log diagnostics without multiplying repeated uses.
 pub fn compilation_analysis(
     diagnostics: &BTreeMap<Url, Vec<Diagnostic>>,
     diagnostics_truncated: bool,
 ) -> serde_json::Value {
     const MAX_KEYS: usize = 128;
     const MAX_KEY_CHARS: usize = 128;
+    const MAX_GLYPH_FONTS: usize = 8;
+    const MAX_FONT_CHARS: usize = 256;
     fn record_key(keys: &mut BTreeSet<String>, key: &str, truncated: &mut bool) {
         if key.chars().count() > MAX_KEY_CHARS || (keys.len() == MAX_KEYS && !keys.contains(key)) {
             *truncated = true;
@@ -279,13 +285,50 @@ pub fn compilation_analysis(
     let mut missing_destinations = BTreeSet::new();
     let mut duplicate_destinations = BTreeSet::new();
     let mut duplicate_labels = BTreeSet::new();
+    let mut glyphs: BTreeMap<char, (DiagnosticSeverity, BTreeSet<String>)> = BTreeMap::new();
     let mut rerun = false;
     let mut truncated = diagnostics_truncated;
-    for diagnostic in diagnostics
-        .values()
-        .flatten()
-        .filter(|diagnostic| diagnostic.severity == Some(DiagnosticSeverity::WARNING))
-    {
+    for diagnostic in diagnostics.values().flatten().filter(|diagnostic| {
+        matches!(
+            diagnostic.severity,
+            Some(DiagnosticSeverity::ERROR | DiagnosticSeverity::WARNING)
+        )
+    }) {
+        // Generated auxiliary files can have been rewritten since this error.
+        // The source-line explanation added for display is not part of the font.
+        let glyph_message = diagnostic
+            .data
+            .as_ref()
+            .filter(|data| data["unresolvedLine"] == true)
+            .and_then(|data| data["reportedLine"].as_u64())
+            .and_then(|line| u32::try_from(line).ok())
+            .and_then(|line| {
+                diagnostic
+                    .message
+                    .strip_suffix(generated_line_note(line).as_str())
+            })
+            .unwrap_or(&diagnostic.message);
+        if let Some((character, font)) = missing_character_details(glyph_message) {
+            if glyphs.len() == MAX_KEYS && !glyphs.contains_key(&character) {
+                truncated = true;
+            } else {
+                let severity = diagnostic.severity.expect("error or warning");
+                let (level, fonts) = glyphs
+                    .entry(character)
+                    .or_insert_with(|| (severity, BTreeSet::new()));
+                *level = (*level).min(severity);
+                if font.chars().count() > MAX_FONT_CHARS
+                    || (fonts.len() == MAX_GLYPH_FONTS && !fonts.contains(font))
+                {
+                    truncated = true;
+                } else {
+                    fonts.insert(font.to_string());
+                }
+            }
+        }
+        if diagnostic.severity != Some(DiagnosticSeverity::WARNING) {
+            continue;
+        }
         rerun = rerun || rerun_required(diagnostic);
         if let Some((citation, key)) = undefined_reference_key(&diagnostic.message) {
             let keys = if citation {
@@ -306,6 +349,17 @@ pub fn compilation_analysis(
             record_key(keys, &name, &mut truncated);
         }
     }
+    let missing_characters: Vec<_> = glyphs
+        .into_iter()
+        .map(|(character, (severity, fonts))| {
+            serde_json::json!({
+                "character": character.to_string(),
+                "codepoint": format!("U+{:04X}", character as u32),
+                "severity": severity,
+                "fonts": fonts,
+            })
+        })
+        .collect();
     serde_json::json!({
         "rerunRequired": rerun,
         "unresolvedReferences": references,
@@ -313,6 +367,7 @@ pub fn compilation_analysis(
         "unresolvedDestinations": missing_destinations,
         "duplicateDestinations": duplicate_destinations,
         "duplicateLabels": duplicate_labels,
+        "missingCharacters": missing_characters,
         "truncated": truncated,
     })
 }
@@ -424,6 +479,10 @@ fn box_code(message: &str) -> Option<&'static str> {
 }
 
 fn missing_character(message: &str) -> Option<char> {
+    missing_character_details(message).map(|(character, _)| character)
+}
+
+fn missing_character_details(message: &str) -> Option<(char, &str)> {
     let tail = message.strip_prefix("Missing character: There is no ")?;
     let (printed, tail) = tail.split_once(" (U+")?;
     let (hex, font) = tail.split_once(") in font ")?;
@@ -434,7 +493,14 @@ fn missing_character(message: &str) -> Option<char> {
         return None;
     }
     let character = char::from_u32(u32::from_str_radix(hex, 16).ok()?)?;
-    (printed == character.to_string()).then_some(character)
+    // TeX terminates the printed font descriptor with punctuation. Remove one
+    // terminator, preserving punctuation that belongs to the font itself.
+    let font = font.trim();
+    let font = font
+        .strip_suffix('.')
+        .or_else(|| font.strip_suffix('!'))
+        .unwrap_or(font);
+    (printed == character.to_string() && !font.is_empty()).then_some((character, font))
 }
 
 fn missing_character_ranges(
@@ -1893,9 +1959,7 @@ fn emit_with_context(
             .and_then(|extension| extension.to_str())
             .is_some_and(|extension| AUXILIARY_EXTENSIONS.contains(&extension));
     if rewritten {
-        message.push_str(&format!(
-            " (reported line {reported_line} is no longer present in the generated file)"
-        ));
+        message.push_str(&generated_line_note(reported_line));
     }
     let line = line.saturating_sub(1).min(last_line);
     let value = text.source.lines().nth(line as usize).unwrap_or("");
@@ -2328,6 +2392,11 @@ fn wrapped_message(
     i: &mut usize,
 ) -> String {
     let initial = lines[*i].trim_start();
+    // Engines byte-wrap missing-glyph messages inside font descriptors too.
+    // Use the same literal joining and source boundaries as their error form.
+    if initial.starts_with("Missing character:") {
+        return wrapped_error_message(root, lines, separator_lines, i, initial);
+    }
     let lua_destination = initial.strip_prefix("warning").is_some_and(|tail| {
         tail.trim_start()
             .starts_with("(pdf backend): unreferenced destination with name '")

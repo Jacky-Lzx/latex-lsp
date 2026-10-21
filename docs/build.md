@@ -68,6 +68,30 @@ end
 
 结果的 `analysis` 汇总本次最终 TeX 日志中的已确认重复编译请求（`rerunRequired`）、未解析交叉引用键（`unresolvedReferences`）、文献引用键（`unresolvedCitations`）、缺失 PDF 目标（`unresolvedDestinations`）、重复 PDF 目标（`duplicateDestinations`）和重复标签键（`duplicateLabels`）。仅从标准 LaTeX、包或类告警正文开头识别未解析引用；普通告警示例或文件名中的同类文字仍保留为告警，不计入引用键。键去重并排序；PDF 目标名解码引擎输出的 PDF 字符串转义，引用、文献和重复标签键保留原文。日志折行不会在引用键的括号前添加空格或把括号误读为文件边界。缺少定义本身不视为重复编译请求。表格列宽需要更新时，识别 `longtable` 的明确重编译提示；列宽收敛后的最终日志不再保留该请求。也识别 hyperref 关于 PDF 页标签（`/PageLabels`）的明确重编译提示；例如 XeLaTeX 首次构建后需要补全页标签，后续日志不再请求时清除该标记。每类最多 128 个键，每个键最多 128 个 Unicode 字符；超出预算的键不截短身份，而是省略并设置 `truncated`。诊断输入被省略时该标记也为 `true`。取消、超时、无法观测最终日志或因输入变化而丢弃的结果返回 `analysis: null`；早期编译轮次已解决的警告不会进入分析。
 
+### 缺字摘要
+
+`analysis.missingCharacters` 汇总最终日志中的缺字错误和警告，按字符码点排序。兼容警告和错误的字节折行，不在字体名称中插入空格。同一字符在不同位置、文件或字体中出现时合并为一项；`fonts` 保留去重并排序后的引擎字体描述，去掉引擎添加的一枚结尾标点，保留字体本身的标点；服务器附加的辅助文件行号说明不进入字体描述。`severity` 使用 LSP 级别：`1` 为错误，`2` 为警告；同一字符兼有两种级别时保留错误。摘要不改变逐位置诊断及构建错误数。
+
+例如 `analysis` 中的相关字段：
+
+```json
+{
+  "missingCharacters": [
+    {
+      "character": "中",
+      "codepoint": "U+4E2D",
+      "severity": 1,
+      "fonts": ["[lmroman10-regular]:mapping=tex-text;"]
+    }
+  ],
+  "truncated": false
+}
+```
+
+仅收录字面字符与合法 Unicode 码点一致的缺字消息；无法确认源码位置时仍可汇总日志确认的字符和字体，定位是否可靠继续由诊断表达。每次编译重新生成摘要，缺字解决后返回空数组；较早编译轮次的输出不会保留到最终日志的摘要中。
+
+最多保留 128 个字符，每个字符最多 8 个字体描述，每个描述最多 256 个 Unicode 字符。超出限制的字符或字体描述会被省略，并设置 `analysis.truncated`；不会截短名称。某个字符的字体描述全部超长时，仍保留字符、级别及空的 `fonts` 数组。已收录字符的后续错误仍会提升其级别，即使新字体描述超出限制。
+
 ## 编译配置
 
 使用 `initializationOptions`（Neovim 的 `init_options`）设置，运行中也可发送 `workspace/didChangeConfiguration`，其 `settings` 可直接使用下列对象或包在 `latex` 字段内。无效配置会被拒绝并保留原配置。

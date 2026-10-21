@@ -1993,6 +1993,96 @@ fn shared_glyph_contexts_publish_each_utf16_range_and_count_each_missing_charact
 
 #[test]
 #[cfg(unix)]
+fn missing_character_analysis_uses_final_logs_and_clears_resolved_fonts_and_glyphs() {
+    for numbered in [false, true] {
+        let script = "printf 'Missing character: There is no 字 (U+5B57) in font early-pass.\\n'\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\ncat \"${2%/*}/fixture.log\" > \"$1/main.log\"\n";
+        let (mut server, directory, main) = fake_build_server(script, false);
+        let source = "\\documentclass{article}\n\\input{child}\n";
+        std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+        std::fs::write(directory.path().join("child.tex"), "中😀中\n").unwrap();
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+        );
+        let prefix = if numbered { "./child.tex:1:" } else { "!" };
+        let warning = "Missing character: There is no 中 (U+4E2D) in font font-b.";
+        let mut mixed = format!("(./main.tex\n{warning}\n(./child.tex\n");
+        for glyph in "中😀中".chars() {
+            let font = if glyph == '中' {
+                "font-a"
+            } else {
+                "emoji-font"
+            };
+            mixed.push_str(&format!("{prefix} Missing character: There is no {glyph} (U+{:04X}) in font {font}.\nl.1 中😀中\n\n", glyph as u32));
+        }
+        mixed.push_str(")\n)\n");
+        let warning_only = format!("(./main.tex\n{warning}\n)\n");
+        for (id, log, expected, status, errors, warnings) in [
+            (
+                2,
+                mixed,
+                json!([
+                    {"character":"中", "codepoint":"U+4E2D", "severity":1, "fonts":["font-a", "font-b"]},
+                    {"character":"😀", "codepoint":"U+1F600", "severity":1, "fonts":["emoji-font"]},
+                ]),
+                "error",
+                3,
+                1,
+            ),
+            (
+                4,
+                warning_only,
+                json!([
+                    {"character":"中", "codepoint":"U+4E2D", "severity":2, "fonts":["font-b"]},
+                ]),
+                "success",
+                0,
+                1,
+            ),
+            (
+                6,
+                "(./main.tex\nOutput written on main.pdf (1 page).\n)\n".into(),
+                json!([]),
+                "success",
+                0,
+                0,
+            ),
+        ] {
+            std::fs::write(directory.path().join("fixture.log"), log).unwrap();
+            let started = server.request(
+                id,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            let finished = server.until(|message| {
+                message["method"] == "latex/buildFinished"
+                    && message["params"]["buildId"] == started["buildId"]
+            });
+            let result = &finished["params"];
+            assert_eq!(result["status"], status, "{finished}");
+            assert_eq!(result["errorsCount"], errors, "{finished}");
+            assert_eq!(result["warningsCount"], warnings, "{finished}");
+            assert_eq!(
+                result["analysis"]["missingCharacters"], expected,
+                "{finished}"
+            );
+            assert_eq!(result["analysis"]["truncated"], false);
+            assert_eq!(result["stale"], false);
+            let saved = server.request(
+                id + 1,
+                "workspace/executeCommand",
+                json!({"command":"latex.buildStatus","arguments":[main]}),
+            );
+            assert_eq!(&saved, result);
+        }
+        server.request(8, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
 fn unchanged_pdf_older_than_an_included_source_is_rejected_but_fresh_noop_builds_succeed() {
     let (mut server, directory, uri) = fake_build_server("exit 0\n", false);
     let source = "\\documentclass{article}\n\\input{chapter}\n";

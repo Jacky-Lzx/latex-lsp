@@ -43,7 +43,7 @@ fn summary_keeps_distinct_literal_keys_without_counting_repeated_uses() {
         compilation_analysis(&items, false),
         json!({
             "rerunRequired":false,"unresolvedReferences":[" spaced ","O'Connor","章😀"],
-            "unresolvedCitations":["beta","章😀"],"unresolvedDestinations":[],"duplicateDestinations":[],"duplicateLabels":[],"truncated":false,
+            "unresolvedCitations":["beta","章😀"],"unresolvedDestinations":[],"duplicateDestinations":[],"duplicateLabels":[],"missingCharacters":[],"truncated":false,
         })
     );
 }
@@ -111,7 +111,7 @@ fn reference_examples_remain_warnings_without_retargeting_real_source_uses() {
             assert_eq!(items[0].range.start.line, 2, "{message}");
             assert_eq!(
                 compilation_analysis(&parsed, false),
-                json!({"rerunRequired":false,"unresolvedReferences":[],"unresolvedCitations":[],"unresolvedDestinations":[],"duplicateDestinations":[],"duplicateLabels":[],"truncated":false}),
+                json!({"rerunRequired":false,"unresolvedReferences":[],"unresolvedCitations":[],"unresolvedDestinations":[],"duplicateDestinations":[],"duplicateLabels":[],"missingCharacters":[],"truncated":false}),
                 "{message}"
             );
         }
@@ -214,7 +214,7 @@ fn parsed_final_log_warnings_and_observation_limits_are_preserved() {
     let log="(./main.tex\nLaTeX Warning: Reference `missing' on page 1 undefined on input line 1.\nLaTeX Warning: Citation `lost' on page 1 undefined on input line 1.\nLaTeX Warning: Label(s) may have changed. Rerun to get cross-references right.\n)\n";
     assert_eq!(
         compilation_analysis(&parse(&root, log), false),
-        json!({"rerunRequired":true,"unresolvedReferences":["missing"],"unresolvedCitations":["lost"],"unresolvedDestinations":[],"duplicateDestinations":[],"duplicateLabels":[],"truncated":false})
+        json!({"rerunRequired":true,"unresolvedReferences":["missing"],"unresolvedCitations":["lost"],"unresolvedDestinations":[],"duplicateDestinations":[],"duplicateLabels":[],"missingCharacters":[],"truncated":false})
     );
     let package_log = "(./main.tex\nPackage natbib Warning: Citation(s) may have changed.\n(natbib) Rerun to get citations correct.\n)\n";
     assert_eq!(
@@ -245,7 +245,7 @@ fn parsed_final_log_warnings_and_observation_limits_are_preserved() {
             ),
             true
         ),
-        json!({"rerunRequired":false,"unresolvedReferences":[],"unresolvedCitations":[],"unresolvedDestinations":[],"duplicateDestinations":[],"duplicateLabels":[],"truncated":true})
+        json!({"rerunRequired":false,"unresolvedReferences":[],"unresolvedCitations":[],"unresolvedDestinations":[],"duplicateDestinations":[],"duplicateLabels":[],"missingCharacters":[],"truncated":true})
     );
 }
 
@@ -406,7 +406,7 @@ fn longtable_requests_another_pass_without_inventing_missing_references() {
             .any(|diagnostic| diagnostic.message.contains("Column widths have changed")));
         assert_eq!(
             compilation_analysis(&parsed, false),
-            json!({"rerunRequired":rerun,"unresolvedReferences":[],"unresolvedCitations":[],"unresolvedDestinations":[],"duplicateDestinations":[],"duplicateLabels":[],"truncated":false})
+            json!({"rerunRequired":rerun,"unresolvedReferences":[],"unresolvedCitations":[],"unresolvedDestinations":[],"duplicateDestinations":[],"duplicateLabels":[],"missingCharacters":[],"truncated":false})
         );
     }
 }
@@ -441,7 +441,7 @@ fn pdf_destination_summary_decodes_and_deduplicates_names_across_files_and_backe
         json!({
             "rerunRequired":false,"unresolvedReferences":["dest(old)"],
             "unresolvedCitations":["emoji😀"],"unresolvedDestinations":["dest(old)","emoji😀"],
-            "duplicateDestinations":["dest(old)"],"duplicateLabels":[],"truncated":false
+            "duplicateDestinations":["dest(old)"],"duplicateLabels":[],"missingCharacters":[],"truncated":false
         })
     );
 }
@@ -485,7 +485,7 @@ fn pdf_destination_summary_rejects_uncertain_records_and_untrusted_diagnostic_da
         compilation_analysis(&diagnostics(messages), false),
         json!({
             "rerunRequired":false,"unresolvedReferences":[],"unresolvedCitations":[],
-            "unresolvedDestinations":[],"duplicateDestinations":[],"duplicateLabels":[],"truncated":false
+            "unresolvedDestinations":[],"duplicateDestinations":[],"duplicateLabels":[],"missingCharacters":[],"truncated":false
         })
     );
 }
@@ -626,7 +626,7 @@ fn duplicate_label_summary_preserves_literal_names_and_keeps_other_key_categorie
         json!({
             "rerunRequired":false,"unresolvedReferences":["O'Connor"],"unresolvedCitations":["章😀"],
             "unresolvedDestinations":["lost"],"duplicateDestinations":["dup"],
-            "duplicateLabels":[" spaced ","O'Connor","章😀"],"truncated":false
+            "duplicateLabels":[" spaced ","O'Connor","章😀"],"missingCharacters":[],"truncated":false
         })
     );
 }
@@ -954,5 +954,254 @@ fn a_complete_reference_warning_at_print_width_preserves_following_file_and_erro
         let analysis = compilation_analysis(&parsed, false);
         let mut expected = vec![key.as_str(), "childmissing"];expected.sort();
         assert_eq!(analysis["unresolvedReferences"], json!(expected));
+    }
+}
+
+fn missing_glyph(character: char, font: &str, severity: DiagnosticSeverity) -> Diagnostic {
+    Diagnostic {
+        severity: Some(severity),
+        message: format!(
+            "Missing character: There is no {character} (U+{:04X}) in font {font}.",
+            character as u32
+        ),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn missing_character_summary_combines_fonts_files_and_highest_severity() {
+    let mut items = diagnostics(vec![
+        missing_glyph('中', "font-b", DiagnosticSeverity::WARNING),
+        missing_glyph('😀', "emoji-font", DiagnosticSeverity::WARNING),
+        missing_glyph('中', "font-b", DiagnosticSeverity::WARNING),
+    ]);
+    items.insert(
+        Url::parse("file:///tmp/latex-lsp-analysis/child.tex").unwrap(),
+        vec![missing_glyph('中', "font-a", DiagnosticSeverity::ERROR)],
+    );
+    let result = compilation_analysis(&items, false);
+    assert_eq!(
+        result["missingCharacters"],
+        json!([
+            {"character":"中", "codepoint":"U+4E2D", "severity":1, "fonts":["font-a", "font-b"]},
+            {"character":"😀", "codepoint":"U+1F600", "severity":2, "fonts":["emoji-font"]},
+        ])
+    );
+    assert_eq!(result["truncated"], false);
+    assert_eq!(result["rerunRequired"], false);
+}
+
+#[test]
+fn missing_character_summary_rejects_examples_bad_identity_and_untrusted_data() {
+    let mut messages = Vec::new();
+    let valid = missing_glyph('中', "font", DiagnosticSeverity::WARNING);
+    for prefix in [
+        "LaTeX Warning: Example: ",
+        "Package font Warning: ",
+        "Example: ",
+    ] {
+        messages.push(warning(format!("{prefix}{}", valid.message)));
+    }
+    for message in [
+        "Missing character: There is no 中 (U+1F600) in font font.",
+        "Missing character: There is no 中 (U+D800) in font font.",
+        "Missing character: There is no 中 (U+110000) in font font.",
+        "Missing character: There is no 中 (U+4E2D) in font .",
+        "Missing character: There is no ^^@ in font nullfont!",
+    ] {
+        messages.push(warning(message));
+    }
+    for severity in [
+        None,
+        Some(DiagnosticSeverity::INFORMATION),
+        Some(DiagnosticSeverity::HINT),
+    ] {
+        let mut item = valid.clone();
+        item.severity = severity;
+        messages.push(item);
+    }
+    let mut forged = warning("Some unrelated font warning.");
+    forged.code = Some(NumberOrString::String("missing-character".into()));
+    forged.data = Some(json!({"character":"中", "codepoint":"U+4E2D", "fonts":["phantom"]}));
+    messages.push(forged);
+    let result = compilation_analysis(&diagnostics(messages), false);
+    assert_eq!(result["missingCharacters"], json!([]));
+    assert_eq!(result["truncated"], false);
+}
+
+#[test]
+fn missing_character_budgets_bound_output_and_still_update_known_characters() {
+    let mut messages: Vec<_> = (0x4E00..0x4E80)
+        .map(|code| {
+            missing_glyph(
+                char::from_u32(code).unwrap(),
+                "font",
+                DiagnosticSeverity::WARNING,
+            )
+        })
+        .collect();
+    let at_limit = compilation_analysis(&diagnostics(messages.clone()), false);
+    assert_eq!(at_limit["missingCharacters"].as_array().unwrap().len(), 128);
+    assert_eq!(at_limit["truncated"], false);
+    messages.push(missing_glyph('中', "font", DiagnosticSeverity::WARNING));
+    // 中 is already one of the 128 accepted characters.
+    let duplicate = compilation_analysis(&diagnostics(messages.clone()), false);
+    assert_eq!(duplicate["truncated"], false);
+    messages.push(missing_glyph(
+        '😀',
+        "overflow-font",
+        DiagnosticSeverity::ERROR,
+    ));
+    messages.push(missing_glyph(
+        '中',
+        "second-font",
+        DiagnosticSeverity::ERROR,
+    ));
+    let result = compilation_analysis(&diagnostics(messages), false);
+    let glyphs = result["missingCharacters"].as_array().unwrap();
+    assert_eq!(glyphs.len(), 128);
+    assert_eq!(result["truncated"], true);
+    assert!(!glyphs.iter().any(|glyph| glyph["character"] == "😀"));
+    assert_eq!(
+        glyphs
+            .iter()
+            .find(|glyph| glyph["character"] == "中")
+            .unwrap(),
+        &json!({"character":"中", "codepoint":"U+4E2D", "severity":1, "fonts":["font", "second-font"]})
+    );
+    let characters: Vec<_> = glyphs
+        .iter()
+        .map(|glyph| glyph["character"].as_str().unwrap())
+        .collect();
+    let mut sorted = characters.clone();
+    sorted.sort();
+    assert_eq!(characters, sorted);
+}
+
+#[test]
+fn missing_character_font_budgets_preserve_identity_and_signal_omissions() {
+    let mut messages: Vec<_> = (0..8)
+        .map(|n| missing_glyph('中', &format!("font-{n}"), DiagnosticSeverity::WARNING))
+        .collect();
+    messages.push(missing_glyph('中', "font-0", DiagnosticSeverity::WARNING));
+    let at_limit = compilation_analysis(&diagnostics(messages.clone()), false);
+    assert_eq!(at_limit["truncated"], false);
+    assert_eq!(
+        at_limit["missingCharacters"][0]["fonts"]
+            .as_array()
+            .unwrap()
+            .len(),
+        8
+    );
+    messages.push(missing_glyph(
+        '中',
+        "font-overflow",
+        DiagnosticSeverity::ERROR,
+    ));
+    let result = compilation_analysis(&diagnostics(messages), false);
+    assert_eq!(result["missingCharacters"][0]["severity"], 1);
+    assert_eq!(
+        result["missingCharacters"][0]["fonts"]
+            .as_array()
+            .unwrap()
+            .len(),
+        8
+    );
+    assert_eq!(result["truncated"], true);
+    let accepted = "😀".repeat(256);
+    let oversize = "😀".repeat(257);
+    let result = compilation_analysis(
+        &diagnostics(vec![
+            missing_glyph('中', &oversize, DiagnosticSeverity::ERROR),
+            missing_glyph('文', &accepted, DiagnosticSeverity::WARNING),
+        ]),
+        false,
+    );
+    assert_eq!(
+        result["missingCharacters"],
+        json!([
+            {"character":"中", "codepoint":"U+4E2D", "severity":1, "fonts":[]},
+            {"character":"文", "codepoint":"U+6587", "severity":2, "fonts":[accepted]},
+        ])
+    );
+    assert_eq!(result["truncated"], true);
+}
+
+#[test]
+fn missing_character_fonts_remove_only_engine_terminators_and_preserve_unresolved_locations() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("main.tex");
+    std::fs::write(&root, "Main document.").unwrap();
+    let log = "(./main.tex\nMissing character: There is no 中 (U+4e2d) in font dotted..\n./gone.tex:99: Missing character: There is no 中 (U+4E2D) in font bang!!\n)\n";
+    let result = compilation_analysis(&parse(&root, log), true);
+    assert_eq!(
+        result["missingCharacters"],
+        json!([
+            {"character":"中", "codepoint":"U+4E2D", "severity":1, "fonts":["bang!", "dotted."]},
+        ])
+    );
+    assert_eq!(result["truncated"], true);
+}
+
+#[test]
+fn generated_source_line_notes_do_not_become_part_of_missing_font_descriptors() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("main.tex");
+    let auxiliary = directory.path().join("main.aux");
+    std::fs::write(&root, "Main document.").unwrap();
+    std::fs::write(&auxiliary, "").unwrap();
+    let parsed = parse(
+        &root,
+        "./main.aux:99: Missing character: There is no 中 (U+4E2D) in font nullfont!\n",
+    );
+    let item = &parsed[&Url::from_file_path(&auxiliary).unwrap()][0];
+    assert!(item
+        .message
+        .ends_with(" (reported line 99 is no longer present in the generated file)"));
+    assert_eq!(
+        compilation_analysis(&parsed, false)["missingCharacters"],
+        json!([
+            {"character":"中", "codepoint":"U+4E2D", "severity":1, "fonts":["nullfont"]},
+        ])
+    );
+}
+
+#[test]
+fn missing_character_byte_wraps_preserve_complete_font_descriptions_and_file_boundaries() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("main.tex");
+    let child = directory.path().join("child.tex");
+    std::fs::write(&root, "中\n").unwrap();
+    std::fs::write(&child, "Child text.\n").unwrap();
+    for width in [60, 79] {
+        for prefix in ["", "! ", "./main.tex:1: "] {
+            let font = format!("[{} Family Name]:mapping=tex-text;", "Font".repeat(20));
+            let message = format!(
+                "{prefix}{}",
+                missing_glyph('中', &font, DiagnosticSeverity::WARNING).message
+            );
+            let wrapped = message
+                .as_bytes()
+                .chunks(width)
+                .map(|bytes| std::str::from_utf8(bytes).unwrap())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let log = format!("(./main.tex\n{wrapped}\n\n(./child.tex\nLaTeX Warning: Child warning on input line 1.\n)\n)\n");
+            let parsed = parse(&root, &log);
+            let summary = compilation_analysis(&parsed, false);
+            assert_eq!(
+                summary["missingCharacters"],
+                json!([
+                    {"character":"中", "codepoint":"U+4E2D", "severity":if prefix.is_empty() { 2 } else { 1 }, "fonts":[font]},
+                ]),
+                "{wrapped}"
+            );
+            let parent = &parsed[&Url::from_file_path(&root).unwrap()];
+            assert_eq!(parent.len(), 1);
+            assert!(!parent[0].message.contains("child.tex"));
+            let items = &parsed[&Url::from_file_path(&child).unwrap()];
+            assert_eq!(items.len(), 1);
+            assert!(items[0].message.contains("Child warning"));
+        }
     }
 }
