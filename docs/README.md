@@ -11,7 +11,8 @@
 - [biblatex 引用](biblatex.md)：字段、列表、姓名、单次、多组和卷号引用。
 - [biblatex 文献分类](bibliography-categories.md)：分类分配、文献键编辑及重命名边界。
 - [符号与重命名](symbols.md)：宏、环境、计数器等符号的支持范围。
-- [项目与文件](projects.md)：根文件、依赖、路径和文件操作。
+- [项目与文件](projects.md)：工作区索引、根文件、依赖和路径解析。
+- [文件操作](file-operations.md)：文件移动协议、引用更新、文件 URL、创建和删除。
 - [编译](build.md)：命令、配置、通知、结果分析和产物检查。
 - [编译输入与过期结果](build-inputs.md)：保存检查、取消、依赖追踪和产物有效性。
 - [编译诊断](diagnostics.md)：错误定位、警告和拼写修复规则。

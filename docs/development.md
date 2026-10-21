@@ -28,6 +28,12 @@ cargo test --locked -- --include-ignored
 cargo test --locked --test box_warnings real_ -- --ignored
 ```
 
+真实文件 URL 重命名回归需要 pdfLaTeX 和 hyperref，验证改名前后生成的 PDF 仍保留查询参数、页面目标及四参数链接的目标：
+
+```sh
+cargo test --locked --test file_operations real_file_url_renames -- --ignored
+```
+
 真实 biblatex 引用及重编译请求回归还需要安装 biblatex 和 logreq，使用 pdfLaTeX 与 BibTeX：
 
 ```sh
