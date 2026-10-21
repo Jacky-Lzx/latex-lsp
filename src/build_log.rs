@@ -2145,6 +2145,57 @@ fn byte_wrapped_reference_message(
     None
 }
 
+/// Probe raw backend byte wraps without consuming possible file-stack lines.
+/// Commit the cursor only when the complete destination warning is confirmed.
+fn byte_wrapped_destination_message(
+    root: &Path,
+    lines: &[&str],
+    separator_lines: &[usize],
+    i: &mut usize,
+    initial: &str,
+) -> Option<String> {
+    let mut message = initial.to_owned();
+    let mut complete = None;
+    for end in (*i..).take(64) {
+        if destination_warning(&message).is_some() {
+            // An apostrophe at the print width can still be part of the name.
+            complete = Some((message.clone(), end));
+            if lines[end].len() < 79 {
+                break;
+            }
+        }
+        if lines[end].len() < 60 || message.len() >= 4096 {
+            break;
+        }
+        let Some(next) = lines.get(end + 1) else {
+            break;
+        };
+        if message.len() + next.len() > 4096
+            || next.trim().is_empty()
+            || (message_boundary(next) && !next.trim_start().starts_with(')'))
+            || next.trim_start().starts_with('<')
+            || next.trim_start().starts_with("Here is how much")
+        {
+            break;
+        }
+        let mut next_index = end + 1;
+        if numbered_error(&continued_error_line(
+            root,
+            lines,
+            separator_lines,
+            &mut next_index,
+        ))
+        .is_some()
+        {
+            break;
+        }
+        message.push_str(next);
+    }
+    let (message, end) = complete?;
+    *i = end;
+    Some(message)
+}
+
 fn wrapped_message(
     root: &Path,
     lines: &[&str],
@@ -2159,6 +2210,12 @@ fn wrapped_message(
                 .trim_start()
                 .starts_with("(pdf backend): ignoring duplicate destination with the name '")
     });
+    if let Some(message) = lua_destination
+        .then(|| byte_wrapped_destination_message(root, lines, separator_lines, i, initial))
+        .flatten()
+    {
+        return message;
+    }
     if initial.starts_with("pdfTeX warning (dest): name{")
         || initial.starts_with("pdfTeX warning (ext4): destination with the same identifier (name{")
         || lua_destination
@@ -4933,6 +4990,96 @@ mod tests {
                 format!("warning  (pdf backend): unreferenced destination with name '{encoded}'"),
             ] {
                 assert!(destination_warning(&message).is_none(), "{message}");
+            }
+        }
+    }
+
+    #[test]
+    fn raw_destination_parentheses_at_print_width_keep_complete_names_and_ranges() {
+        let directory = tempfile::tempdir().unwrap();
+        let main = directory.path().join("main.tex");
+        for (prefix, code, declaration) in [
+            (
+                "warning  (pdf backend): unreferenced destination with name '",
+                "undefined-pdf-destination",
+                false,
+            ),
+            (
+                "warning  (pdf backend): ignoring duplicate destination with the name '",
+                "duplicate-pdf-destination",
+                true,
+            ),
+        ] {
+            for suffix in ["(paired)", "(unpaired", ")unpaired", "(目标😀)"] {
+                let name = format!("{}{suffix}", "x".repeat(80 - prefix.len()));
+                let source = format!("😀 \\hypertarget{{{name}}}{{Target}}\\label{{{name}}}\\hyperlink{{{name}}}{{Link}}\r\n");
+                std::fs::write(&main, &source).unwrap();
+                let text = Text::new(source.clone());
+                let at = if declaration {
+                    source.find(&name)
+                } else {
+                    source.rfind(&name)
+                }
+                .unwrap();
+                let message = format!("{prefix}{name}'");
+                let mut log = String::new();
+                let mut start = 0;
+                while start < message.len() {
+                    let mut end = (start + 80).min(message.len());
+                    while !message.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    log.push_str(&message[start..end]);
+                    log.push('\n');
+                    start = end;
+                }
+                log.push_str("</fonts/resource.otf>\nLaTeX Warning: Keep.\n");
+                let diagnostics = parse(&main, &log);
+                let items = &diagnostics[&Url::from_file_path(&main).unwrap()];
+                assert_eq!(items.len(), 2, "{message}: {items:?}");
+                let mapped: Vec<_> = items
+                    .iter()
+                    .filter(|item| item.code == Some(NumberOrString::String(code.into())))
+                    .collect();
+                assert_eq!(mapped.len(), 1, "{message}: {items:?}");
+                assert_eq!(mapped[0].range, text.range(at, at + name.len()));
+                assert_eq!(
+                    mapped[0].data,
+                    Some(serde_json::json!({"destination":name}))
+                );
+                assert_eq!(mapped[0].message, message);
+                assert!(items
+                    .iter()
+                    .any(|item| item.message == "LaTeX Warning: Keep."));
+            }
+        }
+    }
+
+    #[test]
+    fn incomplete_raw_destination_wraps_preserve_file_stack_and_following_diagnostics() {
+        let directory = tempfile::tempdir().unwrap();
+        let main = directory.path().join("main.tex");
+        let child = directory.path().join("child.tex");
+        std::fs::write(&main, "Main source\n").unwrap();
+        std::fs::write(&child, "Child source\n").unwrap();
+        for prefix in [
+            "warning  (pdf backend): unreferenced destination with name '",
+            "warning  (pdf backend): ignoring duplicate destination with the name '",
+        ] {
+            let partial = format!("{prefix}{}", "x".repeat(80 - prefix.len()));
+            for log in [
+                format!("{partial}\n(./child.tex\nLaTeX Warning: Child sentinel.\n)\nLaTeX Warning: Main sentinel.\n"),
+                format!("(./child.tex\n{partial}\n)\nLaTeX Warning: Main sentinel.\n"),
+                format!("{partial}\n</fonts/resource.otf>\nchild.tex:1: LaTeX Error: Child sentinel.\nLaTeX Warning: Main sentinel.\n"),
+            ] {
+                let diagnostics = parse(&main, &log);
+                let all: Vec<_> = diagnostics.values().flatten().collect();
+                assert!(all.iter().all(|item| item.code.is_none() && item.data.is_none()), "{log}: {diagnostics:?}");
+                assert_eq!(all.iter().filter(|item| item.message == partial).count(), 1, "{log}: {diagnostics:?}");
+                let main_items = &diagnostics[&Url::from_file_path(&main).unwrap()];
+                assert!(main_items.iter().any(|item| item.message == "LaTeX Warning: Main sentinel."), "{log}: {diagnostics:?}");
+                let child_items = &diagnostics[&Url::from_file_path(&child).unwrap()];
+                assert!(child_items.iter().any(|item| item.message.contains("Child sentinel.") || item.message == partial), "{log}: {diagnostics:?}");
             }
         }
     }
