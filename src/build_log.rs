@@ -225,6 +225,7 @@ pub fn compilation_analysis(
                 | "Package natbib Warning: Citation(s) may have changed. Rerun to get citations correct."
                 | "Package natbib Warning: Citation(s) may have changed."
                 | "Package longtable Warning: Table widths have changed. Rerun LaTeX."
+                | "Package hyperref Warning: Rerun to get /PageLabels entry."
             ) || message
                 .strip_prefix("Package rerunfilecheck Warning: File `")
                 .and_then(|tail| tail.split_once("' has changed."))

@@ -55,6 +55,8 @@ fn rerun_requests_require_explicit_known_warning_messages() {
         "LaTeX Warning: Label(s) may have changed.\r\n Rerun to get cross-references right.",
         "Package natbib Warning: Citation(s) may have changed. Rerun to get citations correct.",
         "Package natbib Warning: Citation(s) may have changed.",
+        "Package hyperref Warning: Rerun to get /PageLabels entry.",
+        "Package hyperref Warning: Rerun to get /PageLabels\n entry.",
         "Package longtable Warning: Table widths have changed. Rerun LaTeX.",
         "Package longtable Warning: Table widths have changed.\r\n Rerun LaTeX.",
         "Package rerunfilecheck Warning: File `main.out' has changed.",
@@ -68,6 +70,11 @@ fn rerun_requests_require_explicit_known_warning_messages() {
         "LaTeX Warning: There were undefined references.",
         "LaTeX Warning: Reference `Rerun' on page 1 undefined on input line 1.",
         "Package local Warning: Rerun to get outlines right.",
+        "Package local Warning: Rerun to get /PageLabels entry.",
+        "Class hyperref Warning: Rerun to get /PageLabels entry.",
+        "Package hyperref Warning: Example: Rerun to get /PageLabels entry.",
+        "Package hyperref Warning: Rerun to get /PageLabels entry. Example text.",
+        "Package hyperref Warning: Rerun to get /PageLabels entry",
         "Package rerunfilecheck Warning: File `Rerun to get outlines right' could not open.",
         "Package local Warning: LaTeX Warning: Label(s) may have changed. Rerun to get cross-references right.",
         "Package longtable Warning: Column widths have changed in table 1 on input line 1.",
@@ -558,4 +565,39 @@ fn pdf_destination_summary_uses_complete_byte_wrapped_warnings_and_observation_l
         assert_eq!(result["truncated"], false);
         assert_eq!(compilation_analysis(&parsed, true)["truncated"], true);
     }
+}
+
+#[test]
+fn parsed_hyperref_page_label_requests_clear_with_the_final_log() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("main.tex");
+    std::fs::write(&root, "Main source\n").unwrap();
+    for message in [
+        "Package hyperref Warning: Rerun to get /PageLabels entry.\n",
+        "Package hyperref Warning: Rerun to get /PageLabels\n entry.\n",
+    ] {
+        let parsed = parse(&root, &format!("(./main.tex\n{message})\n"));
+        assert_eq!(parsed.values().map(Vec::len).sum::<usize>(), 1);
+        let analysis = compilation_analysis(&parsed, false);
+        assert_eq!(analysis["rerunRequired"], true);
+        for field in [
+            "unresolvedReferences",
+            "unresolvedCitations",
+            "unresolvedDestinations",
+            "duplicateDestinations",
+        ] {
+            assert_eq!(analysis[field], json!([]));
+        }
+        assert_eq!(analysis["truncated"], false);
+    }
+    assert_eq!(
+        compilation_analysis(
+            &parse(
+                &root,
+                "(./main.tex\nOutput written on main.pdf (1 page).\n)\n"
+            ),
+            false
+        )["rerunRequired"],
+        false
+    );
 }
