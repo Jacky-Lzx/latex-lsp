@@ -1,6 +1,6 @@
 # latex-lsp
 
-Rust 实现的 LaTeX Language Server，提供补全、导航、重命名、诊断、后台编译与结果分析，以及 SyncTeX 查询。
+Rust 实现的 LaTeX 语言服务器，支持补全、导航、重命名、诊断和后台编译。
 
 ```sh
 cargo install --path . --locked

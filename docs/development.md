@@ -14,7 +14,7 @@
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
-# 已安装 latexmk、pdfLaTeX、XeLaTeX、LuaLaTeX、BibTeX、SyncTeX 和 Neovim 0.10+ 时，执行真实编译及编辑器测试：
+# 已安装 latexmk、pdfLaTeX、XeLaTeX、LuaLaTeX、BibTeX、Biber、biblatex、logreq、SyncTeX 和 Neovim 0.10+ 时，执行真实编译及编辑器测试：
 cargo test --locked -- --include-ignored
 ```
 
@@ -34,6 +34,15 @@ cargo test --locked --test volume_citations real_volume -- --ignored
 ```
 
 文献资源回归验证全局资源在文件及文献键改名后的 pdfLaTeX / BibTeX 编译，以及 Biber 控制文件中的精确资源名称；后一项只生成 `.bcf`，无需运行 Biber。
+
+缺失文献资源修复另有两组真实工具回归：
+
+```sh
+cargo test --locked --test biblatex_resource_fixes real_biber -- --ignored
+cargo test --locked --test biblatex_resource_fixes real_bibtex -- --ignored
+```
+
+前者需要 Biber，使用 `--tool` 验证真实缺文件日志及修复后数据库可读取，不验证完整 PDF 编译；后者需要 pdfLaTeX、BibTeX、biblatex 和 logreq，验证应用文件名修复后重新生成 PDF。默认测试另覆盖特殊文件名、选项保留、版本化编辑、过期修复和 stdio 协议。
 
 ## 解析范围
 

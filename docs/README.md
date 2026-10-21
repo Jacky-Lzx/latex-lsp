@@ -14,5 +14,6 @@
 - [编译](build.md)：命令、配置、通知、结果分析和产物检查。
 - [编译输入与过期结果](build-inputs.md)：保存检查、取消、依赖追踪和产物有效性。
 - [编译诊断](diagnostics.md)：错误定位、警告和拼写修复规则。
+- [文献编译诊断](bibliography-diagnostics.md)：BibTeX / Biber 来源定位、缺失资源和文件名修复。
 - [SyncTeX 双向查询](synctex.md)：源码与 PDF 的查询协议。
 - [开发与测试](development.md)：检查命令和代码结构。
