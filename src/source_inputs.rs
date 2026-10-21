@@ -391,9 +391,18 @@ pub(crate) fn source_file_command(name: &str) -> bool {
     )
 }
 
+/// Direct source and bibliography paths can share the same editing checks.
+pub(crate) fn editable_file_command(name: &str) -> bool {
+    source_file_command(name)
+        || matches!(
+            name,
+            "bibliography" | "nobibliography" | "addbibresource" | "bibliographystyle"
+        )
+}
+
 /// Literal references remain editable inside deferred macro code, but not
 /// when consumed as opaque arguments or when the file command is overridden.
-pub(crate) fn editable_source_positions(
+pub(crate) fn editable_file_positions(
     workspace: &Workspace,
     scope: &BTreeSet<Url>,
 ) -> BTreeMap<Url, BTreeSet<usize>> {
@@ -414,7 +423,7 @@ pub(crate) fn editable_source_positions(
                 .commands
                 .iter()
                 .filter(|command| {
-                    source_file_command(&command.name)
+                    editable_file_command(&command.name)
                         && signatures.command_unchanged(&command.name)
                         && !operands.contains(&command.span.start)
                 })

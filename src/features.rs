@@ -680,7 +680,7 @@ fn argument_context(doc: &Document, offset: usize) -> Option<(&Command, Span<usi
         .find_map(|command| argument_span(doc, command, offset).map(|span| (command, span)))
 }
 
-fn direct_source_context_allowed(workspace: &Workspace, uri: &Url, command: &Command) -> bool {
+fn direct_file_context_allowed(workspace: &Workspace, uri: &Url, command: &Command) -> bool {
     let mut roots = workspace
         .root_document(uri)
         .map(|root| vec![root])
@@ -691,7 +691,7 @@ fn direct_source_context_allowed(workspace: &Workspace, uri: &Url, command: &Com
     roots.iter().all(|root| {
         let mut scope = workspace.project_documents(root);
         scope.insert(uri.clone());
-        crate::source_inputs::editable_source_positions(workspace, &scope)
+        crate::source_inputs::editable_file_positions(workspace, &scope)
             .get(uri)
             .is_some_and(|positions| positions.contains(&command.span.start))
     })
@@ -923,8 +923,8 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
     }
     if let Some((command, span)) = argument_context(doc, offset).filter(|_| !name_command) {
         if syntax::file_extensions(&command.name).is_some() {
-            if crate::source_inputs::source_file_command(&command.name)
-                && !direct_source_context_allowed(workspace, uri, command)
+            if crate::source_inputs::editable_file_command(&command.name)
+                && !direct_file_context_allowed(workspace, uri, command)
             {
                 return vec![];
             }

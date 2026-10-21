@@ -359,18 +359,18 @@ pub(crate) fn document_links_in(workspace: &Workspace, uri: &Url, root: &Url) ->
         .syntax
         .commands
         .iter()
-        .any(|command| crate::source_inputs::source_file_command(&command.name))
+        .any(|command| crate::source_inputs::editable_file_command(&command.name))
         .then(|| {
             let mut scope = workspace.project_documents(root);
             scope.insert(uri.clone());
-            crate::source_inputs::editable_source_positions(workspace, &scope)
+            crate::source_inputs::editable_file_positions(workspace, &scope)
         });
     for command in doc
         .syntax
         .commands
         .iter()
         .filter(|command| {
-            !crate::source_inputs::source_file_command(&command.name)
+            !crate::source_inputs::editable_file_command(&command.name)
                 || editable_sources
                     .as_ref()
                     .and_then(|sources| sources.get(uri))
