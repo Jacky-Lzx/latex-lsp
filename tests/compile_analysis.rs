@@ -886,3 +886,73 @@ fn ordinary_warning_status_text_keeps_line_ranges_without_borrowing_valid_use_lo
         assert_eq!(analysis["unresolvedCitations"], json!([]));
     }
 }
+
+#[test]
+fn full_warning_footers_inside_byte_wrapped_reference_keys_do_not_name_healthy_prefixes() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("main.tex");
+    let footer = "' on page 1 undefined on input line 1.";
+    for (kind, command, field) in [
+        ("Reference", "ref", "unresolvedReferences"),
+        ("Hyper reference", "hyperref", "unresolvedReferences"),
+        ("Citation", "cite", "unresolvedCitations"),
+    ] {
+        for quote in ['`', '\''] {
+            let prefix = format!("LaTeX Warning: {kind} {quote}");
+            let short = "x".repeat(79 - prefix.len() - footer.len());
+            for suffix in ["-tail", "(tail)", ")tail", "😀tail"] {
+                let key = format!("{short}{footer}{suffix}");
+                let source = if command == "hyperref" {
+                    format!("\\hyperref[{short}]{{Healthy}}\\hyperref[{key}]{{Missing}}\n")
+                } else {
+                    format!("\\{command}{{{short}}}\\{command}{{{key}}}\n")
+                };
+                std::fs::write(&root, &source).unwrap();
+                let message = format!("{prefix}{key}{footer}");
+                let boundary = prefix.len() + short.len() + footer.len();
+                assert_eq!(boundary, 79);
+                let wrapped = format!("{}\n{}", &message[..boundary], &message[boundary..]);
+                let parsed = parse(&root, &format!("(./main.tex\n{wrapped}\n)\n"));
+                let items = &parsed[&Url::from_file_path(&root).unwrap()];
+                assert_eq!(items.len(), 1, "{wrapped}");
+                assert_eq!(items[0].message, message, "{wrapped}");
+                assert_eq!(items[0].range.start, Position::new(0, 0), "{wrapped}");
+                assert_eq!(
+                    items[0].range.end,
+                    Position::new(0, source.trim_end().encode_utf16().count() as u32)
+                );
+                let analysis = compilation_analysis(&parsed, false);
+                assert_eq!(analysis[field], json!([key]), "{wrapped}");
+                assert_ne!(analysis[field], json!([short]), "{wrapped}");
+            }
+        }
+    }
+}
+
+#[test]
+fn a_complete_reference_warning_at_print_width_preserves_following_file_and_error_boundaries() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("main.tex");
+    let child = directory.path().join("child.tex");
+    let prefix = "LaTeX Warning: Reference `";
+    let footer = "' on page 1 undefined on input line 1.";
+    let key = "x".repeat(79 - prefix.len() - footer.len());
+    std::fs::write(&root, format!("\\ref{{{key}}}\n")).unwrap();
+    std::fs::write(&child, "\\ref{childmissing}\n\\bad\n").unwrap();
+    let warning = format!("{prefix}{key}{footer}");
+    assert_eq!(warning.len(), 79);
+    for entry in ["(./child.tex", "./child.tex:1: LaTeX Warning: Reference `childmissing' on page 1 undefined on input line 1."] {
+        let following = if entry.starts_with('(') { "\nLaTeX Warning: Reference `childmissing' on page 1 undefined on input line 1.\n./child.tex:2: Undefined control sequence.\nl.2 \\bad\n)" } else { "\n./child.tex:2: Undefined control sequence.\nl.2 \\bad" };
+        let parsed = parse(&root, &format!("(./main.tex\n{warning}\n{entry}{following}\n)\n"));
+        let main_items = &parsed[&Url::from_file_path(&root).unwrap()];
+        assert_eq!(main_items.len(), 1);
+        assert_eq!(main_items[0].message, warning);
+        let child_items = &parsed[&Url::from_file_path(&child).unwrap()];
+        assert_eq!(child_items.len(), 2, "{child_items:?}");
+        assert!(child_items.iter().any(|item| item.message.contains("childmissing") && item.range.start.line == 0));
+        assert!(child_items.iter().any(|item| item.message.contains("Undefined control sequence") && item.range.start.line == 1));
+        let analysis = compilation_analysis(&parsed, false);
+        let mut expected = vec![key.as_str(), "childmissing"];expected.sort();
+        assert_eq!(analysis["unresolvedReferences"], json!(expected));
+    }
+}

@@ -2151,8 +2151,7 @@ fn message_boundary(line: &str) -> bool {
         || line.starts_with(')')
 }
 
-/// Speculate across byte-width breaks without committing file-stack markers.
-/// A complete warning confirms that parentheses belong to its literal key.
+/// Confirm complete reference warnings before committing speculative byte wraps.
 fn byte_wrapped_reference_message(
     root: &Path,
     lines: &[&str],
@@ -2161,43 +2160,9 @@ fn byte_wrapped_reference_message(
     initial: &str,
 ) -> Option<String> {
     undefined_reference_start(initial)?;
-    if undefined_reference_key(initial).is_some() {
-        return None;
-    }
-    let mut message = initial.to_owned();
-    let mut end = *i;
-    for _ in 0..64 {
-        if lines[end].len() < 60 || message.len() >= 4096 {
-            return None;
-        }
-        let next = *lines.get(end + 1)?;
-        if message.len() + next.len() > 4096
-            || next.trim().is_empty()
-            || (message_boundary(next) && !next.trim_start().starts_with(')'))
-            || next.trim_start().starts_with('<')
-            || next.trim_start().starts_with("Here is how much")
-        {
-            return None;
-        }
-        let mut next_index = end + 1;
-        if numbered_error(&continued_error_line(
-            root,
-            lines,
-            separator_lines,
-            &mut next_index,
-        ))
-        .is_some()
-        {
-            return None;
-        }
-        message.push_str(next);
-        end += 1;
-        if message.ends_with('.') && undefined_reference_key(&message).is_some() {
-            *i = end;
-            return Some(message);
-        }
-    }
-    None
+    byte_wrapped_literal_message(root, lines, separator_lines, i, initial, |message| {
+        message.ends_with('.') && undefined_reference_key(message).is_some()
+    })
 }
 
 /// Probe byte wraps in literal warning names without consuming file-stack lines.
