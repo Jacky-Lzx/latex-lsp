@@ -448,7 +448,7 @@ FancyVerb 缺失文件错误使用诊断代码 `missing-fancyverb-input`，精�
 
 静态 `bibliography` / `nobibliography` 数据库列表和 `bibliographystyle` 样式也记录本地候选的存在状态与符号链接目标。编译期间文件补回、消失或切换目标时，即使没有文件事件，也会将结果标为过期并丢弃旧诊断；创建、删除和目录变化通知可取消相关编译并清除历史诊断。按真实 `.bib` / `.bst` 后缀、数据库去空白和样式单文件规则匹配路径；动态或不完整列表、项目内重定义的命令不作推断。候选与其他文件条件共用 4096 项上限；始终缺失而未变化的数据库不会单独使预生成 `.bbl` 的编译过期。
 
-本地宏包和文档类也参与相同的条件追踪，涵盖 `usepackage`、`RequirePackage`、`RequirePackageWithOptions`、`documentclass`、`LoadClass` 和 `LoadClassWithOptions`。宏包按完整静态列表去除 TeX 空白，类名按单文件参数保留内部空格与逗号，复用注释和可选参数规则。加载命令总追加 `.sty` / `.cls` 后缀，显式写出后缀也会再追加一次；追踪按此规则使用实际候选文件。动态、不完整或项目内重定义的同类加载命令不作静态推断；仅传递选项的 `PassOptionsToPackage` / `PassOptionsToClass` 不产生加载条件，候选仍共用上述上限。
+本地宏包和文档类也参与相同的条件追踪，涵盖 `usepackage`、`RequirePackage`、`RequirePackageWithOptions`、`documentclass`、`LoadClass` 和 `LoadClassWithOptions`。宏包按完整静态列表去除 TeX 空白，类名按单文件参数保留内部空格与逗号，复用注释和可选参数规则。加载命令总追加 `.sty` / `.cls` 后缀，显式写出后缀也会再追加一次；追踪按此规则使用实际候选文件。静态命名调用和纯别名加载的宏包、文档类也追踪缺失候选；文件在编译期间出现、改换目标或消失时，会丢弃已经过时的结果与诊断，即使没有文件监视通知。动态、不完整或项目内重定义的同类加载命令不作静态推断；仅传递选项的 `PassOptionsToPackage` / `PassOptionsToClass` 不产生加载条件，候选仍共用上述上限。
 
 静态 `includegraphics` 按图片扩展名、编译根目录及项目内静态 `graphicspath` 的搜索规则，保守记录选定图片及之前候选的存在状态和符号链接目标。尚不存在的图片目录同样参与追踪，目录别名保留原路径；编译期间补图会丢弃旧缺图诊断，图片或目录创建通知可取消编译，包括工作区外物理路径的通知。显式扩展名与带点名称的后缀回退共用图片导航规则，不采用子文件目录作为编译工作目录，也不追踪已知编译产物。候选共用 4096 项上限；搜索目录达到 256 项、路径声明动态、不完整或出现多次、项目重定义 `includegraphics` / `graphicspath`，或自定义 `DeclareGraphicsExtensions` / `DeclareGraphicsRule` 时，跳过这项静态图片条件，已确认输入的 recorder 与内容检查继续生效。
 

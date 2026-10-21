@@ -11660,3 +11660,71 @@ fn check_in_flight_code_input_history(command: &str) {
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+#[test]
+#[cfg(unix)]
+fn indirect_loader_candidates_created_during_failure_discard_obsolete_diagnostics() {
+    for (loader, extension) in [
+        ("usepackage", "sty"),
+        ("RequirePackage", "sty"),
+        ("RequirePackageWithOptions", "sty"),
+        ("documentclass", "cls"),
+        ("LoadClass", "cls"),
+        ("LoadClassWithOptions", "cls"),
+    ] {
+        for call in [
+            format!("\\csuse{{{loader}}}"),
+            format!("\\csname {loader}\\endcsname"),
+            r"\readpart".into(),
+            r"\csuse{readpart}".into(),
+            r"\csname readpart\endcsname".into(),
+        ] {
+            let script = "touch \"$1/ready\"\nwhile [ ! -f \"$1/release\" ]; do sleep 0.02; done\nprintf '%s:2: Undefined control sequence.\\n' \"$2\" > \"$1/main.log\"\nexit 1\n";
+            let (mut server, directory, main) = fake_build_server(script, false);
+            let source = format!("\\def\\readpart{{\\{loader}}}\n{call}{{fixture}}\\relax\n");
+            std::fs::write(main.to_file_path().unwrap(), &source).unwrap();
+            server.notify(
+                "textDocument/didChange",
+                json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+            );
+            server.request(
+                2,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            let output = directory.path().join("build/latex-lsp");
+            wait_for_file(&output.join("ready"));
+            std::fs::write(
+                directory.path().join(format!("fixture.{extension}")),
+                "New input.",
+            )
+            .unwrap();
+            std::fs::write(output.join("release"), "").unwrap();
+            let finished = server.until(|message| message["method"] == "latex/buildFinished");
+            assert_eq!(finished["params"]["status"], "error", "{finished}");
+            assert_eq!(
+                finished["params"]["stale"], true,
+                "{loader}/{call}: {finished}"
+            );
+            assert!(finished["params"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("diagnostics discarded"));
+            let diagnostics = server.request(
+                3,
+                "textDocument/diagnostic",
+                json!({"textDocument":{"uri":main}}),
+            );
+            assert!(
+                diagnostics["items"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|d| d["source"] != "latex-build"),
+                "{loader}/{call}: {diagnostics}"
+            );
+            server.request(4, "shutdown", Value::Null);
+            server.notify("exit", Value::Null);
+            server.wait_exit(0);
+        }
+    }
+}

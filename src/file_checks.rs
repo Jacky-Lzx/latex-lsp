@@ -283,6 +283,7 @@ impl Snapshot {
                     .get(&source)
                     .into_iter()
                     .flatten()
+                    .chain(inputs.loaders.get(&source).into_iter().flatten())
                     .filter(|call| call.certain)
                     .map(|call| &call.command),
             ) {
@@ -1717,5 +1718,137 @@ mod indirect_source_checks_tests {
             std::fs::write(directory.path().join("chapte.tex"), "Chapter").unwrap();
             assert!(snapshot.changed_path().is_some(), "{call}");
         }
+    }
+}
+#[cfg(test)]
+mod indirect_loader_conditions {
+    use super::*;
+
+    const LOADERS: [(&str, &str); 6] = [
+        ("usepackage", "sty"),
+        ("RequirePackage", "sty"),
+        ("RequirePackageWithOptions", "sty"),
+        ("documentclass", "cls"),
+        ("LoadClass", "cls"),
+        ("LoadClassWithOptions", "cls"),
+    ];
+
+    fn call(form: &str, loader: &str) -> String {
+        match form {
+            "named" => format!("\\csuse{{{loader}}}"),
+            "literal" => format!("\\csname {loader}\\endcsname"),
+            "alias" => r"\readpart".into(),
+            "named-alias" => r"\csuse{readpart}".into(),
+            "literal-alias" => r"\csname readpart\endcsname".into(),
+            _ => panic!(),
+        }
+    }
+
+    fn capture(root: &Path, source: &str) -> Snapshot {
+        std::fs::write(root.join("main.tex"), source).unwrap();
+        let mut workspace = Workspace::default();
+        workspace.add_root(root.into());
+        Snapshot::capture(
+            &workspace,
+            &Url::from_file_path(root.join("main.tex")).unwrap(),
+            &BuildConfig::default(),
+        )
+    }
+
+    #[test]
+    fn static_indirect_loaders_watch_missing_candidates_and_appended_extensions() {
+        for (loader, extension) in LOADERS {
+            for form in ["named", "literal", "alias", "named-alias", "literal-alias"] {
+                for explicit in [false, true] {
+                    let directory = tempfile::tempdir().unwrap();
+                    let root = directory.path();
+                    std::fs::create_dir(root.join("sub")).unwrap();
+                    let name = if extension == "sty" {
+                        "sub/fixt ure"
+                    } else {
+                        "sub/fixt ure,类"
+                    };
+                    let argument = format!(
+                        "{name}{}",
+                        if explicit {
+                            format!(".{extension}")
+                        } else {
+                            String::new()
+                        }
+                    );
+                    let options = if syntax::loader_forwards_options(loader) {
+                        ""
+                    } else {
+                        "[draft]"
+                    };
+                    let source = format!("\\def\\readpart{{\\{loader}}}\n{}{options}{{% head 😀\r\n{argument}% tail\r\n}}[2020/01/01]\n", call(form, loader));
+                    let snapshot = capture(root, &source);
+                    let normalized = if extension == "sty" {
+                        syntax::loader_name(&argument)
+                    } else {
+                        argument
+                    };
+                    let actual = root.join(format!("{normalized}.{extension}"));
+                    assert!(
+                        snapshot
+                            .watched()
+                            .contains(&Url::from_file_path(&actual).unwrap()),
+                        "{loader}/{form}/{explicit}: {snapshot:?}"
+                    );
+                    assert!(snapshot.changed_path().is_none());
+                    std::fs::write(root.join(normalized), "Decoy").unwrap();
+                    assert!(
+                        snapshot.changed_path().is_none(),
+                        "{loader}/{form}/{explicit}"
+                    );
+                    std::fs::write(actual, "Restored input").unwrap();
+                    assert!(
+                        snapshot.changed_path().is_some(),
+                        "{loader}/{form}/{explicit}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn uncertain_indirect_loaders_and_nonloading_forwarders_do_not_watch_guessed_targets() {
+        for (loader, extension) in LOADERS {
+            for form in ["named", "literal", "alias", "named-alias", "literal-alias"] {
+                let ctrl = call(form, loader);
+                for body in [
+                    format!("\\newcommand{{\\hold}}[1]{{}}\\hold{{{ctrl}{{fixture}}}}"),
+                    format!("\\newcommand{{\\later}}{{{ctrl}{{fixture}}}}"),
+                    format!("{ctrl}{{\\filename}}"),
+                    format!("{ctrl}{{fixt% split\nure}}"),
+                    format!("\\renewcommand{{\\{loader}}}[1]{{}}{ctrl}{{fixture}}"),
+                    format!("\\endinput{ctrl}{{fixture}}"),
+                    format!("{ctrl}{{fixture,\\filename}}"),
+                    format!("{ctrl}{{fixture"),
+                ] {
+                    let directory = tempfile::tempdir().unwrap();
+                    let root = directory.path();
+                    let source = format!("\\def\\readpart{{\\{loader}}}\n{body}");
+                    let snapshot = capture(root, &source);
+                    let target = root.join(format!("fixture.{extension}"));
+                    assert!(
+                        !snapshot
+                            .watched()
+                            .contains(&Url::from_file_path(&target).unwrap()),
+                        "{loader}/{form}/{body}: {snapshot:?}"
+                    );
+                    std::fs::write(target, "Unrelated target").unwrap();
+                    assert!(snapshot.changed_path().is_none(), "{loader}/{form}/{body}");
+                }
+            }
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let snapshot = capture(
+            root,
+            r"\def\readpart{\PassOptionsToPackage}\readpart{draft}{fixture}",
+        );
+        std::fs::write(root.join("fixture.sty"), "Options do not load").unwrap();
+        assert!(snapshot.changed_path().is_none());
     }
 }
