@@ -12409,3 +12409,135 @@ fn multicite_groups_support_navigation_hints_completion_and_versioned_rename_ove
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+fn volume_citations_support_hints_completion_and_versioned_rename_over_stdio() {
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}}}}));
+    server.notify("initialized", json!({}));
+    let main = "file:///volume-citation-protocol/main.tex";
+    let bib = "file:///volume-citation-protocol/refs.bib";
+    let source = "😀 \\volcite2{alpha}\\volcites(overall)[alpha]{alpha}[alpha]{alpha}[note]2[12]{beta}{3}{alpha}";
+    server.notify("textDocument/didOpen", json!({"textDocument":{"uri":bib,"languageId":"bibtex","version":4,"text":"@book{alpha,title={Alpha}}\n@book{beta,title={Beta}}"}}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":main,"languageId":"latex","version":6,"text":source}}),
+    );
+    let position =
+        latex_lsp::text::Text::new(source.into()).position(source.rfind("{alpha}").unwrap() + 3);
+    let target = json!({"textDocument":{"uri":main},"position":position});
+    let definition = server.request(2, "textDocument/definition", target.clone());
+    assert_eq!(definition[0]["uri"], bib);
+    let prepare = server.request(3, "textDocument/prepareRename", target.clone());
+    assert_eq!(prepare["placeholder"], "alpha");
+    let help = server.request(4, "textDocument/signatureHelp", target.clone());
+    assert_eq!(help["activeParameter"], 13);
+    let completions = server.request(5, "textDocument/completion", target.clone());
+    assert!(completions
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["label"] == "alpha"));
+    let references = server.request(6, "textDocument/references", json!({"textDocument":{"uri":main},"position":position,"context":{"includeDeclaration":true}}));
+    assert_eq!(references.as_array().unwrap().len(), 4);
+    let edit = server.request(
+        7,
+        "textDocument/rename",
+        json!({"textDocument":{"uri":main},"position":position,"newName":"renamed"}),
+    );
+    let changes = edit["documentChanges"].as_array().unwrap();
+    assert_eq!(changes.len(), 2);
+    for change in changes {
+        let is_main = change["textDocument"]["uri"] == main;
+        assert_eq!(
+            change["textDocument"]["version"],
+            if is_main { 6 } else { 4 }
+        );
+        assert_eq!(
+            change["edits"].as_array().unwrap().len(),
+            if is_main { 3 } else { 1 }
+        );
+    }
+    server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":7},"contentChanges":[{"text":"\\volcite{2}[pages]"}]}));
+    let help = server.request(
+        8,
+        "textDocument/signatureHelp",
+        json!({"textDocument":{"uri":main},"position":{"line":0,"character":18}}),
+    );
+    assert_eq!(help["activeParameter"], 3);
+    server.request(9, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+fn volume_citation_build_warnings_publish_exact_ranges_and_versioned_fixes_over_stdio() {
+    let script = "printf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf \"LaTeX Warning: Citation 'alphaa' on page 1 undefined on input line 5.\\n\" > \"$1/main.log\"\n";
+    let (mut server, directory, main) = fake_build_server_capabilities(
+        script,
+        false,
+        json!({"workspace":{"workspaceEdit":{"documentChanges":true}},"textDocument":{"codeAction":{"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix"]}}}}}),
+    );
+    let source = "\\documentclass{article}\n\\addbibresource{refs.bib}\n\\volcites[alphaa]{alphaa}[alphaa]{alphaa}\n[alphaa]{alphaa}[alphaa]{alphaa}\n\\printbibliography\n";
+    std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+    std::fs::write(
+        directory.path().join("refs.bib"),
+        "@book{alpha,title={Alpha}}\n",
+    )
+    .unwrap();
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+    );
+    server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let finished = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(finished["params"]["status"], "success", "{finished}");
+    assert_eq!(finished["params"]["diagnosticsCount"], 2);
+    assert_eq!(
+        finished["params"]["analysis"]["unresolvedCitations"],
+        json!(["alphaa"])
+    );
+    let published = server.until(|message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["uri"] == main.as_str()
+            && message["params"]["diagnostics"]
+                .as_array()
+                .is_some_and(|items| items.iter().any(|item| item["source"] == "latex-build"))
+    });
+    let diagnostics = published["params"]["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| item["source"] == "latex-build")
+        .collect::<Vec<_>>();
+    assert_eq!(diagnostics.len(), 2);
+    let text = latex_lsp::text::Text::new(source.into());
+    for (index, diagnostic) in diagnostics.into_iter().enumerate() {
+        let range: tower_lsp::lsp_types::Range =
+            serde_json::from_value(diagnostic["range"].clone()).unwrap();
+        let start = text.offset(range.start).unwrap();
+        assert_eq!(&source[start - 9..start], "[alphaa]{");
+        let actions = server.request(3+index as u64,"textDocument/codeAction",json!({"textDocument":{"uri":main},"range":range,"context":{"diagnostics":[diagnostic],"only":["quickfix"]}}));
+        assert_eq!(actions.as_array().unwrap().len(), 1, "{actions}");
+        assert_eq!(
+            actions[0]["edit"]["documentChanges"][0]["textDocument"]["version"],
+            2
+        );
+        assert_eq!(
+            actions[0]["edit"]["documentChanges"][0]["edits"][0]["newText"],
+            "alpha"
+        );
+        assert_eq!(
+            actions[0]["edit"]["documentChanges"][0]["edits"][0]["range"],
+            diagnostic["range"]
+        );
+    }
+    server.request(5, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

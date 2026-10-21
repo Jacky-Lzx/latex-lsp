@@ -96,7 +96,7 @@ fn candidates(doc: &Document) -> Vec<Token> {
                     }
                 }
             } else if syntax::is_citation(&command.name)
-                && !crate::citations::is_multi(&command.name)
+                && !crate::citations::is_structured(&command.name)
             {
                 if syntax::is_single_citation(&command.name) {
                     reference(&mut tokens, source, argument.span.clone());

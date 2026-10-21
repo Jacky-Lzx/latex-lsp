@@ -1580,6 +1580,50 @@ pub(crate) fn control_word(source: &str, start: usize) -> Option<Range<usize>> {
     (length > 0).then_some(start..start + 1 + length)
 }
 
+pub(crate) fn token(source: &str, start: usize) -> Option<&str> {
+    let ch = source.get(start..)?.chars().next()?;
+    let end = if ch == '\\' {
+        control_word(source, start).map_or_else(
+            || {
+                source[start + 1..]
+                    .chars()
+                    .next()
+                    .map(|ch| start + 1 + ch.len_utf8())
+            },
+            |span| Some(span.end),
+        )?
+    } else {
+        start + ch.len_utf8()
+    };
+    Some(&source[start..end])
+}
+
+/// Only infer ungrouped tokens whose boundaries agree across the engines. In
+/// pdfTeX a Unicode character consists of several UTF-8 tokens; XeTeX reads one
+/// character and may include Unicode letters in a control word instead.
+pub(crate) fn required_token(source: &str, start: usize) -> Option<&str> {
+    let rest = source.get(start..)?;
+    if rest.starts_with("^^") || rest.starts_with("\\^^") {
+        return None;
+    }
+    let value = token(source, start)?;
+    if !value.is_ascii()
+        || value.bytes().any(|byte| byte.is_ascii_control())
+        || (value.contains(' ') && value != "\\ ")
+        || matches!(value, "{" | "}" | "%" | "\\par")
+    {
+        return None;
+    }
+    if control_word(value, 0).is_some() {
+        let following = &source[start + value.len()..];
+        if following.starts_with("^^") || following.chars().next().is_some_and(|ch| !ch.is_ascii())
+        {
+            return None;
+        }
+    }
+    Some(value)
+}
+
 pub(crate) fn conditional_declaration(
     source: &str,
     commands: &[Command],
@@ -1638,7 +1682,7 @@ pub(crate) fn toggle_reference(name: &str) -> bool {
 }
 
 pub fn is_citation(name: &str) -> bool {
-    crate::citations::is_multi(name)
+    crate::citations::is_structured(name)
         || matches!(
             name,
             "cite"
@@ -1707,8 +1751,8 @@ pub(crate) fn citation_argument_start(
     name: &str,
     command_end: usize,
 ) -> Option<usize> {
-    if crate::citations::is_multi(name) {
-        return crate::citations::arguments(source, command_end)
+    if let Some(style) = crate::citations::style(name) {
+        return crate::citations::arguments(source, command_end, style)
             .keys()
             .next()
             .map(|argument| argument.outer_span.start);
@@ -1938,8 +1982,8 @@ impl Syntax {
                         span: start..command_end,
                         argument,
                     };
-                    if crate::citations::is_multi(name) {
-                        let arguments = crate::citations::arguments(source, command_end);
+                    if let Some(style) = crate::citations::style(name) {
+                        let arguments = crate::citations::arguments(source, command_end, style);
                         for argument in arguments.keys() {
                             for span in reference_list_spans(source, argument.span.clone()) {
                                 result.citation_references.push(Entry {

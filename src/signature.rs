@@ -1,7 +1,7 @@
 //! Linearly match call arguments; do not execute macro definitions.
 use crate::{
     catalog::COMMANDS,
-    syntax::{self, Entry},
+    syntax::{self, required_token, token, Entry},
     workspace::{Document, DocumentKind, Workspace},
 };
 use std::{
@@ -15,7 +15,7 @@ use tower_lsp::lsp_types::*;
 enum Kind {
     Required,
     RequiredGroup,
-    MultiKeys,
+    CitationKeys(crate::citations::Style),
     CommandToken,
     RequiredBracket,
     Optional,
@@ -126,9 +126,10 @@ impl<'a> CompletionSignatures<'a> {
         let mut tabstop = 0;
         for (index, parameter) in signature.parameters.iter().enumerate() {
             let (open, close) = match &parameter.kind {
-                Kind::Required | Kind::RequiredGroup | Kind::MultiKeys | Kind::CommandToken => {
-                    ("{", "}")
-                }
+                Kind::Required
+                | Kind::RequiredGroup
+                | Kind::CitationKeys(_)
+                | Kind::CommandToken => ("{", "}"),
                 Kind::RequiredBracket => ("[", "]"),
                 Kind::Delimited {
                     open,
@@ -230,11 +231,11 @@ fn push_delimiter(snippet: &mut String, delimiter: &str) {
 }
 
 fn builtin(name: &str) -> Option<Signature> {
-    if crate::citations::is_multi(name) {
+    if let Some(style) = crate::citations::style(name) {
         return Some(Signature {
             name: name.into(),
-            parameters: multicite_parameters(1),
-            documentation: "Biblatex repeated citation groups. Up to two overall notes in parentheses, followed by groups with up to two notes in brackets and bibliography keys in braces. Requires biblatex.".into(),
+            parameters: citation_parameters(style, 1),
+            documentation: "Biblatex citation arguments. Repeated calls accept up to two overall notes in parentheses; volume citations separate the volume and optional pages from bibliography keys. Requires biblatex.".into(),
             starred: true,
             nested_brackets: false,
         });
@@ -1287,50 +1288,6 @@ fn short(value: &str) -> String {
 
 /// Read one lexical TeX token without expanding it. In particular, a delimiter
 /// control word must not match a prefix of a longer control word.
-fn token(source: &str, start: usize) -> Option<&str> {
-    let ch = source.get(start..)?.chars().next()?;
-    let end = if ch == '\\' {
-        syntax::control_word(source, start).map_or_else(
-            || {
-                source[start + 1..]
-                    .chars()
-                    .next()
-                    .map(|ch| start + 1 + ch.len_utf8())
-            },
-            |span| Some(span.end),
-        )?
-    } else {
-        start + ch.len_utf8()
-    };
-    Some(&source[start..end])
-}
-
-/// Only infer ungrouped tokens whose boundaries agree across the engines. In
-/// pdfTeX a Unicode character consists of several UTF-8 tokens; XeTeX reads one
-/// character and may include Unicode letters in a control word instead.
-fn required_token(source: &str, start: usize) -> Option<&str> {
-    let rest = source.get(start..)?;
-    if rest.starts_with("^^") || rest.starts_with("\\^^") {
-        return None;
-    }
-    let value = token(source, start)?;
-    if !value.is_ascii()
-        || value.bytes().any(|byte| byte.is_ascii_control())
-        || (value.contains(' ') && value != "\\ ")
-        || matches!(value, "{" | "}" | "%" | "\\par")
-    {
-        return None;
-    }
-    if syntax::control_word(value, 0).is_some() {
-        let following = &source[start + value.len()..];
-        if following.starts_with("^^") || following.chars().next().is_some_and(|ch| !ch.is_ascii())
-        {
-            return None;
-        }
-    }
-    Some(value)
-}
-
 /// Static TeX parameter text, used only to establish which tokens are operands.
 /// Signature help deliberately keeps its existing, smaller set of signatures.
 #[derive(Clone)]
@@ -3118,10 +3075,12 @@ fn active_parameter(
                 control_word_spaces = word || argument == "\\ ";
                 continue;
             }
-            Kind::RequiredGroup | Kind::MultiKeys if source.as_bytes().get(i) != Some(&b'{') => {
+            Kind::RequiredGroup | Kind::CitationKeys(_)
+                if source.as_bytes().get(i) != Some(&b'{') =>
+            {
                 return None
             }
-            Kind::Required | Kind::RequiredGroup | Kind::MultiKeys | Kind::CommandToken => {
+            Kind::Required | Kind::RequiredGroup | Kind::CitationKeys(_) | Kind::CommandToken => {
                 (b'{', b'}')
             }
         };
@@ -3141,73 +3100,109 @@ fn active_parameter(
     None
 }
 
-fn multicite_parameters(groups: usize) -> Vec<Parameter> {
-    let mut parameters = ["note / prenote", "postnote"]
-        .into_iter()
-        .map(|label| Parameter {
-            obey_spaces: false,
-            kind: Kind::Delimited {
-                open: "(".into(),
-                close: ")".into(),
-                optional: true,
-            },
-            label: format!("({label})"),
-        })
-        .collect::<Vec<_>>();
+fn citation_parameters(style: crate::citations::Style, groups: usize) -> Vec<Parameter> {
+    let mut parameters = Vec::new();
+    if style.repeated() {
+        parameters.extend(
+            ["note / prenote", "postnote"]
+                .into_iter()
+                .map(|label| Parameter {
+                    obey_spaces: false,
+                    kind: Kind::Delimited {
+                        open: "(".into(),
+                        close: ")".into(),
+                        optional: true,
+                    },
+                    label: format!("({label})"),
+                }),
+        );
+    }
     for group in 1..=groups {
-        for label in ["note / prenote", "postnote"] {
+        let suffix = if style.repeated() {
+            format!(" {group}")
+        } else {
+            String::new()
+        };
+        let fields = if style.volume() {
+            vec![
+                ("prenote", Kind::Optional),
+                ("volume", Kind::Required),
+                ("pages", Kind::Optional),
+            ]
+        } else {
+            vec![
+                ("note / prenote", Kind::Optional),
+                ("postnote", Kind::Optional),
+            ]
+        };
+        for (label, kind) in fields {
+            let label = if matches!(kind, Kind::Optional) {
+                format!("[{label}{suffix}]")
+            } else {
+                format!("{{{label}{suffix}}}")
+            };
             parameters.push(Parameter {
                 obey_spaces: false,
-                kind: Kind::Optional,
-                label: format!("[{label} {group}]"),
+                kind,
+                label,
             });
         }
         parameters.push(Parameter {
             obey_spaces: false,
-            kind: Kind::MultiKeys,
-            label: format!("{{keys {group}}}"),
+            kind: Kind::CitationKeys(style),
+            label: format!("{{keys{suffix}}}"),
         });
     }
     parameters
 }
 
-fn multicite_active(
+fn citation_parameter(
+    style: crate::citations::Style,
+    group: usize,
+    role: crate::citations::Role,
+) -> usize {
+    use crate::citations::Role;
+    if let Role::Overall(index) = role {
+        return index;
+    }
+    let base =
+        if style.repeated() { 2 } else { 0 } + (group - 1) * if style.volume() { 4 } else { 3 };
+    base + match role {
+        Role::Note(index) => index,
+        Role::Volume => 1,
+        Role::Pages => 2,
+        Role::Keys => {
+            if style.volume() {
+                3
+            } else {
+                2
+            }
+        }
+        Role::Overall(_) => unreachable!(),
+    }
+}
+
+fn citation_active(
     source: &str,
     end: usize,
     cursor: usize,
+    style: crate::citations::Style,
     signature: &mut Signature,
 ) -> Option<usize> {
-    let parsed = crate::citations::arguments(source, end);
+    let parsed = crate::citations::arguments(source, end, style);
     let groups = parsed.fields.last().map_or(1, |field| field.group.max(1));
-    signature.parameters = multicite_parameters(groups);
-    let mut global_notes = 0;
-    let mut local_notes = 0;
-    let mut group = 0;
+    signature.parameters = citation_parameters(style, groups);
     for field in &parsed.fields {
-        if group != field.group {
-            group = field.group;
-            local_notes = 0;
-        }
-        let active = match field.open {
-            b'(' => {
-                let index = global_notes;
-                global_notes += 1;
-                index
-            }
-            b'[' => {
-                let index = 2 + 3 * (field.group - 1) + local_notes;
-                local_notes += 1;
-                index
-            }
-            _ => 4 + 3 * (field.group - 1),
-        };
         if cursor < field.argument.outer_span.end
             || (!field.complete && cursor == field.argument.outer_span.end)
         {
-            return Some(active);
+            return Some(citation_parameter(style, field.group, field.role));
         }
     }
-    (cursor == end && parsed.fields.is_empty()).then_some(4)
+    parsed
+        .waiting
+        .filter(|waiting| waiting.span.start <= cursor && cursor <= waiting.span.end)
+        .map(|waiting| citation_parameter(style, waiting.group, waiting.role))
 }
 
 pub fn help(workspace: &Workspace, uri: &Url, position: Position) -> Option<SignatureHelp> {
@@ -3311,13 +3306,17 @@ pub fn help(workspace: &Workspace, uri: &Url, position: Position) -> Option<Sign
             } else if named.is_some() {
                 signature.name = format!("csuse{{{name}}}");
             }
-            if signature
-                .parameters
-                .iter()
-                .any(|parameter| matches!(parameter.kind, Kind::MultiKeys))
+            if let Some(style) =
+                signature
+                    .parameters
+                    .iter()
+                    .find_map(|parameter| match parameter.kind {
+                        Kind::CitationKeys(style) => Some(style),
+                        _ => None,
+                    })
             {
                 if let Some(active) =
-                    multicite_active(&doc.text.source, end, cursor, &mut signature)
+                    citation_active(&doc.text.source, end, cursor, style, &mut signature)
                 {
                     return Some(signature.information(active));
                 }

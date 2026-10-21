@@ -1,31 +1,54 @@
-//! Biblatex multicite argument boundaries, shared by indexing and editor queries.
+//! Biblatex argument boundaries shared by indexing, diagnostics and editor queries.
 use crate::syntax::{self, Argument, Command};
 use std::ops::Range;
 
-pub(crate) fn is_multi(name: &str) -> bool {
-    matches!(
-        name,
-        "cites"
-            | "Cites"
-            | "parencites"
-            | "Parencites"
-            | "footcites"
-            | "Footcites"
-            | "footcitetexts"
-            | "Footcitetexts"
-            | "smartcites"
-            | "Smartcites"
-            | "supercites"
-            | "textcites"
-            | "Textcites"
-            | "autocites"
-            | "Autocites"
-    )
+#[derive(Clone, Copy)]
+pub(crate) enum Style {
+    Multi,
+    Volume,
+    MultiVolume,
+}
+
+impl Style {
+    pub fn repeated(self) -> bool {
+        matches!(self, Self::Multi | Self::MultiVolume)
+    }
+    pub fn volume(self) -> bool {
+        matches!(self, Self::Volume | Self::MultiVolume)
+    }
+}
+
+pub(crate) fn style(name: &str) -> Option<Style> {
+    match name {
+        "cites" | "Cites" | "parencites" | "Parencites" | "footcites" | "Footcites"
+        | "footcitetexts" | "Footcitetexts" | "smartcites" | "Smartcites" | "supercites"
+        | "textcites" | "Textcites" | "autocites" | "Autocites" => Some(Style::Multi),
+        "volcite" | "Volcite" | "pvolcite" | "Pvolcite" | "fvolcite" | "Fvolcite" | "ftvolcite"
+        | "Ftvolcite" | "svolcite" | "Svolcite" | "tvolcite" | "Tvolcite" | "avolcite"
+        | "Avolcite" => Some(Style::Volume),
+        "volcites" | "Volcites" | "pvolcites" | "Pvolcites" | "fvolcites" | "Fvolcites"
+        | "ftvolcites" | "Ftvolcites" | "svolcites" | "Svolcites" | "tvolcites" | "Tvolcites"
+        | "avolcites" | "Avolcites" => Some(Style::MultiVolume),
+        _ => None,
+    }
+}
+
+pub(crate) fn is_structured(name: &str) -> bool {
+    style(name).is_some()
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Role {
+    Overall(usize),
+    Note(usize),
+    Volume,
+    Pages,
+    Keys,
 }
 
 pub(crate) struct Field {
     pub argument: Argument,
-    pub open: u8,
+    pub role: Role,
     pub complete: bool,
     pub group: usize,
 }
@@ -33,13 +56,20 @@ pub(crate) struct Field {
 pub(crate) struct Arguments {
     pub fields: Vec<Field>,
     pub end: usize,
+    pub waiting: Option<Waiting>,
+}
+
+pub(crate) struct Waiting {
+    pub role: Role,
+    pub group: usize,
+    pub span: Range<usize>,
 }
 
 impl Arguments {
     pub fn keys(&self) -> impl Iterator<Item = &Argument> {
         self.fields
             .iter()
-            .filter(|field| field.open == b'{' && field.complete)
+            .filter(|field| field.role == Role::Keys && field.complete)
             .map(|field| &field.argument)
     }
 }
@@ -57,8 +87,7 @@ fn space(source: &str, mut at: usize) -> usize {
                 if at < bytes.len() {
                     at += 1;
                 }
-                // A comment removes its endline without changing TeX's
-                // current line state.
+                // A comment removes its endline without changing TeX's line state.
             }
             Some(b' ' | b'\t') => at += 1,
             Some(b'\r' | b'\n') if !newline => {
@@ -73,7 +102,7 @@ fn space(source: &str, mut at: usize) -> usize {
     }
 }
 
-fn field(source: &str, at: usize, open: u8, group: usize) -> Field {
+fn field(source: &str, at: usize, open: u8, group: usize, role: Role) -> Field {
     let parsed = match open {
         b'(' => syntax::parenthesis_note(source, at),
         b'[' => syntax::bracket_argument(source, at),
@@ -89,13 +118,54 @@ fn field(source: &str, at: usize, open: u8, group: usize) -> Field {
         });
     Field {
         argument,
-        open,
+        role,
         complete,
         group,
     }
 }
 
-pub(crate) fn arguments(source: &str, end: usize) -> Arguments {
+// Keep the first incomplete field for completion and signature help, while
+// indexing only complete key groups. Volumes and pages never enter the key index.
+fn push(
+    source: &str,
+    result: &mut Arguments,
+    at: &mut usize,
+    open: u8,
+    group: usize,
+    role: Role,
+) -> bool {
+    let part = field(source, *at, open, group, role);
+    let complete = part.complete;
+    *at = part.argument.outer_span.end;
+    result.fields.push(part);
+    result.end = *at;
+    if complete {
+        *at = space(source, *at);
+    }
+    complete
+}
+
+fn wait_for(
+    source: &str,
+    command_end: usize,
+    at: usize,
+    result: &mut Arguments,
+    group: usize,
+    role: Role,
+) {
+    if at == source.len() {
+        result.waiting = Some(Waiting {
+            role,
+            group,
+            span: result
+                .fields
+                .last()
+                .map_or(command_end, |field| field.argument.outer_span.end)..at,
+        });
+    }
+}
+
+pub(crate) fn arguments(source: &str, end: usize, style: Style) -> Arguments {
     let mut at = space(source, end);
     if source.as_bytes().get(at) == Some(&b'*') {
         at = space(source, at + 1);
@@ -103,61 +173,84 @@ pub(crate) fn arguments(source: &str, end: usize) -> Arguments {
     let mut result = Arguments {
         fields: Vec::new(),
         end: at,
+        waiting: None,
     };
-    for _ in 0..2 {
-        if source.as_bytes().get(at) != Some(&b'(') {
-            break;
+    if style.repeated() {
+        for note in 0..2 {
+            if source.as_bytes().get(at) != Some(&b'(') {
+                break;
+            }
+            if !push(source, &mut result, &mut at, b'(', 0, Role::Overall(note)) {
+                return result;
+            }
         }
-        let part = field(source, at, b'(', 0);
-        let complete = part.complete;
-        at = part.argument.outer_span.end;
-        result.fields.push(part);
-        result.end = at;
-        if !complete {
-            return result;
-        }
-        at = space(source, at);
     }
     let mut group = 0;
     loop {
         group += 1;
-        for _ in 0..2 {
+        // Biblatex continues a multicite only when the next token is a note
+        // or a brace group. Ordinary text or a control sequence ends it,
+        // even though a volume inside a started group may be a bare token.
+        if group > 1 && !matches!(source.as_bytes().get(at), Some(b'[' | b'{')) {
+            break;
+        }
+        for note in 0..if style.volume() { 1 } else { 2 } {
             if source.as_bytes().get(at) != Some(&b'[') {
                 break;
             }
-            let part = field(source, at, b'[', group);
-            let complete = part.complete;
-            at = part.argument.outer_span.end;
-            result.fields.push(part);
-            result.end = at;
-            if !complete {
+            if !push(source, &mut result, &mut at, b'[', group, Role::Note(note)) {
                 return result;
             }
-            at = space(source, at);
+        }
+        if style.volume() {
+            if source.as_bytes().get(at) == Some(&b'{') {
+                if !push(source, &mut result, &mut at, b'{', group, Role::Volume) {
+                    return result;
+                }
+            } else if let Some(value) = syntax::required_token(source, at) {
+                let span = at..at + value.len();
+                result.fields.push(Field {
+                    argument: Argument {
+                        value: value.into(),
+                        span: span.clone(),
+                        outer_span: span.clone(),
+                    },
+                    role: Role::Volume,
+                    complete: true,
+                    group,
+                });
+                at = space(source, span.end);
+            } else {
+                wait_for(source, end, at, &mut result, group, Role::Volume);
+                break;
+            }
+            if source.as_bytes().get(at) == Some(&b'[')
+                && !push(source, &mut result, &mut at, b'[', group, Role::Pages)
+            {
+                return result;
+            }
         }
         if source.as_bytes().get(at) != Some(&b'{') {
+            wait_for(source, end, at, &mut result, group, Role::Keys);
             break;
         }
-        let part = field(source, at, b'{', group);
-        let complete = part.complete;
-        at = part.argument.outer_span.end;
-        result.fields.push(part);
-        result.end = at;
-        if !complete {
+        if !push(source, &mut result, &mut at, b'{', group, Role::Keys) {
+            return result;
+        }
+        if !style.repeated() {
             break;
         }
-        at = space(source, at);
     }
-    // Biblatex looks ahead to the first non-space token before executing
-    // the accumulated citations. Its warnings can therefore name that line.
+    // Biblatex can read the next non-space token before executing citations,
+    // so its warning line may belong to the following command.
     result.end = at + source[at..].chars().next().map_or(0, char::len_utf8);
     result
 }
 
 pub(crate) fn prefix(source: &str, command: &Command, cursor: usize) -> Option<Range<usize>> {
-    let parsed = arguments(source, command.span.end);
+    let parsed = arguments(source, command.span.end, style(&command.name)?);
     parsed.fields.iter().find_map(|field| {
-        (field.open == b'{')
+        (field.role == Role::Keys)
             .then(|| {
                 syntax::active_key_list_prefix(
                     source,

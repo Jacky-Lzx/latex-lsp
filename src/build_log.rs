@@ -815,8 +815,11 @@ pub(crate) fn undefined_reference_ranges(text: &Text, line: u32, message: &str) 
         }) {
             continue;
         }
-        if citation && crate::citations::is_multi(&command.name) {
-            let arguments = crate::citations::arguments(&text.source, command.span.end);
+        if let Some(style) = citation
+            .then(|| crate::citations::style(&command.name))
+            .flatten()
+        {
+            let arguments = crate::citations::arguments(&text.source, command.span.end, style);
             if text.position(command.span.start).line <= line
                 && text.position(arguments.end.saturating_sub(1)).line >= line
             {

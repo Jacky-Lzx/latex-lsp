@@ -177,7 +177,6 @@ fn multicite_stops_at_paragraphs_ordinary_tokens_and_invalid_note_sequences() {
         r"\parencites[note][note][extra]{alpha}",
         r"\parencites{\dynamic}",
         r"\Supercites{alpha}",
-        r"\volcites{1}{alpha}",
     ] {
         let mut workspace = Workspace::default();
         let main = insert(&mut workspace, "main.tex", source);
