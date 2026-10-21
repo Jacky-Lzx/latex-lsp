@@ -6,7 +6,8 @@
 
 - [安装与编辑器配置](editors.md)：构建、Neovim 配置及示例。
 - [编辑功能](editing.md)：补全、导航、高亮和颜色。
-- [文献](bibliography.md)：文献键、biblatex 多组及卷号引用、手写文献和条目关系。
+- [文献](bibliography.md)：文献键、natbib、手写文献和条目关系。
+- [biblatex 引用](biblatex.md)：单次、多组、卷号引用及星号形式。
 - [符号与重命名](symbols.md)：宏、环境、计数器等符号的支持范围。
 - [项目与文件](projects.md)：根文件、依赖、路径和文件操作。
 - [编译](build.md)：命令、配置、通知、结果分析和产物检查。
