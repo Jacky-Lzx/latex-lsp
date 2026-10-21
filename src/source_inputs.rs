@@ -15,6 +15,7 @@ pub(crate) struct Index {
     pub calls: BTreeMap<Url, Vec<SourceCall>>,
     pub loaders: BTreeMap<Url, Vec<SourceCall>>,
     pub forwarders: BTreeMap<Url, Vec<SourceCall>>,
+    pub resources: BTreeMap<Url, Vec<SourceCall>>,
     pub incomplete: bool,
     literal: Option<BTreeMap<Url, Vec<Url>>>,
 }
@@ -37,6 +38,7 @@ impl Index {
             let mut literal = BTreeMap::new();
             let mut loader_calls = BTreeMap::new();
             let mut forwarders = BTreeMap::new();
+            let mut resources = BTreeMap::new();
             index.calls = scope
                 .iter()
                 .filter_map(|uri| {
@@ -72,6 +74,14 @@ impl Index {
                     if !options.is_empty() {
                         forwarders.insert(uri.clone(), options);
                     }
+                    let bibliography = signatures.indirect_bibliography_invocations(
+                        &doc.text.source,
+                        &doc.syntax,
+                        &positions,
+                    );
+                    if !bibliography.is_empty() {
+                        resources.insert(uri.clone(), bibliography);
+                    }
                     let calls = signatures.indirect_source_invocations(
                         &doc.text.source,
                         &doc.syntax,
@@ -82,6 +92,7 @@ impl Index {
                 .collect();
             index.loaders = loader_calls;
             index.forwarders = forwarders;
+            index.resources = resources;
             index.literal = Some(literal);
             let next = index.scope(workspace, root);
             if !index.incomplete && next == scope {
@@ -95,9 +106,27 @@ impl Index {
             calls: BTreeMap::new(),
             loaders: BTreeMap::new(),
             forwarders: BTreeMap::new(),
+            resources: BTreeMap::new(),
             incomplete: true,
             literal: None,
         }
+    }
+
+    pub fn resource_dependencies(
+        &self,
+        workspace: &Workspace,
+        uri: &Url,
+        root: &Url,
+    ) -> Vec<(Url, DocumentKind)> {
+        let Some(doc) = workspace.documents.get(uri) else {
+            return vec![];
+        };
+        self.resources
+            .get(uri)
+            .into_iter()
+            .flatten()
+            .flat_map(|call| resource_targets(&doc.text.source, uri, root, call))
+            .collect()
     }
 
     fn scope(&mut self, workspace: &Workspace, root: &Url) -> BTreeSet<Url> {
@@ -182,6 +211,42 @@ fn loader_targets(source: &str, uri: &Url, root: &Url, call: &SourceCall) -> Vec
         .filter_map(|name| {
             resolve_file_path(root, &call.command.name, &name, &[extension])
                 .or_else(|| resolve_file_path(uri, &call.command.name, &name, &[extension]))
+        })
+        .collect()
+}
+
+/// Keep resource roles even when an alias uses an unconventional suffix.
+fn resource_targets(
+    source: &str,
+    uri: &Url,
+    root: &Url,
+    call: &SourceCall,
+) -> Vec<(Url, DocumentKind)> {
+    if !call.certain {
+        return vec![];
+    }
+    let (extension, kind) = match call.command.name.as_str() {
+        "bibliography" | "nobibliography" => ("bib", DocumentKind::Bibtex),
+        "bibliographystyle" => ("bst", DocumentKind::BibtexStyle),
+        _ => return vec![],
+    };
+    let names = if syntax::file_list(&call.command.name) {
+        syntax::file_list_spans(source, &call.command)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|span| source[span].to_owned())
+            .collect::<Vec<_>>()
+    } else {
+        syntax::file_argument(source, &call.command)
+            .map(|argument| vec![argument.value.clone()])
+            .unwrap_or_default()
+    };
+    names
+        .into_iter()
+        .filter_map(|name| {
+            resolve_file_path(root, &call.command.name, &name, &[extension])
+                .or_else(|| resolve_file_path(uri, &call.command.name, &name, &[extension]))
+                .map(|uri| (uri, kind))
         })
         .collect()
 }

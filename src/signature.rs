@@ -1808,6 +1808,21 @@ impl<'a> CommandSignatures<'a> {
         )
     }
 
+    /// Bibliography resources provide data rather than LaTeX declarations.
+    pub(crate) fn indirect_bibliography_invocations(
+        &self,
+        source: &str,
+        parsed: &syntax::Syntax,
+        positions: &BTreeSet<usize>,
+    ) -> Vec<SourceCall> {
+        self.indirect_file_invocations(
+            source,
+            parsed,
+            positions,
+            &["bibliography", "nobibliography", "bibliographystyle"],
+        )
+    }
+
     fn indirect_file_invocations(
         &self,
         source: &str,
@@ -1866,7 +1881,9 @@ impl<'a> CommandSignatures<'a> {
                     command: syntax::Command {
                         name: builtin.into(),
                         span: start..end,
-                        argument: if syntax::loader_extension(builtin).is_some() {
+                        argument: if syntax::loader_extension(builtin).is_some()
+                            || builtin == "bibliographystyle"
+                        {
                             syntax::file_name_argument_start(source, builtin, end)
                                 .and_then(|start| syntax::group(source, start, b'{', b'}'))
                                 .map(|(argument, _)| argument)

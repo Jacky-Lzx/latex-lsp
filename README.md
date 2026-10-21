@@ -610,3 +610,5 @@ cargo test --locked -- --include-ignored
 ## 许可证
 
 [MIT](LICENSE)
+
+静态命名调用与纯别名的 `bibliography`、`nobibliography`、`bibliographystyle` 也参与文献库及样式依赖发现、路径补全、跳转和文件重命名，保留列表、注释及显式后缀。文献库与样式按各自的数据类型载入，内容不作为 LaTeX 宏声明；缺失候选参与编译前的文件条件检查，共享文件的编辑要求各主文档含义一致。

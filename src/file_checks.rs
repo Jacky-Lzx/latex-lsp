@@ -284,6 +284,7 @@ impl Snapshot {
                     .into_iter()
                     .flatten()
                     .chain(inputs.loaders.get(&source).into_iter().flatten())
+                    .chain(inputs.resources.get(&source).into_iter().flatten())
                     .filter(|call| call.certain)
                     .map(|call| &call.command),
             ) {
@@ -1850,5 +1851,111 @@ mod indirect_loader_conditions {
         );
         std::fs::write(root.join("fixture.sty"), "Options do not load").unwrap();
         assert!(snapshot.changed_path().is_none());
+    }
+}
+#[cfg(test)]
+mod indirect_bibliography_conditions {
+    use super::*;
+
+    fn capture(root: &Path, source: &str) -> Snapshot {
+        std::fs::write(root.join("main.tex"), source).unwrap();
+        let mut workspace = Workspace::default();
+        workspace.add_root(root.into());
+        Snapshot::capture(
+            &workspace,
+            &Url::from_file_path(root.join("main.tex")).unwrap(),
+            &BuildConfig::default(),
+        )
+    }
+
+    #[test]
+    fn indirect_bibliography_calls_watch_missing_candidates_with_real_suffix_rules() {
+        for (command, extension) in [
+            ("bibliography", "bib"),
+            ("nobibliography", "bib"),
+            ("bibliographystyle", "bst"),
+        ] {
+            for call in [
+                format!("\\csuse{{{command}}}"),
+                format!("\\csname {command}\\endcsname"),
+                r"\loadbib".into(),
+                r"\csuse{loadbib}".into(),
+                r"\csname loadbib\endcsname".into(),
+            ] {
+                for explicit in [false, true] {
+                    let directory = tempfile::tempdir().unwrap();
+                    let root = directory.path();
+                    let stem = if extension == "bib" {
+                        "fixt ure"
+                    } else {
+                        "fixture,part"
+                    };
+                    let name = format!(
+                        "{stem}{}",
+                        if explicit {
+                            format!(".{extension}")
+                        } else {
+                            String::new()
+                        }
+                    );
+                    let source = format!(
+                        "\\def\\loadbib{{\\{command}}}\n{call}{{% head 😀\r\n{name}% tail\r\n}}"
+                    );
+                    let snapshot = capture(root, &source);
+                    let normalized = if extension == "bib" {
+                        syntax::loader_name(stem)
+                    } else {
+                        stem.into()
+                    };
+                    let actual = root.join(format!("{normalized}.{extension}"));
+                    assert!(
+                        snapshot
+                            .watched()
+                            .contains(&Url::from_file_path(&actual).unwrap()),
+                        "{command}/{call}/{explicit}: {snapshot:?}"
+                    );
+                    std::fs::write(
+                        root.join(format!("{normalized}.{extension}.{extension}")),
+                        "Wrong double suffix",
+                    )
+                    .unwrap();
+                    assert!(snapshot.changed_path().is_none());
+                    std::fs::write(actual, "New resource").unwrap();
+                    assert!(snapshot.changed_path().is_some());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn uncertain_bibliography_calls_do_not_invent_missing_resource_conditions() {
+        for (command, extension) in [
+            ("bibliography", "bib"),
+            ("nobibliography", "bib"),
+            ("bibliographystyle", "bst"),
+        ] {
+            for body in [
+                r"\newcommand{\hold}[1]{}\hold{\loadbib{fixture}}".into(),
+                r"\newcommand{\later}{\loadbib{fixture}}".into(),
+                r"\loadbib{\filename}".into(),
+                format!("\\renewcommand{{\\{command}}}[1]{{}}\\loadbib{{fixture}}"),
+                "\\loadbib{fixt% split\nure}".into(),
+                r"\endinput\loadbib{fixture}".into(),
+            ] {
+                let directory = tempfile::tempdir().unwrap();
+                let root = directory.path();
+                let source = format!("\\def\\loadbib{{\\{command}}}\n{body}");
+                let snapshot = capture(root, &source);
+                let target = root.join(format!("fixture.{extension}"));
+                assert!(
+                    !snapshot
+                        .watched()
+                        .contains(&Url::from_file_path(&target).unwrap()),
+                    "{command}/{body}: {snapshot:?}"
+                );
+                std::fs::write(target, "Unrelated").unwrap();
+                assert!(snapshot.changed_path().is_none());
+            }
+        }
     }
 }
