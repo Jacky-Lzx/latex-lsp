@@ -13260,3 +13260,160 @@ fn missing_biblatex_resources_publish_versioned_fixes_and_recheck_alias_provider
         }
     }
 }
+
+#[test]
+#[cfg(unix)]
+fn biber_databases_with_arbitrary_suffixes_keep_roles_navigation_and_versioned_renames() {
+    for name in [
+        "refs.data",
+        "references",
+        "refs.bst",
+        "refs.png",
+        "refs.tex",
+    ] {
+        let script = "cp \"${2%/*}/fixture.blg\" \"$1/main.blg\"\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf '(./main.tex)\\n' > \"$1/main.log\"\n";
+        let (mut server, directory, main) = fake_build_server_capabilities(
+            script,
+            false,
+            json!({"textDocument":{"diagnostic":{}},"workspace":{"workspaceEdit":{"documentChanges":true}}}),
+        );
+        let root = directory.path();
+        std::fs::create_dir(root.join(".inputs")).unwrap();
+        let database = Url::from_file_path(root.join(".inputs").join(name)).unwrap();
+        let data = "% 😀 database\n@book{alpha,title={Alpha}}\n\\newcommand\\leaked{}\n";
+        std::fs::write(database.to_file_path().unwrap(), data).unwrap();
+        let source = format!("\\documentclass{{article}}\n\\def\\database{{.inputs/{name}}}\n\\addbibresource{{\\database}}\n\\cite{{alpha}}\\leaked\n");
+        std::fs::write(main.to_file_path().unwrap(), &source).unwrap();
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+        );
+        std::fs::write(root.join("fixture.blg"), format!("INFO - Found BibTeX data source '.inputs/{name}'\nWARN - Datamodel: Entry 'alpha' (.inputs/{name}): Missing author\n")).unwrap();
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(
+            finished["params"]["status"], "success",
+            "{name}: {finished}"
+        );
+        assert_eq!(finished["params"]["stale"], false, "{name}: {finished}");
+        assert_eq!(
+            finished["params"]["dependenciesCount"], 2,
+            "{name}: {finished}"
+        );
+        let diagnostic = server.request(
+            3,
+            "textDocument/diagnostic",
+            json!({"textDocument":{"uri":database}}),
+        );
+        let warning = diagnostic["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["source"] == "latex-build")
+            .unwrap();
+        assert_eq!(
+            warning["range"],
+            json!({"start":{"line":1,"character":6},"end":{"line":1,"character":11}}),
+            "{name}: {warning}"
+        );
+        let target = json!({"textDocument":{"uri":main},"position":{"line":3,"character":8}});
+        let definition = server.request(4, "textDocument/definition", target.clone());
+        assert_eq!(
+            definition[0]["uri"],
+            json!(database),
+            "{name}: {definition}"
+        );
+        let leaked = server.request(
+            5,
+            "textDocument/definition",
+            json!({"textDocument":{"uri":main},"position":{"line":3,"character":16}}),
+        );
+        assert!(leaked.as_array().unwrap().is_empty(), "{name}: {leaked}");
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":database,"languageId":"bib","version":7,"text":data}}),
+        );
+        let rename = server.request(
+            6,
+            "textDocument/rename",
+            json!({"textDocument":{"uri":main},"position":target["position"],"newName":"renamed"}),
+        );
+        let changes = rename["documentChanges"].as_array().unwrap();
+        assert_eq!(changes.len(), 2, "{name}: {rename}");
+        for change in changes {
+            assert_eq!(
+                change["textDocument"]["version"],
+                if change["textDocument"]["uri"] == json!(main) {
+                    json!(2)
+                } else {
+                    json!(7)
+                }
+            );
+            assert_eq!(change["edits"].as_array().unwrap().len(), 1);
+            assert_eq!(change["edits"][0]["newText"], "renamed");
+        }
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":database}}),
+        );
+        let moved_path = root.join(".inputs/moved.data");
+        let moved = Url::from_file_path(&moved_path).unwrap();
+        std::fs::rename(database.to_file_path().unwrap(), &moved_path).unwrap();
+        server.notify(
+            "workspace/didRenameFiles",
+            json!({"files":[{"oldUri":database,"newUri":moved}]}),
+        );
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":moved,"languageId":"latex","version":8,"text":data}}),
+        );
+        let definition = server.request(7, "textDocument/definition", target);
+        assert_eq!(definition[0]["uri"], json!(moved), "{name}: {definition}");
+        server.request(8, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn discovered_biber_databases_with_arbitrary_suffixes_reject_unsaved_and_changed_inputs() {
+    for name in ["refs.data", "refs.bst", "references"] {
+        for changed in [false, true] {
+            let script="touch \"$1/ready\"\nwhile [ ! -f \"$1/release\" ]; do sleep 0.02; done\ncp \"${2%/*}/fixture.blg\" \"$1/main.blg\"\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\n";
+            let (mut server, directory, main) = fake_build_server(script, false);
+            let root = directory.path();
+            std::fs::create_dir(root.join(".inputs")).unwrap();
+            let path = root.join(".inputs").join(name);
+            let database = Url::from_file_path(&path).unwrap();
+            std::fs::write(&path, "@book{alpha,title={Alpha}}\n").unwrap();
+            std::fs::write(root.join("fixture.blg"),format!("INFO - Found BibTeX data source '.inputs/{name}'\nWARN - Datamodel: Entry 'alpha' (.inputs/{name}): Missing author\n")).unwrap();
+            if !changed {
+                server.notify("textDocument/didOpen",json!({"textDocument":{"uri":database,"languageId":"bib","version":1,"text":"@book{alpha,title={Unsaved}}\n"}}));
+            }
+            server.request(
+                2,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            wait_for_file(&root.join("build/latex-lsp/ready"));
+            if changed {
+                std::fs::write(&path, "@book{alpha,title={Changed}}\n").unwrap();
+            }
+            std::fs::write(root.join("build/latex-lsp/release"), "").unwrap();
+            let finished = server.until(|message| message["method"] == "latex/buildFinished");
+            assert_eq!(
+                finished["params"]["stale"], true,
+                "{name}/{changed}: {finished}"
+            );
+            assert_eq!(finished["params"]["dependenciesCount"], 2, "{finished}");
+            server.request(3, "shutdown", Value::Null);
+            server.notify("exit", Value::Null);
+            server.wait_exit(0);
+        }
+    }
+}

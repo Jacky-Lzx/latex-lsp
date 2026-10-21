@@ -35,6 +35,8 @@ pub fn inputs(root: &Path, contents: &str) -> BTreeSet<Url> {
 pub(crate) struct InputFiles {
     pub all: BTreeSet<Url>,
     pub binary: BTreeSet<Url>,
+    /// Database roles reported by a bibliography tool, regardless of suffix.
+    pub bibliography_databases: BTreeSet<Url>,
     /// Absolute names TeX opened, before following symlinks or resolving `..`.
     pub bindings: BTreeMap<PathBuf, PathBuf>,
     /// Logged names which disappeared before the log could be inspected.
@@ -102,16 +104,11 @@ pub(crate) fn classified_bibliography_inputs(
 ) -> InputFiles {
     let mut result = InputFiles::default();
     for name in contents.lines().take(32768).filter_map(bibliography_source) {
-        if !matches!(
-            Path::new(name.trim_matches('"'))
-                .extension()
-                .and_then(|ext| ext.to_str()),
-            Some("bib" | "bst")
-        ) {
-            continue;
-        }
         if let Some((path, target)) = paths.resolve_binding(name) {
             if let Ok(uri) = Url::from_file_path(&target) {
+                if paths.is_database(name) {
+                    result.bibliography_databases.insert(uri.clone());
+                }
                 result.all.insert(uri);
                 if result.bindings.len() < 4096 {
                     result.bindings.insert(path, target);
@@ -132,13 +129,23 @@ pub(crate) fn classified_bibliography_inputs(
 }
 
 pub(crate) fn bibliography_source(line: &str) -> Option<&str> {
+    bibliography_database_source(line).or_else(|| {
+        line.strip_prefix("The style file: ")
+            .map(str::trim)
+            .filter(|name| name.trim_matches('"').ends_with(".bst"))
+    })
+}
+
+pub(crate) fn bibliography_database_source(line: &str) -> Option<&str> {
     if line.starts_with("Database file #") {
-        line.split_once(": ").map(|(_, name)| name.trim())
-    } else if let Some(name) = line.strip_prefix("The style file: ") {
-        Some(name.trim())
+        line.split_once(": ")
+            .map(|(_, name)| name.trim())
+            .filter(|name| name.trim_matches('"').ends_with(".bib"))
     } else {
-        line.split_once("Found BibTeX data source '")
-            .and_then(|(_, tail)| tail.strip_suffix('\''))
+        line.split_once("INFO - ")
+            .and_then(|(_, message)| message.strip_prefix("Found BibTeX data source '"))
+            .and_then(|tail| tail.strip_suffix('\''))
+            .filter(|name| !name.is_empty() && !name.chars().any(char::is_control))
     }
 }
 
@@ -161,6 +168,18 @@ struct BibliographySources {
     opened: BTreeSet<PathBuf>,
     missing: BTreeSet<PathBuf>,
     candidates: BTreeSet<PathBuf>,
+    extensions: BTreeSet<String>,
+    extensionless_names: BTreeSet<String>,
+}
+
+impl BibliographySources {
+    fn record_suffix(&mut self, path: &Path) {
+        if let Some(extension) = path.extension().and_then(|value| value.to_str()) {
+            self.extensions.insert(extension.to_owned());
+        } else if let Some(name) = path.file_name().and_then(|value| value.to_str()) {
+            self.extensionless_names.insert(name.to_owned());
+        }
+    }
 }
 
 pub(crate) struct RecordedBibliographySource {
@@ -205,9 +224,8 @@ impl<'a> BibliographyPaths<'a> {
         for name in contents
             .lines()
             .take(32768)
-            .filter_map(bibliography_source)
+            .filter_map(bibliography_database_source)
             .map(|name| name.trim().trim_matches('"'))
-            .filter(|name| name.ends_with(".bib"))
         {
             bibliography_names.insert(name);
             if bibliography_names.len() >= 4096 {
@@ -260,6 +278,11 @@ impl<'a> BibliographyPaths<'a> {
         self.resolve_binding(name).map(|(_, target)| target)
     }
 
+    fn is_database(&self, name: &str) -> bool {
+        self.bibliography_names
+            .contains(name.trim().trim_matches('"'))
+    }
+
     pub(crate) fn recorded_bibliography_source(
         &self,
         name: &str,
@@ -267,10 +290,63 @@ impl<'a> BibliographyPaths<'a> {
         if self.bibliography_names.is_empty() {
             return None;
         }
-        let sources = self.bibliography_sources.get_or_init(|| {
+        let sources = self.sources();
+        if let Some(target) = sources.raw.get(name) {
+            // Once a source was selected, disappearance must not silently
+            // switch its raw name to an unrelated fallback database.
+            return Some(RecordedBibliographySource {
+                path: target
+                    .as_ref()
+                    .filter(|target| self.resolve(name).as_ref() == Some(*target))
+                    .cloned(),
+                selected: true,
+            });
+        }
+        // Prefer a confirmed tool input over an unreported same-named file in
+        // a fallback directory. Candidate order still selects between inputs.
+        let mut named = false;
+        let mut selected = false;
+        for path in self.database_candidates(name) {
+            if let Some(target) = path.canonicalize().ok().filter(|path| path.is_file()) {
+                if sources.targets.contains(&target) {
+                    return Some(RecordedBibliographySource {
+                        path: Some(target),
+                        selected: true,
+                    });
+                }
+            }
+            for binding in bibliography_binding_names(&path) {
+                let input = sources.opened.contains(&binding) || sources.missing.contains(&binding);
+                selected |= input;
+                named |= input || sources.candidates.contains(&binding);
+            }
+        }
+        named.then_some(RecordedBibliographySource {
+            path: None,
+            selected,
+        })
+    }
+
+    /// Filter ordinary message words before attempting path equivalence on
+    /// additional database suffixes. Bare .bib paths retain the existing rules.
+    pub(crate) fn could_name_database(&self, name: &str) -> bool {
+        let path = Path::new(name);
+        if let Some(extension) = path.extension().and_then(|value| value.to_str()) {
+            extension == "bib" || self.sources().extensions.contains(extension)
+        } else {
+            path.file_name()
+                .and_then(|value| value.to_str())
+                .is_some_and(|name| self.sources().extensionless_names.contains(name))
+        }
+    }
+
+    fn sources(&self) -> &BibliographySources {
+        self.bibliography_sources.get_or_init(|| {
             let mut sources = BibliographySources::default();
             for name in &self.bibliography_names {
+                sources.record_suffix(Path::new(name));
                 let missing = if let Some((opened, target)) = self.resolve_binding(name) {
+                    sources.record_suffix(&target);
                     sources.opened.extend(bibliography_binding_names(&opened));
                     sources.targets.insert(target.clone());
                     sources.raw.insert(name.clone(), Some(target));
@@ -298,40 +374,6 @@ impl<'a> BibliographyPaths<'a> {
                 }
             }
             sources
-        });
-        if let Some(target) = sources.raw.get(name) {
-            // Once a source was selected, disappearance must not silently
-            // switch its raw name to an unrelated fallback database.
-            return Some(RecordedBibliographySource {
-                path: target
-                    .as_ref()
-                    .filter(|target| self.resolve(name).as_ref() == Some(*target))
-                    .cloned(),
-                selected: true,
-            });
-        }
-        // Prefer a confirmed tool input over an unreported same-named file in
-        // a fallback directory. Candidate order still selects between inputs.
-        let mut named = false;
-        let mut selected = false;
-        for path in self.candidates(name) {
-            if let Some(target) = path.canonicalize().ok().filter(|path| path.is_file()) {
-                if sources.targets.contains(&target) {
-                    return Some(RecordedBibliographySource {
-                        path: Some(target),
-                        selected: true,
-                    });
-                }
-            }
-            for binding in bibliography_binding_names(&path) {
-                let input = sources.opened.contains(&binding) || sources.missing.contains(&binding);
-                selected |= input;
-                named |= input || sources.candidates.contains(&binding);
-            }
-        }
-        named.then_some(RecordedBibliographySource {
-            path: None,
-            selected,
         })
     }
 
@@ -342,13 +384,26 @@ impl<'a> BibliographyPaths<'a> {
         })
     }
 
+    fn database_candidates<'b>(&'b self, name: &'b str) -> impl Iterator<Item = PathBuf> + 'b {
+        self.bib_directories
+            .iter()
+            .map(PathBuf::as_path)
+            .chain(self.directories)
+            .map(move |directory| directory.join(name.trim().trim_matches('"')))
+    }
+
     fn candidates<'b>(&'b self, name: &'b str) -> impl Iterator<Item = PathBuf> + 'b {
         let name = name.trim().trim_matches('"');
         // This is a printed name, not a fallback search. Even when both files
         // exist, BibTeX opened foo.bst for a logged foo.bst.bst. Other tools and
         // database names retain their literal spelling.
-        let name = self.style_names.get(name).map_or(name, String::as_str);
-        let search = if name.ends_with(".bst") {
+        let database = self.is_database(name);
+        let name = if database {
+            name
+        } else {
+            self.style_names.get(name).map_or(name, String::as_str)
+        };
+        let search = if !database && name.ends_with(".bst") {
             &self.bst_directories
         } else {
             &self.bib_directories
@@ -364,6 +419,38 @@ impl<'a> BibliographyPaths<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn biber_database_roles_select_bibinput_paths_even_for_style_suffixes() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        for folder in ["data", "styles"] {
+            std::fs::create_dir(root.join(folder)).unwrap();
+            for name in ["refs.bst", "refs.bst.bst", "references", "article.bst"] {
+                std::fs::write(root.join(folder).join(name), "@book{alpha}\n").unwrap();
+            }
+        }
+        let main = root.join("main.tex");
+        let log_path = root.join("main.blg");
+        for name in ["refs.bst", "refs.bst.bst", "references"] {
+            let log =
+                format!("INFO - Found BibTeX data source '{name}'\nThe style file: article.bst\n");
+            let paths = BibliographyPaths::new(&main, &log_path, &log)
+                .with_search_output("BIBINPUTS='data'\nBSTINPUTS='styles'\n");
+            let inputs = classified_bibliography_inputs(&paths, &log);
+            let database = Url::from_file_path(root.join("data").join(name)).unwrap();
+            let style = Url::from_file_path(root.join("styles/article.bst")).unwrap();
+            assert_eq!(inputs.all, [database.clone(), style].into());
+            assert_eq!(inputs.bibliography_databases, [database].into());
+            assert_eq!(
+                paths
+                    .recorded_bibliography_source(&format!("./{name}"))
+                    .unwrap()
+                    .path,
+                Some(root.join("data").join(name)),
+            );
+        }
+    }
 
     #[test]
     #[cfg(unix)]

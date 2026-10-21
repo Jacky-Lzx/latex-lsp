@@ -4168,8 +4168,7 @@ pub(crate) fn parse_bibliography_in(
     let mut result = BTreeMap::new();
     let databases: Vec<_> = log
         .lines()
-        .filter_map(crate::recorder::bibliography_source)
-        .filter(|name| name.trim_matches('"').ends_with(".bib"))
+        .filter_map(crate::recorder::bibliography_database_source)
         .filter_map(|name| paths.resolve(name))
         .collect();
     let mut previous = "";
@@ -4433,6 +4432,17 @@ fn bibliography_entry(message: &str, filename: Option<&ByteRange<usize>>) -> Bib
     {
         return BibliographyEntry::Key(TYPE_PREFIX.len()..TYPE_PREFIX.len() + key.len());
     }
+    const DUPLICATE_PREFIX: &str = "Duplicate entry key: ";
+    if message
+        .strip_prefix(DUPLICATE_PREFIX)
+        .is_some_and(|tail| tail.starts_with(['\'', '"']))
+    {
+        let start = DUPLICATE_PREFIX.len();
+        return match bibliography_quote_end(message, start) {
+            Some(end) => BibliographyEntry::Key(start + 1..end),
+            None => BibliographyEntry::Unconfirmed(start + 1..message.len()),
+        };
+    }
     for (index, _) in bibliography_fields(message, filename) {
         let word_start = !message[..index].ends_with(|ch: char| ch.is_alphanumeric() || ch == '_');
         if !word_start
@@ -4504,7 +4514,7 @@ fn bibliography_path(
     };
     let mut unconfirmed = None;
     let explicit = bibliography_source_fields(paths, message).find_map(|(start, _)| {
-        if message[..start].ends_with(|ch: char| ch.is_alphanumeric() || ch == '_') {
+        if message[..start].ends_with(|ch: char| ch.is_alphanumeric() || matches!(ch, '_' | '-')) {
             return None;
         }
         markers.iter().find_map(|marker| {
@@ -4538,7 +4548,12 @@ fn bibliography_path(
                 }
                 BibliographyLocation::Named { path, span }
             } else {
-                bibliography_explicit_unquoted_path(paths, message, start)?
+                bibliography_explicit_unquoted_path(
+                    paths,
+                    message,
+                    start,
+                    biber && (!generic || file.is_some()),
+                )?
             };
             // Prose such as `in parser` or `in 'parser'` must not preempt
             // the real file field. Retain an unresolved generic field only
@@ -4703,39 +4718,54 @@ fn bibliography_recorded_unquoted_path(
     start: usize,
 ) -> Option<BibliographyLocation> {
     let body = &message[start..];
+    // Database names are bounded separately from the rest of a tool message.
+    let mut scan_end = body.len().min(8192);
+    while !body.is_char_boundary(scan_end) {
+        scan_end -= 1;
+    }
+    let scanned = &body[..scan_end];
     let token_end = body.find(char::is_whitespace).unwrap_or(body.len());
     // A recorded short name must not truncate a complete longer bare token.
     let minimum_end = body[..token_end]
         .rmatch_indices(".bib")
         .map(|(index, _)| index + 4)
         .find(|&end| bibliography_unquoted_terminated(&body[end..]))
-        .unwrap_or(0);
-    body.rmatch_indices(".bib").find_map(|(index, _)| {
-        let end = index + 4;
-        if end < minimum_end || !bibliography_unquoted_terminated(&body[end..]) {
-            return None;
-        }
-        let (name, span_end) = bibliography_unquoted_name(body, end);
-        // A literal opening bracket in a logged name takes precedence over
-        // treating it as a wrapper supplied by the diagnostic message.
-        let (name, span_end, source) = paths
-            .recorded_bibliography_source(&body[..end])
-            .map(|source| (&body[..end], end, source))
-            .or_else(|| {
-                paths
-                    .recorded_bibliography_source(name)
-                    .map(|source| (name, span_end, source))
-            })?;
-        let path = if source.selected {
-            source.path
-        } else {
-            source.path.or_else(|| paths.resolve(name))
-        };
-        Some(BibliographyLocation::Named {
-            path,
-            span: start..start + span_end,
+        .unwrap_or_else(|| {
+            body[..token_end]
+                .trim_end_matches([',', ':', ';', ')', ']', '}', '.'])
+                .len()
+        });
+    std::iter::once(scan_end)
+        .chain(scanned.char_indices().rev().map(|(end, _)| end))
+        .filter(|&end| end > 0)
+        .find_map(|end| {
+            if end < minimum_end || !bibliography_unquoted_terminated(&body[end..]) {
+                return None;
+            }
+            let (name, span_end) = bibliography_unquoted_name(body, end);
+            if !paths.could_name_database(&body[..end]) && !paths.could_name_database(name) {
+                return None;
+            }
+            // A literal opening bracket in a logged name takes precedence over
+            // treating it as a wrapper supplied by the diagnostic message.
+            let (name, span_end, source) = paths
+                .recorded_bibliography_source(&body[..end])
+                .map(|source| (&body[..end], end, source))
+                .or_else(|| {
+                    paths
+                        .recorded_bibliography_source(name)
+                        .map(|source| (name, span_end, source))
+                })?;
+            let path = if source.selected {
+                source.path
+            } else {
+                source.path.or_else(|| paths.resolve(name))
+            };
+            Some(BibliographyLocation::Named {
+                path,
+                span: start..start + span_end,
+            })
         })
-    })
 }
 
 fn bibliography_unquoted_path(
@@ -4775,6 +4805,7 @@ fn bibliography_explicit_unquoted_path(
     paths: &crate::recorder::BibliographyPaths<'_>,
     message: &str,
     start: usize,
+    explicit_file: bool,
 ) -> Option<BibliographyLocation> {
     let recorded = bibliography_recorded_unquoted_path(paths, message, start);
     let body = &message[start..];
@@ -4789,7 +4820,14 @@ fn bibliography_explicit_unquoted_path(
         }
     }
     let Some(end) = last_extension else {
-        return bibliography_unquoted_path(paths, message, start);
+        return bibliography_unquoted_path(paths, message, start).or_else(|| {
+            // An explicit unknown file must not borrow another database's
+            // entry. A generic `in parser` remains ordinary message prose.
+            explicit_file.then(|| BibliographyLocation::Named {
+                path: None,
+                span: start..start + body.find(char::is_whitespace).unwrap_or(body.len()),
+            })
+        });
     };
     let (path, end) = if bibliography_unquoted_terminated(&body[end..]) {
         let (name, span_end) = bibliography_unquoted_name(body, end);
@@ -4827,9 +4865,6 @@ fn bibliography_recorded_quote_end(
     let body = &message[start + 1..];
     body.rmatch_indices(quote).find_map(|(end, _)| {
         let name = &body[..end];
-        if !name.ends_with(".bib") {
-            return None;
-        }
         let tail = &body[end + 1..];
         if !tail.starts_with(char::is_whitespace) && !bibliography_quote_terminated(tail) {
             return None;
@@ -4855,7 +4890,11 @@ fn bibliography_quoted_path(
     let recorded = bibliography_recorded_quote_end(paths, message, start).filter(|(end, _)| {
         // A recorded prefix cannot truncate an otherwise complete longer
         // filename, including a source missing from this tool's input list.
-        !parsed.is_some_and(|parsed| parsed > *end && message[start + 1..parsed].ends_with(".bib"))
+        !parsed.is_some_and(|parsed| {
+            parsed > *end
+                && (message[start + 1..parsed].ends_with(".bib")
+                    || !message[start + 1..*end].ends_with(".bib"))
+        })
     });
     let is_recorded = recorded.is_some();
     let (end, path) = if let Some((end, source)) = recorded {

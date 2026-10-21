@@ -214,6 +214,8 @@ pub struct Workspace {
     /// Opened recorder paths and the physical files selected by the last build.
     pub recorded_bindings: BTreeMap<Url, BTreeMap<PathBuf, PathBuf>>,
     pub bibliography_inputs: BTreeMap<Url, BTreeSet<Url>>,
+    /// Database parser roles confirmed by complete bibliography tool logs.
+    pub bibliography_databases: BTreeMap<Url, BTreeSet<Url>>,
     /// Paths selected by the last complete BibTeX/Biber logs, before symlinks.
     pub bibliography_bindings: BTreeMap<Url, BTreeMap<PathBuf, PathBuf>>,
     /// Input contents from each root's last complete bibliography tool logs.
@@ -777,6 +779,13 @@ impl Workspace {
     }
 
     fn recorded_kind(&self, uri: &Url) -> Option<DocumentKind> {
+        if self
+            .bibliography_databases
+            .values()
+            .any(|databases| databases.contains(uri))
+        {
+            return Some(DocumentKind::Bibtex);
+        }
         let path = uri.to_file_path().ok()?;
         let mut style = false;
         for (name, target) in self

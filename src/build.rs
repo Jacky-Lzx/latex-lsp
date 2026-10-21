@@ -524,6 +524,14 @@ impl BuildManager {
                     current
                         .bibliography_bindings
                         .insert(root_uri.clone(), bindings);
+                    current.bibliography_databases.insert(
+                        root_uri.clone(),
+                        outcome
+                            .bibliography_databases
+                            .intersection(&recorded)
+                            .cloned()
+                            .collect(),
+                    );
                     for uri in &recorded {
                         current.reload_bibliography(uri);
                     }
@@ -1070,6 +1078,7 @@ pub struct Outcome {
     pub bindings: BTreeMap<PathBuf, PathBuf>,
     pub unresolved_bindings: BTreeSet<PathBuf>,
     pub bibliography_inputs: Option<BTreeSet<Url>>,
+    pub bibliography_databases: BTreeSet<Url>,
     pub bibliography_bindings: BTreeMap<PathBuf, PathBuf>,
     pub bibliography_unresolved_bindings: BTreeSet<PathBuf>,
     pub pdf_updated: bool,
@@ -1094,6 +1103,7 @@ impl Outcome {
             bindings: BTreeMap::new(),
             unresolved_bindings: BTreeSet::new(),
             bibliography_inputs: None,
+            bibliography_databases: BTreeSet::new(),
             bibliography_bindings: BTreeMap::new(),
             bibliography_unresolved_bindings: BTreeSet::new(),
             pdf_updated: false,
@@ -1456,6 +1466,9 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool, rebuild: bo
                     .bibliography_inputs
                     .get_or_insert_with(BTreeSet::new)
                     .extend(inputs.all);
+                outcome
+                    .bibliography_databases
+                    .extend(inputs.bibliography_databases);
                 outcome.bibliography_bindings.extend(inputs.bindings);
                 outcome
                     .bibliography_unresolved_bindings
@@ -1479,6 +1492,7 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool, rebuild: bo
     }
     if !bibliography_complete {
         outcome.bibliography_inputs = None;
+        outcome.bibliography_databases.clear();
         outcome.bibliography_bindings.clear();
         outcome.bibliography_unresolved_bindings.clear();
     }
