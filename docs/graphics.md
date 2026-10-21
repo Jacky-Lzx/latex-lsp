@@ -34,17 +34,7 @@
 
 ## 静态别名与命名调用
 
-目录和扩展名声明支持无参数、正文仅含单个控制序列的纯别名，包括别名链，以及静态 `\csuse` / `\csname` 调用。例如：
-
-```tex
-\def\Paths{\graphicspath}
-\Paths{{figures/}{plots/}}
-\def\Extensions{\DeclareGraphicsExtensions}
-\Extensions{.png,.pdf}
-\csname DeclareGraphicsExtensions\endcsname{.pdf,.png}
-```
-
-服务器使用调用位置后面的参数，按相同的源码顺序和分组规则跟踪设置。通过静态输入文件和本地包定义的别名同样可用；`\csuse` 需要文档已加载提供该命令的宏包，例如 etoolbox。带参数的转发宏、`\let` 捕获的含义、复杂包装和动态命令名不作静态求值；无法确定的调用或 recorder 独有的设置不会推测单一图片目标。
+图片调用、目录声明和扩展名声明支持无参数纯别名、别名链，以及静态 `\csuse` / `\csname` 调用。调用位置的搜索设置用于补全、跳转、文件移动和缺图修复；示例与支持边界见[图片命令的静态别名](graphics-calls.md)。
 
 ## 全局设置与恢复
 
