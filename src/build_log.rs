@@ -196,8 +196,17 @@ pub fn compilation_analysis(
 ) -> serde_json::Value {
     const MAX_KEYS: usize = 128;
     const MAX_KEY_CHARS: usize = 128;
+    fn record_key(keys: &mut BTreeSet<String>, key: &str, truncated: &mut bool) {
+        if key.chars().count() > MAX_KEY_CHARS || (keys.len() == MAX_KEYS && !keys.contains(key)) {
+            *truncated = true;
+        } else {
+            keys.insert(key.to_string());
+        }
+    }
     let mut references = BTreeSet::new();
     let mut citations = BTreeSet::new();
+    let mut missing_destinations = BTreeSet::new();
+    let mut duplicate_destinations = BTreeSet::new();
     let mut rerun = false;
     let mut truncated = diagnostics_truncated;
     for diagnostic in diagnostics
@@ -232,19 +241,22 @@ pub fn compilation_analysis(
             } else {
                 &mut references
             };
-            if key.chars().count() > MAX_KEY_CHARS
-                || (keys.len() == MAX_KEYS && !keys.contains(key))
-            {
-                truncated = true;
-            } else {
-                keys.insert(key.to_string());
-            }
+            record_key(keys, key, &mut truncated);
+        }
+        if let Some((kind, name)) = destination_warning(&diagnostic.message) {
+            let keys = match kind {
+                DestinationWarningKind::Missing => &mut missing_destinations,
+                DestinationWarningKind::Duplicate => &mut duplicate_destinations,
+            };
+            record_key(keys, &name, &mut truncated);
         }
     }
     serde_json::json!({
         "rerunRequired": rerun,
         "unresolvedReferences": references,
         "unresolvedCitations": citations,
+        "unresolvedDestinations": missing_destinations,
+        "duplicateDestinations": duplicate_destinations,
         "truncated": truncated,
     })
 }

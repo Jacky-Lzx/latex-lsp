@@ -43,7 +43,7 @@ fn summary_keeps_distinct_literal_keys_without_counting_repeated_uses() {
         compilation_analysis(&items, false),
         json!({
             "rerunRequired":false,"unresolvedReferences":[" spaced ","O'Connor","章😀"],
-            "unresolvedCitations":["beta","章😀"],"truncated":false,
+            "unresolvedCitations":["beta","章😀"],"unresolvedDestinations":[],"duplicateDestinations":[],"truncated":false,
         })
     );
 }
@@ -104,7 +104,7 @@ fn reference_examples_remain_warnings_without_retargeting_real_source_uses() {
             assert_eq!(items[0].range.start.line, 2, "{message}");
             assert_eq!(
                 compilation_analysis(&parsed, false),
-                json!({"rerunRequired":false,"unresolvedReferences":[],"unresolvedCitations":[],"truncated":false}),
+                json!({"rerunRequired":false,"unresolvedReferences":[],"unresolvedCitations":[],"unresolvedDestinations":[],"duplicateDestinations":[],"truncated":false}),
                 "{message}"
             );
         }
@@ -207,7 +207,7 @@ fn parsed_final_log_warnings_and_observation_limits_are_preserved() {
     let log="(./main.tex\nLaTeX Warning: Reference `missing' on page 1 undefined on input line 1.\nLaTeX Warning: Citation `lost' on page 1 undefined on input line 1.\nLaTeX Warning: Label(s) may have changed. Rerun to get cross-references right.\n)\n";
     assert_eq!(
         compilation_analysis(&parse(&root, log), false),
-        json!({"rerunRequired":true,"unresolvedReferences":["missing"],"unresolvedCitations":["lost"],"truncated":false})
+        json!({"rerunRequired":true,"unresolvedReferences":["missing"],"unresolvedCitations":["lost"],"unresolvedDestinations":[],"duplicateDestinations":[],"truncated":false})
     );
     let package_log = "(./main.tex\nPackage natbib Warning: Citation(s) may have changed.\n(natbib) Rerun to get citations correct.\n)\n";
     assert_eq!(
@@ -238,7 +238,7 @@ fn parsed_final_log_warnings_and_observation_limits_are_preserved() {
             ),
             true
         ),
-        json!({"rerunRequired":false,"unresolvedReferences":[],"unresolvedCitations":[],"truncated":true})
+        json!({"rerunRequired":false,"unresolvedReferences":[],"unresolvedCitations":[],"unresolvedDestinations":[],"duplicateDestinations":[],"truncated":true})
     );
 }
 
@@ -399,7 +399,163 @@ fn longtable_requests_another_pass_without_inventing_missing_references() {
             .any(|diagnostic| diagnostic.message.contains("Column widths have changed")));
         assert_eq!(
             compilation_analysis(&parsed, false),
-            json!({"rerunRequired":rerun,"unresolvedReferences":[],"unresolvedCitations":[],"truncated":false})
+            json!({"rerunRequired":rerun,"unresolvedReferences":[],"unresolvedCitations":[],"unresolvedDestinations":[],"duplicateDestinations":[],"truncated":false})
         );
+    }
+}
+
+fn destination_warning(duplicate: bool, key: &str) -> Diagnostic {
+    warning(if duplicate {
+        format!("warning  (pdf backend): ignoring duplicate destination with the name '{key}'")
+    } else {
+        format!("warning  (pdf backend): unreferenced destination with name '{key}'")
+    })
+}
+
+#[test]
+fn pdf_destination_summary_decodes_and_deduplicates_names_across_files_and_backends() {
+    let mut items = diagnostics(vec![
+        destination_warning(false, r"dest\(old\)"),
+        destination_warning(false, r"emoji\360\237\230\200"),
+        destination_warning(true, r"dest\050old\051"),
+        unresolved(false, "dest(old)"),
+        unresolved(true, "emoji😀"),
+    ]);
+    items.insert(
+        Url::parse("file:///tmp/latex-lsp-analysis/child.tex").unwrap(),
+        vec![
+            warning("pdfTeX warning (dest): name{dest\\(old\\)} has been referenced but does not exist, replaced by a fixed one"),
+            destination_warning(false, "emoji😀"),
+            warning("pdfTeX warning (ext4): destination with the same identifier (name{dest\\(old\\)}) has been already used, duplicate ignored"),
+        ],
+    );
+    assert_eq!(
+        compilation_analysis(&items, false),
+        json!({
+            "rerunRequired":false,"unresolvedReferences":["dest(old)"],
+            "unresolvedCitations":["emoji😀"],"unresolvedDestinations":["dest(old)","emoji😀"],
+            "duplicateDestinations":["dest(old)"],"truncated":false
+        })
+    );
+}
+
+#[test]
+fn pdf_destination_summary_rejects_uncertain_records_and_untrusted_diagnostic_data() {
+    let mut messages = vec![];
+    for message in [
+        "Package local Warning: Example: warning  (pdf backend): unreferenced destination with name 'phantom'",
+        "pdfTeX warning (dest): name{phantom} has been referenced",
+        "warning  (pdf backend): unreferenced destination with name 'phantom' was resolved",
+        "warning  (pdf backend): ignoring duplicate destination with the name 'phantom' was resolved",
+    ] {
+        messages.push(warning(message));
+    }
+    for key in [
+        r"dynamic\name",
+        r"bad\400",
+        r"bad\377",
+        r"bad\000",
+        r"bad\040",
+        " spaced ",
+    ] {
+        messages.push(destination_warning(false, key));
+        messages.push(destination_warning(true, key));
+    }
+    for severity in [
+        None,
+        Some(DiagnosticSeverity::ERROR),
+        Some(DiagnosticSeverity::INFORMATION),
+    ] {
+        let mut item = destination_warning(false, "phantom");
+        item.severity = severity;
+        messages.push(item);
+    }
+    let mut forged = warning("Package local Warning: Ordinary warning.");
+    forged.code = Some(NumberOrString::String("undefined-pdf-destination".into()));
+    forged.data = Some(json!({"destination":"phantom"}));
+    messages.push(forged);
+    assert_eq!(
+        compilation_analysis(&diagnostics(messages), false),
+        json!({
+            "rerunRequired":false,"unresolvedReferences":[],"unresolvedCitations":[],
+            "unresolvedDestinations":[],"duplicateDestinations":[],"truncated":false
+        })
+    );
+}
+
+#[test]
+fn pdf_destination_summary_has_independent_count_and_unicode_identity_budgets() {
+    let messages = (0..128)
+        .flat_map(|index| {
+            [
+                destination_warning(false, &format!("missing{index:03}")),
+                destination_warning(true, &format!("duplicate{index:03}")),
+            ]
+        })
+        .chain([
+            destination_warning(false, "missing000"),
+            destination_warning(true, "duplicate000"),
+        ])
+        .collect();
+    let mut items = diagnostics(messages);
+    let result = compilation_analysis(&items, false);
+    assert_eq!(
+        result["unresolvedDestinations"].as_array().unwrap().len(),
+        128
+    );
+    assert_eq!(
+        result["duplicateDestinations"].as_array().unwrap().len(),
+        128
+    );
+    assert_eq!(result["unresolvedDestinations"][127], "missing127");
+    assert_eq!(result["duplicateDestinations"][0], "duplicate000");
+    assert_eq!(result["truncated"], false);
+    items
+        .values_mut()
+        .next()
+        .unwrap()
+        .push(destination_warning(false, "overflow"));
+    assert_eq!(compilation_analysis(&items, false)["truncated"], true);
+    let accepted = "😀".repeat(128);
+    let rejected = "😀".repeat(129);
+    let messages = vec![
+        destination_warning(false, &accepted),
+        destination_warning(true, &accepted),
+        destination_warning(false, &rejected),
+        destination_warning(true, &rejected),
+    ];
+    let result = compilation_analysis(&diagnostics(messages), false);
+    assert_eq!(result["unresolvedDestinations"], json!([accepted]));
+    assert_eq!(result["duplicateDestinations"], json!([accepted]));
+    assert_eq!(result["truncated"], true);
+}
+
+#[test]
+fn pdf_destination_summary_uses_complete_byte_wrapped_warnings_and_observation_limits() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("main.tex");
+    std::fs::write(&root, "Main source\n").unwrap();
+    for (message, field) in [
+        (
+            r"warning  (pdf backend): unreferenced destination with name 'mix\(\347\233\256\346\240\207\360\237\230\200\)'",
+            "unresolvedDestinations",
+        ),
+        (
+            r"warning  (pdf backend): ignoring duplicate destination with the name 'mix\(\347\233\256\346\240\207\360\237\230\200\)'",
+            "duplicateDestinations",
+        ),
+    ] {
+        let wrapped = message
+            .as_bytes()
+            .chunks(79)
+            .map(|part| std::str::from_utf8(part).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let parsed = parse(&root, &format!("(./main.tex\n{wrapped}\n)\n"));
+        let result = compilation_analysis(&parsed, false);
+        assert_eq!(result[field], json!(["mix(目标😀)"]));
+        assert_eq!(result["rerunRequired"], false);
+        assert_eq!(result["truncated"], false);
+        assert_eq!(compilation_analysis(&parsed, true)["truncated"], true);
     }
 }
