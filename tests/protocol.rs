@@ -1930,6 +1930,69 @@ fn missing_character_errors_publish_precise_ranges_and_correct_build_counts() {
 
 #[test]
 #[cfg(unix)]
+fn shared_glyph_contexts_publish_each_utf16_range_and_count_each_missing_character() {
+    use latex_lsp::text::Text;
+    for numbered in [false, true] {
+        let script = "cat \"${2%/*}/fixture.log\" > \"$1/main.log\"\nexit 1\n";
+        let (mut server, directory, main) = fake_build_server(script, false);
+        let source = "\\documentclass{article}\r\n中😀中\r\n";
+        std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+        );
+        let prefix = if numbered { "./main.tex:2:" } else { "!" };
+        let mut log = String::from("(./main.tex\n");
+        for glyph in "中😀中".chars() {
+            log.push_str(&format!("{prefix} Missing character: There is no {glyph} (U+{:04X}) in font nullfont!\nl.2 中😀中\n\n", glyph as u32));
+        }
+        log.push_str(")\n");
+        std::fs::write(directory.path().join("fixture.log"), log).unwrap();
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(finished["params"]["status"], "error", "{finished}");
+        assert_eq!(finished["params"]["errorsCount"], 3, "{finished}");
+        assert_eq!(finished["params"]["warningsCount"], 0, "{finished}");
+        let published = server.until(|message| {
+            message["method"] == "textDocument/publishDiagnostics"
+                && message["params"]["diagnostics"]
+                    .as_array()
+                    .is_some_and(|items| {
+                        items
+                            .iter()
+                            .filter(|item| item["code"] == "missing-character")
+                            .count()
+                            == 3
+                    })
+        });
+        let glyphs: Vec<_> = published["params"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|item| item["code"] == "missing-character")
+            .collect();
+        let text = Text::new(source.into());
+        for (at, ch) in source.char_indices().filter(|(_, ch)| !ch.is_ascii()) {
+            assert!(
+                glyphs.iter().any(|item| item["range"]
+                    == json!(text.range(at, at + ch.len_utf8()))
+                    && item["severity"] == 1
+                    && item["data"]["character"] == ch.to_string()),
+                "{published}"
+            );
+        }
+        server.request(3, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
 fn unchanged_pdf_older_than_an_included_source_is_rejected_but_fresh_noop_builds_succeed() {
     let (mut server, directory, uri) = fake_build_server("exit 0\n", false);
     let source = "\\documentclass{article}\n\\input{chapter}\n";

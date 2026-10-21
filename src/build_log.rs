@@ -437,14 +437,14 @@ fn missing_character(message: &str) -> Option<char> {
     (printed == character.to_string()).then_some(character)
 }
 
-fn missing_character_range(
+fn missing_character_ranges(
     text: &Text,
     line: u32,
     context: &str,
     character: char,
-) -> Option<Range> {
+) -> Option<Vec<Range>> {
     let prefix = context.trim_end();
-    if character.is_whitespace() || !prefix.ends_with(character) {
+    if character.is_whitespace() || prefix.is_empty() {
         return None;
     }
     let start = text.offset(Position::new(line, 0))?;
@@ -460,17 +460,49 @@ fn missing_character_range(
         }
         start + prefix.len()
     };
-    let at = end.checked_sub(character.len_utf8())?;
     let parsed = crate::syntax::Syntax::latex(text);
-    if parsed.is_ignored(at)
-        || parsed
-            .commands
-            .iter()
-            .any(|command| command.span.contains(&at))
-    {
-        return None;
-    }
-    Some(text.range(at, end))
+    // XeTeX shapes a complete literal run before reporting its missing glyphs.
+    // All messages for that run can therefore share the same consumed prefix.
+    let consumed = &text.source[start..end];
+    let boundary = consumed.char_indices().rev().find(|(_, ch)| {
+        ch.is_whitespace()
+            || matches!(
+                ch,
+                '\\' | '{' | '}' | '%' | '$' | '&' | '#' | '^' | '_' | '~'
+            )
+    });
+    let run_start = match boundary {
+        Some((offset, ch)) if ch.is_whitespace() => {
+            // Blanks immediately after a control word are discarded by TeX.
+            // A preceding macro may have generated text in this same run.
+            let before = start + consumed[..offset].trim_end().len();
+            if parsed.commands.iter().any(|command| {
+                command.span.end == before
+                    && crate::syntax::control_word(&text.source, command.span.start).is_some()
+            }) {
+                return None;
+            }
+            start + offset + ch.len_utf8()
+        }
+        Some(_) => return None,
+        None => start,
+    };
+    let bodies = crate::signature::definition_body_spans(&text.source, &parsed);
+    let ranges: Vec<_> = text.source[run_start..end]
+        .char_indices()
+        .filter(|(_, ch)| *ch == character)
+        .map(|(offset, _)| run_start + offset)
+        .filter(|at| {
+            !parsed.is_ignored(*at)
+                && !bodies.iter().any(|body| body.contains(at))
+                && !parsed
+                    .commands
+                    .iter()
+                    .any(|command| command.span.contains(at))
+        })
+        .map(|at| text.range(at, at + character.len_utf8()))
+        .collect();
+    (!ranges.is_empty()).then_some(ranges)
 }
 
 fn box_range(text: &Text, message: &str) -> Option<Range> {
@@ -1931,9 +1963,9 @@ fn emit_with_context(
     .flatten();
     ranges.extend(command_range);
     let character = missing_character(&message);
-    let character_range =
-        character.and_then(|character| missing_character_range(&text, line, context?, character));
-    ranges.extend(character_range);
+    let character_ranges =
+        character.and_then(|character| missing_character_ranges(&text, line, context?, character));
+    ranges.extend(character_ranges.into_iter().flatten());
     let project_stale = error.as_ref().is_some_and(|context| context.project_stale);
     let macro_context = error
         .as_ref()
@@ -3099,6 +3131,34 @@ fn parse_in_project<'a>(
     project: Option<&'a ProjectSources>,
 ) -> (BTreeMap<Url, Vec<Diagnostic>>, BTreeSet<Url>) {
     let mut result = BTreeMap::new();
+    // Every message for one shaped glyph run expands to all matching source
+    // positions. Expand identical contexts once, avoiding quadratic diagnostics
+    // and repeated source parsing when the run repeats the same character.
+    let mut glyph_contexts = BTreeSet::new();
+    let mut emit = |result: &mut BTreeMap<Url, Vec<Diagnostic>>,
+                    path: &Path,
+                    line: u32,
+                    message: String,
+                    severity: DiagnosticSeverity,
+                    error: Option<ErrorContext<'a>>,
+                    confirmed: bool| {
+        if let Some(context) = error
+            .as_ref()
+            .filter(|_| missing_character(&message).is_some())
+        {
+            if !glyph_contexts.insert((
+                path.to_path_buf(),
+                line,
+                message.clone(),
+                severity,
+                context.source,
+                confirmed,
+            )) {
+                return;
+            }
+        }
+        emit_with_context(result, path, line, message, severity, error, confirmed);
+    };
     let mut sources = BTreeSet::new();
     let mut analysis = project.map(ProjectAnalysis::new);
     let root_path = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
@@ -3128,7 +3188,7 @@ fn parse_in_project<'a>(
         let line = lines[i];
         if line == crate::output::TRUNCATED {
             if let Some((path, message, _)) = pending.take() {
-                emit_with_context(
+                emit(
                     &mut result,
                     &path.path,
                     1,
@@ -3156,7 +3216,7 @@ fn parse_in_project<'a>(
         };
         if let Some((driver, severity, body)) = driver_message(line) {
             if let Some((path, cause, _)) = pending.take() {
-                emit_with_context(
+                emit(
                     &mut result,
                     &path.path,
                     1,
@@ -3193,7 +3253,7 @@ fn parse_in_project<'a>(
             }
             // The PDF driver has no TeX source-line context. Its messages must
             // not borrow an open input file or a later l.N from the TeX log.
-            emit_with_context(&mut result, root, 1, message, severity, None, false);
+            emit(&mut result, root, 1, message, severity, None, false);
             i += 1;
             continue;
         }
@@ -3233,7 +3293,7 @@ fn parse_in_project<'a>(
                             &cause_path.path,
                         )
                     });
-                    emit_with_context(
+                    emit(
                         &mut result,
                         &cause_path.path,
                         cause_line,
@@ -3266,7 +3326,7 @@ fn parse_in_project<'a>(
                 .map(|context| {
                     context.with_project(&message, analysis.as_mut(), &sources, &stack, &path)
                 });
-            emit_with_context(
+            emit(
                 &mut result,
                 &path,
                 number,
@@ -3297,7 +3357,7 @@ fn parse_in_project<'a>(
                         &path.path,
                     )
                 });
-                emit_with_context(
+                emit(
                     &mut result,
                     &path.path,
                     cause_line,
@@ -3327,7 +3387,7 @@ fn parse_in_project<'a>(
                             &path.path,
                         )
                     });
-                emit_with_context(
+                emit(
                     &mut result,
                     &path.path,
                     number,
@@ -3342,7 +3402,7 @@ fn parse_in_project<'a>(
             // TeX wraps warnings at its configured print width.
             let message = wrapped_message(root, &lines, &separator_lines, &mut i);
             let number = input_line(&message).unwrap_or(1);
-            emit_with_context(
+            emit(
                 &mut result,
                 &path.path,
                 number,
@@ -3387,7 +3447,7 @@ fn parse_in_project<'a>(
                 );
                 i = include_end.max(verbatim_end);
                 if let Some(name) = include.filter(|_| include_end == i) {
-                    emit_with_context(
+                    emit(
                         &mut result,
                         &path.path,
                         1,
@@ -3403,7 +3463,7 @@ fn parse_in_project<'a>(
             }
         } else if line.starts_with("Overfull ") || line.starts_with("Underfull ") {
             let path = current();
-            emit_with_context(
+            emit(
                 &mut result,
                 &path.path,
                 input_line(line).unwrap_or(1),
@@ -3424,7 +3484,7 @@ fn parse_in_project<'a>(
         i += 1;
     }
     if let Some((path, message, _)) = pending {
-        emit_with_context(
+        emit(
             &mut result,
             &path.path,
             1,

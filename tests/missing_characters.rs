@@ -252,3 +252,186 @@ fn native_xelatex_missing_glyph_levels_preserve_warnings_errors_and_child_positi
         }
     }
 }
+
+#[test]
+fn shared_run_contexts_locate_all_direct_missing_characters_and_preserve_repetitions() {
+    for source in ["中文中", "中😀中", "中中", "Before 中文😀 after."] {
+        let run = source
+            .strip_prefix("Before ")
+            .unwrap_or(source)
+            .split_whitespace()
+            .next()
+            .unwrap();
+        let consumed = source.find(run).unwrap() + run.len();
+        let log = run.chars().map(|glyph| format!("./main.tex:1: Missing character: There is no {glyph} (U+{:04X}) in font nullfont!\nl.1 {} \n\n", glyph as u32, &source[..consumed])).collect::<String>();
+        let items = parse(source, &log);
+        assert_eq!(items.len(), run.chars().count(), "{source}: {items:?}");
+        let text = Text::new(source.into());
+        for (offset, glyph) in source
+            .char_indices()
+            .filter(|(_, glyph)| *glyph == '中' || *glyph == '文' || *glyph == '😀')
+        {
+            assert!(
+                items.iter().any(|item| item.range
+                    == text.range(offset, offset + glyph.len_utf8())
+                    && item.data.as_ref().unwrap()["character"] == glyph.to_string()),
+                "{source}: missing offset {offset}: {items:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn glyph_runs_do_not_borrow_prior_words_or_macro_generated_characters() {
+    let source = "中 and 中 after.";
+    let items = parse(source, &format!("./main.tex:1: {GLYPH}\nl.1 中 and 中 \n"));
+    let at = source.rfind('中').unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(
+        items[0].range,
+        Text::new(source.into()).range(at, at + '中'.len_utf8())
+    );
+    for (source, context) in [
+        (r"\def\emit{中}\emit 中", r"\def\emit{中}\emit 中"),
+        (r"\def\emit{中}\emit   中中", r"\def\emit{中}\emit   中中"),
+        (r"\emit{中}中", r"\emit{中}中"),
+        (r"\emit[中中]", r"\emit[中中]"),
+        (r"\def\saved{Before 中中}", r"\def\saved{Before 中中"),
+        (r"\begin{verbatim}中中", r"\begin{verbatim}中中"),
+        (r"% 中文中", r"% 中文中"),
+    ] {
+        let items = parse(source, &format!("./main.tex:1: {GLYPH}\nl.1 {context}\n"));
+        assert_eq!(items.len(), 1, "{items:?}");
+        assert_eq!(
+            items[0].range,
+            Text::new(source.into()).range(0, source.len()),
+            "{source}: {items:?}"
+        );
+    }
+}
+
+#[test]
+fn repeated_shortened_glyph_contexts_expand_once_without_losing_source_positions() {
+    let run = format!("{}😀", "中".repeat(128));
+    let source = format!("Prefix {run} after.");
+    let context = format!("...{}😀", "中".repeat(8));
+    let log = run.chars().map(|glyph| format!("./main.tex:1: Missing character: There is no {glyph} (U+{:04X}) in font nullfont!\nl.1 {context}\n\n", glyph as u32)).collect::<String>();
+    let items = parse(&source, &log);
+    assert_eq!(items.len(), 129);
+    let text = Text::new(source.clone());
+    let expected: Vec<_> = source
+        .char_indices()
+        .filter(|(_, ch)| !ch.is_ascii())
+        .map(|(at, ch)| text.range(at, at + ch.len_utf8()))
+        .collect();
+    assert_eq!(
+        items.iter().map(|item| item.range).collect::<Vec<_>>(),
+        expected
+    );
+}
+
+#[test]
+fn different_glyph_contexts_and_fonts_retain_their_own_positions() {
+    let source = "中中 and 中中";
+    let mut log = String::new();
+    for context in ["中中", source] {
+        for font in ["nullfont", "otherfont"] {
+            for _ in 0..2 {
+                log.push_str(&format!(
+                    "./main.tex:1: {}\nl.1 {context}\n\n",
+                    GLYPH.replace("nullfont", font)
+                ));
+            }
+        }
+    }
+    let items = parse(source, &log);
+    assert_eq!(items.len(), 8, "{items:?}");
+    let text = Text::new(source.into());
+    for (at, _) in source.match_indices('中') {
+        let range = text.range(at, at + '中'.len_utf8());
+        assert_eq!(items.iter().filter(|item| item.range == range).count(), 2);
+    }
+}
+
+#[test]
+#[ignore = "requires xelatex"]
+fn native_xelatex_shared_glyph_runs_keep_repetitions_and_conservative_macro_ranges() {
+    use latex_lsp::{build, config::BuildConfig};
+    use std::sync::atomic::AtomicBool;
+    let long = format!("Before {}😀 after.", "中".repeat(24));
+    for numbered in [false, true] {
+        for (source, precise) in [
+            ("中文中", true),
+            ("中😀中", true),
+            ("中中", true),
+            ("Before 中文😀 after.", true),
+            ("中 中", true),
+            ("中 and 中 after.", true),
+            (r"Word \label{x} 中文中", true),
+            (long.as_str(), true),
+            (r"\def\emit{中}\emit 中", false),
+            (r"\textbf{中中}", false),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let main = directory.path().join("main.tex");
+            let child = directory.path().join("child.tex");
+            std::fs::write(&main, "\\documentclass{article}\n\\tracinglostchars=3\n\\begin{document}\n\\input{child}\n\\end{document}\n").unwrap();
+            std::fs::write(&child, source).unwrap();
+            let mut arguments: Vec<String> = [
+                "-interaction=nonstopmode",
+                "-recorder",
+                "-output-directory=%o",
+                "%f",
+            ]
+            .into_iter()
+            .map(String::from)
+            .collect();
+            if numbered {
+                arguments.insert(0, "-file-line-error".into());
+            }
+            let config = BuildConfig {
+                executable: "xelatex".into(),
+                arguments: Some(arguments),
+                ..Default::default()
+            };
+            let outcome = build::run(&main, &config, &AtomicBool::new(false));
+            assert_eq!(
+                outcome.status, "error",
+                "{numbered}/{source}: {}",
+                outcome.output
+            );
+            let items = &outcome.diagnostics[&Url::from_file_path(&child).unwrap()];
+            let glyphs: Vec<_> = items
+                .iter()
+                .filter(|item| {
+                    item.code == Some(NumberOrString::String("missing-character".into()))
+                })
+                .collect();
+            assert!(!glyphs.is_empty(), "{numbered}/{source}: {items:?}");
+            assert!(glyphs
+                .iter()
+                .all(|item| item.severity == Some(DiagnosticSeverity::ERROR)));
+            let text = Text::new(source.into());
+            if precise {
+                let expected: Vec<_> = source
+                    .char_indices()
+                    .filter(|(_, ch)| !ch.is_ascii())
+                    .map(|(at, ch)| text.range(at, at + ch.len_utf8()))
+                    .collect();
+                assert_eq!(
+                    glyphs.iter().map(|item| item.range).collect::<Vec<_>>(),
+                    expected,
+                    "{numbered}/{source}: {items:?}\n{}",
+                    outcome.output
+                );
+            } else {
+                assert!(
+                    glyphs
+                        .iter()
+                        .all(|item| item.range == text.range(0, source.len())),
+                    "{numbered}/{source}: {items:?}"
+                );
+            }
+        }
+    }
+}
