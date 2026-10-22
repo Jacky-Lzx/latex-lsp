@@ -99,7 +99,7 @@ pub struct CitationField {
 #[derive(Clone, Debug, Default)]
 pub struct Syntax {
     pub commands: Vec<Command>,
-    /// Unexpanded declaration/copy/inspection operands remain command references,
+    /// Unexpanded declaration/copy/inspection and known macro operands remain references,
     /// but do not read arguments or perform the named command's operations.
     /// Also retain control symbols and unfinished backslashes for completion;
     /// these positions need not correspond to an indexed command/definition.
@@ -138,6 +138,8 @@ pub struct Syntax {
     pub(crate) ambiguous_string_tests: Vec<Range<usize>>,
     /// Whether this syntax was rebuilt with project-specific string semantics.
     pub(crate) contextual_string_tests: bool,
+    /// Native predicate tokens consumed as operands require context on refresh.
+    pub(crate) contextual_string_operands: bool,
     /// Exact imported/custom parameter grammar when all execution contexts agree.
     pub(crate) contextual_command_shapes:
         std::collections::BTreeMap<usize, std::sync::Arc<crate::signature::CommandShape>>,

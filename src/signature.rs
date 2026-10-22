@@ -2592,7 +2592,17 @@ impl<'a> CommandSignatures<'a> {
     }
 
     pub(crate) fn argument_tokens(&self, source: &str, parsed: &syntax::Syntax) -> BTreeSet<usize> {
-        self.argument_tokens_with_literal(source, parsed, None, false)
+        self.argument_tokens_with_literal(source, parsed, None, false, false)
+    }
+
+    /// Positions confirmed by a known parameter grammar, excluding the
+    /// conservative operand assumed after an unresolved or ambiguous macro.
+    pub(crate) fn known_argument_tokens(
+        &self,
+        source: &str,
+        parsed: &syntax::Syntax,
+    ) -> BTreeSet<usize> {
+        self.argument_tokens_with_literal(source, parsed, None, false, true)
     }
 
     pub(crate) fn literal_is_argument(
@@ -2601,7 +2611,7 @@ impl<'a> CommandSignatures<'a> {
         parsed: &syntax::Syntax,
         at: usize,
     ) -> bool {
-        self.argument_tokens_with_literal(source, parsed, Some(at), false)
+        self.argument_tokens_with_literal(source, parsed, Some(at), false, false)
             .contains(&at)
             || self.possible_literal_argument(source, parsed, at)
     }
@@ -2614,7 +2624,7 @@ impl<'a> CommandSignatures<'a> {
         parsed: &syntax::Syntax,
         at: usize,
     ) -> bool {
-        self.argument_tokens_with_literal(source, parsed, Some(at), true)
+        self.argument_tokens_with_literal(source, parsed, Some(at), true, false)
             .contains(&at)
             || self.possible_literal_argument(source, parsed, at)
     }
@@ -2781,6 +2791,7 @@ impl<'a> CommandSignatures<'a> {
         parsed: &syntax::Syntax,
         literal: Option<usize>,
         declared_only: bool,
+        known_only: bool,
     ) -> BTreeSet<usize> {
         let local = &self.local;
         let mut result = BTreeSet::new();
@@ -2834,7 +2845,7 @@ impl<'a> CommandSignatures<'a> {
                             &mut result,
                         );
                     }
-                } else {
+                } else if !known_only {
                     unknown_argument_token(source, command.span.end, parsed, literal, &mut result);
                 }
                 continue;
@@ -2865,13 +2876,15 @@ impl<'a> CommandSignatures<'a> {
             // control token after that group, hiding an independent file call.
             if self.invokes_builtin(name, "detokenize") {
                 if !self.detokenize_boundary_known {
-                    unknown_argument_token(source, end, parsed, literal, &mut result);
+                    if !known_only {
+                        unknown_argument_token(source, end, parsed, literal, &mut result);
+                    }
                     continue;
                 }
                 let at = syntax::skip_space(source, end);
                 if let Some((_, after)) = syntax::group(source, at, b'{', b'}') {
                     mark_operand_tokens(parsed, at, after, literal, &mut result);
-                } else {
+                } else if !known_only {
                     unknown_argument_token(source, end, parsed, literal, &mut result);
                 }
                 continue;
@@ -2934,7 +2947,9 @@ impl<'a> CommandSignatures<'a> {
                     literal,
                     &mut result,
                 );
-            } else if literal.is_none() || !self.literal_operands.contains_key(name) {
+            } else if !known_only
+                && (literal.is_none() || !self.literal_operands.contains_key(name))
+            {
                 unknown_argument_token(source, end, parsed, literal, &mut result);
             }
         }

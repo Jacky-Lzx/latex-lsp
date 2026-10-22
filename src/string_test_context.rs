@@ -226,7 +226,7 @@ impl Source {
         syntax.contextual_command_shapes = shapes.clone();
         let signatures = CommandSignatures::source_context([(&*text.source, &syntax)]);
         let active = signatures.source_command_positions(&text.source, &syntax);
-        let operands = signatures.argument_tokens(&text.source, &syntax);
+        let operands = signatures.known_argument_tokens(&text.source, &syntax);
         let mut declarations: BTreeMap<usize, Vec<Assignment>> = BTreeMap::new();
         for entry in &syntax.definitions {
             let Some(name) = entry.detail.strip_prefix("Defined with \\") else {
@@ -266,6 +266,7 @@ impl Source {
 #[derive(Clone, Default)]
 struct Analysis {
     meanings: BTreeMap<Url, BTreeMap<usize, u8>>,
+    operands: BTreeMap<Url, BTreeMap<usize, bool>>,
     names: BTreeSet<String>,
     shapes: BTreeMap<Url, BTreeMap<usize, Option<Arc<CommandShape>>>>,
     visited: BTreeSet<Url>,
@@ -326,6 +327,7 @@ impl Analysis {
             *state = initial.clone();
             let mut data_end = 0;
             let mut meanings = BTreeMap::new();
+            let mut consumed = BTreeSet::new();
             let mut next_shapes = BTreeMap::new();
             let mut reparse = false;
             let mut events: Vec<_> = source
@@ -368,13 +370,16 @@ impl Analysis {
                     // Reparse to expose any following call swallowed by that
                     // token's former data grammar.
                     if self.names.contains(&command.name) {
+                        consumed.insert(at);
                         meanings.insert(at, CUSTOM);
                         reparse |= source.syntax.string_test_arities.contains_key(&at);
                     }
                     continue;
                 }
                 let binding = state.binding(&command.name);
-                if self.names.contains(&command.name) || matches!(binding, Binding::Native(_)) {
+                if self.names.contains(&command.name)
+                    || matches!(binding, Binding::Native(_) | Binding::Custom(Some(_)))
+                {
                     // A copy keeps its captured data arity even when its source
                     // or its destination has another builtin spelling.
                     let meaning = state.meaning(&command.name);
@@ -515,6 +520,13 @@ impl Analysis {
             }
             self.incomplete |= reparse;
             for (at, meaning) in meanings {
+                let operand = consumed.contains(&at);
+                self.operands
+                    .entry(uri.clone())
+                    .or_default()
+                    .entry(at)
+                    .and_modify(|previous| *previous &= operand)
+                    .or_insert(operand);
                 if meaning == CUSTOM {
                     let shape = next_shapes.get(&at).cloned();
                     self.shapes
@@ -567,6 +579,32 @@ pub(crate) fn refresh(workspace: &mut Workspace) {
             break;
         }
     }
+    let native_operand = || {
+        let documents = || {
+            workspace
+                .documents
+                .values()
+                .filter(|doc| doc.kind == DocumentKind::Latex)
+        };
+        // Preserve the need for analysis after an earlier pass removed a
+        // predicate's native arity at a confirmed operand position.
+        if documents().any(|doc| doc.syntax.contextual_string_operands) {
+            return true;
+        }
+        if !documents().any(|doc| !doc.syntax.string_test_arities.is_empty()) {
+            return false;
+        }
+        let signatures = CommandSignatures::source_context(
+            documents().map(|doc| (doc.text.source.as_str(), &doc.syntax)),
+        );
+        documents().any(|doc| {
+            doc.syntax.string_test_arities.keys().any(|&at| {
+                // A possible grammar schedules analysis; each root subsequently
+                // confirms its own shapes in execution order.
+                signatures.declared_literal_is_argument(&doc.text.source, &doc.syntax, at)
+            })
+        })
+    };
     if names.len() == 4
         && !workspace
             .documents
@@ -580,6 +618,7 @@ pub(crate) fn refresh(workspace: &mut Workspace) {
                         .iter()
                         .any(|entry| data_count(&entry.name).is_some())
             })
+        && !native_operand()
     {
         for doc in workspace
             .documents
@@ -731,6 +770,14 @@ pub(crate) fn refresh(workspace: &mut Workspace) {
                             }
                         }
                     }
+                }
+            }
+            if !analysis.incomplete {
+                if let Some(operands) = analysis.operands.get(&uri) {
+                    syntax.contextual_string_operands = operands.values().any(|all| *all);
+                    syntax
+                        .control_operands
+                        .extend(operands.iter().filter_map(|(&at, &all)| all.then_some(at)));
                 }
             }
             syntax.contextual_string_tests = true;

@@ -17,6 +17,117 @@ struct Server {
 }
 
 #[test]
+fn imported_string_predicate_operands_refresh_signatures_and_renames_without_main_changes() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+    let definitions = Url::from_file_path(directory.path().join("defs.tex")).unwrap();
+    let source = r"\documentclass{article}\newbool{draft}\input{defs}\discard\ifblank{\booltrue{draft}}{Y}{N}";
+    let one = r"\newcommand{\discard}[1]{}";
+    let zero = one.replace("[1]", "[0]");
+    std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+    std::fs::write(definitions.to_file_path().unwrap(), one).unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(directory.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":main,"languageId":"latex","version":9,"text":source}}),
+    );
+    let text = latex_lsp::text::Text::new(source.into());
+    let target = json!({"textDocument":{"uri":main},"position":text.position(source.rfind("draft").unwrap()+1)});
+    let predicate = source.find(r"\ifblank").unwrap();
+    let operand = json!({"textDocument":{"uri":main},"position":text.position(predicate+3)});
+    let after_operand =
+        json!({"textDocument":{"uri":main},"position":text.position(predicate+r"\ifblank".len())});
+    let rename = json!({"textDocument":{"uri":main},"position":text.position(source.find("draft").unwrap()+1),"newName":"release"});
+    assert_eq!(
+        server
+            .request(2, "textDocument/definition", target.clone())
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        server.request(3, "textDocument/signatureHelp", operand.clone())["signatures"][0]["label"],
+        r"\discard{#1}"
+    );
+    // The following group confirms that the unbraced control word has ended.
+    assert_eq!(
+        server.request(13, "textDocument/signatureHelp", after_operand.clone()),
+        Value::Null
+    );
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":definitions,"languageId":"latex","version":1,"text":one}}),
+    );
+    let number = one.find('1').unwrap();
+    server.notify("textDocument/didChange", json!({"textDocument":{"uri":definitions,"version":2},"contentChanges":[{"range":{"start":{"line":0,"character":number},"end":{"line":0,"character":number+1}},"text":"0"}]}));
+    assert_eq!(
+        server.request(4, "textDocument/definition", target.clone()),
+        json!([])
+    );
+    assert_eq!(
+        server.request(5, "textDocument/signatureHelp", after_operand)["signatures"][0]["label"],
+        r"\ifblank{string}{then}{else}"
+    );
+    let edit = server.request(6, "textDocument/rename", rename.clone());
+    assert_eq!(edit["documentChanges"][0]["textDocument"]["version"], 9);
+    assert_eq!(
+        edit["documentChanges"][0]["edits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":definitions}}),
+    );
+    assert_eq!(
+        server
+            .request(7, "textDocument/definition", target.clone())
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        server.request(8, "textDocument/signatureHelp", operand)["signatures"][0]["label"],
+        r"\discard{#1}"
+    );
+    let edit = server.request(9, "textDocument/rename", rename.clone());
+    assert_eq!(
+        edit["documentChanges"][0]["edits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    std::fs::write(definitions.to_file_path().unwrap(), zero).unwrap();
+    server.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({"changes":[{"uri":definitions,"type":2}]}),
+    );
+    assert_eq!(
+        server.request(10, "textDocument/definition", target),
+        json!([])
+    );
+    let edit = server.request(11, "textDocument/rename", rename);
+    assert_eq!(edit["documentChanges"][0]["textDocument"]["version"], 9);
+    assert_eq!(
+        edit["documentChanges"][0]["edits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    server.request(12, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
 fn string_undefinitions_follow_incremental_dependency_edits_close_and_disk_notifications() {
     let directory = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
