@@ -192,21 +192,17 @@ fn literal_test(source: &str, span: Range<usize>, overridden: &BTreeSet<&str>) -
     if overridden.contains(name) {
         return false;
     }
-    let count = match name {
-        "ifstrequal" => 2,
-        "ifstrempty" | "ifblank" | "notblank" => 1,
-        _ => return false,
+    let Some(count) = crate::string_tests::data_count(name) else {
+        return false;
     };
+    // These predicates do not expand their string arguments. Controls such
+    // as input/ifbool are data here and cannot raise a sibling's name error.
     let mut at = control.end;
     for _ in 0..count {
-        let Some((argument, end)) =
-            syntax::group(source, syntax::skip_space(source, at), b'{', b'}')
+        let Some((_, end)) = syntax::group(source, syntax::skip_space(source, at), b'{', b'}')
         else {
             return false;
         };
-        if source[argument.span].contains('\\') {
-            return false;
-        }
         at = end;
     }
     syntax::skip_space(source, at) == span.end

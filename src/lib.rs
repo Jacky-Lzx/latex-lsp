@@ -43,6 +43,7 @@ pub mod signature;
 mod source_inputs;
 mod special_characters;
 mod spelling_fixes;
+mod string_tests;
 mod switch_diagnostics;
 pub mod synctex;
 pub mod syntax;

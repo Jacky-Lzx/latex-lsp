@@ -502,6 +502,19 @@ fn builtin(name: &str) -> Option<Signature> {
             &[("boolean", false), ("then", false), ("else", false)],
             false,
         ),
+        "ifstrequal" => (
+            &[
+                ("string", false),
+                ("string", false),
+                ("then", false),
+                ("else", false),
+            ],
+            false,
+        ),
+        "ifstrempty" | "ifblank" | "notblank" => (
+            &[("string", false), ("then", false), ("else", false)],
+            false,
+        ),
         "ifthenelse" => (
             &[("condition", false), ("then", false), ("else", false)],
             false,
@@ -3918,6 +3931,7 @@ pub fn help(workspace: &Workspace, uri: &Url, position: Position) -> Option<Sign
     if doc.syntax.ignored.iter().any(|span| {
         span.start <= cursor.saturating_sub(1)
             && cursor.saturating_sub(1) < span.end
+            && !doc.syntax.literal_tests.contains(span)
             && !doc.syntax.commands.iter().any(|command| {
                 matches!(command.name.as_str(), "url" | "href" | "hyperref")
                     && command

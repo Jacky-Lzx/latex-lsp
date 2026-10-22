@@ -130,6 +130,8 @@ pub struct Syntax {
     /// Literal conversion data stays available to filename completion, but
     /// should not offer executable command templates within the quoted text.
     pub literal_conversions: Vec<Range<usize>>,
+    /// Unexpanded string data whose owning predicate still offers a signature.
+    pub literal_tests: Vec<Range<usize>>,
     /// Actual comments, distinguished from ignored URLs and verbatim text.
     pub comments: Vec<Range<usize>>,
     pub fixes: Vec<QuickFix>,
@@ -2074,7 +2076,8 @@ impl Syntax {
                             | "detokenize"
                             | "string"
                             | "meaning"
-                    ) && !passes_options(name)
+                    ) && crate::string_tests::data_count(name).is_none()
+                        && !passes_options(name)
                         && bytes.get(i) == Some(&b'*');
                     if starred {
                         i += 1;
@@ -2192,6 +2195,17 @@ impl Syntax {
                         span: start..command_end,
                         argument,
                     };
+                    if operands_known {
+                        if let Some(count) = crate::string_tests::data_count(name) {
+                            for argument in
+                                crate::string_tests::arguments(source, command_end, count)
+                            {
+                                result.literal_tests.push(argument.span.clone());
+                                literal_arguments
+                                    .insert(argument.start, (argument.span, argument.end));
+                            }
+                        }
+                    }
                     if operands_known
                         && matches!(name, "ifdefcounter" | "ifdeflength" | "ifdefdimen")
                     {
@@ -2532,10 +2546,12 @@ impl Syntax {
                 _ => i += 1,
             }
         }
-        let comment_at_end = result
-            .ignored
-            .last()
-            .is_some_and(|span| span.end == source.len() && source[span.clone()].starts_with('%'));
+        let comment_at_end =
+            result.ignored.last().is_some_and(|span| {
+                span.end == source.len() && source[span.clone()].starts_with('%')
+            }) || result.literal_tests.last().is_some_and(|span| {
+                span.end == source.len() && crate::string_tests::ends_in_comment(source, span)
+            });
         for start in braces {
             result.fix(
                 text,

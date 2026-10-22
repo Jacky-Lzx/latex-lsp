@@ -179,7 +179,7 @@ fn commented_expression_keywords_keep_exact_compiler_ranges_and_spelling_repairs
         ("unlessboolexpr", "to% operand\n gl", "toggle"),
     ] {
         let directory = tempfile::tempdir().unwrap();
-        let call = format!("\\{command}{{no% negate\n t({token}{{darft}}) o% or\n r te% test\n st{{\\ifstrequal{{A}}{{A}}}}}}{{Body}}");
+        let call = format!("\\{command}{{no% negate\n t({token}{{darft}}) o% or\n r te% test\n st{{\\ifstrequal{{\\name}}{{A}}}}}}{{Body}}");
         let source = format!("\\documentclass{{article}}\\input{{definitions}}\n{call}\n");
         let (mut workspace, uri, _) = setup(directory.path(), &source);
         let echo = source.lines().last().unwrap();
@@ -245,7 +245,6 @@ fn comment_spelling_in_macro_tests_and_malformed_keywords_stays_unlocated() {
         r"bo\%ol{darft}",
         "bo% comment\n ol{darft} a nd bool{true}",
         "te% comment\n st{\\probe} or bo% comment\n ol{darft}",
-        "te% comment\n st{\\ifstrequal{\\name}{A}} or bo% comment\n ol{darft}",
     ] {
         let directory = tempfile::tempdir().unwrap();
         let source = format!("\\documentclass{{article}}\\input{{definitions}}\n\\ifboolexpr{{{expression}}}{{Y}}{{N}}\n");

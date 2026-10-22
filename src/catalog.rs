@@ -305,6 +305,26 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
         "Choose branches using an etoolbox boolean expression.",
     ),
     (
+        "ifstrequal",
+        "ifstrequal{${1:string}}{${2:string}}{${3:then}}{${4:else}}",
+        "Compare two strings without expanding their tokens. Requires etoolbox.",
+    ),
+    (
+        "ifstrempty",
+        "ifstrempty{${1:string}}{${2:then}}{${3:else}}",
+        "Test whether an unexpanded string is empty. Requires etoolbox.",
+    ),
+    (
+        "ifblank",
+        "ifblank{${1:string}}{${2:then}}{${3:else}}",
+        "Test whether an unexpanded string is empty or consists of spaces. Requires etoolbox.",
+    ),
+    (
+        "notblank",
+        "notblank{${1:string}}{${2:then}}{${3:else}}",
+        "Test whether an unexpanded string contains a non-space token. Requires etoolbox.",
+    ),
+    (
         "ifboolexpe",
         "ifboolexpe{bool {${1:boolean}}}{${2:then}}{${3:else}}",
         "Expand branches using an etoolbox boolean expression.",

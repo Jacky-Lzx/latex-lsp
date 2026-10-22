@@ -157,6 +157,11 @@ fn expression_and_loop_boundaries_support_literal_tests_multiline_and_utf16() {
             "boolean",
         ),
         (
+            r"\ifboolexpr{test{\ifstrequal{\input{extra}}{A}}or bool{darft}}{Yes}{No}",
+            r"\ifboolexpr{test{\ifstrequal{\input{extra}}{A}}or bool{darft}}",
+            "boolean",
+        ),
+        (
             r"\ifboolexpr{test{\ifstrempty{}}and togl{darft}}{Yes}{No}",
             r"\ifboolexpr{test{\ifstrempty{}}and togl{darft}}",
             "toggle",
@@ -217,10 +222,6 @@ fn dynamic_tests_names_redefinitions_ambiguous_operands_and_incomplete_grammar_s
         ),
         (r"\ifboolexpr{test{\probe}or togl{darft}}", "Toggle"),
         (r"\ifboolexpe{\expression or bool{darft}}", "Boolean"),
-        (
-            r"\ifboolexpr{test{\ifstrequal{\input{extra}}{A}}or bool{darft}}",
-            "Boolean",
-        ),
         (
             r"\renewcommand{\ifstrequal}[2]{}\ifboolexpr{test{\ifstrequal{A}{A}}and togl{darft}}",
             "Toggle",

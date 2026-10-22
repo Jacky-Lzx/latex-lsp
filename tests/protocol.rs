@@ -17,6 +17,99 @@ struct Server {
 }
 
 #[test]
+fn string_predicates_keep_literal_tokens_and_versioned_branch_renames_over_stdio() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = Url::from_directory_path(directory.path()).unwrap();
+    let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+    let definitions = Url::from_file_path(directory.path().join("definitions.tex")).unwrap();
+    let source = "\\documentclass{article}\\input{definitions}\r\n\\ifstrequal{\\ifbool{draft}}{X}{\\booltrue{draft}}{\\boolfalse{draft}}\r\n\\notblank{\\newbool{ghost}}{Yes}{No}\r\n";
+    std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+    std::fs::write(
+        definitions.to_file_path().unwrap(),
+        "\\newbool{draft}\\newtoggle{draft}\n",
+    )
+    .unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":root,"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":main,"languageId":"latex","version":9,"text":source}}),
+    );
+    server.until(|message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["uri"] == main.as_str()
+    });
+    let text = latex_lsp::text::Text::new(source.into());
+    let literal = text.position(source.find("draft").unwrap() + 2);
+    let literal_target = json!({"textDocument":{"uri":main},"position":literal});
+    assert_eq!(
+        server.request(2, "textDocument/definition", literal_target.clone()),
+        json!([])
+    );
+    assert_eq!(
+        server.request(3, "textDocument/prepareRename", literal_target.clone()),
+        Value::Null
+    );
+    assert_eq!(
+        server.request(4, "textDocument/completion", literal_target.clone()),
+        json!([])
+    );
+    let help = server.request(5, "textDocument/signatureHelp", literal_target);
+    assert_eq!(
+        help["signatures"][0]["label"],
+        r"\ifstrequal{string}{string}{then}{else}"
+    );
+    assert_eq!(help["activeParameter"], 0);
+    assert_eq!(
+        server.request(6, "workspace/symbol", json!({"query":"ghost"})),
+        json!([])
+    );
+    let target = json!({"textDocument":{"uri":main},"position":text.position(source.find("\\booltrue{draft}").unwrap()+11)});
+    let mut rename = target;
+    rename["newName"] = json!("release");
+    let edit = server.request(7, "textDocument/rename", rename);
+    let documents = edit["documentChanges"].as_array().unwrap();
+    assert_eq!(documents.len(), 2);
+    for (uri, version, count) in [(&main, json!(9), 2), (&definitions, Value::Null, 1)] {
+        let document = documents
+            .iter()
+            .find(|document| document["textDocument"]["uri"] == uri.as_str())
+            .unwrap();
+        assert_eq!(document["textDocument"]["version"], version);
+        let edits = document["edits"].as_array().unwrap();
+        assert_eq!(edits.len(), count);
+        assert!(edits.iter().all(|edit| edit["newText"] == "release"));
+        if uri == &main {
+            let literal_end = source.find("}{X}").unwrap();
+            assert!(edits.iter().all(
+                |edit| serde_json::from_value::<tower_lsp::lsp_types::Range>(edit["range"].clone())
+                    .unwrap()
+                    .start
+                    > text.position(literal_end)
+            ));
+        }
+    }
+    let changed = source.replace(r"\ifbool{draft}", r"\label{phantom}\input{ghost}");
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":10},"contentChanges":[{"text":changed}]}),
+    );
+    server.until(|message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["uri"] == main.as_str()
+            && message["params"]["version"] == 10
+    });
+    assert_eq!(
+        server.request(8, "workspace/symbol", json!({"query":"phantom"})),
+        json!([])
+    );
+    server.request(9, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
 fn commented_expression_keywords_return_versioned_cross_file_renames_over_stdio() {
     let directory = tempfile::tempdir().unwrap();
     let root = Url::from_directory_path(directory.path()).unwrap();
