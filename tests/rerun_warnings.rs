@@ -258,7 +258,7 @@ fn real_last_page_requests_follow_shrinking_and_growing_documents_until_stable()
             std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
             let config = BuildConfig {
                 executable: wrapper.to_string_lossy().into_owned(),
-                output_directory: ".".into(),
+                output_directory: Some(".".into()),
                 arguments: Some(vec![
                     cache.path().to_string_lossy().into_owned(),
                     "-interaction=nonstopmode".into(),
@@ -375,7 +375,7 @@ fn real_standard_requests_follow_cross_file_renames_and_table_changes_until_stab
                 std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
                 let config = BuildConfig {
                     executable: wrapper.to_string_lossy().into_owned(),
-                    output_directory: ".".into(),
+                    output_directory: Some(".".into()),
                     arguments: Some(vec![
                         cache.path().to_string_lossy().into_owned(),
                         "-interaction=nonstopmode".into(),

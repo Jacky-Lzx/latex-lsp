@@ -126,7 +126,7 @@ fn real_engine_page_counts_ignore_wrapped_filename_examples() {
                 .unwrap();
                 let config = BuildConfig {
                     executable: executable.to_string_lossy().into_owned(),
-                    output_directory: ".".into(),
+                    output_directory: Some(".".into()),
                     arguments: Some(vec![
                         width.to_string(),
                         cache.to_string_lossy().into_owned(),

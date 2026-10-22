@@ -417,7 +417,7 @@ fn real_backreferences_request_rebuild_after_citation_pages_change_and_clear_whe
             std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
             let config = BuildConfig {
                 executable: wrapper.to_string_lossy().into_owned(),
-                output_directory: ".".into(),
+                output_directory: Some(".".into()),
                 arguments: Some(vec![
                     cache.path().to_string_lossy().into_owned(),
                     "-interaction=nonstopmode".into(),

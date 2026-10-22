@@ -669,7 +669,7 @@ fn real_missing_right_repairs_compile_in_all_engines_and_recover_nested_groups()
                 arguments.push("%f".into());
                 let config = BuildConfig {
                     executable: wrapper.to_string_lossy().into(),
-                    output_directory: ".".into(),
+                    output_directory: Some(".".into()),
                     arguments: Some(arguments),
                     ..Default::default()
                 };
@@ -799,7 +799,7 @@ fn real_right_delimiter_fixes_preserve_symbols_and_compile_in_all_engines() {
                 arguments.push("%f".into());
                 let config = BuildConfig {
                     executable: wrapper.to_string_lossy().into(),
-                    output_directory: ".".into(),
+                    output_directory: Some(".".into()),
                     arguments: Some(arguments),
                     ..Default::default()
                 };

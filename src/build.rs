@@ -1167,6 +1167,8 @@ fn run_with_mode(
     // PDF. latexmk may skip a source saved with identical contents even though
     // its timestamp is newer. Force one pass to establish a verified PDF and
     // recorder instead of rejecting that legitimate incremental build.
+    let config = config.resolved(root);
+    let config = &config;
     let refresh = !rebuild
         && config.arguments.is_none()
         && config.rebuild_arguments.is_none()
@@ -1284,7 +1286,7 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool, rebuild: bo
         };
         arguments
     };
-    let output_dir = parent.join(&config.output_directory);
+    let output_dir = config.output_path(root).unwrap();
     if let Err(error) = std::fs::create_dir_all(&output_dir) {
         return Outcome::error(format!("Cannot create build directory: {error}"));
     }

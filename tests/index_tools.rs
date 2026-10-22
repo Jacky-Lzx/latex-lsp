@@ -195,7 +195,7 @@ fn real_index_tool_requests_follow_processing_and_later_index_changes_in_three_e
             std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
             let config = BuildConfig {
                 executable: wrapper.to_string_lossy().into_owned(),
-                output_directory: ".".into(),
+                output_directory: Some(".".into()),
                 arguments: Some(vec![
                     cache.path().to_string_lossy().into_owned(),
                     "-interaction=nonstopmode".into(),

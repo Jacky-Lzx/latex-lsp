@@ -420,6 +420,7 @@ impl LanguageServer for Backend {
                     "watchers": [
                         {"globPattern": format!("**/*.{{{}}}",workspace::SOURCE_EXTENSIONS.join(",")), "kind": 7},
                         {"globPattern": format!("**/*.{{{binary_inputs}}}"), "kind": 7},
+                        {"globPattern": "**/{.latexmkrc,latexmkrc}", "kind": 7},
                         {"globPattern": "**/*", "kind": 5}
                     ]
                 })),

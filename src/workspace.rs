@@ -301,7 +301,9 @@ impl Workspace {
                 .and_then(|doc| magic_directive(doc, &["program", "ts-program"]))
                 .and_then(|argument| crate::config::Engine::from_program(&argument.value));
         }
-        config
+        root.to_file_path()
+            .map(|path| config.resolved(&path))
+            .unwrap_or(config)
     }
 
     pub fn diagnostics(&self, uri: &Url) -> Vec<tower_lsp::lsp_types::Diagnostic> {

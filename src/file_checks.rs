@@ -28,6 +28,7 @@ pub(crate) enum BindingStatus {
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
     paths: BTreeMap<PathBuf, Option<PathBuf>>,
+    configuration: BTreeMap<PathBuf, (Option<PathBuf>, InputSnapshot)>,
     recorded: BTreeMap<PathBuf, Option<PathBuf>>,
     ambiguous: BTreeSet<PathBuf>,
     watched: BTreeSet<Url>,
@@ -146,6 +147,7 @@ impl Snapshot {
         let Ok(root_path) = root.to_file_path() else {
             return Self::default();
         };
+        let config = config.resolved(&root_path);
         let sources = workspace.project_documents(root);
         let inputs = crate::source_inputs::Index::new(workspace, root);
         let active_sources =
@@ -213,7 +215,7 @@ impl Snapshot {
         .map(|path| normalize_path(&path))
         .collect();
         // \include creates auxiliary files under the configured output folder.
-        if let Some(parent) = root_path.parent() {
+        if let Some(output) = config.output_path(&root_path) {
             for source in &sources {
                 if let Some(doc) = workspace.documents.get(source) {
                     for command in doc
@@ -238,11 +240,7 @@ impl Snapshot {
                             let name = argument.value.trim();
                             if syntax::is_literal_file_path(name) {
                                 let base = name.strip_suffix(".tex").unwrap_or(name);
-                                outputs.insert(normalize_path(
-                                    &parent
-                                        .join(&config.output_directory)
-                                        .join(format!("{base}.aux")),
-                                ));
+                                outputs.insert(normalize_path(&output.join(format!("{base}.aux"))));
                             }
                         }
                     }
@@ -459,6 +457,18 @@ impl Snapshot {
             }
         }
         let paths = paths.into_inner();
+        let mut configuration = BTreeMap::new();
+        for path in config.latexmkrc_paths(&root_path) {
+            let binding = file(&path);
+            let selected = binding.is_some();
+            let contents = InputSnapshot::file(&path);
+            configuration.insert(path, (binding, contents));
+            // latexmk reads only the first existing project rc file. Watch
+            // earlier missing candidates, but not an unused later rc file.
+            if selected {
+                break;
+            }
+        }
         let recorded = [
             &workspace.recorded_bindings,
             &workspace.bibliography_bindings,
@@ -470,6 +480,7 @@ impl Snapshot {
         .collect();
         let mut snapshot = Self {
             paths,
+            configuration,
             recorded,
             artifact: config
                 .artifact_path(&root_path, "pdf")
@@ -485,6 +496,11 @@ impl Snapshot {
             .paths
             .iter()
             .chain(&self.recorded)
+            .chain(
+                self.configuration
+                    .iter()
+                    .map(|(path, (before, _))| (path, before)),
+            )
             .flat_map(|(path, before)| {
                 let mut watched = vec![path.clone()];
                 watched.extend(before.clone().or_else(|| canonical_candidate(path)));
@@ -635,6 +651,14 @@ impl Snapshot {
             .iter()
             .chain(&self.recorded)
             .find_map(|(path, before)| (file(path) != *before).then_some(path.as_path()))
+            .or_else(|| {
+                self.configuration
+                    .iter()
+                    .find_map(|(path, (binding, before))| {
+                        (file(path) != *binding || before.changed_file(path))
+                            .then_some(path.as_path())
+                    })
+            })
             .or_else(|| self.ambiguous.first().map(PathBuf::as_path))
     }
 
@@ -643,7 +667,11 @@ impl Snapshot {
     }
 
     pub(crate) fn remember(map: &mut BTreeMap<Url, Arc<Self>>, root: Url, snapshot: Arc<Self>) {
-        if snapshot.paths.is_empty() && snapshot.recorded.is_empty() && snapshot.inputs.is_empty() {
+        if snapshot.paths.is_empty()
+            && snapshot.configuration.is_empty()
+            && snapshot.recorded.is_empty()
+            && snapshot.inputs.is_empty()
+        {
             map.remove(&root);
             return;
         }
@@ -658,6 +686,45 @@ impl Snapshot {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn latexmk_configuration_contents_and_candidate_creation_invalidate_snapshots() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let main = root.join("main.tex");
+        let uri = Url::from_file_path(&main).unwrap();
+        std::fs::write(&main, "Source").unwrap();
+        let mut workspace = Workspace::default();
+        workspace.open(uri.clone(), "Source".into(), 1);
+        let capture = || Snapshot::capture(&workspace, &uri, &workspace.build_config(&uri));
+        let before = capture();
+        assert!(before.changed_path().is_none());
+        let rc = root.join("latexmkrc");
+        std::fs::write(&rc, "$out_dir = 'build';").unwrap();
+        assert_eq!(before.changed_path(), Some(rc.as_path()));
+        let before = capture();
+        assert!(before.changed_path().is_none());
+        let modified = std::fs::metadata(&rc).unwrap().modified().unwrap();
+        std::fs::write(&rc, "$out_dir = 'other';").unwrap();
+        std::fs::File::open(&rc)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+        assert_eq!(before.changed_path(), Some(rc.as_path()));
+        let before = capture();
+        let hidden = root.join(".latexmkrc");
+        std::fs::write(&hidden, "$out_dir = 'build';").unwrap();
+        assert_eq!(before.changed_path(), Some(hidden.as_path()));
+        let before = capture();
+        assert!(before
+            .watched()
+            .contains(&Url::from_file_path(&hidden).unwrap()));
+        // The visible rc is no longer read while .latexmkrc exists.
+        std::fs::write(&rc, "$out_dir = 'unused';").unwrap();
+        assert!(before.changed_path().is_none());
+        std::fs::remove_file(&hidden).unwrap();
+        assert_eq!(before.changed_path(), Some(hidden.as_path()));
+    }
 
     #[test]
     fn moved_bibliography_history_keeps_content_fingerprints_and_tracks_the_new_output_path() {

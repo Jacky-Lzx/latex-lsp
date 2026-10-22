@@ -1527,11 +1527,11 @@ fn builds_cancelled_before_start_preserve_artifacts_and_do_not_create_output_dir
                 .join("missing-compiler")
                 .to_string_lossy()
                 .into(),
-            output_directory: "out/reports".into(),
+            output_directory: Some("out/reports".into()),
             job_name: Some("résumé.1".into()),
             ..Default::default()
         };
-        let output = directory.path().join(&config.output_directory);
+        let output = config.output_path(&main).unwrap();
         let extensions = ["log", "pdf", "fls", "blg", "aux", "synctex.gz"];
         if existing {
             std::fs::create_dir_all(&output).unwrap();
@@ -1670,7 +1670,7 @@ fn real_bibliography_supports_configured_hidden_and_external_output_directories(
         external.path().to_string_lossy().into_owned(),
     ] {
         let config = BuildConfig {
-            output_directory,
+            output_directory: Some(output_directory),
             ..Default::default()
         };
         let outcome = build::run(&main, &config, &AtomicBool::new(false));
@@ -1704,7 +1704,7 @@ fn real_bibtex_directory_changes_resolve_shadowed_database_inputs_and_warning_lo
     )
     .unwrap();
     let config = BuildConfig {
-        output_directory: ".custom-output".into(),
+        output_directory: Some(".custom-output".into()),
         ..Default::default()
     };
     let outcome = build::run(&main, &config, &AtomicBool::new(false));
@@ -2174,7 +2174,7 @@ fn invalid_or_cancelled_rebuilds_preserve_previous_artifacts() {
             executable: "unavailable-custom-compiler".into(),
             ..Default::default()
         };
-        let output = directory.path().join(&config.output_directory);
+        let output = config.output_path(&main).unwrap();
         if existing {
             std::fs::create_dir_all(&output).unwrap();
             for extension in ["pdf", "log", "aux", "fls"] {

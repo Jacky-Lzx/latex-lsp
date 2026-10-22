@@ -4,6 +4,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
+mod latexmk;
+
+const DEFAULT_OUTPUT_DIRECTORY: &str = "build/latex-lsp";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Engine {
@@ -44,7 +48,7 @@ pub struct BuildConfig {
     pub arguments: Option<Vec<String>>,
     pub rebuild_arguments: Option<Vec<String>>,
     pub engine: Option<Engine>,
-    pub output_directory: String,
+    pub output_directory: Option<String>,
     pub root_file: Option<String>,
     pub job_name: Option<String>,
     pub on_save: bool,
@@ -58,7 +62,7 @@ impl Default for BuildConfig {
             arguments: None,
             rebuild_arguments: None,
             engine: None,
-            output_directory: "build/latex-lsp".into(),
+            output_directory: None,
             root_file: None,
             job_name: None,
             on_save: false,
@@ -73,7 +77,11 @@ impl Config {
         let config: Self = serde_json::from_value(value.clone())
             .map_err(|error| format!("Invalid LaTeX configuration: {error}"))?;
         if config.build.executable.trim().is_empty()
-            || config.build.output_directory.trim().is_empty()
+            || config
+                .build
+                .output_directory
+                .as_ref()
+                .is_some_and(|directory| directory.trim().is_empty())
         {
             return Err("Build executable and outputDirectory must not be empty".into());
         }
@@ -101,6 +109,39 @@ impl Config {
 }
 
 impl BuildConfig {
+    /// Resolve once per build so compiler arguments and artifact lookup share
+    /// the same directory even if the rc file changes while the tool runs.
+    pub(crate) fn resolved(&self, root: &Path) -> Self {
+        let mut config = self.clone();
+        if config.output_directory.is_none() {
+            config.output_directory = Some(
+                self.latexmkrc_paths(root)
+                    .into_iter()
+                    .find(|path| path.is_file())
+                    .and_then(|path| latexmk::output_directory(&path))
+                    .unwrap_or_else(|| DEFAULT_OUTPUT_DIRECTORY.into()),
+            );
+        }
+        config
+    }
+
+    pub(crate) fn latexmkrc_paths(&self, root: &Path) -> Vec<PathBuf> {
+        if self.arguments.is_some()
+            || Path::new(&self.executable).file_stem() != Some(OsStr::new("latexmk"))
+        {
+            return Vec::new();
+        }
+        root.parent()
+            .into_iter()
+            .flat_map(|parent| [parent.join(".latexmkrc"), parent.join("latexmkrc")])
+            .collect()
+    }
+
+    pub fn output_path(&self, root: &Path) -> Option<PathBuf> {
+        let config = self.resolved(root);
+        Some(root.parent()?.join(config.output_directory.as_deref()?))
+    }
+
     pub fn job_name<'a>(&'a self, root: &'a Path) -> Option<&'a OsStr> {
         self.job_name
             .as_deref()
@@ -112,22 +153,25 @@ impl BuildConfig {
         let mut name = self.job_name(root)?.to_os_string();
         name.push(".");
         name.push(extension);
-        Some(root.parent()?.join(&self.output_directory).join(name))
+        Some(self.output_path(root)?.join(name))
     }
 
     /// Substitute only template placeholders, never text inserted by another
     /// placeholder (a real source directory can itself contain `%o` or `%j`).
     pub fn expanded_arguments(&self, root: &Path) -> Option<Vec<String>> {
-        self.expand_arguments(root, self.arguments())
+        let config = self.resolved(root);
+        config.expand_arguments(root, config.arguments())
     }
 
     pub fn expanded_rebuild_arguments(&self, root: &Path) -> Result<Vec<String>, String> {
-        self.expand_arguments(root, self.rebuild_arguments()?)
+        let config = self.resolved(root);
+        config
+            .expand_arguments(root, config.rebuild_arguments()?)
             .ok_or_else(|| "Invalid root filename".into())
     }
 
     fn expand_arguments(&self, root: &Path, arguments: Vec<String>) -> Option<Vec<String>> {
-        let output = root.parent()?.join(&self.output_directory);
+        let output = self.output_path(root)?;
         let root_name = root.to_string_lossy();
         let output_name = output.to_string_lossy();
         let job_name = self.job_name(root)?.to_string_lossy();
@@ -257,7 +301,11 @@ impl BuildConfig {
         // BibTeX's default file policy rejects hidden or parent-relative output
         // paths. Keep latexmk's directory workaround for explicitly configured
         // paths that need it; ordinary in-project paths can preserve source cwd.
-        let output = std::path::Path::new(&self.output_directory);
+        let output = Path::new(
+            self.output_directory
+                .as_deref()
+                .unwrap_or(DEFAULT_OUTPUT_DIRECTORY),
+        );
         let needs_fudge = output.is_absolute() || output.components().any(|component| {
             matches!(component, std::path::Component::ParentDir)
                 || matches!(component, std::path::Component::Normal(name) if name.to_str().is_some_and(|name| name.starts_with('.')))
@@ -396,7 +444,7 @@ mod tests {
     fn argument_placeholders_do_not_expand_percent_sequences_inside_source_paths() {
         let root = Path::new("/tmp/%o project/main%j.tex");
         let config = BuildConfig {
-            output_directory: "out%f".into(),
+            output_directory: Some("out%f".into()),
             arguments: Some(vec![
                 "%f".into(),
                 "%o".into(),
@@ -434,12 +482,12 @@ mod tests {
             .arguments()
             .contains(&"-nobibfudge".into()));
         let config = BuildConfig {
-            output_directory: ".latex-lsp".into(),
+            output_directory: Some(".latex-lsp".into()),
             ..Default::default()
         };
         assert!(config.arguments().contains(&"-bibfudge".into()));
         let config = BuildConfig {
-            output_directory: "../output".into(),
+            output_directory: Some("../output".into()),
             ..Default::default()
         };
         assert!(config.arguments().contains(&"-bibfudge".into()));
