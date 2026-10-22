@@ -871,6 +871,28 @@ fn definition_arguments_start(
     Some(i)
 }
 
+/// Comments remove their endline and indentation, but ordinary spaces between
+/// digits remain significant. Do not expand macros or discard escaped tokens.
+fn literal_argument_count(source: &str) -> Option<usize> {
+    if !source.contains('%') {
+        return source.trim().parse().ok();
+    }
+    let mut literal = String::new();
+    let mut at = 0;
+    while at < source.len() {
+        at = tex_operand_comments(source, at);
+        let Some(ch) = source[at..].chars().next() else {
+            break;
+        };
+        if ch == '\\' {
+            return None;
+        }
+        literal.push(ch);
+        at += ch.len_utf8();
+    }
+    literal.trim().parse().ok()
+}
+
 fn source_definition(
     source: &str,
     parsed: &syntax::Syntax,
@@ -899,7 +921,7 @@ fn source_definition(
                 1
             } else {
                 let (argument, _) = syntax::group(source, i, b'[', b']')?;
-                let count = argument.value.trim().parse::<usize>().ok()?;
+                let count = literal_argument_count(&argument.value)?;
                 if !(1..=9).contains(&count) {
                     return None;
                 }
@@ -953,7 +975,7 @@ fn source_definition(
                 });
             }
             let (count, end) = syntax::group(source, i, b'[', b']')?;
-            let count: usize = count.value.trim().parse().ok()?;
+            let count = literal_argument_count(&count.value)?;
             if count > 9 {
                 return None;
             }

@@ -35,6 +35,192 @@ fn check(definitions: &str, marked: &str, label: &str, active: u32) {
 }
 
 #[test]
+fn commented_argument_counts_preserve_cross_file_signatures_and_completion_defaults() {
+    for count in [
+        "2% count\n",
+        "% before\r\n  2% after\r\n",
+        "0% joined\n  2",
+        "+2 % after\n",
+    ] {
+        let declaration = format!("\\newcommand{{\\pair}}[{count}][DEF]{{#1:#2}}");
+        check(&declaration, r"\pair{BO¦DY}", r"\pair[#1=DEF]{#2}", 1);
+        let (mut workspace, uri, position) = setup(&declaration, r"\pa¦");
+        workspace.snippets = true;
+        let item = latex_lsp::features::completion(&workspace, &uri, position)
+            .into_iter()
+            .find(|item| item.label == "pair")
+            .unwrap();
+        let Some(CompletionTextEdit::Edit(edit)) = item.text_edit else {
+            panic!("missing edit")
+        };
+        assert_eq!(edit.new_text, "pair{${1:arg2}}", "{declaration}");
+        check(
+            &format!("\\newenvironment{{panel}}[{count}][DEF]{{#1:#2}}{{}}"),
+            r"\begin{panel}{BO¦DY}",
+            r"\begin{panel}[#1=DEF]{#2}",
+            2,
+        );
+        for declaration in [
+            format!("\\DeclarePairedDelimiterX{{\\pair}}[{count}]{{(}}{{)}}{{#1,#2}}"),
+            format!("\\DeclarePairedDelimiterXPP{{\\pair}}[{count}]{{}}{{(}}{{)}}{{}}{{#1,#2}}"),
+        ] {
+            check(
+                &declaration,
+                r"\pair{one}{tw¦o}",
+                r"\pair*[size]{#1}{#2}",
+                3,
+            );
+        }
+    }
+}
+
+#[test]
+fn commented_argument_counts_keep_dynamic_invalid_and_out_of_range_counts_unknown() {
+    for count in [
+        r"2\%literal",
+        "2% comment\nx",
+        "1 2",
+        "2% joined\n3",
+        "% only\n",
+        r"\countmacro",
+        "99999999999999999999999999999999999",
+    ] {
+        let declaration = format!("\\newcommand{{\\pair}}[{count}]{{#1}}");
+        let (workspace, uri, position) = setup(&declaration, r"\pair{BO¦DY}");
+        assert!(
+            signature::help(&workspace, &uri, position).is_none(),
+            "{declaration}"
+        );
+        let scope = workspace.documents.keys().cloned().collect();
+        assert!(
+            signature::completion(&workspace, "pair", &scope).is_none(),
+            "{declaration}"
+        );
+    }
+}
+
+#[test]
+#[cfg(unix)]
+#[ignore = "requires pdflatex, xelatex, lualatex and mathtools"]
+fn commented_argument_counts_keep_cross_file_rename_and_real_engine_values_consistent() {
+    use latex_lsp::{build, config::BuildConfig, features};
+    use std::os::unix::fs::PermissionsExt;
+
+    for engine in ["pdflatex", "xelatex", "lualatex"] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let main = root.join("main.tex");
+        let declarations = concat!(
+            "\\newcommand{\\pair}[2% count😀\r\n][DEF]{\\typeout{COUNT:PAIR:#1/#2}#1#2}\n",
+            "\\newenvironment{panel}[2% count\n][ENV]{\\typeout{COUNT:ENV:#1/#2}#1#2}{}\n",
+            "\\DeclarePairedDelimiterX{\\bracket}[2% count\n]{(}{)}{\\typeout{COUNT:MATH:#1/#2}#1,#2}\n",
+        );
+        let content = "\\pair{BODY}\\begin{panel}{BODY}\\end{panel}$\\bracket{A}{B}$\n";
+        std::fs::write(&main, "\\documentclass{article}\\usepackage{mathtools}\\input{definitions}\\begin{document}\\input{content}\\end{document}\n").unwrap();
+        std::fs::write(root.join("definitions.tex"), declarations).unwrap();
+        std::fs::write(root.join("content.tex"), content).unwrap();
+        let mut workspace = Workspace::default();
+        workspace.add_root(root.into());
+        let content_uri = Url::from_file_path(root.join("content.tex")).unwrap();
+        let document = &workspace.documents[&content_uri];
+        for (offset, label, active) in [
+            (content.find("BODY").unwrap() + 2, r"\pair[#1=DEF]{#2}", 1),
+            (
+                content.rfind("BODY").unwrap() + 2,
+                r"\begin{panel}[#1=ENV]{#2}",
+                2,
+            ),
+            (
+                content.find("{B}").unwrap() + 2,
+                r"\bracket*[size]{#1}{#2}",
+                3,
+            ),
+        ] {
+            let help =
+                signature::help(&workspace, &content_uri, document.text.position(offset)).unwrap();
+            assert_eq!(help.signatures[0].label, label);
+            assert_eq!(help.active_parameter, Some(active));
+        }
+        let compiler = root.join("compiler");
+        std::fs::write(&compiler, format!("#!/bin/sh\nTEXMFVAR=\"${{0%/*}}/tex-cache\"\nTEXMFCACHE=\"$TEXMFVAR\"\nexport TEXMFVAR TEXMFCACHE\nmkdir -p \"$TEXMFVAR\"\nexec {engine} \"$@\"\n")).unwrap();
+        std::fs::set_permissions(&compiler, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let config = BuildConfig {
+            executable: compiler.to_string_lossy().into(),
+            arguments: Some(
+                [
+                    "-interaction=nonstopmode",
+                    "-recorder",
+                    "-output-directory=%o",
+                    "%f",
+                ]
+                .map(str::to_owned)
+                .into(),
+            ),
+            ..Default::default()
+        };
+        let before = build::run(&main, &config, &Default::default());
+        assert_eq!(before.status, "success", "{engine}: {}", before.output);
+        for (old, new) in [
+            ("pair", "renamedpair"),
+            ("panel", "renamedpanel"),
+            ("bracket", "renamedbracket"),
+        ] {
+            let mut workspace = Workspace::default();
+            workspace.add_root(root.into());
+            let uri = Url::from_file_path(root.join("definitions.tex")).unwrap();
+            let doc = &workspace.documents[&uri];
+            let at = doc.text.position(doc.text.source.find(old).unwrap());
+            let changes = features::rename(&workspace, &uri, at, new)
+                .unwrap()
+                .unwrap()
+                .changes
+                .unwrap();
+            assert_eq!(changes.len(), 2, "{old}");
+            for (uri, mut edits) in changes {
+                edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
+                let changed = workspace.documents[&uri]
+                    .text
+                    .changed(
+                        edits
+                            .into_iter()
+                            .map(|edit| TextDocumentContentChangeEvent {
+                                range: Some(edit.range),
+                                range_length: None,
+                                text: edit.new_text,
+                            })
+                            .collect(),
+                    )
+                    .unwrap();
+                std::fs::write(uri.to_file_path().unwrap(), changed.source).unwrap();
+            }
+        }
+        let after = build::run(&main, &config, &Default::default());
+        assert_eq!(after.status, "success", "{engine}: {}", after.output);
+        let values = |output: &str| {
+            output
+                .lines()
+                .filter(|line| line.starts_with("COUNT:"))
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        let expected = values(&before.output);
+        for marker in [
+            "COUNT:PAIR:DEF/BODY",
+            "COUNT:ENV:ENV/BODY",
+            "COUNT:MATH:A/B",
+        ] {
+            assert!(
+                expected.iter().any(|line| line == marker),
+                "{engine}: {expected:?}"
+            );
+        }
+        assert_eq!(values(&after.output), expected, "{engine}");
+        let changed = std::fs::read_to_string(root.join("definitions.tex")).unwrap();
+        assert!(changed.contains("2% count😀\r\n"));
+    }
+}
+
+#[test]
 fn bibitem_hints_follow_the_actual_optional_label_and_single_key_boundaries() {
     for command in [
         r"\bibitem",

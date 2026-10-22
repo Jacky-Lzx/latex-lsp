@@ -176,6 +176,10 @@ fn color_rename_refuses_macro_callback_tokens_that_can_print_names_as_plain_text
             r"\wrapped\textcolor{accent}{Unused}",
         ),
         (
+            "\\newcommand{\\wrapped}[3% count\r\n]{#2}",
+            r"\wrapped\textcolor{accent}{Unused}",
+        ),
+        (
             r"\newcommand{\wrapped}[4]{#3}",
             r"\wrapped{Unused}\textcolor{accent}{Unused}",
         ),

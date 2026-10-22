@@ -13,6 +13,7 @@
 
 - [编辑功能](editing.md)：补全、导航、高亮和颜色。
 - [补全](completion.md)：调用片段、已有参数、命令名操作数及名称替换。
+- [参数提示](signatures.md)：跨文件签名、声明参数、可选参数边界与注释中的数量。
 - [文献](bibliography.md)：文献键、natbib、手写文献和条目关系。
 - [biblatex 文献资源](biblatex-resources.md)：加载命令、路径编辑和静态支持范围。
 - [biblatex 引用](biblatex.md)：字段、列表、姓名、单次、多组和卷号引用。
