@@ -133,7 +133,9 @@ pub(crate) fn completion(
         .commands
         .iter()
         .rev()
-        .filter(|command| command.span.end <= cursor)
+        .filter(|command| {
+            command.span.end <= cursor && !doc.syntax.control_operands.contains(&command.span.start)
+        })
         .take(128)
         .filter(|command| {
             syntax::boolean_reference(&command.name)

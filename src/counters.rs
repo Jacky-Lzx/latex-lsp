@@ -417,6 +417,9 @@ fn optional_context(
 }
 
 fn context(doc: &Document, command: &Command, cursor: usize) -> Option<CompletionContext> {
+    if doc.syntax.control_operands.contains(&command.span.start) {
+        return None;
+    }
     let source = &doc.text.source;
     let mut at = command.span.end;
     let starred = source.as_bytes().get(at) == Some(&b'*');

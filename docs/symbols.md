@@ -33,6 +33,8 @@ LaTeX 内核的 `NewExpandableDocumentCommand`、`RenewExpandableDocumentCommand
 
 `futurelet` 的直接控制词目标及显式 `expandafter` 展开的静态 `csname` 目标也进入符号索引，支持跨文件导航和安全重命名。后续 token 仍按继续执行处理；示例和支持边界见[前瞻目标](futurelet.md)。
 
+声明目标和复制来源中的控制词保留为命令名引用，不把后续普通文本登记为该命令的声明或参数；例如复制 `newcommand` 不会制造重复定义。标签、环境等名称的编辑边界见[命令名操作数](declaration-operands.md)。
+
 编译特殊字符诊断另保留[复制命令的参数候选](literal-macro-scopes.md#命令与环境复制)，避免把副本消费的参数误修复为正文字符；此检查不推断副本调用的确定签名。
 
 `NewEnvironmentCopy`、`RenewEnvironmentCopy` 和 `DeclareEnvironmentCopy` 支持环境导航、引用、重命名、语义高亮及声明参数提示。第二个参数按来源环境处理，支持完整、未完成和跨行名称的补全；重命名来源时同步更新该参数。副本的 `begin` / `end`、直接生成的命令和静态 `csname` 调用使用副本自己的名称；复制定理时继续使用原计数器，不推断副本拥有同名计数器。含语义空白或动态的来源名称不作静态匹配。

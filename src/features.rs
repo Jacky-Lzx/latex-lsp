@@ -131,6 +131,17 @@ fn raw_target(doc: &Document, offset: usize) -> Option<Target<'_>> {
         });
     }
     for command in &doc.syntax.commands {
+        if doc.syntax.control_operands.contains(&command.span.start) {
+            if command.span.start <= offset && offset <= command.span.end {
+                return Some(Target {
+                    kind: TargetKind::Command,
+                    name: &command.name,
+                    span: command.span.clone(),
+                    control_word: true,
+                });
+            }
+            continue;
+        }
         if let Some(argument) = syntax::environment_copy_source(&doc.text.source, command) {
             if argument.span.start <= offset && offset <= argument.span.end {
                 if !syntax::is_static_key(&argument.value) {
@@ -708,7 +719,9 @@ fn argument_context(doc: &Document, offset: usize) -> Option<(&Command, Span<usi
         .commands
         .iter()
         .rev()
-        .filter(|command| command.span.end <= offset)
+        .filter(|command| {
+            command.span.end <= offset && !doc.syntax.control_operands.contains(&command.span.start)
+        })
         .find_map(|command| argument_span(doc, command, offset).map(|span| (command, span)))
 }
 
@@ -1479,6 +1492,11 @@ fn all_references(
             continue;
         }
         for (index, command) in doc.syntax.commands.iter().enumerate() {
+            if target.kind != TargetKind::Command
+                && doc.syntax.control_operands.contains(&command.span.start)
+            {
+                continue;
+            }
             if target.kind == TargetKind::Environment && generated.is_none() {
                 if let Some(argument) = syntax::environment_copy_source(&doc.text.source, command)
                     .filter(|argument| argument.value == target.name)

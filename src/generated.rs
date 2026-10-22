@@ -44,6 +44,9 @@ struct Declaration<'a> {
 }
 
 fn declaration<'a>(doc: &'a Document, command: &Command) -> Option<Declaration<'a>> {
+    if doc.syntax.control_operands.contains(&command.span.start) {
+        return None;
+    }
     if syntax::declares_toggle(&command.name) {
         let name = doc.text.source[command.argument.as_ref()?.span.clone()].trim();
         if !syntax::is_static_key(name) {
@@ -280,6 +283,9 @@ pub(crate) fn references(doc: &Document, name: &str, environment: Generated) -> 
                     control_word: false,
                 });
             }
+        }
+        if doc.syntax.control_operands.contains(&command.span.start) {
+            continue;
         }
         let mut arguments = Vec::new();
         if environment.kind == Kind::Environment {

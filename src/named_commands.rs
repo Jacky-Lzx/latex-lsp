@@ -157,6 +157,9 @@ fn argument(
 }
 
 pub(crate) fn spans(doc: &Document, command: &syntax::Command) -> Vec<Range<usize>> {
+    if doc.syntax.control_operands.contains(&command.span.start) {
+        return vec![];
+    }
     let source = &doc.text.source;
     let mut result = Vec::new();
     let mut start = syntax::skip_space(source, command.span.end);
@@ -185,7 +188,9 @@ pub(crate) fn completion(
         .commands
         .iter()
         .rev()
-        .filter(|command| command.span.end <= cursor)
+        .filter(|command| {
+            command.span.end <= cursor && !doc.syntax.control_operands.contains(&command.span.start)
+        })
         .take(128)
         .find_map(|command| {
             let mut start = syntax::skip_space(source, command.span.end);

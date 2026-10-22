@@ -540,7 +540,11 @@ pub(crate) fn model_error_invocations_with_signatures(
 }
 
 pub(crate) fn index(source: &str, syntax: &mut Syntax) {
-    for command in syntax.commands.iter().filter(|c| known(&c.name)) {
+    for command in syntax
+        .commands
+        .iter()
+        .filter(|c| known(&c.name) && !syntax.control_operands.contains(&c.span.start))
+    {
         if let Some(occurrences) = occurrences(source, command) {
             for (declaration, span) in occurrences {
                 let entry = Entry {
@@ -721,13 +725,11 @@ pub(crate) fn completion(
 ) -> Option<Vec<CompletionItem>> {
     let doc = workspace.documents.get(uri)?;
     let source = &doc.text.source;
-    for command in doc
-        .syntax
-        .commands
-        .iter()
-        .rev()
-        .filter(|c| known(&c.name) && c.span.end <= offset)
-    {
+    for command in doc.syntax.commands.iter().rev().filter(|c| {
+        known(&c.name)
+            && c.span.end <= offset
+            && !doc.syntax.control_operands.contains(&c.span.start)
+    }) {
         for field in fields(source, command).0 {
             let raw_start = field.start + 1;
             let end = syntax::group(source, field.start, b'{', b'}')

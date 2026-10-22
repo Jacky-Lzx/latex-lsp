@@ -84,6 +84,9 @@ fn candidates(doc: &Document) -> Vec<Token> {
             modifiers: 0,
             priority: 10,
         });
+        if doc.syntax.control_operands.contains(&command.span.start) {
+            continue;
+        }
         if let Some(argument) = &command.argument {
             if matches!(command.name.as_str(), "begin" | "end") {
                 literal(&mut tokens, source, argument.span.clone(), TYPE);

@@ -3747,7 +3747,9 @@ pub fn help(workspace: &Workspace, uri: &Url, position: Position) -> Option<Sign
         .iter()
         .enumerate()
         .rev()
-        .filter(|(_, command)| command.span.end <= cursor)
+        .filter(|(_, command)| {
+            command.span.end <= cursor && !doc.syntax.control_operands.contains(&command.span.start)
+        })
         .take(128)
     {
         let literal = if command.name == "endcsname" {

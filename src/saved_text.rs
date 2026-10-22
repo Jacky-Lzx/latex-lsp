@@ -219,7 +219,11 @@ fn name_references(source: &str, span: Span<usize>) -> (Vec<Entry>, Vec<Entry>) 
 }
 
 pub(crate) fn index(source: &str, parsed: &mut Syntax) {
-    for command in &parsed.commands {
+    for command in parsed
+        .commands
+        .iter()
+        .filter(|command| !parsed.control_operands.contains(&command.span.start))
+    {
         let Some((kind, declaration)) = role(command) else {
             continue;
         };
@@ -451,7 +455,9 @@ pub(crate) fn completion(
         .commands
         .iter()
         .rev()
-        .filter(|command| command.span.end <= cursor)
+        .filter(|command| {
+            command.span.end <= cursor && !doc.syntax.control_operands.contains(&command.span.start)
+        })
         .find_map(|command| {
             let (kind, declaration) = role(command)?;
             if declaration {

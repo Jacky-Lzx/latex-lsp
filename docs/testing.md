@@ -14,6 +14,12 @@ cargo test --locked -- --include-ignored
 
 ## 排版日志与文件移动
 
+声明操作数回归使用三个 LaTeX 引擎验证复制 `newcommand`、`newif`、`newenvironment` 后的普通调用，以及宏、开关和环境重命名前后的输出一致。默认测试另检查各类符号索引、命令名操作数的参数提示与名称补全、静态 `csname`、逐字边界和标签编辑范围：
+
+```sh
+cargo test --locked --test operand_declarations -- --include-ignored
+```
+
 `futurelet` 重命名回归需要 pdfLaTeX、XeLaTeX 和 LuaLaTeX，比较改名前后的前瞻判断与继续执行结果，覆盖直接目标、静态 `csname` 目标和中文新名称。默认测试检查跨文件编辑、非法目标、命令继续加载文件及签名边界；stdio 回归核对 UTF-16 名称范围和文档版本。命令片段另由真实 Neovim 展开验证：
 
 ```sh

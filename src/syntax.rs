@@ -99,6 +99,9 @@ pub struct CitationField {
 #[derive(Clone, Debug, Default)]
 pub struct Syntax {
     pub commands: Vec<Command>,
+    /// Unexpanded declaration/copy operands remain command-name references,
+    /// but do not read arguments or perform the named command's operations.
+    pub control_operands: std::collections::BTreeSet<usize>,
     pub labels: Vec<Entry>,
     pub anchors: Vec<Entry>,
     pub anchor_references: Vec<Entry>,
@@ -1930,6 +1933,7 @@ impl Syntax {
         let mut environments = Vec::new();
         let mut literal_arguments = std::collections::BTreeMap::new();
         let mut control_operands = std::collections::BTreeSet::new();
+        let mut assigned_controls = std::collections::BTreeSet::<String>::new();
         let mut conversion_arguments = std::collections::BTreeMap::new();
         let mut i = 0;
         while i < bytes.len() {
@@ -1989,6 +1993,14 @@ impl Syntax {
                     }
                     let name = &source[name_start..i];
                     let command_end = i;
+                    if control_operands.contains(&start) {
+                        result.commands.push(Command {
+                            name: name.into(),
+                            span: start..command_end,
+                            argument: None,
+                        });
+                        continue;
+                    }
                     let starred = !matches!(
                         name,
                         "input" | "InputIfFileExists" | "IfFileExists" | "detokenize" | "string"
@@ -2123,13 +2135,13 @@ impl Syntax {
                             }
                         }
                     }
-                    if name == "detokenize" && !control_operands.contains(&start) {
+                    if name == "detokenize" {
                         if let Some((argument, end)) =
                             group(source, skip_space(source, command_end), b'{', b'}')
                         {
                             conversion_arguments.insert(argument.outer_span.start, end);
                         }
-                    } else if name == "string" && !control_operands.contains(&start) {
+                    } else if name == "string" {
                         let at = skip_space(source, command_end);
                         if at < source.len() {
                             let end = control_word(source, at).map_or_else(
@@ -2197,6 +2209,24 @@ impl Syntax {
                     } else {
                         None
                     };
+                    let expanded_target = declaration.as_ref().and_then(|span| {
+                        if source[span.clone()] != *"\\csname"
+                            || skip_space(source, command.span.end) != span.start
+                            || !result.commands.last().is_some_and(|previous| {
+                                previous.name == "expandafter"
+                                    && !control_operands.contains(&previous.span.start)
+                                    && skip_space(source, previous.span.end) == command.span.start
+                            })
+                        {
+                            return None;
+                        }
+                        let at = skip_space(source, span.end);
+                        let end = at + source[at..].find('\\')?;
+                        let closing = control_word(source, end)?;
+                        (source[closing.clone()] == *"\\endcsname"
+                            && is_static_key(&source[at..end]))
+                        .then_some((span.start, closing))
+                    });
                     let declaration = declaration.filter(|span| {
                         // expandafter expands a csname target before the
                         // declaration sees it; it does not define `csname`.
@@ -2204,18 +2234,36 @@ impl Syntax {
                             && skip_space(source, command.span.end) == span.start
                             && result.commands.last().is_some_and(|previous| {
                                 previous.name == "expandafter"
+                                    && !control_operands.contains(&previous.span.start)
                                     && skip_space(source, previous.span.end) == command.span.start
                             }))
                     });
-                    if let Some(span) = &declaration {
-                        control_operands.insert(span.start);
+                    // A previous lexical assignment invalidates this keyword's
+                    // operand grammar. Keep later commands visible rather than
+                    // simulating execution or restoration at group boundaries.
+                    let operands_known = !assigned_controls.contains(name);
+                    if operands_known {
+                        if let Some(span) = &declaration {
+                            control_operands.insert(span.start);
+                        }
+                        if let Some((start, end)) = &expanded_target {
+                            control_operands.extend([*start, end.start]);
+                        }
                     }
                     // futurelet replays its two lookahead tokens, which can
                     // execute; only its destination is a declaration operand.
-                    if name == "let" || declares_command_copy(name) || name == "cslet" {
-                        let after_target = parsed
+                    if operands_known
+                        && (name == "let" || declares_command_copy(name) || name == "cslet")
+                    {
+                        let after_target = expanded_target
                             .as_ref()
-                            .map(|(_, end)| *end)
+                            .map(|(_, end)| end.end)
+                            .or_else(|| {
+                                parsed
+                                    .as_ref()
+                                    .filter(|_| name != "let")
+                                    .map(|(_, end)| *end)
+                            })
                             .or_else(|| declaration.as_ref().map(|span| span.end))
                             .or_else(|| {
                                 (name == "cslet")
@@ -2227,15 +2275,28 @@ impl Syntax {
                             if name == "let" && bytes.get(at) == Some(&b'=') {
                                 at = skip_space(source, at + 1);
                             }
-                            let operand = group(source, at, b'{', b'}')
-                                .map(|(argument, _)| argument.span.start)
-                                .unwrap_or(at);
+                            let operand = if name == "let" {
+                                // Primitive let copies one token, including a
+                                // brace; a following group is not its source.
+                                at
+                            } else {
+                                group(source, at, b'{', b'}')
+                                    .map(|(argument, _)| argument.span.start)
+                                    .unwrap_or(at)
+                            };
                             if let Some(word) = control_word(source, operand) {
                                 control_operands.insert(word.start);
                             }
                         }
                     }
+                    if let Some((start, end)) = &expanded_target {
+                        assigned_controls.insert(
+                            source[skip_space(source, start + r"\csname".len())..end.start]
+                                .to_owned(),
+                        );
+                    }
                     if let Some(span) = declaration {
+                        assigned_controls.insert(source[span.start + 1..span.end].to_owned());
                         result.definitions.push(Entry {
                             name: source[span.start + 1..span.end].into(),
                             span,
@@ -2254,6 +2315,8 @@ impl Syntax {
                             is_variable: false,
                         };
                         if declares_environment(name) && is_static_key(&arg.value) {
+                            assigned_controls
+                                .extend([arg.value.clone(), format!("end{}", arg.value)]);
                             result.environments.push(Entry {
                                 detail: format!("Defined with \\{name}"),
                                 ..entry()
@@ -2337,6 +2400,9 @@ impl Syntax {
                             i = end;
                         }
                     }
+                    if let Some(span) = crate::named_commands::declaration(source, &command) {
+                        assigned_controls.insert(source[span].to_owned());
+                    }
                     result.commands.push(command);
                 }
                 _ => i += 1,
@@ -2372,11 +2438,14 @@ impl Syntax {
         result
             .fixes
             .extend(result.environment_fixes.iter().cloned());
+        result.control_operands = control_operands;
         for (index, commands) in result.commands.windows(3).enumerate() {
             let [expand, declaration, target] = commands else {
                 unreachable!()
             };
             if expand.name == "expandafter"
+                && !result.control_operands.contains(&expand.span.start)
+                && !result.control_operands.contains(&declaration.span.start)
                 && (declares_command(&declaration.name)
                     || matches!(
                         declaration.name.as_str(),
@@ -2395,7 +2464,11 @@ impl Syntax {
                 }
             }
         }
-        for command in &result.commands {
+        for command in result
+            .commands
+            .iter()
+            .filter(|command| !result.control_operands.contains(&command.span.start))
+        {
             if let Some(span) = crate::named_commands::declaration(source, command) {
                 result.definitions.push(Entry {
                     name: source[span.clone()].into(),
