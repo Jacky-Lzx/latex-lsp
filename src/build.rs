@@ -1546,10 +1546,19 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool, rebuild: bo
             outcome.message = error.message.clone();
         }
     }
-    // Notifications carry a bounded tail; pipe readers above still drain all output.
     if outcome.pdf.is_some() {
-        outcome.pages = build_log::page_count(if log.is_empty() { &output } else { &log });
+        match build_log::output_summary(if log.is_empty() { &output } else { &log }) {
+            Some(build_log::OutputSummary::Pages(pages)) => outcome.pages = Some(pages),
+            Some(build_log::OutputSummary::NoPages) => {
+                outcome.status = "error";
+                outcome.pdf = None;
+                outcome.message =
+                    "Compiler reported no pages of output; no PDF was produced".into();
+            }
+            None => {}
+        }
     }
+    // Notifications carry a bounded tail; pipe readers above still drain all output.
     outcome.output = output
         .chars()
         .rev()

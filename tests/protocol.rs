@@ -3319,6 +3319,72 @@ fn rejected_or_unanswered_progress_requests_do_not_prevent_compilation() {
 
 #[test]
 #[cfg(unix)]
+fn no_pages_builds_reject_preserved_pdfs_and_recover_after_a_real_output() {
+    for report in [
+        "No pages of output.",
+        "warning  (pdf backend): no pages of output.",
+    ] {
+        let script = format!("printf '%s\\n' '{report}' > \"$1/main.log\"\n");
+        let (mut server, directory, main) = fake_build_server(&script, false);
+        let output = directory.path().join("build/latex-lsp");
+        std::fs::create_dir_all(&output).unwrap();
+        let pdf = output.join("main.pdf");
+        let previous = b"%PDF-1.4\nprevious output\n";
+        std::fs::write(&pdf, previous).unwrap();
+        let now = std::time::SystemTime::now();
+        for (path, age) in [(main.to_file_path().unwrap(), 120), (pdf.clone(), 60)] {
+            std::fs::File::open(path)
+                .unwrap()
+                .set_times(std::fs::FileTimes::new().set_modified(now - Duration::from_secs(age)))
+                .unwrap();
+        }
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        let summary = &finished["params"];
+        assert_eq!(summary["status"], "error", "{report}: {finished}");
+        assert_eq!(summary["exitCode"], 0);
+        assert!(summary["pdfUri"].is_null());
+        assert!(summary["pages"].is_null());
+        assert!(summary["pdfSize"].is_null());
+        assert_eq!(summary["errorsCount"], 1);
+        assert!(summary["message"]
+            .as_str()
+            .unwrap()
+            .contains("no pages of output"));
+        assert_eq!(std::fs::read(&pdf).unwrap(), previous);
+        let status = server.request(
+            3,
+            "workspace/executeCommand",
+            json!({"command":"latex.buildStatus","arguments":[main]}),
+        );
+        assert_eq!(&status, summary);
+
+        std::fs::write(
+            directory.path().join("compiler.sh"),
+            "printf '%%PDF-1.4\\ncurrent output\\n' > \"$1/main.pdf\"\nprintf 'Output written on main.pdf (1 page).\\n' > \"$1/main.log\"\n",
+        ).unwrap();
+        server.request(
+            4,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let recovered = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(recovered["params"]["status"], "success", "{recovered}");
+        assert_eq!(recovered["params"]["errorsCount"], 0);
+        assert_eq!(recovered["params"]["pages"], 1);
+        assert!(recovered["params"]["pdfUri"].is_string());
+        server.request(5, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
 fn build_summaries_use_final_logs_actual_pdf_sizes_and_clear_artifacts_after_errors() {
     let script = "printf 'Output written on old.pdf (9 pages, 900 bytes).\\n'\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf '%s:2: LaTeX Warning: final pass warning.\\nOutput written on directory/main.pdf (9 pages).\\n/main.pdf (2 pages, 999 bytes).\\n' \"$2\" > \"$1/main.log\"\n";
     let (mut server, directory, main) = fake_build_server(script, false);

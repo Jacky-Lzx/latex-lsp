@@ -111,12 +111,30 @@ fn output_summary_pages(summary: &str) -> Option<u32> {
     pages.parse::<u32>().ok().filter(|pages| *pages > 0)
 }
 
-/// Read TeX's final PDF summary, including wrapped paths and page/byte counts.
-pub fn page_count(log: &str) -> Option<u32> {
+pub(crate) enum OutputSummary {
+    Pages(u32),
+    NoPages,
+}
+
+fn no_pages_report(line: &str) -> bool {
+    line == "No pages of output."
+        || line
+            .strip_prefix("warning")
+            .is_some_and(|tail| tail.trim_start() == "(pdf backend): no pages of output.")
+}
+
+/// An explicit no-output report supersedes page counts from earlier passes.
+pub(crate) fn output_summary(log: &str) -> Option<OutputSummary> {
     let lines = log.lines().collect::<Vec<_>>();
     let index = lines
         .iter()
-        .rposition(|line| line.starts_with("Output written on "))?;
+        .rposition(|line| line.starts_with("Output written on ") || no_pages_report(line))?;
+    if no_pages_report(lines[index]) {
+        // An omitted later pass could have produced output. Only reject a PDF
+        // when no hidden output can supersede the observed no-pages report.
+        return (!lines[index + 1..].contains(&crate::output::TRUNCATED))
+            .then_some(OutputSummary::NoPages);
+    }
     let mut summary = String::new();
     for (offset, line) in lines.iter().skip(index).take(128).enumerate() {
         if *line == crate::output::TRUNCATED || summary.len() + line.len() > 8192 {
@@ -134,16 +152,24 @@ pub fn page_count(log: &str) -> Option<u32> {
                 .iter()
                 .any(|prefix| line.starts_with(prefix)))
         {
-            return output_summary_pages(&summary);
+            return output_summary_pages(&summary).map(OutputSummary::Pages);
         }
         summary.push_str(line);
         // Read to a real footer or EOF before accepting a summary. A path
         // can itself contain `main.pdf (9 pages).` at a wrap boundary.
         if index + offset + 1 == lines.len() {
-            return output_summary_pages(&summary);
+            return output_summary_pages(&summary).map(OutputSummary::Pages);
         }
     }
     None
+}
+
+/// Read TeX's final PDF summary, including wrapped paths and page/byte counts.
+pub fn page_count(log: &str) -> Option<u32> {
+    match output_summary(log)? {
+        OutputSummary::Pages(pages) => Some(pages),
+        OutputSummary::NoPages => None,
+    }
 }
 
 fn location(root: &Path, name: &str) -> Option<PathBuf> {
