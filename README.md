@@ -1,5 +1,5 @@
 # latex-lsp
 
-Rust 编写的 LaTeX 语言服务器。
+Rust 编写的 LaTeX 语言服务器，支持补全、导航、重命名、编译与诊断修复。
 
 [安装](docs/install.md) · [编辑器配置](docs/editors.md) · [文档](docs/README.md) · [MIT](LICENSE)

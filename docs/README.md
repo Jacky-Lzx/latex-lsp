@@ -41,6 +41,7 @@
 - [编译结果分析](build-analysis.md)：页数、引用、重编译请求和文献工具。
 - [编译输入与过期结果](build-inputs.md)：保存检查、取消、依赖追踪和产物有效性。
 - [编译诊断](diagnostics.md)：错误定位、警告和拼写修复规则。
+- [长度诊断与修复](length-diagnostics.md)：etoolbox 的未定义长度定位、候选类型与拼写修复。
 - [Unicode 输入错误](unicode-errors.md)：不支持的字符、码点摘要与定位边界。
 - [特殊字符诊断与修复](special-characters.md)：字面特殊字符、多余对齐分隔符的精确定位及转义修复。
 - [多余右花括号](extra-braces.md)：正文、数学及显式分组中的字符定位与删除修复。

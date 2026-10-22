@@ -71,7 +71,9 @@ cargo test --locked --test etoolbox_registers -- --include-ignored
 
 操作示例与静态分析边界见[寄存器与长度](registers.md)。
 
-未定义长度回归检查 `deflength` 的精确范围、裸控制序列及跨行表达式、重复与缩短源码回显、候选寄存器类型、项目隔离及版本化和旧客户端修复。外部回归使用三个引擎的 60 / 79 列日志，在传统与文件行号格式中修复自定义长度、尺寸和内置长度，并核对重新编译后的实际值：
+## 未定义长度诊断
+
+[长度诊断与修复](length-diagnostics.md)回归检查 `deflength` 的精确范围、裸控制序列及跨行表达式、重复与缩短源码回显、候选寄存器类型、项目隔离及版本化和旧客户端修复。外部回归需要 pdfLaTeX、XeLaTeX、LuaLaTeX 和 etoolbox，使用三个引擎的 60 / 79 列日志，在传统与文件行号格式中修复自定义长度、尺寸和内置长度，并核对重新编译后的实际值：
 
 ```sh
 cargo test --locked --test undefined_lengths
