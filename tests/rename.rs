@@ -921,7 +921,14 @@ fn pdf_destinations_rename_independently_of_equal_reference_labels() {
 fn compound_pdf_destination_renames_preserve_separators_comments_labels_and_text() {
     let definitions = "\\hyperdef[label]{section}% definition separator\r\n{start}{section.start}";
     let source = "\\hyperlink{section.start}{section.start}\n\\hyperref{}{section} % link separator\n{start}{section.start}\n\\hyperref[label]{Text}";
-    for name in ["section.updated", "chapter.final"] {
+    for (name, category, key) in [
+        ("section.updated", "section", "updated"),
+        ("section.", "section", ""),
+        ("section.[final]", "section", "[final]"),
+        ("section.[literal", "section", "[literal"),
+        ("section.final]", "section", "final]"),
+        ("chapter.final", "", "chapter.final"),
+    ] {
         let mut workspace = Workspace::default();
         let declaration = insert(&mut workspace, "targets.tex", definitions, None);
         let main = insert(&mut workspace, "main.tex", source, Some(2));
@@ -947,11 +954,6 @@ fn compound_pdf_destination_renames_preserve_separators_comments_labels_and_text
                 .unwrap()
                 .changes
                 .unwrap();
-            let (category, key) = if name == "section.updated" {
-                ("section", "updated")
-            } else {
-                ("", "chapter.final")
-            };
             assert_eq!(edits_result(definitions, &changes[&declaration]), format!("\\hyperdef[label]{{{category}}}% definition separator\r\n{{{key}}}{{section.start}}"));
             assert_eq!(edits_result(source, &changes[&main]), format!("\\hyperlink{{{name}}}{{section.start}}\n\\hyperref{{}}{{{category}}} % link separator\n{{{key}}}{{section.start}}\n\\hyperref[label]{{Text}}"));
         }
@@ -983,7 +985,15 @@ fn real_pdf_destination_renames_update_direct_and_compound_links_without_renamin
             ..Default::default()
         };
         let mut old_name = "section.start";
-        for (from_definition, name) in [(false, "section.next"), (true, "chapter.final")] {
+        for (from_definition, name) in [
+            (false, "section.next"),
+            (true, "section."),
+            (false, "section.[final]"),
+            (true, "section.[literal"),
+            (false, "section.final]"),
+            (true, "chapter.final"),
+            (false, "section.restored"),
+        ] {
             let mut workspace = Workspace::default();
             workspace.add_root(root.into());
             let document =
