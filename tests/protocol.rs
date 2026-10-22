@@ -2448,6 +2448,70 @@ cat "${2%/*}/fixture.log" > "$1/main.log"
 
 #[test]
 #[cfg(unix)]
+fn box_warning_analysis_uses_final_logs_and_clears_repaired_layout_metrics() {
+    let script = r#"cat <<'EARLY'
+Overfull \hbox (99.0pt too wide) detected at line 1
+EARLY
+printf '%%PDF-1.4\n' > "$1/main.pdf"
+cat "${2%/*}/fixture.log" > "$1/main.log"
+"#;
+    let (mut server, directory, main) = fake_build_server(script, false);
+    let horizontal = "Overfull \\hbox (19.0pt too wide) detected at line 2\n\n";
+    let other = "Overfull \\vbox (5.0pt too high) detected at line 2\n\nUnderfull \\hbox (badness 2000) detected at line 2\n\nUnderfull \\vbox (badness 10000) has occurred while \\output is active\n\n";
+    for (id, warnings, expected, count) in [
+        (
+            2,
+            format!("{horizontal}{other}"),
+            json!([
+                {"kind":"overfull","axis":"horizontal","count":1,"maxExcessPt":"19.0"},
+                {"kind":"overfull","axis":"vertical","count":1,"maxExcessPt":"5.0"},
+                {"kind":"underfull","axis":"horizontal","count":1,"maxBadness":2000},
+                {"kind":"underfull","axis":"vertical","count":1,"maxBadness":10000}
+            ]),
+            4,
+        ),
+        (
+            4,
+            horizontal.into(),
+            json!([
+                {"kind":"overfull","axis":"horizontal","count":1,"maxExcessPt":"19.0"}
+            ]),
+            1,
+        ),
+        (6, String::new(), json!([]), 0),
+    ] {
+        let log = format!("(./main.tex\n{warnings}\nOutput written on main.pdf (1 page).\n)\n");
+        std::fs::write(directory.path().join("fixture.log"), log).unwrap();
+        let started = server.request(
+            id,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let finished = server.until(|message| {
+            message["method"] == "latex/buildFinished"
+                && message["params"]["buildId"] == started["buildId"]
+        });
+        let result = &finished["params"];
+        assert_eq!(result["status"], "success", "{finished}");
+        assert_eq!(result["warningsCount"], count, "{finished}");
+        assert_eq!(result["errorsCount"], 0);
+        assert_eq!(result["analysis"]["boxWarnings"], expected, "{finished}");
+        assert_eq!(result["analysis"]["rerunRequired"], false);
+        assert_eq!(result["analysis"]["truncated"], false);
+        let saved = server.request(
+            id + 1,
+            "workspace/executeCommand",
+            json!({"command":"latex.buildStatus","arguments":[main]}),
+        );
+        assert_eq!(&saved, result);
+    }
+    server.request(8, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
 fn unchanged_pdf_older_than_an_included_source_is_rejected_but_fresh_noop_builds_succeed() {
     let (mut server, directory, uri) = fake_build_server("exit 0\n", false);
     let source = "\\documentclass{article}\n\\input{chapter}\n";

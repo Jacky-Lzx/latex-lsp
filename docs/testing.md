@@ -21,10 +21,11 @@ cargo test --locked --test font_substitutions -- --include-ignored
 cargo test --locked --test missing_characters -- --include-ignored
 ```
 
-真实盒子警告回归需要 pdfLaTeX、XeLaTeX 和 LuaLaTeX，使用较窄的日志输出宽度验证 Overfull 警告的跨行恢复及完整段落范围：
+真实盒子警告回归需要 pdfLaTeX、XeLaTeX 和 LuaLaTeX，使用较窄的日志输出宽度验证 Overfull 警告的跨行恢复及完整段落范围；结果分析回归另核对四类指标和排版修复后的清空行为：
 
 ```sh
 cargo test --locked --test box_warnings real_ -- --ignored
+cargo test --locked --test box_analysis -- --include-ignored
 ```
 
 真实文件 URL 重命名回归需要 pdfLaTeX 和 hyperref，验证改名前后生成的 PDF 仍保留查询参数、页面目标及四参数链接的目标：

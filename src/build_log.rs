@@ -383,6 +383,43 @@ fn font_substitution(message: &str) -> Option<FontSubstitution<'_>> {
     .then_some(FontSubstitution::Size(font, requested, replacement))
 }
 
+#[derive(Clone, Copy)]
+enum BoxMetric<'a> {
+    Excess(&'a str),
+    Badness(u32),
+}
+
+struct BoxWarning<'a> {
+    kind: &'static str,
+    axis: &'static str,
+    metric: BoxMetric<'a>,
+}
+
+struct BoxSummary<'a> {
+    count: usize,
+    maximum: BoxMetric<'a>,
+}
+
+// Compare the compiler's decimal strings exactly, including distinctions that
+// would disappear in floating point. Equal values use a stable spelling.
+fn compare_box_excess(left: &str, right: &str) -> std::cmp::Ordering {
+    fn parts(value: &str) -> (&str, &str) {
+        let (integer, fraction) = value.split_once('.').unwrap_or((value, ""));
+        (
+            integer.trim_start_matches('0'),
+            fraction.trim_end_matches('0'),
+        )
+    }
+    let (left_integer, left_fraction) = parts(left);
+    let (right_integer, right_fraction) = parts(right);
+    left_integer
+        .len()
+        .cmp(&right_integer.len())
+        .then_with(|| left_integer.cmp(right_integer))
+        .then_with(|| left_fraction.cmp(right_fraction))
+        .then_with(|| right.cmp(left))
+}
+
 /// Summarize observed final-log diagnostics without multiplying repeated uses.
 pub fn compilation_analysis(
     diagnostics: &BTreeMap<Url, Vec<Diagnostic>>,
@@ -415,6 +452,7 @@ pub fn compilation_analysis(
     let mut bibliography_tools = BTreeSet::new();
     let mut font_substitutions = BTreeSet::new();
     let mut font_size_substitutions = BTreeSet::new();
+    let mut box_warnings: BTreeMap<_, BoxSummary<'_>> = BTreeMap::new();
     let mut rerun = false;
     let mut truncated = diagnostics_truncated;
     for diagnostic in diagnostics.values().flatten().filter(|diagnostic| {
@@ -457,6 +495,31 @@ pub fn compilation_analysis(
         }
         if diagnostic.severity != Some(DiagnosticSeverity::WARNING) {
             continue;
+        }
+        if let Some(warning) = box_warning_details(reported_message) {
+            if matches!(warning.metric, BoxMetric::Excess(value) if value.len() > MAX_KEY_CHARS) {
+                truncated = true;
+            } else {
+                let summary =
+                    box_warnings
+                        .entry((warning.kind, warning.axis))
+                        .or_insert(BoxSummary {
+                            count: 0,
+                            maximum: warning.metric,
+                        });
+                summary.count += 1;
+                match (warning.metric, &mut summary.maximum) {
+                    (BoxMetric::Excess(value), BoxMetric::Excess(maximum)) => {
+                        if compare_box_excess(value, maximum).is_gt() {
+                            *maximum = value;
+                        }
+                    }
+                    (BoxMetric::Badness(value), BoxMetric::Badness(maximum)) => {
+                        *maximum = (*maximum).max(value);
+                    }
+                    _ => unreachable!("each box warning kind has one metric"),
+                }
+            }
         }
         match font_substitution(reported_message) {
             Some(FontSubstitution::Shape(requested, replacement)) => {
@@ -534,6 +597,17 @@ pub fn compilation_analysis(
     let font_size_substitutions: Vec<_> = font_size_substitutions.into_iter().map(|(font, requested, replacement)| {
         serde_json::json!({"font":font, "requestedSize":requested, "replacementSize":replacement})
     }).collect();
+    let box_warnings: Vec<_> = box_warnings
+        .into_iter()
+        .map(|((kind, axis), summary)| {
+            let mut value = serde_json::json!({"kind":kind, "axis":axis, "count":summary.count});
+            match summary.maximum {
+                BoxMetric::Excess(maximum) => value["maxExcessPt"] = maximum.into(),
+                BoxMetric::Badness(maximum) => value["maxBadness"] = maximum.into(),
+            }
+            value
+        })
+        .collect();
     serde_json::json!({
         "rerunRequired": rerun,
         "requiredBibliographyTools": bibliography_tools,
@@ -545,6 +619,7 @@ pub fn compilation_analysis(
         "missingCharacters": missing_characters,
         "fontSubstitutions": font_substitutions,
         "fontSizeSubstitutions": font_size_substitutions,
+        "boxWarnings": box_warnings,
         "truncated": truncated,
     })
 }
@@ -655,7 +730,7 @@ fn box_code(message: &str) -> Option<&'static str> {
     Some(code)
 }
 
-fn complete_box_header(message: &str) -> bool {
+fn box_warning_details(message: &str) -> Option<BoxWarning<'_>> {
     fn number(value: &str) -> bool {
         !value.is_empty()
             && value.bytes().all(|byte| byte.is_ascii_digit())
@@ -663,29 +738,23 @@ fn complete_box_header(message: &str) -> bool {
     }
     let (overfull, tail) = if let Some(tail) = message.strip_prefix("Overfull ") {
         (true, tail)
-    } else if let Some(tail) = message.strip_prefix("Underfull ") {
-        (false, tail)
     } else {
-        return false;
+        (false, message.strip_prefix("Underfull ")?)
     };
     let (horizontal, tail) = if let Some(tail) = tail.strip_prefix("\\hbox (") {
         (true, tail)
-    } else if let Some(tail) = tail.strip_prefix("\\vbox (") {
-        (false, tail)
     } else {
-        return false;
+        (false, tail.strip_prefix("\\vbox (")?)
     };
-    let Some((amount, context)) = tail.split_once(") ") else {
-        return false;
-    };
-    let valid_amount = if overfull {
+    let (amount, context) = tail.split_once(") ")?;
+    let metric = if overfull {
         amount
             .strip_suffix(if horizontal {
                 "pt too wide"
             } else {
                 "pt too high"
             })
-            .is_some_and(|value| {
+            .filter(|value| {
                 value
                     .bytes()
                     .all(|byte| byte.is_ascii_digit() || byte == b'.')
@@ -693,14 +762,18 @@ fn complete_box_header(message: &str) -> bool {
                         .parse::<f64>()
                         .is_ok_and(|value| value.is_finite() && value >= 0.0)
             })
+            .map(BoxMetric::Excess)?
     } else {
-        amount.strip_prefix("badness ").is_some_and(number)
+        BoxMetric::Badness(
+            amount
+                .strip_prefix("badness ")
+                .filter(|value| number(value))?
+                .parse()
+                .ok()?,
+        )
     };
-    if !valid_amount {
-        return false;
-    }
     let context = context.strip_suffix(" []").unwrap_or(context);
-    if let Some(lines) = context
+    let valid_context = if let Some(lines) = context
         .strip_prefix("in paragraph at lines ")
         .or_else(|| context.strip_prefix("in alignment at lines "))
     {
@@ -711,7 +784,16 @@ fn complete_box_header(message: &str) -> bool {
         number(line)
     } else {
         context == "has occurred while \\output is active"
-    }
+    };
+    valid_context.then_some(BoxWarning {
+        kind: if overfull { "overfull" } else { "underfull" },
+        axis: if horizontal { "horizontal" } else { "vertical" },
+        metric,
+    })
+}
+
+fn complete_box_header(message: &str) -> bool {
+    box_warning_details(message).is_some()
 }
 
 /// Recover only a complete engine box header. Box dumps and speculative source
