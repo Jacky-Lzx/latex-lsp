@@ -318,6 +318,8 @@ pub(crate) fn references(doc: &Document, name: &str, environment: Generated) -> 
                 command.name.as_str(),
                 "setcounter"
                     | "addtocounter"
+                    | "defcounter"
+                    | "ifltxcounter"
                     | "stepcounter"
                     | "refstepcounter"
                     | "usecounter"
@@ -337,9 +339,12 @@ pub(crate) fn references(doc: &Document, name: &str, environment: Generated) -> 
                     | "numberwithin"
                     | "@addtoreset"
                     | "@removefromreset"
-            );
+            ) && (doc.text.source.as_bytes().get(command.span.end) != Some(&b'*')
+                || matches!(command.name.as_str(), "counterwithin" | "counterwithout"));
             let referenced_counter =
                 syntax::counter_reference_label_start(&doc.text.source, command).is_some();
+            let counter =
+                counter && doc.text.source.as_bytes().get(command.span.end) != Some(&b'*');
             if counter || pair || referenced_counter {
                 arguments.extend(command.argument.iter().cloned());
             }

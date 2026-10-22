@@ -620,6 +620,11 @@ fn builtin(name: &str) -> Option<Signature> {
             (&[("counter", false), ("key", false)], false)
         }
         "setcounter" | "addtocounter" => (&[("counter", false), ("value", false)], false),
+        "defcounter" => (&[("counter", false), ("expression", false)], false),
+        "ifltxcounter" => (
+            &[("counter", false), ("then", false), ("else", false)],
+            false,
+        ),
         "stepcounter" | "refstepcounter" | "usecounter" | "value" | "arabic" | "roman"
         | "Roman" | "alph" | "Alph" | "fnsymbol" | "aliascntresetthe" => {
             (&[("counter", false)], false)

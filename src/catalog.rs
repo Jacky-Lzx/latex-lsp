@@ -948,6 +948,16 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
         "Add an integer to a LaTeX counter.",
     ),
     (
+        "defcounter",
+        "defcounter{${1:counter}}{${2:0}}",
+        "Assign an integer expression to a LaTeX counter locally. A global prefix makes the assignment global. Requires etoolbox.",
+    ),
+    (
+        "ifltxcounter",
+        "ifltxcounter{${1:counter}}{${2:then}}{${3:else}}",
+        "Test whether a LaTeX counter exists, then execute the corresponding branch. Requires etoolbox.",
+    ),
+    (
         "stepcounter",
         "stepcounter{${1:counter}}",
         "Increment a counter and reset its dependent counters.",

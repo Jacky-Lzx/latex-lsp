@@ -206,6 +206,7 @@ fn error_command(name: &str) -> bool {
         name,
         "setcounter"
             | "addtocounter"
+            | "defcounter"
             | "stepcounter"
             | "refstepcounter"
             | "usecounter"
@@ -248,6 +249,7 @@ fn invocation_arguments(
     match command.name.as_str() {
         "setcounter"
         | "addtocounter"
+        | "defcounter"
         | "setcounterref"
         | "addtocounterref"
         | "setcounterpageref"
@@ -423,7 +425,7 @@ fn context(doc: &Document, command: &Command, cursor: usize) -> Option<Completio
     let source = &doc.text.source;
     let mut at = command.span.end;
     let starred = source.as_bytes().get(at) == Some(&b'*');
-    if starred && syntax::is_counter_reference(&command.name) {
+    if starred && !matches!(command.name.as_str(), "counterwithin" | "counterwithout") {
         return None;
     }
     if starred {
@@ -433,6 +435,8 @@ fn context(doc: &Document, command: &Command, cursor: usize) -> Option<Completio
     let span = match command.name.as_str() {
         "setcounter"
         | "addtocounter"
+        | "defcounter"
+        | "ifltxcounter"
         | "setcounterref"
         | "addtocounterref"
         | "setcounterpageref"

@@ -131,6 +131,16 @@ fn candidates(doc: &Document) -> Vec<Token> {
         for (span, _) in crate::counters::invocations(source, command) {
             push(&mut tokens, span, VARIABLE, false);
         }
+        if command.name == "ifltxcounter" && source.as_bytes().get(command.span.end) != Some(&b'*')
+        {
+            if let Some(argument) = command
+                .argument
+                .as_ref()
+                .filter(|argument| syntax::is_static_key(&argument.value))
+            {
+                push(&mut tokens, argument.span.clone(), VARIABLE, false);
+            }
+        }
     }
     for entry in &doc.syntax.definitions {
         push(
