@@ -32,6 +32,12 @@ cargo test --locked --test special_character_fixes -- --include-ignored
 cargo test --locked --test special_character_fixes extra_closing -- --include-ignored
 ```
 
+重复上下标回归在三个引擎、60 / 79 列日志、传统与文件行号格式及默认与展开上下文中核对行内、显示、分组和注释续行公式。应用空基底操作后重新编译，同时检查隐藏宏展开帧时的裸参数与分隔参数不会被修改：
+
+```sh
+cargo test --locked --test special_character_fixes double_script -- --include-ignored
+```
+
 源码文件名移动回归需要 pdfLaTeX、XeLaTeX 和 LuaLaTeX，验证首部空格、主干末尾空格、裸路径和引号路径，以及移动后的真实输入与导航：
 
 ```sh

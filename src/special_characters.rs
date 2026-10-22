@@ -12,12 +12,12 @@ use tower_lsp::lsp_types::{
 pub(crate) const EXTRA_ALIGNMENT_TAB: &str = r"Extra alignment tab has been changed to \cr.";
 
 pub(crate) fn diagnostic_code(message: &str) -> &'static str {
-    if message == EXTRA_ALIGNMENT_TAB {
-        "extra-alignment-tab"
-    } else if extra_closing_brace(message) {
-        "extra-closing-brace"
-    } else {
-        "unescaped-special-character"
+    match message {
+        EXTRA_ALIGNMENT_TAB => "extra-alignment-tab",
+        "Double subscript." => "double-subscript",
+        "Double superscript." => "double-superscript",
+        _ if extra_closing_brace(message) => "extra-closing-brace",
+        _ => "unescaped-special-character",
     }
 }
 
@@ -32,6 +32,11 @@ fn extra_closing_brace(message: &str) -> bool {
 }
 
 pub(crate) fn error_character(message: &str, context: &str) -> Option<char> {
+    match message {
+        "Double subscript." => return Some('_'),
+        "Double superscript." => return Some('^'),
+        _ => {}
+    }
     if extra_closing_brace(message) {
         return Some('}');
     }
@@ -103,7 +108,7 @@ pub(crate) fn source_range(
     {
         return None;
     }
-    if character == '&'
+    if matches!(character, '&' | '_' | '^')
         && signature::CommandSignatures::new([(text.source.as_str(), parsed)]).literal_is_argument(
             &text.source,
             parsed,
@@ -140,12 +145,22 @@ pub(crate) fn fix(doc: &Document, diagnostic: &Diagnostic) -> Option<QuickFix> {
     {
         return None;
     }
-    let replacement = match character {
-        '}' => String::new(),
-        '^' => "\\textasciicircum{}".into(),
-        _ => format!("\\{character}"),
+    let double_script = matches!(
+        diagnostic_code(&diagnostic.message),
+        "double-subscript" | "double-superscript"
+    );
+    let replacement = if double_script {
+        format!("{{}}{character}")
+    } else {
+        match character {
+            '}' => String::new(),
+            '^' => "\\textasciicircum{}".into(),
+            _ => format!("\\{character}"),
+        }
     };
-    let title = if character == '}' {
+    let title = if double_script {
+        format!("Insert empty base before '{character}'")
+    } else if character == '}' {
         "Remove extra '}'".into()
     } else {
         format!("Escape '{character}' as '{replacement}'")

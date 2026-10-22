@@ -8,6 +8,8 @@ Unicode 未设置映射的错误与码点摘要见[Unicode 输入错误](unicode
 
 多余 `}` 的精确定位、删除操作及数学定界符错误的处理见[多余右花括号](extra-braces.md)。
 
+`Double subscript.` / `Double superscript.` 的字符定位与空基底操作见[重复上下标](math-scripts.md)。
+
 - [分析范围与来源确认](#分析范围与来源确认)
 - [命令、环境与计数器](#命令环境与计数器)
 - [颜色与颜色模型](#颜色与颜色模型)

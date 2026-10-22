@@ -1028,3 +1028,278 @@ fn real_extra_closing_brace_deletions_repair_text_math_and_explicit_groups() {
         }
     }
 }
+
+#[test]
+fn double_scripts_keep_distinct_utf16_ranges_and_offer_explicit_empty_bases() {
+    let source = "😀 $x_1_2$ and $y^1^2$ and $z_{ab}_{cd}$ and $w^{ab}^{cd}$\r\n";
+    let text = Text::new(source.into());
+    for numbered in [false, true] {
+        let mut log = "(./main.tex\n".to_string();
+        let expected: Vec<_> = [
+            ("_2", '_', "Double subscript.", "double-subscript"),
+            ("^2", '^', "Double superscript.", "double-superscript"),
+            ("_{cd}", '_', "Double subscript.", "double-subscript"),
+            ("^{cd}", '^', "Double superscript.", "double-superscript"),
+        ]
+        .into_iter()
+        .map(|(suffix, ch, message, code)| {
+            let at = source.find(suffix).unwrap();
+            let header = if numbered { "./main.tex:1:" } else { "!" };
+            log.push_str(&format!(
+                "{header} {message}\nl.1 {}\n                 following source\n\n",
+                &source[..at + 1]
+            ));
+            (at, ch, code)
+        })
+        .collect();
+        log.push_str(")\n");
+        let (_directory, workspace, uri, items) = setup(source, &log);
+        assert_eq!(items.len(), expected.len(), "{items:?}");
+        for (item, (at, ch, code)) in items.iter().zip(expected) {
+            assert_eq!(item.code, Some(NumberOrString::String(code.into())));
+            assert_eq!(item.range, text.range(at, at + 1));
+            assert_eq!(item.data.as_ref().unwrap()["character"], ch.to_string());
+            let actions =
+                editing::code_actions(&workspace, &uri, item.range, &context(vec![item.clone()]));
+            assert_eq!(actions.len(), 1);
+            let CodeActionOrCommand::CodeAction(action) = &actions[0] else {
+                panic!()
+            };
+            assert_eq!(action.title, format!("Insert empty base before '{ch}'"));
+            let changes = edits(actions, &uri);
+            assert_eq!(changes[0].range, item.range);
+            assert_eq!(changes[0].new_text, format!("{{}}{ch}"));
+        }
+    }
+}
+
+#[test]
+fn double_scripts_require_matching_symbols_direct_context_and_unconsumed_tokens() {
+    for (character, message) in [('_', "Double subscript."), ('^', "Double superscript.")] {
+        let direct = format!("$x{character}1{character}2$");
+        let positive = format!("$x{character}1\\relax{character}2$");
+        let unknown = format!("$x{character}1\\unknown{character}2$");
+        let parameter = format!("\\def\\bad#1{{{character}}}$x{character}1\\bad{character}2$");
+        let delimited =
+            format!("\\def\\bad#1{character}{{{character}}}$x{character}1\\bad x{character}2$");
+        for (source, frame, precise) in [
+            (direct.clone(), "", true),
+            (positive, "", true),
+            (unknown, "", false),
+            (parameter, "", false),
+            (delimited, "", false),
+            (direct.clone(), "\\bad ->_\n", false),
+            (direct.clone(), "<argument> _\n", false),
+            (direct.clone(), "<recently read> _\n", false),
+            (format!("% {direct}"), "", false),
+            (format!("\\verb|{direct}|"), "", false),
+            (format!("\\def\\bad{{{direct}}}"), "", false),
+            (format!("$x{character}1\\{character}2$"), "", false),
+        ] {
+            let at = source.rfind(character).unwrap();
+            let prefix = &source[..at + 1];
+            let log = format!("(./main.tex\n! {message}\n{frame}l.1 {prefix}\n\n)\n");
+            let (_directory, workspace, uri, items) = setup(&source, &log);
+            assert_eq!(items.len(), 1, "{log}: {items:?}");
+            assert_eq!(items[0].code.is_some(), precise, "{log}: {items:?}");
+            assert_eq!(
+                !editing::code_actions(&workspace, &uri, items[0].range, &context(items.clone()))
+                    .is_empty(),
+                precise
+            );
+        }
+        for (source, prefix, location) in [
+            (direct.as_str(), "Wrong _", "./main.tex:1"),
+            (direct.as_str(), "$x_1^", "./main.tex:1"),
+            (direct.as_str(), "$x^1_", "./main.tex:1"),
+            (direct.as_str(), "$x_1_", "./gone.tex:1"),
+            (direct.as_str(), "$x_1_", "./main.tex:0"),
+            (direct.as_str(), "$x_1_", "./main.tex:99"),
+            (
+                "Repeated _ middle Repeated _",
+                "...Repeated _",
+                "./main.tex:1",
+            ),
+        ] {
+            let number = location.rsplit(':').next().unwrap();
+            let log = format!("(./main.tex\n{location}: {message}\nl.{number} {prefix}\n\n)\n");
+            let (_directory, workspace, uri, items) = setup(source, &log);
+            assert_eq!(items.len(), 1);
+            assert!(items[0].code.is_none(), "{log}: {items:?}");
+            assert!(editing::code_actions(
+                &workspace,
+                &uri,
+                items[0].range,
+                &context(items.clone())
+            )
+            .is_empty());
+        }
+    }
+}
+
+#[test]
+fn legacy_double_script_repairs_reject_escapes_forged_codes_and_outdated_sources() {
+    for (character, message) in [('_', "Double subscript."), ('^', "Double superscript.")] {
+        let source = format!("$x{character}1{character}2$\n");
+        let prefix = source[..source.rfind(character).unwrap() + 1].to_string();
+        let log = format!("(./main.tex\n! {message}\nl.1 {prefix}\n)\n");
+        let (_directory, mut workspace, uri, items) = setup(&source, &log);
+        workspace.code_action_literals = false;
+        workspace.apply_edits = true;
+        let actions =
+            editing::code_actions(&workspace, &uri, items[0].range, &context(items.clone()));
+        assert_eq!(actions.len(), 1);
+        let CodeActionOrCommand::Command(command) = &actions[0] else {
+            panic!()
+        };
+        let argument = command.arguments.as_ref().unwrap()[0].clone();
+        let request = || serde_json::from_value::<editing::FixRequest>(argument.clone()).unwrap();
+        assert!(editing::resolve_fix(&workspace, request()).is_some());
+        let mut forged = argument.clone();
+        forged["replacement"] = json!(format!("\\{character}"));
+        assert!(
+            editing::resolve_fix(&workspace, serde_json::from_value(forged).unwrap()).is_none()
+        );
+        workspace.documents.insert(
+            uri.clone(),
+            Document::new(&uri, source.replace("x", "y"), Some(9)),
+        );
+        assert!(editing::resolve_fix(&workspace, request()).is_none());
+        workspace
+            .documents
+            .insert(uri.clone(), Document::new(&uri, source.clone(), Some(10)));
+        assert!(editing::resolve_fix(&workspace, request()).is_none());
+        workspace
+            .documents
+            .insert(uri.clone(), Document::new(&uri, source.clone(), Some(9)));
+        for diagnostic in workspace
+            .build_diagnostics
+            .values_mut()
+            .flat_map(|files| files.values_mut())
+            .flatten()
+        {
+            diagnostic.code = Some(NumberOrString::String("unescaped-special-character".into()));
+        }
+        assert!(editing::resolve_fix(&workspace, request()).is_none());
+        assert!(
+            editing::code_actions(&workspace, &uri, items[0].range, &context(vec![])).is_empty()
+        );
+    }
+}
+
+#[test]
+#[cfg(unix)]
+#[ignore = "requires pdflatex, xelatex and lualatex"]
+fn real_double_script_empty_bases_repair_inline_display_and_grouped_scripts() {
+    use std::os::unix::fs::PermissionsExt;
+    for engine in ["pdflatex", "xelatex", "lualatex"] {
+        for width in [60, 79] {
+            for numbered in [false, true] {
+                for verbose in [false, true] {
+                    let directory = tempfile::tempdir().unwrap();
+                    let root = directory.path();
+                    let main = root.join("main.tex");
+                    let child = root.join("child.tex");
+                    let compiler = root.join(engine);
+                    std::fs::write(&compiler,format!("#!/bin/sh\nTEXMFVAR=\"${{0%/*}}/tex-cache\"\nTEXMFCACHE=\"$TEXMFVAR\"\nmax_print_line={width}\nexport TEXMFVAR TEXMFCACHE max_print_line\nmkdir -p \"$TEXMFVAR\"\nexec {engine} \"$@\"\n")).unwrap();
+                    std::fs::set_permissions(&compiler, std::fs::Permissions::from_mode(0o755))
+                        .unwrap();
+                    let mut arguments = vec![
+                        "-interaction=nonstopmode".into(),
+                        "-recorder".into(),
+                        "-output-directory=%o".into(),
+                        "%f".into(),
+                    ];
+                    if numbered {
+                        arguments.insert(0, "-file-line-error".into());
+                    }
+                    let config = latex_lsp::config::BuildConfig {
+                        executable: compiler.to_string_lossy().into(),
+                        arguments: Some(arguments),
+                        ..Default::default()
+                    };
+                    std::fs::write(&main,format!("\\documentclass{{article}}\n{}\\begin{{document}}\n\\input{{child}}\n\\end{{document}}\n",if verbose {"\\errorcontextlines=100\n"} else {""})).unwrap();
+                    let legal = concat!(
+                        "$x_1^2$ and $x_{a_b}^{c^d}$ and escaped \\_ \\textasciicircum{}.\n",
+                        "\\verb|x_1_2 and y^1^2| % x_1_2\n",
+                    );
+                    let source=format!("{}$x_1_2$ and $y^1^2$ and $z_{{ab}}_{{cd}}$ and $w^{{ab}}^{{cd}}$ and $a_1_2_3$\n\\[d_1_2\\]\n$q_1% preserve comment\n _2$\n{legal}","long prefix ".repeat(20));
+                    std::fs::write(&child, &source).unwrap();
+                    let outcome = latex_lsp::build::run(&main, &config, &Default::default());
+                    assert_eq!(
+                        outcome.status, "error",
+                        "{engine}/{width}/{numbered}/{verbose}: {}",
+                        outcome.output
+                    );
+                    let uri = Url::from_file_path(&child).unwrap();
+                    let items:Vec<_>=outcome.diagnostics[&uri].iter().filter(|item|matches!(item.code.as_ref(),Some(NumberOrString::String(code)) if matches!(code.as_str(),"double-subscript"|"double-superscript"))).cloned().collect();
+                    assert_eq!(
+                        items.len(),
+                        8,
+                        "{engine}/{width}/{numbered}/{verbose}: {:?}\n{}",
+                        outcome.diagnostics,
+                        outcome.output
+                    );
+                    let mut workspace = Workspace {
+                        code_action_literals: true,
+                        versioned_edits: true,
+                        ..Default::default()
+                    };
+                    workspace.add_root(root.into());
+                    workspace.open(uri.clone(), source.clone(), 9);
+                    workspace
+                        .build_diagnostics
+                        .insert(Url::from_file_path(&main).unwrap(), outcome.diagnostics);
+                    let text = Text::new(source.clone());
+                    let mut changes = Vec::new();
+                    for item in items {
+                        let offset = text.offset(item.range.start).unwrap();
+                        assert!(matches!(&source[offset..offset + 1], "_" | "^"));
+                        let actions = editing::code_actions(
+                            &workspace,
+                            &uri,
+                            item.range,
+                            &context(vec![item]),
+                        );
+                        assert_eq!(actions.len(), 1);
+                        changes.extend(edits(actions, &uri));
+                    }
+                    changes.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
+                    let mut fixed = source.clone();
+                    for edit in changes {
+                        fixed.replace_range(
+                            text.offset(edit.range.start).unwrap()
+                                ..text.offset(edit.range.end).unwrap(),
+                            &edit.new_text,
+                        );
+                    }
+                    assert!(fixed.contains("$x_1{}_2$ and $y^1{}^2$"));
+                    assert!(fixed.contains("$q_1% preserve comment\n {}_2$"));
+                    assert!(fixed.ends_with(legal));
+                    std::fs::write(&child, fixed).unwrap();
+                    let repaired = latex_lsp::build::run(&main, &config, &Default::default());
+                    assert_eq!(
+                        repaired.status, "success",
+                        "{engine}/{width}/{numbered}/{verbose}: {}",
+                        repaired.output
+                    );
+                    assert!(repaired
+                        .diagnostics
+                        .values()
+                        .flatten()
+                        .all(|item| item.severity != Some(DiagnosticSeverity::ERROR)));
+                    for source in [
+                        r"\errorcontextlines=-1\def\bad#1{_}$x_1\bad_2$",
+                        r"\errorcontextlines=-1\def\bad#1^{^}$x^1\bad x^2$",
+                    ] {
+                        std::fs::write(&child, source).unwrap();
+                        let macro_error =
+                            latex_lsp::build::run(&main, &config, &Default::default());
+                        assert_eq!(macro_error.status, "error");
+                        assert!(macro_error.diagnostics.values().flatten().all(|item|!matches!(item.code.as_ref(),Some(NumberOrString::String(code)) if matches!(code.as_str(),"double-subscript"|"double-superscript"))),"{engine}/{width}/{numbered}/{verbose}: {:?}",macro_error.diagnostics);
+                    }
+                }
+            }
+        }
+    }
+}

@@ -14171,7 +14171,7 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
         });
         let (mut server, directory, main) =
             fake_build_server_capabilities(script, false, capabilities);
-        let source = "\\documentclass{article}\nBefore & and & after.\nBefore # after.\nBefore foo_bar.\nBefore x^2.\n\\begin{tabular}{ll}A & B & C\\\\\\end{tabular}\nBefore } after.\n$a}b$\n\\begingroup text }\\endgroup\n$\\left(a}b\\right)$\n";
+        let source = "\\documentclass{article}\nBefore & and & after.\nBefore # after.\nBefore foo_bar.\nBefore x^2.\n\\begin{tabular}{ll}A & B & C\\\\\\end{tabular}\nBefore } after.\n$a}b$\n\\begingroup text }\\endgroup\n$\\left(a}b\\right)$\n$x_1_2$ and $y^1^2$\n";
         std::fs::write(main.to_file_path().unwrap(), source).unwrap();
         server.notify(
             "textDocument/didChange",
@@ -14209,6 +14209,12 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
                 "./main.tex:{line}: {message}\nl.{line} {prefix}\n\n"
             ));
         }
+        for (message, prefix) in [
+            ("Double subscript.", "$x_1_"),
+            ("Double superscript.", "$x_1_2$ and $y^1^"),
+        ] {
+            log.push_str(&format!("./main.tex:11: {message}\nl.11 {prefix}\n\n"));
+        }
         log.push_str(")\n");
         std::fs::write(directory.path().join("fixture.log"), log).unwrap();
         std::fs::write(directory.path().join("fail"), "").unwrap();
@@ -14219,7 +14225,7 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
         );
         let finished = server.until(|message| message["method"] == "latex/buildFinished");
         assert_eq!(finished["params"]["status"], "error");
-        assert_eq!(finished["params"]["errorsCount"], 10);
+        assert_eq!(finished["params"]["errorsCount"], 12);
         let published = server.until(|message| {
             message["method"] == "textDocument/publishDiagnostics"
                 && message["params"]["diagnostics"]
@@ -14234,11 +14240,13 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
                                         "unescaped-special-character"
                                             | "extra-alignment-tab"
                                             | "extra-closing-brace"
+                                            | "double-subscript"
+                                            | "double-superscript"
                                     )
                                 )
                             })
                             .count()
-                            == 10
+                            == 12
                     })
         });
         let text = latex_lsp::text::Text::new(source.into());
@@ -14255,22 +14263,24 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
                         "unescaped-special-character"
                             | "extra-alignment-tab"
                             | "extra-closing-brace"
+                            | "double-subscript"
+                            | "double-superscript"
                     )
                 )
             })
             .enumerate()
         {
             let character = item["data"]["character"].as_str().unwrap();
-            let actions = server.request(10 + index as u64, "textDocument/codeAction", json!({"textDocument":{"uri":main},"range":item["range"],"context":{"diagnostics":[item],"only":["quickfix"]}}));
+            let actions = server.request(100 + index as u64, "textDocument/codeAction", json!({"textDocument":{"uri":main},"range":item["range"],"context":{"diagnostics":[item],"only":["quickfix"]}}));
             assert_eq!(actions.as_array().unwrap().len(), 1);
             let edit = if literals {
                 actions[0]["edit"].clone()
             } else {
                 stale = Some(actions[0].clone());
-                server.send(json!({"jsonrpc":"2.0","id":20 + index,"method":"workspace/executeCommand","params":{"command":actions[0]["command"],"arguments":actions[0]["arguments"]}}));
+                server.send(json!({"jsonrpc":"2.0","id":200 + index,"method":"workspace/executeCommand","params":{"command":actions[0]["command"],"arguments":actions[0]["arguments"]}}));
                 let apply = server.until(|message| message["method"] == "workspace/applyEdit");
                 server.send(json!({"jsonrpc":"2.0","id":apply["id"],"result":{"applied":true}}));
-                let response = server.until(|message| message["id"] == 20 + index);
+                let response = server.until(|message| message["id"] == 200 + index);
                 assert!(response.get("error").is_none(), "{response}");
                 apply["params"]["edit"].clone()
             };
@@ -14282,7 +14292,12 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
             assert_eq!(json!(change.range), item["range"]);
             assert_eq!(
                 change.new_text,
-                if character == "}" {
+                if matches!(
+                    item["code"].as_str(),
+                    Some("double-subscript" | "double-superscript")
+                ) {
+                    format!("{{}}{character}")
+                } else if character == "}" {
                     String::new()
                 } else if character == "^" {
                     r"\textasciicircum{}".to_string()
@@ -14336,6 +14351,8 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
                                     "unescaped-special-character"
                                         | "extra-alignment-tab"
                                         | "extra-closing-brace"
+                                        | "double-subscript"
+                                        | "double-superscript"
                                 )
                             )
                         })

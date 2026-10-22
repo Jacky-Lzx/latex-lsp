@@ -6,6 +6,8 @@
 
 多余 `}` 的删除操作见[多余右花括号](extra-braces.md)。
 
+数学模式中的 `Double subscript.` / `Double superscript.` 使用独立的[重复上下标](math-scripts.md)诊断和修复。
+
 ## 使用
 
 保存文件并执行 `latex.build`，在错误位置请求编辑器的代码操作：
