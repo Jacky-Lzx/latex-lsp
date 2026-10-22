@@ -52,3 +52,9 @@ rerunfilecheck 支持文件变更后的标准 `Rerun.` 请求和 hyperref 的完
 ## Unicode 输入错误摘要
 
 `analysis.unsupportedUnicodeCharacters` 汇总最终日志中 LaTeX 未设置映射的 Unicode 字符，提供字符和码点。字段、预算与处理方式见[Unicode 输入错误](unicode-errors.md)。
+
+## PDF 页数
+
+完成通知和 `latex.buildStatus` 的 `pages` 字段来自最终 TeX 输出摘要，仅在本次编译返回有效 PDF 时提供。解析支持 PDF、DVI 和 XDV 摘要，兼容多遍编译、带引号的文件名和日志折行；DVI / XDV 用于先生成中间文件再转换 PDF 的编译流程。
+
+输出目录或文件名中的 `(9 pages).`、`main.pdf (9 pages).` 等字面文字不会作为页数。服务器读取完整摘要后确认输出文件名与页数，不把目录名处的折行当作摘要结尾；最后一份摘要不完整或跨越已省略的日志时返回 `null`，不会沿用前一轮的页数。

@@ -46,6 +46,12 @@ cargo test --locked --test rename --test bracket_labels --test counter_brackets 
 
 ## 排版日志与文件移动
 
+页数回归检查输出路径中的伪页数、PDF / DVI / XDV 格式、引号、日志折行、不完整摘要和读取预算。外部回归使用三个 LaTeX 引擎的 60 / 79 列日志，核对编译结果返回实际 PDF 页数：
+
+```sh
+cargo test --locked --test page_counts -- --include-ignored
+```
+
 信息日志回归检查五类标准 `Info` 消息、文件名括号、字节折行、空白与宏包续行、较长消息、真正的文件切换、折行错误路径和日志省略边界。明确属于续行的错误与警告示例、源码回显、资源及 PDF 输出文字不会发布为诊断。外部回归在三个 LaTeX 引擎的 60 / 79 列输出及传统 / 文件行号格式中核对诊断数量、警告归属、错误行号和未定义命令的精确范围：
 
 ```sh

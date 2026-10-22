@@ -3320,7 +3320,7 @@ fn rejected_or_unanswered_progress_requests_do_not_prevent_compilation() {
 #[test]
 #[cfg(unix)]
 fn build_summaries_use_final_logs_actual_pdf_sizes_and_clear_artifacts_after_errors() {
-    let script = "printf 'Output written on old.pdf (9 pages, 900 bytes).\\n'\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf '%s:2: LaTeX Warning: final pass warning.\\nOutput written on main.pdf (2 pages, 999 bytes).\\n' \"$2\" > \"$1/main.log\"\n";
+    let script = "printf 'Output written on old.pdf (9 pages, 900 bytes).\\n'\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\nprintf '%s:2: LaTeX Warning: final pass warning.\\nOutput written on directory/main.pdf (9 pages).\\n/main.pdf (2 pages, 999 bytes).\\n' \"$2\" > \"$1/main.log\"\n";
     let (mut server, directory, main) = fake_build_server(script, false);
     server.request(
         2,

@@ -72,42 +72,75 @@ pub(crate) fn decode_output(bytes: &[u8]) -> Cow<'_, str> {
     Cow::Owned(String::from_utf8_lossy(&repaired).into_owned())
 }
 
+fn output_summary_pages(summary: &str) -> Option<u32> {
+    let (filename, tail) = summary
+        .strip_prefix("Output written on ")?
+        .rsplit_once(" (")?;
+    let filename = if let Some(filename) = filename.strip_prefix('"') {
+        filename.strip_suffix('"')?
+    } else {
+        filename
+    };
+    // latexmk can produce a PDF from XeTeX's intermediate XDV or a DVI log.
+    // A directory component containing `(9 pages).` is not an output summary.
+    if filename.contains('"')
+        || ![".pdf", ".dvi", ".xdv"]
+            .iter()
+            .any(|extension| filename.ends_with(extension))
+    {
+        return None;
+    }
+    let (pages, tail) = tail.split_once(" page")?;
+    let tail = tail.strip_prefix('s').unwrap_or(tail);
+    let valid = tail == ")."
+        || tail
+            .strip_prefix(", ")
+            .and_then(|bytes| {
+                bytes
+                    .strip_suffix(" bytes).")
+                    .or_else(|| bytes.strip_suffix(" byte)."))
+            })
+            .is_some_and(|bytes| {
+                !bytes.is_empty()
+                    && bytes.bytes().all(|byte| byte.is_ascii_digit())
+                    && bytes.parse::<u64>().is_ok()
+            });
+    if !valid || pages.is_empty() || !pages.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    pages.parse::<u32>().ok().filter(|pages| *pages > 0)
+}
+
 /// Read TeX's final PDF summary, including wrapped paths and page/byte counts.
 pub fn page_count(log: &str) -> Option<u32> {
     let lines = log.lines().collect::<Vec<_>>();
-    for (index, line) in lines.iter().enumerate().rev() {
-        if !line.starts_with("Output written on ") {
-            continue;
+    let index = lines
+        .iter()
+        .rposition(|line| line.starts_with("Output written on "))?;
+    let mut summary = String::new();
+    for (offset, line) in lines.iter().skip(index).take(128).enumerate() {
+        if *line == crate::output::TRUNCATED || summary.len() + line.len() > 8192 {
+            return None;
         }
-        let mut summary = String::new();
-        for line in lines.iter().skip(index).take(16) {
-            if *line == crate::output::TRUNCATED || summary.len() + line.len() > 8192 {
-                break;
-            }
-            summary.push_str(line);
-            let Some((_, tail)) = summary.rsplit_once('(') else {
-                continue;
-            };
-            let Some((pages, tail)) = tail.split_once(" page") else {
-                continue;
-            };
-            let tail = tail.strip_prefix('s').unwrap_or(tail);
-            let valid = tail == ")."
-                || tail
-                    .strip_prefix(", ")
-                    .and_then(|bytes| {
-                        bytes
-                            .strip_suffix(" bytes).")
-                            .or_else(|| bytes.strip_suffix(" byte)."))
-                    })
-                    .is_some_and(|bytes| bytes.parse::<u64>().is_ok());
-            if valid {
-                if let Ok(pages) = pages.parse::<u32>() {
-                    if pages > 0 {
-                        return Some(pages);
-                    }
-                }
-            }
+        if offset > 0
+            && (line.is_empty()
+                || *line == ")"
+                || [
+                    "Transcript written on ",
+                    "PDF statistics:",
+                    "SyncTeX written on ",
+                    "Latexmk:",
+                ]
+                .iter()
+                .any(|prefix| line.starts_with(prefix)))
+        {
+            return output_summary_pages(&summary);
+        }
+        summary.push_str(line);
+        // Read to a real footer or EOF before accepting a summary. A path
+        // can itself contain `main.pdf (9 pages).` at a wrap boundary.
+        if index + offset + 1 == lines.len() {
+            return output_summary_pages(&summary);
         }
     }
     None
