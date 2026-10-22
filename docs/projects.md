@@ -46,7 +46,7 @@
 
 单文件参数中的逗号属于路径：`\includegraphics{images,one/plot,one.pdf}`、`\include{chapter,one}`、`\subfile{chapter,one}` 和 `\addbibresource{refs,one.bib}` 在逗号后继续补全完整文件名。`\bibliography`、`\usepackage` 和 `\includeonly` 等列表参数仍只补全当前条目，保留其他名称与分隔符。
 
-`\includeonly{chapter-a, chapter-b}` 支持列表路径补全、跳转和文件/目录重命名，保留其他列表项与空白；重命名选中章节时同步维护编译选择。该命令只选择 `\include` 已声明的章节，不会单独建立输入依赖。
+`\includeonly{chapter-a, chapter-b}` 支持列表路径补全、跳转和文件/目录重命名，保留其他列表项与空白；重命名选中章节时同步维护编译选择。该命令只选择 `\include` 已声明的章节，不会单独建立输入依赖。章节选择对跨文件字符串语义与重命名的影响见[章节选择说明](selected-string-tests.md)。
 
 ## 输入与代码文件
 
