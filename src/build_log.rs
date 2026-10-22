@@ -2877,14 +2877,21 @@ fn skip_information(
                 .and_then(|tail| tail.strip_prefix(')'))
                 .is_some_and(|tail| tail.starts_with(char::is_whitespace))
         };
-        let byte_wrapped = lines[cursor].len() >= 60;
-        if (!owned && !byte_wrapped)
-            || (next.trim().is_empty() && !owned)
-            || (message_boundary(next)
-                && !(next.trim_start().starts_with(')') && (owned || byte_wrapped)))
+        if owned {
+            // The emitter's prefix proves that even diagnostic-shaped text
+            // belongs to the information message, not the compiler protocol.
+            cursor += 1;
+            committed = cursor;
+            bytes = next.len();
+            continue;
+        }
+        if lines[cursor].len() < 60
+            || next.trim().is_empty()
+            || (message_boundary(next) && !next.trim_start().starts_with(')'))
             || next.trim_start().starts_with('<')
             || next.trim_start().starts_with("Here is how much")
-            || (!owned && (cursor - committed >= 64 || bytes + next.len() + 1 > 4096))
+            || cursor - committed >= 64
+            || bytes + next.len() + 1 > 4096
         {
             break;
         }
@@ -2918,7 +2925,7 @@ fn skip_information(
         }
         cursor += 1;
         bytes += next.len() + 1;
-        if owned || next.trim_end().ends_with('.') {
+        if next.trim_end().ends_with('.') {
             committed = cursor;
             bytes = next.len();
         }

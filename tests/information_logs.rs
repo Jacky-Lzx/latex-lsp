@@ -97,6 +97,34 @@ fn information_byte_wraps_and_owned_continuations_keep_the_source() {
 }
 
 #[test]
+fn owned_information_text_can_look_like_diagnostics_or_resource_output() {
+    for (header, continuation) in [
+        ("Package local Info:", "(local) "),
+        ("Class local Info:", "(local) "),
+        ("LaTeX Info:", "            "),
+        ("LaTeX Font Info:", "(Font) "),
+        ("LaTeX Encoding Info:", "(Encoding) "),
+    ] {
+        for body in [
+            "<example (shadow.tex",
+            "Here is how much (shadow.tex",
+            "Package local Warning: Example (shadow.tex",
+            "Class local Warning: Example (shadow.tex",
+            "LaTeX Warning: Example (shadow.tex",
+            "Package local Info: Example (shadow.tex",
+            "Output written on (shadow.tex",
+            "l.1 (shadow.tex",
+            "./shadow.tex:1: Undefined control sequence.",
+        ] {
+            assert_sources(&format!(
+                "{header} First sentence.\n{continuation}{body} on input line 1."
+            ));
+        }
+        assert_sources(&format!("{header} First sentence.\n{continuation}(shadow.tex)\n{continuation}Example ) on input line 1."));
+    }
+}
+
+#[test]
 fn long_owned_information_sequences_and_no_line_checksums_are_not_sources() {
     assert_sources("LaTeX Info: First sentence.\n            \n            Example (shadow.tex on input line 1.");
     for (header, continuation) in [
@@ -256,12 +284,23 @@ fn real_information_messages_preserve_child_and_parent_error_locations() {
                         format!("{}(shadow.tex", "a".repeat(2 * width)),
                         "First sentence.\\MessageBreak Example (shadow.tex".into(),
                         "First sentence.\\MessageBreak\\MessageBreak Example (shadow.tex".into(),
+                        "First sentence.\\MessageBreak <example (shadow.tex".into(),
+                        "First sentence.\\MessageBreak Here is how much (shadow.tex".into(),
+                        "First sentence.\\MessageBreak Package local Warning: Example (shadow.tex"
+                            .into(),
+                        "First sentence.\\MessageBreak ./shadow.tex:1: Undefined control sequence."
+                            .into(),
+                        "First sentence.\\MessageBreak (shadow.tex)\\MessageBreak Example )".into(),
                     ] {
-                        let suffix = char::from(b'a' + expected.len() as u8);
+                        let suffix = format!(
+                            "{}{}",
+                            char::from(b'a' + (expected.len() / 26) as u8),
+                            char::from(b'a' + (expected.len() % 26) as u8)
+                        );
                         child_source.push_str(&format!("{command}{{{body}}}\n\\PackageWarning{{local}}{{Child sentinel {suffix}}}\n"));
                         let line = child_source.lines().count() as u32;
                         let name = format!("\\unknownchild{suffix}");
-                        child_source.push_str(&format!("{name}\n"));
+                        child_source.push_str(&format!("{name}\\par\n"));
                         expected.push((line, name));
                     }
                 }
