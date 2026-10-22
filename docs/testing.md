@@ -20,7 +20,7 @@ Unicode 输入错误回归需要 pdfLaTeX、XeLaTeX 和 LuaLaTeX。在 60 / 79 �
 cargo test --locked --test unsupported_unicode -- --include-ignored
 ```
 
-特殊字符修复回归需要 pdfLaTeX、XeLaTeX 和 LuaLaTeX。在 60 / 79 列日志中检查子文件中的裸 `&` / `#` / `_` / `^`，应用快速修复后重新编译，核对合法表格、数学上下标、转义字符、注释和逐字内容保持原样：
+特殊字符修复回归需要 pdfLaTeX、XeLaTeX 和 LuaLaTeX。在 60 / 79 列日志中检查子文件中的裸 `&` / `#` / `_` / `^`，应用快速修复后重新编译，核对合法表格、数学上下标、转义字符、注释和逐字内容保持原样。多余对齐分隔符的回归另覆盖 `tabular`、数学 `array`、原始 `halign`、传统与文件行号日志、展开的内部模板帧及宏参数排除：
 
 ```sh
 cargo test --locked --test special_character_fixes -- --include-ignored

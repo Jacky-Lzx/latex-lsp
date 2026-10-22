@@ -2,7 +2,7 @@
 
 [返回文档目录](README.md) · [编译诊断](diagnostics.md)
 
-编译器报告正文中的裸 `&`、`#`、`_` 或 `^` 时，服务器会核对日志的源码回显，精确标出出错字符，并提供转义快速修复。
+编译器报告正文中的裸 `&`、`#`、`_`、`^` 或多余的对齐分隔符时，服务器会核对日志的源码回显，精确标出出错字符，并提供转义快速修复。
 
 ## 使用
 
@@ -11,6 +11,7 @@
 | 编译错误 | 快速修复 | 修改结果 |
 | --- | --- | --- |
 | `Misplaced alignment tab character &.` | `Escape '&' as '\&'` | `&` → `\&` |
+| `Extra alignment tab has been changed to \cr.` | `Escape '&' as '\&'` | `&` → `\&` |
 | `You can't use` 后接 `macro parameter character #` 的模式错误 | `Escape '#' as '\#'` | `#` → `\#` |
 | `Missing $ inserted.`，回显确认 `_` | `Escape '_' as '\_'` | `_` → `\_` |
 | `Missing $ inserted.`，回显确认 `^` | `Escape '^' as '\textasciicircum{}'` | `^` → `\textasciicircum{}` |
@@ -31,6 +32,28 @@ Before \# after.
 
 再次保存并编译，已解决的诊断会清除。修复只替换选中的一个字符，保留同一行的其他内容；表格中的合法 `&` 不会产生这类修复。
 
+## 多余的对齐分隔符
+
+表格或数组中的 `&` 多于列格式所允许的数量时，TeX 报告 `Extra alignment tab has been changed to \cr.`。服务器核对内部 `\endtemplate` 读取帧或以该命令结尾的 `<template>` 帧，再将错误定位到实际分隔符；支持普通与展开的错误上下文、`tabular`、数学 `array` 和原始 `\halign`。
+
+精确诊断使用 `extra-alignment-tab` 代码，仍通过 `data.character` 和 `data.sourceContext` 保存字符与回显。只有源码能确认时才提供转义操作。
+
+如果这里需要显示字面 `&`，可以将：
+
+```tex
+\begin{tabular}{ll}A & B & C\\\end{tabular}
+```
+
+修复为：
+
+```tex
+\begin{tabular}{ll}A & B \& C\\\end{tabular}
+```
+
+如果这里本来就需要第三列，应调整列格式（例如改为 `{lll}`）。转义操作会把选中的分隔符改为当前单元格内的字面字符，需根据内容选择。
+
+不匹配的内部帧、额外用户宏展开帧、重复的缩短回显，以及当前文档中已知宏消费的裸参数或分隔参数保持整行诊断。宏参数检查复用已有签名分析；正常的无参数排版命令后仍可定位分隔符，例如 `\hfil&`。修复前再次核对当前源码、诊断和文档版本，兼容旧客户端。
+
 ## 文本中的下划线与脱字符
 
 `Missing $ inserted.` 的原因可能是遗漏数学定界符，也可能是在普通文本中输入了 `_` / `^`。如果目标是公式，应补上正确的数学定界符；转义操作适用于确实需要显示字面字符的情况，例如将 `file_name` 改为 `file\_name`。
@@ -43,7 +66,7 @@ Before \# after.
 
 - 支持传统 `!` 日志和“文件名:行号:错误”格式；子文件错误定位到实际来源，位置按 LSP 的 UTF-16 单位计算。
 - 完整的 `l.N` 回显须与源码前缀一致；被 TeX 缩短为 `...` 的回显须能在整行中唯一匹配。
-- 精确诊断使用 `unescaped-special-character` 代码，`data.character` 保存字符，`data.sourceContext` 保存用于核对的源码回显。
+- 正文特殊字符的精确诊断使用 `unescaped-special-character` 代码，多余对齐分隔符使用 `extra-alignment-tab`；`data.character` 保存字符，`data.sourceContext` 保存用于核对的源码回显。
 - 支持版本化 Code Action 编辑，以及旧客户端的 `latex.applyQuickFix` 命令。请求修复时重新核对服务器保存的编译诊断和当前源码；执行旧客户端命令时还会重新核对文档版本。
 
 宏展开栈、无法确认的来源、无效行号、源码变化或不唯一的回显保留原诊断，不提供转义编辑。注释、逐字内容、宏定义体和已转义字符也不参与修复。此功能依据已发生的编译错误提供建议，不把所有出现的 `&` / `#` / `_` / `^` 都当成错误。
