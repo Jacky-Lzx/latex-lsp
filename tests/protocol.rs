@@ -14255,3 +14255,138 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
         server.wait_exit(0);
     }
 }
+
+#[test]
+#[cfg(unix)]
+fn unsupported_unicode_analysis_uses_final_logs_publishes_child_ranges_and_clears_on_repair() {
+    let script = r#"cat <<'EARLY'
+! LaTeX Error: Unicode character Ω (U+03A9) not set up for use with LaTeX.
+l.1 Ω
+EARLY
+cat "${2%/*}/fixture.log" > "$1/main.log"
+if [ -f "${2%/*}/fail" ]; then exit 1; fi
+printf '%%PDF-1.4\n' > "$1/main.pdf"
+"#;
+    let (mut server, directory, main) = fake_build_server(script, false);
+    let source = "\\documentclass{article}\n\\input{child}\n";
+    std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+    );
+    let child = Url::from_file_path(directory.path().join("child.tex")).unwrap();
+    let source = "Before 中 and 😀 and 中.\n";
+    let text = latex_lsp::text::Text::new(source.into());
+    std::fs::write(child.to_file_path().unwrap(), source).unwrap();
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":child,"languageId":"latex","version":3,"text":source}}),
+    );
+    for (id, characters, expected) in [
+        (
+            2,
+            vec!['中', '😀', '中'],
+            json!([{"character":"中","codepoint":"U+4E2D"},{"character":"😀","codepoint":"U+1F600"}]),
+        ),
+        (
+            6,
+            vec!['😀'],
+            json!([{"character":"😀","codepoint":"U+1F600"}]),
+        ),
+        (10, vec![], json!([])),
+    ] {
+        let mut log = "(./main.tex\n(./child.tex\n".to_string();
+        let mut search = 0;
+        for character in &characters {
+            let at = source[search..].find(*character).unwrap() + search;
+            let end = at + character.len_utf8();
+            search = end;
+            log.push_str(&format!("./child.tex:1: LaTeX Error: Unicode character {character} (U+{:04X})\n\n               not set up for use with LaTeX.\n\nSee the LaTeX manual or LaTeX Companion for explanation.\nType  H <return>  for immediate help.\n ...\n\nl.1 {}\n                 after.\n\n",*character as u32,&source[..end]));
+        }
+        log.push_str(")\n)\n");
+        std::fs::write(directory.path().join("fixture.log"), log).unwrap();
+        let failure = directory.path().join("fail");
+        if characters.is_empty() {
+            std::fs::remove_file(failure).unwrap();
+        } else {
+            std::fs::write(failure, "").unwrap();
+        }
+        let started = server.request(
+            id,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let finished = server.until(|message| {
+            message["method"] == "latex/buildFinished"
+                && message["params"]["buildId"] == started["buildId"]
+        });
+        let result = &finished["params"];
+        assert_eq!(
+            result["status"],
+            if characters.is_empty() {
+                "success"
+            } else {
+                "error"
+            },
+            "{finished}"
+        );
+        assert_eq!(result["errorsCount"], characters.len());
+        assert_eq!(
+            result["analysis"]["unsupportedUnicodeCharacters"], expected,
+            "{finished}"
+        );
+        assert_eq!(result["analysis"]["missingCharacters"], json!([]));
+        assert_eq!(result["analysis"]["truncated"], false);
+        let saved = server.request(
+            id + 1,
+            "workspace/executeCommand",
+            json!({"command":"latex.buildStatus","arguments":[main]}),
+        );
+        assert_eq!(&saved, result);
+        let pulled = server.request(
+            id + 2,
+            "textDocument/diagnostic",
+            json!({"textDocument":{"uri":child}}),
+        );
+        let items: Vec<_> = pulled["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|item| item["code"] == "unsupported-unicode-character")
+            .collect();
+        assert_eq!(items.len(), characters.len(), "{pulled}");
+        if id == 2 {
+            let published = server.until(|message| {
+                message["method"] == "textDocument/publishDiagnostics"
+                    && message["params"]["uri"] == json!(child)
+                    && message["params"]["diagnostics"]
+                        .as_array()
+                        .is_some_and(|items| {
+                            items
+                                .iter()
+                                .filter(|item| item["code"] == "unsupported-unicode-character")
+                                .count()
+                                == 3
+                        })
+            });
+            for (item, (at, character)) in items.iter().zip(
+                source
+                    .char_indices()
+                    .filter(|(_, character)| matches!(character, '中' | '😀')),
+            ) {
+                assert_eq!(
+                    item["range"],
+                    json!(text.range(at, at + character.len_utf8()))
+                );
+                assert_eq!(item["data"]["character"], character.to_string());
+                assert!(published["params"]["diagnostics"]
+                    .as_array()
+                    .unwrap()
+                    .contains(item));
+            }
+        }
+    }
+    server.request(14, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

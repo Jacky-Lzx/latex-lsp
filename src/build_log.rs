@@ -449,6 +449,7 @@ pub fn compilation_analysis(
     let mut duplicate_destinations = BTreeSet::new();
     let mut duplicate_labels = BTreeSet::new();
     let mut glyphs: BTreeMap<char, (DiagnosticSeverity, BTreeSet<String>)> = BTreeMap::new();
+    let mut unsupported_unicode = BTreeSet::new();
     let mut bibliography_tools = BTreeSet::new();
     let mut font_substitutions = BTreeSet::new();
     let mut font_size_substitutions = BTreeSet::new();
@@ -475,6 +476,11 @@ pub fn compilation_analysis(
                     .strip_suffix(generated_line_note(line).as_str())
             })
             .unwrap_or(&diagnostic.message);
+        if diagnostic.severity == Some(DiagnosticSeverity::ERROR) {
+            if let Some(character) = unsupported_unicode_character(reported_message) {
+                record_substitution(&mut unsupported_unicode, character, &mut truncated);
+            }
+        }
         if let Some((character, font)) = missing_character_details(reported_message) {
             if glyphs.len() == MAX_KEYS && !glyphs.contains_key(&character) {
                 truncated = true;
@@ -594,6 +600,9 @@ pub fn compilation_analysis(
     let font_substitutions: Vec<_> = font_substitutions.into_iter().map(|(requested, replacement)| {
         serde_json::json!({"requested":requested, "replacement":replacement})
     }).collect();
+    let unsupported_unicode: Vec<_> = unsupported_unicode.into_iter().map(|character| {
+        serde_json::json!({"character":character.to_string(), "codepoint":format!("U+{:04X}", character as u32)})
+    }).collect();
     let font_size_substitutions: Vec<_> = font_size_substitutions.into_iter().map(|(font, requested, replacement)| {
         serde_json::json!({"font":font, "requestedSize":requested, "replacementSize":replacement})
     }).collect();
@@ -617,6 +626,7 @@ pub fn compilation_analysis(
         "duplicateDestinations": duplicate_destinations,
         "duplicateLabels": duplicate_labels,
         "missingCharacters": missing_characters,
+        "unsupportedUnicodeCharacters": unsupported_unicode,
         "fontSubstitutions": font_substitutions,
         "fontSizeSubstitutions": font_size_substitutions,
         "boxWarnings": box_warnings,
@@ -852,6 +862,23 @@ fn wrapped_box_message(
     } else {
         initial.to_owned()
     }
+}
+
+fn unsupported_unicode_character(message: &str) -> Option<char> {
+    let tail = message.strip_prefix("LaTeX Error: Unicode character ")?;
+    let (printed, tail) = tail.split_once(" (U+")?;
+    let (hex, ending) = tail.split_once(')')?;
+    if !(4..=6).contains(&hex.len())
+        || !hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || !ending.starts_with(char::is_whitespace)
+        || !ending
+            .split_whitespace()
+            .eq(["not", "set", "up", "for", "use", "with", "LaTeX."])
+    {
+        return None;
+    }
+    let character = char::from_u32(u32::from_str_radix(hex, 16).ok()?)?;
+    (printed == character.to_string()).then_some(character)
 }
 
 fn missing_character(message: &str) -> Option<char> {
@@ -2456,6 +2483,17 @@ fn emit_with_context(
         )
     });
     ranges.extend(special_range);
+    let unsupported_unicode =
+        unsupported_unicode_character(&message).filter(|_| severity == DiagnosticSeverity::ERROR);
+    ranges.extend(unsupported_unicode.and_then(|character| {
+        crate::special_characters::source_range(
+            &text,
+            &crate::syntax::Syntax::latex(&text),
+            line,
+            context?,
+            character,
+        )
+    }));
     let character = missing_character(&message);
     let character_ranges =
         character.and_then(|character| missing_character_ranges(&text, line, context?, character));
@@ -2603,6 +2641,7 @@ fn emit_with_context(
                 code: box_code(&message)
                     .or_else(|| special_range.map(|_| "unescaped-special-character"))
                     .or_else(|| character.map(|_| "missing-character"))
+                    .or_else(|| unsupported_unicode.map(|_| "unsupported-unicode-character"))
                     .or_else(|| destination.as_ref().filter(|_| precise_destination).map(|(kind, _)| kind.code()))
                     .or_else(|| missing_include_key(&message).map(|_| "missing-include"))
                     .or_else(|| input_range.map(|_| "missing-input"))
@@ -2621,6 +2660,7 @@ fn emit_with_context(
                 data: precise_destination.then(|| serde_json::json!({"destination":destination.as_ref().map(|(_, name)| name)}))
                     .or_else(|| special_range.and(special_character).map(|character| serde_json::json!({"character":character.to_string(),"sourceContext":context})))
                     .or_else(|| character.map(|character| serde_json::json!({"character":character.to_string(),"codepoint":format!("U+{:04X}", character as u32)})))
+                    .or_else(|| unsupported_unicode.map(|character| serde_json::json!({"character":character.to_string(),"codepoint":format!("U+{:04X}", character as u32)})))
                     .or_else(|| command_name.map(|name| serde_json::json!({"command":name})))
                     .or_else(|| {
                         environment_range
@@ -3165,6 +3205,22 @@ fn wrapped_error_message(
             break;
         }
         let Some(next) = lines.get(*i + 1) else { break };
+        // pdfTeX can reach its print width exactly at the Unicode header,
+        // emitting a blank line before LaTeX's indented continuation. Bridge
+        // that one gap only when the complete, consistent error is confirmed.
+        if next.trim().is_empty() && message.starts_with("LaTeX Error: Unicode character ") {
+            if let Some(continuation) = lines
+                .get(*i + 2)
+                .filter(|line| message.len() + line.len() <= 4096)
+            {
+                let complete = format!("{message}{continuation}");
+                if unsupported_unicode_character(&complete).is_some() {
+                    message = complete;
+                    *i += 2;
+                    continue;
+                }
+            }
+        }
         let engine_file_close =
             incomplete_engine_file(&message) && next.trim_start().starts_with("):");
         if next.trim().is_empty()

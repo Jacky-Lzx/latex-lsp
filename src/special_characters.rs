@@ -1,4 +1,4 @@
-//! Escape only literal special characters confirmed by a direct compiler error.
+//! Locate literal compiler-reported characters and escape TeX specials.
 use crate::{
     signature,
     syntax::{QuickFix, Syntax},

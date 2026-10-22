@@ -14,6 +14,12 @@ cargo test --locked -- --include-ignored
 
 ## 排版日志与文件移动
 
+Unicode 输入错误回归需要 pdfLaTeX、XeLaTeX 和 LuaLaTeX。在 60 / 79 列日志及传统 / 文件行号格式中核对子文件字符、重复位置、emoji 和零宽连接符，验证 pdfLaTeX 显式映射后的清空，以及 Unicode 引擎的缺字分类：
+
+```sh
+cargo test --locked --test unsupported_unicode -- --include-ignored
+```
+
 特殊字符修复回归需要 pdfLaTeX、XeLaTeX 和 LuaLaTeX。在 60 / 79 列日志中检查子文件中的裸 `&` / `#` / `_` / `^`，应用快速修复后重新编译，核对合法表格、数学上下标、转义字符、注释和逐字内容保持原样：
 
 ```sh

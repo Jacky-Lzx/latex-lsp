@@ -21,6 +21,7 @@
 - [编译](build.md)：命令、配置、通知、结果分析和产物检查。
 - [编译输入与过期结果](build-inputs.md)：保存检查、取消、依赖追踪和产物有效性。
 - [编译诊断](diagnostics.md)：错误定位、警告和拼写修复规则。
+- [Unicode 输入错误](unicode-errors.md)：不支持的字符、码点摘要与定位边界。
 - [特殊字符诊断与修复](special-characters.md)：裸 `&` / `#` / `_` / `^` 的精确定位、转义修复与安全边界。
 - [字体诊断与结果分析](fonts.md)：字体和字号替换、缺字摘要及定位边界。
 - [排版警告分析](typesetting.md)：Overfull / Underfull 分类统计与最大指标。

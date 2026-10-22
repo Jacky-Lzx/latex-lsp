@@ -99,6 +99,10 @@ biblatex 明确要求先运行 BibTeX 或 Biber 时，默认参数的 latexmk �
 
 `analysis.missingCharacters` 按字符与字体汇总缺字，并保留最高严重级别。字段示例、预算与定位规则见[缺字摘要](fonts.md#缺字摘要)。
 
+### Unicode 输入错误摘要
+
+`analysis.unsupportedUnicodeCharacters` 汇总最终日志中 LaTeX 未设置映射的 Unicode 字符，提供字符和码点。字段、预算与处理方式见[Unicode 输入错误](unicode-errors.md)。
+
 ## 编译配置
 
 使用 `initializationOptions`（Neovim 的 `init_options`）设置，运行中也可发送 `workspace/didChangeConfiguration`，其 `settings` 可直接使用下列对象或包在 `latex` 字段内。无效配置会被拒绝并保留原配置。
