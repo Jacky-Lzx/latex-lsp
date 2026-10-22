@@ -222,6 +222,137 @@ fn special_character_actions_filter_requests_deduplicate_roots_and_recheck_data(
 }
 
 #[test]
+fn missing_math_shift_errors_locate_literal_scripts_and_offer_explicit_text_escapes() {
+    for numbered in [false, true] {
+        for (character, replacement) in [('_', r"\_"), ('^', r"\textasciicircum{}")] {
+            let source = format!("😀 Before foo{character}bar.\r\n\\par\r\n");
+            let prefix = format!("😀 Before foo{character}");
+            let header = if numbered { "./main.tex:1:" } else { "!" };
+            let log = format!("(./main.tex\n{header} Missing $ inserted.\n<inserted text> \n                $\nl.1 {prefix}\n                bar.\n\n! Missing $ inserted.\n<inserted text>\n                $\nl.2 \\par\n\n)\n");
+            let (_directory, workspace, uri, items) = setup(&source, &log);
+            assert_eq!(items.len(), 2, "{items:?}");
+            let precise: Vec<_> = items.iter().filter(|item| item.code.is_some()).collect();
+            assert_eq!(precise.len(), 1, "{items:?}");
+            let item = precise[0];
+            let at = source.find(character).unwrap();
+            assert_eq!(item.range, Text::new(source.clone()).range(at, at + 1));
+            assert_eq!(
+                item.code,
+                Some(NumberOrString::String("unescaped-special-character".into()))
+            );
+            let actions =
+                editing::code_actions(&workspace, &uri, item.range, &context(vec![item.clone()]));
+            let CodeActionOrCommand::CodeAction(action) = &actions[0] else {
+                panic!()
+            };
+            assert_eq!(
+                action.title,
+                format!("Escape '{character}' as '{replacement}'")
+            );
+            let fixes = edits(actions, &uri);
+            assert_eq!(fixes.len(), 1);
+            assert_eq!(fixes[0].new_text, replacement);
+        }
+    }
+}
+
+#[test]
+fn missing_math_shift_requires_exact_insertion_frame_and_unambiguous_literal_source() {
+    for (source, prefix, frame, precise) in [
+        (
+            "Before _ after.",
+            "Before _",
+            "<inserted text>\n                $\n",
+            true,
+        ),
+        ("Before _ after.", "Before _", "", false),
+        (
+            "Before _ after.",
+            "Before _",
+            "<inserted text>\n                }\n",
+            false,
+        ),
+        (
+            "Before _ after.",
+            "Before _",
+            "<inserted text>\n                $\n\\bad ->Before _\n",
+            false,
+        ),
+        (
+            "Before _ after.",
+            "Before _",
+            "<argument> _\n<inserted text>\n                $\n",
+            false,
+        ),
+        (
+            "Before _ after.",
+            "Wrong _",
+            "<inserted text>\n                $\n",
+            false,
+        ),
+        (
+            r"Before \_ after.",
+            r"Before \_",
+            "<inserted text>\n                $\n",
+            false,
+        ),
+        (
+            r"\verb|Before _|",
+            r"\verb|Before _",
+            "<inserted text>\n                $\n",
+            false,
+        ),
+        (
+            r"\def\bad{Before _}",
+            r"\def\bad{Before _",
+            "<inserted text>\n                $\n",
+            false,
+        ),
+        (
+            "% Before _",
+            "% Before _",
+            "<inserted text>\n                $\n",
+            false,
+        ),
+        (
+            "Before _ middle Before _",
+            "...Before _",
+            "<inserted text>\n                $\n",
+            false,
+        ),
+        (
+            "Long prefix unique _ after.",
+            "...unique _",
+            "<inserted text>\n                $\n",
+            true,
+        ),
+        (
+            "Before $ after.",
+            "Before $",
+            "<inserted text>\n                $\n",
+            false,
+        ),
+        (
+            "Before _ after.",
+            "Before",
+            "<inserted text>\n                $\n",
+            false,
+        ),
+    ] {
+        let log = format!("(./main.tex\n! Missing $ inserted.\n{frame}l.1 {prefix}\n\n)\n");
+        let (_directory, workspace, uri, items) = setup(source, &log);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].code.is_some(), precise, "{source}: {items:?}");
+        assert_eq!(
+            !editing::code_actions(&workspace, &uri, items[0].range, &context(items.clone()))
+                .is_empty(),
+            precise,
+            "{log}"
+        );
+    }
+}
+
+#[test]
 #[cfg(unix)]
 #[ignore = "requires pdflatex, xelatex and lualatex"]
 fn real_special_character_fixes_repair_child_sources_without_changing_valid_tex() {
@@ -251,7 +382,11 @@ fn real_special_character_fixes_repair_child_sources_without_changing_valid_tex(
                 "$Math # after.$\n",
                 "\\hbox{#}\n",
                 "\\vbox{#}\n",
+                "Text foo_bar.\\par\n",
+                "Text x^2.\\par\n",
+                "Text prefix prefix prefix prefix prefix prefix prefix unique_word.\\par\n",
                 "Escaped \\& and \\#.\n",
+                "Escaped \\_ and \\textasciicircum{}. $x_1^2$\n",
                 "\\begin{tabular}{ll}A & B\\end{tabular}\n",
                 "% Comment & #\n",
                 "\\verb|Verbatim & #|\n",
@@ -273,7 +408,7 @@ fn real_special_character_fixes_repair_child_sources_without_changing_valid_tex(
                 .collect();
             assert_eq!(
                 items.len(),
-                7,
+                10,
                 "{engine}/{width}: {:?}\n{}",
                 outcome.diagnostics,
                 outcome.output
@@ -304,7 +439,7 @@ fn real_special_character_fixes_repair_child_sources_without_changing_valid_tex(
                     &edit.new_text,
                 );
             }
-            assert!(fixed.ends_with("Escaped \\& and \\#.\n\\begin{tabular}{ll}A & B\\end{tabular}\n% Comment & #\n\\verb|Verbatim & #|\n"));
+            assert!(fixed.ends_with("Escaped \\& and \\#.\nEscaped \\_ and \\textasciicircum{}. $x_1^2$\n\\begin{tabular}{ll}A & B\\end{tabular}\n% Comment & #\n\\verb|Verbatim & #|\n"));
             std::fs::write(&child, fixed).unwrap();
             let repaired = latex_lsp::build::run(&main, &config, &Default::default());
             assert_eq!(

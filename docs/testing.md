@@ -14,7 +14,7 @@ cargo test --locked -- --include-ignored
 
 ## 排版日志与文件移动
 
-特殊字符修复回归需要 pdfLaTeX、XeLaTeX 和 LuaLaTeX。在 60 / 79 列日志中检查子文件中的裸 `&` / `#`，应用快速修复后重新编译，核对合法表格、转义字符、注释和逐字内容保持原样：
+特殊字符修复回归需要 pdfLaTeX、XeLaTeX 和 LuaLaTeX。在 60 / 79 列日志中检查子文件中的裸 `&` / `#` / `_` / `^`，应用快速修复后重新编译，核对合法表格、数学上下标、转义字符、注释和逐字内容保持原样：
 
 ```sh
 cargo test --locked --test special_character_fixes -- --include-ignored

@@ -1487,6 +1487,14 @@ fn error_context<'a>(
         .filter(|(_, line)| !line.trim().is_empty())
         .map(|(index, &line)| (index, line));
     let (mut index, mut line) = context.next()?;
+    // A direct script token outside math mode always reports this exact
+    // recovery frame. Additional expansion frames must still block attribution.
+    if message == "Missing $ inserted." {
+        if line.trim() != "<inserted text>" || context.next()?.1.trim() != "$" {
+            return None;
+        }
+        (index, line) = context.next()?;
+    }
     let recent = (message == "Undefined control sequence.")
         .then(|| line.trim_start().strip_prefix("<recently read>"))
         .flatten()
@@ -2435,7 +2443,8 @@ fn emit_with_context(
     })
     .flatten();
     ranges.extend(command_range);
-    let special_character = crate::special_characters::error_character(&message)
+    let special_character = context
+        .and_then(|context| crate::special_characters::error_character(&message, context))
         .filter(|_| severity == DiagnosticSeverity::ERROR);
     let special_range = special_character.and_then(|character| {
         crate::special_characters::source_range(

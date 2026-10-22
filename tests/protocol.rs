@@ -14122,7 +14122,7 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
         });
         let (mut server, directory, main) =
             fake_build_server_capabilities(script, false, capabilities);
-        let source = "\\documentclass{article}\nBefore & and & after.\nBefore # after.\n";
+        let source = "\\documentclass{article}\nBefore & and & after.\nBefore # after.\nBefore foo_bar.\nBefore x^2.\n";
         std::fs::write(main.to_file_path().unwrap(), source).unwrap();
         server.notify(
             "textDocument/didChange",
@@ -14142,6 +14142,9 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
                 "./main.tex:{line}: {message}\nl.{line} {prefix}\n\n"
             ));
         }
+        for (line, prefix) in [(4, "Before foo_"), (5, "Before x^")] {
+            log.push_str(&format!("./main.tex:{line}: Missing $ inserted.\n<inserted text>\n                $\nl.{line} {prefix}\n\n"));
+        }
         log.push_str(")\n");
         std::fs::write(directory.path().join("fixture.log"), log).unwrap();
         std::fs::write(directory.path().join("fail"), "").unwrap();
@@ -14152,7 +14155,7 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
         );
         let finished = server.until(|message| message["method"] == "latex/buildFinished");
         assert_eq!(finished["params"]["status"], "error");
-        assert_eq!(finished["params"]["errorsCount"], 3);
+        assert_eq!(finished["params"]["errorsCount"], 5);
         let published = server.until(|message| {
             message["method"] == "textDocument/publishDiagnostics"
                 && message["params"]["diagnostics"]
@@ -14162,7 +14165,7 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
                             .iter()
                             .filter(|item| item["code"] == "unescaped-special-character")
                             .count()
-                            == 3
+                            == 5
                     })
         });
         let text = latex_lsp::text::Text::new(source.into());
@@ -14195,7 +14198,14 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
             let change: tower_lsp::lsp_types::TextEdit =
                 serde_json::from_value(document["edits"][0].clone()).unwrap();
             assert_eq!(json!(change.range), item["range"]);
-            assert_eq!(change.new_text, format!("\\{character}"));
+            assert_eq!(
+                change.new_text,
+                if character == "^" {
+                    r"\textasciicircum{}".to_string()
+                } else {
+                    format!("\\{character}")
+                }
+            );
             changes.push(change);
         }
         changes.sort_by_key(|change| std::cmp::Reverse(change.range.start));

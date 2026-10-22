@@ -9,9 +9,16 @@ use tower_lsp::lsp_types::{
     Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range, TextEdit,
 };
 
-pub(crate) fn error_character(message: &str) -> Option<char> {
+pub(crate) fn error_character(message: &str, context: &str) -> Option<char> {
     if message == "Misplaced alignment tab character &." {
         return Some('&');
+    }
+    if message == "Missing $ inserted." {
+        return context
+            .trim_end()
+            .chars()
+            .next_back()
+            .filter(|character| matches!(character, '_' | '^'));
     }
     let mode = message
         .strip_prefix("You can't use `macro parameter character #' in ")?
@@ -77,12 +84,12 @@ pub(crate) fn fix(doc: &Document, diagnostic: &Diagnostic) -> Option<QuickFix> {
     {
         return None;
     }
-    let character = error_character(&diagnostic.message)?;
     let data = diagnostic.data.as_ref()?;
+    let context = data["sourceContext"].as_str()?;
+    let character = error_character(&diagnostic.message, context)?;
     if data["character"].as_str()? != character.to_string() {
         return None;
     }
-    let context = data["sourceContext"].as_str()?;
     if source_range(
         &doc.text,
         &doc.syntax,
@@ -93,12 +100,17 @@ pub(crate) fn fix(doc: &Document, diagnostic: &Diagnostic) -> Option<QuickFix> {
     {
         return None;
     }
+    let replacement = if character == '^' {
+        "\\textasciicircum{}".into()
+    } else {
+        format!("\\{character}")
+    };
     Some(QuickFix {
-        title: format!("Escape '{character}' as '\\{character}'"),
+        title: format!("Escape '{character}' as '{replacement}'"),
         diagnostic: diagnostic.clone(),
         edit: TextEdit {
             range: diagnostic.range,
-            new_text: format!("\\{character}"),
+            new_text: replacement,
         },
         additional_edits: vec![],
     })
