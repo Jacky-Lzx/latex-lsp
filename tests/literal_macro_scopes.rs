@@ -32,6 +32,12 @@ fn hash_arguments_require_declared_macros_and_keep_executed_box_contents_precise
     for (definition, row, precise) in [
         (r"\def\bad#1#2{#2}", r"\bad x#", false),
         (r"\def\bad#1;{#1}", r"\bad x#;", false),
+        (r"\def\bad{}\def\bad#1#2{#2}", r"\bad x#", false),
+        (
+            r"\def\other#1#2{#2}\def\bad{}\def\bad{\other}",
+            r"\bad x#",
+            false,
+        ),
         (r"\def\bad{}", r"\bad x#", true),
         ("", r"\hbox{#}", true),
     ] {
@@ -48,6 +54,124 @@ fn hash_arguments_require_declared_macros_and_keep_executed_box_contents_precise
             outcome.diagnostics
         );
     }
+}
+
+#[test]
+fn repeated_declarations_preserve_possible_bare_delimited_and_forwarded_arguments() {
+    for (definition, call) in [
+        (r"\def\bad{}\def\bad#1#2{&}", r"\bad x&"),
+        (r"\newcommand{\bad}{}\renewcommand{\bad}[2]{&}", r"\bad x&"),
+        (
+            r"\NewDocumentCommand{\bad}{}{}\RenewDocumentCommand{\bad}{mm}{&}",
+            r"\bad x&",
+        ),
+        (r"\def\bad{}\def\bad#1&{&}", r"\bad x&"),
+        (r"\def\bad{}\def\bad#1#2{&}\def\bridge{\bad}", r"\bridge x&"),
+        (r"\def\other#1#2{&}\def\bad{}\def\bad{\other}", r"\bad x&"),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let row = format!("\\begin{{tabular}}{{ll}}A & B{call} C\\\\\\end{{tabular}}");
+        let source = format!("\\input{{macros}}\n{row}\n");
+        let prefix = &row[..row.rfind('&').unwrap() + 1];
+        let log = format!("(./main.tex\n(./macros.tex)\n! Extra alignment tab has been changed to \\cr.\n<recently read> \\endtemplate\n\nl.2 {prefix}\n                 following source\n\n)\n");
+        let outcome = build_fixture(directory.path(), &source, definition, &log);
+        let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+        assert!(
+            outcome.diagnostics[&uri][0].code.is_none(),
+            "{definition}: {:?}",
+            outcome.diagnostics
+        );
+    }
+}
+
+#[test]
+fn completed_or_argument_free_redeclarations_still_offer_literal_tab_repairs() {
+    for (definition, call) in [
+        (r"\def\bad{}\def\bad{}", r"\bad x&"),
+        (r"\def\bad#1#2{}\def\bad#1#2{}", r"\bad xy&"),
+        (r"\def\bad#1#2{}\def\bad#1#2{}", r"\bad{x}{y}&"),
+        (r"\def\bad#1#2{}\def\bridge{\bad}", r"\bridge{x}{y}&"),
+        (r"\def\bad#1;{}\def\bad#1;{}", r"\bad x;&"),
+        (
+            r"\newenvironment{bad}[2]{}{}\renewenvironment{bad}[2]{}{}",
+            r"\begin{bad}xy&\end{bad}",
+        ),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let row = format!("\\begin{{tabular}}{{ll}}A & B{call} C\\\\\\end{{tabular}}");
+        let source = format!("\\input{{macros}}\n{row}\n");
+        let prefix = &row[..row.rfind('&').unwrap() + 1];
+        let log = format!("(./main.tex\n(./macros.tex)\n! Extra alignment tab has been changed to \\cr.\n<recently read> \\endtemplate\n\nl.2 {prefix}\n                 following source\n\n)\n");
+        let outcome = build_fixture(directory.path(), &source, definition, &log);
+        let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+        assert_eq!(
+            outcome.diagnostics[&uri][0].code,
+            Some(NumberOrString::String("extra-alignment-tab".into())),
+            "{definition}: {:?}",
+            outcome.diagnostics
+        );
+        let mut workspace = latex_lsp::workspace::Workspace {
+            code_action_literals: true,
+            ..Default::default()
+        };
+        workspace.add_root(directory.path().into());
+        workspace.open(uri.clone(), source, 9);
+        let item = outcome.diagnostics[&uri][0].clone();
+        workspace
+            .build_diagnostic_sources
+            .insert(uri.clone(), outcome.diagnostic_sources);
+        workspace
+            .build_diagnostics
+            .insert(uri.clone(), outcome.diagnostics);
+        assert_eq!(selected_actions(&workspace, &uri, &item).len(), 1);
+    }
+}
+
+#[test]
+fn cross_file_aliases_use_complete_project_arguments_for_diagnostics_and_repairs() {
+    for (arguments, precise) in [("{x}{y}&", true), ("{x}&", false)] {
+        let directory = tempfile::tempdir().unwrap();
+        let row = format!("\\begin{{tabular}}{{ll}}A & B\\bridge{arguments} C\\\\\\end{{tabular}}");
+        let source = format!("\\input{{macros}}\n\\def\\bridge{{\\bad}}\n{row}\n");
+        let prefix = &row[..row.rfind('&').unwrap() + 1];
+        let log = format!("(./main.tex\n(./macros.tex)\n! Extra alignment tab has been changed to \\cr.\n<recently read> \\endtemplate\n\nl.3 {prefix}\n                 following source\n\n)\n");
+        let outcome = build_fixture(directory.path(), &source, r"\def\bad#1#2{}", &log);
+        let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+        let item = outcome.diagnostics[&uri][0].clone();
+        assert_eq!(item.code.is_some(), precise, "{arguments}: {item:?}");
+        let mut workspace = latex_lsp::workspace::Workspace {
+            code_action_literals: true,
+            ..Default::default()
+        };
+        workspace.add_root(directory.path().into());
+        workspace.open(uri.clone(), source, 9);
+        workspace
+            .build_diagnostic_sources
+            .insert(uri.clone(), outcome.diagnostic_sources);
+        workspace
+            .build_diagnostics
+            .insert(uri.clone(), outcome.diagnostics);
+        assert_eq!(
+            selected_actions(&workspace, &uri, &item).len(),
+            usize::from(precise)
+        );
+    }
+}
+
+#[test]
+fn paused_parent_environment_parameters_do_not_blame_their_second_bare_argument() {
+    let directory = tempfile::tempdir().unwrap();
+    let row = r"\begin{tabular}{ll}A & B\begin{bad}x&\end{bad} C\\\end{tabular}";
+    std::fs::write(directory.path().join("child.tex"), format!("{row}\n")).unwrap();
+    let source = r"\newenvironment{bad}[2]{&}{}\input{child}";
+    let log = format!("(./main.tex\n(./child.tex\n! Extra alignment tab has been changed to \\cr.\n<recently read> \\endtemplate\n\nl.1 {}\n                 following source\n\n)\n)\n", &row[..row.rfind('&').unwrap()+1]);
+    let outcome = build_fixture(directory.path(), source, "", &log);
+    let uri = Url::from_file_path(directory.path().join("child.tex")).unwrap();
+    assert!(
+        outcome.diagnostics[&uri][0].code.is_none(),
+        "{:?}",
+        outcome.diagnostics
+    );
 }
 
 #[test]
@@ -235,6 +359,167 @@ fn dynamic_or_changed_macro_sources_keep_literal_errors_at_line_scope() {
     }
 }
 
+fn real_engine_config(
+    root: &std::path::Path,
+    engine: &str,
+    width: usize,
+    numbered: bool,
+) -> BuildConfig {
+    let compiler = root.join("compiler");
+    std::fs::write(&compiler, format!("#!/bin/sh\nTEXMFVAR=\"${{0%/*}}/tex-cache\"\nTEXMFCACHE=\"$TEXMFVAR\"\nmax_print_line={width}\nexport TEXMFVAR TEXMFCACHE max_print_line\nmkdir -p \"$TEXMFVAR\"\nexec {engine} \"$@\"\n")).unwrap();
+    std::fs::set_permissions(&compiler, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut arguments = vec![
+        "-interaction=nonstopmode".into(),
+        "-recorder".into(),
+        "-output-directory=%o".into(),
+        "%f".into(),
+    ];
+    if numbered {
+        arguments.insert(0, "-file-line-error".into());
+    }
+    BuildConfig {
+        executable: compiler.to_string_lossy().into(),
+        arguments: Some(arguments),
+        ..Default::default()
+    }
+}
+
+#[test]
+#[ignore = "requires pdfLaTeX, XeLaTeX and LuaLaTeX"]
+fn real_paused_environment_parameters_and_completed_redeclarations_keep_distinct_repairs() {
+    for engine in ["pdflatex", "xelatex", "lualatex"] {
+        for width in [60, 79] {
+            for numbered in [false, true] {
+                let directory = tempfile::tempdir().unwrap();
+                let root = directory.path();
+                let main = root.join("main.tex");
+                let child = root.join("child.tex");
+                let config = real_engine_config(root, engine, width, numbered);
+                for (definition, call, precise) in [
+                    (
+                        r"\newenvironment{bad}[2][default]{&}{}",
+                        r"\begin{bad}&\end{bad}",
+                        false,
+                    ),
+                    (
+                        r"\NewDocumentEnvironment{bad}{mm}{&}{}",
+                        r"\begin{bad}x&\end{bad}",
+                        false,
+                    ),
+                    (
+                        r"\newenvironment{bad}[2][default]{}{}",
+                        r"\begin{bad}{x}&\end{bad}",
+                        true,
+                    ),
+                    (
+                        r"\newenvironment{bad}[2]{&}{}",
+                        r"\begin{bad}x&\end{bad}",
+                        false,
+                    ),
+                    (
+                        r"\newenvironment{bad}{}{}\renewenvironment{bad}[2]{&}{}",
+                        r"\begin{bad}x&\end{bad}",
+                        false,
+                    ),
+                    (
+                        r"\newenvironment{bad}{}{}\def\bad#1#2{&}",
+                        r"\begin{bad}x&\end{bad}",
+                        false,
+                    ),
+                    (
+                        r"\newenvironment{bad}[2]{&}{}\def\start{\begin}",
+                        r"\start{bad}x&\end{bad}",
+                        false,
+                    ),
+                    (
+                        r"\newenvironment{bad}{}{}\renewenvironment{bad}{}{}",
+                        r"\begin{bad}x&\end{bad}",
+                        true,
+                    ),
+                    (
+                        r"\newenvironment{bad}[2]{}{}\renewenvironment{bad}[2]{}{}",
+                        r"\begin{bad}xy&\end{bad}",
+                        true,
+                    ),
+                ] {
+                    std::fs::write(&main, format!("\\documentclass{{article}}\n{definition}\n\\begin{{document}}\n\\input{{child}}\n\\end{{document}}\n")).unwrap();
+                    let source =
+                        format!("\\begin{{tabular}}{{ll}}A & B{call} C\\\\\\end{{tabular}}\n");
+                    std::fs::write(&child, &source).unwrap();
+                    let outcome = build::run(&main, &config, &Default::default());
+                    assert_eq!(
+                        outcome.status, "error",
+                        "{engine}/{width}/{numbered}/{definition}: {}",
+                        outcome.output
+                    );
+                    let uri = Url::from_file_path(&child).unwrap();
+                    let items: Vec<_> = outcome.diagnostics[&uri]
+                        .iter()
+                        .filter(|item| item.message.starts_with("Extra alignment tab"))
+                        .collect();
+                    assert_eq!(items.len(), 1, "{definition}: {:?}", outcome.diagnostics);
+                    assert_eq!(
+                        items[0].code.is_some(),
+                        precise,
+                        "{engine}/{width}/{numbered}/{definition}: {:?}",
+                        items[0]
+                    );
+                    if !precise {
+                        continue;
+                    }
+                    let item = items[0].clone();
+                    let main_uri = Url::from_file_path(&main).unwrap();
+                    assert_eq!(
+                        item.data.as_ref().unwrap()["macroPausedSources"],
+                        serde_json::json!([main_uri])
+                    );
+                    let mut workspace = latex_lsp::workspace::Workspace {
+                        code_action_literals: true,
+                        versioned_edits: true,
+                        ..Default::default()
+                    };
+                    workspace.add_root(root.into());
+                    workspace.open(uri.clone(), source.clone(), 9);
+                    workspace
+                        .build_diagnostic_sources
+                        .insert(main_uri.clone(), outcome.diagnostic_sources);
+                    workspace
+                        .build_diagnostics
+                        .insert(main_uri, outcome.diagnostics);
+                    let actions = selected_actions(&workspace, &uri, &item);
+                    assert_eq!(actions.len(), 1, "{definition}: {actions:?}");
+                    let CodeActionOrCommand::CodeAction(action) = &actions[0] else {
+                        panic!()
+                    };
+                    let Some(DocumentChanges::Edits(changes)) =
+                        action.edit.as_ref().unwrap().document_changes.as_ref()
+                    else {
+                        panic!()
+                    };
+                    let OneOf::Left(edit) = &changes[0].edits[0] else {
+                        panic!()
+                    };
+                    assert_eq!(edit.new_text, r"\&");
+                    let text = latex_lsp::text::Text::new(source.clone());
+                    let mut fixed = source;
+                    fixed.replace_range(
+                        text.offset(edit.range.start).unwrap()
+                            ..text.offset(edit.range.end).unwrap(),
+                        &edit.new_text,
+                    );
+                    std::fs::write(&child, fixed).unwrap();
+                    let repaired = build::run(&main, &config, &Default::default());
+                    assert_eq!(
+                        repaired.status, "success",
+                        "{engine}/{width}/{numbered}/{definition}: {}",
+                        repaired.output
+                    );
+                }
+            }
+        }
+    }
+}
+
 #[test]
 #[ignore = "requires pdfLaTeX, XeLaTeX and LuaLaTeX"]
 fn real_cross_file_macro_arguments_are_excluded_and_literal_tabs_can_be_repaired() {
@@ -245,28 +530,17 @@ fn real_cross_file_macro_arguments_are_excluded_and_literal_tabs_can_be_repaired
                 let root = directory.path();
                 let main = root.join("main.tex");
                 let macros = root.join("macros.tex");
-                let compiler = root.join("compiler");
-                std::fs::write(&compiler, format!("#!/bin/sh\nTEXMFVAR=\"${{0%/*}}/tex-cache\"\nTEXMFCACHE=\"$TEXMFVAR\"\nmax_print_line={width}\nexport TEXMFVAR TEXMFCACHE max_print_line\nmkdir -p \"$TEXMFVAR\"\nexec {engine} \"$@\"\n")).unwrap();
-                std::fs::set_permissions(&compiler, std::fs::Permissions::from_mode(0o755))
-                    .unwrap();
-                let mut arguments = vec![
-                    "-interaction=nonstopmode".into(),
-                    "-recorder".into(),
-                    "-output-directory=%o".into(),
-                    "%f".into(),
-                ];
-                if numbered {
-                    arguments.insert(0, "-file-line-error".into());
-                }
-                let config = BuildConfig {
-                    executable: compiler.to_string_lossy().into(),
-                    arguments: Some(arguments),
-                    ..Default::default()
-                };
+                let config = real_engine_config(root, engine, width, numbered);
                 let source = "\\documentclass{article}\n\\input{macros}\n\\begin{document}\n\\begin{tabular}{ll}A & B\\bad x& C\\\\\\end{tabular}\n\\end{document}\n";
                 std::fs::write(&main, source).unwrap();
                 let uri = Url::from_file_path(&main).unwrap();
-                for definition in [r"\def\bad#1#2{&}", r"\def\bad#1&{&}"] {
+                for definition in [
+                    r"\def\bad#1#2{&}",
+                    r"\def\bad#1&{&}",
+                    r"\def\bad{}\def\bad#1#2{&}",
+                    r"\newcommand{\bad}{}\renewcommand{\bad}[2]{&}",
+                    r"\def\other#1#2{&}\def\bad{}\def\bad{\other}",
+                ] {
                     std::fs::write(&macros, definition).unwrap();
                     let outcome = build::run(&main, &config, &Default::default());
                     assert_eq!(

@@ -70,7 +70,6 @@ pub(crate) fn source_range(
     context: &str,
     character: char,
     signatures: Option<&signature::CommandSignatures<'_>>,
-    exclusions: &[signature::CommandSignatures<'_>],
 ) -> Option<Range> {
     let prefix = context.trim_end();
     if prefix.len() > 4096 || !prefix.ends_with(character) {
@@ -120,14 +119,14 @@ pub(crate) fn source_range(
                 signatures.literal_is_argument(&text.source, parsed, at)
             }
         };
-        if consumed(&signature::CommandSignatures::new([(
-            text.source.as_str(),
-            parsed,
-        )])) || signatures.is_some_and(consumed)
-            || exclusions
-                .iter()
-                .any(|signatures| signatures.declared_literal_is_argument(&text.source, parsed, at))
-        {
+        let argument = match signatures {
+            Some(signatures) => consumed(signatures),
+            None => consumed(&signature::CommandSignatures::new([(
+                text.source.as_str(),
+                parsed,
+            )])),
+        };
+        if argument {
             return None;
         }
     }
@@ -138,7 +137,6 @@ pub(crate) fn fix(
     doc: &Document,
     diagnostic: &Diagnostic,
     signatures: Option<&signature::CommandSignatures<'_>>,
-    exclusions: &[signature::CommandSignatures<'_>],
 ) -> Option<QuickFix> {
     if diagnostic.severity != Some(DiagnosticSeverity::ERROR) {
         return None;
@@ -161,7 +159,6 @@ pub(crate) fn fix(
         context,
         character,
         signatures,
-        exclusions,
     )? != diagnostic.range
     {
         return None;

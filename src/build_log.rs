@@ -2539,7 +2539,6 @@ fn emit_with_context(
             context?,
             character,
             macro_context.map(|context| &context.macros.signatures),
-            macro_context.map_or(&[], |context| context.calls.literal_exclusions.as_slice()),
         )
     });
     ranges.extend(special_range);
@@ -2553,7 +2552,6 @@ fn emit_with_context(
             context?,
             character,
             None,
-            &[],
         )
     }));
     let character = missing_character(&message);
@@ -3658,7 +3656,6 @@ struct InvocationCalls<'a> {
     source: &'a str,
     invocations: Vec<(ByteRange<usize>, ByteRange<usize>)>,
     file_commands: Vec<crate::syntax::Command>,
-    literal_exclusions: Vec<crate::signature::CommandSignatures<'a>>,
 }
 
 struct InvocationContext<'a> {
@@ -3824,6 +3821,12 @@ impl<'a> ProjectAnalysis<'a> {
                             .iter()
                             .map(|entry| entry.name.as_str())
                     }),
+                )
+                .with_literal_sources(
+                    ancestors
+                        .iter()
+                        .copied()
+                        .map(|(_, doc)| (doc.text.source.as_str(), &doc.syntax)),
                 ),
             }));
             self.calls = std::array::from_fn(|_| None);
@@ -3847,21 +3850,6 @@ impl<'a> ProjectAnalysis<'a> {
                     invocations,
                     file_commands: if kind == InvocationKind::File {
                         file_error_commands(source, &document.syntax, &macros.signatures)
-                    } else {
-                        vec![]
-                    },
-                    literal_exclusions: if kind == InvocationKind::Literal {
-                        self.project
-                            .documents
-                            .iter()
-                            .filter(|(uri, _)| loaded.contains(*uri) || paused.contains(*uri))
-                            .map(|(_, doc)| {
-                                crate::signature::CommandSignatures::new([(
-                                    doc.text.source.as_str(),
-                                    &doc.syntax,
-                                )])
-                            })
-                            .collect()
                     } else {
                         vec![]
                     },

@@ -1482,7 +1482,37 @@ fn tex_operand_match(source: &str, mut at: usize, pattern: &[String]) -> Option<
 pub(crate) struct CommandSignatures<'a> {
     local: BTreeMap<Cow<'a, str>, Option<Signature>>,
     tex_operands: BTreeMap<Cow<'a, str>, Option<TexOperands>>,
+    literal_operands: BTreeMap<Cow<'a, str>, Vec<LiteralOperands>>,
     detokenize_boundary_known: bool,
+}
+
+/// Possible declarations only exclude literal edits; they never establish a
+/// unique command meaning for navigation, source loading or signature help.
+enum LiteralOperands {
+    Signature(Signature),
+    Tex(TexOperands),
+    Alias(String),
+    Unknown,
+}
+
+fn insert_literal_operands<'a>(
+    entries: &mut BTreeMap<Cow<'a, str>, Vec<LiteralOperands>>,
+    name: Cow<'a, str>,
+    signature: Option<&Signature>,
+    tex: Option<&TexOperands>,
+    alias: Option<&str>,
+) {
+    let operands = if let Some(alias) = alias {
+        Some(LiteralOperands::Alias(alias.into()))
+    } else if let Some(tex) = tex {
+        Some(LiteralOperands::Tex(tex.clone()))
+    } else {
+        signature.cloned().map(LiteralOperands::Signature)
+    };
+    entries
+        .entry(name)
+        .or_default()
+        .push(operands.unwrap_or(LiteralOperands::Unknown));
 }
 
 #[derive(Clone)]
@@ -1531,6 +1561,20 @@ impl<'a> CommandSignatures<'a> {
 
     pub(crate) fn new(documents: impl IntoIterator<Item = (&'a str, &'a syntax::Syntax)>) -> Self {
         Self::with_ambiguous_names(documents, std::iter::empty())
+    }
+
+    /// Paused declarations can exclude operands without certifying a meaning.
+    pub(crate) fn with_literal_sources(
+        mut self,
+        documents: impl IntoIterator<Item = (&'a str, &'a syntax::Syntax)>,
+    ) -> Self {
+        for (name, operands) in Self::new(documents).literal_operands {
+            self.literal_operands
+                .entry(name)
+                .or_default()
+                .extend(operands);
+        }
+        self
     }
 
     pub(crate) fn with_ambiguous_names(
@@ -1630,6 +1674,7 @@ impl<'a> CommandSignatures<'a> {
         let mut tex_operands: BTreeMap<_, _> =
             local.keys().map(|name| (name.clone(), None)).collect();
         let mut aliases = BTreeMap::new();
+        let mut literal_operands = BTreeMap::new();
         for &(source, parsed) in &documents {
             let positions = source_context
                 .map(|signatures| signatures.source_command_positions(source, parsed));
@@ -1699,6 +1744,13 @@ impl<'a> CommandSignatures<'a> {
                     let alias = ending
                         .as_ref()
                         .and_then(|_| bodies.as_ref().and_then(|(_, end)| body_alias(source, end)));
+                    insert_literal_operands(
+                        &mut literal_operands,
+                        Cow::Owned(name.clone()),
+                        ending.as_ref(),
+                        None,
+                        alias.as_deref(),
+                    );
                     insert_command_signature(
                         &mut local,
                         &mut tex_operands,
@@ -1718,6 +1770,13 @@ impl<'a> CommandSignatures<'a> {
                 if expanded && alias.is_some() {
                     signature = None;
                 }
+                insert_literal_operands(
+                    &mut literal_operands,
+                    Cow::Borrowed(entry.name.as_str()),
+                    signature.as_ref(),
+                    tex.as_ref(),
+                    alias.as_deref().filter(|_| !expanded),
+                );
                 insert_command_signature(
                     &mut local,
                     &mut tex_operands,
@@ -1734,6 +1793,7 @@ impl<'a> CommandSignatures<'a> {
         let mut signatures = Self {
             local,
             tex_operands,
+            literal_operands,
             detokenize_boundary_known,
         };
         // Deferred or forwarded providers can install an unseen definition.
@@ -2295,6 +2355,7 @@ impl<'a> CommandSignatures<'a> {
     ) -> bool {
         self.argument_tokens_with_literal(source, parsed, Some(at), false)
             .contains(&at)
+            || self.possible_literal_argument(source, parsed, at)
     }
 
     /// A possible declaration can exclude a literal without assigning unknown
@@ -2307,6 +2368,140 @@ impl<'a> CommandSignatures<'a> {
     ) -> bool {
         self.argument_tokens_with_literal(source, parsed, Some(at), true)
             .contains(&at)
+            || self.possible_literal_argument(source, parsed, at)
+    }
+
+    fn possible_literal_argument(&self, source: &str, parsed: &syntax::Syntax, at: usize) -> bool {
+        if self.literal_operands.is_empty() {
+            return false;
+        }
+        let declarations: BTreeSet<_> = parsed
+            .definitions
+            .iter()
+            .chain(&parsed.environments)
+            .map(|entry| (entry.span.start, entry.span.end))
+            .collect();
+        let mut deferred = definition_body_spans(source, parsed);
+        for entry in &parsed.definitions {
+            if let Some((_, end)) = TexOperands::definition(source, parsed, entry) {
+                deferred.push(entry.span.start..end);
+            }
+        }
+        let empty = BTreeSet::new();
+        for (index, command) in parsed
+            .commands
+            .iter()
+            .enumerate()
+            .take_while(|(_, command)| command.span.start < at)
+        {
+            if parsed.is_ignored(command.span.start)
+                || declarations.contains(&(command.span.start, command.span.end))
+                || deferred
+                    .iter()
+                    .any(|span| span.contains(&command.span.start))
+            {
+                continue;
+            }
+            let Some((name, _, after, spaces)) =
+                self.invocation(source, parsed, index, &empty, &declarations)
+            else {
+                continue;
+            };
+            if !self.literal_operands.contains_key(name)
+                && (name != "begin" || self.local.contains_key("begin"))
+            {
+                continue;
+            }
+            let mut pending = vec![(name.to_owned(), after, spaces)];
+            let mut visited = BTreeSet::new();
+            // Do not skip calls merely consumed by another possible arity:
+            // a different declaration may leave that call executable.
+            while let Some((name, after, spaces)) = pending.pop() {
+                if !visited.insert((name.clone(), after, spaces)) {
+                    continue;
+                }
+                if name == "begin" && !self.local.contains_key("begin") {
+                    if let Some(argument) = syntax::environment_name_argument(source, after) {
+                        if self.literal_operands.contains_key(argument.value.as_str()) {
+                            pending.push((argument.value, argument.outer_span.end, false));
+                        }
+                    }
+                    continue;
+                }
+                let mut consumed = BTreeSet::new();
+                if !self.literal_operands.contains_key(name.as_str()) {
+                    if name == "halign" && !self.local.contains_key("halign") {
+                        continue;
+                    }
+                    if let Some(signature) = operand_builtin(&name) {
+                        let opaque = matches!(
+                            name.as_str(),
+                            "detokenize"
+                                | "graphicspath"
+                                | "DeclareGraphicsExtensions"
+                                | "lstset"
+                                | "fvset"
+                                | "includeonly"
+                        );
+                        argument_tokens(
+                            (source, parsed),
+                            after,
+                            spaces,
+                            &signature,
+                            opaque,
+                            Some(at),
+                            &mut consumed,
+                        );
+                    } else {
+                        unknown_argument_token(source, after, parsed, Some(at), &mut consumed);
+                    }
+                    if consumed.contains(&at) {
+                        return true;
+                    }
+                }
+                for operands in self
+                    .literal_operands
+                    .get(name.as_str())
+                    .into_iter()
+                    .flatten()
+                {
+                    match operands {
+                        LiteralOperands::Alias(target) => {
+                            pending.push((target.clone(), after, spaces))
+                        }
+                        LiteralOperands::Tex(operands) => {
+                            if operands
+                                .end(source, after, spaces)
+                                .is_some_and(|end| (after..end).contains(&at))
+                            {
+                                return true;
+                            }
+                        }
+                        LiteralOperands::Signature(signature) => {
+                            argument_tokens(
+                                (source, parsed),
+                                after,
+                                spaces,
+                                signature,
+                                true,
+                                Some(at),
+                                &mut consumed,
+                            );
+                            if consumed.contains(&at) {
+                                return true;
+                            }
+                        }
+                        LiteralOperands::Unknown => {
+                            unknown_argument_token(source, after, parsed, Some(at), &mut consumed);
+                            if consumed.contains(&at) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        false
     }
 
     fn argument_tokens_with_literal(
@@ -2430,7 +2625,7 @@ impl<'a> CommandSignatures<'a> {
                     literal,
                     &mut result,
                 );
-            } else {
+            } else if literal.is_none() || !self.literal_operands.contains_key(name) {
                 unknown_argument_token(source, end, parsed, literal, &mut result);
             }
         }
@@ -3543,6 +3738,92 @@ pub fn help(workspace: &Workspace, uri: &Url, position: Position) -> Option<Sign
 mod tex_operand_tests {
     use super::*;
     use crate::text::Text;
+
+    #[test]
+    fn paused_literal_candidates_preserve_complete_arguments_without_certifying_meanings() {
+        for (declaration, call, consumed) in [
+            (
+                r"\newenvironment{bad}[2][default]{}{}",
+                r"\begin{bad}{x}&",
+                false,
+            ),
+            (
+                r"\newenvironment{bad}[2][default]{}{}",
+                r"\begin{bad}&",
+                true,
+            ),
+            (r"\def\bad#1#2{}", r"\bad{x}{y}&", false),
+            (r"\def\bad#1#2{}", r"\bad{x}&", true),
+            (r"\def\bad#2{}", r"\bad{x}&", true),
+            (r"\def\bad{\undefined}", r"\bad{x}&", true),
+            (r"\def\bad{\halign}", r"\bad{#&#\cr A&B&C\cr}", false),
+        ] {
+            let definitions = syntax::Syntax::latex(&Text::new(declaration.into()));
+            let parsed = syntax::Syntax::latex(&Text::new(call.into()));
+            let signatures = CommandSignatures::with_ambiguous_names([(call, &parsed)], ["bad"])
+                .with_literal_sources([(declaration, &definitions)]);
+            assert!(signatures.local["bad"].is_none());
+            assert_eq!(
+                signatures.literal_is_argument(call, &parsed, call.rfind('&').unwrap()),
+                consumed,
+                "{declaration}/{call}"
+            );
+        }
+    }
+
+    #[test]
+    fn possible_literal_arguments_follow_long_aliases_and_terminate_cycles() {
+        let name = |index: usize| format!("alias{}", "a".repeat(index + 1));
+        let mut source = String::from(r"\def\bad{}\def\bad#1#2{&}");
+        for index in 0..512 {
+            source.push_str(&format!("\\def\\{}{{\\{}}}", name(index), name(index + 1)));
+        }
+        source.push_str(&format!("\\def\\{}{{\\bad}}\\{} x&", name(512), name(0)));
+        let parsed = syntax::Syntax::latex(&Text::new(source.clone()));
+        let signatures = CommandSignatures::new([(source.as_str(), &parsed)]);
+        assert!(signatures.local["bad"].is_none());
+        assert!(signatures.literal_is_argument(&source, &parsed, source.len() - 1));
+        for (definitions, expected) in [
+            (r"\def\first{\second}\def\second{\first}", false),
+            (
+                r"\def\first{\second}\def\second{\first}\def\second{\bad}\def\bad#1#2{&}",
+                true,
+            ),
+        ] {
+            let source = format!("{definitions}\\first x&");
+            let parsed = syntax::Syntax::latex(&Text::new(source.clone()));
+            let signatures = CommandSignatures::new([(source.as_str(), &parsed)]);
+            assert_eq!(
+                signatures.literal_is_argument(&source, &parsed, source.len() - 1),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn possible_literal_arguments_preserve_completed_calls_and_deferred_declarations() {
+        for source in [
+            r"\def\bad{}\def\bad{}\bad x&",
+            r"\def\bad#1#2{}\def\bad#1#2{}\bad xy&",
+            r"\def\bad#1;{}\def\bad#1;{}\bad x;&",
+            r"\def\bad#1&#2{}\def\provider{\bad x}&",
+            r"\def\bad#1&#2{}\def\provider#1\bad#2{}x&",
+            r"\def\bad#1#2{}\def\bad#1#2{}\def\show{\textbf}\show{x}&",
+            r"\newenvironment{bad}[2]{}{}\renewenvironment{bad}[2]{}{}\begin{bad}xy&\end{bad}",
+        ] {
+            let at = source.rfind('&').unwrap();
+            let parsed = syntax::Syntax::latex(&Text::new(source.into()));
+            let signatures = CommandSignatures::new([(source, &parsed)]);
+            assert!(
+                !signatures.possible_literal_argument(source, &parsed, at),
+                "{source}"
+            );
+            assert!(
+                !signatures.literal_is_argument(source, &parsed, at),
+                "{source}"
+            );
+        }
+    }
 
     #[test]
     fn graphicspath_consumes_only_its_data_argument_and_preserves_following_calls() {

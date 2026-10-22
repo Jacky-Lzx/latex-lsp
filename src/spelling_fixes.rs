@@ -351,7 +351,6 @@ pub fn fixes(
         };
         let project = workspace.project_documents(root);
         let mut signatures = BTreeMap::new();
-        let mut literal_exclusions = BTreeMap::new();
         for diagnostic in diagnostics {
             // Match the selected warning before deduplicating edits. Hyperref
             // can report both Hyper reference and Reference for the same key.
@@ -463,37 +462,23 @@ pub fn fixes(
                                             .map(|entry| entry.name.as_str())
                                     }),
                             )
+                            .with_literal_sources(
+                                workspace
+                                    .documents
+                                    .iter()
+                                    .filter(|(uri, doc)| {
+                                        paused.contains(*uri)
+                                            && doc.kind == crate::workspace::DocumentKind::Latex
+                                    })
+                                    .map(|(_, doc)| (doc.text.source.as_str(), &doc.syntax)),
+                            )
                         })
                 })
                 .map(|signatures| &*signatures);
             if literal {
-                let Some((scope, paused)) = invocation_scope.as_ref() else {
-                    continue;
-                };
-                let exclusions = literal_exclusions
-                    .entry((scope.clone(), paused.clone()))
-                    .or_insert_with(|| {
-                        workspace
-                            .documents
-                            .iter()
-                            .filter(|(uri, doc)| {
-                                (scope.contains(*uri) || paused.contains(*uri))
-                                    && doc.kind == crate::workspace::DocumentKind::Latex
-                            })
-                            .map(|(_, doc)| {
-                                crate::signature::CommandSignatures::new([(
-                                    doc.text.source.as_str(),
-                                    &doc.syntax,
-                                )])
-                            })
-                            .collect::<Vec<_>>()
-                    });
-                if let Some(fix) = crate::special_characters::fix(
-                    doc,
-                    diagnostic,
-                    invocation_signatures,
-                    exclusions,
-                ) {
+                if let Some(fix) =
+                    crate::special_characters::fix(doc, diagnostic, invocation_signatures)
+                {
                     if seen.insert((
                         diagnostic.range.start,
                         diagnostic.range.end,

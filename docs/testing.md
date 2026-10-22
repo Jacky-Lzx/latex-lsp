@@ -38,7 +38,7 @@ cargo test --locked --test special_character_fixes extra_closing -- --include-ig
 cargo test --locked --test special_character_fixes double_script -- --include-ignored
 ```
 
-跨文件宏来源回归同样需要这三个引擎，在 60 / 79 列及传统 / 文件行号日志中验证裸参数、分隔参数不会获得转义编辑，以及零参数宏之后的实际分隔符修复后可以重新编译。默认测试另覆盖加载时序、暂停父文件、动态来源、编译中源码变化和宏文件变化后的旧修复拒绝；协议测试同时覆盖 Code Action 和旧客户端：
+跨文件宏来源回归同样需要这三个引擎，在 60 / 79 列及传统 / 文件行号日志中验证裸参数、分隔参数、重复声明和别名转发不会误获转义编辑。父文件声明的传统与 xparse 环境、可选参数和 `\begin` 别名也参与验证；零参数或已完成参数之后的实际分隔符在修复后重新编译。默认测试另覆盖加载时序、暂停父文件、动态来源、编译中源码变化和宏文件变化后的旧修复拒绝；协议测试同时覆盖 Code Action 和旧客户端的重复声明与别名变化：
 
 ```sh
 cargo test --locked --test literal_macro_scopes -- --include-ignored
