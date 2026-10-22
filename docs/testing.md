@@ -141,6 +141,12 @@ cargo test --locked --test rerun_warnings -- --include-ignored
 cargo test --locked --test protocol wrapped_standard_rerun
 ```
 
+[末页变更回归](last-page.md)在三个引擎的 60 / 70 / 79 列日志中连续缩短和加长跨文件正文，核对临时额外页、末页钩子的旧页与正确页、实际 PDF 页数，以及再次编译后的请求和操作清除：
+
+```sh
+cargo test --locked --test rerun_warnings real_last_page -- --include-ignored
+```
+
 rerunfilecheck 回归核对标准 `Rerun.` 请求、hyperref 完整书签及反向文献引用提示、折行、满行后的额外空行、示例文字和 makeindex 请求的边界，并检查结果分析与重编译操作一致。默认回归另核对文件名中的括号、看似完整的警告正文及不完整警告之后的真实文件切换。外部回归在三个 LaTeX 引擎的 60 / 79 列日志中验证特殊文件名、后续主文件与子文件的诊断归属、首次文件变化后的请求及下一遍内容不变后的清空：
 
 ```sh

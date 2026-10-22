@@ -46,6 +46,7 @@
 - [编译](build.md)：入口、命令、通知和重编译操作。
 - [编译配置](build-configuration.md)：编译器、引擎、参数模板和产物名称。
 - [编译结果分析](build-analysis.md)：页数、引用、重编译请求及外部处理工具。
+- [末页变更与重编译](last-page.md)：临时额外页、末页钩子位置、实际页数和请求清除。
 - [索引与术语表处理](index-processing.md)：makeindex 工具摘要、处理流程、最终日志和操作边界。
 - [编译输入与过期结果](build-inputs.md)：保存检查、取消、依赖追踪和产物有效性。
 - [编译诊断](diagnostics.md)：错误定位、警告和拼写修复规则。

@@ -56,7 +56,7 @@ end
 
 ## 从诊断重新编译
 
-编译器明确要求再次编译时，可在对应警告处请求快速修复，选择 `Rebuild …`。支持 LaTeX 交叉引用、natbib 文献、biblatex 的 LaTeX 重运行提示、longtable 表格列宽、hyperref 页标签和 rerunfilecheck 文件变更警告；未定义引用本身不会产生这个操作。
+编译器明确要求再次编译时，可在对应警告处请求快速修复，选择 `Rebuild …`。支持 LaTeX 交叉引用、[末页变更](last-page.md)、natbib 文献、biblatex 的 LaTeX 重运行提示、longtable 表格列宽、hyperref 页标签和 rerunfilecheck 文件变更警告；未定义引用本身不会产生这个操作。
 
 标准请求的单词折行、第一句后的续行及 natbib 简短提示见[折行的重编译警告](build-analysis.md#折行的重编译警告)。
 
