@@ -34,6 +34,12 @@ cargo test --locked --test signature optional_default_previews -- --include-igno
 
 ## 排版日志与文件移动
 
+信息日志回归检查五类标准 `Info` 消息、文件名括号、字节折行、空白与宏包续行、较长消息、真正的文件切换、折行错误路径和日志省略边界。外部回归在三个 LaTeX 引擎的 60 / 79 列输出及传统 / 文件行号格式中核对警告归属、错误行号和未定义命令的精确范围：
+
+```sh
+cargo test --locked --test information_logs -- --include-ignored
+```
+
 rerunfilecheck 回归核对标准 `Rerun.` 请求、hyperref 完整书签提示、折行、示例文字和 makeindex 请求的边界，并检查结果分析与重编译操作一致。默认回归另核对文件名中的括号、看似完整的警告正文及不完整警告之后的真实文件切换。外部回归在三个 LaTeX 引擎的 60 / 79 列日志中验证特殊文件名、后续主文件与子文件的诊断归属、首次文件变化后的请求及下一遍内容不变后的清空：
 
 ```sh

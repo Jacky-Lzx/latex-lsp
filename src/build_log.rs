@@ -2837,10 +2837,100 @@ fn warning_start(line: &str) -> bool {
             .is_some_and(|tail| tail.trim_start().starts_with("(pdf backend):"))
 }
 
+fn information_prefix(line: &str) -> Option<&str> {
+    for (header, continuation) in [
+        ("LaTeX Info:", ""),
+        ("LaTeX Font Info:", "Font"),
+        ("LaTeX Encoding Info:", "Encoding"),
+    ] {
+        if line.starts_with(header) {
+            return Some(continuation);
+        }
+    }
+    let named = line
+        .strip_prefix("Package ")
+        .or_else(|| line.strip_prefix("Class "))?;
+    let (name, _) = named.split_once(" Info:")?;
+    (!name.trim().is_empty()).then_some(name)
+}
+
+/// Information text can contain file-like parentheses, but does not enter a
+/// source. Commit speculative byte continuations only after a message footer
+/// or the same emitter's continuation prefix confirms them.
+fn skip_information(
+    root: &Path,
+    lines: &[&str],
+    separator_lines: &[usize],
+    i: &mut usize,
+    prefix: &str,
+) {
+    let mut cursor = *i;
+    let mut committed = *i;
+    let mut bytes = lines[cursor].len();
+    while let Some(next) = lines.get(cursor + 1) {
+        let owned = if prefix.is_empty() {
+            next.starts_with("            ")
+        } else {
+            next.trim_start()
+                .strip_prefix('(')
+                .and_then(|tail| tail.strip_prefix(prefix))
+                .and_then(|tail| tail.strip_prefix(')'))
+                .is_some_and(|tail| tail.starts_with(char::is_whitespace))
+        };
+        let byte_wrapped = lines[cursor].len() >= 60;
+        if (!owned && !byte_wrapped)
+            || (next.trim().is_empty() && !owned)
+            || (message_boundary(next)
+                && !(next.trim_start().starts_with(')') && (owned || byte_wrapped)))
+            || next.trim_start().starts_with('<')
+            || next.trim_start().starts_with("Here is how much")
+            || (!owned && (cursor - committed >= 64 || bytes + next.len() + 1 > 4096))
+        {
+            break;
+        }
+        let mut next_index = cursor + 1;
+        if numbered_error(&continued_error_line(
+            root,
+            lines,
+            separator_lines,
+            &mut next_index,
+        ))
+        .is_some()
+        {
+            break;
+        }
+        let mut next_index = cursor + 1;
+        let announcement = continued_file_line(root, lines, &mut next_index);
+        if announcement
+            .trim_start()
+            .strip_prefix('(')
+            .and_then(|tail| {
+                let length = stack_file(root, tail)
+                    .map(|(_, length)| length)
+                    .into_iter()
+                    .chain(unresolved_stack_file(tail))
+                    .max()?;
+                Some(tail[length..].trim_start_matches(')').trim())
+            })
+            .is_some_and(|tail| tail.is_empty() || tail.starts_with('('))
+        {
+            break;
+        }
+        cursor += 1;
+        bytes += next.len() + 1;
+        if owned || next.trim_end().ends_with('.') {
+            committed = cursor;
+            bytes = next.len();
+        }
+    }
+    *i = committed;
+}
+
 fn message_boundary(line: &str) -> bool {
     let line = line.trim_start();
     line == crate::output::TRUNCATED
         || warning_start(line)
+        || information_prefix(line).is_some()
         || error_message(line).is_some()
         || driver_message(line).is_some()
         || line.starts_with("==> Fatal error occurred")
@@ -3561,6 +3651,7 @@ fn continued_file_line<'a>(root: &Path, lines: &[&'a str], i: &mut usize) -> Cow
                 if next.is_empty()
                     || *next == crate::output::TRUNCATED
                     || warning_start(next)
+                    || information_prefix(next).is_some()
                     || error_message(next).is_some()
                     || driver_message(next).is_some()
                     || numbered_error(next).is_some()
@@ -4042,6 +4133,11 @@ fn parse_in_project<'a>(
             // The PDF driver has no TeX source-line context. Its messages must
             // not borrow an open input file or a later l.N from the TeX log.
             emit(&mut result, root, 1, message, severity, None, false);
+            i += 1;
+            continue;
+        }
+        if let Some(prefix) = information_prefix(line) {
+            skip_information(root, &lines, &separator_lines, &mut i, prefix);
             i += 1;
             continue;
         }
