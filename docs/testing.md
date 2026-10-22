@@ -71,6 +71,14 @@ cargo test --locked --test etoolbox_registers -- --include-ignored
 
 操作示例与静态分析边界见[寄存器与长度](registers.md)。
 
+未定义长度回归检查 `deflength` 的精确范围、裸控制序列及跨行表达式、重复与缩短源码回显、候选寄存器类型、项目隔离及版本化和旧客户端修复。外部回归使用三个引擎的 60 / 79 列日志，在传统与文件行号格式中修复自定义长度、尺寸和内置长度，并核对重新编译后的实际值：
+
+```sh
+cargo test --locked --test undefined_lengths
+cargo test --locked --test undefined_lengths -- --include-ignored
+cargo test --locked --test protocol undefined_length_diagnostics_offer_versioned_fixes_and_reject_changed_candidate_types
+```
+
 ## 排版日志与文件移动
 
 页数回归检查输出路径中的伪页数、PDF / DVI / XDV 格式、引号、日志折行、不完整摘要和读取预算。外部回归使用三个 LaTeX 引擎的 60 / 79 列日志，核对编译结果返回实际 PDF 页数：

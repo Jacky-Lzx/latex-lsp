@@ -18,6 +18,94 @@ struct Server {
 
 #[test]
 #[cfg(unix)]
+fn undefined_length_diagnostics_offer_versioned_fixes_and_reject_changed_candidate_types() {
+    for literals in [false, true] {
+        let capabilities = json!({
+            "workspace":{"applyEdit":true,"workspaceEdit":{"documentChanges":true}},
+            "textDocument": if literals {
+                json!({"codeAction":{"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix"]}}}})
+            } else { json!({}) }
+        });
+        let (mut server, directory, main) = fake_build_server_capabilities(
+            "cat \"${2%/*}/fixture.log\" > \"$1/main.log\"\nexit 1\n",
+            false,
+            capabilities,
+        );
+        let source =
+            "\\documentclass{article}\n\\input{definitions}\n\\deflength{\\measuer}{2pt+3pt}\n";
+        let definitions = Url::from_file_path(directory.path().join("definitions.tex")).unwrap();
+        std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+        std::fs::write(
+            definitions.to_file_path().unwrap(),
+            "\\newlength{\\measure}\n",
+        )
+        .unwrap();
+        std::fs::write(directory.path().join("fixture.log"), "(./main.tex\n(./definitions.tex)\n./main.tex:3: Package etoolbox Error: Length '\\measuer' undefined.\n\nSee the etoolbox package documentation for explanation.\nType  H <return>  for immediate help.\n ...\n\nl.3 \\deflength{\\measuer}{2pt+3pt}\n)\n").unwrap();
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":9},"contentChanges":[{"text":source}]}),
+        );
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(finished["params"]["status"], "error", "{finished}");
+        let published = server.until(|message| {
+            message["method"] == "textDocument/publishDiagnostics"
+                && message["params"]["uri"] == json!(main)
+                && message["params"]["diagnostics"]
+                    .as_array()
+                    .is_some_and(|items| {
+                        items.iter().any(|item| item["code"] == "undefined-length")
+                    })
+        });
+        assert_eq!(published["params"]["version"], 9);
+        let diagnostic = published["params"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["code"] == "undefined-length")
+            .unwrap();
+        assert_eq!(diagnostic["data"]["length"], "measuer");
+        assert_eq!(
+            diagnostic["range"],
+            json!({"start":{"line":2,"character":11},"end":{"line":2,"character":19}})
+        );
+        let params = json!({"textDocument":{"uri":main},"range":diagnostic["range"],"context":{"diagnostics":[diagnostic],"only":["quickfix"]}});
+        let actions = server.request(3, "textDocument/codeAction", params.clone());
+        assert_eq!(actions.as_array().unwrap().len(), 1, "{actions}");
+        assert_eq!(actions[0]["title"], r"Replace with length `\measure`");
+        if literals {
+            let edit = &actions[0]["edit"]["documentChanges"][0];
+            assert_eq!(edit["textDocument"]["version"], 9);
+            assert_eq!(edit["textDocument"]["uri"], json!(main));
+            assert_eq!(edit["edits"][0]["newText"], r"\measure");
+            assert_eq!(edit["edits"][0]["range"], diagnostic["range"]);
+        }
+        std::fs::write(definitions.to_file_path().unwrap(), "\\newcount\\measure\n").unwrap();
+        server.notify(
+            "workspace/didChangeWatchedFiles",
+            json!({"changes":[{"uri":definitions,"type":2}]}),
+        );
+        assert_eq!(
+            server.request(4, "textDocument/codeAction", params),
+            json!([])
+        );
+        if !literals {
+            server.send(json!({"jsonrpc":"2.0","id":5,"method":"workspace/executeCommand","params":{"command":actions[0]["command"],"arguments":actions[0]["arguments"]}}));
+            let rejected = server.until(|message| message["id"] == 5);
+            assert_eq!(rejected["error"]["code"], -32602, "{rejected}");
+        }
+        server.request(6, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
 fn stored_rebuild_actions_reject_changed_roots_versions_and_resolved_diagnostics() {
     for literals in [false, true] {
         for change in [

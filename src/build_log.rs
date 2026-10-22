@@ -1670,6 +1670,8 @@ fn error_context<'a>(
     }
     let graphics = missing_graphic_name(message).is_some() && missing_file_name(message).is_none();
     let documentation = line.trim() == "See the LaTeX manual or LaTeX Companion for explanation."
+        || undefined_length_name(message).is_some()
+            && line.trim() == "See the etoolbox package documentation for explanation."
         || (undefined_color_name(message).is_some()
             || undefined_color_model_name(message).is_some())
             && line.trim() == "See the xcolor package documentation for explanation."
@@ -2059,6 +2061,14 @@ pub(crate) fn undefined_counter_name(message: &str) -> Option<&str> {
         .or_else(|| tail.strip_prefix('`'))?
         .strip_suffix("' defined.")?;
     crate::syntax::is_static_key(name).then_some(name)
+}
+
+pub(crate) fn undefined_length_name(message: &str) -> Option<&str> {
+    let control = message
+        .strip_prefix("Package etoolbox Error: Length '")?
+        .strip_suffix("' undefined.")?;
+    let span = crate::syntax::control_word(control, 0)?;
+    (span.end == control.len()).then(|| &control[1..])
 }
 
 pub(crate) fn undefined_color_name(message: &str) -> Option<&str> {
@@ -2663,6 +2673,21 @@ fn emit_with_context(
             )
         });
     ranges.extend(counter_range);
+    let length_name = undefined_length_name(&message);
+    let length_range = length_name
+        .filter(|_| !project_stale)
+        .filter(|_| reported_line.checked_sub(1) == Some(line))
+        .and_then(|name| {
+            invocation_error_range(
+                &text,
+                line,
+                context?,
+                &format!("\\{name}"),
+                InvocationKind::Length,
+                cached_calls,
+            )
+        });
+    ranges.extend(length_range);
     let color_name = undefined_color_name(&message);
     let color_range = color_name
         .filter(|_| !project_stale)
@@ -2781,6 +2806,7 @@ fn emit_with_context(
                     .or_else(|| command_range.map(|_| "undefined-control-sequence"))
                     .or_else(|| environment_range.and(environment.as_ref()).map(|error| error.code))
                     .or_else(|| counter_range.map(|_| "undefined-counter"))
+                    .or_else(|| length_range.map(|_| "undefined-length"))
                     .or_else(|| color_range.map(|_| "undefined-color"))
                     .or_else(|| model_range.map(|_| "undefined-color-model"))
                     .map(|code| NumberOrString::String(code.into())),
@@ -2800,6 +2826,7 @@ fn emit_with_context(
                             })
                     })
                     .or_else(|| counter_range.and(counter_name).map(|name| serde_json::json!({"counter":name})))
+                    .or_else(|| length_range.and(length_name).map(|name| serde_json::json!({"length":name})))
                     .or_else(|| color_range.and(color_name).map(|name| serde_json::json!({"color":name})))
                     .or_else(|| model_range.and(color_model).map(|name| serde_json::json!({"model":name})))
                     .or_else(|| input_range.and(missing_file).map(|name| serde_json::json!({"file":name})))
@@ -2825,7 +2852,7 @@ fn emit_with_context(
                     .or_else(|| graphic_range.and(missing_graphic).map(|name| serde_json::json!({"file":name})))
                     .or_else(|| missing_include_key(&message).map(|name| serde_json::json!({"file":name})))
                     .map(|mut data| {
-                        if special_range.is_some() || missing_include_key(&message).is_some() || color_range.is_some() || model_range.is_some() || counter_range.is_some() || environment_range.is_some() || input_range.is_some() || loader_range.is_some() || clash_range.is_some() {
+                        if special_range.is_some() || missing_include_key(&message).is_some() || color_range.is_some() || model_range.is_some() || counter_range.is_some() || length_range.is_some() || environment_range.is_some() || input_range.is_some() || loader_range.is_some() || clash_range.is_some() {
                             if let Some(context) = macro_context {
                                 data["macroSources"] = serde_json::json!(context.macros.sources);
                                 if !context.macros.paused_sources.is_empty() {
@@ -3781,6 +3808,7 @@ enum InvocationKind {
     Color,
     ColorModel,
     Counter,
+    Length,
     EnvironmentBegin,
     EnvironmentEnd,
     File,
@@ -3799,6 +3827,8 @@ impl InvocationKind {
             Some(Self::ColorModel)
         } else if undefined_counter_name(message).is_some() {
             Some(Self::Counter)
+        } else if undefined_length_name(message).is_some() {
+            Some(Self::Length)
         } else {
             environment_error(message)
                 .map(|error| {
@@ -3833,6 +3863,9 @@ impl InvocationKind {
             ),
             Self::Counter => {
                 crate::counters::error_invocations_with_signatures(source, syntax, signatures)
+            }
+            Self::Length => {
+                crate::lengths::error_invocations_with_signatures(source, syntax, signatures)
             }
             Self::File => file_error_invocations_with_signatures(source, syntax, signatures),
             Self::EnvironmentBegin | Self::EnvironmentEnd => {
@@ -3951,7 +3984,7 @@ impl ProjectSources {
 struct ProjectAnalysis<'a> {
     project: &'a ProjectSources,
     macros: Option<Rc<MacroContext<'a>>>,
-    calls: [Option<(Url, Rc<InvocationCalls<'a>>)>; 7],
+    calls: [Option<(Url, Rc<InvocationCalls<'a>>)>; 8],
 }
 
 impl<'a> ProjectAnalysis<'a> {
@@ -9336,20 +9369,25 @@ mod project_color_tests {
                 "Package xcolor Error: Undefined color model `rbg'.",
                 "rbg",
             ),
+            (
+                r"\bridge\deflength{\measuer}{1pt}",
+                "Package etoolbox Error: Length '\\measuer' undefined.",
+                r"\measuer",
+            ),
         ];
         let (_temp, root, _) = fixture(r"\newcommand{\done}{}\def\bridge{\done}", "");
         let mut source = "\\usepackage{palette}\n".to_owned();
         let mut log = "(./main.tex\n(./palette.sty)\n".to_owned();
-        for index in 0..14 {
-            let (call, message, _) = calls[index % 7];
+        for index in 0..calls.len() * 2 {
+            let (call, message, _) = calls[index % calls.len()];
             let line = index + 2;
             source.push_str(&format!("{call}\n"));
-            if matches!(index % 7, 0 | 2) {
+            if matches!(index % calls.len(), 0 | 2) {
                 log.push_str(&format!(
                     "! {message}\n./main.tex:{line}: Emergency stop.\n<read *>\nl.{line} {call}\n"
                 ));
             } else {
-                let help = if matches!(index % 7, 1 | 6) {
+                let help = if matches!(index % calls.len(), 1 | 6) {
                     HELP
                 } else {
                     COUNTER_HELP
@@ -9367,10 +9405,10 @@ mod project_color_tests {
             .iter()
             .filter(|e| e.message != "Emergency stop.")
             .collect();
-        assert_eq!(errors.len(), 14);
+        assert_eq!(errors.len(), calls.len() * 2);
         let text = Text::new(source);
         for (index, error) in errors.iter().enumerate() {
-            let (_, _, name) = calls[index % 7];
+            let (_, _, name) = calls[index % calls.len()];
             let line_start = text.offset(Position::new(index as u32 + 1, 0)).unwrap();
             let start = line_start + text.source[line_start..].find(name).unwrap();
             assert_eq!(

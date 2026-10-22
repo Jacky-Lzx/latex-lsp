@@ -12,6 +12,7 @@ enum Kind {
     Command,
     Environment,
     Counter,
+    Length,
     Anchor,
     Color,
     ColorModel,
@@ -98,6 +99,24 @@ fn target<'a>(
                 && doc.text.range(span.start, span.end) == diagnostic.range
         })
         .then_some((Kind::Counter, name));
+    }
+
+    if diagnostic.code == Some(NumberOrString::String("undefined-length".into())) {
+        let name = diagnostic.data.as_ref()?.get("length")?.as_str()?;
+        if build_log::undefined_length_name(&diagnostic.message) != Some(name) {
+            return None;
+        }
+        return crate::lengths::error_invocations_with_signatures(
+            &doc.text.source,
+            &doc.syntax,
+            signatures?,
+        )
+        .iter()
+        .any(|(span, _)| {
+            doc.text.source[span.clone()].strip_prefix('\\') == Some(name)
+                && doc.text.range(span.start, span.end) == diagnostic.range
+        })
+        .then_some((Kind::Length, name));
     }
 
     if diagnostic.code == Some(NumberOrString::String("undefined-color".into())) {
@@ -297,7 +316,7 @@ fn valid_name(kind: Kind, name: &str) -> bool {
         crate::syntax::is_static_reference_key(name)
     } else if matches!(kind, Kind::Color | Kind::ColorModel) {
         crate::named_colors::literal_name(name)
-    } else if kind == Kind::Command {
+    } else if matches!(kind, Kind::Command | Kind::Length) {
         !name.is_empty()
             && name
                 .bytes()
@@ -373,7 +392,7 @@ pub fn fixes(
             }
             let literal = matches!(diagnostic.code.as_ref(), Some(NumberOrString::String(code)) if matches!(code.as_str(), "unescaped-special-character" | "extra-alignment-tab" | "extra-closing-brace" | "double-subscript" | "double-superscript"));
             let invocation_scope = if literal
-                || matches!(diagnostic.code.as_ref(), Some(NumberOrString::String(code)) if matches!(code.as_str(), "undefined-color" | "undefined-color-model" | "undefined-counter" | "undefined-environment" | "mismatched-environment-end" | "missing-input" | "missing-include" | "missing-package" | "missing-class" | "missing-bibliography-style" | "missing-bibliography-database"))
+                || matches!(diagnostic.code.as_ref(), Some(NumberOrString::String(code)) if matches!(code.as_str(), "undefined-color" | "undefined-color-model" | "undefined-counter" | "undefined-length" | "undefined-environment" | "mismatched-environment-end" | "missing-input" | "missing-include" | "missing-package" | "missing-class" | "missing-bibliography-style" | "missing-bibliography-database"))
             {
                 let confirmed = workspace.build_diagnostic_sources.get(root);
                 let scope = if let Some(value) = diagnostic
@@ -564,6 +583,7 @@ pub fn fixes(
                 continue;
             }
             let mut candidates = BTreeMap::<String, usize>::new();
+            let mut length_conflicts = BTreeSet::new();
             let mut total_entries = 0;
             for document in project
                 .iter()
@@ -579,7 +599,7 @@ pub fn fixes(
                 let entries: &[crate::syntax::Entry] = match kind {
                     Kind::Citation => &document.syntax.citations,
                     Kind::Label => &document.syntax.labels,
-                    Kind::Command => &document.syntax.definitions,
+                    Kind::Command | Kind::Length => &document.syntax.definitions,
                     Kind::Environment => &document.syntax.environments,
                     Kind::Counter => &document.syntax.counters,
                     Kind::Anchor => &document.syntax.anchors,
@@ -587,10 +607,24 @@ pub fn fixes(
                     Kind::ColorModel => &[],
                 };
                 for entry in entries {
+                    if kind == Kind::Length && !crate::lengths::declaration(entry) {
+                        length_conflicts.insert(entry.name.clone());
+                    }
                     *candidates.entry(entry.name.clone()).or_default() += 1;
                     total_entries += 1;
                     if total_entries >= 4096 {
                         break;
+                    }
+                }
+                if kind == Kind::Length {
+                    // Environment, counter and switch declarations can own
+                    // the same control word as an allocated length.
+                    for name in crate::generated::commands(document).take(4096) {
+                        length_conflicts.insert(name);
+                        total_entries += 1;
+                        if total_entries >= 4096 {
+                            break;
+                        }
                     }
                 }
                 if kind == Kind::Command {
@@ -634,6 +668,11 @@ pub fn fixes(
                     candidates.entry((*name).into()).or_insert(1);
                 }
             }
+            if kind == Kind::Length {
+                for name in crate::lengths::BUILTINS {
+                    candidates.entry((*name).into()).or_insert(1);
+                }
+            }
             if kind == Kind::Color {
                 for name in crate::named_colors::BUILTINS {
                     candidates.entry((*name).into()).or_insert(1);
@@ -645,7 +684,10 @@ pub fn fixes(
                 }
             }
             // A known key can be unresolved because of build order or macros.
-            if total_entries >= 4096 || candidates.contains_key(key) {
+            if total_entries >= 4096
+                || candidates.contains_key(key)
+                || length_conflicts.contains(key)
+            {
                 continue;
             }
             let mut candidates: Vec<_> = candidates
@@ -654,6 +696,7 @@ pub fn fixes(
                     *count == 1
                         && valid_name(kind, name)
                         && !counter_conflicts.contains(name.as_str())
+                        && !length_conflicts.contains(name)
                 })
                 .take(MAX_COMPARISONS.saturating_sub(comparisons))
                 .filter_map(|(name, _)| {
@@ -675,6 +718,7 @@ pub fn fixes(
                     ),
                     Kind::Citation => ("citation", name.clone()),
                     Kind::Command => ("command", format!("\\{name}")),
+                    Kind::Length => ("length", format!("\\{name}")),
                     Kind::Environment => ("environment", name.clone()),
                     Kind::Counter => ("counter", name.clone()),
                     Kind::Color => ("color", name.clone()),

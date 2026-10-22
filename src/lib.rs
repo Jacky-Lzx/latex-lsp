@@ -25,6 +25,7 @@ pub mod graphics;
 mod graphics_settings;
 mod image_fixes;
 mod label_diagnostics;
+mod lengths;
 mod listings;
 mod named_colors;
 mod named_commands;
