@@ -38,6 +38,13 @@ cargo test --locked --test special_character_fixes extra_closing -- --include-ig
 cargo test --locked --test special_character_fixes double_script -- --include-ignored
 ```
 
+跨文件宏来源回归同样需要这三个引擎，在 60 / 79 列及传统 / 文件行号日志中验证裸参数、分隔参数不会获得转义编辑，以及零参数宏之后的实际分隔符修复后可以重新编译。默认测试另覆盖加载时序、暂停父文件、动态来源、编译中源码变化和宏文件变化后的旧修复拒绝；协议测试同时覆盖 Code Action 和旧客户端：
+
+```sh
+cargo test --locked --test literal_macro_scopes -- --include-ignored
+cargo test --locked --test protocol literal_build_fixes_recheck_cross_file_macro_changes_without_a_main_version_change
+```
+
 源码文件名移动回归需要 pdfLaTeX、XeLaTeX 和 LuaLaTeX，验证首部空格、主干末尾空格、裸路径和引号路径，以及移动后的真实输入与导航：
 
 ```sh
