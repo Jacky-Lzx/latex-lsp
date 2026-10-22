@@ -89,6 +89,8 @@ ifthen 的 `newboolean` / `provideboolean` 与 etoolbox 的 `newbool` / `provide
 
 表达式关键词中的注释续行支持编辑与重命名，具体写法见[注释与源码编辑](boolean-expressions.md#注释与源码编辑)。etoolbox 直接 boolean 操作中拼错的基础名称支持[编译诊断与修复](boolean-diagnostics.md)。
 
+etoolbox 的[字符串测试](string-tests.md)将数据参数与条件分支分别索引；重命名保留用于比较的 token 字符串，更新声明和分支中的引用。
+
 etoolbox 的 `newtoggle` / `providetoggle` 使用独立命名空间，支持 `settoggle`、`toggletrue` / `togglefalse`、`iftoggle` / `nottoggle` 和上述表达式中的 `togl {名称}` 操作数。提供名称和值补全、片段、参数提示、布尔符号、跨文件导航与安全重命名；同名 boolean 保持独立。重命名同时维护直接或字面的内部 `etb@tgl@名称` 控制序列，并检查生成命令冲突。直接操作中拼错的名称支持[编译诊断与修复](toggle-diagnostics.md)。
 
 ## 命名宏、复制与别名

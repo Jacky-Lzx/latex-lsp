@@ -21,6 +21,7 @@
 - [biblatex 引用](biblatex.md)：字段、列表、姓名、单次、多组和卷号引用。
 - [biblatex 文献分类](bibliography-categories.md)：分类分配、文献键编辑及重命名边界。
 - [符号与重命名](symbols.md)：宏、环境、计数器等符号的支持范围。
+- [字符串测试](string-tests.md)：etoolbox 的字面数据、条件分支、参数提示和重命名边界。
 - [计数器与定理](counters.md)：编号关系、跨文件重命名、etoolbox 操作与 refcount 标签赋值。
 - [寄存器与长度](registers.md)：寄存器声明、类型检查、长度表达式与安全重命名。
 - [futurelet 前瞻目标](futurelet.md)：声明、静态名称、跨文件重命名与继续执行边界。

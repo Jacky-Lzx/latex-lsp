@@ -109,6 +109,10 @@ cargo test --locked --test protocol undefined_toggle_diagnostics_offer_versioned
 
 默认、stdio 协议及三引擎回归的命令与验证范围见[布尔表达式验证](boolean-expressions.md#验证)。真实回归需要 pdfLaTeX、XeLaTeX、LuaLaTeX 和 etoolbox；功能边界见[布尔表达式诊断与修复](boolean-expressions.md)。
 
+## 字符串测试
+
+字符串测试的数据边界、编辑器协议及三引擎验证命令见[字符串测试验证](string-tests.md#验证)，外部回归需要 pdfLaTeX、XeLaTeX、LuaLaTeX 和 etoolbox。
+
 ## 排版日志与文件移动
 
 页数回归检查输出路径中的伪页数、PDF / DVI / XDV 格式、引号、日志折行、不完整摘要和读取预算。外部回归使用三个 LaTeX 引擎的 60 / 79 列日志，核对编译结果返回实际 PDF 页数：
