@@ -131,6 +131,9 @@ fn target<'a>(
             &doc.syntax,
             signatures?,
             crate::switch_diagnostics::Kind::Toggle,
+            diagnostic
+                .message
+                .starts_with(build_log::BOOLEAN_EXPRESSION_ERROR),
         )
         .iter()
         .any(|(span, _)| {
@@ -150,6 +153,9 @@ fn target<'a>(
             &doc.syntax,
             signatures?,
             crate::switch_diagnostics::Kind::Boolean,
+            diagnostic
+                .message
+                .starts_with(build_log::BOOLEAN_EXPRESSION_ERROR),
         )
         .iter()
         .any(|(span, _)| {

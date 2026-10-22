@@ -1,8 +1,8 @@
-//! Verify direct etoolbox boolean and toggle operations without expanding TeX.
+//! Verify etoolbox boolean and toggle operations without expanding TeX.
 use crate::{signature::CommandSignatures, syntax};
-use std::ops::Range;
+use std::{collections::BTreeSet, ops::Range};
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub(crate) enum Kind {
     Boolean,
     Toggle,
@@ -25,11 +25,15 @@ pub(crate) fn boolean_test(
     range: tower_lsp::lsp_types::Range,
 ) -> bool {
     doc.syntax.commands.iter().any(|command| {
-        matches!(command.name.as_str(), "ifbool" | "notbool")
+        (matches!(command.name.as_str(), "ifbool" | "notbool")
             && command
                 .argument
                 .as_ref()
-                .is_some_and(|name| doc.text.range(name.span.start, name.span.end) == range)
+                .is_some_and(|name| doc.text.range(name.span.start, name.span.end) == range))
+            || crate::conditionals::expression(&command.name)
+                && crate::conditionals::expression_arguments(&doc.text.source, command, false)
+                    .iter()
+                    .any(|name| doc.text.range(name.span.start, name.span.end) == range)
     })
 }
 
@@ -38,9 +42,45 @@ pub(crate) fn error_invocations_with_signatures(
     parsed: &syntax::Syntax,
     signatures: &CommandSignatures<'_>,
     kind: Kind,
+    expression: bool,
 ) -> Vec<(Range<usize>, Range<usize>)> {
     let operands = signatures.argument_tokens(source, parsed);
-    let overridden: std::collections::BTreeSet<_> = signatures.names().collect();
+    let overridden: BTreeSet<_> = signatures.names().collect();
+    if expression {
+        return parsed
+            .commands
+            .iter()
+            .filter(|command| {
+                crate::conditionals::expression(&command.name)
+                    && !operands.contains(&command.span.start)
+                    && !overridden.contains(command.name.as_str())
+            })
+            .flat_map(|command| {
+                let Some(argument) = command.argument.as_ref() else {
+                    return vec![];
+                };
+                let Some(names) = expression_arguments(source, argument.span.clone(), &overridden)
+                else {
+                    return vec![];
+                };
+                let start = syntax::skip_space(source, command.span.end);
+                let mut end = argument.outer_span.end;
+                if matches!(command.name.as_str(), "whileboolexpr" | "unlessboolexpr") {
+                    let Some((_, after)) =
+                        syntax::group(source, syntax::skip_space(source, end), b'{', b'}')
+                    else {
+                        return vec![];
+                    };
+                    end = after;
+                }
+                names
+                    .into_iter()
+                    .filter(|(namespace, _)| *namespace == kind)
+                    .map(|(_, span)| (span, start..end))
+                    .collect()
+            })
+            .collect();
+    }
     parsed
         .commands
         .iter()
@@ -56,11 +96,115 @@ pub(crate) fn error_invocations_with_signatures(
                 return None;
             }
             // The setters consume their value before reporting an error;
-            // Conditional tests consume their branches only after it.
+            // conditional tests consume their branches only after it.
             if matches!(command.name.as_str(), "settoggle" | "setbool") {
                 end = syntax::group(source, syntax::skip_space(source, end), b'{', b'}')?.1;
             }
             Some((name.span, start..end))
         })
         .collect()
+}
+
+/// Validate the whole expression: a dynamic name or test can raise the same
+/// error as a static operand without adding a user macro frame to the log.
+fn expression_arguments(
+    source: &str,
+    span: Range<usize>,
+    overridden: &BTreeSet<&str>,
+) -> Option<Vec<(Kind, Range<usize>)>> {
+    if span.len() > 16_384 {
+        return None;
+    }
+    let source = &source[..span.end];
+    let mut at = span.start;
+    let mut depth = 0;
+    let mut operand = true;
+    let mut names = vec![];
+    loop {
+        at = syntax::skip_space(source, at);
+        if at == span.end {
+            break;
+        }
+        let rest = &source[at..];
+        if operand {
+            if rest.starts_with("not") {
+                at += 3;
+                continue;
+            }
+            if rest.starts_with('(') {
+                depth += 1;
+                if depth > 128 {
+                    return None;
+                }
+                at += 1;
+                continue;
+            }
+            let (token, kind) = if rest.starts_with("bool") {
+                ("bool", Some(Kind::Boolean))
+            } else if rest.starts_with("togl") {
+                ("togl", Some(Kind::Toggle))
+            } else if rest.starts_with("test") {
+                ("test", None)
+            } else {
+                return None;
+            };
+            let (argument, end) = syntax::group(
+                source,
+                syntax::skip_space(source, at + token.len()),
+                b'{',
+                b'}',
+            )?;
+            if let Some(kind) = kind {
+                if !syntax::is_static_key(&source[argument.span.clone()]) || names.len() >= 256 {
+                    return None;
+                }
+                names.push((kind, argument.span));
+            } else if !literal_test(source, argument.span, overridden) {
+                return None;
+            }
+            at = end;
+            operand = false;
+        } else if rest.starts_with(')') && depth > 0 {
+            depth -= 1;
+            at += 1;
+        } else if rest.starts_with("and") {
+            at += 3;
+            operand = true;
+        } else if rest.starts_with("or") {
+            at += 2;
+            operand = true;
+        } else {
+            return None;
+        }
+    }
+    (!operand && depth == 0).then_some(names)
+}
+
+fn literal_test(source: &str, span: Range<usize>, overridden: &BTreeSet<&str>) -> bool {
+    let source = &source[..span.end];
+    let Some(control) = syntax::control_word(source, syntax::skip_space(source, span.start)) else {
+        return false;
+    };
+    let name = &source[control.start + 1..control.end];
+    if overridden.contains(name) {
+        return false;
+    }
+    let count = match name {
+        "ifstrequal" => 2,
+        "ifstrempty" | "ifblank" | "notblank" => 1,
+        _ => return false,
+    };
+    let mut at = control.end;
+    for _ in 0..count {
+        let Some((argument, end)) =
+            syntax::group(source, syntax::skip_space(source, at), b'{', b'}')
+        else {
+            return false;
+        };
+        if source[argument.span].contains('\\') {
+            return false;
+        }
+        at = end;
+    }
+    syntax::skip_space(source, at) == span.end
 }

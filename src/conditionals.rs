@@ -11,7 +11,7 @@ enum ArgumentKind {
     Toggle,
 }
 
-fn expression(name: &str) -> bool {
+pub(crate) fn expression(name: &str) -> bool {
     matches!(
         name,
         "ifboolexpr" | "ifboolexpe" | "whileboolexpr" | "unlessboolexpr"

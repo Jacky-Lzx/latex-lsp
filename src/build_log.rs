@@ -2075,16 +2075,83 @@ pub(crate) fn undefined_length_name(message: &str) -> Option<&str> {
 
 pub(crate) fn undefined_toggle_name(message: &str) -> Option<&str> {
     let name = message
-        .strip_prefix("Package etoolbox Error: Toggle '")?
+        .strip_prefix("Package etoolbox Error: Toggle '")
+        .or_else(|| {
+            message
+                .strip_prefix(BOOLEAN_EXPRESSION_ERROR)?
+                .strip_prefix("\nToggle '")
+        })?
         .strip_suffix("' undefined.")?;
     crate::syntax::is_static_key(name).then_some(name)
 }
 
 pub(crate) fn undefined_boolean_name(message: &str) -> Option<&str> {
     let name = message
-        .strip_prefix("Package etoolbox Error: Boolean '\\if")?
+        .strip_prefix("Package etoolbox Error: Boolean '\\if")
+        .or_else(|| {
+            message
+                .strip_prefix(BOOLEAN_EXPRESSION_ERROR)?
+                .strip_prefix("\nBoolean '")
+        })?
         .strip_suffix("' undefined.")?;
     crate::syntax::is_static_key(name).then_some(name)
+}
+
+pub(crate) const BOOLEAN_EXPRESSION_ERROR: &str =
+    "Package etoolbox Error: Invalid boolean expression.";
+
+/// TeX prints the explanation after both rows of the source echo. Keep it
+/// attached to this error, and never scan across another diagnostic or input.
+fn boolean_expression_details(
+    lines: &[&str],
+    start: usize,
+    number: u32,
+    message: &str,
+) -> Option<(String, usize)> {
+    if message != BOOLEAN_EXPRESSION_ERROR {
+        return None;
+    }
+    for (index, line) in lines.iter().enumerate().skip(start).take(16) {
+        if let Some(tail) = line.strip_prefix("l.") {
+            let digits = tail.bytes().take_while(u8::is_ascii_digit).count();
+            if tail[..digits].parse::<u32>().ok()? != number || !tail[digits..].starts_with(' ') {
+                return None;
+            }
+            let continuation = *lines.get(index + 1)?;
+            if !continuation.is_empty() && !continuation.starts_with(char::is_whitespace) {
+                return None;
+            }
+            let first = *lines.get(index + 2)?;
+            if !first.starts_with("Toggle '") && !first.starts_with("Boolean '") {
+                return None;
+            }
+            let mut detail = String::new();
+            for (end, part) in lines.iter().enumerate().skip(index + 2).take(8) {
+                if part.trim().is_empty()
+                    || message_boundary(part)
+                    || detail.len() + part.len() > 4096
+                {
+                    return None;
+                }
+                detail.push_str(part);
+                let combined = format!("{message}\n{detail}");
+                if (undefined_toggle_name(&combined).is_some()
+                    || undefined_boolean_name(&combined).is_some())
+                    && lines.get(end + 1).is_none_or(|next| next.trim().is_empty())
+                {
+                    return Some((combined, end));
+                }
+                if part.len() < 60 {
+                    return None;
+                }
+            }
+            return None;
+        }
+        if message_boundary(line) || line.starts_with('(') {
+            return None;
+        }
+    }
+    None
 }
 
 pub(crate) fn undefined_color_name(message: &str) -> Option<&str> {
@@ -2714,7 +2781,11 @@ fn emit_with_context(
                 line,
                 context?,
                 name,
-                InvocationKind::Toggle,
+                if message.starts_with(BOOLEAN_EXPRESSION_ERROR) {
+                    InvocationKind::ToggleExpression
+                } else {
+                    InvocationKind::Toggle
+                },
                 cached_calls,
             )
         });
@@ -2729,7 +2800,11 @@ fn emit_with_context(
                 line,
                 context?,
                 name,
-                InvocationKind::Boolean,
+                if message.starts_with(BOOLEAN_EXPRESSION_ERROR) {
+                    InvocationKind::BooleanExpression
+                } else {
+                    InvocationKind::Boolean
+                },
                 cached_calls,
             )
         });
@@ -3861,6 +3936,8 @@ enum InvocationKind {
     Length,
     Toggle,
     Boolean,
+    ToggleExpression,
+    BooleanExpression,
     EnvironmentBegin,
     EnvironmentEnd,
     File,
@@ -3882,9 +3959,17 @@ impl InvocationKind {
         } else if undefined_length_name(message).is_some() {
             Some(Self::Length)
         } else if undefined_toggle_name(message).is_some() {
-            Some(Self::Toggle)
+            Some(if message.starts_with(BOOLEAN_EXPRESSION_ERROR) {
+                Self::ToggleExpression
+            } else {
+                Self::Toggle
+            })
         } else if undefined_boolean_name(message).is_some() {
-            Some(Self::Boolean)
+            Some(if message.starts_with(BOOLEAN_EXPRESSION_ERROR) {
+                Self::BooleanExpression
+            } else {
+                Self::Boolean
+            })
         } else {
             environment_error(message)
                 .map(|error| {
@@ -3923,16 +4008,17 @@ impl InvocationKind {
             Self::Length => {
                 crate::lengths::error_invocations_with_signatures(source, syntax, signatures)
             }
-            Self::Toggle | Self::Boolean => {
+            Self::Toggle | Self::Boolean | Self::ToggleExpression | Self::BooleanExpression => {
                 crate::switch_diagnostics::error_invocations_with_signatures(
                     source,
                     syntax,
                     signatures,
-                    if self == Self::Toggle {
+                    if matches!(self, Self::Toggle | Self::ToggleExpression) {
                         crate::switch_diagnostics::Kind::Toggle
                     } else {
                         crate::switch_diagnostics::Kind::Boolean
                     },
+                    matches!(self, Self::ToggleExpression | Self::BooleanExpression),
                 )
             }
             Self::File => file_error_invocations_with_signatures(source, syntax, signatures),
@@ -4052,7 +4138,7 @@ impl ProjectSources {
 struct ProjectAnalysis<'a> {
     project: &'a ProjectSources,
     macros: Option<Rc<MacroContext<'a>>>,
-    calls: [Option<(Url, Rc<InvocationCalls<'a>>)>; 10],
+    calls: [Option<(Url, Rc<InvocationCalls<'a>>)>; 12],
 }
 
 impl<'a> ProjectAnalysis<'a> {
@@ -4369,6 +4455,9 @@ fn parse_in_project<'a>(
             } else {
                 DiagnosticSeverity::ERROR
             };
+            let expression_details = boolean_expression_details(&lines, i + 1, number, &message);
+            let (message, expression_end) =
+                expression_details.map_or((message, None), |(message, end)| (message, Some(end)));
             // An unresolved reported source falls back to the root for display.
             // Its context must not identify coincidentally matching root text.
             let context = confirmed_path
@@ -4386,6 +4475,9 @@ fn parse_in_project<'a>(
                 context,
                 confirmed_path,
             );
+            if let Some(end) = expression_end {
+                i = end;
+            }
         } else if let Some(message) = error_message(line) {
             let message = wrapped_error_message(root, &lines, &separator_lines, &mut i, message);
             if let Some((path, cause, context_start)) = pending.take() {
@@ -4425,6 +4517,9 @@ fn parse_in_project<'a>(
                 .next()
                 .and_then(|value| value.parse().ok());
             if let (Some(number), Some((path, message, context_start))) = (number, pending.take()) {
+                let expression_details = boolean_expression_details(&lines, i, number, &message);
+                let (message, expression_end) = expression_details
+                    .map_or((message, None), |(message, end)| (message, Some(end)));
                 let context = path
                     .confirmed
                     .then(|| error_context(&lines, context_start, number, &message))
@@ -4447,6 +4542,9 @@ fn parse_in_project<'a>(
                     context,
                     path.confirmed,
                 );
+                if let Some(end) = expression_end {
+                    i = end;
+                }
             }
         } else if warning_start(line) || line.starts_with("Missing character:") {
             let path = current();
