@@ -408,21 +408,23 @@ fn restoring_a_native_copy_does_not_execute_quoted_or_deferred_assignments() {
 }
 
 #[test]
-fn native_copies_with_different_data_arities_protect_every_possible_data_argument() {
+fn native_copies_with_different_data_arities_keep_every_actual_data_argument_literal() {
     let source = r"\documentclass{article}\newbool{first}\newbool{second}\newbool{other}\let\ifblank\ifstrequal\ifblank{\booltrue{first}}{\booltrue{second}}{Y}{N}\boolfalse{other}";
     let (_directory, workspace, main) = setup(&[("main.tex", source)]);
     for name in ["first", "second"] {
         let text = Text::new(source.into());
         let declaration = text.position(source.find(name).unwrap() + 1);
         let argument = text.position(source.rfind(name).unwrap() + 1);
-        assert!(
-            features::rename(&workspace, &main, declaration, "release").is_err(),
+        let edit = features::rename(&workspace, &main, declaration, "release")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            rewritten(&workspace, edit, &main),
+            source.replacen(&format!("newbool{{{name}}}"), "newbool{release}", 1),
             "{name}"
         );
         assert!(
-            features::prepare_rename(&workspace, &main, argument)
-                .unwrap()
-                .is_none(),
+            features::definitions(&workspace, &main, argument).is_empty(),
             "{name}"
         );
     }

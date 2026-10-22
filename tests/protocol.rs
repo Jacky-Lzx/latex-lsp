@@ -17,6 +17,101 @@ struct Server {
 }
 
 #[test]
+fn copied_string_predicate_arities_follow_dependency_changes_over_stdio() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+    let definitions = Url::from_file_path(directory.path().join("defs.tex")).unwrap();
+    let source = "\\documentclass{article}\\newbool{draft}\\input{defs}\n\\saved{A}{\\booltrue{draft}}{Y}{N}";
+    let one = r"\let\saved\ifblank";
+    let two = r"\let\saved\ifstrequal";
+    std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+    std::fs::write(definitions.to_file_path().unwrap(), one).unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(directory.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":main,"languageId":"latex","version":9,"text":source}}),
+    );
+    let text = latex_lsp::text::Text::new(source.into());
+    let target = json!({"textDocument":{"uri":main},"position":text.position(source.rfind("draft").unwrap()+1)});
+    let rename = json!({"textDocument":{"uri":main},"position":text.position(source.find("draft").unwrap()+1),"newName":"release"});
+    assert_eq!(
+        server
+            .request(2, "textDocument/definition", target.clone())
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":definitions,"languageId":"latex","version":1,"text":one}}),
+    );
+    server.notify("textDocument/didChange", json!({"textDocument":{"uri":definitions,"version":2},"contentChanges":[{"range":{"start":{"line":0,"character":11},"end":{"line":0,"character":18}},"text":"ifstrequal"}]}));
+    assert_eq!(
+        server.request(3, "textDocument/definition", target.clone()),
+        json!([])
+    );
+    let help = server.request(4, "textDocument/signatureHelp", target.clone());
+    assert_eq!(help["activeParameter"], 1);
+    assert_eq!(
+        help["signatures"][0]["label"],
+        r"\saved{string}{string}{then}{else}"
+    );
+    let edit = server.request(5, "textDocument/rename", rename.clone());
+    assert_eq!(edit["documentChanges"][0]["textDocument"]["version"], 9);
+    assert_eq!(
+        edit["documentChanges"][0]["edits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":definitions}}),
+    );
+    assert_eq!(
+        server
+            .request(6, "textDocument/definition", target.clone())
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let edit = server.request(7, "textDocument/rename", rename.clone());
+    assert_eq!(
+        edit["documentChanges"][0]["edits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    std::fs::write(definitions.to_file_path().unwrap(), two).unwrap();
+    server.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({"changes":[{"uri":definitions,"type":2}]}),
+    );
+    assert_eq!(
+        server.request(8, "textDocument/definition", target),
+        json!([])
+    );
+    let edit = server.request(9, "textDocument/rename", rename);
+    assert_eq!(edit["documentChanges"][0]["textDocument"]["version"], 9);
+    assert_eq!(
+        edit["documentChanges"][0]["edits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    server.request(10, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
 fn restored_string_predicates_follow_incremental_edits_close_and_disk_changes_over_stdio() {
     let directory = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
@@ -5360,7 +5455,12 @@ fn real_synctex_round_trip_handles_spaces_and_rejects_unsaved_or_stale_sources()
     );
     let finished = server.until(|message| message["method"] == "latex/buildFinished");
     assert_eq!(finished["params"]["status"], "success", "{finished}");
-    assert_eq!(finished["params"]["dependenciesCount"], 3, "{finished}");
+    // The main file, chapter and image are required. TeX distributions may
+    // additionally record configuration files read by graphics packages.
+    assert!(
+        finished["params"]["dependenciesCount"].as_u64().unwrap() >= 3,
+        "{finished}"
+    );
     let forward = server.request(4, "workspace/executeCommand", json!({"command":"latex.forwardSearch","arguments":[{"uri":chapter,"position":{"line":0,"character":6}}]}));
     assert_eq!(forward["rootUri"], main.as_str());
     assert_eq!(forward["pdfUri"], finished["params"]["pdfUri"]);

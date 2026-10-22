@@ -62,7 +62,8 @@ pub(crate) fn error_invocations_with_signatures(
                 let Some(argument) = command.argument.as_ref() else {
                     return vec![];
                 };
-                let Some(names) = expression_arguments(source, argument.span.clone(), &overridden)
+                let Some(names) =
+                    expression_arguments(source, parsed, argument.span.clone(), &overridden)
                 else {
                     return vec![];
                 };
@@ -120,6 +121,7 @@ pub(crate) fn error_invocations_with_signatures(
 /// error as a static operand without adding a user macro frame to the log.
 fn expression_arguments(
     source: &str,
+    parsed: &syntax::Syntax,
     span: Range<usize>,
     overridden: &BTreeSet<&str>,
 ) -> Option<Vec<(Kind, Range<usize>)>> {
@@ -166,7 +168,7 @@ fn expression_arguments(
                     return None;
                 }
                 names.push((kind, argument.span));
-            } else if !literal_test(source, argument.span, overridden) {
+            } else if !literal_test(source, parsed, argument.span, overridden) {
                 return None;
             }
             at = end;
@@ -183,17 +185,29 @@ fn expression_arguments(
     (!operand && depth == 0).then_some(names)
 }
 
-fn literal_test(source: &str, span: Range<usize>, overridden: &BTreeSet<&str>) -> bool {
+fn literal_test(
+    source: &str,
+    parsed: &syntax::Syntax,
+    span: Range<usize>,
+    overridden: &BTreeSet<&str>,
+) -> bool {
     let source = &source[..span.end];
     let Some(control) = syntax::control_word(source, syntax::skip_space(source, span.start)) else {
         return false;
     };
     let name = &source[control.start + 1..control.end];
-    if overridden.contains(name) {
-        return false;
-    }
-    let Some(count) = crate::string_tests::data_count(name) else {
-        return false;
+    let count = match parsed.string_test_arities.get(&control.start) {
+        Some(Some(count)) => *count,
+        Some(None) => return false,
+        None => {
+            if overridden.contains(name) {
+                return false;
+            }
+            let Some(count) = crate::string_tests::data_count(name) else {
+                return false;
+            };
+            count
+        }
     };
     // These predicates do not expand their string arguments. Controls such
     // as input/ifbool are data here and cannot raise a sibling's name error.

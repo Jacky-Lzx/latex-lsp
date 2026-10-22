@@ -679,3 +679,65 @@ fn real_expression_repairs_preserve_logic_loops_literals_and_wrapped_names_in_al
         }
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn copied_string_tests_keep_boolean_expression_errors_on_the_executable_sibling() {
+    for (copy, test) in [
+        (r"\let\saved\ifblank", r"\saved{\ifbool{darft}}"),
+        (
+            r"\csletcs{saved}{ifstrequal}",
+            r"\saved{\input{ghost}}{\ifbool{darft}}",
+        ),
+        (r"\let\ifblank\ifstrequal", r"\ifblank{\ifbool{darft}}{A}"),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let main = directory.path().join("main.tex");
+        let call = format!("\\ifboolexpr{{test{{{test}}}or bool{{darft}}}}");
+        let source =
+            format!("\\documentclass{{article}}\\newbool{{draft}}{copy}\n{call}{{Yes}}{{No}}\n");
+        std::fs::write(&main, &source).unwrap();
+        std::fs::write(
+            directory.path().join("ghost.tex"),
+            r"\renewcommand{\ifboolexpr}[1]{}",
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(
+            directory.path().join("fixture.log"),
+            log(2, &call, "Boolean 'darft' undefined.", false),
+        )
+        .unwrap();
+        let compiler = directory.path().join("compiler");
+        std::fs::write(
+            &compiler,
+            "#!/bin/sh\ncat \"${2%/*}/fixture.log\" > \"$1/main.log\"\nexit 1\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&compiler, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let outcome = latex_lsp::build::run(
+            &main,
+            &latex_lsp::config::BuildConfig {
+                executable: compiler.to_string_lossy().into(),
+                arguments: Some(vec!["%o".into(), "%f".into()]),
+                ..Default::default()
+            },
+            &Default::default(),
+        );
+        assert_eq!(outcome.status, "error");
+        let diagnostics = outcome.diagnostics;
+        let uri = Url::from_file_path(&main).unwrap();
+        let error = &diagnostics[&uri][0];
+        let at = source.rfind("darft").unwrap();
+        assert_eq!(
+            error.range,
+            Text::new(source.clone()).range(at, at + 5),
+            "{copy}: {error:?}"
+        );
+        assert_eq!(
+            error.code,
+            Some(NumberOrString::String("undefined-boolean".into())),
+            "{copy}"
+        );
+    }
+}

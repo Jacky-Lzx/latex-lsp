@@ -132,6 +132,8 @@ pub struct Syntax {
     pub literal_conversions: Vec<Range<usize>>,
     /// Unexpanded string data whose owning predicate still offers a signature.
     pub literal_tests: Vec<Range<usize>>,
+    /// Captured data arity at a direct string call; None retains mixed meanings.
+    pub(crate) string_test_arities: std::collections::BTreeMap<usize, Option<usize>>,
     /// Data boundaries that differ between project/load contexts.
     pub(crate) ambiguous_string_tests: Vec<Range<usize>>,
     /// Whether this syntax was rebuilt with project-specific string semantics.
@@ -1990,12 +1992,14 @@ impl Syntax {
     }
 
     pub fn latex(text: &Text) -> Self {
-        Self::latex_with_string_tests(text, |_, known| known)
+        Self::latex_with_string_tests(text, |command, known| {
+            crate::string_tests::data_count(&command.name).filter(|_| known)
+        })
     }
 
     pub(crate) fn latex_with_string_tests(
         text: &Text,
-        mut literal_test: impl FnMut(&Command, bool) -> bool,
+        mut literal_test: impl FnMut(&Command, bool) -> Option<usize>,
     ) -> Self {
         let source = &text.source;
         let bytes = source.as_bytes();
@@ -2082,6 +2086,22 @@ impl Syntax {
                     // A previous lexical assignment invalidates this keyword's
                     // operand grammar without simulating scope restoration.
                     let operands_known = !assigned_controls.contains(name);
+                    let probe = Command {
+                        name: name.into(),
+                        span: start..command_end,
+                        argument: None,
+                    };
+                    if let Some(count) = literal_test(&probe, operands_known) {
+                        // Captured string meanings replace the destination's
+                        // lexical grammar, including file/definition/verb names.
+                        result.string_test_arities.insert(start, Some(count));
+                        for argument in crate::string_tests::arguments(source, command_end, count) {
+                            result.literal_tests.push(argument.span.clone());
+                            literal_arguments.insert(argument.start, (argument.span, argument.end));
+                        }
+                        result.commands.push(probe);
+                        continue;
+                    }
                     let starred = !matches!(
                         name,
                         "input"
@@ -2209,17 +2229,6 @@ impl Syntax {
                         span: start..command_end,
                         argument,
                     };
-                    if literal_test(&command, operands_known) {
-                        if let Some(count) = crate::string_tests::data_count(name) {
-                            for argument in
-                                crate::string_tests::arguments(source, command_end, count)
-                            {
-                                result.literal_tests.push(argument.span.clone());
-                                literal_arguments
-                                    .insert(argument.start, (argument.span, argument.end));
-                            }
-                        }
-                    }
                     if operands_known
                         && matches!(name, "ifdefcounter" | "ifdeflength" | "ifdefdimen")
                     {

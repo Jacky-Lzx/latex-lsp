@@ -2790,17 +2790,10 @@ impl<'a> CommandSignatures<'a> {
                 shape.argument_tokens(source, parsed, command, literal, &mut result);
                 continue;
             }
-            // Project parsing has already confirmed this direct predicate's
-            // literal grammar at this position. A later redefinition must not
-            // make unknown-arity fallback consume the following file load.
-            if let Some(count) = crate::string_tests::data_count(&command.name) {
-                let data = crate::string_tests::arguments(source, command.span.end, count);
-                if !data.is_empty()
-                    && data
-                        .iter()
-                        .all(|argument| parsed.literal_tests.contains(&argument.span))
-                {
-                    if let Some(signature) = operand_builtin(&command.name) {
+            if let Some(arity) = parsed.string_test_arities.get(&command.span.start) {
+                if let Some(count) = arity {
+                    let name = if *count == 2 { "ifstrequal" } else { "ifblank" };
+                    if let Some(signature) = operand_builtin(name) {
                         argument_tokens(
                             (source, parsed),
                             command.span.end,
@@ -2810,9 +2803,11 @@ impl<'a> CommandSignatures<'a> {
                             literal,
                             &mut result,
                         );
-                        continue;
                     }
+                } else {
+                    unknown_argument_token(source, command.span.end, parsed, literal, &mut result);
                 }
+                continue;
             }
             let Some((name, _, end, control_spaces)) =
                 self.invocation(source, parsed, index, &result, &declarations)
@@ -4065,7 +4060,16 @@ pub fn help(workspace: &Workspace, uri: &Url, position: Position) -> Option<Sign
             .map(|argument| argument.value.as_str())
             .or_else(|| literal.as_ref().map(|span| &doc.text.source[span.clone()]))
             .unwrap_or(command.name.as_str());
-        let signature = if name == "hyperref"
+        let signature = if let Some(arity) = doc.syntax.string_test_arities.get(&command.span.start)
+        {
+            let Some(count) = arity else {
+                continue;
+            };
+            let mut signature =
+                operand_builtin(if *count == 2 { "ifstrequal" } else { "ifblank" })?;
+            signature.name = name.into();
+            Some(signature)
+        } else if name == "hyperref"
             && doc
                 .text
                 .source
@@ -4079,7 +4083,8 @@ pub fn help(workspace: &Workspace, uri: &Url, position: Position) -> Option<Sign
                         .definitions
                         .iter()
                         .any(|entry| entry.name == name)
-            }) {
+            })
+        {
             Some(Signature {
                 name: name.into(),
                 starred: false,
