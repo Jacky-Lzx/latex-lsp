@@ -17,6 +17,100 @@ struct Server {
 }
 
 #[test]
+fn imported_string_predicates_refresh_on_edits_close_and_disk_changes_over_stdio() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = Url::from_directory_path(directory.path()).unwrap();
+    let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+    let definitions = Url::from_file_path(directory.path().join("definitions.tex")).unwrap();
+    let source = "\\documentclass{article}\\newbool{draft}\\input{definitions}\n\\ifblank{\\booltrue{draft}}\n";
+    let redefinition = r"\renewcommand{\ifblank}[1]{#1}";
+    std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+    std::fs::write(definitions.to_file_path().unwrap(), "").unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":root,"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":main,"languageId":"latex","version":9,"text":source}}),
+    );
+    let text = latex_lsp::text::Text::new(source.into());
+    let target = json!({"textDocument":{"uri":main},"position":text.position(source.rfind("draft").unwrap()+1)});
+    assert_eq!(
+        server.request(2, "textDocument/definition", target.clone()),
+        json!([])
+    );
+    server.notify("textDocument/didOpen", json!({"textDocument":{"uri":definitions,"languageId":"latex","version":1,"text":redefinition}}));
+    assert_eq!(
+        server
+            .request(3, "textDocument/definition", target.clone())
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let mut rename = target.clone();
+    rename["newName"] = json!("release");
+    let edit = server.request(4, "textDocument/rename", rename.clone());
+    assert_eq!(edit["documentChanges"][0]["textDocument"]["version"], 9);
+    assert_eq!(
+        edit["documentChanges"][0]["edits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    server.notify("textDocument/didChange", json!({"textDocument":{"uri":definitions,"version":2},"contentChanges":[{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":redefinition.len()}},"text":""}]}));
+    assert_eq!(
+        server.request(5, "textDocument/definition", target.clone()),
+        json!([])
+    );
+    server.notify("textDocument/didChange", json!({"textDocument":{"uri":definitions,"version":3},"contentChanges":[{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}},"text":redefinition}]}));
+    assert_eq!(
+        server
+            .request(6, "textDocument/definition", target.clone())
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":definitions}}),
+    );
+    assert_eq!(
+        server.request(7, "textDocument/definition", target.clone()),
+        json!([])
+    );
+    std::fs::write(definitions.to_file_path().unwrap(), redefinition).unwrap();
+    server.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({"changes":[{"uri":definitions,"type":2}]}),
+    );
+    assert_eq!(
+        server
+            .request(8, "textDocument/definition", target.clone())
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let edit = server.request(9, "textDocument/rename", rename);
+    assert_eq!(edit["documentChanges"][0]["textDocument"]["version"], 9);
+    std::fs::write(definitions.to_file_path().unwrap(), "").unwrap();
+    server.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({"changes":[{"uri":definitions,"type":2}]}),
+    );
+    assert_eq!(
+        server.request(10, "textDocument/definition", target),
+        json!([])
+    );
+    server.request(11, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
 fn string_predicates_keep_literal_tokens_and_versioned_branch_renames_over_stdio() {
     let directory = tempfile::tempdir().unwrap();
     let root = Url::from_directory_path(directory.path()).unwrap();

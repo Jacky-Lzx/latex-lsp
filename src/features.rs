@@ -284,6 +284,14 @@ fn raw_target(doc: &Document, offset: usize) -> Option<Target<'_>> {
 
 fn target<'a>(workspace: &'a Workspace, uri: &Url, offset: usize) -> Option<Target<'a>> {
     let doc = workspace.documents.get(uri)?;
+    if doc
+        .syntax
+        .ambiguous_string_tests
+        .iter()
+        .any(|span| span.start <= offset && offset <= span.end)
+    {
+        return None;
+    }
     let raw = raw_target(doc, offset);
     if raw
         .as_ref()
@@ -619,6 +627,21 @@ pub fn rename(
                 new_name.into()
             },
         });
+    }
+    for (uri, edits) in &changes {
+        let doc = &workspace.documents[uri];
+        if edits.iter().any(|edit| {
+            let start = doc.text.offset(edit.range.start).unwrap_or(0);
+            let end = doc.text.offset(edit.range.end).unwrap_or(start);
+            doc.syntax
+                .ambiguous_string_tests
+                .iter()
+                .any(|span| start < span.end && span.start < end)
+        }) {
+            return Err(tower_lsp::jsonrpc::Error::invalid_params(
+                "String-test arguments have different meanings across project or load contexts",
+            ));
+        }
     }
     for edits in changes.values_mut() {
         edits.sort_by_key(|edit| (edit.range.start, edit.range.end));

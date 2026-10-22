@@ -132,6 +132,10 @@ pub struct Syntax {
     pub literal_conversions: Vec<Range<usize>>,
     /// Unexpanded string data whose owning predicate still offers a signature.
     pub literal_tests: Vec<Range<usize>>,
+    /// Data boundaries that differ between project/load contexts.
+    pub(crate) ambiguous_string_tests: Vec<Range<usize>>,
+    /// Whether this syntax was rebuilt with project-specific string semantics.
+    pub(crate) contextual_string_tests: bool,
     /// Actual comments, distinguished from ignored URLs and verbatim text.
     pub comments: Vec<Range<usize>>,
     pub fixes: Vec<QuickFix>,
@@ -1983,6 +1987,13 @@ impl Syntax {
     }
 
     pub fn latex(text: &Text) -> Self {
+        Self::latex_with_string_tests(text, |_, known| known)
+    }
+
+    pub(crate) fn latex_with_string_tests(
+        text: &Text,
+        mut literal_test: impl FnMut(&Command, bool) -> bool,
+    ) -> Self {
         let source = &text.source;
         let bytes = source.as_bytes();
         let mut result = Self::default();
@@ -2195,7 +2206,7 @@ impl Syntax {
                         span: start..command_end,
                         argument,
                     };
-                    if operands_known {
+                    if literal_test(&command, operands_known) {
                         if let Some(count) = crate::string_tests::data_count(name) {
                             for argument in
                                 crate::string_tests::arguments(source, command_end, count)

@@ -278,7 +278,7 @@ impl Workspace {
             .any(|command| root_marker(doc, command) && !quoted.contains(&command.span.start))
     }
 
-    fn is_saved_root(&self, uri: &Url) -> bool {
+    pub(crate) fn is_saved_root(&self, uri: &Url) -> bool {
         self.is_root(uri)
             && uri.to_file_path().is_ok_and(|path| {
                 matches!(
@@ -426,57 +426,65 @@ impl Workspace {
             .commands
             .iter()
             .filter(|command| include(command))
-            .flat_map(|command| {
-                let extension = match command.name.as_str() {
-                    "input" | "InputIfFileExists" | "include" | "subfile" => "tex",
-                    "bibliography" | "nobibliography" => "bib",
-                    name if crate::bib_resources::loads(name) => "bib",
-                    "bibliographystyle" => "bst",
-                    name => match crate::syntax::loader_extension(name) {
-                        Some(extension) => extension,
-                        None => return vec![],
-                    },
-                };
-                let command = doc.syntax.potential_file_command(&doc.text.source, command);
-                crate::syntax::file_argument(&doc.text.source, &command)
-                    .map(|arg| {
-                        let multiple = crate::syntax::file_list(&command.name);
-                        let values = if let Some(spans) =
-                            crate::syntax::file_list_spans(&doc.text.source, &command)
-                        {
-                            spans
-                                .into_iter()
-                                .map(|span| &doc.text.source[span])
-                                .collect::<Vec<_>>()
-                        } else if multiple {
-                            arg.value.split(',').collect::<Vec<_>>()
-                        } else {
-                            vec![arg.value.as_str()]
-                        };
-                        values
-                            .into_iter()
-                            .filter_map(|value| {
-                                let value = if command.name == "bibliographystyle" {
-                                    value
-                                } else {
-                                    value.trim()
-                                };
-                                let kind = match extension {
-                                    "bib" => DocumentKind::Bibtex,
-                                    "bst" => DocumentKind::BibtexStyle,
-                                    _ => DocumentKind::Latex,
-                                };
-                                resolve_file_path(root, &command.name, value, &[extension])
-                                    .or_else(|| {
-                                        resolve_file_path(uri, &command.name, value, &[extension])
-                                    })
-                                    .map(|uri| (uri, kind))
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default()
-            })
+            .flat_map(|command| self.literal_command_dependencies(uri, root, command))
             .collect()
+    }
+
+    pub(crate) fn literal_command_dependencies(
+        &self,
+        uri: &Url,
+        root: &Url,
+        command: &crate::syntax::Command,
+    ) -> Vec<(Url, DocumentKind)> {
+        let Some(doc) = self.documents.get(uri) else {
+            return vec![];
+        };
+        let extension = match command.name.as_str() {
+            "input" | "InputIfFileExists" | "include" | "subfile" => "tex",
+            "bibliography" | "nobibliography" => "bib",
+            name if crate::bib_resources::loads(name) => "bib",
+            "bibliographystyle" => "bst",
+            name => match crate::syntax::loader_extension(name) {
+                Some(extension) => extension,
+                None => return vec![],
+            },
+        };
+        let command = doc.syntax.potential_file_command(&doc.text.source, command);
+        crate::syntax::file_argument(&doc.text.source, &command)
+            .map(|arg| {
+                let multiple = crate::syntax::file_list(&command.name);
+                let values = if let Some(spans) =
+                    crate::syntax::file_list_spans(&doc.text.source, &command)
+                {
+                    spans
+                        .into_iter()
+                        .map(|span| &doc.text.source[span])
+                        .collect::<Vec<_>>()
+                } else if multiple {
+                    arg.value.split(',').collect::<Vec<_>>()
+                } else {
+                    vec![arg.value.as_str()]
+                };
+                values
+                    .into_iter()
+                    .filter_map(|value| {
+                        let value = if command.name == "bibliographystyle" {
+                            value
+                        } else {
+                            value.trim()
+                        };
+                        let kind = match extension {
+                            "bib" => DocumentKind::Bibtex,
+                            "bst" => DocumentKind::BibtexStyle,
+                            _ => DocumentKind::Latex,
+                        };
+                        resolve_file_path(root, &command.name, value, &[extension])
+                            .or_else(|| resolve_file_path(uri, &command.name, value, &[extension]))
+                            .map(|uri| (uri, kind))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Do not index TeX's distribution packages outside the project. Explicitly
@@ -744,6 +752,7 @@ impl Workspace {
     pub fn add_root(&mut self, root: PathBuf) {
         if self.roots.insert(root.clone()) {
             self.scan(&root, 0);
+            crate::string_test_context::refresh(self);
         }
     }
 
@@ -777,7 +786,7 @@ impl Workspace {
                 }
             } else if kind.is_file() && is_source(&path) {
                 if let Ok(uri) = Url::from_file_path(&path) {
-                    self.reload(&uri);
+                    self.reload_document(&uri, self.documents.contains_key(&uri));
                 }
             }
         }
@@ -785,6 +794,7 @@ impl Workspace {
 
     pub fn reload(&mut self, uri: &Url) {
         self.reload_document(uri, self.documents.contains_key(uri));
+        crate::string_test_context::refresh(self);
     }
 
     fn recorded_kind(&self, uri: &Url) -> Option<DocumentKind> {
@@ -850,7 +860,7 @@ impl Workspace {
         self.reload_document_as(uri, parse_source || kind_hint.is_some(), kind_hint);
     }
 
-    fn reload_document_as(
+    pub(crate) fn reload_document_as(
         &mut self,
         uri: &Url,
         parse_source: bool,
@@ -941,6 +951,7 @@ impl Workspace {
         let kind_hint = previous_hint.or_else(|| self.recorded_kind(uri));
         // Discard unsaved text while retaining the independently known role.
         self.reload_document_as(uri, kind_hint.is_some(), kind_hint);
+        crate::string_test_context::refresh(self);
     }
 
     pub fn open(&mut self, uri: Url, source: String, version: i32) {
@@ -966,12 +977,14 @@ impl Workspace {
 
     pub fn load_dependencies(&mut self, uri: &Url, depth: usize) {
         self.load_dependencies_inner(uri, uri, depth, &mut BTreeSet::new(), false);
+        crate::string_test_context::refresh(self);
     }
 
     /// Reload each saved dependency before walking its includes: closed child
     /// files may have gained new dependencies since the previous build.
     pub fn refresh_project(&mut self, root: &Url) {
         self.load_dependencies_inner(root, root, 0, &mut BTreeSet::new(), true);
+        crate::string_test_context::refresh(self);
         // Displayed .tex files may already have been scanned as documents.
         // Refresh closed text without following its apparent LaTeX commands.
         for uri in crate::code_inputs::inputs(self, root) {
@@ -993,7 +1006,7 @@ impl Workspace {
             return;
         }
         if refresh {
-            self.reload(uri);
+            self.reload_document(uri, self.documents.contains_key(uri));
         }
         let mut followed = BTreeSet::new();
         loop {
