@@ -12,6 +12,8 @@ Unicode 未设置映射的错误与码点摘要见[Unicode 输入错误](unicode
 
 `Double subscript.` / `Double superscript.` 的字符定位与空基底操作见[重复上下标](math-scripts.md)。
 
+`Extra \right.` 的命令定位、移除操作与标准定界符展开帧见[多余的右定界符](right-delimiters.md)。
+
 - [分析范围与来源确认](#分析范围与来源确认)
 - [命令、环境与计数器](#命令环境与计数器)
 - [长度诊断与修复](length-diagnostics.md)：etoolbox 的未定义长度定位与拼写修复。
