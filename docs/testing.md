@@ -32,6 +32,18 @@ cargo test --locked --test signature commented_argument_counts -- --include-igno
 cargo test --locked --test signature optional_default_previews -- --include-ignored
 ```
 
+## 重命名
+
+标签、命令、环境、计数器与 PDF 目标的回归覆盖跨文件编辑、注释保留、名称冲突和特殊字符边界。真实编译还核对连续改名后的 PDF 链接、书签和引用值；组合目标覆盖空名称及配对或不配对的方括号，并保留同名普通标签。
+
+以下测试需要当前 LaTeX 发行版、pdfLaTeX、latexmk，以及 hyperref、mathtools、refcount 和 aliascnt：
+
+```sh
+cargo test --locked --test rename --test bracket_labels --test counter_brackets --test counter_rename --test commented_labels -- --include-ignored
+```
+
+源码文件移动的三引擎回归见下节，支持范围见[标签与交叉引用](labels.md)、[PDF 目标与书签](pdf-destinations.md)和[符号与重命名](symbols.md)。
+
 ## 排版日志与文件移动
 
 信息日志回归检查五类标准 `Info` 消息、文件名括号、字节折行、空白与宏包续行、较长消息、真正的文件切换、折行错误路径和日志省略边界。明确属于续行的错误与警告示例、源码回显、资源及 PDF 输出文字不会发布为诊断。外部回归在三个 LaTeX 引擎的 60 / 79 列输出及传统 / 文件行号格式中核对诊断数量、警告归属、错误行号和未定义命令的精确范围：

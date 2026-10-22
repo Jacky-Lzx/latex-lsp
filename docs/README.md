@@ -12,6 +12,8 @@
 ## 编辑与项目
 
 - [编辑功能](editing.md)：补全、导航、高亮和颜色。
+- [标签与交叉引用](labels.md)：键名、注释、范围引用及 hyperref 标签。
+- [PDF 目标与书签](pdf-destinations.md)：内部链接、组合目标和书签重命名。
 - [补全](completion.md)：调用片段、已有参数、命令名操作数及名称替换。
 - [参数提示](signatures.md)：跨文件签名、声明参数、可选参数边界与注释中的数量。
 - [文献](bibliography.md)：文献键、natbib、手写文献和条目关系。
