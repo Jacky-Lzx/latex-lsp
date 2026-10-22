@@ -2521,16 +2521,25 @@ fn emit_with_context(
     })
     .flatten();
     ranges.extend(command_range);
+    let project_stale = error.as_ref().is_some_and(|context| context.project_stale);
+    let macro_context = error
+        .as_ref()
+        .and_then(|context| context.macro_context.as_ref());
     let special_character = context
         .and_then(|context| crate::special_characters::error_character(&message, context))
         .filter(|_| severity == DiagnosticSeverity::ERROR);
     let special_range = special_character.and_then(|character| {
+        if project_stale {
+            return None;
+        }
         crate::special_characters::source_range(
             &text,
             &crate::syntax::Syntax::latex(&text),
             line,
             context?,
             character,
+            macro_context.map(|context| &context.macros.signatures),
+            macro_context.map_or(&[], |context| context.calls.literal_exclusions.as_slice()),
         )
     });
     ranges.extend(special_range);
@@ -2543,16 +2552,14 @@ fn emit_with_context(
             line,
             context?,
             character,
+            None,
+            &[],
         )
     }));
     let character = missing_character(&message);
     let character_ranges =
         character.and_then(|character| missing_character_ranges(&text, line, context?, character));
     ranges.extend(character_ranges.into_iter().flatten());
-    let project_stale = error.as_ref().is_some_and(|context| context.project_stale);
-    let macro_context = error
-        .as_ref()
-        .and_then(|context| context.macro_context.as_ref());
     let cached_calls = macro_context.map(|context| context.calls.as_ref());
     let environment = environment_error(&message);
     let environment_range = environment
@@ -2751,7 +2758,7 @@ fn emit_with_context(
                     .or_else(|| graphic_range.and(missing_graphic).map(|name| serde_json::json!({"file":name})))
                     .or_else(|| missing_include_key(&message).map(|name| serde_json::json!({"file":name})))
                     .map(|mut data| {
-                        if missing_include_key(&message).is_some() || color_range.is_some() || model_range.is_some() || counter_range.is_some() || environment_range.is_some() || input_range.is_some() || loader_range.is_some() || clash_range.is_some() {
+                        if special_range.is_some() || missing_include_key(&message).is_some() || color_range.is_some() || model_range.is_some() || counter_range.is_some() || environment_range.is_some() || input_range.is_some() || loader_range.is_some() || clash_range.is_some() {
                             if let Some(context) = macro_context {
                                 data["macroSources"] = serde_json::json!(context.macros.sources);
                                 if !context.macros.paused_sources.is_empty() {
@@ -3580,11 +3587,16 @@ enum InvocationKind {
     EnvironmentBegin,
     EnvironmentEnd,
     File,
+    Literal,
 }
 
 impl InvocationKind {
     fn for_message(message: &str) -> Option<Self> {
-        if undefined_color_name(message).is_some() {
+        if crate::special_characters::error_character(message, "").is_some()
+            || message == "Missing $ inserted."
+        {
+            Some(Self::Literal)
+        } else if undefined_color_name(message).is_some() {
             Some(Self::Color)
         } else if undefined_color_model_name(message).is_some() {
             Some(Self::ColorModel)
@@ -3615,6 +3627,7 @@ impl InvocationKind {
         signatures: &crate::signature::CommandSignatures<'_>,
     ) -> Vec<(ByteRange<usize>, ByteRange<usize>)> {
         match self {
+            Self::Literal => vec![],
             Self::Color => {
                 crate::named_colors::error_invocations_with_signatures(source, syntax, signatures)
             }
@@ -3645,6 +3658,7 @@ struct InvocationCalls<'a> {
     source: &'a str,
     invocations: Vec<(ByteRange<usize>, ByteRange<usize>)>,
     file_commands: Vec<crate::syntax::Command>,
+    literal_exclusions: Vec<crate::signature::CommandSignatures<'a>>,
 }
 
 struct InvocationContext<'a> {
@@ -3741,7 +3755,7 @@ impl ProjectSources {
 struct ProjectAnalysis<'a> {
     project: &'a ProjectSources,
     macros: Option<Rc<MacroContext<'a>>>,
-    calls: [Option<(Url, Rc<InvocationCalls<'a>>)>; 6],
+    calls: [Option<(Url, Rc<InvocationCalls<'a>>)>; 7],
 }
 
 impl<'a> ProjectAnalysis<'a> {
@@ -3749,7 +3763,7 @@ impl<'a> ProjectAnalysis<'a> {
         Self {
             project,
             macros: None,
-            calls: [None, None, None, None, None, None],
+            calls: std::array::from_fn(|_| None),
         }
     }
 
@@ -3812,7 +3826,7 @@ impl<'a> ProjectAnalysis<'a> {
                     }),
                 ),
             }));
-            self.calls = [None, None, None, None, None, None];
+            self.calls = std::array::from_fn(|_| None);
         }
         let macros = self.macros.as_ref().expect("nonempty macro scope");
         let document = self.project.documents.get(uri).ok_or(())?;
@@ -3833,6 +3847,21 @@ impl<'a> ProjectAnalysis<'a> {
                     invocations,
                     file_commands: if kind == InvocationKind::File {
                         file_error_commands(source, &document.syntax, &macros.signatures)
+                    } else {
+                        vec![]
+                    },
+                    literal_exclusions: if kind == InvocationKind::Literal {
+                        self.project
+                            .documents
+                            .iter()
+                            .filter(|(uri, _)| loaded.contains(*uri) || paused.contains(*uri))
+                            .map(|(_, doc)| {
+                                crate::signature::CommandSignatures::new([(
+                                    doc.text.source.as_str(),
+                                    &doc.syntax,
+                                )])
+                            })
+                            .collect()
                     } else {
                         vec![]
                     },

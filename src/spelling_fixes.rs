@@ -351,6 +351,7 @@ pub fn fixes(
         };
         let project = workspace.project_documents(root);
         let mut signatures = BTreeMap::new();
+        let mut literal_exclusions = BTreeMap::new();
         for diagnostic in diagnostics {
             // Match the selected warning before deduplicating edits. Hyperref
             // can report both Hyper reference and Reference for the same key.
@@ -371,20 +372,9 @@ pub fn fixes(
             if examined > 64 {
                 return result;
             }
-            if matches!(diagnostic.code.as_ref(), Some(NumberOrString::String(code)) if matches!(code.as_str(), "unescaped-special-character" | "extra-alignment-tab" | "extra-closing-brace" | "double-subscript" | "double-superscript"))
-            {
-                if let Some(fix) = crate::special_characters::fix(doc, diagnostic) {
-                    if seen.insert((
-                        diagnostic.range.start,
-                        diagnostic.range.end,
-                        fix.edit.new_text.clone(),
-                    )) {
-                        result.push(fix);
-                    }
-                }
-                continue;
-            }
-            let invocation_scope = if matches!(diagnostic.code.as_ref(), Some(NumberOrString::String(code)) if matches!(code.as_str(), "undefined-color" | "undefined-color-model" | "undefined-counter" | "undefined-environment" | "mismatched-environment-end" | "missing-input" | "missing-include" | "missing-package" | "missing-class" | "missing-bibliography-style" | "missing-bibliography-database"))
+            let literal = matches!(diagnostic.code.as_ref(), Some(NumberOrString::String(code)) if matches!(code.as_str(), "unescaped-special-character" | "extra-alignment-tab" | "extra-closing-brace" | "double-subscript" | "double-superscript"));
+            let invocation_scope = if literal
+                || matches!(diagnostic.code.as_ref(), Some(NumberOrString::String(code)) if matches!(code.as_str(), "undefined-color" | "undefined-color-model" | "undefined-counter" | "undefined-environment" | "mismatched-environment-end" | "missing-input" | "missing-include" | "missing-package" | "missing-class" | "missing-bibliography-style" | "missing-bibliography-database"))
             {
                 let confirmed = workspace.build_diagnostic_sources.get(root);
                 let scope = if let Some(value) = diagnostic
@@ -476,6 +466,44 @@ pub fn fixes(
                         })
                 })
                 .map(|signatures| &*signatures);
+            if literal {
+                let Some((scope, paused)) = invocation_scope.as_ref() else {
+                    continue;
+                };
+                let exclusions = literal_exclusions
+                    .entry((scope.clone(), paused.clone()))
+                    .or_insert_with(|| {
+                        workspace
+                            .documents
+                            .iter()
+                            .filter(|(uri, doc)| {
+                                (scope.contains(*uri) || paused.contains(*uri))
+                                    && doc.kind == crate::workspace::DocumentKind::Latex
+                            })
+                            .map(|(_, doc)| {
+                                crate::signature::CommandSignatures::new([(
+                                    doc.text.source.as_str(),
+                                    &doc.syntax,
+                                )])
+                            })
+                            .collect::<Vec<_>>()
+                    });
+                if let Some(fix) = crate::special_characters::fix(
+                    doc,
+                    diagnostic,
+                    invocation_signatures,
+                    exclusions,
+                ) {
+                    if seen.insert((
+                        diagnostic.range.start,
+                        diagnostic.range.end,
+                        fix.edit.new_text.clone(),
+                    )) {
+                        result.push(fix);
+                    }
+                }
+                continue;
+            }
             if matches!(diagnostic.code.as_ref(), Some(NumberOrString::String(code)) if matches!(code.as_str(), "missing-include" | "missing-input" | "missing-listing" | "missing-verbatim-input" | "missing-fancyverb-input" | "missing-image" | "missing-package" | "missing-class" | "missing-bibliography-style" | "missing-bibliography-database"))
             {
                 let fixes = if diagnostic.code

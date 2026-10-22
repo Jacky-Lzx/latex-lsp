@@ -2284,7 +2284,7 @@ impl<'a> CommandSignatures<'a> {
     }
 
     pub(crate) fn argument_tokens(&self, source: &str, parsed: &syntax::Syntax) -> BTreeSet<usize> {
-        self.argument_tokens_with_literal(source, parsed, None)
+        self.argument_tokens_with_literal(source, parsed, None, false)
     }
 
     pub(crate) fn literal_is_argument(
@@ -2293,7 +2293,19 @@ impl<'a> CommandSignatures<'a> {
         parsed: &syntax::Syntax,
         at: usize,
     ) -> bool {
-        self.argument_tokens_with_literal(source, parsed, Some(at))
+        self.argument_tokens_with_literal(source, parsed, Some(at), false)
+            .contains(&at)
+    }
+
+    /// A possible declaration can exclude a literal without assigning unknown
+    /// commands in the consumer the declaration file's fallback arity.
+    pub(crate) fn declared_literal_is_argument(
+        &self,
+        source: &str,
+        parsed: &syntax::Syntax,
+        at: usize,
+    ) -> bool {
+        self.argument_tokens_with_literal(source, parsed, Some(at), true)
             .contains(&at)
     }
 
@@ -2302,6 +2314,7 @@ impl<'a> CommandSignatures<'a> {
         source: &str,
         parsed: &syntax::Syntax,
         literal: Option<usize>,
+        declared_only: bool,
     ) -> BTreeSet<usize> {
         let local = &self.local;
         let mut result = BTreeSet::new();
@@ -2327,6 +2340,9 @@ impl<'a> CommandSignatures<'a> {
             else {
                 continue;
             };
+            if declared_only && !local.contains_key(name) {
+                continue;
+            }
             // A primitive alignment executes its body. Treating that body as
             // opaque macro data would hide the literal row tabs we validate.
             if literal.is_some() && self.invokes_builtin(name, "halign") {

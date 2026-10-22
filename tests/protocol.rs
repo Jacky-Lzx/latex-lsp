@@ -14157,6 +14157,102 @@ fn discovered_biber_databases_with_arbitrary_suffixes_reject_unsaved_and_changed
 
 #[test]
 #[cfg(unix)]
+fn literal_build_fixes_recheck_cross_file_macro_changes_without_a_main_version_change() {
+    for literals in [false, true] {
+        let capabilities = json!({
+            "workspace":{"applyEdit":true,"workspaceEdit":{"documentChanges":true}},
+            "textDocument": if literals {
+                json!({"codeAction":{"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix"]}}}})
+            } else { json!({}) }
+        });
+        let (mut server, directory, main) = fake_build_server_capabilities(
+            "cat \"${2%/*}/fixture.log\" > \"$1/main.log\"\nexit 1\n",
+            false,
+            capabilities,
+        );
+        let source = "\\input{macros}\n\\begin{tabular}{ll}A & B\\bad x& C\\\\\\end{tabular}\n";
+        let macros = Url::from_file_path(directory.path().join("macros.tex")).unwrap();
+        std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+        std::fs::write(macros.to_file_path().unwrap(), r"\def\bad{}").unwrap();
+        std::fs::write(directory.path().join("fixture.log"), "(./main.tex\n(./macros.tex)\n! Extra alignment tab has been changed to \\cr.\n<recently read> \\endtemplate\n\nl.2 \\begin{tabular}{ll}A & B\\bad x&\n                 following source\n\n)\n").unwrap();
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":9},"contentChanges":[{"text":source}]}),
+        );
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(finished["params"]["status"], "error");
+        let published = server.until(|message| {
+            message["method"] == "textDocument/publishDiagnostics"
+                && message["params"]["uri"] == json!(main)
+                && message["params"]["diagnostics"]
+                    .as_array()
+                    .is_some_and(|items| {
+                        items
+                            .iter()
+                            .any(|item| item["code"] == "extra-alignment-tab")
+                    })
+        });
+        let item = published["params"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["code"] == "extra-alignment-tab")
+            .unwrap();
+        let params = json!({"textDocument":{"uri":main},"range":item["range"],"context":{"diagnostics":[item],"only":["quickfix"]}});
+        let actions = server.request(3, "textDocument/codeAction", params.clone());
+        assert_eq!(actions.as_array().unwrap().len(), 1, "{actions}");
+        std::fs::write(macros.to_file_path().unwrap(), r"\def\bad#1#2{&}").unwrap();
+        server.notify(
+            "workspace/didChangeWatchedFiles",
+            json!({"changes":[{"uri":macros,"type":2}]}),
+        );
+        let actions_after = server.request(4, "textDocument/codeAction", params);
+        assert_eq!(actions_after, json!([]));
+        if !literals {
+            server.send(json!({"jsonrpc":"2.0","id":5,"method":"workspace/executeCommand","params":{"command":actions[0]["command"],"arguments":actions[0]["arguments"]}}));
+            let response = server.until(|message| message["id"] == 5);
+            assert_eq!(response["error"]["code"], -32602);
+            assert!(response["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("outdated"));
+        }
+        let started = server.request(
+            6,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let finished = server.until(|message| {
+            message["method"] == "latex/buildFinished"
+                && message["params"]["buildId"] == started["buildId"]
+        });
+        assert_eq!(finished["params"]["status"], "error");
+        let pulled = server.request(
+            7,
+            "textDocument/diagnostic",
+            json!({"textDocument":{"uri":main}}),
+        );
+        let errors: Vec<_> = pulled["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|item| item["source"] == "latex-build")
+            .collect();
+        assert_eq!(errors.len(), 1, "{pulled}");
+        assert!(errors[0].get("code").is_none(), "{pulled}");
+        server.request(8, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
 fn special_character_build_errors_offer_repair_actions_and_clear_after_rebuild() {
     for literals in [false, true] {
         let script = r#"cat "${2%/*}/fixture.log" > "$1/main.log"

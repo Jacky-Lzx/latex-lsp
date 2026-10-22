@@ -69,6 +69,8 @@ pub(crate) fn source_range(
     line: u32,
     context: &str,
     character: char,
+    signatures: Option<&signature::CommandSignatures<'_>>,
+    exclusions: &[signature::CommandSignatures<'_>],
 ) -> Option<Range> {
     let prefix = context.trim_end();
     if prefix.len() > 4096 || !prefix.ends_with(character) {
@@ -108,19 +110,36 @@ pub(crate) fn source_range(
     {
         return None;
     }
-    if matches!(character, '&' | '_' | '^')
-        && signature::CommandSignatures::new([(text.source.as_str(), parsed)]).literal_is_argument(
-            &text.source,
+    if matches!(character, '&' | '_' | '^' | '#') {
+        let consumed = |signatures: &signature::CommandSignatures<'_>| {
+            if character == '#' {
+                // Unknown primitives can execute their contents (e.g. hbox).
+                // Preserve hash diagnostics unless a declaration consumes it.
+                signatures.declared_literal_is_argument(&text.source, parsed, at)
+            } else {
+                signatures.literal_is_argument(&text.source, parsed, at)
+            }
+        };
+        if consumed(&signature::CommandSignatures::new([(
+            text.source.as_str(),
             parsed,
-            at,
-        )
-    {
-        return None;
+        )])) || signatures.is_some_and(consumed)
+            || exclusions
+                .iter()
+                .any(|signatures| signatures.declared_literal_is_argument(&text.source, parsed, at))
+        {
+            return None;
+        }
     }
     Some(text.range(at, end))
 }
 
-pub(crate) fn fix(doc: &Document, diagnostic: &Diagnostic) -> Option<QuickFix> {
+pub(crate) fn fix(
+    doc: &Document,
+    diagnostic: &Diagnostic,
+    signatures: Option<&signature::CommandSignatures<'_>>,
+    exclusions: &[signature::CommandSignatures<'_>],
+) -> Option<QuickFix> {
     if diagnostic.severity != Some(DiagnosticSeverity::ERROR) {
         return None;
     }
@@ -141,6 +160,8 @@ pub(crate) fn fix(doc: &Document, diagnostic: &Diagnostic) -> Option<QuickFix> {
         diagnostic.range.start.line,
         context,
         character,
+        signatures,
+        exclusions,
     )? != diagnostic.range
     {
         return None;
