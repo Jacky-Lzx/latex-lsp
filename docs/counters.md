@@ -35,4 +35,6 @@
 
 ## 验证
 
+etoolbox 的 `ifcscounter{c@名称}` 按控制序列检查底层寄存器类型；它与 `ifltxcounter{名称}` 的区别见[寄存器与长度](registers.md#etoolbox-类型检查)。
+
 计数器与定理的真实编译、改名及拼写修复回归见[测试说明](testing.md#计数器与定理)。

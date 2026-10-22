@@ -423,7 +423,8 @@ fn builtin(name: &str) -> Option<Signature> {
         "csappto" | "cseappto" | "csgappto" | "csxappto" | "cspreto" | "csepreto" | "csgpreto"
         | "csxpreto" => (&[("command", false), ("code", false)], false),
         "ifcsdef" | "ifcsundef" | "ifcsvoid" | "ifcsmacro" | "ifcsparam" | "ifcsprotected"
-        | "ifcsltxprotect" => (
+        | "ifcsltxprotect" | "ifcscounter" | "ifcslength" | "ifcsdimen" | "ifdefcounter"
+        | "ifdeflength" | "ifdefdimen" => (
             &[("command", false), ("then", false), ("else", false)],
             false,
         ),
@@ -512,6 +513,7 @@ fn builtin(name: &str) -> Option<Signature> {
         "whileboolexpr" | "unlessboolexpr" => (&[("condition", false), ("body", false)], false),
         "newlength" => (&[("length", false)], false),
         "setlength" | "addtolength" => (&[("length", false), ("value", false)], false),
+        "deflength" => (&[("length", false), ("expression", false)], false),
         "settowidth" | "settoheight" | "settodepth" => {
             (&[("length", false), ("text", false)], false)
         }
@@ -714,8 +716,10 @@ fn builtin(name: &str) -> Option<Signature> {
                 }
             } else if syntax::declares_command_copy(name)
                 || name == "cslet" && index == 1
-                || (name == "letcs"
-                    || syntax::declares_traditional_command(name)
+                || (matches!(
+                    name,
+                    "letcs" | "deflength" | "ifdefcounter" | "ifdeflength" | "ifdefdimen"
+                ) || syntax::declares_traditional_command(name)
                     || syntax::declares_document_command(name)
                     || syntax::declares_text_command(name)
                     || syntax::declares_font_switch(name)

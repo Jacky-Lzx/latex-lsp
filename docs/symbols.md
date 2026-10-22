@@ -65,7 +65,7 @@ LaTeX 内核的 `NewExpandableDocumentCommand`、`RenewExpandableDocumentCommand
 
 计数器与定理的补全、导航、跨文件重命名及 etoolbox / refcount 操作见[计数器与定理](counters.md)。该页也说明共享编号、重置关系、派生命令和重命名边界。
 
-`newlength`、`newsavebox`、`newcount` / `newdimen` / `newskip` / `newmuskip` / `newtoks` / `newbox` 等寄存器分配，以及 `chardef` / `mathchardef`、寄存器绑定和字体声明也进入符号索引，支持变量补全、导航、悬停和跨文件安全重命名；识别直接名称和经 `expandafter` 展开的字面 `csname` 声明。常用长度操作、保存盒命令提供片段及参数提示；重命名会检查已有宏、寄存器、计数器派生命令和常用内置长度/寄存器原语的冲突。
+长度、盒子及其他寄存器的声明、重命名和 etoolbox 类型检查见[寄存器与长度](registers.md)。
 
 ## 字体与数学命令
 

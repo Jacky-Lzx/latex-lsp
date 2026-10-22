@@ -2192,6 +2192,19 @@ impl Syntax {
                         span: start..command_end,
                         argument,
                     };
+                    if operands_known
+                        && matches!(name, "ifdefcounter" | "ifdeflength" | "ifdefdimen")
+                    {
+                        // etoolbox inspects this control token with meaning;
+                        // declarations and verbatim commands are not executed.
+                        let mut operand = skip_space(source, command_end);
+                        if bytes.get(operand) == Some(&b'{') {
+                            operand = skip_space(source, operand + 1);
+                        }
+                        if bytes.get(operand) == Some(&b'\\') {
+                            control_operands.insert(operand);
+                        }
+                    }
                     if name == "meaning" && operands_known {
                         let operand = skip_space(source, command_end);
                         if bytes.get(operand) == Some(&b'\\') {

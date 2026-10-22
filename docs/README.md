@@ -22,6 +22,7 @@
 - [biblatex 文献分类](bibliography-categories.md)：分类分配、文献键编辑及重命名边界。
 - [符号与重命名](symbols.md)：宏、环境、计数器等符号的支持范围。
 - [计数器与定理](counters.md)：编号关系、跨文件重命名、etoolbox 操作与 refcount 标签赋值。
+- [寄存器与长度](registers.md)：寄存器声明、类型检查、长度表达式与安全重命名。
 - [futurelet 前瞻目标](futurelet.md)：声明、静态名称、跨文件重命名与继续执行边界。
 - [命令名操作数与声明](declaration-operands.md)：复制与声明位置的命令名引用、索引和编辑边界。
 - [meaning 命令名操作数](meaning.md)：查看命令时的导航、跨文件重命名、单 token 边界和依赖候选。

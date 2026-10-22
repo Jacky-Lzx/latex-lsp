@@ -210,6 +210,36 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
         "Test whether a named macro has parameters. Requires etoolbox.",
     ),
     (
+        "ifcscounter",
+        "ifcscounter{${1:command}}{${2:then}}{${3:else}}",
+        "Test whether a named control sequence is a count register. LaTeX counters use the name c@counter. Requires etoolbox.",
+    ),
+    (
+        "ifcslength",
+        "ifcslength{${1:command}}{${2:then}}{${3:else}}",
+        "Test whether a named control sequence is a skip register (LaTeX length). Requires etoolbox.",
+    ),
+    (
+        "ifcsdimen",
+        "ifcsdimen{${1:command}}{${2:then}}{${3:else}}",
+        "Test whether a named control sequence is a dimension register. Requires etoolbox.",
+    ),
+    (
+        "ifdefcounter",
+        "ifdefcounter{\\${1:command}}{${2:then}}{${3:else}}",
+        "Test whether a control sequence is a count register. Requires etoolbox.",
+    ),
+    (
+        "ifdeflength",
+        "ifdeflength{\\${1:command}}{${2:then}}{${3:else}}",
+        "Test whether a control sequence is a skip register (LaTeX length). Requires etoolbox.",
+    ),
+    (
+        "ifdefdimen",
+        "ifdefdimen{\\${1:command}}{${2:then}}{${3:else}}",
+        "Test whether a control sequence is a dimension register. Requires etoolbox.",
+    ),
+    (
         "ifcsprotected",
         "ifcsprotected{${1:command}}{${2:then}}{${3:else}}",
         "Test whether a named macro is protected. Requires etoolbox.",
@@ -368,6 +398,11 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
         "addtolength",
         "addtolength{\\${1:length}}{${2:1pt}}",
         "Add to a length.",
+    ),
+    (
+        "deflength",
+        "deflength{\\${1:length}}{${2:0pt}}",
+        "Assign a glue expression to a length locally. A global prefix makes the assignment global. Requires etoolbox.",
     ),
     (
         "settowidth",

@@ -60,6 +60,17 @@ cargo test --locked --test etoolbox_counters -- --include-ignored
 
 支持范围与示例见[计数器与定理](counters.md)。
 
+## 寄存器与长度
+
+默认回归覆盖 etoolbox 寄存器类型检查的名称导航与改名、派生计数器名称、补全、参数提示、操作数与分支边界，以及共享文件歧义。真实回归需要 pdfLaTeX、XeLaTeX、LuaLaTeX 和 etoolbox，逐次改名长度、尺寸、计数寄存器、LaTeX 计数器、定理和普通宏，核对类型判断结果、局部/全局赋值及 glue 的伸长和收缩分量保持一致：
+
+```sh
+cargo test --locked --test etoolbox_registers
+cargo test --locked --test etoolbox_registers -- --include-ignored
+```
+
+操作示例与静态分析边界见[寄存器与长度](registers.md)。
+
 ## 排版日志与文件移动
 
 页数回归检查输出路径中的伪页数、PDF / DVI / XDV 格式、引号、日志折行、不完整摘要和读取预算。外部回归使用三个 LaTeX 引擎的 60 / 79 列日志，核对编译结果返回实际 PDF 页数：

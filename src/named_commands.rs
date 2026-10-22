@@ -16,9 +16,9 @@ fn arguments(name: &str) -> &'static [bool] {
         "csletcs" | "ifcsequal" | "ifcsstrequal" => &[true, true],
         name if declares(name) => &[true],
         "csuse" | "csmeaning" | "ifcsdef" | "ifcsundef" | "ifcsvoid" | "ifcsmacro"
-        | "ifcsparam" | "ifcsprotected" | "ifcsltxprotect" | "ifcsstring" | "csundef"
-        | "csgundef" | "csappto" | "cseappto" | "csgappto" | "csxappto" | "cspreto"
-        | "csepreto" | "csgpreto" | "csxpreto" => &[true],
+        | "ifcsparam" | "ifcsprotected" | "ifcsltxprotect" | "ifcscounter" | "ifcslength"
+        | "ifcsdimen" | "ifcsstring" | "csundef" | "csgundef" | "csappto" | "cseappto"
+        | "csgappto" | "csxappto" | "cspreto" | "csepreto" | "csgpreto" | "csxpreto" => &[true],
         _ => &[],
     }
 }
