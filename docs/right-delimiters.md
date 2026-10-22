@@ -1,6 +1,6 @@
 # 多余的右定界符
 
-[返回文档目录](README.md) · [编译诊断](diagnostics.md)
+[返回文档目录](README.md) · [编译诊断](diagnostics.md) · [缺失的右定界符](missing-right-delimiters.md)
 
 TeX 报告 `Extra \right.` 时，当前数学分组中没有与该命令配对的 `\left`。服务器核对日志源码回显，将诊断定位到实际的 `\right`，并提供 `Remove unmatched '\right'` 快速修复。
 

@@ -59,6 +59,7 @@
 - [多余右花括号](extra-braces.md)：正文、数学及显式分组中的字符定位与删除修复。
 - [重复上下标](math-scripts.md)：脚本符号的精确定位及显式空基底修复。
 - [多余的右定界符](right-delimiters.md)：`Extra \right.` 的命令定位、定界符保留与修复校验。
+- [缺失的右定界符](missing-right-delimiters.md)：数学结束标记定位、不可见定界符插入与分轮修复。
 - [特殊字符修复的宏来源](literal-macro-scopes.md)：跨文件参数排除、加载时序及旧修复的重新校验。
 - [字体诊断与结果分析](fonts.md)：字体和字号替换、缺字摘要及定位边界。
 - [排版警告分析](typesetting.md)：Overfull / Underfull 分类统计与最大指标。
