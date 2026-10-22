@@ -34,6 +34,12 @@ cargo test --locked --test signature optional_default_previews -- --include-igno
 
 ## 排版日志与文件移动
 
+rerunfilecheck 回归核对标准 `Rerun.` 请求、hyperref 完整书签提示、折行、示例文字和 makeindex 请求的边界，并检查结果分析与重编译操作一致。外部回归在三个 LaTeX 引擎的 60 / 79 列日志中验证首次文件变化后的请求及下一遍内容不变后的清空：
+
+```sh
+cargo test --locked --test rerunfilecheck -- --include-ignored
+```
+
 声明操作数回归使用三个 LaTeX 引擎验证复制 `newcommand`、`newif`、`newenvironment` 后的普通调用，以及宏、开关和环境重命名前后的输出一致；同时验证直接与静态 `csname` 目标复制字面花括号，以及未执行的宏正文和参数分隔文本。默认测试另检查各类符号索引、命令名操作数的参数提示与名称补全、静态 `csname`、逐字边界和标签编辑范围，并核对花括号复制不会产生错误修复、真实不配对仍保留精确位置：
 
 ```sh

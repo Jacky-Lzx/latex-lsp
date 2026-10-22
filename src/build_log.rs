@@ -303,14 +303,20 @@ pub(crate) fn rerun_required(diagnostic: &Diagnostic) -> bool {
         | "Package hyperref Warning: Rerun to get /PageLabels entry."
     ) || message
         .strip_prefix("Package rerunfilecheck Warning: File `")
-        .and_then(|tail| tail.split_once("' has changed."))
+        .and_then(|tail| tail.rsplit_once("' has changed."))
         .is_some_and(|(file, tail)| {
-            !file.is_empty()
-                && (tail.is_empty()
-                    || tail.trim_start().starts_with("Rerun to get outlines right")
-                    || tail
-                        .trim_start()
-                        .starts_with("(rerunfilecheck) Rerun to get outlines right"))
+            let request = tail
+                .split_whitespace()
+                .filter(|word| *word != "(rerunfilecheck)")
+                .collect::<Vec<_>>()
+                .join(" ");
+            !file.trim().is_empty()
+                && matches!(
+                    request.as_str(),
+                    "" | "Rerun."
+                        | "Rerun to get outlines right."
+                        | "Rerun to get outlines right or use package `bookmark'."
+                )
         })
 }
 
@@ -3103,21 +3109,29 @@ fn wrapped_message(
         return message;
     }
     let reference = undefined_reference_start(initial).is_some();
+    let rerunfilecheck = initial.starts_with("Package rerunfilecheck Warning:");
     // TeX byte-wraps long warning lines, including inside a literal key.
     // Keep blanks at those boundaries instead of inventing a separator.
-    let mut message = if reference {
+    let mut message = if reference || rerunfilecheck {
         initial.to_owned()
     } else {
         lines[*i].trim().to_owned()
     };
     while (!message.ends_with(['.', '!'])
         || (reference && lines[*i].len() >= 60 && undefined_reference_key(&message).is_none())
+        || (rerunfilecheck && lines[*i].len() >= 60)
         // biblatex puts explanatory sentences after a complete first sentence.
         // Keep its own continuation lines with the original warning.
         || initial.starts_with("Package biblatex Warning:")
             && lines.get(*i + 1).is_some_and(|line| {
                 line.trim_start()
                     .strip_prefix("(biblatex)")
+                    .is_some_and(|tail| tail.starts_with(char::is_whitespace))
+            })
+        || rerunfilecheck
+            && lines.get(*i + 1).is_some_and(|line| {
+                line.trim_start()
+                    .strip_prefix("(rerunfilecheck)")
                     .is_some_and(|tail| tail.starts_with(char::is_whitespace))
             }))
         && *i + 1 < lines.len()
@@ -3151,8 +3165,9 @@ fn wrapped_message(
                 break;
             }
         }
-        let byte_wrapped =
-            reference && lines[*i].len() >= 60 && !next.trim_start().starts_with('(');
+        let byte_wrapped = (reference || rerunfilecheck)
+            && lines[*i].len() >= 60
+            && !next.trim_start().starts_with('(');
         *i += 1;
         if byte_wrapped {
             message.push_str(next);

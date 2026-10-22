@@ -58,6 +58,8 @@ end
 
 编译器明确要求再次编译时，可在对应警告处请求快速修复，选择 `Rebuild …`。支持 LaTeX 交叉引用、natbib 文献、biblatex 的 LaTeX 重运行提示、longtable 表格列宽、hyperref 页标签和 rerunfilecheck 文件变更警告；未定义引用本身不会产生这个操作。
 
+rerunfilecheck 支持文件变更后的标准 `Rerun.` 请求和 hyperref 的完整书签重编译提示，兼容日志折行与宏包续行前缀；结果分析使用相同规则。含额外说明的相似文字及要求运行 makeindex 的索引、术语表提示不提供此操作。后续编译中文件不再变化时，重编译标记与操作随对应警告清除。
+
 biblatex 明确要求先运行 BibTeX 或 Biber 时，默认参数的 latexmk 也提供该操作，由 latexmk 调度文献处理与后续 LaTeX 编译。直接 TeX 引擎及自定义 `arguments` / `rebuildArguments` 的流程保留提示和所需工具摘要，但不为这类提示提供重编译操作；请先完成对应的文献处理。切换为无法处理文献的配置后，旧菜单操作会失效。
 
 该操作调用 `latex.rebuild`，同一主文档的多条警告合并为一个入口。共享文件分别列出产生诊断的主文档，避免从共享来源猜测编译根；仅匹配当前保存的编译诊断与请求范围。诊断清除后不再提供入口，根文件缺失、根配置已改变为其他项目或自定义工具尚未配置 `rebuildArguments` 时也不提供。
