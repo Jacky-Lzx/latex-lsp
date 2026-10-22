@@ -1092,6 +1092,16 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
             })
             .collect();
     }
+    // Filename/name providers above can interpret literal conversion wrappers.
+    // The remaining generic command provider must not complete quoted text.
+    if doc
+        .syntax
+        .literal_conversions
+        .iter()
+        .any(|span| span.contains(&offset.saturating_sub(1)))
+    {
+        return vec![];
+    }
     let line_start = doc.text.source[..offset]
         .rfind('\n')
         .map(|i| i + 1)

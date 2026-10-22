@@ -48,8 +48,10 @@ fn copied_declaration_controls_do_not_declare_the_following_text() {
             format!(r"\let\saved\{name}"),
             format!(r"\let\saved=\{name}"),
             format!(r"\NewCommandCopy{{\saved}}{{\{name}}}"),
+            format!("\\NewCommandCopy{{\\saved}}{{ % comment\n  \\{name}}}"),
             format!(r"\cslet{{saved}}\{name}"),
             format!(r"\cslet{{saved}}{{\{name}}}"),
+            format!("\\cslet{{saved}}{{ % comment\n  \\{name}}}"),
             format!(r"\expandafter\let\csname saved\endcsname\{name}"),
             format!(r"\expandafter\NewCommandCopy\csname saved\endcsname{{\{name}}}"),
         ] {

@@ -33,11 +33,15 @@ fn command_operands_replace_only_the_name() {
         r"\let\saved=\ord|",
         r"\let\ord|=\relax",
         r"\newcommand{\ord|}[1]{#1}",
+        r"\newcommand{\ord|",
+        "\\newcommand{ % comment\n  \\ord|}",
         r"\newcommand*\ord|[1]{#1}",
         r"\NewDocumentCommand{\ord|}{m}{#1}",
         r"\def\ord|#1{#1}",
         r"\futurelet\ord|\relax x",
         r"\NewCommandCopy{\saved}{\ord|}",
+        r"\NewCommandCopy{\saved}{\ord|",
+        r"\NewCommandCopy{\ord|",
         r"\NewCommandCopy{\ord|}{\relax}",
         r"\letcs{\ord|}{relax}",
         r"\cslet{saved}{\ord|}",
@@ -76,6 +80,54 @@ fn command_operands_replace_only_the_name() {
 }
 
 #[test]
+fn empty_operand_prefixes_insert_names_without_arguments_or_fake_definitions() {
+    for operand in [
+        r"\meaning\|",
+        "\\meaning % comment\r\n  \\|",
+        r"\meaning\|$",
+        r"\let\saved=\|",
+        r"\let\|=\relax",
+        r"\newcommand{\|}",
+        r"\newcommand{ % comment
+          \|}",
+        r"\newcommand{\|",
+        r"\newcommand*\|",
+        r"\NewDocumentCommand{\|}{m}{#1}",
+        r"\def\|#1{#1}",
+        r"\futurelet\|\relax x",
+        r"\NewCommandCopy{\saved}{\|}",
+        r"\NewCommandCopy{\|}{\relax}",
+        r"\letcs{\|}{relax}",
+        r"\cslet{saved}{\|}",
+    ] {
+        let marked = format!("\\newcommand{{\\ordinary}}[1]{{#1}}\n中文😀 {operand}");
+        for label in ["ordinary", "section"] {
+            let (item, text, offset) = complete(&marked, label);
+            assert_eq!(
+                item.insert_text_format,
+                Some(InsertTextFormat::PLAIN_TEXT),
+                "{marked}: {label}"
+            );
+            let Some(CompletionTextEdit::Edit(edit)) = item.text_edit else {
+                panic!("missing edit")
+            };
+            assert_eq!(edit.range, text.range(offset, offset), "{marked}");
+            assert_eq!(edit.new_text, label, "{marked}");
+            let uri = Url::parse("file:///operand-completion/main.tex").unwrap();
+            let document = Document::new(&uri, text.source, Some(1));
+            assert!(
+                document
+                    .syntax
+                    .definitions
+                    .iter()
+                    .all(|entry| !entry.name.is_empty()),
+                "{marked}"
+            );
+        }
+    }
+}
+
+#[test]
 fn builtin_operands_do_not_insert_call_templates() {
     for marked in [
         r"\meaning\sec|",
@@ -98,6 +150,16 @@ fn builtin_operands_do_not_insert_call_templates() {
 #[test]
 fn executed_commands_keep_argument_snippets() {
     for call in [
+        r"\|",
+        r"\meaning\meaning\|",
+        r"\meaning\string\|",
+        r"\meaning\detokenize{\|}",
+        r"\meaning{\|",
+        r"\meaning*\|",
+        r"\let\saved\meaning\|",
+        r"\futurelet\saved\|",
+        r"\def\meaning{}\meaning\|",
+        r"\def\let{}\let\saved\|",
         r"\ord|",
         r"\meaning\meaning\ord|",
         r"\meaning{\ord|}",
@@ -128,36 +190,68 @@ fn operand_completions_use_cross_file_definitions_and_preserve_following_text() 
     for (name, source) in [
         ("main.tex", r"\input{definitions}\input{content}"),
         ("definitions.tex", r"\newcommand{\ordinary}[1]{#1}"),
-        ("content.tex", "\\meaning % comment\r\n  \\ord$ suffix"),
     ] {
         std::fs::write(temp.path().join(name), source).unwrap();
     }
-    let mut workspace = Workspace {
-        snippets: true,
-        ..Workspace::default()
-    };
-    workspace.add_root(temp.path().into());
-    let uri = Url::from_file_path(temp.path().join("content.tex")).unwrap();
-    let text = &workspace.documents[&uri].text;
-    let offset = text.source.find("ord").unwrap() + 3;
-    let item = features::completion(&workspace, &uri, text.position(offset))
-        .into_iter()
-        .find(|item| item.label == "ordinary")
-        .unwrap();
-    assert_eq!(item.insert_text_format, Some(InsertTextFormat::PLAIN_TEXT));
-    let Some(CompletionTextEdit::Edit(edit)) = item.text_edit else {
-        panic!("missing edit")
-    };
-    assert_eq!(edit.range, text.range(offset - 3, offset));
-    let changed = text
-        .changed(vec![TextDocumentContentChangeEvent {
-            range: Some(edit.range),
-            range_length: None,
-            text: edit.new_text,
-        }])
-        .unwrap();
-    assert_eq!(
-        changed.source,
-        "\\meaning % comment\r\n  \\ordinary$ suffix"
-    );
+    for prefix in ["", "ord"] {
+        let source = format!("\\meaning % comment\r\n  \\{prefix}$ suffix");
+        std::fs::write(temp.path().join("content.tex"), &source).unwrap();
+        let mut workspace = Workspace {
+            snippets: true,
+            ..Workspace::default()
+        };
+        workspace.add_root(temp.path().into());
+        let uri = Url::from_file_path(temp.path().join("content.tex")).unwrap();
+        let text = &workspace.documents[&uri].text;
+        let offset = source.find("$ suffix").unwrap();
+        let item = features::completion(&workspace, &uri, text.position(offset))
+            .into_iter()
+            .find(|item| item.label == "ordinary")
+            .unwrap();
+        assert_eq!(item.insert_text_format, Some(InsertTextFormat::PLAIN_TEXT));
+        let Some(CompletionTextEdit::Edit(edit)) = item.text_edit else {
+            panic!("missing edit")
+        };
+        assert_eq!(edit.range, text.range(offset - prefix.len(), offset));
+        let changed = text
+            .changed(vec![TextDocumentContentChangeEvent {
+                range: Some(edit.range),
+                range_length: None,
+                text: edit.new_text,
+            }])
+            .unwrap();
+        assert_eq!(
+            changed.source,
+            "\\meaning % comment\r\n  \\ordinary$ suffix"
+        );
+    }
+}
+
+#[test]
+fn literal_text_and_escaped_backslashes_do_not_complete_commands() {
+    let uri = Url::parse("file:///operand-completion/main.tex").unwrap();
+    for marked in [
+        "% \\meaning\\|",
+        r"\verb!\meaning\|!",
+        r"\detokenize{\meaning\| x}",
+        r"\detokenize{\ord|}",
+        r"\string\|",
+        r"\string\ord|",
+        r"\meaning\\|",
+    ] {
+        let offset = marked.find('|').unwrap();
+        let source = marked.replacen('|', "", 1);
+        let text = Text::new(source.clone());
+        let mut workspace = Workspace {
+            snippets: true,
+            ..Workspace::default()
+        };
+        workspace
+            .documents
+            .insert(uri.clone(), Document::new(&uri, source, Some(1)));
+        assert!(
+            features::completion(&workspace, &uri, text.position(offset)).is_empty(),
+            "{marked}"
+        );
+    }
 }

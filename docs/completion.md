@@ -12,10 +12,11 @@
 
 ## 命令名操作数
 
-声明目标、命令复制来源和 `meaning` 查看位置只读取命令名，不调用该命令。输入部分命令名并接受补全时，仅替换名称，不插入被命名命令的参数。例如，项目内有 `\newcommand{\ordinary}[1]{#1}` 时：
+声明目标、命令复制来源和 `meaning` 查看位置只读取命令名，不调用该命令。输入部分命令名并接受补全时，仅替换名称，不插入被命名命令的参数；只输入反斜杠、尚未输入字母时也遵循这一规则，兼容尚未闭合的名称分组。例如，项目内有 `\newcommand{\ordinary}[1]{#1}` 时：
 
 | 输入 | 选择 `ordinary` 后 |
 | --- | --- |
+| `\meaning\` | `\meaning\ordinary` |
 | `\meaning\ord` | `\meaning\ordinary` |
 | `\let\saved=\ord` | `\let\saved=\ordinary` |
 | `\newcommand{\ord}` | `\newcommand{\ordinary}` |
@@ -26,6 +27,8 @@
 实际调用仍提供参数片段，包括 `futurelet` 的后续执行命令，以及被查看或复制的操作数之后再次出现的真实命令。操作数判断沿用静态解析边界；本文件前文已显式重定义相关关键词时，按普通调用处理。不执行任意宏展开，也不完整推断跨文件改写或分组恢复。
 
 相关语义见[命令名操作数与声明](declaration-operands.md)、[meaning](meaning.md) 和 [futurelet](futurelet.md)。
+
+`detokenize` 的分组正文、`string` 转成文字的 token 不提供普通命令补全；文件名参数中的这些包装仍可用于路径补全。被 `meaning` 查看或被复制的转换命令不启动文字转换，后续真实命令继续提供补全。
 
 ## 名称替换
 

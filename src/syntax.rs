@@ -101,6 +101,8 @@ pub struct Syntax {
     pub commands: Vec<Command>,
     /// Unexpanded declaration/copy/inspection operands remain command references,
     /// but do not read arguments or perform the named command's operations.
+    /// Also retain control symbols and unfinished backslashes for completion;
+    /// these positions need not correspond to an indexed command/definition.
     pub control_operands: std::collections::BTreeSet<usize>,
     pub labels: Vec<Entry>,
     pub anchors: Vec<Entry>,
@@ -125,6 +127,9 @@ pub struct Syntax {
     pub name_counter_references: Vec<Entry>,
     pub diagnostics: Vec<Diagnostic>,
     pub ignored: Vec<Range<usize>>,
+    /// Literal conversion data stays available to filename completion, but
+    /// should not offer executable command templates within the quoted text.
+    pub literal_conversions: Vec<Range<usize>>,
     /// Actual comments, distinguished from ignored URLs and verbatim text.
     pub comments: Vec<Range<usize>>,
     pub fixes: Vec<QuickFix>,
@@ -1991,6 +1996,7 @@ impl Syntax {
             // Literal conversions suppress command indexing but retain source
             // ranges for consumers such as quoted filename completion.
             if let Some(end) = conversion_arguments.remove(&i) {
+                result.literal_conversions.push(i..end);
                 i = end;
                 continue;
             }
@@ -2188,8 +2194,8 @@ impl Syntax {
                     };
                     if name == "meaning" && operands_known {
                         let operand = skip_space(source, command_end);
-                        if let Some(word) = control_word(source, operand) {
-                            control_operands.insert(word.start);
+                        if bytes.get(operand) == Some(&b'\\') {
+                            control_operands.insert(operand);
                         } else if matches!(bytes.get(operand), Some(b'{' | b'}'))
                             && !result.commands.iter().any(|previous| {
                                 !control_operands.contains(&previous.span.start)
@@ -2277,8 +2283,9 @@ impl Syntax {
                     }
                     let declaration = if declares_command(name) {
                         if let Some(argument) = &command.argument {
-                            let span = trimmed_span(source, argument.span.clone());
-                            control_word(source, span.start).filter(|word| *word == span)
+                            let bounded = &source[..argument.span.end];
+                            control_word(bounded, skip_space(bounded, argument.span.start))
+                                .filter(|word| skip_space(bounded, word.end) == argument.span.end)
                         } else {
                             control_word(source, arg_start)
                         }
@@ -2320,6 +2327,23 @@ impl Syntax {
                     if operands_known {
                         if let Some(span) = &declaration {
                             control_operands.insert(span.start);
+                        } else if declares_command(name)
+                            || matches!(
+                                name,
+                                "def" | "gdef" | "edef" | "xdef" | "let" | "futurelet"
+                            )
+                        {
+                            // Retain the first name token even before its group
+                            // is complete, without inventing a declaration.
+                            let at =
+                                if declares_command(name) && bytes.get(arg_start) == Some(&b'{') {
+                                    skip_space(source, arg_start + 1)
+                                } else {
+                                    arg_start
+                                };
+                            if bytes.get(at) == Some(&b'\\') {
+                                control_operands.insert(at);
+                            }
                         }
                         if let Some((start, end)) = &expanded_target {
                             control_operands.extend([*start, end.start]);
@@ -2354,13 +2378,15 @@ impl Syntax {
                                 // Primitive let copies one token, including a
                                 // brace; a following group is not its source.
                                 at
+                            } else if bytes.get(at) == Some(&b'{') {
+                                // The source group may still be unfinished;
+                                // its first token is already the name operand.
+                                skip_space(source, at + 1)
                             } else {
-                                group(source, at, b'{', b'}')
-                                    .map(|(argument, _)| argument.span.start)
-                                    .unwrap_or(at)
+                                at
                             };
-                            if let Some(word) = control_word(source, operand) {
-                                control_operands.insert(word.start);
+                            if bytes.get(operand) == Some(&b'\\') {
+                                control_operands.insert(operand);
                             } else if name == "let"
                                 && matches!(bytes.get(operand), Some(b'{' | b'}'))
                                 && !result.commands.iter().any(|previous| {
