@@ -1670,7 +1670,9 @@ fn error_context<'a>(
     }
     let graphics = missing_graphic_name(message).is_some() && missing_file_name(message).is_none();
     let documentation = line.trim() == "See the LaTeX manual or LaTeX Companion for explanation."
-        || (undefined_length_name(message).is_some() || undefined_toggle_name(message).is_some())
+        || (undefined_length_name(message).is_some()
+            || undefined_toggle_name(message).is_some()
+            || undefined_boolean_name(message).is_some())
             && line.trim() == "See the etoolbox package documentation for explanation."
         || (undefined_color_name(message).is_some()
             || undefined_color_model_name(message).is_some())
@@ -2074,6 +2076,13 @@ pub(crate) fn undefined_length_name(message: &str) -> Option<&str> {
 pub(crate) fn undefined_toggle_name(message: &str) -> Option<&str> {
     let name = message
         .strip_prefix("Package etoolbox Error: Toggle '")?
+        .strip_suffix("' undefined.")?;
+    crate::syntax::is_static_key(name).then_some(name)
+}
+
+pub(crate) fn undefined_boolean_name(message: &str) -> Option<&str> {
+    let name = message
+        .strip_prefix("Package etoolbox Error: Boolean '\\if")?
         .strip_suffix("' undefined.")?;
     crate::syntax::is_static_key(name).then_some(name)
 }
@@ -2710,6 +2719,21 @@ fn emit_with_context(
             )
         });
     ranges.extend(toggle_range);
+    let boolean_name = undefined_boolean_name(&message);
+    let boolean_range = boolean_name
+        .filter(|_| !project_stale)
+        .filter(|_| reported_line.checked_sub(1) == Some(line))
+        .and_then(|name| {
+            invocation_error_range(
+                &text,
+                line,
+                context?,
+                name,
+                InvocationKind::Boolean,
+                cached_calls,
+            )
+        });
+    ranges.extend(boolean_range);
     let color_name = undefined_color_name(&message);
     let color_range = color_name
         .filter(|_| !project_stale)
@@ -2830,6 +2854,7 @@ fn emit_with_context(
                     .or_else(|| counter_range.map(|_| "undefined-counter"))
                     .or_else(|| length_range.map(|_| "undefined-length"))
                     .or_else(|| toggle_range.map(|_| "undefined-toggle"))
+                    .or_else(|| boolean_range.map(|_| "undefined-boolean"))
                     .or_else(|| color_range.map(|_| "undefined-color"))
                     .or_else(|| model_range.map(|_| "undefined-color-model"))
                     .map(|code| NumberOrString::String(code.into())),
@@ -2851,6 +2876,7 @@ fn emit_with_context(
                     .or_else(|| counter_range.and(counter_name).map(|name| serde_json::json!({"counter":name})))
                     .or_else(|| length_range.and(length_name).map(|name| serde_json::json!({"length":name})))
                     .or_else(|| toggle_range.and(toggle_name).map(|name| serde_json::json!({"toggle":name})))
+                    .or_else(|| boolean_range.and(boolean_name).map(|name| serde_json::json!({"boolean":name})))
                     .or_else(|| color_range.and(color_name).map(|name| serde_json::json!({"color":name})))
                     .or_else(|| model_range.and(color_model).map(|name| serde_json::json!({"model":name})))
                     .or_else(|| input_range.and(missing_file).map(|name| serde_json::json!({"file":name})))
@@ -2876,7 +2902,7 @@ fn emit_with_context(
                     .or_else(|| graphic_range.and(missing_graphic).map(|name| serde_json::json!({"file":name})))
                     .or_else(|| missing_include_key(&message).map(|name| serde_json::json!({"file":name})))
                     .map(|mut data| {
-                        if special_range.is_some() || missing_include_key(&message).is_some() || color_range.is_some() || model_range.is_some() || counter_range.is_some() || length_range.is_some() || toggle_range.is_some() || environment_range.is_some() || input_range.is_some() || loader_range.is_some() || clash_range.is_some() {
+                        if special_range.is_some() || missing_include_key(&message).is_some() || color_range.is_some() || model_range.is_some() || counter_range.is_some() || length_range.is_some() || toggle_range.is_some() || boolean_range.is_some() || environment_range.is_some() || input_range.is_some() || loader_range.is_some() || clash_range.is_some() {
                             if let Some(context) = macro_context {
                                 data["macroSources"] = serde_json::json!(context.macros.sources);
                                 if !context.macros.paused_sources.is_empty() {
@@ -3834,6 +3860,7 @@ enum InvocationKind {
     Counter,
     Length,
     Toggle,
+    Boolean,
     EnvironmentBegin,
     EnvironmentEnd,
     File,
@@ -3856,6 +3883,8 @@ impl InvocationKind {
             Some(Self::Length)
         } else if undefined_toggle_name(message).is_some() {
             Some(Self::Toggle)
+        } else if undefined_boolean_name(message).is_some() {
+            Some(Self::Boolean)
         } else {
             environment_error(message)
                 .map(|error| {
@@ -3894,9 +3923,18 @@ impl InvocationKind {
             Self::Length => {
                 crate::lengths::error_invocations_with_signatures(source, syntax, signatures)
             }
-            Self::Toggle => crate::toggle_diagnostics::error_invocations_with_signatures(
-                source, syntax, signatures,
-            ),
+            Self::Toggle | Self::Boolean => {
+                crate::switch_diagnostics::error_invocations_with_signatures(
+                    source,
+                    syntax,
+                    signatures,
+                    if self == Self::Toggle {
+                        crate::switch_diagnostics::Kind::Toggle
+                    } else {
+                        crate::switch_diagnostics::Kind::Boolean
+                    },
+                )
+            }
             Self::File => file_error_invocations_with_signatures(source, syntax, signatures),
             Self::EnvironmentBegin | Self::EnvironmentEnd => {
                 environment_error_invocations_with_signatures(
@@ -4014,7 +4052,7 @@ impl ProjectSources {
 struct ProjectAnalysis<'a> {
     project: &'a ProjectSources,
     macros: Option<Rc<MacroContext<'a>>>,
-    calls: [Option<(Url, Rc<InvocationCalls<'a>>)>; 9],
+    calls: [Option<(Url, Rc<InvocationCalls<'a>>)>; 10],
 }
 
 impl<'a> ProjectAnalysis<'a> {
@@ -9407,6 +9445,11 @@ mod project_color_tests {
             (
                 r"\bridge\settoggle{darft}{true}",
                 "Package etoolbox Error: Toggle 'darft' undefined.",
+                "darft",
+            ),
+            (
+                r"\bridge\setbool{darft}{true}",
+                "Package etoolbox Error: Boolean '\\ifdarft' undefined.",
                 "darft",
             ),
         ];

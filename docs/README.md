@@ -43,6 +43,7 @@
 - [编译诊断](diagnostics.md)：错误定位、警告和拼写修复规则。
 - [长度诊断与修复](length-diagnostics.md)：etoolbox 的未定义长度定位、候选类型与拼写修复。
 - [toggle 诊断与修复](toggle-diagnostics.md)：未定义开关的定位、独立命名空间与项目内拼写修复。
+- [boolean 诊断与修复](boolean-diagnostics.md)：基础名称定位、项目内候选与只读内置条件修复。
 - [Unicode 输入错误](unicode-errors.md)：不支持的字符、码点摘要与定位边界。
 - [特殊字符诊断与修复](special-characters.md)：字面特殊字符、多余对齐分隔符的精确定位及转义修复。
 - [多余右花括号](extra-braces.md)：正文、数学及显式分组中的字符定位与删除修复。

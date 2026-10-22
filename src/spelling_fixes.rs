@@ -14,6 +14,7 @@ enum Kind {
     Counter,
     Length,
     Toggle,
+    Boolean,
     Anchor,
     Color,
     ColorModel,
@@ -125,10 +126,11 @@ fn target<'a>(
         if build_log::undefined_toggle_name(&diagnostic.message) != Some(name) {
             return None;
         }
-        return crate::toggle_diagnostics::error_invocations_with_signatures(
+        return crate::switch_diagnostics::error_invocations_with_signatures(
             &doc.text.source,
             &doc.syntax,
             signatures?,
+            crate::switch_diagnostics::Kind::Toggle,
         )
         .iter()
         .any(|(span, _)| {
@@ -136,6 +138,25 @@ fn target<'a>(
                 && doc.text.range(span.start, span.end) == diagnostic.range
         })
         .then_some((Kind::Toggle, name));
+    }
+
+    if diagnostic.code == Some(NumberOrString::String("undefined-boolean".into())) {
+        let name = diagnostic.data.as_ref()?.get("boolean")?.as_str()?;
+        if build_log::undefined_boolean_name(&diagnostic.message) != Some(name) {
+            return None;
+        }
+        return crate::switch_diagnostics::error_invocations_with_signatures(
+            &doc.text.source,
+            &doc.syntax,
+            signatures?,
+            crate::switch_diagnostics::Kind::Boolean,
+        )
+        .iter()
+        .any(|(span, _)| {
+            doc.text.source[span.clone()] == *name
+                && doc.text.range(span.start, span.end) == diagnostic.range
+        })
+        .then_some((Kind::Boolean, name));
     }
 
     if diagnostic.code == Some(NumberOrString::String("undefined-color".into())) {
@@ -411,7 +432,7 @@ pub fn fixes(
             }
             let literal = matches!(diagnostic.code.as_ref(), Some(NumberOrString::String(code)) if matches!(code.as_str(), "unescaped-special-character" | "extra-alignment-tab" | "extra-closing-brace" | "double-subscript" | "double-superscript"));
             let invocation_scope = if literal
-                || matches!(diagnostic.code.as_ref(), Some(NumberOrString::String(code)) if matches!(code.as_str(), "undefined-color" | "undefined-color-model" | "undefined-counter" | "undefined-length" | "undefined-toggle" | "undefined-environment" | "mismatched-environment-end" | "missing-input" | "missing-include" | "missing-package" | "missing-class" | "missing-bibliography-style" | "missing-bibliography-database"))
+                || matches!(diagnostic.code.as_ref(), Some(NumberOrString::String(code)) if matches!(code.as_str(), "undefined-color" | "undefined-color-model" | "undefined-counter" | "undefined-length" | "undefined-toggle" | "undefined-boolean" | "undefined-environment" | "mismatched-environment-end" | "missing-input" | "missing-include" | "missing-package" | "missing-class" | "missing-bibliography-style" | "missing-bibliography-database"))
             {
                 let confirmed = workspace.build_diagnostic_sources.get(root);
                 let scope = if let Some(value) = diagnostic
@@ -603,7 +624,9 @@ pub fn fixes(
             }
             let mut candidates = BTreeMap::<String, usize>::new();
             let mut length_conflicts = BTreeSet::new();
-            let mut toggle_owners = BTreeMap::<String, usize>::new();
+            let mut switch_owners = BTreeMap::<String, usize>::new();
+            let boolean_test = kind == Kind::Boolean
+                && crate::switch_diagnostics::boolean_test(doc, diagnostic.range);
             let mut total_entries = 0;
             for document in project
                 .iter()
@@ -623,6 +646,7 @@ pub fn fixes(
                     Kind::Environment => &document.syntax.environments,
                     Kind::Counter => &document.syntax.counters,
                     Kind::Toggle => &document.syntax.toggles,
+                    Kind::Boolean => &document.syntax.conditionals,
                     Kind::Anchor => &document.syntax.anchors,
                     Kind::Color => &document.syntax.colors,
                     Kind::ColorModel => &[],
@@ -648,8 +672,9 @@ pub fn fixes(
                         }
                     }
                 }
-                if kind == Kind::Toggle {
-                    // Each declaration owns one internal control sequence.
+                if matches!(kind, Kind::Toggle | Kind::Boolean) {
+                    // Toggle declarations own one internal command, booleans
+                    // own a condition and two setters.
                     // Additional macros or generated commands can replace it.
                     for name in document
                         .syntax
@@ -659,8 +684,13 @@ pub fn fixes(
                         .chain(crate::generated::commands(document))
                         .take(4096)
                     {
-                        if let Some(name) = name.strip_prefix("etb@tgl@") {
-                            *toggle_owners.entry(name.into()).or_default() += 1;
+                        let owned = if kind == Kind::Toggle {
+                            name.strip_prefix("etb@tgl@")
+                        } else {
+                            Some(name.as_str())
+                        };
+                        if let Some(name) = owned {
+                            *switch_owners.entry(name.into()).or_default() += 1;
                         }
                         total_entries += 1;
                         if total_entries >= 4096 {
@@ -714,6 +744,11 @@ pub fn fixes(
                     candidates.entry((*name).into()).or_insert(1);
                 }
             }
+            if boolean_test {
+                for name in ["true", "false"] {
+                    candidates.entry(name.into()).or_insert(1);
+                }
+            }
             if kind == Kind::Color {
                 for name in crate::named_colors::BUILTINS {
                     candidates.entry((*name).into()).or_insert(1);
@@ -728,7 +763,8 @@ pub fn fixes(
             if total_entries >= 4096
                 || candidates.contains_key(key)
                 || length_conflicts.contains(key)
-                || toggle_owners.contains_key(key)
+                || kind == Kind::Toggle && switch_owners.contains_key(key)
+                || kind == Kind::Boolean && switch_owners.contains_key(&format!("if{key}"))
             {
                 continue;
             }
@@ -739,7 +775,15 @@ pub fn fixes(
                         && valid_name(kind, name)
                         && !counter_conflicts.contains(name.as_str())
                         && !length_conflicts.contains(name)
-                        && (kind != Kind::Toggle || toggle_owners.get(name) == Some(&1))
+                        && (kind != Kind::Toggle || switch_owners.get(name) == Some(&1))
+                        && (kind != Kind::Boolean
+                            || if matches!(name.as_str(), "true" | "false") {
+                                boolean_test && !switch_owners.contains_key(&format!("if{name}"))
+                            } else {
+                                crate::generated::conditional_names(name)
+                                    .iter()
+                                    .all(|control| switch_owners.get(control) == Some(&1))
+                            })
                 })
                 .take(MAX_COMPARISONS.saturating_sub(comparisons))
                 .filter_map(|(name, _)| {
@@ -763,6 +807,7 @@ pub fn fixes(
                     Kind::Command => ("command", format!("\\{name}")),
                     Kind::Length => ("length", format!("\\{name}")),
                     Kind::Toggle => ("toggle", name.clone()),
+                    Kind::Boolean => ("boolean", name.clone()),
                     Kind::Environment => ("environment", name.clone()),
                     Kind::Counter => ("counter", name.clone()),
                     Kind::Color => ("color", name.clone()),

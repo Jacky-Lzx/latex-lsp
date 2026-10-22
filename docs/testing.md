@@ -81,6 +81,18 @@ cargo test --locked --test undefined_lengths -- --include-ignored
 cargo test --locked --test protocol undefined_length_diagnostics_offer_versioned_fixes_and_reject_changed_candidate_types
 ```
 
+## boolean 诊断
+
+默认回归检查 etoolbox 五种直接操作的基础名称定位、跨行与 UTF-16 范围、重复和截断源码回显、声明及派生命令冲突、项目隔离、只读内置条件、版本化及旧客户端修复。外部回归需要 pdfLaTeX、XeLaTeX、LuaLaTeX、ifthen 和 etoolbox；在三个引擎的 60 / 79 列及两种日志格式中修复后重新编译，核对局部、全局赋值、分支与同名 toggle 的独立性：
+
+```sh
+cargo test --locked --test undefined_booleans
+cargo test --locked --test undefined_booleans -- --include-ignored
+cargo test --locked --test protocol undefined_boolean_diagnostics_offer_versioned_fixes_and_reject_changed_candidate_namespaces
+```
+
+支持范围见[boolean 诊断与修复](boolean-diagnostics.md)。
+
 ## toggle 诊断
 
 默认回归核对五种直接操作的实际参数读取边界、UTF-16 和跨行定位、重复及缩短回显、候选命名空间、项目隔离、生成命令冲突及过期修复。真实回归需要 pdfLaTeX、XeLaTeX、LuaLaTeX 和 etoolbox，分别使用 60 / 79 列和两种日志格式，应用修复后重新编译并核对局部、全局赋值及分支结果：
