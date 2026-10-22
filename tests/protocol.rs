@@ -15983,6 +15983,9 @@ fn wrapped_standard_rerun_actions_use_complete_final_warnings_and_reject_replace
             ("LaTeX Warning: Label(s) may have changed.\n               Rerun to get cross-references right.", "LaTeX Warning: Label(s) may have changed. Rerun to get cross-references right."),
             ("Package natbib Warning: Citation(s) may have changed.\n(natbib) Rerun to get citations correct.", "Package natbib Warning: Citation(s) may have changed. (natbib) Rerun to get citations correct."),
             ("Package longtable Warning: Table widths have changed. Rerun LaT\neX.", "Package longtable Warning: Table widths have changed. Rerun LaTeX."),
+            ("LaTeX Warning: Temporary extra page added at the end. Rerun \nto get it removed.", "LaTeX Warning: Temporary extra page added at the end. Rerun to get it removed."),
+            ("LaTeX Warning: Hook 'shipout/lastpage' executed on wrong pag\ne (1 not 3).\n               Rerun to correct this.", "LaTeX Warning: Hook 'shipout/lastpage' executed on wrong page (1 not 3). Rerun to correct this."),
+            ("LaTeX Warning: Hook 'shipout/lastpage' executed on wrong page (1 not 3\n).\n               Rerun to correct this.", "LaTeX Warning: Hook 'shipout/lastpage' executed on wrong page (1 not 3). Rerun to correct this."),
         ] {
             let capabilities = if literals {
                 json!({"textDocument":{"codeAction":{"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix"]}}}}})

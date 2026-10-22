@@ -383,6 +383,7 @@ pub(crate) fn required_index_tool(diagnostic: &Diagnostic) -> Option<&'static st
 
 const STANDARD_RERUN_REQUESTS: &[&str] = &[
     "LaTeX Warning: Label(s) may have changed. Rerun to get cross-references right.",
+    "LaTeX Warning: Temporary extra page added at the end. Rerun to get it removed.",
     "Package natbib Warning: Citation(s) may have changed. Rerun to get citations correct.",
     "Package natbib Warning: Citation(s) may have changed.",
     "Package longtable Warning: Table widths have changed. Rerun LaTeX.",
@@ -392,6 +393,8 @@ const STANDARD_RERUN_REQUESTS: &[&str] = &[
 fn standard_rerun_prefix(message: &str) -> Option<&'static str> {
     [
         ("LaTeX Warning: Label(s)", "               "),
+        ("LaTeX Warning: Temporary extra page", "               "),
+        ("LaTeX Warning: Hook 'shipout/lastpage'", "               "),
         ("Package natbib Warning: Citation(s)", "(natbib)"),
         ("Package longtable Warning: Table widths", "(longtable)"),
         ("Package hyperref Warning: Rerun", "(hyperref)"),
@@ -409,6 +412,24 @@ fn normalized_rerun_message(message: &str) -> String {
         .join(" ")
 }
 
+// The kernel reports the previous and actual absolute page counts, then
+// emits the request on an indented MessageBreak continuation.
+fn last_page_hook_rerun_tail(message: &str) -> Option<&str> {
+    let message =
+        message.strip_prefix("LaTeX Warning: Hook 'shipout/lastpage' executed on wrong page (")?;
+    let (pages, tail) = message.split_once(").")?;
+    let (previous, actual) = pages.split_once(" not ")?;
+    let page = |value: &str| {
+        value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit())
+            .then(|| value.parse::<u32>().ok())
+            .flatten()
+            .filter(|value| *value > 0)
+    };
+    (page(previous)? != page(actual)?).then_some(tail.trim_start())
+}
+
 // A MessageBreak after a complete first sentence is still part of the
 // request. Keep unexpected trailing prose too, so it cannot borrow a valid
 // short natbib header while its actual continuation asks for something else.
@@ -416,10 +437,12 @@ fn rerun_sentence_continuation(message: &str, next: &str) -> bool {
     if !next.trim_start().starts_with("Rerun ") {
         return false;
     }
-    let prefix = format!("{} ", normalized_rerun_message(message));
+    let message = normalized_rerun_message(message);
+    let prefix = format!("{message} ");
     STANDARD_RERUN_REQUESTS
         .iter()
         .any(|request| request.starts_with(&prefix))
+        || last_page_hook_rerun_tail(&message) == Some("")
 }
 
 /// Share the confirmed rerun warning grammar with analysis and editor actions.
@@ -432,6 +455,7 @@ pub(crate) fn rerun_required(diagnostic: &Diagnostic) -> bool {
     }
     let message = normalized_rerun_message(&diagnostic.message);
     STANDARD_RERUN_REQUESTS.contains(&message.as_str())
+        || last_page_hook_rerun_tail(&message) == Some("Rerun to correct this.")
         || rerunfilecheck_request(&message).is_some()
 }
 
@@ -3577,9 +3601,15 @@ fn wrapped_message(
         && *i + 1 < lines.len()
         && message.len() < 4096
     {
-        let next_at = continuation(*i).unwrap_or(*i + 1);
+        let continuation_at = continuation(*i);
+        let next_at = continuation_at.unwrap_or(*i + 1);
         let next = lines[next_at];
-        if next.trim().is_empty() || message_boundary(next) {
+        // Confirm a closing page-count parenthesis before treating it as
+        // warning text. A real file close on a separate line stays a boundary.
+        let closes_page_counts = lines[*i].len() >= 60
+            && next.starts_with(").")
+            && last_page_hook_rerun_tail(&format!("{message}{next}")).is_some();
+        if next.trim().is_empty() || (message_boundary(next) && !closes_page_counts) {
             break;
         }
         let mut next_index = next_at;
@@ -3608,12 +3638,18 @@ fn wrapped_message(
         }
         let byte_wrapped = (reference || rerunfilecheck || standard_rerun.is_some())
             && lines[*i].len() >= 60
-            && !next.trim_start().starts_with('(');
+            && continuation_at.is_none()
+            && !(standard_rerun.is_some() && rerun_sentence_continuation(&message, next))
+            // A kernel warning can byte-wrap immediately before its page
+            // counts. Real file announcements were excluded above.
+            && (!next.trim_start().starts_with('(') || standard_rerun == Some("               "));
         *i = next_at;
         if byte_wrapped {
             message.push_str(next);
         } else {
-            message.push(' ');
+            if !message.ends_with(char::is_whitespace) {
+                message.push(' ');
+            }
             message.push_str(next.trim());
         }
     }
