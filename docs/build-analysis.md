@@ -47,6 +47,10 @@ rerunfilecheck 支持文件变更后的标准 `Rerun.` 请求，以及 hyperref 
 
 摘要依据本次最终日志，不保留前一轮已满足的请求。`latex/buildFinished` 和 `latex.buildStatus` 返回相同字段；取消、超时和过期结果仍按原规则返回 `analysis: null`。重编译操作的工具适用范围见[从诊断重新编译](build.md#从诊断重新编译)。
 
+## 索引与术语表工具
+
+`analysis.requiredIndexTools` 汇总 rerunfilecheck 明确请求的 `makeindex`，去重并排序。完整的索引或术语表请求同时设置 `rerunRequired: true`；该列表与 `requiredBibliographyTools` 独立。处理命令、日志快照规则及重编译操作的适用边界见[索引与术语表处理](index-processing.md)。
+
 ## 排版警告摘要
 
 `analysis.boxWarnings` 汇总水平、垂直方向的 Overfull / Underfull 诊断数量，以及最大溢出量或 badness。字段、计数和预算规则见[排版警告分析](typesetting.md)。
