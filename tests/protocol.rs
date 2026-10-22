@@ -17,6 +17,70 @@ struct Server {
 }
 
 #[test]
+fn conditional_string_hooks_refresh_after_non_source_file_events_over_stdio() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+    let gate = Url::from_file_path(directory.path().join("gate.csv")).unwrap();
+    let source = "\\documentclass{article}\\newbool{draft}\\newcommand{\\identity}[1]{#1}\\IfFileExists{./gate.csv}{\\let\\ifblank\\identity}{}\n\\ifblank{\\booltrue{draft}}{Y}{N}\n";
+    std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(directory.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":main,"languageId":"latex","version":9,"text":source}}),
+    );
+    let text = latex_lsp::text::Text::new(source.into());
+    let target = json!({"textDocument":{"uri":main},"position":text.position(source.rfind("draft").unwrap()+1)});
+    assert_eq!(
+        server.request(2, "textDocument/definition", target.clone()),
+        json!([])
+    );
+    for watched in [true, false] {
+        std::fs::write(gate.to_file_path().unwrap(), "Data,not TeX").unwrap();
+        if watched {
+            server.notify(
+                "workspace/didChangeWatchedFiles",
+                json!({"changes":[{"uri":gate,"type":1}]}),
+            );
+        } else {
+            server.notify("workspace/didCreateFiles", json!({"files":[{"uri":gate}]}));
+        }
+        assert_eq!(
+            server
+                .request(3, "textDocument/definition", target.clone())
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        let mut rename = target.clone();
+        rename["newName"] = json!("release");
+        let edit = server.request(4, "textDocument/rename", rename);
+        let documents = edit["documentChanges"].as_array().unwrap();
+        assert_eq!(documents.len(), 1);
+        assert_eq!(documents[0]["textDocument"]["version"], 9);
+        assert_eq!(documents[0]["edits"].as_array().unwrap().len(), 2);
+        std::fs::remove_file(gate.to_file_path().unwrap()).unwrap();
+        if watched {
+            server.notify(
+                "workspace/didChangeWatchedFiles",
+                json!({"changes":[{"uri":gate,"type":3}]}),
+            );
+        } else {
+            server.notify("workspace/didDeleteFiles", json!({"files":[{"uri":gate}]}));
+        }
+        assert_eq!(
+            server.request(5, "textDocument/definition", target.clone()),
+            json!([])
+        );
+    }
+    server.request(6, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
 fn imported_string_predicates_refresh_on_edits_close_and_disk_changes_over_stdio() {
     let directory = tempfile::tempdir().unwrap();
     let root = Url::from_directory_path(directory.path()).unwrap();

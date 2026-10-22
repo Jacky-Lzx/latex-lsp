@@ -2725,6 +2725,30 @@ impl<'a> CommandSignatures<'a> {
             if result.contains(&command.span.start) {
                 continue;
             }
+            // Project parsing has already confirmed this direct predicate's
+            // literal grammar at this position. A later redefinition must not
+            // make unknown-arity fallback consume the following file load.
+            if let Some(count) = crate::string_tests::data_count(&command.name) {
+                let data = crate::string_tests::arguments(source, command.span.end, count);
+                if !data.is_empty()
+                    && data
+                        .iter()
+                        .all(|argument| parsed.literal_tests.contains(&argument.span))
+                {
+                    if let Some(signature) = operand_builtin(&command.name) {
+                        argument_tokens(
+                            (source, parsed),
+                            command.span.end,
+                            true,
+                            &signature,
+                            false,
+                            literal,
+                            &mut result,
+                        );
+                        continue;
+                    }
+                }
+            }
             let Some((name, _, end, control_spaces)) =
                 self.invocation(source, parsed, index, &result, &declarations)
             else {

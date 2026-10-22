@@ -943,6 +943,8 @@ impl Workspace {
             self.load_dependencies(uri, 0);
         }
         affected.extend(self.documents.keys().filter(|uri| matches(uri)).cloned());
+        // A non-source file can select a different conditional-load hook.
+        crate::string_test_context::refresh(self);
         affected
     }
 

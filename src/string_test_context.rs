@@ -2,15 +2,70 @@
 use crate::{
     signature::CommandSignatures,
     string_tests::{arguments, data_count},
-    syntax::Syntax,
-    workspace::{DocumentKind, Workspace},
+    syntax::{self, Command, Syntax},
+    workspace::{resolve_file_path, DocumentKind, Workspace},
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ops::Range,
+};
 use tower_lsp::lsp_types::Url;
 
 const LITERAL: u8 = 1;
 const CUSTOM: u8 = 2;
 const MAX_VISITS: usize = 4096;
+
+fn file_test(name: &str) -> bool {
+    matches!(name, "InputIfFileExists" | "IfFileExists")
+}
+
+struct Conditional {
+    hook: Range<usize>,
+    input: Option<Url>,
+    end: usize,
+}
+
+impl Conditional {
+    fn new(source: &str, command: &Command, uri: &Url, root: &Url) -> Option<Self> {
+        let argument = syntax::file_argument(source, command)?;
+        if argument.outer_span.start != syntax::skip_space(source, command.span.end)
+            || !syntax::is_literal_file_path(&argument.value)
+        {
+            return None;
+        }
+        let file = resolve_file_path(root, &command.name, &argument.value, &["tex"])
+            .or_else(|| resolve_file_path(uri, &command.name, &argument.value, &["tex"]));
+        // A missing unqualified name may still exist in the TeX distribution.
+        // Explicit paths can be checked within the documented local lookup.
+        if file.is_none() && !argument.value.contains('/') {
+            return None;
+        }
+        let (found, at) = syntax::group(
+            source,
+            syntax::skip_space(source, argument.outer_span.end),
+            b'{',
+            b'}',
+        )?;
+        let (missing, end) = syntax::group(source, syntax::skip_space(source, at), b'{', b'}')?;
+        let hook = if file.is_some() {
+            found.span
+        } else {
+            missing.span
+        };
+        Some(Self {
+            hook,
+            input: (command.name == "InputIfFileExists")
+                .then_some(file)
+                .flatten(),
+            end,
+        })
+    }
+}
+
+enum Event<'a> {
+    Command(&'a Command),
+    Input { uri: Url, at: usize },
+}
 
 struct Source {
     syntax: Syntax,
@@ -30,7 +85,7 @@ impl Source {
         for entry in syntax
             .definitions
             .iter()
-            .filter(|entry| data_count(&entry.name).is_some())
+            .filter(|entry| data_count(&entry.name).is_some() || file_test(&entry.name))
         {
             let Some(name) = entry.detail.strip_prefix("Defined with \\") else {
                 continue;
@@ -106,7 +161,30 @@ impl Analysis {
             let mut data_end = 0;
             let mut meanings = BTreeMap::new();
             let mut reparse = false;
-            for command in &source.syntax.commands {
+            let mut events: Vec<_> = source
+                .syntax
+                .commands
+                .iter()
+                .rev()
+                .map(Event::Command)
+                .collect();
+            while let Some(event) = events.pop() {
+                let command = match event {
+                    Event::Command(command) => command,
+                    Event::Input {
+                        uri: dependency,
+                        at,
+                    } => {
+                        if at >= data_end {
+                            if workspace.documents.contains_key(&dependency) {
+                                self.walk(workspace, &dependency, root, assigned, stack);
+                            } else {
+                                self.missing.insert(dependency, DocumentKind::Latex);
+                            }
+                        }
+                        continue;
+                    }
+                };
                 let at = command.span.start;
                 if at < data_end || source.syntax.control_operands.contains(&at) {
                     continue;
@@ -136,6 +214,37 @@ impl Analysis {
                 }
                 if let Some(names) = source.declarations.get(&at) {
                     assigned.extend(names.iter().cloned());
+                }
+                if file_test(&command.name) {
+                    if let Some(conditional) = (!assigned.contains(&command.name))
+                        .then(|| Conditional::new(&doc.text.source, command, uri, root))
+                        .flatten()
+                    {
+                        // Hooks are token arguments. Execute only the selected
+                        // hook, and schedule the input after its commands.
+                        while matches!(events.last(), Some(Event::Command(next)) if next.span.start < conditional.end)
+                        {
+                            events.pop();
+                        }
+                        if let Some(dependency) = conditional.input {
+                            events.push(Event::Input {
+                                uri: dependency,
+                                at: conditional.end,
+                            });
+                        }
+                        events.extend(
+                            source
+                                .syntax
+                                .commands
+                                .iter()
+                                .rev()
+                                .filter(|next| conditional.hook.contains(&next.span.start))
+                                .map(Event::Command),
+                        );
+                    } else {
+                        self.incomplete = true;
+                    }
+                    continue;
                 }
                 for (dependency, kind) in workspace.literal_command_dependencies(uri, root, command)
                 {
