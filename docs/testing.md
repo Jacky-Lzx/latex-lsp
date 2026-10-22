@@ -26,6 +26,12 @@ cargo test --locked --test operand_completion
 cargo test --locked --test signature commented_argument_counts -- --include-ignored
 ```
 
+默认值预览回归覆盖传统宏/环境与 xparse 默认值，核对注释消除、转义百分号、显式控制空格、控制词边界、Unicode 和长注释。三个引擎使用 `\ifx` 比较原始默认值与预览文本的 token 身份，同时检查参数提示和补全详情一致：
+
+```sh
+cargo test --locked --test signature optional_default_previews -- --include-ignored
+```
+
 ## 排版日志与文件移动
 
 声明操作数回归使用三个 LaTeX 引擎验证复制 `newcommand`、`newif`、`newenvironment` 后的普通调用，以及宏、开关和环境重命名前后的输出一致；同时验证直接与静态 `csname` 目标复制字面花括号，以及未执行的宏正文和参数分隔文本。默认测试另检查各类符号索引、命令名操作数的参数提示与名称补全、静态 `csname`、逐字边界和标签编辑范围，并核对花括号复制不会产生错误修复、真实不配对仍保留精确位置：

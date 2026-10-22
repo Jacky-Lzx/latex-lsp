@@ -1361,13 +1361,52 @@ pub(crate) fn definition_body_spans(
 }
 
 fn short(value: &str) -> String {
-    value
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .chars()
-        .take(80)
-        .collect()
+    let mut literal = String::new();
+    let mut at = 0;
+    let mut control_word = false;
+    let mut pending_space = false;
+    while at < value.len() {
+        if value.as_bytes()[at] == b'%' {
+            at = tex_operand_comments(value, at);
+            // Removing a comment must not turn two tokens into a longer
+            // control word when the preview is read as TeX source.
+            if control_word
+                && value[at..]
+                    .chars()
+                    .next()
+                    .is_some_and(|ch| ch.is_alphabetic() || ch == '@')
+            {
+                pending_space = true;
+            }
+            continue;
+        }
+        let end = if value.as_bytes()[at] == b'\\' {
+            let word = syntax::control_word(value, at);
+            let end = word
+                .as_ref()
+                .map(|word| word.end)
+                .or_else(|| syntax::token(value, at).map(|token| at + token.len()))
+                .unwrap_or(at + 1);
+            control_word = word.is_some();
+            end
+        } else {
+            let ch = value[at..].chars().next().unwrap();
+            control_word = false;
+            if ch.is_whitespace() {
+                pending_space = true;
+                at += ch.len_utf8();
+                continue;
+            }
+            at + ch.len_utf8()
+        };
+        if pending_space && !literal.is_empty() && !literal.ends_with(' ') {
+            literal.push(' ');
+        }
+        pending_space = false;
+        literal.push_str(&value[at..end]);
+        at = end;
+    }
+    literal.chars().take(80).collect()
 }
 
 /// Read one lexical TeX token without expanding it. In particular, a delimiter

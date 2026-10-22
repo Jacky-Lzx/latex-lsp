@@ -34,6 +34,135 @@ fn check(definitions: &str, marked: &str, label: &str, active: u32) {
     );
 }
 
+const OPTIONAL_DEFAULT_PREVIEWS: &[(&str, &str)] = &[
+    ("\\ ", "\\ "),
+    ("\\ % comment\n", "\\ "),
+    ("A\\ % comment\n B", "A\\ B"),
+    ("A\\  B", "A\\ B"),
+    ("% ignored\n", ""),
+    ("DE% comment\n  F", "DEF"),
+    ("DE% comment\r\n  F", "DEF"),
+    ("DE % comment\n F", "DE F"),
+    ("% comment\n DEF% tail\n", "DEF"),
+    ("\\relax% comment\n DEF", "\\relax DEF"),
+    ("\\relax% comment\n % second\n DEF", "\\relax DEF"),
+    ("\\relax% comment\n 2", "\\relax2"),
+    ("\\%literal% comment\n DEF", "\\%literalDEF"),
+    ("\\\\% comment\n DEF", "\\\\DEF"),
+    ("\\\\\\%literal", "\\\\\\%literal"),
+    ("😀% comment\n 中文", "😀中文"),
+];
+
+#[test]
+fn optional_default_previews_remove_comments_without_joining_control_words() {
+    for &(default, preview) in OPTIONAL_DEFAULT_PREVIEWS {
+        for declaration in [
+            format!("\\newcommand{{\\pair}}[2][{default}]{{#1:#2}}"),
+            format!("\\NewDocumentCommand{{\\pair}}{{O{{{default}}}m}}{{#1:#2}}"),
+        ] {
+            let label = format!("\\pair[#1={preview}]{{#2}}");
+            check(&declaration, r"\pair{BO¦DY}", &label, 1);
+            let (mut workspace, uri, position) = setup(&declaration, r"\pa¦");
+            workspace.snippets = true;
+            let item = latex_lsp::features::completion(&workspace, &uri, position)
+                .into_iter()
+                .find(|item| item.label == "pair")
+                .unwrap();
+            assert_eq!(
+                item.detail.as_deref(),
+                Some(label.as_str()),
+                "{declaration}"
+            );
+            let Some(CompletionTextEdit::Edit(edit)) = item.text_edit else {
+                panic!("missing edit")
+            };
+            assert_eq!(edit.new_text, "pair{${1:arg2}}");
+        }
+        check(
+            &format!("\\NewDocumentCommand{{\\pair}}{{D(){{{default}}}m}}{{#1:#2}}"),
+            r"\pair{BO¦DY}",
+            &format!("\\pair(#1={preview}){{#2}}"),
+            1,
+        );
+        check(
+            &format!("\\newenvironment{{panel}}[2][{default}]{{#1:#2}}{{}}"),
+            r"\begin{panel}{BO¦DY}",
+            &format!("\\begin{{panel}}[#1={preview}]{{#2}}"),
+            2,
+        );
+    }
+    let default = format!("DE% {}\n F", "comment".repeat(30));
+    check(
+        &format!("\\newcommand{{\\pair}}[2][{default}]{{#1:#2}}"),
+        r"\pair{BO¦DY}",
+        r"\pair[#1=DEF]{#2}",
+        1,
+    );
+}
+
+#[test]
+#[cfg(unix)]
+#[ignore = "requires pdflatex, xelatex and lualatex"]
+fn optional_default_previews_preserve_real_tex_token_identities() {
+    use latex_lsp::{build, config::BuildConfig};
+    use std::os::unix::fs::PermissionsExt;
+
+    for engine in ["pdflatex", "xelatex", "lualatex"] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let main = root.join("main.tex");
+        let mut source = "\\documentclass{article}\n\\begin{document}\n".to_owned();
+        let mut expected = Vec::new();
+        for (index, &(default, preview)) in OPTIONAL_DEFAULT_PREVIEWS.iter().enumerate() {
+            for modern in [false, true] {
+                let ordinal = index * 2 + usize::from(modern);
+                let suffix = format!(
+                    "{}{}",
+                    char::from(b'a' + (ordinal / 26) as u8),
+                    char::from(b'a' + (ordinal % 26) as u8)
+                );
+                let marker = format!("DEFAULT:{suffix}:OK");
+                let body = format!("\\def\\got{{#1}}\\ifx\\got\\expected\\typeout{{{marker}}}\\else\\errmessage{{Default token mismatch}}\\fi");
+                let declaration = if modern {
+                    format!("\\NewDocumentCommand{{\\probe{suffix}}}{{O{{{default}}}}}{{{body}}}")
+                } else {
+                    format!("\\newcommand{{\\probe{suffix}}}[1][{default}]{{{body}}}")
+                };
+                source.push_str(&format!("\\begingroup\\def\\expected{{{preview}}}\n{declaration}\n\\probe{suffix}\\endgroup\n"));
+                expected.push(marker);
+            }
+        }
+        source.push_str("\\mbox{OK}\\end{document}\n");
+        std::fs::write(&main, source).unwrap();
+        let compiler = root.join("compiler");
+        std::fs::write(&compiler, format!("#!/bin/sh\nTEXMFVAR=\"${{0%/*}}/tex-cache\"\nTEXMFCACHE=\"$TEXMFVAR\"\nexport TEXMFVAR TEXMFCACHE\nmkdir -p \"$TEXMFVAR\"\nexec {engine} \"$@\"\n")).unwrap();
+        std::fs::set_permissions(&compiler, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let config = BuildConfig {
+            executable: compiler.to_string_lossy().into(),
+            arguments: Some(
+                [
+                    "-interaction=nonstopmode",
+                    "-recorder",
+                    "-output-directory=%o",
+                    "%f",
+                ]
+                .map(str::to_owned)
+                .into(),
+            ),
+            ..Default::default()
+        };
+        let result = build::run(&main, &config, &Default::default());
+        assert_eq!(result.status, "success", "{engine}: {}", result.output);
+        let actual = result
+            .output
+            .lines()
+            .filter(|line| line.starts_with("DEFAULT:"))
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected, "{engine}");
+    }
+}
+
 #[test]
 fn commented_argument_counts_preserve_cross_file_signatures_and_completion_defaults() {
     for count in [
