@@ -14,7 +14,7 @@ etoolbox 的 `ifboolexpr`、`ifboolexpe`、`whileboolexpr` 和 `unlessboolexpr` 
 
 ## 表达式边界
 
-支持静态名称、`not` / `and` / `or`、圆括号、注释和跨行参数，包括 `nottogl{...}` 等紧接的关键字。`test {...}` 支持未被重定义的 `ifstrequal`、`ifstrempty`、`ifblank` 和 `notblank`，要求字符串参数使用完整花括号。这些[字符串测试](string-tests.md)不展开数据中的命令，字符串中的类似操作数文本和命令 token 不作为可执行引用，也不妨碍外层操作数的精确定位。
+支持静态名称、`not` / `and` / `or`、圆括号、注释和跨行参数，包括 `nottogl{...}` 等紧接的关键字。`test {...}` 支持未被重定义的 `ifstrequal`、`ifstrempty`、`ifblank` 和 `notblank`，要求字符串参数使用完整花括号。编译时也识别[已确认的静态副本](string-test-copy-calls.md)，使用调用处保存的数据参数数量。这些[字符串测试](string-tests.md)不展开数据中的命令，字符串中的类似操作数文本和命令 token 不作为可执行引用，也不妨碍外层操作数的精确定位。
 
 动态名称、任意宏生成的表达式或测试、重定义、残缺或无法确认的语法，以及同一表达式内同一命名空间的重复名称保留行级诊断。宏生成的名称和嵌套测试可能产生与外层操作数相同的回显，因此不能仅按错误名称搜索源码。分析超出预算时也保留原错误。
 
