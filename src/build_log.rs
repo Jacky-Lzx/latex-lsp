@@ -362,6 +362,47 @@ fn rerunfilecheck_request(message: &str) -> bool {
         })
 }
 
+const STANDARD_RERUN_REQUESTS: &[&str] = &[
+    "LaTeX Warning: Label(s) may have changed. Rerun to get cross-references right.",
+    "Package natbib Warning: Citation(s) may have changed. Rerun to get citations correct.",
+    "Package natbib Warning: Citation(s) may have changed.",
+    "Package longtable Warning: Table widths have changed. Rerun LaTeX.",
+    "Package hyperref Warning: Rerun to get /PageLabels entry.",
+];
+
+fn standard_rerun_prefix(message: &str) -> Option<&'static str> {
+    [
+        ("LaTeX Warning: Label(s)", "               "),
+        ("Package natbib Warning: Citation(s)", "(natbib)"),
+        ("Package longtable Warning: Table widths", "(longtable)"),
+        ("Package hyperref Warning: Rerun", "(hyperref)"),
+    ]
+    .into_iter()
+    .find_map(|(header, prefix)| message.starts_with(header).then_some(prefix))
+}
+
+fn normalized_rerun_message(message: &str) -> String {
+    let prefix = standard_rerun_prefix(message);
+    message
+        .split_whitespace()
+        .filter(|word| Some(*word) != prefix)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+// A MessageBreak after a complete first sentence is still part of the
+// request. Keep unexpected trailing prose too, so it cannot borrow a valid
+// short natbib header while its actual continuation asks for something else.
+fn rerun_sentence_continuation(message: &str, next: &str) -> bool {
+    if !next.trim_start().starts_with("Rerun ") {
+        return false;
+    }
+    let prefix = format!("{} ", normalized_rerun_message(message));
+    STANDARD_RERUN_REQUESTS
+        .iter()
+        .any(|request| request.starts_with(&prefix))
+}
+
 /// Share the confirmed rerun warning grammar with analysis and editor actions.
 pub(crate) fn rerun_required(diagnostic: &Diagnostic) -> bool {
     if diagnostic.severity != Some(DiagnosticSeverity::WARNING) {
@@ -370,18 +411,8 @@ pub(crate) fn rerun_required(diagnostic: &Diagnostic) -> bool {
     if biblatex_rerun(diagnostic).is_some() {
         return true;
     }
-    let message = diagnostic
-        .message
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    matches!(message.as_str(),
-        "LaTeX Warning: Label(s) may have changed. Rerun to get cross-references right."
-        | "Package natbib Warning: Citation(s) may have changed. Rerun to get citations correct."
-        | "Package natbib Warning: Citation(s) may have changed."
-        | "Package longtable Warning: Table widths have changed. Rerun LaTeX."
-        | "Package hyperref Warning: Rerun to get /PageLabels entry."
-    ) || rerunfilecheck_request(&message)
+    let message = normalized_rerun_message(&diagnostic.message);
+    STANDARD_RERUN_REQUESTS.contains(&message.as_str()) || rerunfilecheck_request(&message)
 }
 
 fn generated_line_note(line: u32) -> String {
@@ -3348,17 +3379,21 @@ fn byte_wrapped_font_message(
 
 // A full TeX print line followed by an explicit MessageBreak leaves one
 // empty physical line before the package's continuation prefix.
-fn rerunfilecheck_continuation(lines: &[&str], at: usize) -> Option<usize> {
+fn package_warning_continuation(lines: &[&str], at: usize, prefix: &str) -> Option<usize> {
     let mut next = at + 1;
     if lines.get(next)?.trim().is_empty() && lines[at].len() >= 60 {
         next += 1;
     }
-    lines
-        .get(next)?
-        .trim_start()
-        .strip_prefix("(rerunfilecheck)")?
-        .starts_with(char::is_whitespace)
-        .then_some(next)
+    let line = lines.get(next)?;
+    let owned = if prefix.starts_with(' ') {
+        // The kernel uses fifteen spaces instead of a package name.
+        line.starts_with(prefix)
+    } else {
+        line.trim_start()
+            .strip_prefix(prefix)?
+            .starts_with(char::is_whitespace)
+    };
+    owned.then_some(next)
 }
 
 fn wrapped_message(
@@ -3478,6 +3513,14 @@ fn wrapped_message(
     }
     let reference = undefined_reference_start(initial).is_some();
     let rerunfilecheck = initial.starts_with("Package rerunfilecheck Warning:");
+    let standard_rerun = standard_rerun_prefix(initial);
+    let continuation_prefix = if rerunfilecheck {
+        Some("(rerunfilecheck)")
+    } else {
+        standard_rerun
+    };
+    let continuation =
+        |at| continuation_prefix.and_then(|prefix| package_warning_continuation(lines, at, prefix));
     // TeX byte-wraps long warning lines, including inside a literal key.
     // Keep blanks at those boundaries instead of inventing a separator.
     let mut message = if rerunfilecheck {
@@ -3492,14 +3535,16 @@ fn wrapped_message(
             rerunfilecheck_request,
         )
         .unwrap_or_else(|| initial.to_owned())
-    } else if reference {
+    } else if reference || standard_rerun.is_some() {
         initial.to_owned()
     } else {
         lines[*i].trim().to_owned()
     };
     while (!message.ends_with(['.', '!'])
         || (reference && lines[*i].len() >= 60 && undefined_reference_key(&message).is_none())
-        || (rerunfilecheck && lines[*i].len() >= 60)
+        || ((rerunfilecheck || standard_rerun.is_some()) && lines[*i].len() >= 60)
+        || standard_rerun.is_some()
+            && lines.get(*i + 1).is_some_and(|next| rerun_sentence_continuation(&message, next))
         // biblatex puts explanatory sentences after a complete first sentence.
         // Keep its own continuation lines with the original warning.
         || initial.starts_with("Package biblatex Warning:")
@@ -3508,15 +3553,11 @@ fn wrapped_message(
                     .strip_prefix("(biblatex)")
                     .is_some_and(|tail| tail.starts_with(char::is_whitespace))
             })
-        || rerunfilecheck && rerunfilecheck_continuation(lines, *i).is_some())
+        || continuation(*i).is_some())
         && *i + 1 < lines.len()
         && message.len() < 4096
     {
-        let next_at = if rerunfilecheck {
-            rerunfilecheck_continuation(lines, *i).unwrap_or(*i + 1)
-        } else {
-            *i + 1
-        };
+        let next_at = continuation(*i).unwrap_or(*i + 1);
         let next = lines[next_at];
         if next.trim().is_empty() || message_boundary(next) {
             break;
@@ -3545,7 +3586,7 @@ fn wrapped_message(
                 break;
             }
         }
-        let byte_wrapped = (reference || rerunfilecheck)
+        let byte_wrapped = (reference || rerunfilecheck || standard_rerun.is_some())
             && lines[*i].len() >= 60
             && !next.trim_start().starts_with('(');
         *i = next_at;

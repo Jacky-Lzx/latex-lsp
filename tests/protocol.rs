@@ -15973,3 +15973,63 @@ printf '%s\n' "Package rerunfilecheck Warning: File \`main.brf' has changed." "(
         server.wait_exit(0);
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn wrapped_standard_rerun_actions_use_complete_final_warnings_and_reject_replaced_guards() {
+    for literals in [false, true] {
+        for (message, expected) in [
+            ("LaTeX Warning: Label(s) may have changed. Rerun to get cross\n-references right.", "LaTeX Warning: Label(s) may have changed. Rerun to get cross-references right."),
+            ("LaTeX Warning: Label(s) may have changed.\n               Rerun to get cross-references right.", "LaTeX Warning: Label(s) may have changed. Rerun to get cross-references right."),
+            ("Package natbib Warning: Citation(s) may have changed.\n(natbib) Rerun to get citations correct.", "Package natbib Warning: Citation(s) may have changed. (natbib) Rerun to get citations correct."),
+            ("Package longtable Warning: Table widths have changed. Rerun LaT\neX.", "Package longtable Warning: Table widths have changed. Rerun LaTeX."),
+        ] {
+            let capabilities = if literals {
+                json!({"textDocument":{"codeAction":{"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix"]}}}}})
+            } else { json!({}) };
+            let script = r#"set -eu
+printf '%%PDF-1.4\n' > "$1/main.pdf"
+cat "${2%/*}/fixture.log" > "$1/main.log"
+printf '%s\n' "$3" >> "${2%/*}/compiler-calls"
+printf '%s\n' 'LaTeX Warning: Label(s) may have changed. Rerun to get cross-references right.'
+"#;
+            let (mut server, directory, main) = fake_build_server_capabilities(script, false, capabilities);
+            configure_rebuild(&mut server, &directory, false, "force");
+            let fixture = directory.path().join("fixture.log");
+            std::fs::write(&fixture, format!("(./main.tex\n{message}\n\n)\n")).unwrap();
+            server.request(2, "workspace/executeCommand", json!({"command":"latex.build","arguments":[main]}));
+            let finished = server.until(|item| item["method"] == "latex/buildFinished");
+            assert_eq!(finished["params"]["status"], "success", "{finished}");
+            assert_eq!(finished["params"]["analysis"]["rerunRequired"], true, "{finished}");
+            let published = server.until(|item| item["method"] == "textDocument/publishDiagnostics" && item["params"]["uri"] == main.as_str() && item["params"]["diagnostics"].as_array().is_some_and(|items| items.iter().any(|item| item["message"] == expected)));
+            let diagnostic = published["params"]["diagnostics"].as_array().unwrap().iter().find(|item| item["message"] == expected).unwrap();
+            let params = json!({"textDocument":{"uri":main},"range":diagnostic["range"],"context":{"diagnostics":[diagnostic],"only":["quickfix"]}});
+            let actions = server.request(3, "textDocument/codeAction", params.clone());
+            assert_eq!(actions.as_array().unwrap().len(), 1, "{actions}");
+            let command = if literals { actions[0]["command"].clone() } else { actions[0].clone() };
+            assert_eq!(command["command"], "latex.rebuild");
+            let status = server.request(4, "workspace/executeCommand", json!({"command":"latex.buildStatus","arguments":[main]}));
+            assert_eq!(status["analysis"], finished["params"]["analysis"]);
+            // A complete natbib continuation replaces the apparent short request.
+            std::fs::write(&fixture, "(./main.tex\nPackage natbib Warning: Citation(s) may have changed.\n(natbib) This is only an example.\n\n)\n").unwrap();
+            server.request(5, "workspace/executeCommand", command.clone());
+            let finished = server.until(|item| item["method"] == "latex/buildFinished");
+            assert_eq!(finished["params"]["status"], "success", "{finished}");
+            assert_eq!(finished["params"]["rebuild"], true);
+            assert_eq!(finished["params"]["analysis"]["rerunRequired"], false, "{finished}");
+            let published = server.until(|item| item["method"] == "textDocument/publishDiagnostics" && item["params"]["uri"] == main.as_str() && item["params"]["diagnostics"].as_array().is_some_and(|items| items.iter().any(|item| item["message"] == "Package natbib Warning: Citation(s) may have changed. (natbib) This is only an example.")));
+            let diagnostic = published["params"]["diagnostics"].as_array().unwrap().iter().find(|item| item["source"] == "latex-build").unwrap();
+            assert_eq!(server.request(6, "textDocument/codeAction", params), json!([]));
+            assert_eq!(server.request(7, "textDocument/codeAction", json!({"textDocument":{"uri":main},"range":diagnostic["range"],"context":{"diagnostics":[diagnostic],"only":["quickfix"]}})), json!([]));
+            let status = server.request(8, "workspace/executeCommand", json!({"command":"latex.buildStatus","arguments":[main]}));
+            assert_eq!(status["analysis"], finished["params"]["analysis"]);
+            server.send(json!({"jsonrpc":"2.0","id":9,"method":"workspace/executeCommand","params":command}));
+            let rejected = server.until(|item| item["id"] == 9);
+            assert_eq!(rejected["error"]["code"], -32602, "{rejected}");
+            assert_eq!(std::fs::read_to_string(directory.path().join("compiler-calls")).unwrap(), "normal\nforce\n");
+            server.request(10, "shutdown", Value::Null);
+            server.notify("exit", Value::Null);
+            server.wait_exit(0);
+        }
+    }
+}
