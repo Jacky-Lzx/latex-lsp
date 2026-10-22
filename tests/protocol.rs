@@ -15869,3 +15869,107 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[cfg(unix)]
+#[test]
+fn backreference_rerun_analysis_and_guarded_actions_follow_only_the_final_log_over_stdio() {
+    for literals in [false, true] {
+        let capabilities = if literals {
+            json!({"textDocument":{"codeAction":{"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix"]}}}}})
+        } else {
+            json!({})
+        };
+        let script = r#"set -eu
+printf '%%PDF-1.4\n' > "$1/main.pdf"
+cat "${2%/*}/fixture.log" > "$1/main.log"
+printf '%s\n' "$3" >> "${2%/*}/compiler-calls"
+# Console output may still contain warnings from an earlier compilation pass.
+printf '%s\n' "Package rerunfilecheck Warning: File \`main.brf' has changed." "(rerunfilecheck) Rerun to get bibliographical references right."
+"#;
+        let (mut server, directory, main) =
+            fake_build_server_capabilities(script, false, capabilities);
+        configure_rebuild(&mut server, &directory, false, "force");
+        let fixture = directory.path().join("fixture.log");
+        std::fs::write(&fixture, "(./main.tex\nPackage rerunfilecheck Warning: File `main.brf' has changed.\n\n(rerunfilecheck)                Rerun to get bibliographical\n references right.\n)\n").unwrap();
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let first = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(first["params"]["status"], "success", "{first}");
+        assert_eq!(first["params"]["analysis"]["rerunRequired"], true);
+        assert_eq!(
+            first["params"]["analysis"]["requiredBibliographyTools"],
+            json!([])
+        );
+        let published = server.until(|message| {
+            message["method"] == "textDocument/publishDiagnostics"
+                && message["params"]["uri"] == main.as_str()
+                && message["params"]["diagnostics"]
+                    .as_array()
+                    .is_some_and(|items| items.iter().any(|item| item["source"] == "latex-build"))
+        });
+        let diagnostic = published["params"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["source"] == "latex-build")
+            .unwrap();
+        let request = json!({"textDocument":{"uri":main},"range":diagnostic["range"],"context":{"diagnostics":[diagnostic],"only":["quickfix"]}});
+        let actions = server.request(3, "textDocument/codeAction", request.clone());
+        assert_eq!(actions.as_array().unwrap().len(), 1, "{actions}");
+        let command = if literals {
+            actions[0]["command"].clone()
+        } else {
+            actions[0].clone()
+        };
+        assert_eq!(command["command"], "latex.rebuild");
+        let status = server.request(
+            4,
+            "workspace/executeCommand",
+            json!({"command":"latex.buildStatus","arguments":[main]}),
+        );
+        assert_eq!(status["analysis"], first["params"]["analysis"]);
+        std::fs::write(&fixture, "(./main.tex\n)\n").unwrap();
+        server.request(5, "workspace/executeCommand", command.clone());
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(finished["params"]["status"], "success", "{finished}");
+        assert_eq!(finished["params"]["rebuild"], true);
+        assert_eq!(finished["params"]["analysis"]["rerunRequired"], false);
+        let cleared = server.until(|message| {
+            message["method"] == "textDocument/publishDiagnostics"
+                && message["params"]["uri"] == main.as_str()
+                && message["params"]["diagnostics"]
+                    .as_array()
+                    .is_some_and(|items| items.iter().all(|item| item["source"] != "latex-build"))
+        });
+        assert!(cleared["params"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item["source"] != "latex-build"));
+        assert_eq!(
+            server.request(6, "textDocument/codeAction", request),
+            json!([])
+        );
+        let status = server.request(
+            7,
+            "workspace/executeCommand",
+            json!({"command":"latex.buildStatus","arguments":[main]}),
+        );
+        assert_eq!(status["analysis"], finished["params"]["analysis"]);
+        server.send(
+            json!({"jsonrpc":"2.0","id":8,"method":"workspace/executeCommand","params":command}),
+        );
+        let rejected = server.until(|message| message["id"] == 8);
+        assert_eq!(rejected["error"]["code"], -32602, "{rejected}");
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("compiler-calls")).unwrap(),
+            "normal\nforce\n"
+        );
+        server.request(9, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}

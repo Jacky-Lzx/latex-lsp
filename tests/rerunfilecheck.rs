@@ -2,6 +2,9 @@ use latex_lsp::{build_log, editing, workspace::Workspace};
 use tower_lsp::lsp_types::*;
 
 const CONFIRMED: &[&str] = &[
+    "Package rerunfilecheck Warning: File `main.brf' has changed.\n\n(rerunfilecheck)                Rerun to get bibliographical\n references right.",
+    "Package rerunfilecheck Warning: File `main.brf' has changed. Rerun to get bibliographical references right.",
+    "Package rerunfilecheck Warning: File `main.brf' has changed.\r\n(rerunfilecheck) Rerun to get bibliographical references right.",
     "Package rerunfilecheck Warning: File `main.track' has changed. Rerun.",
     "Package rerunfilecheck Warning: File `main.track' has changed.\r\n(rerunfilecheck) Rerun.",
     "Package rerunfilecheck Warning: File `main.out' has changed.",
@@ -10,6 +13,14 @@ const CONFIRMED: &[&str] = &[
 ];
 
 const UNCONFIRMED: &[&str] = &[
+    "Package rerunfilecheck Warning: File `main.idx' has changed.\n\n(rerunfilecheck) Rerun LaTeX/makeindex to get index right.",
+    "Package rerunfilecheck Warning: File `main.glo' has changed.\n\n(rerunfilecheck) Rerun LaTeX/makeindex to get glossary right.",
+    "Package rerunfilecheck Warning: File `main.brf' has changed.\n\n(rerunfilecheck) Unknown request.",
+    "Package rerunfilecheck Warning: File `main.brf' has changed. Rerun to get bibliographical references right",
+    "Package rerunfilecheck Warning: File `main.brf' has changed. Rerun to get bibliographical references right. Extra text.",
+    "Package rerunfilecheck Warning: File `main.brf' has changed.\n(rerunfilecheck) Rerun to get bibliographical references right.\n(rerunfilecheck) Example only.",
+    "Package rerunfilecheck Warning: File `main.brf' has changed. Example: Rerun to get bibliographical references right.",
+    "Package backref Warning: File `main.brf' has changed. Rerun to get bibliographical references right.",
     "Package rerunfilecheck Warning: File `' has changed. Rerun.",
     "Package rerunfilecheck Warning: File `main.track' has changed. Rerun",
     "Package rerunfilecheck Warning: File `main.track' has changed. Rerun. Extra text.",
@@ -105,6 +116,7 @@ fn byte_wrapped_file_change_requests_preserve_names_and_adjacent_warnings() {
         ] {
             for request in [
                 " Rerun.",
+                "\n(rerunfilecheck) Rerun to get bibliographical references right.",
                 "\n(rerunfilecheck) Rerun to get outlines right\n(rerunfilecheck) or use package `bookmark'.",
             ] {
                 let message = format!("Package rerunfilecheck Warning: File `{file}' has changed.{request}");
@@ -144,37 +156,39 @@ fn parenthesized_filename_wraps_do_not_change_the_diagnostic_source() {
                 "{}{embedded}{suffix}",
                 "a".repeat(width - prefix.len() - embedded.len())
             );
-            let message = format!("{prefix}{filename}' has changed. Rerun.");
-            let wrapped = message
-                .as_bytes()
-                .chunks(width)
-                .map(|chunk| std::str::from_utf8(chunk).unwrap())
-                .collect::<Vec<_>>()
-                .join("\n");
-            let parsed = build_log::parse(&main, &format!("(./main.tex\n(./section.tex\n{wrapped}\n\nPackage local Warning: Child sentinel on input line 1.\n)\nPackage local Warning: Root sentinel on input line 1.\n)\n"));
-            assert_eq!(parsed.len(), 2, "{width}/{filename}: {parsed:?}");
-            let child_items = &parsed[&child_uri];
-            assert_eq!(child_items.len(), 2, "{width}/{filename}: {parsed:?}");
-            assert!(
-                child_items.iter().any(|item| item.message == message),
-                "{width}/{filename}: {parsed:?}"
-            );
-            assert!(
-                child_items
-                    .iter()
-                    .any(|item| item.message.contains("Child sentinel")),
-                "{width}/{filename}: {parsed:?}"
-            );
-            assert_eq!(parsed[&main_uri].len(), 1, "{width}/{filename}: {parsed:?}");
-            assert!(
-                parsed[&main_uri][0].message.contains("Root sentinel"),
-                "{width}/{filename}: {parsed:?}"
-            );
-            assert_eq!(
-                build_log::compilation_analysis(&parsed, false)["rerunRequired"],
-                true,
-                "{width}/{filename}: {parsed:?}"
-            );
+            for request in ["Rerun.", "Rerun to get bibliographical references right."] {
+                let message = format!("{prefix}{filename}' has changed. {request}");
+                let wrapped = message
+                    .as_bytes()
+                    .chunks(width)
+                    .map(|chunk| std::str::from_utf8(chunk).unwrap())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let parsed = build_log::parse(&main, &format!("(./main.tex\n(./section.tex\n{wrapped}\n\nPackage local Warning: Child sentinel on input line 1.\n)\nPackage local Warning: Root sentinel on input line 1.\n)\n"));
+                assert_eq!(parsed.len(), 2, "{width}/{filename}: {parsed:?}");
+                let child_items = &parsed[&child_uri];
+                assert_eq!(child_items.len(), 2, "{width}/{filename}: {parsed:?}");
+                assert!(
+                    child_items.iter().any(|item| item.message == message),
+                    "{width}/{filename}: {parsed:?}"
+                );
+                assert!(
+                    child_items
+                        .iter()
+                        .any(|item| item.message.contains("Child sentinel")),
+                    "{width}/{filename}: {parsed:?}"
+                );
+                assert_eq!(parsed[&main_uri].len(), 1, "{width}/{filename}: {parsed:?}");
+                assert!(
+                    parsed[&main_uri][0].message.contains("Root sentinel"),
+                    "{width}/{filename}: {parsed:?}"
+                );
+                assert_eq!(
+                    build_log::compilation_analysis(&parsed, false)["rerunRequired"],
+                    true,
+                    "{width}/{filename}: {parsed:?}"
+                );
+            }
         }
     }
 }
@@ -373,6 +387,158 @@ fn real_file_changes_request_rebuild_until_the_next_unchanged_pass() {
                         "{engine}/{width}/{outlines}/{pass}: {diagnostics:?}"
                     );
                 }
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "requires pdfLaTeX, XeLaTeX, LuaLaTeX and hyperref"]
+fn real_backreferences_request_rebuild_after_citation_pages_change_and_clear_when_stable() {
+    use latex_lsp::{build, config::BuildConfig};
+    use std::os::unix::fs::PermissionsExt;
+
+    let cache = tempfile::tempdir().unwrap();
+    for engine in ["pdflatex", "xelatex", "lualatex"] {
+        for width in [60, 79] {
+            let directory = tempfile::tempdir().unwrap();
+            let main = directory.path().join("main.tex");
+            let root = Url::from_file_path(&main).unwrap();
+            let wrapper = directory.path().join("engine");
+            std::fs::write(&wrapper, format!("#!/bin/sh\nexport max_print_line={width}\nexport TEXMFVAR=\"$1\"\nexport TEXMFCACHE=\"$1\"\nshift\nexec {engine} \"$@\"\n")).unwrap();
+            std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let config = BuildConfig {
+                executable: wrapper.to_string_lossy().into_owned(),
+                output_directory: ".".into(),
+                arguments: Some(vec![
+                    cache.path().to_string_lossy().into_owned(),
+                    "-interaction=nonstopmode".into(),
+                    "-halt-on-error".into(),
+                    "-no-shell-escape".into(),
+                    "-file-line-error".into(),
+                    "-recorder".into(),
+                    "%f".into(),
+                ]),
+                ..Default::default()
+            };
+            for (stage, pagebreak) in [(1, ""), (2, r"\newpage")] {
+                let source = format!("\\documentclass{{article}}\n\\usepackage[backref=page]{{hyperref}}\n\\begin{{document}}\nIntro.{pagebreak}\nText \\cite{{book}}.\n\\begin{{thebibliography}}{{1}}\n\\bibitem{{book}} Author. Book.\n\n\\end{{thebibliography}}\n\\end{{document}}\n");
+                std::fs::write(&main, source).unwrap();
+                for pass in 1..=3 {
+                    let outcome = build::run(&main, &config, &Default::default());
+                    assert_eq!(
+                        outcome.status, "success",
+                        "{engine}/{width}/{stage}/{pass}: {}",
+                        outcome.output
+                    );
+                    assert_eq!(outcome.pages, Some(stage));
+                    let backreferences = outcome
+                        .diagnostics
+                        .iter()
+                        .filter_map(|(uri, items)| {
+                            let warnings = items
+                                .iter()
+                                .filter(|item| {
+                                    item.message.starts_with("Package rerunfilecheck Warning:")
+                                        && item.message.contains("bibliographical references")
+                                })
+                                .cloned()
+                                .collect::<Vec<_>>();
+                            (!warnings.is_empty()).then_some((uri.clone(), warnings))
+                        })
+                        .collect::<std::collections::BTreeMap<_, _>>();
+                    assert_eq!(
+                        !backreferences.is_empty(),
+                        pass == 1,
+                        "{engine}/{width}/{stage}/{pass}: {:?}",
+                        outcome.diagnostics
+                    );
+                    let analysis = build_log::compilation_analysis(&backreferences, false);
+                    assert_eq!(analysis["rerunRequired"], pass == 1);
+                    assert_eq!(analysis["requiredBibliographyTools"], serde_json::json!([]));
+                    let rebuilds = actions(&root, &backreferences);
+                    assert_eq!(
+                        rebuilds.len(),
+                        usize::from(pass == 1),
+                        "{engine}/{width}/{stage}/{pass}: {rebuilds:?}"
+                    );
+                    if pass == 1 {
+                        assert_eq!(outcome.analysis.as_ref().unwrap()["rerunRequired"], true);
+                    } else if pass == 3 {
+                        assert_eq!(
+                            outcome.analysis.as_ref().unwrap()["rerunRequired"],
+                            false,
+                            "{engine}/{width}/{stage}/{pass}: {:?}",
+                            outcome.diagnostics
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires pdfLaTeX, XeLaTeX, LuaLaTeX and rerunfilecheck"]
+fn real_index_and_glossary_requests_do_not_offer_a_tex_only_rebuild() {
+    let cache = tempfile::tempdir().unwrap();
+    for engine in ["pdflatex", "xelatex", "lualatex"] {
+        for width in [60, 79] {
+            let directory = tempfile::tempdir().unwrap();
+            let main = directory.path().join("main.tex");
+            let root = Url::from_file_path(&main).unwrap();
+            std::fs::write(&main, "\\documentclass{article}\n\\usepackage[index,glossary]{rerunfilecheck}\n\\makeindex\\makeglossary\n\\begin{document}Text.\\index{Alpha}\\glossary{Gamma}\\end{document}\n").unwrap();
+            for pass in 1..=2 {
+                let output = std::process::Command::new(engine)
+                    .current_dir(directory.path())
+                    .env("TEXMFVAR", cache.path())
+                    .env("TEXMFCACHE", cache.path())
+                    .env("max_print_line", width.to_string())
+                    .args([
+                        "-interaction=nonstopmode",
+                        "-halt-on-error",
+                        "-no-shell-escape",
+                        "main.tex",
+                    ])
+                    .output()
+                    .unwrap();
+                assert!(
+                    output.status.success(),
+                    "{engine}/{width}/{pass}: {}",
+                    String::from_utf8_lossy(&output.stdout)
+                );
+                let log = std::fs::read_to_string(directory.path().join("main.log")).unwrap();
+                let diagnostics = build_log::parse(&main, &log);
+                let requests = diagnostics
+                    .values()
+                    .flatten()
+                    .filter(|item| item.message.starts_with("Package rerunfilecheck Warning:"))
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    requests.len(),
+                    if pass == 1 { 2 } else { 0 },
+                    "{engine}/{width}/{pass}: {diagnostics:?}"
+                );
+                if pass == 1 {
+                    for kind in ["index", "glossary"] {
+                        assert!(
+                            requests.iter().any(|item| item
+                                .message
+                                .contains(&format!("Rerun LaTeX/makeindex to get {kind} right."))),
+                            "{engine}/{width}/{pass}: {requests:?}"
+                        );
+                    }
+                }
+                assert_eq!(
+                    build_log::compilation_analysis(&diagnostics, false)["rerunRequired"],
+                    false,
+                    "{engine}/{width}/{pass}: {diagnostics:?}"
+                );
+                assert!(
+                    actions(&root, &diagnostics).is_empty(),
+                    "{engine}/{width}/{pass}"
+                );
             }
         }
     }

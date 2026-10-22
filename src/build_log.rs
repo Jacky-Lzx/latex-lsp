@@ -356,6 +356,7 @@ fn rerunfilecheck_request(message: &str) -> bool {
                     request.as_str(),
                     "" | "Rerun."
                         | "Rerun to get outlines right."
+                        | "Rerun to get bibliographical references right."
                         | "Rerun to get outlines right or use package `bookmark'."
                 )
         })
@@ -3345,6 +3346,21 @@ fn byte_wrapped_font_message(
     Some(message)
 }
 
+// A full TeX print line followed by an explicit MessageBreak leaves one
+// empty physical line before the package's continuation prefix.
+fn rerunfilecheck_continuation(lines: &[&str], at: usize) -> Option<usize> {
+    let mut next = at + 1;
+    if lines.get(next)?.trim().is_empty() && lines[at].len() >= 60 {
+        next += 1;
+    }
+    lines
+        .get(next)?
+        .trim_start()
+        .strip_prefix("(rerunfilecheck)")?
+        .starts_with(char::is_whitespace)
+        .then_some(next)
+}
+
 fn wrapped_message(
     root: &Path,
     lines: &[&str],
@@ -3492,20 +3508,20 @@ fn wrapped_message(
                     .strip_prefix("(biblatex)")
                     .is_some_and(|tail| tail.starts_with(char::is_whitespace))
             })
-        || rerunfilecheck
-            && lines.get(*i + 1).is_some_and(|line| {
-                line.trim_start()
-                    .strip_prefix("(rerunfilecheck)")
-                    .is_some_and(|tail| tail.starts_with(char::is_whitespace))
-            }))
+        || rerunfilecheck && rerunfilecheck_continuation(lines, *i).is_some())
         && *i + 1 < lines.len()
         && message.len() < 4096
     {
-        let next = lines[*i + 1];
+        let next_at = if rerunfilecheck {
+            rerunfilecheck_continuation(lines, *i).unwrap_or(*i + 1)
+        } else {
+            *i + 1
+        };
+        let next = lines[next_at];
         if next.trim().is_empty() || message_boundary(next) {
             break;
         }
-        let mut next_index = *i + 1;
+        let mut next_index = next_at;
         if numbered_error(&continued_error_line(
             root,
             lines,
@@ -3517,7 +3533,7 @@ fn wrapped_message(
             break;
         }
         if next.trim_start().starts_with('(') {
-            let mut next_index = *i + 1;
+            let mut next_index = next_at;
             let announcement = continued_file_line(root, lines, &mut next_index);
             if announcement
                 .trim_start()
@@ -3532,7 +3548,7 @@ fn wrapped_message(
         let byte_wrapped = (reference || rerunfilecheck)
             && lines[*i].len() >= 60
             && !next.trim_start().starts_with('(');
-        *i += 1;
+        *i = next_at;
         if byte_wrapped {
             message.push_str(next);
         } else {
