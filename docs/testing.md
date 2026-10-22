@@ -133,6 +133,14 @@ cargo test --locked --test no_pages -- --include-ignored
 cargo test --locked --test information_logs -- --include-ignored
 ```
 
+标准重编译警告回归覆盖 LaTeX、natbib、longtable 与 hyperref 的 60–82 列逐字节折行、LF / CRLF、行尾空格、第一句后的续行、额外说明和相邻文件错误。三引擎回归使用 60 / 63 / 79 列日志，分别重命名跨文件标签和文献键，或修改表格后续分块的列宽，核对请求重新出现、实际 PDF 页数及收敛后的清空。协议回归检查完整警告、两种客户端操作响应、最终日志优先级和旧操作失效：
+
+```sh
+cargo test --locked --test rerun_warnings
+cargo test --locked --test rerun_warnings -- --include-ignored
+cargo test --locked --test protocol wrapped_standard_rerun
+```
+
 rerunfilecheck 回归核对标准 `Rerun.` 请求、hyperref 完整书签及反向文献引用提示、折行、满行后的额外空行、示例文字和 makeindex 请求的边界，并检查结果分析与重编译操作一致。默认回归另核对文件名中的括号、看似完整的警告正文及不完整警告之后的真实文件切换。外部回归在三个 LaTeX 引擎的 60 / 79 列日志中验证特殊文件名、后续主文件与子文件的诊断归属、首次文件变化后的请求及下一遍内容不变后的清空：
 
 ```sh
