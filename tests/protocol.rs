@@ -17,6 +17,95 @@ struct Server {
 }
 
 #[test]
+fn selected_string_predicates_refresh_on_selector_edits_close_and_disk_changes_over_stdio() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+    let settings = Url::from_file_path(directory.path().join("settings.tex")).unwrap();
+    let source = "\\documentclass{article}\\newbool{draft}\\input{settings}\n\\begin{document}\\include{definitions}\\ifblank{\\booltrue{draft}}{Y}{N}\\end{document}\n";
+    let excluded = r"\includeonly{}";
+    let selected = r"\includeonly{definitions}";
+    std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+    std::fs::write(settings.to_file_path().unwrap(), excluded).unwrap();
+    std::fs::write(
+        directory.path().join("definitions.tex"),
+        r"\renewcommand{\ifblank}[1]{#1}",
+    )
+    .unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(directory.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":main,"languageId":"latex","version":9,"text":source}}),
+    );
+    let text = latex_lsp::text::Text::new(source.into());
+    let target = json!({"textDocument":{"uri":main},"position":text.position(source.rfind("draft").unwrap()+1)});
+    assert_eq!(
+        server.request(2, "textDocument/definition", target.clone()),
+        json!([])
+    );
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":settings,"languageId":"latex","version":1,"text":excluded}}),
+    );
+    server.notify("textDocument/didChange", json!({"textDocument":{"uri":settings,"version":2},"contentChanges":[{"range":{"start":{"line":0,"character":13},"end":{"line":0,"character":13}},"text":"definitions"}]}));
+    assert_eq!(
+        server
+            .request(3, "textDocument/definition", target.clone())
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let mut rename = target.clone();
+    rename["newName"] = json!("release");
+    let edit = server.request(4, "textDocument/rename", rename.clone());
+    assert_eq!(edit["documentChanges"][0]["textDocument"]["version"], 9);
+    assert_eq!(
+        edit["documentChanges"][0]["edits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":settings}}),
+    );
+    assert_eq!(
+        server.request(5, "textDocument/definition", target.clone()),
+        json!([])
+    );
+    std::fs::write(settings.to_file_path().unwrap(), selected).unwrap();
+    server.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({"changes":[{"uri":settings,"type":2}]}),
+    );
+    assert_eq!(
+        server
+            .request(6, "textDocument/definition", target.clone())
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let edit = server.request(7, "textDocument/rename", rename);
+    assert_eq!(edit["documentChanges"][0]["textDocument"]["version"], 9);
+    std::fs::write(settings.to_file_path().unwrap(), excluded).unwrap();
+    server.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({"changes":[{"uri":settings,"type":2}]}),
+    );
+    assert_eq!(
+        server.request(8, "textDocument/definition", target),
+        json!([])
+    );
+    server.request(9, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
 fn conditional_string_hooks_refresh_after_non_source_file_events_over_stdio() {
     let directory = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();

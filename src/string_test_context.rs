@@ -67,6 +67,25 @@ enum Event<'a> {
     Input { uri: Url, at: usize },
 }
 
+#[derive(Clone, Default)]
+enum Selection {
+    #[default]
+    All,
+    Only(BTreeSet<String>),
+    Unknown,
+}
+
+fn chapter_name(value: &str) -> &str {
+    value.strip_suffix(".tex").unwrap_or(value)
+}
+
+#[derive(Clone, Default)]
+struct Context {
+    assigned: BTreeSet<String>,
+    selection: Selection,
+    uncertain: bool,
+}
+
 struct Source {
     syntax: Syntax,
     active: BTreeSet<usize>,
@@ -82,11 +101,11 @@ impl Source {
         let signatures = CommandSignatures::source_context([(&*text.source, &syntax)]);
         let active = signatures.source_command_positions(&text.source, &syntax);
         let mut declarations: BTreeMap<usize, Vec<String>> = BTreeMap::new();
-        for entry in syntax
-            .definitions
-            .iter()
-            .filter(|entry| data_count(&entry.name).is_some() || file_test(&entry.name))
-        {
+        for entry in syntax.definitions.iter().filter(|entry| {
+            data_count(&entry.name).is_some()
+                || file_test(&entry.name)
+                || matches!(entry.name.as_str(), "includeonly" | "include")
+        }) {
             let Some(name) = entry.detail.strip_prefix("Defined with \\") else {
                 continue;
             };
@@ -115,6 +134,7 @@ struct Analysis {
     meanings: BTreeMap<Url, BTreeMap<usize, u8>>,
     visited: BTreeSet<Url>,
     missing: BTreeMap<Url, DocumentKind>,
+    excluded: BTreeSet<Url>,
     visits: usize,
     incomplete: bool,
 }
@@ -125,7 +145,7 @@ impl Analysis {
         workspace: &Workspace,
         uri: &Url,
         root: &Url,
-        assigned: &mut BTreeSet<String>,
+        state: &mut Context,
         stack: &mut BTreeSet<Url>,
     ) {
         if stack.len() >= 16 || self.visits >= MAX_VISITS || !stack.insert(uri.clone()) {
@@ -140,24 +160,23 @@ impl Analysis {
             stack.remove(uri);
             return;
         };
-        let initial = assigned.clone();
+        let initial = state.clone();
         let checkpoint = self.clone();
         let mut context = BTreeMap::<usize, u8>::new();
         for round in 0..32 {
             // Start from literal grammar. Eagerly exposing every data operand
             // could let a quoted verbatim opener swallow the rest of the file.
             let source = Source::new(&doc.text, |command, known| {
-                context
-                    .get(&command.span.start)
-                    .map_or(known && !initial.contains(&command.name), |meaning| {
-                        *meaning == LITERAL
-                    })
+                context.get(&command.span.start).map_or(
+                    known && !initial.uncertain && !initial.assigned.contains(&command.name),
+                    |meaning| *meaning == LITERAL,
+                )
             });
             let visits = self.visits + 1;
             *self = checkpoint.clone();
             self.visits = visits;
             self.visited.insert(uri.clone());
-            *assigned = initial.clone();
+            *state = initial.clone();
             let mut data_end = 0;
             let mut meanings = BTreeMap::new();
             let mut reparse = false;
@@ -177,7 +196,7 @@ impl Analysis {
                     } => {
                         if at >= data_end {
                             if workspace.documents.contains_key(&dependency) {
-                                self.walk(workspace, &dependency, root, assigned, stack);
+                                self.walk(workspace, &dependency, root, state, stack);
                             } else {
                                 self.missing.insert(dependency, DocumentKind::Latex);
                             }
@@ -192,7 +211,9 @@ impl Analysis {
                 if let Some(count) = data_count(&command.name) {
                     // Deferred bodies retain editable references, while their
                     // loads and assignments do not execute at definition time.
-                    let meaning = if assigned.contains(&command.name) {
+                    let meaning = if state.uncertain {
+                        LITERAL | CUSTOM
+                    } else if state.assigned.contains(&command.name) {
                         CUSTOM
                     } else {
                         LITERAL
@@ -213,10 +234,50 @@ impl Analysis {
                     continue;
                 }
                 if let Some(names) = source.declarations.get(&at) {
-                    assigned.extend(names.iter().cloned());
+                    state.assigned.extend(names.iter().cloned());
+                }
+                if command.name == "includeonly" {
+                    state.selection = if state.assigned.contains("includeonly") {
+                        Selection::Unknown
+                    } else if let Some(names) = syntax::includeonly_names(&doc.text.source, command)
+                    {
+                        Selection::Only(names.into_iter().collect())
+                    } else {
+                        Selection::Unknown
+                    };
+                    continue;
+                }
+                if command.name == "include" {
+                    let selected = if state.assigned.contains("include") {
+                        None
+                    } else {
+                        match &state.selection {
+                            Selection::All => Some(true),
+                            Selection::Only(names) => {
+                                syntax::file_argument(&doc.text.source, command)
+                                    .filter(|argument| {
+                                        syntax::is_literal_file_path(&argument.value)
+                                    })
+                                    .map(|argument| names.contains(chapter_name(&argument.value)))
+                            }
+                            Selection::Unknown => None,
+                        }
+                    };
+                    if selected == Some(false) {
+                        // Keep excluded chapters available to the editor, but
+                        // do not execute their dependency trees as new roots.
+                        for (dependency, _) in
+                            workspace.literal_command_dependencies(uri, root, command)
+                        {
+                            self.excluded
+                                .extend(workspace.project_documents(&dependency));
+                        }
+                        continue;
+                    }
+                    state.uncertain |= selected.is_none();
                 }
                 if file_test(&command.name) {
-                    if let Some(conditional) = (!assigned.contains(&command.name))
+                    if let Some(conditional) = (!state.assigned.contains(&command.name))
                         .then(|| Conditional::new(&doc.text.source, command, uri, root))
                         .flatten()
                     {
@@ -254,7 +315,7 @@ impl Analysis {
                     if !workspace.documents.contains_key(&dependency) {
                         self.missing.insert(dependency, kind);
                     } else {
-                        self.walk(workspace, &dependency, root, assigned, stack);
+                        self.walk(workspace, &dependency, root, state, stack);
                     }
                 }
             }
@@ -312,7 +373,7 @@ pub(crate) fn refresh(workspace: &mut Workspace) {
                 workspace,
                 root,
                 root,
-                &mut BTreeSet::new(),
+                &mut Context::default(),
                 &mut BTreeSet::new(),
             );
         }
@@ -331,23 +392,23 @@ pub(crate) fn refresh(workspace: &mut Workspace) {
             })
             .collect();
         for uri in sources.keys().filter(|uri| !children.contains(*uri)) {
-            if !analysis.visited.contains(uri) {
+            if !analysis.visited.contains(uri) && !analysis.excluded.contains(uri) {
                 analysis.walk(
                     workspace,
                     uri,
                     uri,
-                    &mut BTreeSet::new(),
+                    &mut Context::default(),
                     &mut BTreeSet::new(),
                 );
             }
         }
         for uri in sources.keys() {
-            if !analysis.visited.contains(uri) {
+            if !analysis.visited.contains(uri) && !analysis.excluded.contains(uri) {
                 analysis.walk(
                     workspace,
                     uri,
                     uri,
-                    &mut BTreeSet::new(),
+                    &mut Context::default(),
                     &mut BTreeSet::new(),
                 );
             }
