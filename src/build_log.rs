@@ -1514,6 +1514,26 @@ fn error_context<'a>(
         .filter(|(_, line)| !line.trim().is_empty())
         .map(|(index, &line)| (index, line));
     let (mut index, mut line) = context.next()?;
+    if message == crate::special_characters::EXTRA_ALIGNMENT_TAB {
+        // LaTeX alignments report the internal end-template token; raw TeX
+        // alignments can report only the template. Expanded user frames must
+        // still prevent attribution to a literal source tab.
+        let mut internal_frame = false;
+        if line.trim() == r"<recently read> \endtemplate" {
+            internal_frame = true;
+            (index, line) = context.next()?;
+        }
+        if line.starts_with("<template> ") {
+            if !line.trim_end().ends_with(r"\endtemplate") {
+                return None;
+            }
+            internal_frame = true;
+            (index, line) = context.next()?;
+        }
+        if !internal_frame {
+            return None;
+        }
+    }
     // A direct script token outside math mode always reports this exact
     // recovery frame. Additional expansion frames must still block attribution.
     if message == "Missing $ inserted." {
@@ -2639,7 +2659,7 @@ fn emit_with_context(
                 severity: Some(severity),
                 source: Some("latex-build".into()),
                 code: box_code(&message)
-                    .or_else(|| special_range.map(|_| "unescaped-special-character"))
+                    .or_else(|| special_range.map(|_| crate::special_characters::diagnostic_code(&message)))
                     .or_else(|| character.map(|_| "missing-character"))
                     .or_else(|| unsupported_unicode.map(|_| "unsupported-unicode-character"))
                     .or_else(|| destination.as_ref().filter(|_| precise_destination).map(|(kind, _)| kind.code()))

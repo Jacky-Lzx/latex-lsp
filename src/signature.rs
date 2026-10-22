@@ -2284,6 +2284,25 @@ impl<'a> CommandSignatures<'a> {
     }
 
     pub(crate) fn argument_tokens(&self, source: &str, parsed: &syntax::Syntax) -> BTreeSet<usize> {
+        self.argument_tokens_with_literal(source, parsed, None)
+    }
+
+    pub(crate) fn literal_is_argument(
+        &self,
+        source: &str,
+        parsed: &syntax::Syntax,
+        at: usize,
+    ) -> bool {
+        self.argument_tokens_with_literal(source, parsed, Some(at))
+            .contains(&at)
+    }
+
+    fn argument_tokens_with_literal(
+        &self,
+        source: &str,
+        parsed: &syntax::Syntax,
+        literal: Option<usize>,
+    ) -> BTreeSet<usize> {
         let local = &self.local;
         let mut result = BTreeSet::new();
         let declarations: BTreeSet<_> = parsed
@@ -2296,7 +2315,7 @@ impl<'a> CommandSignatures<'a> {
                 // Parameter-text delimiters are data at declaration time.
                 // In particular a delimiter control must
                 // not consume the first invocation following the definition.
-                mark_operand_commands(parsed, entry.span.start, end, &mut result);
+                mark_operand_tokens(parsed, entry.span.start, end, literal, &mut result);
             }
         }
         for (index, command) in parsed.commands.iter().enumerate() {
@@ -2308,11 +2327,16 @@ impl<'a> CommandSignatures<'a> {
             else {
                 continue;
             };
+            // A primitive alignment executes its body. Treating that body as
+            // opaque macro data would hide the literal row tabs we validate.
+            if literal.is_some() && self.invokes_builtin(name, "halign") {
+                continue;
+            }
             if self.invokes_builtin(name, "globaldefs") {
                 if let Some((_, after)) = self.literal_integer_value(source, end) {
                     // A backtick control is a character-code operand, not a
                     // macro invocation that can consume the following call.
-                    mark_operand_commands(parsed, end, after, &mut result);
+                    mark_operand_tokens(parsed, end, after, literal, &mut result);
                 }
                 continue;
             }
@@ -2321,14 +2345,14 @@ impl<'a> CommandSignatures<'a> {
             // control token after that group, hiding an independent file call.
             if self.invokes_builtin(name, "detokenize") {
                 if !self.detokenize_boundary_known {
-                    unknown_argument_token(source, end, parsed, &mut result);
+                    unknown_argument_token(source, end, parsed, literal, &mut result);
                     continue;
                 }
                 let at = syntax::skip_space(source, end);
                 if let Some((_, after)) = syntax::group(source, at, b'{', b'}') {
-                    mark_operand_commands(parsed, at, after, &mut result);
+                    mark_operand_tokens(parsed, at, after, literal, &mut result);
                 } else {
-                    unknown_argument_token(source, end, parsed, &mut result);
+                    unknown_argument_token(source, end, parsed, literal, &mut result);
                 }
                 continue;
             }
@@ -2353,7 +2377,7 @@ impl<'a> CommandSignatures<'a> {
             {
                 // Delimited TeX arguments are read without executing any of
                 // their tokens, including controls inside balanced groups.
-                mark_operand_commands(parsed, command.span.end, end, &mut result);
+                mark_operand_tokens(parsed, command.span.end, end, literal, &mut result);
                 continue;
             }
             let signature = local.get(name).and_then(Option::as_ref);
@@ -2382,16 +2406,16 @@ impl<'a> CommandSignatures<'a> {
                             | "includeonly"
                     );
                 argument_tokens(
-                    source,
+                    (source, parsed),
                     end,
                     control_spaces,
                     signature,
-                    parsed,
                     opaque,
+                    literal,
                     &mut result,
                 );
             } else {
-                unknown_argument_token(source, end, parsed, &mut result);
+                unknown_argument_token(source, end, parsed, literal, &mut result);
             }
         }
         result
@@ -2585,10 +2609,24 @@ fn mark_operand_commands(
     );
 }
 
+fn mark_operand_tokens(
+    parsed: &syntax::Syntax,
+    start: usize,
+    end: usize,
+    literal: Option<usize>,
+    result: &mut BTreeSet<usize>,
+) {
+    mark_operand_commands(parsed, start, end, result);
+    if let Some(at) = literal.filter(|at| (start..end).contains(at)) {
+        result.insert(at);
+    }
+}
+
 fn unknown_argument_token(
     source: &str,
     mut at: usize,
     parsed: &syntax::Syntax,
+    literal: Option<usize>,
     result: &mut BTreeSet<usize>,
 ) {
     loop {
@@ -2603,10 +2641,10 @@ fn unknown_argument_token(
             _ => None,
         };
         if let Some((_, end)) = grouped {
-            mark_operand_commands(parsed, at, end, result);
+            mark_operand_tokens(parsed, at, end, literal, result);
             at = end;
         } else {
-            if syntax::control_word(source, at).is_some() {
+            if syntax::control_word(source, at).is_some() || literal == Some(at) {
                 result.insert(at);
             }
             return;
@@ -2645,14 +2683,15 @@ fn environment_declaration_operand(name: &str, parameter: usize) -> bool {
 }
 
 fn argument_tokens(
-    source: &str,
+    document: (&str, &syntax::Syntax),
     mut at: usize,
     mut control_spaces: bool,
     signature: &Signature,
-    parsed: &syntax::Syntax,
     opaque: bool,
+    literal: Option<usize>,
     result: &mut BTreeSet<usize>,
 ) {
+    let (source, parsed) = document;
     let mut starred = false;
     if signature.starred {
         at = optional_start(source, at, true);
@@ -2722,7 +2761,7 @@ fn argument_tokens(
                     return;
                 };
                 if let Some(parsed) = opaque {
-                    mark_operand_commands(parsed, at, end, result);
+                    mark_operand_tokens(parsed, at, end, literal, result);
                 }
                 if syntax::control_word(open, 0).is_some() {
                     result.insert(at);
@@ -2749,7 +2788,7 @@ fn argument_tokens(
             };
             let Some((_, end)) = group else { return };
             if let Some(parsed) = opaque {
-                mark_operand_commands(parsed, at, end, result);
+                mark_operand_tokens(parsed, at, end, literal, result);
             }
             at = end;
             control_spaces = false;
@@ -2761,7 +2800,7 @@ fn argument_tokens(
                 return;
             };
             let word = syntax::control_word(source, at).is_some();
-            if word {
+            if word || literal == Some(at) {
                 result.insert(at);
             }
             at += value.len();

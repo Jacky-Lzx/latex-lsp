@@ -459,3 +459,259 @@ fn real_special_character_fixes_repair_child_sources_without_changing_valid_tex(
         }
     }
 }
+
+const EXTRA_ALIGNMENT: &str = r"Extra alignment tab has been changed to \cr.";
+
+#[test]
+fn extra_alignment_tabs_keep_distinct_utf16_ranges_and_offer_versioned_text_escapes() {
+    let source="😀 \\begin{tabular}{ll}A & B & C\\\\\\end{tabular} \\begin{tabular}{ll}D & E & F\\\\\\end{tabular}\r\n";
+    let text = Text::new(source.into());
+    for numbered in [false, true] {
+        for frame in 0..3 {
+            let mut log = "(./main.tex\n".to_string();
+            let expected: Vec<_> = source
+                .char_indices()
+                .filter(|(_, ch)| *ch == '&')
+                .enumerate()
+                .filter(|(index, _)| index % 2 == 1)
+                .map(|(_, pair)| pair)
+                .collect();
+            for (at, _) in &expected {
+                let header = if numbered { "./main.tex:1:" } else { "!" };
+                let extra = if frame != 0 {
+                    "<template> ...fil }\\hskip \\tabcolsep \\endtemplate\n                      \n"
+                } else {
+                    ""
+                };
+                let recent = if frame != 2 {
+                    "<recently read> \\endtemplate\n                           \n"
+                } else {
+                    ""
+                };
+                log.push_str(&format!("{header} {EXTRA_ALIGNMENT}\n{recent}{extra}l.1 {}\n                  following source\n\n",&source[..at+1]));
+            }
+            log.push_str(")\n");
+            let (_directory, workspace, uri, items) = setup(source, &log);
+            assert_eq!(items.len(), 2, "{items:?}");
+            for (item, (at, _)) in items.iter().zip(expected) {
+                assert_eq!(
+                    item.code,
+                    Some(NumberOrString::String("extra-alignment-tab".into()))
+                );
+                assert_eq!(item.range, text.range(at, at + 1));
+                let actions = editing::code_actions(
+                    &workspace,
+                    &uri,
+                    item.range,
+                    &context(vec![item.clone()]),
+                );
+                let fixes = edits(actions, &uri);
+                assert_eq!(fixes.len(), 1);
+                assert_eq!(fixes[0].range, item.range);
+                assert_eq!(fixes[0].new_text, r"\&");
+            }
+        }
+    }
+}
+
+#[test]
+fn extra_alignment_tab_fixes_require_the_exact_internal_frame_and_literal_source() {
+    for (source, prefix, frame) in [
+        ("Before & after.", "Before &", ""),
+        ("Before & after.", "Before &", "<recently read> \\unknown\n"),
+        (
+            "Before & after.",
+            "Before &",
+            "<recently read> \\endtemplate\n\\bad ->Before &\n",
+        ),
+        (
+            "Before & after.",
+            "Before &",
+            "<recently read> \\endtemplate\n<template> incomplete\n",
+        ),
+        (
+            "Before & middle Before &",
+            "...Before &",
+            "<recently read> \\endtemplate\n",
+        ),
+        (
+            r"Before \& escaped",
+            r"Before \&",
+            "<recently read> \\endtemplate\n",
+        ),
+        (
+            "Before & after.",
+            "Different &",
+            "<recently read> \\endtemplate\n",
+        ),
+    ] {
+        let log = format!("(./main.tex\n! {EXTRA_ALIGNMENT}\n{frame}l.1 {prefix}\n\n)\n");
+        let (_directory, workspace, uri, items) = setup(source, &log);
+        assert_eq!(items.len(), 1);
+        assert!(items[0].code.is_none(), "{log}: {items:?}");
+        assert!(
+            editing::code_actions(&workspace, &uri, items[0].range, &context(items.clone()))
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+#[cfg(unix)]
+#[ignore = "requires pdflatex, xelatex and lualatex"]
+fn real_extra_alignment_tabs_repair_tables_arrays_and_raw_alignments() {
+    use std::os::unix::fs::PermissionsExt;
+    for engine in ["pdflatex", "xelatex", "lualatex"] {
+        for width in [60, 79] {
+            for verbose in [false, true] {
+                for numbered in [false, true] {
+                    let directory = tempfile::tempdir().unwrap();
+                    let root = directory.path();
+                    let main = root.join("main.tex");
+                    let child = root.join("child.tex");
+                    let compiler = root.join(engine);
+                    std::fs::write(&compiler,format!("#!/bin/sh\nTEXMFVAR=\"${{0%/*}}/tex-cache\"\nTEXMFCACHE=\"$TEXMFVAR\"\nmax_print_line={width}\nexport TEXMFVAR TEXMFCACHE max_print_line\nmkdir -p \"$TEXMFVAR\"\nexec {engine} \"$@\"\n")).unwrap();
+                    std::fs::set_permissions(&compiler, std::fs::Permissions::from_mode(0o755))
+                        .unwrap();
+                    let mut arguments = vec![
+                        "-interaction=nonstopmode".into(),
+                        "-recorder".into(),
+                        "-output-directory=%o".into(),
+                        "%f".into(),
+                    ];
+                    if numbered {
+                        arguments.insert(0, "-file-line-error".into());
+                    }
+                    let config = latex_lsp::config::BuildConfig {
+                        executable: compiler.to_string_lossy().into(),
+                        arguments: Some(arguments),
+                        ..Default::default()
+                    };
+                    std::fs::write(&main,format!("\\documentclass{{article}}\n{}\\begin{{document}}\n\\input{{child}}\n\\end{{document}}\n",if verbose {"\\errorcontextlines=100\n"}else{""})).unwrap();
+                    let source = concat!(
+                        "\\begin{tabular}{ll}A & B & C\\\\\\end{tabular}\n",
+                        "$\\begin{array}{cc}A & B & C\\\\\\end{array}$\n",
+                        "\\halign{#\\hfil & #\\hfil\\cr A & B & C\\cr}\n",
+                        "\\begin{tabular}{ll}Legal & Escaped \\&\\\\\\end{tabular}\n",
+                    );
+                    std::fs::write(&child, source).unwrap();
+                    let outcome = latex_lsp::build::run(&main, &config, &Default::default());
+                    assert_eq!(
+                        outcome.status, "error",
+                        "{engine}/{width}/{verbose}/{numbered}: {}",
+                        outcome.output
+                    );
+                    let uri = Url::from_file_path(&child).unwrap();
+                    let items: Vec<_> = outcome.diagnostics[&uri]
+                        .iter()
+                        .filter(|item| {
+                            item.code == Some(NumberOrString::String("extra-alignment-tab".into()))
+                        })
+                        .cloned()
+                        .collect();
+                    assert_eq!(
+                        items.len(),
+                        3,
+                        "{engine}/{width}/{verbose}/{numbered}: {:?}\n{}",
+                        outcome.diagnostics,
+                        outcome.output
+                    );
+                    let mut workspace = Workspace {
+                        code_action_literals: true,
+                        versioned_edits: true,
+                        ..Default::default()
+                    };
+                    workspace.add_root(root.into());
+                    workspace.open(uri.clone(), source.into(), 9);
+                    workspace
+                        .build_diagnostics
+                        .insert(Url::from_file_path(&main).unwrap(), outcome.diagnostics);
+                    let mut fixes = Vec::new();
+                    for item in items {
+                        let actions = editing::code_actions(
+                            &workspace,
+                            &uri,
+                            item.range,
+                            &context(vec![item]),
+                        );
+                        assert_eq!(actions.len(), 1);
+                        fixes.extend(edits(actions, &uri));
+                    }
+                    fixes.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
+                    let text = Text::new(source.into());
+                    let mut fixed = source.to_string();
+                    for edit in fixes {
+                        fixed.replace_range(
+                            text.offset(edit.range.start).unwrap()
+                                ..text.offset(edit.range.end).unwrap(),
+                            &edit.new_text,
+                        );
+                    }
+                    assert!(fixed
+                        .ends_with("\\begin{tabular}{ll}Legal & Escaped \\&\\\\\\end{tabular}\n"));
+                    std::fs::write(&child, fixed).unwrap();
+                    let repaired = latex_lsp::build::run(&main, &config, &Default::default());
+                    assert_eq!(
+                        repaired.status, "success",
+                        "{engine}/{width}/{verbose}/{numbered}: {}",
+                        repaired.output
+                    );
+                    assert!(repaired
+                        .diagnostics
+                        .values()
+                        .flatten()
+                        .all(|item| item.severity != Some(DiagnosticSeverity::ERROR)));
+                    std::fs::write(
+                        &child,
+                        r"\def\bad#1#2{&}\begin{tabular}{ll}A & B\bad x& C\\\end{tabular}",
+                    )
+                    .unwrap();
+                    let macro_error = latex_lsp::build::run(&main, &config, &Default::default());
+                    assert_eq!(macro_error.status, "error");
+                    assert!(
+                        macro_error
+                            .diagnostics
+                            .values()
+                            .flatten()
+                            .all(|item| item.code
+                                != Some(NumberOrString::String("extra-alignment-tab".into()))),
+                        "{engine}/{width}/{verbose}/{numbered}: {:?}",
+                        macro_error.diagnostics
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn extra_alignment_tabs_consumed_by_macro_parameters_are_not_treated_as_row_separators() {
+    for source in [
+        r"\def\bad#1{&}\begin{tabular}{ll}A & B\bad&",
+        r"\def\bad#1#2{&}\begin{tabular}{ll}A & B\bad x&",
+        r"\def\bad#1&{&}\begin{tabular}{ll}A & B\bad x&",
+        r"\begin{tabular}{ll}A & B\unknown&",
+    ] {
+        let log=format!("(./main.tex\n! {EXTRA_ALIGNMENT}\n<recently read> \\endtemplate\n\nl.1 {source}\n\n)\n");
+        let (_directory, workspace, uri, items) = setup(source, &log);
+        assert_eq!(items.len(), 1);
+        assert!(items[0].code.is_none(), "{source}: {items:?}");
+        assert!(
+            editing::code_actions(&workspace, &uri, items[0].range, &context(items.clone()))
+                .is_empty()
+        );
+    }
+    let source = r"\begin{tabular}{ll}A & B\hfil&";
+    let log = format!(
+        "(./main.tex\n! {EXTRA_ALIGNMENT}\n<recently read> \\endtemplate\n\nl.1 {source}\n\n)\n"
+    );
+    let (_directory, workspace, uri, items) = setup(source, &log);
+    assert_eq!(
+        items[0].code,
+        Some(NumberOrString::String("extra-alignment-tab".into()))
+    );
+    assert_eq!(
+        editing::code_actions(&workspace, &uri, items[0].range, &context(items.clone())).len(),
+        1
+    );
+}

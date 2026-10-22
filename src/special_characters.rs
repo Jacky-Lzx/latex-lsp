@@ -9,8 +9,21 @@ use tower_lsp::lsp_types::{
     Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range, TextEdit,
 };
 
+pub(crate) const EXTRA_ALIGNMENT_TAB: &str = r"Extra alignment tab has been changed to \cr.";
+
+pub(crate) fn diagnostic_code(message: &str) -> &'static str {
+    if message == EXTRA_ALIGNMENT_TAB {
+        "extra-alignment-tab"
+    } else {
+        "unescaped-special-character"
+    }
+}
+
 pub(crate) fn error_character(message: &str, context: &str) -> Option<char> {
-    if message == "Misplaced alignment tab character &." {
+    if matches!(
+        message,
+        "Misplaced alignment tab character &." | EXTRA_ALIGNMENT_TAB
+    ) {
         return Some('&');
     }
     if message == "Missing $ inserted." {
@@ -75,19 +88,31 @@ pub(crate) fn source_range(
     {
         return None;
     }
+    if character == '&'
+        && signature::CommandSignatures::new([(text.source.as_str(), parsed)]).literal_is_argument(
+            &text.source,
+            parsed,
+            at,
+        )
+    {
+        return None;
+    }
     Some(text.range(at, end))
 }
 
 pub(crate) fn fix(doc: &Document, diagnostic: &Diagnostic) -> Option<QuickFix> {
-    if diagnostic.code != Some(NumberOrString::String("unescaped-special-character".into()))
-        || diagnostic.severity != Some(DiagnosticSeverity::ERROR)
-    {
+    if diagnostic.severity != Some(DiagnosticSeverity::ERROR) {
         return None;
     }
     let data = diagnostic.data.as_ref()?;
     let context = data["sourceContext"].as_str()?;
     let character = error_character(&diagnostic.message, context)?;
-    if data["character"].as_str()? != character.to_string() {
+    if diagnostic.code
+        != Some(NumberOrString::String(
+            diagnostic_code(&diagnostic.message).into(),
+        ))
+        || data["character"].as_str()? != character.to_string()
+    {
         return None;
     }
     if source_range(

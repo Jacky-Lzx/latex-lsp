@@ -14122,7 +14122,7 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
         });
         let (mut server, directory, main) =
             fake_build_server_capabilities(script, false, capabilities);
-        let source = "\\documentclass{article}\nBefore & and & after.\nBefore # after.\nBefore foo_bar.\nBefore x^2.\n";
+        let source = "\\documentclass{article}\nBefore & and & after.\nBefore # after.\nBefore foo_bar.\nBefore x^2.\n\\begin{tabular}{ll}A & B & C\\\\\\end{tabular}\n";
         std::fs::write(main.to_file_path().unwrap(), source).unwrap();
         server.notify(
             "textDocument/didChange",
@@ -14145,6 +14145,7 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
         for (line, prefix) in [(4, "Before foo_"), (5, "Before x^")] {
             log.push_str(&format!("./main.tex:{line}: Missing $ inserted.\n<inserted text>\n                $\nl.{line} {prefix}\n\n"));
         }
+        log.push_str("./main.tex:6: Extra alignment tab has been changed to \\cr.\n<recently read> \\endtemplate\n\nl.6 \\begin{tabular}{ll}A & B &\n                  C\\\\\\end{tabular}\n\n");
         log.push_str(")\n");
         std::fs::write(directory.path().join("fixture.log"), log).unwrap();
         std::fs::write(directory.path().join("fail"), "").unwrap();
@@ -14155,7 +14156,7 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
         );
         let finished = server.until(|message| message["method"] == "latex/buildFinished");
         assert_eq!(finished["params"]["status"], "error");
-        assert_eq!(finished["params"]["errorsCount"], 5);
+        assert_eq!(finished["params"]["errorsCount"], 6);
         let published = server.until(|message| {
             message["method"] == "textDocument/publishDiagnostics"
                 && message["params"]["diagnostics"]
@@ -14163,9 +14164,14 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
                     .is_some_and(|items| {
                         items
                             .iter()
-                            .filter(|item| item["code"] == "unescaped-special-character")
+                            .filter(|item| {
+                                matches!(
+                                    item["code"].as_str(),
+                                    Some("unescaped-special-character" | "extra-alignment-tab")
+                                )
+                            })
                             .count()
-                            == 5
+                            == 6
                     })
         });
         let text = latex_lsp::text::Text::new(source.into());
@@ -14175,7 +14181,12 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
             .as_array()
             .unwrap()
             .iter()
-            .filter(|item| item["code"] == "unescaped-special-character")
+            .filter(|item| {
+                matches!(
+                    item["code"].as_str(),
+                    Some("unescaped-special-character" | "extra-alignment-tab")
+                )
+            })
             .enumerate()
         {
             let character = item["data"]["character"].as_str().unwrap();
@@ -14245,9 +14256,12 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
                 && message["params"]["diagnostics"]
                     .as_array()
                     .is_some_and(|items| {
-                        items
-                            .iter()
-                            .all(|item| item["code"] != "unescaped-special-character")
+                        items.iter().all(|item| {
+                            !matches!(
+                                item["code"].as_str(),
+                                Some("unescaped-special-character" | "extra-alignment-tab")
+                            )
+                        })
                     })
         });
         server.request(41, "shutdown", Value::Null);

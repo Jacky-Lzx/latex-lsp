@@ -371,7 +371,7 @@ pub fn fixes(
             if examined > 64 {
                 return result;
             }
-            if diagnostic.code == Some(NumberOrString::String("unescaped-special-character".into()))
+            if matches!(diagnostic.code.as_ref(), Some(NumberOrString::String(code)) if matches!(code.as_str(), "unescaped-special-character" | "extra-alignment-tab"))
             {
                 if let Some(fix) = crate::special_characters::fix(doc, diagnostic) {
                     if seen.insert((
