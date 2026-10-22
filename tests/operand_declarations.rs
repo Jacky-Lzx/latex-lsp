@@ -313,6 +313,11 @@ fn real_copied_declaration_sources_preserve_ordinary_calls_and_symbol_renames() 
         let main = root.join("main.tex");
         let definitions = "\\newcommand{\\ordinary}[1]{\\typeout{OPERAND:#1}#1}\n\\newif\\ifdraft\\drafttrue\n\\newenvironment{panel}{}{}\n";
         let content = concat!(
+            "\\meaning\\newcommand\\ordinary{Meaning}\n",
+            "\\meaning\\ordinary{Uncalled}\n",
+            "\\meaning\\verb|\\newcommand{\\aftermeaning}{\\typeout{OPERAND:meaning-verb}}|\\aftermeaning\n",
+            "\\meaning{\\meaning}\n",
+            "\\newcommand{\\unusedmeaning}{\\meaning{}}\n",
             "\\let\\saved\\newcommand\\ordinary{Follower}\n",
             "\\let\\savedif\\newif\\ifdraft\\typeout{OPERAND:draft}\\fi\n",
             "\\let\\savedenv\\newenvironment{panel}{}{}\\begin{panel}\\ordinary{Panel}\\end{panel}\n",
@@ -320,6 +325,7 @@ fn real_copied_declaration_sources_preserve_ordinary_calls_and_symbol_renames() 
             "\\newcommand{\\unusedbraces}{\\let\\saved{}}\n",
             "\\def\\unusedparameter#1\\let\\saved={Body}\n",
             "\\begingroup\\def\\let{}\\def\\unused{}\\let\\unused\\gdef\\restored{\\typeout{OPERAND:rebound}Rebound}\\endgroup\\restored\n",
+            "\\begingroup\\def\\meaning{}\\meaning\\newcommand{\\afterreboundmeaning}{\\typeout{OPERAND:meaning-rebound}}\\afterreboundmeaning\\endgroup\n",
             "% \\ordinary \\ifdraft \\begin{panel}\n",
             "\\verb|\\ordinary \\ifdraft \\begin{panel}|\n",
         );
@@ -401,11 +407,14 @@ fn real_copied_declaration_sources_preserve_ordinary_calls_and_symbol_renames() 
             assert_eq!(
                 observed,
                 [
+                    "OPERAND:Meaning",
+                    "OPERAND:meaning-verb",
                     "OPERAND:Follower",
                     "OPERAND:draft",
                     "OPERAND:Panel",
                     "OPERAND:braces",
-                    "OPERAND:rebound"
+                    "OPERAND:rebound",
+                    "OPERAND:meaning-rebound"
                 ]
             );
         }

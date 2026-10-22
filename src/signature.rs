@@ -4856,10 +4856,9 @@ mod quoted_source_token_tests {
             {
                 assert_eq!(
                     quoted.contains(&command.span.start),
-                    command
-                        .argument
-                        .as_ref()
-                        .is_some_and(|argument| argument.value == "quoted"),
+                    // Fixture names identify expected operands independently
+                    // of whether Syntax gives the control call arguments.
+                    source[command.span.end..].starts_with("{quoted}"),
                     "{source}: {command:?}"
                 );
             }

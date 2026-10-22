@@ -231,6 +231,9 @@ impl Snapshot {
                         )
                         .filter(|command| command.name == "include")
                     {
+                        let potential =
+                            doc.syntax.potential_file_command(&doc.text.source, command);
+                        let command = potential.as_ref();
                         if let Some(argument) = syntax::file_argument(&doc.text.source, command) {
                             let name = argument.value.trim();
                             if syntax::is_literal_file_path(name) {
@@ -306,6 +309,8 @@ impl Snapshot {
                         .map(|call| &call.command),
                 )
             {
+                let potential = doc.syntax.potential_file_command(&doc.text.source, command);
+                let command = potential.as_ref();
                 if paths.borrow().len() >= MAX_PATHS {
                     break 'sources;
                 }

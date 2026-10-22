@@ -20,6 +20,15 @@ cargo test --locked -- --include-ignored
 cargo test --locked --test operand_declarations -- --include-ignored
 ```
 
+`meaning` 的默认回归检查声明与逐字扫描边界、字面花括号、参数提示和标签编辑排除、直接与静态名称的跨文件导航及重命名，并验证依赖候选不会混入复制来源后的普通文本。上面的三引擎回归同时检查查看 `newcommand`、普通宏和 `verb` 后的执行结果、宏正文、参数分隔文本及本文件改写 `meaning` 后的实际调用；重命名前后比较输出。项目上下文的根文件和依赖规则另有回归，覆盖声明目标、复制来源和含义不确定的查看操作：
+
+默认单元测试另核对命令 token 的文字化边界，以及跨文件或不确定改写 `meaning` 时，宏包、文档类和文献候选文件的变化仍会使编译结果过期。
+
+```sh
+cargo test --locked --test meaning_operands
+cargo test --locked --test quoted_roots --test source_dependencies --test file_macro_operands
+```
+
 `futurelet` 重命名回归需要 pdfLaTeX、XeLaTeX 和 LuaLaTeX，比较改名前后的前瞻判断与继续执行结果，覆盖直接目标、静态 `csname` 目标和中文新名称。默认测试检查跨文件编辑、非法目标、命令继续加载文件及签名边界；stdio 回归核对 UTF-16 名称范围和文档版本。命令片段另由真实 Neovim 展开验证：
 
 ```sh

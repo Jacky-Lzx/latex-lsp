@@ -180,11 +180,12 @@ impl Index {
         // potential dependencies whenever that binding cannot be confirmed.
         // Use the source graph's literal-name rules. Comments around a name
         // are harmless, while every package-list item must remain static.
-        let dynamic = |source: &str, command: &syntax::Command| {
+        let dynamic = |source: &str, parsed: &syntax::Syntax, command: &syntax::Command| {
+            let command = parsed.potential_file_command(source, command);
             if syntax::file_list(&command.name) {
-                syntax::complete_file_list_spans(source, command).is_none()
+                syntax::complete_file_list_spans(source, &command).is_none()
             } else {
-                syntax::file_argument(source, command)
+                syntax::file_argument(source, &command)
                     .is_none_or(|argument| !syntax::is_literal_file_path(&argument.value))
             }
         };
@@ -225,7 +226,7 @@ impl Index {
                                 command.name.as_str(),
                                 "input" | "include" | "subfile" | "InputIfFileExists"
                             ) || syntax::loader_extension(&command.name).is_some())
-                                && dynamic(&doc.text.source, command)
+                                && dynamic(&doc.text.source, &doc.syntax, command)
                     })
         }) || self
             .calls
@@ -235,7 +236,7 @@ impl Index {
                 workspace.documents.get(uri).is_none_or(|doc| {
                     calls
                         .iter()
-                        .any(|call| dynamic(&doc.text.source, &call.command))
+                        .any(|call| dynamic(&doc.text.source, &doc.syntax, &call.command))
                 })
             })
         {

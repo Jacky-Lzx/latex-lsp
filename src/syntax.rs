@@ -99,7 +99,7 @@ pub struct CitationField {
 #[derive(Clone, Debug, Default)]
 pub struct Syntax {
     pub commands: Vec<Command>,
-    /// Unexpanded declaration/copy operands remain command-name references,
+    /// Unexpanded declaration/copy/inspection operands remain command references,
     /// but do not read arguments or perform the named command's operations.
     pub control_operands: std::collections::BTreeSet<usize>,
     pub labels: Vec<Entry>,
@@ -1912,6 +1912,56 @@ pub fn section_level(name: &str) -> Option<u32> {
 }
 
 impl Syntax {
+    pub(crate) fn inspection_operand(&self, source: &str, command: &Command) -> bool {
+        self.control_operands.contains(&command.span.start)
+            && self
+                .commands
+                .binary_search_by_key(&command.span.start, |item| item.span.start)
+                .ok()
+                .and_then(|index| index.checked_sub(1))
+                .map(|index| &self.commands[index])
+                .is_some_and(|previous| {
+                    previous.name == "meaning"
+                        && !self.control_operands.contains(&previous.span.start)
+                        && skip_space(source, previous.span.end) == command.span.start
+                })
+    }
+
+    /// File discovery keeps possible paths when another source can rebind an
+    /// apparent quoting primitive. Reconstruct that candidate without making
+    /// the operand an executed call in the symbol index.
+    pub(crate) fn potential_file_command<'a>(
+        &self,
+        source: &str,
+        command: &'a Command,
+    ) -> std::borrow::Cow<'a, Command> {
+        if command.argument.is_some() || !self.inspection_operand(source, command) {
+            return std::borrow::Cow::Borrowed(command);
+        }
+        let argument = (|| {
+            let start = file_name_argument_start(source, &command.name, command.span.end)?;
+            let grouped = if crate::bib_resources::loads(&command.name) {
+                verbatim_file_group(source, start)
+            } else {
+                group(source, start, b'{', b'}')
+            };
+            grouped
+                .or_else(|| {
+                    (command.name == "input")
+                        .then(|| input_argument(source, start))
+                        .flatten()
+                })
+                .map(|(argument, _)| argument)
+        })();
+        match argument {
+            Some(argument) => std::borrow::Cow::Owned(Command {
+                argument: Some(argument),
+                ..command.clone()
+            }),
+            None => std::borrow::Cow::Borrowed(command),
+        }
+    }
+
     fn fix(
         &mut self,
         text: &Text,
@@ -1960,8 +2010,9 @@ impl Syntax {
                     result.ignored.push(start..i);
                     result.comments.push(start..i);
                 }
-                // A brace consumed by primitive let is data, not a group.
-                b'{' | b'}' if brace_operands.remove(&i) => {
+                // A consumed brace token is data, not a group. Retain its
+                // position so later operands do not read it as an argument.
+                b'{' | b'}' if brace_operands.contains(&i) => {
                     i += 1;
                 }
                 b'{' => {
@@ -2006,9 +2057,17 @@ impl Syntax {
                         });
                         continue;
                     }
+                    // A previous lexical assignment invalidates this keyword's
+                    // operand grammar without simulating scope restoration.
+                    let operands_known = !assigned_controls.contains(name);
                     let starred = !matches!(
                         name,
-                        "input" | "InputIfFileExists" | "IfFileExists" | "detokenize" | "string"
+                        "input"
+                            | "InputIfFileExists"
+                            | "IfFileExists"
+                            | "detokenize"
+                            | "string"
+                            | "meaning"
                     ) && !passes_options(name)
                         && bytes.get(i) == Some(&b'*');
                     if starred {
@@ -2090,7 +2149,7 @@ impl Syntax {
                     let url_argument = matches!(name, "url" | "href")
                         || name == "hyperref"
                             && bytes.get(skip_space(source, command_end)) == Some(&b'{');
-                    let parsed = if name == "Verb" {
+                    let parsed = if name == "Verb" || (name == "meaning" && operands_known) {
                         None
                     } else if crate::fancyvrb::is_inline_save(name) || crate::fancyvrb::is_use(name)
                     {
@@ -2127,6 +2186,21 @@ impl Syntax {
                         span: start..command_end,
                         argument,
                     };
+                    if name == "meaning" && operands_known {
+                        let operand = skip_space(source, command_end);
+                        if let Some(word) = control_word(source, operand) {
+                            control_operands.insert(word.start);
+                        } else if matches!(bytes.get(operand), Some(b'{' | b'}'))
+                            && !result.commands.iter().any(|previous| {
+                                !control_operands.contains(&previous.span.start)
+                                    && !brace_operands
+                                        .contains(&skip_space(source, previous.span.end))
+                                    && crate::signature::reads_brace(source, previous, operand)
+                            })
+                        {
+                            brace_operands.insert(operand);
+                        }
+                    }
                     if let Some(style) = crate::citations::style(name) {
                         let arguments = crate::citations::arguments(source, command_end, style);
                         for argument in arguments.keys() {
@@ -2243,10 +2317,6 @@ impl Syntax {
                                     && skip_space(source, previous.span.end) == command.span.start
                             }))
                     });
-                    // A previous lexical assignment invalidates this keyword's
-                    // operand grammar. Keep later commands visible rather than
-                    // simulating execution or restoration at group boundaries.
-                    let operands_known = !assigned_controls.contains(name);
                     if operands_known {
                         if let Some(span) = &declaration {
                             control_operands.insert(span.start);
@@ -2295,6 +2365,8 @@ impl Syntax {
                                 && matches!(bytes.get(operand), Some(b'{' | b'}'))
                                 && !result.commands.iter().any(|previous| {
                                     !control_operands.contains(&previous.span.start)
+                                        && !brace_operands
+                                            .contains(&skip_space(source, previous.span.end))
                                         && crate::signature::reads_brace(source, previous, operand)
                                 })
                             {

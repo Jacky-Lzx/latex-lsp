@@ -148,13 +148,21 @@ pub fn root_directive(doc: &Document) -> Option<crate::syntax::Argument> {
     magic_directive(doc, &["root"])
 }
 
-fn root_marker(command: &crate::syntax::Command) -> bool {
+fn root_marker(doc: &Document, command: &crate::syntax::Command) -> bool {
+    if doc.syntax.control_operands.contains(&command.span.start)
+        && !doc.syntax.inspection_operand(&doc.text.source, command)
+    {
+        return false;
+    }
     command.name == "documentclass"
         || command.name == "begin"
-            && command
-                .argument
-                .as_ref()
-                .is_some_and(|argument| argument.value == "document")
+            && command.argument.as_ref().map_or_else(
+                || {
+                    crate::syntax::environment_name_argument(&doc.text.source, command.span.end)
+                        .is_some_and(|argument| argument.value == "document")
+                },
+                |argument| argument.value == "document",
+            )
 }
 
 fn magic_directive(doc: &Document, fields: &[&str]) -> Option<crate::syntax::Argument> {
@@ -242,7 +250,7 @@ impl Workspace {
             .syntax
             .commands
             .iter()
-            .find(|command| root_marker(command))
+            .find(|command| root_marker(doc, command))
         else {
             return false;
         };
@@ -267,7 +275,7 @@ impl Workspace {
         doc.syntax
             .commands
             .iter()
-            .any(|command| root_marker(command) && !quoted.contains(&command.span.start))
+            .any(|command| root_marker(doc, command) && !quoted.contains(&command.span.start))
     }
 
     fn is_saved_root(&self, uri: &Url) -> bool {
@@ -429,11 +437,12 @@ impl Workspace {
                         None => return vec![],
                     },
                 };
-                crate::syntax::file_argument(&doc.text.source, command)
+                let command = doc.syntax.potential_file_command(&doc.text.source, command);
+                crate::syntax::file_argument(&doc.text.source, &command)
                     .map(|arg| {
                         let multiple = crate::syntax::file_list(&command.name);
                         let values = if let Some(spans) =
-                            crate::syntax::file_list_spans(&doc.text.source, command)
+                            crate::syntax::file_list_spans(&doc.text.source, &command)
                         {
                             spans
                                 .into_iter()

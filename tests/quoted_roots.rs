@@ -76,6 +76,32 @@ fn quoted_document_markers_do_not_create_roots_or_shared_build_lenses() {
 }
 
 #[test]
+fn declaration_targets_and_copy_sources_do_not_become_document_roots() {
+    for statement in [
+        r"\let\saved\begin{document}",
+        r"\let\saved\documentclass{article}",
+        r"\def\documentclass#1{}",
+        r"\let\documentclass\relax",
+        r"\futurelet\documentclass\relax\relax",
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let workspace = project(root, &format!(r"{statement}\input{{shared}}"));
+        let shared = uri(root, "shared.tex");
+        assert_eq!(
+            workspace.root_document(&shared).unwrap(),
+            uri(root, "main.tex"),
+            "{statement}"
+        );
+        assert_eq!(
+            code_lens::lenses(&workspace, &shared).len(),
+            1,
+            "{statement}"
+        );
+    }
+}
+
+#[test]
 fn actual_and_uncertain_root_markers_keep_shared_root_ambiguity() {
     for marker in [r"\documentclass{article}", r"\begin{document}"] {
         for statement in [
