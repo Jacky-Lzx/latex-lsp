@@ -1723,10 +1723,15 @@ fn error_context<'a>(
             return None;
         }
     }
-    // A direct script token outside math mode always reports this exact
-    // recovery frame. Additional expansion frames must still block attribution.
-    if message == "Missing $ inserted." {
-        if line.trim() != "<inserted text>" || context.next()?.1.trim() != "$" {
+    // Accept only the engine's exact recovery token and immediate source
+    // echo. Additional expansion frames must still block attribution.
+    let inserted = match message {
+        "Missing $ inserted." => Some("$"),
+        crate::right_delimiters::MISSING_ERROR => Some(r"\right ."),
+        _ => None,
+    };
+    if let Some(inserted) = inserted {
+        if line.trim() != "<inserted text>" || context.next()?.1.trim() != inserted {
             return None;
         }
         (index, line) = context.next()?;
@@ -2841,6 +2846,23 @@ fn emit_with_context(
         .as_ref()
         .map(|invocation| text.range(invocation.command.start, invocation.command.end));
     ranges.extend(right_range);
+    let missing_right = (message == crate::right_delimiters::MISSING_ERROR
+        && severity == DiagnosticSeverity::ERROR
+        && !project_stale)
+        .then(|| {
+            crate::right_delimiters::missing_boundary(
+                &text,
+                &crate::syntax::Syntax::latex(&text),
+                line,
+                context?,
+                macro_context.map(|context| &context.macros.signatures),
+            )
+        })
+        .flatten();
+    let missing_right_range = missing_right
+        .as_ref()
+        .map(|boundary| text.range(boundary.start, boundary.end));
+    ranges.extend(missing_right_range);
     let unsupported_unicode =
         unsupported_unicode_character(&message).filter(|_| severity == DiagnosticSeverity::ERROR);
     ranges.extend(unsupported_unicode.and_then(|character| {
@@ -3052,6 +3074,7 @@ fn emit_with_context(
                     .or_else(|| float_excess.map(|_| "oversized-float"))
                     .or_else(|| special_range.map(|_| crate::special_characters::diagnostic_code(&message)))
                     .or_else(|| right_range.map(|_| crate::right_delimiters::CODE))
+                    .or_else(|| missing_right_range.map(|_| crate::right_delimiters::MISSING_CODE))
                     .or_else(|| character.map(|_| "missing-character"))
                     .or_else(|| unsupported_unicode.map(|_| "unsupported-unicode-character"))
                     .or_else(|| destination.as_ref().filter(|_| precise_destination).map(|(kind, _)| kind.code()))
@@ -3076,6 +3099,7 @@ fn emit_with_context(
                     .or_else(|| float_excess.map(|excess| serde_json::json!({"excessPt":excess})))
                     .or_else(|| special_range.and(special_character).map(|character| serde_json::json!({"character":character.to_string(),"sourceContext":context})))
                     .or_else(|| right_delimiter.as_ref().map(|invocation| serde_json::json!({"delimiter":&text.source[invocation.delimiter.clone()],"delimiterFrame":error.as_ref().and_then(|error| error.right_delimiter_frame),"sourceLine":line,"sourceContext":context})))
+                    .or_else(|| missing_right.as_ref().map(|boundary| serde_json::json!({"closingToken":&text.source[boundary.clone()],"sourceLine":line,"sourceContext":context})))
                     .or_else(|| character.map(|character| serde_json::json!({"character":character.to_string(),"codepoint":format!("U+{:04X}", character as u32)})))
                     .or_else(|| unsupported_unicode.map(|character| serde_json::json!({"character":character.to_string(),"codepoint":format!("U+{:04X}", character as u32)})))
                     .or_else(|| command_name.map(|name| serde_json::json!({"command":name})))
@@ -3116,7 +3140,7 @@ fn emit_with_context(
                     .or_else(|| graphic_range.and(missing_graphic).map(|name| serde_json::json!({"file":name})))
                     .or_else(|| missing_include_key(&message).map(|name| serde_json::json!({"file":name})))
                     .map(|mut data| {
-                        if special_range.is_some() || right_range.is_some() || missing_include_key(&message).is_some() || color_range.is_some() || model_range.is_some() || counter_range.is_some() || length_range.is_some() || toggle_range.is_some() || boolean_range.is_some() || environment_range.is_some() || input_range.is_some() || loader_range.is_some() || clash_range.is_some() {
+                        if special_range.is_some() || right_range.is_some() || missing_right_range.is_some() || missing_include_key(&message).is_some() || color_range.is_some() || model_range.is_some() || counter_range.is_some() || length_range.is_some() || toggle_range.is_some() || boolean_range.is_some() || environment_range.is_some() || input_range.is_some() || loader_range.is_some() || clash_range.is_some() {
                             if let Some(context) = macro_context {
                                 data["macroSources"] = serde_json::json!(context.macros.sources);
                                 if !context.macros.paused_sources.is_empty() {
@@ -4120,6 +4144,7 @@ impl InvocationKind {
         if crate::special_characters::error_character(message, "").is_some()
             || message == "Missing $ inserted."
             || message == crate::right_delimiters::ERROR
+            || message == crate::right_delimiters::MISSING_ERROR
         {
             Some(Self::Literal)
         } else if undefined_color_name(message).is_some() {

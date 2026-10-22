@@ -15529,159 +15529,187 @@ fn literal_build_fixes_recheck_cross_file_macro_changes_without_a_main_version_c
 #[test]
 #[cfg(unix)]
 fn right_delimiter_fixes_publish_child_ranges_preserve_comments_and_clear_over_stdio() {
-    for literals in [false, true] {
-        let script = r#"cat "${2%/*}/fixture.log" > "$1/main.log"
+    for missing in [false, true] {
+        for literals in [false, true] {
+            let code = if missing {
+                "missing-right-delimiter"
+            } else {
+                "unmatched-right-delimiter"
+            };
+            let script = r#"cat "${2%/*}/fixture.log" > "$1/main.log"
 if [ -f "${2%/*}/fail" ]; then exit 1; fi
 printf '%%PDF-1.4\n' > "$1/main.pdf"
 "#;
-        let capabilities = json!({
-            "workspace":{"applyEdit":true,"workspaceEdit":{"documentChanges":true}},
-            "textDocument": if literals {
-                json!({"codeAction":{"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix"]}}}})
-            } else { json!({}) }
-        });
-        let (mut server, directory, main) =
-            fake_build_server_capabilities(script, false, capabilities);
-        let child = Url::from_file_path(directory.path().join("child.tex")).unwrap();
-        let source = "$\\alpha\\right% keep\n.b$\n";
-        let main_source =
-            "\\documentclass{article}\n\\begin{document}\\input{child}\\end{document}\n";
-        std::fs::write(child.to_file_path().unwrap(), source).unwrap();
-        std::fs::write(main.to_file_path().unwrap(), main_source).unwrap();
-        server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":9},"contentChanges":[{"text":main_source}]}));
-        server.notify(
+            let capabilities = json!({
+                "workspace":{"applyEdit":true,"workspaceEdit":{"documentChanges":true}},
+                "textDocument": if literals {
+                    json!({"codeAction":{"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix"]}}}})
+                } else { json!({}) }
+            });
+            let (mut server, directory, main) =
+                fake_build_server_capabilities(script, false, capabilities);
+            let child = Url::from_file_path(directory.path().join("child.tex")).unwrap();
+            let source = if missing {
+                "$\\left(a% keep\n$ and trailing\n"
+            } else {
+                "$\\alpha\\right% keep\n.b$\n"
+            };
+            let main_source =
+                "\\documentclass{article}\n\\begin{document}\\input{child}\\end{document}\n";
+            std::fs::write(child.to_file_path().unwrap(), source).unwrap();
+            std::fs::write(main.to_file_path().unwrap(), main_source).unwrap();
+            server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":9},"contentChanges":[{"text":main_source}]}));
+            server.notify(
             "textDocument/didOpen",
             json!({"textDocument":{"uri":child,"languageId":"latex","version":4,"text":source}}),
         );
-        std::fs::write(
+            std::fs::write(
             directory.path().join("fixture.log"),
-            "(./main.tex\n(./child.tex\n./child.tex:2: Extra \\right.\nl.2 .\n      b$\n\n)\n)\n",
+            if missing {
+                "(./main.tex\n(./child.tex\n./child.tex:2: Missing \\right. inserted.\n<inserted text>\n                \\right .\nl.2 $\n      and trailing\n\n)\n)\n"
+            } else {
+                "(./main.tex\n(./child.tex\n./child.tex:2: Extra \\right.\nl.2 .\n      b$\n\n)\n)\n"
+            },
         )
         .unwrap();
-        std::fs::write(directory.path().join("fail"), "").unwrap();
-        server.request(
-            2,
-            "workspace/executeCommand",
-            json!({"command":"latex.build","arguments":[main]}),
-        );
-        let finished = server.until(|item| item["method"] == "latex/buildFinished");
-        assert_eq!(finished["params"]["status"], "error", "{finished}");
-        assert_eq!(finished["params"]["errorsCount"], 1);
-        let published = server.until(|item| {
-            item["method"] == "textDocument/publishDiagnostics"
-                && item["params"]["uri"] == child.as_str()
-                && item["params"]["diagnostics"]
-                    .as_array()
-                    .is_some_and(|items| {
-                        items
-                            .iter()
-                            .any(|item| item["code"] == "unmatched-right-delimiter")
-                    })
-        });
-        let diagnostic = published["params"]["diagnostics"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|item| item["code"] == "unmatched-right-delimiter")
-            .unwrap();
-        assert_eq!(
-            diagnostic["range"],
-            json!({"start":{"line":0,"character":7},"end":{"line":0,"character":13}})
-        );
-        assert_eq!(diagnostic["data"]["sourceLine"], 1);
-        assert_eq!(diagnostic["data"]["delimiter"], ".");
-        let params = json!({"textDocument":{"uri":child},"range":diagnostic["range"],"context":{"diagnostics":[diagnostic],"only":["quickfix"]}});
-        let actions = server.request(3, "textDocument/codeAction", params.clone());
-        assert_eq!(actions.as_array().unwrap().len(), 1, "{actions}");
-        assert_eq!(actions[0]["title"], r"Remove unmatched '\right'");
-        let mut stale = None;
-        let edit = if literals {
-            actions[0]["edit"].clone()
-        } else {
-            let mut tampered = actions[0].clone();
-            tampered["arguments"][0]["replacement"] = "WRONG".into();
-            server.send(json!({"jsonrpc":"2.0","id":4,"method":"workspace/executeCommand","params":tampered}));
-            let response = server.until(|item| item["id"] == 4);
-            assert_eq!(response["error"]["code"], -32602, "{response}");
-            server.send(json!({"jsonrpc":"2.0","id":5,"method":"workspace/executeCommand","params":actions[0]}));
-            let apply = server.until(|item| item["method"] == "workspace/applyEdit");
-            server.send(json!({"jsonrpc":"2.0","id":apply["id"],"result":{"applied":true}}));
-            let response = server.until(|item| item["id"] == 5);
-            assert!(response.get("error").is_none(), "{response}");
-            stale = Some(actions[0].clone());
-            apply["params"]["edit"].clone()
-        };
-        let document = &edit["documentChanges"][0];
-        assert_eq!(document["textDocument"]["uri"], json!(child));
-        assert_eq!(document["textDocument"]["version"], 4);
-        let mut edits = serde_json::from_value::<Vec<tower_lsp::lsp_types::TextEdit>>(
-            document["edits"].clone(),
-        )
-        .unwrap();
-        assert_eq!(edits.len(), 2);
-        edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
-        let fixed = latex_lsp::text::Text::new(source.into())
-            .changed(
-                edits
-                    .into_iter()
-                    .map(
-                        |edit| tower_lsp::lsp_types::TextDocumentContentChangeEvent {
-                            range: Some(edit.range),
-                            range_length: None,
-                            text: edit.new_text,
-                        },
-                    )
-                    .collect(),
+            std::fs::write(directory.path().join("fail"), "").unwrap();
+            server.request(
+                2,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            let finished = server.until(|item| item["method"] == "latex/buildFinished");
+            assert_eq!(finished["params"]["status"], "error", "{finished}");
+            assert_eq!(finished["params"]["errorsCount"], 1);
+            let published = server.until(|item| {
+                item["method"] == "textDocument/publishDiagnostics"
+                    && item["params"]["uri"] == child.as_str()
+                    && item["params"]["diagnostics"]
+                        .as_array()
+                        .is_some_and(|items| items.iter().any(|item| item["code"] == code))
+            });
+            let diagnostic = published["params"]["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|item| item["code"] == code)
+                .unwrap();
+            assert_eq!(
+                diagnostic["range"],
+                if missing {
+                    json!({"start":{"line":1,"character":0},"end":{"line":1,"character":1}})
+                } else {
+                    json!({"start":{"line":0,"character":7},"end":{"line":0,"character":13}})
+                }
+            );
+            assert_eq!(diagnostic["data"]["sourceLine"], 1);
+            assert_eq!(
+                diagnostic["data"][if missing { "closingToken" } else { "delimiter" }],
+                if missing { "$" } else { "." }
+            );
+            let params = json!({"textDocument":{"uri":child},"range":diagnostic["range"],"context":{"diagnostics":[diagnostic],"only":["quickfix"]}});
+            let actions = server.request(3, "textDocument/codeAction", params.clone());
+            assert_eq!(actions.as_array().unwrap().len(), 1, "{actions}");
+            assert_eq!(
+                actions[0]["title"],
+                if missing {
+                    r"Insert invisible '\right.'"
+                } else {
+                    r"Remove unmatched '\right'"
+                }
+            );
+            let mut stale = None;
+            let edit = if literals {
+                actions[0]["edit"].clone()
+            } else {
+                let mut tampered = actions[0].clone();
+                tampered["arguments"][0]["replacement"] = "WRONG".into();
+                server.send(json!({"jsonrpc":"2.0","id":4,"method":"workspace/executeCommand","params":tampered}));
+                let response = server.until(|item| item["id"] == 4);
+                assert_eq!(response["error"]["code"], -32602, "{response}");
+                server.send(json!({"jsonrpc":"2.0","id":5,"method":"workspace/executeCommand","params":actions[0]}));
+                let apply = server.until(|item| item["method"] == "workspace/applyEdit");
+                server.send(json!({"jsonrpc":"2.0","id":apply["id"],"result":{"applied":true}}));
+                let response = server.until(|item| item["id"] == 5);
+                assert!(response.get("error").is_none(), "{response}");
+                stale = Some(actions[0].clone());
+                apply["params"]["edit"].clone()
+            };
+            let document = &edit["documentChanges"][0];
+            assert_eq!(document["textDocument"]["uri"], json!(child));
+            assert_eq!(document["textDocument"]["version"], 4);
+            let mut edits = serde_json::from_value::<Vec<tower_lsp::lsp_types::TextEdit>>(
+                document["edits"].clone(),
             )
-            .unwrap()
-            .source;
-        assert_eq!(fixed, "$\\alpha{}% keep\nb$\n");
-        std::fs::write(child.to_file_path().unwrap(), &fixed).unwrap();
-        server.notify(
-            "textDocument/didChange",
-            json!({"textDocument":{"uri":child,"version":5},"contentChanges":[{"text":fixed}]}),
-        );
-        if let Some(stale) = stale {
-            server.send(
+            .unwrap();
+            assert_eq!(edits.len(), if missing { 1 } else { 2 });
+            edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
+            let fixed = latex_lsp::text::Text::new(source.into())
+                .changed(
+                    edits
+                        .into_iter()
+                        .map(
+                            |edit| tower_lsp::lsp_types::TextDocumentContentChangeEvent {
+                                range: Some(edit.range),
+                                range_length: None,
+                                text: edit.new_text,
+                            },
+                        )
+                        .collect(),
+                )
+                .unwrap()
+                .source;
+            assert_eq!(
+                fixed,
+                if missing {
+                    "$\\left(a% keep\n\\right.$ and trailing\n"
+                } else {
+                    "$\\alpha{}% keep\nb$\n"
+                }
+            );
+            std::fs::write(child.to_file_path().unwrap(), &fixed).unwrap();
+            server.notify(
+                "textDocument/didChange",
+                json!({"textDocument":{"uri":child,"version":5},"contentChanges":[{"text":fixed}]}),
+            );
+            if let Some(stale) = stale {
+                server.send(
                 json!({"jsonrpc":"2.0","id":7,"method":"workspace/executeCommand","params":stale}),
             );
-            assert_eq!(
-                server.until(|item| item["id"] == 7)["error"]["code"],
-                -32602
+                assert_eq!(
+                    server.until(|item| item["id"] == 7)["error"]["code"],
+                    -32602
+                );
+            }
+            std::fs::write(
+                directory.path().join("fixture.log"),
+                "(./main.tex\n(./child.tex)\n)\n",
+            )
+            .unwrap();
+            std::fs::remove_file(directory.path().join("fail")).unwrap();
+            server.request(
+                8,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
             );
+            let finished = server.until(|item| item["method"] == "latex/buildFinished");
+            assert_eq!(finished["params"]["status"], "success", "{finished}");
+            assert_eq!(finished["params"]["errorsCount"], 0);
+            server.until(|item| {
+                item["method"] == "textDocument/publishDiagnostics"
+                    && item["params"]["uri"] == child.as_str()
+                    && item["params"]["diagnostics"]
+                        .as_array()
+                        .is_some_and(|items| items.iter().all(|item| item["code"] != code))
+            });
+            assert_eq!(
+                server.request(9, "textDocument/codeAction", params),
+                json!([])
+            );
+            server.request(10, "shutdown", Value::Null);
+            server.notify("exit", Value::Null);
+            server.wait_exit(0);
         }
-        std::fs::write(
-            directory.path().join("fixture.log"),
-            "(./main.tex\n(./child.tex)\n)\n",
-        )
-        .unwrap();
-        std::fs::remove_file(directory.path().join("fail")).unwrap();
-        server.request(
-            8,
-            "workspace/executeCommand",
-            json!({"command":"latex.build","arguments":[main]}),
-        );
-        let finished = server.until(|item| item["method"] == "latex/buildFinished");
-        assert_eq!(finished["params"]["status"], "success", "{finished}");
-        assert_eq!(finished["params"]["errorsCount"], 0);
-        server.until(|item| {
-            item["method"] == "textDocument/publishDiagnostics"
-                && item["params"]["uri"] == child.as_str()
-                && item["params"]["diagnostics"]
-                    .as_array()
-                    .is_some_and(|items| {
-                        items
-                            .iter()
-                            .all(|item| item["code"] != "unmatched-right-delimiter")
-                    })
-        });
-        assert_eq!(
-            server.request(9, "textDocument/codeAction", params),
-            json!([])
-        );
-        server.request(10, "shutdown", Value::Null);
-        server.notify("exit", Value::Null);
-        server.wait_exit(0);
     }
 }
 

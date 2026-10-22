@@ -3,6 +3,221 @@ use tower_lsp::lsp_types::*;
 
 const ERROR: &str = r"Extra \right.";
 const CODE: &str = "unmatched-right-delimiter";
+const MISSING_ERROR: &str = r"Missing \right. inserted.";
+const MISSING_CODE: &str = "missing-right-delimiter";
+
+fn missing_log(line: u32, prefix: &str, numbered: bool) -> String {
+    let header = if numbered {
+        format!("./main.tex:{line}: {MISSING_ERROR}")
+    } else {
+        format!("! {MISSING_ERROR}")
+    };
+    format!("(./main.tex\n{header}\n<inserted text>\n                \\right .\nl.{line} {prefix}\n\n)\n")
+}
+
+#[test]
+fn missing_right_repairs_preserve_math_boundaries_comments_and_utf16() {
+    for numbered in [false, true] {
+        for newline in ["\n", "\r\n"] {
+            for (source, line, prefix, closing) in [
+                ("😀 $\\left(a$", 1, "😀 $\\left(a$", "$"),
+                (r"$$\left(a$$", 1, r"$$\left(a$", "$"),
+                (r"\(\left(a\)", 1, r"\(\left(a\)", r"\)"),
+                (r"\[\left(a\]", 1, r"\[\left(a\]", r"\]"),
+                (
+                    r"$\begingroup\left(a\endgroup$",
+                    1,
+                    r"$\begingroup\left(a\endgroup",
+                    r"\endgroup",
+                ),
+                (
+                    r"\begin{equation}\left(a\end{equation}",
+                    1,
+                    r"\begin{equation}\left(a\end{equation}",
+                    r"\end{equation}",
+                ),
+                (
+                    r"\begin{math}\left(a\end{math}",
+                    1,
+                    r"\begin{math}\left(a\end{math}",
+                    r"\end{math}",
+                ),
+                (
+                    r"\begin{displaymath}\left(a\end{displaymath}",
+                    1,
+                    r"\begin{displaymath}\left(a\end{displaymath}",
+                    r"\end{displaymath}",
+                ),
+                ("$\\left(a% keep\n$", 2, "$", "$"),
+                (r"$\left(a\middle|b$", 1, r"$\left(a\middle|b$", "$"),
+                (
+                    r"\newcommand{\probe}{\left(a} $\probe$",
+                    1,
+                    r"\newcommand{\probe}{\left(a} $\probe$",
+                    "$",
+                ),
+            ] {
+                let source = source.replace('\n', newline);
+                let log = missing_log(line, prefix, numbered).replace('\n', newline);
+                let (_directory, workspace, root, items) = workspace(&source, &log);
+                assert_eq!(items.len(), 1, "{source}: {items:?}");
+                let item = &items[0];
+                assert_eq!(
+                    item.code,
+                    Some(NumberOrString::String(MISSING_CODE.into())),
+                    "{source}: {item:?}"
+                );
+                let end = workspace.documents[&root]
+                    .text
+                    .offset(Position::new(line - 1, 0))
+                    .unwrap()
+                    + prefix.len();
+                let start = end - closing.len();
+                assert_eq!(
+                    item.range,
+                    workspace.documents[&root].text.range(start, end)
+                );
+                assert_eq!(item.data.as_ref().unwrap()["closingToken"], closing);
+                let edits = edit(actions(&workspace, &root, item), &root);
+                assert_eq!(edits.len(), 1);
+                assert_eq!(
+                    edits[0].range,
+                    workspace.documents[&root].text.range(start, start)
+                );
+                let mut expected = source.clone();
+                expected.insert_str(start, r"\right.");
+                assert_eq!(apply(&source, edits), expected);
+            }
+        }
+    }
+    let source = r"$\left(a$ and $\left[b$";
+    let first = missing_log(1, r"$\left(a$", false);
+    let second = missing_log(1, source, false);
+    let log = first.trim_end_matches(")\n").to_owned() + second.trim_start_matches("(./main.tex\n");
+    let (_directory, workspace, root, items) = workspace(source, &log);
+    assert_eq!(items.len(), 2);
+    assert_ne!(items[0].range, items[1].range);
+    let edits = items
+        .iter()
+        .flat_map(|item| edit(actions(&workspace, &root, item), &root))
+        .collect();
+    assert_eq!(
+        apply(source, edits),
+        r"$\left(a\right.$ and $\left[b\right.$"
+    );
+}
+
+#[test]
+fn missing_right_requires_exact_recovery_and_direct_unconsumed_terminators() {
+    for (source, prefix, precise) in [
+        (r"$\left(a$", r"...\left(a$", true),
+        (r"$\left(a$ and $\left(a$", r"...\left(a$", false),
+        (r"$\left(a$", r"$\left(b$", false),
+        (r"$\left(a$", r"$\left(a", false),
+        (r"$\left(a\$", r"$\left(a\$", false),
+        (r"$\left(a\\)", r"$\left(a\\)", false),
+        (r"% $\left(a$", r"% $\left(a$", false),
+        (r"\verb|$\left(a$|", r"\verb|$\left(a$", false),
+        (
+            r"\newcommand{\probe}{$\left(a$}",
+            r"\newcommand{\probe}{$\left(a$",
+            false,
+        ),
+        (
+            r"\newcommand{\probe}[1]{#1} $\left(a\probe$",
+            r"\newcommand{\probe}[1]{#1} $\left(a\probe$",
+            false,
+        ),
+        (
+            r"\newcommand{\probe}[1]{#1} \probe{$\left(a$}",
+            r"\newcommand{\probe}[1]{#1} \probe{$\left(a$",
+            false,
+        ),
+        (r"\def\right{} $\left(a$", r"\def\right{} $\left(a$", false),
+        (r"$\left(a\string$", r"$\left(a\string$", false),
+        (r"$\left(a\meaning$", r"$\left(a\meaning$", false),
+        (r"$\left(a\noexpand$", r"$\left(a\noexpand$", false),
+        (r"$\left(a\meaning\)", r"$\left(a\meaning\)", false),
+        (
+            r"\def\endgroup{} $\left(a\endgroup",
+            r"\def\endgroup{} $\left(a\endgroup",
+            false,
+        ),
+        (
+            r"\def\end{} \begin{math}\left(a\end{math}",
+            r"\def\end{} \begin{math}\left(a\end{math}",
+            false,
+        ),
+        (
+            r"\renewenvironment{equation}{}{} \begin{equation}\left(a\end{equation}",
+            r"\renewenvironment{equation}{}{} \begin{equation}\left(a\end{equation}",
+            false,
+        ),
+        (
+            r"\[\left(a\]\end{document}",
+            r"\[\left(a\]\end{document}",
+            false,
+        ),
+        (r"$\left(a\end{custom}", r"$\left(a\end{custom}", false),
+    ] {
+        let (_directory, workspace, root, items) =
+            workspace(source, &missing_log(1, prefix, false));
+        assert_eq!(items.len(), 1, "{source}: {items:?}");
+        assert_eq!(items[0].code.is_some(), precise, "{source}: {:?}", items[0]);
+        assert_eq!(
+            !actions(&workspace, &root, &items[0]).is_empty(),
+            precise,
+            "{source}"
+        );
+    }
+    for frame in [
+        "",
+        "<inserted text>\n$\n",
+        "<inserted text>\n\\right)\n",
+        "<inserted text>\n\\right .\n\\probe ->$\n",
+        "\\probe ->$\n<inserted text>\n\\right .\n",
+    ] {
+        let log = format!("(./main.tex\n! {MISSING_ERROR}\n{frame}l.1 $\\left(a$\n\n)\n");
+        let (_directory, workspace, root, items) = workspace(r"$\left(a$", &log);
+        assert_eq!(items.len(), 1);
+        assert!(items[0].code.is_none(), "{frame}: {:?}", items[0]);
+        assert!(actions(&workspace, &root, &items[0]).is_empty());
+    }
+}
+
+#[test]
+fn legacy_missing_right_fixes_reject_stale_source_metadata_and_replacements() {
+    let source = r"$\left(a$";
+    let (_directory, mut workspace, root, items) =
+        workspace(source, &missing_log(1, source, false));
+    workspace.code_action_literals = false;
+    workspace.apply_edits = true;
+    let actions = actions(&workspace, &root, &items[0]);
+    let CodeActionOrCommand::Command(command) = &actions[0] else {
+        panic!("{actions:?}")
+    };
+    let value = command.arguments.as_ref().unwrap()[0].clone();
+    let request = || serde_json::from_value::<editing::FixRequest>(value.clone()).unwrap();
+    assert!(editing::resolve_fix(&workspace, request()).is_some());
+    let mut forged = value.clone();
+    forged["replacement"] = "WRONG".into();
+    assert!(editing::resolve_fix(&workspace, serde_json::from_value(forged).unwrap()).is_none());
+    workspace.open(root.clone(), source.into(), 10);
+    assert!(editing::resolve_fix(&workspace, request()).is_none());
+    workspace.open(root.clone(), r"$\left(b$".into(), 9);
+    assert!(editing::resolve_fix(&workspace, request()).is_none());
+    workspace.open(root.clone(), source.into(), 9);
+    workspace
+        .build_diagnostics
+        .get_mut(&root)
+        .unwrap()
+        .get_mut(&root)
+        .unwrap()[0]
+        .data
+        .as_mut()
+        .unwrap()["closingToken"] = "WRONG".into();
+    assert!(editing::resolve_fix(&workspace, request()).is_none());
+}
 
 fn workspace(source: &str, log: &str) -> (tempfile::TempDir, Workspace, Url, Vec<Diagnostic>) {
     let directory = tempfile::tempdir().unwrap();
@@ -40,7 +255,16 @@ fn edit(actions: CodeActionResponse, uri: &Url) -> Vec<TextEdit> {
     let CodeActionOrCommand::CodeAction(action) = &actions[0] else {
         panic!("{actions:?}")
     };
-    assert_eq!(action.title, r"Remove unmatched '\right'");
+    assert_eq!(
+        action.title,
+        if action.diagnostics.as_ref().unwrap()[0].code
+            == Some(NumberOrString::String("missing-right-delimiter".into()))
+        {
+            r"Insert invisible '\right.'"
+        } else {
+            r"Remove unmatched '\right'"
+        }
+    );
     let Some(DocumentChanges::Edits(documents)) = &action.edit.as_ref().unwrap().document_changes
     else {
         panic!("{action:?}")
@@ -355,6 +579,161 @@ fn loaded_macro_parameters_are_used_and_rechecked_before_right_delimiter_edits()
             std::fs::write(&macros, r"\def\consume#1{#1}").unwrap();
             workspace.reload(&Url::from_file_path(&macros).unwrap());
             assert!(actions(&workspace, &root, item).is_empty());
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn missing_right_repairs_recheck_loaded_parameter_and_primitive_definitions() {
+    use latex_lsp::{build, config::BuildConfig};
+    use std::os::unix::fs::PermissionsExt;
+    for definition in [
+        r"\def\consume{}",
+        r"\def\consume#1{#1}",
+        r"\def\consume{}\def\right{}",
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let main = directory.path().join("main.tex");
+        let macros = directory.path().join("macros.tex");
+        let source = "\\input{macros}\n$\\left(a\\consume$\n";
+        std::fs::write(&main, source).unwrap();
+        std::fs::write(&macros, definition).unwrap();
+        let compiler = directory.path().join("compiler");
+        std::fs::write(&compiler, "#!/bin/sh\ncat <<'LOG' > \"$1/main.log\"\n(./main.tex\n(./macros.tex)\n! Missing \\right. inserted.\n<inserted text>\n                \\right .\nl.2 $\\left(a\\consume$\n\n)\nLOG\nexit 1\n").unwrap();
+        std::fs::set_permissions(&compiler, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let config = BuildConfig {
+            executable: compiler.to_string_lossy().into(),
+            arguments: Some(vec!["%o".into(), "%f".into()]),
+            ..Default::default()
+        };
+        let outcome = build::run(&main, &config, &Default::default());
+        let root = Url::from_file_path(&main).unwrap();
+        let item = &outcome.diagnostics[&root][0];
+        let precise = definition == r"\def\consume{}";
+        assert_eq!(item.code.is_some(), precise, "{definition}: {item:?}");
+        let mut workspace = Workspace {
+            code_action_literals: true,
+            ..Default::default()
+        };
+        workspace.add_root(directory.path().into());
+        workspace
+            .build_diagnostics
+            .insert(root.clone(), outcome.diagnostics.clone());
+        assert_eq!(!actions(&workspace, &root, item).is_empty(), precise);
+        if precise {
+            assert!(
+                item.data.as_ref().unwrap()["macroSources"]
+                    .as_array()
+                    .unwrap()
+                    .len()
+                    >= 2
+            );
+            std::fs::write(&macros, r"\def\consume{}\def\right{}").unwrap();
+            workspace.reload(&Url::from_file_path(&macros).unwrap());
+            assert!(actions(&workspace, &root, item).is_empty());
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "requires pdfLaTeX, XeLaTeX and LuaLaTeX"]
+fn real_missing_right_repairs_compile_in_all_engines_and_recover_nested_groups() {
+    use latex_lsp::{build, config::BuildConfig};
+    use std::os::unix::fs::PermissionsExt;
+    let cache = tempfile::tempdir().unwrap();
+    for engine in ["pdflatex", "xelatex", "lualatex"] {
+        for width in [60, 79] {
+            for numbered in [false, true] {
+                let directory = tempfile::tempdir().unwrap();
+                let main = directory.path().join("main.tex");
+                let child = directory.path().join("child.tex");
+                let root = Url::from_file_path(&main).unwrap();
+                let uri = Url::from_file_path(&child).unwrap();
+                let source = "$\\left(a$\n$$\\left(a$$\n\\(\\left(a\\)\n\\[\\left(a\\]\n$\\begingroup\\left(a\\endgroup$\n\\begin{equation}\\left(a\\end{equation}\n\\begin{math}\\left(a\\end{math}\n\\begin{displaymath}\\left(a\\end{displaymath}\n$\\left(a% keep\n$\n\\newcommand{\\probe}{\\left(a} $\\probe$\n$\\left(a+\\left[b$\n";
+                std::fs::write(&main, "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\\input{child}\n\\end{document}\n").unwrap();
+                std::fs::write(&child, source).unwrap();
+                let wrapper = directory.path().join("engine");
+                std::fs::write(&wrapper, format!("#!/bin/sh\nexport max_print_line={width}\nexport TEXMFVAR=\"$1\"\nexport TEXMFCACHE=\"$1\"\nshift\nexec {engine} \"$@\"\n")).unwrap();
+                std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+                let mut arguments = vec![
+                    cache.path().to_string_lossy().into_owned(),
+                    "-interaction=nonstopmode".into(),
+                    "-no-shell-escape".into(),
+                    "-recorder".into(),
+                ];
+                if numbered {
+                    arguments.push("-file-line-error".into());
+                }
+                arguments.push("%f".into());
+                let config = BuildConfig {
+                    executable: wrapper.to_string_lossy().into(),
+                    output_directory: ".".into(),
+                    arguments: Some(arguments),
+                    ..Default::default()
+                };
+                let mut repaired = source.to_owned();
+                let mut repairs = 0;
+                for round in 0..=12 {
+                    let outcome = build::run(&main, &config, &Default::default());
+                    let mut workspace = Workspace {
+                        code_action_literals: true,
+                        versioned_edits: true,
+                        ..Default::default()
+                    };
+                    workspace.add_root(directory.path().into());
+                    workspace.open(uri.clone(), repaired.clone(), 9);
+                    workspace
+                        .build_diagnostics
+                        .insert(root.clone(), outcome.diagnostics.clone());
+                    let items = outcome
+                        .diagnostics
+                        .get(&uri)
+                        .into_iter()
+                        .flatten()
+                        .filter(|item| item.message == MISSING_ERROR)
+                        .collect::<Vec<_>>();
+                    if items.is_empty() {
+                        assert_eq!(
+                            outcome.status, "success",
+                            "{engine}/{width}/{numbered}: {}",
+                            outcome.output
+                        );
+                        assert_eq!(outcome.pages, Some(1));
+                        assert!(outcome.pdf.as_ref().unwrap().is_file());
+                        assert!(outcome
+                            .diagnostics
+                            .values()
+                            .flatten()
+                            .all(|item| item.severity != Some(DiagnosticSeverity::ERROR)));
+                        assert!(repaired.contains("% keep\n\\right.$"));
+                        assert!(repaired.contains(r"$\left(a+\left[b\right.\right.$"));
+                        assert_eq!(repairs, 12, "{engine}/{width}/{numbered}");
+                        break;
+                    }
+                    // Some LuaTeX versions repeat the first recovery until
+                    // reaching the error limit. Rebuild after each set of
+                    // distinct repairs instead of assuming every error ran.
+                    assert!(
+                        round < 12 && items.len() <= 11,
+                        "{engine}/{width}/{numbered}/{round}: {:?}",
+                        outcome.diagnostics
+                    );
+                    repairs += items.len();
+                    let mut edits = vec![];
+                    for item in items {
+                        assert_eq!(
+                            item.code,
+                            Some(NumberOrString::String(MISSING_CODE.into())),
+                            "{engine}/{width}/{numbered}: {item:?}"
+                        );
+                        edits.extend(edit(actions(&workspace, &uri, item), &uri));
+                    }
+                    repaired = apply(&repaired, edits);
+                    std::fs::write(&child, &repaired).unwrap();
+                }
+            }
         }
     }
 }

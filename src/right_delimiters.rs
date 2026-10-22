@@ -1,4 +1,4 @@
-//! Source-confirmed unmatched right delimiters; never guess an opening position.
+//! Source-confirmed right delimiter repairs; never guess a visible delimiter.
 use crate::{
     signature::CommandSignatures,
     syntax::{self, QuickFix, Syntax},
@@ -10,6 +10,8 @@ use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Posit
 
 pub(crate) const ERROR: &str = r"Extra \right.";
 pub(crate) const CODE: &str = "unmatched-right-delimiter";
+pub(crate) const MISSING_ERROR: &str = r"Missing \right. inserted.";
+pub(crate) const MISSING_CODE: &str = "missing-right-delimiter";
 
 pub(crate) struct Invocation {
     pub command: Span<usize>,
@@ -57,21 +59,14 @@ pub(crate) fn expansion_frame(line: &str) -> Option<&str> {
     .then_some(name)
 }
 
-pub(crate) fn invocation(
-    text: &Text,
-    parsed: &Syntax,
-    line: u32,
-    context: &str,
-    frame: Option<&str>,
-    signatures: Option<&CommandSignatures<'_>>,
-) -> Option<Invocation> {
+fn source_end(text: &Text, line: u32, context: &str) -> Option<usize> {
     let prefix = context.trim_end();
     if prefix.is_empty() || prefix.len() > 4096 {
         return None;
     }
     let start = text.offset(Position::new(line, 0))?;
     let value = text.source.get(start..)?.lines().next()?;
-    let end = if let Some(suffix) = prefix.strip_prefix("...") {
+    Some(if let Some(suffix) = prefix.strip_prefix("...") {
         let suffix = suffix.trim_start_matches('\u{fffd}');
         let at = value.find(suffix)?;
         if suffix.is_empty() || value.rfind(suffix) != Some(at) {
@@ -83,7 +78,18 @@ pub(crate) fn invocation(
             return None;
         }
         start + prefix.len()
-    };
+    })
+}
+
+pub(crate) fn invocation(
+    text: &Text,
+    parsed: &Syntax,
+    line: u32,
+    context: &str,
+    frame: Option<&str>,
+    signatures: Option<&CommandSignatures<'_>>,
+) -> Option<Invocation> {
+    let end = source_end(text, line, context)?;
     let (command, delimiter) = parsed
         .commands
         .iter()
@@ -126,11 +132,129 @@ pub(crate) fn invocation(
     })
 }
 
+/// The engine's exact recovery frame confirms the missing delimiter. Only
+/// repair at a directly echoed math/group terminator, never at end{document}
+/// or another delayed recovery location.
+pub(crate) fn missing_boundary(
+    text: &Text,
+    parsed: &Syntax,
+    line: u32,
+    context: &str,
+    signatures: Option<&CommandSignatures<'_>>,
+) -> Option<Span<usize>> {
+    let end = source_end(text, line, context)?;
+    let source = &text.source;
+    let (start, command) = if source[..end].ends_with('$') {
+        (end - 1, None)
+    } else if source[..end].ends_with(r"\)") || source[..end].ends_with(r"\]") {
+        (end - 2, Some(&source[end - 1..end]))
+    } else {
+        let command = parsed.commands.iter().rev().find(|command| {
+            command.span.end == end && command.name == "endgroup"
+                || command.name == "end"
+                    && command.argument.as_ref().is_some_and(|argument| {
+                        argument.outer_span.end == end
+                            && matches!(
+                                argument.value.as_str(),
+                                "math" | "displaymath" | "equation"
+                            )
+                    })
+        })?;
+        (command.span.start, Some(command.name.as_str()))
+    };
+    let backslashes = source.as_bytes()[..start]
+        .iter()
+        .rev()
+        .take_while(|byte| **byte == b'\\')
+        .count();
+    if backslashes % 2 == 1
+        || parsed.is_ignored(start)
+        || parsed.control_operands.contains(&start)
+        || crate::signature::definition_body_spans(source, parsed)
+            .iter()
+            .any(|body| body.contains(&start))
+    {
+        return None;
+    }
+    let local;
+    let signatures = match signatures {
+        Some(signatures) => signatures,
+        None => {
+            local = CommandSignatures::new([(source.as_str(), parsed)]);
+            &local
+        }
+    };
+    if !signatures.command_unchanged("right")
+        || command.is_some_and(|name| !signatures.command_unchanged(name))
+        || signatures.literal_is_argument(source, parsed, start)
+        || parsed.commands.iter().any(|command| {
+            syntax::skip_space(source, command.span.end) == start
+                && ["string", "meaning", "noexpand"]
+                    .iter()
+                    .any(|name| signatures.invokes_builtin(&command.name, name))
+        })
+    {
+        return None;
+    }
+    if command == Some("end") {
+        let call = parsed
+            .commands
+            .iter()
+            .find(|call| call.span.start == start)?;
+        let name = &call.argument.as_ref()?.value;
+        if !signatures.environment_primitives_unchanged()
+            || !signatures.command_unchanged(name)
+            || !signatures.command_unchanged(&format!("end{name}"))
+        {
+            return None;
+        }
+    }
+    Some(start..end)
+}
+
+fn missing_fix(
+    doc: &Document,
+    diagnostic: &Diagnostic,
+    signatures: Option<&CommandSignatures<'_>>,
+) -> Option<QuickFix> {
+    if diagnostic.message != MISSING_ERROR
+        || diagnostic.severity != Some(DiagnosticSeverity::ERROR)
+        || diagnostic.code != Some(NumberOrString::String(MISSING_CODE.into()))
+    {
+        return None;
+    }
+    let data = diagnostic.data.as_ref()?;
+    let boundary = missing_boundary(
+        &doc.text,
+        &doc.syntax,
+        u32::try_from(data["sourceLine"].as_u64()?).ok()?,
+        data["sourceContext"].as_str()?,
+        signatures,
+    )?;
+    if doc.text.range(boundary.start, boundary.end) != diagnostic.range
+        || data["closingToken"].as_str()? != &doc.text.source[boundary.clone()]
+    {
+        return None;
+    }
+    Some(QuickFix {
+        title: r"Insert invisible '\right.'".into(),
+        diagnostic: diagnostic.clone(),
+        edit: TextEdit {
+            range: doc.text.range(boundary.start, boundary.start),
+            new_text: r"\right.".into(),
+        },
+        additional_edits: vec![],
+    })
+}
+
 pub(crate) fn fix(
     doc: &Document,
     diagnostic: &Diagnostic,
     signatures: Option<&CommandSignatures<'_>>,
 ) -> Option<QuickFix> {
+    if diagnostic.message == MISSING_ERROR {
+        return missing_fix(doc, diagnostic, signatures);
+    }
     if diagnostic.message != ERROR
         || diagnostic.severity != Some(DiagnosticSeverity::ERROR)
         || diagnostic.code != Some(NumberOrString::String(CODE.into()))
