@@ -17,6 +17,74 @@ struct Server {
 }
 
 #[test]
+fn commented_expression_keywords_return_versioned_cross_file_renames_over_stdio() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = Url::from_directory_path(directory.path()).unwrap();
+    let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+    let definitions = Url::from_file_path(directory.path().join("definitions.tex")).unwrap();
+    let source = "\\documentclass{article}\\input{definitions}\r\n\\ifboolexpr{bo% boolean\r\n  ol{draft} and to% toggle\r\n gl{draft}}{Y}{N}\r\n";
+    std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+    std::fs::write(
+        definitions.to_file_path().unwrap(),
+        "\\newbool{draft}\\newtoggle{draft}\n",
+    )
+    .unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":root,"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":main,"languageId":"latex","version":9,"text":source}}),
+    );
+    server.until(|message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["uri"] == main.as_str()
+    });
+    for (line, character) in [(2, 5), (3, 4)] {
+        let range = json!({"start":{"line":line,"character":character},"end":{"line":line,"character":character+5}});
+        let target =
+            json!({"textDocument":{"uri":main},"position":{"line":line,"character":character+1}});
+        let prepared = server.request(2, "textDocument/prepareRename", target.clone());
+        assert_eq!(prepared["placeholder"], "draft");
+        assert_eq!(prepared["range"], range);
+        let locations = server.request(3, "textDocument/definition", target.clone());
+        assert_eq!(locations.as_array().unwrap().len(), 1);
+        assert_eq!(locations[0]["uri"], definitions.as_str());
+        let mut references = target.clone();
+        references["context"] = json!({"includeDeclaration":true});
+        assert_eq!(
+            server
+                .request(4, "textDocument/references", references)
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        let mut params = target;
+        params["newName"] = json!("release");
+        let edit = server.request(5, "textDocument/rename", params);
+        let documents = edit["documentChanges"].as_array().unwrap();
+        assert_eq!(documents.len(), 2);
+        for (uri, version) in [(&main, json!(9)), (&definitions, Value::Null)] {
+            let document = documents
+                .iter()
+                .find(|document| document["textDocument"]["uri"] == uri.as_str())
+                .unwrap();
+            assert_eq!(document["textDocument"]["version"], version);
+            let edits = document["edits"].as_array().unwrap();
+            assert_eq!(edits.len(), 1);
+            assert_eq!(edits[0]["newText"], "release");
+            if uri == &main {
+                assert_eq!(edits[0]["range"], range);
+            }
+        }
+    }
+    server.request(6, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
 #[cfg(unix)]
 fn expression_fixes_recheck_cross_file_tests_without_a_main_version_change() {
     for literals in [false, true] {

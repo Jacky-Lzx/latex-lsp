@@ -138,8 +138,8 @@ fn expression_arguments(
         }
         let rest = &source[at..];
         if operand {
-            if rest.starts_with("not") {
-                at += 3;
+            if let Some(end) = crate::conditionals::keyword_end(source, at, "not") {
+                at = end;
                 continue;
             }
             if rest.starts_with('(') {
@@ -150,21 +150,17 @@ fn expression_arguments(
                 at += 1;
                 continue;
             }
-            let (token, kind) = if rest.starts_with("bool") {
-                ("bool", Some(Kind::Boolean))
-            } else if rest.starts_with("togl") {
-                ("togl", Some(Kind::Toggle))
-            } else if rest.starts_with("test") {
-                ("test", None)
-            } else {
-                return None;
-            };
-            let (argument, end) = syntax::group(
-                source,
-                syntax::skip_space(source, at + token.len()),
-                b'{',
-                b'}',
-            )?;
+            let (after, kind) = [
+                ("bool", Some(Kind::Boolean)),
+                ("togl", Some(Kind::Toggle)),
+                ("test", None),
+            ]
+            .into_iter()
+            .find_map(|(keyword, kind)| {
+                crate::conditionals::keyword_end(source, at, keyword).map(|end| (end, kind))
+            })?;
+            let (argument, end) =
+                syntax::group(source, syntax::skip_space(source, after), b'{', b'}')?;
             if let Some(kind) = kind {
                 if !syntax::is_static_key(&source[argument.span.clone()]) || names.len() >= 256 {
                     return None;
@@ -178,14 +174,10 @@ fn expression_arguments(
         } else if rest.starts_with(')') && depth > 0 {
             depth -= 1;
             at += 1;
-        } else if rest.starts_with("and") {
-            at += 3;
-            operand = true;
-        } else if rest.starts_with("or") {
-            at += 2;
-            operand = true;
         } else {
-            return None;
+            at = crate::conditionals::keyword_end(source, at, "and")
+                .or_else(|| crate::conditionals::keyword_end(source, at, "or"))?;
+            operand = true;
         }
     }
     (!operand && depth == 0).then_some(names)

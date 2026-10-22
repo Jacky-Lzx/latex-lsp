@@ -18,16 +18,44 @@ pub(crate) fn expression(name: &str) -> bool {
     )
 }
 
-fn operand_token(mut token: &str) -> Option<bool> {
-    loop {
-        if matches!(token, "bool" | "togl") {
-            return Some(token == "togl");
+/// TeX removes a comment's endline and the next row's indentation, but
+/// ordinary spaces and blank rows must not join two parts of a keyword.
+fn skip_keyword_comments(source: &str, mut at: usize) -> usize {
+    while source.as_bytes().get(at) == Some(&b'%') {
+        at = source[at..]
+            .find('\n')
+            .map_or(source.len(), |end| at + end + 1);
+        while matches!(source.as_bytes().get(at), Some(b' ' | b'\t')) {
+            at += 1;
         }
-        let rest = token
-            .strip_prefix("not")
-            .or_else(|| token.strip_prefix("and"))
-            .or_else(|| token.strip_prefix("or"))?;
-        token = rest;
+    }
+    at
+}
+
+pub(crate) fn keyword_end(source: &str, mut at: usize, keyword: &str) -> Option<usize> {
+    for byte in keyword.bytes() {
+        at = skip_keyword_comments(source, at);
+        if source.as_bytes().get(at) != Some(&byte) {
+            return None;
+        }
+        at += 1;
+    }
+    Some(at)
+}
+
+fn operand_token(token: &str) -> Option<bool> {
+    let mut at = 0;
+    loop {
+        for (keyword, toggle) in [("bool", false), ("togl", true)] {
+            if keyword_end(token, at, keyword)
+                .is_some_and(|end| skip_keyword_comments(token, end) == token.len())
+            {
+                return Some(toggle);
+            }
+        }
+        at = ["not", "and", "or"]
+            .into_iter()
+            .find_map(|keyword| keyword_end(token, at, keyword))?;
     }
 }
 
@@ -82,6 +110,10 @@ fn operand_starts(
             _ => {
                 let start = i;
                 while i < end {
+                    i = skip_keyword_comments(&source[..end], i);
+                    if i == end {
+                        break;
+                    }
                     let ch = source[i..].chars().next().unwrap();
                     if !ch.is_alphanumeric() && !matches!(ch, '@' | '_' | '-') {
                         break;
