@@ -282,6 +282,26 @@ pub(crate) fn required_bibliography_tool(diagnostic: &Diagnostic) -> Option<&'st
     }
 }
 
+fn rerunfilecheck_request(message: &str) -> bool {
+    message
+        .strip_prefix("Package rerunfilecheck Warning: File `")
+        .and_then(|tail| tail.rsplit_once("' has changed."))
+        .is_some_and(|(file, tail)| {
+            let request = tail
+                .split_whitespace()
+                .filter(|word| *word != "(rerunfilecheck)")
+                .collect::<Vec<_>>()
+                .join(" ");
+            !file.trim().is_empty()
+                && matches!(
+                    request.as_str(),
+                    "" | "Rerun."
+                        | "Rerun to get outlines right."
+                        | "Rerun to get outlines right or use package `bookmark'."
+                )
+        })
+}
+
 /// Share the confirmed rerun warning grammar with analysis and editor actions.
 pub(crate) fn rerun_required(diagnostic: &Diagnostic) -> bool {
     if diagnostic.severity != Some(DiagnosticSeverity::WARNING) {
@@ -301,23 +321,7 @@ pub(crate) fn rerun_required(diagnostic: &Diagnostic) -> bool {
         | "Package natbib Warning: Citation(s) may have changed."
         | "Package longtable Warning: Table widths have changed. Rerun LaTeX."
         | "Package hyperref Warning: Rerun to get /PageLabels entry."
-    ) || message
-        .strip_prefix("Package rerunfilecheck Warning: File `")
-        .and_then(|tail| tail.rsplit_once("' has changed."))
-        .is_some_and(|(file, tail)| {
-            let request = tail
-                .split_whitespace()
-                .filter(|word| *word != "(rerunfilecheck)")
-                .collect::<Vec<_>>()
-                .join(" ");
-            !file.trim().is_empty()
-                && matches!(
-                    request.as_str(),
-                    "" | "Rerun."
-                        | "Rerun to get outlines right."
-                        | "Rerun to get outlines right or use package `bookmark'."
-                )
-        })
+    ) || rerunfilecheck_request(&message)
 }
 
 fn generated_line_note(line: u32) -> String {
@@ -2864,14 +2868,15 @@ fn byte_wrapped_reference_message(
     initial: &str,
 ) -> Option<String> {
     undefined_reference_start(initial)?;
-    byte_wrapped_literal_message(root, lines, separator_lines, i, initial, |message| {
+    byte_wrapped_literal_message::<79>(root, lines, separator_lines, i, initial, |message| {
         message.ends_with('.') && undefined_reference_key(message).is_some()
     })
 }
 
 /// Probe byte wraps in literal warning names without consuming file-stack lines.
 /// Commit the cursor only when a complete known warning is confirmed.
-fn byte_wrapped_literal_message(
+/// COMPLETE_WIDTH controls lookahead for apparent footers within a name.
+fn byte_wrapped_literal_message<const COMPLETE_WIDTH: usize>(
     root: &Path,
     lines: &[&str],
     separator_lines: &[usize],
@@ -2892,8 +2897,8 @@ fn byte_wrapped_literal_message(
                 .and_then(|line| line.chars().next())
                 .is_some_and(|character| !character.is_ascii());
             let unicode_wrap =
-                unicode_continuation && lines[end].len() >= 79 - char::MAX.len_utf8();
-            if lines[end].len() < 79 && !unicode_wrap {
+                unicode_continuation && lines[end].len() >= COMPLETE_WIDTH - char::MAX.len_utf8();
+            if lines[end].len() < COMPLETE_WIDTH && !unicode_wrap {
                 break;
             }
         }
@@ -3011,9 +3016,14 @@ fn wrapped_message(
 ) -> String {
     let initial = lines[*i].trim_start();
     if initial.starts_with(OVERSIZED_FLOAT_PREFIX) {
-        return byte_wrapped_literal_message(root, lines, separator_lines, i, initial, |message| {
-            oversized_float_excess(message).is_some()
-        })
+        return byte_wrapped_literal_message::<79>(
+            root,
+            lines,
+            separator_lines,
+            i,
+            initial,
+            |message| oversized_float_excess(message).is_some(),
+        )
         .unwrap_or_else(|| initial.to_owned());
     }
     if font_warning_body(initial).is_some() {
@@ -3036,16 +3046,21 @@ fn wrapped_message(
     });
     if let Some(message) = lua_destination
         .then(|| {
-            byte_wrapped_literal_message(root, lines, separator_lines, i, initial, |message| {
-                destination_warning(message).is_some()
-            })
+            byte_wrapped_literal_message::<79>(
+                root,
+                lines,
+                separator_lines,
+                i,
+                initial,
+                |message| destination_warning(message).is_some(),
+            )
         })
         .flatten()
     {
         return message;
     }
     if let Some(message) = duplicate_label_start(initial).and_then(|_| {
-        byte_wrapped_literal_message(root, lines, separator_lines, i, initial, |message| {
+        byte_wrapped_literal_message::<79>(root, lines, separator_lines, i, initial, |message| {
             duplicate_label_key(message).is_some()
         })
     }) {
@@ -3112,7 +3127,19 @@ fn wrapped_message(
     let rerunfilecheck = initial.starts_with("Package rerunfilecheck Warning:");
     // TeX byte-wraps long warning lines, including inside a literal key.
     // Keep blanks at those boundaries instead of inventing a separator.
-    let mut message = if reference || rerunfilecheck {
+    let mut message = if rerunfilecheck {
+        // A filename can continue with parentheses that look like a source
+        // announcement. Only consume them when the full warning is confirmed.
+        byte_wrapped_literal_message::<60>(
+            root,
+            lines,
+            separator_lines,
+            i,
+            initial,
+            rerunfilecheck_request,
+        )
+        .unwrap_or_else(|| initial.to_owned())
+    } else if reference {
         initial.to_owned()
     } else {
         lines[*i].trim().to_owned()

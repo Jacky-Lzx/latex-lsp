@@ -123,6 +123,194 @@ fn byte_wrapped_file_change_requests_preserve_names_and_adjacent_warnings() {
 }
 
 #[test]
+fn parenthesized_filename_wraps_do_not_change_the_diagnostic_source() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    let child = directory.path().join("section.tex");
+    std::fs::write(&main, "Root text.\n").unwrap();
+    std::fs::write(&child, "Child text.\n").unwrap();
+    std::fs::write(directory.path().join("shadow.tex"), "Healthy text.\n").unwrap();
+    let main_uri = Url::from_file_path(&main).unwrap();
+    let child_uri = Url::from_file_path(&child).unwrap();
+    let prefix = "Package rerunfilecheck Warning: File `";
+    for width in [60, 79] {
+        for (embedded, suffix) in [
+            ("", "(shadow.tex).track"),
+            ("", ")tail.track"),
+            ("", "(missing.tex.track"),
+            ("' has changed. Rerun.", "(shadow.tex).track"),
+        ] {
+            let filename = format!(
+                "{}{embedded}{suffix}",
+                "a".repeat(width - prefix.len() - embedded.len())
+            );
+            let message = format!("{prefix}{filename}' has changed. Rerun.");
+            let wrapped = message
+                .as_bytes()
+                .chunks(width)
+                .map(|chunk| std::str::from_utf8(chunk).unwrap())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let parsed = build_log::parse(&main, &format!("(./main.tex\n(./section.tex\n{wrapped}\n\nPackage local Warning: Child sentinel on input line 1.\n)\nPackage local Warning: Root sentinel on input line 1.\n)\n"));
+            assert_eq!(parsed.len(), 2, "{width}/{filename}: {parsed:?}");
+            let child_items = &parsed[&child_uri];
+            assert_eq!(child_items.len(), 2, "{width}/{filename}: {parsed:?}");
+            assert!(
+                child_items.iter().any(|item| item.message == message),
+                "{width}/{filename}: {parsed:?}"
+            );
+            assert!(
+                child_items
+                    .iter()
+                    .any(|item| item.message.contains("Child sentinel")),
+                "{width}/{filename}: {parsed:?}"
+            );
+            assert_eq!(parsed[&main_uri].len(), 1, "{width}/{filename}: {parsed:?}");
+            assert!(
+                parsed[&main_uri][0].message.contains("Root sentinel"),
+                "{width}/{filename}: {parsed:?}"
+            );
+            assert_eq!(
+                build_log::compilation_analysis(&parsed, false)["rerunRequired"],
+                true,
+                "{width}/{filename}: {parsed:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn incomplete_file_change_warnings_keep_real_file_boundaries() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    let child = directory.path().join("section.tex");
+    std::fs::write(&main, "Root text.\n").unwrap();
+    std::fs::write(&child, "Child text.\n").unwrap();
+    let main_uri = Url::from_file_path(&main).unwrap();
+    let child_uri = Url::from_file_path(&child).unwrap();
+    let prefix = "Package rerunfilecheck Warning: File `";
+    for width in [60, 79] {
+        let incomplete = format!("{prefix}{}", "a".repeat(width - prefix.len()));
+        let parsed = build_log::parse(&main, &format!("(./main.tex\n{incomplete}\n(./section.tex\nPackage local Warning: Child sentinel on input line 1.\n)\nPackage local Warning: Root sentinel on input line 1.\n)\n"));
+        assert_eq!(parsed.len(), 2, "{width}: {parsed:?}");
+        assert_eq!(parsed[&child_uri].len(), 1, "{width}: {parsed:?}");
+        assert!(parsed[&child_uri][0].message.contains("Child sentinel"));
+        assert_eq!(parsed[&main_uri].len(), 2, "{width}: {parsed:?}");
+        assert!(parsed[&main_uri]
+            .iter()
+            .any(|item| item.message == incomplete));
+        assert!(parsed[&main_uri]
+            .iter()
+            .any(|item| item.message.contains("Root sentinel")));
+        assert_eq!(
+            build_log::compilation_analysis(&parsed, false)["rerunRequired"],
+            false
+        );
+        assert!(actions(&main_uri, &parsed).is_empty());
+    }
+}
+
+#[test]
+#[ignore = "requires pdfLaTeX, XeLaTeX, LuaLaTeX and rerunfilecheck"]
+fn real_parenthesized_file_changes_preserve_following_source_contexts() {
+    let cache = tempfile::tempdir().unwrap();
+    let prefix = "Package rerunfilecheck Warning: File `";
+    for engine in ["pdflatex", "xelatex", "lualatex"] {
+        for width in [60, 79] {
+            for (embedded, suffix) in [
+                ("", "(shadow.tex).track"),
+                ("", ")tail.track"),
+                ("", "(missing.tex.track"),
+                ("' has changed. Rerun.", "(shadow.tex).track"),
+            ] {
+                let directory = tempfile::tempdir().unwrap();
+                let main = directory.path().join("main.tex");
+                let filename = format!(
+                    "{}{embedded}{suffix}",
+                    "a".repeat(width - prefix.len() - embedded.len())
+                );
+                let source = format!("\\documentclass{{article}}\n\\usepackage{{rerunfilecheck}}\n\\RerunFileCheck{{{filename}}}{{}}{{}}\n\\AddToHook{{enddocument/info}}{{\\input{{section}}\\PackageWarningNoLine{{local}}{{Root sentinel}}}}\n\\begin{{document}}\n\\newwrite\\trackfile\n\\immediate\\openout\\trackfile=\"{filename}\"\n\\immediate\\write\\trackfile{{Changed content}}\n\\immediate\\closeout\\trackfile\nText.\n\\end{{document}}\n");
+                std::fs::write(&main, source).unwrap();
+                std::fs::write(
+                    directory.path().join("section.tex"),
+                    "\\PackageWarningNoLine{local}{Child sentinel}\n",
+                )
+                .unwrap();
+                std::fs::write(directory.path().join("shadow.tex"), "Healthy text.\n").unwrap();
+                let root = Url::from_file_path(&main).unwrap();
+                let child = Url::from_file_path(directory.path().join("section.tex")).unwrap();
+                for pass in 1..=2 {
+                    let output = std::process::Command::new(engine)
+                        .current_dir(directory.path())
+                        .env("TEXMFVAR", cache.path())
+                        .env("TEXMFCACHE", cache.path())
+                        .env("max_print_line", width.to_string())
+                        .args([
+                            "-interaction=nonstopmode",
+                            "-halt-on-error",
+                            "-no-shell-escape",
+                            "main.tex",
+                        ])
+                        .output()
+                        .unwrap();
+                    assert!(
+                        output.status.success(),
+                        "{engine}/{width}/{suffix}/{pass}: {}",
+                        String::from_utf8_lossy(&output.stdout)
+                    );
+                    let log = std::fs::read_to_string(directory.path().join("main.log")).unwrap();
+                    let parsed = build_log::parse(&main, &log);
+                    assert_eq!(
+                        parsed.len(),
+                        2,
+                        "{engine}/{width}/{suffix}/{pass}: {parsed:?}"
+                    );
+                    assert_eq!(
+                        parsed[&child].len(),
+                        1,
+                        "{engine}/{width}/{suffix}/{pass}: {parsed:?}"
+                    );
+                    assert_eq!(
+                        parsed[&child][0].message,
+                        "Package local Warning: Child sentinel."
+                    );
+                    assert!(
+                        parsed[&root]
+                            .iter()
+                            .any(|item| item.message == "Package local Warning: Root sentinel."),
+                        "{engine}/{width}/{suffix}/{pass}: {parsed:?}"
+                    );
+                    let warning = parsed[&root]
+                        .iter()
+                        .find(|item| item.message.starts_with(prefix));
+                    assert_eq!(
+                        warning.is_some(),
+                        pass == 1,
+                        "{engine}/{width}/{suffix}/{pass}: {parsed:?}"
+                    );
+                    if let Some(warning) = warning {
+                        assert_eq!(
+                            warning.message,
+                            format!("{prefix}{filename}' has changed. Rerun.")
+                        );
+                    }
+                    assert_eq!(
+                        build_log::compilation_analysis(&parsed, false)["rerunRequired"],
+                        pass == 1,
+                        "{engine}/{width}/{suffix}/{pass}: {parsed:?}"
+                    );
+                    assert_eq!(
+                        actions(&root, &parsed).len(),
+                        usize::from(pass == 1),
+                        "{engine}/{width}/{suffix}/{pass}: {parsed:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 #[ignore = "requires pdfLaTeX, XeLaTeX, LuaLaTeX, rerunfilecheck and hyperref"]
 fn real_file_changes_request_rebuild_until_the_next_unchanged_pass() {
     let cache = tempfile::tempdir().unwrap();
