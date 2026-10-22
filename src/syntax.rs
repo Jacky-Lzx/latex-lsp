@@ -2191,7 +2191,8 @@ impl Syntax {
                         } else {
                             control_word(source, arg_start)
                         }
-                    } else if matches!(name, "def" | "gdef" | "edef" | "xdef" | "let") {
+                    } else if matches!(name, "def" | "gdef" | "edef" | "xdef" | "let" | "futurelet")
+                    {
                         control_word(source, arg_start)
                     } else {
                         None
@@ -2209,6 +2210,8 @@ impl Syntax {
                     if let Some(span) = &declaration {
                         control_operands.insert(span.start);
                     }
+                    // futurelet replays its two lookahead tokens, which can
+                    // execute; only its destination is a declaration operand.
                     if name == "let" || declares_command_copy(name) || name == "cslet" {
                         let after_target = parsed
                             .as_ref()
@@ -2377,7 +2380,7 @@ impl Syntax {
                 && (declares_command(&declaration.name)
                     || matches!(
                         declaration.name.as_str(),
-                        "def" | "gdef" | "edef" | "xdef" | "let"
+                        "def" | "gdef" | "edef" | "xdef" | "let" | "futurelet"
                     ))
                 && skip_space(source, expand.span.end) == declaration.span.start
                 && skip_space(source, declaration.span.end) == target.span.start

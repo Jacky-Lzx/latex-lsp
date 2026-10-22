@@ -29,6 +29,7 @@ fn snippets_expand_in_a_real_editor_without_consuming_tex_backslashes() {
         ("citepalias", "citepalias{key}"),
         ("pdfbookmark", "pdfbookmark{title}{name}"),
         ("newcommand", r"newcommand{\name}[1]{definition}"),
+        ("futurelet", r"futurelet\lookahead\continuation A"),
         ("renewcommand", r"renewcommand{\name}{definition}"),
         ("newrobustcmd", r"newrobustcmd{\name}{definition}"),
         ("renewrobustcmd", r"renewrobustcmd{\name}{definition}"),

@@ -14,6 +14,14 @@ cargo test --locked -- --include-ignored
 
 ## 排版日志与文件移动
 
+`futurelet` 重命名回归需要 pdfLaTeX、XeLaTeX 和 LuaLaTeX，比较改名前后的前瞻判断与继续执行结果，覆盖直接目标、静态 `csname` 目标和中文新名称。默认测试检查跨文件编辑、非法目标、命令继续加载文件及签名边界；stdio 回归核对 UTF-16 名称范围和文档版本。命令片段另由真实 Neovim 展开验证：
+
+```sh
+cargo test --locked --test futurelet -- --include-ignored
+cargo test --locked --test protocol futurelet_targets_return_versioned_cross_file_renames_over_stdio
+cargo test --locked --test snippets -- --include-ignored
+```
+
 Unicode 输入错误回归需要 pdfLaTeX、XeLaTeX 和 LuaLaTeX。在 60 / 79 列日志及传统 / 文件行号格式中核对子文件字符、重复位置、emoji 和零宽连接符，验证 pdfLaTeX 显式映射后的清空，以及 Unicode 引擎的缺字分类：
 
 ```sh

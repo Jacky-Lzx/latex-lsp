@@ -4977,6 +4977,63 @@ fn exit_without_shutdown_returns_failure() {
 }
 
 #[test]
+fn futurelet_targets_return_versioned_cross_file_renames_over_stdio() {
+    for declaration in [
+        r"\futurelet\lookahead\relax A",
+        r"\expandafter\futurelet\csname lookahead\endcsname\relax A",
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = Url::from_directory_path(directory.path()).unwrap();
+        let definitions = Url::from_file_path(directory.path().join("definitions.tex")).unwrap();
+        std::fs::write(definitions.to_file_path().unwrap(), declaration).unwrap();
+        let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+        let source = "\\documentclass{article}\n\\begin{document}\\input{definitions}\n😀 \\lookahead\\csname lookahead\\endcsname\n\\end{document}\n";
+        std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+        let mut server = Server::start();
+        server.request(1, "initialize", json!({"processId":null,"rootUri":root,"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}}}}));
+        server.notify("initialized", json!({}));
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":main,"languageId":"latex","version":9,"text":source}}),
+        );
+        server.until(|message| {
+            message["method"] == "textDocument/publishDiagnostics"
+                && message["params"]["uri"] == main.as_str()
+        });
+        let target = json!({"textDocument":{"uri":main},"position":{"line":2,"character":5}});
+        let prepared = server.request(2, "textDocument/prepareRename", target.clone());
+        assert_eq!(prepared["placeholder"], "lookahead");
+        assert_eq!(
+            prepared["range"],
+            json!({"start":{"line":2,"character":4},"end":{"line":2,"character":13}})
+        );
+        let locations = server.request(3, "textDocument/definition", target.clone());
+        assert_eq!(locations[0]["uri"], definitions.as_str());
+        let mut params = target;
+        params["newName"] = json!("renamedlookahead");
+        let edit = server.request(4, "textDocument/rename", params);
+        let documents = edit["documentChanges"].as_array().unwrap();
+        assert_eq!(documents.len(), 2);
+        for (uri, version, count) in [(&main, json!(9), 2), (&definitions, Value::Null, 1)] {
+            let document = documents
+                .iter()
+                .find(|document| document["textDocument"]["uri"] == uri.as_str())
+                .unwrap();
+            assert_eq!(document["textDocument"]["version"], version);
+            let edits = document["edits"].as_array().unwrap();
+            assert_eq!(edits.len(), count);
+            assert!(edits.iter().all(|edit| edit["newText"]
+                .as_str()
+                .unwrap()
+                .ends_with("renamedlookahead")));
+        }
+        server.request(5, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
 fn rename_prepares_ranges_and_returns_versioned_cross_file_edits() {
     let directory = tempfile::tempdir().unwrap();
     let root = Url::from_directory_path(directory.path()).unwrap();

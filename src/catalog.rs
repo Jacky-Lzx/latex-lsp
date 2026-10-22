@@ -1063,6 +1063,11 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
         "Give a control sequence the current meaning of another token.",
     ),
     (
+        "futurelet",
+        "futurelet\\${1:lookahead}\\${2:continuation} ${3:A}",
+        "Copy the meaning of the token after the continuation, then execute both tokens.",
+    ),
+    (
         "NewDocumentCommand",
         "NewDocumentCommand{\\${1:name}}{${2:m}}{${3:definition}}",
         "Define a command using an xparse argument specification.",
