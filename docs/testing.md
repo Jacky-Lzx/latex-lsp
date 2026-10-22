@@ -133,10 +133,16 @@ cargo test --locked --test no_pages -- --include-ignored
 cargo test --locked --test information_logs -- --include-ignored
 ```
 
-rerunfilecheck 回归核对标准 `Rerun.` 请求、hyperref 完整书签提示、折行、示例文字和 makeindex 请求的边界，并检查结果分析与重编译操作一致。默认回归另核对文件名中的括号、看似完整的警告正文及不完整警告之后的真实文件切换。外部回归在三个 LaTeX 引擎的 60 / 79 列日志中验证特殊文件名、后续主文件与子文件的诊断归属、首次文件变化后的请求及下一遍内容不变后的清空：
+rerunfilecheck 回归核对标准 `Rerun.` 请求、hyperref 完整书签及反向文献引用提示、折行、满行后的额外空行、示例文字和 makeindex 请求的边界，并检查结果分析与重编译操作一致。默认回归另核对文件名中的括号、看似完整的警告正文及不完整警告之后的真实文件切换。外部回归在三个 LaTeX 引擎的 60 / 79 列日志中验证特殊文件名、后续主文件与子文件的诊断归属、首次文件变化后的请求及下一遍内容不变后的清空：
 
 ```sh
 cargo test --locked --test rerunfilecheck -- --include-ignored
+```
+
+反向引用回归先生成稳定文献引用，再将引用移至下一页，核对三引擎的页数、重新出现的请求及再次收敛后的清空；索引和术语表的真实日志回归确保 makeindex 说明不会生成单纯重跑 TeX 的操作。stdio 回归覆盖标准 CodeAction / 旧式 Command 客户端、完成通知与状态一致、最终日志优先级、诊断清除和旧菜单操作失效：
+
+```sh
+cargo test --locked --test protocol backreference_rerun
 ```
 
 声明操作数回归使用三个 LaTeX 引擎验证复制 `newcommand`、`newif`、`newenvironment` 后的普通调用，以及宏、开关和环境重命名前后的输出一致；同时验证直接与静态 `csname` 目标复制字面花括号，以及未执行的宏正文和参数分隔文本。默认测试另检查各类符号索引、命令名操作数的参数提示与名称补全、静态 `csname`、逐字边界和标签编辑范围，并核对花括号复制不会产生错误修复、真实不配对仍保留精确位置：
