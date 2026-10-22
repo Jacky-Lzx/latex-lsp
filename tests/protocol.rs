@@ -14105,3 +14105,143 @@ fn discovered_biber_databases_with_arbitrary_suffixes_reject_unsaved_and_changed
         }
     }
 }
+
+#[test]
+#[cfg(unix)]
+fn special_character_build_errors_offer_escape_actions_and_clear_after_rebuild() {
+    for literals in [false, true] {
+        let script = r#"cat "${2%/*}/fixture.log" > "$1/main.log"
+if [ -f "${2%/*}/fail" ]; then exit 1; fi
+printf '%%PDF-1.4\n' > "$1/main.pdf"
+"#;
+        let capabilities = json!({
+            "workspace":{"applyEdit":true,"workspaceEdit":{"documentChanges":true}},
+            "textDocument": if literals {
+                json!({"codeAction":{"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix"]}}}})
+            } else { json!({}) }
+        });
+        let (mut server, directory, main) =
+            fake_build_server_capabilities(script, false, capabilities);
+        let source = "\\documentclass{article}\nBefore & and & after.\nBefore # after.\n";
+        std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":9},"contentChanges":[{"text":source}]}),
+        );
+        let mut log = "(./main.tex\n".to_string();
+        for (line, message, prefix) in [
+            (2, "Misplaced alignment tab character &.", "Before &"),
+            (2, "Misplaced alignment tab character &.", "Before & and &"),
+            (
+                3,
+                "You can't use `macro parameter character #' in horizontal mode.",
+                "Before #",
+            ),
+        ] {
+            log.push_str(&format!(
+                "./main.tex:{line}: {message}\nl.{line} {prefix}\n\n"
+            ));
+        }
+        log.push_str(")\n");
+        std::fs::write(directory.path().join("fixture.log"), log).unwrap();
+        std::fs::write(directory.path().join("fail"), "").unwrap();
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(finished["params"]["status"], "error");
+        assert_eq!(finished["params"]["errorsCount"], 3);
+        let published = server.until(|message| {
+            message["method"] == "textDocument/publishDiagnostics"
+                && message["params"]["diagnostics"]
+                    .as_array()
+                    .is_some_and(|items| {
+                        items
+                            .iter()
+                            .filter(|item| item["code"] == "unescaped-special-character")
+                            .count()
+                            == 3
+                    })
+        });
+        let text = latex_lsp::text::Text::new(source.into());
+        let mut changes = Vec::new();
+        let mut stale = None;
+        for (index, item) in published["params"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|item| item["code"] == "unescaped-special-character")
+            .enumerate()
+        {
+            let character = item["data"]["character"].as_str().unwrap();
+            let actions = server.request(10 + index as u64, "textDocument/codeAction", json!({"textDocument":{"uri":main},"range":item["range"],"context":{"diagnostics":[item],"only":["quickfix"]}}));
+            assert_eq!(actions.as_array().unwrap().len(), 1);
+            let edit = if literals {
+                actions[0]["edit"].clone()
+            } else {
+                stale = Some(actions[0].clone());
+                server.send(json!({"jsonrpc":"2.0","id":20 + index,"method":"workspace/executeCommand","params":{"command":actions[0]["command"],"arguments":actions[0]["arguments"]}}));
+                let apply = server.until(|message| message["method"] == "workspace/applyEdit");
+                server.send(json!({"jsonrpc":"2.0","id":apply["id"],"result":{"applied":true}}));
+                let response = server.until(|message| message["id"] == 20 + index);
+                assert!(response.get("error").is_none(), "{response}");
+                apply["params"]["edit"].clone()
+            };
+            let document = &edit["documentChanges"][0];
+            assert_eq!(document["textDocument"]["uri"], json!(main));
+            assert_eq!(document["textDocument"]["version"], 9);
+            let change: tower_lsp::lsp_types::TextEdit =
+                serde_json::from_value(document["edits"][0].clone()).unwrap();
+            assert_eq!(json!(change.range), item["range"]);
+            assert_eq!(change.new_text, format!("\\{character}"));
+            changes.push(change);
+        }
+        changes.sort_by_key(|change| std::cmp::Reverse(change.range.start));
+        let mut fixed = source.to_string();
+        for change in changes {
+            fixed.replace_range(
+                text.offset(change.range.start).unwrap()..text.offset(change.range.end).unwrap(),
+                &change.new_text,
+            );
+        }
+        std::fs::write(main.to_file_path().unwrap(), &fixed).unwrap();
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":10},"contentChanges":[{"text":fixed}]}),
+        );
+        if let Some(command) = stale {
+            server.send(json!({"jsonrpc":"2.0","id":30,"method":"workspace/executeCommand","params":{"command":command["command"],"arguments":command["arguments"]}}));
+            let response = server.until(|message| message["id"] == 30);
+            assert_eq!(response["error"]["code"], -32602);
+            assert!(response["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("outdated"));
+        }
+        std::fs::write(directory.path().join("fixture.log"), "(./main.tex\n)\n").unwrap();
+        std::fs::remove_file(directory.path().join("fail")).unwrap();
+        server.request(
+            40,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(finished["params"]["status"], "success");
+        assert_eq!(finished["params"]["errorsCount"], 0);
+        server.until(|message| {
+            message["method"] == "textDocument/publishDiagnostics"
+                && message["params"]["diagnostics"]
+                    .as_array()
+                    .is_some_and(|items| {
+                        items
+                            .iter()
+                            .all(|item| item["code"] != "unescaped-special-character")
+                    })
+        });
+        server.request(41, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}

@@ -2435,6 +2435,18 @@ fn emit_with_context(
     })
     .flatten();
     ranges.extend(command_range);
+    let special_character = crate::special_characters::error_character(&message)
+        .filter(|_| severity == DiagnosticSeverity::ERROR);
+    let special_range = special_character.and_then(|character| {
+        crate::special_characters::source_range(
+            &text,
+            &crate::syntax::Syntax::latex(&text),
+            line,
+            context?,
+            character,
+        )
+    });
+    ranges.extend(special_range);
     let character = missing_character(&message);
     let character_ranges =
         character.and_then(|character| missing_character_ranges(&text, line, context?, character));
@@ -2580,6 +2592,7 @@ fn emit_with_context(
                 severity: Some(severity),
                 source: Some("latex-build".into()),
                 code: box_code(&message)
+                    .or_else(|| special_range.map(|_| "unescaped-special-character"))
                     .or_else(|| character.map(|_| "missing-character"))
                     .or_else(|| destination.as_ref().filter(|_| precise_destination).map(|(kind, _)| kind.code()))
                     .or_else(|| missing_include_key(&message).map(|_| "missing-include"))
@@ -2597,6 +2610,7 @@ fn emit_with_context(
                     .map(|code| NumberOrString::String(code.into())),
                 message: displayed_message.clone(),
                 data: precise_destination.then(|| serde_json::json!({"destination":destination.as_ref().map(|(_, name)| name)}))
+                    .or_else(|| special_range.and(special_character).map(|character| serde_json::json!({"character":character.to_string(),"sourceContext":context})))
                     .or_else(|| character.map(|character| serde_json::json!({"character":character.to_string(),"codepoint":format!("U+{:04X}", character as u32)})))
                     .or_else(|| command_name.map(|name| serde_json::json!({"command":name})))
                     .or_else(|| {

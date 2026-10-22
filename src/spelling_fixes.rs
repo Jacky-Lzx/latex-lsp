@@ -371,6 +371,19 @@ pub fn fixes(
             if examined > 64 {
                 return result;
             }
+            if diagnostic.code == Some(NumberOrString::String("unescaped-special-character".into()))
+            {
+                if let Some(fix) = crate::special_characters::fix(doc, diagnostic) {
+                    if seen.insert((
+                        diagnostic.range.start,
+                        diagnostic.range.end,
+                        fix.edit.new_text.clone(),
+                    )) {
+                        result.push(fix);
+                    }
+                }
+                continue;
+            }
             let invocation_scope = if matches!(diagnostic.code.as_ref(), Some(NumberOrString::String(code)) if matches!(code.as_str(), "undefined-color" | "undefined-color-model" | "undefined-counter" | "undefined-environment" | "mismatched-environment-end" | "missing-input" | "missing-include" | "missing-package" | "missing-class" | "missing-bibliography-style" | "missing-bibliography-database"))
             {
                 let confirmed = workspace.build_diagnostic_sources.get(root);

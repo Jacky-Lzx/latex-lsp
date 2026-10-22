@@ -40,6 +40,7 @@ pub mod semantic;
 mod semantic_cache;
 pub mod signature;
 mod source_inputs;
+mod special_characters;
 mod spelling_fixes;
 pub mod synctex;
 pub mod syntax;
