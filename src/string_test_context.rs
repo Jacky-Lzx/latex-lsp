@@ -188,6 +188,7 @@ struct Assignment {
 struct Source {
     syntax: Syntax,
     active: BTreeSet<usize>,
+    operands: BTreeSet<usize>,
     lexical_probes: Vec<Command>,
     declarations: BTreeMap<usize, Vec<Assignment>>,
 }
@@ -225,6 +226,7 @@ impl Source {
         syntax.contextual_command_shapes = shapes.clone();
         let signatures = CommandSignatures::source_context([(&*text.source, &syntax)]);
         let active = signatures.source_command_positions(&text.source, &syntax);
+        let operands = signatures.argument_tokens(&text.source, &syntax);
         let mut declarations: BTreeMap<usize, Vec<Assignment>> = BTreeMap::new();
         for entry in &syntax.definitions {
             let Some(name) = entry.detail.strip_prefix("Defined with \\") else {
@@ -254,6 +256,7 @@ impl Source {
         Self {
             syntax,
             active,
+            operands,
             lexical_probes,
             declarations,
         }
@@ -359,6 +362,17 @@ impl Analysis {
                 if at < data_end || source.syntax.control_operands.contains(&at) {
                     continue;
                 }
+                if source.operands.contains(&at) {
+                    // A control consumed by another command is a token, even
+                    // if its saved meaning would normally read string data.
+                    // Reparse to expose any following call swallowed by that
+                    // token's former data grammar.
+                    if self.names.contains(&command.name) {
+                        meanings.insert(at, CUSTOM);
+                        reparse |= source.syntax.string_test_arities.contains_key(&at);
+                    }
+                    continue;
+                }
                 let binding = state.binding(&command.name);
                 if self.names.contains(&command.name) || matches!(binding, Binding::Native(_)) {
                     // A copy keeps its captured data arity even when its source
@@ -387,6 +401,20 @@ impl Analysis {
                 }
                 if !source.active.contains(&at) {
                     continue;
+                }
+                if let Some(target) = source.syntax.command_undefinitions.get(&at) {
+                    if let Some(target) = target {
+                        let binding =
+                            if state.uncertain || state.assigned.contains_key(&command.name) {
+                                Binding::Unknown
+                            } else {
+                                Binding::Custom(Some(Arc::new(CommandShape::no_arguments())))
+                            };
+                        state.assigned.insert(target.name.clone(), binding);
+                    } else {
+                        // An expanded name can remove any tracked binding.
+                        state.uncertain = true;
+                    }
                 }
                 if let Some(declarations) = source.declarations.get(&at) {
                     for declaration in declarations {
@@ -545,10 +573,12 @@ pub(crate) fn refresh(workspace: &mut Workspace) {
             .values()
             .filter(|doc| doc.kind == DocumentKind::Latex)
             .any(|doc| {
-                doc.syntax
-                    .definitions
-                    .iter()
-                    .any(|entry| data_count(&entry.name).is_some())
+                !doc.syntax.command_undefinitions.is_empty()
+                    || doc
+                        .syntax
+                        .definitions
+                        .iter()
+                        .any(|entry| data_count(&entry.name).is_some())
             })
     {
         for doc in workspace

@@ -418,7 +418,9 @@ fn builtin(name: &str) -> Option<Signature> {
             (&[("options", false), ("name", false)], false)
         }
         "includeonly" => (&[("files", false)], false),
-        "csuse" | "csmeaning" | "csundef" | "csgundef" => (&[("command", false)], false),
+        "undef" | "gundef" | "csuse" | "csmeaning" | "csundef" | "csgundef" => {
+            (&[("command", false)], false)
+        }
         "cslet" | "letcs" | "csletcs" => (&[("alias", false), ("command", false)], false),
         "csappto" | "cseappto" | "csgappto" | "csxappto" | "cspreto" | "csepreto" | "csgpreto"
         | "csxpreto" => (&[("command", false), ("code", false)], false),
@@ -731,7 +733,13 @@ fn builtin(name: &str) -> Option<Signature> {
                 || name == "cslet" && index == 1
                 || (matches!(
                     name,
-                    "letcs" | "deflength" | "ifdefcounter" | "ifdeflength" | "ifdefdimen"
+                    "letcs"
+                        | "undef"
+                        | "gundef"
+                        | "deflength"
+                        | "ifdefcounter"
+                        | "ifdeflength"
+                        | "ifdefdimen"
                 ) || syntax::declares_traditional_command(name)
                     || syntax::declares_document_command(name)
                     || syntax::declares_text_command(name)
@@ -1301,6 +1309,28 @@ impl std::fmt::Debug for CommandShape {
 }
 
 impl CommandShape {
+    /// An undefined control consumes no operands; retaining its former alias
+    /// grammar would hide the following executable token or file load.
+    pub(crate) fn no_arguments() -> Self {
+        Self {
+            signature: None,
+            tex: Some(TexOperands {
+                prefix: vec![],
+                delimiters: vec![],
+            }),
+        }
+    }
+
+    fn takes_no_arguments(&self) -> bool {
+        self.tex
+            .as_ref()
+            .is_some_and(|tex| tex.prefix.is_empty() && tex.delimiters.is_empty())
+            || self
+                .signature
+                .as_ref()
+                .is_some_and(|signature| signature.parameters.is_empty())
+    }
+
     pub(crate) fn definition(source: &str, parsed: &syntax::Syntax, entry: &Entry) -> Option<Self> {
         let mut signature = source_definition(source, parsed, entry, false);
         let definition = TexOperands::definition(source, parsed, entry);
@@ -4060,6 +4090,14 @@ pub fn help(workspace: &Workspace, uri: &Url, position: Position) -> Option<Sign
             .map(|argument| argument.value.as_str())
             .or_else(|| literal.as_ref().map(|span| &doc.text.source[span.clone()]))
             .unwrap_or(command.name.as_str());
+        if doc
+            .syntax
+            .contextual_command_shapes
+            .get(&command.span.start)
+            .is_some_and(|shape| shape.takes_no_arguments())
+        {
+            continue;
+        }
         let signature = if let Some(arity) = doc.syntax.string_test_arities.get(&command.span.start)
         {
             let Some(count) = arity else {

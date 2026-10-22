@@ -23,6 +23,37 @@ fn arguments(name: &str) -> &'static [bool] {
     }
 }
 
+/// Whether the undefinition interface reads a name or an unexpanded control.
+pub(crate) fn undefines(name: &str) -> Option<bool> {
+    match name {
+        "undef" | "gundef" => Some(false),
+        "csundef" | "csgundef" => Some(true),
+        _ => None,
+    }
+}
+
+pub(crate) fn undefinition(source: &str, command: &syntax::Command) -> Option<syntax::Entry> {
+    let named = undefines(&command.name)?;
+    let at = syntax::skip_space(source, command.span.end);
+    let grouped = syntax::group(source, at, b'{', b'}');
+    let span = if named {
+        let argument = grouped?.0;
+        syntax::is_static_key(&source[argument.span.clone()]).then_some(argument.span)?
+    } else if let Some((argument, _)) = grouped {
+        let bounded = &source[..argument.span.end];
+        let word = syntax::control_word(bounded, syntax::skip_space(bounded, argument.span.start))?;
+        (syntax::skip_space(bounded, word.end) == argument.span.end).then_some(word)?
+    } else {
+        syntax::control_word(source, at)?
+    };
+    Some(syntax::Entry {
+        name: source[span.start + usize::from(!named)..span.end].into(),
+        span,
+        detail: format!("Undefined with \\{}", command.name),
+        is_variable: false,
+    })
+}
+
 pub(crate) fn declares(name: &str) -> bool {
     matches!(
         name,

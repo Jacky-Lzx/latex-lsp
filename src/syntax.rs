@@ -141,6 +141,8 @@ pub struct Syntax {
     /// Exact imported/custom parameter grammar when all execution contexts agree.
     pub(crate) contextual_command_shapes:
         std::collections::BTreeMap<usize, std::sync::Arc<crate::signature::CommandShape>>,
+    /// Known undefinition calls; a missing static target keeps effects uncertain.
+    pub(crate) command_undefinitions: std::collections::BTreeMap<usize, Option<Entry>>,
     /// Actual comments, distinguished from ignored URLs and verbatim text.
     pub comments: Vec<Range<usize>>,
     pub fixes: Vec<QuickFix>,
@@ -2101,6 +2103,24 @@ impl Syntax {
                         }
                         result.commands.push(probe);
                         continue;
+                    }
+                    if operands_known {
+                        if let Some(named) = crate::named_commands::undefines(name) {
+                            let target = crate::named_commands::undefinition(source, &probe);
+                            if let Some(target) = &target {
+                                assigned_controls.insert(target.name.clone());
+                            }
+                            result.command_undefinitions.insert(start, target);
+                            if !named {
+                                let mut at = skip_space(source, command_end);
+                                if bytes.get(at) == Some(&b'{') {
+                                    at = skip_space(source, at + 1);
+                                }
+                                if bytes.get(at) == Some(&b'\\') {
+                                    control_operands.insert(at);
+                                }
+                            }
+                        }
                     }
                     let starred = !matches!(
                         name,
