@@ -20,8 +20,27 @@ etoolbox 的 `ifboolexpr`、`ifboolexpe`、`whileboolexpr` 和 `unlessboolexpr` 
 
 循环命令在报错前已读取表达式和循环体，日志必须确认完整读取边界；条件命令在报错前只读取表达式。修复不修改循环体、条件分支或赋值。
 
+缩短的源码回显必须在对应源码行中唯一，并与调用的读取终点一致。帮助正文提供完整名称时，回显可只覆盖名称的后半部分；如果只剩结束花括号，或长循环体使操作数完全不可见，则保留行级诊断。
+
 ## 日志与协议
 
 诊断消息追加编译器给出的 `Boolean '名称' undefined.` 或 `Toggle '名称' undefined.`，保留两个命名空间的独立错误。标准帮助正文缺失、残缺或与当前错误无法确认关联时，不猜测名称；折行说明在确认完整结束后恢复，不跨越其他诊断。
 
-精确诊断复用 `undefined-boolean` / `undefined-toggle` 代码、名称数据与宏来源校验。版本化编辑、旧客户端以及过期修复遵循[通用规则](diagnostics.md#分析范围与来源确认)。验证命令见[测试说明](testing.md#布尔表达式诊断)。
+精确诊断复用 `undefined-boolean` / `undefined-toggle` 代码、名称数据与宏来源校验。版本化编辑、旧客户端以及过期修复遵循[通用规则](diagnostics.md#分析范围与来源确认)。即使主文件版本未变，依赖文件重定义测试命令后也会拒绝旧修复；同一命名空间新增重复操作数后也须重新确认位置。
+
+## 验证
+
+默认回归检查两个命名空间、表达式与循环的读取边界、字面测试字符串、动态或歧义操作数、帮助正文的关联与折行、重复及缩短回显、跨行和 UTF-16 范围，以及版本化和旧客户端修复：
+
+```sh
+cargo test --locked --test boolean_expression_diagnostics
+cargo test --locked --test protocol expression_fixes_recheck_cross_file_tests_without_a_main_version_change
+```
+
+真实回归需要 pdfLaTeX、XeLaTeX、LuaLaTeX 和 etoolbox：
+
+```sh
+cargo test --locked --test boolean_expression_diagnostics -- --include-ignored
+```
+
+三个引擎分别使用 60 / 79 列和传统 / 文件行号日志。每组验证 11 处操作数修复，再重新编译生成 PDF，并核对条件分支、循环次数、内置条件、跨行表达式与长名称的实际结果；另确认动态名称及用户测试宏保留行级诊断。其他外部工具测试见[真实工具回归](testing.md)。

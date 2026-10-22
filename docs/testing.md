@@ -107,14 +107,7 @@ cargo test --locked --test protocol undefined_toggle_diagnostics_offer_versioned
 
 ## 布尔表达式诊断
 
-默认回归检查两种命名空间、表达式与循环的读取边界、静态测试字符串、动态或歧义操作数、帮助正文的关联与折行、重复及缩短回显、跨行和 UTF-16 范围、版本化和旧客户端修复。真实回归需要 pdfLaTeX、XeLaTeX、LuaLaTeX 和 etoolbox：
-
-```sh
-cargo test --locked --test boolean_expression_diagnostics
-cargo test --locked --test boolean_expression_diagnostics -- --include-ignored
-```
-
-支持范围见[布尔表达式诊断与修复](boolean-expressions.md)。
+默认、stdio 协议及三引擎回归的命令与验证范围见[布尔表达式验证](boolean-expressions.md#验证)。真实回归需要 pdfLaTeX、XeLaTeX、LuaLaTeX 和 etoolbox；功能边界见[布尔表达式诊断与修复](boolean-expressions.md)。
 
 ## 排版日志与文件移动
 
