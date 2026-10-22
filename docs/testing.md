@@ -14,6 +14,12 @@ cargo test --locked -- --include-ignored
 
 ## 排版日志与文件移动
 
+源码文件名移动回归需要 pdfLaTeX、XeLaTeX 和 LuaLaTeX，验证首部空格、主干末尾空格、裸路径和引号路径，以及移动后的真实输入与导航：
+
+```sh
+cargo test --locked --test source_filename_renames -- --include-ignored
+```
+
 字体替换回归需要 pdfLaTeX、XeLaTeX、LuaLaTeX 和 Computer Modern 字体，在 60 / 79 列日志中验证长字体名、字体与字号替换，以及修复后摘要清空。缺字回归需要 XeLaTeX：
 
 ```sh

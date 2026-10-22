@@ -5038,6 +5038,90 @@ fn file_rename_requests_update_references_and_preserve_open_document_versions() 
 }
 
 #[test]
+fn source_filename_renames_validate_tex_whitespace_and_keep_versioned_navigation() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = Url::from_file_path(root.join("main.tex")).unwrap();
+    let chapter = Url::from_file_path(root.join("chapter.tex")).unwrap();
+    let mut source = "\\documentclass{article}\n\\input{chapter}\n\\ref{sec:x}\n".to_string();
+    std::fs::write(root.join("main.tex"), &source).unwrap();
+    std::fs::write(root.join("chapter.tex"), "\\label{sec:x}").unwrap();
+    let mut server = Server::start();
+    server.request(
+        1,
+        "initialize",
+        json!({"processId":null,
+        "rootUri":Url::from_directory_path(root).unwrap(),
+        "capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true},
+            "fileOperations":{"willRename":true,"didRename":true}}}}),
+    );
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{
+        "uri":main,"languageId":"latex","version":7,"text":source}}),
+    );
+    server.until(|message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["uri"] == main.as_str()
+    });
+    let invalid = Url::from_file_path(root.join("two  spaces.tex")).unwrap();
+    server.send(
+        json!({"jsonrpc":"2.0","id":2,"method":"workspace/willRenameFiles",
+        "params":{"files":[{"oldUri":chapter,"newUri":invalid}]}}),
+    );
+    let rejected = server.until(|message| message["id"] == 2);
+    assert_eq!(rejected["error"]["code"], -32602, "{rejected}");
+    let mut old = chapter;
+    for (id, version, filename, expected) in [
+        (3, 7, " leading.tex", "./ leading"),
+        (5, 8, "chapter .tex", "./chapter .tex"),
+    ] {
+        let new = Url::from_file_path(root.join(filename)).unwrap();
+        let files = json!({"files":[{"oldUri":old,"newUri":new}]});
+        let result = server.request(id, "workspace/willRenameFiles", files.clone());
+        let documents = result["documentChanges"].as_array().unwrap();
+        assert_eq!(documents.len(), 1, "{result}");
+        assert_eq!(documents[0]["textDocument"]["uri"], main.as_str());
+        assert_eq!(documents[0]["textDocument"]["version"], version);
+        let edits: Vec<tower_lsp::lsp_types::TextEdit> =
+            serde_json::from_value(documents[0]["edits"].clone()).unwrap();
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0].new_text, expected);
+        source = latex_lsp::text::Text::new(source)
+            .changed(
+                edits
+                    .into_iter()
+                    .map(
+                        |edit| tower_lsp::lsp_types::TextDocumentContentChangeEvent {
+                            range: Some(edit.range),
+                            range_length: None,
+                            text: edit.new_text,
+                        },
+                    )
+                    .collect(),
+            )
+            .unwrap()
+            .source;
+        std::fs::write(root.join("main.tex"), &source).unwrap();
+        server.notify("textDocument/didChange",json!({"textDocument":{"uri":main,"version":version+1},"contentChanges":[{"text":source}]}));
+        std::fs::rename(old.to_file_path().unwrap(), new.to_file_path().unwrap()).unwrap();
+        server.notify("workspace/didRenameFiles", files);
+        let definition = server.request(
+            id + 1,
+            "textDocument/definition",
+            json!({
+            "textDocument":{"uri":main},"position":{"line":2,"character":8}}),
+        );
+        assert_eq!(definition[0]["uri"], new.as_str(), "{definition}");
+        old = new;
+    }
+    server.request(7, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
 fn file_url_rename_requests_preserve_destinations_in_versioned_edits() {
     let directory = tempfile::tempdir().unwrap();
     let root = Url::from_directory_path(directory.path()).unwrap();

@@ -299,6 +299,11 @@ fn replacement(
         )
     };
     let mut value = reference_path(&path, command)?;
+    if (original.starts_with("./") && !value.starts_with('.')) || value.starts_with(' ') {
+        // A leading filename space would be discarded by LaTeX. Keep it
+        // inside the path, where one literal space retains its identity.
+        value.insert_str(0, "./");
+    }
     if command.and_then(syntax::package_class_extension).is_some()
         || !original.ends_with(&format!(".{extension}"))
     {
@@ -307,16 +312,27 @@ fn replacement(
             .and_then(|ext| ext.to_str())
             .filter(|extension| inferred.contains(extension))
         {
-            value.truncate(value.len() - extension.len() - 1);
+            let end = value.len() - extension.len() - 1;
+            // A trailing stem space can be read by TeX before its inferred
+            // suffix, but our static filename spans trim it. Keep the explicit
+            // suffix so navigation and subsequent renames retain the target.
+            if command.and_then(syntax::package_class_extension).is_some()
+                || syntax::is_literal_file_path(&value[..end])
+            {
+                value.truncate(end);
+            }
         }
-    }
-    if original.starts_with("./") && !value.starts_with('.') {
-        value.insert_str(0, "./");
     }
     if let Some(command) = command {
         let target_after = Url::from_file_path(&new_target)
             .map_err(|_| Error::invalid_params("Invalid renamed file URI"))?;
         let resolves_to_target = |value: &str| {
+            if command != "includegraphics"
+                && !crate::bib_resources::loads(command)
+                && !syntax::is_literal_file_path(value)
+            {
+                return false;
+            }
             let selected = if command == "includegraphics" {
                 renames.image(root, value, inferred, graphics)
             } else {
@@ -345,7 +361,7 @@ fn replacement(
                     value = base.to_owned();
                 }
             }
-            if original.starts_with("./") && !value.starts_with('.') {
+            if (original.starts_with("./") && !value.starts_with('.')) || value.starts_with(' ') {
                 value.insert_str(0, "./");
             }
             if !resolves_to_target(&value) {
@@ -395,9 +411,11 @@ fn safe_path(path: &Path) -> Result<String> {
         .to_owned();
     #[cfg(windows)]
     let value = value.replace('\\', "/");
-    if value.contains([
-        '\\', '%', '#', '&', '$', '{', '}', '^', '~', '"', '\r', '\n',
-    ]) {
+    if value.chars().any(char::is_control)
+        || value.contains([
+            '\\', '%', '#', '&', '$', '{', '}', '^', '~', '"', '\r', '\n',
+        ])
+    {
         return Err(Error::invalid_params("Renamed path contains characters that cannot be represented safely in a LaTeX file reference"));
     }
     Ok(value)
