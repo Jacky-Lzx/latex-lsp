@@ -420,6 +420,29 @@ fn compare_box_excess(left: &str, right: &str) -> std::cmp::Ordering {
         .then_with(|| right.cmp(left))
 }
 
+const OVERSIZED_FLOAT_PREFIX: &str = "LaTeX Warning: Float too large for page by ";
+
+fn nonnegative_decimal(value: &str) -> bool {
+    value
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || byte == b'.')
+        && value
+            .parse::<f64>()
+            .is_ok_and(|value| value.is_finite() && value >= 0.0)
+}
+
+fn oversized_float_excess(message: &str) -> Option<&str> {
+    let (amount, line) = message
+        .strip_prefix(OVERSIZED_FLOAT_PREFIX)?
+        .split_once("pt on input line ")?;
+    let line = line.strip_suffix('.')?;
+    (nonnegative_decimal(amount)
+        && !line.is_empty()
+        && line.bytes().all(|byte| byte.is_ascii_digit())
+        && line.parse::<u32>().is_ok())
+    .then_some(amount)
+}
+
 /// Summarize observed final-log diagnostics without multiplying repeated uses.
 pub fn compilation_analysis(
     diagnostics: &BTreeMap<Url, Vec<Diagnostic>>,
@@ -454,6 +477,8 @@ pub fn compilation_analysis(
     let mut font_substitutions = BTreeSet::new();
     let mut font_size_substitutions = BTreeSet::new();
     let mut box_warnings: BTreeMap<_, BoxSummary<'_>> = BTreeMap::new();
+    let mut oversized_float_count = 0usize;
+    let mut max_float_excess: Option<&str> = None;
     let mut rerun = false;
     let mut truncated = diagnostics_truncated;
     for diagnostic in diagnostics.values().flatten().filter(|diagnostic| {
@@ -501,6 +526,18 @@ pub fn compilation_analysis(
         }
         if diagnostic.severity != Some(DiagnosticSeverity::WARNING) {
             continue;
+        }
+        if let Some(excess) = oversized_float_excess(reported_message) {
+            if excess.len() > MAX_KEY_CHARS {
+                truncated = true;
+            } else {
+                oversized_float_count += 1;
+                if max_float_excess
+                    .is_none_or(|maximum| compare_box_excess(excess, maximum).is_gt())
+                {
+                    max_float_excess = Some(excess);
+                }
+            }
         }
         if let Some(warning) = box_warning_details(reported_message) {
             if matches!(warning.metric, BoxMetric::Excess(value) if value.len() > MAX_KEY_CHARS) {
@@ -630,6 +667,7 @@ pub fn compilation_analysis(
         "fontSubstitutions": font_substitutions,
         "fontSizeSubstitutions": font_size_substitutions,
         "boxWarnings": box_warnings,
+        "oversizedFloats": {"count": oversized_float_count, "maxExcessPt": max_float_excess},
         "truncated": truncated,
     })
 }
@@ -764,14 +802,7 @@ fn box_warning_details(message: &str) -> Option<BoxWarning<'_>> {
             } else {
                 "pt too high"
             })
-            .filter(|value| {
-                value
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || byte == b'.')
-                    && value
-                        .parse::<f64>()
-                        .is_ok_and(|value| value.is_finite() && value >= 0.0)
-            })
+            .filter(|value| nonnegative_decimal(value))
             .map(BoxMetric::Excess)?
     } else {
         BoxMetric::Badness(
@@ -2650,6 +2681,8 @@ fn emit_with_context(
         ),
         _ => message.clone(),
     };
+    let float_excess =
+        oversized_float_excess(&message).filter(|_| severity == DiagnosticSeverity::WARNING);
     result
         .entry(uri)
         .or_default()
@@ -2659,6 +2692,7 @@ fn emit_with_context(
                 severity: Some(severity),
                 source: Some("latex-build".into()),
                 code: box_code(&message)
+                    .or_else(|| float_excess.map(|_| "oversized-float"))
                     .or_else(|| special_range.map(|_| crate::special_characters::diagnostic_code(&message)))
                     .or_else(|| character.map(|_| "missing-character"))
                     .or_else(|| unsupported_unicode.map(|_| "unsupported-unicode-character"))
@@ -2678,6 +2712,7 @@ fn emit_with_context(
                     .map(|code| NumberOrString::String(code.into())),
                 message: displayed_message.clone(),
                 data: precise_destination.then(|| serde_json::json!({"destination":destination.as_ref().map(|(_, name)| name)}))
+                    .or_else(|| float_excess.map(|excess| serde_json::json!({"excessPt":excess})))
                     .or_else(|| special_range.and(special_character).map(|character| serde_json::json!({"character":character.to_string(),"sourceContext":context})))
                     .or_else(|| character.map(|character| serde_json::json!({"character":character.to_string(),"codepoint":format!("U+{:04X}", character as u32)})))
                     .or_else(|| unsupported_unicode.map(|character| serde_json::json!({"character":character.to_string(),"codepoint":format!("U+{:04X}", character as u32)})))
@@ -2964,6 +2999,12 @@ fn wrapped_message(
     i: &mut usize,
 ) -> String {
     let initial = lines[*i].trim_start();
+    if initial.starts_with(OVERSIZED_FLOAT_PREFIX) {
+        return byte_wrapped_literal_message(root, lines, separator_lines, i, initial, |message| {
+            oversized_float_excess(message).is_some()
+        })
+        .unwrap_or_else(|| initial.to_owned());
+    }
     if font_warning_body(initial).is_some() {
         // Do not invent a name by adding spaces to an unconfirmed wrap, or
         // consume an adjacent file/error while looking for a missing footer.
@@ -3221,7 +3262,11 @@ fn wrapped_error_message(
             && missing_graphic_name(&message).is_none()
             && missing_listing_name(&message).is_none()
             || incomplete_engine_file(&message);
-        if message.trim_end().ends_with(['.', '!']) && !incomplete_file || message.len() >= 4096 {
+        let incomplete_float = message.starts_with(OVERSIZED_FLOAT_PREFIX)
+            && oversized_float_excess(&message).is_none();
+        if message.trim_end().ends_with(['.', '!']) && !incomplete_file && !incomplete_float
+            || message.len() >= 4096
+        {
             break;
         }
         let Some(next) = lines.get(*i + 1) else { break };

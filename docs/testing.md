@@ -52,6 +52,12 @@ cargo test --locked --test box_warnings real_ -- --ignored
 cargo test --locked --test box_analysis -- --include-ignored
 ```
 
+浮动体过高回归需要 pdfLaTeX、XeLaTeX 和 LuaLaTeX，在 60 / 79 列日志、传统和文件行号格式中核对子文件图表的警告行、数量及最大超出量，缩小内容后重新编译并确认摘要清空。默认测试另覆盖小数点处折行、相邻诊断边界、精确十进制比较及数值预算：
+
+```sh
+cargo test --locked --test oversized_floats -- --include-ignored
+```
+
 真实文件 URL 重命名回归需要 pdfLaTeX 和 hyperref，验证改名前后生成的 PDF 仍保留查询参数、页面目标及四参数链接的目标：
 
 ```sh

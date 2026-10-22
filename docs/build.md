@@ -91,6 +91,8 @@ biblatex 明确要求先运行 BibTeX 或 Biber 时，默认参数的 latexmk �
 
 `analysis.boxWarnings` 汇总水平、垂直方向的 Overfull / Underfull 诊断数量，以及最大溢出量或 badness。字段、计数和预算规则见[排版警告分析](typesetting.md)。
 
+`analysis.oversizedFloats` 单独汇总浮动体过高警告的数量与最大超出量，见[浮动体高度警告](floats.md)。
+
 ### 字体替换摘要
 
 `analysis.fontSubstitutions` 和 `analysis.fontSizeSubstitutions` 分别汇总最终日志中的字体与字号替换。字段、去重及预算规则见[字体诊断与结果分析](fonts.md#字体与字号替换)。

@@ -4,6 +4,8 @@
 
 `analysis.boxWarnings` 按警告类型和方向汇总最终 TeX 日志中的 Overfull / Underfull 诊断，帮助客户端展示排版问题的数量和最严重程度。
 
+图表超出页面高度的独立统计见[浮动体高度警告](floats.md)。
+
 ## 字段
 
 每项包含 `kind`（`overfull` / `underfull`）、`axis`（`horizontal` / `vertical`）和 `count`。Overfull 额外提供字符串 `maxExcessPt`，表示最大的溢出量，单位为 TeX pt；Underfull 提供整数 `maxBadness`，表示最大的 badness。

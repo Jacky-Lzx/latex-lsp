@@ -34,6 +34,7 @@
 - [多余右花括号](extra-braces.md)：正文、数学及显式分组中的字符定位与删除修复。
 - [字体诊断与结果分析](fonts.md)：字体和字号替换、缺字摘要及定位边界。
 - [排版警告分析](typesetting.md)：Overfull / Underfull 分类统计与最大指标。
+- [浮动体高度警告](floats.md)：过高图表的源码行、警告数量与最大超出量。
 - [文献编译诊断](bibliography-diagnostics.md)：BibTeX / Biber 来源定位、缺失资源和文件名修复。
 - [SyncTeX 双向查询](synctex.md)：源码与 PDF 的查询协议。
 

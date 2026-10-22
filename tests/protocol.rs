@@ -2512,6 +2512,55 @@ cat "${2%/*}/fixture.log" > "$1/main.log"
 
 #[test]
 #[cfg(unix)]
+fn oversized_float_analysis_uses_final_logs_classifies_child_warnings_and_clears() {
+    let script = r#"cat <<'EARLY'
+LaTeX Warning: Float too large for page by 999.0pt on input line 1.
+EARLY
+printf '%%PDF-1.4\n' > "$1/main.pdf"
+cat "${2%/*}/fixture.log" > "$1/main.log"
+"#;
+    let (mut server, directory, main) = fake_build_server(script, false);
+    let source = "\\documentclass{article}\n\\input{child}\n";
+    std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+    );
+    let child = Url::from_file_path(directory.path().join("child.tex")).unwrap();
+    std::fs::write(child.to_file_path().unwrap(), "First\nSecond\nThird\n").unwrap();
+    for (id, warnings, expected, count) in [
+        (2, "LaTeX Warning: Float too large for page by 12.5pt on input line 2.\n\nLaTeX Warning: Float too large for page by 19.25pt on input line 3.\n",json!({"count":2,"maxExcessPt":"19.25"}),2),
+        (5, "LaTeX Warning: Float too large for page by 12.5pt on input line 2.\n",json!({"count":1,"maxExcessPt":"12.5"}),1),
+        (8, "",json!({"count":0,"maxExcessPt":null}),0),
+    ] {
+        std::fs::write(directory.path().join("fixture.log"),format!("(./main.tex\n(./child.tex\n{warnings}\n)\nOutput written on main.pdf (1 page).\n)\n")).unwrap();
+        let started = server.request(id,"workspace/executeCommand",json!({"command":"latex.build","arguments":[main]}));
+        let finished = server.until(|message|message["method"]=="latex/buildFinished"&&message["params"]["buildId"]==started["buildId"]);
+        let result = &finished["params"];
+        assert_eq!(result["status"],"success","{finished}");
+        assert_eq!(result["warningsCount"],count);
+        assert_eq!(result["errorsCount"],0);
+        assert_eq!(result["analysis"]["oversizedFloats"],expected);
+        assert_eq!(result["analysis"]["boxWarnings"],json!([]));
+        assert_eq!(result["analysis"]["rerunRequired"],false);
+        assert_eq!(result["analysis"]["truncated"],false);
+        let published = server.until(|message|message["method"]=="textDocument/publishDiagnostics"&&message["params"]["uri"]==child.as_str()&&message["params"]["diagnostics"].as_array().is_some_and(|items|items.iter().filter(|item|item["code"]=="oversized-float").count()==count));
+        for item in published["params"]["diagnostics"].as_array().unwrap().iter().filter(|item|item["code"]=="oversized-float") {
+            assert_eq!(item["severity"],2);
+            assert!(item["data"]["excessPt"].as_str().is_some());
+        }
+        let saved = server.request(id+1,"workspace/executeCommand",json!({"command":"latex.buildStatus","arguments":[main]}));
+        assert_eq!(&saved,result);
+        let pulled = server.request(id+2,"textDocument/diagnostic",json!({"textDocument":{"uri":child}}));
+        assert_eq!(pulled["items"].as_array().unwrap().iter().filter(|item|item["code"]=="oversized-float").count(),count);
+    }
+    server.request(11, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
 fn unchanged_pdf_older_than_an_included_source_is_rejected_but_fresh_noop_builds_succeed() {
     let (mut server, directory, uri) = fake_build_server("exit 0\n", false);
     let source = "\\documentclass{article}\n\\input{chapter}\n";
