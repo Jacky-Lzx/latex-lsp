@@ -105,6 +105,17 @@ cargo test --locked --test protocol undefined_toggle_diagnostics_offer_versioned
 
 支持范围见[toggle 诊断与修复](toggle-diagnostics.md)。
 
+## 布尔表达式诊断
+
+默认回归检查两种命名空间、表达式与循环的读取边界、静态测试字符串、动态或歧义操作数、帮助正文的关联与折行、重复及缩短回显、跨行和 UTF-16 范围、版本化和旧客户端修复。真实回归需要 pdfLaTeX、XeLaTeX、LuaLaTeX 和 etoolbox：
+
+```sh
+cargo test --locked --test boolean_expression_diagnostics
+cargo test --locked --test boolean_expression_diagnostics -- --include-ignored
+```
+
+支持范围见[布尔表达式诊断与修复](boolean-expressions.md)。
+
 ## 排版日志与文件移动
 
 页数回归检查输出路径中的伪页数、PDF / DVI / XDV 格式、引号、日志折行、不完整摘要和读取预算。外部回归使用三个 LaTeX 引擎的 60 / 79 列日志，核对编译结果返回实际 PDF 页数：

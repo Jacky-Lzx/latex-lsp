@@ -17,6 +17,7 @@ Unicode 未设置映射的错误与码点摘要见[Unicode 输入错误](unicode
 - [长度诊断与修复](length-diagnostics.md)：etoolbox 的未定义长度定位与拼写修复。
 - [toggle 诊断与修复](toggle-diagnostics.md)：etoolbox 直接开关操作的名称定位与拼写修复。
 - [boolean 诊断与修复](boolean-diagnostics.md)：etoolbox 条件名称定位与拼写修复。
+- [布尔表达式诊断与修复](boolean-expressions.md)：恢复帮助正文中的错误名称，修复静态操作数。
 - [颜色与颜色模型](#颜色与颜色模型)
 - [引用与重复声明](#引用与重复声明)
 - [输入文件、宏包与文档类](#输入文件宏包与文档类)

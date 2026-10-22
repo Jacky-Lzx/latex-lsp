@@ -18,7 +18,7 @@ etoolbox 报告 `Boolean '\ifdarft' undefined` 时，服务器将日志中的条
 
 内置 `true` / `false` 仅用于 `ifbool` / `notbool` 的只读条件建议；它们没有对应赋值命令，不能用于赋值修复。被项目定义覆盖的内置条件不作为候选。
 
-动态、不完整或含语义空白的名称、宏展开、被宏消费的操作、重定义以及无法唯一核对的日志回显保留整行错误。ifthen 自身的错误与 etoolbox 的 `Invalid boolean expression` 使用不同格式，目前保留原有行级错误。
+动态、不完整或含语义空白的名称、宏展开、被宏消费的操作、重定义以及无法唯一核对的日志回显保留整行错误。ifthen 自身的错误保留原有行级位置；etoolbox 的 `Invalid boolean expression` 见[布尔表达式诊断与修复](boolean-expressions.md)。
 
 ## 协议与验证
 
