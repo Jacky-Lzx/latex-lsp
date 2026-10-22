@@ -81,6 +81,18 @@ cargo test --locked --test undefined_lengths -- --include-ignored
 cargo test --locked --test protocol undefined_length_diagnostics_offer_versioned_fixes_and_reject_changed_candidate_types
 ```
 
+## toggle 诊断
+
+默认回归核对五种直接操作的实际参数读取边界、UTF-16 和跨行定位、重复及缩短回显、候选命名空间、项目隔离、生成命令冲突及过期修复。真实回归需要 pdfLaTeX、XeLaTeX、LuaLaTeX 和 etoolbox，分别使用 60 / 79 列和两种日志格式，应用修复后重新编译并核对局部、全局赋值及分支结果：
+
+```sh
+cargo test --locked --test undefined_toggles
+cargo test --locked --test undefined_toggles -- --include-ignored
+cargo test --locked --test protocol undefined_toggle_diagnostics_offer_versioned_fixes_and_reject_changed_candidate_namespaces
+```
+
+支持范围见[toggle 诊断与修复](toggle-diagnostics.md)。
+
 ## 排版日志与文件移动
 
 页数回归检查输出路径中的伪页数、PDF / DVI / XDV 格式、引号、日志折行、不完整摘要和读取预算。外部回归使用三个 LaTeX 引擎的 60 / 79 列日志，核对编译结果返回实际 PDF 页数：

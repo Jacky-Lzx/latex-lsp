@@ -13,6 +13,7 @@ enum Kind {
     Environment,
     Counter,
     Length,
+    Toggle,
     Anchor,
     Color,
     ColorModel,
@@ -117,6 +118,24 @@ fn target<'a>(
                 && doc.text.range(span.start, span.end) == diagnostic.range
         })
         .then_some((Kind::Length, name));
+    }
+
+    if diagnostic.code == Some(NumberOrString::String("undefined-toggle".into())) {
+        let name = diagnostic.data.as_ref()?.get("toggle")?.as_str()?;
+        if build_log::undefined_toggle_name(&diagnostic.message) != Some(name) {
+            return None;
+        }
+        return crate::toggle_diagnostics::error_invocations_with_signatures(
+            &doc.text.source,
+            &doc.syntax,
+            signatures?,
+        )
+        .iter()
+        .any(|(span, _)| {
+            doc.text.source[span.clone()] == *name
+                && doc.text.range(span.start, span.end) == diagnostic.range
+        })
+        .then_some((Kind::Toggle, name));
     }
 
     if diagnostic.code == Some(NumberOrString::String("undefined-color".into())) {
@@ -392,7 +411,7 @@ pub fn fixes(
             }
             let literal = matches!(diagnostic.code.as_ref(), Some(NumberOrString::String(code)) if matches!(code.as_str(), "unescaped-special-character" | "extra-alignment-tab" | "extra-closing-brace" | "double-subscript" | "double-superscript"));
             let invocation_scope = if literal
-                || matches!(diagnostic.code.as_ref(), Some(NumberOrString::String(code)) if matches!(code.as_str(), "undefined-color" | "undefined-color-model" | "undefined-counter" | "undefined-length" | "undefined-environment" | "mismatched-environment-end" | "missing-input" | "missing-include" | "missing-package" | "missing-class" | "missing-bibliography-style" | "missing-bibliography-database"))
+                || matches!(diagnostic.code.as_ref(), Some(NumberOrString::String(code)) if matches!(code.as_str(), "undefined-color" | "undefined-color-model" | "undefined-counter" | "undefined-length" | "undefined-toggle" | "undefined-environment" | "mismatched-environment-end" | "missing-input" | "missing-include" | "missing-package" | "missing-class" | "missing-bibliography-style" | "missing-bibliography-database"))
             {
                 let confirmed = workspace.build_diagnostic_sources.get(root);
                 let scope = if let Some(value) = diagnostic
@@ -584,6 +603,7 @@ pub fn fixes(
             }
             let mut candidates = BTreeMap::<String, usize>::new();
             let mut length_conflicts = BTreeSet::new();
+            let mut toggle_owners = BTreeMap::<String, usize>::new();
             let mut total_entries = 0;
             for document in project
                 .iter()
@@ -602,6 +622,7 @@ pub fn fixes(
                     Kind::Command | Kind::Length => &document.syntax.definitions,
                     Kind::Environment => &document.syntax.environments,
                     Kind::Counter => &document.syntax.counters,
+                    Kind::Toggle => &document.syntax.toggles,
                     Kind::Anchor => &document.syntax.anchors,
                     Kind::Color => &document.syntax.colors,
                     Kind::ColorModel => &[],
@@ -621,6 +642,26 @@ pub fn fixes(
                     // the same control word as an allocated length.
                     for name in crate::generated::commands(document).take(4096) {
                         length_conflicts.insert(name);
+                        total_entries += 1;
+                        if total_entries >= 4096 {
+                            break;
+                        }
+                    }
+                }
+                if kind == Kind::Toggle {
+                    // Each declaration owns one internal control sequence.
+                    // Additional macros or generated commands can replace it.
+                    for name in document
+                        .syntax
+                        .definitions
+                        .iter()
+                        .map(|entry| entry.name.clone())
+                        .chain(crate::generated::commands(document))
+                        .take(4096)
+                    {
+                        if let Some(name) = name.strip_prefix("etb@tgl@") {
+                            *toggle_owners.entry(name.into()).or_default() += 1;
+                        }
                         total_entries += 1;
                         if total_entries >= 4096 {
                             break;
@@ -687,6 +728,7 @@ pub fn fixes(
             if total_entries >= 4096
                 || candidates.contains_key(key)
                 || length_conflicts.contains(key)
+                || toggle_owners.contains_key(key)
             {
                 continue;
             }
@@ -697,6 +739,7 @@ pub fn fixes(
                         && valid_name(kind, name)
                         && !counter_conflicts.contains(name.as_str())
                         && !length_conflicts.contains(name)
+                        && (kind != Kind::Toggle || toggle_owners.get(name) == Some(&1))
                 })
                 .take(MAX_COMPARISONS.saturating_sub(comparisons))
                 .filter_map(|(name, _)| {
@@ -719,6 +762,7 @@ pub fn fixes(
                     Kind::Citation => ("citation", name.clone()),
                     Kind::Command => ("command", format!("\\{name}")),
                     Kind::Length => ("length", format!("\\{name}")),
+                    Kind::Toggle => ("toggle", name.clone()),
                     Kind::Environment => ("environment", name.clone()),
                     Kind::Counter => ("counter", name.clone()),
                     Kind::Color => ("color", name.clone()),

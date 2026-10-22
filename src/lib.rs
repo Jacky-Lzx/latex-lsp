@@ -46,6 +46,7 @@ mod spelling_fixes;
 pub mod synctex;
 pub mod syntax;
 pub mod text;
+mod toggle_diagnostics;
 pub mod workspace;
 
 use std::sync::{
