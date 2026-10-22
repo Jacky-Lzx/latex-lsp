@@ -22,6 +22,20 @@ etoolbox 的 `ifboolexpr`、`ifboolexpe`、`whileboolexpr` 和 `unlessboolexpr` 
 
 缩短的源码回显必须在对应源码行中唯一，并与调用的读取终点一致。帮助正文提供完整名称时，回显可只覆盖名称的后半部分；如果只剩结束花括号，或长循环体使操作数完全不可见，则保留行级诊断。
 
+## 注释与源码编辑
+
+关键词内部的注释续行遵循 TeX 的读取规则。例如，下面的 `bo` 和 `ol` 组成 `bool`：
+
+```tex
+\newbool{draft}
+\ifboolexpr{bo% 保留这条注释
+  ol{draft}}{Yes}{No}
+```
+
+`bool`、`togl`、`not`、`and`、`or` 和 `test` 均支持这种写法，包括 CRLF、下一行缩进和连续注释。导航、引用、悬停、名称补全与跨文件重命名能识别相应的操作数；编译诊断及拼写修复使用名称本身的源码范围。编辑保留关键词、注释和缩进，同名 boolean 与 toggle 各自更新。
+
+普通空格、空行和转义的百分号不会拼接成关键词。`test` 中字面字符串里的类似操作数文本不作为 boolean / toggle 引用；名称本身仍须为静态字面内容。
+
 ## 日志与协议
 
 诊断消息追加编译器给出的 `Boolean '名称' undefined.` 或 `Toggle '名称' undefined.`，保留两个命名空间的独立错误。标准帮助正文缺失、残缺或与当前错误无法确认关联时，不猜测名称；折行说明在确认完整结束后恢复，不跨越其他诊断。
@@ -37,10 +51,20 @@ cargo test --locked --test boolean_expression_diagnostics
 cargo test --locked --test protocol expression_fixes_recheck_cross_file_tests_without_a_main_version_change
 ```
 
+注释续行另有编辑、诊断和版本化跨文件重命名回归：
+
+```sh
+cargo test --locked --test expression_keywords
+cargo test --locked --test protocol commented_expression_keywords_return_versioned_cross_file_renames_over_stdio
+```
+
 真实回归需要 pdfLaTeX、XeLaTeX、LuaLaTeX 和 etoolbox：
 
 ```sh
 cargo test --locked --test boolean_expression_diagnostics -- --include-ignored
+cargo test --locked --test expression_keywords -- --include-ignored
 ```
 
 三个引擎分别使用 60 / 79 列和传统 / 文件行号日志。每组验证 11 处操作数修复，再重新编译生成 PDF，并核对条件分支、循环次数、内置条件、跨行表达式与长名称的实际结果；另确认动态名称及用户测试宏保留行级诊断。其他外部工具测试见[真实工具回归](testing.md)。
+
+注释续行的真实回归在三个引擎中分别使用传统和文件行号日志。先独立重命名跨文件的 boolean 与 toggle，核对分支、字面字符串和两次循环的结果；再引入两个命名空间的拼写错误，验证精确范围、修复及重新编译后的相同结果。
