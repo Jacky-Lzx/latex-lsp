@@ -1514,6 +1514,7 @@ struct PackageOptions {
 
 struct ErrorContext<'a> {
     source: &'a str,
+    right_delimiter_frame: Option<&'a str>,
     package_options: Option<PackageOptions>,
     name_frame: Option<&'a str>,
     macro_context: Option<InvocationContext<'a>>,
@@ -1524,6 +1525,7 @@ impl<'a> ErrorContext<'a> {
     fn source(source: &'a str) -> Self {
         Self {
             source,
+            right_delimiter_frame: None,
             package_options: None,
             name_frame: None,
             macro_context: None,
@@ -1695,6 +1697,12 @@ fn error_context<'a>(
         .filter(|(_, line)| !line.trim().is_empty())
         .map(|(index, &line)| (index, line));
     let (mut index, mut line) = context.next()?;
+    let right_delimiter_frame = (message == crate::right_delimiters::ERROR)
+        .then(|| crate::right_delimiters::expansion_frame(line))
+        .flatten();
+    if right_delimiter_frame.is_some() {
+        (index, line) = context.next()?;
+    }
     if message == crate::special_characters::EXTRA_ALIGNMENT_TAB {
         // LaTeX alignments report the internal end-template token; raw TeX
         // alignments can report only the template. Expanded user frames must
@@ -1808,6 +1816,7 @@ fn error_context<'a>(
         .is_none_or(|token| prefix.trim_end().ends_with(token))
         .then(|| ErrorContext {
             source: prefix,
+            right_delimiter_frame,
             package_options: package_option_details(lines, index + 1, message),
             name_frame,
             macro_context: None,
@@ -2814,6 +2823,24 @@ fn emit_with_context(
         )
     });
     ranges.extend(special_range);
+    let right_delimiter = (message == crate::right_delimiters::ERROR
+        && severity == DiagnosticSeverity::ERROR
+        && !project_stale)
+        .then(|| {
+            crate::right_delimiters::invocation(
+                &text,
+                &crate::syntax::Syntax::latex(&text),
+                line,
+                context?,
+                error.as_ref().and_then(|error| error.right_delimiter_frame),
+                macro_context.map(|context| &context.macros.signatures),
+            )
+        })
+        .flatten();
+    let right_range = right_delimiter
+        .as_ref()
+        .map(|invocation| text.range(invocation.command.start, invocation.command.end));
+    ranges.extend(right_range);
     let unsupported_unicode =
         unsupported_unicode_character(&message).filter(|_| severity == DiagnosticSeverity::ERROR);
     ranges.extend(unsupported_unicode.and_then(|character| {
@@ -3024,6 +3051,7 @@ fn emit_with_context(
                 code: box_code(&message)
                     .or_else(|| float_excess.map(|_| "oversized-float"))
                     .or_else(|| special_range.map(|_| crate::special_characters::diagnostic_code(&message)))
+                    .or_else(|| right_range.map(|_| crate::right_delimiters::CODE))
                     .or_else(|| character.map(|_| "missing-character"))
                     .or_else(|| unsupported_unicode.map(|_| "unsupported-unicode-character"))
                     .or_else(|| destination.as_ref().filter(|_| precise_destination).map(|(kind, _)| kind.code()))
@@ -3047,6 +3075,7 @@ fn emit_with_context(
                 data: precise_destination.then(|| serde_json::json!({"destination":destination.as_ref().map(|(_, name)| name)}))
                     .or_else(|| float_excess.map(|excess| serde_json::json!({"excessPt":excess})))
                     .or_else(|| special_range.and(special_character).map(|character| serde_json::json!({"character":character.to_string(),"sourceContext":context})))
+                    .or_else(|| right_delimiter.as_ref().map(|invocation| serde_json::json!({"delimiter":&text.source[invocation.delimiter.clone()],"delimiterFrame":error.as_ref().and_then(|error| error.right_delimiter_frame),"sourceLine":line,"sourceContext":context})))
                     .or_else(|| character.map(|character| serde_json::json!({"character":character.to_string(),"codepoint":format!("U+{:04X}", character as u32)})))
                     .or_else(|| unsupported_unicode.map(|character| serde_json::json!({"character":character.to_string(),"codepoint":format!("U+{:04X}", character as u32)})))
                     .or_else(|| command_name.map(|name| serde_json::json!({"command":name})))
@@ -3087,7 +3116,7 @@ fn emit_with_context(
                     .or_else(|| graphic_range.and(missing_graphic).map(|name| serde_json::json!({"file":name})))
                     .or_else(|| missing_include_key(&message).map(|name| serde_json::json!({"file":name})))
                     .map(|mut data| {
-                        if special_range.is_some() || missing_include_key(&message).is_some() || color_range.is_some() || model_range.is_some() || counter_range.is_some() || length_range.is_some() || toggle_range.is_some() || boolean_range.is_some() || environment_range.is_some() || input_range.is_some() || loader_range.is_some() || clash_range.is_some() {
+                        if special_range.is_some() || right_range.is_some() || missing_include_key(&message).is_some() || color_range.is_some() || model_range.is_some() || counter_range.is_some() || length_range.is_some() || toggle_range.is_some() || boolean_range.is_some() || environment_range.is_some() || input_range.is_some() || loader_range.is_some() || clash_range.is_some() {
                             if let Some(context) = macro_context {
                                 data["macroSources"] = serde_json::json!(context.macros.sources);
                                 if !context.macros.paused_sources.is_empty() {
@@ -4090,6 +4119,7 @@ impl InvocationKind {
     fn for_message(message: &str) -> Option<Self> {
         if crate::special_characters::error_character(message, "").is_some()
             || message == "Missing $ inserted."
+            || message == crate::right_delimiters::ERROR
         {
             Some(Self::Literal)
         } else if undefined_color_name(message).is_some() {

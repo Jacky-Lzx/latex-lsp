@@ -36,6 +36,7 @@ mod primitives;
 mod project_diagnostics;
 mod project_environments;
 pub mod recorder;
+mod right_delimiters;
 mod saved_text;
 pub mod semantic;
 mod semantic_cache;
