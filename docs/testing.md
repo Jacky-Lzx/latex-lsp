@@ -111,7 +111,7 @@ cargo test --locked --test protocol undefined_toggle_diagnostics_offer_versioned
 
 ## 字符串测试
 
-字符串测试的数据边界、编辑器协议及三引擎验证命令见[字符串测试验证](string-tests.md#验证)；导入重定义、共享文件、增量编辑、关闭恢复和磁盘变更的回归见[跨文件上下文验证](string-test-projects.md#验证)。外部回归需要 pdfLaTeX、XeLaTeX、LuaLaTeX 和 etoolbox。
+字符串测试的数据边界、编辑器协议及三引擎验证命令见[字符串测试验证](string-tests.md#验证)；导入重定义、共享文件、增量编辑、关闭恢复和磁盘变更的回归见[跨文件上下文验证](string-test-projects.md#验证)。条件文件钩子的分支选择、执行顺序及非源码文件通知回归见[条件文件钩子验证](conditional-string-tests.md#验证)。外部回归需要 pdfLaTeX、XeLaTeX、LuaLaTeX 和 etoolbox。
 
 ## 排版日志与文件移动
 

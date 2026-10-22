@@ -22,6 +22,7 @@
 - [biblatex 文献分类](bibliography-categories.md)：分类分配、文献键编辑及重命名边界。
 - [符号与重命名](symbols.md)：宏、环境、计数器等符号的支持范围。
 - [字符串测试](string-tests.md)：etoolbox 的字面数据、条件分支和参数提示；[跨文件上下文](string-test-projects.md)说明重定义、加载顺序和共享文件重命名边界。
+- [条件文件钩子](conditional-string-tests.md)：文件存在性分支、前置钩子顺序、字符串语义和重命名。
 - [计数器与定理](counters.md)：编号关系、跨文件重命名、etoolbox 操作与 refcount 标签赋值。
 - [寄存器与长度](registers.md)：寄存器声明、类型检查、长度表达式与安全重命名。
 - [futurelet 前瞻目标](futurelet.md)：声明、静态名称、跨文件重命名与继续执行边界。
