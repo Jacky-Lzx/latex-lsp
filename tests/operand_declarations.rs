@@ -111,6 +111,110 @@ fn declaration_targets_do_not_execute_declaration_or_verbatim_controls() {
 }
 
 #[test]
+fn copied_literal_braces_do_not_create_syntax_diagnostics_or_fixes() {
+    for target in [r"\saved", r"\csname saved\endcsname"] {
+        let prefix = if target.starts_with(r"\csname") {
+            r"\expandafter"
+        } else {
+            ""
+        };
+        for separator in ["", "=", " % target\n = % source\n "] {
+            for brace in ['{', '}'] {
+                let source = format!(
+                    "{{{prefix}\\let{target}{separator}{brace}\\newcommand{{\\ordinary}}{{Body}}}}\\ordinary"
+                );
+                let parsed = Syntax::latex(&Text::new(source.clone()));
+                assert!(parsed.diagnostics.is_empty(), "{source}: {parsed:?}");
+                assert!(parsed.fixes.is_empty(), "{source}: {parsed:?}");
+                assert!(
+                    parsed
+                        .definitions
+                        .iter()
+                        .any(|entry| entry.name == "ordinary"),
+                    "{source}: {parsed:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn literal_brace_operands_preserve_real_errors_and_replayed_tokens() {
+    for (source, message) in [
+        (r"\let\saved={ {", "Unclosed brace"),
+        (r"\let\saved=} }", "Unexpected closing brace"),
+        (r"\futurelet\saved\relax{", "Unclosed brace"),
+        (r"\futurelet\saved\relax}", "Unexpected closing brace"),
+        (r"\def\let{}\let\saved{", "Unclosed brace"),
+        (r"\def\let{}\let\saved}", "Unexpected closing brace"),
+        (r"\let\saved\let\other{", "Unclosed brace"),
+    ] {
+        let text = Text::new(source.into());
+        let parsed = Syntax::latex(&text);
+        assert_eq!(parsed.diagnostics.len(), 1, "{source}: {parsed:?}");
+        let diagnostic = &parsed.diagnostics[0];
+        assert_eq!(diagnostic.message, message, "{source}");
+        assert_eq!(diagnostic.range, text.range(source.len() - 1, source.len()));
+        assert_eq!(parsed.fixes.len(), 1, "{source}: {parsed:?}");
+    }
+}
+
+#[test]
+fn literal_brace_operands_in_macro_bodies_retain_lexical_pairing() {
+    for declaration in [
+        r"\def\wrapper",
+        r"\csdef{wrapper}#1",
+        r"\newcommand{\wrapper}",
+        r"\expandafter\newcommand\csname wrapper\endcsname",
+        r"\NewDocumentCommand{\wrapper}{}",
+        r"\newenvironment{wrapper}{}",
+    ] {
+        for body in [r"{\let\saved{}}", r"{\let\saved}}"] {
+            let source = format!("{declaration}{body}");
+            let text = Text::new(source.clone());
+            let parsed = Syntax::latex(&text);
+            if body.ends_with("{}}") {
+                assert!(parsed.diagnostics.is_empty(), "{source}: {parsed:?}");
+            } else {
+                assert_eq!(parsed.diagnostics.len(), 1, "{source}: {parsed:?}");
+                assert_eq!(
+                    parsed.diagnostics[0].range,
+                    text.range(source.len() - 1, source.len())
+                );
+            }
+        }
+        let source = format!(r"{declaration}{{\let\saved{{}}");
+        let text = Text::new(source.clone());
+        let parsed = Syntax::latex(&text);
+        assert_eq!(parsed.diagnostics.len(), 1, "{source}: {parsed:?}");
+        assert_eq!(parsed.diagnostics[0].message, "Unclosed brace", "{source}");
+    }
+    for source in [
+        r"\textbf{\let\saved{}}",
+        r"\unknown{\let\saved{}}",
+        r"\href{url}{\let\saved{}}",
+        r"\section[\let\saved{}]{Title}",
+    ] {
+        assert!(
+            Syntax::latex(&Text::new(source.into()))
+                .diagnostics
+                .is_empty(),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn let_tokens_in_parameter_text_do_not_consume_the_definition_body_brace() {
+    for declaration in ["def", "gdef", "edef", "xdef"] {
+        let source = format!(r"\{declaration}\wrapper#1\let\saved={{Body}}");
+        let parsed = Syntax::latex(&Text::new(source.clone()));
+        assert!(parsed.diagnostics.is_empty(), "{source}: {parsed:?}");
+        assert!(parsed.fixes.is_empty(), "{source}: {parsed:?}");
+    }
+}
+
+#[test]
 fn locally_rebound_declaration_keywords_do_not_hide_executed_definitions() {
     for prefix in [
         r"\def\let{}",
@@ -212,6 +316,9 @@ fn real_copied_declaration_sources_preserve_ordinary_calls_and_symbol_renames() 
             "\\let\\saved\\newcommand\\ordinary{Follower}\n",
             "\\let\\savedif\\newif\\ifdraft\\typeout{OPERAND:draft}\\fi\n",
             "\\let\\savedenv\\newenvironment{panel}{}{}\\begin{panel}\\ordinary{Panel}\\end{panel}\n",
+            "{\\let\\opening={\\expandafter\\let\\csname closing\\endcsname=}\\typeout{OPERAND:braces}}\n",
+            "\\newcommand{\\unusedbraces}{\\let\\saved{}}\n",
+            "\\def\\unusedparameter#1\\let\\saved={Body}\n",
             "\\begingroup\\def\\let{}\\def\\unused{}\\let\\unused\\gdef\\restored{\\typeout{OPERAND:rebound}Rebound}\\endgroup\\restored\n",
             "% \\ordinary \\ifdraft \\begin{panel}\n",
             "\\verb|\\ordinary \\ifdraft \\begin{panel}|\n",
@@ -219,6 +326,9 @@ fn real_copied_declaration_sources_preserve_ordinary_calls_and_symbol_renames() 
         std::fs::write(&main, "\\documentclass{article}\\input{definitions}\\begin{document}\\input{content}\\end{document}\n").unwrap();
         std::fs::write(root.join("definitions.tex"), definitions).unwrap();
         std::fs::write(root.join("content.tex"), content).unwrap();
+        assert!(Syntax::latex(&Text::new(content.into()))
+            .diagnostics
+            .is_empty());
         let compiler = root.join("compiler");
         std::fs::write(&compiler, format!("#!/bin/sh\nTEXMFVAR=\"${{0%/*}}/tex-cache\"\nTEXMFCACHE=\"$TEXMFVAR\"\nexport TEXMFVAR TEXMFCACHE\nmkdir -p \"$TEXMFVAR\"\nexec {engine} \"$@\"\n")).unwrap();
         std::fs::set_permissions(&compiler, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -294,6 +404,7 @@ fn real_copied_declaration_sources_preserve_ordinary_calls_and_symbol_renames() 
                     "OPERAND:Follower",
                     "OPERAND:draft",
                     "OPERAND:Panel",
+                    "OPERAND:braces",
                     "OPERAND:rebound"
                 ]
             );

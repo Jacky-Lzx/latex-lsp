@@ -2882,6 +2882,124 @@ fn operand_builtin(name: &str) -> Option<Signature> {
     })
 }
 
+/// Braces in arguments and replacement text are balanced before their tokens
+/// can execute. Include unfinished groups so diagnostics still report them.
+pub(crate) fn reads_brace(source: &str, command: &syntax::Command, brace: usize) -> bool {
+    fn operand_end(source: &str, mut at: usize) -> Option<usize> {
+        let value = token(source, at)?;
+        at += value.len();
+        if value == r"\csname" {
+            loop {
+                at = syntax::skip_space(source, at);
+                let value = token(source, at)?;
+                at += value.len();
+                if value == r"\endcsname" {
+                    break;
+                }
+            }
+        }
+        Some(syntax::skip_space(source, at))
+    }
+
+    let mut at = syntax::skip_space(source, command.span.end);
+    if matches!(
+        command.name.as_str(),
+        "def" | "gdef" | "edef" | "xdef" | "csdef" | "csgdef" | "csedef" | "csxdef"
+    ) {
+        if command.name.starts_with("cs") {
+            if let Some((_, end)) = syntax::group(source, at, b'{', b'}') {
+                if brace < end {
+                    return true;
+                }
+                at = syntax::skip_space(source, end);
+            }
+        }
+        while at <= brace {
+            if source.as_bytes().get(at) == Some(&b'{') {
+                return syntax::group(source, at, b'{', b'}').is_none_or(|(_, end)| brace < end);
+            }
+            let Some(end) = operand_end(source, at) else {
+                return false;
+            };
+            at = end;
+        }
+        return false;
+    }
+    let Some(signature) = operand_builtin(&command.name) else {
+        // Unknown arity: retain lexical pairing within a following group.
+        while at < brace {
+            let (open, close) = match source.as_bytes().get(at) {
+                Some(b'{') => (b'{', b'}'),
+                Some(b'[') => (b'[', b']'),
+                _ => return false,
+            };
+            let Some((_, end)) = syntax::group(source, at, open, close) else {
+                return true;
+            };
+            if brace < end {
+                return true;
+            }
+            at = syntax::skip_space(source, end);
+        }
+        return false;
+    };
+    if signature.starred && source.as_bytes().get(at) == Some(&b'*') {
+        at = syntax::skip_space(source, at + 1);
+    }
+    for parameter in &signature.parameters {
+        if at >= brace {
+            return false;
+        }
+        let bracket = match &parameter.kind {
+            Kind::Optional | Kind::UnstarredOptional | Kind::RequiredBracket => {
+                if source.as_bytes().get(at) != Some(&b'[') {
+                    if matches!(parameter.kind, Kind::RequiredBracket) {
+                        return false;
+                    }
+                    continue;
+                }
+                true
+            }
+            Kind::Star => {
+                if source.as_bytes().get(at) == Some(&b'*') {
+                    at = syntax::skip_space(source, at + 1);
+                }
+                continue;
+            }
+            Kind::Flag(_) | Kind::Delimited { .. } => return false,
+            _ => false,
+        };
+        if bracket || source.as_bytes().get(at) == Some(&b'{') {
+            let group = if bracket && !signature.nested_brackets {
+                syntax::bracket_argument(source, at)
+            } else {
+                syntax::group(
+                    source,
+                    at,
+                    if bracket { b'[' } else { b'{' },
+                    if bracket { b']' } else { b'}' },
+                )
+            };
+            let Some((_, end)) = group else {
+                return true;
+            };
+            if brace < end {
+                return true;
+            }
+            at = syntax::skip_space(source, end);
+        } else {
+            if matches!(parameter.kind, Kind::RequiredGroup) {
+                return false;
+            }
+            let Some(end) = required_token(source, at).and_then(|_| operand_end(source, at)) else {
+                return false;
+            };
+            at = end;
+        }
+    }
+    false
+}
+
 /// Walk and memoize alias chains iteratively, including unknown targets and
 /// cycles. The source graph may be arbitrarily deep without using Rust's stack.
 fn resolve_aliases<'a, T: Clone>(

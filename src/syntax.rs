@@ -1933,6 +1933,7 @@ impl Syntax {
         let mut environments = Vec::new();
         let mut literal_arguments = std::collections::BTreeMap::new();
         let mut control_operands = std::collections::BTreeSet::new();
+        let mut brace_operands = std::collections::BTreeSet::new();
         let mut assigned_controls = std::collections::BTreeSet::<String>::new();
         let mut conversion_arguments = std::collections::BTreeMap::new();
         let mut i = 0;
@@ -1958,6 +1959,10 @@ impl Syntax {
                     }
                     result.ignored.push(start..i);
                     result.comments.push(start..i);
+                }
+                // A brace consumed by primitive let is data, not a group.
+                b'{' | b'}' if brace_operands.remove(&i) => {
+                    i += 1;
                 }
                 b'{' => {
                     braces.push(i);
@@ -2286,6 +2291,14 @@ impl Syntax {
                             };
                             if let Some(word) = control_word(source, operand) {
                                 control_operands.insert(word.start);
+                            } else if name == "let"
+                                && matches!(bytes.get(operand), Some(b'{' | b'}'))
+                                && !result.commands.iter().any(|previous| {
+                                    !control_operands.contains(&previous.span.start)
+                                        && crate::signature::reads_brace(source, previous, operand)
+                                })
+                            {
+                                brace_operands.insert(operand);
                             }
                         }
                     }
