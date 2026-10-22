@@ -302,3 +302,38 @@ fn bibliography_requests_offer_rebuild_only_for_the_known_latexmk_cycle() {
         }
     }
 }
+
+#[test]
+fn index_processing_requests_report_the_tool_without_offering_an_incomplete_rebuild() {
+    for executable in [
+        "latexmk", "pdflatex", "xelatex", "lualatex", "tectonic", "custom",
+    ] {
+        for kind in ["index", "glossary"] {
+            let mut project = Project::new(true, false);
+            project.workspace.config.build.executable = executable.into();
+            project.workspace.config.build.rebuild_arguments = Some(vec!["%f".into()]);
+            let mut diagnostic = project.diagnostic.clone();
+            let header = if kind == "glossary" {
+                "Package  rerunfilecheck Warning:"
+            } else {
+                "Package rerunfilecheck Warning:"
+            };
+            diagnostic.message = format!("{header} File `main.track' has changed. (rerunfilecheck) Rerun LaTeX/makeindex to get {kind} right.");
+            let diagnostics = [(project.root.clone(), vec![diagnostic.clone()])].into();
+            let analysis = build_log::compilation_analysis(&diagnostics, false);
+            assert_eq!(
+                analysis["requiredIndexTools"],
+                serde_json::json!(["makeindex"])
+            );
+            assert_eq!(analysis["rerunRequired"], true);
+            project
+                .workspace
+                .build_diagnostics
+                .insert(project.root.clone(), diagnostics);
+            assert!(
+                project.actions(vec![diagnostic]).is_empty(),
+                "{executable}/{kind}"
+            );
+        }
+    }
+}

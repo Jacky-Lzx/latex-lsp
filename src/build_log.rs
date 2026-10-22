@@ -341,25 +341,44 @@ pub(crate) fn required_bibliography_tool(diagnostic: &Diagnostic) -> Option<&'st
     }
 }
 
-fn rerunfilecheck_request(message: &str) -> bool {
-    message
-        .strip_prefix("Package rerunfilecheck Warning: File `")
-        .and_then(|tail| tail.rsplit_once("' has changed."))
-        .is_some_and(|(file, tail)| {
-            let request = tail
-                .split_whitespace()
-                .filter(|word| *word != "(rerunfilecheck)")
-                .collect::<Vec<_>>()
-                .join(" ");
-            !file.trim().is_empty()
-                && matches!(
-                    request.as_str(),
-                    "" | "Rerun."
-                        | "Rerun to get outlines right."
-                        | "Rerun to get bibliographical references right."
-                        | "Rerun to get outlines right or use package `bookmark'."
-                )
-        })
+enum RerunFilecheckRequest {
+    Latex,
+    Index,
+}
+
+fn rerunfilecheck_request(message: &str) -> Option<RerunFilecheckRequest> {
+    let (file, tail) = message
+        .strip_prefix("Package rerunfilecheck Warning: File `")?
+        .rsplit_once("' has changed.")?;
+    if file.trim().is_empty() {
+        return None;
+    }
+    let request = tail
+        .split_whitespace()
+        .filter(|word| *word != "(rerunfilecheck)")
+        .collect::<Vec<_>>()
+        .join(" ");
+    match request.as_str() {
+        ""
+        | "Rerun."
+        | "Rerun to get outlines right."
+        | "Rerun to get bibliographical references right."
+        | "Rerun to get outlines right or use package `bookmark'." => {
+            Some(RerunFilecheckRequest::Latex)
+        }
+        "Rerun LaTeX/makeindex to get index right."
+        | "Rerun LaTeX/makeindex to get glossary right." => Some(RerunFilecheckRequest::Index),
+        _ => None,
+    }
+}
+
+pub(crate) fn required_index_tool(diagnostic: &Diagnostic) -> Option<&'static str> {
+    (diagnostic.severity == Some(DiagnosticSeverity::WARNING)
+        && matches!(
+            rerunfilecheck_request(&normalized_rerun_message(&diagnostic.message)),
+            Some(RerunFilecheckRequest::Index)
+        ))
+    .then_some("makeindex")
 }
 
 const STANDARD_RERUN_REQUESTS: &[&str] = &[
@@ -412,7 +431,8 @@ pub(crate) fn rerun_required(diagnostic: &Diagnostic) -> bool {
         return true;
     }
     let message = normalized_rerun_message(&diagnostic.message);
-    STANDARD_RERUN_REQUESTS.contains(&message.as_str()) || rerunfilecheck_request(&message)
+    STANDARD_RERUN_REQUESTS.contains(&message.as_str())
+        || rerunfilecheck_request(&message).is_some()
 }
 
 fn generated_line_note(line: u32) -> String {
@@ -575,6 +595,7 @@ pub fn compilation_analysis(
     let mut glyphs: BTreeMap<char, (DiagnosticSeverity, BTreeSet<String>)> = BTreeMap::new();
     let mut unsupported_unicode = BTreeSet::new();
     let mut bibliography_tools = BTreeSet::new();
+    let mut index_tools = BTreeSet::new();
     let mut font_substitutions = BTreeSet::new();
     let mut font_size_substitutions = BTreeSet::new();
     let mut box_warnings: BTreeMap<_, BoxSummary<'_>> = BTreeMap::new();
@@ -705,6 +726,9 @@ pub fn compilation_analysis(
         if let Some(tool) = required_bibliography_tool(diagnostic) {
             bibliography_tools.insert(tool);
         }
+        if let Some(tool) = required_index_tool(diagnostic) {
+            index_tools.insert(tool);
+        }
         if let Some((citation, key)) = undefined_reference_key(&diagnostic.message) {
             let keys = if citation {
                 &mut citations
@@ -758,6 +782,7 @@ pub fn compilation_analysis(
     serde_json::json!({
         "rerunRequired": rerun,
         "requiredBibliographyTools": bibliography_tools,
+        "requiredIndexTools": index_tools,
         "unresolvedReferences": references,
         "unresolvedCitations": citations,
         "unresolvedDestinations": missing_destinations,
@@ -3526,14 +3551,9 @@ fn wrapped_message(
     let mut message = if rerunfilecheck {
         // A filename can continue with parentheses that look like a source
         // announcement. Only consume them when the full warning is confirmed.
-        byte_wrapped_literal_message::<60>(
-            root,
-            lines,
-            separator_lines,
-            i,
-            initial,
-            rerunfilecheck_request,
-        )
+        byte_wrapped_literal_message::<60>(root, lines, separator_lines, i, initial, |message| {
+            rerunfilecheck_request(message).is_some()
+        })
         .unwrap_or_else(|| initial.to_owned())
     } else if reference || standard_rerun.is_some() {
         initial.to_owned()

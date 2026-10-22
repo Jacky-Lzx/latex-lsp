@@ -69,9 +69,11 @@ pub fn code_actions(
     actions
 }
 
-// A TeX-only invocation cannot satisfy a request for BibTeX or Biber.
+// Index processing needs a separate workflow. Only the known latexmk cycle
+// can also satisfy bibliography requests before running TeX again.
 fn rebuild_warning(config: &crate::config::BuildConfig, diagnostic: &Diagnostic) -> bool {
     crate::build_log::rerun_required(diagnostic)
+        && crate::build_log::required_index_tool(diagnostic).is_none()
         && (crate::build_log::required_bibliography_tool(diagnostic).is_none()
             || config.rebuilds_bibliography())
 }

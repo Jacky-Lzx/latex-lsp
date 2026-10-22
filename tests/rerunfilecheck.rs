@@ -12,9 +12,14 @@ const CONFIRMED: &[&str] = &[
     "Package rerunfilecheck Warning: File `main.out' has changed.\n(rerunfilecheck) Rerun to get outlines right\n(rerunfilecheck) or use package `bookmark'.",
 ];
 
-const UNCONFIRMED: &[&str] = &[
+const INDEX_REQUESTS: &[&str] = &[
     "Package rerunfilecheck Warning: File `main.idx' has changed.\n\n(rerunfilecheck) Rerun LaTeX/makeindex to get index right.",
     "Package rerunfilecheck Warning: File `main.glo' has changed.\n\n(rerunfilecheck) Rerun LaTeX/makeindex to get glossary right.",
+    "Package rerunfilecheck Warning: File `main.out' has changed. Rerun LaTeX/makeindex to get index right.",
+    "Package rerunfilecheck Warning: File `main.out' has changed. Rerun LaTeX/makeindex to get glossary right.",
+];
+
+const UNCONFIRMED: &[&str] = &[
     "Package rerunfilecheck Warning: File `main.brf' has changed.\n\n(rerunfilecheck) Unknown request.",
     "Package rerunfilecheck Warning: File `main.brf' has changed. Rerun to get bibliographical references right",
     "Package rerunfilecheck Warning: File `main.brf' has changed. Rerun to get bibliographical references right. Extra text.",
@@ -29,8 +34,6 @@ const UNCONFIRMED: &[&str] = &[
     "Package rerunfilecheck Warning: File `main.out' has changed. Rerun to get outlines right or use package `bookmark'. Extra text.",
     "Package rerunfilecheck Warning: File `main.out' has changed.\n(rerunfilecheck) Example only.",
     "Package rerunfilecheck Warning: File `main.track' has changed. Rerun.\n(rerunfilecheck) Extra text.",
-    "Package rerunfilecheck Warning: File `main.out' has changed. Rerun LaTeX/makeindex to get index right.",
-    "Package rerunfilecheck Warning: File `main.out' has changed. Rerun LaTeX/makeindex to get glossary right.",
     "Package local Warning: File `main.track' has changed. Rerun.",
     "Class rerunfilecheck Warning: File `main.track' has changed. Rerun.",
 ];
@@ -69,7 +72,11 @@ fn file_change_requests_agree_in_analysis_and_rebuild_actions() {
     )
     .unwrap();
     let root = Url::from_file_path(&main).unwrap();
-    for (messages, expected) in [(CONFIRMED, true), (UNCONFIRMED, false)] {
+    for (messages, expected, available) in [
+        (CONFIRMED, true, true),
+        (INDEX_REQUESTS, true, false),
+        (UNCONFIRMED, false, false),
+    ] {
         for message in messages {
             let diagnostics = build_log::parse(&main, &format!("(./main.tex\n{message}\n)\n"));
             assert_eq!(diagnostics.values().flatten().count(), 1, "{message}");
@@ -81,10 +88,10 @@ fn file_change_requests_agree_in_analysis_and_rebuild_actions() {
             let rebuilds = actions(&root, &diagnostics);
             assert_eq!(
                 rebuilds.len(),
-                usize::from(expected),
+                usize::from(available),
                 "{message}: {rebuilds:?}"
             );
-            if expected {
+            if available {
                 let CodeActionOrCommand::CodeAction(action) = &rebuilds[0] else {
                     panic!("{rebuilds:?}")
                 };
@@ -530,10 +537,19 @@ fn real_index_and_glossary_requests_do_not_offer_a_tex_only_rebuild() {
                         );
                     }
                 }
+                let analysis = build_log::compilation_analysis(&diagnostics, false);
                 assert_eq!(
-                    build_log::compilation_analysis(&diagnostics, false)["rerunRequired"],
-                    false,
+                    analysis["rerunRequired"],
+                    pass == 1,
                     "{engine}/{width}/{pass}: {diagnostics:?}"
+                );
+                assert_eq!(
+                    analysis["requiredIndexTools"],
+                    if pass == 1 {
+                        serde_json::json!(["makeindex"])
+                    } else {
+                        serde_json::json!([])
+                    }
                 );
                 assert!(
                     actions(&root, &diagnostics).is_empty(),
