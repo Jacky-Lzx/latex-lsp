@@ -14160,6 +14160,9 @@ fn discovered_biber_databases_with_arbitrary_suffixes_reject_unsaved_and_changed
 fn literal_build_fixes_recheck_cross_file_macro_changes_without_a_main_version_change() {
     for literals in [false, true] {
         for replacement in [
+            r"\def\original#1#2{&}\let\bad\original",
+            r"\def\original#1#2{&}\NewCommandCopy{\bad}{\original}",
+            r"\def\original#1#2{&}\csletcs{bad}{original}",
             r"\def\bad#1#2{&}",
             r"\def\bad{}\def\bad#1#2{&}",
             r"\def\other#1#2{&}\def\bad{}\def\bad{\other}",

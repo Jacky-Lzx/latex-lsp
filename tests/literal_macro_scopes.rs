@@ -57,6 +57,97 @@ fn hash_arguments_require_declared_macros_and_keep_executed_box_contents_precise
 }
 
 #[test]
+fn copied_commands_preserve_possible_bare_and_delimited_arguments() {
+    for (definition, call) in [
+        (r"\def\consume#1#2{&}\let\bad\consume", r"\bad x&"),
+        (
+            r"\def\consume#1#2{&}\expandafter\let\csname bad\endcsname\consume",
+            r"\bad x&",
+        ),
+        (r"\def\consume#1#2{&}\let\bad=\consume", r"\bad x&"),
+        (r"\def\consume#1&{&}\let\bad\consume", r"\bad x&"),
+        (
+            r"\def\consume#1#2{&}\NewCommandCopy{\bad}{\consume}",
+            r"\bad x&",
+        ),
+        (r"\def\consume#1#2{&}\cslet{bad}\consume", r"\bad x&"),
+        (r"\def\consume#1#2{&}\cslet{bad}{\consume}", r"\bad x&"),
+        (r"\def\consume#1#2{&}\letcs\bad{consume}", r"\bad x&"),
+        (r"\def\consume#1#2{&}\csletcs{bad}{consume}", r"\bad x&"),
+        (
+            r"\def\consume#1#2{&}\let\bad\consume\def\consume{}",
+            r"\bad x&",
+        ),
+        (
+            r"\def\consume#1#2{&}\let\middle\consume\let\bad\middle",
+            r"\bad x&",
+        ),
+        (
+            r"\newenvironment{original}[2]{&}{}\NewEnvironmentCopy{bad}{original}",
+            r"\begin{bad}x&\end{bad}",
+        ),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let row = format!("\\begin{{tabular}}{{ll}}A & B{call} C\\\\\\end{{tabular}}");
+        let source = format!("\\input{{macros}}\n{row}\n");
+        let prefix = &row[..row.rfind('&').unwrap() + 1];
+        let log = format!("(./main.tex\n(./macros.tex)\n! Extra alignment tab has been changed to \\cr.\n<recently read> \\endtemplate\n\nl.2 {prefix}\n                 following source\n\n)\n");
+        let outcome = build_fixture(directory.path(), &source, definition, &log);
+        let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+        assert!(
+            outcome.diagnostics[&uri][0].code.is_none(),
+            "{definition}: {:?}",
+            outcome.diagnostics
+        );
+    }
+}
+
+#[test]
+fn copying_a_source_is_not_an_invocation_and_completed_copies_keep_tab_repairs() {
+    for copy in [
+        r"\let\bad\consume",
+        r"\let\bad=\consume",
+        r"\NewCommandCopy{\bad}{\consume}",
+        r"\cslet{bad}\consume",
+        r"\letcs\bad{consume}",
+        r"\csletcs{bad}{consume}",
+    ] {
+        for call in ["x&", r"\bad{x}{y}&"] {
+            let directory = tempfile::tempdir().unwrap();
+            let row = format!("\\begin{{tabular}}{{ll}}A & B\\def\\consume#1#2{{}}{copy} {call} C\\\\\\end{{tabular}}");
+            let source = format!("{row}\n");
+            let prefix = &row[..row.rfind('&').unwrap() + 1];
+            let log = format!("(./main.tex\n! Extra alignment tab has been changed to \\cr.\n<recently read> \\endtemplate\n\nl.1 {prefix}\n                 following source\n\n)\n");
+            let outcome = build_fixture(directory.path(), &source, "", &log);
+            let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+            let item = outcome.diagnostics[&uri][0].clone();
+            assert_eq!(
+                item.code,
+                Some(NumberOrString::String("extra-alignment-tab".into())),
+                "{copy}/{call}: {item:?}"
+            );
+            let mut workspace = latex_lsp::workspace::Workspace {
+                code_action_literals: true,
+                ..Default::default()
+            };
+            workspace.add_root(directory.path().into());
+            workspace.open(uri.clone(), source, 9);
+            workspace
+                .build_diagnostic_sources
+                .insert(uri.clone(), outcome.diagnostic_sources);
+            workspace
+                .build_diagnostics
+                .insert(uri.clone(), outcome.diagnostics);
+            assert_eq!(
+                selected_actions(&workspace, &uri, &item).len(),
+                1,
+                "{copy}/{call}"
+            );
+        }
+    }
+}
+
+#[test]
 fn repeated_declarations_preserve_possible_bare_delimited_and_forwarded_arguments() {
     for (definition, call) in [
         (r"\def\bad{}\def\bad#1#2{&}", r"\bad x&"),
@@ -381,6 +472,141 @@ fn real_engine_config(
         executable: compiler.to_string_lossy().into(),
         arguments: Some(arguments),
         ..Default::default()
+    }
+}
+
+#[test]
+#[ignore = "requires pdfLaTeX, XeLaTeX and LuaLaTeX"]
+fn real_copied_commands_exclude_arguments_and_repair_following_literal_tabs() {
+    for engine in ["pdflatex", "xelatex", "lualatex"] {
+        for width in [60, 79] {
+            for numbered in [false, true] {
+                let directory = tempfile::tempdir().unwrap();
+                let root = directory.path();
+                let main = root.join("main.tex");
+                let macros = root.join("macros.tex");
+                let child = root.join("child.tex");
+                let config = real_engine_config(root, engine, width, numbered);
+                std::fs::write(&main,"\\documentclass{article}\n\\usepackage{etoolbox}\n\\input{macros}\n\\begin{document}\n\\input{child}\n\\end{document}\n").unwrap();
+                for (definition, call) in [
+                    (r"\def\consume#1#2{&}\let\bad\consume", r"\bad x&"),
+                    (r"\def\consume#1&{&}\let\bad\consume", r"\bad x&"),
+                    (
+                        r"\def\consume#1#2{&}\NewCommandCopy{\bad}{\consume}",
+                        r"\bad x&",
+                    ),
+                    (r"\def\consume#1#2{&}\cslet{bad}\consume", r"\bad x&"),
+                    (r"\def\consume#1#2{&}\letcs\bad{consume}", r"\bad x&"),
+                    (r"\def\consume#1#2{&}\csletcs{bad}{consume}", r"\bad x&"),
+                    (
+                        r"\def\consume#1#2{&}\let\bad\consume\def\consume{}",
+                        r"\bad x&",
+                    ),
+                    (
+                        r"\newenvironment{original}[2]{&}{}\NewEnvironmentCopy{bad}{original}",
+                        r"\begin{bad}x&\end{bad}",
+                    ),
+                    (
+                        r"\newenvironment{original}[2]{&}{}\let\bad\begin\def\begin{}\let\begin\bad",
+                        r"\bad{original}x&\end{original}",
+                    ),
+                ] {
+                    std::fs::write(&macros, definition).unwrap();
+                    std::fs::write(
+                        &child,
+                        format!("\\begin{{tabular}}{{ll}}A & B{call} C\\\\\\end{{tabular}}\n"),
+                    )
+                    .unwrap();
+                    let outcome = build::run(&main, &config, &Default::default());
+                    assert_eq!(
+                        outcome.status, "error",
+                        "{engine}/{width}/{numbered}/{definition}: {}",
+                        outcome.output
+                    );
+                    let errors: Vec<_> = outcome
+                        .diagnostics
+                        .values()
+                        .flatten()
+                        .filter(|item| item.message.starts_with("Extra alignment tab"))
+                        .collect();
+                    assert_eq!(
+                        errors.len(),
+                        1,
+                        "{engine}/{width}/{numbered}/{definition}: {:?}",
+                        outcome.diagnostics
+                    );
+                    assert!(errors[0].code.is_none(), "{definition}: {:?}", errors[0]);
+                }
+                for (definition, call) in [
+                    (r"\def\consume#1#2{}\let\bad\consume", r"\bad{x}{y}&"),
+                    (
+                        r"\def\consume#1#2{}\NewCommandCopy{\bad}{\consume}",
+                        r"\bad{x}{y}&",
+                    ),
+                    ("", r"\def\consume#1#2{}\let\bad\consume x&"),
+                ] {
+                    std::fs::write(&macros, definition).unwrap();
+                    let source =
+                        format!("\\begin{{tabular}}{{ll}}A & B{call} C\\\\\\end{{tabular}}\n");
+                    std::fs::write(&child, &source).unwrap();
+                    let outcome = build::run(&main, &config, &Default::default());
+                    let uri = Url::from_file_path(&child).unwrap();
+                    let item = outcome.diagnostics[&uri]
+                        .iter()
+                        .find(|item| {
+                            item.code == Some(NumberOrString::String("extra-alignment-tab".into()))
+                        })
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "{engine}/{width}/{numbered}/{call}: {:?}",
+                                outcome.diagnostics
+                            )
+                        })
+                        .clone();
+                    let main_uri = Url::from_file_path(&main).unwrap();
+                    let mut workspace = latex_lsp::workspace::Workspace {
+                        code_action_literals: true,
+                        versioned_edits: true,
+                        ..Default::default()
+                    };
+                    workspace.add_root(root.into());
+                    workspace.open(uri.clone(), source.clone(), 9);
+                    workspace
+                        .build_diagnostic_sources
+                        .insert(main_uri.clone(), outcome.diagnostic_sources);
+                    workspace
+                        .build_diagnostics
+                        .insert(main_uri, outcome.diagnostics);
+                    let actions = selected_actions(&workspace, &uri, &item);
+                    assert_eq!(actions.len(), 1, "{definition}/{call}");
+                    let CodeActionOrCommand::CodeAction(action) = &actions[0] else {
+                        panic!()
+                    };
+                    let Some(DocumentChanges::Edits(changes)) =
+                        action.edit.as_ref().unwrap().document_changes.as_ref()
+                    else {
+                        panic!()
+                    };
+                    let OneOf::Left(edit) = &changes[0].edits[0] else {
+                        panic!()
+                    };
+                    let text = latex_lsp::text::Text::new(source.clone());
+                    let mut fixed = source;
+                    fixed.replace_range(
+                        text.offset(edit.range.start).unwrap()
+                            ..text.offset(edit.range.end).unwrap(),
+                        &edit.new_text,
+                    );
+                    std::fs::write(&child, fixed).unwrap();
+                    let repaired = build::run(&main, &config, &Default::default());
+                    assert_eq!(
+                        repaired.status, "success",
+                        "{engine}/{width}/{numbered}/{definition}/{call}: {}",
+                        repaired.output
+                    );
+                }
+            }
+        }
     }
 }
 

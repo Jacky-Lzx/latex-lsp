@@ -1182,6 +1182,63 @@ fn source_alias(source: &str, parsed: &syntax::Syntax, entry: &Entry) -> Option<
     body_alias(source, &source_alias_body(source, parsed, entry)?)
 }
 
+/// Read a static copy's source and operand end. A copy captures a meaning;
+/// possible source shapes do not certify that meaning or a late-bound alias.
+fn literal_copy_target(
+    source: &str,
+    parsed: &syntax::Syntax,
+    entry: &Entry,
+    environment: bool,
+) -> Option<(String, usize)> {
+    let declaration = entry.detail.strip_prefix("Defined with \\")?;
+    let named = if environment {
+        syntax::declares_environment_copy(declaration).then_some(true)?
+    } else {
+        match declaration {
+            "let" | "cslet" => false,
+            "letcs" | "csletcs" => true,
+            name if syntax::declares_command_copy(name) => false,
+            _ => return None,
+        }
+    };
+    let mut at = if declaration == "let" {
+        // Primitive let does not accept a braced destination or source. Do
+        // not mistake a copied closing brace for the destination's delimiter.
+        let mut at = syntax::skip_space(source, entry.span.end);
+        if source.as_bytes().get(entry.span.start) != Some(&b'\\') {
+            at = parsed
+                .commands
+                .iter()
+                .find(|command| command.span.start == at && command.name == "endcsname")?
+                .span
+                .end;
+        }
+        at = syntax::skip_space(source, at);
+        if source.as_bytes().get(at) == Some(&b'=') {
+            at = syntax::skip_space(source, at + 1);
+        }
+        at
+    } else {
+        definition_arguments_start(source, parsed, entry, environment)?
+    };
+    if named {
+        let (argument, end) = syntax::group(source, at, b'{', b'}')?;
+        return syntax::is_static_key(&argument.value).then_some((argument.value, end));
+    }
+    if declaration != "let" {
+        if let Some((argument, end)) = syntax::group(source, at, b'{', b'}') {
+            at = syntax::skip_space(source, argument.span.start);
+            let word = syntax::control_word(source, at)?;
+            if syntax::skip_space(source, word.end) != argument.span.end {
+                return None;
+            }
+            return Some((source[word.start + 1..word.end].into(), end));
+        }
+    }
+    let word = syntax::control_word(source, at)?;
+    Some((source[word.start + 1..word.end].into(), word.end))
+}
+
 /// Tokens declaring an unexpanded, argument-free file loader alias.
 /// Its body forwards the loader rather than performing a dynamic file load.
 pub(crate) fn file_load_alias_body_positions(
@@ -1492,6 +1549,7 @@ enum LiteralOperands {
     Signature(Signature),
     Tex(TexOperands),
     Alias(String),
+    Copy(String),
     Unknown,
 }
 
@@ -1717,6 +1775,8 @@ impl<'a> CommandSignatures<'a> {
                 let bodies = environment
                     .then(|| environment_bodies(source, parsed, entry))
                     .flatten();
+                let copied =
+                    literal_copy_target(source, parsed, entry, environment).map(|(name, _)| name);
                 let alias = signature
                     .as_ref()
                     .filter(|s| s.parameters.is_empty())
@@ -1744,13 +1804,20 @@ impl<'a> CommandSignatures<'a> {
                     let alias = ending
                         .as_ref()
                         .and_then(|_| bodies.as_ref().and_then(|(_, end)| body_alias(source, end)));
-                    insert_literal_operands(
-                        &mut literal_operands,
-                        Cow::Owned(name.clone()),
-                        ending.as_ref(),
-                        None,
-                        alias.as_deref(),
-                    );
+                    if let Some(target) = &copied {
+                        literal_operands
+                            .entry(Cow::Owned(name.clone()))
+                            .or_insert_with(Vec::new)
+                            .push(LiteralOperands::Copy(format!("end{target}")));
+                    } else {
+                        insert_literal_operands(
+                            &mut literal_operands,
+                            Cow::Owned(name.clone()),
+                            ending.as_ref(),
+                            None,
+                            alias.as_deref(),
+                        );
+                    }
                     insert_command_signature(
                         &mut local,
                         &mut tex_operands,
@@ -1770,13 +1837,20 @@ impl<'a> CommandSignatures<'a> {
                 if expanded && alias.is_some() {
                     signature = None;
                 }
-                insert_literal_operands(
-                    &mut literal_operands,
-                    Cow::Borrowed(entry.name.as_str()),
-                    signature.as_ref(),
-                    tex.as_ref(),
-                    alias.as_deref().filter(|_| !expanded),
-                );
+                if let Some(target) = copied {
+                    literal_operands
+                        .entry(Cow::Borrowed(entry.name.as_str()))
+                        .or_insert_with(Vec::new)
+                        .push(LiteralOperands::Copy(target));
+                } else {
+                    insert_literal_operands(
+                        &mut literal_operands,
+                        Cow::Borrowed(entry.name.as_str()),
+                        signature.as_ref(),
+                        tex.as_ref(),
+                        alias.as_deref().filter(|_| !expanded),
+                    );
+                }
                 insert_command_signature(
                     &mut local,
                     &mut tex_operands,
@@ -2387,6 +2461,21 @@ impl<'a> CommandSignatures<'a> {
                 deferred.push(entry.span.start..end);
             }
         }
+        for (entry, environment) in parsed
+            .definitions
+            .iter()
+            .map(|entry| (entry, false))
+            .chain(parsed.environments.iter().map(|entry| (entry, true)))
+        {
+            if !self
+                .local
+                .contains_key(entry.detail.strip_prefix("Defined with \\").unwrap_or(""))
+            {
+                if let Some((_, end)) = literal_copy_target(source, parsed, entry, environment) {
+                    deferred.push(entry.span.start..end);
+                }
+            }
+        }
         let empty = BTreeSet::new();
         for (index, command) in parsed
             .commands
@@ -2412,28 +2501,33 @@ impl<'a> CommandSignatures<'a> {
             {
                 continue;
             }
-            let mut pending = vec![(name.to_owned(), after, spaces)];
+            let mut pending = vec![(name.to_owned(), after, spaces, false)];
             let mut visited = BTreeSet::new();
             // Do not skip calls merely consumed by another possible arity:
             // a different declaration may leave that call executable.
-            while let Some((name, after, spaces)) = pending.pop() {
-                if !visited.insert((name.clone(), after, spaces)) {
+            while let Some((name, after, spaces, copied)) = pending.pop() {
+                if !visited.insert((name.clone(), after, spaces, copied)) {
                     continue;
                 }
-                if name == "begin" && !self.local.contains_key("begin") {
+                let declared = self.literal_operands.contains_key(name.as_str());
+                if name == "begin" && (copied || !self.local.contains_key("begin")) {
                     if let Some(argument) = syntax::environment_name_argument(source, after) {
                         if self.literal_operands.contains_key(argument.value.as_str()) {
-                            pending.push((argument.value, argument.outer_span.end, false));
+                            pending.push((argument.value, argument.outer_span.end, false, false));
                         }
                     }
-                    continue;
-                }
-                let mut consumed = BTreeSet::new();
-                if !self.literal_operands.contains_key(name.as_str()) {
-                    if name == "halign" && !self.local.contains_key("halign") {
+                    if !declared {
                         continue;
                     }
-                    if let Some(signature) = operand_builtin(&name) {
+                }
+                let mut consumed = BTreeSet::new();
+                if copied || !declared {
+                    if name == "halign" && (copied || !self.local.contains_key("halign")) {
+                        // A captured primitive alignment executes its body.
+                        if !declared {
+                            continue;
+                        }
+                    } else if let Some(signature) = operand_builtin(&name) {
                         let opaque = matches!(
                             name.as_str(),
                             "detokenize"
@@ -2452,7 +2546,7 @@ impl<'a> CommandSignatures<'a> {
                             Some(at),
                             &mut consumed,
                         );
-                    } else {
+                    } else if !declared {
                         unknown_argument_token(source, after, parsed, Some(at), &mut consumed);
                     }
                     if consumed.contains(&at) {
@@ -2467,7 +2561,10 @@ impl<'a> CommandSignatures<'a> {
                 {
                     match operands {
                         LiteralOperands::Alias(target) => {
-                            pending.push((target.clone(), after, spaces))
+                            pending.push((target.clone(), after, spaces, false))
+                        }
+                        LiteralOperands::Copy(target) => {
+                            pending.push((target.clone(), after, spaces, true))
                         }
                         LiteralOperands::Tex(operands) => {
                             if operands
@@ -2524,6 +2621,21 @@ impl<'a> CommandSignatures<'a> {
                 // In particular a delimiter control must
                 // not consume the first invocation following the definition.
                 mark_operand_tokens(parsed, entry.span.start, end, literal, &mut result);
+            }
+        }
+        for (entry, environment) in parsed
+            .definitions
+            .iter()
+            .map(|entry| (entry, false))
+            .chain(parsed.environments.iter().map(|entry| (entry, true)))
+        {
+            if !self
+                .local
+                .contains_key(entry.detail.strip_prefix("Defined with \\").unwrap_or(""))
+            {
+                if let Some((_, end)) = literal_copy_target(source, parsed, entry, environment) {
+                    mark_operand_tokens(parsed, entry.span.start, end, literal, &mut result);
+                }
             }
         }
         for (index, command) in parsed.commands.iter().enumerate() {
@@ -3738,6 +3850,87 @@ pub fn help(workspace: &Workspace, uri: &Url, position: Position) -> Option<Sign
 mod tex_operand_tests {
     use super::*;
     use crate::text::Text;
+
+    #[test]
+    fn copied_literal_candidates_capture_builtin_and_previous_source_shapes() {
+        for (source, expected) in [
+            (
+                r"\def\original#1#2{}\let\bad\original\def\original{}\bad x&",
+                true,
+            ),
+            (
+                r"\newenvironment{bad}[2]{}{}\let\start\begin\def\begin{}\let\begin\start\start{bad}x&",
+                true,
+            ),
+            (
+                r"\def\consume#1#2{}\def\bad{}\def\let{}\let\bad\consume x&",
+                true,
+            ),
+            (r"\let\first\second\let\second\first\first x&", false),
+            (r"\def\original{}\let\bad\original\bad{x}{y}&", false),
+        ] {
+            let parsed = syntax::Syntax::latex(&Text::new(source.into()));
+            let signatures = CommandSignatures::new([(source, &parsed)]);
+            assert_eq!(
+                signatures.literal_is_argument(source, &parsed, source.rfind('&').unwrap()),
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn copied_sources_are_operands_and_do_not_execute_file_loads() {
+        for copy in [
+            r"\let\bad\input",
+            r"\let\bad=\input",
+            r"\NewCommandCopy{\bad}{\input}",
+            r"\cslet{bad}\input",
+            r"\letcs\bad{input}",
+            r"\csletcs{bad}{input}",
+        ] {
+            let source = format!(r"{copy}{{wrong}}\input{{right}}");
+            let parsed = syntax::Syntax::latex(&Text::new(source.clone()));
+            let signatures = CommandSignatures::source_context([(source.as_str(), &parsed)]);
+            let active = signatures.source_command_positions(&source, &parsed);
+            for command in parsed
+                .commands
+                .iter()
+                .filter(|command| command.name == "input")
+            {
+                assert_eq!(
+                    active.contains(&command.span.start),
+                    command
+                        .argument
+                        .as_ref()
+                        .is_some_and(|argument| argument.value == "right"),
+                    "{source}: {command:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn copy_sources_require_one_static_operand_and_keep_primitive_braces_literal() {
+        for source in [
+            r"\let\bad{\source}",
+            r"\let\bad}\source",
+            r"\NewCommandCopy{\bad}{\source\other}",
+            r"\csletcs{bad}{\dynamic}",
+            r"\letcs\bad{source\dynamic}",
+        ] {
+            let parsed = syntax::Syntax::latex(&Text::new(source.into()));
+            let entry = parsed
+                .definitions
+                .iter()
+                .find(|entry| entry.name == "bad")
+                .unwrap();
+            assert!(
+                literal_copy_target(source, &parsed, entry, false).is_none(),
+                "{source}"
+            );
+        }
+    }
 
     #[test]
     fn paused_literal_candidates_preserve_complete_arguments_without_certifying_meanings() {
