@@ -15529,9 +15529,13 @@ fn literal_build_fixes_recheck_cross_file_macro_changes_without_a_main_version_c
 #[test]
 #[cfg(unix)]
 fn right_delimiter_fixes_publish_child_ranges_preserve_comments_and_clear_over_stdio() {
-    for missing in [false, true] {
+    for kind in 0..3 {
+        let missing = kind == 1;
+        let operand = kind == 2;
         for literals in [false, true] {
-            let code = if missing {
+            let code = if operand {
+                "missing-delimiter-operand"
+            } else if missing {
                 "missing-right-delimiter"
             } else {
                 "unmatched-right-delimiter"
@@ -15549,7 +15553,9 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
             let (mut server, directory, main) =
                 fake_build_server_capabilities(script, false, capabilities);
             let child = Url::from_file_path(directory.path().join("child.tex")).unwrap();
-            let source = if missing {
+            let source = if operand {
+                "$\\left% keep\n a\\right)$\n"
+            } else if missing {
                 "$\\left(a% keep\n$ and trailing\n"
             } else {
                 "$\\alpha\\right% keep\n.b$\n"
@@ -15565,7 +15571,9 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
         );
             std::fs::write(
             directory.path().join("fixture.log"),
-            if missing {
+            if operand {
+                "(./main.tex\n(./child.tex\n./child.tex:2: Missing delimiter (. inserted).\n<to be read again>\n                   a\nl.2  a\n      \\right)$\n\n)\n)\n"
+            } else if missing {
                 "(./main.tex\n(./child.tex\n./child.tex:2: Missing \\right. inserted.\n<inserted text>\n                \\right .\nl.2 $\n      and trailing\n\n)\n)\n"
             } else {
                 "(./main.tex\n(./child.tex\n./child.tex:2: Extra \\right.\nl.2 .\n      b$\n\n)\n)\n"
@@ -15596,7 +15604,9 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
                 .unwrap();
             assert_eq!(
                 diagnostic["range"],
-                if missing {
+                if operand {
+                    json!({"start":{"line":0,"character":1},"end":{"line":0,"character":6}})
+                } else if missing {
                     json!({"start":{"line":1,"character":0},"end":{"line":1,"character":1}})
                 } else {
                     json!({"start":{"line":0,"character":7},"end":{"line":0,"character":13}})
@@ -15604,15 +15614,29 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
             );
             assert_eq!(diagnostic["data"]["sourceLine"], 1);
             assert_eq!(
-                diagnostic["data"][if missing { "closingToken" } else { "delimiter" }],
-                if missing { "$" } else { "." }
+                diagnostic["data"][if operand {
+                    "recoveryToken"
+                } else if missing {
+                    "closingToken"
+                } else {
+                    "delimiter"
+                }],
+                if operand {
+                    "a"
+                } else if missing {
+                    "$"
+                } else {
+                    "."
+                }
             );
             let params = json!({"textDocument":{"uri":child},"range":diagnostic["range"],"context":{"diagnostics":[diagnostic],"only":["quickfix"]}});
             let actions = server.request(3, "textDocument/codeAction", params.clone());
             assert_eq!(actions.as_array().unwrap().len(), 1, "{actions}");
             assert_eq!(
                 actions[0]["title"],
-                if missing {
+                if operand {
+                    r"Insert invisible delimiter after '\left'"
+                } else if missing {
                     r"Insert invisible '\right.'"
                 } else {
                     r"Remove unmatched '\right'"
@@ -15642,7 +15666,7 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
                 document["edits"].clone(),
             )
             .unwrap();
-            assert_eq!(edits.len(), if missing { 1 } else { 2 });
+            assert_eq!(edits.len(), if missing || operand { 1 } else { 2 });
             edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
             let fixed = latex_lsp::text::Text::new(source.into())
                 .changed(
@@ -15661,7 +15685,9 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
                 .source;
             assert_eq!(
                 fixed,
-                if missing {
+                if operand {
+                    "$\\left.% keep\n a\\right)$\n"
+                } else if missing {
                     "$\\left(a% keep\n\\right.$ and trailing\n"
                 } else {
                     "$\\alpha{}% keep\nb$\n"

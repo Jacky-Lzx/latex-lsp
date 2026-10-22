@@ -10,6 +10,7 @@ pub mod colors;
 mod conditionals;
 pub mod config;
 mod counters;
+mod delimiter_operands;
 pub mod diagnostic;
 pub mod dispatch;
 pub mod editing;

@@ -59,7 +59,7 @@ pub(crate) fn expansion_frame(line: &str) -> Option<&str> {
     .then_some(name)
 }
 
-fn source_end(text: &Text, line: u32, context: &str) -> Option<usize> {
+pub(crate) fn source_end(text: &Text, line: u32, context: &str) -> Option<usize> {
     let prefix = context.trim_end();
     if prefix.is_empty() || prefix.len() > 4096 {
         return None;

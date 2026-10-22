@@ -1515,6 +1515,7 @@ struct PackageOptions {
 struct ErrorContext<'a> {
     source: &'a str,
     right_delimiter_frame: Option<&'a str>,
+    delimiter_operand_token: Option<&'a str>,
     package_options: Option<PackageOptions>,
     name_frame: Option<&'a str>,
     macro_context: Option<InvocationContext<'a>>,
@@ -1526,6 +1527,7 @@ impl<'a> ErrorContext<'a> {
         Self {
             source,
             right_delimiter_frame: None,
+            delimiter_operand_token: None,
             package_options: None,
             name_frame: None,
             macro_context: None,
@@ -1703,6 +1705,16 @@ fn error_context<'a>(
     if right_delimiter_frame.is_some() {
         (index, line) = context.next()?;
     }
+    let delimiter_operand_token = if message == crate::delimiter_operands::ERROR {
+        if line.trim() != "<to be read again>" {
+            return None;
+        }
+        let token = crate::delimiter_operands::recovery_token(context.next()?.1)?;
+        (index, line) = context.next()?;
+        Some(token)
+    } else {
+        None
+    };
     if message == crate::special_characters::EXTRA_ALIGNMENT_TAB {
         // LaTeX alignments report the internal end-template token; raw TeX
         // alignments can report only the template. Expanded user frames must
@@ -1822,6 +1834,7 @@ fn error_context<'a>(
         .then(|| ErrorContext {
             source: prefix,
             right_delimiter_frame,
+            delimiter_operand_token,
             package_options: package_option_details(lines, index + 1, message),
             name_frame,
             macro_context: None,
@@ -1915,6 +1928,59 @@ fn following_error_location<'a>(lines: &[&'a str], start: usize) -> Option<(u32,
         }
     }
     None
+}
+
+/// The second source-echo line and TeX's exact delimiter help are diagnostic
+/// data. Their parentheses must not enter or leave a source file. Commit only
+/// the immediate echo continuation and complete, known help paragraphs.
+fn delimiter_error_tail(lines: &[&str], start: usize, number: u32) -> Option<usize> {
+    let header = format!("l.{number} ");
+    let mut echo = None;
+    for (index, line) in lines.iter().enumerate().skip(start).take(16) {
+        if line.trim_start().starts_with(&header) {
+            echo = Some(index);
+            break;
+        }
+        if message_boundary(line) || line.trim_start().starts_with('(') {
+            return None;
+        }
+    }
+    let echo = echo?;
+    let mut end = echo;
+    if let Some(next) = lines.get(echo + 1) {
+        let indent = next.bytes().take_while(|byte| *byte == b' ').count();
+        if next.is_empty()
+            || indent > 0 && (indent == lines[echo].len() || indent == lines[echo].chars().count())
+        {
+            end += 1;
+        }
+    }
+    let mut help = OptionHelp {
+        lines: lines.get(end + 1..)?,
+        index: 0,
+        bytes: 0,
+    };
+    let complete = (|| {
+        help.expect(r"I was expecting to see something like `(' or `\{' or")?;
+        help.expect(r"`\}' here. If you typed, e.g., `{' instead of `\{', you")?;
+        help.expect("should probably delete the `{' by typing `1' now, so that")?;
+        let mut period = help;
+        if period
+            .expect("braces don't get unbalanced. Otherwise just proceed.")
+            .is_some()
+        {
+            help = period;
+        } else {
+            help.expect("braces don't get unbalanced. Otherwise just proceed")?;
+        }
+        help.expect(r"Acceptable delimiters are characters whose \delcode is")?;
+        help.expect(r"nonnegative, or you can use `\delimiter <delimiter code>'.")
+    })();
+    Some(if complete.is_some() {
+        end + help.index
+    } else {
+        end
+    })
 }
 
 fn uninterrupted_file_prompt(lines: &[&str], start: usize, end: usize) -> bool {
@@ -2863,6 +2929,24 @@ fn emit_with_context(
         .as_ref()
         .map(|boundary| text.range(boundary.start, boundary.end));
     ranges.extend(missing_right_range);
+    let delimiter_operand = (message == crate::delimiter_operands::ERROR
+        && severity == DiagnosticSeverity::ERROR
+        && !project_stale)
+        .then(|| {
+            crate::delimiter_operands::invocation(
+                &text,
+                &crate::syntax::Syntax::latex(&text),
+                line,
+                context?,
+                error.as_ref()?.delimiter_operand_token?,
+                macro_context.map(|context| &context.macros.signatures),
+            )
+        })
+        .flatten();
+    let delimiter_operand_range = delimiter_operand
+        .as_ref()
+        .map(|invocation| text.range(invocation.command.start, invocation.command.end));
+    ranges.extend(delimiter_operand_range);
     let unsupported_unicode =
         unsupported_unicode_character(&message).filter(|_| severity == DiagnosticSeverity::ERROR);
     ranges.extend(unsupported_unicode.and_then(|character| {
@@ -3075,6 +3159,7 @@ fn emit_with_context(
                     .or_else(|| special_range.map(|_| crate::special_characters::diagnostic_code(&message)))
                     .or_else(|| right_range.map(|_| crate::right_delimiters::CODE))
                     .or_else(|| missing_right_range.map(|_| crate::right_delimiters::MISSING_CODE))
+                    .or_else(|| delimiter_operand_range.map(|_| crate::delimiter_operands::CODE))
                     .or_else(|| character.map(|_| "missing-character"))
                     .or_else(|| unsupported_unicode.map(|_| "unsupported-unicode-character"))
                     .or_else(|| destination.as_ref().filter(|_| precise_destination).map(|(kind, _)| kind.code()))
@@ -3100,6 +3185,7 @@ fn emit_with_context(
                     .or_else(|| special_range.and(special_character).map(|character| serde_json::json!({"character":character.to_string(),"sourceContext":context})))
                     .or_else(|| right_delimiter.as_ref().map(|invocation| serde_json::json!({"delimiter":&text.source[invocation.delimiter.clone()],"delimiterFrame":error.as_ref().and_then(|error| error.right_delimiter_frame),"sourceLine":line,"sourceContext":context})))
                     .or_else(|| missing_right.as_ref().map(|boundary| serde_json::json!({"closingToken":&text.source[boundary.clone()],"sourceLine":line,"sourceContext":context})))
+                    .or_else(|| delimiter_operand.as_ref().map(|invocation| serde_json::json!({"delimiterCommand":&text.source[invocation.command.clone()],"recoveryToken":&text.source[invocation.operand.clone()],"sourceLine":line,"sourceContext":context})))
                     .or_else(|| character.map(|character| serde_json::json!({"character":character.to_string(),"codepoint":format!("U+{:04X}", character as u32)})))
                     .or_else(|| unsupported_unicode.map(|character| serde_json::json!({"character":character.to_string(),"codepoint":format!("U+{:04X}", character as u32)})))
                     .or_else(|| command_name.map(|name| serde_json::json!({"command":name})))
@@ -3140,7 +3226,7 @@ fn emit_with_context(
                     .or_else(|| graphic_range.and(missing_graphic).map(|name| serde_json::json!({"file":name})))
                     .or_else(|| missing_include_key(&message).map(|name| serde_json::json!({"file":name})))
                     .map(|mut data| {
-                        if special_range.is_some() || right_range.is_some() || missing_right_range.is_some() || missing_include_key(&message).is_some() || color_range.is_some() || model_range.is_some() || counter_range.is_some() || length_range.is_some() || toggle_range.is_some() || boolean_range.is_some() || environment_range.is_some() || input_range.is_some() || loader_range.is_some() || clash_range.is_some() {
+                        if special_range.is_some() || right_range.is_some() || missing_right_range.is_some() || delimiter_operand_range.is_some() || missing_include_key(&message).is_some() || color_range.is_some() || model_range.is_some() || counter_range.is_some() || length_range.is_some() || toggle_range.is_some() || boolean_range.is_some() || environment_range.is_some() || input_range.is_some() || loader_range.is_some() || clash_range.is_some() {
                             if let Some(context) = macro_context {
                                 data["macroSources"] = serde_json::json!(context.macros.sources);
                                 if !context.macros.paused_sources.is_empty() {
@@ -4145,6 +4231,7 @@ impl InvocationKind {
             || message == "Missing $ inserted."
             || message == crate::right_delimiters::ERROR
             || message == crate::right_delimiters::MISSING_ERROR
+            || message == crate::delimiter_operands::ERROR
         {
             Some(Self::Literal)
         } else if undefined_color_name(message).is_some() {
@@ -4663,6 +4750,9 @@ fn parse_in_project<'a>(
                 .map(|context| {
                     context.with_project(&message, analysis.as_mut(), &sources, &stack, &path)
                 });
+            let delimiter_end = (message == crate::delimiter_operands::ERROR)
+                .then(|| delimiter_error_tail(&lines, i + 1, number))
+                .flatten();
             emit(
                 &mut result,
                 &path,
@@ -4674,6 +4764,9 @@ fn parse_in_project<'a>(
             );
             if let Some(end) = expression_end {
                 i = end;
+            }
+            if let Some(end) = delimiter_end {
+                i = i.max(end);
             }
         } else if let Some(message) = error_message(line) {
             let message = wrapped_error_message(root, &lines, &separator_lines, &mut i, message);
@@ -4730,6 +4823,9 @@ fn parse_in_project<'a>(
                             &path.path,
                         )
                     });
+                let delimiter_end = (message == crate::delimiter_operands::ERROR)
+                    .then(|| delimiter_error_tail(&lines, i, number))
+                    .flatten();
                 emit(
                     &mut result,
                     &path.path,
@@ -4741,6 +4837,9 @@ fn parse_in_project<'a>(
                 );
                 if let Some(end) = expression_end {
                     i = end;
+                }
+                if let Some(end) = delimiter_end {
+                    i = i.max(end);
                 }
             }
         } else if warning_start(line) || line.starts_with("Missing character:") {
