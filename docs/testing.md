@@ -26,6 +26,12 @@ cargo test --locked --test unsupported_unicode -- --include-ignored
 cargo test --locked --test special_character_fixes -- --include-ignored
 ```
 
+其中多余右花括号的回归覆盖普通文本、数学模式、`begingroup` 和 `left` 分组，在三个引擎、60 / 79 列日志、传统与文件行号格式、默认与展开上下文中验证单字符删除与重新编译，同时保留合法分组、转义字符和逐字内容，排除宏展开来源。单独运行：
+
+```sh
+cargo test --locked --test special_character_fixes extra_closing -- --include-ignored
+```
+
 源码文件名移动回归需要 pdfLaTeX、XeLaTeX 和 LuaLaTeX，验证首部空格、主干末尾空格、裸路径和引号路径，以及移动后的真实输入与导航：
 
 ```sh

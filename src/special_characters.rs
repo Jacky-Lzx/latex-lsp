@@ -1,4 +1,4 @@
-//! Locate literal compiler-reported characters and escape TeX specials.
+//! Locate literal compiler-reported characters and repair TeX specials.
 use crate::{
     signature,
     syntax::{QuickFix, Syntax},
@@ -14,12 +14,27 @@ pub(crate) const EXTRA_ALIGNMENT_TAB: &str = r"Extra alignment tab has been chan
 pub(crate) fn diagnostic_code(message: &str) -> &'static str {
     if message == EXTRA_ALIGNMENT_TAB {
         "extra-alignment-tab"
+    } else if extra_closing_brace(message) {
+        "extra-closing-brace"
     } else {
         "unescaped-special-character"
     }
 }
 
+fn extra_closing_brace(message: &str) -> bool {
+    matches!(
+        message,
+        "Too many }'s."
+            | "Extra }, or forgotten $."
+            | r"Extra }, or forgotten \endgroup."
+            | r"Extra }, or forgotten \right."
+    )
+}
+
 pub(crate) fn error_character(message: &str, context: &str) -> Option<char> {
+    if extra_closing_brace(message) {
+        return Some('}');
+    }
     if matches!(
         message,
         "Misplaced alignment tab character &." | EXTRA_ALIGNMENT_TAB
@@ -125,13 +140,18 @@ pub(crate) fn fix(doc: &Document, diagnostic: &Diagnostic) -> Option<QuickFix> {
     {
         return None;
     }
-    let replacement = if character == '^' {
-        "\\textasciicircum{}".into()
+    let replacement = match character {
+        '}' => String::new(),
+        '^' => "\\textasciicircum{}".into(),
+        _ => format!("\\{character}"),
+    };
+    let title = if character == '}' {
+        "Remove extra '}'".into()
     } else {
-        format!("\\{character}")
+        format!("Escape '{character}' as '{replacement}'")
     };
     Some(QuickFix {
-        title: format!("Escape '{character}' as '{replacement}'"),
+        title,
         diagnostic: diagnostic.clone(),
         edit: TextEdit {
             range: diagnostic.range,

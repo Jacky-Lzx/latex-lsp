@@ -715,3 +715,316 @@ fn extra_alignment_tabs_consumed_by_macro_parameters_are_not_treated_as_row_sepa
         1
     );
 }
+
+const EXTRA_BRACE: &str = "Too many }'s.";
+const BRACE_CODE: &str = "extra-closing-brace";
+
+#[test]
+fn extra_closing_braces_keep_utf16_occurrences_and_offer_versioned_deletions() {
+    let source = "😀 Before } and } after.\r\n$a}b$\r\n\\begingroup text }\\endgroup\r\n$\\left(a}b\\right)$\r\n";
+    let text = Text::new(source.into());
+    for numbered in [false, true] {
+        let mut log = "(./main.tex\n".to_string();
+        for (line, message, prefix) in [
+            (1, EXTRA_BRACE, "😀 Before }"),
+            (1, EXTRA_BRACE, "😀 Before } and }"),
+            (2, "Extra }, or forgotten $.", "$a}"),
+            (
+                3,
+                r"Extra }, or forgotten \endgroup.",
+                r"\begingroup text }",
+            ),
+            (4, r"Extra }, or forgotten \right.", r"$\left(a}"),
+        ] {
+            let header = if numbered {
+                format!("./main.tex:{line}:")
+            } else {
+                "!".into()
+            };
+            log.push_str(&format!(
+                "{header} {message}\nl.{line} {prefix}\n                 following source\n\n"
+            ));
+        }
+        log.push_str(")\n");
+        let (_directory, workspace, uri, items) = setup(source, &log);
+        let expected: Vec<_> = source
+            .match_indices('}')
+            .map(|(at, _)| text.range(at, at + 1))
+            .collect();
+        assert_eq!(items.len(), expected.len(), "{items:?}");
+        for (item, expected) in items.iter().zip(expected) {
+            assert_eq!(item.code, Some(NumberOrString::String(BRACE_CODE.into())));
+            assert_eq!(item.range, expected);
+            assert_eq!(item.data.as_ref().unwrap()["character"], "}");
+            let actions =
+                editing::code_actions(&workspace, &uri, item.range, &context(vec![item.clone()]));
+            assert_eq!(actions.len(), 1);
+            let CodeActionOrCommand::CodeAction(action) = &actions[0] else {
+                panic!()
+            };
+            assert_eq!(action.title, "Remove extra '}'");
+            let changes = edits(actions, &uri);
+            assert_eq!(changes[0].range, expected);
+            assert_eq!(changes[0].new_text, "");
+        }
+    }
+}
+
+#[test]
+fn extra_closing_braces_require_direct_unambiguous_literal_source() {
+    for (source, prefix, frame, location, precise) in [
+        ("Before } after.", "Before }", "", "./main.tex:1", true),
+        (
+            "Long prefix unique } after.",
+            "...unique }",
+            "",
+            "./main.tex:1",
+            true,
+        ),
+        (
+            "Before } and Before }",
+            "...Before }",
+            "",
+            "./main.tex:1",
+            false,
+        ),
+        ("Before } after.", "Wrong }", "", "./main.tex:1", false),
+        (r"Before \} after.", r"Before \}", "", "./main.tex:1", false),
+        (
+            r"Before \\} after.",
+            r"Before \\}",
+            "",
+            "./main.tex:1",
+            true,
+        ),
+        ("% Before }", "% Before }", "", "./main.tex:1", false),
+        (
+            r"\verb|Before }|",
+            r"\verb|Before }",
+            "",
+            "./main.tex:1",
+            false,
+        ),
+        (
+            r"\def\bad{{Before } inside}",
+            r"\def\bad{{Before }",
+            "",
+            "./main.tex:1",
+            false,
+        ),
+        (
+            "Before } after.",
+            "Before }",
+            "\\bad ->Before }\n",
+            "./main.tex:1",
+            false,
+        ),
+        (
+            "Before } after.",
+            "Before }",
+            "<argument> Before }\n",
+            "./main.tex:1",
+            false,
+        ),
+        (
+            "Before } after.",
+            "Before }",
+            "<recently read> }\n",
+            "./main.tex:1",
+            false,
+        ),
+        ("Before } after.", "Before }", "", "./gone.tex:1", false),
+        ("Before } after.", "Before }", "", "./main.tex:0", false),
+        ("Before } after.", "Before }", "", "./main.tex:99", false),
+    ] {
+        let number = location.rsplit(':').next().unwrap();
+        let log =
+            format!("(./main.tex\n{location}: {EXTRA_BRACE}\n{frame}l.{number} {prefix}\n\n)\n");
+        let (_directory, workspace, uri, items) = setup(source, &log);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].code.is_some(), precise, "{log}: {items:?}");
+        assert_eq!(
+            !editing::code_actions(&workspace, &uri, items[0].range, &context(items.clone()))
+                .is_empty(),
+            precise,
+            "{log}"
+        );
+    }
+    for message in [
+        "Missing } inserted.",
+        "Extra }, or forgotten something.",
+        "Too many }'s. additional text",
+    ] {
+        let (_directory, workspace, uri, items) = setup(
+            "Before } after.",
+            &format!("(./main.tex\n! {message}\nl.1 Before }}\n)\n"),
+        );
+        assert_eq!(items.len(), 1);
+        assert!(items[0].code.is_none());
+        assert!(
+            editing::code_actions(&workspace, &uri, items[0].range, &context(items.clone()))
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+fn legacy_extra_closing_brace_deletions_recheck_diagnostics_source_and_version() {
+    let source = "Before } after.\n";
+    let log = format!("(./main.tex\n! {EXTRA_BRACE}\nl.1 Before }}\n)\n");
+    let (_directory, mut workspace, uri, items) = setup(source, &log);
+    workspace.code_action_literals = false;
+    workspace.apply_edits = true;
+    let actions = editing::code_actions(&workspace, &uri, items[0].range, &context(items.clone()));
+    assert_eq!(actions.len(), 1);
+    let CodeActionOrCommand::Command(command) = &actions[0] else {
+        panic!()
+    };
+    let argument = command.arguments.as_ref().unwrap()[0].clone();
+    let request = || serde_json::from_value::<editing::FixRequest>(argument.clone()).unwrap();
+    assert!(editing::resolve_fix(&workspace, request()).is_some());
+    let mut forged = argument.clone();
+    forged["replacement"] = json!("\\}");
+    assert!(editing::resolve_fix(&workspace, serde_json::from_value(forged).unwrap()).is_none());
+    workspace.documents.insert(
+        uri.clone(),
+        Document::new(&uri, "Changed } after.\n".into(), Some(9)),
+    );
+    assert!(editing::resolve_fix(&workspace, request()).is_none());
+    workspace
+        .documents
+        .insert(uri.clone(), Document::new(&uri, source.into(), Some(10)));
+    assert!(editing::resolve_fix(&workspace, request()).is_none());
+    workspace
+        .documents
+        .insert(uri.clone(), Document::new(&uri, source.into(), Some(9)));
+    workspace.build_diagnostics.clear();
+    assert!(editing::resolve_fix(&workspace, request()).is_none());
+}
+
+#[test]
+#[cfg(unix)]
+#[ignore = "requires pdflatex, xelatex and lualatex"]
+fn real_extra_closing_brace_deletions_repair_text_math_and_explicit_groups() {
+    use std::os::unix::fs::PermissionsExt;
+    for engine in ["pdflatex", "xelatex", "lualatex"] {
+        for width in [60, 79] {
+            for numbered in [false, true] {
+                for verbose in [false, true] {
+                    let directory = tempfile::tempdir().unwrap();
+                    let root = directory.path();
+                    let main = root.join("main.tex");
+                    let child = root.join("child.tex");
+                    let compiler = root.join(engine);
+                    std::fs::write(&compiler,format!("#!/bin/sh\nTEXMFVAR=\"${{0%/*}}/tex-cache\"\nTEXMFCACHE=\"$TEXMFVAR\"\nmax_print_line={width}\nexport TEXMFVAR TEXMFCACHE max_print_line\nmkdir -p \"$TEXMFVAR\"\nexec {engine} \"$@\"\n")).unwrap();
+                    std::fs::set_permissions(&compiler, std::fs::Permissions::from_mode(0o755))
+                        .unwrap();
+                    let mut arguments = vec![
+                        "-interaction=nonstopmode".into(),
+                        "-recorder".into(),
+                        "-output-directory=%o".into(),
+                        "%f".into(),
+                    ];
+                    if numbered {
+                        arguments.insert(0, "-file-line-error".into());
+                    }
+                    let config = latex_lsp::config::BuildConfig {
+                        executable: compiler.to_string_lossy().into(),
+                        arguments: Some(arguments),
+                        ..Default::default()
+                    };
+                    std::fs::write(&main,format!("\\documentclass{{article}}\n{}\\begin{{document}}\n\\input{{child}}\n\\end{{document}}\n",if verbose {"\\errorcontextlines=100\n"}else{""})).unwrap();
+                    let legal = concat!(
+                        "{Legal {nested} group} and escaped \\}.\n",
+                        "\\verb|literal }| % comment }\n",
+                        "\\def\\balanced{nested {group}}\\balanced\n",
+                    );
+                    let source = format!("{{Valid}} {}First extra}} then Second extra}} tail.\n$a extra}} b$\n\\begingroup text extra}}\\endgroup\n$\\left(a extra}} b\\right)$\n{legal}","long prefix ".repeat(20));
+                    std::fs::write(&child, &source).unwrap();
+                    let outcome = latex_lsp::build::run(&main, &config, &Default::default());
+                    assert_eq!(
+                        outcome.status, "error",
+                        "{engine}/{width}/{numbered}/{verbose}: {}",
+                        outcome.output
+                    );
+                    let uri = Url::from_file_path(&child).unwrap();
+                    let items: Vec<_> = outcome.diagnostics[&uri]
+                        .iter()
+                        .filter(|item| item.code == Some(NumberOrString::String(BRACE_CODE.into())))
+                        .cloned()
+                        .collect();
+                    assert_eq!(
+                        items.len(),
+                        5,
+                        "{engine}/{width}/{numbered}/{verbose}: {:?}\n{}",
+                        outcome.diagnostics,
+                        outcome.output
+                    );
+                    let text = Text::new(source.clone());
+                    let expected: Vec<_> = source
+                        .match_indices("extra}")
+                        .map(|(at, _)| text.range(at + 5, at + 6))
+                        .collect();
+                    assert_eq!(
+                        items.iter().map(|item| item.range).collect::<Vec<_>>(),
+                        expected
+                    );
+                    let mut workspace = Workspace {
+                        code_action_literals: true,
+                        versioned_edits: true,
+                        ..Default::default()
+                    };
+                    workspace.add_root(root.into());
+                    workspace.open(uri.clone(), source.clone(), 9);
+                    workspace
+                        .build_diagnostics
+                        .insert(Url::from_file_path(&main).unwrap(), outcome.diagnostics);
+                    let mut changes = Vec::new();
+                    for item in items {
+                        let actions = editing::code_actions(
+                            &workspace,
+                            &uri,
+                            item.range,
+                            &context(vec![item]),
+                        );
+                        assert_eq!(actions.len(), 1);
+                        changes.extend(edits(actions, &uri));
+                    }
+                    changes.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
+                    let mut fixed = source.clone();
+                    for edit in changes {
+                        assert!(edit.new_text.is_empty());
+                        fixed.replace_range(
+                            text.offset(edit.range.start).unwrap()
+                                ..text.offset(edit.range.end).unwrap(),
+                            &edit.new_text,
+                        );
+                    }
+                    assert!(fixed.ends_with(legal));
+                    std::fs::write(&child, &fixed).unwrap();
+                    let repaired = latex_lsp::build::run(&main, &config, &Default::default());
+                    assert_eq!(
+                        repaired.status, "success",
+                        "{engine}/{width}/{numbered}/{verbose}: {}",
+                        repaired.output
+                    );
+                    assert!(repaired
+                        .diagnostics
+                        .values()
+                        .flatten()
+                        .all(|item| item.severity != Some(DiagnosticSeverity::ERROR)));
+                    std::fs::write(&child, r"\def\bad{\egroup}\bad").unwrap();
+                    let macro_error = latex_lsp::build::run(&main, &config, &Default::default());
+                    assert_eq!(macro_error.status, "error");
+                    assert!(
+                        macro_error.diagnostics.values().flatten().all(
+                            |item| item.code != Some(NumberOrString::String(BRACE_CODE.into()))
+                        ),
+                        "{engine}/{width}/{numbered}/{verbose}: {:?}",
+                        macro_error.diagnostics
+                    );
+                }
+            }
+        }
+    }
+}

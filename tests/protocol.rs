@@ -14108,7 +14108,7 @@ fn discovered_biber_databases_with_arbitrary_suffixes_reject_unsaved_and_changed
 
 #[test]
 #[cfg(unix)]
-fn special_character_build_errors_offer_escape_actions_and_clear_after_rebuild() {
+fn special_character_build_errors_offer_repair_actions_and_clear_after_rebuild() {
     for literals in [false, true] {
         let script = r#"cat "${2%/*}/fixture.log" > "$1/main.log"
 if [ -f "${2%/*}/fail" ]; then exit 1; fi
@@ -14122,7 +14122,7 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
         });
         let (mut server, directory, main) =
             fake_build_server_capabilities(script, false, capabilities);
-        let source = "\\documentclass{article}\nBefore & and & after.\nBefore # after.\nBefore foo_bar.\nBefore x^2.\n\\begin{tabular}{ll}A & B & C\\\\\\end{tabular}\n";
+        let source = "\\documentclass{article}\nBefore & and & after.\nBefore # after.\nBefore foo_bar.\nBefore x^2.\n\\begin{tabular}{ll}A & B & C\\\\\\end{tabular}\nBefore } after.\n$a}b$\n\\begingroup text }\\endgroup\n$\\left(a}b\\right)$\n";
         std::fs::write(main.to_file_path().unwrap(), source).unwrap();
         server.notify(
             "textDocument/didChange",
@@ -14146,6 +14146,20 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
             log.push_str(&format!("./main.tex:{line}: Missing $ inserted.\n<inserted text>\n                $\nl.{line} {prefix}\n\n"));
         }
         log.push_str("./main.tex:6: Extra alignment tab has been changed to \\cr.\n<recently read> \\endtemplate\n\nl.6 \\begin{tabular}{ll}A & B &\n                  C\\\\\\end{tabular}\n\n");
+        for (line, message, prefix) in [
+            (7, "Too many }'s.", "Before }"),
+            (8, "Extra }, or forgotten $.", "$a}"),
+            (
+                9,
+                r"Extra }, or forgotten \endgroup.",
+                r"\begingroup text }",
+            ),
+            (10, r"Extra }, or forgotten \right.", r"$\left(a}"),
+        ] {
+            log.push_str(&format!(
+                "./main.tex:{line}: {message}\nl.{line} {prefix}\n\n"
+            ));
+        }
         log.push_str(")\n");
         std::fs::write(directory.path().join("fixture.log"), log).unwrap();
         std::fs::write(directory.path().join("fail"), "").unwrap();
@@ -14156,7 +14170,7 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
         );
         let finished = server.until(|message| message["method"] == "latex/buildFinished");
         assert_eq!(finished["params"]["status"], "error");
-        assert_eq!(finished["params"]["errorsCount"], 6);
+        assert_eq!(finished["params"]["errorsCount"], 10);
         let published = server.until(|message| {
             message["method"] == "textDocument/publishDiagnostics"
                 && message["params"]["diagnostics"]
@@ -14167,11 +14181,15 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
                             .filter(|item| {
                                 matches!(
                                     item["code"].as_str(),
-                                    Some("unescaped-special-character" | "extra-alignment-tab")
+                                    Some(
+                                        "unescaped-special-character"
+                                            | "extra-alignment-tab"
+                                            | "extra-closing-brace"
+                                    )
                                 )
                             })
                             .count()
-                            == 6
+                            == 10
                     })
         });
         let text = latex_lsp::text::Text::new(source.into());
@@ -14184,7 +14202,11 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
             .filter(|item| {
                 matches!(
                     item["code"].as_str(),
-                    Some("unescaped-special-character" | "extra-alignment-tab")
+                    Some(
+                        "unescaped-special-character"
+                            | "extra-alignment-tab"
+                            | "extra-closing-brace"
+                    )
                 )
             })
             .enumerate()
@@ -14211,7 +14233,9 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
             assert_eq!(json!(change.range), item["range"]);
             assert_eq!(
                 change.new_text,
-                if character == "^" {
+                if character == "}" {
+                    String::new()
+                } else if character == "^" {
                     r"\textasciicircum{}".to_string()
                 } else {
                     format!("\\{character}")
@@ -14259,7 +14283,11 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
                         items.iter().all(|item| {
                             !matches!(
                                 item["code"].as_str(),
-                                Some("unescaped-special-character" | "extra-alignment-tab")
+                                Some(
+                                    "unescaped-special-character"
+                                        | "extra-alignment-tab"
+                                        | "extra-closing-brace"
+                                )
                             )
                         })
                     })

@@ -31,6 +31,7 @@
 - [编译诊断](diagnostics.md)：错误定位、警告和拼写修复规则。
 - [Unicode 输入错误](unicode-errors.md)：不支持的字符、码点摘要与定位边界。
 - [特殊字符诊断与修复](special-characters.md)：字面特殊字符、多余对齐分隔符的精确定位及转义修复。
+- [多余右花括号](extra-braces.md)：正文、数学及显式分组中的字符定位与删除修复。
 - [字体诊断与结果分析](fonts.md)：字体和字号替换、缺字摘要及定位边界。
 - [排版警告分析](typesetting.md)：Overfull / Underfull 分类统计与最大指标。
 - [文献编译诊断](bibliography-diagnostics.md)：BibTeX / Biber 来源定位、缺失资源和文件名修复。
