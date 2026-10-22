@@ -1,6 +1,9 @@
 //! Verify etoolbox boolean and toggle operations without expanding TeX.
 use crate::{signature::CommandSignatures, syntax};
-use std::{collections::BTreeSet, ops::Range};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ops::Range,
+};
 
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum Kind {
@@ -73,9 +76,17 @@ pub(crate) fn error_invocations_with_signatures(
                     };
                     end = after;
                 }
+                let mut counts = BTreeMap::new();
+                for (namespace, span) in &names {
+                    if *namespace == kind {
+                        *counts.entry(&source[span.clone()]).or_insert(0) += 1;
+                    }
+                }
                 names
                     .into_iter()
-                    .filter(|(namespace, _)| *namespace == kind)
+                    .filter(|(namespace, span)| {
+                        *namespace == kind && counts.get(&source[span.clone()]) == Some(&1)
+                    })
                     .map(|(_, span)| (span, start..end))
                     .collect()
             })

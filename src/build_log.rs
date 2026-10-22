@@ -2121,33 +2121,54 @@ fn boolean_expression_details(
             if !continuation.is_empty() && !continuation.starts_with(char::is_whitespace) {
                 return None;
             }
-            let first = *lines.get(index + 2)?;
-            if !first.starts_with("Toggle '") && !first.starts_with("Boolean '") {
-                return None;
-            }
-            let mut detail = String::new();
-            for (end, part) in lines.iter().enumerate().skip(index + 2).take(8) {
-                if part.trim().is_empty()
-                    || message_boundary(part)
-                    || detail.len() + part.len() > 4096
+            // The unconsumed source row also wraps at max_print_line.
+            // Advance only past full physical rows, and require the actual
+            // explanation to end before the following blank separator.
+            for detail_start in index + 2..index + 6 {
+                if let Some(details) = boolean_expression_explanation(lines, detail_start, message)
                 {
-                    return None;
+                    return Some(details);
                 }
-                detail.push_str(part);
-                let combined = format!("{message}\n{detail}");
-                if (undefined_toggle_name(&combined).is_some()
-                    || undefined_boolean_name(&combined).is_some())
-                    && lines.get(end + 1).is_none_or(|next| next.trim().is_empty())
-                {
-                    return Some((combined, end));
-                }
-                if part.len() < 60 {
-                    return None;
+                if lines.get(detail_start - 1)?.len() < 60 {
+                    break;
                 }
             }
             return None;
         }
         if message_boundary(line) || line.starts_with('(') {
+            return None;
+        }
+    }
+    None
+}
+
+fn boolean_expression_explanation(
+    lines: &[&str],
+    start: usize,
+    message: &str,
+) -> Option<(String, usize)> {
+    let first = *lines.get(start)?;
+    if !first.starts_with("Toggle '") && !first.starts_with("Boolean '") {
+        return None;
+    }
+    let mut detail = String::new();
+    for (end, part) in lines.iter().enumerate().skip(start).take(8) {
+        if part.trim().is_empty()
+            || message_boundary(part) && !part.starts_with(')')
+            || detail.len() + part.len() > 4096
+        {
+            return None;
+        }
+        detail.push_str(part);
+        let explained = detail
+            .strip_prefix("Toggle '")
+            .or_else(|| detail.strip_prefix("Boolean '"))
+            .and_then(|tail| tail.strip_suffix("' undefined."))
+            .is_some_and(|name| !name.is_empty());
+        if explained && lines.get(end + 1).is_none_or(|next| next.trim().is_empty()) {
+            return Some((format!("{message}\n{detail}"), end));
+        }
+        if part.len() < 60 {
             return None;
         }
     }
@@ -2232,7 +2253,15 @@ fn invocation_error_range(
         }
         let consumed = &text.source[start..tail.end];
         let matched = shortened.map_or(consumed == prefix, |suffix| {
-            suffix.ends_with(&text.source[tail.clone()]) && consumed.ends_with(suffix)
+            let expression_name = matches!(
+                kind,
+                InvocationKind::BooleanExpression | InvocationKind::ToggleExpression
+            ) && tail
+                .end
+                .checked_sub(suffix.len())
+                .is_some_and(|suffix_start| suffix_start < span.end);
+            (suffix.ends_with(&text.source[tail.clone()]) || expression_name)
+                && consumed.ends_with(suffix)
         });
         matched.then(|| text.range(span.start, span.end))
     });
