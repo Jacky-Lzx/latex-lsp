@@ -136,6 +136,9 @@ pub struct Syntax {
     pub(crate) ambiguous_string_tests: Vec<Range<usize>>,
     /// Whether this syntax was rebuilt with project-specific string semantics.
     pub(crate) contextual_string_tests: bool,
+    /// Exact imported/custom parameter grammar when all execution contexts agree.
+    pub(crate) contextual_command_shapes:
+        std::collections::BTreeMap<usize, std::sync::Arc<crate::signature::CommandShape>>,
     /// Actual comments, distinguished from ignored URLs and verbatim text.
     pub comments: Vec<Range<usize>>,
     pub fixes: Vec<QuickFix>,

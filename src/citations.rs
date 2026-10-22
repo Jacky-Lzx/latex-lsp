@@ -2,7 +2,7 @@
 use crate::syntax::{self, Argument, Command};
 use std::ops::Range;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub(crate) enum Style {
     Multi,
     Volume,

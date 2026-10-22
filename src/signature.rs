@@ -11,7 +11,7 @@ use std::{
 };
 use tower_lsp::lsp_types::*;
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 enum Kind {
     Required,
     RequiredGroup,
@@ -29,14 +29,14 @@ enum Kind {
     },
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct Parameter {
     obey_spaces: bool,
     kind: Kind,
     label: String,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct Signature {
     name: String,
     parameters: Vec<Parameter>,
@@ -1228,7 +1228,7 @@ fn source_alias(source: &str, parsed: &syntax::Syntax, entry: &Entry) -> Option<
 
 /// Read a static copy's source and operand end. A copy captures a meaning;
 /// possible source shapes do not certify that meaning or a late-bound alias.
-fn literal_copy_target(
+pub(crate) fn literal_copy_target(
     source: &str,
     parsed: &syntax::Syntax,
     entry: &Entry,
@@ -1281,6 +1281,67 @@ fn literal_copy_target(
     }
     let word = syntax::control_word(source, at)?;
     Some((source[word.start + 1..word.end].into(), word.end))
+}
+
+/// Captured parameter grammar for a command's current, unexpanded meaning.
+#[derive(Clone, PartialEq)]
+pub(crate) struct CommandShape {
+    signature: Option<Signature>,
+    tex: Option<TexOperands>,
+}
+
+impl std::fmt::Debug for CommandShape {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CommandShape")
+            .field("signature", &self.signature.as_ref().map(Signature::label))
+            .field("tex", &self.tex.is_some())
+            .finish()
+    }
+}
+
+impl CommandShape {
+    pub(crate) fn definition(source: &str, parsed: &syntax::Syntax, entry: &Entry) -> Option<Self> {
+        let mut signature = source_definition(source, parsed, entry, false);
+        let definition = TexOperands::definition(source, parsed, entry);
+        let known = definition.is_some();
+        let tex = definition
+            .filter(|(operands, _)| operands.delimited() || signature.is_none())
+            .map(|(operands, _)| operands);
+        if TexOperands::declares(entry) && (tex.is_some() || !known) {
+            signature = None;
+        }
+        (signature.is_some() || tex.is_some()).then_some(Self { signature, tex })
+    }
+
+    fn argument_tokens(
+        &self,
+        source: &str,
+        parsed: &syntax::Syntax,
+        command: &syntax::Command,
+        literal: Option<usize>,
+        result: &mut BTreeSet<usize>,
+    ) {
+        if let Some(end) = self
+            .tex
+            .as_ref()
+            .and_then(|operands| operands.end(source, command.span.end, true))
+        {
+            mark_operand_tokens(parsed, command.span.end, end, literal, result);
+        } else if let Some(signature) = &self.signature {
+            argument_tokens(
+                (source, parsed),
+                command.span.end,
+                true,
+                signature,
+                false,
+                literal,
+                result,
+            );
+        } else {
+            unknown_argument_token(source, command.span.end, parsed, literal, result);
+        }
+    }
 }
 
 /// Tokens declaring an unexpanded, argument-free file loader alias.
@@ -1435,7 +1496,7 @@ fn short(value: &str) -> String {
 /// control word must not match a prefix of a longer control word.
 /// Static TeX parameter text, used only to establish which tokens are operands.
 /// Signature help deliberately keeps its existing, smaller set of signatures.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct TexOperands {
     prefix: Vec<String>,
     delimiters: Vec<Vec<String>>,
@@ -2723,6 +2784,10 @@ impl<'a> CommandSignatures<'a> {
         }
         for (index, command) in parsed.commands.iter().enumerate() {
             if result.contains(&command.span.start) {
+                continue;
+            }
+            if let Some(shape) = parsed.contextual_command_shapes.get(&command.span.start) {
+                shape.argument_tokens(source, parsed, command, literal, &mut result);
                 continue;
             }
             // Project parsing has already confirmed this direct predicate's

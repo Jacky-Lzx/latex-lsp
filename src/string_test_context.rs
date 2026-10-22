@@ -1,6 +1,6 @@
 //! Ordered, project-specific meanings of etoolbox's literal string tests.
 use crate::{
-    signature::CommandSignatures,
+    signature::{literal_copy_target, CommandShape, CommandSignatures},
     string_tests::{arguments, data_count},
     syntax::{self, Command, Syntax},
     workspace::{resolve_file_path, DocumentKind, Workspace},
@@ -8,6 +8,7 @@ use crate::{
 use std::{
     collections::{BTreeMap, BTreeSet},
     ops::Range,
+    sync::Arc,
 };
 use tower_lsp::lsp_types::Url;
 
@@ -79,46 +80,92 @@ fn chapter_name(value: &str) -> &str {
     value.strip_suffix(".tex").unwrap_or(value)
 }
 
+#[derive(Clone)]
+enum Binding {
+    Native(usize),
+    Custom(Option<Arc<CommandShape>>),
+    Unknown,
+}
+
 #[derive(Clone, Default)]
 struct Context {
-    assigned: BTreeSet<String>,
+    assigned: BTreeMap<String, Binding>,
     selection: Selection,
     uncertain: bool,
+}
+
+impl Context {
+    fn binding(&self, name: &str) -> Binding {
+        self.assigned
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| data_count(name).map_or(Binding::Custom(None), Binding::Native))
+    }
+
+    fn assign(&mut self, command: &Command, declaration: &Assignment) {
+        let binding = if declaration.copy {
+            if self.uncertain || self.assigned.contains_key(&command.name) {
+                Binding::Unknown
+            } else {
+                declaration
+                    .source
+                    .as_deref()
+                    .map_or(Binding::Unknown, |name| self.binding(name))
+            }
+        } else {
+            Binding::Custom(declaration.shape.clone())
+        };
+        self.assigned.insert(declaration.name.clone(), binding);
+    }
+}
+
+struct Assignment {
+    name: String,
+    source: Option<String>,
+    copy: bool,
+    shape: Option<Arc<CommandShape>>,
 }
 
 struct Source {
     syntax: Syntax,
     active: BTreeSet<usize>,
-    declarations: BTreeMap<usize, Vec<String>>,
+    declarations: BTreeMap<usize, Vec<Assignment>>,
 }
 
 impl Source {
     fn new(
         text: &crate::text::Text,
         literal: impl FnMut(&crate::syntax::Command, bool) -> bool,
+        shapes: &BTreeMap<usize, Arc<CommandShape>>,
     ) -> Self {
-        let syntax = Syntax::latex_with_string_tests(text, literal);
+        let mut syntax = Syntax::latex_with_string_tests(text, literal);
+        syntax.contextual_command_shapes = shapes.clone();
         let signatures = CommandSignatures::source_context([(&*text.source, &syntax)]);
         let active = signatures.source_command_positions(&text.source, &syntax);
-        let mut declarations: BTreeMap<usize, Vec<String>> = BTreeMap::new();
-        for entry in syntax.definitions.iter().filter(|entry| {
-            data_count(&entry.name).is_some()
-                || file_test(&entry.name)
-                || matches!(entry.name.as_str(), "includeonly" | "include")
-        }) {
+        let mut declarations: BTreeMap<usize, Vec<Assignment>> = BTreeMap::new();
+        for entry in &syntax.definitions {
             let Some(name) = entry.detail.strip_prefix("Defined with \\") else {
                 continue;
             };
-            if let Some(command) = syntax
+            let before = syntax
                 .commands
+                .partition_point(|command| command.span.start < entry.span.start);
+            if let Some(command) = syntax.commands[..before]
                 .iter()
                 .rev()
-                .find(|command| command.span.start < entry.span.start && command.name == name)
+                .find(|command| command.name == name)
             {
                 declarations
                     .entry(command.span.start)
                     .or_default()
-                    .push(entry.name.clone());
+                    .push(Assignment {
+                        name: entry.name.clone(),
+                        source: literal_copy_target(&text.source, &syntax, entry, false)
+                            .map(|(name, _)| name),
+                        copy: matches!(name, "let" | "cslet" | "letcs" | "csletcs")
+                            || syntax::declares_command_copy(name),
+                        shape: CommandShape::definition(&text.source, &syntax, entry).map(Arc::new),
+                    });
             }
         }
         Self {
@@ -132,6 +179,8 @@ impl Source {
 #[derive(Clone, Default)]
 struct Analysis {
     meanings: BTreeMap<Url, BTreeMap<usize, u8>>,
+    ambiguous_counts: BTreeMap<Url, BTreeMap<usize, usize>>,
+    shapes: BTreeMap<Url, BTreeMap<usize, Option<Arc<CommandShape>>>>,
     visited: BTreeSet<Url>,
     missing: BTreeMap<Url, DocumentKind>,
     excluded: BTreeSet<Url>,
@@ -163,15 +212,22 @@ impl Analysis {
         let initial = state.clone();
         let checkpoint = self.clone();
         let mut context = BTreeMap::<usize, u8>::new();
+        let mut shapes = BTreeMap::new();
         for round in 0..32 {
             // Start from literal grammar. Eagerly exposing every data operand
             // could let a quoted verbatim opener swallow the rest of the file.
-            let source = Source::new(&doc.text, |command, known| {
-                context.get(&command.span.start).map_or(
-                    known && !initial.uncertain && !initial.assigned.contains(&command.name),
+            let source = Source::new(
+                &doc.text,
+                |command, known| {
+                    context.get(&command.span.start).map_or(
+                    known
+                        && !initial.uncertain
+                        && matches!(initial.binding(&command.name), Binding::Native(count) if Some(count) == data_count(&command.name)),
                     |meaning| *meaning == LITERAL,
                 )
-            });
+                },
+                &shapes,
+            );
             let visits = self.visits + 1;
             *self = checkpoint.clone();
             self.visits = visits;
@@ -179,6 +235,7 @@ impl Analysis {
             *state = initial.clone();
             let mut data_end = 0;
             let mut meanings = BTreeMap::new();
+            let mut next_shapes = BTreeMap::new();
             let mut reparse = false;
             let mut events: Vec<_> = source
                 .syntax
@@ -211,13 +268,35 @@ impl Analysis {
                 if let Some(count) = data_count(&command.name) {
                     // Deferred bodies retain editable references, while their
                     // loads and assignments do not execute at definition time.
+                    let binding = state.binding(&command.name);
                     let meaning = if state.uncertain {
                         LITERAL | CUSTOM
-                    } else if state.assigned.contains(&command.name) {
-                        CUSTOM
                     } else {
-                        LITERAL
+                        match &binding {
+                            Binding::Native(arity) if *arity == count => LITERAL,
+                            Binding::Custom(_) => CUSTOM,
+                            Binding::Native(_) | Binding::Unknown => LITERAL | CUSTOM,
+                        }
                     };
+                    if meaning == CUSTOM {
+                        if let Binding::Custom(Some(shape)) = &binding {
+                            next_shapes.insert(at, shape.clone());
+                        }
+                    }
+                    let ambiguous_count = match binding {
+                        Binding::Native(arity) => count.max(arity),
+                        Binding::Unknown => 2,
+                        Binding::Custom(_) => count,
+                    };
+                    if ambiguous_count > count {
+                        let previous = self
+                            .ambiguous_counts
+                            .entry(uri.clone())
+                            .or_default()
+                            .entry(at)
+                            .or_default();
+                        *previous = (*previous).max(ambiguous_count);
+                    }
                     meanings.insert(at, meaning);
                     let data = arguments(&doc.text.source, command.span.end, count);
                     if !data.is_empty() {
@@ -233,11 +312,13 @@ impl Analysis {
                 if !source.active.contains(&at) {
                     continue;
                 }
-                if let Some(names) = source.declarations.get(&at) {
-                    state.assigned.extend(names.iter().cloned());
+                if let Some(declarations) = source.declarations.get(&at) {
+                    for declaration in declarations {
+                        state.assign(command, declaration);
+                    }
                 }
                 if command.name == "includeonly" {
-                    state.selection = if state.assigned.contains("includeonly") {
+                    state.selection = if state.assigned.contains_key("includeonly") {
                         Selection::Unknown
                     } else if let Some(names) = syntax::includeonly_names(&doc.text.source, command)
                     {
@@ -248,7 +329,7 @@ impl Analysis {
                     continue;
                 }
                 if command.name == "include" {
-                    let selected = if state.assigned.contains("include") {
+                    let selected = if state.assigned.contains_key("include") {
                         None
                     } else {
                         match &state.selection {
@@ -277,7 +358,7 @@ impl Analysis {
                     state.uncertain |= selected.is_none();
                 }
                 if file_test(&command.name) {
-                    if let Some(conditional) = (!state.assigned.contains(&command.name))
+                    if let Some(conditional) = (!state.assigned.contains_key(&command.name))
                         .then(|| Conditional::new(&doc.text.source, command, uri, root))
                         .flatten()
                     {
@@ -319,12 +400,27 @@ impl Analysis {
                     }
                 }
             }
+            reparse |= shapes != next_shapes;
             if reparse && round < 31 && self.visits < MAX_VISITS {
                 context = meanings;
+                shapes = next_shapes;
                 continue;
             }
             self.incomplete |= reparse;
             for (at, meaning) in meanings {
+                if meaning == CUSTOM {
+                    let shape = next_shapes.get(&at).cloned();
+                    self.shapes
+                        .entry(uri.clone())
+                        .or_default()
+                        .entry(at)
+                        .and_modify(|previous| {
+                            if *previous != shape {
+                                *previous = None;
+                            }
+                        })
+                        .or_insert(shape);
+                }
                 *self
                     .meanings
                     .entry(uri.clone())
@@ -360,7 +456,12 @@ pub(crate) fn refresh(workspace: &mut Workspace) {
             .documents
             .iter()
             .filter(|(_, doc)| doc.kind == DocumentKind::Latex)
-            .map(|(uri, doc)| (uri.clone(), Source::new(&doc.text, |_, known| known)))
+            .map(|(uri, doc)| {
+                (
+                    uri.clone(),
+                    Source::new(&doc.text, |_, known| known, &BTreeMap::new()),
+                )
+            })
             .collect();
         let mut analysis = Analysis::default();
         let roots: Vec<_> = sources
@@ -443,6 +544,12 @@ pub(crate) fn refresh(workspace: &mut Workspace) {
                     let Some(count) = data_count(&doc.text.source[word.start + 1..word.end]) else {
                         continue;
                     };
+                    let count = analysis
+                        .ambiguous_counts
+                        .get(&uri)
+                        .and_then(|counts| counts.get(&at))
+                        .copied()
+                        .unwrap_or(count);
                     syntax.ambiguous_string_tests.extend(
                         arguments(&doc.text.source, word.end, count)
                             .into_iter()
@@ -458,6 +565,17 @@ pub(crate) fn refresh(workspace: &mut Workspace) {
                                 .into_iter()
                                 .map(|argument| argument.span),
                         );
+                    }
+                }
+            }
+            if !analysis.incomplete {
+                if let (Some(meanings), Some(shapes)) = (meanings, analysis.shapes.get(&uri)) {
+                    for (&at, shape) in shapes {
+                        if meanings.get(&at) == Some(&CUSTOM) {
+                            if let Some(shape) = shape {
+                                syntax.contextual_command_shapes.insert(at, shape.clone());
+                            }
+                        }
                     }
                 }
             }
