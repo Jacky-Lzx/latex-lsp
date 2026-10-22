@@ -15,6 +15,8 @@
 
 `\meaning\ordinary` 中的命令名保留为宏引用，可跳转到原定义并参与重命名。显式展开静态名称的 `\expandafter\meaning\csname ordinary\endcsname` 也保留名称引用。
 
+输入部分控制词时，命令名补全只替换名称，不插入参数占位符；适用于内置命令和跨文件用户命令，详见[补全规则](completion.md#命令名操作数)。
+
 被查看的命令不消费后续分组，不为这些分组提供名称补全、参数提示或名称编辑。例如 `\meaning\ref{real}` 中的 `{real}` 是普通分组，重命名同名标签时不会修改它。查看 `verb`、`begin` 或 `detokenize` 不会在该处启动逐字、环境或字符串转换扫描；后面实际出现的命令仍正常解析。
 
 ## token 与诊断

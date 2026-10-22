@@ -20,7 +20,7 @@
 
 复制 `verb`、`begin` 等命令也不会在复制处启动逐字扫描或环境配对。复制之后实际出现的命令仍正常解析；`futurelet` 的继续执行规则见[前瞻目标](futurelet.md)。
 
-`meaning` 查看命令时的同类索引与编辑规则见[meaning 操作数](meaning.md)。
+操作数位置的命令名补全只替换名称，不插入调用参数；详见[补全规则](completion.md#命令名操作数)。`meaning` 查看命令时的同类索引与编辑规则见[meaning 操作数](meaning.md)。
 
 ## 边界
 
