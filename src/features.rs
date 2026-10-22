@@ -1119,10 +1119,12 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
             .take_while(|b| b.is_ascii_alphabetic() || *b == b'@')
             .count();
     let range = doc.text.range(line_start + slash + 1, command_end);
-    // A command already followed by arguments only needs its name replaced.
+    // Declaration/inspection operands name a control sequence without calling
+    // it. Reuse the parser's operand boundaries rather than keyword lookbehind.
     let after_command = syntax::skip_space(&doc.text.source, command_end);
-    let use_snippets =
-        workspace.snippets && !doc.text.source[after_command..].starts_with(['{', '[', '*']);
+    let use_snippets = workspace.snippets
+        && !doc.syntax.control_operands.contains(&(line_start + slash))
+        && !doc.text.source[after_command..].starts_with(['{', '[', '*']);
     let mut seen = BTreeSet::new();
     let mut result = Vec::new();
     let signatures = crate::signature::CompletionSignatures::new(workspace, &scope);
