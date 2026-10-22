@@ -70,71 +70,11 @@ biblatex 明确要求先运行 BibTeX 或 Biber 时，默认参数的 latexmk �
 
 ## 结果分析
 
-结果的 `analysis` 汇总本次最终 TeX 日志中的已确认重复编译请求（`rerunRequired`）、未解析交叉引用键（`unresolvedReferences`）、文献引用键（`unresolvedCitations`）、缺失 PDF 目标（`unresolvedDestinations`）、重复 PDF 目标（`duplicateDestinations`）和重复标签键（`duplicateLabels`）。仅从标准 LaTeX、包或类告警正文开头识别未解析引用；普通告警示例或文件名中的同类文字仍保留为告警，不计入引用键。键去重并排序；PDF 目标名解码引擎输出的 PDF 字符串转义，引用、文献和重复标签键保留原文。日志折行不会在引用键的括号前添加空格或把括号误读为文件边界。缺少定义本身不视为重复编译请求。表格列宽需要更新时，识别 `longtable` 的明确重编译提示；列宽收敛后的最终日志不再保留该请求。也识别 hyperref 关于 PDF 页标签（`/PageLabels`）的明确重编译提示；例如 XeLaTeX 首次构建后需要补全页标签，后续日志不再请求时清除该标记。每类最多 128 个键，每个键最多 128 个 Unicode 字符；超出预算的键不截短身份，而是省略并设置 `truncated`。诊断输入被省略时该标记也为 `true`。取消、超时、无法观测最终日志或因输入变化而丢弃的结果返回 `analysis: null`；早期编译轮次已解决的警告不会进入分析。
-
-### 文献处理与重编译
-
-`analysis.requiredBibliographyTools` 汇总 biblatex 明确请求重新运行的文献工具，使用小写名称 `biber` / `bibtex`，去重并排序。完整的文献处理请求也会设置 `rerunRequired: true`，因为文献处理后还需要运行 LaTeX；仅出现未定义引用不会推断所需工具。
-
-例如，BibTeX 后端的首次编译可能返回：
-
-```json
-{
-  "rerunRequired": true,
-  "requiredBibliographyTools": ["bibtex"]
-}
-```
-
-运行 BibTeX 后，若 biblatex 只要求再运行 LaTeX，工具列表变为 `[]`，`rerunRequired` 仍为 `true`。最终日志不再请求时，两者分别为 `[]` 和 `false`。分页变化、语言加载的明确 LaTeX 重运行提示也参与分析；普通警告示例、不完整请求及其他宏包中的相似文字不会设置这些字段。
-
-摘要依据本次最终日志，不保留前一轮已满足的请求。`latex/buildFinished` 和 `latex.buildStatus` 返回相同字段；取消、超时和过期结果仍按原规则返回 `analysis: null`。重编译操作的工具适用范围见[从诊断重新编译](#从诊断重新编译)。
-
-### 排版警告摘要
-
-`analysis.boxWarnings` 汇总水平、垂直方向的 Overfull / Underfull 诊断数量，以及最大溢出量或 badness。字段、计数和预算规则见[排版警告分析](typesetting.md)。
-
-`analysis.oversizedFloats` 单独汇总浮动体过高警告的数量与最大超出量，见[浮动体高度警告](floats.md)。
-
-### 字体替换摘要
-
-`analysis.fontSubstitutions` 和 `analysis.fontSizeSubstitutions` 分别汇总最终日志中的字体与字号替换。字段、去重及预算规则见[字体诊断与结果分析](fonts.md#字体与字号替换)。
-
-### 缺字摘要
-
-`analysis.missingCharacters` 按字符与字体汇总缺字，并保留最高严重级别。字段示例、预算与定位规则见[缺字摘要](fonts.md#缺字摘要)。
-
-### Unicode 输入错误摘要
-
-`analysis.unsupportedUnicodeCharacters` 汇总最终日志中 LaTeX 未设置映射的 Unicode 字符，提供字符和码点。字段、预算与处理方式见[Unicode 输入错误](unicode-errors.md)。
+最终日志的重编译请求、未解析引用、文献工具及排版、字体和字符摘要，见[编译结果分析](build-analysis.md)。
 
 ## 编译配置
 
-使用 `initializationOptions`（Neovim 的 `init_options`）设置，运行中也可发送 `workspace/didChangeConfiguration`，其 `settings` 可直接使用下列对象或包在 `latex` 字段内。无效配置会被拒绝并保留原配置。
-
-```json
-{
-  "build": {
-    "executable": "latexmk",
-    "arguments": null,
-    "rebuildArguments": null,
-    "engine": null,
-    "outputDirectory": "build/latex-lsp",
-    "rootFile": null,
-    "onSave": false,
-    "timeoutSeconds": 120
-  }
-}
-```
-
-`rootFile` 相对于当前工作区根目录，`outputDirectory` 相对于主文档所在目录。`executable` 可改为 `pdflatex`、`xelatex`、`lualatex` 或 `tectonic`，省略 `arguments` 时自动选择对应的默认参数。自定义参数中的 `%f` 替换为根文件绝对路径，`%o` 替换为输出目录，`%j` 替换为产物名称（未配置时为主文件名去掉扩展名）；参数直接传给进程，不经过 shell。默认 TeX/latexmk 参数关闭 shell escape。超时范围为 1–3600 秒。
-
-`build.rebuildArguments` 单独指定强制编译的完整参数列表，也支持 `%f`、`%o`、`%j`；普通 `latex.build` 仍使用 `arguments`。自定义了 `arguments` 或使用未知编译工具时，必须显式设置 `rebuildArguments` 才能调用 `latex.rebuild`，否则在修改旧日志前报错。例如自定义 latexmk 参数时，可设 `"rebuildArguments": ["-g", "-pdf", "-interaction=nonstopmode", "-file-line-error", "-synctex=1", "-no-shell-escape", "-outdir=%o", "%f"]`；参数应包含工具所需的完整编译选项，设置 `jobName` 时也需自行传入 `%j`。使用这份自定义参数的重编译通知中，`engine` 为 `null`。
-
-例如 Neovim 配置中可加入 `init_options = { build = { executable = 'xelatex', onSave = true } }`。手动使用 XeLaTeX/pdfLaTeX 时只运行一遍，需要多遍处理文献和交叉引用的项目建议使用 latexmk，并自行配置对应引擎参数。
-
-`build.jobName` 可设置 PDF、日志、recorder 和 SyncTeX 的共同文件名，例如 `"jobName": "论文 draft.v2"` 生成 `论文 draft.v2.pdf`，主文件仍可以叫 `main.tex`。latexmk 和三个直接 TeX 引擎会自动添加 `-jobname`；自定义 `arguments` 需自行传递 `%j`。名称支持字母、数字、空格、点、下划线和短横线，不能包含目录或前后空格。Tectonic 默认调用不支持该选项。开始和完成通知的 `jobName` 返回实际产物名称；两个项目若将写入同一个 PDF，会拒绝并行编译，待前一次结束后可再次编译。
-
-使用 latexmk 时，`engine` 可设为 `pdflatex`、`xelatex` 或 `lualatex`，服务器会选择相应的多遍编译模式。未指定时，优先读取主文件前 20 行的 `% !TeX program = xelatex` 或 `% !TeX TS-program = lualatex`，否则使用 pdfLaTeX；指令忽略大小写和逐字环境，只接受这三个引擎名称。子文件中的 program 指令不会覆盖主文件。显式 `engine` 优先于指令，显式选择的直接引擎 `executable` 和自定义 `arguments` 保持其调用方式。例如 `init_options = { build = { engine = 'xelatex', onSave = true } }` 可用 latexmk 自动处理 XeLaTeX 的多遍编译及文献。
+编译器、引擎、根文件、输出目录、参数模板及保存后编译等设置，见[编译配置](build-configuration.md)。
 
 ## 保存、取消与输入快照
 

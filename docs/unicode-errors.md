@@ -30,7 +30,7 @@ pdfLaTeX 遇到未定义映射的 Unicode 字符时，会报告 `LaTeX Error: Un
 
 摘要只收录错误级别的完整标准消息，每次根据本次最终日志重新生成，不保留前一轮编译或修复前的记录；错误解决后返回 `[]`。最多保留 128 个不同字符，超出预算或诊断被截断时设置 `analysis.truncated: true`。逐位置诊断和错误数保持独立：同一行三个字符位置可以产生三项错误，摘要只保留其中不同的字符。
 
-字体缺少字形时的 `Missing character: There is no … in font …` 继续进入 `analysis.missingCharacters`，保留字体与严重级别。两类问题可以同时存在，详见[缺字摘要](fonts.md#缺字摘要)。取消、超时和过期结果仍按[编译指南](build.md#结果分析)返回 `analysis: null`。
+字体缺少字形时的 `Missing character: There is no … in font …` 继续进入 `analysis.missingCharacters`，保留字体与严重级别。两类问题可以同时存在，详见[缺字摘要](fonts.md#缺字摘要)。取消、超时和过期结果仍按[编译结果分析](build-analysis.md)返回 `analysis: null`。
 
 ## 处理方式
 
@@ -40,6 +40,6 @@ pdfLaTeX 遇到未定义映射的 Unicode 字符时，会报告 `LaTeX Error: Un
 \DeclareUnicodeCharacter{2212}{\ensuremath{-}}
 ```
 
-映射的替代内容需根据字符含义选择。中文和多语种正文通常需要选择合适的 Unicode 引擎、语言宏包和字体；仅切换到 XeLaTeX 或 LuaLaTeX 仍可能产生字体缺字，编译配置见[编译指南](build.md#编译配置)。服务器提供诊断信息，保留用户对字符表示和编译引擎的选择。
+映射的替代内容需根据字符含义选择。中文和多语种正文通常需要选择合适的 Unicode 引擎、语言宏包和字体；仅切换到 XeLaTeX 或 LuaLaTeX 仍可能产生字体缺字，配置方法见[编译配置](build-configuration.md)。服务器提供诊断信息，保留用户对字符表示和编译引擎的选择。
 
 真实工具回归命令见[测试文档](testing.md)。

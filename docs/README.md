@@ -32,7 +32,9 @@
 ## 编译与诊断
 
 - [静态花括号诊断](brace-diagnostics.md)：编辑时的配对检查、单 token 复制、宏正文和快速修复边界。
-- [编译](build.md)：命令、配置、通知、结果分析和产物检查。
+- [编译](build.md)：入口、命令、通知和重编译操作。
+- [编译配置](build-configuration.md)：编译器、引擎、参数模板和产物名称。
+- [编译结果分析](build-analysis.md)：结果字段、引用、重编译请求和文献工具。
 - [编译输入与过期结果](build-inputs.md)：保存检查、取消、依赖追踪和产物有效性。
 - [编译诊断](diagnostics.md)：错误定位、警告和拼写修复规则。
 - [Unicode 输入错误](unicode-errors.md)：不支持的字符、码点摘要与定位边界。

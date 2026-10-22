@@ -1,0 +1,48 @@
+# 编译结果分析
+
+[返回文档目录](README.md) · [编译指南](build.md)
+
+结果的 `analysis` 汇总本次最终 TeX 日志中的已确认重复编译请求（`rerunRequired`）、未解析交叉引用键（`unresolvedReferences`）、文献引用键（`unresolvedCitations`）、缺失 PDF 目标（`unresolvedDestinations`）、重复 PDF 目标（`duplicateDestinations`）和重复标签键（`duplicateLabels`）。
+
+仅从标准 LaTeX、包或类告警正文开头识别未解析引用；普通告警示例或文件名中的同类文字仍保留为告警，不计入引用键。键去重并排序；PDF 目标名解码引擎输出的 PDF 字符串转义，引用、文献和重复标签键保留原文。日志折行不会在引用键的括号前添加空格或把括号误读为文件边界。
+
+缺少定义本身不视为重复编译请求。表格列宽需要更新时，识别 `longtable` 的明确重编译提示；列宽收敛后的最终日志不再保留该请求。也识别 hyperref 关于 PDF 页标签（`/PageLabels`）的明确重编译提示；例如 XeLaTeX 首次构建后需要补全页标签，后续日志不再请求时清除该标记。
+
+每类最多 128 个键，每个键最多 128 个 Unicode 字符；超出预算的键不截短身份，而是省略并设置 `truncated`。诊断输入被省略时该标记也为 `true`。
+
+取消、超时、无法观测最终日志或因输入变化而丢弃的结果返回 `analysis: null`；早期编译轮次已解决的警告不会进入分析。
+
+## 文献处理与重编译
+
+`analysis.requiredBibliographyTools` 汇总 biblatex 明确请求重新运行的文献工具，使用小写名称 `biber` / `bibtex`，去重并排序。完整的文献处理请求也会设置 `rerunRequired: true`，因为文献处理后还需要运行 LaTeX；仅出现未定义引用不会推断所需工具。
+
+例如，BibTeX 后端的首次编译可能返回：
+
+```json
+{
+  "rerunRequired": true,
+  "requiredBibliographyTools": ["bibtex"]
+}
+```
+
+运行 BibTeX 后，若 biblatex 只要求再运行 LaTeX，工具列表变为 `[]`，`rerunRequired` 仍为 `true`。最终日志不再请求时，两者分别为 `[]` 和 `false`。分页变化、语言加载的明确 LaTeX 重运行提示也参与分析；普通警告示例、不完整请求及其他宏包中的相似文字不会设置这些字段。
+
+摘要依据本次最终日志，不保留前一轮已满足的请求。`latex/buildFinished` 和 `latex.buildStatus` 返回相同字段；取消、超时和过期结果仍按原规则返回 `analysis: null`。重编译操作的工具适用范围见[从诊断重新编译](build.md#从诊断重新编译)。
+
+## 排版警告摘要
+
+`analysis.boxWarnings` 汇总水平、垂直方向的 Overfull / Underfull 诊断数量，以及最大溢出量或 badness。字段、计数和预算规则见[排版警告分析](typesetting.md)。
+
+`analysis.oversizedFloats` 单独汇总浮动体过高警告的数量与最大超出量，见[浮动体高度警告](floats.md)。
+
+## 字体替换摘要
+
+`analysis.fontSubstitutions` 和 `analysis.fontSizeSubstitutions` 分别汇总最终日志中的字体与字号替换。字段、去重及预算规则见[字体诊断与结果分析](fonts.md#字体与字号替换)。
+
+## 缺字摘要
+
+`analysis.missingCharacters` 按字符与字体汇总缺字，并保留最高严重级别。字段示例、预算与定位规则见[缺字摘要](fonts.md#缺字摘要)。
+
+## Unicode 输入错误摘要
+
+`analysis.unsupportedUnicodeCharacters` 汇总最终日志中 LaTeX 未设置映射的 Unicode 字符，提供字符和码点。字段、预算与处理方式见[Unicode 输入错误](unicode-errors.md)。

@@ -29,7 +29,7 @@
 
 恢复引擎按字节折行的长字体名和字号，保留名称内部原有的空白、Unicode 和括号；无法确认完整警告时不推测替换关系。仅有 “Some font shapes…” 或 “Size substitutions…” 等汇总警告不产生具体记录。低于 LaTeX `fontsubfuzz` 阈值而未报警的字号替换也不会被推断。
 
-两类替换本身不设置 `rerunRequired`，不改变构建成功状态或警告数。`latex/buildFinished` 和 `latex.buildStatus` 返回相同摘要，只采用本次最终日志；修复后两数组恢复为 `[]`，早期编译轮次中的替换不保留。取消、超时或过期等结果继续按[结果分析](build.md#结果分析)返回 `analysis: null`。
+两类替换本身不设置 `rerunRequired`，不改变构建成功状态或警告数。`latex/buildFinished` 和 `latex.buildStatus` 返回相同摘要，只采用本次最终日志；修复后两数组恢复为 `[]`，早期编译轮次中的替换不保留。取消、超时或过期等结果继续按[结果分析](build-analysis.md)返回 `analysis: null`。
 
 ## 缺字摘要
 

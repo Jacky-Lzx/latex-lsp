@@ -34,4 +34,4 @@
 
 ## 编译状态
 
-摘要本身不改变构建成功状态、警告数或 `rerunRequired`。`latex/buildFinished` 和 `latex.buildStatus` 返回相同摘要；较早编译轮次中的警告不保留，排版修复后相应类别消失。取消、超时或过期等结果继续按[结果分析](build.md#结果分析)返回 `analysis: null`。
+摘要本身不改变构建成功状态、警告数或 `rerunRequired`。`latex/buildFinished` 和 `latex.buildStatus` 返回相同摘要；较早编译轮次中的警告不保留，排版修复后相应类别消失。取消、超时或过期等结果继续按[结果分析](build-analysis.md)返回 `analysis: null`。
