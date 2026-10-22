@@ -24,6 +24,7 @@
 - [字符串测试](string-tests.md)：etoolbox 的字面数据、条件分支和参数提示；[跨文件上下文](string-test-projects.md)说明重定义、加载顺序和共享文件重命名边界。
 - [字符串命令的保存与恢复](string-test-copies.md)：静态复制、恢复后的字面数据和跨文件参数边界。
 - [字符串副本的直接调用](string-test-copy-calls.md)：捕获的数据参数数量、参数提示、共享文件歧义和编译诊断。
+- [撤销定义与字符串测试](string-test-undefinitions.md)：撤销操作数、已保存副本、重新定义、动态目标和增量更新。
 - [条件文件钩子](conditional-string-tests.md)：文件存在性分支、前置钩子顺序、字符串语义和重命名。
 - [章节选择与字符串语义](selected-string-tests.md)：`includeonly` 的加载顺序、名称匹配、共享文件和重命名边界。
 - [计数器与定理](counters.md)：编号关系、跨文件重命名、etoolbox 操作与 refcount 标签赋值。
