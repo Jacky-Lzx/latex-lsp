@@ -14,6 +14,8 @@ Unicode 未设置映射的错误与码点摘要见[Unicode 输入错误](unicode
 
 `Extra \right.` 的命令定位、移除操作与标准定界符展开帧见[多余的右定界符](right-delimiters.md)。`Missing \right. inserted.` 的结束标记定位与插入操作见[缺失的右定界符](missing-right-delimiters.md)。
 
+`Missing delimiter (. inserted).` 的命令定位与不可见参数插入见[缺失的定界符参数](delimiter-operands.md)。
+
 - [分析范围与来源确认](#分析范围与来源确认)
 - [命令、环境与计数器](#命令环境与计数器)
 - [长度诊断与修复](length-diagnostics.md)：etoolbox 的未定义长度定位与拼写修复。
