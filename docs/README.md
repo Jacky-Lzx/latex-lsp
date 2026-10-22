@@ -2,9 +2,10 @@
 
 [返回项目 README](../README.md)
 
-初次使用请从[安装与编辑器配置](editors.md)开始；需要生成 PDF 时，继续阅读[编译指南](build.md)。
+支持补全、导航、跨文件重命名、诊断、快速修复和后台编译。初次使用请先[安装服务器](install.md)，再[配置编辑器](editors.md)；生成 PDF 的配置见[编译指南](build.md)。
 
-- [安装与编辑器配置](editors.md)：构建、Neovim 配置及示例。
+- [安装与启动](install.md)：环境要求、构建、安装及进程协议。
+- [编辑器配置](editors.md)：Neovim 配置、其他编辑器及示例。
 - [编辑功能](editing.md)：补全、导航、高亮和颜色。
 - [文献](bibliography.md)：文献键、natbib、手写文献和条目关系。
 - [biblatex 文献资源](biblatex-resources.md)：加载命令、路径编辑和静态支持范围。
@@ -20,6 +21,7 @@
 - [编译](build.md)：命令、配置、通知、结果分析和产物检查。
 - [编译输入与过期结果](build-inputs.md)：保存检查、取消、依赖追踪和产物有效性。
 - [编译诊断](diagnostics.md)：错误定位、警告和拼写修复规则。
+- [特殊字符诊断与修复](special-characters.md)：裸 `&` / `#` 的精确定位、转义修复与安全边界。
 - [字体诊断与结果分析](fonts.md)：字体和字号替换、缺字摘要及定位边界。
 - [排版警告分析](typesetting.md)：Overfull / Underfull 分类统计与最大指标。
 - [文献编译诊断](bibliography-diagnostics.md)：BibTeX / Biber 来源定位、缺失资源和文件名修复。
