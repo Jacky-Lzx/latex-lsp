@@ -63,17 +63,9 @@ LaTeX 内核的 `NewExpandableDocumentCommand`、`RenewExpandableDocumentCommand
 
 ## 计数器、定理与寄存器
 
-- 定理重命名：维护 `\newtheorem` 的共享编号与编号重置关系、计数器操作、派生命令及 cleveref 名称；区分自有计数器、共享计数器和无编号定理，可从关联命令跳转或发起重命名。
-
-计数器操作支持命令片段、参数提示和名称补全，包括 `setcounter` / `addtocounter`、`stepcounter` / `refstepcounter`、`value` / `arabic` 等格式化命令、`counterwithin` / `counterwithout` / `numberwithin`。名称候选来自内置计数器、当前项目的 `newcounter` / `newaliascnt` 和拥有计数器的定理声明；支持新计数器、别名及定理的共享/重置参数，保留已有名称后缀、空白和其他实参。不同论文之间的候选按依赖隔离，宏生成的名称不作推断。
-
-静态 `newcounter` / `newaliascnt` 声明支持跳转、悬停、引用、文档/工作区符号及跨文件重命名。重命名联动维护计数器操作、子计数器重置、定理共享编号、别名和格式化命令，包括字面 `csname`、`aliascntresetthe` 及别名元数据；同名的独立宏和 cleveref 的显示文字保持原样。名称冲突、共享引用在其他论文中指向独立声明、或同名定理与计数器对格式化命令的所有权有歧义时拒绝改动。
+计数器与定理的补全、导航、跨文件重命名及 etoolbox / refcount 操作见[计数器与定理](counters.md)。该页也说明共享编号、重置关系、派生命令和重命名边界。
 
 `newlength`、`newsavebox`、`newcount` / `newdimen` / `newskip` / `newmuskip` / `newtoks` / `newbox` 等寄存器分配，以及 `chardef` / `mathchardef`、寄存器绑定和字体声明也进入符号索引，支持变量补全、导航、悬停和跨文件安全重命名；识别直接名称和经 `expandafter` 展开的字面 `csname` 声明。常用长度操作、保存盒命令提供片段及参数提示；重命名会检查已有宏、寄存器、计数器派生命令和常用内置长度/寄存器原语的冲突。
-
-`setcounterref` / `addtocounterref`、`setcounterpageref` / `addtocounterpageref` 分别识别首个计数器参数和第二个标签参数，提供各自的补全、导航、引用、重命名、编译诊断和拼写修复。同名计数器与标签仍属于不同的符号，修复和重命名只改动相应参数；支持命令片段、参数提示及跨行标签的补全。常用的带星号引用（如 `ref*`、`pageref*`）也支持名称补全和参数提示。
-
-重命名静态 `\newtheorem{claim}{Claim}` 时，同步维护 `\newtheorem{lemma}[claim]{Lemma}`、`\newtheorem{fact}{Fact}[claim]`、`\newcounter{inner}[claim]`、常见计数器操作与 `counterwithin` / `counterwithout` / `numberwithin`，以及 `\claim`、`\endclaim`、`\theclaim` 等派生命令；支持字面 `\csname theclaim\endcsname`，不展开动态宏。共享计数器的定理保留底层计数器，无编号定理不修改独立计数器。新名称与计数器或派生命令冲突、或共享引用属于其他项目中的独立计数器时拒绝改动；存在直接派生命令调用时，新名称需能组成 TeX 控制序列。
 
 ## 字体与数学命令
 

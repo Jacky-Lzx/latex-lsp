@@ -42,7 +42,23 @@ cargo test --locked --test signature optional_default_previews -- --include-igno
 cargo test --locked --test rename --test bracket_labels --test counter_brackets --test counter_rename --test commented_labels -- --include-ignored
 ```
 
-源码文件移动的三引擎回归见下节，支持范围见[标签与交叉引用](labels.md)、[PDF 目标与书签](pdf-destinations.md)和[符号与重命名](symbols.md)。
+源码文件移动的三引擎回归见[排版日志与文件移动](#排版日志与文件移动)，支持范围见[标签与交叉引用](labels.md)、[PDF 目标与书签](pdf-destinations.md)和[符号与重命名](symbols.md)。
+
+## 计数器与定理
+
+默认测试检查跨文件导航与改名、补全、参数提示、语义高亮、名称冲突及非法星号和动态名称的排除：
+
+```sh
+cargo test --locked --test etoolbox_counters --test counters --test counter_rename --test counter_brackets --test counter_fixes --test undefined_counters --test shortened_counter_context --test theorem
+```
+
+etoolbox 的真实回归需要 pdfLaTeX、XeLaTeX、LuaLaTeX 和 etoolbox。在三个引擎中比较普通计数器与定理改名前后的局部赋值、全局赋值和存在性检查，覆盖含 `]` 的新名称；同时用传统与文件行号日志验证未定义计数器的精确定位，应用拼写修复后重新编译。检查分支正文、表达式和同名独立符号不被误改：
+
+```sh
+cargo test --locked --test etoolbox_counters -- --include-ignored
+```
+
+支持范围与示例见[计数器与定理](counters.md)。
 
 ## 排版日志与文件移动
 
