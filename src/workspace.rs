@@ -513,6 +513,12 @@ impl Workspace {
         let Some(doc) = self.documents.get(uri) else {
             return vec![];
         };
+        if let Some(targets) = crate::imports::dependencies(self, uri, root, command) {
+            return targets
+                .into_iter()
+                .map(|uri| (uri, DocumentKind::Latex))
+                .collect();
+        }
         let extension = match command.name.as_str() {
             "input" | "InputIfFileExists" | "include" | "subfile" => "tex",
             "bibliography" | "nobibliography" => "bib",

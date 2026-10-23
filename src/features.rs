@@ -1099,6 +1099,11 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
         return vec![];
     }
     if !name_command {
+        if let Some(items) = crate::imports::completion(workspace, uri, offset) {
+            return items;
+        }
+    }
+    if !name_command {
         if let Some(items) = crate::citation_search::completion(workspace, uri, offset, &scope) {
             return items;
         }

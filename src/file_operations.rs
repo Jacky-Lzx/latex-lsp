@@ -537,6 +537,12 @@ pub fn will_rename(workspace: &Workspace, files: &[FileRename]) -> Result<Option
                     .is_some_and(|path| renames.path(&path) != path);
                 let document_changed = renames.affects(uri);
                 let root_changed = renames.affects(root);
+                if crate::imports::is_link(workspace, uri, root, link.range) {
+                    if target_changed || document_changed || root_changed {
+                        return Err(Error::invalid_params("Moving import-relative sources requires updating their import directory explicitly"));
+                    }
+                    continue;
+                }
                 let command = doc.syntax.commands.iter().chain(&commands).find(|command| {
                     syntax::file_extensions(&command.name).is_some()
                         && syntax::file_argument(&doc.text.source, command).is_some_and(

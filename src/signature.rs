@@ -277,6 +277,8 @@ fn builtin(name: &str) -> Option<Signature> {
         });
     }
     let (arguments, starred): (&[(&str, bool)], bool) = match name {
+        "import" | "subimport" | "inputfrom" | "subinputfrom" | "includefrom"
+        | "subincludefrom" => (&[("directory", false), ("file", false)], true),
         "DeclareBibliographyCategory" => (&[("category", false)], false),
         "printfield" => (&[("format", true), ("field", false)], false),
         "thefield" | "strfield" => (&[("field", false)], false),

@@ -37,6 +37,7 @@ mod generated;
 pub mod graphics;
 mod graphics_settings;
 mod image_fixes;
+mod imports;
 mod label_diagnostics;
 mod lengths;
 mod listings;

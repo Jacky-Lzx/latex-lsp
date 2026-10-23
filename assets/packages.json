@@ -46,5 +46,6 @@
   {"name":"fontspec","description":"OpenType font selection for XeLaTeX and LuaLaTeX.","commands":[]},
   {"name":"tikz","description":"Drawing diagrams with TikZ.","commands":[]},
   {"name":"pgfplots","description":"Scientific plots based on TikZ.","requires":["tikz"],"commands":[]},
-  {"name":"biblatex","description":"Programmable bibliographies and citations.","commands":[]}
+  {"name":"biblatex","description":"Programmable bibliographies and citations.","commands":[]},
+  {"name":"import","description":"Import source files with scoped relative search directories.","commands":[{"name":"import","parameters":["directory","file"],"starred":true,"description":"Load a source file relative to the selected import directory."},{"name":"subimport","parameters":["directory","file"],"starred":true,"description":"Load a source file relative to the selected import directory."},{"name":"inputfrom","parameters":["directory","file"],"starred":true,"description":"Load a source file relative to the selected import directory."},{"name":"subinputfrom","parameters":["directory","file"],"starred":true,"description":"Load a source file relative to the selected import directory."},{"name":"includefrom","parameters":["directory","file"],"starred":true,"description":"Load a source file relative to the selected import directory."},{"name":"subincludefrom","parameters":["directory","file"],"starred":true,"description":"Load a source file relative to the selected import directory."}]}
 ]
