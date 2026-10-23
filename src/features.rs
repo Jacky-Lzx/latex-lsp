@@ -341,6 +341,22 @@ fn target<'a>(workspace: &'a Workspace, uri: &Url, offset: usize) -> Option<Targ
     {
         return raw;
     }
+    if crate::named_references::may_contain_key(doc, offset) {
+        if let Some((citation, span)) =
+            crate::named_references::Index::new(workspace, uri).target(uri, offset)
+        {
+            return Some(Target {
+                kind: if citation {
+                    TargetKind::Citation
+                } else {
+                    TargetKind::Label
+                },
+                name: &doc.text.source[span.clone()],
+                span,
+                control_word: false,
+            });
+        }
+    }
     if crate::environment_calls::may_contain_name(doc, offset) {
         if let Some(span) = crate::environment_calls::Index::new(workspace).target(uri, offset) {
             return Some(Target {
@@ -505,6 +521,13 @@ fn rename_target<'a>(
     }
     if let Some(kind) = target.kind.saved_kind() {
         crate::saved_text::validate(workspace, &scope, kind)?;
+    }
+    if matches!(target.kind, TargetKind::Label | TargetKind::Citation) {
+        crate::named_references::Index::new(workspace, uri).validate(
+            &scope,
+            target.kind == TargetKind::Citation,
+            target.name,
+        )?;
     }
     Ok(Some((target, scope)))
 }
@@ -1706,8 +1729,20 @@ fn all_references(
     });
     let environment_calls = (target.kind == TargetKind::Environment)
         .then(|| crate::environment_calls::Index::new(workspace));
+    let named_references = matches!(target.kind, TargetKind::Label | TargetKind::Citation)
+        .then(|| crate::named_references::Index::new(workspace, uri));
     let mut result = Vec::new();
     for (uri, doc) in &workspace.documents {
+        if let Some(index) = &named_references {
+            result.extend(
+                index
+                    .references(uri, target.kind == TargetKind::Citation, target.name)
+                    .map(|span| Location {
+                        uri: uri.clone(),
+                        range: doc.text.range(span.start, span.end),
+                    }),
+            );
+        }
         if target.kind == TargetKind::BibString {
             result.extend(
                 doc.syntax

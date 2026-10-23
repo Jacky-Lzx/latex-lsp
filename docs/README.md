@@ -15,6 +15,7 @@
 - [格式化](formatting.md)：LaTeX 与 BibTeX 全文和范围格式化、默认 tex-fmt、可选 latexindent、参数与项目设置。
 - [文档折叠](folding.md)：章节、环境、多行公式、BibTeX 条目及客户端能力。
 - [外部文档与编译引用信息](auxiliary-references.md)：xr 前缀、aux 编号/页码/标题、悬停和行内提示。
+- [静态命名引用](named-references.md)：命名引用键的导航、引用收集和跨文件重命名。
 - [标签与交叉引用](labels.md)：键名、注释、范围引用及 hyperref 标签。
 - [PDF 目标与书签](pdf-destinations.md)：内部链接、组合目标和书签重命名。
 - [上下文选项补全](options.md)：宏包、文档类、图片和设置命令的键与枚举值。

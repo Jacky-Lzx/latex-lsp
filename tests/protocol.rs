@@ -27392,3 +27392,68 @@ fn duplicate_key_related_locations_refresh_over_push_and_pull_without_building()
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+fn named_reference_keys_navigate_and_return_versioned_cross_file_renames_over_stdio() {
+    use latex_lsp::text::Text;
+    let dir = tempfile::tempdir().unwrap();
+    let uri = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let chapter = Url::from_file_path(dir.path().join("chapter.tex")).unwrap();
+    let source = "\\documentclass{article}\r\n\\input{chapter}\r\n\\newcommand{\\later}{\\csuse{ref}{key}}\r\n😀 \\csname ref\\endcsname{key} \\ref{key}";
+    std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+    std::fs::write(chapter.to_file_path().unwrap(), r"\label{key}").unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"latex","version":5,"text":source}}),
+    );
+    let text = Text::new(source.into());
+    let at = source.find("endcsname{key").unwrap() + "endcsname{".len();
+    let position = text.position(at + 1);
+    let params = json!({"textDocument":{"uri":uri},"position":position});
+    let definitions = server.request(2, "textDocument/definition", params.clone());
+    assert_eq!(definitions[0]["uri"], chapter.as_str());
+    assert_eq!(
+        definitions[0]["range"],
+        json!({"start":{"line":0,"character":7},"end":{"line":0,"character":10}})
+    );
+    assert!(!server
+        .request(3, "textDocument/hover", params.clone())
+        .is_null());
+    let references = server.request(4, "textDocument/references", json!({"textDocument":{"uri":uri},"position":position,"context":{"includeDeclaration":true}}));
+    assert_eq!(references.as_array().unwrap().len(), 4);
+    let highlights = server.request(5, "textDocument/documentHighlight", params.clone());
+    assert_eq!(highlights.as_array().unwrap().len(), 3);
+    let prepared = server.request(6, "textDocument/prepareRename", params.clone());
+    assert_eq!(prepared["range"], json!(text.range(at, at + 3)));
+    let renamed = server.request(
+        7,
+        "textDocument/rename",
+        json!({"textDocument":{"uri":uri},"position":position,"newName":"updated"}),
+    );
+    let documents = renamed["documentChanges"].as_array().unwrap();
+    assert_eq!(documents.len(), 2);
+    let main = documents
+        .iter()
+        .find(|item| item["textDocument"]["uri"] == uri.as_str())
+        .unwrap();
+    assert_eq!(main["textDocument"]["version"], 5);
+    assert_eq!(main["edits"].as_array().unwrap().len(), 3);
+    assert!(documents
+        .iter()
+        .flat_map(|item| item["edits"].as_array().unwrap())
+        .all(|edit| edit["newText"] == "updated"));
+    server.notify("textDocument/didOpen", json!({"textDocument":{"uri":chapter,"languageId":"latex","version":1,"text":"\\label{key}\\renewcommand{\\ref}[1]{#1}"}}));
+    assert_eq!(
+        server.request(8, "textDocument/definition", params.clone()),
+        json!([])
+    );
+    assert!(server
+        .request(9, "textDocument/prepareRename", params)
+        .is_null());
+    server.request(10, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

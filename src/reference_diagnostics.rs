@@ -73,96 +73,19 @@ pub(crate) fn occurrences(ws: &Workspace, uri: &Url) -> Vec<(bool, Range<usize>)
         {
             continue;
         }
-        let resolved;
-        let command = if let Some((name, span)) =
-            signatures.named_invocation(source, &doc.syntax, index, &operands, &declarations)
-        {
-            if !syntax::warns_on_undefined_reference(name)
-                && !syntax::has_separate_label_argument(name)
-                && !syntax::warns_on_undefined_citation(name)
-            {
-                continue;
-            }
-            let start = if syntax::is_reference(name) {
-                syntax::reference_argument_start(source, name, span.end)
-            } else if syntax::is_citation(name) {
-                syntax::citation_argument_start(source, name, span.end)
-            } else {
-                None
-            };
-            let argument = start
-                .and_then(|at| syntax::group(source, at, b'{', b'}'))
-                .map(|(argument, _)| {
-                    if syntax::is_single_reference(name) {
-                        syntax::single_reference_argument(source, argument)
-                    } else if syntax::is_single_citation(name) {
-                        syntax::single_citation_argument(source, argument)
-                    } else {
-                        argument
-                    }
-                });
-            resolved = syntax::Command {
-                name: name.into(),
-                span,
-                argument,
-            };
-            &resolved
-        } else {
-            command
-        };
+        let resolved = crate::reference_calls::named_command(
+            source,
+            &doc.syntax,
+            index,
+            &signatures,
+            &operands,
+            &declarations,
+        );
+        let command = resolved.as_ref().unwrap_or(command);
         if !signatures.command_unchanged(&command.name) {
             continue;
         }
-        if syntax::warns_on_undefined_citation(&command.name) {
-            if let Some(style) = crate::citations::style(&command.name) {
-                for arg in crate::citations::arguments(source, command.span.end, style).keys() {
-                    result.extend(
-                        crate::citations::key_spans(source, arg, style)
-                            .into_iter()
-                            .map(|span| (true, span)),
-                    );
-                }
-            } else if let Some(arg) = &command.argument {
-                if syntax::is_single_citation(&command.name) {
-                    if syntax::is_static_citation_key(&arg.value) {
-                        result.push((true, arg.span.clone()));
-                    }
-                } else {
-                    result.extend(
-                        syntax::citation_list_spans(source, arg.span.clone())
-                            .into_iter()
-                            .map(|span| (true, span)),
-                    );
-                }
-            }
-        } else if syntax::warns_on_undefined_reference(&command.name)
-            || syntax::has_separate_label_argument(&command.name)
-        {
-            if let Some(arg) = command
-                .argument
-                .as_ref()
-                .filter(|_| !syntax::has_separate_label_argument(&command.name))
-            {
-                if syntax::is_single_reference(&command.name) {
-                    if syntax::is_static_reference_key(&arg.value) {
-                        result.push((false, arg.span.clone()));
-                    }
-                } else {
-                    result.extend(
-                        syntax::reference_list_spans(source, arg.span.clone())
-                            .into_iter()
-                            .map(|span| (false, span)),
-                    );
-                }
-            }
-            if let Some(arg) = syntax::separate_label_argument(source, command)
-                .or_else(|| syntax::range_reference_end(source, command))
-            {
-                if syntax::is_static_reference_key(&arg.value) {
-                    result.push((false, arg.span));
-                }
-            }
-        }
+        result.extend(crate::reference_calls::keys(source, command, true));
     }
     result.sort_by_key(|(citation, span)| (span.start, span.end, *citation));
     result.dedup();
