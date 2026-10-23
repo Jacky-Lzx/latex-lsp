@@ -1097,6 +1097,11 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
     if doc.syntax.is_ignored(offset.saturating_sub(1)) && !name_command {
         return vec![];
     }
+    if !name_command {
+        if let Some(items) = crate::bib_accessors::completion(workspace, uri, offset, &scope) {
+            return items;
+        }
+    }
     if let Some(items) = crate::counters::completion(workspace, uri, offset, &scope) {
         return items;
     }
@@ -1362,7 +1367,10 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
     }
     for &(name, snippet, documentation) in COMMANDS {
         if name.starts_with(prefix) && seen.insert(name.into()) {
+            let builtin_arguments =
+                name != "thefield" || crate::signature::uses_builtin(workspace, name, &scope);
             let use_snippets = use_snippets
+                && builtin_arguments
                 && !crate::signature::has_existing_arguments(
                     workspace,
                     name,
@@ -1373,7 +1381,8 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
                 label: name.into(),
                 kind: Some(CompletionItemKind::FUNCTION),
                 detail: Some(format!("\\{name}")),
-                documentation: Some(Documentation::String(documentation.into())),
+                documentation: builtin_arguments
+                    .then(|| Documentation::String(documentation.into())),
                 insert_text_format: Some(if use_snippets {
                     InsertTextFormat::SNIPPET
                 } else {
@@ -1825,6 +1834,9 @@ pub fn hover(workspace: &Workspace, uri: &Url, position: Position) -> Option<Hov
     let doc = workspace.documents.get(uri)?;
     let offset = doc.text.offset(position)?;
     if let Some(hover) = crate::bib_completion::hover(doc, offset) {
+        return Some(hover);
+    }
+    if let Some(hover) = crate::bib_accessors::hover(workspace, uri, offset) {
         return Some(hover);
     }
     let target = target(workspace, uri, offset)?;

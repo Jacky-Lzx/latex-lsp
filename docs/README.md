@@ -12,14 +12,16 @@
 ## 编辑与项目
 
 - [编辑功能](editing.md)：补全、导航、高亮和颜色。
+- [文档折叠](folding.md)：章节、环境、多行公式、BibTeX 条目及客户端能力。
 - [标签与交叉引用](labels.md)：键名、注释、范围引用及 hyperref 标签。
 - [PDF 目标与书签](pdf-destinations.md)：内部链接、组合目标和书签重命名。
 - [补全](completion.md)：调用片段、已有参数、命令名操作数及名称替换。
 - [参数提示](signatures.md)：跨文件签名、声明参数、可选参数边界与注释中的数量。
-- [文献](bibliography.md)：文献键、natbib、手写文献和条目关系。
+- [文献](bibliography.md)：文献键、biblatex 别名、natbib、手写文献、条目关系、字符串缩写及 URL/DOI 链接。
 - [biblatex 文献资源](biblatex-resources.md)：加载命令、路径编辑和静态支持范围。
 - [biblatex 引用](biblatex.md)：字段、列表、姓名、单次、多组和卷号引用。
 - [biblatex 文献分类](bibliography-categories.md)：分类分配、文献键编辑及重命名边界。
+- [biblatex 文献集合](bibliography-sets.md)：动态集合声明、成员引用、独立重命名及原生集合诊断。
 - [符号与重命名](symbols.md)：宏、环境、计数器等符号的支持范围。
 - [字符串测试](string-tests.md)：etoolbox 的字面数据、条件分支和参数提示；[跨文件上下文](string-test-projects.md)说明重定义、加载顺序和共享文件重命名边界。
 - [字符串命令的保存与恢复](string-test-copies.md)：静态复制、恢复后的字面数据和跨文件参数边界。

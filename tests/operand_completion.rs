@@ -45,6 +45,14 @@ fn command_operands_replace_only_the_name() {
         r"\NewCommandCopy{\ord|}{\relax}",
         r"\letcs{\ord|}{relax}",
         r"\cslet{saved}{\ord|}",
+        r"\iffieldequals{title}{\ord|}",
+        r"\iflistequals{publisher}{\ord|}",
+        r"\ifnameequals{author}{\ord|}",
+        "\\iffieldequals{title}% between\r\n{% before\r\n\\ord|% after\r\n}",
+        r"\ifnameequals{author}{\ord|",
+        r"\iffieldequals{title}\ord|",
+        r"\newif\ord|",
+        r"\newif\ord|inary",
     ] {
         let marked = format!("\\newcommand{{\\ordinary}}[1]{{#1}}\n中文😀 {operand}");
         let (item, text, offset) = complete(&marked, "ordinary");
@@ -99,6 +107,12 @@ fn empty_operand_prefixes_insert_names_without_arguments_or_fake_definitions() {
         r"\NewCommandCopy{\|}{\relax}",
         r"\letcs{\|}{relax}",
         r"\cslet{saved}{\|}",
+        r"\iffieldequals{title}{\|}",
+        r"\iflistequals{publisher}{\|}",
+        r"\ifnameequals{author}{\|}",
+        r"\ifnameequals{author}{\|",
+        r"\newif\|",
+        "\\newif % condition\r\n\\|",
     ] {
         let marked = format!("\\newcommand{{\\ordinary}}[1]{{#1}}\n中文😀 {operand}");
         for label in ["ordinary", "section"] {
@@ -169,6 +183,14 @@ fn executed_commands_keep_argument_snippets() {
         r"\futurelet\saved\relax\ord|",
         r"\def\meaning{}\meaning\ord|",
         r"\def\let{}\let\saved\ord|",
+        r"\iffieldequals{title}{\saved}{\ord|}{no}",
+        r"\iflistequals{publisher}{\saved}{yes}{\ord|}",
+        r"\ifnameequals{author}{\saved}\ord|",
+        r"\newcommand\iffieldequals[2]{}\iffieldequals{title}{\ord|}",
+        r"\newif\iflistequals\iflistequals{publisher}{\ord|}",
+        r"\meaning\ifnameequals{author}{\ord|}",
+        r"\def\newif{}\newif\ord|",
+        r"\meaning\newif\ord|",
     ] {
         let marked = format!("\\newcommand{{\\ordinary}}[1]{{#1}}\n{call}");
         let (item, _, _) = complete(&marked, "ordinary");

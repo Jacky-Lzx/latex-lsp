@@ -17149,6 +17149,323 @@ fn biblatex_entry_queries_keep_branch_roles_and_refresh_single_key_references_ov
 }
 
 #[test]
+fn biblatex_data_selectors_complete_typed_names_hover_and_refresh_user_overrides_over_stdio() {
+    use latex_lsp::text::Text;
+    use tower_lsp::lsp_types::{
+        CompletionItem, CompletionItemKind, CompletionTextEdit, TextDocumentContentChangeEvent,
+    };
+
+    let cases = [
+        ("printfield", "[fm[t]", "title", 1),
+        ("printlist", "[{fm[t]}][2-4]", "publisher", 2),
+        ("printnames", "[fmt][2-4]", "author", 2),
+        ("citefield", "[see][12]{alpha}[fmt]", "title", 4),
+        ("citelist", "{alpha}[fmt]", "publisher", 4),
+        ("citename", "{alpha}", "author", 4),
+        ("thefield", "", "title", 0),
+        ("strfield", "", "title", 0),
+        ("iffieldundef", "", "title", 0),
+        ("iflistundef", "", "publisher", 0),
+        ("ifnameundef", "", "author", 0),
+        ("iffieldequalstr", "", "title", 0),
+        ("iffieldequals", "", "title", 0),
+        ("iffieldsequal", "", "title", 0),
+        ("iffieldsequal", "{year}", "title", 1),
+        ("iflistequals", "", "publisher", 0),
+        ("ifnameequals", "", "author", 0),
+        ("ifentrytype", "", "book", 0),
+    ];
+    for snippets in [false, true] {
+        let mut server = Server::start();
+        server.request(1, "initialize", json!({"processId":null,"capabilities":{"textDocument":{"completion":{"completionItem":{"snippetSupport":snippets}}}}}));
+        server.notify("initialized", json!({}));
+        let main = "file:///data-selector-protocol/main.tex";
+        let bib = "file:///data-selector-protocol/refs.bib";
+        server.notify("textDocument/didOpen", json!({"textDocument":{"uri":bib,"languageId":"bibtex","version":3,"text":"@book{alpha,title={Alpha}} @book{title,title={Title}} @book{publisher,title={Publisher}} @book{author,title={Author}}"}}));
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":main,"languageId":"latex","version":1,"text":""}}),
+        );
+        let mut version = 1;
+        for (index, (name, before, field, parameter)) in cases.iter().enumerate() {
+            let id = 10 + index as u64 * 20;
+            let kind = if *name == "ifentrytype" {
+                CompletionItemKind::CLASS
+            } else {
+                CompletionItemKind::FIELD
+            };
+            let prefix = field[..2].to_ascii_uppercase();
+            let tail = if name.starts_with("if") {
+                let comparison = match *name {
+                    "iffieldequalstr" => "{a string}",
+                    "iffieldequals" | "iflistequals" | "ifnameequals" => "{\\saved}",
+                    "iffieldsequal" if before.is_empty() => "{year}",
+                    _ => "",
+                };
+                format!("{comparison}{{True {field}}}{{False {field}}}")
+            } else {
+                String::new()
+            };
+            let source = format!(
+                "% 😀\r\n\\{name}{before}{{% before\r\n {prefix}BAD % after\r\n}}{tail} prose\r\n"
+            );
+            version += 1;
+            server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":version},"contentChanges":[{"text":source}]}));
+            let text = Text::new(source.clone());
+            let start = source.find(&format!("{prefix}BAD")).unwrap();
+            let at = text.position(start + 2);
+            let target = json!({"textDocument":{"uri":main},"position":at});
+            let items: Vec<CompletionItem> = serde_json::from_value(server.request(
+                id,
+                "textDocument/completion",
+                target.clone(),
+            ))
+            .unwrap();
+            assert!(items.iter().all(|item| item.kind == Some(kind)));
+            let item = items.into_iter().find(|item| item.label == *field).unwrap();
+            assert_ne!(
+                item.insert_text_format,
+                Some(tower_lsp::lsp_types::InsertTextFormat::SNIPPET)
+            );
+            let Some(CompletionTextEdit::Edit(edit)) = item.text_edit else {
+                panic!()
+            };
+            assert_eq!(edit.range.start.line, at.line);
+            assert_eq!(edit.range.end.line, at.line);
+            let mut edits = item.additional_text_edits.unwrap_or_default();
+            edits.push(edit);
+            edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
+            let changes: Vec<_> = edits
+                .into_iter()
+                .map(|edit| TextDocumentContentChangeEvent {
+                    range: Some(edit.range),
+                    range_length: None,
+                    text: edit.new_text,
+                })
+                .collect();
+            let completed = text.changed(changes.clone()).unwrap();
+            assert_eq!(
+                completed.source,
+                source.replace(&format!(" {prefix}BAD "), field)
+            );
+            version += 1;
+            server.notify(
+                "textDocument/didChange",
+                json!({"textDocument":{"uri":main,"version":version},"contentChanges":changes}),
+            );
+            let start = completed
+                .source
+                .find(&format!("\r\n{field}% after"))
+                .unwrap()
+                + 2;
+            let at = completed.position(start + 2);
+            let target = json!({"textDocument":{"uri":main},"position":at});
+            let hover = server.request(id + 1, "textDocument/hover", target.clone());
+            assert_eq!(
+                hover["range"],
+                json!(completed.range(start, start + field.len()))
+            );
+            assert!(hover["contents"]["value"]
+                .as_str()
+                .unwrap()
+                .starts_with(&format!("{field}\n\n")));
+            assert!(server
+                .request(id + 2, "textDocument/definition", target.clone())
+                .as_array()
+                .unwrap()
+                .is_empty());
+            assert!(server
+                .request(id + 3, "textDocument/prepareRename", target.clone())
+                .is_null());
+            assert_eq!(
+                server.request(id + 4, "textDocument/signatureHelp", target)["activeParameter"],
+                *parameter
+            );
+            if name.starts_with("cite") {
+                let key = completed.position(completed.source.find("{alpha}").unwrap() + 2);
+                let definitions = server.request(
+                    id + 5,
+                    "textDocument/definition",
+                    json!({"textDocument":{"uri":main},"position":key}),
+                );
+                assert_eq!(definitions[0]["uri"], bib);
+            }
+
+            let overridden = format!("\\newcommand\\{name}[1]{{}}{}", completed.source);
+            version += 1;
+            server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":version},"contentChanges":[{"text":overridden}]}));
+            let overridden_at = Text::new(overridden.clone())
+                .position(overridden.find(&format!("\r\n{field}% after")).unwrap() + 4);
+            let target = json!({"textDocument":{"uri":main},"position":overridden_at});
+            let items = server.request(id + 6, "textDocument/completion", target.clone());
+            assert!(!items
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["kind"] == json!(kind)));
+            assert!(server
+                .request(id + 7, "textDocument/hover", target)
+                .is_null());
+            server.notify(
+                "textDocument/didClose",
+                json!({"textDocument":{"uri":main}}),
+            );
+            version += 1;
+            server.notify("textDocument/didOpen", json!({"textDocument":{"uri":main,"languageId":"latex","version":version,"text":completed.source}}));
+            assert!(!server
+                .request(
+                    id + 8,
+                    "textDocument/hover",
+                    json!({"textDocument":{"uri":main},"position":at})
+                )
+                .is_null());
+        }
+        for (index, (source, name)) in [
+            ("\\newcounter{field}\\thefield", "thefield"),
+            ("\\newif\\ifnameundef\\ifnameundef", "ifnameundef"),
+            (
+                "\\newif\\iffieldequalstr\\iffieldequalstr",
+                "iffieldequalstr",
+            ),
+            ("\\newif\\iffieldequals\\iffieldequals", "iffieldequals"),
+            ("\\newif\\iffieldsequal\\iffieldsequal", "iffieldsequal"),
+            ("\\newif\\iflistequals\\iflistequals", "iflistequals"),
+            ("\\newif\\ifnameequals\\ifnameequals", "ifnameequals"),
+            ("\\newif\\ifentrytype\\ifentrytype", "ifentrytype"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            version += 1;
+            server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":version},"contentChanges":[{"text":source}]}));
+            let target = json!({"textDocument":{"uri":main},"position":Text::new(source.into()).position(source.len())});
+            let items = server.request(
+                930 + index as u64 * 2,
+                "textDocument/completion",
+                target.clone(),
+            );
+            let item = items
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|item| item["label"] == name)
+                .unwrap();
+            assert_eq!(item["textEdit"]["newText"], name);
+            assert_eq!(item["insertTextFormat"], 1);
+            assert!(item["documentation"].is_null());
+            assert!(server
+                .request(931 + index as u64 * 2, "textDocument/signatureHelp", target)
+                .is_null());
+        }
+        version += 1;
+        let source = "\\thefield";
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":version},"contentChanges":[{"text":source}]}));
+        let items = server.request(940, "textDocument/completion", json!({"textDocument":{"uri":main},"position":Text::new(source.into()).position(source.len())}));
+        let item = items
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["label"] == "thefield")
+            .unwrap();
+        assert_eq!(
+            item["textEdit"]["newText"],
+            if snippets {
+                "thefield{${1:field}}"
+            } else {
+                "thefield"
+            }
+        );
+        assert!(!item["documentation"].is_null());
+        for (index, (name, snippet)) in [
+            (
+                "iffieldequalstr",
+                "iffieldequalstr{${1:field}}{${2:string}}{${3:true}}{${4:false}}",
+            ),
+            (
+                "iffieldequals",
+                "iffieldequals{${1:field}}{${2:command}}{${3:true}}{${4:false}}",
+            ),
+            (
+                "iffieldsequal",
+                "iffieldsequal{${1:field 1}}{${2:field 2}}{${3:true}}{${4:false}}",
+            ),
+            (
+                "iflistequals",
+                "iflistequals{${1:literal list}}{${2:command}}{${3:true}}{${4:false}}",
+            ),
+            (
+                "ifnameequals",
+                "ifnameequals{${1:name list}}{${2:command}}{${3:true}}{${4:false}}",
+            ),
+            (
+                "ifentrytype",
+                "ifentrytype{${1:entry type}}{${2:true}}{${3:false}}",
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            version += 1;
+            let source = format!("\\{name}");
+            server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":version},"contentChanges":[{"text":source}]}));
+            let items = server.request(950 + index as u64, "textDocument/completion", json!({"textDocument":{"uri":main},"position":Text::new(source.clone()).position(source.len())}));
+            let item = items
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|item| item["label"] == name)
+                .unwrap();
+            assert_eq!(
+                item["textEdit"]["newText"],
+                if snippets { snippet } else { name }
+            );
+            assert!(!item["documentation"].is_null());
+        }
+        for (index, (name, field)) in [
+            ("iffieldequals", "title"),
+            ("iflistequals", "publisher"),
+            ("ifnameequals", "author"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let source = format!("\\newcommand\\ordinary[1]{{#1}}\r\n😀 \\{name}{{{field}}}{{% before\r\n\\ordBAD% after\r\n}}{{yes}}{{no}}");
+            version += 1;
+            server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":version},"contentChanges":[{"text":source}]}));
+            let text = Text::new(source.clone());
+            let start = source.find("ordBAD").unwrap();
+            let target = json!({"textDocument":{"uri":main},"position":text.position(start + 3)});
+            let items = server.request(
+                960 + index as u64 * 2,
+                "textDocument/completion",
+                target.clone(),
+            );
+            let item = items
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|item| item["label"] == "ordinary")
+                .unwrap();
+            assert_eq!(item["textEdit"]["newText"], "ordinary");
+            assert_eq!(
+                item["textEdit"]["range"],
+                json!(text.range(start, start + 6))
+            );
+            assert_eq!(item["insertTextFormat"], 1);
+            let help = server.request(961 + index as u64 * 2, "textDocument/signatureHelp", target);
+            assert_eq!(help["activeParameter"], 1);
+            assert!(help["signatures"][0]["label"]
+                .as_str()
+                .unwrap()
+                .starts_with(&format!("\\{name}")));
+        }
+        server.request(999, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
 fn bibliography_categories_support_key_editing_and_versioned_renames_over_stdio() {
     let mut server = Server::start();
     server.request(1, "initialize", json!({"processId":null,"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}}}}));

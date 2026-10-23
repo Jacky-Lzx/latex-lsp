@@ -1,4 +1,5 @@
 mod anchors;
+mod bib_accessors;
 mod bib_aliases;
 mod bib_completion;
 mod bib_links;

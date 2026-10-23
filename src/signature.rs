@@ -252,6 +252,81 @@ fn builtin(name: &str) -> Option<Signature> {
     }
     let (arguments, starred): (&[(&str, bool)], bool) = match name {
         "DeclareBibliographyCategory" => (&[("category", false)], false),
+        "printfield" => (&[("format", true), ("field", false)], false),
+        "thefield" | "strfield" => (&[("field", false)], false),
+        "iffieldundef" => (
+            &[("field", false), ("true", false), ("false", false)],
+            false,
+        ),
+        "iflistundef" => (
+            &[("literal list", false), ("true", false), ("false", false)],
+            false,
+        ),
+        "ifnameundef" => (
+            &[("name list", false), ("true", false), ("false", false)],
+            false,
+        ),
+        "ifentrytype" => (
+            &[("entry type", false), ("true", false), ("false", false)],
+            false,
+        ),
+        "iffieldequalstr" => (
+            &[
+                ("field", false),
+                ("string", false),
+                ("true", false),
+                ("false", false),
+            ],
+            false,
+        ),
+        "iffieldequals" => (
+            &[
+                ("field", false),
+                ("command", false),
+                ("true", false),
+                ("false", false),
+            ],
+            false,
+        ),
+        "iffieldsequal" => (
+            &[
+                ("field 1", false),
+                ("field 2", false),
+                ("true", false),
+                ("false", false),
+            ],
+            false,
+        ),
+        "iflistequals" => (
+            &[
+                ("literal list", false),
+                ("command", false),
+                ("true", false),
+                ("false", false),
+            ],
+            false,
+        ),
+        "ifnameequals" => (
+            &[
+                ("name list", false),
+                ("command", false),
+                ("true", false),
+                ("false", false),
+            ],
+            false,
+        ),
+        "printlist" => (
+            &[
+                ("format", true),
+                ("start-stop", true),
+                ("literal list", false),
+            ],
+            false,
+        ),
+        "printnames" => (
+            &[("format", true), ("start-stop", true), ("name list", false)],
+            false,
+        ),
         name if syntax::declares_traditional_command(name) => (
             &[
                 ("command", false),
@@ -897,6 +972,9 @@ fn builtin(name: &str) -> Option<Signature> {
                     | "ProvidesFile"
                     | "NeedsTeXFormat"
                     | "bibitem"
+                    | "printfield"
+                    | "printlist"
+                    | "printnames"
                     | "newenvironment"
                     | "renewenvironment"
                     | "provideenvironment"
@@ -3686,6 +3764,11 @@ fn signature(workspace: &Workspace, name: &str, scope: &BTreeSet<Url>) -> Option
     lookup(workspace, name, false, scope, None)
 }
 
+pub(crate) fn uses_builtin(workspace: &Workspace, name: &str, scope: &BTreeSet<Url>) -> bool {
+    builtin(name)
+        .is_some_and(|builtin| signature(workspace, name, scope).as_ref() == Some(&builtin))
+}
+
 fn lookup<'a>(
     workspace: &'a Workspace,
     name: &str,
@@ -3752,6 +3835,24 @@ fn lookup<'a>(
             signature.name = name.into();
             signature.parameters.remove(0);
             Some(signature)
+        } else if matches!(
+            name,
+            "thefield"
+                | "iffieldundef"
+                | "iflistundef"
+                | "ifnameundef"
+                | "iffieldequalstr"
+                | "iffieldequals"
+                | "iffieldsequal"
+                | "iflistequals"
+                | "ifnameequals"
+                | "ifentrytype"
+        ) && workspace.documents.iter().any(|(uri, doc)| {
+            scope.contains(uri) && crate::generated::generated_command_exists(doc, name)
+        }) {
+            // These data accessors can be replaced implicitly by counters,
+            // theorems or newif; their builtin argument lists no longer apply.
+            None
         } else {
             builtin(name)
         }
