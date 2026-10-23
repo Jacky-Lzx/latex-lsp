@@ -926,6 +926,16 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
         "Insert a source file as code without importing LaTeX symbols. Requires listings.",
     ),
     (
+        "mintinline",
+        "mintinline{${1:python}}{${2:code}}",
+        "Typeset inline highlighted code, in braces or between matching delimiters. Requires minted.",
+    ),
+    (
+        "mint",
+        "mint{${1:python}}{${2:code}}",
+        "Typeset a single highlighted code block, in braces or between matching delimiters. Requires minted.",
+    ),
+    (
         "includegraphics",
         "includegraphics[width=${1:\\linewidth}]{${2:file}}",
         "Insert an image. Requires graphicx.",

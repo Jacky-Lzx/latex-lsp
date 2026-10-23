@@ -17,6 +17,73 @@ struct Server {
 }
 
 #[test]
+fn minted_inline_code_stays_opaque_after_incremental_changes_over_stdio() {
+    use latex_lsp::text::Text;
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = Url::from_file_path(root.join("main.tex")).unwrap();
+    let source = "% 😀\r\n\\label{kept}\r\n\\mintinline[breaklines]{tex}|\\label{kept}\\input{fake} }%|\r\n\\ref{kept}\r\n";
+    std::fs::write(root.join("main.tex"), source).unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(root).unwrap(),"capabilities":{"textDocument":{"diagnostic":{}},"workspace":{"workspaceEdit":{"documentChanges":true}}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":main,"languageId":"latex","version":7,"text":source}}),
+    );
+    let diagnostics = server.request(
+        2,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":main}}),
+    );
+    assert_eq!(diagnostics["items"], json!([]), "{diagnostics}");
+    let position = Text::new(source.into()).position(source.rfind("kept").unwrap() + 1);
+    let references = server.request(3, "textDocument/references", json!({"textDocument":{"uri":main},"position":position,"context":{"includeDeclaration":true}}));
+    assert_eq!(references.as_array().unwrap().len(), 2, "{references}");
+    let edit = server.request(
+        4,
+        "textDocument/rename",
+        json!({"textDocument":{"uri":main},"position":position,"newName":"changed"}),
+    );
+    assert_eq!(edit["documentChanges"][0]["textDocument"]["version"], 7);
+    assert_eq!(
+        edit["documentChanges"][0]["edits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    let inside = Text::new(source.into()).position(source.find("\\input").unwrap() + 3);
+    assert_eq!(
+        server.request(
+            5,
+            "textDocument/definition",
+            json!({"textDocument":{"uri":main},"position":inside})
+        ),
+        json!([])
+    );
+    let text = Text::new(source.into());
+    let start = source.find('|').unwrap();
+    let end = source.rfind('|').unwrap() + 1;
+    server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":8},"contentChanges":[{"range":text.range(start,end),"text":"{\\label{kept} %\r\n{nested}}"}]}));
+    let diagnostics = server.request(
+        6,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":main}}),
+    );
+    assert_eq!(diagnostics["items"], json!([]), "{diagnostics}");
+    let symbols = server.request(
+        7,
+        "textDocument/documentSymbol",
+        json!({"textDocument":{"uri":main}}),
+    );
+    assert_eq!(symbols.as_array().unwrap().len(), 1, "{symbols}");
+    assert_eq!(symbols[0]["name"], "kept");
+    server.request(8, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+}
+
+#[test]
 #[cfg(unix)]
 fn bibliography_string_warnings_offer_versioned_and_legacy_repairs_over_stdio() {
     for (pull, legacy) in [(false, false), (true, false), (true, true)] {

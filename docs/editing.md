@@ -96,6 +96,8 @@ BibTeX [字符串缩写](bibliography.md#字符串缩写)另支持大小写不�
 
 ## 逐字文本与保存名称
 
+`\mintinline` 与 `\mint` 的花括号或字符定界代码按逐字文本解析和高亮，保留代码内的命令、标签及文件示例，支持跨行、Unicode 定界符及增量编辑；提供片段及头部参数提示。边界规则见 [minted 代码](minted.md)。
+
 解析时跳过 `%` 注释、`\verb`、`\lstinline` 和常见逐字环境（`verbatim`、`lstlisting`、`minted`、`comment`，以及 FancyVerb 的 `Verbatim`、`LVerbatim`、`BVerbatim`、`SaveVerbatim`、`VerbatimOut` 和各自的星号形式）。逐字环境中的示例标签、命令和文件包含不会进入源码索引，重命名保留其中的字面内容；支持环境名称补全、折叠、逐字高亮和未闭合环境修复。不模拟 `commandchars`、自定义环境或内部宏带来的执行行为。FancyVerb 每行只核对第一个字面关闭标记；同一行先出现其他环境的关闭标记时，后续同名标记继续作为展示内容，不会提前恢复源码索引。关闭标记后同一行被 FancyVerb 丢弃的内容也不参与符号索引或编辑；下一行恢复正常源码解析，编译器报告的行尾多余内容错误仍会保留。环境头部的选项及保存名称按参数边界读取；其中的字面关闭标记不会结束正文，支持多行选项和注释续行。`UseVerb`、`UseVerbatim`、`LUseVerbatim`、`BUseVerbatim`、`UseMVerb`、`pUseMVerb` 的保存名称参数同样按数据处理，前面的格式选项继续正常解析。`\SaveVerb{name}|text|`、`\SaveGVerb{name}|text|` 与 `\Verb|text|` 的行内正文也按字面内容处理，支持星号、一次可选参数、注释续行、分组分隔符和 Unicode 分隔符；缺少结束分隔符时在行尾恢复源码解析。`aftersave`、`formatcom` 等选项中的命令仍正常索引，重命名保留展示正文。
 
 保存文本名称支持定义跳转、引用、悬停、补全和版本化重命名。`SaveVerb` 与 `SaveVerbatim` 共用名称，`UseVerb` 及三个 `UseVerbatim` 命令读取这一组；`SaveGVerb` 与 `UseMVerb`、`pUseMVerb` 使用另一组。名称按完整字面值匹配，保留首尾空格、逗号和 Unicode；改写裸参数时自动补花括号。共享文件的修改会覆盖所有依赖项目，并检查各项目的定义与命名冲突。空名称、宏展开、名称内的注释及跨行名称暂不推断；包含动态名称的调用、相关重定义、可执行字符设置、无法静态确认的 `SaveMVerb` 定义或项目歧义会阻止自动重命名。

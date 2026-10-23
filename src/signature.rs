@@ -466,6 +466,10 @@ fn builtin(name: &str) -> Option<Signature> {
         name if crate::fancyvrb::is_input(name) => (&[("options", true), ("file", false)], true),
         "verbatiminput" => (&[("file", false)], true),
         "lstinputlisting" => (&[("options", true), ("file", false)], false),
+        "mintinline" | "mint" => (
+            &[("options", true), ("language", false), ("code", false)],
+            false,
+        ),
         "documentclass" | "usepackage" | "RequirePackage" | "LoadClass" => (
             &[
                 ("options", true),
@@ -905,6 +909,7 @@ fn builtin(name: &str) -> Option<Signature> {
             {
                 Kind::CommandToken
             } else if name == "verbatiminput"
+                || crate::minted::is_inline(name)
                 || syntax::is_range_reference(name)
                 || index == 1
                     && matches!(
@@ -944,6 +949,7 @@ fn builtin(name: &str) -> Option<Signature> {
         documentation,
         starred,
         nested_brackets: !(name == "lstinputlisting"
+            || crate::minted::is_inline(name)
             || crate::fancyvrb::is_input(name)
             || syntax::is_citation(name)
             || syntax::loader_extension(name).is_some()
@@ -4361,7 +4367,8 @@ pub fn help(workspace: &Workspace, uri: &Url, position: Position) -> Option<Sign
             && cursor.saturating_sub(1) < span.end
             && !doc.syntax.literal_tests.contains(span)
             && !doc.syntax.commands.iter().any(|command| {
-                matches!(command.name.as_str(), "url" | "href" | "hyperref")
+                (matches!(command.name.as_str(), "url" | "href" | "hyperref")
+                    || crate::minted::is_inline(&command.name))
                     && command
                         .argument
                         .as_ref()

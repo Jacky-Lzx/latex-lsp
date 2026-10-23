@@ -2185,6 +2185,25 @@ impl Syntax {
                             }
                         }
                     }
+                    if operands_known && crate::minted::is_inline(name) {
+                        let language = crate::minted::language(source, command_end);
+                        if let Some(argument) = &language {
+                            literal_arguments.insert(
+                                argument.outer_span.start,
+                                (argument.span.clone(), argument.outer_span.end),
+                            );
+                            if let Some(span) =
+                                crate::minted::inline_span(source, argument.outer_span.end)
+                            {
+                                literal_arguments.insert(span.start, (span.clone(), span.end));
+                            }
+                        }
+                        result.commands.push(Command {
+                            argument: language,
+                            ..probe
+                        });
+                        continue;
+                    }
                     let starred = !matches!(
                         name,
                         "input"

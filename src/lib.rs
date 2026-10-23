@@ -36,6 +36,7 @@ mod image_fixes;
 mod label_diagnostics;
 mod lengths;
 mod listings;
+mod minted;
 mod named_colors;
 mod named_commands;
 pub mod navigation;
