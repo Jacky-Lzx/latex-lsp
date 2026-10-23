@@ -2145,6 +2145,150 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main
 
 #[test]
 #[cfg(unix)]
+fn biber_relation_warnings_refresh_each_field_dynamic_fallback_and_repair_over_push_and_pull() {
+    for pull in [false, true] {
+        let script = r#"cp "${2%/*}/fixture.blg" "$1/main.blg"
+printf '%%PDF-1.4\n' > "$1/main.pdf"
+printf '(./main.tex)\n' > "$1/main.log"
+printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main.fls"
+"#;
+        let capabilities = if pull {
+            json!({"textDocument":{"diagnostic":{}}})
+        } else {
+            json!({})
+        };
+        let (mut server, directory, main) =
+            fake_build_server_capabilities(script, false, capabilities);
+        let root = directory.path();
+        let refs = Url::from_file_path(root.join("refs.data")).unwrap();
+        let main_source = "\\documentclass{article}\n\\addbibresource{refs.data}\n";
+        std::fs::write(main.to_file_path().unwrap(), main_source).unwrap();
+        server.notify("textDocument/didChange",json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":main_source}]}));
+        let mut current="% 😀\r\n@book{café😀,crossref={pére😀},xref={pére😀},related={valid,pére😀}}\r\n@set{set😀,entryset={valid,pére😀}}\r\n@book{valid,title={Valid}}\r\n".to_string();
+        std::fs::write(refs.to_file_path().unwrap(), &current).unwrap();
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":refs,"languageId":"bibtex","version":7,"text":current}}),
+        );
+        for stage in 0..4 {
+            let mut changes = Vec::new();
+            if stage == 1 {
+                for field in ["crossref", "xref", "related", "entryset"] {
+                    let field_start = current.find(&format!("{field}=")).unwrap();
+                    let start = field_start + current[field_start..].find("pére😀").unwrap();
+                    let range = latex_lsp::text::Text::new(current.clone()).range(start, start);
+                    current.insert_str(start, "\r\n ");
+                    changes.push(json!({"range":range,"text":"\r\n "}));
+                }
+            } else if stage == 2 {
+                let start = current.find("crossref=").unwrap() + "crossref=".len();
+                let end = start + current[start..].find('}').unwrap() + 1;
+                let range = latex_lsp::text::Text::new(current.clone()).range(start, end);
+                current.replace_range(start..end, "inherit");
+                changes.push(json!({"range":range,"text":"inherit"}));
+            } else if stage == 3 {
+                let start = current.len();
+                let text = "@book{pére😀,title={Parent}}\r\n";
+                let range = latex_lsp::text::Text::new(current.clone()).range(start, start);
+                current.push_str(text);
+                changes.push(json!({"range":range,"text":text}));
+            }
+            if !changes.is_empty() {
+                std::fs::write(refs.to_file_path().unwrap(), &current).unwrap();
+                server.notify(
+                    "textDocument/didChange",
+                    json!({"textDocument":{"uri":refs,"version":7+stage},"contentChanges":changes}),
+                );
+                server.notify("textDocument/didSave", json!({"textDocument":{"uri":refs}}));
+            }
+            let mut log = "INFO - Found BibTeX data source 'refs.data'\n".to_string();
+            let mut expected = Vec::new();
+            if stage < 3 {
+                for (field, kind, key) in [
+                    ("crossref", "crossref", "café😀"),
+                    ("xref", "xref", "café😀"),
+                    ("related", "related entry", "café😀"),
+                    ("entryset", "static set member", "set😀"),
+                ] {
+                    let message=format!("I didn't find a database entry for {kind} 'pére😀' in entry '{key}' - ignoring (section 2)");
+                    log.push_str(&format!("WARN - {message}\n"));
+                    let fallback = stage == 2 && field == "crossref";
+                    let start = if fallback {
+                        current.find("café😀").unwrap()
+                    } else {
+                        let field_start = current.find(&format!("{field}=")).unwrap();
+                        field_start + current[field_start..].find("pére😀").unwrap()
+                    };
+                    let marker = if fallback { "café😀" } else { "pére😀" };
+                    let range = serde_json::to_value(
+                        latex_lsp::text::Text::new(current.clone())
+                            .range(start, start + marker.len()),
+                    )
+                    .unwrap();
+                    let mut data = json!({"key":key,"parent":"pére😀","field":field,"section":2});
+                    if fallback {
+                        data["unresolvedField"] = true.into();
+                    }
+                    expected.push((format!("Biber: {message}"), range, data));
+                }
+            }
+            std::fs::write(root.join("fixture.blg"), log).unwrap();
+            server.request(
+                2 + stage * 2,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            let finished = server.until(|item| item["method"] == "latex/buildFinished");
+            assert_eq!(finished["params"]["status"], "success", "{finished}");
+            let matches_expected = |items: &[Value]| {
+                items.len() == expected.len()
+                    && expected.iter().all(|(message, range, data)| {
+                        items.iter().any(|item| {
+                            item["code"] == "missing-bibliography-relation"
+                                && item["range"] == *range
+                                && item["data"] == *data
+                                && item["message"] == *message
+                                && item["severity"] == 2
+                        })
+                    })
+            };
+            let items = if pull {
+                server.request(
+                    3 + stage * 2,
+                    "textDocument/diagnostic",
+                    json!({"textDocument":{"uri":refs}}),
+                )["items"]
+                    .clone()
+            } else {
+                server.until(|item| {
+                    item["method"] == "textDocument/publishDiagnostics"
+                        && item["params"]["uri"] == refs.as_str()
+                        && item["params"]["diagnostics"]
+                            .as_array()
+                            .is_some_and(|items| matches_expected(items))
+                })["params"]["diagnostics"]
+                    .clone()
+            };
+            assert!(
+                matches_expected(items.as_array().unwrap()),
+                "stage {stage}: {items}\nexpected {expected:?}"
+            );
+            for item in items.as_array().unwrap() {
+                assert_eq!(item["source"], "latex-build");
+                assert!(item["relatedInformation"].is_null());
+            }
+        }
+        server.request(10, "shutdown", Value::Null);
+        if pull {
+            assert_no_pushed_diagnostics(&server);
+        }
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
 fn repeated_bibliography_fields_publish_related_assignments_and_refresh_after_saved_edits() {
     for pull in [false, true] {
         let script = r#"cp "${2%/*}/fixture.blg" "$1/main.blg"

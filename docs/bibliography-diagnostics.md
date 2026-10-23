@@ -84,6 +84,17 @@ cargo test --locked --test protocol biber_field_warnings_
 cargo test --locked --test protocol biber_unqualified_field_warnings_
 ```
 
+## Biber 关系引用
+
+Biber 的完整 `I didn't find a database entry for … 'parent' in entry 'child' - ignoring (section …)` 消息使用 `missing-bibliography-relation`，支持 `crossref`、`xref`、`related entry` 和 `static set member` 四种原生关系。它们分别对应原始 `crossref`、`xref`、`related` 和 `entryset` 字段，保留原生消息、级别及 section 编号；静态集合成员警告由 Biber 实际处理集合条目时报告。
+
+定位与 XDATA 共享完整此前输入历史及规范化键唯一性检查，单一关系标记唯一字面目标，列表关系标记精确列表项。同一目标在不同关系字段中分别索引；重复字段或同字段内的规范等价目标仍有歧义。宏、拼接、继承、source map 和不完整字段回退到所属键，未确认来源回退到主文档。不猜测改名、插入缺失条目或展开动态值。保存后重新编译更新范围，补齐目标后的推送与拉取诊断都会清除。
+
+```sh
+cargo test --locked --test biber_relation_diagnostics -- --include-ignored
+cargo test --locked --test protocol biber_relation_warnings_
+```
+
 ## Biber 姓名格式
 
 Biber 的完整姓名消息使用 `malformed-bibliography-name`，覆盖以下原生情况：

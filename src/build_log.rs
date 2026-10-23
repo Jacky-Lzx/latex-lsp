@@ -5696,6 +5696,16 @@ pub(crate) fn parse_bibliography_in(
             }
         }
         if tool == "Biber" {
+            if let Some(warning) = crate::bib_diagnostics::biber_relations::record(message) {
+                if let Some((uri, diagnostic)) =
+                    bibliography_context.biber_relation_warning(root, warning, message, severity)
+                {
+                    result.entry(uri).or_default().push(diagnostic);
+                }
+                continue;
+            }
+        }
+        if tool == "Biber" {
             if let Some(warning) = crate::bib_diagnostics::biber_fields::record(message) {
                 if let Some((uri, diagnostic)) = bibliography_context
                     .biber_field_warning(root, paths, warning, message, severity)
