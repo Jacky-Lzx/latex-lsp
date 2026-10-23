@@ -211,6 +211,12 @@ impl Index {
                 .nodes
                 .push(item(origin, uri, doc, None, &fingerprints[uri]));
             let operands = signatures.argument_tokens(&doc.text.source, &doc.syntax);
+            let declarations = doc
+                .syntax
+                .definitions
+                .iter()
+                .map(|entry| (entry.span.start, entry.span.end))
+                .collect();
             let eligible_data: BTreeSet<_> = definitions
                 .iter()
                 .filter(|definition| definition.uri == *uri && definition.eligible)
@@ -256,7 +262,7 @@ impl Index {
             let mut next = 0;
             let mut stack: Vec<&Definition> = vec![];
             let mut noexpand = None;
-            for command in &doc.syntax.commands {
+            for (command_index, command) in doc.syntax.commands.iter().enumerate() {
                 let at = command.span.start;
                 while next < local.len() && local[next].declaration.start <= at {
                     while stack.last().is_some_and(|definition| {
@@ -301,10 +307,19 @@ impl Index {
                 } else {
                     file
                 };
-                let Some(&callee) = index.by_name.get(&command.name) else {
+                let (name, span) = signatures
+                    .named_invocation(
+                        &doc.text.source,
+                        &doc.syntax,
+                        command_index,
+                        &operands,
+                        &declarations,
+                    )
+                    .unwrap_or((&command.name, command.span.clone()));
+                let Some(&callee) = index.by_name.get(name) else {
                     continue;
                 };
-                let range = doc.text.range(command.span.start, command.span.end);
+                let range = doc.text.range(span.start, span.end);
                 index.edges.entry((caller, callee)).or_default().push(range);
                 calls += 1;
                 if calls > 20_000 {
@@ -407,6 +422,126 @@ mod tests {
     fn source_range<'a>(ws: &'a Workspace, uri: &Url, range: Range) -> &'a str {
         let text = &ws.documents[uri].text;
         &text.source[text.offset(range.start).unwrap()..text.offset(range.end).unwrap()]
+    }
+
+    #[test]
+    fn static_named_calls_share_targets_and_have_complete_utf16_crlf_ranges() {
+        let source = "\\newcommand{\\leaf}{}\r\n\\newcommand{\\caller}{😀 \\csuse{leaf} \\csname leaf\\endcsname \\leaf}\r\n😀 \\csuse{caller} \\csname leaf\\endcsname\r\n";
+        let (ws, uri) = setup(source);
+        let leaf = prepared(&ws, &uri, "leaf");
+        let calls = incoming(&ws, &leaf).unwrap();
+        assert_eq!(calls.len(), 2, "{calls:?}");
+        let caller = calls
+            .iter()
+            .find(|call| call.from.name == "\\caller")
+            .unwrap();
+        let ranges: Vec<_> = caller
+            .from_ranges
+            .iter()
+            .map(|range| source_range(&ws, &uri, *range))
+            .collect();
+        assert_eq!(
+            ranges,
+            ["\\csuse{leaf}", "\\csname leaf\\endcsname", "\\leaf"]
+        );
+        let outgoing = outgoing(&ws, &caller.from).unwrap();
+        assert_eq!(outgoing.len(), 1);
+        assert_eq!(outgoing[0].to, leaf);
+        assert_eq!(outgoing[0].from_ranges, caller.from_ranges);
+        for needle in ["csuse{leaf}", "csname leaf"] {
+            let at = source.find(needle).unwrap() + needle.find("leaf").unwrap();
+            assert_eq!(
+                prepare(&ws, &uri, ws.documents[&uri].text.position(at))
+                    .unwrap()
+                    .unwrap(),
+                vec![leaf.clone()]
+            );
+        }
+    }
+
+    #[test]
+    fn named_operands_literals_dynamic_names_and_declaration_targets_do_not_create_edges() {
+        for excluded in [
+            r"\meaning\csuse{leaf}",
+            r"\meaning\csname leaf\endcsname",
+            r"\let\copy\csuse{leaf}",
+            r"\let\copy\csname leaf\endcsname",
+            r"\csmeaning{leaf}",
+            r"\ifcsdef{leaf}{}{}",
+            r"\csletcs{copy}{leaf}",
+            r"\noexpand\csuse{leaf}",
+            r"\noexpand\csname leaf\endcsname",
+            r"\string\csuse{leaf}",
+            r"\string\csname leaf\endcsname",
+            r"\detokenize{\csuse{leaf} \csname leaf\endcsname}",
+            r"\discard{\csuse{leaf} \csname leaf\endcsname}",
+            r"\discard\csuse{leaf}",
+            r"\discard\csname leaf\endcsname",
+            r"\csuse{discard}{\csuse{leaf}}",
+            r"\csname discard\endcsname{\csuse{leaf}}",
+            r"\csuse{ leaf }",
+            r"\csuse{\dynamic}",
+            r"\csname leaf \endcsname",
+            r"\csname \dynamic\endcsname",
+            "% \\csuse{leaf}\n",
+            r"\verb|\csname leaf\endcsname|",
+            r"\newcommand{\nested}{\newcommand{\inner}{\csuse{leaf}}}",
+        ] {
+            // Isolate malformed token-inspection examples: leftover endcsname
+            // tokens must not conservatively consume the next test's wrapper.
+            let source = format!("\\newcommand{{\\leaf}}{{}}\n\\newcommand{{\\discard}}[1]{{}}\n{excluded}\n\\relax\n\\leaf\n");
+            let (ws, uri) = setup(&source);
+            let leaf = prepared(&ws, &uri, "leaf");
+            let incoming = incoming(&ws, &leaf).unwrap();
+            assert_eq!(incoming.len(), 1, "{excluded}: {incoming:?}");
+            assert_eq!(incoming[0].from.kind, SymbolKind::FILE);
+            assert_eq!(incoming[0].from_ranges.len(), 1, "{excluded}: {incoming:?}");
+            assert_eq!(
+                source_range(&ws, &uri, incoming[0].from_ranges[0]),
+                "\\leaf"
+            );
+        }
+    }
+
+    #[test]
+    fn named_definitions_and_recursion_keep_body_calls_without_counting_targets() {
+        for declaration in [
+            r"\csdef{recursive}{\csuse{recursive}}",
+            r"\expandafter\def\csname recursive\endcsname{\csname recursive\endcsname}",
+        ] {
+            let source = format!("{declaration}\n\\recursive\n");
+            let (ws, uri) = setup(&source);
+            let node = prepared(&ws, &uri, "recursive");
+            let outgoing = outgoing(&ws, &node).unwrap();
+            assert_eq!(outgoing.len(), 1, "{declaration}: {outgoing:?}");
+            assert_eq!(outgoing[0].to, node);
+            assert_eq!(outgoing[0].from_ranges.len(), 1);
+            let incoming = incoming(&ws, &node).unwrap();
+            assert_eq!(incoming.len(), 2);
+            assert!(incoming.iter().all(|call| call.from_ranges.len() == 1));
+        }
+    }
+
+    #[test]
+    fn redefined_named_primitives_remain_user_calls_without_invented_targets() {
+        for (definition, invocation) in [
+            (r"\newcommand{\csuse}[1]{}", r"\csuse{leaf}"),
+            (r"\def\csname{}", r"\csname leaf\endcsname"),
+            (r"\def\endcsname{}", r"\csname leaf\endcsname"),
+        ] {
+            let source = format!("\\newcommand{{\\leaf}}{{}}\n{definition}\n\\newcommand{{\\caller}}{{{invocation}}}\n\\caller\n");
+            let (ws, uri) = setup(&source);
+            let at = source.find("\\leaf").unwrap() + 1;
+            let leaf = prepare(&ws, &uri, ws.documents[&uri].text.position(at))
+                .unwrap()
+                .unwrap()
+                .remove(0);
+            assert!(incoming(&ws, &leaf).unwrap().is_empty(), "{source}");
+            let caller = prepared(&ws, &uri, "caller");
+            let edges = outgoing(&ws, &caller).unwrap();
+            assert_eq!(edges.len(), 1, "{source}: {edges:?}");
+            assert_ne!(edges[0].to.name, "\\leaf");
+        }
     }
 
     #[test]

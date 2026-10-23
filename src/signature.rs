@@ -2590,6 +2590,38 @@ impl<'a> CommandSignatures<'a> {
         Some((name, start, end, named.is_none()))
     }
 
+    /// One static named call, anchored at its opening command. Reuse the
+    /// operand/declaration rules of argument scanning without expanding aliases.
+    pub(crate) fn named_invocation<'b>(
+        &self,
+        source: &'b str,
+        parsed: &'b syntax::Syntax,
+        index: usize,
+        operands: &BTreeSet<usize>,
+        declarations: &BTreeSet<(usize, usize)>,
+    ) -> Option<(&'b str, std::ops::Range<usize>)> {
+        let command = parsed.commands.get(index)?;
+        let invocation_index = match command.name.as_str() {
+            "csuse"
+                if self.command_unchanged("csuse")
+                    && command
+                        .argument
+                        .as_ref()
+                        .is_some_and(|argument| syntax::is_static_key(&argument.value)) =>
+            {
+                index
+            }
+            "csname" if self.command_unchanged("csname") && self.command_unchanged("endcsname") => {
+                syntax::literal_csname(source, &parsed.commands, index)?;
+                index + 1
+            }
+            _ => return None,
+        };
+        let (name, start, end, _) =
+            self.invocation(source, parsed, invocation_index, operands, declarations)?;
+        Some((name, start..end))
+    }
+
     pub(crate) fn invokes_builtin(&self, name: &str, builtin: &str) -> bool {
         !self.local.contains_key(builtin)
             && self.local.get(name).map_or(name == builtin, |signature| {

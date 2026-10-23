@@ -26308,3 +26308,90 @@ fn user_command_completion_resolution_rejects_changed_definitions_and_invalid_da
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+fn call_hierarchy_static_named_calls_link_cross_file_targets_and_follow_primitive_redefinitions() {
+    use latex_lsp::text::Text;
+    let dir = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let macros = Url::from_file_path(dir.path().join("macros.tex")).unwrap();
+    let source =
+        "\\documentclass{article}\n\\input{macros}\n\\csuse{caller}\n\\csname leaf\\endcsname\n";
+    let definitions = "\\newcommand{\\leaf}{}\r\n\\newcommand{\\caller}{😀 \\csuse{leaf} \\csname leaf\\endcsname}\r\n";
+    std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+    std::fs::write(macros.to_file_path().unwrap(), definitions).unwrap();
+    std::fs::write(
+        dir.path().join("other.tex"),
+        "\\documentclass{article}\n\\def\\csuse#1{}\n\\def\\leaf{}\n",
+    )
+    .unwrap();
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    let leaf = server.request(
+        2,
+        "textDocument/prepareCallHierarchy",
+        json!({"textDocument":{"uri":main},"position":{"line":3,"character":10}}),
+    )[0]
+    .clone();
+    assert_eq!(leaf["name"], "\\leaf");
+    assert_eq!(leaf["uri"], macros.as_str());
+    let incoming = server.request(3, "callHierarchy/incomingCalls", json!({"item":leaf}));
+    assert_eq!(incoming.as_array().unwrap().len(), 2);
+    let caller = incoming
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|call| call["from"]["name"] == "\\caller")
+        .unwrap()["from"]
+        .clone();
+    let outgoing = server.request(4, "callHierarchy/outgoingCalls", json!({"item":caller}));
+    assert_eq!(outgoing[0]["to"], leaf);
+    let ranges: Vec<tower_lsp::lsp_types::Range> =
+        serde_json::from_value(outgoing[0]["fromRanges"].clone()).unwrap();
+    let text = Text::new(definitions.into());
+    let calls: Vec<_> = ranges
+        .iter()
+        .map(|range| {
+            &text.source[text.offset(range.start).unwrap()..text.offset(range.end).unwrap()]
+        })
+        .collect();
+    assert_eq!(calls, ["\\csuse{leaf}", "\\csname leaf\\endcsname"]);
+    let prepared_caller = server.request(
+        5,
+        "textDocument/prepareCallHierarchy",
+        json!({"textDocument":{"uri":main},"position":{"line":2,"character":9}}),
+    )[0]
+    .clone();
+    assert_eq!(prepared_caller["name"], "\\caller");
+    server.notify("textDocument/didOpen",json!({"textDocument":{"uri":macros,"languageId":"latex","version":1,"text":format!("{definitions}\\newcommand{{\\csuse}}[1]{{}}\r\n")}}));
+    let node = server.request(
+        6,
+        "textDocument/prepareCallHierarchy",
+        json!({"textDocument":{"uri":main},"position":{"line":3,"character":10}}),
+    )[0]
+    .clone();
+    let incoming = server.request(7, "callHierarchy/incomingCalls", json!({"item":node}));
+    let caller = incoming
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|call| call["from"]["name"] == "\\caller")
+        .unwrap();
+    assert_eq!(caller["fromRanges"].as_array().unwrap().len(), 1);
+    let outgoing = server.request(
+        8,
+        "callHierarchy/outgoingCalls",
+        json!({"item":caller["from"]}),
+    );
+    let names: Vec<_> = outgoing
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|call| call["to"]["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["\\leaf", "\\csuse"]);
+    server.request(9, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
