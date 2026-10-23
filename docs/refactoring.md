@@ -8,6 +8,10 @@
 
 重构只处理顶层的普通正文及完整的常用文本样式命令。部分控制序列、命令参数内部、公式、特殊环境、注释、逐字代码、原始宏参数和不平衡分组不提供重构，避免改变参数边界。命令提取要求当前文件有 `document` 环境；不模拟 TeX 宏展开和任意 catcode 设置。
 
+参数边界复用当前项目的静态签名，包含无花括号的单 token 参数、可选参数、TeX / xparse 分隔参数、标志和静态 `csuse` / `csname` 调用。纯转发别名、未保存的跨文件定义、歧义和未知调用使用相同的保守检查。例如，`\take Hello` 会读取首个 `H` 时，不将 `Hello` 包成新命令或分组；选择已消费的 `H` 之后的正文仍可重构。`noexpand` 等单 token 操作数也保留原边界，完整选择顶层样式调用继续可用。
+
+项目索引不完整，或分析范围超过 16 MiB 源码、100000 个命令或 4096 个定义时，不提供结构重构。此限制不改变已有快速修复与显式 `source.fixAll` 的入口。
+
 编辑使用客户端协商的文档版本。旧客户端通过 `latex.applyCodeAction` 应用操作时，服务器会重新计算并核对文档版本与操作类型；过期或伪造操作不会执行。
 
 服务器支持标准 `codeAction/resolve`。客户端同时声明 `codeActionLiteralSupport`、`dataSupport: true`，且 `resolveSupport.properties` 包含 `edit` 时，重构、快速修复和 `source.fixAll` 返回带 `data` 的操作，编辑在解析请求中返回。标题、类型、诊断、首选标记及其他原有字段保持不变；其余客户端继续收到内联编辑或既有应用命令。重编译操作保留原来的命令和警告校验流程。
@@ -20,4 +24,5 @@
 cargo test --locked --lib code_action_resolve
 cargo test --locked --test protocol code_action_resolution
 cargo test --locked --test refactor --test rebuild_actions
+cargo test --locked --test refactor real_refactors_after_consumed -- --include-ignored
 ```

@@ -303,6 +303,45 @@ pub(crate) fn actions(
     let Some((start, end, insertion)) = selection(doc, range) else {
         return result;
     };
+    let scope = ws.symbol_scope(uri);
+    let documents: Vec<_> = ws
+        .documents
+        .iter()
+        .filter(|(uri, doc)| scope.contains(*uri) && doc.kind == DocumentKind::Latex)
+        .map(|(_, doc)| doc)
+        .collect();
+    if !ws.index_truncated.is_empty()
+        || documents
+            .iter()
+            .map(|doc| doc.text.source.len())
+            .sum::<usize>()
+            > 16 * 1024 * 1024
+        || documents
+            .iter()
+            .map(|doc| doc.syntax.commands.len())
+            .sum::<usize>()
+            > 100_000
+        || documents
+            .iter()
+            .map(|doc| doc.syntax.definitions.len() + doc.syntax.environments.len())
+            .sum::<usize>()
+            > 4096
+    {
+        return result;
+    }
+    let signatures = crate::signature::CommandSignatures::new(
+        documents
+            .iter()
+            .map(|doc| (doc.text.source.as_str(), &doc.syntax)),
+    );
+    let anchor = syntax::skip_space(&doc.text.source, start);
+    if signatures.is_parameter_token(&doc.text.source, &doc.syntax, start)
+        || anchor < end
+            && anchor != start
+            && signatures.is_parameter_token(&doc.text.source, &doc.syntax, anchor)
+    {
+        return result;
+    }
     let selected = &doc.text.source[start..end];
     if allows(context, &CodeActionKind::REFACTOR_REWRITE) {
         for (title, replacement) in [

@@ -27003,3 +27003,61 @@ fn on_type_formatting_respects_noexpand_spaces_named_calls_and_user_redefinition
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+fn refactor_parameter_context_rejects_data_and_tracks_project_definitions_over_stdio() {
+    use latex_lsp::text::Text;
+    for deferred in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+        let macros = Url::from_file_path(dir.path().join("macros.tex")).unwrap();
+        let source = "\\documentclass{article}\r\n\\input{macros}\r\n\\begin{document}\r\n😀 \\take Hello world\r\n\\end{document}";
+        std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+        std::fs::write(macros.to_file_path().unwrap(), "\\newcommand{\\take}[1]{}").unwrap();
+        let mut server = Server::start();
+        let capabilities = json!({"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["refactor"]}},"dataSupport":deferred,"resolveSupport":{"properties":["edit"]}});
+        server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{"textDocument":{"codeAction":capabilities}},"initializationOptions":{"distribution":{"enabled":false}}}));
+        server.notify("initialized", json!({}));
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"languageId":"latex","version":1,"text":source}}),
+        );
+        let at = source.find("Hello world").unwrap();
+        let range = Text::new(source.into()).range(at, at + "Hello world".len());
+        let params = json!({"textDocument":{"uri":uri},"range":range,"context":{"diagnostics":[],"only":["refactor"]}});
+        assert_eq!(
+            server.request(2, "textDocument/codeAction", params.clone()),
+            json!([])
+        );
+        server.notify("textDocument/didOpen", json!({"textDocument":{"uri":macros,"languageId":"latex","version":1,"text":"\\newcommand{\\take}{}"}}));
+        let allowed = server.request(3, "textDocument/codeAction", params.clone());
+        assert_eq!(allowed.as_array().unwrap().len(), 4);
+        let action = server.request(4, "codeAction/resolve", allowed[0].clone());
+        assert!(action.get("edit").is_some());
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":macros,"version":2},"contentChanges":[{"text":"\\newcommand{\\take}[1]{}"}]}));
+        assert_eq!(
+            server.request(5, "textDocument/codeAction", params.clone()),
+            json!([])
+        );
+        if deferred {
+            server.send(
+                json!({"jsonrpc":"2.0","id":6,"method":"codeAction/resolve","params":allowed[0]}),
+            );
+            assert_eq!(
+                server.until(|message| message["id"] == 6)["error"]["code"],
+                -32801
+            );
+        }
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":macros}}),
+        );
+        assert_eq!(
+            server.request(7, "textDocument/codeAction", params),
+            json!([])
+        );
+        server.request(8, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}

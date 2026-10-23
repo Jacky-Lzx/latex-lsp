@@ -146,3 +146,128 @@ fn completed_expl3_regions_and_deferred_switches_do_not_block_plain_body_text() 
         );
     }
 }
+
+#[test]
+fn refactors_reject_bare_optional_delimited_and_named_parameter_tokens() {
+    for source in [
+        r"\newcommand{\take}[1]{}\begin{document}\take ¦Hello world¦\end{document}",
+        r"\newcommand{\take}[1]{}\begin{document}\take ¦ Hello world¦\end{document}",
+        r"\newcommand{\take}[1]{}\begin{document}\csuse{take}¦Hello world¦\end{document}",
+        r"\newcommand{\take}[1]{}\begin{document}\csname take\endcsname ¦Hello world¦\end{document}",
+        r"\newcommand{\take}[1]{}\def\forward{\take}\begin{document}\forward ¦Hello world¦\end{document}",
+        r"\newcommand{\take}[1][default]{}\begin{document}\take[¦Hello world¦]\end{document}",
+        r"\newcommand{\take}[1][default]{}\begin{document}\take¦[Hello world]¦\end{document}",
+        r"\def\take#1STOP{}\begin{document}\take Before ¦Hello world¦STOP\end{document}",
+        r"\NewDocumentCommand{\take}{d<>}{}\begin{document}\take<¦Hello world¦>\end{document}",
+        r"\NewDocumentCommand{\take}{t+}{}\begin{document}\take¦+Hello world¦\end{document}",
+        r"\begin{document}\section[¦Hello world¦]{Title}\end{document}",
+        r"\begin{document}\section¦*¦{Title}\end{document}",
+        r"\begin{document}\textbf ¦Hello world¦\end{document}",
+        r"\begin{document}\noexpand ¦Hello world¦\end{document}",
+        r"\begin{document}\csuse{noexpand}¦ Hello world¦\end{document}",
+        r"\begin{document}\csname noexpand\endcsname ¦Hello world¦\end{document}",
+        r"\begin{document}\unknown ¦Hello world¦\end{document}",
+    ] {
+        let (ws, uri, range, context) = setup(source, CodeActionKind::REFACTOR);
+        assert!(
+            editing::code_actions(&ws, &uri, range, &context).is_empty(),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn consumed_arguments_do_not_block_later_plain_text_or_complete_style_commands() {
+    for source in [
+        r"\newcommand{\take}[1]{}\begin{document}\take H¦ello world¦\end{document}",
+        r"\newcommand{\take}[1][default]{}\begin{document}\take[argument] ¦Hello world¦\end{document}",
+        r"\def\take#1STOP{}\begin{document}\take argumentSTOP ¦Hello world¦\end{document}",
+        r"\begin{document}\csuse{noexpand} ¦Hello world¦\end{document}",
+        r"\begin{document}¦Hello \textbf{world}¦\end{document}",
+        r"\begin{document}¦\textbf{Hello world}¦\end{document}",
+    ] {
+        let (ws, uri, range, context) = setup(source, CodeActionKind::REFACTOR);
+        assert_eq!(
+            editing::code_actions(&ws, &uri, range, &context).len(),
+            4,
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn refactor_parameter_context_follows_related_unsaved_definitions_and_ambiguity() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let macros = Url::from_file_path(dir.path().join("macros.tex")).unwrap();
+    let source = "\\documentclass{article}\r\n\\input{macros}\r\n\\begin{document}\r\n😀 \\take Hello world\r\n\\end{document}";
+    std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+    std::fs::write(macros.to_file_path().unwrap(), "\\newcommand{\\take}[1]{}").unwrap();
+    let mut ws = Workspace {
+        code_action_literals: true,
+        ..Default::default()
+    };
+    ws.config.distribution.enabled = false;
+    ws.open(uri.clone(), source.into(), 1);
+    let at = source.find("Hello world").unwrap();
+    let range = Text::new(source.into()).range(at, at + "Hello world".len());
+    let context = CodeActionContext {
+        diagnostics: vec![],
+        only: Some(vec![CodeActionKind::REFACTOR]),
+        trigger_kind: None,
+    };
+    assert!(editing::code_actions(&ws, &uri, range, &context).is_empty());
+    ws.open(macros.clone(), "\\newcommand{\\take}{}".into(), 1);
+    assert_eq!(editing::code_actions(&ws, &uri, range, &context).len(), 4);
+    ws.open(
+        macros,
+        "\\newcommand{\\take}{}\n\\renewcommand{\\take}[1]{}".into(),
+        2,
+    );
+    assert!(editing::code_actions(&ws, &uri, range, &context).is_empty());
+}
+
+#[test]
+fn structural_refactors_skip_incomplete_project_contexts() {
+    let (mut ws, uri, range, context) = setup(
+        r"\begin{document}¦Hello¦\end{document}",
+        CodeActionKind::REFACTOR,
+    );
+    ws.index_truncated.insert("maxFiles".into());
+    assert!(editing::code_actions(&ws, &uri, range, &context).is_empty());
+}
+
+#[test]
+#[ignore = "requires pdflatex"]
+fn real_refactors_after_consumed_arguments_preserve_tex_tokenization() {
+    let marked = r"\documentclass{article}\newcommand{\take}[1]{\typeout{CAPTURE:\detokenize{#1}}}\begin{document}\take H¦ello world¦\end{document}";
+    let (ws, uri, range, context) = setup(marked, CodeActionKind::REFACTOR_REWRITE);
+    let actions = editing::code_actions(&ws, &uri, range, &context);
+    assert_eq!(actions.len(), 3);
+    let original = &ws.documents[&uri].text.source;
+    let rewritten = changed(&ws, &uri, &actions, "Wrap selection in \\emph");
+    let dir = tempfile::tempdir().unwrap();
+    for (name, source) in [
+        ("original.tex", original.as_str()),
+        ("rewritten.tex", rewritten.as_str()),
+    ] {
+        std::fs::write(dir.path().join(name), source).unwrap();
+        let output = std::process::Command::new("pdflatex")
+            .args([
+                "-no-shell-escape",
+                "-interaction=nonstopmode",
+                "-halt-on-error",
+                name,
+            ])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        let log = std::fs::read_to_string(dir.path().join(name.replace(".tex", ".log"))).unwrap();
+        assert!(log.lines().any(|line| line == "CAPTURE:H"), "{log}");
+    }
+}

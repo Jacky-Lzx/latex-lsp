@@ -3108,7 +3108,7 @@ impl<'a> CommandSignatures<'a> {
     }
 
     pub(crate) fn argument_tokens(&self, source: &str, parsed: &syntax::Syntax) -> BTreeSet<usize> {
-        self.argument_tokens_with_literal(source, parsed, None, false, false)
+        self.argument_tokens_with_literal(source, parsed, None, false, false, false)
     }
 
     /// Positions confirmed by a known parameter grammar, excluding the
@@ -3118,7 +3118,7 @@ impl<'a> CommandSignatures<'a> {
         source: &str,
         parsed: &syntax::Syntax,
     ) -> BTreeSet<usize> {
-        self.argument_tokens_with_literal(source, parsed, None, false, true)
+        self.argument_tokens_with_literal(source, parsed, None, false, true, false)
     }
 
     /// A stable copy can establish argument tokenization without certifying
@@ -3281,13 +3281,26 @@ impl<'a> CommandSignatures<'a> {
         None
     }
 
+    /// Structural refactors must not replace even executed argument tokens:
+    /// adding a group or control word can change the caller's parameter boundary.
+    pub(crate) fn is_parameter_token(
+        &self,
+        source: &str,
+        parsed: &syntax::Syntax,
+        at: usize,
+    ) -> bool {
+        self.argument_tokens_with_literal(source, parsed, Some(at), false, false, true)
+            .contains(&at)
+            || self.possible_literal_argument(source, parsed, at)
+    }
+
     pub(crate) fn literal_is_argument(
         &self,
         source: &str,
         parsed: &syntax::Syntax,
         at: usize,
     ) -> bool {
-        self.argument_tokens_with_literal(source, parsed, Some(at), false, false)
+        self.argument_tokens_with_literal(source, parsed, Some(at), false, false, false)
             .contains(&at)
             || self.possible_literal_argument(source, parsed, at)
     }
@@ -3300,7 +3313,7 @@ impl<'a> CommandSignatures<'a> {
         parsed: &syntax::Syntax,
         at: usize,
     ) -> bool {
-        self.argument_tokens_with_literal(source, parsed, Some(at), true, false)
+        self.argument_tokens_with_literal(source, parsed, Some(at), true, false, false)
             .contains(&at)
             || self.possible_literal_argument(source, parsed, at)
     }
@@ -3468,6 +3481,7 @@ impl<'a> CommandSignatures<'a> {
         literal: Option<usize>,
         declared_only: bool,
         known_only: bool,
+        all_parameters: bool,
     ) -> BTreeSet<usize> {
         let local = &self.local;
         let mut result = BTreeSet::new();
@@ -3554,7 +3568,11 @@ impl<'a> CommandSignatures<'a> {
                 // A csuse name group preserves following space tokens, unlike
                 // a literal control word or endcsname.
                 let at = optional_start(source, end, control_spaces);
-                if source.as_bytes().get(at) == Some(&b'\\') && token(source, at).is_some() {
+                // Refactors also preserve an ordinary single-token operand:
+                // replacing it with a control would change expansion suppression.
+                if (source.as_bytes().get(at) == Some(&b'\\') && token(source, at).is_some())
+                    || (all_parameters && literal == Some(at))
+                {
                     result.insert(at);
                 }
                 continue;
@@ -3617,7 +3635,8 @@ impl<'a> CommandSignatures<'a> {
                 // Resolved aliases retain their leaf's name. Builtin
                 // formatters and their pure aliases execute grouped contents;
                 // a user macro can instead discard or detokenize its argument.
-                let opaque = local.contains_key(signature.name.as_str())
+                let opaque = all_parameters
+                    || local.contains_key(signature.name.as_str())
                     || matches!(
                         signature.name.as_str(),
                         "graphicspath"
@@ -4158,6 +4177,9 @@ fn argument_tokens(
     if signature.starred {
         at = optional_start(source, at, true);
         if source.as_bytes().get(at) == Some(&b'*') {
+            if literal == Some(at) {
+                result.insert(at);
+            }
             at += 1;
             starred = true;
             control_spaces = false;
@@ -4187,6 +4209,9 @@ fn argument_tokens(
             }
             Kind::Star => {
                 if source.as_bytes().get(at) == Some(&b'*') {
+                    if literal == Some(at) {
+                        result.insert(at);
+                    }
                     at += 1;
                     starred = true;
                     control_spaces = false;
@@ -4197,7 +4222,7 @@ fn argument_tokens(
             }
             Kind::Flag(flag) => {
                 if token(source, at) == Some(flag.as_str()) {
-                    if syntax::control_word(flag, 0).is_some() {
+                    if syntax::control_word(flag, 0).is_some() || literal == Some(at) {
                         result.insert(at);
                     }
                     at += flag.len();
