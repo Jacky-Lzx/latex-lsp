@@ -864,6 +864,7 @@ impl BuildManager {
                     .iter()
                     .filter_map(|(uri, doc)| doc.version.is_some().then_some(uri.clone())),
             );
+            let inlay_refresh = current.inlay_refresh;
             let delivery = current.diagnostic_delivery.clone();
             let notifications = if delivery.is_pull() {
                 vec![]
@@ -897,6 +898,9 @@ impl BuildManager {
             let _ = manager
                 .while_open(client.send_notification::<BuildFinished>(result))
                 .await;
+            if inlay_refresh {
+                let _ = manager.while_open(client.inlay_hint_refresh()).await;
+            }
             let queued = state.lock().unwrap().get_mut(&root_uri).and_then(|record| {
                 // A new manual build may already own the record. Its saves
                 // belong to that build and must remain in its queue.

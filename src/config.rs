@@ -43,6 +43,24 @@ pub struct Config {
     pub distribution: DistributionConfig,
     pub diagnostics: DiagnosticsConfig,
     pub indexing: IndexingConfig,
+    pub inlay_hints: InlayHintsConfig,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct InlayHintsConfig {
+    pub enabled: bool,
+    pub numbers: bool,
+    pub pages: bool,
+}
+impl Default for InlayHintsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            numbers: true,
+            pages: true,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]

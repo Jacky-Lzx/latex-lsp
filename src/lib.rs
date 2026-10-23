@@ -1,4 +1,5 @@
 mod anchors;
+mod auxiliary;
 mod bib_accessors;
 mod bib_aliases;
 mod bib_completion;
@@ -357,6 +358,13 @@ impl LanguageServer for Backend {
             workspace.config = config::Config::parse(options)
                 .map_err(tower_lsp::jsonrpc::Error::invalid_params)?;
         }
+        workspace.inlay_refresh = params
+            .capabilities
+            .workspace
+            .as_ref()
+            .and_then(|cap| cap.inlay_hint.as_ref())
+            .and_then(|cap| cap.refresh_support)
+            .unwrap_or(false);
         workspace.versioned_edits = params
             .capabilities
             .workspace
@@ -463,6 +471,7 @@ impl LanguageServer for Backend {
                     })
                 }),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
+                inlay_hint_provider: Some(OneOf::Left(true)),
                 document_formatting_provider: Some(OneOf::Left(true)),
                 signature_help_provider: Some(SignatureHelpOptions {
                     trigger_characters: Some(
@@ -1018,6 +1027,19 @@ impl LanguageServer for Backend {
             });
         }
         Ok(Some(formatting::edits(&text, formatted)))
+    }
+
+    async fn inlay_hint(&self, params: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
+        if params.range.start > params.range.end {
+            return Err(tower_lsp::jsonrpc::Error::invalid_params(
+                "Invalid inlay hint range",
+            ));
+        }
+        Ok(Some(auxiliary::hints(
+            &*self.workspace.read().await,
+            &document_uri(params.text_document.uri),
+            params.range,
+        )))
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {

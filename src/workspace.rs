@@ -244,6 +244,7 @@ fn magic_directive(doc: &Document, fields: &[&str]) -> Option<crate::syntax::Arg
 pub struct Workspace {
     pub distribution: crate::distribution::Distribution,
     pub index_truncated: BTreeSet<String>,
+    pub inlay_refresh: bool,
     pub lint_diagnostics: BTreeMap<Url, Vec<tower_lsp::lsp_types::Diagnostic>>,
     pub documents: BTreeMap<Url, Document>,
     pub roots: BTreeSet<PathBuf>,

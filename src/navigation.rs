@@ -339,6 +339,7 @@ pub(crate) fn document_links_in(workspace: &Workspace, uri: &Url, root: &Url) ->
         }
     }
     crate::imports::update_links(workspace, uri, root, &mut links);
+    links.extend(crate::auxiliary::document_links(workspace, uri, root));
     let mut seen = BTreeSet::new();
     links.retain(|link| seen.insert((link.range.start, link.range.end)));
     links.sort_by_key(|link| (link.range.start, link.range.end));

@@ -277,6 +277,7 @@ fn builtin(name: &str) -> Option<Signature> {
         });
     }
     let (arguments, starred): (&[(&str, bool)], bool) = match name {
+        "externaldocument" => (&[("prefix", true), ("file", false), ("URL", true)], false),
         "import" | "subimport" | "inputfrom" | "subinputfrom" | "includefrom"
         | "subincludefrom" => (&[("directory", false), ("file", false)], true),
         "DeclareBibliographyCategory" => (&[("category", false)], false),

@@ -97,6 +97,13 @@ pub(crate) fn diagnostics(ws: &Workspace, uri: &Url) -> Vec<Diagnostic> {
                 .map(|entry| entry.name.as_str()),
         );
     }
+    let auxiliary = crate::auxiliary::labels(ws, uri);
+    labels.extend(
+        auxiliary
+            .iter()
+            .filter(|(_, info)| info.external)
+            .map(|(name, _)| name.as_str()),
+    );
     occurrences(doc)
         .into_iter()
         .filter_map(|(citation, span)| {
@@ -147,6 +154,7 @@ pub(crate) fn fixes(
         return vec![];
     };
     let scope = ws.symbol_scope(uri);
+    let auxiliary = crate::auxiliary::labels(ws, uri);
     let mut result = Vec::new();
     for diagnostic in diagnostics(ws, uri)
         .into_iter()
@@ -168,7 +176,7 @@ pub(crate) fn fixes(
         if !(3..=128).contains(&length) {
             continue;
         }
-        let candidates: BTreeSet<_> = ws
+        let mut candidates: BTreeSet<_> = ws
             .documents
             .iter()
             .filter(|(uri, _)| scope.contains(*uri))
@@ -186,6 +194,14 @@ pub(crate) fn fixes(
             .take(4096)
             .map(|entry| entry.name.as_str())
             .collect();
+        if !citation {
+            candidates.extend(
+                auxiliary
+                    .iter()
+                    .filter(|(_, info)| info.external)
+                    .map(|(name, _)| name.as_str()),
+            );
+        }
         let mut ranked: Vec<_> = candidates
             .into_iter()
             .filter_map(|name| {

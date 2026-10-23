@@ -17,6 +17,54 @@ struct Server {
 }
 
 #[test]
+fn compiled_reference_inlay_hints_follow_ranges_configuration_and_aux_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let source = "😀 \\documentclass{article}\\label{x}\\ref{x}\\ref{unknown}";
+    std::fs::write(dir.path().join("main.tex"), source).unwrap();
+    std::fs::write(
+        dir.path().join("main.aux"),
+        "\\newlabel{x}{{1.2}{5}{A title}{}}\n",
+    )
+    .unwrap();
+    let mut server = Server::start();
+    let initialized=server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{}}));
+    assert_eq!(initialized["capabilities"]["inlayHintProvider"], true);
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"latex","version":1,"text":source}}),
+    );
+    let params = json!({"textDocument":{"uri":uri},"range":{"start":{"line":0,"character":0},"end":{"line":1,"character":0}}});
+    let hints = server.request(2, "textDocument/inlayHint", params.clone());
+    assert_eq!(hints.as_array().unwrap().len(), 1);
+    assert_eq!(hints[0]["label"], "→ 1.2, p. 5");
+    assert!(hints[0]["tooltip"].as_str().unwrap().contains("A title"));
+    let empty=server.request(3,"textDocument/inlayHint",json!({"textDocument":{"uri":uri},"range":{"start":{"line":1,"character":0},"end":{"line":2,"character":0}}}));
+    assert_eq!(empty, json!([]));
+    std::fs::write(
+        dir.path().join("main.aux"),
+        "\\newlabel{x}{{3}{8}{Updated title}{}}\n",
+    )
+    .unwrap();
+    assert_eq!(
+        server.request(4, "textDocument/inlayHint", params.clone())[0]["label"],
+        "→ 3, p. 8"
+    );
+    server.notify(
+        "workspace/didChangeConfiguration",
+        json!({"settings":{"inlayHints":{"enabled":false}}}),
+    );
+    assert_eq!(
+        server.request(5, "textDocument/inlayHint", params),
+        json!([])
+    );
+    server.request(6, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
 fn indexing_limits_are_visible_and_completion_reports_incompleteness() {
     let dir = tempfile::tempdir().unwrap();
     for name in ["a.tex", "b.tex"] {

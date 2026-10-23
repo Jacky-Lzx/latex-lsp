@@ -1229,6 +1229,14 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
         } else {
             return vec![];
         }
+        if kind == Some(TargetKind::Label) {
+            candidates.extend(
+                crate::auxiliary::labels(workspace, uri)
+                    .into_iter()
+                    .filter(|(_, info)| info.external)
+                    .map(|(name, info)| (name, crate::auxiliary::describe(&info))),
+            );
+        }
         let mut seen = BTreeSet::new();
         return candidates
             .into_iter()
@@ -1549,7 +1557,7 @@ pub fn definitions(workspace: &Workspace, uri: &Url, position: Position) -> Vec<
         return vec![];
     };
     let scope = workspace.symbol_scope(uri);
-    workspace
+    let mut result: Vec<_> = workspace
         .documents
         .iter()
         .filter(|(uri, _)| scope.contains(*uri))
@@ -1561,7 +1569,13 @@ pub fn definitions(workspace: &Workspace, uri: &Url, position: Position) -> Vec<
                     range: doc.text.range(entry.span.start, entry.span.end),
                 })
         })
-        .collect()
+        .collect();
+    if result.is_empty() && target.kind == TargetKind::Label {
+        if let Some(location) = crate::auxiliary::definition(workspace, uri, target.name) {
+            result.push(location);
+        }
+    }
+    result
 }
 
 pub fn references(
@@ -1599,10 +1613,16 @@ pub fn references(
             scope.extend(project.iter().cloned());
         }
     }
-    all_references(workspace, uri, position, include_declaration)
+    let mut result: Vec<_> = all_references(workspace, uri, position, include_declaration)
         .into_iter()
         .filter(|location| scope.contains(&location.uri))
-        .collect()
+        .collect();
+    if include_declaration && definitions.is_empty() && target.kind == TargetKind::Label {
+        if let Some(location) = crate::auxiliary::definition(workspace, uri, target.name) {
+            result.push(location);
+        }
+    }
+    result
 }
 
 fn all_references(
@@ -1937,6 +1957,13 @@ pub fn hover(workspace: &Workspace, uri: &Url, position: Position) -> Option<Hov
                 entry_doc.text.position(entry.span.start).line + 1
             ));
             break;
+        }
+    }
+    if target.kind == TargetKind::Label {
+        if let Some(info) = crate::auxiliary::labels(workspace, uri).get(target.name) {
+            let extra = crate::auxiliary::describe(info);
+            value =
+                Some(value.map_or_else(|| extra.clone(), |value| format!("{value}\n\n{extra}")));
         }
     }
     if value.is_none() && target.kind == TargetKind::Command {
