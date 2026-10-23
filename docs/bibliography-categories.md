@@ -26,6 +26,8 @@
 
 分类分配不会产生缺失文献键的引用警告，因此同一行真实引用的警告和拼写修复只定位到引用命令。
 
+`\ifentrycategory{key}{category}{true}{false}` 的第一个参数支持单个文献键的补全、导航、悬停、引用、高亮和重命名；第二个参数使用分类名称。条目改名只更新键，分类改名只更新分类，保留分支中的普通文字。查询不产生普通缺失文献引用警告，不接受星号、可选说明或逗号键列表。
+
 
 分类名称可用于 `DeclareBibliographyCategory` 声明、`addtocategory` 的第一个参数、`ifentrycategory` 的第二个参数和 `ifcategory` 的第一个参数，以及 `printbibliography` 的 `category` / `notcategory` 选项。静态 `defbibfilter` 布尔表达式中的 `category=name` 也参与编辑；保留过滤器名、其他筛选值、成立／不成立代码和标题中的同名文字。无需安装 biblatex 或运行编译即可使用这些源码功能。
 

@@ -663,3 +663,12 @@ cargo test --locked --test protocol chktex_with_real_tool -- --ignored
 ```
 
 expl3 的真实测试使用 pdfLaTeX 比较函数及变量重命名前后的展开结果；发行版测试需要 kpsewhich。真实格式化与静态检查分别需要 tex-fmt 和 ChkTeX。其余专项测试不依赖外部工具。
+
+
+显式分类查询的单键测试同时检查分类命名空间隔离、四参数提示、列表／动态键排除、命名调用／纯转发别名、共享数据库所有者及诊断归属。真实 biblatex 对照需要安装 pdfLaTeX、BibTeX 和 biblatex：
+
+```sh
+cargo test --locked --test biblatex_entry_categories
+cargo test --locked --test protocol biblatex_entry_queries_keep_branch_roles
+cargo test --locked --test biblatex_entry_categories real_entry_category_query -- --include-ignored
+```

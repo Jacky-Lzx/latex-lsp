@@ -303,15 +303,6 @@ fn builtin(name: &str) -> Option<Signature> {
         | "subincludefrom" => (&[("directory", false), ("file", false)], true),
         "DeclareBibliographyCategory" => (&[("category", false)], false),
         "printbibliography" => (&[("options", true)], false),
-        "ifentrycategory" => (
-            &[
-                ("key", false),
-                ("category", false),
-                ("true", false),
-                ("false", false),
-            ],
-            false,
-        ),
         "ifcategory" => (
             &[("category", false), ("true", false), ("false", false)],
             false,
@@ -4905,7 +4896,9 @@ fn active_parameter(
 
 fn citation_parameters(style: crate::citations::Style, groups: usize) -> Vec<Parameter> {
     if style.single_key() {
-        let labels: &[&str] = if style.context_codes() == 2 {
+        let labels: &[&str] = if matches!(style, crate::citations::Style::EntryCategoryQuery) {
+            &["{key}", "{category}", "{true}", "{false}"]
+        } else if style.context_codes() == 2 {
             &["{key}", "{true}", "{false}"]
         } else {
             &["{key}", "{code}"]
@@ -5019,7 +5012,12 @@ fn citation_parameter(
     if style.single_key() {
         return match role {
             Role::Keys => 0,
-            Role::Code(index) => index + 1,
+            Role::Category => 1,
+            Role::Code(index) => {
+                index
+                    + 1
+                    + usize::from(matches!(style, crate::citations::Style::EntryCategoryQuery))
+            }
             _ => unreachable!(),
         };
     }

@@ -1953,7 +1953,12 @@ pub fn is_citation(name: &str) -> bool {
 pub(crate) fn is_single_citation(name: &str) -> bool {
     matches!(
         name,
-        "bibentry" | "defcitealias" | "entrydata" | "ifentryexists" | "ifentryinbib"
+        "bibentry"
+            | "defcitealias"
+            | "entrydata"
+            | "ifentryexists"
+            | "ifentryinbib"
+            | "ifentrycategory"
     )
 }
 
@@ -1967,6 +1972,7 @@ pub(crate) fn warns_on_undefined_citation(name: &str) -> bool {
                 | "entrydata"
                 | "ifentryexists"
                 | "ifentryinbib"
+                | "ifentrycategory"
         )
 }
 
@@ -2001,6 +2007,7 @@ pub(crate) fn citation_accepts_notes(name: &str) -> bool {
                 | "entrydata"
                 | "ifentryexists"
                 | "ifentryinbib"
+                | "ifentrycategory"
         )
 }
 

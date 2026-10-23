@@ -21400,7 +21400,13 @@ fn biblatex_entry_queries_keep_branch_roles_and_refresh_single_key_references_ov
     use latex_lsp::text::Text;
     use tower_lsp::lsp_types::{TextDocumentContentChangeEvent, TextEdit};
 
-    for name in ["ifentryexists", "ifentryinbib"] {
+    for name in ["ifentryexists", "ifentryinbib", "ifentrycategory"] {
+        let category = if name == "ifentrycategory" {
+            "{selected}"
+        } else {
+            ""
+        };
+        let branch_offset = u32::from(name == "ifentrycategory");
         for versioned in [false, true] {
             let mut server = Server::start();
             server.request(1, "initialize", json!({"processId":null,"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":versioned}}}}));
@@ -21408,7 +21414,7 @@ fn biblatex_entry_queries_keep_branch_roles_and_refresh_single_key_references_ov
             let main = "file:///entry-query-protocol/main.tex";
             let bib = "file:///entry-query-protocol/refs.bib";
             let bibliography = "@book{alpha,title={Literal alpha}}\r\n";
-            let source = format!("% 😀\r\n\\{name}{{% before\r\nalpha% after\r\n}}{{True alpha \\cite{{alpha}}}}{{False alpha}}\\label{{alpha}}\r\n");
+            let source = format!("% 😀\r\n\\{name}{{% before\r\nalpha% after\r\n}}{category}{{True alpha \\cite{{alpha}}}}{{False alpha}}\\label{{alpha}}\r\n");
             server.notify("textDocument/didOpen", json!({"textDocument":{"uri":bib,"languageId":"bibtex","version":5,"text":bibliography}}));
             server.notify(
                 "textDocument/didOpen",
@@ -21451,11 +21457,15 @@ fn biblatex_entry_queries_keep_branch_roles_and_refresh_single_key_references_ov
             );
             for (id, position, expected) in [
                 (8, at, 0),
-                (9, text.position(source.find("True alpha").unwrap() + 7), 1),
+                (
+                    9,
+                    text.position(source.find("True alpha").unwrap() + 7),
+                    1 + branch_offset,
+                ),
                 (
                     10,
                     text.position(source.find("False alpha").unwrap() + 8),
-                    2,
+                    2 + branch_offset,
                 ),
             ] {
                 let help = server.request(
@@ -21466,7 +21476,14 @@ fn biblatex_entry_queries_keep_branch_roles_and_refresh_single_key_references_ov
                 assert_eq!(help["activeParameter"], expected);
                 assert_eq!(
                     help["signatures"][0]["label"],
-                    format!("\\{name}{{key}}{{true}}{{false}}")
+                    format!(
+                        "\\{name}{{key}}{}{{true}}{{false}}",
+                        if category.is_empty() {
+                            ""
+                        } else {
+                            "{category}"
+                        }
+                    )
                 );
             }
             let renamed = server.request(

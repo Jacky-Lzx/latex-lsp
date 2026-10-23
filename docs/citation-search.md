@@ -6,4 +6,4 @@
 
 检索范围与项目文献作用域一致。普通引用、引用列表、单次引用及 biblatex 多组/卷号引用共享此行为，中文等 Unicode 元数据也可检索。BibTeX 数据库中的 crossref 等字段编辑继续使用文献键补全。动态宏或含注释的查询保留既有的字面键处理，不作任意文本替换。
 
-`bibentry`、`defcitealias`、`entrydata`、`ifentryexists` 和 `ifentryinbib` 要求严格的单个文献键，继续使用原有键补全与参数边界检查，不启用元数据检索。
+`bibentry`、`defcitealias`、`entrydata`、`ifentryexists`、`ifentryinbib` 和 `ifentrycategory` 要求严格的单个文献键，继续使用原有键补全与参数边界检查，不启用元数据检索。

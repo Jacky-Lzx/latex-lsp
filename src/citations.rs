@@ -12,6 +12,7 @@ pub(crate) enum Style {
     Set,
     EntryData,
     EntryQuery,
+    EntryCategoryQuery,
 }
 
 impl Style {
@@ -45,7 +46,7 @@ impl Style {
     pub fn context_codes(self) -> usize {
         match self {
             Self::EntryData => 1,
-            Self::EntryQuery => 2,
+            Self::EntryQuery | Self::EntryCategoryQuery => 2,
             _ => 0,
         }
     }
@@ -57,6 +58,7 @@ pub(crate) fn style(name: &str) -> Option<Style> {
         "defbibentryset" => Some(Style::Set),
         "entrydata" => Some(Style::EntryData),
         "ifentryexists" | "ifentryinbib" => Some(Style::EntryQuery),
+        "ifentrycategory" => Some(Style::EntryCategoryQuery),
         "citefield" => Some(Style::Data("field")),
         "citelist" => Some(Style::Data("literal list")),
         "citename" => Some(Style::Data("name list")),
@@ -225,7 +227,10 @@ pub(crate) fn arguments(source: &str, end: usize, style: Style) -> Arguments {
         result.end = at;
     }
     if style.single_key() {
-        for role in std::iter::once(Role::Keys).chain((0..style.context_codes()).map(Role::Code)) {
+        for role in std::iter::once(Role::Keys)
+            .chain(matches!(style, Style::EntryCategoryQuery).then_some(Role::Category))
+            .chain((0..style.context_codes()).map(Role::Code))
+        {
             if source.as_bytes().get(at) != Some(&b'{') {
                 wait_for(source, end, at, &mut result, 1, role);
                 break;
