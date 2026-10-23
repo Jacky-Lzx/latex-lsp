@@ -303,6 +303,7 @@ fn builtin(name: &str) -> Option<Signature> {
         | "subincludefrom" => (&[("directory", false), ("file", false)], true),
         "DeclareBibliographyCategory" => (&[("category", false)], false),
         "printbibliography" => (&[("options", true)], false),
+        "newrefsection" | "refsection" => (&[("resources", true)], false),
         "item" => (&[("label", true)], false),
         "ifcategory" => (
             &[("category", false), ("true", false), ("false", false)],
@@ -1096,6 +1097,8 @@ fn builtin(name: &str) -> Option<Signature> {
                     | "AtDataInput"
                     | "item"
                     | "printbibliography"
+                    | "newrefsection"
+                    | "refsection"
             )),
     })
 }
@@ -2158,6 +2161,21 @@ impl InlineTokenization {
         parsed: &syntax::Syntax,
         name: &str,
     ) -> Option<&'static str> {
+        self.builtin_name(
+            source,
+            parsed,
+            name,
+            &["lstinline", "mintinline", "mint", "Verb", "EscVerb"],
+        )
+    }
+
+    fn builtin_name(
+        &mut self,
+        source: &str,
+        parsed: &syntax::Syntax,
+        name: &str,
+        builtins: &[&'static str],
+    ) -> Option<&'static str> {
         for entry in &parsed.definitions[self.aliases_seen..] {
             if let Some(target) = source_alias(source, parsed, entry).or_else(|| {
                 literal_copy_target(source, parsed, entry, false).map(|(target, _)| target)
@@ -2174,10 +2192,7 @@ impl InlineTokenization {
             let mut visited = BTreeSet::new();
             let mut found = false;
             while let Some(name) = pending.pop() {
-                if matches!(
-                    name,
-                    "lstinline" | "mintinline" | "mint" | "Verb" | "EscVerb"
-                ) {
+                if builtins.contains(&name) {
                     found = true;
                     break;
                 }
@@ -2194,9 +2209,68 @@ impl InlineTokenization {
         }
         self.refresh(source, parsed);
         let signatures = self.signatures.as_ref().unwrap();
-        ["lstinline", "mintinline", "mint", "Verb", "EscVerb"]
-            .into_iter()
+        builtins
+            .iter()
+            .copied()
             .find(|builtin| signatures.invokes_builtin(name, builtin))
+    }
+
+    /// File-verb resource lists change catcodes only when read from the input,
+    /// never after an outer macro has already collected their tokens.
+    pub(crate) fn resource_bracket(
+        &mut self,
+        source: &str,
+        parsed: &syntax::Syntax,
+        controls: &BTreeSet<usize>,
+    ) -> Option<usize> {
+        let command = parsed.commands.last()?;
+        let (name, end, named) = match command.name.as_str() {
+            "csuse" => {
+                let argument = command.argument.as_ref()?;
+                if !static_invocation_name(&argument.value) {
+                    return None;
+                }
+                (argument.value.as_str(), argument.outer_span.end, true)
+            }
+            "endcsname" => {
+                let index = parsed.commands.len().checked_sub(2)?;
+                let span = literal_invocation_name(source, &parsed.commands, index)?;
+                (&source[span], command.span.end, true)
+            }
+            name => (name, command.span.end, false),
+        };
+        let builtin = self.builtin_name(
+            source,
+            parsed,
+            name,
+            &["newrefsection", "refsection", "begin"],
+        )?;
+        let signatures = self.signatures.as_ref()?;
+        if named
+            && !(if command.name == "csuse" {
+                signatures.command_unchanged("csuse")
+            } else {
+                signatures.command_unchanged("csname") && signatures.command_unchanged("endcsname")
+            })
+        {
+            return None;
+        }
+        let end = if builtin == "begin" {
+            let environment = syntax::environment_name_argument(source, end)?;
+            if environment.value != "refsection" || !signatures.command_unchanged("refsection") {
+                return None;
+            }
+            environment.outer_span.end
+        } else {
+            end
+        };
+        let at = syntax::skip_space(source, end);
+        if source.as_bytes().get(at) != Some(&b'[')
+            || self.contains(source, parsed, controls, command.span.start)
+        {
+            return None;
+        }
+        Some(at)
     }
 
     fn refresh(&mut self, source: &str, parsed: &syntax::Syntax) {
@@ -3828,6 +3902,9 @@ fn argument_free(name: &str) -> bool {
             | "clearpage"
             | "cleardoublepage"
             | "newblock"
+            | "newrefsegment"
+            | "endrefsection"
+            | "endrefsegment"
             | "centering"
             | "raggedright"
             | "raggedleft"
@@ -4267,8 +4344,16 @@ fn operand_delimited_end(source: &str, at: usize, open: &str, close: &str) -> Op
     }
 }
 
-fn builtin_argument_data(name: &str, parameter: usize) -> bool {
-    match name {
+fn builtin_argument_data(signature: &Signature, parameter: usize) -> bool {
+    match signature.name.as_str() {
+        "newrefsection" | "refsection" => true,
+        "begin" => {
+            parameter == 1
+                && signature
+                    .parameters
+                    .first()
+                    .is_some_and(|name| name.label == "{refsection}")
+        }
         "AtDataInput" | "AtBeginBiblist" | "AtEveryBiblistitem" => parameter == 0,
         "newenvironment" | "renewenvironment" | "provideenvironment" | "NewEnviron"
         | "RenewEnviron" => parameter < 3,
@@ -4330,7 +4415,7 @@ fn argument_tokens(
         // Defaults and parameter specifications are data; start/end code is
         // indexed normally. A body may display its defaults without executing
         // their tokens, so color renames must not rewrite those tokens.
-        let opaque = (opaque || builtin_argument_data(&signature.name, index)).then_some(parsed);
+        let opaque = (opaque || builtin_argument_data(signature, index)).then_some(parsed);
         if starred && matches!(parameter.kind, Kind::UnstarredOptional) {
             continue;
         }
@@ -4403,7 +4488,9 @@ fn argument_tokens(
             _ => false,
         };
         if bracket || source.as_bytes().get(at) == Some(&b'{') {
-            let group = if bracket && !signature.nested_brackets {
+            let group = if bracket && parsed.raw_resource_brackets.contains(&at) {
+                syntax::verbatim_file_bracket(source, at)
+            } else if bracket && !signature.nested_brackets {
                 syntax::bracket_argument(source, at)
             } else {
                 syntax::group(
@@ -4638,6 +4725,8 @@ fn builtin_environment(name: &str) -> Option<Signature> {
         ],
         "figure" | "figure*" | "table" | "table*" => &[("placement", true)],
         "thebibliography" => &[("widest label", false)],
+        "refsection" => &[("resources", true)],
+        "refsegment" => &[],
         "list" => &[("label", false), ("spacing", false)],
         "alignat" | "alignat*" => &[("column pairs", false)],
         "alignedat" => &[("position", true), ("column pairs", false)],
@@ -4671,7 +4760,7 @@ fn builtin_environment(name: &str) -> Option<Signature> {
         parameters,
         documentation: format!("Arguments of the {name} environment."),
         starred: false,
-        nested_brackets: !matches!(name, "minted" | "lstlisting")
+        nested_brackets: !matches!(name, "minted" | "lstlisting" | "refsection")
             && !crate::fancyvrb::is_environment(name),
     })
 }
@@ -4951,7 +5040,9 @@ fn active_parameter(
                 (b'{', b'}')
             }
         };
-        let end = if open == b'[' && !signature.nested_brackets {
+        let end = if open == b'[' && doc.syntax.raw_resource_brackets.contains(&i) {
+            syntax::verbatim_file_bracket(&source[..cursor], i).map(|(_, end)| end)
+        } else if open == b'[' && !signature.nested_brackets {
             syntax::optional_note_end(&source[..cursor], i)
         } else {
             group_end(doc, i, cursor, open, close, raw_header)

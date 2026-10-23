@@ -159,6 +159,8 @@ pub struct Syntax {
     pub(crate) command_undefinitions: std::collections::BTreeMap<usize, Option<Entry>>,
     /// Actual comments, distinguished from ignored URLs and verbatim text.
     pub comments: Vec<Range<usize>>,
+    /// Resource lists read with biblatex file-verb catcodes, before tokenization.
+    pub(crate) raw_resource_brackets: std::collections::BTreeSet<usize>,
     pub fixes: Vec<QuickFix>,
     /// Ordinary environment-stack fixes, replaceable by project-aware analysis.
     /// Verbatim closing-marker errors remain in the general diagnostics.
@@ -312,6 +314,10 @@ pub(crate) fn optional_note_end(source: &str, at: usize) -> Option<usize> {
 
 pub(crate) fn bracket_argument(source: &str, at: usize) -> Option<(Argument, usize)> {
     group_mode(source, at, b'[', b']', true, false)
+}
+
+pub(crate) fn verbatim_file_bracket(source: &str, at: usize) -> Option<(Argument, usize)> {
+    group_mode(source, at, b'[', b']', false, false)
 }
 
 pub(crate) fn parenthesis_note(source: &str, at: usize) -> Option<(Argument, usize)> {
@@ -2141,6 +2147,7 @@ impl Syntax {
         let mut conversion_arguments = std::collections::BTreeMap::new();
         let mut inline_tokenization = crate::signature::InlineTokenization::default();
         let mut fancyverb_context = crate::fancyvrb::InlineContext::default();
+        let mut raw_resource_end = 0;
         let mut i = 0;
         while i < bytes.len() {
             // Literal conversions suppress command indexing but retain source
@@ -2158,6 +2165,7 @@ impl Syntax {
                 continue;
             }
             match bytes[i] {
+                b'%' if i < raw_resource_end => i += 1,
                 b'%' => {
                     let start = i;
                     while i < bytes.len() && bytes[i] != b'\n' {
@@ -2941,6 +2949,13 @@ impl Syntax {
                         assigned_controls.insert(source[span].to_owned());
                     }
                     result.commands.push(command);
+                    if let Some(at) =
+                        inline_tokenization.resource_bracket(source, &result, &control_operands)
+                    {
+                        raw_resource_end =
+                            verbatim_file_bracket(source, at).map_or(source.len(), |(_, end)| end);
+                        result.raw_resource_brackets.insert(at);
+                    }
                 }
                 _ => i += 1,
             }

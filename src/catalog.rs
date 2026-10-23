@@ -835,6 +835,10 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("ifentrycategory", "ifentrycategory{${1:key}}{${2:category}}{${3:true}}{${4:false}}", "Test whether a bibliography entry belongs to a biblatex category."),
     ("ifcategory", "ifcategory{${1:category}}{${2:true}}{${3:false}}", "Test the current bibliography entry's biblatex category."),
     ("defbibfilter", "defbibfilter{${1:name}}{${2:category=selected}}", "Define a biblatex bibliography filter using and, or, not and parentheses."),
+    ("newrefsection", "newrefsection", "End the current biblatex reference section and start a new one. A nonempty optional resource list replaces default resources; global resources remain available."),
+    ("newrefsegment", "newrefsegment", "End the current biblatex reference segment and start a new one without changing bibliography labels."),
+    ("endrefsection", "endrefsection", "End the active biblatex reference section."),
+    ("endrefsegment", "endrefsegment", "End the active biblatex reference segment."),
     ("AtBeginRefsection", "AtBeginRefsection{${1:code}}", "Run code at the beginning of each biblatex reference section. Preamble only."),
     ("AtNextRefsection", "AtNextRefsection{${1:code}}", "Run code at the beginning of the next biblatex reference section."),
     ("AtFollowingRefsections", "AtFollowingRefsections{${1:code}}", "Run code at the beginning of subsequent biblatex reference sections."),
@@ -1384,4 +1388,6 @@ pub const ENVIRONMENTS: &[&str] = &[
     "lemma",
     "proof",
     "thebibliography",
+    "refsection",
+    "refsegment",
 ];

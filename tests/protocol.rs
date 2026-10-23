@@ -28298,3 +28298,91 @@ fn input_hook_type_completion_and_hover_follow_unsaved_project_meanings() {
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+#[test]
+fn bibliography_sections_preserve_raw_resource_headers_and_incremental_reference_edits_over_stdio()
+{
+    use latex_lsp::text::Text;
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    let uri = "untitled:bibliography-sections.tex";
+    for (stage, boundary) in [
+        r"\newrefsection[ref%name.bib]",
+        r"\csuse{newrefsection}[ref%name.bib]",
+        r"\csname newrefsection\endcsname[ref%name.bib]",
+        r"\sectionboundary[ref%name.bib]",
+        r"\begin{refsection}[ref%name.bib]",
+        r"\csuse{begin}{refsection}[ref%name.bib]",
+        "\\textbf{\\newrefsection[ref% comment\r\nname.bib]}",
+        r"\newrefsegment",
+        r"\endrefsection",
+        r"\endrefsegment",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let source = format!("% 😀\r\n\\def\\sectionboundary{{\\newrefsection}}\\label{{target}}{boundary}\\ref{{target}}");
+        let version = stage + 7;
+        if stage == 0 {
+            server.notify("textDocument/didOpen", json!({"textDocument":{"uri":uri,"languageId":"latex","version":version,"text":source}}));
+        } else {
+            server.notify("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":version},"contentChanges":[{"text":source}]}));
+        }
+        let text = Text::new(source.clone());
+        let at = text.position(source.rfind("target").unwrap() + 1);
+        let id = 10 + stage as u64 * 3;
+        let definition = server.request(
+            id,
+            "textDocument/definition",
+            json!({"textDocument":{"uri":uri},"position":at}),
+        );
+        assert_eq!(
+            definition.as_array().unwrap().len(),
+            1,
+            "{source}: {definition}"
+        );
+        let edit = server.request(
+            id + 1,
+            "textDocument/rename",
+            json!({"textDocument":{"uri":uri},"position":at,"newName":"updated"}),
+        );
+        assert_eq!(
+            edit["documentChanges"][0]["textDocument"]["version"],
+            version
+        );
+        let mut edits: Vec<tower_lsp::lsp_types::TextEdit> =
+            serde_json::from_value(edit["documentChanges"][0]["edits"].clone()).unwrap();
+        edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
+        let updated = text
+            .changed(
+                edits
+                    .into_iter()
+                    .map(
+                        |edit| tower_lsp::lsp_types::TextDocumentContentChangeEvent {
+                            range: Some(edit.range),
+                            range_length: None,
+                            text: edit.new_text,
+                        },
+                    )
+                    .collect(),
+            )
+            .unwrap();
+        assert_eq!(updated.source, source.replace("target", "updated"));
+        if stage < 6 {
+            let at = text.position(source.find("%name").unwrap() + 3);
+            let help = server.request(
+                id + 2,
+                "textDocument/signatureHelp",
+                json!({"textDocument":{"uri":uri},"position":at}),
+            );
+            assert_eq!(
+                help["activeParameter"],
+                if stage >= 4 { 1 } else { 0 },
+                "{source}: {help}"
+            );
+        }
+    }
+    server.request(1000, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
