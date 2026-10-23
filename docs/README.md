@@ -37,6 +37,7 @@
 - [futurelet 前瞻目标](futurelet.md)：声明、静态名称、跨文件重命名与继续执行边界。
 - [命令名操作数与声明](declaration-operands.md)：复制与声明位置的命令名引用、索引和编辑边界。
 - [meaning 命令名操作数](meaning.md)：查看命令时的导航、跨文件重命名、单 token 边界和依赖候选。
+- [TeX 发行版与宏包](distribution.md)：已安装文件补全、源码跳转、命令元数据与参数提示。
 - [项目与文件](projects.md)：工作区索引、根文件、依赖和路径解析。
 - [图片解析与移动](graphics.md)：搜索目录、扩展名顺序、局部与全局设置和图片重命名。
 - [图片文件名](graphics-filenames.md)：文件与搜索目录的引号、引擎差异、空白、路径补全和缺图修复。

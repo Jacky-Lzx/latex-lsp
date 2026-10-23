@@ -588,7 +588,8 @@ pub fn rename(
         TargetKind::Color => crate::named_colors::builtin(new_name),
         TargetKind::BibString => crate::bib_strings::builtin(new_name).is_some(),
         TargetKind::Command | TargetKind::Environment => {
-            COMMANDS.iter().any(|(name, _, _)| *name == new_name)
+            crate::packages::command(workspace, &scope, new_name).is_some()
+                || COMMANDS.iter().any(|(name, _, _)| *name == new_name)
                 || syntax::declares_register(new_name)
                 || crate::catalog::PRIMITIVES.contains(&new_name)
                 || ENVIRONMENTS
@@ -1365,6 +1366,40 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
             }
         }
     }
+    let loaded_packages = crate::packages::loaded(workspace, &scope);
+    for package in crate::packages::catalog()
+        .iter()
+        .filter(|package| loaded_packages.contains(&package.name))
+    {
+        for command in &package.commands {
+            if !command.name.starts_with(prefix) || !seen.insert(command.name.clone()) {
+                continue;
+            }
+            let signature = signatures.at(&command.name, &doc.text.source[command_end..]);
+            let snippet = signature
+                .as_ref()
+                .and_then(|(_, snippet)| snippet.as_ref())
+                .filter(|_| use_snippets);
+            result.push(CompletionItem {
+                label: command.name.clone(),
+                kind: Some(CompletionItemKind::FUNCTION),
+                detail: Some(format!("\\{} — {}", command.name, package.name)),
+                documentation: Some(Documentation::String(crate::packages::documentation(
+                    package, command,
+                ))),
+                insert_text_format: Some(if snippet.is_some() {
+                    InsertTextFormat::SNIPPET
+                } else {
+                    InsertTextFormat::PLAIN_TEXT
+                }),
+                text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                    range,
+                    new_text: snippet.cloned().unwrap_or_else(|| command.name.clone()),
+                })),
+                ..Default::default()
+            });
+        }
+    }
     for &(name, snippet, documentation) in COMMANDS {
         if name.starts_with(prefix) && seen.insert(name.into()) {
             let builtin_arguments =
@@ -1839,6 +1874,36 @@ pub fn hover(workspace: &Workspace, uri: &Url, position: Position) -> Option<Hov
     if let Some(hover) = crate::bib_accessors::hover(workspace, uri, offset) {
         return Some(hover);
     }
+    if let Some(link) = crate::navigation::document_links(workspace, uri)
+        .into_iter()
+        .find(|link| link.range.start <= position && position <= link.range.end)
+    {
+        if let Some(target) = link.target {
+            if let Some(file) = target
+                .path_segments()
+                .and_then(|mut segments| segments.next_back())
+            {
+                if let Some(package) = crate::packages::catalog()
+                    .iter()
+                    .find(|package| file == format!("{}.sty", package.name))
+                {
+                    return Some(Hover {
+                        contents: HoverContents::Markup(MarkupContent {
+                            kind: MarkupKind::PlainText,
+                            value: format!(
+                                "{}\n\n{}\nSource: {}\nDocumentation: https://texdoc.org/pkg/{}",
+                                package.name,
+                                package.description,
+                                target.path(),
+                                package.name
+                            ),
+                        }),
+                        range: Some(link.range),
+                    });
+                }
+            }
+        }
+    }
     let target = target(workspace, uri, offset)?;
     let scope = workspace.symbol_scope(uri);
     let mut value = None;
@@ -1858,6 +1923,16 @@ pub fn hover(workspace: &Workspace, uri: &Url, position: Position) -> Option<Hov
             ));
             break;
         }
+    }
+    if value.is_none() && target.kind == TargetKind::Command {
+        value =
+            crate::packages::command(workspace, &scope, target.name).map(|(package, command)| {
+                format!(
+                    "\\{}\n\n{}",
+                    target.name,
+                    crate::packages::documentation(package, command)
+                )
+            });
     }
     if value.is_none() && target.kind == TargetKind::Command {
         value = COMMANDS

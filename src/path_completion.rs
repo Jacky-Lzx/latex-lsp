@@ -353,6 +353,45 @@ fn complete_with_argument(
             );
         }
     }
+    if directory.is_empty() {
+        if let Some(extension) = syntax::package_class_extension(command)
+            .or_else(|| (command == "bibliographystyle").then_some("bst"))
+        {
+            for (file, uri) in &workspace.distribution.files {
+                let Some(stem) = file.strip_suffix(&format!(".{extension}")) else {
+                    continue;
+                };
+                let new_text = if extension == "bst" && existing_name.contains('.') {
+                    file
+                } else {
+                    stem
+                };
+                if !file.starts_with(name_prefix)
+                    || !insertions.insert(new_text.to_owned())
+                    || !uri.to_file_path().is_ok_and(|path| path.is_file())
+                {
+                    continue;
+                }
+                candidates.insert(
+                    file.clone(),
+                    CompletionItem {
+                        label: file.clone(),
+                        kind: Some(CompletionItemKind::MODULE),
+                        detail: Some(format!("TeX distribution — {}", uri.path())),
+                        filter_text: Some(format!("{filter_prefix}{}", &file[prefix.len()..])),
+                        sort_text: Some(format!("2{file}")),
+                        text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                            range,
+                            new_text: new_text.to_owned(),
+                        })),
+                        additional_text_edits: (!additional_edits.is_empty())
+                            .then(|| additional_edits.clone()),
+                        ..Default::default()
+                    },
+                );
+            }
+        }
+    }
     let mut result: Vec<_> = candidates.into_values().collect();
     result.sort_by(|a, b| a.sort_text.cmp(&b.sort_text));
     result.truncate(256);

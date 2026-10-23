@@ -4235,7 +4235,41 @@ fn lookup<'a>(
             // theorems or newif; their builtin argument lists no longer apply.
             None
         } else {
-            builtin(name)
+            builtin(name).or_else(|| {
+                let (package, command) = crate::packages::command(workspace, scope, name)?;
+                Some(Signature {
+                    name: name.into(),
+                    parameters: command
+                        .parameters
+                        .iter()
+                        .map(|parameter| {
+                            let optional = parameter.starts_with('[');
+                            Parameter {
+                                obey_spaces: false,
+                                kind: if parameter.starts_with('(') {
+                                    Kind::Delimited {
+                                        open: "(".into(),
+                                        close: ")".into(),
+                                        optional: true,
+                                    }
+                                } else if optional {
+                                    Kind::Optional
+                                } else {
+                                    Kind::Required
+                                },
+                                label: if optional || parameter.starts_with(['{', '(']) {
+                                    parameter.clone()
+                                } else {
+                                    format!("{{{parameter}}}")
+                                },
+                            }
+                        })
+                        .collect(),
+                    documentation: crate::packages::documentation(package, command),
+                    starred: command.starred,
+                    nested_brackets: false,
+                })
+            })
         }
     }
 }

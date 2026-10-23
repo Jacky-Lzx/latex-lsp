@@ -326,6 +326,7 @@ pub(crate) fn document_links_in(workspace: &Workspace, uri: &Url, root: &Url) ->
                     root,
                     &command.name,
                 )
+                .or_else(|| workspace.distribution.resolve(&command.name, &value))
             };
             if let Some(target) = target {
                 links.push(DocumentLink {

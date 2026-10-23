@@ -241,6 +241,7 @@ fn magic_directive(doc: &Document, fields: &[&str]) -> Option<crate::syntax::Arg
 
 #[derive(Default)]
 pub struct Workspace {
+    pub distribution: crate::distribution::Distribution,
     pub documents: BTreeMap<Url, Document>,
     pub roots: BTreeSet<PathBuf>,
     pub snippets: bool,

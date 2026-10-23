@@ -3,14 +3,9 @@ use std::{
     io::{Read, Write},
     path::PathBuf,
     process::{Command, Stdio},
-    sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
-        Arc,
-    },
     time::{Duration, Instant},
 };
 
-use tokio::sync::{Notify, Semaphore};
 use tower_lsp::{
     jsonrpc::{Error, Result},
     lsp_types::{FormattingOptions, TextEdit},
@@ -21,104 +16,19 @@ use crate::{
     text::Text,
 };
 
-#[derive(Clone)]
-pub struct Formatters {
-    slots: Arc<Semaphore>,
-    closing: Arc<AtomicBool>,
-    active: Arc<AtomicUsize>,
-    idle: Arc<Notify>,
-}
-
-impl Default for Formatters {
-    fn default() -> Self {
-        Self {
-            slots: Arc::new(Semaphore::new(4)),
-            closing: Arc::default(),
-            active: Arc::default(),
-            idle: Arc::default(),
-        }
+pub(crate) fn start(
+    tasks: &crate::tasks::Tasks,
+    config: FormattingConfig,
+    options: FormattingOptions,
+    source: String,
+    directory: Option<PathBuf>,
+) -> Result<crate::tasks::Task<String>> {
+    if !(1..=256).contains(&options.tab_size) {
+        return Err(Error::invalid_params(
+            "Formatting tabSize must be between 1 and 256",
+        ));
     }
-}
-
-struct Active {
-    active: Arc<AtomicUsize>,
-    idle: Arc<Notify>,
-}
-
-impl Drop for Active {
-    fn drop(&mut self) {
-        self.active.fetch_sub(1, Ordering::SeqCst);
-        self.idle.notify_waiters();
-    }
-}
-
-pub struct Task {
-    handle: tokio::task::JoinHandle<Result<String>>,
-    cancel: Arc<AtomicBool>,
-}
-
-impl Task {
-    pub async fn wait(&mut self) -> Result<String> {
-        (&mut self.handle)
-            .await
-            .map_err(|error| failure(format!("Formatting task failed: {error}")))?
-    }
-}
-
-impl Drop for Task {
-    fn drop(&mut self) {
-        self.cancel.store(true, Ordering::SeqCst);
-    }
-}
-
-impl Formatters {
-    pub fn start(
-        &self,
-        config: FormattingConfig,
-        options: FormattingOptions,
-        source: String,
-        directory: Option<PathBuf>,
-    ) -> Result<Task> {
-        if !(1..=256).contains(&options.tab_size) {
-            return Err(Error::invalid_params(
-                "Formatting tabSize must be between 1 and 256",
-            ));
-        }
-        if self.closing.load(Ordering::SeqCst) {
-            return Err(Error::invalid_request());
-        }
-        let permit = self
-            .slots
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| failure("Too many concurrent formatting requests; retry shortly"))?;
-        self.active.fetch_add(1, Ordering::SeqCst);
-        let active = Active {
-            active: self.active.clone(),
-            idle: self.idle.clone(),
-        };
-        let cancel = Arc::new(AtomicBool::new(false));
-        let cancelled = cancel.clone();
-        let closing = self.closing.clone();
-        let handle = tokio::task::spawn_blocking(move || {
-            let (_permit, _active) = (permit, active);
-            run(&config, &options, source, directory, || {
-                cancelled.load(Ordering::SeqCst) || closing.load(Ordering::SeqCst)
-            })
-        });
-        Ok(Task { handle, cancel })
-    }
-
-    pub async fn shutdown(&self) {
-        self.closing.store(true, Ordering::SeqCst);
-        loop {
-            let idle = self.idle.notified();
-            if self.active.load(Ordering::SeqCst) == 0 {
-                break;
-            }
-            idle.await;
-        }
-    }
+    tasks.start(move |cancel| run(&config, &options, source, directory, || cancel.cancelled()))
 }
 
 fn failure(message: impl Into<String>) -> Error {

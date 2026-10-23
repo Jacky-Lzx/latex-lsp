@@ -40,6 +40,25 @@ impl Engine {
 pub struct Config {
     pub build: BuildConfig,
     pub formatting: FormattingConfig,
+    pub distribution: DistributionConfig,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct DistributionConfig {
+    pub enabled: bool,
+    pub executable: String,
+    pub roots: Vec<PathBuf>,
+}
+
+impl Default for DistributionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            executable: "kpsewhich".into(),
+            roots: vec![],
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -106,6 +125,9 @@ impl Config {
         let value = value.get("latex").unwrap_or(&value);
         let config: Self = serde_json::from_value(value.clone())
             .map_err(|error| format!("Invalid LaTeX configuration: {error}"))?;
+        if config.distribution.executable.trim().is_empty() {
+            return Err("Distribution executable must not be empty".into());
+        }
         if config
             .formatting
             .executable

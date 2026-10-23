@@ -20,6 +20,7 @@ mod counters;
 mod delimiter_operands;
 pub mod diagnostic;
 pub mod dispatch;
+pub mod distribution;
 pub mod editing;
 mod environment_calls;
 mod environment_diagnostics;
@@ -42,6 +43,7 @@ mod named_colors;
 mod named_commands;
 pub mod navigation;
 mod output;
+mod packages;
 pub mod path_completion;
 mod primitives;
 mod project_diagnostics;
@@ -60,6 +62,7 @@ mod string_tests;
 mod switch_diagnostics;
 pub mod synctex;
 pub mod syntax;
+mod tasks;
 pub mod text;
 pub mod workspace;
 
@@ -99,7 +102,7 @@ pub struct Backend {
     workspace: Arc<RwLock<Workspace>>,
     builds: build::BuildManager,
     sync_queries: synctex::Queries,
-    formatters: formatting::Formatters,
+    external_tasks: tasks::Tasks,
     shutdown_requested: AtomicBool,
     semantic_cache: Mutex<semantic_cache::Cache>,
     diagnostic_cache: Mutex<diagnostic::Cache>,
@@ -111,7 +114,7 @@ impl Backend {
         Self {
             builds: build::BuildManager::new(client.clone(), workspace.clone()),
             sync_queries: synctex::Queries::default(),
-            formatters: formatting::Formatters::default(),
+            external_tasks: tasks::Tasks::default(),
             client,
             workspace,
             shutdown_requested: AtomicBool::new(false),
@@ -124,10 +127,10 @@ impl Backend {
     pub fn cleanup(&self) -> impl std::future::Future<Output = ()> + Send + 'static {
         let builds = self.builds.clone();
         let queries = self.sync_queries.clone();
-        let formatters = self.formatters.clone();
+        let external_tasks = self.external_tasks.clone();
         let workspace = self.workspace.clone();
         async move {
-            tokio::join!(queries.shutdown(), formatters.shutdown());
+            tokio::join!(queries.shutdown(), external_tasks.shutdown());
             builds.shutdown().await;
             workspace.read().await.diagnostic_delivery.close();
         }
@@ -149,6 +152,22 @@ impl Backend {
 
     pub async fn cancel_progress(&self, params: WorkDoneProgressCancelParams) {
         self.builds.cancel_progress(&params.token);
+    }
+
+    async fn reload_distribution(&self) {
+        let config = self.workspace.read().await.config.distribution.clone();
+        if let Ok(mut task) = self.external_tasks.start(move |cancel| {
+            let distribution =
+                distribution::Distribution::discover_cancelled(&config, || cancel.cancelled());
+            if cancel.cancelled() {
+                return Err(tower_lsp::jsonrpc::Error::request_cancelled());
+            }
+            Ok(distribution)
+        }) {
+            if let Ok(distribution) = task.wait().await {
+                self.workspace.write().await.distribution = distribution;
+            }
+        }
     }
 
     async fn publish_open(&self) {
@@ -422,6 +441,7 @@ impl LanguageServer for Backend {
     }
 
     async fn initialized(&self, _: InitializedParams) {
+        self.reload_distribution().await;
         if self.workspace.read().await.watch_files {
             let binary_inputs = syntax::file_extensions("includegraphics")
                 .unwrap()
@@ -550,7 +570,12 @@ impl LanguageServer for Backend {
     async fn did_change_configuration(&self, params: DidChangeConfigurationParams) {
         match config::Config::parse(params.settings) {
             Ok(config) => {
+                let distribution_changed =
+                    self.workspace.read().await.config.distribution != config.distribution;
                 self.workspace.write().await.config = config;
+                if distribution_changed {
+                    self.reload_distribution().await;
+                }
                 self.publish_open().await;
             }
             Err(error) => self.client.log_message(MessageType::WARNING, error).await,
@@ -833,7 +858,8 @@ impl LanguageServer for Backend {
             .and_then(|path| path.parent().map(std::path::Path::to_path_buf))
             .filter(|path| path.is_dir())
             .or_else(|| workspace.roots.iter().next().cloned());
-        let mut task = self.formatters.start(
+        let mut task = formatting::start(
+            &self.external_tasks,
             config.clone(),
             params.options,
             text.source.clone(),
