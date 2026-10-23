@@ -1,6 +1,6 @@
 use crate::{
     features, syntax,
-    workspace::{resolve_file_path, resolve_path, root_directive, Document, Workspace},
+    workspace::{resolve_file_path, resolve_path, root_directive, Document, DocumentKind, Workspace},
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -14,6 +14,9 @@ pub fn workspace_symbols(workspace: &Workspace, query: &str) -> Vec<SymbolInform
     let mut result = Vec::new();
     for (uri, doc) in &workspace.documents {
         for symbol in features::flat_symbols(doc, uri) {
+            if doc.kind == DocumentKind::Bibtex && symbol.kind == SymbolKind::PROPERTY {
+                continue;
+            }
             let name = symbol.name.to_lowercase();
             let score = if name == query {
                 0

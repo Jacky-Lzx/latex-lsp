@@ -17,6 +17,105 @@ struct Server {
 }
 
 #[test]
+#[cfg(unix)]
+fn bibliography_alias_symbols_negotiate_hierarchy_refresh_search_and_restore_disk_over_stdio() {
+    for hierarchy in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let source="% 😀\r\n@string{names={legacy😀,other}}\r\n@book{owner,IDS={legacy😀,other},title={Book}}\r\n";
+        std::fs::write(root.join("refs.bib"), source).unwrap();
+        let bib = Url::from_file_path(root.join("refs.bib")).unwrap();
+        let mut server = Server::start();
+        server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(root).unwrap(),"capabilities":{"textDocument":{"documentSymbol":{"hierarchicalDocumentSymbolSupport":hierarchy}}}}));
+        server.notify("initialized", json!({}));
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":bib,"languageId":"bibtex","version":7,"text":source}}),
+        );
+        let mut current = source.to_string();
+        for stage in 0..4 {
+            if stage == 1 {
+                let range = latex_lsp::text::Text::new(current.clone()).range(0, 0);
+                current.insert_str(0, "% moved 😀\r\n");
+                server.notify("textDocument/didChange",json!({"textDocument":{"uri":bib,"version":8},"contentChanges":[{"range":range,"text":"% moved 😀\r\n"}]}));
+            } else if stage == 2 {
+                current = current.replace("IDS={legacy😀,other}", "IDS=names");
+                server.notify("textDocument/didChange",json!({"textDocument":{"uri":bib,"version":9},"contentChanges":[{"text":current}]}));
+            } else if stage == 3 {
+                server.notify("textDocument/didClose", json!({"textDocument":{"uri":bib}}));
+                current = source.into();
+            }
+            let symbols = server.request(
+                2 + stage * 10,
+                "textDocument/documentSymbol",
+                json!({"textDocument":{"uri":bib}}),
+            );
+            let aliases = if hierarchy {
+                let owner = symbols
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|item| item["name"] == "owner")
+                    .unwrap();
+                let field = owner["children"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|item| item["name"] == "IDS")
+                    .unwrap();
+                assert_eq!(
+                    field["kind"],
+                    json!(tower_lsp::lsp_types::SymbolKind::PROPERTY)
+                );
+                field["children"].as_array().cloned().unwrap_or_default()
+            } else {
+                symbols
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|item| item["name"] == "legacy😀" || item["name"] == "other")
+                    .cloned()
+                    .collect()
+            };
+            assert_eq!(aliases.len(), if stage == 2 { 0 } else { 2 });
+            let found = server.request(
+                3 + stage * 10,
+                "workspace/symbol",
+                json!({"query":"legacy😀"}),
+            );
+            assert_eq!(found.as_array().unwrap().len(), usize::from(stage != 2));
+            if stage != 2 {
+                let start = current.rfind("legacy😀").unwrap();
+                let expected = latex_lsp::text::Text::new(current.clone())
+                    .range(start, start + "legacy😀".len());
+                let alias = aliases
+                    .iter()
+                    .find(|item| item["name"] == "legacy😀")
+                    .unwrap();
+                assert_eq!(alias["kind"], json!(tower_lsp::lsp_types::SymbolKind::KEY));
+                if hierarchy {
+                    assert_eq!(alias["range"], json!(expected));
+                    assert_eq!(alias["selectionRange"], json!(expected));
+                    assert!(alias["detail"].as_str().unwrap().contains("owner"));
+                } else {
+                    assert_eq!(alias["location"], json!({"uri":bib,"range":expected}));
+                    assert_eq!(alias["containerName"], "IDS");
+                }
+                assert_eq!(found[0]["location"], json!({"uri":bib,"range":expected}));
+                assert_eq!(found[0]["containerName"], "IDS");
+            }
+            assert_eq!(
+                server.request(4 + stage * 10, "workspace/symbol", json!({"query":"IDS"})),
+                json!([])
+            );
+        }
+        server.request(50, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
 fn bibliography_ids_aliases_refresh_navigation_and_independent_renames_over_stdio() {
     for versioned in [false, true] {
         let directory = tempfile::tempdir().unwrap();
@@ -278,6 +377,130 @@ fn bibliography_abbreviations_refresh_navigation_completion_and_versioned_rename
     server.request(14, "shutdown", Value::Null);
     server.notify("exit", Value::Null);
     server.wait_exit(0);
+}
+
+#[test]
+fn bibliography_outlines_negotiate_field_hierarchy_and_refresh_incremental_edits_over_stdio() {
+    let directory = tempfile::tempdir().unwrap();
+    let file = Url::from_file_path(directory.path().join("refs.data")).unwrap();
+    for hierarchy in [false, true] {
+        for uri in [Url::parse("untitled:refs.tex").unwrap(), file.clone()] {
+            let mut server = Server::start();
+            server.request(1,"initialize",json!({"processId":null,"capabilities":{"textDocument":{"documentSymbol":{"hierarchicalDocumentSymbolSupport":hierarchy}}}}));
+            server.notify("initialized", json!({}));
+            let source = "% 😀\r\n@string{Journal={Name}}\r\n@book{entry😀,\r\n  TITLE = {😀},\r\n  year = 2026\r\n}\r\n";
+            server.notify(
+                "textDocument/didOpen",
+                json!({"textDocument":{"uri":uri,"languageId":"bibtex","version":1,"text":source}}),
+            );
+            let check = |symbols: &Value, source: &str, fields: &[&str]| {
+                let text = latex_lsp::text::Text::new(source.into());
+                let key_start = source.find("entry😀").unwrap();
+                let key_range = json!(text.range(key_start, key_start + "entry😀".len()));
+                if hierarchy {
+                    assert_eq!(symbols.as_array().unwrap().len(), 2, "{symbols}");
+                    assert_eq!(symbols[0]["name"], "Journal");
+                    let start = source.find("@string").unwrap();
+                    let end = source[start..].find('\r').unwrap() + start;
+                    assert_eq!(symbols[0]["range"], json!(text.range(start, end)));
+                    assert_eq!(symbols[1]["name"], "entry😀");
+                    assert_eq!(symbols[1]["selectionRange"], key_range);
+                    assert_eq!(
+                        symbols[1]["range"],
+                        json!(text.range(
+                            source.find("@book").unwrap(),
+                            source.rfind('}').unwrap() + 1
+                        ))
+                    );
+                    let children = symbols[1]["children"].as_array().unwrap();
+                    assert_eq!(
+                        children
+                            .iter()
+                            .map(|s| s["name"].as_str().unwrap())
+                            .collect::<Vec<_>>(),
+                        fields
+                    );
+                    for (child, name) in children.iter().zip(fields) {
+                        assert_eq!(child["kind"], 7);
+                        let start = source.find(name).unwrap();
+                        assert_eq!(
+                            child["selectionRange"],
+                            json!(text.range(start, start + name.len()))
+                        );
+                        assert!(child.get("location").is_none());
+                    }
+                } else {
+                    let expected = ["Journal", "entry😀"]
+                        .into_iter()
+                        .chain(fields.iter().copied())
+                        .collect::<Vec<_>>();
+                    assert_eq!(
+                        symbols
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .map(|s| s["name"].as_str().unwrap())
+                            .collect::<Vec<_>>(),
+                        expected
+                    );
+                    assert_eq!(symbols[1]["location"]["range"], key_range);
+                    for (child, name) in symbols.as_array().unwrap()[2..].iter().zip(fields) {
+                        assert_eq!(child["kind"], 7);
+                        assert_eq!(child["containerName"], "entry😀");
+                        assert_eq!(child["location"]["uri"], uri.as_str());
+                        let start = source.find(name).unwrap();
+                        assert_eq!(
+                            child["location"]["range"],
+                            json!(text.range(start, start + name.len()))
+                        );
+                        assert!(child.get("children").is_none());
+                    }
+                }
+            };
+            let symbols = server.request(
+                2,
+                "textDocument/documentSymbol",
+                json!({"textDocument":{"uri":uri}}),
+            );
+            check(&symbols, source, &["TITLE", "year"]);
+            let text = latex_lsp::text::Text::new(source.into());
+            let field = source.find("TITLE").unwrap();
+            let year = source.find("year = 2026").unwrap();
+            let replacement = "year = 2027,\r\n  url = {https://example.org}";
+            server.notify("textDocument/didChange",json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"range":text.range(field,field+5),"text":"note"},{"range":text.range(year,year+"year = 2026".len()),"text":replacement}]}));
+            let changed = source
+                .replace("TITLE", "note")
+                .replace("year = 2026", replacement);
+            let symbols = server.request(
+                3,
+                "textDocument/documentSymbol",
+                json!({"textDocument":{"uri":uri}}),
+            );
+            check(&symbols, &changed, &["note", "year", "url"]);
+            let global = server.request(4, "workspace/symbol", json!({"query":""}));
+            assert_eq!(
+                global
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|symbol| symbol["name"].as_str().unwrap())
+                    .collect::<Vec<_>>(),
+                ["Journal", "entry😀"]
+            );
+            server.notify("textDocument/didChange",json!({"textDocument":{"uri":uri,"version":3},"contentChanges":[{"text":"@misc{fieldless}"}]}));
+            let symbols = server.request(
+                5,
+                "textDocument/documentSymbol",
+                json!({"textDocument":{"uri":uri}}),
+            );
+            assert_eq!(symbols.as_array().unwrap().len(), 1);
+            assert_eq!(symbols[0]["name"], "fieldless");
+            assert!(symbols[0].get("children").is_none());
+            server.request(6, "shutdown", Value::Null);
+            server.notify("exit", Value::Null);
+            server.wait_exit(0);
+        }
+    }
 }
 
 #[test]

@@ -3,6 +3,7 @@ mod bib_aliases;
 mod bib_completion;
 mod bib_links;
 mod bib_strings;
+mod bib_symbols;
 mod bib_resources;
 pub mod build;
 pub mod build_log;

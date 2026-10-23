@@ -1904,21 +1904,7 @@ pub fn diagnostics(doc: &Document) -> Vec<Diagnostic> {
 #[allow(deprecated)]
 pub fn symbols(doc: &Document) -> Vec<DocumentSymbol> {
     if doc.kind == DocumentKind::Bibtex {
-        return doc
-            .syntax
-            .citations
-            .iter()
-            .map(|entry| DocumentSymbol {
-                name: entry.name.clone(),
-                detail: Some(entry.detail.clone()),
-                kind: SymbolKind::KEY,
-                tags: None,
-                deprecated: None,
-                range: doc.text.range(entry.span.start, entry.span.end),
-                selection_range: doc.text.range(entry.span.start, entry.span.end),
-                children: None,
-            })
-            .collect();
+        return crate::bib_symbols::symbols(doc);
     }
     let headings: Vec<_> = doc
         .syntax
