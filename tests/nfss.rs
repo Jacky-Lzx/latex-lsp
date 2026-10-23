@@ -17,6 +17,16 @@ const DECLARATIONS: &[(&str, &[&str])] = &[
     ("DeclareMathSizes", &["10", "10", "7", "5"]),
 ];
 
+const SELECTORS: &[(&str, &[&str])] = &[
+    ("fontencoding", &["LSP"]),
+    ("fontfamily", &["lsptest"]),
+    ("fontseries", &["m"]),
+    ("fontshape", &["n"]),
+    ("linespread", &["1.25"]),
+    ("fontsize", &["10", "12"]),
+    ("usefont", &["OT1", "cmtt", "m", "n"]),
+];
+
 fn setup(source: &str, snippets: bool) -> (Workspace, Url) {
     let uri = Url::parse("file:///nfss-tests/lsplsptest.fd").unwrap();
     let mut workspace = Workspace {
@@ -68,7 +78,7 @@ fn fill(template: &str, arguments: &[&str]) -> String {
 
 #[test]
 fn nfss_parameter_hints_track_every_field_comments_nested_settings_and_math_stars() {
-    for (name, arguments) in DECLARATIONS {
+    for (name, arguments) in DECLARATIONS.iter().chain(SELECTORS) {
         for star in if *name == "DeclareMathSizes" {
             &["", "*"][..]
         } else {
@@ -111,7 +121,7 @@ fn nfss_parameter_hints_track_every_field_comments_nested_settings_and_math_star
 
 #[test]
 fn nfss_completions_negotiate_snippets_preserve_arguments_and_honor_user_signatures() {
-    for (name, arguments) in DECLARATIONS {
+    for (name, arguments) in DECLARATIONS.iter().chain(SELECTORS) {
         let source = format!("\\{name}");
         for snippets in [false, true] {
             let (workspace, uri) = setup(&source, snippets);
@@ -161,6 +171,36 @@ fn nfss_completions_negotiate_snippets_preserve_arguments_and_honor_user_signatu
 }
 
 #[test]
+fn selectfont_and_its_aliases_do_not_consume_following_command_arguments() {
+    for (source, name) in [
+        (r"\selectfont", "selectfont"),
+        (r"\def\switch{\selectfont}\switch", "switch"),
+    ] {
+        let (workspace, uri) = setup(source, true);
+        let item = command_item(&workspace, &uri, name, source.len());
+        assert_eq!(edit(&item).new_text, name);
+        assert!(signature::help(
+            &workspace,
+            &uri,
+            Text::new(source.into()).position(source.len())
+        )
+        .is_none());
+    }
+    for prefix in [r"\selectfont", r"\def\switch{\selectfont}\switch"] {
+        let source = format!("{prefix}\\frac{{one}}{{two}}");
+        let (workspace, uri) = setup(&source, false);
+        let help = signature::help(
+            &workspace,
+            &uri,
+            Text::new(source.clone()).position(source.find("two").unwrap() + 1),
+        )
+        .unwrap();
+        assert_eq!(help.signatures[0].label, r"\frac{numerator}{denominator}");
+        assert_eq!(help.active_parameter, Some(1));
+    }
+}
+
+#[test]
 #[ignore = "requires pdflatex, xelatex and lualatex"]
 fn real_completed_nfss_declarations_load_the_declared_font_in_three_engines() {
     let mut declarations = String::new();
@@ -173,7 +213,23 @@ fn real_completed_nfss_declarations_load_the_declared_font_in_three_engines() {
         declarations.push('\n');
     }
     declarations.push_str("\\DeclareMathSizes*{12}{12}{8}{6}\n");
-    let source = format!("\\documentclass{{article}}\n\\makeatletter\n{declarations}\\begin{{document}}\n{{\\fontencoding{{LSP}}\\fontfamily{{lsptest}}\\fontseries{{m}}\\fontshape{{n}}\\selectfont\\typeout{{NFSS-FONT:\\fontname\\font}}Native font.}}\n$x^2$\\typeout{{NFSS-MATH:\\tf@size/\\sf@size/\\ssf@size}}\n\\end{{document}}\n");
+    let mut selectors = String::new();
+    for (name, arguments) in SELECTORS {
+        let source = format!("\\{name}");
+        let (workspace, uri) = setup(&source, true);
+        let item = command_item(&workspace, &uri, name, source.len());
+        if *name == "usefont" {
+            let (workspace, uri) = setup(r"\selectfont", true);
+            let select = command_item(&workspace, &uri, "selectfont", 11);
+            selectors.push('\\');
+            selectors.push_str(&edit(&select).new_text);
+            selectors.push_str("\\typeout{NFSS-FONT:\\fontname\\font}\\typeout{NFSS-ATTRS:\\f@encoding/\\f@family/\\f@series/\\f@shape}\\typeout{NFSS-SIZE:\\f@size/\\f@baselineskip/\\f@linespread}\\typeout{NFSS-BASELINE:\\the\\baselineskip}Native font.\n");
+        }
+        selectors.push('\\');
+        selectors.push_str(&fill(&edit(&item).new_text, arguments));
+        selectors.push('\n');
+    }
+    let source = format!("\\documentclass{{article}}\n\\makeatletter\n{declarations}\\begin{{document}}\n{{{selectors}\\typeout{{NFSS-USEFONT:\\fontname\\font}}Monospace.}}\n$x^2$\\typeout{{NFSS-MATH:\\tf@size/\\sf@size/\\ssf@size}}\n\\end{{document}}\n");
     for engine in ["pdflatex", "xelatex", "lualatex"] {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();
@@ -199,6 +255,13 @@ fn real_completed_nfss_declarations_load_the_declared_font_in_three_engines() {
             String::from_utf8_lossy(&output.stderr)
         );
         assert!(log.contains("NFSS-FONT:cmr10"), "{engine}: {log}");
+        assert!(
+            log.contains("NFSS-ATTRS:LSP/lsptest/m/n"),
+            "{engine}: {log}"
+        );
+        assert!(log.contains("NFSS-SIZE:10/12.0pt/1.25"), "{engine}: {log}");
+        assert!(log.contains("NFSS-BASELINE:15.0pt"), "{engine}: {log}");
+        assert!(log.contains("NFSS-USEFONT:cmtt10"), "{engine}: {log}");
         assert!(log.contains("NFSS-MATH:10/7/5"), "{engine}: {log}");
         assert!(std::fs::read(root.join("main.pdf"))
             .unwrap()

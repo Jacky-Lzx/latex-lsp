@@ -2965,6 +2965,7 @@ fn uncertain_and_argument_free_aliases_do_not_invent_signature_or_snippet_parame
         r"\def\bridge{\wrapped}\def\wrapped{}",
         r"\def\bridge{\relax}",
         r"\def\bridge{\bfseries}",
+        r"\def\bridge{\selectfont}",
         r"\def\bridge{\frac{one}}",
         r"\def\bridge{\relax\frac}",
         r"\newcommand{\bridge}[0][invalid]{\frac}",

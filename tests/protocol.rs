@@ -16390,8 +16390,10 @@ printf '%s\n' "Package rerunfilecheck Warning: File \`main.idx' has changed." "(
     }
 }
 
+
+
 #[test]
-fn nfss_declarations_negotiate_snippets_and_refresh_signatures_over_stdio() {
+fn nfss_declarations_and_selectors_negotiate_snippets_and_refresh_signatures_over_stdio() {
     use latex_lsp::text::Text;
 
     let declarations = [
@@ -16426,6 +16428,13 @@ fn nfss_declarations_negotiate_snippets_and_refresh_signatures_over_stdio() {
             "DeclareMathSizes",
             &["text size", "math size", "script size", "scriptscript size"][..],
         ),
+        ("fontencoding", &["encoding"][..]),
+        ("fontfamily", &["family"][..]),
+        ("fontseries", &["series"][..]),
+        ("fontshape", &["shape"][..]),
+        ("linespread", &["factor"][..]),
+        ("fontsize", &["size", "baseline skip"][..]),
+        ("usefont", &["encoding", "family", "series", "shape"][..]),
     ];
     for snippets in [false, true] {
         let mut server = Server::start();

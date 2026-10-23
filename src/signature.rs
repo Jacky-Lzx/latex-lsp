@@ -592,6 +592,21 @@ fn builtin(name: &str) -> Option<Signature> {
             ],
             true,
         ),
+        "fontencoding" => (&[("encoding", false)], false),
+        "fontfamily" => (&[("family", false)], false),
+        "fontseries" => (&[("series", false)], false),
+        "fontshape" => (&[("shape", false)], false),
+        "fontsize" => (&[("size", false), ("baseline skip", false)], false),
+        "linespread" => (&[("factor", false)], false),
+        "usefont" => (
+            &[
+                ("encoding", false),
+                ("family", false),
+                ("series", false),
+                ("shape", false),
+            ],
+            false,
+        ),
         "DeclareTextFontCommand" => (&[("command", false), ("font commands", false)], false),
         "DeclareFixedFont" => (
             &[
@@ -3040,6 +3055,7 @@ fn argument_free(name: &str) -> bool {
             | "noindent"
             | "indent"
             | "normalfont"
+            | "selectfont"
             | "bfseries"
             | "mdseries"
             | "itshape"

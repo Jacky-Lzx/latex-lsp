@@ -31,6 +31,18 @@
 
 编码、字体族和字体文件名暂不提供注册表驱动的候选或导航；字号规格仍按 LaTeX 原始语法填写。
 
+## 选择字体与行距
+
+`\fontencoding{encoding}`、`\fontfamily{family}`、`\fontseries{series}`、`\fontshape{shape}`、`\fontsize{size}{baseline skip}` 和 `\linespread{factor}` 提供参数片段及提示。它们设置请求属性，需要随后调用无参数的 `\selectfont` 才应用；`\usefont{encoding}{family}{series}{shape}` 立即选择字体，并保留当前字号。字号与基线距离不带单位时按 pt 处理，基线距离还受行距因子缩放。
+
+```tex
+{\fontencoding{OT1}\fontfamily{cmr}\fontseries{m}\fontshape{n}
+ \linespread{1.25}\fontsize{10}{12}\selectfont
+ 正文使用 10pt 字体与 15pt 基线距离。}
+```
+
+选择命令共用已有参数保留、客户端片段协商和用户签名覆盖规则。`\selectfont` 及其静态别名不会消耗后续命令的参数，后续命令仍可正常获取提示与源码修复。
+
 ## 字体与字号替换
 
 最终日志中的完整标准 `LaTeX Font Warning` 分为两类：

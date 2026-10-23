@@ -163,6 +163,17 @@ fn file_errors_distinguish_macro_operands_from_completed_calls() {
                 true,
             ),
             ("", r"\relax\noindent\bfseries", true),
+            ("", r"\selectfont", true),
+            (r"\def\switch{\selectfont}", r"\switch", true),
+            (
+                "",
+                r"\fontencoding{OT1}\fontfamily{cmr}\fontseries{m}\fontshape{n}\linespread{1.0}\fontsize{10}{12}\selectfont",
+                true,
+            ),
+            ("", r"\usefont{OT1}{cmr}{m}{n}", true),
+            ("", r"\fontfamily", false),
+            ("", r"\fontsize{10}", false),
+            (r"\renewcommand\selectfont[1]{}", r"\selectfont", false),
         ] {
             let call = format!("{prefix}\\{command}{{palete}}\\relax");
             let source = format!("{declaration}\n{call}\n");

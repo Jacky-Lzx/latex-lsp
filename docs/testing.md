@@ -221,7 +221,7 @@ cargo test --locked --test protocol literal_build_fixes_recheck_cross_file_macro
 cargo test --locked --test source_filename_renames -- --include-ignored
 ```
 
-NFSS 字体声明的默认回归核对六类内核命令的所有参数、注释与嵌套设置、`\DeclareMathSizes` 的有星号和无星号形式、片段协商、保留已有参数及用户签名覆盖。stdio 回归使用 `.fd` 文档验证编辑器实际请求；外部回归填充实际补全片段，在 pdfLaTeX、XeLaTeX 和 LuaLaTeX 中编译，核对选中的 Computer Modern 字体和数学字号：
+NFSS 字体声明与选择的默认回归核对六类声明和七类带参数选择命令的所有参数、注释与嵌套设置、`\DeclareMathSizes` 的有星号和无星号形式、片段协商、保留已有参数及用户签名覆盖。另检查无参数 `\selectfont` 及其别名后的命令边界、文件错误修复及本地重定义。stdio 回归使用 `.fd` 文档验证编辑器实际请求；外部回归填充实际补全片段，在 pdfLaTeX、XeLaTeX 和 LuaLaTeX 中编译，核对选中的 Computer Modern 字体、编码、字形、数学字号以及行距因子应用后的基线距离：
 
 ```sh
 cargo test --locked --test nfss
