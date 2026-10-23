@@ -2417,6 +2417,142 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main
         server.wait_exit(0);
     }
 }
+#[test]
+#[cfg(unix)]
+fn biber_granular_xdata_warnings_refresh_values_mapped_fallback_and_repair_over_push_and_pull() {
+    for pull in [false, true] {
+        let script = r#"cp "${2%/*}/fixture.blg" "$1/main.blg"
+printf '%%PDF-1.4\n' > "$1/main.pdf"
+printf '(./main.tex)\n' > "$1/main.log"
+printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main.fls"
+"#;
+        let capabilities = if pull {
+            json!({"textDocument":{"diagnostic":{}}})
+        } else {
+            json!({})
+        };
+        let (mut server, directory, main) =
+            fake_build_server_capabilities(script, false, capabilities);
+        let root = directory.path();
+        let refs = Url::from_file_path(root.join("refs.data")).unwrap();
+        let main_source = "\\documentclass{article}\n\\addbibresource{refs.data}\n";
+        std::fs::write(main.to_file_path().unwrap(), main_source).unwrap();
+        server.notify("textDocument/didChange",json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":main_source}]}));
+        let mut current="% 😀\r\n@book{café😀,title={xdata=pére😀-title},author={xdata=pére😀-author-2},publisher={xdata=pére😀},subtitle={xdata=pére😀-author}}\r\n@xdata{pére😀,publisher={Publisher},author={Doe, Jane}}\r\n".to_string();
+        std::fs::write(refs.to_file_path().unwrap(), &current).unwrap();
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":refs,"languageId":"bibtex","version":7,"text":current}}),
+        );
+        for stage in 0..4 {
+            let mut changes = Vec::new();
+            if stage == 1 {
+                for field in ["title", "author", "publisher", "subtitle"] {
+                    let start = current.find(&format!("{field}=")).unwrap();
+                    let range = latex_lsp::text::Text::new(current.clone()).range(start, start);
+                    current.insert_str(start, "\r\n ");
+                    changes.push(json!({"range":range,"text":"\r\n "}));
+                }
+            } else if stage == 2 {
+                let start = current.find("title=").unwrap();
+                let range =
+                    latex_lsp::text::Text::new(current.clone()).range(start, start + "title".len());
+                current.replace_range(start..start + "title".len(), "inherit");
+                changes.push(json!({"range":range,"text":"inherit"}));
+            } else if stage == 3 {
+                let range = latex_lsp::text::Text::new(current.clone()).range(0, current.len());
+                current="% 😀\r\n@book{café😀,title={xdata=pére😀-title},author={xdata=pére😀-author-2},publisher={xdata=pére😀-publisher},subtitle={xdata=pére😀-subtitle}}\r\n@xdata{pére😀,title={Parent},subtitle={Subtitle},publisher={Publisher},author={Doe, Jane and Smith, John}}\r\n".into();
+                changes.push(json!({"range":range,"text":current}));
+            }
+            if !changes.is_empty() {
+                std::fs::write(refs.to_file_path().unwrap(), &current).unwrap();
+                server.notify(
+                    "textDocument/didChange",
+                    json!({"textDocument":{"uri":refs,"version":7+stage},"contentChanges":changes}),
+                );
+                server.notify("textDocument/didSave", json!({"textDocument":{"uri":refs}}));
+            }
+            let mut log = "INFO - Found BibTeX data source 'refs.data'\n".to_string();
+            let mut expected = Vec::new();
+            if stage < 3 {
+                for (field,body,reason,source_field,position) in [
+                    ("title","references XDATA field 'title' in entry 'pére😀' and this field does not exist, not resolving","missing-source-field",Some("title"),None),
+                    ("author","references field 'author' position 2 in entry 'pére😀' and this position does not exist, not resolving","missing-position",Some("author"),Some("2")),
+                    ("publisher","","unspecified-source-field",None,None),
+                    ("subtitle","which xdata references field 'author' in entry 'pére😀' are not the same types, not resolving","incompatible-field-types",Some("author"),None),
+                ] {
+                    let message=if field=="publisher" {"Entry 'café😀' has XDATA reference from field 'publisher' that contains no source field (section 0)".to_string()} else {format!("Field '{field}' in entry 'café😀' {body} (section 0)")};
+                    log.push_str(&format!("WARN - {message}\n"));
+                    let fallback=stage==2 && field=="title";
+                    let range=if fallback {
+                        let start=current.find("café😀").unwrap();
+                        latex_lsp::text::Text::new(current.clone()).range(start,start+"café😀".len())
+                    } else {
+                        let start=current.find(&format!("{field}={{")).unwrap()+field.len()+2;
+                        let end=start+current[start..].find('}').unwrap();
+                        latex_lsp::text::Text::new(current.clone()).range(start,end)
+                    };
+                    let mut data=json!({"key":"café😀","field":field,"section":0,"reason":reason});
+                    if let Some(source_field)=source_field {data["parent"]="pére😀".into();data["sourceField"]=source_field.into();}
+                    if let Some(position)=position {data["sourcePosition"]=position.into();}
+                    if fallback {data["unresolvedField"]=true.into();}
+                    expected.push((format!("Biber: {message}"),serde_json::to_value(range).unwrap(),data));
+                }
+            }
+            std::fs::write(root.join("fixture.blg"), log).unwrap();
+            server.request(
+                2 + stage * 2,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            let finished = server.until(|item| item["method"] == "latex/buildFinished");
+            assert_eq!(finished["params"]["status"], "success", "{finished}");
+            let matches_expected = |items: &[Value]| {
+                items.len() == expected.len()
+                    && expected.iter().all(|(message, range, data)| {
+                        items.iter().any(|item| {
+                            item["code"] == "invalid-bibliography-xdata"
+                                && item["range"] == *range
+                                && item["data"] == *data
+                                && item["message"] == *message
+                                && item["severity"] == 2
+                        })
+                    })
+            };
+            let items = if pull {
+                server.request(
+                    3 + stage * 2,
+                    "textDocument/diagnostic",
+                    json!({"textDocument":{"uri":refs}}),
+                )["items"]
+                    .clone()
+            } else {
+                server.until(|item| {
+                    item["method"] == "textDocument/publishDiagnostics"
+                        && item["params"]["uri"] == refs.as_str()
+                        && item["params"]["diagnostics"]
+                            .as_array()
+                            .is_some_and(|items| matches_expected(items))
+                })["params"]["diagnostics"]
+                    .clone()
+            };
+            assert!(
+                matches_expected(items.as_array().unwrap()),
+                "stage {stage}: {items}\nexpected {expected:?}"
+            );
+            for item in items.as_array().unwrap() {
+                assert_eq!(item["source"], "latex-build");
+                assert!(item["relatedInformation"].is_null());
+            }
+        }
+        server.request(10, "shutdown", Value::Null);
+        if pull {
+            assert_no_pushed_diagnostics(&server);
+        }
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
 
 #[test]
 #[cfg(unix)]
