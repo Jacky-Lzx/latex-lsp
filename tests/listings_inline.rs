@@ -406,6 +406,44 @@ fn headers_have_signatures_hover_snippets_and_preserve_existing_code() {
 }
 
 #[test]
+fn static_inline_aliases_keep_their_names_editable_and_their_code_opaque() {
+    for declaration in [
+        r"\let\code\lstinline",
+        r"\NewCommandCopy{\code}{\lstinline}",
+        r"\newcommand{\code}{\lstinline}",
+        r"\def\code{\lstinline}",
+        r"\let\forward\lstinline\let\code\forward",
+        r"\newcommand{\forward}{\lstinline}\newcommand{\code}{\forward}",
+    ] {
+        let body = r"\label{kept}\input{fake}\code }%";
+        let source =
+            format!("{declaration}\\label{{kept}}\\code[language=TeX]|{body}|\\ref{{kept}}");
+        let main = uri();
+        let mut workspace = Workspace::default();
+        workspace.open(main.clone(), source.clone(), 7);
+        let doc = &workspace.documents[&main];
+        assert!(
+            doc.syntax.diagnostics.is_empty(),
+            "{source}: {:?}",
+            doc.syntax.diagnostics
+        );
+        assert_eq!(doc.syntax.labels.len(), 1, "{source}");
+        assert!(navigation::document_links(&workspace, &main).is_empty());
+        let at = doc
+            .text
+            .position(source.find("\\code[language").unwrap() + 2);
+        let edit = features::rename(&workspace, &main, at, "snippet")
+            .unwrap()
+            .unwrap();
+        let updated = apply(&source, edit.changes.unwrap()[&main].clone());
+        assert!(updated.contains(body));
+        assert_eq!(updated.matches("\\snippet").count(), 2, "{updated}");
+        let at = doc.text.position(source.rfind("kept").unwrap());
+        assert_eq!(features::references(&workspace, &main, at, true).len(), 2);
+    }
+}
+
+#[test]
 fn local_redefinitions_replace_the_inline_grammar() {
     for declaration in [r"\renewcommand{\lstinline}[1]{#1}", r"\let\lstinline\other"] {
         let source = format!("{declaration}\\lstinline{{\\label{{real}}}}");
@@ -413,6 +451,25 @@ fn local_redefinitions_replace_the_inline_grammar() {
         assert_eq!(doc.syntax.labels.len(), 1, "{declaration}");
         assert_eq!(doc.syntax.labels[0].name, "real");
         assert!(doc.syntax.diagnostics.is_empty());
+    }
+    for declaration in [
+        r"\newcommand{\code}[1]{#1}",
+        r"\newcommand{\code}[1]{\lstinline}",
+        r"\newcommand{\code}{\unknown}",
+        r"\newcommand{\code}{\forward}\newcommand{\forward}{\code}",
+        r"\let\code\unknown",
+        r"\let\code\later\newcommand{\later}{\lstinline}",
+        r"\let\code\lstinline\renewcommand{\code}[1]{#1}",
+        r"\newcommand{\gobble}[1]{}\gobble\let\code\lstinline",
+    ] {
+        let source = format!("{declaration}\\code{{\\label{{real}}}}");
+        let doc = Document::new(&uri(), source.clone(), Some(7));
+        assert!(
+            doc.syntax.diagnostics.is_empty(),
+            "{source}: {:?}",
+            doc.syntax.diagnostics
+        );
+        assert_eq!(doc.syntax.labels.len(), 1, "{source}");
     }
 }
 
@@ -448,6 +505,9 @@ fn real_inline_forms_preserve_native_labels_inputs_and_header_commands_after_ren
             "\\let\\strong\\textbf\\let\\stronger\\strong\\stronger{\\lstinline{a\nb}}",
             r"\let\strong\textbf\newcommand{\stronger}{\strong}\stronger{\lstinline{a{b}c}}",
             r"\let\zero\relax\zero{\lstinline{a{b}c}",
+            r"\let\code\lstinline\code|\label{kept}\input{fake}|",
+            r"\newcommand{\code}{\lstinline}\code|\label{kept}\input{fake}|",
+            r"\let\forward\lstinline\let\code\forward\code|\label{kept}\input{fake}|",
         ] {
             let directory = tempfile::tempdir().unwrap();
             let root = directory.path();

@@ -92,6 +92,46 @@ fn inline_code_is_opaque_to_symbols_dependencies_diagnostics_and_edits() {
 }
 
 #[test]
+fn inline_aliases_preserve_literal_bodies_and_command_rename_ranges() {
+    for target in ["mintinline", "mint"] {
+        for declaration in [
+            format!("\\let\\code\\{target}"),
+            format!("\\NewCommandCopy{{\\code}}{{\\{target}}}"),
+            format!("\\newcommand{{\\code}}{{\\{target}}}"),
+            format!("\\def\\code{{\\{target}}}"),
+            format!("\\let\\forward\\{target}\\let\\code\\forward"),
+        ] {
+            let body = r"\label{kept}\input{fake}\code {nested}%";
+            let source = format!(
+                "{declaration}\\label{{kept}}\\code[breaklines]{{latex}}|{body}|\\ref{{kept}}"
+            );
+            let main = uri();
+            let mut workspace = Workspace::default();
+            workspace.open(main.clone(), source.clone(), 7);
+            let doc = &workspace.documents[&main];
+            assert!(
+                doc.syntax.diagnostics.is_empty(),
+                "{source}: {:?}",
+                doc.syntax.diagnostics
+            );
+            assert_eq!(doc.syntax.labels.len(), 1, "{source}");
+            assert!(navigation::document_links(&workspace, &main).is_empty());
+            let at = doc
+                .text
+                .position(source.find("\\code[breaklines").unwrap() + 2);
+            let edit = features::rename(&workspace, &main, at, "snippet")
+                .unwrap()
+                .unwrap();
+            let updated = apply(&source, edit.changes.unwrap()[&main].clone());
+            assert!(updated.contains(body));
+            assert_eq!(updated.matches("\\snippet").count(), 2, "{updated}");
+            let at = doc.text.position(source.rfind("kept").unwrap());
+            assert_eq!(features::references(&workspace, &main, at, true).len(), 2);
+        }
+    }
+}
+
+#[test]
 fn raw_braces_and_percent_signs_balance_without_tex_escape_rules() {
     for source in [
         r"\mintinline{tex}{\{\label{phantom}\}}\label{real}",
@@ -336,8 +376,9 @@ fn real_tokenized_inline_code_preserves_labels_and_inputs_after_rename() {
                 let directory = tempfile::tempdir().unwrap();
                 let root = directory.path();
                 let main = Url::from_file_path(root.join("main.tex")).unwrap();
-                let literal =
-                    format!("\\let\\strong\\textbf\\strong{{\\{command}{{latex}}{body}}}");
+                let literal = format!(
+                    "\\let\\code\\{command}\\let\\strong\\textbf\\strong{{\\code{{latex}}{body}}}"
+                );
                 let source = format!("\\documentclass{{article}}\n\\usepackage[verbatim]{{minted}}\n\\begin{{document}}\n\\label{{kept}}{literal}\\label{{tail}}\\ref{{kept}}\n\\end{{document}}\n");
                 let mut workspace = Workspace::default();
                 workspace.open(main.clone(), source.clone(), 7);

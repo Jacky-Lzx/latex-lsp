@@ -2235,7 +2235,17 @@ impl Syntax {
                             }
                         }
                     }
-                    if operands_known && crate::minted::is_inline(name) {
+                    let inline_name = if operands_known
+                        && (name == "lstinline" || crate::minted::is_inline(name))
+                    {
+                        Some(name)
+                    } else if !control_operands.contains(&start) && assigned_controls.contains(name)
+                    {
+                        inline_tokenization.literal_name(source, &result, name)
+                    } else {
+                        None
+                    };
+                    if inline_name.is_some_and(crate::minted::is_inline) {
                         let language = crate::minted::language(source, command_end);
                         if let Some(argument) = &language {
                             literal_arguments.insert(
@@ -2263,7 +2273,7 @@ impl Syntax {
                         });
                         continue;
                     }
-                    if operands_known && name == "lstinline" {
+                    if inline_name == Some("lstinline") {
                         if let Some(at) = crate::listings::inline_start(source, command_end) {
                             let tokenized = inline_tokenization.contains(
                                 source,

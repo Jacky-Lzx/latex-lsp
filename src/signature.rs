@@ -1918,19 +1918,59 @@ pub(crate) struct InlineTokenization {
     declarations: (usize, usize),
     scanned: usize,
     end: usize,
+    aliases_seen: usize,
+    aliases: BTreeMap<String, Vec<String>>,
 }
 
 impl InlineTokenization {
-    pub(crate) fn contains(
+    /// Cheap lexical candidates keep ordinary local macro calls from forcing
+    /// signature resolution. Only a path to an inline reader needs the full
+    /// source-context proof of its current meaning.
+    pub(crate) fn literal_name(
         &mut self,
         source: &str,
         parsed: &syntax::Syntax,
-        controls: &BTreeSet<usize>,
-        at: usize,
-    ) -> bool {
-        if at < self.end {
-            return true;
+        name: &str,
+    ) -> Option<&'static str> {
+        for entry in &parsed.definitions[self.aliases_seen..] {
+            if let Some(target) = source_alias(source, parsed, entry).or_else(|| {
+                literal_copy_target(source, parsed, entry, false).map(|(target, _)| target)
+            }) {
+                self.aliases
+                    .entry(entry.name.clone())
+                    .or_default()
+                    .push(target);
+            }
         }
+        self.aliases_seen = parsed.definitions.len();
+        let possible = {
+            let mut pending = vec![name];
+            let mut visited = BTreeSet::new();
+            let mut found = false;
+            while let Some(name) = pending.pop() {
+                if matches!(name, "lstinline" | "mintinline" | "mint") {
+                    found = true;
+                    break;
+                }
+                if visited.insert(name) {
+                    if let Some(targets) = self.aliases.get(name) {
+                        pending.extend(targets.iter().map(String::as_str));
+                    }
+                }
+            }
+            found
+        };
+        if !possible {
+            return None;
+        }
+        self.refresh(source, parsed);
+        let signatures = self.signatures.as_ref().unwrap();
+        ["lstinline", "mintinline", "mint"]
+            .into_iter()
+            .find(|builtin| signatures.invokes_builtin(name, builtin))
+    }
+
+    fn refresh(&mut self, source: &str, parsed: &syntax::Syntax) {
         let declarations = (parsed.definitions.len(), parsed.environments.len());
         if self.signatures.is_none() || self.declarations != declarations {
             let mut signatures = CommandSignatures::source_context([(source, parsed)]);
@@ -1956,6 +1996,19 @@ impl InlineTokenization {
             self.declarations = declarations;
             self.scanned = 0;
         }
+    }
+
+    pub(crate) fn contains(
+        &mut self,
+        source: &str,
+        parsed: &syntax::Syntax,
+        controls: &BTreeSet<usize>,
+        at: usize,
+    ) -> bool {
+        if at < self.end {
+            return true;
+        }
+        self.refresh(source, parsed);
         self.scanned = self.scanned.max(
             parsed
                 .commands

@@ -89,6 +89,9 @@ fn minted_inline_code_stays_opaque_after_incremental_changes_over_stdio() {
         "\\mintinline{tex}%\\label{kept}\\input{fake}%",
         "\\textbf{\\mintinline{tex}{a\\}\\label{kept}\\input{fake}b}",
         "\\textbf{\\mintinline{tex}{a\\}\\label{kept}\\input{fake}b}}",
+        "\\let\\code\\mintinline\\code{tex}|\\label{kept}\\input{fake}|",
+        "\\newcommand{\\code}{\\mintinline}\\code{tex}|\\label{kept}\\input{fake}|",
+        "\\mintinline{tex}%\\label{kept}\\input{fake}%",
     ]
     .into_iter()
     .enumerate()
@@ -147,7 +150,7 @@ fn minted_inline_code_stays_opaque_after_incremental_changes_over_stdio() {
         );
         assert_eq!(
             symbols.as_array().unwrap().len(),
-            if stage == 2 { 2 } else { 1 },
+            if matches!(stage, 2 | 7 | 8) { 2 } else { 1 },
             "{source}: {symbols}"
         );
         if let Some(offset) = code.find("\\input") {
@@ -428,6 +431,9 @@ fn listings_inline_literal_boundaries_follow_incremental_edits_over_stdio() {
         Some("\\lstinline*\\label{kept}\\input{fake}* "),
         Some("\\textbf{\\lstinline{a{\\label{kept}\\input{fake}}b} "),
         Some("\\textbf{\\lstinline{a{\\label{kept}\\input{fake}}b}} "),
+        Some("\\let\\code\\lstinline\\code|\\label{kept}\\input{fake}| "),
+        Some("\\newcommand{\\code}{\\lstinline}\\code|\\label{kept}\\input{fake}| "),
+        Some("\\lstinline*\\label{kept}\\input{fake}* "),
     ]
     .into_iter()
     .enumerate()
@@ -462,7 +468,11 @@ fn listings_inline_literal_boundaries_follow_incremental_edits_over_stdio() {
             "textDocument/documentSymbol",
             json!({"textDocument":{"uri":main}}),
         );
-        let symbol_count = if stage == 8 || stage == 9 { 2 } else { 1 };
+        let symbol_count = if matches!(stage, 8 | 9 | 13 | 14) {
+            2
+        } else {
+            1
+        };
         assert_eq!(
             symbols.as_array().unwrap().len(),
             symbol_count,
