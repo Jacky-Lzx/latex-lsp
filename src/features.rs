@@ -1272,20 +1272,28 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
             );
         }
         let mut seen = BTreeSet::new();
+        let environment_docs = (kind.is_none())
+            .then(|| crate::completion_resolve::Commands::new(workspace, uri, &scope));
         return candidates
             .into_iter()
             .filter(|(name, _)| name.starts_with(prefix) && seen.insert(name.clone()))
-            .map(|(name, detail)| CompletionItem {
-                label: name.clone(),
-                detail: Some(detail),
-                kind: Some(CompletionItemKind::REFERENCE),
-                text_edit: Some(CompletionTextEdit::Edit(TextEdit {
-                    range: replacement_range,
-                    new_text: syntax::label_name_text(&doc.text.source, command, &name),
-                })),
-                additional_text_edits: (!additional_edits.is_empty())
-                    .then(|| additional_edits.clone()),
-                ..CompletionItem::default()
+            .map(|(name, detail)| {
+                let mut item = CompletionItem {
+                    label: name.clone(),
+                    detail: Some(detail),
+                    kind: Some(CompletionItemKind::REFERENCE),
+                    text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                        range: replacement_range,
+                        new_text: syntax::label_name_text(&doc.text.source, command, &name),
+                    })),
+                    additional_text_edits: (!additional_edits.is_empty())
+                        .then(|| additional_edits.clone()),
+                    ..CompletionItem::default()
+                };
+                if let Some(docs) = &environment_docs {
+                    docs.apply_environment(&mut item, &name);
+                }
+                item
             })
             .collect();
     }
@@ -1390,6 +1398,8 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
             };
             if is_command {
                 command_docs.apply(&mut item, entry);
+            } else {
+                command_docs.apply_environment(&mut item, &entry.name);
             }
             result.push(item);
         }
@@ -2020,11 +2030,13 @@ pub fn hover(workspace: &Workspace, uri: &Url, position: Position) -> Option<Hov
                 Some(value.map_or_else(|| extra.clone(), |value| format!("{value}\n\n{extra}")));
         }
     }
-    if target.kind == TargetKind::Command {
-        if let (Some(value), Some(notes)) = (
-            value.as_mut(),
-            crate::command_docs::for_command(workspace, &scope, target.name),
-        ) {
+    if matches!(target.kind, TargetKind::Command | TargetKind::Environment) {
+        let notes = if target.kind == TargetKind::Command {
+            crate::command_docs::for_command(workspace, &scope, target.name)
+        } else {
+            crate::command_docs::for_environment(workspace, &scope, target.name)
+        };
+        if let (Some(value), Some(notes)) = (value.as_mut(), notes) {
             value.push_str("\n\n");
             value.push_str(&notes);
         }

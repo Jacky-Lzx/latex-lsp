@@ -19,7 +19,18 @@ fn directive(text: &str) -> bool {
 }
 
 pub(crate) fn for_command(ws: &Workspace, scope: &BTreeSet<Url>, name: &str) -> Option<String> {
-    Index::new(ws, scope).notes(name)
+    Index::new(ws, scope).notes(name, Namespace::Command)
+}
+
+pub(crate) fn for_environment(ws: &Workspace, scope: &BTreeSet<Url>, name: &str) -> Option<String> {
+    Index::new(ws, scope).notes(name, Namespace::Environment)
+}
+
+#[derive(Clone, Copy, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum Namespace {
+    Command,
+    Environment,
 }
 
 pub(crate) struct Declaration<'a> {
@@ -31,35 +42,50 @@ pub(crate) struct Declaration<'a> {
 /// Build once for a completion list, instead of scanning the project per item.
 pub(crate) struct Index<'a> {
     definitions: BTreeMap<&'a str, Option<Declaration<'a>>>,
+    environments: BTreeMap<&'a str, Option<Declaration<'a>>>,
 }
 
 impl<'a> Index<'a> {
     pub(crate) fn new(ws: &'a Workspace, scope: &BTreeSet<Url>) -> Self {
         let mut definitions = BTreeMap::new();
+        let mut environments = BTreeMap::new();
         for (uri, doc) in ws.documents.iter().filter(|(uri, _)| scope.contains(*uri)) {
-            for entry in &doc.syntax.definitions {
-                definitions
-                    .entry(entry.name.as_str())
-                    .and_modify(|entry| *entry = None)
-                    .or_insert(Some(Declaration { uri, doc, entry }));
+            for (entries, index) in [
+                (&doc.syntax.definitions, &mut definitions),
+                (&doc.syntax.environments, &mut environments),
+            ] {
+                for entry in entries {
+                    index
+                        .entry(entry.name.as_str())
+                        .and_modify(|entry| *entry = None)
+                        .or_insert(Some(Declaration { uri, doc, entry }));
+                }
             }
         }
-        Self { definitions }
+        Self {
+            definitions,
+            environments,
+        }
     }
 
-    pub(crate) fn get(&self, name: &str) -> Option<&Declaration<'a>> {
-        self.definitions.get(name)?.as_ref()
+    pub(crate) fn get(&self, name: &str, namespace: Namespace) -> Option<&Declaration<'a>> {
+        match namespace {
+            Namespace::Command => &self.definitions,
+            Namespace::Environment => &self.environments,
+        }
+        .get(name)?
+        .as_ref()
     }
 
-    fn notes(&self, name: &str) -> Option<String> {
-        let declaration = self.get(name)?;
+    fn notes(&self, name: &str, namespace: Namespace) -> Option<String> {
+        let declaration = self.get(name, namespace)?;
         comments(declaration.doc, declaration.entry)
     }
 
-    pub(crate) fn documentation(&self, name: &str) -> Option<String> {
-        let declaration = self.get(name)?;
+    pub(crate) fn documentation(&self, name: &str, namespace: Namespace) -> Option<String> {
+        let declaration = self.get(name, namespace)?;
         let mut text = declaration.entry.detail.clone();
-        if let Some(notes) = self.notes(name) {
+        if let Some(notes) = self.notes(name, namespace) {
             text.push_str("\n\n");
             text.push_str(&notes);
         }
@@ -214,5 +240,51 @@ mod tests {
         );
         assert_eq!(for_command(&ws, &[a, b].into(), "example"), None);
         assert_eq!(for_command(&ws, &BTreeSet::new(), "textbf"), None);
+    }
+
+    #[test]
+    fn environment_documentation_uses_its_own_unique_declaration_and_comment_rules() {
+        let uri = Url::parse("untitled:environments.tex").unwrap();
+        for declaration in [
+            "\\newenvironment{example}[1]{}{}",
+            "\\NewDocumentEnvironment{example}{m}{}{}",
+            "\\NewEnviron{example}{}",
+            "\\DeclareEnvironmentCopy{example}{itemize}",
+        ] {
+            let source = format!("% Macro notes\r\n\\newcommand{{\\example}}{{}}\r\n%% 中文😀 **plain**\r\n{declaration}\r\n\\begin{{example}}body\\end{{example}}");
+            let mut ws = Workspace::default();
+            ws.open(uri.clone(), source.clone(), 1);
+            let scope = [uri.clone()].into();
+            assert_eq!(
+                for_command(&ws, &scope, "example"),
+                Some("Macro notes".into())
+            );
+            assert_eq!(
+                for_environment(&ws, &scope, "example"),
+                Some("中文😀 **plain**".into()),
+                "{declaration}"
+            );
+            let doc = &ws.documents[&uri];
+            for needle in ["\\begin{example", "\\end{example"] {
+                let at = source.rfind(needle).unwrap() + needle.len() - 2;
+                let hover = crate::features::hover(&ws, &uri, doc.text.position(at)).unwrap();
+                let tower_lsp::lsp_types::HoverContents::Markup(value) = hover.contents else {
+                    panic!()
+                };
+                assert_eq!(value.kind, tower_lsp::lsp_types::MarkupKind::PlainText);
+                assert!(value.value.contains("中文😀 **plain**"), "{}", value.value);
+                assert!(!value.value.contains("Macro notes"));
+            }
+            ws.open(
+                uri.clone(),
+                format!("{source}\n% Duplicate notes\n\\renewenvironment{{example}}{{}}{{}}"),
+                2,
+            );
+            assert_eq!(for_environment(&ws, &scope, "example"), None);
+            assert_eq!(
+                for_command(&ws, &scope, "example"),
+                Some("Macro notes".into())
+            );
+        }
     }
 }

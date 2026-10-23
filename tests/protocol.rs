@@ -26639,3 +26639,130 @@ fn user_environment_signature_documentation_uses_the_environment_declaration() {
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+fn user_environment_documentation_hover_and_completion_follow_project_buffers() {
+    use latex_lsp::text::Text;
+    for deferred in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+        let definitions = Url::from_file_path(dir.path().join("environments.tex")).unwrap();
+        let source = "\\documentclass{article}\r\n\\input{environments}\r\n😀 \\begin{example}{value}\r\n\\end{example}\r\n\\begin{ \r\n  exaBAD \r\n }\r\n\\exaBAD\r\n\\onlyBAD";
+        let declarations = "% Macro notes\r\n\\newcommand{\\example}[1]{#1}\r\n% 中文😀 **Environment** <tag>\r\n\\NewDocumentEnvironment{example}{m}{}{}\r\n% Direct environment notes\r\n\\newenvironment{onlyenv}[1]{}{}";
+        std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+        std::fs::write(definitions.to_file_path().unwrap(), declarations).unwrap();
+        std::fs::write(
+            dir.path().join("other.tex"),
+            "\\documentclass{article}\n% Other project notes\n\\newenvironment{example}{}{}",
+        )
+        .unwrap();
+        let mut server = Server::start();
+        let item_capabilities = if deferred {
+            json!({"snippetSupport":true,"resolveSupport":{"properties":["documentation"]}})
+        } else {
+            json!({"snippetSupport":true})
+        };
+        server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{"textDocument":{"completion":{"completionItem":item_capabilities}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+        server.notify("initialized", json!({}));
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":main,"languageId":"latex","version":1,"text":source}}),
+        );
+        let text = Text::new(source.into());
+        let position = |needle: &str| text.position(source.rfind(needle).unwrap() + needle.len());
+        let hover_params = json!({"textDocument":{"uri":main},"position":position("\\begin{exam")});
+        let hover = server.request(2, "textDocument/hover", hover_params.clone());
+        assert_eq!(hover["contents"]["kind"], "plaintext");
+        let value = hover["contents"]["value"].as_str().unwrap();
+        assert!(value.contains("中文😀 **Environment** <tag>"), "{value}");
+        assert!(value.contains("environments.tex:4"));
+        assert!(!value.contains("Macro notes") && !value.contains("Other project notes"));
+        let mut next_id = 3;
+        let mut environment_item = Value::Null;
+        for (needle, name, notes, excluded) in [
+            (
+                "  exa",
+                "example",
+                "中文😀 **Environment** <tag>",
+                "Macro notes",
+            ),
+            (
+                "\\end{exam",
+                "example",
+                "中文😀 **Environment** <tag>",
+                "Macro notes",
+            ),
+            ("\\exa", "example", "Macro notes", "**Environment**"),
+            (
+                "\\only",
+                "onlyenv",
+                "Direct environment notes",
+                "Macro notes",
+            ),
+        ] {
+            let list = server.request(
+                next_id,
+                "textDocument/completion",
+                json!({"textDocument":{"uri":main},"position":position(needle)}),
+            );
+            next_id += 1;
+            let item = list
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|item| item["label"] == name)
+                .unwrap()
+                .clone();
+            if needle == "  exa" {
+                assert!(!item["additionalTextEdits"].as_array().unwrap().is_empty());
+                environment_item = item.clone();
+            }
+            assert_eq!(item.get("documentation").is_none(), deferred);
+            let resolved = server.request(next_id, "completionItem/resolve", item.clone());
+            next_id += 1;
+            let value = resolved["documentation"].as_str().unwrap();
+            assert!(
+                value.contains(notes) && !value.contains(excluded),
+                "{value}"
+            );
+            let mut expected = item;
+            expected["documentation"] = resolved["documentation"].clone();
+            assert_eq!(resolved, expected);
+        }
+        server.notify("textDocument/didOpen", json!({"textDocument":{"uri":definitions,"languageId":"latex","version":1,"text":declarations.replace("中文😀 **Environment** <tag>", "Updated environment notes")}}));
+        let updated = server.request(next_id, "textDocument/hover", hover_params.clone());
+        next_id += 1;
+        assert!(updated["contents"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("Updated environment notes"));
+        if deferred {
+            server.send(json!({"jsonrpc":"2.0","id":next_id,"method":"completionItem/resolve","params":environment_item}));
+            assert_eq!(
+                server.until(|message| message["id"] == next_id)["error"]["code"],
+                -32801
+            );
+            next_id += 1;
+        }
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":definitions,"version":2},"contentChanges":[{"text":format!("{declarations}\r\n% Duplicate environment notes\r\n\\renewenvironment{{example}}{{}}{{}}") }]}));
+        let ambiguous = server.request(next_id, "textDocument/hover", hover_params.clone());
+        next_id += 1;
+        let value = ambiguous["contents"]["value"].as_str().unwrap();
+        assert!(
+            !value.contains("**Environment**") && !value.contains("Duplicate environment notes")
+        );
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":definitions}}),
+        );
+        let restored = server.request(next_id, "textDocument/hover", hover_params);
+        next_id += 1;
+        assert!(restored["contents"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("中文😀 **Environment** <tag>"));
+        server.request(next_id, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}

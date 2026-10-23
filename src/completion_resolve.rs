@@ -16,6 +16,7 @@ struct Identity {
     origin: Url,
     definition: Url,
     name: String,
+    namespace: command_docs::Namespace,
     fingerprint: String,
 }
 
@@ -50,7 +51,20 @@ impl<'a> Commands<'a> {
     }
 
     pub(crate) fn apply(&self, item: &mut CompletionItem, entry: &syntax::Entry) {
-        let Some(declaration) = self.index.get(&entry.name) else {
+        self.apply_name(item, &entry.name, command_docs::Namespace::Command);
+    }
+
+    pub(crate) fn apply_environment(&self, item: &mut CompletionItem, name: &str) {
+        self.apply_name(item, name, command_docs::Namespace::Environment);
+    }
+
+    fn apply_name(
+        &self,
+        item: &mut CompletionItem,
+        name: &str,
+        namespace: command_docs::Namespace,
+    ) {
+        let Some(declaration) = self.index.get(name, namespace) else {
             return;
         };
         if let Some(fingerprint) = &self.fingerprint {
@@ -59,7 +73,8 @@ impl<'a> Commands<'a> {
                 serde_json::to_value(Identity {
                     origin: self.origin.clone(),
                     definition: declaration.uri.clone(),
-                    name: entry.name.clone(),
+                    name: name.into(),
+                    namespace,
                     fingerprint: fingerprint.clone(),
                 })
                 .unwrap(),
@@ -67,7 +82,7 @@ impl<'a> Commands<'a> {
         } else {
             item.documentation = self
                 .index
-                .documentation(&entry.name)
+                .documentation(name, namespace)
                 .map(Documentation::String);
         }
     }
@@ -96,13 +111,13 @@ pub(crate) fn resolve(ws: &Workspace, mut item: CompletionItem) -> Result<Comple
     }
     let index = command_docs::Index::new(ws, &scope);
     if index
-        .get(&identity.name)
+        .get(&identity.name, identity.namespace)
         .is_none_or(|declaration| *declaration.uri != identity.definition)
     {
         return Err(modified());
     }
     item.documentation = index
-        .documentation(&identity.name)
+        .documentation(&identity.name, identity.namespace)
         .map(Documentation::String);
     Ok(item)
 }
@@ -258,5 +273,118 @@ mod tests {
             2,
         );
         assert!(resolve(&ws, item).is_err());
+    }
+
+    fn environment_item(ws: &Workspace, uri: &Url, needle: &str, name: &str) -> CompletionItem {
+        let doc = &ws.documents[uri];
+        let at = doc.text.source.rfind(needle).unwrap() + needle.len();
+        crate::features::completion(ws, uri, doc.text.position(at))
+            .into_iter()
+            .find(|item| item.label == name)
+            .unwrap()
+    }
+
+    fn documentation(item: &CompletionItem) -> &str {
+        match item.documentation.as_ref().unwrap() {
+            Documentation::String(value) => value,
+            _ => panic!("source documentation must be plain text"),
+        }
+    }
+
+    #[test]
+    fn environment_documentation_keeps_macro_namespace_and_original_completion_edits() {
+        let uri = Url::parse("untitled:environments.tex").unwrap();
+        let source = "% Macro documentation\r\n\\newcommand{\\example}[1]{#1}\r\n% 中文😀 **Environment** <tag>\r\n\\NewDocumentEnvironment{example}{O{x} m}{}{}\r\n% Direct environment\r\n\\newenvironment{onlyenv}[1]{}{}\r\n😀 \\begin{exaBAD}\r\n\\end{exaBAD}\r\n\\exaBAD\r\n\\onlyBAD";
+        let mut ws = Workspace {
+            snippets: true,
+            ..Default::default()
+        };
+        ws.open(uri.clone(), source.into(), 1);
+        for (needle, name, expected, excluded) in [
+            (
+                "\\begin{exa",
+                "example",
+                "中文😀 **Environment** <tag>",
+                "Macro documentation",
+            ),
+            (
+                "\\end{exa",
+                "example",
+                "中文😀 **Environment** <tag>",
+                "Macro documentation",
+            ),
+            ("\\exa", "example", "Macro documentation", "**Environment**"),
+            (
+                "\\only",
+                "onlyenv",
+                "Direct environment",
+                "Macro documentation",
+            ),
+        ] {
+            ws.completion_resolve_documentation = false;
+            let inline = environment_item(&ws, &uri, needle, name);
+            assert!(documentation(&inline).contains(expected));
+            assert!(!documentation(&inline).contains(excluded));
+            ws.completion_resolve_documentation = true;
+            let deferred = environment_item(&ws, &uri, needle, name);
+            assert!(deferred.documentation.is_none());
+            let resolved = resolve(&ws, deferred.clone()).unwrap();
+            let mut expected_item = deferred;
+            expected_item.documentation = inline.documentation;
+            assert_eq!(resolved, expected_item);
+            assert_eq!(resolved.text_edit, inline.text_edit);
+            assert_eq!(resolve(&ws, resolved.clone()).unwrap(), resolved);
+        }
+    }
+
+    #[test]
+    fn environment_documentation_resolution_rejects_updates_and_duplicate_declarations() {
+        let uri = Url::parse("untitled:environment-updates.tex").unwrap();
+        let mut ws = Workspace {
+            completion_resolve_documentation: true,
+            ..Default::default()
+        };
+        let source = "% Environment notes\n\\newenvironment{example}{}{}\n\\begin{exa}";
+        ws.open(uri.clone(), source.into(), 1);
+        let item = environment_item(&ws, &uri, "\\begin{exa", "example");
+        ws.open(
+            uri.clone(),
+            source.replace("Environment notes", "Updated notes"),
+            2,
+        );
+        assert_eq!(
+            resolve(&ws, item).unwrap_err().code,
+            ErrorCode::ServerError(-32801)
+        );
+        let updated = environment_item(&ws, &uri, "\\begin{exa", "example");
+        assert!(documentation(&resolve(&ws, updated.clone()).unwrap()).contains("Updated notes"));
+        ws.open(
+            uri.clone(),
+            format!("{source}\n% Duplicate notes\n\\renewenvironment{{example}}{{}}{{}}"),
+            3,
+        );
+        assert!(resolve(&ws, updated).is_err());
+        let ambiguous = environment_item(&ws, &uri, "\\begin{exa", "example");
+        assert!(ambiguous.data.is_none());
+        assert!(ambiguous.documentation.is_none());
+    }
+
+    #[test]
+    fn environment_name_completion_retains_multiline_edits_and_builtin_fallback() {
+        let uri = Url::parse("untitled:multiline-environment.tex").unwrap();
+        let mut ws = Workspace {
+            completion_resolve_documentation: true,
+            ..Default::default()
+        };
+        ws.open(uri.clone(), "% Environment notes\r\n\\newenvironment{example}{}{}\r\n\\begin{ \r\n  exaBAD \r\n }\r\n\\begin{ite}".into(), 1);
+        let item = environment_item(&ws, &uri, "  exa", "example");
+        assert!(!item.additional_text_edits.as_ref().unwrap().is_empty());
+        let resolved = resolve(&ws, item.clone()).unwrap();
+        assert!(documentation(&resolved).contains("Environment notes"));
+        assert_eq!(resolved.additional_text_edits, item.additional_text_edits);
+        assert_eq!(resolved.text_edit, item.text_edit);
+        let builtin = environment_item(&ws, &uri, "\\begin{ite", "itemize");
+        assert!(builtin.data.is_none());
+        assert_eq!(resolve(&ws, builtin.clone()).unwrap(), builtin);
     }
 }
