@@ -40,6 +40,50 @@ LSP 编译结果也会定位静态命名调用和纯别名中的缺失文献库�
 
 默认 latexmk 确认数据库缺失并跳过 BibTeX 时，服务器也会产生 `missing-bibliography-database` 警告，提供相同的精确定位和修复。编译继续遵守 latexmk 的策略及现有输入一致性检查，预生成 `.bbl` 的项目仍可生成 PDF。警告只采纳本次最后一次目标日志检查后的完整驱动列表，已有的原生 BibTeX 错误优先；没有输出新列表的空操作编译不会新增缺库警告。其他可执行程序、不同作业日志、不完整或截断的输出不进入这项解析。
 
+## Biber 文献集合
+
+Biber 原生的集合警告使用 `invalid-bibliography-set`：集合条目中已不需要的 `crossref`、集合成员中已不需要的 `entryset`，以及集合缺少 `entryset`。前两类标记原始字段名，数据中的 `reason` 为 `obsolete-field`；后一类标记所属条目键，`reason` 为 `missing-entryset`。诊断保留工具报告的级别与消息，不在没有原生报告时静态判断集合是否合法。
+
+字段名按 Biber 的完整 Unicode 折叠匹配，支持 `CROSSREF`、`croſſref` 等原始拼写和动态值表达式。重复字段、模型名称碰撞、不完整赋值或 source map 生成的字段回退到唯一条目键，并标记 `unresolvedField`。缺少 `entryset` 的报告始终使用条目键，因为 source map 可能已移走原始字段。
+
+这类警告没有数据库名，只有此前输入历史完整、全部来源可读、规范等价且区分大小写的所属键唯一时才定位到数据库。来源不明、键有歧义或缓存超限时保留主文档诊断。保存后重新编译更新位置，修复后清除 push/pull 诊断；不提供猜测的字段删除或插入。
+
+```sh
+cargo test --locked --test biber_set_diagnostics -- --include-ignored
+cargo test --locked --test protocol biber_sets_
+```
+
+## Biber 字段校验
+
+Biber 原生 `Datamodel: Entry 'key' (refs.bib): Field 'field' invalid in data model - ignoring` 和 `Invalid field 'field' for entrytype 'book'` 使用诊断代码 `invalid-bibliography-field`，标记明确条目中的唯一字段名。是否支持字段由实际 Biber 数据模型决定，服务器只采纳工具报告，不静态推测自定义字段是否有效。
+
+`invalid-bibliography-field-value` 标记无效值，支持日期及日期范围结束部分的格式警告、数据类型、上下界、模式匹配，以及 ISBN、ISSN、ISMN 校验消息。完整单一字面值标记内部内容，空字面值覆盖定界符；字符串缩写、拼接和其他完整表达式标记整段值表达式，不执行宏展开。消息和级别均保持原生结果，不自动删除字段或改写值。
+
+带文件名的消息只取明确命名的数据库，支持已确认数据库角色的其他扩展名、完整特殊文件名和符号链接。字段仅来自该条目完整正文中的唯一有效赋值；重复字段、未闭合正文、无效表达式及缺失字段（包括仅由继承提供的字段）保留唯一条目键的位置，不借用父条目或其他数据库。条目键缺失或有歧义时保留文件首行；来源不可读、未确认或超限时保留主文档。日期消息中未转义的文件名与值若无法区分，保留主文档警告。
+
+默认 Biber 未开启数据模型校验时，完整的 `legacy year field 'value' in entry 'key' is not an integer - this will probably not sort properly.`、同模板的 `month` 警告、`ISBN 'value' in entry 'key' is invalid - run biber with '--validate_datamodel' for details.`，以及 `Range field 'pages' in entry 'key' is malformed, falling back to literal` 也使用值诊断代码。这些消息没有文件名，仅在此前数据库读取历史完整、所有候选文件可读且规范化后的键在全部候选中唯一时定位相应字段值；符号链接按实际目标去重，不借用后续输入。范围字段按输入拼写定位，支持默认页码及自定义模型范围字段；消息未指出具体片段，因此标记完整值。历史缺失、语法或未知错误、日志截断、规范化键碰撞或读取超限时保留主文档警告。原始值中的引号、文件名及类似日志的文字不会被另行解释为位置，不自动修改日期、ISBN 或页码范围。
+
+匹配按 Biber 的 Unicode 规则区分命名空间：键保持大小写并规范分解；未知字段、日期及畸形范围警告保留输入字段的组合后 ASCII 折叠；条目类型限制、数据类型及其他数据模型校验、默认年份、月份与 ISBN 警告使用完整 Unicode 折叠。例如自定义模型 `strasse` 可对应原始 `Straße`，默认 `isbn` 可对应 `IſBN`。同条目中的 `STRASSE` 和 `Straße` 对模型警告构成歧义，即使有拼写恰好相同的字段也回退到键；未知字段消息仍能分别定位这两个原始字段，畸形范围警告也能分别定位 `pages` 和 `pageſ` 的值。范围始终指向原始源码，保留 UTF-16 和 CRLF；两种字段索引共享每个原始位置的一次转换，按有界来源建立缓存。保存后重新编译会更新范围，修复后推送与拉取诊断都会清除。
+
+```sh
+cargo test --locked --test biber_field_diagnostics -- --include-ignored
+cargo test --locked --test protocol biber_field_warnings_
+cargo test --locked --test protocol biber_unqualified_field_warnings_
+```
+
+## Biber 日期覆盖
+
+完整的 `Overwriting field 'year' with year value from field 'date' for entry 'key'` 和对应的 `month` 警告使用独立代码 `overwritten-bibliography-field`，标记被覆盖的原始年份或月份值。诊断保留工具消息、级别及 `overwrittenBy: "date"` 数据；值本身可以有效，只是与 Biber 实际使用的日期分量不同，不自动决定应删除或修改哪个字段。
+
+条目内存在唯一、完整的原始 `date` 赋值时，标准 `relatedInformation` 关联到它的值，便于从被覆盖值跳转查看日期。范围日期关联整个值，字符串及拼接表达式保持原始表达式范围。原始年份或月份缺失、重复或不完整时回退到唯一条目键；`date` 缺失、歧义或由 source map 生成时不猜测关联位置，不借用其他条目中的字段。
+
+这类消息没有文件名，复用完整的此前 Biber 输入历史、区分大小写的规范化键唯一性和有界来源缓存。来源未确认、键有歧义、日志截断、此前语法或未知错误、读取失败时保留主文档诊断。保存后重新编译更新主位置及关联位置；调整日期或使分量一致后，推送与拉取诊断一并清除。
+
+```sh
+cargo test --locked --test biber_overwritten_diagnostics -- --include-ignored
+cargo test --locked --test protocol biber_overwritten_fields_
+```
+
 ## Biber 重复文献键
 
 完整的 `Duplicate entry key: 'alpha' in file 'refs.bib', skipping ...` 消息使用诊断代码 `duplicate-bibliography-key`；开启 `--noskipduplicates` 时没有 `, skipping ...` 的原生格式也受支持。主键仅在明确命名的数据库中区分大小写匹配，唯一声明使用精确键范围；同一文件有多个同名声明时保留文件首行范围，通过 `relatedInformation` 列出候选，不凭无行号消息猜测具体声明。

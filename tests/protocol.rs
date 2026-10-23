@@ -902,6 +902,583 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" 
 
 #[test]
 #[cfg(unix)]
+fn biber_field_warnings_refresh_names_and_values_over_push_and_pull_after_saved_edits() {
+    for pull in [false, true] {
+        let script = r#"cp "${2%/*}/fixture.blg" "$1/main.blg"
+printf '%%PDF-1.4\n' > "$1/main.pdf"
+printf '(./main.tex)\n' > "$1/main.log"
+printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main.fls"
+"#;
+        let capabilities = if pull {
+            json!({"textDocument":{"diagnostic":{}}})
+        } else {
+            json!({})
+        };
+        let (mut server, directory, main) =
+            fake_build_server_capabilities(script, false, capabilities);
+        let root = directory.path();
+        let refs = Url::from_file_path(root.join("refs.data")).unwrap();
+        let main_source = "\\documentclass{article}\n\\addbibresource{refs.data}\n";
+        std::fs::write(main.to_file_path().unwrap(), main_source).unwrap();
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":main_source}]}));
+        let mut current = "% 😀\r\n@book{café😀,title={Title},wrong={Kept},date={2026-99-33},volume={invalid}}\r\n".to_string();
+        std::fs::write(refs.to_file_path().unwrap(), &current).unwrap();
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":refs,"languageId":"bibtex","version":7,"text":current}}),
+        );
+        for stage in 0..3 {
+            if stage > 0 {
+                let edits = if stage == 1 {
+                    vec![("wrong", "\r\n ")]
+                } else {
+                    vec![
+                        ("wrong", "note"),
+                        ("2026-99-33", "2026-10-23"),
+                        ("invalid", "12"),
+                    ]
+                };
+                let mut changes = Vec::new();
+                for (marker, text) in edits {
+                    let at = current.find(marker).unwrap();
+                    let end = at + if stage == 1 { 0 } else { marker.len() };
+                    let range = latex_lsp::text::Text::new(current.clone()).range(at, end);
+                    current.replace_range(at..end, text);
+                    changes.push(json!({"range":range,"text":text}));
+                }
+                std::fs::write(refs.to_file_path().unwrap(), &current).unwrap();
+                server.notify(
+                    "textDocument/didChange",
+                    json!({"textDocument":{"uri":refs,"version":7+stage},"contentChanges":changes}),
+                );
+                server.notify("textDocument/didSave", json!({"textDocument":{"uri":refs}}));
+            }
+            let mut log = "INFO - Found BibTeX data source 'refs.data'\n".to_string();
+            if stage < 2 {
+                log.push_str("WARN - Datamodel: Entry 'café😀' (refs.data): Field 'wrong' invalid in data model - ignoring\n");
+                log.push_str("WARN - Entry 'café😀' (refs.data): Invalid format '2026-99-33' of date field 'date' - ignoring\n");
+                log.push_str("WARN - Datamodel: Entry 'café😀' (refs.data): Invalid value of field 'volume' must be datatype 'integer' - ignoring field\n");
+            }
+            std::fs::write(root.join("fixture.blg"), log).unwrap();
+            server.request(
+                2 + stage * 2,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            let finished = server.until(|item| item["method"] == "latex/buildFinished");
+            assert_eq!(finished["params"]["status"], "success", "{finished}");
+            let items = if pull {
+                server.request(
+                    3 + stage * 2,
+                    "textDocument/diagnostic",
+                    json!({"textDocument":{"uri":refs}}),
+                )["items"]
+                    .clone()
+            } else {
+                server.until(|item| {
+                    item["method"] == "textDocument/publishDiagnostics"
+                        && item["params"]["uri"] == refs.as_str()
+                        && item["params"]["diagnostics"]
+                            .as_array()
+                            .is_some_and(|items| {
+                                if stage == 2 {
+                                    items.is_empty()
+                                } else {
+                                    items.iter().any(|item| {
+                                        item["code"] == "invalid-bibliography-field"
+                                            && item["range"]["start"]["line"] == stage + 1
+                                    })
+                                }
+                            })
+                })["params"]["diagnostics"]
+                    .clone()
+            };
+            let items = items.as_array().unwrap();
+            if stage == 2 {
+                assert!(items.is_empty(), "{items:?}");
+                continue;
+            }
+            assert_eq!(items.len(), 3, "{items:?}");
+            for (code, field, marker) in [
+                ("invalid-bibliography-field", "wrong", "wrong"),
+                ("invalid-bibliography-field-value", "date", "2026-99-33"),
+                ("invalid-bibliography-field-value", "volume", "invalid"),
+            ] {
+                let item = items
+                    .iter()
+                    .find(|item| item["code"] == code && item["data"]["field"] == field)
+                    .unwrap();
+                let at = current.find(marker).unwrap();
+                assert_eq!(
+                    item["range"],
+                    serde_json::to_value(
+                        latex_lsp::text::Text::new(current.clone()).range(at, at + marker.len())
+                    )
+                    .unwrap()
+                );
+                assert_eq!(item["severity"], 2);
+                assert_eq!(item["data"]["key"], "café😀");
+                assert!(item["data"].get("unresolvedField").is_none());
+            }
+        }
+        server.request(8, "shutdown", Value::Null);
+        if pull {
+            assert_no_pushed_diagnostics(&server);
+        }
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn biber_field_warnings_refresh_unicode_model_collisions_and_input_spellings_over_push_and_pull() {
+    for pull in [false, true] {
+        let script = r#"cp "${2%/*}/fixture.blg" "$1/main.blg"
+printf '%%PDF-1.4\n' > "$1/main.pdf"
+printf '(./main.tex)\n' > "$1/main.log"
+printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main.fls"
+"#;
+        let capabilities = if pull {
+            json!({"textDocument":{"diagnostic":{}}})
+        } else {
+            json!({})
+        };
+        let (mut server, directory, main) =
+            fake_build_server_capabilities(script, false, capabilities);
+        let root = directory.path();
+        let refs = Url::from_file_path(root.join("refs.data")).unwrap();
+        let main_source = "\\documentclass{article}\n\\addbibresource{refs.data}\n";
+        std::fs::write(main.to_file_path().unwrap(), main_source).unwrap();
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":main_source}]}));
+        let mut current =
+            "% 😀\r\n@book{café😀,title={Title},Straße={invalid😀},IſBN={bad😀}}\r\n".to_string();
+        std::fs::write(refs.to_file_path().unwrap(), &current).unwrap();
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":refs,"languageId":"bibtex","version":7,"text":current}}),
+        );
+        for stage in 0..5 {
+            let edits = match stage {
+                1 => vec![("Straße", "\r\n ", true)],
+                2 => vec![("Straße", "STRASSE={12},ISBN={9780306406157},", true)],
+                4 => vec![
+                    ("STRASSE={12},ISBN={9780306406157},", "", false),
+                    ("Straße", "note", false),
+                    ("invalid😀", "Kept", false),
+                    ("bad😀", "9780306406157", false),
+                ],
+                _ => Vec::new(),
+            };
+            if !edits.is_empty() {
+                let mut changes = Vec::new();
+                for (marker, replacement, insert) in edits {
+                    let at = current.find(marker).unwrap();
+                    let end = at + if insert { 0 } else { marker.len() };
+                    let range = latex_lsp::text::Text::new(current.clone()).range(at, end);
+                    current.replace_range(at..end, replacement);
+                    changes.push(json!({"range":range,"text":replacement}));
+                }
+                std::fs::write(refs.to_file_path().unwrap(), &current).unwrap();
+                server.notify(
+                    "textDocument/didChange",
+                    json!({"textDocument":{"uri":refs,"version":7+stage},"contentChanges":changes}),
+                );
+                server.notify("textDocument/didSave", json!({"textDocument":{"uri":refs}}));
+            }
+            let mut log = "INFO - Found BibTeX data source 'refs.data'\n".to_string();
+            let expected = if stage < 3 {
+                log.push_str("WARN - Datamodel: Entry 'café😀' (refs.data): Invalid value of field 'strasse' must be datatype 'integer' - ignoring field\n");
+                vec![(
+                    "invalid-bibliography-field-value",
+                    "strasse",
+                    if stage == 2 {
+                        "café😀"
+                    } else {
+                        "invalid😀"
+                    },
+                    stage == 2,
+                )]
+            } else if stage == 3 {
+                log.push_str("WARN - Datamodel: Entry 'café😀' (refs.data): Field 'straße' invalid in data model - ignoring\nWARN - Datamodel: Entry 'café😀' (refs.data): Field 'strasse' invalid in data model - ignoring\n");
+                vec![
+                    ("invalid-bibliography-field", "straße", "Straße", false),
+                    ("invalid-bibliography-field", "strasse", "STRASSE", false),
+                ]
+            } else {
+                Vec::new()
+            };
+            let mut expected = expected;
+            if stage < 4 {
+                log.push_str("WARN - ISBN 'bad😀' in entry 'café😀' is invalid - run biber with '--validate_datamodel' for details.\n");
+                expected.push((
+                    "invalid-bibliography-field-value",
+                    "isbn",
+                    if stage >= 2 { "café😀" } else { "bad😀" },
+                    stage >= 2,
+                ));
+            }
+            let expected: Vec<_> = expected
+                .into_iter()
+                .map(|(code, field, marker, unresolved)| {
+                    let at = current.find(marker).unwrap();
+                    (
+                        code,
+                        field,
+                        serde_json::to_value(
+                            latex_lsp::text::Text::new(current.clone())
+                                .range(at, at + marker.len()),
+                        )
+                        .unwrap(),
+                        unresolved,
+                    )
+                })
+                .collect();
+            std::fs::write(root.join("fixture.blg"), log).unwrap();
+            server.request(
+                2 + stage * 2,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            let finished = server.until(|item| item["method"] == "latex/buildFinished");
+            assert_eq!(finished["params"]["status"], "success", "{finished}");
+            let matches_expected = |items: &[Value]| {
+                items.len() == expected.len()
+                    && expected.iter().all(|(code, field, range, unresolved)| {
+                        items.iter().any(|item| {
+                            item["code"] == *code
+                                && item["data"]["field"] == *field
+                                && item["range"] == *range
+                                && item["data"].get("unresolvedField").is_some() == *unresolved
+                        })
+                    })
+            };
+            let items = if pull {
+                server.request(
+                    3 + stage * 2,
+                    "textDocument/diagnostic",
+                    json!({"textDocument":{"uri":refs}}),
+                )["items"]
+                    .clone()
+            } else {
+                server.until(|item| {
+                    item["method"] == "textDocument/publishDiagnostics"
+                        && item["params"]["uri"] == refs.as_str()
+                        && item["params"]["diagnostics"]
+                            .as_array()
+                            .is_some_and(|items| matches_expected(items))
+                })["params"]["diagnostics"]
+                    .clone()
+            };
+            assert!(
+                matches_expected(items.as_array().unwrap()),
+                "stage {stage}: {items}\nexpected {expected:?}"
+            );
+            for item in items.as_array().unwrap() {
+                assert_eq!(item["severity"], 2);
+                assert_eq!(item["data"]["key"], "café😀");
+                assert_eq!(item["source"], "latex-build");
+            }
+        }
+        server.request(12, "shutdown", Value::Null);
+        if pull {
+            assert_no_pushed_diagnostics(&server);
+        }
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn biber_unqualified_field_warnings_refresh_values_over_push_and_pull_after_saved_edits() {
+    for pull in [false, true] {
+        let script = r#"cp "${2%/*}/fixture.blg" "$1/main.blg"
+printf '%%PDF-1.4\n' > "$1/main.pdf"
+printf '(./main.tex)\n' > "$1/main.log"
+printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main.fls"
+"#;
+        let capabilities = if pull {
+            json!({"textDocument":{"diagnostic":{}}})
+        } else {
+            json!({})
+        };
+        let (mut server, directory, main) =
+            fake_build_server_capabilities(script, false, capabilities);
+        let root = directory.path();
+        let refs = Url::from_file_path(root.join("refs.data")).unwrap();
+        let main_source = "\\documentclass{article}\n\\addbibresource{refs.data}\n";
+        std::fs::write(main.to_file_path().unwrap(), main_source).unwrap();
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":main_source}]}));
+        let mut current =
+            "% 😀\r\n@book{café😀,title={Title},year={bad😀},isbn={invalid😀},month={badmonth😀},PAGES={-12},Pageſ={-13}}\r\n".to_string();
+        std::fs::write(refs.to_file_path().unwrap(), &current).unwrap();
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":refs,"languageId":"bibtex","version":7,"text":current}}),
+        );
+        for stage in 0..3 {
+            if stage > 0 {
+                let edits = if stage == 1 {
+                    vec![("year", "\r\n ")]
+                } else {
+                    vec![
+                        ("bad😀", "2026"),
+                        ("invalid😀", "9780306406157"),
+                        ("badmonth😀", "10"),
+                        ("-12", "12--15"),
+                        ("-13", "20--23"),
+                    ]
+                };
+                let mut changes = Vec::new();
+                for (marker, replacement) in edits {
+                    let at = current.find(marker).unwrap();
+                    let end = at + if stage == 1 { 0 } else { marker.len() };
+                    let range = latex_lsp::text::Text::new(current.clone()).range(at, end);
+                    current.replace_range(at..end, replacement);
+                    changes.push(json!({"range":range,"text":replacement}));
+                }
+                std::fs::write(refs.to_file_path().unwrap(), &current).unwrap();
+                server.notify(
+                    "textDocument/didChange",
+                    json!({"textDocument":{"uri":refs,"version":7+stage},"contentChanges":changes}),
+                );
+                server.notify("textDocument/didSave", json!({"textDocument":{"uri":refs}}));
+            }
+            let mut log = "INFO - Found BibTeX data source 'refs.data'\n".to_string();
+            if stage < 2 {
+                log.push_str("WARN - legacy year field 'bad😀' in entry 'café😀' is not an integer - this will probably not sort properly.\n");
+                log.push_str("WARN - ISBN 'invalid😀' in entry 'café😀' is invalid - run biber with '--validate_datamodel' for details.\n");
+                log.push_str("WARN - legacy month field 'badmonth😀' in entry 'café😀' is not an integer - this will probably not sort properly.\n");
+                log.push_str("WARN - Range field 'pages' in entry 'café😀' is malformed, falling back to literal\n");
+                log.push_str("WARN - Range field 'pageſ' in entry 'café😀' is malformed, falling back to literal\n");
+            }
+            std::fs::write(root.join("fixture.blg"), log).unwrap();
+            server.request(
+                2 + stage * 2,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            let finished = server.until(|item| item["method"] == "latex/buildFinished");
+            assert_eq!(finished["params"]["status"], "success", "{finished}");
+            let items = if pull {
+                server.request(
+                    3 + stage * 2,
+                    "textDocument/diagnostic",
+                    json!({"textDocument":{"uri":refs}}),
+                )["items"]
+                    .clone()
+            } else {
+                server.until(|item| {
+                    item["method"] == "textDocument/publishDiagnostics"
+                        && item["params"]["uri"] == refs.as_str()
+                        && item["params"]["diagnostics"]
+                            .as_array()
+                            .is_some_and(|items| {
+                                if stage == 2 {
+                                    items.is_empty()
+                                } else {
+                                    items.iter().any(|item| {
+                                        item["code"] == "invalid-bibliography-field-value"
+                                            && item["range"]["start"]["line"] == stage + 1
+                                    })
+                                }
+                            })
+                })["params"]["diagnostics"]
+                    .clone()
+            };
+            let items = items.as_array().unwrap();
+            if stage == 2 {
+                assert!(items.is_empty(), "{items:?}");
+                continue;
+            }
+            assert_eq!(items.len(), 5, "{items:?}");
+            for (field, marker) in [
+                ("year", "bad😀"),
+                ("isbn", "invalid😀"),
+                ("month", "badmonth😀"),
+                ("pages", "-12"),
+                ("pageſ", "-13"),
+            ] {
+                let item = items
+                    .iter()
+                    .find(|item| item["data"]["field"] == field)
+                    .unwrap();
+                let at = current.find(marker).unwrap();
+                assert_eq!(
+                    item["range"],
+                    serde_json::to_value(
+                        latex_lsp::text::Text::new(current.clone()).range(at, at + marker.len())
+                    )
+                    .unwrap()
+                );
+                assert_eq!(item["code"], "invalid-bibliography-field-value");
+                assert_eq!(item["severity"], 2);
+                assert_eq!(item["data"], json!({"key":"café😀","field":field}));
+            }
+        }
+        server.request(8, "shutdown", Value::Null);
+        if pull {
+            assert_no_pushed_diagnostics(&server);
+        }
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn biber_overwritten_fields_refresh_values_related_dates_and_mapped_fallbacks_over_push_and_pull() {
+    for pull in [false, true] {
+        let script = r#"cp "${2%/*}/fixture.blg" "$1/main.blg"
+printf '%%PDF-1.4\n' > "$1/main.pdf"
+printf '(./main.tex)\n' > "$1/main.log"
+printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main.fls"
+"#;
+        let capabilities = if pull {
+            json!({"textDocument":{"diagnostic":{}}})
+        } else {
+            json!({})
+        };
+        let (mut server, directory, main) =
+            fake_build_server_capabilities(script, false, capabilities);
+        let root = directory.path();
+        let refs = Url::from_file_path(root.join("refs.data")).unwrap();
+        let main_source = "\\documentclass{article}\n\\addbibresource{refs.data}\n";
+        std::fs::write(main.to_file_path().unwrap(), main_source).unwrap();
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":main_source}]}));
+        let mut current =
+            "% 😀\r\n@book{café😀,title={Title},YEAR={1999},MONTH={2},DATE={2026-10-23}}\r\n"
+                .to_string();
+        std::fs::write(refs.to_file_path().unwrap(), &current).unwrap();
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":refs,"languageId":"bibtex","version":7,"text":current}}),
+        );
+        for stage in 0..5 {
+            let edits = match stage {
+                1 => vec![("YEAR", "\r\n ", true), ("DATE", "\r\n ", true)],
+                2 => vec![("DATE", "published", false)],
+                3 => vec![("YEAR", "publicationyear", false)],
+                4 => vec![("1999", "2026", false), ("MONTH={2}", "MONTH={10}", false)],
+                _ => Vec::new(),
+            };
+            if !edits.is_empty() {
+                let mut changes = Vec::new();
+                for (marker, replacement, insert) in edits {
+                    let at = current.find(marker).unwrap();
+                    let end = at + if insert { 0 } else { marker.len() };
+                    let range = latex_lsp::text::Text::new(current.clone()).range(at, end);
+                    current.replace_range(at..end, replacement);
+                    changes.push(json!({"range":range,"text":replacement}));
+                }
+                std::fs::write(refs.to_file_path().unwrap(), &current).unwrap();
+                server.notify(
+                    "textDocument/didChange",
+                    json!({"textDocument":{"uri":refs,"version":7+stage},"contentChanges":changes}),
+                );
+                server.notify("textDocument/didSave", json!({"textDocument":{"uri":refs}}));
+            }
+            let mut log = "INFO - Found BibTeX data source 'refs.data'\n".to_string();
+            let mut expected = Vec::new();
+            if stage < 4 {
+                for (field, prefix, marker) in
+                    [("year", "YEAR={", "1999"), ("month", "MONTH={", "2")]
+                {
+                    log.push_str(&format!("WARN - Overwriting field '{field}' with {field} value from field 'date' for entry 'café😀'\n"));
+                    let unresolved = stage == 3 && field == "year";
+                    let (start, length) = if unresolved {
+                        (current.find("café😀").unwrap(), "café😀".len())
+                    } else {
+                        (current.find(prefix).unwrap() + prefix.len(), marker.len())
+                    };
+                    let range = serde_json::to_value(
+                        latex_lsp::text::Text::new(current.clone()).range(start, start + length),
+                    )
+                    .unwrap();
+                    let mut data = json!({"key":"café😀","field":field,"overwrittenBy":"date"});
+                    if unresolved {
+                        data["unresolvedField"] = true.into();
+                    }
+                    let related = if stage < 2 {
+                        let at = current.find("2026-10-23").unwrap();
+                        Some(
+                            serde_json::to_value(
+                                latex_lsp::text::Text::new(current.clone()).range(at, at + 10),
+                            )
+                            .unwrap(),
+                        )
+                    } else {
+                        None
+                    };
+                    expected.push((range, data, related));
+                }
+            }
+            std::fs::write(root.join("fixture.blg"), log).unwrap();
+            server.request(
+                2 + stage * 2,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            let finished = server.until(|item| item["method"] == "latex/buildFinished");
+            assert_eq!(finished["params"]["status"], "success", "{finished}");
+            let matches_expected = |items: &[Value]| {
+                items.len() == expected.len()
+                    && expected.iter().all(|(range, data, related)| {
+                        items.iter().any(|item| {
+                            item["code"] == "overwritten-bibliography-field"
+                                && item["range"] == *range
+                                && item["data"] == *data
+                                && match related {
+                                    Some(range) => {
+                                        item["relatedInformation"].as_array().is_some_and(|items| {
+                                            items.len() == 1
+                                                && items[0]["location"]["uri"] == refs.as_str()
+                                                && items[0]["location"]["range"] == *range
+                                        })
+                                    }
+                                    None => item["relatedInformation"].is_null(),
+                                }
+                        })
+                    })
+            };
+            let items = if pull {
+                server.request(
+                    3 + stage * 2,
+                    "textDocument/diagnostic",
+                    json!({"textDocument":{"uri":refs}}),
+                )["items"]
+                    .clone()
+            } else {
+                server.until(|item| {
+                    item["method"] == "textDocument/publishDiagnostics"
+                        && item["params"]["uri"] == refs.as_str()
+                        && item["params"]["diagnostics"]
+                            .as_array()
+                            .is_some_and(|items| matches_expected(items))
+                })["params"]["diagnostics"]
+                    .clone()
+            };
+            assert!(
+                matches_expected(items.as_array().unwrap()),
+                "stage {stage}: {items}\nexpected {expected:?}"
+            );
+            for item in items.as_array().unwrap() {
+                assert_eq!(item["severity"], 2);
+                assert_eq!(item["source"], "latex-build");
+            }
+        }
+        server.request(12, "shutdown", Value::Null);
+        if pull {
+            assert_no_pushed_diagnostics(&server);
+        }
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
 fn bibliography_alias_symbols_negotiate_hierarchy_refresh_search_and_restore_disk_over_stdio() {
     for hierarchy in [false, true] {
         let directory = tempfile::tempdir().unwrap();
@@ -1128,6 +1705,155 @@ fn bibliography_dynamic_sets_refresh_declarations_and_independent_renames_over_s
             }
         }
         server.request(99, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn biber_sets_refresh_field_names_key_fallbacks_and_clear_over_push_and_pull() {
+    for pull in [false, true] {
+        let script = r#"cp "${2%/*}/fixture.blg" "$1/main.blg"
+printf '%%PDF-1.4\n' > "$1/main.pdf"
+printf '(./main.tex)\n' > "$1/main.log"
+printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main.fls"
+"#;
+        let capabilities = if pull {
+            json!({"textDocument":{"diagnostic":{}}})
+        } else {
+            json!({})
+        };
+        let (mut server, directory, main) =
+            fake_build_server_capabilities(script, false, capabilities);
+        let root = directory.path();
+        let refs = Url::from_file_path(root.join("refs.data")).unwrap();
+        let main_source = "\\documentclass{article}\n\\addbibresource{refs.data}\n";
+        std::fs::write(main.to_file_path().unwrap(), main_source).unwrap();
+        server.notify("textDocument/didChange",json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":main_source}]}));
+        let mut current = "% 😀\r\n@set{café😀,entryset={child😀},CROSSREF={parent}}\r\n@book{child😀,ENTRYſET={café😀}}\r\n@set{empty😀,title={Empty}}\r\n".to_string();
+        std::fs::write(refs.to_file_path().unwrap(), &current).unwrap();
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":refs,"languageId":"bibtex","version":7,"text":current}}),
+        );
+        let cases = [
+            ("café😀", "crossref", "obsolete-field", "CROSSREF", "café😀"),
+            (
+                "child😀",
+                "entryset",
+                "obsolete-field",
+                "ENTRYſET",
+                "child😀",
+            ),
+            (
+                "empty😀",
+                "entryset",
+                "missing-entryset",
+                "empty😀",
+                "empty😀",
+            ),
+        ];
+        for stage in 0..4 {
+            let changes = if stage == 1 {
+                let range = latex_lsp::text::Text::new(current.clone()).range(0, 0);
+                current.insert_str(0, "% moved 😀\r\n");
+                vec![json!({"range":range,"text":"% moved 😀\r\n"})]
+            } else if stage == 2 {
+                current = current
+                    .replace("CROSSREF", "note")
+                    .replace("ENTRYſET", "NOTE");
+                vec![json!({"text":current})]
+            } else if stage == 3 {
+                current = "@set{café😀,entryset={child😀}}\r\n@book{child😀,title={Child}}\r\n@book{empty😀,title={Repaired}}\r\n".into();
+                vec![json!({"text":current})]
+            } else {
+                vec![]
+            };
+            if !changes.is_empty() {
+                std::fs::write(refs.to_file_path().unwrap(), &current).unwrap();
+                server.notify(
+                    "textDocument/didChange",
+                    json!({"textDocument":{"uri":refs,"version":7+stage},"contentChanges":changes}),
+                );
+                server.notify("textDocument/didSave", json!({"textDocument":{"uri":refs}}));
+            }
+            let mut log = "INFO - Found BibTeX data source 'refs.data'\n".to_string();
+            if stage < 3 {
+                log.push_str("WARN - Field 'crossref' is no longer needed in set entries in Biber - ignoring in entry 'café😀'\nWARN - Field 'entryset' is no longer needed in set member entries in Biber - ignoring in entry 'child😀'\nWARN - Set entry 'empty😀' has no entryset field, ignoring\n");
+            }
+            std::fs::write(root.join("fixture.blg"), log).unwrap();
+            server.request(
+                2 + stage * 2,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            let finished = server.until(|item| item["method"] == "latex/buildFinished");
+            assert_eq!(finished["params"]["status"], "success", "{finished}");
+            let matches = |items: &[Value]| {
+                items
+                    .iter()
+                    .filter(|item| item["code"] == "invalid-bibliography-set")
+                    .count()
+                    == if stage < 3 { 3 } else { 0 }
+            };
+            let items = if pull {
+                server.request(
+                    3 + stage * 2,
+                    "textDocument/diagnostic",
+                    json!({"textDocument":{"uri":refs}}),
+                )["items"]
+                    .clone()
+            } else {
+                server.until(|item| {
+                    item["method"] == "textDocument/publishDiagnostics"
+                        && item["params"]["uri"] == refs.as_str()
+                        && item["params"]["diagnostics"]
+                            .as_array()
+                            .is_some_and(|items| matches(items))
+                })["params"]["diagnostics"]
+                    .clone()
+            };
+            assert!(matches(items.as_array().unwrap()), "{stage}: {items}");
+            if stage == 3 {
+                continue;
+            }
+            for (key, field, reason, name, raw_key) in cases {
+                let item = items
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|item| {
+                        item["code"] == "invalid-bibliography-set" && item["data"]["key"] == key
+                    })
+                    .unwrap();
+                let text = latex_lsp::text::Text::new(current.clone());
+                let range = if stage == 2 || reason == "missing-entryset" {
+                    let syntax = latex_lsp::syntax::Syntax::bibtex(&text);
+                    let entry = syntax
+                        .citations
+                        .iter()
+                        .find(|entry| entry.name == raw_key)
+                        .unwrap();
+                    text.range(entry.span.start, entry.span.end)
+                } else {
+                    let start = current.find(name).unwrap();
+                    text.range(start, start + name.len())
+                };
+                assert_eq!(item["range"], json!(range), "{stage}: {item}");
+                assert_eq!(item["severity"], 2);
+                let mut data = json!({"key":key,"field":field,"reason":reason});
+                if stage == 2 && reason == "obsolete-field" {
+                    data["unresolvedField"] = true.into();
+                }
+                assert_eq!(item["data"], data);
+                assert_eq!(server.request(20+stage,"textDocument/codeAction",json!({"textDocument":{"uri":refs},"range":range,"context":{"diagnostics":[item],"only":["quickfix"]}})),json!([]));
+            }
+        }
+        server.request(30, "shutdown", Value::Null);
+        if pull {
+            assert_no_pushed_diagnostics(&server);
+        }
         server.notify("exit", Value::Null);
         server.wait_exit(0);
     }
