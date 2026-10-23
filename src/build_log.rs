@@ -5774,6 +5774,16 @@ pub(crate) fn parse_bibliography_in(
                 continue;
             }
         }
+        if tool == "Biber" {
+            if let Some(warning) = crate::bib_diagnostics::biber_types::record(message) {
+                if let Some((uri, diagnostic)) =
+                    bibliography_context.biber_type_warning(root, paths, warning, message, severity)
+                {
+                    result.entry(uri).or_default().push(diagnostic);
+                }
+                continue;
+            }
+        }
         let location = bibliography_path(paths, message, tool == "Biber");
         let filename = match &location {
             BibliographyLocation::Named { span, .. } => Some(span),

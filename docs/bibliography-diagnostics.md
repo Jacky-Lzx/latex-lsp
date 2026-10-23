@@ -160,6 +160,19 @@ cargo test --locked --test biber_overwritten_diagnostics -- --include-ignored
 cargo test --locked --test protocol biber_overwritten_fields_
 ```
 
+## Biber 条目类型
+
+Biber 数据模型校验的完整 `Datamodel: Entry 'key' (refs.bib): Invalid entry type 'boook' - defaulting to 'misc'` 消息使用诊断代码 `invalid-bibliography-entry-type`，标记唯一条目中的原始类型名。有效类型由实际工具的数据模型决定；诊断保留原生消息、级别和 `entryType` 数据，不静态否定自定义类型，也不自动将源码改为 `misc`。
+
+类型名按 Biber 的完整 Unicode 大小写折叠和规范分解匹配，例如 `Straße` / `STRAẞE` 对应 `strasse`，希腊词尾 sigma、带点 I 和连字也按原生结果处理。引用键仍只做区分大小写的规范分解，字段名沿用自己的匹配规则；位置始终覆盖原始源码，保留实际字符数及 UTF-16 范围。
+
+只在明确命名的数据库内定位。完整条目、唯一规范化键及匹配的原始类型均可确认时才标记类型名；正文未闭合，或 source map 等处理让报告类型与源码不同时，标记唯一条目键并附 `unresolvedType`。键缺失或有歧义时保留来源首行；来源未确认、不可读或超限时保留主文档，不借用其他库。类型和字段位置共用有界来源缓存，保存后重编译会更新范围，修复后清除推送与拉取诊断。
+
+```sh
+cargo test --locked --test biber_type_diagnostics -- --include-ignored
+cargo test --locked --test protocol biber_type_warnings_
+```
+
 ## Biber 必填字段
 
 Biber 数据模型校验的完整 `Missing mandatory field 'author'` 和 `Missing mandatory field - one of 'date, year' must be defined` 消息使用诊断代码 `missing-bibliography-field`。只采纳实际工具报告的要求，不静态假定条目必须有哪些字段；字段组表示至少填写一项，不会被拆成多条全部必填的错误。诊断数据中单字段保存在 `field`，备选组保存在 `fields`。
