@@ -696,6 +696,9 @@ impl Workspace {
                     })
                     .cloned(),
             );
+            // Explicit inputs may live above/outside the workspace folder.
+            // Folder isolation must not discard this buffer's source graph.
+            scope.extend(self.project_documents(uri));
         }
         scope.insert(uri.clone());
         SymbolProjects { scope, regions }
