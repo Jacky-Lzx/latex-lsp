@@ -22,9 +22,14 @@ pub(crate) struct Plan {
     output: PathBuf,
     stages: Vec<Stage>,
 }
+pub(crate) struct Failed {
+    pub failure: Failure,
+    pub report: crate::index_diagnostics::Report,
+}
 pub(crate) struct Processed {
     pub output: String,
     pub tools: Vec<serde_json::Value>,
+    pub report: crate::index_diagnostics::Report,
     inputs: Vec<Watched>,
 }
 impl Processed {
@@ -160,6 +165,21 @@ impl Plan {
         &self,
         build: &BuildConfig,
         cancel: &AtomicBool,
+    ) -> Result<Processed, Failed> {
+        let mut report = crate::index_diagnostics::Report::default();
+        match self.run_inner(build, cancel, &mut report) {
+            Ok(mut processed) => {
+                processed.report = report;
+                Ok(processed)
+            }
+            Err(failure) => Err(Failed { failure, report }),
+        }
+    }
+    fn run_inner(
+        &self,
+        build: &BuildConfig,
+        cancel: &AtomicBool,
+        report: &mut crate::index_diagnostics::Report,
     ) -> Result<Processed, Failure> {
         let mut output = String::new();
         let mut tools = vec![];
@@ -217,12 +237,12 @@ impl Plan {
                 .collect::<Vec<_>>();
             let mut command = Command::new(&stage.config.executable);
             command.args(&arguments).current_dir(&self.output);
-            let stage_output = crate::build_tools::execute(
+            let executed = crate::build_tools::execute(
                 command,
                 &stage.config.executable,
                 stage.config.timeout_seconds,
                 cancel,
-            )?;
+            );
             if cancel.load(Ordering::Relaxed) {
                 return Err(cancelled());
             }
@@ -237,6 +257,72 @@ impl Plan {
                     stage.input.display()
                 )));
             }
+            let transcript_output = transcript_path(&stage.output, &stage.config);
+            let transcript_text = if stage.config.is_makeindex() {
+                std::fs::symlink_metadata(&transcript)
+                    .is_ok_and(|metadata| metadata.file_type().is_file())
+                    .then(|| std::fs::File::open(&transcript).ok())
+                    .flatten()
+                    .map(crate::build::capture)
+                    .map(|bytes| crate::build_log::decode_output(&bytes).into_owned())
+            } else {
+                None
+            };
+            if let Some(text) = &transcript_text {
+                let parsed = crate::index_diagnostics::parse(
+                    &self.root,
+                    &stage.input,
+                    &transcript_output,
+                    text,
+                );
+                report.truncated |= parsed.truncated;
+                for (uri, diagnostics) in parsed.diagnostics {
+                    report
+                        .diagnostics
+                        .entry(uri)
+                        .or_default()
+                        .extend(diagnostics);
+                }
+                // Keep this invocation's controlled transcript even on errors.
+                // Installing the log must not replace a prior successful index.
+                transcript.persist(&transcript_output).map_err(|error| {
+                    Failure::error(format!("Cannot install index transcript: {error}"))
+                })?;
+            }
+            let stage_output = match executed {
+                Ok(output) => output,
+                Err(mut failure) => {
+                    failure.output = format!(
+                        "{}\n{}",
+                        failure.output,
+                        transcript_text.as_deref().unwrap_or_default()
+                    );
+                    return Err(failure);
+                }
+            };
+            if stage.config.is_makeindex() {
+                let rejected = transcript_text.as_deref().and_then(rejected_entries);
+                let message = if rejected != Some(0) {
+                    Some(rejected.map_or_else(
+                        || "makeindex did not produce a complete processing transcript".into(),
+                        |count| {
+                            format!("makeindex rejected {count} index entries; see build output")
+                        },
+                    ))
+                } else if report.truncated {
+                    Some("makeindex processing transcript exceeded the diagnostic limit; cannot verify all entries or style errors".into())
+                } else {
+                    report
+                        .first_error()
+                        .map(|diagnostic| diagnostic.message.clone())
+                };
+                if let Some(message) = message {
+                    let mut failure = Failure::error(message);
+                    failure.output =
+                        format!("{}\n{}", stage_output, transcript_text.unwrap_or_default());
+                    return Err(failure);
+                }
+            }
             if !std::fs::symlink_metadata(&temporary)
                 .is_ok_and(|metadata| metadata.file_type().is_file())
             {
@@ -247,34 +333,9 @@ impl Plan {
                 failure.output = stage_output;
                 return Err(failure);
             }
-            let transcript_output = transcript_path(&stage.output, &stage.config);
-            if stage.config.is_makeindex() {
-                let report = std::fs::symlink_metadata(&transcript)
-                    .is_ok_and(|metadata| metadata.file_type().is_file())
-                    .then(|| std::fs::File::open(&transcript).ok())
-                    .flatten()
-                    .map(crate::build::capture)
-                    .map(|bytes| crate::build_log::decode_output(&bytes).into_owned());
-                let rejected = report.as_deref().and_then(rejected_entries);
-                if rejected != Some(0) {
-                    let mut failure = Failure::error(rejected.map_or_else(
-                        || "makeindex did not produce a complete processing transcript".into(),
-                        |count| {
-                            format!("makeindex rejected {count} index entries; see build output")
-                        },
-                    ));
-                    failure.output = format!("{}\n{}", stage_output, report.unwrap_or_default());
-                    return Err(failure);
-                }
-            }
             temporary
                 .persist(&stage.output)
                 .map_err(|error| Failure::error(format!("Cannot install index output: {error}")))?;
-            if stage.config.is_makeindex() {
-                transcript.persist(&transcript_output).map_err(|error| {
-                    Failure::error(format!("Cannot install index transcript: {error}"))
-                })?;
-            }
             output.push_str(&format!(
                 "\n{} {}\n{}",
                 stage.config.executable,
@@ -288,6 +349,7 @@ impl Plan {
         Ok(Processed {
             output,
             tools,
+            report: Default::default(),
             inputs,
         })
     }
@@ -308,6 +370,11 @@ fn rejected_entries(report: &str) -> Option<u64> {
         .lines()
         .filter(|line| line.starts_with("Scanning input file ") || line.starts_with("done ("))
         .filter_map(|line| line.rsplit_once("done (").map(|(_, summary)| summary))
+        // Style and output summaries can occur on separate lines after a
+        // diagnostic. They are not input acceptance counts.
+        .filter(|summary| {
+            !summary.contains(" attributes redefined, ") && !summary.contains(" lines written")
+        })
         .map(|summary| {
             summary
                 .split_once(" entries accepted, ")?

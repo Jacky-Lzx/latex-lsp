@@ -45,6 +45,7 @@ pub mod graphics;
 mod graphics_settings;
 mod image_fixes;
 mod imports;
+mod index_diagnostics;
 mod index_processing;
 mod label_diagnostics;
 mod lengths;

@@ -450,3 +450,93 @@ fn real_makeindex_rejected_entries_fail_even_with_a_zero_exit_code_and_quiet_out
         fixture.no_staging_files();
     }
 }
+
+#[test]
+fn failed_makeindex_processes_keep_new_transcripts_and_precise_input_diagnostics() {
+    let mut fixture = Fixture::new("exit 99");
+    fixture.config.index_tools[0] = IndexToolConfig {
+        executable: script(
+            fixture.directory.path(),
+            "makeindex",
+            r#"printf generated > "$2"
+printf '!! Input index error (file = %s, line = 1):\n   -- Failed index entry.\ndone (0 entries accepted, 1 rejected).\n' "$5" > "$4"
+exit 2
+"#,
+        ),
+        ..Default::default()
+    };
+    fixture.old_index();
+    let result = fixture.run();
+    assert_eq!(result.status, "error");
+    assert_eq!(result.exit_code, Some(2));
+    assert_eq!(
+        std::fs::read_to_string(fixture.artifact("ind")).unwrap(),
+        "old index"
+    );
+    let input = tower_lsp::lsp_types::Url::from_file_path(fixture.artifact("idx")).unwrap();
+    assert_eq!(result.diagnostics[&input][0].range.start.line, 0);
+    assert_eq!(
+        result.diagnostics[&input][0].source.as_deref(),
+        Some("makeindex")
+    );
+    assert!(std::fs::read_to_string(fixture.artifact("ilg"))
+        .unwrap()
+        .contains("Failed index entry"));
+    fixture.no_staging_files();
+}
+
+#[test]
+#[ignore = "requires makeindex"]
+fn real_makeindex_style_errors_fail_at_zero_exit_and_conflicts_remain_located_warnings() {
+    for style_error in [false, true] {
+        let mut fixture = Fixture::new("exit 99");
+        let style = fixture.directory.path().join("malformed.ist");
+        fixture.config.index_tools[0] = IndexToolConfig::default();
+        if style_error {
+            std::fs::write(&style, "unknown_option \"x\"\n").unwrap();
+            fixture.config.index_tools[0]
+                .arguments
+                .splice(0..0, ["-s".into(), "%r/malformed.ist".into()]);
+            fixture.config.index_tools[0].dependencies = vec!["malformed.ist".into()];
+        } else {
+            fixture.config.executable = script(fixture.directory.path(), "conflicting-compiler", &format!("{COMPILER}\nprintf '\\\\indexentry{{Apple|textbf}}{{1}}\\n\\\\indexentry{{Apple|textit}}{{1}}\\n' >> \"$1/$2.idx\"\n"));
+        }
+        fixture.old_index();
+        let result = fixture.run();
+        assert_eq!(
+            result.status,
+            if style_error { "error" } else { "success" },
+            "{}\n{}",
+            result.message,
+            result.output
+        );
+        let uri = tower_lsp::lsp_types::Url::from_file_path(if style_error {
+            style
+        } else {
+            fixture.artifact("idx")
+        })
+        .unwrap();
+        let diagnostics = &result.diagnostics[&uri];
+        assert_eq!(
+            diagnostics[0].severity,
+            Some(if style_error {
+                tower_lsp::lsp_types::DiagnosticSeverity::ERROR
+            } else {
+                tower_lsp::lsp_types::DiagnosticSeverity::WARNING
+            })
+        );
+        if style_error {
+            assert!(result.message.contains("Unknown specifier"));
+            assert_eq!(
+                std::fs::read_to_string(fixture.artifact("ind")).unwrap(),
+                "old index"
+            );
+            assert_eq!(fixture.passes(), 1);
+        } else {
+            assert!(diagnostics[0].message.contains("Conflicting entries"));
+            assert_eq!(fixture.passes(), 2);
+        }
+        assert!(fixture.artifact("ilg").is_file());
+        fixture.no_staging_files();
+    }
+}

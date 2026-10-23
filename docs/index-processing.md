@@ -66,7 +66,21 @@
 
 工具工作目录是实际产物目录，与 `build.outputDirectory`、latexmkrc 和 `build.jobName` 保持一致。`%i` 是当前索引输入的相对文件名，`%t` 是本次暂存输出的相对文件名，`%l` 是暂存处理日志的相对文件名；`%r` 是主文档目录，`%f` 是主文件绝对路径，`%o` 是产物目录，`%j` 是该索引任务的产物名称。占位符只替换一次，路径中的空格或 `%j` 等字面文字不会被再次展开。参数必须使用 `%i` 和 `%t`；makeindex 还必须用 `-t %l` 指定可核验的处理日志。
 
-每次调用在确认退出成功、输入和额外依赖未变化、输出确实产生后，才原子替换正式索引。取消、超时、工具失败或没有产生输出时保留该任务原有索引。makeindex 会在拒绝条目后仍返回退出码 0，因此服务器另行检查新处理日志；存在拒绝条目或缺少完整摘要时按失败处理，详情进入编译输出。成功日志保存为 `.ilg` / `.glg` / `.alg` / `.nlg`，完成分析中的 `processedIndexTools` 提供输入、输出及处理日志 URI。
+每次调用在确认退出成功、输入和额外依赖未变化、输出确实产生后，才原子替换正式索引。取消、超时、工具失败或没有产生输出时保留该任务原有索引。makeindex 会在拒绝条目或样式错误后仍返回退出码 0，因此服务器另行检查新处理日志；存在拒绝条目、样式错误、诊断截断或缺少完整摘要时按失败处理。新日志保存为 `.ilg` / `.glg` / `.alg` / `.nlg`；工具失败时，只要输入和依赖仍有效，也保存本次日志供检查。成功分析中的 `processedIndexTools` 提供输入、输出及处理日志 URI。
+
+## 工具诊断
+
+显式 makeindex 任务把处理日志中的消息发布为标准编辑器诊断，来源为 `makeindex`：
+
+| 诊断代码 | 级别与位置 |
+| --- | --- |
+| `invalid-index-entry` | 错误，定位当前任务实际 `.idx` / `.glo` 等生成输入的条目行 |
+| `invalid-index-style` | 错误，定位日志明确指出的实际样式文件与行 |
+| `index-entry-warning` | 警告，例如同一页同一键的多个封装命令冲突，定位生成输入的条目行 |
+
+范围使用 UTF-16 并支持 CRLF。文件不可读、行号越界、日志位置不完整或输入文件与任务不符时，诊断回退到根文档，数据中的 `unresolvedLocation` 为 `true`；不会按同名文件猜测来源。`inputUri`、`transcriptUri`、`reportedFile` 和 `reportedLine` 保留处理上下文。修复后再次编译会清除旧诊断。
+
+索引输入可能经过宏展开，生成条目的行号不能直接视为 `.tex` 中 `\\index` 的行号；目前定位到生成输入或样式文件。自定义工具仍保留标准输出与失败详情，不套用 makeindex 的日志语法。日志和源文件读取均有预算，无法完整验证的处理结果不会覆盖旧索引。
 
 最后一遍 LaTeX 若改变了索引输入，继续运行工具和 LaTeX，最多四轮；仍未稳定时返回错误，不把含旧索引的 PDF 报告为成功。`analysis.indexProcessingRounds` 返回实际处理轮数。空索引输入／输出是合法的；只有确认最终 PDF 有效后才返回编译成功。日志和诊断以最后一遍 TeX 及本次管线实际更新的文献处理日志为准，先前遍次的临时警告不会覆盖最终结果。
 
@@ -114,6 +128,8 @@ LaTeX 文档还需加载生成的文件。其他术语表宏包可能需要不�
 
 ```sh
 cargo test --locked --test index_workflow
+cargo test --locked --lib index_diagnostics
+cargo test --locked --test protocol index_processing_diagnostics
 cargo test --locked --test protocol index_workflow
 cargo test --locked --test index_workflow -- --include-ignored
 cargo test --locked --test index_tools --test rebuild_actions
@@ -124,4 +140,4 @@ cargo test --locked --test index_tools -- --include-ignored
 
 真实回归需要 pdfLaTeX、XeLaTeX、LuaLaTeX、makeindex、makeidx 和 rerunfilecheck。在三个引擎的 60 / 79 列日志中，先产生索引与术语表请求，执行工具生成 `.ind` / `.gls` 并编译 PDF，再修改条目并重复处理，核对工具列表、实际条目和 PDF 页数。
 
-显式管线回归另外使用真实 pdfLaTeX / makeindex 验证只有索引排版的首遍、术语表样式、条目更新、最终 PDF，以及普通／quiet 模式下退出码 0 的拒绝条目。默认测试覆盖原子替换、四轮上限、缺少输入、额外依赖、符号链接、输入变更、取消／超时和子进程清理；stdio 覆盖状态一致性、保存检查、共享命名索引冲突及过期结果。
+显式管线回归另外使用真实 pdfLaTeX / makeindex 验证只有索引排版的首遍、术语表样式、条目更新、最终 PDF，以及普通／quiet 模式下退出码 0 的拒绝条目、零退出样式错误和冲突警告定位。默认测试覆盖原子替换、四轮上限、缺少输入、额外依赖、符号链接、输入变更、取消／超时和子进程清理；stdio 覆盖状态一致性、保存检查、共享命名索引冲突、过期结果和诊断修复后的清除。

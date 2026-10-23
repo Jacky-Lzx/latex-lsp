@@ -25384,3 +25384,95 @@ fn bibliography_workflow_guarded_rebuild_actions_recheck_backend_job_and_removed
         server.wait_exit(0);
     }
 }
+
+#[test]
+#[cfg(unix)]
+fn index_processing_diagnostics_publish_styles_and_generated_inputs_then_clear_after_repair() {
+    let (mut server, directory, uri) = index_workflow_server("exit 99", false);
+    let tool = directory.path().join("makeindex");
+    let script = r#"#!/bin/sh
+set -eu
+root=${0%/*}
+printf generated > "$2"
+if test ! -f "$root/repaired"; then
+ printf '** Input style error (file = %s/style.ist, line = 1):\n   -- Unknown specifier style.\ndone (1 entries accepted, 0 rejected).\n' "$root" > "$4"
+elif test "$(cat "$root/repaired")" = warning; then
+ printf '## Warning (input = %s, line = 1; output = %s, line = 3):\n   -- Conflicting entries.\ndone (1 entries accepted, 0 rejected).\n' "$5" "$2" > "$4"
+else
+ printf 'Scanning input file %s...done (1 entries accepted, 0 rejected).\n' "$5" > "$4"
+fi
+"#;
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::write(&tool, script).unwrap();
+    std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let arguments = json!([directory.path().join("compiler.sh"), "%o", "%f", "%j"]);
+    server.notify("workspace/didChangeConfiguration", json!({"settings":{"distribution":{"enabled":false},"build":{"executable":"/bin/sh","arguments":arguments,"rebuildArguments":arguments,"indexTools":[{"executable":tool,"dependencies":["style.ist"]}]}}}));
+    let output = directory.path().join("build/latex-lsp");
+    std::fs::create_dir_all(&output).unwrap();
+    std::fs::write(output.join("main.ind"), "old index").unwrap();
+    let style = Url::from_file_path(directory.path().join("style.ist")).unwrap();
+    let input = Url::from_file_path(output.join("main.idx")).unwrap();
+    for state in ["error", "warning", "clean"] {
+        if state != "error" {
+            std::fs::write(directory.path().join("repaired"), state).unwrap();
+        }
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[uri]}),
+        );
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(
+            finished["params"]["status"],
+            if state == "error" { "error" } else { "success" },
+            "{finished}"
+        );
+        let target = if state == "error" { &style } else { &input };
+        let published = server.until(|message| {
+            message["method"] == "textDocument/publishDiagnostics"
+                && message["params"]["uri"] == target.as_str()
+                && message["params"]["diagnostics"]
+                    .as_array()
+                    .is_some_and(|items| {
+                        if state == "clean" {
+                            items.is_empty()
+                        } else {
+                            items.iter().any(|item| item["source"] == "makeindex")
+                        }
+                    })
+        });
+        if state != "clean" {
+            let diagnostic = &published["params"]["diagnostics"][0];
+            assert_eq!(diagnostic["range"]["start"]["line"], 0);
+            assert_eq!(
+                diagnostic["code"],
+                if state == "error" {
+                    "invalid-index-style"
+                } else {
+                    "index-entry-warning"
+                }
+            );
+            assert!(diagnostic["data"]["transcriptUri"]
+                .as_str()
+                .unwrap()
+                .ends_with("main.ilg"));
+        }
+        if state == "error" {
+            assert_eq!(
+                std::fs::read_to_string(output.join("main.ind")).unwrap(),
+                "old index"
+            );
+        }
+        if state == "warning" {
+            let cleared = server.until(|message| {
+                message["method"] == "textDocument/publishDiagnostics"
+                    && message["params"]["uri"] == style.as_str()
+                    && message["params"]["diagnostics"] == json!([])
+            });
+            assert_eq!(cleared["params"]["diagnostics"], json!([]));
+        }
+    }
+    server.request(3, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

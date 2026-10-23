@@ -1368,7 +1368,17 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool, rebuild: bo
         };
         let processed = match plan.run(config, cancel) {
             Ok(processed) => processed,
-            Err(failure) => return stage_failure(first, failure),
+            Err(failed) => {
+                first.diagnostics_truncated |= failed.report.truncated;
+                for (uri, diagnostics) in failed.report.diagnostics {
+                    first
+                        .diagnostics
+                        .entry(uri)
+                        .or_default()
+                        .extend(diagnostics);
+                }
+                return stage_failure(first, failed.failure);
+            }
         };
         if cancel.load(Ordering::Relaxed) {
             return Outcome {
@@ -1420,6 +1430,14 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool, rebuild: bo
                 .as_ref()
                 .is_none_or(|processed| processed.inputs_unchanged())
         {
+            first.diagnostics_truncated |= processed.report.truncated;
+            for (uri, diagnostics) in processed.report.diagnostics {
+                first
+                    .diagnostics
+                    .entry(uri)
+                    .or_default()
+                    .extend(diagnostics);
+            }
             if let Some(analysis) = first.analysis.as_mut().and_then(Value::as_object_mut) {
                 if !config.index_tools.is_empty() {
                     analysis.insert("processedIndexTools".into(), Value::Array(processed.tools));
