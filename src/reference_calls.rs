@@ -10,8 +10,33 @@ pub(crate) fn named_command(
     operands: &BTreeSet<usize>,
     declarations: &BTreeSet<(usize, usize)>,
 ) -> Option<syntax::Command> {
-    let (name, span) =
-        signatures.named_invocation(source, parsed, index, operands, declarations)?;
+    let lexical = parsed.commands.get(index)?;
+    let (name, span) = if let Some(invocation) =
+        signatures.named_invocation(source, parsed, index, operands, declarations)
+    {
+        invocation
+    } else {
+        // Builtin-name redefinitions keep their conservative ordinary-macro
+        // treatment. This path recognizes distinct user forwarding names.
+        if syntax::is_reference(&lexical.name)
+            || syntax::has_separate_label_argument(&lexical.name)
+            || syntax::is_citation(&lexical.name)
+        {
+            return None;
+        }
+        (
+            signatures.forwarded_builtin(&lexical.name)?,
+            lexical.span.clone(),
+        )
+    };
+    let name = if syntax::is_reference(name)
+        || syntax::has_separate_label_argument(name)
+        || syntax::is_citation(name)
+    {
+        name
+    } else {
+        signatures.forwarded_builtin(name)?
+    };
     if !syntax::is_reference(name)
         && !syntax::has_separate_label_argument(name)
         && !syntax::is_citation(name)

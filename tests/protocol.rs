@@ -27602,3 +27602,140 @@ fn refactor_math_alias_contexts_follow_unsaved_cross_file_definitions_over_stdio
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+fn forwarding_reference_keys_refresh_diagnostics_hints_completion_and_versioned_edits_over_stdio() {
+    use latex_lsp::text::Text;
+    let dir = tempfile::tempdir().unwrap();
+    let uri = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let macros = Url::from_file_path(dir.path().join("macros.tex")).unwrap();
+    let declarations = r"\label{known}\bibitem{paper}";
+    let definitions =
+        format!("{declarations}\\def\\myref{{\\ref}}\\newcommand{{\\mycite}}{{\\cite}}");
+    let source = "\\documentclass{article}\r\n\\input{macros}\r\n\\begin{document}\r\n😀 \\myref{known} \\csname myref\\endcsname{known} \\csuse{mycite}{paper}\r\n\\myref{missing} \\mycite{absent}\r\n\\end{document}";
+    std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+    std::fs::write(macros.to_file_path().unwrap(), &definitions).unwrap();
+    std::fs::write(
+        dir.path().join("main.aux"),
+        "\\newlabel{known}{{4}{9}{Title}{}}\n",
+    )
+    .unwrap();
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"latex","version":5,"text":source}}),
+    );
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":macros,"languageId":"latex","version":3,"text":definitions}}),
+    );
+    let text = Text::new(source.into());
+    let known = source.find("known").unwrap();
+    let position = text.position(known + 2);
+    let params = json!({"textDocument":{"uri":uri},"position":position});
+    let diagnostic_params = json!({"textDocument":{"uri":uri}});
+    let report = server.request(2, "textDocument/diagnostic", diagnostic_params.clone());
+    let errors: Vec<_> = report["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|d| {
+            matches!(
+                d["code"].as_str(),
+                Some("undefined-reference" | "undefined-citation")
+            )
+        })
+        .collect();
+    assert_eq!(errors.len(), 2, "{report}");
+    for key in ["missing", "absent"] {
+        let at = source.find(key).unwrap();
+        assert!(errors
+            .iter()
+            .any(|d| d["range"] == json!(text.range(at, at + key.len()))));
+    }
+    let pushed = server.until(|m| {
+        m["method"] == "textDocument/publishDiagnostics" && m["params"]["uri"] == uri.as_str()
+    });
+    assert!(pushed["params"]["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|d| d["code"] == "undefined-reference"));
+    let hint_params = json!({"textDocument":{"uri":uri},"range":text.range(0,source.len())});
+    let hints = server.request(3, "textDocument/inlayHint", hint_params.clone());
+    assert_eq!(hints.as_array().unwrap().len(), 2, "{hints}");
+    assert!(hints
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|h| h["label"] == "→ 4, p. 9"));
+    let definitions = server.request(4, "textDocument/definition", params.clone());
+    assert_eq!(definitions[0]["uri"], macros.as_str());
+    assert_eq!(
+        definitions[0]["range"],
+        json!({"start":{"line":0,"character":7},"end":{"line":0,"character":12}})
+    );
+    assert!(!server
+        .request(5, "textDocument/hover", params.clone())
+        .is_null());
+    let refs=server.request(6,"textDocument/references",json!({"textDocument":{"uri":uri},"position":position,"context":{"includeDeclaration":true}}));
+    assert_eq!(refs.as_array().unwrap().len(), 3);
+    let prepared = server.request(7, "textDocument/prepareRename", params.clone());
+    assert_eq!(prepared["range"], json!(text.range(known, known + 5)));
+    let edit = server.request(
+        8,
+        "textDocument/rename",
+        json!({"textDocument":{"uri":uri},"position":position,"newName":"updated"}),
+    );
+    let documents = edit["documentChanges"].as_array().unwrap();
+    assert_eq!(documents.len(), 2);
+    for (document, version, count) in [(&uri, 5, 2), (&macros, 3, 1)] {
+        let edits = documents
+            .iter()
+            .find(|d| d["textDocument"]["uri"] == document.as_str())
+            .unwrap();
+        assert_eq!(edits["textDocument"]["version"], version);
+        assert_eq!(edits["edits"].as_array().unwrap().len(), count);
+    }
+    let completion = server.request(9, "textDocument/completion", params.clone());
+    let items = completion
+        .as_array()
+        .or_else(|| completion["items"].as_array())
+        .unwrap();
+    let item = items.iter().find(|i| i["label"] == "known").unwrap();
+    assert_eq!(
+        item["textEdit"]["range"],
+        json!(text.range(known, known + 5))
+    );
+    server.notify("textDocument/didChange",json!({"textDocument":{"uri":macros,"version":4},"contentChanges":[{"text":format!("{declarations}\\def\\myref#1{{#1}}\\def\\mycite#1{{#1}}") }]}));
+    let report = server.request(10, "textDocument/diagnostic", diagnostic_params);
+    assert!(
+        !report["items"].as_array().unwrap().iter().any(|d| matches!(
+            d["code"].as_str(),
+            Some("undefined-reference" | "undefined-citation")
+        ))
+    );
+    assert_eq!(
+        server.request(11, "textDocument/inlayHint", hint_params),
+        json!([])
+    );
+    assert_eq!(
+        server.request(12, "textDocument/definition", params.clone()),
+        json!([])
+    );
+    assert!(server
+        .request(13, "textDocument/prepareRename", params.clone())
+        .is_null());
+    let completion = server.request(14, "textDocument/completion", params);
+    assert!(!completion
+        .as_array()
+        .or_else(|| completion["items"].as_array())
+        .unwrap()
+        .iter()
+        .any(|i| i["label"] == "known"));
+    server.request(15, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

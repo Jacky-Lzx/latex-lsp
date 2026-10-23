@@ -125,13 +125,25 @@ fn calls(doc: &Document, signatures: &CommandSignatures<'_>) -> Option<Calls> {
     }
     Some(result)
 }
-fn has_calls(doc: &Document) -> bool {
+fn candidate_names(workspace: &Workspace) -> BTreeSet<&str> {
+    workspace
+        .documents
+        .values()
+        .flat_map(|doc| {
+            doc.syntax
+                .definitions
+                .iter()
+                .chain(&doc.syntax.environments)
+        })
+        .map(|entry| entry.name.as_str())
+        .collect()
+}
+fn has_calls(doc: &Document, names: &BTreeSet<&str>) -> bool {
     doc.kind == DocumentKind::Latex
-        && doc
-            .syntax
-            .commands
-            .iter()
-            .any(|command| matches!(command.name.as_str(), "csuse" | "csname"))
+        && doc.syntax.commands.iter().any(|command| {
+            matches!(command.name.as_str(), "csuse" | "csname")
+                || names.contains(command.name.as_str())
+        })
 }
 
 impl Index {
@@ -142,7 +154,12 @@ impl Index {
                 ..Default::default()
             };
         }
-        if !workspace.documents.values().any(has_calls) {
+        let candidates = candidate_names(workspace);
+        if !workspace
+            .documents
+            .values()
+            .any(|doc| has_calls(doc, &candidates))
+        {
             return Self::default();
         }
         let contexts = crate::environment_calls::project_contexts(workspace);
@@ -197,7 +214,11 @@ impl Index {
                     .map(|doc| (doc.text.source.as_str(), &doc.syntax)),
             );
             for uri in consumers {
-                let Some(doc) = workspace.documents.get(&uri).filter(|doc| has_calls(doc)) else {
+                let Some(doc) = workspace
+                    .documents
+                    .get(&uri)
+                    .filter(|doc| has_calls(doc, &candidates))
+                else {
                     continue;
                 };
                 let Some(calls) = calls(doc, &signatures) else {
@@ -286,9 +307,12 @@ impl Index {
         Ok(())
     }
 }
-pub(crate) fn may_contain_key(doc: &Document, offset: usize) -> bool {
+pub(crate) fn may_contain_key(workspace: &Workspace, doc: &Document, offset: usize) -> bool {
+    let names = candidate_names(workspace);
     doc.syntax.commands.iter().any(|command| {
-        matches!(command.name.as_str(), "csuse" | "csname") && command.span.start < offset
+        (matches!(command.name.as_str(), "csuse" | "csname")
+            || names.contains(command.name.as_str()))
+            && command.span.start < offset
     })
 }
 
@@ -298,7 +322,11 @@ pub(crate) fn completion_context(
     offset: usize,
     prefix: impl Fn(&crate::syntax::Command) -> Option<Range<usize>>,
 ) -> Option<(crate::syntax::Command, Range<usize>)> {
-    let doc = workspace.documents.get(uri).filter(|doc| has_calls(doc))?;
+    let candidates = candidate_names(workspace);
+    let doc = workspace
+        .documents
+        .get(uri)
+        .filter(|doc| has_calls(doc, &candidates))?;
     if !workspace.index_truncated.is_empty() {
         return None;
     }

@@ -341,7 +341,7 @@ fn target<'a>(workspace: &'a Workspace, uri: &Url, offset: usize) -> Option<Targ
     {
         return raw;
     }
-    if crate::named_references::may_contain_key(doc, offset) {
+    if crate::named_references::may_contain_key(workspace, doc, offset) {
         if let Some((citation, span)) =
             crate::named_references::Index::new(workspace, uri).target(uri, offset)
         {

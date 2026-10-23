@@ -369,3 +369,335 @@ fn shared_named_completion_contexts_follow_unsaved_consumer_semantics() {
         .iter()
         .any(|item| item.label == "known"));
 }
+
+#[test]
+fn forwarding_keys_share_navigation_rename_and_macro_name_targets() {
+    for (definition, call, key) in [
+        (r"\def\myref{\ref}", r"\myref{label}", "label"),
+        (
+            r"\newcommand{\myref}{\ref}\def\next{\myref}",
+            r"\next{label}",
+            "label",
+        ),
+        (r"\def\myref{\ref}", r"\csuse{myref}{label}", "label"),
+        (
+            r"\def\myref{\ref}",
+            r"\csname myref\endcsname{label}",
+            "label",
+        ),
+        (
+            r"\newcommand{\mycite}{\cite}",
+            r"\mycite[before][after]{paper}",
+            "paper",
+        ),
+        (
+            r"\def\mycite{\cites}",
+            r"\csuse{mycite}{paper}{paper}",
+            "paper",
+        ),
+    ] {
+        let source = format!("😀 \\label{{label}}\\bibitem{{paper}}\r\n{definition}\r\n{call}");
+        let (ws, uri) = setup(&source);
+        let position = Text::new(source.clone()).position(source.rfind(key).unwrap() + 1);
+        assert_eq!(
+            features::definitions(&ws, &uri, position).len(),
+            1,
+            "{source}"
+        );
+        assert!(features::hover(&ws, &uri, position).is_some(), "{source}");
+        let count = if call.contains("{paper}{paper}") {
+            3
+        } else {
+            2
+        };
+        assert_eq!(
+            features::references(&ws, &uri, position, true).len(),
+            count,
+            "{source}"
+        );
+        assert_eq!(
+            editing::highlights(&ws, &uri, position).len(),
+            count,
+            "{source}"
+        );
+        assert!(
+            features::prepare_rename(&ws, &uri, position)
+                .unwrap()
+                .is_some(),
+            "{source}"
+        );
+        let edit = features::rename(&ws, &uri, position, "updated")
+            .unwrap()
+            .unwrap();
+        let edits = &edit.changes.as_ref().unwrap()[&uri];
+        assert_eq!(edits.len(), count, "{source}");
+        let updated = apply(&source, edits.clone());
+        assert!(updated.contains(definition), "{updated}");
+        assert!(!updated.contains(&format!("{{{key}}}")), "{updated}");
+        if call.starts_with(r"\myref") {
+            let command = Text::new(source.clone()).position(source.rfind(r"\myref").unwrap() + 3);
+            let definitions = features::definitions(&ws, &uri, command);
+            assert_eq!(definitions.len(), 1);
+            assert_eq!(definitions[0].range.start.line, 1);
+        }
+    }
+}
+
+#[test]
+fn forwarding_keys_publish_precise_missing_diagnostics_and_keep_query_commands_quiet() {
+    for (definition, call, expected) in [
+        (
+            r"\def\myref{\ref}",
+            r"\myref{missing}",
+            vec![(false, "missing")],
+        ),
+        (
+            r"\def\myref{\cref}",
+            r"\myref{missing,other}",
+            vec![(false, "missing"), (false, "other")],
+        ),
+        (
+            r"\def\myref{\crefrange}",
+            r"\myref{missing}{other}",
+            vec![(false, "missing"), (false, "other")],
+        ),
+        (
+            r"\def\myref{\hyperref}",
+            r"\myref[missing]{Title}",
+            vec![(false, "missing")],
+        ),
+        (
+            r"\def\mycite{\cite}",
+            r"\csuse{mycite}[note]{missing,other}",
+            vec![(true, "missing"), (true, "other")],
+        ),
+        (
+            r"\def\mycite{\cites}",
+            r"\mycite[note]{missing}[note]{other}",
+            vec![(true, "missing"), (true, "other")],
+        ),
+        (r"\def\myref{\getrefnumber}", r"\myref{missing}", vec![]),
+    ] {
+        let source = format!("{definition}\r\n😀 {call}");
+        let (ws, uri) = setup(&source);
+        let diagnostics: Vec<_> = ws
+            .diagnostics(&uri)
+            .into_iter()
+            .filter(|d| d.message.starts_with("Undefined"))
+            .collect();
+        assert_eq!(
+            diagnostics.len(),
+            expected.len(),
+            "{source}: {diagnostics:?}"
+        );
+        for (citation, key) in expected {
+            let at = source.rfind(key).unwrap();
+            let code = if citation {
+                "undefined-citation"
+            } else {
+                "undefined-reference"
+            };
+            assert!(
+                diagnostics.iter().any(|d| d.range
+                    == Text::new(source.clone()).range(at, at + key.len())
+                    && d.code == Some(NumberOrString::String(code.into()))),
+                "{source}: {diagnostics:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn forwarding_key_completion_uses_leaf_grammar_and_replaces_the_complete_key() {
+    for (definition, marked, label, expected) in [
+        (
+            r"\def\myref{\ref}",
+            r"\myref{kn¦BAD}",
+            "known",
+            r"\myref{known}",
+        ),
+        (
+            r"\def\myref{\crefrange}",
+            r"\csuse{myref}{known}{kn¦BAD}",
+            "known",
+            r"\csuse{myref}{known}{known}",
+        ),
+        (
+            r"\def\mycite{\cite}",
+            r"\csname mycite\endcsname[note]{pa¦BAD}",
+            "paper",
+            r"\csname mycite\endcsname[note]{paper}",
+        ),
+        (
+            r"\def\mycite{\cites}",
+            r"\mycite{paper}[note]{pa¦",
+            "paper",
+            r"\mycite{paper}[note]{paper",
+        ),
+    ] {
+        let prefix = format!("😀 \\label{{known}}\\bibitem{{paper}}\r\n{definition}\r\n");
+        let at = prefix.len() + marked.find('¦').unwrap();
+        let source = format!("{prefix}{}", marked.replace('¦', ""));
+        let (ws, uri) = setup(&source);
+        let items = features::completion(&ws, &uri, Text::new(source.clone()).position(at));
+        let item = items
+            .iter()
+            .find(|item| item.label == label)
+            .unwrap_or_else(|| panic!("{source}: {items:?}"));
+        let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+            panic!("{item:?}")
+        };
+        let mut edits = vec![edit.clone()];
+        edits.extend(item.additional_text_edits.clone().unwrap_or_default());
+        assert_eq!(apply(&source, edits), format!("{prefix}{expected}"));
+    }
+}
+
+#[test]
+fn forwarding_key_semantics_reject_non_aliases_and_non_executable_data() {
+    for (definition, call) in [
+        (r"\def\myref#1{\ref{#1}}", r"\myref{missing}"),
+        (r"\def\myref{\ref\relax}", r"\myref{missing}"),
+        (r"\edef\myref{\ref}", r"\myref{missing}"),
+        (r"\let\myref=\ref", r"\myref{missing}"),
+        (r"\def\myref{\ref}\def\ref#1{}", r"\myref{missing}"),
+        (r"\def\myref{\ref}\def\myref{}", r"\myref{missing}"),
+        (r"\def\myref{\next}\def\next{\myref}", r"\myref{missing}"),
+        (r"\def\myref{\ref}", r"\noexpand\myref{missing}"),
+        (r"\def\myref{\ref}", r"\meaning\myref{missing}"),
+        (r"\def\myref{\ref}", r"\detokenize{\myref{missing}}"),
+        (r"\def\myref{\ref}\def\take#1{}", r"\take{\myref{missing}}"),
+    ] {
+        let source = format!("\\label{{known}}{definition}\r\n{call}");
+        let (ws, uri) = setup(&source);
+        assert!(
+            !ws.diagnostics(&uri)
+                .iter()
+                .any(|d| d.message.starts_with("Undefined")),
+            "{source}"
+        );
+        let at = source.rfind("missing").unwrap();
+        let position = Text::new(source.clone()).position(at + 2);
+        assert!(
+            features::definitions(&ws, &uri, position).is_empty(),
+            "{source}"
+        );
+        assert!(
+            !features::completion(&ws, &uri, position)
+                .iter()
+                .any(|item| item.label == "known"),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn forwarding_key_operands_block_partial_renames_but_literal_examples_are_preserved() {
+    for call in [
+        r"\noexpand\myref{key}",
+        r"\def\take#1{}\take{\myref{key}}",
+        r"\unknown{\myref{key}}",
+    ] {
+        let source = format!("\\label{{key}}\\def\\myref{{\\ref}}{call}");
+        let (ws, uri) = setup(&source);
+        assert!(
+            features::rename(&ws, &uri, Position::new(0, 8), "updated").is_err(),
+            "{source}"
+        );
+    }
+    let source = r"\label{key}\def\myref{\ref}\detokenize{\myref{key}}";
+    let (ws, uri) = setup(source);
+    let edit = features::rename(&ws, &uri, Position::new(0, 8), "updated")
+        .unwrap()
+        .unwrap();
+    assert_eq!(edit.changes.as_ref().unwrap()[&uri].len(), 1);
+}
+
+#[test]
+fn shared_forwarding_keys_require_every_consumer_and_track_unsaved_alias_replacements() {
+    let dir = tempfile::tempdir().unwrap();
+    for (name, source) in [
+        (
+            "a.tex",
+            r"\documentclass{article}\def\myref{\ref}\input{common}\input{shared}",
+        ),
+        (
+            "b.tex",
+            r"\documentclass{article}\def\myref#1{#1}\input{common}\input{shared}",
+        ),
+        ("common.tex", r"\label{known}"),
+        ("shared.tex", r"\myref{known}"),
+        (
+            "independent.tex",
+            r"\documentclass{article}\def\myref#1{}\label{known}",
+        ),
+    ] {
+        std::fs::write(dir.path().join(name), source).unwrap();
+    }
+    let mut ws = Workspace::default();
+    ws.config.distribution.enabled = false;
+    ws.add_root(dir.path().into());
+    let common = Url::from_file_path(dir.path().join("common.tex")).unwrap();
+    let shared = Url::from_file_path(dir.path().join("shared.tex")).unwrap();
+    let key = Position::new(0, 9);
+    assert!(features::definitions(&ws, &shared, key).is_empty());
+    assert!(features::rename(&ws, &common, Position::new(0, 8), "updated").is_err());
+    assert!(!features::completion(&ws, &shared, key)
+        .iter()
+        .any(|item| item.label == "known"));
+    let b = Url::from_file_path(dir.path().join("b.tex")).unwrap();
+    ws.open(
+        b,
+        r"\documentclass{article}\def\myref{\ref}\input{common}\input{shared}".into(),
+        2,
+    );
+    assert_eq!(features::definitions(&ws, &shared, key).len(), 1);
+    assert!(features::completion(&ws, &shared, key)
+        .iter()
+        .any(|item| item.label == "known"));
+    let changes = features::rename(&ws, &common, Position::new(0, 8), "updated")
+        .unwrap()
+        .unwrap()
+        .changes
+        .unwrap();
+    assert_eq!(changes.len(), 2);
+    assert_eq!(changes[&shared].len(), 1);
+}
+
+#[test]
+#[ignore = "requires pdflatex and etoolbox"]
+fn real_forwarding_key_renames_preserve_resolved_references_and_citations() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let mut source = "\\documentclass{article}\n\\usepackage{etoolbox}\n\\def\\myref{\\ref}\\newcommand{\\mycite}{\\cite}\\def\\nextref{\\myref}\n\\newcommand{\\later}{\\myref{key} \\mycite{paper}}\n\\begin{document}\n\\section{Title}\\label{key}\n\\later \\nextref{key} \\csname myref\\endcsname{key} \\csuse{mycite}{paper}\n\\begin{thebibliography}{9}\\bibitem{paper} Entry\\end{thebibliography}\n\\end{document}".to_owned();
+    let mut ws = Workspace::default();
+    ws.config.distribution.enabled = false;
+    for key in ["key", "paper"] {
+        ws.open(uri.clone(), source.clone(), 1);
+        let position = Text::new(source.clone()).position(source.rfind(key).unwrap() + 1);
+        let edit = features::rename(&ws, &uri, position, &format!("updated{key}"))
+            .unwrap()
+            .unwrap();
+        source = apply(&source, edit.changes.unwrap().remove(&uri).unwrap());
+    }
+    std::fs::write(uri.to_file_path().unwrap(), &source).unwrap();
+    for _ in 0..2 {
+        let output = std::process::Command::new("pdflatex")
+            .args([
+                "-no-shell-escape",
+                "-interaction=nonstopmode",
+                "-halt-on-error",
+                "main.tex",
+            ])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+    let log = std::fs::read_to_string(dir.path().join("main.log")).unwrap();
+    assert!(!log.contains("undefined"), "{log}");
+}

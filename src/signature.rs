@@ -2629,6 +2629,14 @@ impl<'a> CommandSignatures<'a> {
         Some((name, start..end))
     }
 
+    /// A unique zero-argument source alias whose current leaf is still builtin.
+    /// Captured copies and expanded definitions do not enter this alias graph.
+    pub(crate) fn forwarded_builtin(&self, name: &str) -> Option<&str> {
+        let signature = self.local.get(name)?.as_ref()?;
+        (signature.name != name && !self.local.contains_key(signature.name.as_str()))
+            .then_some(signature.name.as_str())
+    }
+
     pub(crate) fn invokes_builtin(&self, name: &str, builtin: &str) -> bool {
         !self.local.contains_key(builtin)
             && self.local.get(name).map_or(name == builtin, |signature| {
