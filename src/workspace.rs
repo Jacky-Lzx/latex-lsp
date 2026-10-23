@@ -1288,7 +1288,7 @@ pub(crate) fn resolve_file_path_with(
     extensions: &[&str],
     file: impl Fn(&Path) -> Option<PathBuf>,
 ) -> Option<Url> {
-    let extensions = if crate::bib_resources::loads(command) {
+    let extensions = if crate::bib_resources::references_file(command) {
         &[""][..]
     } else {
         extensions

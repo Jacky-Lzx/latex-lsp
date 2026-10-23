@@ -6,6 +6,11 @@ pub(crate) fn loads(name: &str) -> bool {
     matches!(name, "addbibresource" | "addglobalbib")
 }
 
+/// Both loading and registration commands expose a literal file reference.
+pub(crate) fn references_file(name: &str) -> bool {
+    loads(name) || name == "addsectionbib"
+}
+
 pub(crate) fn start(source: &str, command_end: usize) -> Option<usize> {
     let mut at = syntax::skip_space(source, command_end);
     if source.as_bytes().get(at) == Some(&b'*') {

@@ -67,7 +67,8 @@ fn complete_with_argument(
     };
     let prefix = normalized_prefix.as_deref().unwrap_or(raw_prefix);
     if prefix.contains(['\\', '{', '}'])
-        || !crate::bib_resources::loads(command) && prefix.contains(['%', '#', '$', '&', '^', '~'])
+        || !crate::bib_resources::references_file(command)
+            && prefix.contains(['%', '#', '$', '&', '^', '~'])
     {
         return vec![];
     }
@@ -95,7 +96,7 @@ fn complete_with_argument(
     let suffix_length = suffix
         .find(|ch| {
             matches!(ch, '/' | '{' | '}' | '\\')
-                || ch == '%' && !crate::bib_resources::loads(command)
+                || ch == '%' && !crate::bib_resources::references_file(command)
                 || ch == ',' && syntax::file_list(command)
                 || crate::fancyvrb::is_input(command) && ch == '"'
                 || !compact
@@ -196,7 +197,7 @@ fn complete_with_argument(
                 || (compact || syntax::passes_options(command) || command == "bibliographystyle")
                     && name.contains([' ', '\t', '\r', '\n'])
                 || name.contains(['\\', '{', '}', '"', '\n', '\r'])
-                || !crate::bib_resources::loads(command)
+                || !crate::bib_resources::references_file(command)
                     && name.contains(['%', '#', '$', '&', '^', '~'])
             {
                 continue;
@@ -231,7 +232,7 @@ fn complete_with_argument(
                     new_text.push('/');
                 }
             } else if command != "includegraphics"
-                && !crate::bib_resources::loads(command)
+                && !crate::bib_resources::references_file(command)
                 && !syntax::code_input_command(command)
             {
                 let explicit_extension = existing_name

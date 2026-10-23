@@ -883,6 +883,7 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("citelist", "citelist{${1:keys}}{${2:literal list}}", "Print a bibliography literal list with an optional format. Requires biblatex."),
     ("citename", "citename{${1:keys}}{${2:name list}}", "Print a bibliography name list with an optional format. Requires biblatex."),
     ("addglobalbib", "addglobalbib{${1:references.bib}}", "Load a bibliography resource in every reference section. Use the full filename. Requires biblatex."),
+    ("addsectionbib", "addsectionbib{${1:file.bib}}", "Register a biblatex resource for explicit reference-section selection without adding it to default or global resources."),
     (
         "addbibresource",
         "addbibresource{${1:references.bib}}",

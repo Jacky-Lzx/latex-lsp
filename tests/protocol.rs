@@ -28464,3 +28464,95 @@ fn section_resource_changes_reject_default_database_renames_and_restore_empty_li
         server.wait_exit(0);
     }
 }
+
+#[test]
+fn registered_section_files_complete_link_and_move_without_exposing_unused_entries_over_stdio() {
+    use latex_lsp::text::Text;
+    let directory = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+    let bib = Url::from_file_path(directory.path().join("section.bib")).unwrap();
+    let source = "% 😀\r\n\\documentclass{article}\\usepackage{definitions}\\register[label=chosen]{secBAD.bib}\\cite{selected}";
+    for (name, text) in [
+        ("main.tex", source),
+        ("definitions.sty", r"\def\register{\addsectionbib}"),
+        ("section.bib", "@book{selected,title={Selected}}"),
+    ] {
+        std::fs::write(directory.path().join(name), text).unwrap();
+    }
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(directory.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true},"fileOperations":{"willRename":true}},"textDocument":{"diagnostic":{}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":main,"languageId":"latex","version":7,"text":source}}),
+    );
+    let at = Text::new(source.into()).position(source.find("secBAD").unwrap() + 3);
+    let items = server.request(
+        2,
+        "textDocument/completion",
+        json!({"textDocument":{"uri":main},"position":at}),
+    );
+    let item = items
+        .as_array()
+        .or_else(|| items["items"].as_array())
+        .unwrap()
+        .iter()
+        .find(|item| item["label"] == "section.bib")
+        .unwrap();
+    let edit: tower_lsp::lsp_types::TextEdit =
+        serde_json::from_value(item["textEdit"].clone()).unwrap();
+    let updated = Text::new(source.into())
+        .changed(vec![tower_lsp::lsp_types::TextDocumentContentChangeEvent {
+            range: Some(edit.range),
+            range_length: None,
+            text: edit.new_text,
+        }])
+        .unwrap()
+        .source;
+    assert_eq!(updated, source.replace("secBAD.bib", "section.bib"));
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":8},"contentChanges":[{"text":updated}]}),
+    );
+    let links = server.request(
+        3,
+        "textDocument/documentLink",
+        json!({"textDocument":{"uri":main}}),
+    );
+    assert!(links
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|link| link["target"] == bib.as_str()));
+    let diagnostics = server.request(
+        4,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":main}}),
+    );
+    assert!(diagnostics["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["message"] == "Undefined citation `selected`"));
+    let renamed = Url::from_file_path(directory.path().join("selected%renamed.bib")).unwrap();
+    let edit = server.request(
+        5,
+        "workspace/willRenameFiles",
+        json!({"files":[{"oldUri":bib,"newUri":renamed}]}),
+    );
+    assert_eq!(edit["documentChanges"][0]["textDocument"]["version"], 8);
+    assert_eq!(
+        edit["documentChanges"][0]["edits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        edit["documentChanges"][0]["edits"][0]["newText"],
+        "selected%renamed.bib"
+    );
+    server.request(1000, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

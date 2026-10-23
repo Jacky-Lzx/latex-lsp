@@ -626,7 +626,9 @@ fn builtin(name: &str) -> Option<Signature> {
             ],
             false,
         ),
-        "addbibresource" | "addglobalbib" => (&[("options", true), ("file", false)], false),
+        "addbibresource" | "addglobalbib" | "addsectionbib" => {
+            (&[("options", true), ("file", false)], false)
+        }
         "part" | "chapter" | "section" | "subsection" | "subsubsection" | "paragraph"
         | "subparagraph" | "caption" => (&[("short title", true), ("title", false)], true),
         "footnote" => (&[("number", true), ("text", false)], false),
@@ -3009,6 +3011,7 @@ impl<'a> CommandSignatures<'a> {
                 "bibliographystyle",
                 "addbibresource",
                 "addglobalbib",
+                "addsectionbib",
             ],
         )
     }
@@ -3117,11 +3120,11 @@ impl<'a> CommandSignatures<'a> {
                         span: start..end,
                         argument: if syntax::loader_extension(builtin).is_some()
                             || matches!(builtin, "bibliographystyle" | "includegraphics")
-                            || crate::bib_resources::loads(builtin)
+                            || crate::bib_resources::references_file(builtin)
                         {
                             syntax::file_name_argument_start(source, builtin, end)
                                 .and_then(|start| {
-                                    if crate::bib_resources::loads(builtin) {
+                                    if crate::bib_resources::references_file(builtin) {
                                         syntax::verbatim_file_group(source, start)
                                     } else {
                                         syntax::group(source, start, b'{', b'}')

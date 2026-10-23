@@ -327,7 +327,7 @@ fn replacement(
             .map_err(|_| Error::invalid_params("Invalid renamed file URI"))?;
         let resolves_to_target = |value: &str| {
             if command != "includegraphics"
-                && !crate::bib_resources::loads(command)
+                && !crate::bib_resources::references_file(command)
                 && !syntax::is_literal_file_path(value)
             {
                 return false;
@@ -385,7 +385,7 @@ fn replacement(
 }
 
 fn reference_path(path: &Path, command: Option<&str>) -> Result<String> {
-    if !command.is_some_and(crate::bib_resources::loads) {
+    if !command.is_some_and(crate::bib_resources::references_file) {
         return safe_path(path);
     }
     let value = path

@@ -450,7 +450,7 @@ fn direct_file_positions(
                             | "IfFileExists"
                             | "includegraphics"
                     ) || syntax::code_input_command(&command.name)
-                        || crate::bib_resources::loads(&command.name))
+                        || crate::bib_resources::references_file(&command.name))
                         && (!require_original_meaning
                             || signatures.command_unchanged(&command.name))
                         && positions.contains(&command.span.start)
@@ -479,7 +479,7 @@ pub(crate) fn source_file_command(name: &str) -> bool {
 /// Source, bibliography and package/class paths share editing checks.
 pub(crate) fn editable_file_command(name: &str) -> bool {
     source_file_command(name)
-        || crate::bib_resources::loads(name)
+        || crate::bib_resources::references_file(name)
         || syntax::package_class_extension(name).is_some()
         || matches!(
             name,

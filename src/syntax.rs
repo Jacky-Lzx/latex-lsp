@@ -975,7 +975,7 @@ pub(crate) fn file_name_argument_start(
     name: &str,
     command_end: usize,
 ) -> Option<usize> {
-    if crate::bib_resources::loads(name) {
+    if crate::bib_resources::references_file(name) {
         return crate::bib_resources::start(source, command_end);
     }
     if name == "inputminted" {
@@ -1160,7 +1160,7 @@ pub fn file_extensions(name: &str) -> Option<&'static [&'static str]> {
         name if code_input_command(name) => &[""],
         "include" | "includeonly" | "subfile" => &["tex"],
         "bibliography" | "nobibliography" => &["bib"],
-        name if crate::bib_resources::loads(name) => &["bib"],
+        name if crate::bib_resources::references_file(name) => &["bib"],
         "bibliographystyle" => &["bst"],
         "usepackage" | "RequirePackage" | "RequirePackageWithOptions" => &["sty"],
         "documentclass" | "LoadClass" | "LoadClassWithOptions" => &["cls"],
@@ -1199,7 +1199,7 @@ pub fn file_list(name: &str) -> bool {
 /// Completion can offer explicit source extensions that TeX does not infer.
 pub(crate) fn inferred_file_extensions(name: &str) -> Option<&'static [&'static str]> {
     let extensions = file_extensions(name)?;
-    Some(if crate::bib_resources::loads(name) {
+    Some(if crate::bib_resources::references_file(name) {
         &[""]
     } else if matches!(name, "input" | "InputIfFileExists") {
         &extensions[..1]
@@ -1243,7 +1243,7 @@ pub(crate) fn file_argument<'a>(
     source: &str,
     command: &'a Command,
 ) -> Option<std::borrow::Cow<'a, Argument>> {
-    if crate::bib_resources::loads(&command.name) {
+    if crate::bib_resources::references_file(&command.name) {
         return crate::bib_resources::argument(source, command).map(std::borrow::Cow::Owned);
     }
     if passes_options(&command.name) {
@@ -2090,7 +2090,7 @@ impl Syntax {
         }
         let argument = (|| {
             let start = file_name_argument_start(source, &command.name, command.span.end)?;
-            let grouped = if crate::bib_resources::loads(&command.name) {
+            let grouped = if crate::bib_resources::references_file(&command.name) {
                 verbatim_file_group(source, start)
             } else {
                 group(source, start, b'{', b'}')
@@ -2436,7 +2436,7 @@ impl Syntax {
                     } else if is_citation(name) {
                         arg_start = citation_argument_start(source, name, command_end)
                             .unwrap_or(source.len());
-                    } else if crate::bib_resources::loads(name)
+                    } else if crate::bib_resources::references_file(name)
                         || loader_extension(name).is_some()
                         || name == "bibliographystyle"
                         || code_input_command(name)
@@ -2489,7 +2489,7 @@ impl Syntax {
                             arg_start,
                             b'{',
                             b'}',
-                            !(url_argument || crate::bib_resources::loads(name)),
+                            !(url_argument || crate::bib_resources::references_file(name)),
                             true,
                         )
                         .or_else(|| {
@@ -2934,7 +2934,7 @@ impl Syntax {
                             _ => {}
                         }
                     }
-                    if crate::bib_resources::loads(name) {
+                    if crate::bib_resources::references_file(name) {
                         if let Some((_, end)) = parsed.as_ref() {
                             i = *end;
                         }
