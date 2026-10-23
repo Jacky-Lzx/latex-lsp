@@ -2450,6 +2450,180 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main
 
 #[test]
 #[cfg(unix)]
+fn biber_alias_conflicts_refresh_ranges_dynamic_fallbacks_and_clear_over_push_and_pull() {
+    for pull in [false, true] {
+        let script = r#"cp "${2%/*}/fixture.blg" "$1/main.blg"
+printf '%%PDF-1.4\n' > "$1/main.pdf"
+printf '(./main.tex)\n' > "$1/main.log"
+printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main.fls"
+"#;
+        let capabilities = if pull {
+            json!({"textDocument":{"diagnostic":{}}})
+        } else {
+            json!({})
+        };
+        let (mut server, directory, main) =
+            fake_build_server_capabilities(script, false, capabilities);
+        let root = directory.path();
+        let refs = Url::from_file_path(root.join("refs.data")).unwrap();
+        let main_source = "\\documentclass{article}\n\\addbibresource{refs.data}\n";
+        std::fs::write(main.to_file_path().unwrap(), main_source).unwrap();
+        server.notify("textDocument/didChange",json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":main_source}]}));
+        let initial="% 😀\r\n@book{café😀,ids={pére😀}}\r\n@book{second,IDS={pére😀}}\r\n@book{third,ids={real😀}}\r\n@book{real😀,title={Actual}}\r\n@book{self😀,ids={self😀}}\r\n";
+        let mut current = initial.to_string();
+        std::fs::write(refs.to_file_path().unwrap(), &current).unwrap();
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":refs,"languageId":"bibtex","version":7,"text":current}}),
+        );
+        let cases = [
+            (
+                "Entry alias 'pére😀' already has an alias 'café😀', skipping ...",
+                "pére😀",
+                "duplicate-alias",
+                "café😀",
+            ),
+            (
+                "Citekey alias 'real😀' is also a real entry key, skipping ...",
+                "real😀",
+                "entry-key-collision",
+                "real😀,title",
+            ),
+            (
+                "BAD RECURSION! Entry alias 'self😀' is identical to the entry key, skipping ...",
+                "self😀",
+                "self-alias",
+                "self😀,ids",
+            ),
+        ];
+        for stage in 0..4 {
+            let mut changes = Vec::new();
+            if stage == 1 {
+                for marker in ["IDS={pére😀", "ids={real😀", "ids={self😀"] {
+                    let at = current.find(marker).unwrap() + marker.find('{').unwrap() + 1;
+                    let range = latex_lsp::text::Text::new(current.clone()).range(at, at);
+                    current.insert_str(at, "\r\n ");
+                    changes.push(json!({"range":range,"text":"\r\n "}));
+                }
+            } else if stage == 2 {
+                current="% 😀\r\n@string{dup={pére😀}} @string{col={real😀}} @string{own={self😀}}\r\n@book{café😀,ids={pére😀}}\r\n@book{second,IDS=dup}\r\n@book{third,ids=col}\r\n@book{real😀,title={Actual}}\r\n@book{self😀,ids=own}\r\n".into();
+                changes.push(json!({"text":current}));
+            } else if stage == 3 {
+                current = initial
+                    .replace("IDS={pére😀}", "IDS={newalias😀}")
+                    .replace("ids={real😀}", "ids={legacy😀}")
+                    .replace("ids={self😀}", "ids={other😀}");
+                changes.push(json!({"text":current}));
+            }
+            if !changes.is_empty() {
+                std::fs::write(refs.to_file_path().unwrap(), &current).unwrap();
+                server.notify(
+                    "textDocument/didChange",
+                    json!({"textDocument":{"uri":refs,"version":7+stage},"contentChanges":changes}),
+                );
+                server.notify("textDocument/didSave", json!({"textDocument":{"uri":refs}}));
+            }
+            let mut log = "INFO - Found BibTeX data source 'refs.data'\n".to_string();
+            if stage < 3 {
+                for (message, _, _, _) in cases {
+                    log.push_str(&format!("WARN - {message}\n"));
+                }
+            }
+            std::fs::write(root.join("fixture.blg"), log).unwrap();
+            server.request(
+                2 + stage * 5,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            let finished = server.until(|item| item["method"] == "latex/buildFinished");
+            assert_eq!(finished["params"]["status"], "success", "{finished}");
+            for (i, target) in [&refs, &main].into_iter().enumerate() {
+                let expected = if stage == 3 || (stage == 2) == (target == &refs) {
+                    0
+                } else {
+                    3
+                };
+                let matches = |items: &[Value]| {
+                    items
+                        .iter()
+                        .filter(|item| item["code"] == "conflicting-bibliography-alias")
+                        .count()
+                        == expected
+                };
+                let items = if pull {
+                    server.request(
+                        3 + stage * 5 + i as u64,
+                        "textDocument/diagnostic",
+                        json!({"textDocument":{"uri":target}}),
+                    )["items"]
+                        .clone()
+                } else {
+                    server.until(|item| {
+                        item["method"] == "textDocument/publishDiagnostics"
+                            && item["params"]["uri"] == target.as_str()
+                            && item["params"]["diagnostics"]
+                                .as_array()
+                                .is_some_and(|items| matches(items))
+                    })["params"]["diagnostics"]
+                        .clone()
+                };
+                assert!(
+                    matches(items.as_array().unwrap()),
+                    "stage {stage}: {target}: {items}"
+                );
+                if expected == 0 {
+                    continue;
+                }
+                let text = latex_lsp::text::Text::new(current.clone());
+                for (message, alias, reason, owner) in cases {
+                    let item = items
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .find(|item| item["message"] == format!("Biber: {message}"))
+                        .unwrap();
+                    assert_eq!(item["severity"], 2);
+                    assert_eq!(item["data"]["alias"], alias);
+                    assert_eq!(item["data"]["reason"], reason);
+                    if stage == 2 {
+                        assert_eq!(
+                            item["range"],
+                            json!({"start":{"line":0,"character":0},"end":{"line":0,"character":0}})
+                        );
+                        assert_eq!(item["data"]["unresolvedSource"], true);
+                        assert_eq!(item["data"]["unresolvedAlias"], true);
+                    } else {
+                        let start = if reason == "self-alias" {
+                            current.rfind(alias).unwrap()
+                        } else {
+                            current.find(alias).unwrap()
+                        };
+                        assert_eq!(item["range"], json!(text.range(start, start + alias.len())));
+                        assert!(item["data"]["unresolvedSource"].is_null());
+                    }
+                    let start = current.find(owner).unwrap();
+                    let key = owner.split(',').next().unwrap();
+                    assert!(item["relatedInformation"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|item| item["location"]
+                            == json!({"uri":refs,"range":text.range(start,start+key.len())})));
+                    assert_eq!(server.request(5+stage*5,"textDocument/codeAction",json!({"textDocument":{"uri":target},"range":item["range"],"context":{"diagnostics":[item],"only":["quickfix"]}})),json!([]));
+                }
+            }
+        }
+        server.request(23, "shutdown", Value::Null);
+        if pull {
+            assert_no_pushed_diagnostics(&server);
+        }
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
 fn biber_relation_warnings_refresh_each_field_dynamic_fallback_and_repair_over_push_and_pull() {
     for pull in [false, true] {
         let script = r#"cp "${2%/*}/fixture.blg" "$1/main.blg"

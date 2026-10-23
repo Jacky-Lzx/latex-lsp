@@ -160,6 +160,17 @@ cargo test --locked --test biber_overwritten_diagnostics -- --include-ignored
 cargo test --locked --test protocol biber_overwritten_fields_
 ```
 
+## Biber 文献别名冲突
+
+Biber 的三类完整 `ids` 警告使用 `conflicting-bibliography-alias`：`Entry alias … already has an alias …, skipping ...`、`Citekey alias … is also a real entry key, skipping ...`（也接受 `Entry alias` 前缀）和 `BAD RECURSION! Entry alias … is identical to the entry key, skipping ...`。它们分别表示别名已被其他条目占用、别名与真实主键冲突、别名等于自身主键；保留原生消息与级别，不在没有编译器报告时自行生成警告。
+
+此前输入历史完整且全部来源可读时，诊断使用静态 `ids` 声明索引，按区分大小写的 NFD 匹配别名与所属主键。被跳过的声明及相关主键可唯一确认时，精确标记别名并链接已有声明。多个候选、主键碰撞、动态或重复字段、未闭合正文等情况保留主文档警告，并列出最多 16 个可确认的相关位置；不会依据重复消息的先后顺序推断被跳过的条目。未知错误、截断、读取或来源数量超限后不借用位置。只报告冲突，不猜测应该删除或改名的条目；保存后重新编译更新范围，修复后的推送与拉取诊断都会清除。
+
+```sh
+cargo test --locked --test biber_alias_diagnostics -- --include-ignored
+cargo test --locked --test protocol biber_alias_conflicts_
+```
+
 ## Biber 重复文献键
 
 完整的 `Duplicate entry key: 'alpha' in file 'refs.bib', skipping ...` 消息使用诊断代码 `duplicate-bibliography-key`；开启 `--noskipduplicates` 时没有 `, skipping ...` 的原生格式也受支持。主键仅在明确命名的数据库中区分大小写匹配，唯一声明使用精确键范围；同一文件有多个同名声明时保留文件首行范围，通过 `relatedInformation` 列出候选，不凭无行号消息猜测具体声明。

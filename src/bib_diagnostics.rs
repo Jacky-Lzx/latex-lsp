@@ -1,4 +1,5 @@
 //! BibTeX diagnostics retain database roles, token ranges and input order.
+pub(crate) mod biber_aliases;
 pub(crate) mod biber_cycles;
 pub(crate) mod biber_fields;
 pub(crate) mod biber_keys;
@@ -118,6 +119,7 @@ struct Parsed {
     entry_keys: BTreeMap<String, Option<std::ops::Range<usize>>>,
     biber_locations: OnceLock<biber_keys::Locations>,
     biber_field_locations: OnceLock<biber_fields::Locations>,
+    biber_alias_locations: OnceLock<biber_aliases::Locations>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -220,6 +222,7 @@ impl Context {
                     entry_keys,
                     biber_locations: OnceLock::new(),
                     biber_field_locations: OnceLock::new(),
+                    biber_alias_locations: OnceLock::new(),
                 }))
             })
             .clone()
