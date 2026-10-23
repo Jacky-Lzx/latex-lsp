@@ -21976,7 +21976,13 @@ fn bibliography_categories_support_key_editing_and_versioned_renames_over_stdio(
         "textDocument/definition",
         json!({"textDocument":{"uri":main},"position":category_position}),
     );
-    assert_eq!(category, json!([]));
+    assert_eq!(category.as_array().unwrap().len(), 1);
+    assert_eq!(category[0]["uri"], main);
+    let declaration = source.find("{alpha}").unwrap() + 1;
+    assert_eq!(
+        category[0]["range"],
+        serde_json::to_value(text.range(declaration, declaration + "alpha".len())).unwrap()
+    );
     server.request(9, "shutdown", Value::Null);
     server.notify("exit", Value::Null);
     server.wait_exit(0);
@@ -23871,17 +23877,25 @@ fn fancyvrb_inline_body_execution_follows_incremental_macro_wrapping_over_stdio(
         );
         assert_eq!(diagnostics["items"], json!([]), "{source}: {diagnostics}");
         let position = Text::new(source.clone()).position(source.rfind("kept").unwrap());
-        let edit = server.request(
-            id + 1,
-            "textDocument/rename",
-            json!({"textDocument":{"uri":main},"position":position,"newName":"changed"}),
-        );
-        assert_eq!(
-            edit["documentChanges"][0]["textDocument"]["version"],
-            version
-        );
-        let edits = edit["documentChanges"][0]["edits"].as_array().unwrap();
-        assert_eq!(edits.len(), if live { 3 } else { 2 }, "{source}: {edit}");
+        if stage == 5 {
+            // User macro operands are data to the static reference index.
+            // Refuse a partial rename even when this particular macro emits #1.
+            server.send(json!({"jsonrpc":"2.0","id":id + 1,"method":"textDocument/rename","params":json!({"textDocument":{"uri":main},"position":position,"newName":"changed"})}));
+            let response = server.until(|message| message["id"] == id + 1);
+            assert_eq!(response["error"]["code"], -32602, "{source}: {response}");
+        } else {
+            let edit = server.request(
+                id + 1,
+                "textDocument/rename",
+                json!({"textDocument":{"uri":main},"position":position,"newName":"changed"}),
+            );
+            assert_eq!(
+                edit["documentChanges"][0]["textDocument"]["version"],
+                version
+            );
+            let edits = edit["documentChanges"][0]["edits"].as_array().unwrap();
+            assert_eq!(edits.len(), if live { 3 } else { 2 }, "{source}: {edit}");
+        }
         let links = server.request(
             id + 2,
             "textDocument/documentLink",
@@ -24136,23 +24150,31 @@ fn escaped_inline_code_refreshes_aliases_redefinitions_and_unfinished_arguments_
             assert_eq!(items[0]["message"], "Unclosed brace");
         }
         let position = Text::new(source.clone()).position(source.find("kept").unwrap());
-        let edit = server.request(
-            id + 1,
-            "textDocument/rename",
-            json!({"textDocument":{"uri":main},"position":position,"newName":"changed"}),
-        );
-        assert_eq!(
-            edit["documentChanges"][0]["textDocument"]["version"],
-            version
-        );
-        assert_eq!(
-            edit["documentChanges"][0]["edits"]
-                .as_array()
-                .unwrap()
-                .len(),
-            if unclosed { 1 } else { 2 + usize::from(live) },
-            "{source}: {edit}"
-        );
+        if stage == 4 {
+            // User macro operands are data to the static reference index.
+            // Refuse a partial rename even when this particular macro emits #1.
+            server.send(json!({"jsonrpc":"2.0","id":id + 1,"method":"textDocument/rename","params":json!({"textDocument":{"uri":main},"position":position,"newName":"changed"})}));
+            let response = server.until(|message| message["id"] == id + 1);
+            assert_eq!(response["error"]["code"], -32602, "{source}: {response}");
+        } else {
+            let edit = server.request(
+                id + 1,
+                "textDocument/rename",
+                json!({"textDocument":{"uri":main},"position":position,"newName":"changed"}),
+            );
+            assert_eq!(
+                edit["documentChanges"][0]["textDocument"]["version"],
+                version
+            );
+            assert_eq!(
+                edit["documentChanges"][0]["edits"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                if unclosed { 1 } else { 2 + usize::from(live) },
+                "{source}: {edit}"
+            );
+        }
         let links = server.request(
             id + 2,
             "textDocument/documentLink",

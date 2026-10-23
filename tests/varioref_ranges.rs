@@ -360,7 +360,7 @@ fn identical_endpoints_are_distinct_references_and_warning_ranges() {
     assert_eq!(diagnostics[&uri].len(), 2);
     let mut expected = references
         .iter()
-        .skip(1)
+        .filter(|location| location.range.start.line != 0)
         .map(|location| location.range)
         .collect::<Vec<_>>();
     expected.sort_by_key(|range| range.start);
