@@ -27,6 +27,8 @@
 
 当前不展开动态名称、复制命令的捕获含义或任意宏替换；不推断运行时分支、调用次数或执行顺序。已有查找引用功能仍可查看不属于调用的名称使用。
 
+`noexpand` 沿用参数分析中的单 token 边界：只抑制紧随的控制序列，不把整个分组当成宏参数。普通控制词及字面 `endcsname` 后的词法空白被忽略，`csuse` 名称分组后的实际空白仍是 token；因此 `\csuse{noexpand}\leaf` 抑制 `leaf`，`\csuse{noexpand} \leaf` 则仍有对 `leaf` 的调用。可确认的纯转发别名使用相同规则。用户显式重定义 `noexpand` 时使用其声明的参数语法，对这个用户宏本身的调用也进入图。
+
 返回节点的数据保留最初请求的项目来源和内容指纹。后续请求重新解析当前作用域；节点文件内容／版本改变、定义移除或变得不唯一时，返回 `ContentModified`（`-32801`），请重新打开调用层次。缺少有效节点数据返回 `InvalidParams`。调用方列表可根据其他文件的最新内容更新。
 
 索引不完整时返回明确错误；单次分析还限制为 1024 个 LaTeX 文档、合计 16 MiB、4096 个声明、100,000 个命令和 20,000 处调用，超限时返回错误而不是部分图。
@@ -36,6 +38,9 @@
 ```sh
 cargo test --locked --lib call_hierarchy
 cargo test --locked --test protocol call_hierarchy
+cargo test --locked --lib real_noexpand_ -- --include-ignored
 ```
 
 覆盖项目隔离、跨文件与文件顶层调用、重复位置、递归、声明语法、宏参数与字面数据、嵌套定义、UTF-16／CRLF、增量编辑、歧义、过期或无效节点以及分析预算。
+
+最后一项需要 pdfLaTeX 与 etoolbox，通过实际输出次数对照原语／用户重定义、命名调用空白及分组的调用边。

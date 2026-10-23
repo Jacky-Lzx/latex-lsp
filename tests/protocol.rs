@@ -26395,3 +26395,56 @@ fn call_hierarchy_static_named_calls_link_cross_file_targets_and_follow_primitiv
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+fn call_hierarchy_noexpand_uses_single_tokens_named_spaces_and_current_user_redefinitions() {
+    use latex_lsp::text::Text;
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":null,"capabilities":{},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    let uri = Url::parse("untitled:noexpand.tex").unwrap();
+    let calls = "\\noexpand\\leaf\n\\csuse{noexpand} \\leaf\n\\noexpand{\\leaf}\n\\csuse{noexpand}\\leaf\n\\csname noexpand\\endcsname \\leaf\n";
+    let source = format!("\\newcommand{{\\leaf}}{{}}\n{calls}");
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"latex","version":1,"text":source}}),
+    );
+    let pos = Text::new(source.clone()).position(source.find("\\leaf").unwrap() + 1);
+    let params = json!({"textDocument":{"uri":uri},"position":pos});
+    let leaf = server.request(2, "textDocument/prepareCallHierarchy", params.clone())[0].clone();
+    let incoming = server.request(3, "callHierarchy/incomingCalls", json!({"item":leaf}));
+    assert_eq!(incoming.as_array().unwrap().len(), 1);
+    assert_eq!(
+        incoming[0]["fromRanges"].as_array().unwrap().len(),
+        2,
+        "{incoming}"
+    );
+    let updated = format!("\\newcommand{{\\leaf}}{{}}\n\\def\\noexpand{{}}\n{calls}");
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"text":updated}]}),
+    );
+    let leaf = server.request(4, "textDocument/prepareCallHierarchy", params)[0].clone();
+    let incoming = server.request(5, "callHierarchy/incomingCalls", json!({"item":leaf}));
+    assert_eq!(
+        incoming[0]["fromRanges"].as_array().unwrap().len(),
+        5,
+        "{incoming}"
+    );
+    let pos = Text::new(updated.clone()).position(updated.find("\\noexpand").unwrap() + 1);
+    let node = server.request(
+        6,
+        "textDocument/prepareCallHierarchy",
+        json!({"textDocument":{"uri":uri},"position":pos}),
+    )[0]
+    .clone();
+    let incoming = server.request(7, "callHierarchy/incomingCalls", json!({"item":node}));
+    assert_eq!(
+        incoming[0]["fromRanges"].as_array().unwrap().len(),
+        5,
+        "{incoming}"
+    );
+    server.request(8, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

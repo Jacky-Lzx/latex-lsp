@@ -3543,6 +3543,18 @@ impl<'a> CommandSignatures<'a> {
                 }
                 continue;
             }
+            if self.invokes_builtin(name, "noexpand") {
+                // Expansion suppresses one control token, including a control
+                // symbol. A brace or ordinary math/alignment token keeps its
+                // original meaning; it does not make a following group data.
+                // A csuse name group preserves following space tokens, unlike
+                // a literal control word or endcsname.
+                let at = optional_start(source, end, control_spaces);
+                if source.as_bytes().get(at) == Some(&b'\\') && token(source, at).is_some() {
+                    result.insert(at);
+                }
+                continue;
+            }
             // This primitive consumes exactly one balanced general-text
             // group. The unknown-macro fallback would also consume the next
             // control token after that group, hiding an independent file call.
@@ -3803,7 +3815,9 @@ fn argument_free(name: &str) -> bool {
 
 fn operand_builtin(name: &str) -> Option<Signature> {
     builtin(name).or_else(|| {
-        let parameters = if argument_free(name) {
+        let parameters = if argument_free(name) || name == "noexpand" {
+            // noexpand's single-token rule is handled explicitly above; the
+            // empty shape here lets static aliases retain its primitive name.
             vec![]
         } else if name == "detokenize" {
             // Give pure aliases the primitive's grouped operand boundary.
@@ -6112,6 +6126,110 @@ mod quoted_source_token_tests {
                     "{source}: {command:?}"
                 );
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod noexpand_tests {
+    use super::*;
+
+    #[test]
+    fn noexpand_suppresses_one_control_token_with_the_invocations_real_space_rules() {
+        for (invocation, tail, suppressed) in [
+            (r"\noexpand", r"\leaf", true),
+            (r"\noexpand", r" \leaf", true),
+            (r"\csuse{noexpand}", r"\leaf", true),
+            (r"\csuse{noexpand}", r" \leaf", false),
+            (r"\csuse{noexpand}", "\n\\leaf", false),
+            (r"\csuse{noexpand}", "% comment\r\n  \\leaf", true),
+            (r"\csname noexpand\endcsname", r" \leaf", true),
+            (r"\hold", r" \leaf", true),
+            (r"\csuse{hold}", r" \leaf", false),
+        ] {
+            let source = format!(
+                "\\newcommand{{\\leaf}}{{}}\n\\def\\hold{{\\noexpand}}\n{invocation}{tail}\n\\relax"
+            );
+            let parsed = syntax::Syntax::latex(&crate::text::Text::new(source.clone()));
+            let signatures = CommandSignatures::new([(source.as_str(), &parsed)]);
+            let operands = signatures.argument_tokens(&source, &parsed);
+            let leaf = source.rfind("\\leaf").unwrap();
+            assert_eq!(operands.contains(&leaf), suppressed, "{source}");
+            assert!(
+                !operands.contains(&source.rfind("\\relax").unwrap()),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn noexpand_does_not_turn_groups_or_literal_math_and_alignment_tokens_into_macro_data() {
+        for invocation in [
+            r"\noexpand",
+            r"\csuse{noexpand}",
+            r"\csname noexpand\endcsname",
+            r"\hold",
+        ] {
+            for tail in [r"{\leaf}", r"[\leaf]", r"$\leaf$", r"&\leaf"] {
+                let source = format!(
+                    "\\newcommand{{\\leaf}}{{}}\n\\def\\hold{{\\noexpand}}\n{invocation}{tail}"
+                );
+                let parsed = syntax::Syntax::latex(&crate::text::Text::new(source.clone()));
+                let signatures = CommandSignatures::new([(source.as_str(), &parsed)]);
+                assert!(
+                    !signatures
+                        .argument_tokens(&source, &parsed)
+                        .contains(&source.rfind("\\leaf").unwrap()),
+                    "{source}"
+                );
+                let start = source.len() - tail.len();
+                assert!(
+                    !signatures.literal_is_argument(&source, &parsed, start),
+                    "{source}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn user_redefinitions_keep_their_own_parameter_grammar() {
+        for (definition, suppressed) in [(r"\def\noexpand{}", false), (r"\def\noexpand#1{}", true)]
+        {
+            let source = format!("\\newcommand{{\\leaf}}{{}}\n{definition}\n\\noexpand\\leaf");
+            let parsed = syntax::Syntax::latex(&crate::text::Text::new(source.clone()));
+            let signatures = CommandSignatures::new([(source.as_str(), &parsed)]);
+            assert_eq!(
+                signatures
+                    .argument_tokens(&source, &parsed)
+                    .contains(&source.rfind("\\leaf").unwrap()),
+                suppressed,
+                "{source}"
+            );
+        }
+    }
+    #[test]
+    fn primitive_noexpand_only_hides_the_suppressed_loader_not_independent_grouped_inputs() {
+        for (call, names) in [
+            (r"\noexpand\input{skip}\input{after}", vec!["after"]),
+            (
+                r"\noexpand{\input{inside}}\input{after}",
+                vec!["inside", "after"],
+            ),
+            (r"\csuse{noexpand} \input{inside}", vec!["inside"]),
+            (r"\csuse{noexpand}\input{skip}\input{after}", vec!["after"]),
+        ] {
+            let parsed = syntax::Syntax::latex(&crate::text::Text::new(call.into()));
+            let signatures = CommandSignatures::source_context([(call, &parsed)]);
+            let positions = signatures.source_command_positions(call, &parsed);
+            let actual: Vec<_> = parsed
+                .commands
+                .iter()
+                .filter(|command| {
+                    command.name == "input" && positions.contains(&command.span.start)
+                })
+                .map(|command| command.argument.as_ref().unwrap().value.as_str())
+                .collect();
+            assert_eq!(actual, names, "{call}");
         }
     }
 }

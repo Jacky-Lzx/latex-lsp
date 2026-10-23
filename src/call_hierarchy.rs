@@ -261,7 +261,6 @@ impl Index {
             local.sort_unstable_by_key(|definition| definition.declaration.start);
             let mut next = 0;
             let mut stack: Vec<&Definition> = vec![];
-            let mut noexpand = None;
             for (command_index, command) in doc.syntax.commands.iter().enumerate() {
                 let at = command.span.start;
                 while next < local.len() && local[next].declaration.start <= at {
@@ -282,18 +281,10 @@ impl Index {
                 while merged.get(opaque).is_some_and(|span| span.end <= at) {
                     opaque += 1;
                 }
-                if noexpand == Some(at) {
-                    noexpand = None;
-                    continue;
-                }
                 if operands.contains(&at)
                     || doc.syntax.control_operands.contains(&at)
                     || merged.get(opaque).is_some_and(|span| span.contains(&at))
                 {
-                    continue;
-                }
-                if command.name == "noexpand" {
-                    noexpand = Some(syntax::skip_space(&doc.text.source, command.span.end));
                     continue;
                 }
                 let caller = if let Some(definition) = stack.last() {
@@ -769,5 +760,79 @@ mod tests {
         ws.open(uri.clone(), "\\newcommand{\\leaf}{}\n\\leaf\n".into(), 1);
         let error = prepare(&ws, &uri, Position::new(1, 2)).unwrap_err();
         assert!(error.message.contains("indexing is incomplete"));
+    }
+    #[test]
+    fn noexpand_redefinitions_and_named_spaces_preserve_the_correct_call_edges() {
+        for (definition, invocation, expected) in [
+            ("", r"\noexpand\leaf", 0),
+            ("", r"\csuse{noexpand}\leaf", 0),
+            ("", r"\csuse{noexpand} \leaf", 1),
+            ("", r"\csname noexpand\endcsname \leaf", 0),
+            ("", r"\noexpand{\leaf}", 1),
+            (r"\def\noexpand{}", r"\noexpand\leaf", 1),
+            (r"\def\noexpand{}", r"\csuse{noexpand}\leaf", 1),
+            (r"\def\noexpand#1{}", r"\noexpand\leaf", 0),
+        ] {
+            let source = format!("\\newcommand{{\\leaf}}{{}}\n{definition}\n{invocation}\n");
+            let (ws, uri) = setup(&source);
+            let leaf = prepared(&ws, &uri, "leaf");
+            let calls = incoming(&ws, &leaf).unwrap();
+            assert_eq!(
+                calls
+                    .iter()
+                    .map(|call| call.from_ranges.len())
+                    .sum::<usize>(),
+                expected,
+                "{source}: {calls:?}"
+            );
+            if !definition.is_empty() {
+                let at = ws.documents[&uri]
+                    .text
+                    .position(source.find("\\noexpand").unwrap() + 1);
+                let node = prepare(&ws, &uri, at).unwrap().unwrap().remove(0);
+                assert_eq!(incoming(&ws, &node).unwrap().len(), 1, "{source}");
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires pdflatex and etoolbox"]
+    fn real_noexpand_control_tokens_and_named_spaces_agree_with_call_hierarchy() {
+        for redefined in [false, true] {
+            for invocation in [
+                r"\noexpand\leaf",
+                r"\csuse{noexpand}\leaf",
+                r"\csuse{noexpand} \leaf",
+                r"\csname noexpand\endcsname \leaf",
+                r"\noexpand{\leaf}",
+            ] {
+                let definition = if redefined { r"\def\noexpand{}" } else { "" };
+                let source = format!("\\documentclass{{article}}\n\\usepackage{{etoolbox}}\n\\newcommand{{\\leaf}}{{\\typeout{{LSP-NOEXPAND-CALL}}}}\n\\begin{{document}}\n\\begingroup\n{definition}\n{invocation}\n\\endgroup\nText.\n\\end{{document}}\n");
+                let dir = tempfile::tempdir().unwrap();
+                std::fs::write(dir.path().join("main.tex"), &source).unwrap();
+                let output = std::process::Command::new("pdflatex")
+                    .args(["-interaction=nonstopmode", "-halt-on-error", "main.tex"])
+                    .current_dir(dir.path())
+                    .output()
+                    .unwrap();
+                let text = String::from_utf8_lossy(&output.stdout);
+                assert!(output.status.success(), "{source}\n{text}");
+                let expected = text
+                    .lines()
+                    .filter(|line| *line == "LSP-NOEXPAND-CALL")
+                    .count();
+                let (ws, uri) = setup(&source);
+                let leaf = prepared(&ws, &uri, "leaf");
+                let calls = incoming(&ws, &leaf).unwrap();
+                assert_eq!(
+                    calls
+                        .iter()
+                        .map(|call| call.from_ranges.len())
+                        .sum::<usize>(),
+                    expected,
+                    "{source}: {calls:?}"
+                );
+            }
+        }
     }
 }
