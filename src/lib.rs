@@ -10,6 +10,7 @@ mod bib_symbols;
 pub mod build;
 pub mod build_log;
 pub mod catalog;
+mod chktex;
 mod citations;
 mod code_inputs;
 pub mod code_lens;
@@ -49,6 +50,7 @@ mod primitives;
 mod project_diagnostics;
 mod project_environments;
 pub mod recorder;
+mod reference_diagnostics;
 mod right_delimiters;
 mod saved_text;
 pub mod semantic;
@@ -168,6 +170,59 @@ impl Backend {
                 self.workspace.write().await.distribution = distribution;
             }
         }
+    }
+
+    async fn lint(&self, uri: &Url) {
+        let workspace = self.workspace.read().await;
+        let config = workspace.config.diagnostics.chktex.clone();
+        let Some(doc) = workspace
+            .documents
+            .get(uri)
+            .filter(|doc| config.enabled && doc.kind == workspace::DocumentKind::Latex)
+        else {
+            return;
+        };
+        let (source, version) = (doc.text.source.clone(), doc.version);
+        let directory = uri
+            .to_file_path()
+            .ok()
+            .and_then(|path| path.parent().map(std::path::Path::to_path_buf));
+        let task = chktex::start(
+            &self.external_tasks,
+            config.clone(),
+            source.clone(),
+            directory,
+        );
+        drop(workspace);
+        dispatch::release();
+        let result = match task {
+            Ok(mut task) => task.wait().await,
+            Err(error) => Err(error),
+        };
+        let mut workspace = self.workspace.write().await;
+        if workspace.config.diagnostics.chktex != config
+            || !workspace.documents.get(uri).is_some_and(|doc| {
+                doc.version == version && doc.version.is_some() && doc.text.source == source
+            })
+        {
+            return;
+        }
+        match result {
+            Ok(diagnostics) => {
+                workspace.lint_diagnostics.insert(uri.clone(), diagnostics);
+            }
+            Err(error) => {
+                workspace.lint_diagnostics.remove(uri);
+                drop(workspace);
+                self.client
+                    .log_message(MessageType::WARNING, error.message)
+                    .await;
+                self.publish_open().await;
+                return;
+            }
+        }
+        drop(workspace);
+        self.publish_open().await;
     }
 
     async fn publish_open(&self) {
@@ -533,18 +588,20 @@ impl LanguageServer for Backend {
         self.publish_open().await;
         let on_save = self.workspace.read().await.config.build.on_save;
         if on_save {
-            if let Err(error) = self.builds.on_save(uri).await {
+            if let Err(error) = self.builds.on_save(uri.clone()).await {
                 self.client
                     .log_message(MessageType::WARNING, error.message)
                     .await;
             }
         }
+        self.lint(&uri).await;
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = document_uri(params.text_document.uri);
         let mut workspace = self.workspace.write().await;
         workspace.close(&uri);
+        workspace.lint_diagnostics.remove(&uri);
         self.semantic_cache.lock().await.remove(&uri);
         self.diagnostic_cache.lock().await.remove(&uri);
         let delivery = workspace.diagnostic_delivery.clone();
@@ -572,7 +629,11 @@ impl LanguageServer for Backend {
             Ok(config) => {
                 let distribution_changed =
                     self.workspace.read().await.config.distribution != config.distribution;
-                self.workspace.write().await.config = config;
+                {
+                    let mut workspace = self.workspace.write().await;
+                    workspace.lint_diagnostics.clear();
+                    workspace.config = config;
+                }
                 if distribution_changed {
                     self.reload_distribution().await;
                 }

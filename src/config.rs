@@ -41,6 +41,7 @@ pub struct Config {
     pub build: BuildConfig,
     pub formatting: FormattingConfig,
     pub distribution: DistributionConfig,
+    pub diagnostics: DiagnosticsConfig,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -57,6 +58,41 @@ impl Default for DistributionConfig {
             enabled: true,
             executable: "kpsewhich".into(),
             roots: vec![],
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct DiagnosticsConfig {
+    pub undefined_references: bool,
+    pub undefined_citations: bool,
+    pub chktex: ChktexConfig,
+}
+impl Default for DiagnosticsConfig {
+    fn default() -> Self {
+        Self {
+            undefined_references: true,
+            undefined_citations: true,
+            chktex: ChktexConfig::default(),
+        }
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChktexConfig {
+    pub enabled: bool,
+    pub executable: String,
+    pub arguments: Vec<String>,
+    pub timeout_seconds: u64,
+}
+impl Default for ChktexConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            executable: "chktex".into(),
+            arguments: vec![],
+            timeout_seconds: 10,
         }
     }
 }
@@ -125,6 +161,13 @@ impl Config {
         let value = value.get("latex").unwrap_or(&value);
         let config: Self = serde_json::from_value(value.clone())
             .map_err(|error| format!("Invalid LaTeX configuration: {error}"))?;
+        if config.diagnostics.chktex.executable.trim().is_empty()
+            || !(1..=3600).contains(&config.diagnostics.chktex.timeout_seconds)
+        {
+            return Err(
+                "ChkTeX needs a nonempty executable and timeoutSeconds between 1 and 3600".into(),
+            );
+        }
         if config.distribution.executable.trim().is_empty() {
             return Err("Distribution executable must not be empty".into());
         }

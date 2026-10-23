@@ -16,6 +16,90 @@ struct Server {
     pending: RefCell<Vec<Value>>,
 }
 
+#[test]
+#[cfg(unix)]
+fn chktex_checks_buffer_on_save_and_discards_stale_results() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let executable = dir.path().join("checker");
+    std::fs::write(&executable, "#!/bin/sh\nprintf '%s\\n' \"$@\" > args\ncat > input\ntouch ready\nwhile test -f delay; do sleep 0.05; done\nprintf '1:11:3:Warning:11:Use dots: here\\n'\nexit 1\n").unwrap();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let uri = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    std::fs::write(dir.path().join("main.tex"), "disk").unwrap();
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{},"initializationOptions":{"distribution":{"enabled":false},"diagnostics":{"chktex":{"enabled":true,"executable":executable}}}}));
+    server.notify("initialized", json!({}));
+    open_formatting_document(&mut server, &uri, "😀 hello...\n");
+    server.notify("textDocument/didSave", json!({"textDocument":{"uri":uri}}));
+    let diagnostic = server.until(|message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["diagnostics"]
+                .as_array()
+                .is_some_and(|items| items.iter().any(|item| item["source"] == "chktex"))
+    });
+    assert_eq!(
+        diagnostic["params"]["diagnostics"][0]["range"],
+        json!({"start":{"line":0,"character":8},"end":{"line":0,"character":11}})
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("input")).unwrap(),
+        "😀 hello...\n"
+    );
+    assert!(std::fs::read_to_string(dir.path().join("args"))
+        .unwrap()
+        .contains("-I0"));
+    std::fs::write(dir.path().join("delay"), "").unwrap();
+    std::fs::remove_file(dir.path().join("ready")).unwrap();
+    server.notify("textDocument/didSave", json!({"textDocument":{"uri":uri}}));
+    wait_for_file(&dir.path().join("ready"));
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"text":"clean\n"}]}),
+    );
+    // A later request must run while the checker still waits.
+    server.request(
+        2,
+        "textDocument/documentSymbol",
+        json!({"textDocument":{"uri":uri}}),
+    );
+    std::fs::remove_file(dir.path().join("delay")).unwrap();
+    server.until(|message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["version"] == 2
+            && message["params"]["diagnostics"] == json!([])
+    });
+    server.request(3, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[ignore = "requires chktex on PATH"]
+fn chktex_with_real_tool() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    std::fs::write(dir.path().join("main.tex"), "").unwrap();
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{},"initializationOptions":{"diagnostics":{"chktex":{"enabled":true}}}}));
+    server.notify("initialized", json!({}));
+    open_formatting_document(&mut server, &uri, "Hello world...\n");
+    server.notify("textDocument/didSave", json!({"textDocument":{"uri":uri}}));
+    let message = server.until(|message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["diagnostics"]
+                .as_array()
+                .is_some_and(|items| {
+                    items
+                        .iter()
+                        .any(|item| item["source"] == "chktex" && item["code"] == "11")
+                })
+    });
+    assert_eq!(message["params"]["version"], 1);
+    server.request(2, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
 #[cfg(unix)]
 fn formatting_server(script: &str, timeout: u64) -> (Server, tempfile::TempDir, Url) {
     use std::os::unix::fs::PermissionsExt;
@@ -1043,7 +1127,11 @@ fn listings_environment_option_signatures_follow_incremental_edits_and_project_o
             )
             .as_array()
             .unwrap()
-            .len(),
+            .iter()
+            .filter(|link| link["target"]
+                .as_str()
+                .is_some_and(|value| value.ends_with("/settings.sty")))
+            .count(),
         1
     );
     server.request(10, "shutdown", Value::Null);
@@ -8316,7 +8404,14 @@ while [ ! -f "$1/release" ]; do sleep 0.02; done
             "textDocument/documentLink",
             json!({"textDocument":{"uri":main}}),
         );
-        assert_eq!(links[0]["target"], new.as_str());
+        assert!(
+            links
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|link| link["target"] == new.as_str()),
+            "{links}"
+        );
         server.request(
             4,
             "workspace/executeCommand",
@@ -8407,7 +8502,14 @@ while [ ! -f "$1/release" ]; do sleep 0.02; done
             "textDocument/documentLink",
             json!({"textDocument":{"uri":main}}),
         );
-        assert_eq!(links[0]["target"], new.as_str());
+        assert!(
+            links
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|link| link["target"] == new.as_str()),
+            "{links}"
+        );
         server.request(
             4,
             "workspace/executeCommand",

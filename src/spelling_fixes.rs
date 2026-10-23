@@ -408,7 +408,7 @@ pub fn fixes(
     let Some(doc) = workspace.documents.get(uri) else {
         return vec![];
     };
-    let mut result = Vec::new();
+    let mut result = crate::reference_diagnostics::fixes(workspace, uri, range, requested);
     let mut seen = BTreeSet::new();
     let mut examined = 0;
     let mut comparisons = 0;

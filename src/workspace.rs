@@ -242,6 +242,7 @@ fn magic_directive(doc: &Document, fields: &[&str]) -> Option<crate::syntax::Arg
 #[derive(Default)]
 pub struct Workspace {
     pub distribution: crate::distribution::Distribution,
+    pub lint_diagnostics: BTreeMap<Url, Vec<tower_lsp::lsp_types::Diagnostic>>,
     pub documents: BTreeMap<Url, Document>,
     pub roots: BTreeSet<PathBuf>,
     pub snippets: bool,
@@ -365,6 +366,7 @@ impl Workspace {
             .map(|uri| {
                 let version = self.documents.get(&uri).and_then(|doc| doc.version);
                 let mut diagnostics = self.local_and_build_diagnostics(&uri);
+                diagnostics.extend(crate::reference_diagnostics::diagnostics(self, &uri));
                 if let Some(doc) = self.documents.get(&uri) {
                     environments.replace_diagnostics(&uri, doc, &mut diagnostics);
                 }
@@ -382,6 +384,13 @@ impl Workspace {
             .get(uri)
             .map(crate::features::diagnostics)
             .unwrap_or_default();
+        diagnostics.extend(
+            self.lint_diagnostics
+                .get(uri)
+                .into_iter()
+                .flatten()
+                .cloned(),
+        );
         for project in self.build_diagnostics.values() {
             if let Some(build) = project.get(uri) {
                 diagnostics.extend(build.iter().cloned());
@@ -399,6 +408,7 @@ impl Workspace {
     }
 
     pub fn clear_build_diagnostics(&mut self, uri: &Url) {
+        self.lint_diagnostics.remove(uri);
         for project in self.build_diagnostics.values_mut() {
             project.remove(uri);
         }

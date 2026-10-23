@@ -543,6 +543,21 @@ pub fn will_rename(workspace: &Workspace, files: &[FileRename]) -> Result<Option
                             |argument| argument.span.start <= start && argument.span.end >= end,
                         )
                 });
+                // Distribution loaders keep their spelling when the project
+                // moves: kpsewhich's search path is independent of its cwd.
+                // Revalidate if the move introduces a local shadow instead.
+                if !target_changed
+                    && command.is_some_and(|command| {
+                        workspace
+                            .distribution
+                            .resolve(&command.name, original)
+                            .as_ref()
+                            == Some(&target)
+                            && renames.source(uri, root, &command.name, original).is_none()
+                    })
+                {
+                    continue;
+                }
                 let graphics = command
                     .filter(|command| command.name == "includegraphics")
                     .and_then(|command| {
