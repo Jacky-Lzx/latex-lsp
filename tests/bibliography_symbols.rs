@@ -330,6 +330,39 @@ fn legacy_outlines_flatten_fields_with_container_names_and_global_search_keeps_k
 }
 
 #[test]
+fn language_identified_buffers_and_reopened_documents_refresh_outline_fields() {
+    let uri = Url::parse("untitled:misleading.tex").unwrap();
+    let mut workspace = Workspace::default();
+    workspace.open_with_language(uri.clone(), "@misc{entry,title={Old}}".into(), 1, "bibtex");
+    assert_eq!(
+        features::symbols(&workspace.documents[&uri])[0]
+            .children
+            .as_ref()
+            .unwrap()[0]
+            .name,
+        "title"
+    );
+    workspace.open_with_language(uri.clone(), "@misc{entry,year=2026}".into(), 2, "bib");
+    assert_eq!(
+        features::symbols(&workspace.documents[&uri])[0]
+            .children
+            .as_ref()
+            .unwrap()[0]
+            .name,
+        "year"
+    );
+    workspace.open_with_language(
+        uri.clone(),
+        "\\section{Main}\\label{label}".into(),
+        3,
+        "latex",
+    );
+    let symbols = features::symbols(&workspace.documents[&uri]);
+    assert_eq!(symbols[0].name, "Main");
+    assert_eq!(symbols[0].children.as_ref().unwrap()[0].name, "label");
+}
+
+#[test]
 fn large_bibliographies_keep_fields_in_their_own_entries() {
     let source = (0..4096)
         .map(|i| format!("@misc{{key{i},title={{Text {i}}},year=2026}}\n"))

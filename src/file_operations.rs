@@ -1,8 +1,7 @@
 use crate::{
     features, graphics, navigation, syntax,
     workspace::{
-        normalize_path, resolve_file_path, resolve_file_path_with, resolve_path, Document,
-        Workspace,
+        normalize_path, resolve_file_path, resolve_file_path_with, resolve_path, Workspace,
     },
 };
 use std::{
@@ -761,10 +760,7 @@ pub fn did_rename(workspace: &mut Workspace, files: &[FileRename]) -> Result<BTr
         if new_uri != uri {
             affected.insert(uri);
             affected.insert(new_uri.clone());
-            moved.push((
-                new_uri.clone(),
-                Document::new_with_kind(&new_uri, doc.text.source, doc.version, doc.kind_hint),
-            ));
+            moved.push((new_uri.clone(), doc.relocated(&new_uri)));
         } else {
             workspace.documents.insert(uri, doc);
         }

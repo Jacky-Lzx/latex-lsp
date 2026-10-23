@@ -504,6 +504,159 @@ fn bibliography_outlines_negotiate_field_hierarchy_and_refresh_incremental_edits
 }
 
 #[test]
+fn bibtex_language_ids_enable_untitled_and_nonstandard_buffers_over_stdio() {
+    let directory = tempfile::tempdir().unwrap();
+    let file = Url::from_file_path(directory.path().join("refs.data")).unwrap();
+    for (uri, language_id) in [
+        (Url::parse("untitled:Untitled-1").unwrap(), "bibtex"),
+        (Url::parse("untitled:misleading.tex").unwrap(), "bib"),
+        (file, "bibtex"),
+    ] {
+        let mut server = Server::start();
+        server.request(1, "initialize", json!({"processId":null,"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}}}}));
+        server.notify("initialized", json!({}));
+        let source =
+            "% 😀\r\n@book{alpha,\r\n  title = {Text},\r\n  doi = {10.1234/example}\r\n}\r\n";
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"languageId":language_id,"version":1,"text":source}}),
+        );
+        let symbols = server.request(
+            2,
+            "textDocument/documentSymbol",
+            json!({"textDocument":{"uri":uri}}),
+        );
+        assert_eq!(symbols[0]["name"], "alpha", "{uri}: {symbols}");
+        let links = server.request(
+            3,
+            "textDocument/documentLink",
+            json!({"textDocument":{"uri":uri}}),
+        );
+        assert_eq!(links[0]["target"], "https://doi.org/10.1234/example");
+        let folding = server.request(
+            4,
+            "textDocument/foldingRange",
+            json!({"textDocument":{"uri":uri}}),
+        );
+        assert_eq!(folding.as_array().unwrap().len(), 1, "{folding}");
+        let text = latex_lsp::text::Text::new(source.into());
+        let start = source.find("alpha").unwrap();
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"range":text.range(start,start+5),"text":"beta"}]}));
+        let symbols = server.request(
+            5,
+            "textDocument/documentSymbol",
+            json!({"textDocument":{"uri":uri}}),
+        );
+        assert_eq!(symbols[0]["name"], "beta");
+        let renamed = server.request(6, "textDocument/rename", json!({"textDocument":{"uri":uri},"position":{"line":1,"character":7},"newName":"gamma"}));
+        assert_eq!(renamed["documentChanges"][0]["textDocument"]["version"], 2);
+        assert_eq!(
+            renamed["documentChanges"][0]["edits"][0]["newText"],
+            "gamma"
+        );
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":uri,"version":3},"contentChanges":[{"text":"@art"}]}),
+        );
+        let items = server.request(
+            7,
+            "textDocument/completion",
+            json!({"textDocument":{"uri":uri},"position":{"line":0,"character":4}}),
+        );
+        assert!(
+            items
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["label"] == "article"),
+            "{items}"
+        );
+        server.notify("textDocument/didClose", json!({"textDocument":{"uri":uri}}));
+        let symbols = server.request(
+            8,
+            "textDocument/documentSymbol",
+            json!({"textDocument":{"uri":uri}}),
+        );
+        assert!(symbols.is_null(), "closed unsaved document: {symbols}");
+        server.request(9, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+fn client_language_survives_moves_and_edits_and_is_discarded_on_close_over_stdio() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let old = Url::from_file_path(root.join("refs.data")).unwrap();
+    let new = Url::from_file_path(root.join("moved.tex")).unwrap();
+    let saved = r"\label{disk}";
+    std::fs::write(old.to_file_path().unwrap(), saved).unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(root).unwrap(),"capabilities":{}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":old,"languageId":"bib","version":7,"text":"@book{unsaved,}"}}),
+    );
+    let symbols = server.request(
+        2,
+        "textDocument/documentSymbol",
+        json!({"textDocument":{"uri":old}}),
+    );
+    assert_eq!(symbols[0]["name"], "unsaved");
+    std::fs::rename(old.to_file_path().unwrap(), new.to_file_path().unwrap()).unwrap();
+    server.notify(
+        "workspace/didRenameFiles",
+        json!({"files":[{"oldUri":old,"newUri":new}]}),
+    );
+    let symbols = server.request(
+        3,
+        "textDocument/documentSymbol",
+        json!({"textDocument":{"uri":new}}),
+    );
+    assert_eq!(symbols[0]["name"], "unsaved");
+    server.notify("textDocument/didChange", json!({"textDocument":{"uri":new,"version":8},"contentChanges":[{"range":{"start":{"line":0,"character":6},"end":{"line":0,"character":13}},"text":"changed"}]}));
+    let symbols = server.request(
+        4,
+        "textDocument/documentSymbol",
+        json!({"textDocument":{"uri":new}}),
+    );
+    assert_eq!(symbols[0]["name"], "changed");
+    server.notify("textDocument/didClose", json!({"textDocument":{"uri":new}}));
+    let symbols = server.request(
+        5,
+        "textDocument/documentSymbol",
+        json!({"textDocument":{"uri":new}}),
+    );
+    assert_eq!(symbols[0]["name"], "disk");
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":new,"languageId":"plaintext","version":1,"text":saved}}),
+    );
+    let symbols = server.request(
+        6,
+        "textDocument/documentSymbol",
+        json!({"textDocument":{"uri":new}}),
+    );
+    assert_eq!(symbols[0]["name"], "disk");
+    server.notify("textDocument/didClose", json!({"textDocument":{"uri":new}}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":new,"languageId":"bibtex","version":1,"text":"@book{fresh,}"}}),
+    );
+    let symbols = server.request(
+        7,
+        "textDocument/documentSymbol",
+        json!({"textDocument":{"uri":new}}),
+    );
+    assert_eq!(symbols[0]["name"], "fresh");
+    server.request(8, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
 fn imported_string_predicate_operands_refresh_signatures_and_renames_without_main_changes() {
     let directory = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();

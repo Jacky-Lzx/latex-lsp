@@ -41,6 +41,8 @@ vim.lsp.enable('latex_lsp')
 
 打开 `.tex` 后，可用 `vim.lsp.buf.hover()` 查看提示，`vim.lsp.buf.definition()` 跳转，`vim.lsp.buf.references()` 查找引用，`vim.lsp.buf.rename()` 跨文件重命名。补全可通过 `<C-x><C-o>` 或支持 Neovim LSP 的补全插件触发；snippet 需要客户端声明支持。
 
+新建未命名文档或打开非标准扩展名时，可先设置 `:setfiletype tex` 或 `:setfiletype bib`。客户端连接并发送相应语言类型后，服务器即可提供编辑功能，无需先保存为 `.tex` / `.bib`；编译仍需可用的已保存主文档。
+
 输入命令参数时，可通过 `vim.lsp.buf.signature_help()` 查看签名；支持自动参数提示的插件也可使用标准 `textDocument/signatureHelp`。
 
 自动提示的触发字符包括 `{`、`[`、`<`、`(`、`|`、`*`、`+` 和逗号，并在常见结束分隔符处更新当前参数。其他自定义分隔符可手动请求提示。

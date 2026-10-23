@@ -85,8 +85,10 @@ pub struct Document {
     pub syntax: Syntax,
     pub version: Option<i32>,
     pub kind: DocumentKind,
-    /// Input role inferred before resolving aliases; otherwise use the URI.
+    /// Project input role, which takes precedence over editor language and URI.
     pub kind_hint: Option<DocumentKind>,
+    /// Editor language selection, valid only while this document is open.
+    client_kind: Option<DocumentKind>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -94,6 +96,17 @@ pub enum DocumentKind {
     Latex,
     Bibtex,
     BibtexStyle,
+}
+
+impl DocumentKind {
+    fn from_language_id(language_id: &str) -> Option<Self> {
+        match language_id {
+            "latex" | "tex" | "plaintex" => Some(Self::Latex),
+            "bibtex" | "bib" => Some(Self::Bibtex),
+            "bst" | "bibtex-style" => Some(Self::BibtexStyle),
+            _ => None,
+        }
+    }
 }
 
 impl Document {
@@ -107,8 +120,18 @@ impl Document {
         version: Option<i32>,
         kind_hint: Option<DocumentKind>,
     ) -> Self {
+        Self::new_with_language(uri, source, version, kind_hint, None)
+    }
+
+    fn new_with_language(
+        uri: &Url,
+        source: String,
+        version: Option<i32>,
+        kind_hint: Option<DocumentKind>,
+        client_kind: Option<DocumentKind>,
+    ) -> Self {
         let text = Text::new(source);
-        let kind = kind_hint.unwrap_or_else(|| {
+        let kind = kind_hint.or(client_kind).unwrap_or_else(|| {
             if uri.path().ends_with(".bib") {
                 DocumentKind::Bibtex
             } else if uri.path().ends_with(".bst") {
@@ -124,7 +147,22 @@ impl Document {
             version,
             kind,
             kind_hint,
+            client_kind,
         }
+    }
+
+    pub(crate) fn with_text(&self, uri: &Url, source: String, version: Option<i32>) -> Self {
+        Self::new_with_language(uri, source, version, self.kind_hint, self.client_kind)
+    }
+
+    pub(crate) fn relocated(self, uri: &Url) -> Self {
+        Self::new_with_language(
+            uri,
+            self.text.source,
+            self.version,
+            self.kind_hint,
+            self.client_kind,
+        )
     }
 
     fn parse(text: &Text, kind: DocumentKind) -> Syntax {
@@ -961,6 +999,16 @@ impl Workspace {
     }
 
     pub fn open(&mut self, uri: Url, source: String, version: i32) {
+        self.open_with_language(uri, source, version, "");
+    }
+
+    pub fn open_with_language(
+        &mut self,
+        uri: Url,
+        source: String,
+        version: i32,
+        language_id: &str,
+    ) {
         let uri = document_uri(uri);
         if self.roots.is_empty() {
             if let Ok(path) = uri.to_file_path() {
@@ -976,7 +1024,13 @@ impl Workspace {
             .or_else(|| self.recorded_kind(&uri));
         self.documents.insert(
             uri.clone(),
-            Document::new_with_kind(&uri, source, Some(version), kind_hint),
+            Document::new_with_language(
+                &uri,
+                source,
+                Some(version),
+                kind_hint,
+                DocumentKind::from_language_id(language_id),
+            ),
         );
         self.load_dependencies(&uri, 0);
     }

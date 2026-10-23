@@ -89,3 +89,168 @@ fn supporting_sources_are_discovered_and_explicit_inputs_keep_project_scope_and_
         );
     }
 }
+
+#[test]
+#[ignore = "requires Neovim 0.11+"]
+fn neovim_bib_filetype_enables_unsaved_nonstandard_files_and_incremental_edits() {
+    let directory = tempfile::tempdir().unwrap();
+    let script = directory.path().join("language.lua");
+    std::fs::write(&script, include_str!("fixtures/neovim_language.lua")).unwrap();
+    let output = std::process::Command::new("nvim")
+        .args(["--headless", "-u", "NONE", "-i", "NONE", "-n", "-l"])
+        .arg(script)
+        .env("LATEX_LSP_TEST_BIN", env!("CARGO_BIN_EXE_latex-lsp"))
+        .env("XDG_CACHE_HOME", directory.path().join("cache"))
+        .env("XDG_STATE_HOME", directory.path().join("state"))
+        .env("XDG_CONFIG_HOME", directory.path().join("config"))
+        .env("XDG_DATA_HOME", directory.path().join("data"))
+        .current_dir(directory.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn editor_languages_select_parsers_for_untitled_and_misleading_names() {
+    let source = "@book{entry,title={Text}}\n\\label{label}\n";
+    for (language_id, kind) in [
+        ("latex", DocumentKind::Latex),
+        ("tex", DocumentKind::Latex),
+        ("plaintex", DocumentKind::Latex),
+        ("bibtex", DocumentKind::Bibtex),
+        ("bib", DocumentKind::Bibtex),
+        ("bst", DocumentKind::BibtexStyle),
+        ("bibtex-style", DocumentKind::BibtexStyle),
+    ] {
+        for name in [
+            "untitled:Untitled-1",
+            "untitled:wrong.bib",
+            "untitled:wrong.bst",
+        ] {
+            let uri = Url::parse(name).unwrap();
+            let mut workspace = Workspace::default();
+            workspace.open_with_language(uri.clone(), source.into(), 1, language_id);
+            let doc = &workspace.documents[&uri];
+            assert_eq!(doc.kind, kind, "{name}/{language_id}");
+            assert_eq!(doc.kind_hint, None, "editor identity is not a project role");
+            let symbols = features::symbols(doc);
+            let names: Vec<_> = symbols.iter().map(|symbol| symbol.name.as_str()).collect();
+            assert_eq!(
+                names,
+                match kind {
+                    DocumentKind::Latex => vec!["label"],
+                    DocumentKind::Bibtex => vec!["entry"],
+                    DocumentKind::BibtexStyle => vec![],
+                },
+                "{name}/{language_id}"
+            );
+            assert!(workspace.root_document(&uri).is_err());
+        }
+    }
+}
+
+#[test]
+fn unknown_language_ids_retain_suffix_inference() {
+    for language_id in ["", "plaintext", "unknown", "BIBTEX"] {
+        for (name, kind) in [
+            ("untitled:refs.bib", DocumentKind::Bibtex),
+            ("untitled:style.bst", DocumentKind::BibtexStyle),
+            ("untitled:main.tex", DocumentKind::Latex),
+        ] {
+            let uri = Url::parse(name).unwrap();
+            let mut workspace = Workspace::default();
+            workspace.open_with_language(uri.clone(), "".into(), 1, language_id);
+            assert_eq!(workspace.documents[&uri].kind, kind);
+        }
+    }
+}
+
+#[test]
+fn dependencies_override_editor_languages_before_and_after_opening() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let uri = |name| Url::from_file_path(root.join(name)).unwrap();
+    let main = uri("main.tex");
+    let database = uri("refs.data");
+    let chapter = uri("chapter.bib");
+    let source = "\\documentclass{article}\\addbibresource{refs.data}\\input{chapter.bib}";
+    std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+    std::fs::write(database.to_file_path().unwrap(), "@book{saved,}").unwrap();
+    std::fs::write(chapter.to_file_path().unwrap(), r"\label{saved}").unwrap();
+    for open_first in [false, true] {
+        let mut workspace = Workspace::default();
+        // An explicit root avoids discovery caused by opening the first file.
+        workspace.roots.insert(root.into());
+        if !open_first {
+            workspace.open(main.clone(), source.into(), 1);
+        }
+        workspace.open_with_language(database.clone(), "@book{unsaved,}".into(), 7, "latex");
+        workspace.open_with_language(chapter.clone(), r"\label{unsaved}".into(), 9, "bib");
+        if open_first {
+            assert_eq!(workspace.documents[&database].kind, DocumentKind::Latex);
+            assert_eq!(workspace.documents[&chapter].kind, DocumentKind::Bibtex);
+            workspace.open(main.clone(), source.into(), 1);
+        }
+        assert_eq!(workspace.documents[&database].kind, DocumentKind::Bibtex);
+        assert_eq!(workspace.documents[&chapter].kind, DocumentKind::Latex);
+        for (target, version) in [(&database, 7), (&chapter, 9)] {
+            let doc = &workspace.documents[target];
+            assert_eq!(doc.version, Some(version));
+            assert_eq!(features::symbols(doc)[0].name, "unsaved");
+        }
+    }
+}
+
+#[test]
+fn moving_open_documents_retains_client_language_but_closed_documents_use_new_suffix() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let old = Url::from_file_path(root.join("refs.data")).unwrap();
+    let new = Url::from_file_path(root.join("refs.tex")).unwrap();
+    let source = "@book{entry,title={Text}}\n\\label{label}";
+    std::fs::write(old.to_file_path().unwrap(), source).unwrap();
+    let mut workspace = Workspace::default();
+    workspace.open_with_language(old.clone(), source.into(), 7, "bib");
+    std::fs::rename(old.to_file_path().unwrap(), new.to_file_path().unwrap()).unwrap();
+    file_operations::did_rename(
+        &mut workspace,
+        &[FileRename {
+            old_uri: old.to_string(),
+            new_uri: new.to_string(),
+        }],
+    )
+    .unwrap();
+    assert!(!workspace.documents.contains_key(&old));
+    assert_eq!(workspace.documents[&new].kind, DocumentKind::Bibtex);
+    assert_eq!(workspace.documents[&new].version, Some(7));
+    assert_eq!(
+        features::symbols(&workspace.documents[&new])[0].name,
+        "entry"
+    );
+
+    let old = Url::from_file_path(root.join("closed.bib")).unwrap();
+    let new = Url::from_file_path(root.join("closed.tex")).unwrap();
+    std::fs::write(old.to_file_path().unwrap(), source).unwrap();
+    workspace.reload(&old);
+    assert_eq!(workspace.documents[&old].kind, DocumentKind::Bibtex);
+    std::fs::rename(old.to_file_path().unwrap(), new.to_file_path().unwrap()).unwrap();
+    file_operations::did_rename(
+        &mut workspace,
+        &[FileRename {
+            old_uri: old.to_string(),
+            new_uri: new.to_string(),
+        }],
+    )
+    .unwrap();
+    assert_eq!(workspace.documents[&new].kind, DocumentKind::Latex);
+    assert_eq!(workspace.documents[&new].version, None);
+    assert_eq!(
+        features::symbols(&workspace.documents[&new])[0].name,
+        "label"
+    );
+}

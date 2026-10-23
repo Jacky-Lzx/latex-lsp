@@ -64,7 +64,7 @@ use std::sync::{
 };
 use tokio::sync::{Mutex, RwLock};
 use tower_lsp::{jsonrpc::Result, lsp_types::*, Client, LanguageServer};
-use workspace::{document_uri, Document, Workspace};
+use workspace::{document_uri, Workspace};
 
 fn file_operation_options() -> FileOperationRegistrationOptions {
     FileOperationRegistrationOptions {
@@ -459,10 +459,12 @@ impl LanguageServer for Backend {
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let item = params.text_document;
-        self.workspace
-            .write()
-            .await
-            .open(item.uri.clone(), item.text, item.version);
+        self.workspace.write().await.open_with_language(
+            item.uri,
+            item.text,
+            item.version,
+            &item.language_id,
+        );
         self.publish_open().await;
     }
 
@@ -488,16 +490,8 @@ impl LanguageServer for Backend {
                 .await;
             return;
         };
-        let kind_hint = doc.kind_hint;
-        workspace.documents.insert(
-            uri.clone(),
-            Document::new_with_kind(
-                &uri,
-                text.source,
-                Some(params.text_document.version),
-                kind_hint,
-            ),
-        );
+        let updated = doc.with_text(&uri, text.source, Some(params.text_document.version));
+        workspace.documents.insert(uri.clone(), updated);
         workspace.clear_build_diagnostics(&uri);
         workspace.load_dependencies(&uri, 0);
         drop(workspace);
