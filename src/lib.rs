@@ -24,6 +24,7 @@ mod code_inputs;
 pub mod code_lens;
 pub mod colors;
 mod command_docs;
+mod completion_resolve;
 mod conditionals;
 pub mod config;
 mod counters;
@@ -485,6 +486,19 @@ impl LanguageServer for Backend {
             .and_then(|completion| completion.completion_item.as_ref())
             .and_then(|item| item.snippet_support)
             .unwrap_or(false);
+        workspace.completion_resolve_documentation = params
+            .capabilities
+            .text_document
+            .as_ref()
+            .and_then(|doc| doc.completion.as_ref())
+            .and_then(|completion| completion.completion_item.as_ref())
+            .and_then(|item| item.resolve_support.as_ref())
+            .is_some_and(|support| {
+                support
+                    .properties
+                    .iter()
+                    .any(|property| property == "documentation")
+            });
         workspace.hierarchical_symbols = params
             .capabilities
             .text_document
@@ -543,6 +557,7 @@ impl LanguageServer for Backend {
                     },
                 )),
                 completion_provider: Some(CompletionOptions {
+                    resolve_provider: Some(true),
                     trigger_characters: Some(vec![
                         "\\".into(),
                         "{".into(),
@@ -1213,6 +1228,10 @@ impl LanguageServer for Backend {
         } else {
             CompletionResponse::Array(items)
         }))
+    }
+
+    async fn completion_resolve(&self, item: CompletionItem) -> Result<CompletionItem> {
+        completion_resolve::resolve(&*self.workspace.read().await, item)
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {

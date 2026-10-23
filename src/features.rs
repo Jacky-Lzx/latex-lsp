@@ -1335,20 +1335,21 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
     let mut seen = BTreeSet::new();
     let mut result = Vec::new();
     let signatures = crate::signature::CompletionSignatures::new(workspace, &scope);
+    let command_docs = crate::completion_resolve::Commands::new(workspace, uri, &scope);
     // User definitions take precedence over built-in documentation and snippets.
-    for entry in workspace
+    for (entry, is_command) in workspace
         .documents
         .iter()
         .filter(|(uri, _)| scope.contains(*uri))
-        .flat_map(|(_, doc)| &doc.syntax.definitions)
+        .flat_map(|(_, doc)| doc.syntax.definitions.iter().map(|entry| (entry, true)))
         .chain(
             workspace
                 .documents
                 .iter()
                 .filter(|(uri, _)| scope.contains(*uri))
-                .flat_map(|(_, doc)| &doc.syntax.environments),
+                .flat_map(|(_, doc)| doc.syntax.environments.iter().map(|entry| (entry, false))),
         )
-        .filter(|entry| {
+        .filter(|(entry, _)| {
             !entry.name.is_empty()
                 && entry
                     .name
@@ -1362,7 +1363,7 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
                 .as_ref()
                 .and_then(|(_, snippet)| snippet.as_ref())
                 .filter(|_| use_snippets);
-            result.push(CompletionItem {
+            let mut item = CompletionItem {
                 label: entry.name.clone(),
                 kind: Some(if entry.is_variable {
                     CompletionItemKind::VARIABLE
@@ -1386,7 +1387,11 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
                     new_text: snippet.cloned().unwrap_or_else(|| entry.name.clone()),
                 })),
                 ..CompletionItem::default()
-            });
+            };
+            if is_command {
+                command_docs.apply(&mut item, entry);
+            }
+            result.push(item);
         }
     }
     for entry in workspace

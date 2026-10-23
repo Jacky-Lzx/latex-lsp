@@ -252,6 +252,7 @@ pub struct Workspace {
     pub documents: BTreeMap<Url, Document>,
     pub roots: BTreeSet<PathBuf>,
     pub snippets: bool,
+    pub completion_resolve_documentation: bool,
     pub watch_files: bool,
     pub hierarchical_symbols: bool,
     pub versioned_edits: bool,

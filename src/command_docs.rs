@@ -3,7 +3,7 @@ use crate::{
     syntax,
     workspace::{Document, Workspace},
 };
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use tower_lsp::lsp_types::Url;
 
 const MAX_LINES: usize = 32;
@@ -19,21 +19,52 @@ fn directive(text: &str) -> bool {
 }
 
 pub(crate) fn for_command(ws: &Workspace, scope: &BTreeSet<Url>, name: &str) -> Option<String> {
-    let mut definitions = scope
-        .iter()
-        .filter_map(|uri| ws.documents.get(uri))
-        .flat_map(|doc| {
-            doc.syntax
-                .definitions
-                .iter()
-                .filter(move |entry| entry.name == name)
-                .map(move |entry| (doc, entry))
-        });
-    let (doc, entry) = definitions.next()?;
-    if definitions.next().is_some() {
-        return None;
+    Index::new(ws, scope).notes(name)
+}
+
+pub(crate) struct Declaration<'a> {
+    pub(crate) uri: &'a Url,
+    doc: &'a Document,
+    pub(crate) entry: &'a syntax::Entry,
+}
+
+/// Build once for a completion list, instead of scanning the project per item.
+pub(crate) struct Index<'a> {
+    definitions: BTreeMap<&'a str, Option<Declaration<'a>>>,
+}
+
+impl<'a> Index<'a> {
+    pub(crate) fn new(ws: &'a Workspace, scope: &BTreeSet<Url>) -> Self {
+        let mut definitions = BTreeMap::new();
+        for (uri, doc) in ws.documents.iter().filter(|(uri, _)| scope.contains(*uri)) {
+            for entry in &doc.syntax.definitions {
+                definitions
+                    .entry(entry.name.as_str())
+                    .and_modify(|entry| *entry = None)
+                    .or_insert(Some(Declaration { uri, doc, entry }));
+            }
+        }
+        Self { definitions }
     }
-    comments(doc, entry)
+
+    pub(crate) fn get(&self, name: &str) -> Option<&Declaration<'a>> {
+        self.definitions.get(name)?.as_ref()
+    }
+
+    fn notes(&self, name: &str) -> Option<String> {
+        let declaration = self.get(name)?;
+        comments(declaration.doc, declaration.entry)
+    }
+
+    pub(crate) fn documentation(&self, name: &str) -> Option<String> {
+        let declaration = self.get(name)?;
+        let mut text = declaration.entry.detail.clone();
+        if let Some(notes) = self.notes(name) {
+            text.push_str("\n\n");
+            text.push_str(&notes);
+        }
+        Some(text)
+    }
 }
 
 fn comments(doc: &Document, entry: &syntax::Entry) -> Option<String> {

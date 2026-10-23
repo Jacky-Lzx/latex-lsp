@@ -26183,3 +26183,128 @@ fn cleanup_rejects_artifacts_shared_with_another_completed_project() {
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+fn user_command_completion_documentation_negotiates_lazy_resolution_and_preserves_edits() {
+    for support in [None, Some("detail"), Some("documentation")] {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+        let source =
+            "% **Literal** 中文😀 documentation\r\n\\newcommand{\\example}[1]{#1}\r\n😀 \\exaBAD";
+        std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+        let item_capabilities = support.map_or_else(
+            || json!({"snippetSupport":true}),
+            |property| json!({"snippetSupport":true,"resolveSupport":{"properties":[property]}}),
+        );
+        let mut server = Server::start();
+        let init = server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{"textDocument":{"completion":{"completionItem":item_capabilities}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+        assert_eq!(
+            init["capabilities"]["completionProvider"]["resolveProvider"],
+            true
+        );
+        server.notify("initialized", json!({}));
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"languageId":"latex","version":1,"text":source}}),
+        );
+        let list = server.request(
+            2,
+            "textDocument/completion",
+            json!({"textDocument":{"uri":uri},"position":{"line":2,"character":7}}),
+        );
+        let item = list
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["label"] == "example")
+            .unwrap()
+            .clone();
+        if support == Some("documentation") {
+            assert!(item.get("documentation").is_none());
+            assert!(item.get("data").is_some());
+        } else {
+            assert!(item["documentation"]
+                .as_str()
+                .unwrap()
+                .contains("**Literal** 中文😀 documentation"));
+            assert!(item.get("data").is_none());
+        }
+        let resolved = server.request(3, "completionItem/resolve", item.clone());
+        assert!(resolved["documentation"]
+            .as_str()
+            .unwrap()
+            .contains("**Literal** 中文😀 documentation"));
+        let mut expected = item;
+        expected["documentation"] = resolved["documentation"].clone();
+        assert_eq!(resolved, expected);
+        assert_eq!(
+            resolved["textEdit"]["range"],
+            json!({"start":{"line":2,"character":4},"end":{"line":2,"character":10}})
+        );
+        assert_eq!(resolved["insertTextFormat"], 2);
+        server.request(4, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+fn user_command_completion_resolution_rejects_changed_definitions_and_invalid_data() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let source = "% Original docs\n\\def\\example{value}\n\\exa";
+    std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{"textDocument":{"completion":{"completionItem":{"resolveSupport":{"properties":["documentation"]}}}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"latex","version":1,"text":source}}),
+    );
+    let list = server.request(
+        2,
+        "textDocument/completion",
+        json!({"textDocument":{"uri":uri},"position":{"line":2,"character":4}}),
+    );
+    let item = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["label"] == "example")
+        .unwrap()
+        .clone();
+    let mut forged = item.clone();
+    forged["data"]["extra"] = json!("invalid");
+    server.send(json!({"jsonrpc":"2.0","id":3,"method":"completionItem/resolve","params":forged}));
+    assert_eq!(
+        server.until(|message| message["id"] == 3)["error"]["code"],
+        -32602
+    );
+    server.notify("textDocument/didChange",json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"text":"% New docs\n\\def\\example{updated}\n\\exa"}]}));
+    server.send(json!({"jsonrpc":"2.0","id":4,"method":"completionItem/resolve","params":item}));
+    assert_eq!(
+        server.until(|message| message["id"] == 4)["error"]["code"],
+        -32801
+    );
+    let list = server.request(
+        5,
+        "textDocument/completion",
+        json!({"textDocument":{"uri":uri},"position":{"line":2,"character":4}}),
+    );
+    let item = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["label"] == "example")
+        .unwrap()
+        .clone();
+    assert!(
+        server.request(6, "completionItem/resolve", item)["documentation"]
+            .as_str()
+            .unwrap()
+            .contains("New docs")
+    );
+    server.request(7, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
