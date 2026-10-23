@@ -4,6 +4,7 @@ mod bib_accessors;
 mod bib_aliases;
 mod bib_completion;
 mod bib_diagnostics;
+mod bib_field_diagnostics;
 mod bib_formatting;
 mod bib_links;
 mod bib_resources;

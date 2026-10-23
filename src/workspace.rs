@@ -379,6 +379,7 @@ impl Workspace {
                 let version = self.documents.get(&uri).and_then(|doc| doc.version);
                 let mut diagnostics = self.local_and_build_diagnostics(&uri);
                 diagnostics.extend(crate::reference_diagnostics::diagnostics(self, &uri));
+                diagnostics.extend(crate::bib_field_diagnostics::diagnostics(self, &uri));
                 diagnostics.extend(crate::extra_symbols::diagnostics(self, &uri));
                 let root = self.root_document(&uri).ok();
                 for message in crate::project_config::load(self, &uri, root.as_ref()).1 {

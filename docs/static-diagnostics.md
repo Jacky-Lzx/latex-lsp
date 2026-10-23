@@ -1,4 +1,4 @@
-# 编辑时引用诊断与 ChkTeX
+# 编辑时引用、文献字段诊断与 ChkTeX
 
 未定义的静态标签引用和文献引用在编辑时即可显示警告，无需运行 TeX。检查使用当前项目的源码和文献数据库，支持引用列表、范围引用、结构化 biblatex 引用及 IDS 别名。动态键、注释和逐字代码不会作为静态键检查。修正名称或增加声明后，警告随编辑更新；可使用项目内名称的拼写修复。同一位置已有编译器确认的引用警告时，省略重复静态警告。
 
@@ -8,6 +8,7 @@
     "diagnostics": {
       "undefinedReferences": true,
       "undefinedCitations": true,
+      "duplicateBibliographyFields": true,
       "chktex": {
         "enabled": false,
         "executable": "chktex",
@@ -17,6 +18,19 @@
     }
   }
 }
+```
+
+文献缓冲区中的重复字段默认在编辑时显示警告，代码为 `repeated-bibliography-field`，来源为 `latex-lsp`。同一条目内的字段名按 ASCII 大小写不敏感比较；每个重复赋值标记字段名称，并通过相关信息链接第一次有效赋值。不同条目中的同名字段互不影响，不检查字段值中的示例或特殊条目的正文。
+
+检查要求字段名、赋值和表达式完整；条目的关闭定界符尚未输入时，已完整的赋值仍可检查。修正字段名或删除重复赋值后立即清除诊断。已有精确定位的编译器重复字段警告时，省略对应静态警告；只定位到行或来源尚未确认的编译器消息不会遮挡编辑检查。设置 `diagnostics.duplicateBibliographyFields: false` 可关闭静态检查，编译器结果继续显示。
+
+此检查只报告重复，不推断字段值或不同文献后端的保留规则，也不自动删除赋值。支持编辑器指定的文献语言类型、未命名缓冲区，以及项目确认的文献输入角色。单行包含大量 Unicode 字段时采用一次位置扫描，避免逐个字段重复计算 UTF-16 坐标。
+
+验证：
+
+```sh
+cargo test --locked --test static_bibliography_fields
+cargo test --locked --test protocol bibliography_field
 ```
 
 ChkTeX 默认关闭，开启后在保存时检查当前缓冲区，以文档所在目录运行，因此可以读取本地 `.chktexrc`。`arguments` 用于附加警告开关或 rc 文件参数。服务器随后追加输出格式、`-I0` 和 `TabSize=1`，不跟随 `input` 读取其他文件。输出转换为 UTF-16 范围，诊断来源为 `chktex`。

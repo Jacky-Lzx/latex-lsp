@@ -4602,6 +4602,7 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.bib" > "$1/main.
                                 } else {
                                     items.iter().any(|item| {
                                         item["code"] == "repeated-bibliography-field"
+                                            && item["source"] == "latex-build"
                                             && item["range"]["start"]["line"] == stage + 1
                                     })
                                 }
@@ -24548,4 +24549,75 @@ fn bibliography_formatting_ranges_work_for_adjacent_entries_and_untitled_buffers
     server.request(5, "shutdown", Value::Null);
     server.notify("exit", Value::Null);
     server.wait_exit(0);
+}
+
+#[test]
+fn static_bibliography_field_diagnostics_refresh_push_and_pull_without_building() {
+    for pull in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = Url::from_file_path(directory.path().join("refs.bib")).unwrap();
+        let source = "% 😀\r\n@book{k,title={One},TITLE={Two}}";
+        let capabilities = if pull {
+            json!({"textDocument":{"diagnostic":{}}})
+        } else {
+            json!({})
+        };
+        let mut server = Server::start();
+        server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(directory.path()).unwrap(),"capabilities":capabilities,"initializationOptions":{"distribution":{"enabled":false}}}));
+        server.notify("initialized", json!({}));
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"languageId":"bibtex","version":1,"text":source}}),
+        );
+        let report = |server: &mut Server, id, version, count| -> Value {
+            if pull {
+                server.request(
+                    id,
+                    "textDocument/diagnostic",
+                    json!({"textDocument":{"uri":uri}}),
+                )["items"]
+                    .clone()
+            } else {
+                server.until(|message| {
+                    message["method"] == "textDocument/publishDiagnostics"
+                        && message["params"]["uri"] == uri.as_str()
+                        && message["params"]["version"] == version
+                        && message["params"]["diagnostics"]
+                            .as_array()
+                            .is_some_and(|items| items.len() == count)
+                })["params"]["diagnostics"]
+                    .clone()
+            }
+        };
+        let items = report(&mut server, 2, 1, 1);
+        assert_eq!(items.as_array().unwrap().len(), 1);
+        assert_eq!(items[0]["code"], "repeated-bibliography-field");
+        assert_eq!(items[0]["source"], "latex-lsp");
+        let at = source.find("TITLE").unwrap();
+        let text = latex_lsp::text::Text::new(source.into());
+        assert_eq!(
+            items[0]["range"],
+            serde_json::to_value(text.range(at, at + 5)).unwrap()
+        );
+        assert_eq!(
+            items[0]["relatedInformation"][0]["location"]["uri"],
+            uri.as_str()
+        );
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"range":text.range(at,at+5),"text":"note"}]}));
+        assert_eq!(report(&mut server, 3, 2, 0), json!([]));
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":uri,"version":3},"contentChanges":[{"text":source}]}),
+        );
+        assert_eq!(report(&mut server, 4, 3, 1).as_array().unwrap().len(), 1);
+        server.notify("workspace/didChangeConfiguration", json!({"settings":{"distribution":{"enabled":false},"diagnostics":{"duplicateBibliographyFields":false}}}));
+        assert_eq!(report(&mut server, 5, 3, 0), json!([]));
+        assert!(!directory.path().join("refs.bib").exists());
+        server.request(6, "shutdown", Value::Null);
+        if pull {
+            assert_no_pushed_diagnostics(&server);
+        }
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
 }
