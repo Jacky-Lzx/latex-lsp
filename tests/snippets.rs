@@ -120,6 +120,21 @@ fn snippets_expand_in_a_real_editor_without_consuming_tex_backslashes() {
         ),
         ("DeclareTextSymbol", r"DeclareTextSymbol{\command}{OT1}{65}"),
         ("DeclareTextAccent", r"DeclareTextAccent{\command}{OT1}{19}"),
+        ("DeclareFontEncoding", "DeclareFontEncoding{encoding}{}{}"),
+        (
+            "DeclareFontEncodingDefaults",
+            "DeclareFontEncodingDefaults{}{}",
+        ),
+        ("DeclareFontFamily", "DeclareFontFamily{OT1}{family}{}"),
+        (
+            "DeclareFontShape",
+            "DeclareFontShape{OT1}{family}{m}{n}{<-> cmr10}{}",
+        ),
+        (
+            "DeclareFontSubstitution",
+            "DeclareFontSubstitution{OT1}{cmr}{m}{n}",
+        ),
+        ("DeclareMathSizes", "DeclareMathSizes{10}{10}{7}{5}"),
         (
             "DeclareMathAccent",
             r"DeclareMathAccent{\command}{\mathalpha}{operators}{94}",

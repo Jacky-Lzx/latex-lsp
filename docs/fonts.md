@@ -1,8 +1,35 @@
-# 字体诊断与结果分析
+# 字体声明、诊断与结果分析
 
 [返回文档目录](README.md) · [编译](build.md) · [编译诊断](diagnostics.md)
 
 编译成功生成 PDF 时，字体替换和缺字警告仍可能表示排版内容与预期不同。结果摘要帮助客户端集中显示这些问题，逐位置诊断保留原有级别和计数。
+
+## NFSS 字体声明
+
+字体定义文件 `.fd` 使用 LaTeX 源码解析，参与项目扫描、文件监听与显式 `\input{...fd}` 路径补全。以下内核声明提供命令说明、参数片段和逐参数提示：
+
+| 命令 | 参数顺序 |
+| --- | --- |
+| `\DeclareFontEncoding` | 编码、文本设置、数学设置 |
+| `\DeclareFontEncodingDefaults` | 默认文本设置、默认数学设置 |
+| `\DeclareFontFamily` | 编码、字体族、加载设置 |
+| `\DeclareFontShape` | 编码、字体族、字重、字形、字号规格、加载设置 |
+| `\DeclareFontSubstitution` | 编码、默认字体族、字重、字形 |
+| `\DeclareMathSizes` | 正文字号、数学字号、上标字号、次级上标字号 |
+
+`\DeclareMathSizes*` 同样支持四个参数的提示，默认片段插入无星号形式。其他五类声明不接受星号。提示可跨注释、换行及嵌套设置分组；这些编码和字体族参数不会被登记为命令定义。客户端未支持片段时只插入命令名，已有参数时保留原参数；项目内自定义的同名命令使用自己的签名。
+
+例如声明一个采用 Computer Modern 的独立编码和字体族：
+
+```tex
+\DeclareFontEncoding{LSP}{}{}
+\DeclareFontFamily{LSP}{lsptest}{}
+\DeclareFontShape{LSP}{lsptest}{m}{n}{<-> cmr10}{}
+\DeclareFontSubstitution{LSP}{lsptest}{m}{n}
+\DeclareMathSizes{10}{10}{7}{5}
+```
+
+编码、字体族和字体文件名暂不提供注册表驱动的候选或导航；字号规格仍按 LaTeX 原始语法填写。
 
 ## 字体与字号替换
 

@@ -544,6 +544,54 @@ fn builtin(name: &str) -> Option<Signature> {
             false,
         ),
         "newfont" => (&[("command", false), ("font", false)], false),
+        "DeclareFontEncoding" => (
+            &[
+                ("encoding", false),
+                ("text settings", false),
+                ("math settings", false),
+            ],
+            false,
+        ),
+        "DeclareFontEncodingDefaults" => {
+            (&[("text settings", false), ("math settings", false)], false)
+        }
+        "DeclareFontFamily" => (
+            &[
+                ("encoding", false),
+                ("family", false),
+                ("loading settings", false),
+            ],
+            false,
+        ),
+        "DeclareFontShape" => (
+            &[
+                ("encoding", false),
+                ("family", false),
+                ("series", false),
+                ("shape", false),
+                ("size specification", false),
+                ("loading settings", false),
+            ],
+            false,
+        ),
+        "DeclareFontSubstitution" => (
+            &[
+                ("encoding", false),
+                ("family", false),
+                ("series", false),
+                ("shape", false),
+            ],
+            false,
+        ),
+        "DeclareMathSizes" => (
+            &[
+                ("text size", false),
+                ("math size", false),
+                ("script size", false),
+                ("scriptscript size", false),
+            ],
+            true,
+        ),
         "DeclareTextFontCommand" => (&[("command", false), ("font commands", false)], false),
         "DeclareFixedFont" => (
             &[

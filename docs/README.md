@@ -62,7 +62,7 @@
 - [缺失的右定界符](missing-right-delimiters.md)：数学结束标记定位、不可见定界符插入与分轮修复。
 - [缺失的定界符参数](delimiter-operands.md)：直接原语的源码核对、不可见参数插入与文件来源校验。
 - [特殊字符修复的宏来源](literal-macro-scopes.md)：跨文件参数排除、加载时序及旧修复的重新校验。
-- [字体诊断与结果分析](fonts.md)：字体和字号替换、缺字摘要及定位边界。
+- [字体声明、诊断与结果分析](fonts.md)：NFSS 声明补全与参数提示、字体和字号替换、缺字摘要及定位边界。
 - [排版警告分析](typesetting.md)：Overfull / Underfull 分类统计与最大指标。
 - [浮动体高度警告](floats.md)：过高图表的源码行、警告数量与最大超出量。
 - [文献编译诊断](bibliography-diagnostics.md)：BibTeX / Biber 来源定位、缺失资源和文件名修复。
