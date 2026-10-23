@@ -20,11 +20,11 @@ libc = "0.2"
 
 [profile.dev]
 debug = 0
-incremental = false
+incremental = true
 
 [profile.test]
 debug = 0
-incremental = false
+incremental = true
 
 [profile.release]
 lto = "thin"

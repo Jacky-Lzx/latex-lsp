@@ -16,7 +16,7 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
 ```
 
-开发和测试构建默认关闭调试信息与增量缓存，以控制磁盘占用。需要源码级调试时，可按需设置 `CARGO_PROFILE_DEV_DEBUG=2` 或 `CARGO_PROFILE_TEST_DEBUG=2`；发布构建继续使用独立配置。
+开发和测试构建默认开启增量编译，复用缓存以加快修改代码后的重复编译；调试信息仍默认关闭。增量缓存会增加磁盘占用，需要节省空间时可设置 `CARGO_INCREMENTAL=0`。需要源码级调试时，可按需设置 `CARGO_PROFILE_DEV_DEBUG=2` 或 `CARGO_PROFILE_TEST_DEBUG=2`；发布构建继续使用独立配置。
 
 测试包含 UTF-16/增量编辑、语法容错、跨文件导航、文献补全、磁盘/未保存内容同步，以及启动真实进程验证的 stdio 协议流程。
 
