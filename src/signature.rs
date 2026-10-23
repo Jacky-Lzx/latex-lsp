@@ -1715,6 +1715,14 @@ impl TexOperands {
     }
 
     fn definition(source: &str, parsed: &syntax::Syntax, entry: &Entry) -> Option<(Self, usize)> {
+        let (operands, at) = Self::declaration(source, parsed, entry)?;
+        syntax::group(source, at, b'{', b'}')?;
+        Some((operands, at))
+    }
+
+    /// A valid parameter header already starts tokenizing replacement text,
+    /// even while its closing brace has not yet been typed.
+    fn declaration(source: &str, parsed: &syntax::Syntax, entry: &Entry) -> Option<(Self, usize)> {
         if !Self::declares(entry) {
             return None;
         }
@@ -1767,11 +1775,20 @@ impl TexOperands {
                 }
             }
         }
-        syntax::group(source, at, b'{', b'}')?;
         Some((Self { prefix, delimiters }, at))
     }
 
     fn end(&self, source: &str, at: usize, control_spaces: bool) -> Option<usize> {
+        self.end_mode(source, at, control_spaces, false)
+    }
+
+    fn end_mode(
+        &self,
+        source: &str,
+        at: usize,
+        control_spaces: bool,
+        unfinished: bool,
+    ) -> Option<usize> {
         let mut at = tex_operand_match(
             source,
             optional_start(source, at, control_spaces),
@@ -1781,9 +1798,14 @@ impl TexOperands {
             if delimiter.is_empty() {
                 at = tex_operand_skip_spaces(source, at)?;
                 at = if source.as_bytes().get(at) == Some(&b'{') {
-                    syntax::group(source, at, b'{', b'}')?.1
+                    match syntax::group(source, at, b'{', b'}') {
+                        Some((_, end)) => end,
+                        None => return unfinished.then_some(source.len()),
+                    }
                 } else {
-                    tex_operand_token(source, at)?.1
+                    tex_operand_token(source, at)
+                        .map(|(_, end)| end)
+                        .or_else(|| (unfinished && at == source.len()).then_some(at))?
                 };
             } else {
                 loop {
@@ -1792,9 +1814,13 @@ impl TexOperands {
                         at = end;
                         break;
                     }
-                    at = match source.as_bytes().get(at)? {
-                        b'{' => syntax::group(source, at, b'{', b'}')?.1,
-                        _ => tex_operand_token(source, at)?.1,
+                    at = match source.as_bytes().get(at) {
+                        Some(b'{') => match syntax::group(source, at, b'{', b'}') {
+                            Some((_, end)) => end,
+                            None => return unfinished.then_some(source.len()),
+                        },
+                        Some(_) => tex_operand_token(source, at)?.1,
+                        None => return unfinished.then_some(source.len()),
                     };
                 }
             }
@@ -2913,12 +2939,27 @@ impl<'a> CommandSignatures<'a> {
         at: usize,
         scanned: &mut usize,
     ) -> Option<usize> {
-        if let Some(span) = definition_body_spans(source, parsed)
-            .into_iter()
-            .find(|span| span.contains(&at))
-        {
-            return Some(span.end);
-        }
+        let bodies: BTreeMap<_, _> = parsed
+            .definitions
+            .iter()
+            .filter_map(|entry| {
+                let (_, body) = TexOperands::declaration(source, parsed, entry)?;
+                let declaration = entry.detail.strip_prefix("Defined with \\")?;
+                if self.local.contains_key(declaration) {
+                    return None;
+                }
+                let before = parsed
+                    .commands
+                    .partition_point(|command| command.span.start < entry.span.start);
+                let command = parsed.commands[..before]
+                    .iter()
+                    .rev()
+                    .find(|command| command.name == declaration)?;
+                let end =
+                    syntax::group(source, body, b'{', b'}').map_or(source.len(), |(_, end)| end);
+                Some((command.span.start, end))
+            })
+            .collect();
         let mut operands = controls.clone();
         let declarations = parsed
             .definitions
@@ -2930,6 +2971,13 @@ impl<'a> CommandSignatures<'a> {
             if operands.contains(&command.span.start) {
                 continue;
             }
+            if let Some(&end) = bodies.get(&command.span.start) {
+                mark_operand_tokens(parsed, command.span.end, end, Some(at), &mut operands);
+                if operands.contains(&at) {
+                    return Some(end);
+                }
+                continue;
+            }
             let Some((name, _, end, spaces)) =
                 self.invocation(source, parsed, index, &operands, &declarations)
             else {
@@ -2939,7 +2987,8 @@ impl<'a> CommandSignatures<'a> {
             let tex = shape
                 .and_then(|shape| shape.tex.as_ref())
                 .or_else(|| self.tex_operands.get(name).and_then(Option::as_ref));
-            let end = if let Some(end) = tex.and_then(|tex| tex.end(source, end, spaces)) {
+            let end = if let Some(end) = tex.and_then(|tex| tex.end_mode(source, end, spaces, true))
+            {
                 mark_operand_tokens(parsed, command.span.end, end, Some(at), &mut operands);
                 end
             } else {
@@ -2951,7 +3000,7 @@ impl<'a> CommandSignatures<'a> {
                     .or_else(|| self.local.get(name).and_then(Option::as_ref))
                     .or(builtin.as_ref());
                 if let Some(signature) = signature {
-                    argument_tokens(
+                    let read = argument_tokens(
                         (source, parsed),
                         end,
                         spaces,
@@ -2959,7 +3008,11 @@ impl<'a> CommandSignatures<'a> {
                         true,
                         Some(at),
                         &mut operands,
-                    )
+                    );
+                    if read.unfinished && read.end <= at {
+                        return Some(source.len());
+                    }
+                    read.end
                 } else {
                     end
                 }
@@ -3798,6 +3851,28 @@ fn environment_declaration_operand(name: &str, parameter: usize) -> bool {
     }
 }
 
+/// The reader's progress is used only by lexical tokenization recovery.
+/// Other consumers still require complete operands before proposing edits.
+struct ArgumentRead {
+    end: usize,
+    unfinished: bool,
+}
+
+impl ArgumentRead {
+    fn complete(end: usize) -> Self {
+        Self {
+            end,
+            unfinished: false,
+        }
+    }
+    fn unfinished(end: usize) -> Self {
+        Self {
+            end,
+            unfinished: true,
+        }
+    }
+}
+
 fn argument_tokens(
     document: (&str, &syntax::Syntax),
     mut at: usize,
@@ -3806,7 +3881,7 @@ fn argument_tokens(
     opaque: bool,
     literal: Option<usize>,
     result: &mut BTreeSet<usize>,
-) -> usize {
+) -> ArgumentRead {
     let (source, parsed) = document;
     let mut starred = false;
     if signature.starred {
@@ -3832,7 +3907,7 @@ fn argument_tokens(
             Kind::Optional | Kind::UnstarredOptional | Kind::RequiredBracket => {
                 if source.as_bytes().get(at) != Some(&b'[') {
                     if matches!(parameter.kind, Kind::RequiredBracket) {
-                        return at;
+                        return ArgumentRead::complete(at);
                     }
                     at = before;
                     continue;
@@ -3871,10 +3946,10 @@ fn argument_tokens(
                         at = before;
                         continue;
                     }
-                    return at;
+                    return ArgumentRead::complete(at);
                 }
                 let Some(end) = operand_delimited_end(source, at, open, close) else {
-                    return at;
+                    return ArgumentRead::unfinished(at);
                 };
                 if let Some(parsed) = opaque {
                     mark_operand_tokens(parsed, at, end, literal, result);
@@ -3902,7 +3977,9 @@ fn argument_tokens(
                     if bracket { b']' } else { b'}' },
                 )
             };
-            let Some((_, end)) = group else { return at };
+            let Some((_, end)) = group else {
+                return ArgumentRead::unfinished(at);
+            };
             if let Some(parsed) = opaque {
                 mark_operand_tokens(parsed, at, end, literal, result);
             }
@@ -3910,10 +3987,10 @@ fn argument_tokens(
             control_spaces = false;
         } else {
             if matches!(parameter.kind, Kind::RequiredGroup) {
-                return at;
+                return ArgumentRead::complete(at);
             }
             let Some(value) = required_token(source, at) else {
-                return at;
+                return ArgumentRead::complete(at);
             };
             let word = syntax::control_word(source, at).is_some();
             if word || literal == Some(at) {
@@ -3923,7 +4000,7 @@ fn argument_tokens(
             control_spaces = word || value == "\\ ";
         }
     }
-    at
+    ArgumentRead::complete(at)
 }
 
 /// Preserve an existing bare argument on this logical line. A normal newline

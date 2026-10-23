@@ -87,6 +87,8 @@ fn minted_inline_code_stays_opaque_after_incremental_changes_over_stdio() {
         "\\let\\strong\\textbf\\strong{\\mintinline{tex}% header\r\n|\\label{kept}\\input{fake}|}",
         "\\relax{\\mintinline{tex}{a\\}}",
         "\\mintinline{tex}%\\label{kept}\\input{fake}%",
+        "\\textbf{\\mintinline{tex}{a\\}\\label{kept}\\input{fake}b}",
+        "\\textbf{\\mintinline{tex}{a\\}\\label{kept}\\input{fake}b}}",
     ]
     .into_iter()
     .enumerate()
@@ -104,7 +106,16 @@ fn minted_inline_code_stays_opaque_after_incremental_changes_over_stdio() {
             "textDocument/diagnostic",
             json!({"textDocument":{"uri":main}}),
         );
-        assert_eq!(diagnostics["items"], json!([]), "{source}: {diagnostics}");
+        if stage == 5 {
+            assert_eq!(
+                diagnostics["items"].as_array().unwrap().len(),
+                1,
+                "{source}: {diagnostics}"
+            );
+            assert_eq!(diagnostics["items"][0]["message"], "Unclosed brace");
+        } else {
+            assert_eq!(diagnostics["items"], json!([]), "{source}: {diagnostics}");
+        }
         let position = text.position(source.rfind("kept").unwrap());
         let edit = server.request(
             id + 1,
@@ -415,6 +426,8 @@ fn listings_inline_literal_boundaries_follow_incremental_edits_over_stdio() {
         Some("\\let\\strong\\textbf\\strong{\\lstinline{a{\\label{kept}\\input{fake}}b}} "),
         Some("\\let\\strong\\relax\\strong{\\lstinline{\\label kept {\\input fake}} "),
         Some("\\lstinline*\\label{kept}\\input{fake}* "),
+        Some("\\textbf{\\lstinline{a{\\label{kept}\\input{fake}}b} "),
+        Some("\\textbf{\\lstinline{a{\\label{kept}\\input{fake}}b}} "),
     ]
     .into_iter()
     .enumerate()
@@ -434,7 +447,16 @@ fn listings_inline_literal_boundaries_follow_incremental_edits_over_stdio() {
             "textDocument/diagnostic",
             json!({"textDocument":{"uri":main}}),
         );
-        assert_eq!(diagnostics["items"], json!([]), "{source}: {diagnostics}");
+        if stage == 11 {
+            assert_eq!(
+                diagnostics["items"].as_array().unwrap().len(),
+                1,
+                "{source}: {diagnostics}"
+            );
+            assert_eq!(diagnostics["items"][0]["message"], "Unclosed brace");
+        } else {
+            assert_eq!(diagnostics["items"], json!([]), "{source}: {diagnostics}");
+        }
         let symbols = server.request(
             id + 1,
             "textDocument/documentSymbol",

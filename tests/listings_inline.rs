@@ -194,6 +194,50 @@ fn macro_arguments_keep_balanced_tokens_comments_and_multiline_code_opaque() {
 }
 
 #[test]
+fn unfinished_known_arguments_and_definitions_keep_their_outer_brace_diagnostic() {
+    for before in [
+        r"\textbf{",
+        r"\newcommand{\one}[1]{#1}\one{",
+        r"\let\strong\textbf\strong{",
+        r"\def\example{",
+        r"\newcommand{\example}{",
+        r"\NewDocumentCommand{\example}{}{",
+        r"\newenvironment{example}{",
+        r"\newenvironment{example}{}{",
+        r"\NewDocumentEnvironment{example}{}{",
+        r"\def\one#1;{#1}\one{",
+        r"\NewDocumentCommand{\one}{d<>}{#1}\one<{",
+    ] {
+        let source = format!("{before}\\lstinline{{a{{\\label{{fake}}}}c}}");
+        let doc = Document::new(&uri(), source.clone(), Some(7));
+        assert!(doc.syntax.labels.is_empty(), "{source}");
+        assert_eq!(
+            doc.syntax.diagnostics.len(),
+            1,
+            "{source}: {:?}",
+            doc.syntax.diagnostics
+        );
+        assert_eq!(
+            doc.syntax.diagnostics[0].message, "Unclosed brace",
+            "{source}"
+        );
+    }
+    for source in [
+        r"{\lstinline{a{b}c}",
+        r"\relax{\lstinline{a{b}c}",
+        r"\newcommand{\zero}{}\zero{\lstinline{a{b}c}",
+        r"\newcommand{\gobble}[1]{}\newcommand{\example}{}\gobble\def\example{\lstinline{a{b}c}",
+    ] {
+        let doc = Document::new(&uri(), source.into(), Some(7));
+        assert!(
+            doc.syntax.diagnostics.is_empty(),
+            "{source}: {:?}",
+            doc.syntax.diagnostics
+        );
+    }
+}
+
+#[test]
 fn ordinary_groups_and_consumed_formatter_controls_keep_source_catcodes() {
     for prefix in [
         "{",

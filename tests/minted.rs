@@ -175,6 +175,31 @@ fn macro_arguments_preserve_tokenized_comments_escapes_and_delimiters() {
 }
 
 #[test]
+fn unfinished_macro_arguments_do_not_let_escaped_code_braces_close_the_wrapper() {
+    for before in [
+        r"\textbf{",
+        r"\let\strong\textbf\strong{",
+        r"\def\example{",
+        r"\newcommand{\example}{",
+        r"\def\one#1;{#1}\one{",
+    ] {
+        let source = format!(r"{before}\mintinline{{latex}}{{a\}}\label{{fake}}b}}");
+        let doc = Document::new(&uri(), source.clone(), Some(7));
+        assert!(doc.syntax.labels.is_empty(), "{source}");
+        assert_eq!(
+            doc.syntax.diagnostics.len(),
+            1,
+            "{source}: {:?}",
+            doc.syntax.diagnostics
+        );
+        assert_eq!(
+            doc.syntax.diagnostics[0].message, "Unclosed brace",
+            "{source}"
+        );
+    }
+}
+
+#[test]
 fn ordinary_scopes_and_consumed_commands_preserve_raw_minted_catcodes() {
     for before in [
         "{",
