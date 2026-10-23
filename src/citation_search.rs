@@ -53,7 +53,9 @@ pub(crate) fn completion(
     }
     let source = &doc.text.source;
     for command in doc.syntax.commands.iter().rev().filter(|cmd| {
-        syntax::is_citation(&cmd.name) && !doc.syntax.control_operands.contains(&cmd.span.start)
+        syntax::is_citation(&cmd.name)
+            && !syntax::is_single_citation(&cmd.name)
+            && !doc.syntax.control_operands.contains(&cmd.span.start)
     }) {
         let args: Vec<_> = if let Some(style) = crate::citations::style(&command.name) {
             crate::citations::arguments(source, command.span.end, style)
