@@ -25901,3 +25901,97 @@ fn call_hierarchy_supports_untitled_buffers_recursion_and_incremental_ambiguity(
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+fn user_command_documentation_hover_uses_project_comments_and_unsaved_definition_updates() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main_source = "\\documentclass{article}\n\\input{macros}\n😀 \\example{value}\n";
+    let definitions = "%% A 中文😀 command.\r\n%\r\n% **literal** <b>tag</b> [link](https://example.test)\r\n\\newcommand{\\example}[1]{#1}\r\n";
+    std::fs::write(root.join("main.tex"), main_source).unwrap();
+    std::fs::write(root.join("macros.tex"), definitions).unwrap();
+    std::fs::write(root.join("other.tex"), "\\documentclass{article}\n% Other project documentation\n\\newcommand{\\example}{}\n\\example\n").unwrap();
+    let main = Url::from_file_path(root.join("main.tex")).unwrap();
+    let macros = Url::from_file_path(root.join("macros.tex")).unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(root).unwrap(),"capabilities":{"textDocument":{"hover":{"contentFormat":["markdown","plaintext"]}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    let params = json!({"textDocument":{"uri":main},"position":{"line":2,"character":5}});
+    let hover = server.request(2, "textDocument/hover", params.clone());
+    assert_eq!(hover["contents"]["kind"], "plaintext");
+    let value = hover["contents"]["value"].as_str().unwrap();
+    assert!(
+        value.contains("A 中文😀 command.\n\n**literal** <b>tag</b> [link](https://example.test)"),
+        "{value}"
+    );
+    assert!(value.contains("Defined with \\newcommand") && value.contains("macros.tex:4"));
+    assert!(!value.contains("Other project"));
+    assert_eq!(
+        hover["range"],
+        json!({"start":{"line":2,"character":3},"end":{"line":2,"character":11}})
+    );
+    server.notify("textDocument/didOpen", json!({"textDocument":{"uri":macros,"languageId":"latex","version":1,"text":"% Updated unsaved documentation\n\\newcommand\n {\\example}[1]{#1}\n"}}));
+    let updated = server.request(3, "textDocument/hover", params.clone());
+    assert!(updated["contents"]["value"]
+        .as_str()
+        .unwrap()
+        .contains("Updated unsaved documentation"));
+    assert!(!updated["contents"]["value"]
+        .as_str()
+        .unwrap()
+        .contains("A 中文"));
+    server.notify("textDocument/didChange", json!({"textDocument":{"uri":macros,"version":2},"contentChanges":[{"text":"% Detached documentation\n\n\\newcommand{\\example}[1]{#1}\n"}]}));
+    let detached = server.request(4, "textDocument/hover", params.clone());
+    assert!(detached["contents"]["value"]
+        .as_str()
+        .unwrap()
+        .contains("Defined with \\newcommand"));
+    assert!(!detached["contents"]["value"]
+        .as_str()
+        .unwrap()
+        .contains("Detached documentation"));
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":macros}}),
+    );
+    let restored = server.request(5, "textDocument/hover", params);
+    assert!(restored["contents"]["value"]
+        .as_str()
+        .unwrap()
+        .contains("A 中文😀 command."));
+    assert_eq!(
+        std::fs::read_to_string(root.join("macros.tex")).unwrap(),
+        definitions
+    );
+    server.request(6, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+fn user_command_documentation_hover_supports_untitled_buffers_and_suppresses_ambiguous_notes() {
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":null,"capabilities":{},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    let uri = Url::parse("untitled:documented.tex").unwrap();
+    let source = "% !TeX program = xelatex\n% Actual command documentation\n\\long\\def\\example#1{#1}\n\\example{value}\n";
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"latex","version":1,"text":source}}),
+    );
+    let params = json!({"textDocument":{"uri":uri},"position":{"line":3,"character":4}});
+    let hover = server.request(2, "textDocument/hover", params.clone());
+    let value = hover["contents"]["value"].as_str().unwrap();
+    assert!(value.contains("Actual command documentation"), "{value}");
+    assert!(!value.contains("!TeX"));
+    server.notify("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"range":{"start":{"line":4,"character":0},"end":{"line":4,"character":0}},"text":"% Other documentation\n\\def\\example#1{#1}\n"}]}));
+    let ambiguous = server.request(3, "textDocument/hover", params);
+    let value = ambiguous["contents"]["value"].as_str().unwrap();
+    assert!(
+        !value.contains("Actual command documentation") && !value.contains("Other documentation"),
+        "{value}"
+    );
+    server.request(4, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

@@ -2015,6 +2015,15 @@ pub fn hover(workspace: &Workspace, uri: &Url, position: Position) -> Option<Hov
                 Some(value.map_or_else(|| extra.clone(), |value| format!("{value}\n\n{extra}")));
         }
     }
+    if target.kind == TargetKind::Command {
+        if let (Some(value), Some(notes)) = (
+            value.as_mut(),
+            crate::command_docs::for_command(workspace, &scope, target.name),
+        ) {
+            value.push_str("\n\n");
+            value.push_str(&notes);
+        }
+    }
     if value.is_none() && target.kind == TargetKind::Command {
         value =
             crate::packages::command(workspace, &scope, target.name).map(|(package, command)| {

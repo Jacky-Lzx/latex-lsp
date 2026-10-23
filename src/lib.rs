@@ -22,6 +22,7 @@ mod citations;
 mod code_inputs;
 pub mod code_lens;
 pub mod colors;
+mod command_docs;
 mod conditionals;
 pub mod config;
 mod counters;

@@ -104,15 +104,7 @@ fn modified() -> Error {
     }
 }
 fn declaration_start(doc: &Document, entry: &syntax::Entry) -> usize {
-    let declaration = entry.detail.strip_prefix("Defined with \\");
-    doc.syntax.commands[..doc
-        .syntax
-        .commands
-        .partition_point(|command| command.span.start < entry.span.start)]
-        .iter()
-        .rev()
-        .find(|command| Some(command.name.as_str()) == declaration)
-        .map_or(entry.span.start, |command| command.span.start)
+    crate::signature::command_declaration_start(&doc.syntax, entry).unwrap_or(entry.span.start)
 }
 impl Index {
     fn new(ws: &Workspace, origin: &Url) -> Result<Self> {

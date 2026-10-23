@@ -1736,6 +1736,20 @@ pub(crate) fn definition_data_spans(
     spans
 }
 
+/// Start of the declaration control word, before its destination name.
+pub(crate) fn command_declaration_start(parsed: &syntax::Syntax, entry: &Entry) -> Option<usize> {
+    let declaration = entry.detail.strip_prefix("Defined with \\")?;
+    parsed.commands[..parsed
+        .commands
+        .partition_point(|command| command.span.start < entry.span.start)]
+        .iter()
+        .rev()
+        .find(|command| {
+            command.name == declaration && !parsed.control_operands.contains(&command.span.start)
+        })
+        .map(|command| command.span.start)
+}
+
 /// Complete replacement text for a supported user command declaration.
 pub(crate) fn command_definition_body(
     source: &str,
