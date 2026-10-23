@@ -43,6 +43,7 @@ mod minted;
 mod named_colors;
 mod named_commands;
 pub mod navigation;
+mod options;
 mod output;
 mod packages;
 pub mod path_completion;
@@ -446,6 +447,8 @@ impl LanguageServer for Backend {
                         ",".into(),
                         "/".into(),
                         "@".into(),
+                        "[".into(),
+                        "=".into(),
                     ]),
                     ..Default::default()
                 }),
