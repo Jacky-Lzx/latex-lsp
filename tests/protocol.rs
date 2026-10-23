@@ -28669,3 +28669,50 @@ fn selected_section_file_items_complete_link_and_move_over_stdio() {
         server.wait_exit(0);
     }
 }
+
+#[test]
+fn bibliography_resource_option_boundaries_track_the_filename_over_stdio() {
+    use latex_lsp::text::Text;
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":null,"capabilities":{},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    let uri = Url::parse("untitled:resource-options.tex").unwrap();
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"latex","version":1,"text":""}}),
+    );
+    let mut id = 2;
+    for name in ["addbibresource", "addglobalbib", "addsectionbib"] {
+        for call in [
+            format!(r"\{name}"),
+            format!(r"\csuse{{{name}}}"),
+            format!(r"\csname {name}\endcsname"),
+            r"\register".into(),
+        ] {
+            for tail in [
+                "[label=pre[fix]{sec¦tion.bib}",
+                "[label={pre]fix}]{sec¦tion.bib}",
+                "[label=pre[fix]{section.bib} body¦",
+            ] {
+                let marked = format!("% 😀\r\n\\def\\register{{\\{name}}}{call}{tail}");
+                let source = marked.replace('¦', "");
+                let at = Text::new(source.clone()).position(marked.find('¦').unwrap());
+                server.notify("textDocument/didChange",json!({"textDocument":{"uri":uri,"version":id},"contentChanges":[{"text":source}]}));
+                let help = server.request(
+                    id,
+                    "textDocument/signatureHelp",
+                    json!({"textDocument":{"uri":uri},"position":at}),
+                );
+                if tail.contains("body") {
+                    assert!(help.is_null(), "{marked}: {help}");
+                } else {
+                    assert_eq!(help["activeParameter"], 1, "{marked}: {help}");
+                }
+                id += 1;
+            }
+        }
+    }
+    server.request(1000, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

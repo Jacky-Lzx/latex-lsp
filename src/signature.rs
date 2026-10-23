@@ -1045,6 +1045,7 @@ fn builtin(name: &str) -> Option<Signature> {
         documentation,
         starred,
         nested_brackets: !(matches!(name, "lstinputlisting" | "lstinline")
+            || crate::bib_resources::references_file(name)
             || crate::minted::is_inline(name)
             || name == "inputminted"
             || crate::fancyvrb::is_input(name)

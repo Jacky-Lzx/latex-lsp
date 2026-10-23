@@ -266,3 +266,44 @@ fn real_registered_resource_moves_preserve_explicit_section_selection() {
         );
     }
 }
+
+#[test]
+fn resource_option_signatures_close_at_the_first_ungrouped_right_bracket() {
+    for name in ["addbibresource", "addglobalbib", "addsectionbib"] {
+        for call in [
+            format!(r"\{name}"),
+            format!(r"\csuse{{{name}}}"),
+            format!(r"\csname {name}\endcsname"),
+            r"\register".into(),
+        ] {
+            for tail in [
+                "[label=pre[fix]{sec¦tion.bib}",
+                "[label={pre]fix}]{sec¦tion.bib}",
+                "[label=pre[fix]{unfinished¦",
+            ] {
+                let marked = format!(
+                    "% 😀\r\n\\documentclass{{article}}\\def\\register{{\\{name}}}{call}{tail}"
+                );
+                let source = marked.replace('¦', "");
+                let (_dir, ws, main, _) = setup(&source, "section.bib");
+                let at = Text::new(source).position(marked.find('¦').unwrap());
+                let help = signature::help(&ws, &main, at).unwrap_or_else(|| panic!("{marked}"));
+                assert_eq!(help.active_parameter, Some(1), "{marked}");
+            }
+            let marked = format!(
+                r"\documentclass{{article}}\def\register{{\{name}}}{call}[label=pre[fix]{{section.bib}} body¦"
+            );
+            let source = marked.replace('¦', "");
+            let (_dir, ws, main, _) = setup(&source, "section.bib");
+            assert!(
+                signature::help(
+                    &ws,
+                    &main,
+                    Text::new(source).position(marked.find('¦').unwrap())
+                )
+                .is_none(),
+                "{marked}"
+            );
+        }
+    }
+}
