@@ -17,7 +17,7 @@ impl Snapshot {
     fn retain(tokens: SemanticTokens) -> Option<std::sync::Arc<Self>> {
         let count = tokens.data.len();
         CACHED_TOKENS
-            .fetch_update(
+            .try_update(
                 std::sync::atomic::Ordering::Relaxed,
                 std::sync::atomic::Ordering::Relaxed,
                 |current| current.checked_add(count).filter(|total| *total <= 65_536),
