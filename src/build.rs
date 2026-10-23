@@ -1310,12 +1310,9 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool, rebuild: bo
     let recorder_path = config.artifact_path(root, "fls").unwrap();
     let recorder_before = ArtifactFingerprint::capture(&recorder_path);
     let bibliography_before = bibliography_logs(&output_dir);
-    // A previous log must never be interpreted as the result of a failed spawn.
-    if log_path.exists() {
-        if let Err(error) = std::fs::remove_file(&log_path) {
-            return Outcome::error(format!("Cannot replace compiler log: {error}"));
-        }
-    }
+    // latexmk can reuse a failed invocation without rerunning TeX. Keep its
+    // transcript intact; decide after the process exits whether it is current.
+    let log_before = ArtifactFingerprint::capture(&log_path);
     let diagnostic_project = build_log::ProjectSources::capture(root);
     let mut command = Command::new(&config.executable);
     command
@@ -1402,7 +1399,24 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool, rebuild: bo
         build_log::decode_output(&stdout),
         build_log::decode_output(&stderr)
     );
-    let log = read_log(&log_path).unwrap_or_default();
+    // An unchanged transcript is authoritative only when latexmk explicitly
+    // reuses its previous invocation. Spawn failures return above; timeouts,
+    // cancellation and unrelated tool failures must not revive an old log.
+    let reused_log = outcome.exit_code.is_some()
+        && matches!(outcome.status, "success" | "error")
+        && Path::new(&config.executable)
+            .file_stem()
+            .and_then(|name| name.to_str())
+            == Some("latexmk")
+        && output
+            .lines()
+            .any(|line| line.starts_with("Latexmk: Nothing to do for '"));
+    let current_log = reused_log || ArtifactFingerprint::capture(&log_path) != log_before;
+    let log = if current_log {
+        read_log(&log_path).unwrap_or_default()
+    } else {
+        String::new()
+    };
     outcome.pdf_updated = outcome
         .pdf
         .as_ref()
@@ -1535,7 +1549,7 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool, rebuild: bo
         outcome.message = "Compiler reported errors; generated PDF may be incomplete".into();
         outcome.pdf = None;
     }
-    if log_path.is_file() {
+    if current_log && log_path.is_file() {
         outcome.log = Some(log_path);
     }
     if outcome.status == "error" {

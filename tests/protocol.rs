@@ -2955,6 +2955,129 @@ fn fake_build_server(script: &str, on_save: bool) -> (Server, tempfile::TempDir,
     fake_build_server_capabilities(script, on_save, json!({}))
 }
 
+#[test]
+#[cfg(unix)]
+fn repeated_latexmk_failures_publish_the_original_diagnostic_and_clear_after_repair() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main_path = root.join("main.tex");
+    let main = Url::from_file_path(&main_path).unwrap();
+    let source =
+        "\\documentclass{article}\n\\begin{document}\n\\unknownLspCommand\n\\end{document}\n";
+    std::fs::write(&main_path, source).unwrap();
+    let compiler = root.join("latexmk");
+    std::fs::write(
+        &compiler,
+        r#"#!/bin/sh
+if [ -f repaired ]; then
+  printf '%%PDF-1.4\n' > "$1/main.pdf"
+  : > "$1/main.log"
+  exit 0
+fi
+if [ ! -f "$1/cached" ]; then
+  printf '%s:3: Undefined control sequence.\nl.3 \\unknownLspCommand\n' "$2" > "$1/main.log"
+  touch "$1/cached"
+else
+  printf "Latexmk: Nothing to do for '%s'.\n" "$2"
+  printf 'pdflatex: gave an error in previous invocation of latexmk.\n'
+fi
+exit 12
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&compiler, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut server = Server::start();
+    server.request(
+        1,
+        "initialize",
+        json!({
+            "processId":null,
+            "rootUri":Url::from_directory_path(root).unwrap(),
+            "capabilities":{},
+            "initializationOptions":{"build":{"executable":compiler,"arguments":["%o","%f"]}}
+        }),
+    );
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({
+            "textDocument":{"uri":main,"languageId":"latex","version":1,"text":source}
+        }),
+    );
+    server.until(|message| message["method"] == "textDocument/publishDiagnostics");
+    let mut original = None;
+    for id in 2..5 {
+        server.request(
+            id,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(finished["params"]["status"], "error", "{finished}");
+        assert_eq!(finished["params"]["stale"], false);
+        assert_eq!(finished["params"]["exitCode"], 12);
+        assert_eq!(finished["params"]["errorsCount"], 1);
+        assert!(
+            finished["params"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("Undefined control sequence"),
+            "{finished}"
+        );
+        let published = server.until(|message| {
+            message["method"] == "textDocument/publishDiagnostics"
+                && message["params"]["uri"] == main.as_str()
+        });
+        let errors: Vec<_> = published["params"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|item| item["source"] == "latex-build" && item["severity"] == 1)
+            .cloned()
+            .collect();
+        assert_eq!(errors.len(), 1, "{published}");
+        assert_eq!(errors[0]["range"]["start"]["line"], 2);
+        if let Some(original) = &original {
+            assert_eq!(&errors, original);
+        } else {
+            original = Some(errors);
+        }
+    }
+    let repaired = source.replace("\\unknownLspCommand", "Repaired.");
+    std::fs::write(&main_path, &repaired).unwrap();
+    std::fs::write(root.join("repaired"), "").unwrap();
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":repaired}]}),
+    );
+    server.request(
+        5,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let finished = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(finished["params"]["status"], "success", "{finished}");
+    assert_eq!(finished["params"]["errorsCount"], 0);
+    let diagnostics = server.request(
+        6,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":main}}),
+    );
+    assert!(
+        diagnostics["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item["source"] != "latex-build"),
+        "{diagnostics}"
+    );
+    server.request(7, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
 #[cfg(unix)]
 fn fake_build_server_capabilities(
     script: &str,

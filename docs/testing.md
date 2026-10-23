@@ -283,6 +283,13 @@ cargo test --locked --test quoted_graphics real_ -- --ignored
 
 ## 文献与编译诊断
 
+连续 latexmk 编译回归覆盖已有产物、缓存失败后的错误位置保留、成功的无操作编译、修正后的诊断清空，以及自定义输出目录和作业名；真实工具部分需要 pdfLaTeX 和 XeLaTeX。默认测试另核对启动失败、超时及其他工具失败不会误用旧日志，并通过 stdio 验证重复诊断发布与修正后的清空：
+
+```sh
+cargo test --locked --test repeated_build -- --include-ignored
+cargo test --locked --test protocol repeated_latexmk_failures
+```
+
 真实 biblatex 引用及重编译请求回归还需要安装 biblatex 和 logreq，使用 pdfLaTeX 与 BibTeX：
 
 ```sh
