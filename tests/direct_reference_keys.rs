@@ -115,6 +115,56 @@ fn literal_examples_remain_untouched_and_complete_macro_bodies_keep_real_keys() 
 }
 
 #[test]
+fn stable_copied_argument_shapes_keep_following_references_editable() {
+    for prefix in [
+        r"\let\strong\textbf\strong{Text}",
+        r"\let\strong\textbf\csuse{strong}{Text}",
+        r"\newcommand\take[1]{}\let\saved\take\saved{Text}",
+    ] {
+        let source = format!(r"\label{{paper}}{prefix}\ref{{paper}}");
+        let (ws, uri) = setup(&source);
+        let position = Text::new(source.clone()).position(source.rfind("paper").unwrap());
+        assert_eq!(
+            features::definitions(&ws, &uri, position).len(),
+            1,
+            "{source}"
+        );
+        assert_eq!(
+            features::rename(&ws, &uri, position, "updated")
+                .unwrap()
+                .unwrap()
+                .changes
+                .unwrap()[&uri]
+                .len(),
+            2,
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn copied_shapes_preserve_data_and_unresolved_macro_protection() {
+    for prefix in [
+        r"\newcommand\take[1]{}\let\saved\take\saved{\ref{paper}}",
+        r"\let\saved\unknown\saved{Text}\ref{paper}",
+        r"\let\saved\take\newcommand\take[1]{}\saved{Text}\ref{paper}",
+        r"\let\saved\textbf\let\saved\unknown\saved{Text}\ref{paper}",
+    ] {
+        let source = format!(r"\label{{paper}}{prefix}");
+        let (ws, uri) = setup(&source);
+        let position = Text::new(source.clone()).position(source.rfind("paper").unwrap());
+        assert!(
+            features::definitions(&ws, &uri, position).is_empty(),
+            "{source}"
+        );
+        assert!(
+            features::rename(&ws, &uri, Position::new(0, 9), "updated").is_err(),
+            "{source}"
+        );
+    }
+}
+
+#[test]
 fn shared_direct_keys_require_consistent_command_meanings_and_refresh_unsaved_definitions() {
     let dir = tempfile::tempdir().unwrap();
     for (name, source) in [

@@ -54,7 +54,7 @@ pub(crate) struct Context {
 impl Context {
     pub(crate) fn new(doc: &Document, signatures: &CommandSignatures<'_>) -> Self {
         let source = &doc.text.source;
-        let operands = signatures.argument_tokens(source, &doc.syntax);
+        let operands = signatures.editing_argument_tokens(source, &doc.syntax);
         let declarations = doc
             .syntax
             .definitions

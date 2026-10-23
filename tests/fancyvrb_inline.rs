@@ -586,7 +586,11 @@ fn collected_verb_bodies_keep_executable_commands_and_file_edits() {
                 );
             }
             let at = doc.text.position(source.rfind("kept").unwrap());
-            assert_eq!(features::definitions(&workspace, &main, at).len(), 1);
+            assert_eq!(
+                features::definitions(&workspace, &main, at).len(),
+                1,
+                "{source}"
+            );
             for (old, new) in [("kept", "changed"), ("say", "speak")] {
                 let at = doc.text.position(source.rfind(old).unwrap());
                 let updated = apply(
@@ -673,7 +677,7 @@ fn redefined_fancyverb_commands_keep_their_ordinary_argument_commands() {
 #[test]
 #[ignore = "requires pdflatex and xelatex"]
 fn real_collected_verb_executes_body_commands_before_and_after_rename() {
-    for engine in ["pdflatex", "xelatex"] {
+    for (engine, wrapper) in [("pdflatex", r"\textbf"), ("xelatex", r"\strong")] {
         for body in [
             r"|\typeout{LIVEBODY}\label{kept}\input{chapter}|",
             r"|a{b|\typeout{LIVEBODY}\label{kept}\input{chapter}}d|",
@@ -685,7 +689,7 @@ fn real_collected_verb_executes_body_commands_before_and_after_rename() {
             let root = directory.path();
             std::fs::write(root.join("chapter.tex"), "Chapter text").unwrap();
             let main = Url::from_file_path(root.join("main.tex")).unwrap();
-            let source = format!("\\documentclass{{article}}\n\\usepackage{{fancyvrb}}\n\\begin{{document}}\n\\textbf{{\\Verb{body}}}\\ref{{kept}}\n\\end{{document}}\n");
+            let source = format!("\\documentclass{{article}}\n\\usepackage{{fancyvrb}}\n\\let\\strong\\textbf\n\\begin{{document}}\n{wrapper}{{\\Verb{body}}}\\ref{{kept}}\n\\end{{document}}\n");
             let mut workspace = Workspace {
                 versioned_edits: true,
                 ..Default::default()

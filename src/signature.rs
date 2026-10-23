@@ -2258,6 +2258,7 @@ impl InlineTokenization {
 
 /// Possible declarations only exclude literal edits; they never establish a
 /// unique command meaning for navigation, source loading or signature help.
+#[derive(Clone)]
 enum LiteralOperands {
     Signature(Signature),
     Tex(TexOperands),
@@ -3185,6 +3186,31 @@ impl<'a> CommandSignatures<'a> {
         self.argument_tokens_with_literal(source, parsed, None, false, false, false)
     }
 
+    /// A stable local copy can bound its arguments without making that copy a
+    /// confirmed reference/loader alias. Keep the copied shapes private to this
+    /// operand query; callers still resolve command meanings through `self`.
+    pub(crate) fn editing_argument_tokens(
+        &self,
+        source: &str,
+        parsed: &syntax::Syntax,
+    ) -> BTreeSet<usize> {
+        if !parsed
+            .definitions
+            .iter()
+            .any(|entry| literal_copy_target(source, parsed, entry, false).is_some())
+        {
+            return self.argument_tokens(source, parsed);
+        }
+        let mut shapes = Self {
+            local: self.local.clone(),
+            tex_operands: self.tex_operands.clone(),
+            literal_operands: self.literal_operands.clone(),
+            detokenize_boundary_known: self.detokenize_boundary_known,
+        };
+        shapes.inline_copy_operands(parsed);
+        shapes.argument_tokens(source, parsed)
+    }
+
     /// Positions confirmed by a known parameter grammar, excluding the
     /// conservative operand assumed after an unresolved or ambiguous macro.
     pub(crate) fn known_argument_tokens(
@@ -3196,7 +3222,7 @@ impl<'a> CommandSignatures<'a> {
     }
 
     /// A stable copy can establish argument tokenization without certifying
-    /// its expansion for navigation. Keep this inference in the inline lexer:
+    /// its expansion for navigation. Keep this inference in operand queries:
     /// unresolved, repeated or later source declarations cannot prove a copy's
     /// captured grammar. Pure forwarders retain their late-bound target.
     fn inline_copy_operands(&mut self, parsed: &syntax::Syntax) {
