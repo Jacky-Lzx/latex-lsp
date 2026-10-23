@@ -27330,3 +27330,65 @@ fn named_references_publish_exact_warnings_hints_and_follow_interface_redefiniti
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+fn duplicate_key_related_locations_refresh_over_push_and_pull_without_building() {
+    use latex_lsp::text::Text;
+    let uri = Url::parse("untitled:duplicate-keys.bib").unwrap();
+    let source = "@book{键,title={😀 First}}\r\n@article{键,title={Second}}";
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":null,"capabilities":{"textDocument":{"publishDiagnostics":{"relatedInformation":true}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"bibtex","version":1,"text":source}}),
+    );
+    let report = server.request(
+        2,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":uri}}),
+    );
+    let diagnostic = report["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["code"] == "duplicate-bibliography-key")
+        .unwrap();
+    let text = Text::new(source.into());
+    let first = source.find('键').unwrap();
+    let second = source.rfind('键').unwrap();
+    assert_eq!(
+        diagnostic["range"],
+        json!(text.range(second, second + "键".len()))
+    );
+    assert_eq!(
+        diagnostic["relatedInformation"][0]["location"],
+        json!({"uri":uri,"range":text.range(first, first + "键".len())})
+    );
+    let pushed = server.until(|message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["uri"] == uri.as_str()
+    });
+    assert!(pushed["params"]["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item == diagnostic));
+    server.notify("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"text":"@article{键,title={Second}}"}]}));
+    let repaired = server.request(
+        3,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":uri},"previousResultId":report["resultId"]}),
+    );
+    assert_eq!(repaired["kind"], "full");
+    assert_eq!(repaired["items"], json!([]));
+    let cleared = server.until(|message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["uri"] == uri.as_str()
+            && message["params"]["version"] == 2
+    });
+    assert_eq!(cleared["params"]["diagnostics"], json!([]));
+    server.request(4, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

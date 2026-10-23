@@ -413,7 +413,7 @@ impl Workspace {
         let mut diagnostics = self
             .documents
             .get(uri)
-            .map(crate::features::diagnostics)
+            .map(|doc| crate::features::diagnostics_at(doc, uri))
             .unwrap_or_default();
         diagnostics.extend(
             self.lint_diagnostics

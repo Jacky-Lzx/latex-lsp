@@ -317,3 +317,88 @@ fn duplicate_label_diagnostics_agree_with_real_compilation_and_clear_after_repai
         repaired.diagnostics
     );
 }
+
+#[test]
+fn local_duplicate_diagnostics_link_first_declarations_with_distinct_namespaces() {
+    let uri = Url::parse("untitled:duplicate-names.tex").unwrap();
+    let source = "😀 \\label{键} \\bibitem{键} \\hypertarget{键}{First}\r\n\\label{键} \\bibitem{键} \\hypertarget{键}{Second}";
+    let mut workspace = Workspace::default();
+    workspace.config.distribution.enabled = false;
+    workspace.open(uri.clone(), source.into(), 1);
+    let diagnostics = workspace.diagnostics(&uri);
+    let duplicates: Vec<_> = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.message == "Duplicate key `键`")
+        .collect();
+    assert_eq!(duplicates.len(), 3, "{diagnostics:?}");
+    let text = latex_lsp::text::Text::new(source.into());
+    for (code, command) in [
+        ("duplicate-label", "label"),
+        ("duplicate-bibliography-key", "bibitem"),
+        ("duplicate-pdf-destination", "hypertarget"),
+    ] {
+        let diagnostic = duplicates
+            .iter()
+            .find(|diagnostic| diagnostic.code == Some(NumberOrString::String(code.into())))
+            .unwrap();
+        let related = diagnostic.related_information.as_ref().unwrap();
+        assert_eq!(related.len(), 1);
+        let at = source.find(&format!("\\{command}{{键}}")).unwrap() + command.len() + 2;
+        assert_eq!(
+            related[0].location,
+            Location::new(uri.clone(), text.range(at, at + "键".len()))
+        );
+        assert_eq!(diagnostic.range.start.line, 1);
+    }
+}
+
+#[test]
+fn local_bibliography_duplicates_refresh_first_positions_without_indexing_value_examples() {
+    let uri = Url::parse("untitled:duplicates.bib").unwrap();
+    let source = "@comment{ @book{键,title={Example}} }\r\n@book{键,title={😀 @article{键, ignored}}}\r\n@article{键,title={Second}}\r\n@misc{键,title={Third}}";
+    let mut workspace = Workspace::default();
+    workspace.config.distribution.enabled = false;
+    workspace.open(uri.clone(), source.into(), 1);
+    let diagnostics = workspace.diagnostics(&uri);
+    let duplicates: Vec<_> = diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.code == Some(NumberOrString::String("duplicate-bibliography-key".into()))
+        })
+        .collect();
+    assert_eq!(duplicates.len(), 2, "{diagnostics:?}");
+    assert!(duplicates.iter().all(
+        |diagnostic| diagnostic.related_information.as_ref().unwrap()[0]
+            .location
+            .uri
+            == uri
+    ));
+    assert!(duplicates.iter().all(
+        |diagnostic| diagnostic.related_information.as_ref().unwrap()[0]
+            .location
+            .range
+            .start
+            .line
+            == 1
+    ));
+    let updated = source.replacen("\r\n@book{键,", "\r\n@book{unique,", 1);
+    workspace.open(uri.clone(), updated, 2);
+    let diagnostics = workspace.diagnostics(&uri);
+    let duplicates: Vec<_> = diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.code == Some(NumberOrString::String("duplicate-bibliography-key".into()))
+        })
+        .collect();
+    assert_eq!(duplicates.len(), 1, "{diagnostics:?}");
+    assert_eq!(
+        duplicates[0].related_information.as_ref().unwrap()[0]
+            .location
+            .range
+            .start
+            .line,
+        2
+    );
+    workspace.open(uri.clone(), "@book{unique,title={Only entry}}".into(), 3);
+    assert!(workspace.diagnostics(&uri).is_empty());
+}

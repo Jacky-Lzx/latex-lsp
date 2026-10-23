@@ -6,6 +6,8 @@
 
 静态 `csuse` 与字面 `csname` 的引用调用使用相同检查，例如 `\csuse{ref}{missing}`、`\csname cite\endcsname[说明]{paper}`。键范围只覆盖实际参数中的名称，引用列表、范围、可选说明和结构化 biblatex 引用沿用直接调用的规则。命名接口或目标命令被项目重定义时跳过相应语义；动态命令名和动态键不作展开。
 
+同一文档中的重复标签、文献键与 PDF 目标继续报告 `Duplicate key`，并分别使用稳定代码 `duplicate-label`、`duplicate-bibliography-key` 和 `duplicate-pdf-destination`。每个重复位置通过 `relatedInformation` 链接本命名空间的首次声明，支持未保存文档、Unicode 和 CRLF。删除或修改首次声明后，关联位置随缓冲区更新；同名的不同命名空间互不冲突。项目内跨文件冲突仍由现有 `duplicate-definition` 诊断报告。
+
 ```json
 {
   "latex": {

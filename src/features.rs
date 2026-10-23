@@ -2084,20 +2084,41 @@ pub fn hover(workspace: &Workspace, uri: &Url, position: Position) -> Option<Hov
 }
 
 pub fn diagnostics(doc: &Document) -> Vec<Diagnostic> {
+    diagnostics_for(doc, None)
+}
+
+pub(crate) fn diagnostics_at(doc: &Document, uri: &Url) -> Vec<Diagnostic> {
+    diagnostics_for(doc, Some(uri))
+}
+
+fn diagnostics_for(doc: &Document, uri: Option<&Url>) -> Vec<Diagnostic> {
     let mut diagnostics = doc.syntax.diagnostics.clone();
-    for entries in [
-        &doc.syntax.labels,
-        &doc.syntax.citations,
-        &doc.syntax.anchors,
+    for (code, entries) in [
+        ("duplicate-label", &doc.syntax.labels),
+        ("duplicate-bibliography-key", &doc.syntax.citations),
+        ("duplicate-pdf-destination", &doc.syntax.anchors),
     ] {
-        let mut seen = BTreeSet::new();
+        let mut seen = std::collections::BTreeMap::<&str, &Entry>::new();
         for entry in entries {
-            if !seen.insert(&entry.name) {
-                diagnostics.push(syntax::diagnostic(
+            if let Some(first) = seen.get(entry.name.as_str()) {
+                let mut diagnostic = syntax::diagnostic(
                     &doc.text,
                     entry.span.clone(),
                     format!("Duplicate key `{}`", entry.name),
-                ));
+                );
+                diagnostic.code = Some(NumberOrString::String(code.into()));
+                diagnostic.related_information = uri.map(|uri| {
+                    vec![DiagnosticRelatedInformation {
+                        location: Location::new(
+                            uri.clone(),
+                            doc.text.range(first.span.start, first.span.end),
+                        ),
+                        message: format!("First declaration of `{}` in this document", entry.name),
+                    }]
+                });
+                diagnostics.push(diagnostic);
+            } else {
+                seen.insert(&entry.name, entry);
             }
         }
     }
