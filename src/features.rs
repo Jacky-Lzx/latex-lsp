@@ -537,6 +537,15 @@ pub fn prepare_rename(
     uri: &Url,
     position: Position,
 ) -> tower_lsp::jsonrpc::Result<Option<PrepareRenameResponse>> {
+    if let Some(offset) = workspace
+        .documents
+        .get(uri)
+        .and_then(|doc| doc.text.offset(position))
+    {
+        if let Some(result) = crate::bib_categories::prepare(workspace, uri, offset) {
+            return result;
+        }
+    }
     if let Some(entry) = workspace.documents.get(uri).and_then(|doc| {
         doc.text
             .offset(position)
@@ -561,6 +570,15 @@ pub fn rename(
     position: Position,
     new_name: &str,
 ) -> tower_lsp::jsonrpc::Result<Option<WorkspaceEdit>> {
+    if let Some(offset) = workspace
+        .documents
+        .get(uri)
+        .and_then(|doc| doc.text.offset(position))
+    {
+        if let Some(result) = crate::bib_categories::rename(workspace, uri, offset, new_name) {
+            return result;
+        }
+    }
     if let Some(entry) = workspace.documents.get(uri).and_then(|doc| {
         doc.text
             .offset(position)
@@ -1151,6 +1169,11 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
         }
     }
     if !name_command {
+        if let Some(items) = crate::bib_categories::completion(workspace, uri, offset) {
+            return items;
+        }
+    }
+    if !name_command {
         if let Some(items) = crate::extra_symbols::completion(workspace, uri, offset) {
             return items;
         }
@@ -1629,6 +1652,9 @@ pub fn definitions(workspace: &Workspace, uri: &Url, position: Position) -> Vec<
         return vec![];
     };
 
+    if let Some(result) = crate::bib_categories::definitions(workspace, uri, offset) {
+        return result;
+    }
     if let Some(entry) = crate::extra_symbols::at(doc, offset) {
         return crate::extra_symbols::definitions(workspace, uri, entry);
     }
@@ -1676,6 +1702,13 @@ pub fn references(
     let Some(doc) = workspace.documents.get(uri) else {
         return vec![];
     };
+    if let Some(offset) = doc.text.offset(position) {
+        if let Some(result) =
+            crate::bib_categories::references(workspace, uri, offset, include_declaration)
+        {
+            return result;
+        }
+    }
     if let Some(entry) = doc
         .text
         .offset(position)
@@ -2011,6 +2044,9 @@ fn all_references(
 pub fn hover(workspace: &Workspace, uri: &Url, position: Position) -> Option<Hover> {
     let doc = workspace.documents.get(uri)?;
     let offset = doc.text.offset(position)?;
+    if let Some(result) = crate::bib_categories::hover(workspace, uri, offset) {
+        return Some(result);
+    }
     if let Some(entry) = crate::extra_symbols::at(doc, offset) {
         return Some(crate::extra_symbols::hover(workspace, uri, entry));
     }

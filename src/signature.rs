@@ -302,6 +302,21 @@ fn builtin(name: &str) -> Option<Signature> {
         "import" | "subimport" | "inputfrom" | "subinputfrom" | "includefrom"
         | "subincludefrom" => (&[("directory", false), ("file", false)], true),
         "DeclareBibliographyCategory" => (&[("category", false)], false),
+        "printbibliography" => (&[("options", true)], false),
+        "ifentrycategory" => (
+            &[
+                ("key", false),
+                ("category", false),
+                ("true", false),
+                ("false", false),
+            ],
+            false,
+        ),
+        "ifcategory" => (
+            &[("category", false), ("true", false), ("false", false)],
+            false,
+        ),
+        "defbibfilter" => (&[("name", false), ("filter", false)], false),
         "printfield" => (&[("format", true), ("field", false)], false),
         "thefield" | "strfield" => (&[("field", false)], false),
         "iffieldundef" => (

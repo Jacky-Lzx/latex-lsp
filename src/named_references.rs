@@ -42,15 +42,16 @@ fn contains(spans: &[Range<usize>], at: usize) -> bool {
         .checked_sub(1)
         .is_some_and(|index| spans[index].contains(&at))
 }
-struct Context {
+pub(crate) struct Context {
     operands: BTreeSet<usize>,
-    declarations: BTreeSet<(usize, usize)>,
+    pub(crate) declarations: BTreeSet<(usize, usize)>,
     declaration_data: Vec<Range<usize>>,
     bodies: Vec<Range<usize>>,
     opaque: Vec<Range<usize>>,
+    literal: Vec<Range<usize>>,
 }
 impl Context {
-    fn new(doc: &Document, signatures: &CommandSignatures<'_>) -> Self {
+    pub(crate) fn new(doc: &Document, signatures: &CommandSignatures<'_>) -> Self {
         let source = &doc.text.source;
         let operands = signatures.argument_tokens(source, &doc.syntax);
         let declarations = doc
@@ -61,15 +62,17 @@ impl Context {
             .collect();
         let declaration_data = merged(crate::expl3::math_data_spans(doc));
         let bodies = merged(crate::expl3::occurrences(doc).bodies);
-        let opaque: Vec<_> = doc
+        let literal: Vec<_> = doc
             .syntax
             .ignored
             .iter()
             .chain(&doc.syntax.literal_conversions)
             .chain(&doc.syntax.literal_tests)
-            .chain(&doc.syntax.ambiguous_string_tests)
             .cloned()
             .collect();
+        let literal = merged(literal);
+        let mut opaque = literal.clone();
+        opaque.extend(doc.syntax.ambiguous_string_tests.iter().cloned());
         let opaque = merged(opaque);
         Self {
             operands,
@@ -77,9 +80,13 @@ impl Context {
             declaration_data,
             bodies,
             opaque,
+            literal,
         }
     }
-    fn operand(&self, doc: &Document, at: usize) -> bool {
+    pub(crate) fn literal(&self, at: usize) -> bool {
+        contains(&self.literal, at)
+    }
+    pub(crate) fn operand(&self, doc: &Document, at: usize) -> bool {
         self.operands.contains(&at)
             || doc.syntax.control_operands.contains(&at)
             || contains(&self.opaque, at)

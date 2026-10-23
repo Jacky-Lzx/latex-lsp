@@ -76,12 +76,20 @@ fn category_memberships_reference_keys_without_renaming_category_names() {
     assert_eq!(apply(source, &rename[&main]), expected);
     assert_eq!(rename[&bib][0].new_text, "renamed");
     let category = source.find("{alpha}{%").unwrap() + 2;
-    assert!(features::definitions(
+    let definitions = features::definitions(
         &workspace,
         &main,
-        workspace.documents[&main].text.position(category)
-    )
-    .is_empty());
+        workspace.documents[&main].text.position(category),
+    );
+    assert_eq!(definitions.len(), 1);
+    assert_eq!(definitions[0].uri, main);
+    let declaration = source.find("{alpha}").unwrap() + 1;
+    assert_eq!(
+        definitions[0].range,
+        workspace.documents[&main]
+            .text
+            .range(declaration, declaration + 5)
+    );
 }
 
 #[test]

@@ -27822,3 +27822,93 @@ fn math_semantics_diagnostics_refresh_from_unsaved_cross_file_alias_and_paramete
         server.wait_exit(0);
     }
 }
+#[test]
+fn bibliography_category_names_support_versioned_cross_file_edits_and_unsaved_redefinitions_over_stdio(
+) {
+    use latex_lsp::text::Text;
+    let dir = tempfile::tempdir().unwrap();
+    let uri = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let categories = Url::from_file_path(dir.path().join("categories.tex")).unwrap();
+    let declarations = r"\DeclareBibliographyCategory{selected}\bibitem{selected}";
+    let source="\\documentclass{article}\r\n\\input{categories}\r\n\\begin{document}\r\n😀 \\addtocategory{selected}{selected} \\printbibliography[category=selected]\r\n\\end{document}";
+    std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+    std::fs::write(categories.to_file_path().unwrap(), declarations).unwrap();
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"latex","version":5,"text":source}}),
+    );
+    server.notify("textDocument/didOpen",json!({"textDocument":{"uri":categories,"languageId":"latex","version":3,"text":declarations}}));
+    let text = Text::new(source.into());
+    let at = source.find("selected").unwrap();
+    let position = text.position(at + 2);
+    let params = json!({"textDocument":{"uri":uri},"position":position});
+    let definition = server.request(2, "textDocument/definition", params.clone());
+    assert_eq!(definition[0]["uri"], categories.as_str());
+    assert_eq!(
+        definition[0]["range"],
+        json!({"start":{"line":0,"character":29},"end":{"line":0,"character":37}})
+    );
+    assert!(!server
+        .request(3, "textDocument/hover", params.clone())
+        .is_null());
+    let refs=server.request(4,"textDocument/references",json!({"textDocument":{"uri":uri},"position":position,"context":{"includeDeclaration":true}}));
+    assert_eq!(refs.as_array().unwrap().len(), 3);
+    let highlights = server.request(5, "textDocument/documentHighlight", params.clone());
+    assert_eq!(highlights.as_array().unwrap().len(), 2);
+    let prepared = server.request(6, "textDocument/prepareRename", params.clone());
+    assert_eq!(prepared["range"], json!(text.range(at, at + 8)));
+    let edit = server.request(
+        7,
+        "textDocument/rename",
+        json!({"textDocument":{"uri":uri},"position":position,"newName":"updated"}),
+    );
+    let docs = edit["documentChanges"].as_array().unwrap();
+    assert_eq!(docs.len(), 2);
+    for (uri, version, count) in [(&uri, 5, 2), (&categories, 3, 1)] {
+        let doc = docs
+            .iter()
+            .find(|d| d["textDocument"]["uri"] == uri.as_str())
+            .unwrap();
+        assert_eq!(doc["textDocument"]["version"], version);
+        assert_eq!(doc["edits"].as_array().unwrap().len(), count);
+    }
+    let completion = server.request(8, "textDocument/completion", params.clone());
+    let items = completion
+        .as_array()
+        .or_else(|| completion["items"].as_array())
+        .unwrap();
+    let item = items.iter().find(|i| i["label"] == "selected").unwrap();
+    assert_eq!(item["textEdit"]["range"], json!(text.range(at, at + 8)));
+    // The bibliography key in the second argument belongs to another namespace.
+    let citation_at = source.find("}{selected}").unwrap() + 2;
+    let citation_definition = server.request(
+        9,
+        "textDocument/definition",
+        json!({"textDocument":{"uri":uri},"position":text.position(citation_at+2)}),
+    );
+    assert_eq!(
+        citation_definition[0]["range"],
+        json!({"start":{"line":0,"character":47},"end":{"line":0,"character":55}})
+    );
+    server.notify("textDocument/didChange",json!({"textDocument":{"uri":categories,"version":4},"contentChanges":[{"text":format!("{declarations}\\def\\addtocategory#1#2{{}}\\def\\printbibliography[#1]{{}}") }]}));
+    assert_eq!(
+        server.request(10, "textDocument/definition", params.clone()),
+        json!([])
+    );
+    assert!(server
+        .request(11, "textDocument/prepareRename", params.clone())
+        .is_null());
+    let completion = server.request(12, "textDocument/completion", params);
+    assert!(!completion
+        .as_array()
+        .or_else(|| completion["items"].as_array())
+        .unwrap()
+        .iter()
+        .any(|i| i["label"] == "selected"));
+    server.request(13, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
