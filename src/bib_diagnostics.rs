@@ -1,4 +1,5 @@
 //! BibTeX diagnostics retain database roles, token ranges and input order.
+pub(crate) mod crossref;
 
 use crate::{bib_strings, recorder::BibliographyPaths, syntax, text::Text, workspace::Workspace};
 use std::{

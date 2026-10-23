@@ -293,6 +293,258 @@ printf 'INPUT %s\n' "$2" > "$1/main.fls"
 
 #[test]
 #[cfg(unix)]
+fn bibliography_crossref_errors_publish_operands_related_parents_and_clear_after_rebuild() {
+    for pull in [false, true] {
+        let script = r#"cp "${2%/*}/fixture.blg" "$1/main.blg"
+printf 'INPUT %s\n' "$2" > "$1/main.fls"
+exit 1
+"#;
+        let capabilities = if pull {
+            json!({"textDocument":{"diagnostic":{}}})
+        } else {
+            json!({})
+        };
+        let (mut server, directory, main) =
+            fake_build_server_capabilities(script, false, capabilities);
+        let root = directory.path();
+        let defs = Url::from_file_path(root.join("defs.bib")).unwrap();
+        let refs = Url::from_file_path(root.join("refs.bib")).unwrap();
+        let source = "\\documentclass{article}\n\\bibliography{defs,refs}\n";
+        std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+        std::fs::write(
+            defs.to_file_path().unwrap(),
+            "@proceedings{parent,title={Parent}}\r\n",
+        )
+        .unwrap();
+        std::fs::write(
+            refs.to_file_path().unwrap(),
+            "% 😀\r\n@misc{child,title={😀},crossref={parent}}\r\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("fixture.blg"), "Database file #1: defs.bib\nDatabase file #2: refs.bib\nA bad cross reference---entry \"child\"\nrefers to entry \"parent\", which doesn't exist\n").unwrap();
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+        );
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(finished["params"]["status"], "error", "{finished}");
+        let items = if pull {
+            server.request(
+                3,
+                "textDocument/diagnostic",
+                json!({"textDocument":{"uri":refs}}),
+            )["items"]
+                .clone()
+        } else {
+            server.until(|message| {
+                message["method"] == "textDocument/publishDiagnostics"
+                    && message["params"]["uri"] == refs.as_str()
+                    && message["params"]["diagnostics"]
+                        .as_array()
+                        .is_some_and(|items| {
+                            items
+                                .iter()
+                                .any(|item| item["code"] == "bad-bibliography-crossref")
+                        })
+            })["params"]["diagnostics"]
+                .clone()
+        };
+        let items = items.as_array().unwrap();
+        assert_eq!(items.len(), 1, "{items:?}");
+        let item = &items[0];
+        assert_eq!(item["severity"], 1);
+        assert_eq!(item["code"], "bad-bibliography-crossref");
+        assert_eq!(
+            item["range"],
+            json!({"start":{"line":1,"character":33},"end":{"line":1,"character":39}})
+        );
+        assert_eq!(item["data"]["key"], "child");
+        assert_eq!(item["data"]["parent"], "parent");
+        assert_eq!(item["relatedInformation"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            item["relatedInformation"][0]["location"],
+            json!({"uri":defs,"range":{"start":{"line":0,"character":13},"end":{"line":0,"character":19}}})
+        );
+        assert!(item["relatedInformation"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("can skip an uncited parent"));
+        std::fs::write(
+            root.join("fixture.blg"),
+            "Database file #1: defs.bib\nDatabase file #2: refs.bib\n",
+        )
+        .unwrap();
+        server.request(
+            4,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        server.until(|message| message["method"] == "latex/buildFinished");
+        let cleared = if pull {
+            server.request(
+                5,
+                "textDocument/diagnostic",
+                json!({"textDocument":{"uri":refs}}),
+            )["items"]
+                .clone()
+        } else {
+            server.until(|message| {
+                message["method"] == "textDocument/publishDiagnostics"
+                    && message["params"]["uri"] == refs.as_str()
+                    && message["params"]["diagnostics"] == json!([])
+            })["params"]["diagnostics"]
+                .clone()
+        };
+        assert_eq!(cleared, json!([]));
+        server.request(6, "shutdown", Value::Null);
+        if pull {
+            assert_no_pushed_diagnostics(&server);
+        }
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn bibliography_nested_crossrefs_preserve_warning_and_error_severity_and_clear_over_stdio() {
+    for pull in [false, true] {
+        let script = r#"cp "${2%/*}/fixture.blg" "$1/main.blg"
+printf '%%PDF-1.4\n' > "$1/main.pdf"
+printf '(./main.tex)\n' > "$1/main.log"
+printf 'INPUT %s\n' "$2" > "$1/main.fls"
+if [ -f "${2%/*}/fail" ]; then exit 1; fi
+"#;
+        let capabilities = if pull {
+            json!({"textDocument":{"diagnostic":{}}})
+        } else {
+            json!({})
+        };
+        let (mut server, directory, main) =
+            fake_build_server_capabilities(script, false, capabilities);
+        let root = directory.path();
+        let refs = Url::from_file_path(root.join("refs.bib")).unwrap();
+        let main_source = "\\documentclass{article}\n\\bibliography{defs,refs}\n\\nocite{*}\n";
+        let source = "% 😀\r\n@misc{child,title={😀},crossref={parent}}\r\n@misc{parent,crossref={grandparent}}\r\n";
+        std::fs::write(main.to_file_path().unwrap(), main_source).unwrap();
+        std::fs::write(refs.to_file_path().unwrap(), source).unwrap();
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":main_source}]}));
+        let fetch = |server: &mut Server, id: u64, expected: &str| {
+            if pull {
+                server.request(
+                    id,
+                    "textDocument/diagnostic",
+                    json!({"textDocument":{"uri":refs}}),
+                )["items"]
+                    .clone()
+            } else {
+                server.until(|message| {
+                    message["method"] == "textDocument/publishDiagnostics"
+                        && message["params"]["uri"] == refs.as_str()
+                        && if expected.is_empty() {
+                            message["params"]["diagnostics"] == json!([])
+                        } else {
+                            message["params"]["diagnostics"]
+                                .as_array()
+                                .is_some_and(|items| {
+                                    items.iter().any(|item| item["code"] == expected)
+                                })
+                        }
+                })["params"]["diagnostics"]
+                    .clone()
+            }
+        };
+        for stage in 0..3 {
+            let history = "Database file #1: defs.bib\nDatabase file #2: refs.bib\n";
+            let nested = "Warning--you've nested cross references--entry \"child\"\nrefers to entry \"parent\", which also refers to something\n";
+            let missing = "A bad cross reference---entry \"parent\"\nrefers to entry \"grandparent\", which doesn't exist\n";
+            let (log, expected) = match stage {
+                0 => (format!("{history}{nested}"), "nested-bibliography-crossref"),
+                1 => (
+                    format!("{history}{nested}{missing}"),
+                    "bad-bibliography-crossref",
+                ),
+                _ => (history.to_owned(), ""),
+            };
+            if stage == 1 {
+                std::fs::write(root.join("fail"), "").unwrap();
+                std::fs::write(root.join("defs.bib"), "% ancestor removed\n").unwrap();
+            } else {
+                std::fs::write(root.join("defs.bib"), "@misc{grandparent,title={Top}}\n").unwrap();
+            }
+            if stage == 2 {
+                std::fs::remove_file(root.join("fail")).unwrap();
+                std::fs::write(refs.to_file_path().unwrap(), "% 😀\r\n@misc{child,title={😀},crossref={parent}}\r\n@misc{parent,title={Parent}}\r\n").unwrap();
+            }
+            std::fs::write(root.join("fixture.blg"), log).unwrap();
+            server.request(
+                2 + stage * 2,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            let finished = server.until(|message| message["method"] == "latex/buildFinished");
+            assert_eq!(
+                finished["params"]["status"],
+                if stage == 1 { "error" } else { "success" },
+                "{finished}"
+            );
+            let items = fetch(&mut server, 3 + stage * 2, expected);
+            let items = items.as_array().unwrap();
+            if stage == 2 {
+                assert!(items.is_empty(), "{items:?}");
+                continue;
+            }
+            assert_eq!(items.len(), if stage == 0 { 1 } else { 2 }, "{items:?}");
+            let nested = items
+                .iter()
+                .find(|item| item["code"] == "nested-bibliography-crossref")
+                .unwrap();
+            assert_eq!(nested["severity"], 2);
+            assert_eq!(
+                nested["range"],
+                json!({"start":{"line":1,"character":33},"end":{"line":1,"character":39}})
+            );
+            assert!(nested["message"]
+                .as_str()
+                .unwrap()
+                .ends_with("which also refers to something"));
+            assert_eq!(nested["relatedInformation"].as_array().unwrap().len(), 1);
+            assert_eq!(
+                nested["relatedInformation"][0]["location"],
+                json!({"uri":refs,"range":{"start":{"line":2,"character":6},"end":{"line":2,"character":12}}})
+            );
+            assert!(nested["relatedInformation"][0]["message"]
+                .as_str()
+                .unwrap()
+                .contains("nested crossref chain"));
+            if stage == 1 {
+                let missing = items
+                    .iter()
+                    .find(|item| item["code"] == "bad-bibliography-crossref")
+                    .unwrap();
+                assert_eq!(missing["severity"], 1);
+                assert_eq!(
+                    missing["range"],
+                    json!({"start":{"line":2,"character":23},"end":{"line":2,"character":34}})
+                );
+            }
+        }
+        server.request(8, "shutdown", Value::Null);
+        if pull {
+            assert_no_pushed_diagnostics(&server);
+        }
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
 fn generic_bibliography_entry_warnings_refresh_ambiguity_and_key_ranges_after_saved_edits() {
     for pull in [false, true] {
         let script = r#"cp "${2%/*}/fixture.blg" "$1/main.blg"

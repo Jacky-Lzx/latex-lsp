@@ -69,6 +69,34 @@ cargo test --locked --test bibliography_type_diagnostics -- --include-ignored
 cargo test --locked --test protocol bibliography_type_warnings_
 ```
 
+## 无效的 crossref
+
+原生 BibTeX 的两行 `A bad cross reference---entry "child"` / `refers to entry "parent", which doesn't exist` 使用错误代码 `bad-bibliography-crossref`，定位到子条目中唯一的字面 `crossref` 值。字段名不区分 ASCII 大小写，支持花括号、引号、两种条目定界符、UTF-16、CRLF 和数据库符号链接。
+
+字面值前后的 ASCII 空白按 BibTeX 的报告匹配，范围只覆盖父键；空值同样保留完整错误，范围覆盖其花括号或引号，便于在编辑器中看见。
+
+定位只使用报错前日志确认读取的数据库，并要求完整的子条目、唯一键和唯一 `crossref` 字段。动态值、拼接、重复字段、歧义键、缺失数据库、异常读取顺序、此前语法错误、截断日志或扫描超限时，在主文档保留原始错误。缺少第二行时仍保留第一行错误，并继续处理后续独立诊断。沿用单文件 2 MiB、累计 16 MiB 和 1024 个输入的限制，另限制最多扫描 16384 个条目。
+
+已读取数据库中存在同名父条目时，通过 `relatedInformation` 提供最多 16 个相关位置。父条目排在子条目前时，说明 BibTeX 可能跳过未显式引用的前置父条目：父条目确实存在，仍可能报“不存在”。显式引用父条目、使用通配引用和将父条目放在子条目之后会影响 BibTeX 的选择；服务器不把物理存在性当作成功解析的依据，也不自动移动条目或提供未经选择规则验证的拼写修复。
+
+```sh
+cargo test --locked --test bibliography_crossref_diagnostics -- --include-ignored
+cargo test --locked --test protocol bibliography_crossref_errors_
+```
+
+## 嵌套的 crossref
+
+原生 BibTeX 的两行 `Warning--you've nested cross references--entry "child"` / `refers to entry "parent", which also refers to something` 使用诊断代码 `nested-bibliography-crossref`。警告保留完整的子、父条目关系，定位到子条目的字面 `crossref` 值，并在 `relatedInformation` 中链接父条目键。父条目可排在子条目之前或之后；相关说明标明编译器报告的嵌套引用链，不把已经解析到的父条目解释为缺失。
+
+普通嵌套、自引用和循环均按实际编译器日志处理，级别保持为警告，不单凭这些警告将成功构建改成失败。若父条目又引用了缺失祖先，紧随其后的 `bad-bibliography-crossref` 错误独立定位到父条目的字段值，保留错误级别；两条诊断同时显示。
+
+定位复用上述数据库历史、唯一键、唯一字段、完整正文和读取上限。动态或有歧义的子条目引用、缺失来源、截断日志以及缺失或不匹配的续行，都会在主文档保留警告；不会吞掉下一条独立记录。该诊断只采纳原生编译器报告，不静态推测动态继承关系，也不自动改写继承链。修复并重编译后，推送和拉取诊断均清除旧结果。
+
+```sh
+cargo test --locked --test bibliography_crossref_diagnostics -- --include-ignored
+cargo test --locked --test protocol bibliography_nested_crossrefs_
+```
+
 ## 来源与条目定位
 
 BibTeX 带行号的文献库及样式错误按日志中的输入名称识别类型，再定位到符号链接的实际文件；目标使用无关扩展名时仍保留正确行号。辅助文件不会因链接目标带有源码扩展名而被误当成文献来源；路径缺失或实际为目录时，诊断保留在主文件。

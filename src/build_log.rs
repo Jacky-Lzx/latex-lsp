@@ -5502,6 +5502,19 @@ pub(crate) fn parse_bibliography_in(
             previous = "";
             continue;
         }
+        if let Some((kind, child)) = crate::bib_diagnostics::crossref::record(line) {
+            let parent = lines.peek().copied().and_then(|line| kind.parent(line));
+            if parent.is_some() {
+                lines.next();
+            }
+            if let Some((uri, diagnostic)) =
+                bibliography_context.crossref(root, kind, child, parent)
+            {
+                result.entry(uri).or_insert_with(Vec::new).push(diagnostic);
+            }
+            previous = "";
+            continue;
+        }
         if line == crate::output::TRUNCATED {
             previous = "Error context omitted from a large bibliography log";
             continue;
