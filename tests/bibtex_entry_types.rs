@@ -197,7 +197,7 @@ fn type_identifiers_keep_reserved_entries_and_invalid_numeric_types_opaque() {
 }
 
 #[test]
-fn standard_unknown_type_warnings_use_exact_keys_without_retargeting_examples_or_ambiguity() {
+fn standard_unknown_type_warnings_use_exact_types_without_retargeting_examples_or_ambiguity() {
     let directory = tempfile::tempdir().unwrap();
     let main = directory.path().join("main.tex");
     let bib = directory.path().join("refs.bib");
@@ -220,10 +220,10 @@ fn standard_unknown_type_warnings_use_exact_keys_without_retargeting_examples_or
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
         let items = &diagnostics[&bib_uri];
         assert_eq!(items.len(), 1);
-        let start = source.find(key).unwrap();
+        let start = source.find("custom_type").unwrap();
         assert_eq!(
             items[0].range,
-            Text::new(source.clone()).range(start, start + key.len())
+            Text::new(source.clone()).range(start, start + "custom_type".len())
         );
         assert_eq!(items[0].severity, Some(DiagnosticSeverity::WARNING));
     }

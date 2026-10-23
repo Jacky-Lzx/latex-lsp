@@ -47,6 +47,253 @@ fn decoded(doc: &Document, range: Option<Range>) -> Vec<(Range, String, String, 
 }
 
 #[test]
+fn bibtex_abbreviation_declarations_and_value_operands_are_variables() {
+    let doc = document("strings.bib", "% 😀\r\n@string{Journal={Text}}\r\n@string{Full=JOURNAL # { text}}\r\n@preamble{journal}\r\n@book{Journal,title=Full,month=jan,note={Journal}}");
+    let tokens = decoded(&doc, None);
+    let variables: Vec<_> = tokens
+        .iter()
+        .filter(|(_, _, kind, _)| kind == "variable")
+        .map(|(_, name, _, declaration)| (name.as_str(), *declaration))
+        .collect();
+    assert_eq!(
+        variables,
+        [
+            ("Journal", 1),
+            ("Full", 1),
+            ("JOURNAL", 0),
+            ("journal", 0),
+            ("Full", 0),
+            ("jan", 0)
+        ]
+    );
+    let range = tokens
+        .iter()
+        .find(|(_, name, _, _)| name == "JOURNAL")
+        .unwrap()
+        .0;
+    let partial = decoded(
+        &doc,
+        Some(Range::new(
+            range.start,
+            Position::new(range.start.line, range.start.character + 3),
+        )),
+    );
+    assert_eq!(partial[0].1, "JOU");
+}
+
+#[test]
+fn bibliography_literals_preserve_validated_link_boundaries() {
+    let doc = document("refs.bib", "@book{😀, url={\r\n https://example.org/中😀 \r\n}, doi={10.1234/key}, title={https://example.org/title}}\r\n@book{other,url={https://example.org/duplicate},url=unknown,doi={10.1234/} # suffix}");
+    let tokens = decoded(&doc, None);
+    let strings: Vec<_> = tokens
+        .iter()
+        .filter(|(_, _, kind, _)| kind == "string")
+        .map(|(_, value, _, _)| value.as_str())
+        .collect();
+    assert_eq!(
+        strings,
+        [
+            "{",
+            " ",
+            "https://example.org/中😀",
+            " ",
+            "}",
+            "{",
+            "10.1234/key",
+            "}",
+            "{https://example.org/title}",
+            "{https://example.org/duplicate}",
+            "{10.1234/}"
+        ]
+    );
+    let range = tokens
+        .iter()
+        .find(|(_, value, _, _)| value == "https://example.org/中😀")
+        .unwrap()
+        .0;
+    assert_eq!(range.start, Position::new(1, 1));
+    let partial = decoded(
+        &doc,
+        Some(Range::new(
+            range.start,
+            Position::new(1, range.start.character + 5),
+        )),
+    );
+    assert_eq!(partial[0].1, "https");
+}
+
+#[test]
+fn bibliography_structure_highlights_original_case_and_expression_operands() {
+    let doc = document("structure.bib", "@Custom-Type{key, TiTle = {Some {title}}, year=2026, note=jan # \"中😀\" # 42}\r\n@STRING(Full = \"Journal\" # jan)\r\n@PREAMBLE{Full # { text}}\r\n@boo");
+    let tokens: Vec<_> = decoded(&doc, None)
+        .into_iter()
+        .map(|(_, value, kind, bits)| (value, kind, bits))
+        .collect();
+    let expected = [
+        ("Custom-Type", "type", 0),
+        ("key", "enumMember", 1),
+        ("TiTle", "property", 0),
+        ("=", "operator", 0),
+        ("{Some {title}}", "string", 0),
+        ("year", "property", 0),
+        ("=", "operator", 0),
+        ("2026", "number", 0),
+        ("note", "property", 0),
+        ("=", "operator", 0),
+        ("jan", "variable", 0),
+        ("#", "operator", 0),
+        ("\"中😀\"", "string", 0),
+        ("#", "operator", 0),
+        ("42", "number", 0),
+        ("STRING", "type", 0),
+        ("Full", "variable", 1),
+        ("=", "operator", 0),
+        ("\"Journal\"", "string", 0),
+        ("#", "operator", 0),
+        ("jan", "variable", 0),
+        ("PREAMBLE", "type", 0),
+        ("Full", "variable", 0),
+        ("#", "operator", 0),
+        ("{ text}", "string", 0),
+        ("boo", "type", 0),
+    ];
+    assert_eq!(
+        tokens,
+        expected.map(|(value, kind, bits)| (value.into(), kind.into(), bits))
+    );
+}
+
+#[test]
+fn bibliography_comments_do_not_leak_types_fields_or_operands() {
+    let source = concat!(
+        "% top 😀\r\n@book % type gap\r\n{ % header\r\nkey\"quoted,\r\n",
+        "% fields @fake{bad, title=9}\r\nTiTle % assignment\r\n= % operand\r\n",
+        "\"100% {quoted \"nested\"} \\fake\" % tail\r\n# % concat\r\n2026, note={100% \\fake}}\r\n",
+        "@comment{ @book{hidden,title=2026} % opaque\r\n title=jan }\r\n",
+        "@string{month % name gap\r\n= % string gap\r\njan}\r\n",
+        "@preamble{% preamble\r\nmonth}\r\n",
+    );
+    let doc = document("comments.bib", source);
+    let tokens = decoded(&doc, None);
+    let comments: Vec<_> = tokens
+        .iter()
+        .filter(|(_, _, kind, _)| kind == "comment")
+        .map(|(_, value, _, _)| value.as_str())
+        .collect();
+    assert_eq!(
+        comments,
+        [
+            "% top 😀",
+            "% type gap",
+            "% header",
+            "% fields @fake{bad, title=9}",
+            "% assignment",
+            "% operand",
+            "% tail",
+            "% concat",
+            "@comment{ @book{hidden,title=2026} % opaque",
+            " title=jan }",
+            "% name gap",
+            "% string gap",
+            "% preamble"
+        ]
+    );
+    for (value, kind) in [
+        ("key\"quoted", "enumMember"),
+        ("\"100% {quoted \"nested\"} \\fake\"", "string"),
+        ("{100% \\fake}", "string"),
+        ("2026", "number"),
+    ] {
+        assert!(
+            tokens
+                .iter()
+                .any(|(_, text, ty, _)| text == value && ty == kind),
+            "missing {value}: {tokens:?}"
+        );
+    }
+    assert!(!tokens.iter().any(|(_, _, kind, _)| kind == "macro"));
+}
+
+#[test]
+fn bibliography_relationship_keys_override_literal_backgrounds() {
+    let doc = document("relationships.bib", "@book{child,crossref={parent},related=\"other, key\"}\r\n@book{parent,title={line one\r\n中😀 line two}}");
+    let tokens = decoded(&doc, None);
+    for value in ["parent", "other", "key"] {
+        assert!(tokens
+            .iter()
+            .any(|(_, text, kind, bits)| text == value && kind == "enumMember" && *bits == 0));
+    }
+    let selected = Range::new(Position::new(2, 0), Position::new(2, 3));
+    assert_eq!(
+        decoded(&doc, Some(selected)),
+        [(selected, "中😀".into(), "string".into(), 0)]
+    );
+}
+
+#[test]
+fn bibliography_unfinished_literals_and_fields_remain_highlighted() {
+    for literal in ["{unfinished % 😀 ", "\"unfinished {nested} % 😀 "] {
+        let doc = document(
+            "unfinished.bib",
+            &format!("@book{{key, title = jan # {literal}"),
+        );
+        let tokens = decoded(&doc, None);
+        assert!(tokens
+            .iter()
+            .any(|(_, value, kind, _)| value == literal && kind == "string"));
+        assert!(tokens
+            .iter()
+            .any(|(_, value, kind, _)| value == "jan" && kind == "variable"));
+        assert!(!tokens.iter().any(|(_, _, kind, _)| kind == "comment"));
+    }
+    let doc = document("unfinished.bib", "@book{key, unknown_field\r\n@123");
+    let tokens = decoded(&doc, None);
+    assert!(tokens
+        .iter()
+        .any(|(_, value, kind, _)| value == "unknown_field" && kind == "property"));
+    assert!(!tokens
+        .iter()
+        .any(|(_, value, kind, _)| value == "123" && kind == "type"));
+}
+
+#[test]
+fn bibliography_large_index_keeps_tokens_ordered_and_comments_isolated() {
+    let source: String = (0..1000)
+        .map(|index| format!("@book{{key{index},title={{中😀 % text}},year=2026 # jan}} % end\r\n"))
+        .collect();
+    let doc = document("large.bib", &source);
+    let tokens = decoded(&doc, None);
+    assert_eq!(tokens.len(), 11000);
+    assert_eq!(
+        tokens
+            .iter()
+            .filter(|(_, _, kind, _)| kind == "comment")
+            .count(),
+        1000
+    );
+}
+
+#[test]
+fn bibliography_comment_construct_overrides_comments_between_type_and_body() {
+    let doc = document(
+        "opaque.bib",
+        "@comment % header\r\n{ title={% literal}, year=42 }\r\n@book{key,title={visible}}",
+    );
+    let tokens = decoded(&doc, None);
+    assert_eq!(
+        tokens
+            .iter()
+            .filter(|(_, _, kind, _)| kind == "comment")
+            .count(),
+        2
+    );
+    assert!(!tokens.iter().any(|(_, _, kind, _)| kind == "number"));
+    assert!(tokens
+        .iter()
+        .any(|(_, value, kind, _)| value == "{visible}" && kind == "string"));
+}
+
+#[test]
 fn environment_copy_targets_are_declarations_and_sources_are_type_references() {
     for command in [
         "NewEnvironmentCopy",

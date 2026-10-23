@@ -2181,7 +2181,10 @@ fn semantic_tokens_advertise_full_and_range_and_follow_incremental_changes() {
             "type",
             "enumMember",
             "string",
-            "comment"
+            "comment",
+            "property",
+            "number",
+            "operator"
         ])
     );
     server.notify("initialized", json!({}));
@@ -2221,6 +2224,144 @@ fn semantic_tokens_advertise_full_and_range_and_follow_incremental_changes() {
     );
     assert!(missing.is_null());
     server.request(7, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+fn bibtex_semantic_tokens_follow_field_value_and_comment_edits() {
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"capabilities":{}}));
+    server.notify("initialized", json!({}));
+    // The editor's language selection also works for extensionless buffers.
+    let uri = "untitled:bibliography-semantic";
+    let source = "@book{key,title={中😀},year=2026}\r\n";
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"bibtex","version":1,"text":source}}),
+    );
+    let initial = server.request(
+        2,
+        "textDocument/semanticTokens/full",
+        json!({"textDocument":{"uri":uri}}),
+    );
+    assert_eq!(
+        initial["data"],
+        json!([
+            0, 1, 4, 2, 0, 0, 5, 3, 3, 1, 0, 4, 5, 6, 0, 0, 5, 1, 8, 0, 0, 1, 5, 4, 0, 0, 6, 4, 6,
+            0, 0, 4, 1, 8, 0, 0, 1, 4, 7, 0
+        ])
+    );
+    let range = server.request(3, "textDocument/semanticTokens/range", json!({"textDocument":{"uri":uri},"range":{"start":{"line":0,"character":17},"end":{"line":0,"character":20}}}));
+    assert_eq!(range["data"], json!([0, 17, 3, 4, 0]));
+    server.notify("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[
+        {"range":{"start":{"line":0,"character":10},"end":{"line":0,"character":15}},"text":"note"},
+        {"range":{"start":{"line":0,"character":15},"end":{"line":0,"character":15}},"text":"% value 😀\r\n"},
+        {"range":{"start":{"line":1,"character":11},"end":{"line":1,"character":15}},"text":"jan # 42"}
+    ]}));
+    let changed = server.request(
+        4,
+        "textDocument/semanticTokens/full/delta",
+        json!({"textDocument":{"uri":uri},"previousResultId":initial["resultId"]}),
+    );
+    let full = server.request(
+        5,
+        "textDocument/semanticTokens/full",
+        json!({"textDocument":{"uri":uri}}),
+    );
+    let expected = json!([
+        0, 1, 4, 2, 0, 0, 5, 3, 3, 1, 0, 4, 4, 6, 0, 0, 4, 1, 8, 0, 0, 1, 10, 5, 0, 1, 0, 5, 4, 0,
+        0, 6, 4, 6, 0, 0, 4, 1, 8, 0, 0, 1, 3, 1, 0, 0, 4, 1, 8, 0, 0, 2, 2, 7, 0
+    ]);
+    assert_eq!(full["data"], expected);
+    let mut reconstructed = initial["data"].as_array().unwrap().clone();
+    if let Some(edits) = changed["edits"].as_array() {
+        for edit in edits.iter().rev() {
+            let start = edit["start"].as_u64().unwrap() as usize;
+            let count = edit["deleteCount"].as_u64().unwrap() as usize;
+            let data = edit["data"].as_array().cloned().unwrap_or_default();
+            reconstructed.splice(start..start + count, data);
+        }
+        assert_eq!(Value::Array(reconstructed), expected);
+    } else {
+        assert_eq!(changed["data"], expected);
+    }
+    let unchanged = server.request(
+        6,
+        "textDocument/semanticTokens/full/delta",
+        json!({"textDocument":{"uri":uri},"previousResultId":full["resultId"]}),
+    );
+    assert_eq!(unchanged["edits"], json!([]));
+    server.notify("textDocument/didClose", json!({"textDocument":{"uri":uri}}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"bibtex","version":1,"text":source}}),
+    );
+    let reopened = server.request(
+        7,
+        "textDocument/semanticTokens/full/delta",
+        json!({"textDocument":{"uri":uri},"previousResultId":unchanged["resultId"]}),
+    );
+    assert_eq!(reopened["data"], initial["data"]);
+    server.request(8, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+fn bibtex_custom_field_names_preserve_symbols_navigation_and_incremental_semantics() {
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"capabilities":{"textDocument":{"documentSymbol":{"hierarchicalDocumentSymbolSupport":true}}}}));
+    server.notify("initialized", json!({}));
+    let uri = "file:///custom-field-protocol/refs.bib";
+    let entry = "@book{entry, custom_field = Full, title={Kept}, crossref={parent}}";
+    let source = format!("@string{{Full={{Value}}}}\r\n{entry}\r\n@book{{parent}}\r\n");
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"bibtex","version":1,"text":source}}),
+    );
+    server.notify("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"range":{"start":{"line":1,"character":19},"end":{"line":1,"character":20}},"text":":"}]}));
+    let symbols = server.request(
+        2,
+        "textDocument/documentSymbol",
+        json!({"textDocument":{"uri":uri}}),
+    );
+    let fields = symbols
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|symbol| symbol["name"] == "entry")
+        .unwrap()["children"]
+        .as_array()
+        .unwrap();
+    assert_eq!(
+        fields
+            .iter()
+            .map(|field| field["name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["custom:field", "title", "crossref"]
+    );
+    assert_eq!(
+        fields[0]["selectionRange"],
+        json!({"start":{"line":1,"character":13},"end":{"line":1,"character":25}})
+    );
+    let definition = server.request(
+        3,
+        "textDocument/definition",
+        json!({"textDocument":{"uri":uri},"position":{"line":1,"character":30}}),
+    );
+    assert_eq!(
+        definition[0]["range"],
+        json!({"start":{"line":0,"character":8},"end":{"line":0,"character":12}})
+    );
+    let relationship = server.request(4, "textDocument/definition", json!({"textDocument":{"uri":uri},"position":{"line":1,"character":entry.find("parent").unwrap() + 1}}));
+    assert_eq!(
+        relationship[0]["range"],
+        json!({"start":{"line":2,"character":6},"end":{"line":2,"character":12}})
+    );
+    let semantic = server.request(5, "textDocument/semanticTokens/range", json!({"textDocument":{"uri":uri},"range":{"start":{"line":1,"character":13},"end":{"line":1,"character":25}}}));
+    assert_eq!(semantic["data"], json!([1, 13, 12, 6, 0]));
+    server.request(6, "shutdown", Value::Null);
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }

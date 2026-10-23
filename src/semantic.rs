@@ -9,6 +9,9 @@ const TYPE: u32 = 2;
 const KEY: u32 = 3;
 const STRING: u32 = 4;
 const COMMENT: u32 = 5;
+const PROPERTY: u32 = 6;
+const NUMBER: u32 = 7;
+const OPERATOR: u32 = 8;
 const DECLARATION: u32 = 1;
 
 pub fn options() -> SemanticTokensOptions {
@@ -21,6 +24,9 @@ pub fn options() -> SemanticTokensOptions {
                 SemanticTokenType::ENUM_MEMBER,
                 SemanticTokenType::STRING,
                 SemanticTokenType::COMMENT,
+                SemanticTokenType::PROPERTY,
+                SemanticTokenType::NUMBER,
+                SemanticTokenType::OPERATOR,
             ],
             token_modifiers: vec![SemanticTokenModifier::DECLARATION],
         },
@@ -56,6 +62,12 @@ fn literal(tokens: &mut Vec<Token>, source: &str, span: Span<usize>, kind: u32) 
 
 fn reference(tokens: &mut Vec<Token>, source: &str, span: Span<usize>) {
     if syntax::is_static_reference_key(&source[span.clone()]) {
+        push(tokens, span, KEY, false);
+    }
+}
+
+fn citation(tokens: &mut Vec<Token>, source: &str, span: Span<usize>) {
+    if syntax::is_static_citation_key(&source[span.clone()]) {
         push(tokens, span, KEY, false);
     }
 }
@@ -102,10 +114,10 @@ fn candidates(doc: &Document) -> Vec<Token> {
                 && !crate::citations::is_structured(&command.name)
             {
                 if syntax::is_single_citation(&command.name) {
-                    reference(&mut tokens, source, argument.span.clone());
+                    citation(&mut tokens, source, argument.span.clone());
                 } else {
-                    for span in syntax::reference_list_spans(source, argument.span.clone()) {
-                        reference(&mut tokens, source, span);
+                    for span in syntax::citation_list_spans(source, argument.span.clone()) {
+                        citation(&mut tokens, source, span);
                     }
                 }
             } else if syntax::boolean_reference(&command.name)
@@ -157,6 +169,7 @@ fn candidates(doc: &Document) -> Vec<Token> {
         (&doc.syntax.toggles, VARIABLE),
         (&doc.syntax.labels, KEY),
         (&doc.syntax.citations, KEY),
+        (&doc.syntax.bibliography_aliases, KEY),
         (&doc.syntax.colors, VARIABLE),
     ] {
         for entry in entries {
@@ -165,6 +178,43 @@ fn candidates(doc: &Document) -> Vec<Token> {
     }
     for entry in &doc.syntax.citation_references {
         push(&mut tokens, entry.span.clone(), KEY, false);
+    }
+    for entry in &doc.syntax.bibliography_strings.definitions {
+        push(&mut tokens, entry.span.clone(), VARIABLE, true);
+    }
+    for entry in &doc.syntax.bibliography_strings.references {
+        push(&mut tokens, entry.span.clone(), VARIABLE, false);
+    }
+    for entry in &doc.syntax.bibliography_completion.types {
+        if crate::bib_strings::identifier(&source[entry.span.clone()]) {
+            push(&mut tokens, entry.span.clone(), TYPE, false);
+        }
+    }
+    for entry in &doc.syntax.bibliography_completion.entries {
+        for field in &entry.fields {
+            push(&mut tokens, field.span.clone(), PROPERTY, false);
+        }
+    }
+    let values = &doc.syntax.bibliography_strings;
+    for span in &values.literal_spans {
+        // Literal backgrounds yield to relationship keys and validated links.
+        tokens.push(Token {
+            span: span.clone(),
+            kind: STRING,
+            modifiers: 0,
+            priority: 10,
+        });
+    }
+    for (spans, kind) in [
+        (&values.number_spans, NUMBER),
+        (&values.operator_spans, OPERATOR),
+    ] {
+        for span in spans {
+            push(&mut tokens, span.clone(), kind, false);
+        }
+    }
+    for link in &doc.syntax.bibliography_links {
+        push(&mut tokens, link.span.clone(), STRING, false);
     }
     for entry in &doc.syntax.color_references {
         push(&mut tokens, entry.span.clone(), VARIABLE, false);
