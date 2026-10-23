@@ -6987,6 +6987,248 @@ fn quick_fixes_highlights_and_selection_ranges_work_over_stdio() {
 }
 
 #[test]
+fn bibliography_type_and_field_completion_negotiate_snippets_and_refresh_over_stdio() {
+    let directory = tempfile::tempdir().unwrap();
+    let uri = Url::from_file_path(directory.path().join("refs.bib")).unwrap();
+    for snippets in [false, true] {
+        let mut server = Server::start();
+        let initialized = server.request(1, "initialize", json!({"processId":null,"capabilities":{"textDocument":{"completion":{"completionItem":{"snippetSupport":snippets}}}}}));
+        assert!(
+            initialized["capabilities"]["completionProvider"]["triggerCharacters"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("@"))
+        );
+        server.notify("initialized", json!({}));
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"languageId":"bibtex","version":1,"text":"@ArTBAD"}}),
+        );
+        let items = server.request(
+            2,
+            "textDocument/completion",
+            json!({"textDocument":{"uri":uri},"position":{"line":0,"character":4}}),
+        );
+        let article = items
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["label"] == "article")
+            .unwrap();
+        assert_eq!(
+            article["textEdit"]["range"],
+            json!({"start":{"line":0,"character":1},"end":{"line":0,"character":7}})
+        );
+        assert_eq!(article["insertTextFormat"], if snippets { 2 } else { 1 });
+        if snippets {
+            assert!(article["textEdit"]["newText"]
+                .as_str()
+                .unwrap()
+                .contains("author = {${2:}}"));
+        } else {
+            assert_eq!(article["textEdit"]["newText"], "article");
+        }
+        let source = "@book{😀,\r\n  authBAD = {Writer},\r\n  ti\r\n}";
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"text":source}]}),
+        );
+        let items = server.request(
+            3,
+            "textDocument/completion",
+            json!({"textDocument":{"uri":uri},"position":{"line":1,"character":6}}),
+        );
+        let author = items
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["label"] == "author")
+            .unwrap();
+        assert_eq!(author["insertTextFormat"], 1);
+        assert_eq!(author["textEdit"]["newText"], "author");
+        assert_eq!(
+            author["textEdit"]["range"],
+            json!({"start":{"line":1,"character":2},"end":{"line":1,"character":9}})
+        );
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":3},"contentChanges":[{"range":author["textEdit"]["range"],"text":"author"}]}));
+        let hover = server.request(
+            4,
+            "textDocument/hover",
+            json!({"textDocument":{"uri":uri},"position":{"line":1,"character":4}}),
+        );
+        assert!(hover["contents"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("Authors"));
+        let items = server.request(
+            5,
+            "textDocument/completion",
+            json!({"textDocument":{"uri":uri},"position":{"line":2,"character":4}}),
+        );
+        let title = items
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["label"] == "title")
+            .unwrap();
+        assert_eq!(
+            title["textEdit"]["newText"],
+            if snippets {
+                "title = {${1:}},"
+            } else {
+                "title"
+            }
+        );
+        let source = "@book{😀,\r\n  author = {Writer},\r\n  title = {Text @art},\r\n  \r\n}";
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":uri,"version":4},"contentChanges":[{"text":source}]}),
+        );
+        let items = server.request(
+            6,
+            "textDocument/completion",
+            json!({"textDocument":{"uri":uri},"position":{"line":3,"character":2}}),
+        );
+        assert!(!items
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["label"] == "author" || item["label"] == "title"));
+        assert!(items
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["label"] == "publisher"));
+        let at = source.find("@art").unwrap() + 4;
+        let empty = server.request(7, "textDocument/completion", json!({"textDocument":{"uri":uri},"position":latex_lsp::text::Text::new(source.into()).position(at)}));
+        assert_eq!(empty, json!([]));
+        server.request(8, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+fn custom_bibliography_field_completions_refresh_project_resources_and_negotiate_snippets() {
+    for snippets in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        std::fs::write(
+            root.join("main.tex"),
+            r"\documentclass{article}\bibliography{shared,query}",
+        )
+        .unwrap();
+        let shared = Url::from_file_path(root.join("shared.bib")).unwrap();
+        let query = Url::from_file_path(root.join("query.bib")).unwrap();
+        let disk = "@book{old,Cost$Field={Disk}}";
+        std::fs::write(shared.to_file_path().unwrap(), disk).unwrap();
+        let source = "@book{😀, coBAD}";
+        std::fs::write(query.to_file_path().unwrap(), source).unwrap();
+        let mut server = Server::start();
+        server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(root).unwrap(),"capabilities":{"textDocument":{"completion":{"completionItem":{"snippetSupport":snippets}}}}}));
+        server.notify("initialized", json!({}));
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":query,"languageId":"bibtex","version":1,"text":source}}),
+        );
+        let request = json!({"textDocument":{"uri":query},"position":{"line":0,"character":12}});
+        let items = server.request(2, "textDocument/completion", request.clone());
+        let cost = items
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["label"] == "Cost$Field")
+            .unwrap();
+        assert_eq!(
+            cost["textEdit"]["range"],
+            json!({"start":{"line":0,"character":10},"end":{"line":0,"character":15}})
+        );
+        assert_eq!(cost["insertTextFormat"], if snippets { 2 } else { 1 });
+        assert_eq!(
+            cost["textEdit"]["newText"],
+            if snippets {
+                r"Cost\$Field = {${1:}},"
+            } else {
+                "Cost$Field"
+            }
+        );
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":shared,"languageId":"bibtex","version":7,"text":disk}}),
+        );
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":shared,"version":8},"contentChanges":[{"range":{"start":{"line":0,"character":10},"end":{"line":0,"character":20}},"text":"Code\\Field"}]}));
+        let items = server.request(3, "textDocument/completion", request.clone());
+        let code = items
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["label"] == "Code\\Field")
+            .unwrap();
+        assert_eq!(
+            code["textEdit"]["newText"],
+            if snippets {
+                r"Code\\Field = {${1:}},"
+            } else {
+                r"Code\Field"
+            }
+        );
+        assert!(!items
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["label"] == "Cost$Field"));
+        std::fs::write(
+            shared.to_file_path().unwrap(),
+            "@book{old,Counter:Field={Watched}}",
+        )
+        .unwrap();
+        server.notify(
+            "workspace/didChangeWatchedFiles",
+            json!({"changes":[{"uri":shared,"type":2}]}),
+        );
+        let items = server.request(4, "textDocument/completion", request.clone());
+        assert!(items
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["label"] == "Code\\Field"));
+        assert!(!items
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["label"] == "Counter:Field"));
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":shared}}),
+        );
+        let items = server.request(5, "textDocument/completion", request.clone());
+        assert!(items
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["label"] == "Counter:Field"));
+        assert!(!items
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["label"] == "Cost$Field" || item["label"] == "Code\\Field"));
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":query,"version":2},"contentChanges":[{"range":{"start":{"line":0,"character":15},"end":{"line":0,"character":15}},"text":" % keep\r\n = {Keep}"}]}));
+        let items = server.request(6, "textDocument/completion", request);
+        let counter = items
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["label"] == "Counter:Field")
+            .unwrap();
+        assert_eq!(counter["insertTextFormat"], 1);
+        assert_eq!(counter["textEdit"]["newText"], "Counter:Field");
+        server.request(7, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
 fn navigation_capabilities_and_requests_work_over_stdio() {
     let directory = tempfile::tempdir().unwrap();
     let root = Url::from_directory_path(directory.path()).unwrap();

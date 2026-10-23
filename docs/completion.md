@@ -2,7 +2,43 @@
 
 [返回文档目录](README.md) · [编辑功能](editing.md) · [编辑器配置](editors.md)
 
-支持常用 LaTeX 命令、环境、项目内用户命令、跨文件标签、BibTeX 文献键，以及输入文件、图片和本地包等路径。支持词中替换；引用和路径的可选参数含有嵌套命令时，仍可找到当前的键名或文件参数。
+支持常用 LaTeX 命令、环境、项目内用户命令、跨文件标签、BibTeX 条目类型、字段名、字符串缩写与文献键，以及输入文件、图片和本地包等路径。支持词中替换；引用和路径的可选参数含有嵌套命令时，仍可找到当前的键名或文件参数。
+
+biblatex 的 `citefield` / `printfield`、`citelist` / `printlist`、`citename` / `printnames` 还按参数类型补全常用输出字段、字面列表或姓名列表名称，并提供悬停说明；详见[biblatex 数据访问](biblatex.md#字段列表和姓名引用)。
+
+字段读取、undef 检查和字段/列表比较共用名称候选。`iffieldsequal` 的两个字段参数都可补全；比较字符串、命令内容和执行分支中的普通文字保持独立，详见[字段与列表条件](biblatex.md#字段与列表条件)。
+
+`ifentrytype` 的首参数建议常用 biblatex 输出条目类型，使用普通名称编辑和类型说明；它的两个分支保持独立，详见[条目条件检查](biblatex.md#条目条件检查)。
+
+## BibTeX 条目与字段
+
+在 `@` 后补全常用 BibTeX / biblatex 条目类型，也提供当前项目文献库中已出现的自定义类型。输入 `@art` 可选择 `article`，大小写不敏感，词中补全会替换完整类型名并保留 `@`。已有花括号或圆括号正文时，只替换名称，保留条目键、字段和注释。
+
+支持片段的客户端可以直接插入新条目的字段模板，例如选择 `article` 后填入文献键、作者、标题、期刊和年份。模板采用当前文档的 LF / CRLF；`comment`、`string` 和 `preamble` 使用各自的语法。模板提供常用字段，不用于判断样式要求或校验必填项；自定义类型生成通用条目骨架。
+
+在条目键后的逗号、字段之间的空白或未完成字段名处，提供常用字段补全。候选包含字段说明，优先显示当前类型常用的字段，排除同一条目中已经填写的字段名；比较不区分大小写。编辑已有字段名时保留其赋值、字段值及注释。例如，把 `AUTHbad = {Writer}` 中的 `AUTHbad` 补全为 `author`，不会修改 `{Writer}`。
+
+候选也包含当前项目文献库中已赋值的自定义字段。保留原始名称，按 ASCII 大小写去重；同名字段优先采用当前文件中的拼写，内置字段使用标准小写名称。当前类型常用字段排在最前，其余内置字段之后显示自定义字段。尚未赋值的名称不会成为项目候选，已输入 `=` 的未完成赋值仍可贡献字段名。其他项目、注释和特殊条目中的示例不参与收集。
+
+字段名采用 BibTeX 标识符规则，支持 `custom:field`、`field$` 和非 ASCII 字符等合法名称；它们的后续字段继续参与大纲、导航、补全和语义高亮。在 `AUTH:bad` 中输入 `AUTH` 后选择 `author`，会替换整个 `AUTH:bad` 名称。数字开头的字段名不作为有效赋值解析。
+
+支持片段时，新字段插入值占位符，如 `author = {…},`，并保留已有逗号；已有 `=` 时只改字段名。自定义字段名中的 `$` 和反斜杠会按片段语法转义，展开后保留原始字符。没有片段能力的客户端只插入类型名或字段名。内置条目类型和字段名也提供悬停说明；条目键和条目间引用继续使用文献导航与补全。
+
+上下文复用条目及字段解析，不在条目键、标题、URL、其他字段值、注释和特殊条目正文中建议类型或字段名。缺少键后的逗号或遇到无法解析的字段时，不猜测后续字段。自定义类型和字段的候选按项目隔离，不引入独立论文中的名称；未保存的增量编辑立即更新候选，关闭文件后恢复当前磁盘内容。
+
+验证：
+
+```sh
+cargo test --locked --test bibliography_completion --test bibliography
+cargo test --locked --test protocol bibliography_type_and_field_
+cargo test --locked --test protocol custom_bibliography_field_completions
+cargo test --locked --test bibliography_completion real_bibtex_reads_completed -- --include-ignored
+cargo test --locked --test bibliography_completion bibliography_snippets -- --include-ignored
+```
+
+最后一项通过真实 Neovim 0.10+ 的 `vim.snippet` 检查片段展开；原生 BibTeX 回归使用自定义样式读取补全后的字段，验证已有赋值和后续标题保留。
+
+BibTeX 字段值、字符串赋值和 `@preamble` 的表达式还提供项目内[字符串缩写](bibliography.md#字符串缩写)及常见月份补全。候选可替换完整裸标识符，或填入 `=`、`#` 后的空值位置，保留字面文本和拼接结构。
 
 ## 调用片段与已有参数
 

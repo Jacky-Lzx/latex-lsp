@@ -311,7 +311,13 @@ impl LanguageServer for Backend {
                     },
                 )),
                 completion_provider: Some(CompletionOptions {
-                    trigger_characters: Some(vec!["\\".into(), "{".into(), ",".into(), "/".into()]),
+                    trigger_characters: Some(vec![
+                        "\\".into(),
+                        "{".into(),
+                        ",".into(),
+                        "/".into(),
+                        "@".into(),
+                    ]),
                     ..Default::default()
                 }),
                 diagnostic_provider: pull_diagnostics.then(|| {

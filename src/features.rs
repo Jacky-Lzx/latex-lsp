@@ -1291,6 +1291,12 @@ fn bibliography_completion(
     offset: usize,
     scope: &BTreeSet<Url>,
 ) -> Vec<CompletionItem> {
+    if let Some(items) = crate::bib_completion::completion(workspace, doc, offset, scope) {
+        return items;
+    }
+    if let Some(items) = crate::bib_strings::completion(workspace, doc, offset, scope) {
+        return items;
+    }
     let Some(field) = doc
         .syntax
         .citation_fields
@@ -1309,23 +1315,45 @@ fn bibliography_completion(
     let suffix = &doc.text.source[offset..field.argument.span.end];
     let remaining = suffix.find(',').unwrap_or(suffix.len());
     let remaining = suffix[..remaining].trim_end().len();
-    let range = doc.text.range(offset - key.len(), offset + remaining);
+    let key_span = offset - key.len()..offset + remaining;
     let mut seen = BTreeSet::new();
     workspace
         .documents
         .iter()
         .filter(|(uri, _)| scope.contains(*uri))
         .flat_map(|(uri, doc)| doc.syntax.citations.iter().map(move |entry| (uri, entry)))
-        .filter(|(_, entry)| entry.name.starts_with(key) && seen.insert(entry.name.clone()))
-        .map(|(uri, entry)| CompletionItem {
-            label: entry.name.clone(),
-            detail: Some(format!("{} — {}", entry.detail, uri.path())),
-            kind: Some(CompletionItemKind::REFERENCE),
-            text_edit: Some(CompletionTextEdit::Edit(TextEdit {
-                range,
-                new_text: entry.name.clone(),
-            })),
-            ..Default::default()
+        .filter(|(_, entry)| {
+            syntax::is_static_citation_key(&entry.name)
+                && entry.name.starts_with(key)
+                && seen.insert(entry.name.clone())
+        })
+        .filter_map(|(uri, entry)| {
+            let (span, new_text) = if entry.name.contains('"')
+                && doc
+                    .text
+                    .source
+                    .as_bytes()
+                    .get(field.argument.outer_span.start)
+                    == Some(&b'"')
+            {
+                let before = &doc.text.source[field.argument.span.start..offset - key.len()];
+                let after = &doc.text.source[offset + remaining..field.argument.span.end];
+                (
+                    field.argument.outer_span.clone(),
+                    format!("{{{before}{}{after}}}", entry.name),
+                )
+            } else {
+                (key_span.clone(), entry.name.clone())
+            };
+            let (range, additional) = syntax::name_completion_ranges(&doc.text, span, offset)?;
+            Some(CompletionItem {
+                label: entry.name.clone(),
+                detail: Some(format!("{} — {}", entry.detail, uri.path())),
+                kind: Some(CompletionItemKind::REFERENCE),
+                text_edit: Some(CompletionTextEdit::Edit(TextEdit { range, new_text })),
+                additional_text_edits: (!additional.is_empty()).then_some(additional),
+                ..Default::default()
+            })
         })
         .collect()
 }
@@ -1671,7 +1699,11 @@ fn all_references(
 
 pub fn hover(workspace: &Workspace, uri: &Url, position: Position) -> Option<Hover> {
     let doc = workspace.documents.get(uri)?;
-    let target = target(workspace, uri, doc.text.offset(position)?)?;
+    let offset = doc.text.offset(position)?;
+    if let Some(hover) = crate::bib_completion::hover(doc, offset) {
+        return Some(hover);
+    }
+    let target = target(workspace, uri, offset)?;
     let scope = workspace.symbol_scope(uri);
     let mut value = None;
     for (entry_uri, entry_doc) in &workspace.documents {
