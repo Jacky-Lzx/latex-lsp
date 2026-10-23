@@ -1779,6 +1779,33 @@ pub(crate) fn token(source: &str, start: usize) -> Option<&str> {
     Some(&source[start..end])
 }
 
+/// Inline verbatim readers cannot change the catcodes of tokens already
+/// collected as a macro argument. Match ordinary tokens, skipping comments
+/// and protecting delimiters inside balanced groups or control symbols.
+pub(crate) fn tokenized_code_end(source: &str, start: usize) -> Option<usize> {
+    let delimiter = token(source, start)?;
+    if delimiter == "{" {
+        return group(source, start, b'{', b'}').map(|(_, end)| end);
+    }
+    if delimiter.starts_with('\\') || delimiter == "}" || delimiter.chars().any(char::is_whitespace)
+    {
+        return None;
+    }
+    let mut at = start + delimiter.len();
+    loop {
+        at = skip_space(source, at);
+        let value = token(source, at)?;
+        if value == delimiter {
+            return Some(at + value.len());
+        }
+        at = match value {
+            "{" => group(source, at, b'{', b'}')?.1,
+            "}" => return None,
+            _ => at + value.len(),
+        };
+    }
+}
+
 /// Only infer ungrouped tokens whose boundaries agree across the engines. In
 /// pdfTeX a Unicode character consists of several UTF-8 tokens; XeTeX reads one
 /// character and may include Unicode letters in a control word instead.
@@ -2215,9 +2242,18 @@ impl Syntax {
                                 argument.outer_span.start,
                                 (argument.span.clone(), argument.outer_span.end),
                             );
-                            if let Some(span) =
-                                crate::minted::inline_span(source, argument.outer_span.end)
-                            {
+                            let code = skip_space(source, argument.outer_span.end);
+                            let tokenized = inline_tokenization.contains(
+                                source,
+                                &result,
+                                &control_operands,
+                                code,
+                            );
+                            if let Some(span) = crate::minted::inline_span(
+                                source,
+                                argument.outer_span.end,
+                                tokenized,
+                            ) {
                                 literal_arguments.insert(span.start, (span.clone(), span.end));
                             }
                         }

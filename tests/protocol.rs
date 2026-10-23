@@ -79,7 +79,87 @@ fn minted_inline_code_stays_opaque_after_incremental_changes_over_stdio() {
     );
     assert_eq!(symbols.as_array().unwrap().len(), 1, "{symbols}");
     assert_eq!(symbols[0]["name"], "kept");
-    server.request(8, "shutdown", Value::Null);
+    let mut source = source.to_owned();
+    source.replace_range(start..end, "{\\label{kept} %\r\n{nested}}");
+    for (stage, code) in [
+        "\\textbf{\\mintinline{tex}{a\\}\\label{kept}\\input{fake}b}}",
+        "\\textbf{\\mintinline{tex}|a{b|\\label{kept}\\input{fake}}d|}",
+        "\\let\\strong\\textbf\\strong{\\mintinline{tex}% header\r\n|\\label{kept}\\input{fake}|}",
+        "\\relax{\\mintinline{tex}{a\\}}",
+        "\\mintinline{tex}%\\label{kept}\\input{fake}%",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let start = source.find("\\label{kept}\r\n").unwrap() + "\\label{kept}\r\n".len();
+        let end = source.rfind("\r\n\\ref").unwrap();
+        let text = Text::new(source.clone());
+        let version = 9 + stage;
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":version},"contentChanges":[{"range":text.range(start,end),"text":code}]}));
+        source.replace_range(start..end, code);
+        let text = Text::new(source.clone());
+        let id = 20 + stage as u64 * 8;
+        let diagnostics = server.request(
+            id,
+            "textDocument/diagnostic",
+            json!({"textDocument":{"uri":main}}),
+        );
+        assert_eq!(diagnostics["items"], json!([]), "{source}: {diagnostics}");
+        let position = text.position(source.rfind("kept").unwrap());
+        let edit = server.request(
+            id + 1,
+            "textDocument/rename",
+            json!({"textDocument":{"uri":main},"position":position,"newName":"changed"}),
+        );
+        assert_eq!(
+            edit["documentChanges"][0]["textDocument"]["version"],
+            version
+        );
+        assert_eq!(
+            edit["documentChanges"][0]["edits"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2,
+            "{source}: {edit}"
+        );
+        let links = server.request(
+            id + 2,
+            "textDocument/documentLink",
+            json!({"textDocument":{"uri":main}}),
+        );
+        assert_eq!(links, json!([]), "{source}: {links}");
+        let symbols = server.request(
+            id + 3,
+            "textDocument/documentSymbol",
+            json!({"textDocument":{"uri":main}}),
+        );
+        assert_eq!(
+            symbols.as_array().unwrap().len(),
+            if stage == 2 { 2 } else { 1 },
+            "{source}: {symbols}"
+        );
+        if let Some(offset) = code.find("\\input") {
+            let inside = text.position(start + offset + 3);
+            assert_eq!(
+                server.request(
+                    id + 4,
+                    "textDocument/signatureHelp",
+                    json!({"textDocument":{"uri":main},"position":inside})
+                ),
+                Value::Null
+            );
+            assert_eq!(
+                server.request(
+                    id + 5,
+                    "textDocument/definition",
+                    json!({"textDocument":{"uri":main},"position":inside})
+                ),
+                json!([])
+            );
+        }
+    }
+    server.request(100, "shutdown", Value::Null);
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }

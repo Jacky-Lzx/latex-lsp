@@ -30,7 +30,7 @@ cargo test --locked
 
 ## 代码结构与分析缓存
 
-`minted.rs` 共享 `mintinline` / `mint` 的头部及原始代码边界，分别读取普通选项、语言参数和 fvextra 的逐字参数。语言与代码在语法主扫描中登记不透明范围，保留命令和可执行的头部选项；语义高亮、导航与重命名读取同一份范围。`inputminted` 的第三实参通过文件参数入口读取，使用面向 Python 字符串的无引号文件名包装，与 FancyVerb 通过 `code_inputs` 共享编辑分派、项目数据角色与构建快照。minted 的设置检查独立于 listings，复用 FancyVerb 的全局执行设置保护；原生和回退模式的缺失文件错误共用精确源码回显核对及版本化拼写修复。
+`minted.rs` 共享 `mintinline` / `mint` 的头部及原始代码边界，分别读取普通选项、语言参数和 fvextra 的逐字参数。宏参数中的预分词上下文与 listings 共用 `InlineTokenization`，通过 `syntax::tokenized_code_end` 读取普通 token 和分组，普通源码仍使用 fvextra 的原始字符规则。语言与代码在语法主扫描中登记不透明范围，保留命令和可执行的头部选项；语义高亮、导航与重命名读取同一份范围。`inputminted` 的第三实参通过文件参数入口读取，使用面向 Python 字符串的无引号文件名包装，与 FancyVerb 通过 `code_inputs` 共享编辑分派、项目数据角色与构建快照。minted 的设置检查独立于 listings，复用 FancyVerb 的全局执行设置保护；原生和回退模式的缺失文件错误共用精确源码回显核对及版本化拼写修复。
 
 minted 环境先以普通 TeX 规则读取选项和语言，再从下一行调用 FancyVerb 共享的正文结束扫描器；不能从整个头部起点简单搜索结束字符串。语法层继续将真实结束标记和结束行被丢弃的尾部分为两个不透明范围，使折叠及环境名联动编辑保留准确边界，尾部的示例命令不参与依赖和符号处理。
 

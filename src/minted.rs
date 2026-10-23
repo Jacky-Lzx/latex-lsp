@@ -29,21 +29,34 @@ pub(crate) fn environment_header_end(source: &str, header_start: usize) -> Optio
     crate::fancyvrb::name_argument(source, start).map(|(_, end)| end)
 }
 
-/// Braced code balances literal braces. Backslashes and percent signs in
+/// Direct braced code balances literal braces. Backslashes and percent signs in
 /// the body are data, so neither escapes a brace nor starts a TeX comment.
 /// Both forms accept line breaks, as fvextra's ReadVArg does. An unfinished
-/// argument remains literal through the end of input.
-pub(crate) fn inline_span(source: &str, after_language: usize) -> Option<Range<usize>> {
-    // ReadVArg changes catcodes before looking ahead: '%' and '\\' can be
-    // delimiters here, and a percent sign no longer starts a header comment.
-    let start = after_language
-        + source[after_language..]
-            .bytes()
-            .take_while(u8::is_ascii_whitespace)
-            .count();
+/// argument remains literal through the end of input. Already collected macro
+/// arguments retain ordinary TeX tokens, including comments before the code.
+pub(crate) fn inline_span(
+    source: &str,
+    after_language: usize,
+    tokenized: bool,
+) -> Option<Range<usize>> {
+    // Direct ReadVArg changes catcodes before looking ahead: '%' and '\\'
+    // can be delimiters. Collected arguments keep their original catcodes.
+    let start = if tokenized {
+        syntax::skip_space(source, after_language)
+    } else {
+        after_language
+            + source[after_language..]
+                .bytes()
+                .take_while(u8::is_ascii_whitespace)
+                .count()
+    };
     let delimiter = source.get(start..)?.chars().next()?;
     if delimiter.is_whitespace() || delimiter == '}' {
         return None;
+    }
+    if tokenized {
+        let end = syntax::tokenized_code_end(source, start).unwrap_or(source.len());
+        return Some(start..end);
     }
     let mut depth = 1usize;
     let body = start + delimiter.len_utf8();

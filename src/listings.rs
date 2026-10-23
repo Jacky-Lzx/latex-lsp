@@ -25,33 +25,11 @@ pub(crate) fn inline_span(source: &str, command_end: usize) -> Option<Range<usiz
 
 pub(crate) fn inline_body(source: &str, start: usize, tokenized: bool) -> Range<usize> {
     let delimiter = source[start..].chars().next().unwrap();
-    if tokenized {
-        if delimiter == '{' {
-            if let Some((_, end)) = syntax::group(source, start, b'{', b'}') {
-                return start..end;
-            }
-        } else {
-            let mut at = start + delimiter.len_utf8();
-            loop {
-                at = syntax::skip_space(source, at);
-                let Some(value) = syntax::token(source, at) else {
-                    break;
-                };
-                if value.starts_with(delimiter) {
-                    return start..at + value.len();
-                }
-                if value == "{" {
-                    let Some((_, end)) = syntax::group(source, at, b'{', b'}') else {
-                        break;
-                    };
-                    at = end;
-                } else if value == "}" {
-                    break;
-                } else {
-                    at += value.len();
-                }
-            }
-        }
+    if let Some(end) = tokenized
+        .then(|| syntax::tokenized_code_end(source, start))
+        .flatten()
+    {
+        return start..end;
     }
     let close = if delimiter == '{' { '}' } else { delimiter };
     let body = start + delimiter.len_utf8();

@@ -359,7 +359,7 @@ cargo test --locked --test protocol fancyvrb_environment_header_
 
 ## minted 代码
 
-minted 的默认回归覆盖内联逐字代码、跨行和 Unicode 定界符、环境头部的完整与未完成参数提示、注释及可选参数边界、项目重定义与未保存设置刷新，以及文件补全与移动、数据/源码角色、全局设置保护和缺失文件修复。协议回归检查头部参数的逐次增量输入、代码与关闭行尾部的提示隔离，以及代码文件内容变化和构建中路径编辑对 PDF / SyncTeX 历史的影响：
+minted 的默认回归覆盖内联逐字代码、已知宏参数和复制宏中的预分词边界、普通作用域及零参数包装反例、跨行和 Unicode 定界符、环境头部的完整与未完成参数提示、注释及可选参数边界、项目重定义与未保存设置刷新，以及文件补全与移动、数据/源码角色、全局设置保护和缺失文件修复。协议回归检查头部参数的逐次增量输入、代码与关闭行尾部的提示隔离，以及代码文件内容变化和构建中路径编辑对 PDF / SyncTeX 历史的影响：
 
 ```sh
 cargo test --locked --test minted --test minted_environments --test minted_inputs --test missing_minted_inputs
@@ -369,7 +369,7 @@ cargo test --locked --test protocol static_code_
 cargo test --locked --test protocol in_flight_code_path_
 ```
 
-安装 pdfLaTeX 与 minted v3 后，为四个测试目标添加 `-- --include-ignored`。内联代码使用关闭 shell escape 的逐字模式；路径、环境及双模式缺失文件修复回归另需 PATH 上的 `latexminted`。高亮回归使用受限 shell escape 和立即高亮模式，核对生成文件中的独立内容标记，确认 Python 实际读取的空格及 Unicode 文件名。环境回归核对头部及正文的伪结束标记、逐字与高亮模式、结束行尾部的原生错误、版本化标签重命名及实际 aux 输出。支持范围见 [minted 代码](minted.md)。
+安装 pdfLaTeX 与 minted v3 后，为四个测试目标添加 `-- --include-ignored`。内联代码使用关闭 shell escape 的逐字模式，预分词回归另用 XeLaTeX 核对注释、转义、嵌套分组及标签重命名后代码中的伪命令和文件包含不执行；路径、环境及双模式缺失文件修复回归另需 PATH 上的 `latexminted`。高亮回归使用受限 shell escape 和立即高亮模式，核对生成文件中的独立内容标记，确认 Python 实际读取的空格及 Unicode 文件名。环境回归核对头部及正文的伪结束标记、逐字与高亮模式、结束行尾部的原生错误、版本化标签重命名及实际 aux 输出。支持范围见 [minted 代码](minted.md)。
 
 ## 文献与编译诊断
 

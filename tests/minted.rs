@@ -121,6 +121,81 @@ fn raw_braces_and_percent_signs_balance_without_tex_escape_rules() {
 }
 
 #[test]
+fn macro_arguments_preserve_tokenized_comments_escapes_and_delimiters() {
+    for command in ["mintinline", "mint"] {
+        for body in [
+            r"{a\}\label{phantom}\input{fake}b}",
+            "{a% ignored }\r\n\\label{phantom}\\input{fake}b}",
+            r"|a\|\label{phantom}\input{fake}b|",
+            r"|a{b|\label{phantom}\input{fake}}d|",
+            "|a% ignored |\r\n\\label{phantom}\\input{fake}b|",
+            "% header comment\r\n|\\label{phantom}\\input{fake}|",
+        ] {
+            for (before, after) in [
+                (r"\textbf{", "}"),
+                (r"\newcommand{\one}[1]{#1}\one{", "}"),
+                (r"\let\strong\textbf\strong{", "}"),
+                (r"\def\example{", r"}\example"),
+            ] {
+                let literal = format!("{before}\\{command}[breaklines]{{latex}}{body}{after}");
+                let source = format!("\\label{{kept}}{literal}\\ref{{kept}}");
+                let main = uri();
+                let mut workspace = Workspace::default();
+                workspace.open(main.clone(), source.clone(), 7);
+                let doc = &workspace.documents[&main];
+                assert!(
+                    doc.syntax.diagnostics.is_empty(),
+                    "{source}: {:?}",
+                    doc.syntax.diagnostics
+                );
+                assert_eq!(doc.syntax.labels.len(), 1, "{source}");
+                assert!(
+                    !doc.syntax
+                        .commands
+                        .iter()
+                        .any(|command| command.name == "input"),
+                    "{source}"
+                );
+                assert!(navigation::document_links(&workspace, &main).is_empty());
+                let at = doc.text.position(source.rfind("kept").unwrap());
+                let edit = features::rename(&workspace, &main, at, "changed")
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(
+                    apply(&source, edit.changes.unwrap()[&main].clone()),
+                    format!("\\label{{changed}}{literal}\\ref{{changed}}")
+                );
+                let inside = doc.text.position(source.find("phantom").unwrap());
+                assert!(features::completion(&workspace, &main, inside).is_empty());
+                assert!(signature::help(&workspace, &main, inside).is_none());
+                assert!(features::hover(&workspace, &main, inside).is_none());
+            }
+        }
+    }
+}
+
+#[test]
+fn ordinary_scopes_and_consumed_commands_preserve_raw_minted_catcodes() {
+    for before in [
+        "{",
+        r"\relax{",
+        r"\newcommand{\zero}{}\zero{",
+        r"\newcommand{\gobble}[1]{}\gobble\textbf{",
+        r"\let\zero\relax\zero{",
+        r"\unknown{",
+    ] {
+        let source = format!(r"{before}\mintinline{{latex}}{{a\}}}}\label{{real}}");
+        let doc = Document::new(&uri(), source.clone(), Some(7));
+        assert!(
+            doc.syntax.diagnostics.is_empty(),
+            "{source}: {:?}",
+            doc.syntax.diagnostics
+        );
+        assert_eq!(doc.syntax.labels.len(), 1, "{source}");
+    }
+}
+
+#[test]
 fn incomplete_code_stays_literal_until_its_delimiter_or_end_of_input() {
     for source in [
         "\\mintinline{tex}{\\label{phantom} %\r\n\\input{fake}",
@@ -218,6 +293,64 @@ fn headers_have_signatures_and_snippets_and_incremental_edits_refresh_literal_bo
         "{kinds:?}"
     );
     assert!(!kinds.iter().any(|(_, kind)| *kind == "comment"));
+}
+
+#[test]
+#[ignore = "requires pdflatex, xelatex and minted v3"]
+fn real_tokenized_inline_code_preserves_labels_and_inputs_after_rename() {
+    for engine in ["pdflatex", "xelatex"] {
+        for command in ["mintinline", "mint"] {
+            for body in [
+                r"{a\}\typeout{PHANTOM}\label{kept}\input{fake}b}",
+                "{a% ignored }\n\\typeout{PHANTOM}\\label{kept}\\input{fake}b}",
+                r"|a\|\typeout{PHANTOM}\label{kept}\input{fake}b|",
+                r"|a{b|\typeout{PHANTOM}\label{kept}\input{fake}}d|",
+                "|a% ignored |\n\\typeout{PHANTOM}\\label{kept}\\input{fake}b|",
+                "% header\n|\\typeout{PHANTOM}\\label{kept}\\input{fake}|",
+            ] {
+                let directory = tempfile::tempdir().unwrap();
+                let root = directory.path();
+                let main = Url::from_file_path(root.join("main.tex")).unwrap();
+                let literal =
+                    format!("\\let\\strong\\textbf\\strong{{\\{command}{{latex}}{body}}}");
+                let source = format!("\\documentclass{{article}}\n\\usepackage[verbatim]{{minted}}\n\\begin{{document}}\n\\label{{kept}}{literal}\\label{{tail}}\\ref{{kept}}\n\\end{{document}}\n");
+                let mut workspace = Workspace::default();
+                workspace.open(main.clone(), source.clone(), 7);
+                let doc = &workspace.documents[&main];
+                assert!(
+                    doc.syntax.diagnostics.is_empty(),
+                    "{source}: {:?}",
+                    doc.syntax.diagnostics
+                );
+                let at = doc.text.position(source.rfind("kept").unwrap());
+                let edit = features::rename(&workspace, &main, at, "changed")
+                    .unwrap()
+                    .unwrap();
+                let updated = apply(&source, edit.changes.unwrap()[&main].clone());
+                assert!(updated.contains(&literal));
+                std::fs::write(root.join("main.tex"), updated).unwrap();
+                let output = std::process::Command::new(engine)
+                    .args([
+                        "-interaction=nonstopmode",
+                        "-halt-on-error",
+                        "-no-shell-escape",
+                        "main.tex",
+                    ])
+                    .current_dir(root)
+                    .output()
+                    .unwrap();
+                let log = std::fs::read_to_string(root.join("main.log")).unwrap();
+                assert!(output.status.success(), "{engine}/{command}/{body}: {log}");
+                assert!(!log.lines().any(|line| line == "PHANTOM"));
+                let aux = std::fs::read_to_string(root.join("main.aux")).unwrap();
+                assert!(
+                    aux.contains("newlabel{changed}") && aux.contains("newlabel{tail}"),
+                    "{aux}"
+                );
+                assert!(!aux.contains("newlabel{kept}"), "{aux}");
+            }
+        }
+    }
 }
 
 #[test]
