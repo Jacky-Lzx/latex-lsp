@@ -95,16 +95,23 @@ impl Context {
     }
 }
 
-fn calls(doc: &Document, signatures: &CommandSignatures<'_>) -> Option<Calls> {
+type Potential = BTreeMap<String, BTreeSet<String>>;
+type Uncertain = Vec<(bool, String)>;
+fn calls(
+    doc: &Document,
+    signatures: &CommandSignatures<'_>,
+    potential: &Potential,
+) -> Option<(Calls, Uncertain)> {
     let source = &doc.text.source;
     let context = Context::new(doc, signatures);
     let empty = BTreeSet::new();
     let mut result = BTreeMap::new();
+    let mut uncertain = Vec::new();
     for (index, lexical) in doc.syntax.commands.iter().enumerate() {
         if context.literal(lexical.span.start) {
             continue;
         }
-        let Some(command) = reference_calls::named_command(
+        let command = reference_calls::named_command(
             source,
             &doc.syntax,
             index,
@@ -112,16 +119,27 @@ fn calls(doc: &Document, signatures: &CommandSignatures<'_>) -> Option<Calls> {
             &empty,
             &context.declarations,
         )
-        .or_else(|| direct_reference(&lexical.name).then(|| lexical.clone())) else {
+        .or_else(|| direct_reference(&lexical.name).then(|| lexical.clone()))
+        .filter(|command| signatures.command_unchanged(&command.name));
+        let Some(command) = command else {
+            let (name, span) = signatures
+                .named_invocation(source, &doc.syntax, index, &empty, &context.declarations)
+                .unwrap_or((&lexical.name, lexical.span.clone()));
+            for possible in potential.get(name).into_iter().flatten() {
+                let command = reference_calls::resolved_command(source, possible, span.clone());
+                for (citation, key) in reference_calls::keys(source, &command, false) {
+                    if result.len() + uncertain.len() >= 20_000 {
+                        return None;
+                    }
+                    uncertain.push((citation, source[key].to_owned()));
+                }
+            }
             continue;
         };
-        if !signatures.command_unchanged(&command.name) {
-            continue;
-        }
         let at = lexical.span.start;
         let operand = context.operand(doc, at);
         for (citation, span) in reference_calls::keys(source, &command, false) {
-            if result.len() >= 20_000 {
+            if result.len() + uncertain.len() >= 20_000 {
                 return None;
             }
             result.insert(
@@ -135,12 +153,68 @@ fn calls(doc: &Document, signatures: &CommandSignatures<'_>) -> Option<Calls> {
             );
         }
     }
-    Some(result)
+    Some((result, uncertain))
 }
 fn direct_reference(name: &str) -> bool {
     syntax::is_reference(name)
         || syntax::has_separate_label_argument(name)
         || syntax::is_citation(name)
+}
+// Track only paths containing a captured copy. Plain forwarding paths keep
+// their existing confirmed semantics. Captures may predate a redefinition and
+// therefore remain possible references even when the source is now ordinary.
+fn copy_candidates(docs: &[&Document], work: &mut usize) -> Option<Potential> {
+    let mut users = BTreeMap::<String, Vec<(String, bool)>>::new();
+    let mut has_copy = false;
+    for doc in docs {
+        for entry in &doc.syntax.definitions {
+            let edge =
+                crate::signature::literal_copy_target(&doc.text.source, &doc.syntax, entry, false)
+                    .map(|(target, _)| (target, true))
+                    .or_else(|| {
+                        crate::signature::source_alias(&doc.text.source, &doc.syntax, entry)
+                            .map(|target| (target, false))
+                    });
+            if let Some((target, copied)) = edge {
+                has_copy |= copied;
+                users
+                    .entry(target)
+                    .or_default()
+                    .push((entry.name.clone(), copied));
+            }
+        }
+    }
+    let mut result = Potential::new();
+    if !has_copy {
+        return Some(result);
+    }
+    for builtin in users.keys().filter(|name| direct_reference(name)) {
+        let mut pending = vec![(builtin.clone(), false)];
+        let mut seen = BTreeSet::new();
+        while let Some((name, copied)) = pending.pop() {
+            *work = work.saturating_add(1);
+            if *work > 100_000 {
+                return None;
+            }
+            if !seen.insert((name.clone(), copied)) {
+                continue;
+            }
+            if copied {
+                result
+                    .entry(name.clone())
+                    .or_default()
+                    .insert(builtin.clone());
+            }
+            pending.extend(
+                users
+                    .get(&name)
+                    .into_iter()
+                    .flatten()
+                    .map(|(name, edge)| (name.clone(), copied || *edge)),
+            );
+        }
+    }
+    Some(result)
 }
 fn candidate_names(workspace: &Workspace) -> BTreeSet<&str> {
     workspace
@@ -200,6 +274,8 @@ impl Index {
         let mut commands = 0usize;
         let mut definitions = 0usize;
         let mut keys = 0usize;
+        let mut copy_work = 0usize;
+        let mut uncertain = Vec::new();
         for (scope, consumers) in contexts
             .into_iter()
             .filter(|(scope, _)| !scope.is_disjoint(&connected))
@@ -231,6 +307,12 @@ impl Index {
                 docs.iter()
                     .map(|doc| (doc.text.source.as_str(), &doc.syntax)),
             );
+            let Some(potential) = copy_candidates(&docs, &mut copy_work) else {
+                return Self {
+                    incomplete: true,
+                    ..Default::default()
+                };
+            };
             for uri in consumers {
                 let Some(doc) = workspace
                     .documents
@@ -239,23 +321,31 @@ impl Index {
                 else {
                     continue;
                 };
-                let Some(calls) = calls(doc, &signatures) else {
+                let Some((calls, possible)) = calls(doc, &signatures, &potential) else {
                     return Self {
                         incomplete: true,
                         ..Default::default()
                     };
                 };
-                keys = keys.saturating_add(calls.len());
+                keys = keys.saturating_add(calls.len() + possible.len());
                 if keys > 100_000 {
                     return Self {
                         incomplete: true,
                         ..Default::default()
                     };
                 }
+                uncertain.extend(
+                    possible
+                        .into_iter()
+                        .map(|(citation, name)| (uri.clone(), citation, name)),
+                );
                 interpretations.entry(uri).or_default().push(calls);
             }
         }
-        let mut result = Self::default();
+        let mut result = Self {
+            ambiguous: uncertain,
+            ..Default::default()
+        };
         for (uri, interpretations) in interpretations {
             let starts: BTreeSet<_> = interpretations
                 .iter()
@@ -320,7 +410,7 @@ impl Index {
             .iter()
             .any(|(uri, kind, key)| scope.contains(uri) && *kind == citation && key == name)
         {
-            return Err(jsonrpc::Error::invalid_params("Rename is ambiguous: a reference is used as data or has different meanings in its projects"));
+            return Err(jsonrpc::Error::invalid_params("Rename is ambiguous: a reference is used as data, has an unconfirmed captured meaning, or has different meanings in its projects"));
         }
         Ok(())
     }

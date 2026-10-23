@@ -43,6 +43,11 @@ pub(crate) fn named_command(
     {
         return None;
     }
+    Some(resolved_command(source, name, span))
+}
+
+/// Apply a possible builtin grammar without certifying its captured meaning.
+pub(crate) fn resolved_command(source: &str, name: &str, span: Range<usize>) -> syntax::Command {
     let start = if syntax::is_reference(name) {
         syntax::reference_argument_start(source, name, span.end)
     } else if syntax::is_citation(name) {
@@ -61,11 +66,11 @@ pub(crate) fn named_command(
                 argument
             }
         });
-    Some(syntax::Command {
+    syntax::Command {
         name: name.into(),
         span,
         argument,
-    })
+    }
 }
 
 pub(crate) fn keys(

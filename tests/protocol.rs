@@ -28093,3 +28093,60 @@ fn biblatex_callback_code_supports_category_edits_and_refreshes_unsaved_hook_def
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+#[test]
+fn captured_reference_renames_reject_partial_edits_and_refresh_unsaved_copy_definitions() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let macros = Url::from_file_path(dir.path().join("macros.tex")).unwrap();
+    let chapter = Url::from_file_path(dir.path().join("chapter.tex")).unwrap();
+    let source = "😀 \\label{paper}\\csuse{saved}{paper}";
+    for (name, text) in [
+        (
+            "main.tex",
+            r"\documentclass{article}\input{macros}\input{chapter}",
+        ),
+        ("macros.tex", r"\csletcs{saved}{ref}"),
+        ("chapter.tex", source),
+    ] {
+        std::fs::write(dir.path().join(name), text).unwrap();
+    }
+    for versioned in [false, true] {
+        let mut server = Server::start();
+        server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":versioned}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+        server.notify("initialized", json!({}));
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":chapter,"languageId":"latex","version":4,"text":source}}),
+        );
+        server.send(json!({"jsonrpc":"2.0","id":2,"method":"textDocument/rename","params":{"textDocument":{"uri":chapter},"position":{"line":0,"character":12},"newName":"updated"}}));
+        let response = server.until(|message| message["id"] == 2);
+        assert_eq!(response["error"]["code"], -32602, "{response}");
+        assert!(
+            response["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("ambiguous"),
+            "{response}"
+        );
+        server.notify("textDocument/didOpen",json!({"textDocument":{"uri":macros,"languageId":"latex","version":7,"text":r"\newcommand\saved[1]{}"}}));
+        let edit=server.request(3,"textDocument/rename",json!({"textDocument":{"uri":chapter},"position":{"line":0,"character":12},"newName":"updated"}));
+        if versioned {
+            let edits = edit["documentChanges"].as_array().unwrap();
+            assert_eq!(edits.len(), 1, "{edit}");
+            assert_eq!(edits[0]["textDocument"]["uri"], chapter.as_str());
+            assert_eq!(edits[0]["textDocument"]["version"], 4);
+            assert_eq!(edits[0]["edits"].as_array().unwrap().len(), 1);
+        } else {
+            assert_eq!(edit["changes"].as_object().unwrap().len(), 1);
+            assert_eq!(
+                edit["changes"][chapter.as_str()].as_array().unwrap().len(),
+                1
+            );
+        }
+        assert!(edit.to_string().contains("updated"));
+        assert!(!edit.to_string().contains(main.as_str()));
+        server.request(4, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
