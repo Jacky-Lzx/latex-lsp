@@ -334,7 +334,7 @@ cargo test --locked --test quoted_graphics real_ -- --ignored
 
 ## minted 代码
 
-minted 的默认回归覆盖内联逐字代码、跨行和 Unicode 定界符、参数提示、文件补全与移动、数据/源码角色、全局设置保护和缺失文件修复。协议回归还检查代码文件内容变化和构建中路径编辑对 PDF / SyncTeX 历史的影响：
+minted 的默认回归覆盖内联逐字代码、跨行和 Unicode 定界符、环境头部的完整与未完成参数提示、注释及可选参数边界、项目重定义与未保存设置刷新，以及文件补全与移动、数据/源码角色、全局设置保护和缺失文件修复。协议回归检查头部参数的逐次增量输入、代码与关闭行尾部的提示隔离，以及代码文件内容变化和构建中路径编辑对 PDF / SyncTeX 历史的影响：
 
 ```sh
 cargo test --locked --test minted --test minted_environments --test minted_inputs --test missing_minted_inputs

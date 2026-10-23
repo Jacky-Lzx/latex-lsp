@@ -220,6 +220,132 @@ fn false_end_markers_leave_a_single_unclosed_environment_with_a_working_fix() {
 }
 
 #[test]
+fn header_signatures_follow_tex_argument_boundaries_and_unfinished_input() {
+    let main = Url::parse("file:///minted-environments/signatures.tex").unwrap();
+    let mut workspace = Workspace::default();
+    for (marked, active) in [
+        (r"\begin{minted}¦", 1),
+        (r"\begin{minted} ¦", 1),
+        (r"\begin{minted}[break¦lines]{python}", 1),
+        (r"\begin{minted}[label={A]B},break¦lines]{python}", 1),
+        (r"\begin{minted}[label=[literal]{py¦thon}", 2),
+        (
+            r"\begin{minted}[label={\detokenize{\end{minted}}}]{la¦tex}",
+            2,
+        ),
+        (r"\begin{minted}[label={\%literal¦}]{python}", 1),
+        (r"\begin{minted}[linenos]¦", 2),
+        ("\\begin{minted}[linenos]% ] ignored\r\n{py¦thon}", 2),
+        ("\\begin{minted}[label={A% ] ignored\r\nB}]{py¦thon}", 2),
+        ("\\begin{minted}{py% } ignored\r\nth¦on}", 2),
+        (
+            "\\begin{minted}% remove endline\r\n[linenos] % language\r\n {py¦thon}",
+            2,
+        ),
+        (r"\begin{minted}{py¦thon}", 2),
+        (r"\begin{minted}{\lan¦guage}", 2),
+        (r"\begin{minted}\lan¦guage", 2),
+        (r"\begin{minted}[break¦", 1),
+        (r"\begin{minted}[label={nested[bracket]¦", 1),
+        (r"\begin{minted}{py¦", 2),
+        ("\\begin{minted}{😀中文¦}", 2),
+    ] {
+        let marked = format!("% 😀\r\n{marked}");
+        let offset = marked.find('¦').unwrap();
+        let source = marked.replace('¦', "");
+        workspace.open(main.clone(), source.clone(), 7);
+        let help = signature::help(&workspace, &main, Text::new(source).position(offset))
+            .unwrap_or_else(|| panic!("missing signature: {marked}"));
+        assert_eq!(
+            help.signatures[0].label, r"\begin{minted}[options]{language}",
+            "{marked}"
+        );
+        assert_eq!(help.active_parameter, Some(active), "{marked}");
+        assert_eq!(help.signatures[0].active_parameter, Some(active));
+        assert_eq!(help.signatures[0].parameters.as_ref().unwrap().len(), 3);
+        assert!(help.signatures[0].documentation.is_some());
+    }
+}
+
+#[test]
+fn comments_completed_headers_raw_code_and_discarded_tails_have_no_header_signature() {
+    let main = Url::parse("file:///minted-environments/no-signatures.tex").unwrap();
+    let mut workspace = Workspace::default();
+    for marked in [
+        "\\begin{minted}% comm¦ent\r\n{python}",
+        "\\begin{minted}[label={A% comm¦ent\r\nB}]{python}",
+        "\\begin{minted}[label={\\\\% comm¦ent\r\nB}]{python}",
+        "\\begin{minted}{py% comm¦ent\r\nthon}",
+        r"\begin{minted}{python}¦",
+        "\\begin{minted}{python} ignored¦\r\ncode\r\n\\end{minted}",
+        "\\begin{minted}{python}\r\n\\frac{a}{b¦}\r\n\\end{minted}",
+        "\\begin{minted}{python}\r\ncode\r\n\\end{minted}\\frac{a}{b¦}\r\n",
+        "\\begin{minted}\r\n\r\n{py¦thon}",
+        "\\begin{minted}[linenos]\r\n\r\n{py¦thon}",
+        "\\begin{verbatim}\r\n\\begin{minted}[break¦lines]{python}\r\n\\end{verbatim}",
+        r"% \begin{minted}[break¦lines]{python}",
+        r"\begin{ minted}[break¦lines]{python}",
+        r"\begin{minted }[break¦lines]{python}",
+    ] {
+        let offset = marked.find('¦').unwrap();
+        let source = marked.replace('¦', "");
+        workspace.open(main.clone(), source.clone(), 7);
+        assert!(
+            signature::help(&workspace, &main, Text::new(source).position(offset)).is_none(),
+            "{marked}"
+        );
+    }
+}
+
+#[test]
+fn project_overrides_suppress_builtin_headers_and_unsaved_settings_refresh_them() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    for name in ["one", "two"] {
+        std::fs::create_dir(root.join(name)).unwrap();
+    }
+    let main = uri(root, "one/main.tex");
+    let settings = uri(root, "one/settings.sty");
+    let source = "\\documentclass{article}\\usepackage{settings}\r\n\\begin{minted}[linenos]{python}\r\ncode\r\n\\end{minted}\r\n";
+    std::fs::write(root.join("one/main.tex"), source).unwrap();
+    std::fs::write(
+        root.join("two/main.tex"),
+        r"\documentclass{article}\renewenvironment{minted}[1]{}{}",
+    )
+    .unwrap();
+    let at = Text::new(source.into()).position(source.find("python").unwrap() + 2);
+    for definition in [
+        r"\renewenvironment{minted}[1]{}{}",
+        r"\NewDocumentEnvironment{minted}{mm}{}{}",
+        r"\RenewEnvironmentCopy{minted}{other}",
+        r"\def\minted#1{#1}",
+        r"\let\minted\other",
+        r"\def\begin#1{}",
+        r"\newenvironment{begin}{}{}",
+        r"\csundef{minted}",
+        r"\csundef{\dynamic}",
+    ] {
+        std::fs::write(root.join("one/settings.sty"), definition).unwrap();
+        let mut workspace = Workspace::default();
+        workspace.add_root(root.join("one"));
+        workspace.add_root(root.join("two"));
+        workspace.open(main.clone(), source.into(), 7);
+        assert!(
+            signature::help(&workspace, &main, at).is_none(),
+            "{definition}"
+        );
+        workspace.open(settings.clone(), String::new(), 8);
+        let help = signature::help(&workspace, &main, at)
+            .unwrap_or_else(|| panic!("header did not refresh: {definition}"));
+        assert_eq!(
+            help.signatures[0].label,
+            r"\begin{minted}[options]{language}"
+        );
+        assert_eq!(help.active_parameter, Some(2));
+    }
+}
+
+#[test]
 #[ignore = "requires pdflatex, minted v3, and latexminted on PATH"]
 fn real_minted_environment_boundaries_and_versioned_renames_match_both_reader_modes() {
     for raw in [true, false] {
@@ -245,6 +371,22 @@ fn real_minted_environment_boundaries_and_versioned_renames_match_both_reader_mo
                 ..Default::default()
             };
             workspace.open(main.clone(), source.clone(), 7);
+            for (offset, active) in [
+                (source.find("detokenize").unwrap() + 3, 1),
+                (source.find("{latex}").unwrap() + 3, 2),
+            ] {
+                let help = signature::help(
+                    &workspace,
+                    &main,
+                    workspace.documents[&main].text.position(offset),
+                )
+                .unwrap();
+                assert_eq!(
+                    help.signatures[0].label,
+                    r"\begin{minted}[options]{language}"
+                );
+                assert_eq!(help.active_parameter, Some(active));
+            }
             let at = workspace.documents[&main]
                 .text
                 .position(source.rfind("kept").unwrap());

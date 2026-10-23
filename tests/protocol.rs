@@ -308,6 +308,83 @@ fn minted_environment_boundaries_refresh_diagnostics_and_linked_names_over_stdio
 }
 
 #[test]
+fn minted_environment_header_signatures_follow_incremental_edits_over_stdio() {
+    use latex_lsp::text::Text;
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = Url::from_file_path(root.join("main.tex")).unwrap();
+    let initial = "% 😀\r\n\\begin{minted}[label={A]B},break";
+    std::fs::write(root.join("main.tex"), initial).unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(root).unwrap(),"capabilities":{"textDocument":{"diagnostic":{}},"workspace":{"workspaceEdit":{"documentChanges":true}}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":main,"languageId":"latex","version":7,"text":initial}}),
+    );
+    let initial_text = Text::new(initial.into());
+    let at = initial_text.position(initial.len());
+    let help = server.request(
+        2,
+        "textDocument/signatureHelp",
+        json!({"textDocument":{"uri":main},"position":at}),
+    );
+    assert_eq!(
+        help["signatures"][0]["label"],
+        r"\begin{minted}[options]{language}"
+    );
+    assert_eq!(help["activeParameter"], 1);
+    server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":8},"contentChanges":[{"range":initial_text.range(initial.len(),initial.len()),"text":"lines]\r\n{py"}]}));
+    let partial = format!("{initial}lines]\r\n{{py");
+    let partial_text = Text::new(partial.clone());
+    let help = server.request(
+        3,
+        "textDocument/signatureHelp",
+        json!({"textDocument":{"uri":main},"position":partial_text.position(partial.len())}),
+    );
+    assert_eq!(
+        help["signatures"][0]["label"],
+        r"\begin{minted}[options]{language}"
+    );
+    assert_eq!(help["activeParameter"], 2);
+    let suffix = "thon}\r\n\\frac{a}{b}\\input{fake}\\label{kept}\r\n\\end{minted}\\frac{c}{d}\\label{kept}\r\n\\label{kept}\\ref{kept}\r\n";
+    server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":9},"contentChanges":[{"range":partial_text.range(partial.len(),partial.len()),"text":suffix}]}));
+    let complete = format!("{partial}{suffix}");
+    let text = Text::new(complete.clone());
+    for (id, needle) in [(4, "{b}"), (5, "{d}")] {
+        assert_eq!(server.request(id, "textDocument/signatureHelp", json!({"textDocument":{"uri":main},"position":text.position(complete.find(needle).unwrap()+2)})), Value::Null);
+    }
+    let help = server.request(6, "textDocument/signatureHelp", json!({"textDocument":{"uri":main},"position":text.position(complete.find("python").unwrap()+2)}));
+    assert_eq!(help["activeParameter"], 2);
+    let diagnostics = server.request(
+        7,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":main}}),
+    );
+    assert_eq!(diagnostics["items"], json!([]), "{diagnostics}");
+    let edit = server.request(8, "textDocument/rename", json!({"textDocument":{"uri":main},"position":text.position(complete.rfind("kept").unwrap()),"newName":"changed"}));
+    assert_eq!(edit["documentChanges"][0]["textDocument"]["version"], 9);
+    assert_eq!(
+        edit["documentChanges"][0]["edits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        server.request(
+            9,
+            "textDocument/documentLink",
+            json!({"textDocument":{"uri":main}})
+        ),
+        json!([])
+    );
+    server.request(10, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
 #[cfg(unix)]
 fn bibliography_string_warnings_offer_versioned_and_legacy_repairs_over_stdio() {
     for (pull, legacy) in [(false, false), (true, false), (true, true)] {

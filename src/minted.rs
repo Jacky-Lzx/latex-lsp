@@ -19,10 +19,41 @@ pub(crate) fn language(source: &str, end: usize) -> Option<Argument> {
 /// they finish does FancyVerb discard the rest of that header line and scan
 /// literal body lines; a marker nested in the header cannot close the block.
 pub(crate) fn environment_end(source: &str, header_start: usize) -> Option<usize> {
-    let start = options_start(source, header_start)?;
-    let (_, language_end) = crate::fancyvrb::name_argument(source, start)?;
+    let language_end = environment_header_end(source, header_start)?;
     let body_start = language_end + source[language_end..].find('\n')? + 1;
     crate::fancyvrb::environment_end_from_body(source, body_start, "minted")
+}
+
+pub(crate) fn environment_header_end(source: &str, header_start: usize) -> Option<usize> {
+    let start = options_start(source, header_start)?;
+    crate::fancyvrb::name_argument(source, start).map(|(_, end)| end)
+}
+
+/// Header comments are not separately indexed inside the enclosing raw span.
+/// Check only the prefix before the caret, preserving TeX's escaped percent
+/// tokens and CRLF comment boundaries.
+pub(crate) fn header_comment(source: &str, start: usize, cursor: usize) -> bool {
+    let mut at = start;
+    while at < cursor {
+        match source.as_bytes()[at] {
+            b'\\' => {
+                at += 1;
+                if at < cursor {
+                    at += source[at..].chars().next().unwrap().len_utf8();
+                }
+            }
+            b'%' => {
+                while at < cursor && source.as_bytes()[at] != b'\n' {
+                    at += 1;
+                }
+                if at == cursor {
+                    return true;
+                }
+            }
+            _ => at += 1,
+        }
+    }
+    false
 }
 
 /// Braced code balances literal braces. Backslashes and percent signs in

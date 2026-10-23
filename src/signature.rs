@@ -3886,6 +3886,7 @@ fn builtin_environment(name: &str) -> Option<Signature> {
         "list" => &[("label", false), ("spacing", false)],
         "alignat" | "alignat*" => &[("column pairs", false)],
         "alignedat" => &[("position", true), ("column pairs", false)],
+        "minted" => &[("options", true), ("language", false)],
         _ => return None,
     };
     let mut parameters = vec![Parameter {
@@ -3911,11 +3912,18 @@ fn builtin_environment(name: &str) -> Option<Signature> {
         parameters,
         documentation: format!("Arguments of the {name} environment."),
         starred: false,
-        nested_brackets: true,
+        nested_brackets: name != "minted",
     })
 }
 
-fn group_end(doc: &Document, start: usize, cursor: usize, open: u8, close: u8) -> Option<usize> {
+fn group_end(
+    doc: &Document,
+    start: usize,
+    cursor: usize,
+    open: u8,
+    close: u8,
+    raw_header: Option<&std::ops::Range<usize>>,
+) -> Option<usize> {
     let source = &doc.text.source;
     let bytes = source.as_bytes();
     let mut depth = 1usize;
@@ -3933,12 +3941,20 @@ fn group_end(doc: &Document, start: usize, cursor: usize, open: u8, close: u8) -
             ignored += 1;
         }
         if let Some(span) = doc.syntax.ignored.get(ignored) {
-            if span.start <= i {
+            if span.start <= i
+                && !raw_header.is_some_and(|header| span.start == header.start && i < header.end)
+            {
                 i = span.end;
                 continue;
             }
         }
         match bytes[i] {
+            b'%' => {
+                while i < cursor && bytes[i] != b'\n' {
+                    i += 1;
+                }
+                continue;
+            }
             b'\\' => {
                 i += 1;
                 if i < source.len() {
@@ -4048,6 +4064,7 @@ fn active_parameter(
     end: usize,
     cursor: usize,
     signature: &Signature,
+    raw_header: Option<&std::ops::Range<usize>>,
 ) -> Option<usize> {
     let source = &doc.text.source;
     let mut i = end;
@@ -4177,7 +4194,7 @@ fn active_parameter(
         let end = if open == b'[' && !signature.nested_brackets {
             syntax::optional_note_end(&source[..cursor], i)
         } else {
-            group_end(doc, i, cursor, open, close)
+            group_end(doc, i, cursor, open, close, raw_header)
         };
         match end {
             Some(end) => {
@@ -4362,12 +4379,76 @@ fn citation_active(
         .map(|waiting| citation_parameter(style, waiting.group, waiting.role))
 }
 
+/// Only the parser's actual minted raw region can open this header reader.
+/// Keep its range intact for folding and linked editing; the ordinary argument
+/// matcher temporarily reads through it for a header-only signature query.
+fn minted_environment_header(
+    doc: &Document,
+    cursor: usize,
+) -> Option<(&syntax::Command, std::ops::Range<usize>)> {
+    let command = doc
+        .syntax
+        .commands
+        .iter()
+        .rev()
+        .find(|command| command.span.end <= cursor)?;
+    if command.name != "begin" || doc.syntax.control_operands.contains(&command.span.start) {
+        return None;
+    }
+    let argument = syntax::environment_name_argument(&doc.text.source, command.span.end)?;
+    if argument.value != "minted" || cursor < argument.outer_span.end {
+        return None;
+    }
+    let raw = doc
+        .syntax
+        .ignored
+        .iter()
+        .find(|span| span.start == argument.outer_span.end)?;
+    let end = crate::minted::environment_header_end(&doc.text.source, raw.start).unwrap_or(raw.end);
+    (cursor <= end).then_some((command, raw.start..end))
+}
+
 pub fn help(workspace: &Workspace, uri: &Url, position: Position) -> Option<SignatureHelp> {
     let doc = workspace.documents.get(uri)?;
     if doc.kind != DocumentKind::Latex {
         return None;
     }
     let cursor = doc.text.offset(position)?;
+    if let Some((command, header)) = minted_environment_header(doc, cursor) {
+        if crate::minted::header_comment(&doc.text.source, header.start, cursor) {
+            return None;
+        }
+        let scope = workspace.symbol_scope(uri);
+        if workspace
+            .documents
+            .iter()
+            .filter(|(uri, _)| scope.contains(*uri))
+            .any(|(_, doc)| {
+                doc.syntax
+                    .definitions
+                    .iter()
+                    .chain(&doc.syntax.environments)
+                    .any(|entry| matches!(entry.name.as_str(), "begin" | "minted"))
+                    || doc.syntax.command_undefinitions.values().any(|target| {
+                        target
+                            .as_ref()
+                            .is_none_or(|target| matches!(target.name.as_str(), "begin" | "minted"))
+                    })
+            })
+        {
+            return None;
+        }
+        let signature = builtin_environment("minted")?;
+        return active_parameter(
+            doc,
+            command,
+            command.span.end,
+            cursor,
+            &signature,
+            Some(&header),
+        )
+        .map(|active| signature.information(active));
+    }
     if doc.syntax.ignored.iter().any(|span| {
         span.start <= cursor.saturating_sub(1)
             && cursor.saturating_sub(1) < span.end
@@ -4506,7 +4587,7 @@ pub fn help(workspace: &Workspace, uri: &Url, position: Position) -> Option<Sign
                 }
                 continue;
             }
-            if let Some(active) = active_parameter(doc, command, end, cursor, &signature) {
+            if let Some(active) = active_parameter(doc, command, end, cursor, &signature, None) {
                 return Some(signature.information(active));
             }
         }
