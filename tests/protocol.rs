@@ -24768,6 +24768,142 @@ printf 'PWD %s\nINPUT %s\n' "$output" "$source" > "$output/$job.fls"
 
 #[test]
 #[cfg(unix)]
+fn index_rebuild_actions_run_matching_pipelines_and_reject_changed_task_configuration() {
+    let compiler = r#"set -eu
+printf x >> "$1/passes"
+printf 'index entries\n' > "$1/main.idx"
+printf '%%PDF-index\n' > "$1/main.pdf"
+printf '(./main.tex\n' > "$1/main.log"
+if ! cmp -s "$1/main.idx" "$1/main.ind"; then
+  printf "Package rerunfilecheck Warning: File \140main.idx' has changed. Rerun LaTeX/makeindex to get index right.\n" >> "$1/main.log"
+fi
+printf 'Output written on main.pdf (1 page, 11 bytes).\n)\n' >> "$1/main.log"
+printf 'PWD %s\nINPUT %s\n' "$PWD" "$2" > "$1/main.fls"
+"#;
+    for literals in [false, true] {
+        for change in ["execute", "remove", "job", "type"] {
+            let capabilities = if literals {
+                json!({"textDocument":{"codeAction":{"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix"]}}}}})
+            } else {
+                json!({})
+            };
+            let (mut server, directory, uri) =
+                fake_build_server_capabilities(compiler, false, capabilities);
+            let arguments = json!([directory.path().join("compiler.sh"), "%o", "%f"]);
+            let mut settings = json!({"build":{"executable":"/bin/sh","arguments":arguments,"rebuildArguments":arguments}});
+            server.notify(
+                "workspace/didChangeConfiguration",
+                json!({"settings":settings}),
+            );
+            server.request(
+                2,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[uri]}),
+            );
+            let finished = server.until(|message| message["method"] == "latex/buildFinished");
+            assert_eq!(finished["params"]["status"], "success", "{finished}");
+            let published = server.until(|message| {
+                message["method"] == "textDocument/publishDiagnostics"
+                    && message["params"]["uri"] == uri.as_str()
+                    && message["params"]["diagnostics"]
+                        .as_array()
+                        .is_some_and(|items| {
+                            items.iter().any(|item| item["source"] == "latex-build")
+                        })
+            });
+            let diagnostic = published["params"]["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|item| item["source"] == "latex-build")
+                .unwrap();
+            let request = json!({"textDocument":{"uri":uri},"range":diagnostic["range"],"context":{"diagnostics":[diagnostic],"only":["quickfix"]}});
+            assert_eq!(
+                server.request(3, "textDocument/codeAction", request.clone()),
+                json!([])
+            );
+            let tool = directory.path().join("index-tool.sh");
+            std::fs::write(&tool, "cat \"$1\" > \"$2\"\n").unwrap();
+            settings["build"]["indexTools"] =
+                json!([{"executable":"/bin/sh","arguments":[tool,"%i","%t"]}]);
+            server.notify(
+                "workspace/didChangeConfiguration",
+                json!({"settings":settings}),
+            );
+            let actions = server.request(4, "textDocument/codeAction", request.clone());
+            assert_eq!(
+                actions.as_array().unwrap().len(),
+                1,
+                "{change}/{literals}: {actions}"
+            );
+            let command = if literals {
+                &actions[0]["command"]
+            } else {
+                &actions[0]
+            };
+            match change {
+                "remove" => settings["build"]["indexTools"] = json!([]),
+                "job" => settings["build"]["indexTools"][0]["jobName"] = json!("other"),
+                "type" => {
+                    settings["build"]["indexTools"][0]["inputExtension"] = json!("glo");
+                    settings["build"]["indexTools"][0]["outputExtension"] = json!("gls");
+                }
+                "execute" => {}
+                _ => unreachable!(),
+            }
+            if change != "execute" {
+                server.notify(
+                    "workspace/didChangeConfiguration",
+                    json!({"settings":settings}),
+                );
+                assert_eq!(
+                    server.request(5, "textDocument/codeAction", request.clone()),
+                    json!([])
+                );
+            }
+            server.send(json!({"jsonrpc":"2.0","id":6,"method":"workspace/executeCommand","params":command}));
+            let response = server.until(|message| message["id"] == 6);
+            if change == "execute" {
+                assert_eq!(response["result"]["status"], "started", "{response}");
+                let finished = server.until(|message| message["method"] == "latex/buildFinished");
+                assert_eq!(finished["params"]["status"], "success", "{finished}");
+                assert_eq!(finished["params"]["analysis"]["rerunRequired"], false);
+                assert_eq!(finished["params"]["analysis"]["indexProcessingRounds"], 1);
+                assert_eq!(
+                    std::fs::read(directory.path().join("build/latex-lsp/passes"))
+                        .unwrap()
+                        .len(),
+                    3
+                );
+                assert_eq!(
+                    server.request(7, "textDocument/codeAction", request),
+                    json!([])
+                );
+            } else {
+                assert_eq!(
+                    response["error"]["code"], -32602,
+                    "{change}/{literals}: {response}"
+                );
+                assert!(response["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("code actions again"));
+                assert_eq!(
+                    std::fs::read(directory.path().join("build/latex-lsp/passes"))
+                        .unwrap()
+                        .len(),
+                    1
+                );
+            }
+            server.request(8, "shutdown", Value::Null);
+            server.notify("exit", Value::Null);
+            server.wait_exit(0);
+        }
+    }
+}
+
+#[test]
+#[cfg(unix)]
 fn index_workflow_over_stdio_keeps_status_final_artifacts_and_saved_dependencies_consistent() {
     let (mut server, directory, uri) = index_workflow_server("cat \"$1\" > \"$2\"", false);
     let style = Url::from_file_path(directory.path().join("style.ist")).unwrap();

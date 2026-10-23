@@ -98,7 +98,9 @@ makeindex -s glossary.ist -o main.gls main.glo
 
 LaTeX 文档还需加载生成的文件。其他术语表宏包可能需要不同工具、样式或处理步骤，应遵循对应宏包的配置。
 
-此类警告继续提供工具摘要，暂不生成 `Rebuild …` 菜单操作。配置上述管线后可手动执行 `latex.build`；其他项目也可以继续使用独立工具处理流程。
+当当前根文档的 `build.indexTools` 能处理警告中的实际输入时，快速修复菜单提供 `Rebuild …`。普通索引请求必须匹配 `idx` 任务；术语表请求必须匹配相应的 `glo`、`acn` 或 `nlo` 任务。文件名必须符合任务的 jobName：单独的文件名按实际产物目录解析，含目录的相对路径按主文档目录解析，绝对路径必须对应同一产物。配置任务的工具及参数由用户决定，菜单不会推断样式参数。
+
+没有匹配任务、文件类型或名称不一致时，仅保留工具摘要；仍可手动运行独立工具。菜单执行时重新校验当前配置、原始诊断和文档版本，移除任务或修改名称／类型后的旧操作会被拒绝。共享来源按产生诊断的各根文档分别核对，不借用其他项目的任务。
 
 ## 日志与更新边界
 
@@ -115,6 +117,7 @@ cargo test --locked --test index_workflow
 cargo test --locked --test protocol index_workflow
 cargo test --locked --test index_workflow -- --include-ignored
 cargo test --locked --test index_tools --test rebuild_actions
+cargo test --locked --test protocol index_rebuild_actions
 cargo test --locked --test protocol index_tool_analysis
 cargo test --locked --test index_tools -- --include-ignored
 ```

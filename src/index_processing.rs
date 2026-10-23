@@ -91,6 +91,42 @@ fn artifact(
     }
     selected.artifact_path(root, extension)
 }
+
+/// Match the warning's actual input, including its processing kind. A basename
+/// is relative to TeX's artifact directory; a qualified path is relative to
+/// the compiler's root directory. Do not accept a matching basename elsewhere.
+pub(crate) fn handles_warning(
+    root: &Path,
+    build: &BuildConfig,
+    diagnostic: &tower_lsp::lsp_types::Diagnostic,
+) -> bool {
+    let Some(request) = crate::build_log::required_index_input(diagnostic) else {
+        return false;
+    };
+    let reported = Path::new(request.file);
+    build.index_tools.iter().any(|tool| {
+        if tool.validate().is_err() || request.glossary != (tool.input_extension != "idx") {
+            return false;
+        }
+        let Some(expected) = artifact(root, build, tool, &tool.input_extension) else {
+            return false;
+        };
+        if reported.is_relative()
+            && reported
+                .components()
+                .filter(|part| *part != std::path::Component::CurDir)
+                .count()
+                == 1
+        {
+            return reported.file_name() == expected.file_name();
+        }
+        let Some(parent) = root.parent() else {
+            return false;
+        };
+        crate::workspace::normalize_path(&parent.join(reported))
+            == crate::workspace::normalize_path(&expected)
+    })
+}
 fn transcript_path(output: &Path, tool: &IndexToolConfig) -> PathBuf {
     output.with_extension(match tool.input_extension.as_str() {
         "glo" => "glg",

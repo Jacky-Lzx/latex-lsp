@@ -341,15 +341,24 @@ pub(crate) fn required_bibliography_tool(diagnostic: &Diagnostic) -> Option<&'st
     }
 }
 
-enum RerunFilecheckRequest {
+enum RerunFilecheckRequest<'a> {
     Latex,
-    Index,
+    Index(IndexRequest<'a>),
 }
 
-fn rerunfilecheck_request(message: &str) -> Option<RerunFilecheckRequest> {
-    let (file, tail) = message
-        .strip_prefix("Package rerunfilecheck Warning: File `")?
-        .rsplit_once("' has changed.")?;
+pub(crate) struct IndexRequest<'a> {
+    pub file: &'a str,
+    pub glossary: bool,
+}
+
+fn rerunfilecheck_request(message: &str) -> Option<RerunFilecheckRequest<'_>> {
+    let (header, tail) = message.split_once('`')?;
+    if header.split_whitespace().collect::<Vec<_>>().join(" ")
+        != "Package rerunfilecheck Warning: File"
+    {
+        return None;
+    }
+    let (file, tail) = tail.rsplit_once("' has changed.")?;
     if file.trim().is_empty() {
         return None;
     }
@@ -366,19 +375,34 @@ fn rerunfilecheck_request(message: &str) -> Option<RerunFilecheckRequest> {
         | "Rerun to get outlines right or use package `bookmark'." => {
             Some(RerunFilecheckRequest::Latex)
         }
-        "Rerun LaTeX/makeindex to get index right."
-        | "Rerun LaTeX/makeindex to get glossary right." => Some(RerunFilecheckRequest::Index),
+        "Rerun LaTeX/makeindex to get index right." => {
+            Some(RerunFilecheckRequest::Index(IndexRequest {
+                file,
+                glossary: false,
+            }))
+        }
+        "Rerun LaTeX/makeindex to get glossary right." => {
+            Some(RerunFilecheckRequest::Index(IndexRequest {
+                file,
+                glossary: true,
+            }))
+        }
         _ => None,
     }
 }
 
 pub(crate) fn required_index_tool(diagnostic: &Diagnostic) -> Option<&'static str> {
-    (diagnostic.severity == Some(DiagnosticSeverity::WARNING)
-        && matches!(
-            rerunfilecheck_request(&normalized_rerun_message(&diagnostic.message)),
-            Some(RerunFilecheckRequest::Index)
-        ))
-    .then_some("makeindex")
+    required_index_input(diagnostic).map(|_| "makeindex")
+}
+
+pub(crate) fn required_index_input(diagnostic: &Diagnostic) -> Option<IndexRequest<'_>> {
+    if diagnostic.severity != Some(DiagnosticSeverity::WARNING) {
+        return None;
+    }
+    match rerunfilecheck_request(&diagnostic.message)? {
+        RerunFilecheckRequest::Index(request) => Some(request),
+        RerunFilecheckRequest::Latex => None,
+    }
 }
 
 const STANDARD_RERUN_REQUESTS: &[&str] = &[

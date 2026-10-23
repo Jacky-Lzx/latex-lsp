@@ -74,11 +74,18 @@ pub fn code_actions(
     actions
 }
 
-// Index processing needs a separate workflow. Only the known latexmk cycle
-// can also satisfy bibliography requests before running TeX again.
-fn rebuild_warning(config: &crate::config::BuildConfig, diagnostic: &Diagnostic) -> bool {
+// Explicit index stages must match this root and warning. Only the known
+// latexmk cycle can also satisfy bibliography requests before rerunning TeX.
+fn rebuild_warning(
+    root: &Url,
+    config: &crate::config::BuildConfig,
+    diagnostic: &Diagnostic,
+) -> bool {
     crate::build_log::rerun_required(diagnostic)
-        && crate::build_log::required_index_tool(diagnostic).is_none()
+        && (crate::build_log::required_index_tool(diagnostic).is_none()
+            || root.to_file_path().is_ok_and(|root| {
+                crate::index_processing::handles_warning(&root, config, diagnostic)
+            }))
         && (crate::build_log::required_bibliography_tool(diagnostic).is_none()
             || config.rebuilds_bibliography())
 }
@@ -101,7 +108,7 @@ fn rebuild_actions(
                 .iter()
                 .filter(|diagnostic| {
                     diagnostic.source.as_deref() == Some("latex-build")
-                        && rebuild_warning(&config, diagnostic)
+                        && rebuild_warning(root, &config, diagnostic)
                         && diagnostic.range.start <= range.end
                         && range.start <= diagnostic.range.end
                         && (context.diagnostics.is_empty()
@@ -171,7 +178,7 @@ pub(crate) fn valid_rebuild_guard(workspace: &Workspace, root: &Url, guard: &Reb
             .is_some_and(|current| {
                 guard.diagnostics.iter().any(|diagnostic| {
                     diagnostic.source.as_deref() == Some("latex-build")
-                        && rebuild_warning(&workspace.build_config(root), diagnostic)
+                        && rebuild_warning(root, &workspace.build_config(root), diagnostic)
                         && current.contains(diagnostic)
                 })
             })

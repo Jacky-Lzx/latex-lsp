@@ -1,4 +1,4 @@
-use latex_lsp::{build_log, editing, workspace::Workspace};
+use latex_lsp::{build_log, config::IndexToolConfig, editing, workspace::Workspace};
 use tower_lsp::lsp_types::*;
 
 const RERUN: &str =
@@ -336,4 +336,113 @@ fn index_processing_requests_report_the_tool_without_offering_an_incomplete_rebu
             );
         }
     }
+}
+
+fn index_warning(project: &mut Project, file: &str, kind: &str) {
+    let log = format!("(./main.tex\nPackage rerunfilecheck Warning: File `{file}' has changed. (rerunfilecheck) Rerun LaTeX/makeindex to get {kind} right.\n)\n");
+    let diagnostics = build_log::parse(&project.root.to_file_path().unwrap(), &log);
+    project.diagnostic = diagnostics[&project.root][0].clone();
+    project
+        .workspace
+        .build_diagnostics
+        .insert(project.root.clone(), diagnostics);
+}
+
+#[test]
+fn index_actions_match_configured_input_names_paths_and_processing_kind() {
+    for literals in [false, true] {
+        let mut project = Project::new(literals, false);
+        project.workspace.config.build.index_tools = vec![IndexToolConfig::default()];
+        let absolute = project.directory.path().join("build/latex-lsp/main.idx");
+        for (file, kind, allowed) in [
+            ("main.idx", "index", true),
+            ("./main.idx", "index", true),
+            ("build/latex-lsp/main.idx", "index", true),
+            (absolute.to_str().unwrap(), "index", true),
+            ("main.idx", "glossary", false),
+            ("main.glo", "glossary", false),
+            ("main.track", "index", false),
+            ("other.idx", "index", false),
+            ("elsewhere/main.idx", "index", false),
+        ] {
+            index_warning(&mut project, file, kind);
+            let actions = project.actions(vec![project.diagnostic.clone()]);
+            assert_eq!(
+                actions.len(),
+                usize::from(allowed),
+                "{literals}/{file}/{kind}: {actions:?}"
+            );
+            if allowed {
+                assert_eq!(command(&actions[0]).command, "latex.rebuild");
+            }
+        }
+    }
+}
+
+#[test]
+fn index_actions_follow_job_overrides_glossary_extensions_and_updated_configuration() {
+    let mut project = Project::new(true, false);
+    project.workspace.config.build.job_name = Some("draft  中文".into());
+    project.workspace.config.build.index_tools = vec![IndexToolConfig::default()];
+    index_warning(&mut project, "draft  中文.idx", "index");
+    assert_eq!(project.actions(vec![]).len(), 1);
+    // Filename whitespace is data, not warning-header normalization.
+    index_warning(&mut project, "draft 中文.idx", "index");
+    assert!(project.actions(vec![]).is_empty());
+    project.workspace.config.build.index_tools[0].job_name = Some("people".into());
+    index_warning(&mut project, "draft  中文.idx", "index");
+    assert!(project.actions(vec![]).is_empty());
+    index_warning(&mut project, "people.idx", "index");
+    assert_eq!(project.actions(vec![]).len(), 1);
+    for (input, output) in [("glo", "gls"), ("acn", "acr"), ("nlo", "nls")] {
+        project.workspace.config.build.index_tools[0].input_extension = input.into();
+        project.workspace.config.build.index_tools[0].output_extension = output.into();
+        index_warning(&mut project, &format!("people.{input}"), "glossary");
+        assert_eq!(project.actions(vec![]).len(), 1);
+        index_warning(&mut project, &format!("people.{input}"), "index");
+        assert!(project.actions(vec![]).is_empty());
+    }
+    index_warning(&mut project, "people.nlo", "glossary");
+    project.workspace.config.build.index_tools.clear();
+    assert!(project.actions(vec![]).is_empty());
+}
+
+#[test]
+fn shared_source_index_actions_use_each_roots_own_task_configuration() {
+    let mut project = Project::new(true, false);
+    let other = project.directory.path().join("other.tex");
+    let shared = project.directory.path().join("shared.tex");
+    std::fs::write(&shared, "Shared text.\n").unwrap();
+    for name in ["main.tex", "other.tex"] {
+        let path = project.directory.path().join(name);
+        std::fs::write(&path, "\\documentclass{article}\\input{shared}").unwrap();
+        let diagnostics = build_log::parse(&path, &format!("(./{name}\n(./shared.tex\nPackage rerunfilecheck Warning: File `people.idx' has changed. Rerun LaTeX/makeindex to get index right.\n)\n)\n"));
+        project
+            .workspace
+            .build_diagnostics
+            .insert(Url::from_file_path(&path).unwrap(), diagnostics);
+    }
+    std::fs::write(project.directory.path().join(".latex-lsp.json"), r#"{"projects":{"main.tex":{"build":{"indexTools":[{"jobName":"people"}]}},"other.tex":{"build":{"indexTools":[{}]}}}}"#).unwrap();
+    project.workspace.reload(&project.root);
+    project
+        .workspace
+        .reload(&Url::from_file_path(&other).unwrap());
+    let shared_uri = Url::from_file_path(&shared).unwrap();
+    project.workspace.reload(&shared_uri);
+    let diagnostics = project.workspace.build_diagnostics[&project.root][&shared_uri].clone();
+    let actions = editing::code_actions(
+        &project.workspace,
+        &shared_uri,
+        diagnostics[0].range,
+        &CodeActionContext {
+            diagnostics,
+            only: None,
+            trigger_kind: None,
+        },
+    );
+    assert_eq!(actions.len(), 1, "{actions:?}");
+    assert_eq!(
+        command(&actions[0]).arguments.as_ref().unwrap()[0]["uri"],
+        serde_json::json!(project.root)
+    );
 }
