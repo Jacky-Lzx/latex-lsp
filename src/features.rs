@@ -387,6 +387,16 @@ fn target<'a>(workspace: &'a Workspace, uri: &Url, offset: usize) -> Option<Targ
     raw
 }
 
+pub(crate) fn command_target<'a>(
+    workspace: &'a Workspace,
+    uri: &Url,
+    position: Position,
+) -> Option<&'a str> {
+    let doc = workspace.documents.get(uri)?;
+    let target = target(workspace, uri, doc.text.clamped_offset(position)?)?;
+    (target.kind == TargetKind::Command).then_some(target.name)
+}
+
 fn entries(doc: &Document, kind: TargetKind) -> impl Iterator<Item = &Entry> {
     let primary: &[Entry] = match kind {
         TargetKind::Label => &doc.syntax.labels,

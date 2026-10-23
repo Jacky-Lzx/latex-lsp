@@ -1736,6 +1736,32 @@ pub(crate) fn definition_data_spans(
     spans
 }
 
+/// Complete replacement text for a supported user command declaration.
+pub(crate) fn command_definition_body(
+    source: &str,
+    parsed: &syntax::Syntax,
+    entry: &Entry,
+) -> Option<syntax::Argument> {
+    if TexOperands::declares(entry) {
+        let (_, at) = TexOperands::definition(source, parsed, entry)?;
+        return syntax::group(source, at, b'{', b'}').map(|(body, _)| body);
+    }
+    let declaration = entry.detail.strip_prefix("Defined with \\")?;
+    let mut at = definition_arguments_start(source, parsed, entry, false)?;
+    if syntax::declares_traditional_command(declaration) {
+        for _ in 0..2 {
+            if let Some((_, end)) = syntax::bracket_argument(source, at) {
+                at = syntax::skip_space(source, end);
+            }
+        }
+    } else if syntax::declares_document_command(declaration) {
+        at = syntax::group(source, at, b'{', b'}')?.1;
+    } else {
+        return None;
+    }
+    syntax::group(source, syntax::skip_space(source, at), b'{', b'}').map(|(body, _)| body)
+}
+
 fn definition_spans(
     source: &str,
     parsed: &syntax::Syntax,
@@ -1743,26 +1769,7 @@ fn definition_spans(
 ) -> Vec<std::ops::Range<usize>> {
     let mut spans = Vec::new();
     for entry in &parsed.definitions {
-        let body = (|| {
-            if TexOperands::declares(entry) {
-                let (_, at) = TexOperands::definition(source, parsed, entry)?;
-                return syntax::group(source, at, b'{', b'}').map(|(body, _)| body);
-            }
-            let declaration = entry.detail.strip_prefix("Defined with \\")?;
-            let mut at = definition_arguments_start(source, parsed, entry, false)?;
-            if syntax::declares_traditional_command(declaration) {
-                for _ in 0..2 {
-                    if let Some((_, end)) = syntax::bracket_argument(source, at) {
-                        at = syntax::skip_space(source, end);
-                    }
-                }
-            } else if syntax::declares_document_command(declaration) {
-                at = syntax::group(source, at, b'{', b'}')?.1;
-            } else {
-                return None;
-            }
-            syntax::group(source, syntax::skip_space(source, at), b'{', b'}').map(|(body, _)| body)
-        })();
+        let body = command_definition_body(source, parsed, entry);
         if let Some(body) = body {
             spans.push(if include_headers {
                 entry.span.start..body.outer_span.end

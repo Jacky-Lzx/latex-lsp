@@ -14,6 +14,7 @@ mod bibliography_processing;
 pub mod build;
 pub mod build_log;
 mod build_tools;
+mod call_hierarchy;
 pub mod catalog;
 mod chktex;
 mod citation_search;
@@ -584,6 +585,7 @@ impl LanguageServer for Backend {
                 }),
                 definition_provider: Some(OneOf::Left(true)),
                 references_provider: Some(OneOf::Left(true)),
+                call_hierarchy_provider: Some(CallHierarchyServerCapability::Simple(true)),
                 document_highlight_provider: Some(OneOf::Left(true)),
                 selection_range_provider: Some(SelectionRangeProviderCapability::Simple(true)),
                 linked_editing_range_provider: Some(LinkedEditingRangeServerCapabilities::Simple(
@@ -1135,6 +1137,32 @@ impl LanguageServer for Backend {
             &params.options,
         )
         .map(Some)
+    }
+
+    async fn prepare_call_hierarchy(
+        &self,
+        params: CallHierarchyPrepareParams,
+    ) -> Result<Option<Vec<CallHierarchyItem>>> {
+        let params = params.text_document_position_params;
+        call_hierarchy::prepare(
+            &*self.workspace.read().await,
+            &document_uri(params.text_document.uri),
+            params.position,
+        )
+    }
+
+    async fn incoming_calls(
+        &self,
+        params: CallHierarchyIncomingCallsParams,
+    ) -> Result<Option<Vec<CallHierarchyIncomingCall>>> {
+        call_hierarchy::incoming(&*self.workspace.read().await, &params.item).map(Some)
+    }
+
+    async fn outgoing_calls(
+        &self,
+        params: CallHierarchyOutgoingCallsParams,
+    ) -> Result<Option<Vec<CallHierarchyOutgoingCall>>> {
+        call_hierarchy::outgoing(&*self.workspace.read().await, &params.item).map(Some)
     }
 
     async fn inlay_hint(&self, params: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
