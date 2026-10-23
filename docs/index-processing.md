@@ -19,7 +19,62 @@
 
 索引工具与 BibTeX / Biber 独立汇总，可以同时出现在各自列表中。没有明确索引请求时，`requiredIndexTools` 为 `[]`。
 
-## 处理流程
+## 显式编译管线
+
+`build.indexTools` 默认是空列表。配置后，`latex.build`、`latex.rebuild` 和保存后编译均在同一个后台任务中执行：先运行 LaTeX 生成输入，再按配置顺序处理索引，最后强制运行 LaTeX 读取结果。无需从日志猜测工具参数，也不启动独立于编译任务的并发流程。
+
+普通索引可使用默认 makeindex 设置：
+
+```json
+{
+  "build": {
+    "executable": "pdflatex",
+    "indexTools": [{}]
+  }
+}
+```
+
+术语表与普通索引可以一起配置。例如主文档旁有 `glossary.ist`，其中声明 `keyword "\\glossaryentry"`：
+
+```json
+{
+  "build": {
+    "executable": "pdflatex",
+    "indexTools": [
+      {},
+      {
+        "inputExtension": "glo",
+        "outputExtension": "gls",
+        "arguments": ["-s", "%r/glossary.ist", "-o", "%t", "-t", "%l", "%i"],
+        "dependencies": ["glossary.ist"]
+      }
+    ]
+  }
+}
+```
+
+每个任务的设置：
+
+| 字段 | 默认值与含义 |
+| --- | --- |
+| `executable` | `makeindex`，直接调用可执行文件 |
+| `arguments` | `["-o", "%t", "-t", "%l", "%i"]`，完整参数列表，不经过 shell |
+| `inputExtension` / `outputExtension` | `idx` / `ind`；也支持 `glo` / `gls`、`acn` / `acr`、`nlo` / `nls` |
+| `jobName` | 未设置时使用实际编译产物名称；命名索引可设为 `people`，读取 `people.idx` 并生成 `people.ind` |
+| `dependencies` | 样式等额外输入文件，相对主文档目录，也可使用绝对路径；最多 128 项 |
+| `timeoutSeconds` | 每次工具调用 30 秒，范围 1–3600 |
+
+工具工作目录是实际产物目录，与 `build.outputDirectory`、latexmkrc 和 `build.jobName` 保持一致。`%i` 是当前索引输入的相对文件名，`%t` 是本次暂存输出的相对文件名，`%l` 是暂存处理日志的相对文件名；`%r` 是主文档目录，`%f` 是主文件绝对路径，`%o` 是产物目录，`%j` 是该索引任务的产物名称。占位符只替换一次，路径中的空格或 `%j` 等字面文字不会被再次展开。参数必须使用 `%i` 和 `%t`；makeindex 还必须用 `-t %l` 指定可核验的处理日志。
+
+每次调用在确认退出成功、输入和额外依赖未变化、输出确实产生后，才原子替换正式索引。取消、超时、工具失败或没有产生输出时保留该任务原有索引。makeindex 会在拒绝条目后仍返回退出码 0，因此服务器另行检查新处理日志；存在拒绝条目或缺少完整摘要时按失败处理，详情进入编译输出。成功日志保存为 `.ilg` / `.glg` / `.alg` / `.nlg`，完成分析中的 `processedIndexTools` 提供输入、输出及处理日志 URI。
+
+最后一遍 LaTeX 若改变了索引输入，继续运行工具和 LaTeX，最多四轮；仍未稳定时返回错误，不把含旧索引的 PDF 报告为成功。`analysis.indexProcessingRounds` 返回实际处理轮数。空索引输入／输出是合法的；只有确认最终 PDF 有效后才返回编译成功。日志和诊断以最后一遍 TeX 及本次管线实际更新的文献处理日志为准，先前遍次的临时警告不会覆盖最终结果。
+
+所有步骤共用现有任务 ID、状态、进度、`latex.cancelBuild`、关闭服务器和保存检查。额外依赖的未保存缓冲区会阻止启动；执行期间修改来源或文件绑定会使结果过期，样式文件事件会取消受影响任务。两个项目即使 PDF 名称不同，也不能同时写入同一个命名索引或处理日志。最多配置 32 个任务；重复输出会被拒绝。
+
+`build.timeoutSeconds` 限制每次 LaTeX 调用，各索引任务使用自己的超时。使用自定义编译 `arguments` 时，还需显式配置 `rebuildArguments`，用于处理后的强制 LaTeX 遍次；无效配置和缺少样式依赖会在首次编译前报错。仅在确有索引输入的项目中开启对应任务；缺少输入文件会报错。默认 latexmk 可能已处理普通索引，显式任务适合需要指定额外步骤或参数的项目。
+
+## 手动处理
 
 普通索引通常先由 LaTeX 的 `\makeindex` 声明和 `\index` 条目生成 `.idx`，再调用工具生成 `.ind`，最后使用 `makeidx` 宏包的 `\printindex` 将其排入 PDF。例如在产物目录中运行：
 
@@ -43,7 +98,7 @@ makeindex -s glossary.ist -o main.gls main.glo
 
 LaTeX 文档还需加载生成的文件。其他术语表宏包可能需要不同工具、样式或处理步骤，应遵循对应宏包的配置。
 
-此类警告提供工具摘要，不生成现有的 `Rebuild …` 菜单操作。单纯重跑 TeX 无法完成索引处理；默认 latexmk 或自定义流程也无法从一条警告确认所有索引、术语表任务的参数。手动构建与项目已有的外部工具流程继续可用。
+此类警告继续提供工具摘要，暂不生成 `Rebuild …` 菜单操作。配置上述管线后可手动执行 `latex.build`；其他项目也可以继续使用独立工具处理流程。
 
 ## 日志与更新边界
 
@@ -56,9 +111,14 @@ LaTeX 文档还需加载生成的文件。其他术语表宏包可能需要不�
 ## 验证
 
 ```sh
+cargo test --locked --test index_workflow
+cargo test --locked --test protocol index_workflow
+cargo test --locked --test index_workflow -- --include-ignored
 cargo test --locked --test index_tools --test rebuild_actions
 cargo test --locked --test protocol index_tool_analysis
 cargo test --locked --test index_tools -- --include-ignored
 ```
 
 真实回归需要 pdfLaTeX、XeLaTeX、LuaLaTeX、makeindex、makeidx 和 rerunfilecheck。在三个引擎的 60 / 79 列日志中，先产生索引与术语表请求，执行工具生成 `.ind` / `.gls` 并编译 PDF，再修改条目并重复处理，核对工具列表、实际条目和 PDF 页数。
+
+显式管线回归另外使用真实 pdfLaTeX / makeindex 验证只有索引排版的首遍、术语表样式、条目更新、最终 PDF，以及普通／quiet 模式下退出码 0 的拒绝条目。默认测试覆盖原子替换、四轮上限、缺少输入、额外依赖、符号链接、输入变更、取消／超时和子进程清理；stdio 覆盖状态一致性、保存检查、共享命名索引冲突及过期结果。

@@ -181,6 +181,7 @@ impl Default for FormattingConfig {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct BuildConfig {
+    pub index_tools: Vec<IndexToolConfig>,
     pub executable: String,
     pub arguments: Option<Vec<String>>,
     pub rebuild_arguments: Option<Vec<String>>,
@@ -195,6 +196,7 @@ pub struct BuildConfig {
 impl Default for BuildConfig {
     fn default() -> Self {
         Self {
+            index_tools: vec![],
             executable: "latexmk".into(),
             arguments: None,
             rebuild_arguments: None,
@@ -205,6 +207,112 @@ impl Default for BuildConfig {
             on_save: false,
             timeout_seconds: 120,
         }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct IndexToolConfig {
+    pub executable: String,
+    pub arguments: Vec<String>,
+    pub input_extension: String,
+    pub output_extension: String,
+    pub job_name: Option<String>,
+    pub dependencies: Vec<String>,
+    pub timeout_seconds: u64,
+}
+impl Default for IndexToolConfig {
+    fn default() -> Self {
+        Self {
+            executable: "makeindex".into(),
+            arguments: vec![
+                "-o".into(),
+                "%t".into(),
+                "-t".into(),
+                "%l".into(),
+                "%i".into(),
+            ],
+            input_extension: "idx".into(),
+            output_extension: "ind".into(),
+            job_name: None,
+            dependencies: vec![],
+            timeout_seconds: 30,
+        }
+    }
+}
+fn valid_job_name(name: &str) -> bool {
+    !name.trim().is_empty()
+        && name.trim() == name
+        && !matches!(name, "." | "..")
+        && name
+            .chars()
+            .all(|ch| ch.is_alphanumeric() || matches!(ch, ' ' | '-' | '_' | '.'))
+}
+impl IndexToolConfig {
+    pub(crate) fn is_makeindex(&self) -> bool {
+        Path::new(&self.executable).file_stem() == Some(OsStr::new("makeindex"))
+    }
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        if self.executable.trim().is_empty() || !(1..=3600).contains(&self.timeout_seconds) {
+            return Err(
+                "Index tools need a nonempty executable and timeoutSeconds between 1 and 3600"
+                    .into(),
+            );
+        }
+        if !matches!(
+            (
+                self.input_extension.as_str(),
+                self.output_extension.as_str()
+            ),
+            ("idx", "ind") | ("glo", "gls") | ("acn", "acr") | ("nlo", "nls")
+        ) {
+            return Err(
+                "Index tools support idx/ind, glo/gls, acn/acr or nlo/nls input/output extensions"
+                    .into(),
+            );
+        }
+        if !self
+            .arguments
+            .iter()
+            .any(|argument| argument.contains("%i"))
+            || !self
+                .arguments
+                .iter()
+                .any(|argument| argument.contains("%t"))
+        {
+            return Err(
+                "Index tool arguments must include %i input and %t output placeholders".into(),
+            );
+        }
+        if self.is_makeindex()
+            && !self
+                .arguments
+                .iter()
+                .any(|argument| argument.contains("%l"))
+        {
+            return Err(
+                "makeindex arguments must include %l for a verified transcript (for example -t %l)"
+                    .into(),
+            );
+        }
+        if self
+            .job_name
+            .as_deref()
+            .is_some_and(|name| !valid_job_name(name))
+        {
+            return Err("Index tool jobName must use letters, digits, spaces, '.', '_' or '-', without leading or trailing spaces or a directory path".into());
+        }
+        if self.dependencies.len() > 128
+            || self
+                .dependencies
+                .iter()
+                .any(|path| path.trim().is_empty() || path.contains('\0'))
+        {
+            return Err(
+                "Index tool dependencies must contain at most 128 nonempty file paths".into(),
+            );
+        }
+        Ok(())
     }
 }
 
@@ -255,13 +363,7 @@ impl Config {
             return Err("Build timeoutSeconds must be between 1 and 3600".into());
         }
         if let Some(name) = &config.build.job_name {
-            if name.trim().is_empty()
-                || name.trim() != name
-                || matches!(name.as_str(), "." | "..")
-                || name
-                    .chars()
-                    .any(|ch| !ch.is_alphanumeric() && !matches!(ch, ' ' | '-' | '_' | '.'))
-            {
+            if !valid_job_name(name) {
                 return Err("Build jobName must use letters, digits, spaces, '.', '_' or '-', without leading or trailing spaces or a directory path".into());
             }
             if config.build.arguments.is_none()
@@ -269,6 +371,19 @@ impl Config {
             {
                 return Err("Tectonic does not support jobName with its default arguments".into());
             }
+        }
+        if config.build.index_tools.len() > 32 {
+            return Err("At most 32 index tools may be configured".into());
+        }
+        let mut outputs = std::collections::BTreeSet::new();
+        for tool in &config.build.index_tools {
+            tool.validate()?;
+            if !outputs.insert((&tool.job_name, &tool.output_extension)) {
+                return Err("Multiple index tools write the same output; choose different jobName or outputExtension".into());
+            }
+        }
+        if !config.build.index_tools.is_empty() {
+            config.build.rebuild_arguments()?;
         }
         Ok(config)
     }

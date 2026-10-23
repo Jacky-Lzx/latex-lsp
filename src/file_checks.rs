@@ -469,6 +469,11 @@ impl Snapshot {
                 break;
             }
         }
+        for path in crate::index_processing::dependencies(&root_path, &config) {
+            let binding = file(&path);
+            let contents = InputSnapshot::file(&path);
+            configuration.insert(path, (binding, contents));
+        }
         let recorded = [
             &workspace.recorded_bindings,
             &workspace.bibliography_bindings,

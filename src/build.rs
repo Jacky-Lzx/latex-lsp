@@ -48,6 +48,7 @@ struct Record {
     inputs: BTreeMap<Url, InputSnapshot>,
     checks: Arc<crate::file_checks::Snapshot>,
     artifact: Option<PathBuf>,
+    index_artifacts: BTreeSet<PathBuf>,
 }
 
 struct QueuedBuild {
@@ -167,6 +168,7 @@ impl BuildManager {
             ));
         }
         workspace.refresh_project(&root);
+        let config = workspace.build_config(&root);
         let static_code_inputs = crate::code_inputs::inputs(&workspace, &root);
         let mut project = workspace.project_files(&root);
         // Known opened paths remain build dependencies even when their current
@@ -179,6 +181,17 @@ impl BuildManager {
                 .filter(|path| path.is_file())
                 .filter_map(|path| Url::from_file_path(path).ok()),
         );
+        if let Ok(path) = root.to_file_path() {
+            project.extend(
+                crate::index_processing::dependencies(&path, &config)
+                    .into_iter()
+                    .flat_map(|path| {
+                        let physical = path.canonicalize().ok();
+                        [Some(path), physical].into_iter().flatten()
+                    })
+                    .filter_map(|path| Url::from_file_path(path).ok()),
+            );
+        }
         let mut snapshots = BTreeMap::new();
         let mut file_snapshots = BTreeMap::new();
         for uri in &project {
@@ -215,7 +228,6 @@ impl BuildManager {
                 }
             }
         }
-        let config = workspace.build_config(&root);
         if rebuild {
             config.rebuild_arguments().map_err(Error::invalid_params)?;
         }
@@ -236,6 +248,16 @@ impl BuildManager {
                 .zip(path.file_name())
                 .map_or_else(|| path.clone(), |(parent, name)| parent.join(name))
         });
+        let index_artifacts: BTreeSet<_> = crate::index_processing::outputs(&root_path, &config)
+            .into_iter()
+            .map(|path| {
+                let path = crate::workspace::normalize_path(&path);
+                path.parent()
+                    .and_then(|parent| parent.canonicalize().ok())
+                    .zip(path.file_name())
+                    .map_or_else(|| path.clone(), |(parent, name)| parent.join(name))
+            })
+            .collect();
         {
             let mut state = self.state.lock().unwrap();
             if self.closing.load(Ordering::SeqCst) {
@@ -259,6 +281,14 @@ impl BuildManager {
                     "Another active build writes the same output file: {}; wait for {} to finish or choose a different jobName or outputDirectory",
                     artifact.as_ref().unwrap().display(), owner
                 )));
+            }
+            if let Some((owner, record)) = state.iter().find(|(owner, record)| {
+                *owner != &root
+                    && record.active.is_some()
+                    && !record.index_artifacts.is_disjoint(&index_artifacts)
+            }) {
+                return Err(Error::invalid_params(format!("Another active build writes the same index output file: {}; wait for {} to finish or choose a different index jobName or outputDirectory",
+                    record.index_artifacts.intersection(&index_artifacts).next().unwrap().display(), owner)));
             }
             let record = state.entry(root.clone()).or_default();
             if let Some((id, _)) = &record.active {
@@ -299,6 +329,7 @@ impl BuildManager {
                 .collect();
             record.checks = checks.clone();
             record.artifact = artifact;
+            record.index_artifacts = index_artifacts;
             self.tasks.fetch_add(1, Ordering::SeqCst);
         }
         self.launch(
@@ -1276,6 +1307,112 @@ fn outdated_pdf_input(
 }
 
 fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool, rebuild: bool) -> Outcome {
+    if config.index_tools.is_empty() {
+        return run_single(root, config, cancel, rebuild, None);
+    }
+    // Validate the entire explicit workflow before the first compiler touches
+    // logs, including custom forced-pass arguments and style dependencies.
+    if let Err(message) = config.rebuild_arguments() {
+        return Outcome::error(message);
+    }
+    let plan = match crate::index_processing::Plan::prepare(root, config) {
+        Ok(plan) => plan,
+        Err(failure) => return Outcome::error(failure.message),
+    };
+    let bibliography_before = config
+        .output_path(root)
+        .map(|output| bibliography_logs(&output))
+        .unwrap_or_default();
+    let mut first = run_single(root, config, cancel, rebuild, None);
+    // An index-only document can legitimately have no pages until its first
+    // .ind has been generated. A successful TeX process can still feed tools.
+    if !matches!(first.status, "success" | "error")
+        || first.exit_code != Some(0)
+        || first
+            .diagnostics
+            .values()
+            .flatten()
+            .any(|item| item.severity == Some(DiagnosticSeverity::ERROR))
+    {
+        return first;
+    }
+    for round in 1..=4 {
+        let processed = match plan.run(config, cancel) {
+            Ok(processed) => processed,
+            Err(failure) => {
+                first.status = failure.status;
+                first.exit_code = failure.exit_code;
+                first.message = failure.message;
+                first.pdf = None;
+                first.pages = None;
+                first.analysis = None;
+                first.output = output_tail(&format!("{}\n{}", first.output, failure.output));
+                return first;
+            }
+        };
+        if cancel.load(Ordering::Relaxed) {
+            return Outcome {
+                status: "cancelled",
+                ..Outcome::error("Compilation cancelled".into())
+            };
+        }
+        let mut final_pass = run_single(root, config, cancel, true, Some(&bibliography_before));
+        final_pass.output = output_tail(&format!(
+            "{}\n{}\n{}",
+            first.output, processed.output, final_pass.output
+        ));
+        final_pass.pdf_updated |= first.pdf_updated;
+        if let Some(inputs) = first.inputs.take() {
+            final_pass
+                .inputs
+                .get_or_insert_with(BTreeSet::new)
+                .extend(inputs);
+            final_pass.binary_inputs.extend(first.binary_inputs);
+            for (path, target) in first.bindings {
+                final_pass.bindings.entry(path).or_insert(target);
+            }
+            final_pass
+                .unresolved_bindings
+                .extend(first.unresolved_bindings);
+        }
+        if final_pass.status != "success" {
+            return final_pass;
+        }
+        if processed.inputs_unchanged() {
+            if let Some(analysis) = final_pass.analysis.as_mut().and_then(Value::as_object_mut) {
+                analysis.insert("processedIndexTools".into(), Value::Array(processed.tools));
+                analysis.insert("indexProcessingRounds".into(), Value::from(round));
+            }
+            return final_pass;
+        }
+        first = final_pass;
+    }
+    first.status = "error";
+    first.pdf = None;
+    first.pages = None;
+    first.analysis = None;
+    first.message = "Index inputs did not stabilize after four processing rounds; check the document and build again".into();
+    first
+}
+
+fn output_tail(output: &str) -> String {
+    output
+        .chars()
+        .rev()
+        .take(8192)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect()
+}
+
+fn run_single(
+    root: &Path,
+    config: &BuildConfig,
+    cancel: &AtomicBool,
+    rebuild: bool,
+    bibliography_baseline: Option<&BTreeMap<PathBuf, ArtifactFingerprint>>,
+) -> Outcome {
     let Some(parent) = root.parent() else {
         return Outcome::error("Invalid root path".into());
     };
@@ -1314,7 +1451,8 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool, rebuild: bo
     let pdf_before = ArtifactFingerprint::capture(&pdf_path);
     let recorder_path = config.artifact_path(root, "fls").unwrap();
     let recorder_before = ArtifactFingerprint::capture(&recorder_path);
-    let bibliography_before = bibliography_logs(&output_dir);
+    let bibliography_at_start = bibliography_logs(&output_dir);
+    let bibliography_before = bibliography_baseline.unwrap_or(&bibliography_at_start);
     // latexmk can reuse a failed invocation without rerunning TeX. Keep its
     // transcript intact; decide after the process exits whether it is current.
     let log_before = ArtifactFingerprint::capture(&log_path);

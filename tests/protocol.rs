@@ -24746,3 +24746,194 @@ fn math_delimiters_publish_pull_and_clear_with_edits_and_settings() {
         server.wait_exit(0);
     }
 }
+
+#[cfg(unix)]
+fn index_workflow_server(tool_body: &str, named: bool) -> (Server, tempfile::TempDir, Url) {
+    let compiler = r#"set -eu
+output="$1"; source="$2"; job="$3"
+printf x >> "$output/passes"
+printf '\\indexentry{Apple}{1}\n' > "$output/$job.idx"
+printf '%%PDF-index\n' > "$output/$job.pdf"
+printf '(./main.tex\nOutput written on %s.pdf (1 page, 11 bytes).\n)\n' "$job" > "$output/$job.log"
+printf 'PWD %s\nINPUT %s\n' "$output" "$source" > "$output/$job.fls"
+"#;
+    let (mut server, directory, uri) = fake_build_server(compiler, false);
+    let tool = directory.path().join("index-tool.sh");
+    std::fs::write(&tool, format!("set -eu\n{tool_body}\n")).unwrap();
+    std::fs::write(directory.path().join("style.ist"), "style").unwrap();
+    let arguments = json!([directory.path().join("compiler.sh"), "%o", "%f", "%j"]);
+    server.notify("workspace/didChangeConfiguration", json!({"settings":{"distribution":{"enabled":false},"build":{"executable":"/bin/sh","arguments":arguments,"rebuildArguments":arguments,"timeoutSeconds":10,"indexTools":[{"executable":"/bin/sh","arguments":[tool,"%i","%t","%r/style.ist"],"dependencies":["style.ist"],"jobName":if named {json!("shared")} else {Value::Null}}]}}}));
+    (server, directory, uri)
+}
+
+#[test]
+#[cfg(unix)]
+fn index_workflow_over_stdio_keeps_status_final_artifacts_and_saved_dependencies_consistent() {
+    let (mut server, directory, uri) = index_workflow_server("cat \"$1\" > \"$2\"", false);
+    let style = Url::from_file_path(directory.path().join("style.ist")).unwrap();
+    server.notify("textDocument/didOpen", json!({"textDocument":{"uri":style,"languageId":"plaintext","version":1,"text":"unsaved style"}}));
+    server.send(json!({"jsonrpc":"2.0","id":2,"method":"workspace/executeCommand","params":{"command":"latex.build","arguments":[uri]}}));
+    let refused = server.until(|message| message["id"] == 2);
+    assert_eq!(refused["error"]["code"], -32602);
+    assert!(refused["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("Save"));
+    assert!(!directory.path().join("build/latex-lsp/passes").exists());
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":style}}),
+    );
+    let started = server.request(
+        3,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[uri]}),
+    );
+    assert_eq!(started["status"], "started");
+    let finished = server.until(|message| message["method"] == "latex/buildFinished");
+    let finished = &finished["params"];
+    assert_eq!(finished["status"], "success", "{finished}");
+    assert_eq!(finished["stale"], false, "{finished}");
+    assert_eq!(finished["analysis"]["indexProcessingRounds"], 1);
+    assert_eq!(
+        finished["analysis"]["processedIndexTools"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        std::fs::read(directory.path().join("build/latex-lsp/passes"))
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        std::fs::read_to_string(directory.path().join("build/latex-lsp/main.ind")).unwrap(),
+        "\\indexentry{Apple}{1}\n"
+    );
+    let status = server.request(
+        4,
+        "workspace/executeCommand",
+        json!({"command":"latex.buildStatus","arguments":[uri]}),
+    );
+    assert_eq!(status, *finished);
+    server.request(5, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+fn index_workflow_cancellation_remains_responsive_and_blocks_shared_named_outputs() {
+    let (mut server, directory, uri) = index_workflow_server(
+        "printf ready > ready\nwhile test ! -f release; do sleep 0.02; done\ncat \"$1\" > \"$2\"",
+        true,
+    );
+    let output = directory.path().join("build/latex-lsp");
+    std::fs::create_dir_all(&output).unwrap();
+    std::fs::write(output.join("shared.idx"), "shared input").unwrap();
+    std::fs::write(output.join("shared.ind"), "old index").unwrap();
+    let other = Url::from_file_path(directory.path().join("other.tex")).unwrap();
+    std::fs::write(
+        other.to_file_path().unwrap(),
+        "\\documentclass{article}Other.",
+    )
+    .unwrap();
+    server.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({"changes":[{"uri":other,"type":1}]}),
+    );
+    let started = server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[uri]}),
+    );
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !output.join("ready").exists() {
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    server.request(3, "workspace/symbol", json!({"query":"Title"}));
+    server.send(json!({"jsonrpc":"2.0","id":4,"method":"workspace/executeCommand","params":{"command":"latex.build","arguments":[other]}}));
+    let refused = server.until(|message| message["id"] == 4);
+    assert_eq!(refused["error"]["code"], -32602, "{refused}");
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("same index output file"),
+        "{refused}"
+    );
+    let status = server.request(
+        5,
+        "workspace/executeCommand",
+        json!({"command":"latex.buildStatus","arguments":[uri]}),
+    );
+    assert_eq!(status["buildId"], started["buildId"]);
+    assert_eq!(status["status"], "running");
+    assert_eq!(
+        server.request(
+            6,
+            "workspace/executeCommand",
+            json!({"command":"latex.cancelBuild","arguments":[uri]})
+        )["cancelled"],
+        1
+    );
+    let finished = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(finished["params"]["status"], "cancelled", "{finished}");
+    assert_eq!(finished["params"]["analysis"], Value::Null);
+    assert_eq!(
+        std::fs::read_to_string(output.join("shared.ind")).unwrap(),
+        "old index"
+    );
+    server.request(7, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+fn index_workflow_source_edits_and_style_file_events_invalidate_inflight_results() {
+    for style_event in [false, true] {
+        let (mut server, directory, uri) = index_workflow_server("printf ready > ready\nwhile test ! -f release; do sleep 0.02; done\ncat \"$1\" > \"$2\"", false);
+        let output = directory.path().join("build/latex-lsp");
+        std::fs::create_dir_all(&output).unwrap();
+        std::fs::write(output.join("main.ind"), "old index").unwrap();
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[uri]}),
+        );
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !output.join("ready").exists() {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if style_event {
+            let style = directory.path().join("style.ist");
+            std::fs::write(&style, "changed style").unwrap();
+            server.notify(
+                "workspace/didChangeWatchedFiles",
+                json!({"changes":[{"uri":Url::from_file_path(style).unwrap(),"type":2}]}),
+            );
+        } else {
+            server.notify("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"text":"\\documentclass{article}\\section{Edited}"}]}));
+            server.request(3, "workspace/symbol", json!({"query":"Edited"}));
+            std::fs::write(output.join("release"), "").unwrap();
+        }
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(finished["params"]["stale"], true, "{finished}");
+        assert_eq!(finished["params"]["analysis"], Value::Null);
+        if style_event {
+            assert_eq!(finished["params"]["status"], "cancelled");
+            assert_eq!(
+                std::fs::read_to_string(output.join("main.ind")).unwrap(),
+                "old index"
+            );
+        }
+        server.request(4, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
