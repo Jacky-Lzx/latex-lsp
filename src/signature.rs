@@ -3500,6 +3500,19 @@ impl<'a> CommandSignatures<'a> {
 
     /// A possible declaration can exclude a literal without assigning unknown
     /// commands in the consumer the declaration file's fallback arity.
+    /// File-verb catcodes cannot alter tokens collected by any enclosing
+    /// argument reader, including transparent text and callback code.
+    pub(crate) fn resource_is_tokenized(
+        &self,
+        source: &str,
+        parsed: &syntax::Syntax,
+        at: usize,
+    ) -> bool {
+        self.pretokenized_literal_end(source, parsed, &parsed.control_operands, at, &mut 0)
+            .is_some()
+            || self.declared_literal_is_argument(source, parsed, at)
+    }
+
     pub(crate) fn declared_literal_is_argument(
         &self,
         source: &str,

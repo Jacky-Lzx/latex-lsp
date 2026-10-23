@@ -289,6 +289,22 @@ pub(crate) struct SymbolProjects {
 }
 
 impl Workspace {
+    fn refresh_context(&mut self) {
+        for _ in 0..8 {
+            crate::string_test_context::refresh(self);
+            let changed = crate::resource_context::refresh(self);
+            if changed.is_empty() {
+                break;
+            }
+            let roots: BTreeSet<_> = changed
+                .iter()
+                .flat_map(|uri| self.source_roots(uri))
+                .collect();
+            for root in roots {
+                self.load_dependencies_inner(&root, &root, 0, &mut BTreeSet::new(), false);
+            }
+        }
+    }
     /// A quoted document marker does not make an example a compilation root.
     /// Resolve primitive meanings in this candidate's source context, without
     /// invoking root selection while discovering that context.
@@ -886,7 +902,7 @@ impl Workspace {
     pub fn add_root(&mut self, root: PathBuf) {
         if self.roots.insert(root.clone()) {
             self.scan(&root, 0);
-            crate::string_test_context::refresh(self);
+            self.refresh_context();
         }
     }
 
@@ -895,7 +911,7 @@ impl Workspace {
             self.scan_with(&root, 0, cancelled);
         }
         if !cancelled() {
-            crate::string_test_context::refresh(self);
+            self.refresh_context();
         }
     }
 
@@ -956,7 +972,7 @@ impl Workspace {
 
     pub fn reload(&mut self, uri: &Url) {
         self.reload_document(uri, self.documents.contains_key(uri));
-        crate::string_test_context::refresh(self);
+        self.refresh_context();
     }
 
     fn recorded_kind(&self, uri: &Url) -> Option<DocumentKind> {
@@ -1133,7 +1149,7 @@ impl Workspace {
         }
         affected.extend(self.documents.keys().filter(|uri| matches(uri)).cloned());
         // A non-source file can select a different conditional-load hook.
-        crate::string_test_context::refresh(self);
+        self.refresh_context();
         affected
     }
 
@@ -1142,7 +1158,7 @@ impl Workspace {
         let kind_hint = previous_hint.or_else(|| self.recorded_kind(uri));
         // Discard unsaved text while retaining the independently known role.
         self.reload_document_as(uri, kind_hint.is_some(), kind_hint);
-        crate::string_test_context::refresh(self);
+        self.refresh_context();
     }
 
     pub fn open(&mut self, uri: Url, source: String, version: i32) {
@@ -1184,14 +1200,14 @@ impl Workspace {
 
     pub fn load_dependencies(&mut self, uri: &Url, depth: usize) {
         self.load_dependencies_inner(uri, uri, depth, &mut BTreeSet::new(), false);
-        crate::string_test_context::refresh(self);
+        self.refresh_context();
     }
 
     /// Reload each saved dependency before walking its includes: closed child
     /// files may have gained new dependencies since the previous build.
     pub fn refresh_project(&mut self, root: &Url) {
         self.load_dependencies_inner(root, root, 0, &mut BTreeSet::new(), true);
-        crate::string_test_context::refresh(self);
+        self.refresh_context();
         // Displayed .tex files may already have been scanned as documents.
         // Refresh closed text without following its apparent LaTeX commands.
         for uri in crate::code_inputs::inputs(self, root) {

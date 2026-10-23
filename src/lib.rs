@@ -78,6 +78,7 @@ pub mod recorder;
 mod refactor;
 mod reference_calls;
 mod reference_diagnostics;
+mod resource_context;
 mod right_delimiters;
 mod saved_text;
 pub mod semantic;

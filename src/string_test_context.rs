@@ -198,22 +198,27 @@ impl Source {
         text: &crate::text::Text,
         mut literal: impl FnMut(&crate::syntax::Command, bool) -> u8,
         shapes: &BTreeMap<usize, Arc<CommandShape>>,
+        readers: &crate::resource_context::Readers,
     ) -> Self {
         let mut uncertain = BTreeSet::new();
         let mut lexical_probes = Vec::new();
-        let mut syntax = Syntax::latex_with_string_tests(text, |command, known| {
-            // The primitive verb is omitted from the normal command index.
-            // Keep its invocation visible to the ordered analysis: a prior
-            // assignment may have replaced their delimiter-based grammar.
-            if command.name == "verb" {
-                lexical_probes.push(command.clone());
-            }
-            let meaning = literal(command, known);
-            if ambiguous(meaning) {
-                uncertain.insert(command.span.start);
-            }
-            literal_prefix(meaning)
-        });
+        let mut syntax = Syntax::latex_with_resource_context(
+            text,
+            |command, known| {
+                // The primitive verb is omitted from the normal command index.
+                // Keep its invocation visible to the ordered analysis: a prior
+                // assignment may have replaced their delimiter-based grammar.
+                if command.name == "verb" {
+                    lexical_probes.push(command.clone());
+                }
+                let meaning = literal(command, known);
+                if ambiguous(meaning) {
+                    uncertain.insert(command.span.start);
+                }
+                literal_prefix(meaning)
+            },
+            readers,
+        );
         lexical_probes.retain(|probe| {
             !syntax
                 .commands
@@ -319,6 +324,7 @@ impl Analysis {
                         })
                 },
                 &shapes,
+                &doc.syntax.contextual_resource_readers,
             );
             let visits = self.visits + 1;
             *self = checkpoint.clone();
@@ -625,7 +631,8 @@ pub(crate) fn refresh(workspace: &mut Workspace) {
             .values_mut()
             .filter(|doc| doc.syntax.contextual_string_tests)
         {
-            doc.syntax = Syntax::latex(&doc.text);
+            doc.syntax =
+                Syntax::latex_with_readers(&doc.text, &doc.syntax.contextual_resource_readers);
             doc.semantic_full = Default::default();
             doc.extra_symbols = Default::default();
         }
@@ -640,7 +647,12 @@ pub(crate) fn refresh(workspace: &mut Workspace) {
             .map(|(uri, doc)| {
                 (
                     uri.clone(),
-                    Source::new(&doc.text, default_meaning, &BTreeMap::new()),
+                    Source::new(
+                        &doc.text,
+                        default_meaning,
+                        &BTreeMap::new(),
+                        &doc.syntax.contextual_resource_readers,
+                    ),
                 )
             })
             .collect();
@@ -718,17 +730,21 @@ pub(crate) fn refresh(workspace: &mut Workspace) {
         for (uri, source) in sources {
             let doc = workspace.documents.get_mut(&uri).unwrap();
             let meanings = analysis.meanings.get(&uri);
-            let mut syntax = Syntax::latex_with_string_tests(&doc.text, |command, known| {
-                if analysis.incomplete {
-                    return None;
-                }
-                meanings
-                    .and_then(|meanings| meanings.get(&command.span.start))
-                    .map_or_else(
-                        || literal_prefix(default_meaning(command, known)),
-                        |meaning| literal_prefix(*meaning),
-                    )
-            });
+            let mut syntax = Syntax::latex_with_resource_context(
+                &doc.text,
+                |command, known| {
+                    if analysis.incomplete {
+                        return None;
+                    }
+                    meanings
+                        .and_then(|meanings| meanings.get(&command.span.start))
+                        .map_or_else(
+                            || literal_prefix(default_meaning(command, known)),
+                            |meaning| literal_prefix(*meaning),
+                        )
+                },
+                &doc.syntax.contextual_resource_readers,
+            );
             if let Some(meanings) = meanings {
                 for (&at, &meaning) in meanings {
                     if !ambiguous(meaning) && !analysis.incomplete {

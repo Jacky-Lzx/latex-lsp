@@ -28716,3 +28716,68 @@ fn bibliography_resource_option_boundaries_track_the_filename_over_stdio() {
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+fn imported_resource_reader_meanings_refresh_without_changing_parent_versions_over_stdio() {
+    use latex_lsp::text::Text;
+    let directory = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+    let provider = Url::from_file_path(directory.path().join("provider.sty")).unwrap();
+    let native = r"\def\choose{\newrefsection}";
+    let custom = r"\newcommand\choose[1][]{}";
+    let source="% 😀\r\n\\documentclass{article}\\usepackage{provider}\\csname choose\\endcsname[refs%data.bib]\\label{phantom}\r\n]\\label{kept}\\ref{phantom}\\ref{kept}";
+    for (name, text) in [
+        ("main.tex", source),
+        ("provider.sty", native),
+        ("refs%data.bib", "@book{paper,title={Paper}}"),
+    ] {
+        std::fs::write(directory.path().join(name), text).unwrap();
+    }
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(directory.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":main,"languageId":"latex","version":5,"text":source}}),
+    );
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":provider,"languageId":"latex","version":7,"text":native}}),
+    );
+    let text = Text::new(source.into());
+    for (stage, definition) in [native, custom, native].into_iter().enumerate() {
+        server.notify("textDocument/didChange",json!({"textDocument":{"uri":provider,"version":8+stage},"contentChanges":[{"text":definition}]}));
+        let result=server.request(10+stage as u64*10,"textDocument/definition",json!({"textDocument":{"uri":main},"position":text.position(source.rfind("phantom").unwrap()+2)}));
+        assert_eq!(
+            result.as_array().unwrap().len(),
+            usize::from(stage != 1),
+            "stage {stage}: {result}"
+        );
+        let diagnostics = server.request(
+            11 + stage as u64 * 10,
+            "textDocument/diagnostic",
+            json!({"textDocument":{"uri":main}}),
+        );
+        assert_eq!(
+            diagnostics["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["message"] == "Undefined reference `phantom`"),
+            stage == 1,
+            "{diagnostics}"
+        );
+        let edit=server.request(12+stage as u64*10,"textDocument/rename",json!({"textDocument":{"uri":main},"position":text.position(source.rfind("kept").unwrap()+1),"newName":"updated"}));
+        assert_eq!(edit["documentChanges"][0]["textDocument"]["version"], 5);
+        assert_eq!(
+            edit["documentChanges"][0]["edits"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+    server.request(1000, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

@@ -539,6 +539,7 @@ fn rename_target<'a>(
     if let Some(kind) = target.kind.saved_kind() {
         crate::saved_text::validate(workspace, &scope, kind)?;
     }
+    crate::resource_context::validate_rename(workspace, &scope, target.name)?;
     if matches!(target.kind, TargetKind::Label | TargetKind::Citation) {
         crate::named_references::Index::new(workspace, uri).validate(
             &scope,
@@ -582,6 +583,19 @@ pub fn prepare_rename(
 }
 
 pub fn rename(
+    workspace: &Workspace,
+    uri: &Url,
+    position: Position,
+    new_name: &str,
+) -> tower_lsp::jsonrpc::Result<Option<WorkspaceEdit>> {
+    let edit = rename_impl(workspace, uri, position, new_name)?;
+    if let Some(edit) = &edit {
+        crate::resource_context::validate_workspace_edit(workspace, edit)?;
+    }
+    Ok(edit)
+}
+
+fn rename_impl(
     workspace: &Workspace,
     uri: &Url,
     position: Position,

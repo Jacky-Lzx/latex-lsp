@@ -243,6 +243,9 @@ pub(crate) fn calls(
                 continue;
             };
             let at = syntax::skip_space(source, end);
+            if crate::resource_context::ambiguous_header(&doc.syntax, at) {
+                continue;
+            }
             if source.as_bytes().get(at) != Some(&b'[') {
                 continue;
             }

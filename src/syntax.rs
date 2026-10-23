@@ -161,6 +161,7 @@ pub struct Syntax {
     pub comments: Vec<Range<usize>>,
     /// Resource lists read with biblatex file-verb catcodes, before tokenization.
     pub(crate) raw_resource_brackets: std::collections::BTreeSet<usize>,
+    pub(crate) contextual_resource_readers: crate::resource_context::Readers,
     pub fixes: Vec<QuickFix>,
     /// Ordinary environment-stack fixes, replaceable by project-aware analysis.
     /// Verbatim closing-marker errors remain in the general diagnostics.
@@ -2164,11 +2165,33 @@ impl Syntax {
 
     pub(crate) fn latex_with_string_tests(
         text: &Text,
+        literal_test: impl FnMut(&Command, bool) -> Option<usize>,
+    ) -> Self {
+        Self::latex_with_resource_context(text, literal_test, &Default::default())
+    }
+
+    pub(crate) fn latex_with_readers(
+        text: &Text,
+        readers: &crate::resource_context::Readers,
+    ) -> Self {
+        Self::latex_with_resource_context(
+            text,
+            |command, known| crate::string_tests::data_count(&command.name).filter(|_| known),
+            readers,
+        )
+    }
+
+    pub(crate) fn latex_with_resource_context(
+        text: &Text,
         mut literal_test: impl FnMut(&Command, bool) -> Option<usize>,
+        readers: &crate::resource_context::Readers,
     ) -> Self {
         let source = &text.source;
         let bytes = source.as_bytes();
-        let mut result = Self::default();
+        let mut result = Self {
+            contextual_resource_readers: readers.clone(),
+            ..Self::default()
+        };
         let mut braces = Vec::new();
         let mut environments = Vec::new();
         let mut literal_arguments = std::collections::BTreeMap::new();
@@ -2246,6 +2269,9 @@ impl Syntax {
                     }
                     let name = &source[name_start..i];
                     let command_end = i;
+                    let reader = readers.get(&start);
+                    let native_resource = crate::bib_resources::references_file(name)
+                        && !reader.is_some_and(Option::is_none);
                     if control_operands.contains(&start) {
                         result.commands.push(Command {
                             name: name.into(),
@@ -2467,7 +2493,7 @@ impl Syntax {
                     } else if is_citation(name) {
                         arg_start = citation_argument_start(source, name, command_end)
                             .unwrap_or(source.len());
-                    } else if crate::bib_resources::references_file(name)
+                    } else if native_resource
                         || loader_extension(name).is_some()
                         || name == "bibliographystyle"
                         || code_input_command(name)
@@ -2520,7 +2546,7 @@ impl Syntax {
                             arg_start,
                             b'{',
                             b'}',
-                            !(url_argument || crate::bib_resources::references_file(name)),
+                            !(url_argument || native_resource),
                             true,
                         )
                         .or_else(|| {
@@ -2539,11 +2565,19 @@ impl Syntax {
                             argument.clone()
                         }
                     });
-                    let command = Command {
+                    let mut command = Command {
                         name: name.into(),
                         span: start..command_end,
                         argument,
                     };
+                    if let Some(Some(reader)) =
+                        reader.filter(|_| !matches!(name, "csuse" | "csname" | "endcsname"))
+                    {
+                        if !reader.bracket && !reader.opaque {
+                            command.argument = verbatim_file_group(source, reader.start)
+                                .map(|(argument, _)| argument);
+                        }
+                    }
                     if operands_known {
                         fancyverb_context.observe(&command);
                     }
@@ -2965,7 +2999,7 @@ impl Syntax {
                             _ => {}
                         }
                     }
-                    if crate::bib_resources::references_file(name) {
+                    if native_resource {
                         if let Some((_, end)) = parsed.as_ref() {
                             i = *end;
                         }
@@ -2980,12 +3014,33 @@ impl Syntax {
                         assigned_controls.insert(source[span].to_owned());
                     }
                     result.commands.push(command);
-                    if let Some(at) =
-                        inline_tokenization.resource_bracket(source, &result, &control_operands)
-                    {
-                        raw_resource_end =
-                            verbatim_file_bracket(source, at).map_or(source.len(), |(_, end)| end);
-                        result.raw_resource_brackets.insert(at);
+                    match reader {
+                        Some(Some(reader)) if reader.opaque => {
+                            result.ignored.push(reader.start..reader.end);
+                            i = i.max(reader.end);
+                        }
+                        Some(Some(reader)) if reader.bracket => {
+                            raw_resource_end = reader.end;
+                            result.raw_resource_brackets.insert(reader.start);
+                        }
+                        Some(Some(reader)) => {
+                            if verbatim_file_group(source, reader.start).is_none() {
+                                braces.push(reader.start);
+                            }
+                            i = i.max(reader.end);
+                        }
+                        Some(None) => {}
+                        None => {
+                            if let Some(at) = inline_tokenization.resource_bracket(
+                                source,
+                                &result,
+                                &control_operands,
+                            ) {
+                                raw_resource_end = verbatim_file_bracket(source, at)
+                                    .map_or(source.len(), |(_, end)| end);
+                                result.raw_resource_brackets.insert(at);
+                            }
+                        }
                     }
                 }
                 _ => i += 1,
