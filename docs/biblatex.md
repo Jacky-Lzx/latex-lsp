@@ -173,3 +173,12 @@
 
 补全片段只插入卷号和文献键两个必选参数，保留已有调用和可选说明。参数提示分别跟踪卷号、页码和各组键；填写说明或卷号后尚未输入必选参数时，继续提示下一个必选参数。普通多组引用也支持说明之后的等待提示。
 
+
+
+## 回调代码
+
+常见的 `AtEveryBibitem`、`AtBeginBibliography`、`AtEveryCite`、`AtEveryCitekey`、`AtEveryMultiCite` 及下一次／当前引用回调提供代码片段和参数提示；代码中的静态标签、文献键和分类名称可正常补全、导航与改名，回调之后的调用保持独立。也支持参考文献分区、简写列表、驱动和卷号引用回调。
+
+`AtDataInput[entry type]{code}` 的可选条目类型与 `AtBeginBiblist{bibliography list}{code}`／`AtEveryBiblistitem` 的首参数按选择器数据处理，其余参数作为代码。`AtEveryEntrykey{code}{success}{failure}` 的三个参数都保留代码语义；`AtUsedriver` 和 `AtVolcite` 的星号形式保留替换回调的原生行为。省略可选参数的补全不会改变默认值，已有调用的代码会原样保留。
+
+静态命名调用与唯一纯转发别名使用相同的签名；用户重定义、传给其他宏的参数数据和共享消费者歧义继续受项目编辑保护。不模拟回调的执行次数、顺序或动态展开，不通过源码预测当前条目的数据。

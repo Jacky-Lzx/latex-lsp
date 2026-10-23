@@ -28021,3 +28021,75 @@ fn direct_reference_keys_refresh_project_semantics_and_reject_partial_renames_ov
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+fn biblatex_callback_code_supports_category_edits_and_refreshes_unsaved_hook_definitions_over_stdio(
+) {
+    use latex_lsp::text::Text;
+    let dir = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let definitions = Url::from_file_path(dir.path().join("definitions.tex")).unwrap();
+    let declarations = r"\DeclareBibliographyCategory{selected}";
+    let source = "\\documentclass{article}\r\n\\input{definitions}\r\n😀 \\AtEveryBibitem{\\ifcategory{selected}{}{}}\\printbibliography[category=selected]";
+    std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+    std::fs::write(definitions.to_file_path().unwrap(), declarations).unwrap();
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":main,"languageId":"latex","version":5,"text":source}}),
+    );
+    server.notify("textDocument/didOpen",json!({"textDocument":{"uri":definitions,"languageId":"latex","version":2,"text":declarations}}));
+    let text = Text::new(source.into());
+    let position = text.position(source.find("selected").unwrap() + 2);
+    let target = json!({"textDocument":{"uri":main},"position":position});
+    assert_eq!(
+        server.request(2, "textDocument/definition", target.clone())[0]["uri"],
+        definitions.as_str()
+    );
+    assert!(server
+        .request(3, "textDocument/completion", target.clone())
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["label"] == "selected"));
+    let hook = text.position(source.find(r"\ifcategory").unwrap());
+    assert_eq!(
+        server.request(
+            4,
+            "textDocument/signatureHelp",
+            json!({"textDocument":{"uri":main},"position":hook})
+        )["signatures"][0]["label"],
+        r"\AtEveryBibitem{code}"
+    );
+    let rename = json!({"textDocument":{"uri":main},"position":position,"newName":"updated"});
+    let edit = server.request(5, "textDocument/rename", rename.clone());
+    assert_eq!(edit["documentChanges"].as_array().unwrap().len(), 2);
+    let edited = edit["documentChanges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|edit| edit["textDocument"]["uri"] == main.as_str())
+        .unwrap();
+    assert_eq!(edited["textDocument"]["version"], 5);
+    assert_eq!(edited["edits"].as_array().unwrap().len(), 2);
+    server.notify("textDocument/didChange",json!({"textDocument":{"uri":definitions,"version":3},"contentChanges":[{"text":format!("{declarations}\\def\\AtEveryBibitem#1{{}}") }]}));
+    assert_eq!(
+        server.request(6, "textDocument/definition", target.clone()),
+        json!([])
+    );
+    server.send(json!({"jsonrpc":"2.0","id":7,"method":"textDocument/rename","params":{"textDocument":{"uri":definitions},"position":{"line":0,"character":32},"newName":"updated"}}));
+    assert_eq!(
+        server.until(|message| message["id"] == 7)["error"]["code"],
+        -32602
+    );
+    server.notify("textDocument/didChange",json!({"textDocument":{"uri":definitions,"version":4},"contentChanges":[{"text":declarations}]}));
+    assert_eq!(
+        server.request(8, "textDocument/definition", target)[0]["uri"],
+        definitions.as_str()
+    );
+    server.request(9, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

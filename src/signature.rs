@@ -309,6 +309,30 @@ fn builtin(name: &str) -> Option<Signature> {
             false,
         ),
         "defbibfilter" => (&[("name", false), ("filter", false)], false),
+        "AtBeginRefsection"
+        | "AtNextRefsection"
+        | "AtFollowingRefsections"
+        | "AtBeginBibliography"
+        | "AtBeginShorthands"
+        | "AtEveryBibitem"
+        | "AtEveryLositem"
+        | "AtNextBibliography"
+        | "AtEveryCite"
+        | "AtEveryCitekey"
+        | "AtEveryMultiCite"
+        | "AtNextCite"
+        | "AtEachCitekey"
+        | "AtNextCitekey"
+        | "AtNextMultiCite" => (&[("code", false)], false),
+        "AtUsedriver" | "AtVolcite" => (&[("code", false)], true),
+        "AtDataInput" => (&[("entry type", true), ("code", false)], false),
+        "AtBeginBiblist" | "AtEveryBiblistitem" => {
+            (&[("bibliography list", false), ("code", false)], false)
+        }
+        "AtEveryEntrykey" => (
+            &[("code", false), ("success", false), ("failure", false)],
+            false,
+        ),
         "printfield" => (&[("format", true), ("field", false)], false),
         "thefield" | "strfield" => (&[("field", false)], false),
         "iffieldundef" => (
@@ -1069,6 +1093,7 @@ fn builtin(name: &str) -> Option<Signature> {
                     | "paragraph"
                     | "subparagraph"
                     | "caption"
+                    | "AtDataInput"
             )),
     })
 }
@@ -4214,8 +4239,9 @@ fn operand_delimited_end(source: &str, at: usize, open: &str, close: &str) -> Op
     }
 }
 
-fn environment_declaration_operand(name: &str, parameter: usize) -> bool {
+fn builtin_argument_data(name: &str, parameter: usize) -> bool {
     match name {
+        "AtDataInput" | "AtBeginBiblist" | "AtEveryBiblistitem" => parameter == 0,
         "newenvironment" | "renewenvironment" | "provideenvironment" | "NewEnviron"
         | "RenewEnviron" => parameter < 3,
         "NewDocumentEnvironment"
@@ -4276,8 +4302,7 @@ fn argument_tokens(
         // Defaults and parameter specifications are data; start/end code is
         // indexed normally. A body may display its defaults without executing
         // their tokens, so color renames must not rewrite those tokens.
-        let opaque =
-            (opaque || environment_declaration_operand(&signature.name, index)).then_some(parsed);
+        let opaque = (opaque || builtin_argument_data(&signature.name, index)).then_some(parsed);
         if starred && matches!(parameter.kind, Kind::UnstarredOptional) {
             continue;
         }

@@ -323,7 +323,7 @@ fn categories_shared_with_a_missing_or_different_declaration_reject_renames() {
 fn real_biblatex_category_rename_preserves_membership_and_filtered_output() {
     let dir = tempfile::tempdir().unwrap();
     let uri = Url::from_file_path(dir.path().join("main.tex")).unwrap();
-    let source = "\\documentclass{article}\n\\usepackage[backend=bibtex,style=numeric]{biblatex}\n\\addbibresource{refs.bib}\n\\DeclareBibliographyCategory{selected}\n\\def\\assign{\\addtocategory}\n\\assign{selected}{paper}\n\\defbibfilter{mine}{category=selected}\n\\def\\checkcurrent{\\ifcategory{selected}{\\typeout{CURRENT-CATEGORY-OK}}{\\errmessage{Current category lost}}}\n\\AtEveryBibitem{\\checkcurrent}\\relax\n\\begin{document}\n\\nocite{paper}\n\\ifentrycategory{paper}{selected}{\\typeout{CATEGORY-MEMBERSHIP-OK}}{\\errmessage{Category lost}}\n\\printbibliography[category=selected]\n\\printbibliography[filter=mine]\n\\end{document}\n";
+    let source = "\\documentclass{article}\n\\usepackage[backend=bibtex,style=numeric]{biblatex}\n\\addbibresource{refs.bib}\n\\DeclareBibliographyCategory{selected}\n\\def\\assign{\\addtocategory}\n\\assign{selected}{paper}\n\\defbibfilter{mine}{category=selected}\n\\AtEveryBibitem{\\ifcategory{selected}{\\typeout{CURRENT-CATEGORY-OK}}{\\errmessage{Current category lost}}}\n\\begin{document}\n\\nocite{paper}\n\\ifentrycategory{paper}{selected}{\\typeout{CATEGORY-MEMBERSHIP-OK}}{\\errmessage{Category lost}}\n\\printbibliography[category=selected]\n\\printbibliography[filter=mine]\n\\end{document}\n";
     let mut ws = Workspace::default();
     ws.config.distribution.enabled = false;
     ws.open(uri.clone(), source.into(), 1);

@@ -681,3 +681,12 @@ cargo test --locked --test direct_reference_keys
 cargo test --locked --test protocol direct_reference_keys_refresh
 cargo test --locked --test direct_reference_keys real_label_rename -- --include-ignored
 ```
+
+
+biblatex 回调测试核对官方代码／选择器参数、全部分支、星号、未闭合调用、命名调用与别名、用户重定义和补全保留。原生对照需要 pdfLaTeX、BibTeX 和 biblatex，验证改名后导入／引用／条目键回调确实执行：
+
+```sh
+cargo test --locked --test biblatex_hooks
+cargo test --locked --test biblatex_hooks real_biblatex_callbacks -- --include-ignored
+cargo test --locked --test bibliography_categories real_biblatex_category -- --include-ignored
+```
