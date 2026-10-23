@@ -23272,6 +23272,39 @@ fn fancyvrb_inline_body_execution_follows_incremental_macro_wrapping_over_stdio(
             format!("\\usepackage{{fvextra}}\\fvset{{extra=false}}\\textbf{{{body}}}"),
             true,
         ),
+        (
+            format!("\\let\\code\\Verb{}", body.replace("Verb", "code")),
+            false,
+        ),
+        (
+            format!(
+                "\\let\\code\\Verb\\textbf{{{}}}",
+                body.replace("Verb", "code")
+            ),
+            true,
+        ),
+        (
+            format!(
+                "\\newcommand{{\\code}}{{\\Verb}}\\textbf{{{}}}",
+                body.replace("Verb", "code")
+            ),
+            true,
+        ),
+        (
+            format!(
+                "\\usepackage{{fvextra}}\\let\\code\\Verb\\textbf{{{}}}",
+                body.replace("Verb", "code")
+            ),
+            false,
+        ),
+        (
+            format!(
+                "\\usepackage{{fvextra}}\\fvset{{extra=false}}\\let\\code\\Verb\\textbf{{{}}}",
+                body.replace("Verb", "code")
+            ),
+            true,
+        ),
+        (body.to_owned(), false),
     ]
     .into_iter()
     .enumerate()
@@ -23318,9 +23351,29 @@ fn fancyvrb_inline_body_execution_follows_incremental_macro_wrapping_over_stdio(
         );
         assert_eq!(
             symbols.as_array().unwrap().len(),
-            1 + usize::from(live) + usize::from(stage == 4 || stage == 5),
+            1 + usize::from(live) + usize::from(matches!(stage, 4 | 5 | 11..=15)),
             "{source}: {symbols}"
         );
+        if let Some(at) = source.find("\\code|") {
+            let position = Text::new(source.clone()).position(at + 2);
+            let edit = server.request(
+                id + 4,
+                "textDocument/rename",
+                json!({"textDocument":{"uri":main},"position":position,"newName":"snippet"}),
+            );
+            assert_eq!(
+                edit["documentChanges"][0]["textDocument"]["version"],
+                version
+            );
+            assert_eq!(
+                edit["documentChanges"][0]["edits"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                2,
+                "{source}: {edit}"
+            );
+        }
     }
     server.request(100, "shutdown", Value::Null);
     server.notify("exit", Value::Null);

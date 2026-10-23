@@ -473,6 +473,7 @@ fn builtin(name: &str) -> Option<Signature> {
         "verbatiminput" => (&[("file", false)], true),
         "lstinputlisting" => (&[("options", true), ("file", false)], false),
         "lstinline" => (&[("options", true)], false),
+        "Verb" => (&[("options", true)], true),
         "mintinline" | "mint" => (
             &[("options", true), ("language", false), ("code", false)],
             false,
@@ -1948,7 +1949,7 @@ impl InlineTokenization {
             let mut visited = BTreeSet::new();
             let mut found = false;
             while let Some(name) = pending.pop() {
-                if matches!(name, "lstinline" | "mintinline" | "mint") {
+                if matches!(name, "lstinline" | "mintinline" | "mint" | "Verb") {
                     found = true;
                     break;
                 }
@@ -1965,7 +1966,7 @@ impl InlineTokenization {
         }
         self.refresh(source, parsed);
         let signatures = self.signatures.as_ref().unwrap();
-        ["lstinline", "mintinline", "mint"]
+        ["lstinline", "mintinline", "mint", "Verb"]
             .into_iter()
             .find(|builtin| signatures.invokes_builtin(name, builtin))
     }
