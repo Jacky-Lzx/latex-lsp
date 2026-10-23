@@ -2665,6 +2665,8 @@ impl Syntax {
                                     let ending = format!("\\end{{{env}}}");
                                     let end = if crate::fancyvrb::is_environment(env) {
                                         crate::fancyvrb::environment_end(source, body_start, env)
+                                    } else if env == "minted" {
+                                        crate::minted::environment_end(source, body_start)
                                     } else {
                                         source[body_start..]
                                             .find(&ending)
@@ -2686,7 +2688,9 @@ impl Syntax {
                                     if env == "comment" {
                                         result.comments.push(body_start..i);
                                     }
-                                    if end.is_some() && crate::fancyvrb::is_environment(env) {
+                                    if end.is_some()
+                                        && (crate::fancyvrb::is_environment(env) || env == "minted")
+                                    {
                                         // FancyVerb discards the rest of its closing line.
                                         // Keep the marker boundary in the first raw span
                                         // for folding and linked editing of delimiters.

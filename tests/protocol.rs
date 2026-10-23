@@ -205,6 +205,109 @@ printf 'PWD %s\nINPUT %s\n' "$PWD" "$2" > "$1/main.fls"
 }
 
 #[test]
+fn minted_environment_boundaries_refresh_diagnostics_and_linked_names_over_stdio() {
+    use latex_lsp::text::Text;
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = Url::from_file_path(root.join("main.tex")).unwrap();
+    let source = concat!(
+        "% 😀\r\n\\label{kept}\r\n",
+        "\\begin{minted}[label={\\detokenize{\\end{minted}}}]\r\n{tex}\r\n",
+        "\\end{other}\\end{minted}\\label{falseend}\r\n",
+        "\\input{fake}\\label{kept}\r\n",
+        "\\end{minted}\\label{discarded}\r\n",
+        "\\ref{kept}\r\n",
+    );
+    std::fs::write(root.join("main.tex"), source).unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(root).unwrap(),"capabilities":{"textDocument":{"diagnostic":{}},"workspace":{"workspaceEdit":{"documentChanges":true}}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":main,"languageId":"latex","version":7,"text":source}}),
+    );
+    let diagnostics = server.request(
+        2,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":main}}),
+    );
+    assert_eq!(diagnostics["items"], json!([]), "{diagnostics}");
+    let text = Text::new(source.into());
+    let position = text.position(source.rfind("kept").unwrap());
+    let edit = server.request(
+        3,
+        "textDocument/rename",
+        json!({"textDocument":{"uri":main},"position":position,"newName":"changed"}),
+    );
+    assert_eq!(edit["documentChanges"][0]["textDocument"]["version"], 7);
+    assert_eq!(
+        edit["documentChanges"][0]["edits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    let close = source.rfind("\\end{minted}").unwrap();
+    let begin = source.find("\\begin{minted}").unwrap();
+    let linked = server.request(
+        4,
+        "textDocument/linkedEditingRange",
+        json!({"textDocument":{"uri":main},"position":text.position(close+6)}),
+    );
+    assert_eq!(
+        linked["ranges"],
+        json!([
+            text.range(begin + 7, begin + 13),
+            text.range(close + 5, close + 11)
+        ])
+    );
+    assert_eq!(
+        server.request(
+            5,
+            "textDocument/documentLink",
+            json!({"textDocument":{"uri":main}})
+        ),
+        json!([])
+    );
+    let range = text.range(close + 5, close + 11);
+    server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":8},"contentChanges":[{"range":range,"text":"other"}]}));
+    let diagnostics = server.request(
+        6,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":main}}),
+    );
+    let items = diagnostics["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{diagnostics}");
+    assert_eq!(items[0]["message"], "Unclosed environment `minted`");
+    let broken = text
+        .changed(vec![tower_lsp::lsp_types::TextDocumentContentChangeEvent {
+            range: Some(range),
+            range_length: None,
+            text: "other".into(),
+        }])
+        .unwrap();
+    server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":9},"contentChanges":[{"range":broken.range(close+5,close+10),"text":"minted"}]}));
+    let diagnostics = server.request(
+        7,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":main}}),
+    );
+    assert_eq!(diagnostics["items"], json!([]), "{diagnostics}");
+    let symbols = server.request(
+        8,
+        "textDocument/documentSymbol",
+        json!({"textDocument":{"uri":main}}),
+    );
+    assert_eq!(symbols.as_array().unwrap().len(), 1, "{symbols}");
+    assert_eq!(symbols[0]["name"], "kept");
+    let references = server.request(9, "textDocument/references", json!({"textDocument":{"uri":main},"position":position,"context":{"includeDeclaration":true}}));
+    assert_eq!(references.as_array().unwrap().len(), 2, "{references}");
+    server.request(10, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
 #[cfg(unix)]
 fn bibliography_string_warnings_offer_versioned_and_legacy_repairs_over_stdio() {
     for (pull, legacy) in [(false, false), (true, false), (true, true)] {

@@ -8,7 +8,7 @@
 
 可选设置和语言参数之前的空白、TeX 注释按普通参数规则读取；语言参数之后已切换为逐字读取规则，`%` 是代码定界符。参数提示覆盖设置和语言名称；代码内部不提供 LaTeX 命令提示。已有本地命令重定义后，解析恢复普通参数规则。不展开自定义 minted 命令或推断 `escapeinside` 等选项执行的 LaTeX 内容。
 
-`minted` 环境继续作为逐字环境处理。静态分析不调用 Pygments 或启用 shell escape。
+`minted` 环境按 FancyVerb 的逐行规则读取。先读取普通 TeX 选项和语言参数，再从下一行扫描代码；头部参数中的 `\end{minted}` 不会结束环境。每行只检查第一个字面的 `\end{…}`，名称必须恰好为 `minted`；如果首先出现其他名称，该行的后续标记仍是代码。真实结束行的剩余内容不会进入符号、文件依赖或重命名索引；原生工具对此报告的额外内容错误仍保留为编译诊断。折叠和环境名联动编辑使用真实结束边界，未闭合代码可补齐结束行。支持 CRLF、UTF-16 位置及增量编辑。静态分析不调用 Pygments 或启用 shell escape。
 
 `\inputminted[options]{language}{file}` 提供路径补全、文件链接、定义跳转、参数提示，以及版本化文件和目录重命名。文件名可以使用任意后缀或不带后缀；按主文档目录及 TeX 的 `.tex` 优先规则查找。文件中的 LaTeX 示例作为构建数据读取，不把标签、命令或嵌套输入加入主文档的源码索引；同一文件同时被 `\input` 读取时保留其源码用途。
 
@@ -22,13 +22,14 @@
 
 ```sh
 cargo test --locked --test minted
+cargo test --locked --test minted_environments
 cargo test --locked --test minted_inputs --test missing_minted_inputs
 cargo test --locked --test protocol minted_inline_
 cargo test --locked --test protocol static_code_
 ```
 
-安装 pdfLaTeX 与 minted v3 后，可运行下面的命令。内联边界使用关闭 shell escape 的 `verbatim` 模式；文件名及双模式缺失文件修复回归还需要 PATH 上的 `latexminted`。高亮回归使用受限 shell escape 和 `highlightmode=immediate`，检查实际生成的代码内容，核对空格及 Unicode 路径，避免首次快速构建的占位输出掩盖问题：
+安装 pdfLaTeX 与 minted v3 后，可运行下面的命令。内联边界使用关闭 shell escape 的 `verbatim` 模式；文件名、环境边界及双模式缺失文件修复回归还需要 PATH 上的 `latexminted`。高亮回归使用受限 shell escape 和 `highlightmode=immediate`，检查实际生成的代码内容，核对空格及 Unicode 路径，避免首次快速构建的占位输出掩盖问题。环境回归同时检查合法代码和结束行多余内容的原生错误，核对标签重命名前后的真实输出：
 
 ```sh
-cargo test --locked --test minted --test minted_inputs --test missing_minted_inputs -- --include-ignored
+cargo test --locked --test minted --test minted_environments --test minted_inputs --test missing_minted_inputs -- --include-ignored
 ```

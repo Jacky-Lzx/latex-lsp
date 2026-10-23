@@ -92,6 +92,16 @@ pub(crate) fn is_environment(name: &str) -> bool {
 /// environment there makes the complete line data, including later markers.
 pub(crate) fn environment_end(source: &str, header_start: usize, name: &str) -> Option<usize> {
     let body_start = environment_body_start(source, header_start, name)?;
+    environment_end_from_body(source, body_start, name)
+}
+
+/// Shared with environments whose ordinary TeX header is read before the
+/// FancyVerb scanner starts (for example minted's language argument).
+pub(crate) fn environment_end_from_body(
+    source: &str,
+    body_start: usize,
+    name: &str,
+) -> Option<usize> {
     let ending = format!("\\end{{{name}}}");
     let mut offset = body_start;
     for line in source[body_start..].split_inclusive('\n') {

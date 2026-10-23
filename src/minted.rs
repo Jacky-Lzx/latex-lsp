@@ -15,6 +15,16 @@ pub(crate) fn language(source: &str, end: usize) -> Option<Argument> {
     syntax::group(source, at, b'{', b'}').map(|(argument, _)| argument)
 }
 
+/// The optional settings and language are ordinary TeX arguments. Only after
+/// they finish does FancyVerb discard the rest of that header line and scan
+/// literal body lines; a marker nested in the header cannot close the block.
+pub(crate) fn environment_end(source: &str, header_start: usize) -> Option<usize> {
+    let start = options_start(source, header_start)?;
+    let (_, language_end) = crate::fancyvrb::name_argument(source, start)?;
+    let body_start = language_end + source[language_end..].find('\n')? + 1;
+    crate::fancyvrb::environment_end_from_body(source, body_start, "minted")
+}
+
 /// Braced code balances literal braces. Backslashes and percent signs in
 /// the body are data, so neither escapes a brace nor starts a TeX comment.
 /// Both forms accept line breaks, as fvextra's ReadVArg does. An unfinished
