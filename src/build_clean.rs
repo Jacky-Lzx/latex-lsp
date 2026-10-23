@@ -103,6 +103,7 @@ fn stamp(path: &Path, budget: u64) -> Result<Stamp, String> {
 }
 
 struct Entry {
+    original: PathBuf,
     path: PathBuf,
     target: PathBuf,
     stamp: Stamp,
@@ -110,6 +111,7 @@ struct Entry {
 
 pub(crate) struct Plan {
     pub(crate) directory: PathBuf,
+    original_directory: PathBuf,
     target: Option<PathBuf>,
     directory_identity: Option<Identity>,
     entries: Vec<Entry>,
@@ -126,11 +128,15 @@ impl Plan {
         let root_path = root
             .to_file_path()
             .map_err(|_| "Cleanup requires a local file")?;
-        let directory = crate::workspace::normalize_path(
-            &config
-                .output_path(&root_path)
-                .ok_or("Invalid output directory")?,
-        );
+        let original_directory = config
+            .output_path(&root_path)
+            .ok_or("Invalid output directory")?;
+        let directory = crate::workspace::normalize_path(&original_directory);
+        if original_directory.canonicalize().ok() != directory.canonicalize().ok() {
+            return Err(
+                "Cleanup requires an unambiguous output directory; choose its direct path".into(),
+            );
+        }
         let target = match directory.canonicalize() {
             Ok(path) if path.is_dir() => Some(path),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
@@ -228,6 +234,7 @@ impl Plan {
             .collect();
         let mut plan = Self {
             directory,
+            original_directory,
             target,
             directory_identity,
             entries: vec![],
@@ -235,8 +242,8 @@ impl Plan {
         };
         let mut budget = MAX_BYTES;
         let mut seen = BTreeSet::new();
-        for path in paths {
-            let path = crate::workspace::normalize_path(&path);
+        for original in paths {
+            let path = crate::workspace::normalize_path(&original);
             let metadata = match std::fs::symlink_metadata(&path) {
                 Ok(metadata) => metadata,
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
@@ -245,6 +252,8 @@ impl Plan {
             let resolved = path.canonicalize().ok();
             let reason = if !metadata.file_type().is_file() {
                 Some("not-regular-file")
+            } else if original.canonicalize().ok() != resolved {
+                Some("ambiguous-path")
             } else if resolved.as_ref().is_none_or(|path| {
                 plan.target
                     .as_ref()
@@ -278,6 +287,7 @@ impl Plan {
                 .map_err(|error| format!("Cannot plan {}: {error}", path.display()))?;
             budget -= stamp.length;
             plan.entries.push(Entry {
+                original,
                 path,
                 target: resolved,
                 stamp,
@@ -288,6 +298,7 @@ impl Plan {
 
     fn valid_directory(&self) -> bool {
         self.directory.canonicalize().ok() == self.target
+            && self.original_directory.canonicalize().ok() == self.target
             && self
                 .target
                 .as_ref()
@@ -298,6 +309,7 @@ impl Plan {
 
     fn valid_entry(&self, entry: &Entry) -> bool {
         self.valid_directory()
+            && entry.original.canonicalize().ok().as_ref() == Some(&entry.target)
             && entry.path.canonicalize().ok().as_ref() == Some(&entry.target)
             && stamp(&entry.path, MAX_BYTES).ok().as_ref() == Some(&entry.stamp)
     }
@@ -353,6 +365,83 @@ mod tests {
             ..Default::default()
         };
         (dir, ws, root, config)
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn parent_traversal_across_directory_aliases_cannot_clean_the_wrong_output_tree() {
+        use std::os::unix::fs::symlink;
+        let (dir, ws, root, mut config) = fixture();
+        std::fs::create_dir_all(dir.path().join("nested/deeper")).unwrap();
+        for parent in ["out", "nested/out"] {
+            std::fs::create_dir(dir.path().join(parent)).unwrap();
+            std::fs::write(dir.path().join(parent).join("任务.aux"), "preserve").unwrap();
+        }
+        symlink(dir.path().join("nested/deeper"), dir.path().join("alias")).unwrap();
+        config.output_directory = Some("alias/../out".into());
+        assert!(Plan::prepare(&ws, &root, &config, false).is_err());
+        for parent in ["out", "nested/out"] {
+            assert!(dir.path().join(parent).join("任务.aux").exists());
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn ambiguous_recorder_paths_do_not_authorize_the_lexically_matching_auxiliary() {
+        use std::os::unix::fs::symlink;
+        let (dir, ws, root, config) = fixture();
+        std::fs::create_dir_all(dir.path().join("nested/deeper")).unwrap();
+        for parent in ["out", "nested/out"] {
+            std::fs::create_dir(dir.path().join(parent)).unwrap();
+            std::fs::write(dir.path().join(parent).join("chapter.aux"), "preserve").unwrap();
+        }
+        symlink(dir.path().join("nested/deeper"), dir.path().join("alias")).unwrap();
+        std::fs::write(
+            dir.path().join("out/任务.fls"),
+            format!(
+                "PWD {}\nOUTPUT alias/../out/chapter.aux\n",
+                dir.path().display()
+            ),
+        )
+        .unwrap();
+        let result = Plan::prepare(&ws, &root, &config, false)
+            .unwrap()
+            .execute(false)
+            .unwrap();
+        assert_eq!(result["skipped"][0]["reason"], "ambiguous-path");
+        assert_eq!(result["removed"].as_array().unwrap().len(), 1);
+        for parent in ["out", "nested/out"] {
+            assert!(dir.path().join(parent).join("chapter.aux").exists());
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn original_parent_path_bindings_are_revalidated_even_when_the_normalized_path_is_unchanged() {
+        use std::os::unix::fs::symlink;
+        let (dir, ws, root, mut config) = fixture();
+        std::fs::create_dir(dir.path().join("inner")).unwrap();
+        std::fs::create_dir_all(dir.path().join("nested/deeper")).unwrap();
+        for parent in ["out", "nested/out"] {
+            std::fs::create_dir(dir.path().join(parent)).unwrap();
+            std::fs::write(dir.path().join(parent).join("任务.aux"), "preserve").unwrap();
+        }
+        symlink(dir.path().join("inner"), dir.path().join("alias")).unwrap();
+        config.output_directory = Some("alias/../out".into());
+        let plan = Plan::prepare(&ws, &root, &config, false).unwrap();
+        assert_eq!(
+            plan.execute(true).unwrap()["files"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        std::fs::remove_file(dir.path().join("alias")).unwrap();
+        symlink(dir.path().join("nested/deeper"), dir.path().join("alias")).unwrap();
+        assert!(plan.execute(false).is_err());
+        for parent in ["out", "nested/out"] {
+            assert!(dir.path().join(parent).join("任务.aux").exists());
+        }
     }
 
     #[test]

@@ -26448,3 +26448,95 @@ fn call_hierarchy_noexpand_uses_single_tokens_named_spaces_and_current_user_rede
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+#[cfg(unix)]
+fn retargeted_output_directory_aliases_keep_active_build_and_cleanup_conflicts_protected() {
+    use std::os::unix::fs::symlink;
+    for index in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let first = Url::from_file_path(dir.path().join("first.tex")).unwrap();
+        let second = Url::from_file_path(dir.path().join("second.tex")).unwrap();
+        for uri in [&first, &second] {
+            std::fs::write(uri.to_file_path().unwrap(), "\\documentclass{article}\n").unwrap();
+        }
+        for name in ["old", "new"] {
+            std::fs::create_dir(dir.path().join(name)).unwrap();
+        }
+        symlink(dir.path().join("old"), dir.path().join("out")).unwrap();
+        let compiler = dir.path().join("compiler.sh");
+        std::fs::write(&compiler, "touch started\nwhile [ ! -e release ]; do sleep 0.01; done\nprintf '%%PDF-1.4\\n' > \"$1/$2.pdf\"\n: > \"$1/$2.log\"\n").unwrap();
+        let mut build = json!({"executable":"/bin/sh","arguments":[compiler,"%o","%j"],"rebuildArguments":[compiler,"%o","%j"],"outputDirectory":"out","timeoutSeconds":15});
+        let artifact = if index {
+            build["indexTools"] = json!([{"jobName":"shared"}]);
+            "shared.ind"
+        } else {
+            build["jobName"] = json!("shared");
+            "shared.pdf"
+        };
+        let protected = dir.path().join("new").join(artifact);
+        std::fs::write(&protected, "protected while build runs").unwrap();
+        let mut server = Server::start();
+        server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{},"initializationOptions":{"distribution":{"enabled":false},"build":build}}));
+        server.notify("initialized", json!({}));
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[first]}),
+        );
+        wait_for_file(&dir.path().join("started"));
+        std::fs::remove_file(dir.path().join("out")).unwrap();
+        symlink(dir.path().join("new"), dir.path().join("out")).unwrap();
+        let mut id = 3;
+        for command in ["latex.cleanAuxiliary", "latex.cleanArtifacts"] {
+            for dry_run in [false, true] {
+                server.send(json!({"jsonrpc":"2.0","id":id,"method":"workspace/executeCommand","params":{"command":command,"arguments":[{"uri":second,"dryRun":dry_run}]}}));
+                let response = server.until(|message| message["id"] == id);
+                assert_eq!(response["error"]["code"], -32602, "{response}");
+                assert!(
+                    response["error"]["message"]
+                        .as_str()
+                        .unwrap()
+                        .contains("active build"),
+                    "{response}"
+                );
+                assert_eq!(
+                    std::fs::read_to_string(&protected).unwrap(),
+                    "protected while build runs"
+                );
+                id += 1;
+            }
+        }
+        for command in ["latex.build", "latex.rebuild"] {
+            server.send(json!({"jsonrpc":"2.0","id":id,"method":"workspace/executeCommand","params":{"command":command,"arguments":[second]}}));
+            let response = server.until(|message| message["id"] == id);
+            assert_eq!(response["error"]["code"], -32602, "{response}");
+            assert!(
+                response["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains(if index {
+                        "same index output file"
+                    } else {
+                        "same output file"
+                    }),
+                "{response}"
+            );
+            id += 1;
+        }
+        assert_eq!(
+            server.request(
+                id,
+                "workspace/executeCommand",
+                json!({"command":"latex.buildStatus","arguments":[first]})
+            )["status"],
+            "running"
+        );
+        id += 1;
+        std::fs::write(dir.path().join("release"), "").unwrap();
+        server.until(|message| message["method"] == "latex/buildFinished");
+        server.request(id, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}

@@ -48,8 +48,48 @@ struct Record {
     inputs: BTreeMap<Url, InputSnapshot>,
     checks: Arc<crate::file_checks::Snapshot>,
     artifact: Option<PathBuf>,
+    // Preserve the path passed to the compiler as well as initial physical
+    // artifact names: a directory alias may be retargeted while it runs.
+    output_directory: Option<PathBuf>,
     index_artifacts: BTreeSet<PathBuf>,
     bibliography_output_directory: Option<PathBuf>,
+}
+
+fn artifact_binding(path: PathBuf) -> PathBuf {
+    path.parent()
+        .and_then(|parent| parent.canonicalize().ok())
+        .zip(path.file_name())
+        .map_or_else(
+            || crate::workspace::normalize_path(&path),
+            |(parent, name)| parent.join(name),
+        )
+}
+
+impl Record {
+    fn current_artifact(&self, path: &Path) -> Option<PathBuf> {
+        Some(
+            self.output_directory
+                .as_ref()?
+                .canonicalize()
+                .ok()?
+                .join(path.file_name()?),
+        )
+    }
+
+    fn shares_pdf(&self, artifact: &Path) -> bool {
+        self.artifact.as_ref().is_some_and(|previous| {
+            previous == artifact || self.current_artifact(previous).as_deref() == Some(artifact)
+        })
+    }
+
+    fn shared_index(&self, candidates: &BTreeSet<PathBuf>) -> Option<PathBuf> {
+        self.index_artifacts.iter().find_map(|path| {
+            [Some(path.clone()), self.current_artifact(path)]
+                .into_iter()
+                .flatten()
+                .find(|path| candidates.contains(path))
+        })
+    }
 }
 
 struct QueuedBuild {
@@ -127,7 +167,6 @@ impl BuildManager {
             .to_file_path()
             .map_err(|_| Error::invalid_params("Cleanup requires a local file"))?;
         let physical = |path: PathBuf| {
-            let path = crate::workspace::normalize_path(&path);
             path.canonicalize()
                 .ok()
                 .or_else(|| {
@@ -136,12 +175,14 @@ impl BuildManager {
                         .ok()
                         .map(|parent| parent.join(path.file_name().unwrap()))
                 })
-                .unwrap_or(path)
+                .unwrap_or_else(|| crate::workspace::normalize_path(&path))
         };
-        let artifact = config.artifact_path(&root_path, "pdf").map(physical);
+        let artifact = config
+            .artifact_path(&root_path, "pdf")
+            .map(artifact_binding);
         let index_artifacts: BTreeSet<_> = crate::index_processing::outputs(&root_path, &config)
             .into_iter()
-            .map(physical)
+            .map(artifact_binding)
             .collect();
         let directory = config.output_path(&root_path).map(physical);
         let (result, affected) = {
@@ -152,14 +193,21 @@ impl BuildManager {
                 return Err(Error::invalid_request());
             }
             for (owner, record) in state.iter() {
-                let shared = artifact.is_some() && artifact == record.artifact
-                    || !index_artifacts.is_disjoint(&record.index_artifacts);
+                let shared = artifact
+                    .as_ref()
+                    .is_some_and(|path| record.shares_pdf(path))
+                    || record.shared_index(&index_artifacts).is_some();
                 let same_directory = record
                     .artifact
                     .as_ref()
                     .and_then(|path| path.parent())
                     .zip(directory.as_deref())
                     .is_some_and(|(a, b)| a == b)
+                    || record.output_directory.as_ref().is_some_and(|path| {
+                        directory
+                            .as_ref()
+                            .is_some_and(|directory| physical(path.clone()) == *directory)
+                    })
                     || record
                         .index_artifacts
                         .iter()
@@ -345,22 +393,12 @@ impl BuildManager {
         drop(workspace);
         let build_id = self.sequence.fetch_add(1, Ordering::Relaxed);
         let cancel = Arc::new(AtomicBool::new(false));
-        let artifact = config.artifact_path(&root_path, "pdf").map(|path| {
-            let path = crate::workspace::normalize_path(&path);
-            path.parent()
-                .and_then(|parent| parent.canonicalize().ok())
-                .zip(path.file_name())
-                .map_or_else(|| path.clone(), |(parent, name)| parent.join(name))
-        });
+        let artifact = config
+            .artifact_path(&root_path, "pdf")
+            .map(artifact_binding);
         let index_artifacts: BTreeSet<_> = crate::index_processing::outputs(&root_path, &config)
             .into_iter()
-            .map(|path| {
-                let path = crate::workspace::normalize_path(&path);
-                path.parent()
-                    .and_then(|parent| parent.canonicalize().ok())
-                    .zip(path.file_name())
-                    .map_or_else(|| path.clone(), |(parent, name)| parent.join(name))
-            })
+            .map(artifact_binding)
             .collect();
         {
             let mut state = self.state.lock().unwrap();
@@ -378,21 +416,25 @@ impl BuildManager {
             if let Some((owner, _)) = state.iter().find(|(owner, record)| {
                 *owner != &root
                     && record.active.is_some()
-                    && artifact.is_some()
-                    && record.artifact == artifact
+                    && artifact
+                        .as_ref()
+                        .is_some_and(|path| record.shares_pdf(path))
             }) {
                 return Err(Error::invalid_params(format!(
                     "Another active build writes the same output file: {}; wait for {} to finish or choose a different jobName or outputDirectory",
                     artifact.as_ref().unwrap().display(), owner
                 )));
             }
-            if let Some((owner, record)) = state.iter().find(|(owner, record)| {
-                *owner != &root
-                    && record.active.is_some()
-                    && !record.index_artifacts.is_disjoint(&index_artifacts)
+            if let Some((owner, path)) = state.iter().find_map(|(owner, record)| {
+                if owner == &root || record.active.is_none() {
+                    return None;
+                }
+                record
+                    .shared_index(&index_artifacts)
+                    .map(|path| (owner, path))
             }) {
                 return Err(Error::invalid_params(format!("Another active build writes the same index output file: {}; wait for {} to finish or choose a different index jobName or outputDirectory",
-                    record.index_artifacts.intersection(&index_artifacts).next().unwrap().display(), owner)));
+                    path.display(), owner)));
             }
             let record = state.entry(root.clone()).or_default();
             if let Some((id, _)) = &record.active {
@@ -433,6 +475,7 @@ impl BuildManager {
                 .collect();
             record.checks = checks.clone();
             record.artifact = artifact;
+            record.output_directory = config.output_path(&root_path);
             record.index_artifacts = index_artifacts;
             record.bibliography_output_directory =
                 config.bibliography_tool.as_ref().and_then(|_| {
