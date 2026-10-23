@@ -1087,6 +1087,10 @@ fn describe_definition(
         uri.path(),
         doc.text.position(entry.span.start).line + 1
     );
+    if let Some(notes) = crate::command_docs::comments(doc, entry) {
+        signature.documentation.push_str("\n\n");
+        signature.documentation.push_str(&notes);
+    }
     Some(signature)
 }
 
@@ -6231,5 +6235,134 @@ mod noexpand_tests {
                 .collect();
             assert_eq!(actual, names, "{call}");
         }
+    }
+}
+
+#[cfg(test)]
+mod documentation_tests {
+    use super::*;
+
+    fn setup(source: &str) -> (Workspace, Url) {
+        let uri = Url::parse("untitled:signature-docs.tex").unwrap();
+        let mut ws = Workspace::default();
+        ws.config.distribution.enabled = false;
+        ws.open(uri.clone(), source.into(), 1);
+        (ws, uri)
+    }
+
+    fn at_end(ws: &Workspace, uri: &Url) -> Option<SignatureHelp> {
+        let doc = &ws.documents[uri];
+        help(ws, uri, doc.text.position(doc.text.source.len()))
+    }
+
+    fn documentation(help: &SignatureHelp) -> &str {
+        let Some(Documentation::String(text)) = &help.signatures[0].documentation else {
+            panic!("Expected plain documentation")
+        };
+        text
+    }
+
+    #[test]
+    fn direct_and_static_named_signatures_append_plain_comments_without_changing_parameters() {
+        for invocation in [
+            r"\example",
+            r"\csuse{example}",
+            r"\csname example\endcsname",
+        ] {
+            let source = format!("% 中文😀 **plain** <tag>\r\n%\r\n% The required text.\r\n\\newcommand{{\\example}}[2][DEF]{{#1#2}}\r\n{invocation}{{value");
+            let (ws, uri) = setup(&source);
+            let signature = at_end(&ws, &uri).unwrap();
+            assert_eq!(signature.active_parameter, Some(1));
+            assert_eq!(
+                signature.signatures[0].parameters.as_ref().unwrap().len(),
+                2
+            );
+            let doc = documentation(&signature);
+            assert!(doc.contains("Defined with \\newcommand"), "{doc}");
+            assert!(
+                doc.ends_with("中文😀 **plain** <tag>\n\nThe required text."),
+                "{doc}"
+            );
+        }
+    }
+
+    #[test]
+    fn aliases_use_their_own_documentation_and_keep_the_resolved_signature() {
+        for definition in [r"\newcommand{\alias}{\example}", r"\def\alias{\example}"] {
+            let source = format!("% Original documentation\n\\newcommand{{\\example}}[1]{{#1}}\n% Alias documentation\n{definition}\n\\alias{{value");
+            let (ws, uri) = setup(&source);
+            let signature = at_end(&ws, &uri).unwrap();
+            assert_eq!(signature.signatures[0].label, "\\alias{#1}");
+            let doc = documentation(&signature);
+            assert!(doc.ends_with("Alias documentation"), "{doc}");
+            assert!(!doc.contains("Original documentation"));
+        }
+    }
+
+    #[test]
+    fn incremental_comments_update_and_ambiguous_definitions_do_not_offer_a_signature() {
+        let original = "% Original\n\\newcommand{\\example}[1]{#1}\n\\example{value";
+        let (mut ws, uri) = setup(original);
+        assert!(documentation(&at_end(&ws, &uri).unwrap()).ends_with("Original"));
+        ws.open(uri.clone(), original.replace("Original", "Updated"), 2);
+        assert!(documentation(&at_end(&ws, &uri).unwrap()).ends_with("Updated"));
+        ws.open(
+            uri.clone(),
+            format!("\\newcommand{{\\example}}[2]{{#1#2}}\n{original}"),
+            3,
+        );
+        assert!(at_end(&ws, &uri).is_none());
+    }
+
+    #[test]
+    fn environment_and_macro_signatures_keep_their_own_declaration_comments() {
+        for declaration in [
+            r"\newenvironment{example}[2][DEF]{}{}",
+            r"\NewDocumentEnvironment{example}{O{DEF}m}{}{}",
+        ] {
+            let definitions = format!("% Macro documentation\n\\newcommand{{\\example}}[1]{{#1}}\n% Environment documentation\n{declaration}\n");
+            let (ws, uri) = setup(&format!("{definitions}\\example{{value"));
+            let signature = at_end(&ws, &uri).unwrap();
+            assert!(documentation(&signature).ends_with("Macro documentation"));
+            assert_eq!(signature.active_parameter, Some(0));
+            let (ws, uri) = setup(&format!("{definitions}\\begin{{example}}{{value"));
+            let signature = at_end(&ws, &uri).unwrap();
+            assert!(documentation(&signature).ends_with("Environment documentation"));
+            assert!(!documentation(&signature).contains("Macro documentation"));
+            assert_eq!(signature.active_parameter, Some(2));
+        }
+    }
+
+    #[test]
+    fn unrelated_projects_do_not_supply_signature_comments() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+        let definitions = Url::from_file_path(dir.path().join("macros.tex")).unwrap();
+        let source = "\\documentclass{article}\n\\input{macros}\n\\example{value";
+        for (name, contents) in [
+            ("main.tex", source),
+            (
+                "macros.tex",
+                "% Selected project docs\n\\newcommand{\\example}[1]{#1}",
+            ),
+            (
+                "other.tex",
+                "\\documentclass{article}\n% Other docs\n\\newcommand{\\example}[2]{#1#2}",
+            ),
+        ] {
+            std::fs::write(dir.path().join(name), contents).unwrap();
+        }
+        let mut ws = Workspace::default();
+        ws.config.distribution.enabled = false;
+        ws.add_root(dir.path().into());
+        ws.open(main.clone(), source.into(), 1);
+        let signature = at_end(&ws, &main).unwrap();
+        assert!(documentation(&signature).ends_with("Selected project docs"));
+        ws.open(
+            definitions,
+            "% Changed project docs\n\\newcommand{\\example}[1]{#1}".into(),
+            2,
+        );
+        assert!(documentation(&at_end(&ws, &main).unwrap()).ends_with("Changed project docs"));
     }
 }

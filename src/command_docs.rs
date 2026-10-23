@@ -67,7 +67,7 @@ impl<'a> Index<'a> {
     }
 }
 
-fn comments(doc: &Document, entry: &syntax::Entry) -> Option<String> {
+pub(crate) fn comments(doc: &Document, entry: &syntax::Entry) -> Option<String> {
     let source = &doc.text.source;
     let declaration = crate::signature::command_declaration_start(&doc.syntax, entry)?;
     let line_start = source[..declaration].rfind('\n').map_or(0, |at| at + 1);

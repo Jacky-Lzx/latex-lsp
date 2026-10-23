@@ -4,6 +4,8 @@
 
 常用命令、环境及跨文件用户宏/环境提供参数签名，区分必选和可选参数，跟踪嵌套调用中的当前参数。编辑器可通过标准 `textDocument/signatureHelp` 请求提示，Neovim 可调用 `vim.lsp.buf.signature_help()`。
 
+唯一用户宏或环境声明前的连续说明注释也显示在参数提示中，保留声明类型、定义文件与行号，以及原有签名和当前参数。支持直接调用、静态 `csuse` / `csname` 调用和跨文件未保存修改；可推断签名的纯转发别名使用别名自身的说明。同名宏和环境分别解析，重复声明时不选择某一份说明。注释按纯文本展示，提取规则与预算见[用户声明文档](command-documentation.md)。
+
 ## 声明与可选参数
 
 传统 `newcommand` / `renewcommand` / `providecommand`、`DeclareRobustCommand` 和 etoolbox 的 robust 变体，以及 `newenvironment` / `renewenvironment` 的声明本身也提示名称、参数数量、默认值及定义正文，识别星号和两种宏名称分组形式；补全保留已有的控制词名称。

@@ -19,6 +19,8 @@
 
 每块最多 32 行、8192 字节，超限时不附加注释。此功能提供源码中的说明，不执行 TeX、不推断参数含义，也不把宏正文当成文档。
 
+[参数提示](signatures.md) 同样显示唯一用户宏或环境声明前的说明，保留签名、当前参数和定义位置；直接调用与静态命名调用共用此规则。纯转发别名在签名可推断时显示自身声明的说明，环境使用独立于宏的声明命名空间。
+
 ```sh
 cargo test --locked --lib command_docs
 cargo test --locked --test protocol user_command_documentation

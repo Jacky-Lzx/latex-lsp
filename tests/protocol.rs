@@ -26540,3 +26540,102 @@ fn retargeted_output_directory_aliases_keep_active_build_and_cleanup_conflicts_p
         server.wait_exit(0);
     }
 }
+
+#[test]
+fn user_command_signature_documentation_updates_with_project_buffers_and_close() {
+    use latex_lsp::text::Text;
+    let dir = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let macros = Url::from_file_path(dir.path().join("macros.tex")).unwrap();
+    let source = "\\documentclass{article}\n\\input{macros}\n😀 \\csuse{example}{value";
+    let definitions =
+        "% Original **plain** 中文😀 documentation\r\n\\newcommand{\\example}[2][DEF]{#1#2}\r\n";
+    std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+    std::fs::write(macros.to_file_path().unwrap(), definitions).unwrap();
+    std::fs::write(
+        dir.path().join("other.tex"),
+        "% Other docs\n\\documentclass{article}\n\\newcommand{\\example}[4]{#1#2#3#4}",
+    )
+    .unwrap();
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{"textDocument":{"signatureHelp":{"signatureInformation":{"documentationFormat":["markdown","plaintext"]}}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    let params = json!({"textDocument":{"uri":main},"position":Text::new(source.into()).position(source.len())});
+    for (id, expected) in [(2, "Original"), (3, "Updated"), (4, "Original")] {
+        if id == 3 {
+            server.notify("textDocument/didOpen",json!({"textDocument":{"uri":macros,"languageId":"latex","version":1,"text":definitions.replace("Original","Updated")}}));
+        } else if id == 4 {
+            server.notify(
+                "textDocument/didClose",
+                json!({"textDocument":{"uri":macros}}),
+            );
+        }
+        let help = server.request(id, "textDocument/signatureHelp", params.clone());
+        assert_eq!(help["activeParameter"], 1);
+        assert_eq!(
+            help["signatures"][0]["label"],
+            "\\csuse{example}[#1=DEF]{#2}"
+        );
+        assert_eq!(
+            help["signatures"][0]["parameters"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        let notes = help["signatures"][0]["documentation"].as_str().unwrap();
+        assert!(
+            notes.ends_with(&format!("{expected} **plain** 中文😀 documentation")),
+            "{notes}"
+        );
+        assert!(notes.contains("macros.tex:2"));
+        assert!(!notes.contains("Other docs"));
+    }
+    server.notify("textDocument/didOpen",json!({"textDocument":{"uri":macros,"languageId":"latex","version":1,"text":format!("{definitions}\\renewcommand{{\\example}}[2]{{#1#2}}\n")}}));
+    assert_eq!(
+        server.request(5, "textDocument/signatureHelp", params),
+        Value::Null
+    );
+    server.request(6, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+fn user_environment_signature_documentation_uses_the_environment_declaration() {
+    use latex_lsp::text::Text;
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":null,"capabilities":{},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    let uri = Url::parse("untitled:environment-docs.tex").unwrap();
+    let definitions = "% Macro documentation\r\n\\newcommand{\\example}[1]{#1}\r\n% Environment documentation\r\n\\newenvironment{example}[2][DEF]{}{}\r\n";
+    for (id, invocation, expected, active) in [
+        (2, "\\example{value", "Macro documentation", 0),
+        (3, "\\begin{example}{value", "Environment documentation", 2),
+    ] {
+        let source = format!("{definitions}{invocation}");
+        if id == 2 {
+            server.notify(
+                "textDocument/didOpen",
+                json!({"textDocument":{"uri":uri,"languageId":"latex","version":1,"text":source}}),
+            );
+        } else {
+            server.notify(
+                "textDocument/didChange",
+                json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"text":source}]}),
+            );
+        }
+        let help = server.request(id,"textDocument/signatureHelp",json!({"textDocument":{"uri":uri},"position":Text::new(source.clone()).position(source.len())}));
+        assert_eq!(help["activeParameter"], active);
+        assert!(
+            help["signatures"][0]["documentation"]
+                .as_str()
+                .unwrap()
+                .ends_with(expected),
+            "{help}"
+        );
+    }
+    server.request(4, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
