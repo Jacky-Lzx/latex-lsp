@@ -71,6 +71,25 @@ cargo test --locked --test protocol biber_field_warnings_
 cargo test --locked --test protocol biber_unqualified_field_warnings_
 ```
 
+## Biber 姓名格式
+
+Biber 的完整姓名消息使用 `malformed-bibliography-name`，覆盖以下原生情况：
+
+- `Name "name" has too many commas, skipping entry 'key'`：逗号过多。
+- `Name "name" is malformed (consecutive commas): skipping entry 'key'`：连续逗号。
+- `Name in key 'key' is empty (probably consecutive 'and'): skipping entry 'key'`：空姓名。
+
+诊断保留实际级别、消息、文献键及 `reason`，前两类另保存 Biber 报告的 `name`。逗号错误仍使构建失败；空姓名按原生警告显示。姓名可能经 LaTeX 解码，也可能来自自定义模型的姓名字段，因此只标记唯一条目键，不猜测原始姓名范围或提供逗号、`and` 的自动修复。
+
+消息没有文件名，要求此前输入历史完整、所有候选可读，且键经过区分大小写的规范分解后唯一。后续数据库不参与定位；键碰撞、来源缺失、日志截断或读取超限时保留主文档。位置复用有界键缓存，支持 Unicode、CRLF 及特殊文件名。
+
+这三种完整消息表示仅跳过一个条目，Biber 仍会处理后面的条目，所以保留已有输入历史，让后续姓名错误和字段警告继续精确定位。语法错误、未知错误及不完整姓名错误模板继续使历史失效；该规则也适用于重复键、大小写关联和默认字段诊断。保存后重编译更新范围，修复后清除推送与拉取诊断。
+
+```sh
+cargo test --locked --test biber_name_diagnostics -- --include-ignored
+cargo test --locked --test protocol biber_name_errors_
+```
+
 ## Biber 日期覆盖
 
 完整的 `Overwriting field 'year' with year value from field 'date' for entry 'key'` 和对应的 `month` 警告使用独立代码 `overwritten-bibliography-field`，标记被覆盖的原始年份或月份值。诊断保留工具消息、级别及 `overwrittenBy: "date"` 数据；值本身可以有效，只是与 Biber 实际使用的日期分量不同，不自动决定应删除或修改哪个字段。

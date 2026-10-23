@@ -1479,6 +1479,160 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main
 
 #[test]
 #[cfg(unix)]
+fn biber_name_errors_preserve_later_locations_and_refresh_error_warning_and_repair_over_push_and_pull(
+) {
+    for pull in [false, true] {
+        let script = r#"cp "${2%/*}/fixture.blg" "$1/main.blg"
+printf '%%PDF-1.4\n' > "$1/main.pdf"
+printf '(./main.tex)\n' > "$1/main.log"
+printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main.fls"
+"#;
+        let capabilities = if pull {
+            json!({"textDocument":{"diagnostic":{}}})
+        } else {
+            json!({})
+        };
+        let (mut server, directory, main) =
+            fake_build_server_capabilities(script, false, capabilities);
+        let root = directory.path();
+        let refs = Url::from_file_path(root.join("refs.data")).unwrap();
+        let main_source = "\\documentclass{article}\n\\addbibresource{refs.data}\n";
+        std::fs::write(main.to_file_path().unwrap(), main_source).unwrap();
+        server.notify("textDocument/didChange",json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":main_source}]}));
+        let mut current="% 😀\r\n@book{café😀,author={Doe,, Jane}}\r\n@book{other😀,author={Other, Jane, Jr, Extra}}\r\n@book{last😀,year={bad}}\r\n".to_string();
+        std::fs::write(refs.to_file_path().unwrap(), &current).unwrap();
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":refs,"languageId":"bibtex","version":7,"text":current}}),
+        );
+        for stage in 0..5 {
+            let edits = match stage {
+                1 => vec![("café😀", "\r\n ", true), ("other😀", "\r\n ", true)],
+                2 => vec![
+                    ("Doe,, Jane", "Doe, Jane", false),
+                    ("Other, Jane, Jr, Extra", "Other, Jane", false),
+                ],
+                3 => vec![("Doe, Jane", "Doe, Jane and and Smith, John", false)],
+                4 => vec![
+                    ("Doe, Jane and and Smith, John", "Doe, Jane", false),
+                    ("bad", "2026", false),
+                ],
+                _ => Vec::new(),
+            };
+            if !edits.is_empty() {
+                let mut changes = Vec::new();
+                for (marker, replacement, insert) in edits {
+                    let start = current.find(marker).unwrap();
+                    let end = start + if insert { 0 } else { marker.len() };
+                    let range = latex_lsp::text::Text::new(current.clone()).range(start, end);
+                    current.replace_range(start..end, replacement);
+                    changes.push(json!({"range":range,"text":replacement}));
+                }
+                std::fs::write(refs.to_file_path().unwrap(), &current).unwrap();
+                server.notify(
+                    "textDocument/didChange",
+                    json!({"textDocument":{"uri":refs,"version":7+stage},"contentChanges":changes}),
+                );
+                server.notify("textDocument/didSave", json!({"textDocument":{"uri":refs}}));
+            }
+            let mut log = "INFO - Found BibTeX data source 'refs.data'\n".to_string();
+            let mut expected = Vec::new();
+            if stage < 2 {
+                log.push_str("ERROR - Name \"Doe,, Jane\" is malformed (consecutive commas): skipping entry 'café😀'\nERROR - Name \"Other, Jane, Jr, Extra\" has too many commas, skipping entry 'other😀'\n");
+                expected.push((
+                    "malformed-bibliography-name",
+                    "café😀",
+                    1,
+                    json!({"key":"café😀","reason":"consecutive-commas","name":"Doe,, Jane"}),
+                ));
+                expected.push(("malformed-bibliography-name","other😀",1,json!({"key":"other😀","reason":"too-many-commas","name":"Other, Jane, Jr, Extra"})));
+            } else if stage == 3 {
+                log.push_str("WARN - Name in key 'café😀' is empty (probably consecutive 'and'): skipping entry 'café😀'\n");
+                expected.push((
+                    "malformed-bibliography-name",
+                    "café😀",
+                    2,
+                    json!({"key":"café😀","reason":"empty-name"}),
+                ));
+            }
+            if stage < 4 {
+                log.push_str("WARN - legacy year field 'bad' in entry 'last😀' is not an integer - this will probably not sort properly.\n");
+                expected.push((
+                    "invalid-bibliography-field-value",
+                    "bad",
+                    2,
+                    json!({"key":"last😀","field":"year"}),
+                ));
+            }
+            let expected: Vec<_> = expected
+                .into_iter()
+                .map(|(code, marker, severity, data)| {
+                    let start = current.find(marker).unwrap();
+                    let range = latex_lsp::text::Text::new(current.clone())
+                        .range(start, start + marker.len());
+                    (code, serde_json::to_value(range).unwrap(), severity, data)
+                })
+                .collect();
+            std::fs::write(root.join("fixture.blg"), log).unwrap();
+            server.request(
+                2 + stage * 2,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            let finished = server.until(|item| item["method"] == "latex/buildFinished");
+            assert_eq!(
+                finished["params"]["status"],
+                if stage < 2 { "error" } else { "success" },
+                "{finished}"
+            );
+            let matches_expected = |items: &[Value]| {
+                items.len() == expected.len()
+                    && expected.iter().all(|(code, range, severity, data)| {
+                        items.iter().any(|item| {
+                            item["code"] == *code
+                                && item["range"] == *range
+                                && item["severity"] == *severity
+                                && item["data"] == *data
+                        })
+                    })
+            };
+            let items = if pull {
+                server.request(
+                    3 + stage * 2,
+                    "textDocument/diagnostic",
+                    json!({"textDocument":{"uri":refs}}),
+                )["items"]
+                    .clone()
+            } else {
+                server.until(|item| {
+                    item["method"] == "textDocument/publishDiagnostics"
+                        && item["params"]["uri"] == refs.as_str()
+                        && item["params"]["diagnostics"]
+                            .as_array()
+                            .is_some_and(|items| matches_expected(items))
+                })["params"]["diagnostics"]
+                    .clone()
+            };
+            assert!(
+                matches_expected(items.as_array().unwrap()),
+                "stage {stage}: {items}\nexpected {expected:?}"
+            );
+            for item in items.as_array().unwrap() {
+                assert_eq!(item["source"], "latex-build");
+                assert!(item["relatedInformation"].is_null());
+            }
+        }
+        server.request(12, "shutdown", Value::Null);
+        if pull {
+            assert_no_pushed_diagnostics(&server);
+        }
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
 fn bibliography_alias_symbols_negotiate_hierarchy_refresh_search_and_restore_disk_over_stdio() {
     for hierarchy in [false, true] {
         let directory = tempfile::tempdir().unwrap();

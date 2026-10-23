@@ -91,7 +91,9 @@ impl Sources {
         if level == "ERROR" {
             // These exact name failures skip one entry, then reading continues.
             // Other recovery can leave editor-indexed entries unread by Biber.
-            self.complete = false;
+            if super::biber_names::record(message).is_none() {
+                self.complete = false;
+            }
             return;
         }
         let Some(name) = recorder::bibliography_database_source(line) else {
