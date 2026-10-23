@@ -12,6 +12,8 @@
 
 `\begin{minted}[options]{language}` 的头部也提供参数提示，支持未完成的参数、注释续行及 Unicode 位置；代码正文和关闭行尾部继续按逐字内容处理。重定义与项目作用域规则见 [minted 代码](minted.md)。
 
+FancyVerb 的 `Verbatim`、`LVerbatim`、`BVerbatim` 及其星号形式提示 `[options]`；`SaveVerbatim` 另提示 `{name}`，`VerbatimOut` 另提示 `{file}`。未完成参数与注释续行同样支持。普通换行会结束无选项的头部查找，下一行的方括号或花括号属于逐字内容；带选项的保存名称及文件名可跨普通换行读取。完整参数、头部被丢弃的尾部及代码正文不继续提示。项目内重定义、取消定义和 FancyVerb 环境定制会抑制相应内置签名，未保存设置变化立即生效。
+
 ## 参数数量中的注释
 
 参数数量按 TeX 注释规则读取，支持注释续行、CRLF 和被注释拆开的数字。例如：

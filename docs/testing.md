@@ -332,6 +332,17 @@ cargo test --locked --test quoted_graphics real_ -- --ignored
 
 默认回归另覆盖完整和未完成路径的别名补全、跨输入文件与本地宏包的别名、recorder 来源中的宏定义与参数边界、仅作代码展示的文件排除、共享根文件冲突、未执行和不确定调用的排除，以及目录补全和缺图建议的作用域、共享源码歧义、候选图片的过期检查及版本化 stdio 文件移动。
 
+## FancyVerb 环境参数提示
+
+默认回归覆盖十种环境的选项、保存名称和输出文件提示，包含未完成参数、注释续行、CRLF、Unicode、首个未受花括号保护的右方括号、无选项时的活动换行、项目重定义与未保存设置刷新。协议回归逐次输入头部、完成参数并添加正文和关闭行尾部，核对提示及依赖隔离：
+
+```sh
+cargo test --locked --test fancyvrb_environments
+cargo test --locked --test protocol fancyvrb_environment_header_
+```
+
+安装 pdfLaTeX、XeLaTeX 和 fancyvrb 后，为第一个命令添加 `-- --include-ignored`；原生回归在实际编译及版本化标签重命名场景中核对头部提示与逐字正文边界。
+
 ## minted 代码
 
 minted 的默认回归覆盖内联逐字代码、跨行和 Unicode 定界符、环境头部的完整与未完成参数提示、注释及可选参数边界、项目重定义与未保存设置刷新，以及文件补全与移动、数据/源码角色、全局设置保护和缺失文件修复。协议回归检查头部参数的逐次增量输入、代码与关闭行尾部的提示隔离，以及代码文件内容变化和构建中路径编辑对 PDF / SyncTeX 历史的影响：

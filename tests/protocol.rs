@@ -308,6 +308,90 @@ fn minted_environment_boundaries_refresh_diagnostics_and_linked_names_over_stdio
 }
 
 #[test]
+fn fancyvrb_environment_header_signatures_follow_incremental_edits_over_stdio() {
+    use latex_lsp::text::Text;
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = Url::from_file_path(root.join("main.tex")).unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(root).unwrap(),"capabilities":{}}));
+    server.notify("initialized", json!({}));
+    for (index, environment) in [
+        "Verbatim",
+        "Verbatim*",
+        "LVerbatim",
+        "LVerbatim*",
+        "BVerbatim",
+        "BVerbatim*",
+        "SaveVerbatim",
+        "SaveVerbatim*",
+        "VerbatimOut",
+        "VerbatimOut*",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let required = match environment.trim_end_matches('*') {
+            "SaveVerbatim" => "{name}",
+            "VerbatimOut" => "{file}",
+            _ => "",
+        };
+        let label = format!("\\begin{{{environment}}}[options]{required}");
+        let initial = format!("% 😀\r\n\\begin{{{environment}}}[label={{A]B}},frame=sin");
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":main,"languageId":"latex","version":1,"text":initial}}),
+        );
+        let mut source = initial.clone();
+        let id = 10 + index as u64 * 10;
+        let help = server.request(id, "textDocument/signatureHelp", json!({"textDocument":{"uri":main},"position":Text::new(source.clone()).position(source.len())}));
+        assert_eq!(help["signatures"][0]["label"], label);
+        assert_eq!(help["activeParameter"], 1);
+        let suffix = if required.is_empty() {
+            "gle]"
+        } else {
+            "gle]\r\n{😀na"
+        };
+        let text = Text::new(source.clone());
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"range":text.range(source.len(),source.len()),"text":suffix}]}));
+        source.push_str(suffix);
+        let help = server.request(id+1, "textDocument/signatureHelp", json!({"textDocument":{"uri":main},"position":Text::new(source.clone()).position(source.len())}));
+        if required.is_empty() {
+            assert_eq!(help, Value::Null);
+        } else {
+            assert_eq!(help["signatures"][0]["label"], label);
+            assert_eq!(help["activeParameter"], 2);
+        }
+        let suffix = format!(
+            "{}\r\n\\frac{{a}}{{b}}\\input{{fake}}\r\n\\end{{{environment}}}\\frac{{c}}{{d}}\r\n",
+            if required.is_empty() { "" } else { "me}" }
+        );
+        let text = Text::new(source.clone());
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":3},"contentChanges":[{"range":text.range(source.len(),source.len()),"text":suffix}]}));
+        source.push_str(&suffix);
+        for (offset, needle) in [(2, "{b}"), (3, "{d}")] {
+            let help = server.request(id+offset, "textDocument/signatureHelp", json!({"textDocument":{"uri":main},"position":Text::new(source.clone()).position(source.find(needle).unwrap()+2)}));
+            assert_eq!(help, Value::Null);
+        }
+        assert_eq!(
+            server.request(
+                id + 4,
+                "textDocument/documentLink",
+                json!({"textDocument":{"uri":main}})
+            ),
+            json!([])
+        );
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":main}}),
+        );
+    }
+    server.request(200, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
 fn minted_environment_header_signatures_follow_incremental_edits_over_stdio() {
     use latex_lsp::text::Text;
     let directory = tempfile::tempdir().unwrap();

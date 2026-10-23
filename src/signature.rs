@@ -3887,6 +3887,11 @@ fn builtin_environment(name: &str) -> Option<Signature> {
         "alignat" | "alignat*" => &[("column pairs", false)],
         "alignedat" => &[("position", true), ("column pairs", false)],
         "minted" => &[("options", true), ("language", false)],
+        "Verbatim" | "Verbatim*" | "LVerbatim" | "LVerbatim*" | "BVerbatim" | "BVerbatim*" => {
+            &[("options", true)]
+        }
+        "SaveVerbatim" | "SaveVerbatim*" => &[("options", true), ("name", false)],
+        "VerbatimOut" | "VerbatimOut*" => &[("options", true), ("file", false)],
         _ => return None,
     };
     let mut parameters = vec![Parameter {
@@ -3912,7 +3917,7 @@ fn builtin_environment(name: &str) -> Option<Signature> {
         parameters,
         documentation: format!("Arguments of the {name} environment."),
         starred: false,
-        nested_brackets: name != "minted",
+        nested_brackets: name != "minted" && !crate::fancyvrb::is_environment(name),
     })
 }
 
@@ -4379,13 +4384,13 @@ fn citation_active(
         .map(|waiting| citation_parameter(style, waiting.group, waiting.role))
 }
 
-/// Only the parser's actual minted raw region can open this header reader.
+/// Only the parser's actual raw environment region can open this header reader.
 /// Keep its range intact for folding and linked editing; the ordinary argument
 /// matcher temporarily reads through it for a header-only signature query.
-fn minted_environment_header(
+fn verbatim_environment_header(
     doc: &Document,
     cursor: usize,
-) -> Option<(&syntax::Command, std::ops::Range<usize>)> {
+) -> Option<(&syntax::Command, String, std::ops::Range<usize>)> {
     let command = doc
         .syntax
         .commands
@@ -4396,7 +4401,9 @@ fn minted_environment_header(
         return None;
     }
     let argument = syntax::environment_name_argument(&doc.text.source, command.span.end)?;
-    if argument.value != "minted" || cursor < argument.outer_span.end {
+    if (argument.value != "minted" && !crate::fancyvrb::is_environment(&argument.value))
+        || cursor < argument.outer_span.end
+    {
         return None;
     }
     let raw = doc
@@ -4404,8 +4411,14 @@ fn minted_environment_header(
         .ignored
         .iter()
         .find(|span| span.start == argument.outer_span.end)?;
-    let end = crate::minted::environment_header_end(&doc.text.source, raw.start).unwrap_or(raw.end);
-    (cursor <= end).then_some((command, raw.start..end))
+    let end = if argument.value == "minted" {
+        crate::minted::environment_header_end(&doc.text.source, raw.start)
+    } else {
+        crate::fancyvrb::environment_header_end(&doc.text.source, raw.start, &argument.value)
+            .map(|(boundary, _)| boundary)
+    }
+    .unwrap_or(raw.end);
+    (cursor <= end).then_some((command, argument.value, raw.start..end))
 }
 
 pub fn help(workspace: &Workspace, uri: &Url, position: Position) -> Option<SignatureHelp> {
@@ -4414,8 +4427,8 @@ pub fn help(workspace: &Workspace, uri: &Url, position: Position) -> Option<Sign
         return None;
     }
     let cursor = doc.text.offset(position)?;
-    if let Some((command, header)) = minted_environment_header(doc, cursor) {
-        if crate::minted::header_comment(&doc.text.source, header.start, cursor) {
+    if let Some((command, name, header)) = verbatim_environment_header(doc, cursor) {
+        if crate::fancyvrb::header_comment(&doc.text.source, header.start, cursor) {
             return None;
         }
         let scope = workspace.symbol_scope(uri);
@@ -4428,17 +4441,30 @@ pub fn help(workspace: &Workspace, uri: &Url, position: Position) -> Option<Sign
                     .definitions
                     .iter()
                     .chain(&doc.syntax.environments)
-                    .any(|entry| matches!(entry.name.as_str(), "begin" | "minted"))
+                    .any(|entry| entry.name == "begin" || entry.name == name)
                     || doc.syntax.command_undefinitions.values().any(|target| {
                         target
                             .as_ref()
-                            .is_none_or(|target| matches!(target.name.as_str(), "begin" | "minted"))
+                            .is_none_or(|target| target.name == "begin" || target.name == name)
                     })
+                    || crate::fancyvrb::is_environment(&name)
+                        && doc.syntax.commands.iter().any(|command| {
+                            matches!(
+                                command.name.as_str(),
+                                "DefineVerbatimEnvironment"
+                                    | "CustomVerbatimEnvironment"
+                                    | "RecustomVerbatimEnvironment"
+                            ) && command.argument.as_ref().is_none_or(|argument| {
+                                !syntax::is_static_key(&argument.value)
+                                    || argument.value == name.trim_end_matches('*')
+                                    || argument.value == name
+                            })
+                        })
             })
         {
             return None;
         }
-        let signature = builtin_environment("minted")?;
+        let signature = builtin_environment(&name)?;
         return active_parameter(
             doc,
             command,

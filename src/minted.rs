@@ -29,33 +29,6 @@ pub(crate) fn environment_header_end(source: &str, header_start: usize) -> Optio
     crate::fancyvrb::name_argument(source, start).map(|(_, end)| end)
 }
 
-/// Header comments are not separately indexed inside the enclosing raw span.
-/// Check only the prefix before the caret, preserving TeX's escaped percent
-/// tokens and CRLF comment boundaries.
-pub(crate) fn header_comment(source: &str, start: usize, cursor: usize) -> bool {
-    let mut at = start;
-    while at < cursor {
-        match source.as_bytes()[at] {
-            b'\\' => {
-                at += 1;
-                if at < cursor {
-                    at += source[at..].chars().next().unwrap().len_utf8();
-                }
-            }
-            b'%' => {
-                while at < cursor && source.as_bytes()[at] != b'\n' {
-                    at += 1;
-                }
-                if at == cursor {
-                    return true;
-                }
-            }
-            _ => at += 1,
-        }
-    }
-    false
-}
-
 /// Braced code balances literal braces. Backslashes and percent signs in
 /// the body are data, so neither escapes a brace nor starts a TeX comment.
 /// Both forms accept line breaks, as fvextra's ReadVArg does. An unfinished

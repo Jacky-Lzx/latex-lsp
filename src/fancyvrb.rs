@@ -115,6 +115,33 @@ pub(crate) fn environment_end_from_body(
     None
 }
 
+/// Header comments are not separately indexed inside the enclosing raw span.
+/// Check only the prefix before the caret, preserving TeX's escaped percent
+/// tokens and CRLF comment boundaries.
+pub(crate) fn header_comment(source: &str, start: usize, cursor: usize) -> bool {
+    let mut at = start;
+    while at < cursor {
+        match source.as_bytes()[at] {
+            b'\\' => {
+                at += 1;
+                if at < cursor {
+                    at += source[at..].chars().next().unwrap().len_utf8();
+                }
+            }
+            b'%' => {
+                while at < cursor && source.as_bytes()[at] != b'\n' {
+                    at += 1;
+                }
+                if at == cursor {
+                    return true;
+                }
+            }
+            _ => at += 1,
+        }
+    }
+    false
+}
+
 fn header_space(source: &str, mut at: usize) -> usize {
     loop {
         while matches!(source.as_bytes().get(at), Some(b' ' | b'\t')) {
@@ -131,6 +158,19 @@ fn header_space(source: &str, mut at: usize) -> usize {
 }
 
 fn environment_body_start(source: &str, header_start: usize, name: &str) -> Option<usize> {
+    let (_, at) = environment_header_end(source, header_start, name)?;
+    // FV@BeginScanning discards the remainder of the header line. Markers in
+    // options, saved names and extraneous header text never close the body.
+    source[at..].find('\n').map(|newline| at + newline + 1)
+}
+
+/// Signature boundary and actual token end. An active newline can be a name
+/// token, but must not keep a name hint alive on the following body line.
+pub(crate) fn environment_header_end(
+    source: &str,
+    header_start: usize,
+    name: &str,
+) -> Option<(usize, usize)> {
     // FV@Environment makes end-of-line active before looking for an optional
     // argument. Comments may continue the header; a plain newline cannot.
     let mut at = header_space(source, header_start);
@@ -149,6 +189,7 @@ fn environment_body_start(source: &str, header_start: usize, name: &str) -> Opti
         } else {
             header_space(source, at)
         };
+        let start = at;
         at = match source.as_bytes().get(at)? {
             b'{' => syntax::group(source, at, b'{', b'}')?.1,
             b'\\' => syntax::control_word(source, at)
@@ -162,10 +203,11 @@ fn environment_body_start(source: &str, header_start: usize, name: &str) -> Opti
             b'\r' if source[at..].starts_with("\r\n") => at + 2,
             _ => at + source[at..].chars().next()?.len_utf8(),
         };
+        if matches!(source.as_bytes().get(start), Some(b'\r' | b'\n')) {
+            return Some((start, at));
+        }
     }
-    // FV@BeginScanning discards the remainder of the header line. Markers in
-    // options, saved names and extraneous header text never close the body.
-    source[at..].find('\n').map(|newline| at + newline + 1)
+    Some((at, at))
 }
 
 /// A saved block's name is read before the literal body, with active EOL

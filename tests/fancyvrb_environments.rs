@@ -31,6 +31,157 @@ fn argument(environment: &str) -> &'static str {
     }
 }
 
+fn signature_label(environment: &str) -> String {
+    let required = match environment.trim_end_matches('*') {
+        "SaveVerbatim" => "{name}",
+        "VerbatimOut" => "{file}",
+        _ => "",
+    };
+    format!("\\begin{{{environment}}}[options]{required}")
+}
+
+#[test]
+fn header_signatures_follow_fancyverb_lookahead_and_token_boundaries() {
+    let main = Url::parse("file:///fancyvrb/signatures.tex").unwrap();
+    let mut workspace = Workspace::default();
+    for environment in ENVIRONMENTS {
+        let mut cases = vec![
+            ("¦", 1),
+            (" \t¦", 1),
+            ("[frame=sin¦gle]", 1),
+            ("[label={A]B},frame=sin¦gle]", 1),
+            ("[label={\\%literal¦}]", 1),
+            ("% continue\r\n [frame=sin¦gle]", 1),
+            ("[label={A% ] ignored\r\nB¦}]", 1),
+            ("[frame=¦", 1),
+        ];
+        if !argument(environment).is_empty() {
+            cases.extend([
+                ("{na¦me}", 2),
+                ("[frame=single]¦", 2),
+                ("[label=[literal]{na¦me}", 2),
+                ("[frame=single]\r\n {😀中文¦}", 2),
+                ("% continue\r\n {na¦me}", 2),
+                ("{na% } ignored\r\nme¦}", 2),
+                ("{na¦", 2),
+                ("\\na¦me", 2),
+            ]);
+        }
+        for (header, active) in cases {
+            let marked = format!("% 😀\r\n\\begin{{{environment}}}{header}");
+            let offset = marked.find('¦').unwrap();
+            let source = marked.replace('¦', "");
+            workspace.open(main.clone(), source.clone(), 7);
+            let help = signature::help(&workspace, &main, Text::new(source).position(offset))
+                .unwrap_or_else(|| panic!("missing signature: {marked}"));
+            assert_eq!(help.signatures[0].label, signature_label(environment));
+            assert_eq!(help.active_parameter, Some(active), "{marked}");
+            assert_eq!(help.signatures[0].active_parameter, Some(active));
+        }
+    }
+}
+
+#[test]
+fn header_comments_active_newlines_and_literal_bodies_have_no_signature() {
+    let main = Url::parse("file:///fancyvrb/no-signatures.tex").unwrap();
+    let mut workspace = Workspace::default();
+    for environment in ENVIRONMENTS {
+        for header in [
+            "% comm¦ent\r\n[frame=single]".to_owned(),
+            "[label={A% comm¦ent\r\nB}]".to_owned(),
+            "[label={\\\\% comm¦ent\r\nB}]".to_owned(),
+            "\r\n[frame=sin¦gle]".to_owned(),
+            "\r\n{na¦me}".to_owned(),
+            format!("[frame=single]{}¦", argument(environment)),
+            format!("{} discarded¦\r\nbody", argument(environment)),
+            format!(
+                "{}\r\n\\frac{{a}}{{b¦}}\r\n\\end{{{environment}}}",
+                argument(environment)
+            ),
+            format!(
+                "{}\r\nbody\r\n\\end{{{environment}}}\\frac{{a}}{{b¦}}",
+                argument(environment)
+            ),
+        ] {
+            let marked = format!("\\begin{{{environment}}}{header}");
+            let offset = marked.find('¦').unwrap();
+            let source = marked.replace('¦', "");
+            workspace.open(main.clone(), source.clone(), 7);
+            assert!(
+                signature::help(&workspace, &main, Text::new(source).position(offset)).is_none(),
+                "{marked}"
+            );
+        }
+    }
+}
+
+#[test]
+fn project_header_overrides_refresh_after_unsaved_settings_changes() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = uri(root, "main.tex");
+    let settings = uri(root, "settings.sty");
+    let unrelated = root.join("other-project");
+    std::fs::create_dir(&unrelated).unwrap();
+    std::fs::write(
+        unrelated.join("main.tex"),
+        r"\documentclass{article}\def\begin#1{}",
+    )
+    .unwrap();
+    for environment in ENVIRONMENTS {
+        let base = environment.trim_end_matches('*');
+        let source = format!("\\documentclass{{article}}\\usepackage{{settings}}\r\n\\begin{{{environment}}}[frame=single]{}\r\nbody\r\n\\end{{{environment}}}\r\n", argument(environment));
+        std::fs::write(root.join("main.tex"), &source).unwrap();
+        let at = Text::new(source.clone()).position(source.find("single").unwrap() + 2);
+        for definition in [
+            format!("\\renewenvironment{{{environment}}}[1]{{}}{{}}"),
+            format!("\\NewDocumentEnvironment{{{environment}}}{{mm}}{{}}{{}}"),
+            format!("\\RenewEnvironmentCopy{{{environment}}}{{other}}"),
+            format!("\\csdef{{{environment}}}#1{{#1}}"),
+            format!("\\csundef{{{environment}}}"),
+            format!("\\RecustomVerbatimEnvironment{{{base}}}{{Verbatim}}{{}}"),
+            format!("\\DefineVerbatimEnvironment{{{base}}}{{Verbatim}}{{}}"),
+            "\\CustomVerbatimEnvironment{\\dynamic}{Verbatim}{}".into(),
+            "\\def\\begin#1{}".into(),
+            "\\csundef{\\dynamic}".into(),
+        ] {
+            std::fs::write(root.join("settings.sty"), &definition).unwrap();
+            let mut workspace = Workspace::default();
+            workspace.add_root(root.into());
+            workspace.add_root(unrelated.clone());
+            workspace.open(main.clone(), source.clone(), 7);
+            assert!(
+                signature::help(&workspace, &main, at).is_none(),
+                "{environment}: {definition}"
+            );
+            workspace.open(settings.clone(), String::new(), 8);
+            let help = signature::help(&workspace, &main, at)
+                .unwrap_or_else(|| panic!("did not refresh: {definition}"));
+            assert_eq!(help.signatures[0].label, signature_label(environment));
+        }
+        // The package defines the base and starred control sequences
+        // independently. Ordinary TeX redefinition changes only its target.
+        let other = if environment.ends_with('*') {
+            base.to_owned()
+        } else {
+            format!("{environment}*")
+        };
+        for definition in [
+            format!("\\renewenvironment{{{other}}}[1]{{}}{{}}"),
+            "\\RecustomVerbatimEnvironment{Unrelated}{Verbatim}{}".into(),
+        ] {
+            std::fs::write(root.join("settings.sty"), definition).unwrap();
+            let mut workspace = Workspace::default();
+            workspace.add_root(root.into());
+            workspace.open(main.clone(), source.clone(), 7);
+            assert_eq!(
+                signature::help(&workspace, &main, at).unwrap().signatures[0].label,
+                signature_label(environment)
+            );
+        }
+    }
+}
+
 fn apply(source: &str, mut edits: Vec<TextEdit>) -> String {
     edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
     Text::new(source.into())
@@ -691,6 +842,21 @@ fn real_header_markers_keep_body_literal_after_versioned_label_rename() {
                     "{environment}/{header}: {:?}",
                     doc.syntax.diagnostics
                 );
+                if let Some(offset) = source.find("frame=single") {
+                    let help =
+                        signature::help(&workspace, &main, doc.text.position(offset + 8)).unwrap();
+                    assert_eq!(help.signatures[0].label, signature_label(environment));
+                    assert_eq!(help.active_parameter, Some(1));
+                }
+                if !argument(environment).is_empty() {
+                    if let Some(offset) = source.find(argument(environment)) {
+                        let help =
+                            signature::help(&workspace, &main, doc.text.position(offset + 2))
+                                .unwrap();
+                        assert_eq!(help.signatures[0].label, signature_label(environment));
+                        assert_eq!(help.active_parameter, Some(2));
+                    }
+                }
                 let at = doc.text.position(source.rfind("kept").unwrap());
                 let updated = apply(
                     &source,
