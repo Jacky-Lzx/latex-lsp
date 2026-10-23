@@ -45,6 +45,7 @@ fn occurrences_for(ws: &Workspace, uri: &Url, printing: bool) -> Vec<(bool, Rang
         docs.iter()
             .map(|doc| (doc.text.source.as_str(), &doc.syntax)),
     );
+    let selected_resources = crate::bib_sections::selects_resources(&docs, &signatures);
     let source = &doc.text.source;
     let operands = signatures.editing_argument_tokens(source, &doc.syntax);
     let mut opaque = crate::signature::definition_data_spans(source, &doc.syntax);
@@ -93,7 +94,11 @@ fn occurrences_for(ws: &Workspace, uri: &Url, printing: bool) -> Vec<(bool, Rang
         if !signatures.command_unchanged(&command.name) || printing && command.name == "nocite" {
             continue;
         }
-        result.extend(crate::reference_calls::keys(source, command, true));
+        result.extend(
+            crate::reference_calls::keys(source, command, true)
+                .into_iter()
+                .filter(|(citation, _)| !*citation || !selected_resources),
+        );
     }
     result.sort_by_key(|(citation, span)| (span.start, span.end, *citation));
     result.dedup();

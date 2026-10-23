@@ -28386,3 +28386,81 @@ fn bibliography_sections_preserve_raw_resource_headers_and_incremental_reference
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+#[test]
+fn section_resource_changes_reject_default_database_renames_and_restore_empty_list_interactions_over_stdio(
+) {
+    use latex_lsp::text::Text;
+    for document_changes in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+        let bib = Url::from_file_path(directory.path().join("default.bib")).unwrap();
+        let source = r"\documentclass{article}\addbibresource{default.bib}\addsectionbib[label=chosen]{section.bib}\begin{document}\newrefsection[chosen]\cite{collision}\end{document}";
+        for (name, text) in [
+            ("main.tex", source),
+            ("default.bib", "@book{collision,title={Default}}"),
+            ("section.bib", "@book{collision,title={Selected}}"),
+        ] {
+            std::fs::write(directory.path().join(name), text).unwrap();
+        }
+        let mut server = Server::start();
+        server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(directory.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":document_changes}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+        server.notify("initialized", json!({}));
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":main,"languageId":"latex","version":5,"text":source}}),
+        );
+        server.notify("textDocument/didOpen", json!({"textDocument":{"uri":bib,"languageId":"bibtex","version":7,"text":"@book{collision,title={Default}}"}}));
+        let at = Text::new(source.into()).position(source.find("collision").unwrap() + 1);
+        let definition = server.request(
+            2,
+            "textDocument/definition",
+            json!({"textDocument":{"uri":main},"position":at}),
+        );
+        assert_eq!(definition, json!([]));
+        server.send(json!({"jsonrpc":"2.0","id":3,"method":"textDocument/rename","params":{"textDocument":{"uri":bib},"position":{"line":0,"character":8},"newName":"updated"}}));
+        let response = server.until(|message| message["id"] == 3);
+        assert_eq!(response["error"]["code"], -32602, "{response}");
+        assert!(response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("reference sections"));
+        let updated = source.replace("[chosen]", "[]");
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":6},"contentChanges":[{"text":updated}]}),
+        );
+        let at = Text::new(updated.clone()).position(updated.find("collision").unwrap() + 1);
+        let definition = server.request(
+            4,
+            "textDocument/definition",
+            json!({"textDocument":{"uri":main},"position":at}),
+        );
+        assert_eq!(definition.as_array().unwrap().len(), 1);
+        assert_eq!(definition[0]["uri"], bib.as_str());
+        let edit = server.request(
+            5,
+            "textDocument/rename",
+            json!({"textDocument":{"uri":main},"position":at,"newName":"updated"}),
+        );
+        if document_changes {
+            let changes = edit["documentChanges"].as_array().unwrap();
+            assert_eq!(changes.len(), 2);
+            for change in changes {
+                let is_main = change["textDocument"]["uri"] == main.as_str();
+                assert_eq!(
+                    change["textDocument"]["version"],
+                    if is_main { 6 } else { 7 }
+                );
+                assert_eq!(change["edits"].as_array().unwrap().len(), 1);
+            }
+        } else {
+            let changes = edit["changes"].as_object().unwrap();
+            assert_eq!(changes.len(), 2);
+            assert_eq!(changes[main.as_str()].as_array().unwrap().len(), 1);
+            assert_eq!(changes[bib.as_str()].as_array().unwrap().len(), 1);
+        }
+        server.request(1000, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}

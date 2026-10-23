@@ -24,6 +24,7 @@ pub(crate) struct Index {
     certain: BTreeMap<Url, Calls>,
     ambiguous: Vec<(Url, bool, String)>,
     incomplete: bool,
+    section_resources: BTreeSet<Url>,
 }
 fn merged(mut spans: Vec<Range<usize>>) -> Vec<Range<usize>> {
     spans.sort_unstable_by_key(|span| span.start);
@@ -276,6 +277,7 @@ impl Index {
         let mut keys = 0usize;
         let mut copy_work = 0usize;
         let mut uncertain = Vec::new();
+        let mut section_resources = BTreeSet::new();
         for (scope, consumers) in contexts
             .into_iter()
             .filter(|(scope, _)| !scope.is_disjoint(&connected))
@@ -313,6 +315,10 @@ impl Index {
                     ..Default::default()
                 };
             };
+            let selected_resources = crate::bib_sections::selects_resources(&docs, &signatures);
+            if selected_resources {
+                section_resources.extend(consumers.iter().cloned());
+            }
             for uri in consumers {
                 let Some(doc) = workspace
                     .documents
@@ -321,12 +327,17 @@ impl Index {
                 else {
                     continue;
                 };
-                let Some((calls, possible)) = calls(doc, &signatures, &potential) else {
+                let Some((mut calls, possible)) = calls(doc, &signatures, &potential) else {
                     return Self {
                         incomplete: true,
                         ..Default::default()
                     };
                 };
+                if selected_resources {
+                    for key in calls.values_mut().filter(|key| key.citation) {
+                        key.operand = true;
+                    }
+                }
                 keys = keys.saturating_add(calls.len() + possible.len());
                 if keys > 100_000 {
                     return Self {
@@ -344,6 +355,7 @@ impl Index {
         }
         let mut result = Self {
             ambiguous: uncertain,
+            section_resources,
             ..Default::default()
         };
         for (uri, interpretations) in interpretations {
@@ -402,6 +414,9 @@ impl Index {
         citation: bool,
         name: &str,
     ) -> jsonrpc::Result<()> {
+        if citation && !scope.is_disjoint(&self.section_resources) {
+            return Err(jsonrpc::Error::invalid_params("Bibliography resources differ between reference sections; a complete citation rename cannot be confirmed"));
+        }
         if self.incomplete {
             return Err(jsonrpc::Error::invalid_params("Reference analysis is incomplete or exceeds its budget; reindex or narrow the project before renaming"));
         }
@@ -469,6 +484,7 @@ pub(crate) fn completion_context(
             docs.iter()
                 .map(|doc| (doc.text.source.as_str(), &doc.syntax)),
         );
+        let selected_resources = crate::bib_sections::selects_resources(&docs, &signatures);
         let context = Context::new(doc, &signatures);
         let candidate = doc
             .syntax
@@ -490,7 +506,9 @@ pub(crate) fn completion_context(
                     &context.declarations,
                 )
                 .or_else(|| direct_reference(&lexical.name).then(|| lexical.clone()))?;
-                if !signatures.command_unchanged(&command.name) {
+                if !signatures.command_unchanged(&command.name)
+                    || selected_resources && syntax::is_citation(&command.name)
+                {
                     return None;
                 }
                 let span = prefix(&command)?;

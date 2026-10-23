@@ -9,6 +9,7 @@ mod bib_field_diagnostics;
 mod bib_formatting;
 mod bib_links;
 mod bib_resources;
+mod bib_sections;
 mod bib_strings;
 mod bib_symbols;
 mod bibliography_processing;

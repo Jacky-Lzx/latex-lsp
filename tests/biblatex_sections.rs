@@ -29,7 +29,7 @@ fn apply(source: &str, mut edits: Vec<TextEdit>) -> String {
 #[test]
 fn section_and_segment_boundaries_keep_following_reference_keys_independent() {
     for (command, args) in [
-        ("newrefsection", "[refs.bib]"),
+        ("newrefsection", "[]"),
         ("newrefsection", ""),
         ("newrefsegment", ""),
         ("endrefsection", ""),
