@@ -20,6 +20,7 @@ pub mod catalog;
 mod chktex;
 mod citation_search;
 mod citations;
+mod code_action_resolve;
 mod code_inputs;
 pub mod code_lens;
 pub mod colors;
@@ -512,6 +513,18 @@ impl LanguageServer for Backend {
             .as_ref()
             .and_then(|doc| doc.code_action.as_ref())
             .is_some_and(|action| action.code_action_literal_support.is_some());
+        workspace.code_action_resolve_edits = workspace.code_action_literals
+            && params
+                .capabilities
+                .text_document
+                .as_ref()
+                .and_then(|doc| doc.code_action.as_ref())
+                .is_some_and(|action| {
+                    action.data_support == Some(true)
+                        && action.resolve_support.as_ref().is_some_and(|support| {
+                            support.properties.iter().any(|property| property == "edit")
+                        })
+                });
         workspace.folding_capabilities = params
             .capabilities
             .text_document
@@ -616,7 +629,7 @@ impl LanguageServer for Backend {
                             CodeActionKind::REFACTOR_EXTRACT,
                             CodeActionKind::SOURCE_FIX_ALL,
                         ]),
-                        resolve_provider: Some(false),
+                        resolve_provider: Some(true),
                         ..Default::default()
                     },
                 )),
@@ -1347,12 +1360,16 @@ impl LanguageServer for Backend {
     }
 
     async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
-        Ok(Some(editing::code_actions(
+        Ok(Some(code_action_resolve::actions(
             &*self.workspace.read().await,
             &document_uri(params.text_document.uri),
             params.range,
             &params.context,
         )))
+    }
+
+    async fn code_action_resolve(&self, action: CodeAction) -> Result<CodeAction> {
+        code_action_resolve::resolve(&*self.workspace.read().await, action)
     }
 
     async fn code_lens(&self, params: CodeLensParams) -> Result<Option<Vec<CodeLens>>> {

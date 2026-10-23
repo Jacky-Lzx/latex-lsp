@@ -26766,3 +26766,143 @@ fn user_environment_documentation_hover_and_completion_follow_project_buffers() 
         server.wait_exit(0);
     }
 }
+
+#[test]
+fn code_action_resolution_negotiates_edits_and_preserves_the_original_action() {
+    use latex_lsp::text::Text;
+    for (data_support, property) in [(true, "edit"), (false, "edit"), (true, "command")] {
+        let uri = Url::parse("untitled:resolved-actions.tex").unwrap();
+        let source = "\\begin{document}\r\n😀 Hello world\r\n\\end{document}";
+        let mut server = Server::start();
+        let init = server.request(1, "initialize", json!({"processId":null,"rootUri":null,"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}},"textDocument":{"codeAction":{"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["refactor"]}},"dataSupport":data_support,"resolveSupport":{"properties":[property]}}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+        assert_eq!(
+            init["capabilities"]["codeActionProvider"]["resolveProvider"],
+            true
+        );
+        server.notify("initialized", json!({}));
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"languageId":"latex","version":7,"text":source}}),
+        );
+        let text = Text::new(source.into());
+        let start = source.find("Hello").unwrap();
+        let range = text.range(start, start + "Hello world".len());
+        let params = json!({"textDocument":{"uri":uri},"range":range,"context":{"diagnostics":[],"only":["refactor"]}});
+        let actions = server.request(2, "textDocument/codeAction", params.clone());
+        assert_eq!(actions.as_array().unwrap().len(), 4);
+        let deferred = data_support && property == "edit";
+        for (index, item) in actions.as_array().unwrap().iter().enumerate() {
+            assert_eq!(item.get("edit").is_none(), deferred);
+            assert_eq!(item.get("data").is_some(), deferred);
+            let resolved = server.request(3 + index as u64, "codeAction/resolve", item.clone());
+            let mut expected = item.clone();
+            expected["edit"] = resolved["edit"].clone();
+            assert_eq!(resolved, expected);
+            assert_eq!(
+                resolved["edit"]["documentChanges"][0]["textDocument"]["version"],
+                7
+            );
+            if resolved["kind"] == "refactor.extract" {
+                assert_eq!(
+                    resolved["edit"]["documentChanges"][0]["edits"][0]["newText"],
+                    "\\newcommand{\\extractedcommand}{Hello world}\r\n"
+                );
+            }
+        }
+        if deferred {
+            let mut forged = actions[0].clone();
+            forged["title"] = "Forged action".into();
+            server.send(
+                json!({"jsonrpc":"2.0","id":7,"method":"codeAction/resolve","params":forged}),
+            );
+            assert_eq!(
+                server.until(|message| message["id"] == 7)["error"]["code"],
+                -32801
+            );
+            let mut malformed = actions[0].clone();
+            malformed["data"]["unknown"] = true.into();
+            server.send(
+                json!({"jsonrpc":"2.0","id":8,"method":"codeAction/resolve","params":malformed}),
+            );
+            assert_eq!(
+                server.until(|message| message["id"] == 8)["error"]["code"],
+                -32602
+            );
+            server.notify(
+                "textDocument/didChange",
+                json!({"textDocument":{"uri":uri,"version":8},"contentChanges":[{"text":source}]}),
+            );
+            server.send(
+                json!({"jsonrpc":"2.0","id":9,"method":"codeAction/resolve","params":actions[0]}),
+            );
+            assert_eq!(
+                server.until(|message| message["id"] == 9)["error"]["code"],
+                -32801
+            );
+            let updated = server.request(10, "textDocument/codeAction", params);
+            let resolved = server.request(11, "codeAction/resolve", updated[0].clone());
+            assert_eq!(
+                resolved["edit"]["documentChanges"][0]["textDocument"]["version"],
+                8
+            );
+        }
+        server.request(12, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+fn code_action_resolution_supports_syntax_quickfixes_and_source_fix_all() {
+    use tower_lsp::lsp_types::{CodeAction, DocumentChanges, OneOf};
+    let uri = Url::parse("untitled:resolved-fixes.tex").unwrap();
+    let source = "\\begin{itemize}\n\\item Hello\n";
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":null,"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}},"textDocument":{"codeAction":{"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix","source.fixAll"]}},"dataSupport":true,"resolveSupport":{"properties":["edit"]}}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"latex","version":1,"text":source}}),
+    );
+    let mut id = 2;
+    for kind in ["quickfix", "source.fixAll"] {
+        let actions = server.request(id, "textDocument/codeAction", json!({"textDocument":{"uri":uri},"range":{"start":{"line":0,"character":0},"end":{"line":3,"character":0}},"context":{"diagnostics":[],"only":[kind]}}));
+        id += 1;
+        let action = actions
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|action| action["kind"] == kind)
+            .unwrap();
+        assert!(action.get("edit").is_none());
+        assert!(!action["diagnostics"].as_array().unwrap().is_empty());
+        let resolved = server.request(id, "codeAction/resolve", action.clone());
+        id += 1;
+        let action: CodeAction = serde_json::from_value(resolved).unwrap();
+        let Some(DocumentChanges::Edits(changes)) = action.edit.unwrap().document_changes else {
+            panic!()
+        };
+        let mut edits = changes
+            .into_iter()
+            .flat_map(|change| change.edits)
+            .map(|edit| {
+                let OneOf::Left(edit) = edit else { panic!() };
+                edit
+            })
+            .collect::<Vec<_>>();
+        edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
+        let text = latex_lsp::text::Text::new(source.into());
+        let mut corrected = source.to_owned();
+        for edit in edits {
+            corrected.replace_range(
+                text.offset(edit.range.start).unwrap()..text.offset(edit.range.end).unwrap(),
+                &edit.new_text,
+            );
+        }
+        let doc = latex_lsp::workspace::Document::new(&uri, corrected, Some(2));
+        assert!(latex_lsp::features::diagnostics(&doc).is_empty());
+    }
+    server.request(id, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
