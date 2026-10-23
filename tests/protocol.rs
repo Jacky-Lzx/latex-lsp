@@ -28206,3 +28206,73 @@ fn compiled_citation_hints_follow_root_outputs_printing_semantics_and_configurat
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+#[test]
+fn input_hook_type_completion_and_hover_follow_unsaved_project_meanings() {
+    let dir = tempfile::tempdir().unwrap();
+    let chapter = Url::from_file_path(dir.path().join("chapter.tex")).unwrap();
+    let macros = Url::from_file_path(dir.path().join("macros.tex")).unwrap();
+    let source = "😀 \\oninput[BOook]{code}";
+    for (name, text) in [
+        (
+            "main.tex",
+            r"\documentclass{article}\input{macros}\input{chapter}",
+        ),
+        ("macros.tex", r"\def\oninput{\AtDataInput}"),
+        ("other.tex", r"\documentclass{article}\def\AtDataInput#1{}"),
+        ("chapter.tex", source),
+    ] {
+        std::fs::write(dir.path().join(name), text).unwrap();
+    }
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":chapter,"languageId":"latex","version":3,"text":source}}),
+    );
+    let text = latex_lsp::text::Text::new(source.into());
+    let position = text.position(source.find("BOook").unwrap() + 2);
+    let params = json!({"textDocument":{"uri":chapter},"position":position});
+    let response = server.request(2, "textDocument/completion", params.clone());
+    let item = response
+        .as_array()
+        .or_else(|| response["items"].as_array())
+        .unwrap()
+        .iter()
+        .find(|item| item["label"] == "book")
+        .unwrap();
+    assert_eq!(item["textEdit"]["newText"], "book");
+    assert_eq!(item["kind"], 7);
+    let edit: tower_lsp::lsp_types::TextEdit =
+        serde_json::from_value(item["textEdit"].clone()).unwrap();
+    let updated = text
+        .changed(vec![tower_lsp::lsp_types::TextDocumentContentChangeEvent {
+            range: Some(edit.range),
+            range_length: None,
+            text: edit.new_text,
+        }])
+        .unwrap()
+        .source;
+    assert_eq!(updated, source.replace("BOook", "book"));
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":chapter,"version":4},"contentChanges":[{"text":updated}]}),
+    );
+    let hover = server.request(3, "textDocument/hover", params.clone());
+    assert_eq!(hover["contents"]["kind"], "plaintext");
+    assert!(hover["contents"]["value"]
+        .as_str()
+        .unwrap()
+        .contains("book"));
+    server.notify("textDocument/didOpen",json!({"textDocument":{"uri":macros,"languageId":"latex","version":7,"text":r"\def\oninput{\AtDataInput}\def\AtDataInput#1{}"}}));
+    let response = server.request(4, "textDocument/completion", params);
+    assert!(!response
+        .as_array()
+        .or_else(|| response["items"].as_array())
+        .unwrap()
+        .iter()
+        .any(|item| item["label"] == "book"));
+    server.request(5, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

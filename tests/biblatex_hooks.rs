@@ -310,6 +310,8 @@ fn real_biblatex_callbacks_keep_category_queries_after_entry_key_rename() {
     let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
     let bib = Url::from_file_path(dir.path().join("refs.bib")).unwrap();
     let source = "\\documentclass{article}\n\\usepackage[backend=bibtex,style=numeric]{biblatex}\n\\addbibresource{refs.bib}\n\\DeclareBibliographyCategory{selected}\n\\addtocategory{selected}{alpha}\n\\AtDataInput[book]{\\ifentrycategory{alpha}{selected}{\\typeout{DATA-HOOK-OK}}{\\errmessage{Data hook lost entry}}}\n\\AtEveryCitekey{\\ifentrycategory{alpha}{selected}{\\typeout{CITE-HOOK-OK}}{\\errmessage{Cite hook lost entry}}}\n\\AtEveryEntrykey{\\typeout{ENTRYKEY-HOOK:#1}}{\\typeout{APPENDED-HOOK-OK}}{\\errmessage{Hook append failed}}\n\\begin{document}\n\\cite{alpha}\n\\printbibliography\n\\end{document}";
+    let completed = complete_input_hook_type(&source.replacen("[book]", "[BO¦ook]", 1));
+    let source = completed.as_str();
     let bibliography =
         "@book{alpha,author={Doe, Jane},title={Hook book},year={2026},publisher={Example}}";
     std::fs::write(main.to_file_path().unwrap(), source).unwrap();
@@ -360,4 +362,134 @@ fn real_biblatex_callbacks_keep_category_queries_after_entry_key_rename() {
         assert!(log.contains(marker), "{marker}: {log}");
     }
     assert!(!log.contains("undefined on input line"), "{log}");
+}
+fn complete_input_hook_type(marked: &str) -> String {
+    let source = marked.replace('¦', "");
+    let (ws, uri) = setup(&source);
+    let at = ws.documents[&uri].text.position(marked.find('¦').unwrap());
+    let item = features::completion(&ws, &uri, at)
+        .into_iter()
+        .find(|item| item.label == "book")
+        .unwrap_or_else(|| panic!("missing book: {marked}"));
+    assert_eq!(item.kind, Some(CompletionItemKind::CLASS));
+    assert!(matches!(&item.documentation,Some(Documentation::String(value)) if !value.is_empty()));
+    let Some(CompletionTextEdit::Edit(edit)) = item.text_edit else {
+        panic!()
+    };
+    assert_eq!(edit.range.start.line, edit.range.end.line);
+    let mut edits = item.additional_text_edits.unwrap_or_default();
+    edits.push(edit);
+    apply(&source, edits)
+}
+
+#[test]
+fn input_hook_type_completions_and_hover_follow_direct_named_and_forwarding_calls() {
+    for call in [
+        r"\AtDataInput",
+        r"\csuse{AtDataInput}",
+        r"\csname AtDataInput\endcsname",
+        r"\oninput",
+    ] {
+        let prefix = r"\def\oninput{\AtDataInput}😀 ";
+        let marked = format!("{prefix}{call}[BO¦ook]{{code}}");
+        let completed = complete_input_hook_type(&marked);
+        assert_eq!(completed, format!("{prefix}{call}[book]{{code}}"));
+        let (ws, uri) = setup(&completed);
+        let at = ws.documents[&uri]
+            .text
+            .position(completed.rfind("book").unwrap() + 2);
+        let hover = features::hover(&ws, &uri, at).unwrap();
+        assert!(format!("{:?}", hover.contents).contains("book"));
+        assert!(features::definitions(&ws, &uri, at).is_empty());
+        assert!(features::prepare_rename(&ws, &uri, at).unwrap().is_none());
+    }
+}
+
+#[test]
+fn input_hook_type_edits_preserve_comments_unfinished_headers_and_following_code() {
+    for (marked, expected) in [
+        (
+            "\\AtDataInput[% select [ ]😀\r\n BO¦ook % tail\r\n]{\\label{kept}}",
+            "\\AtDataInput[% select [ ]😀\r\nbook% tail\r\n]{\\label{kept}}",
+        ),
+        (
+            "\\AtDataInput[\r\n BO¦ook \r\n]{code}",
+            "\\AtDataInput[book]{code}",
+        ),
+        (
+            "\\AtDataInput[bo¦\n\\label{kept}",
+            "\\AtDataInput[book\n\\label{kept}",
+        ),
+    ] {
+        assert_eq!(complete_input_hook_type(marked), expected, "{marked}");
+    }
+}
+
+#[test]
+fn input_hook_type_candidates_exclude_code_data_literals_and_uncertain_meanings() {
+    for marked in [
+        r"\AtDataInput[book]{bo¦ok}",
+        r"\AtDataInput[book]{code}bo¦ok",
+        r"\def\AtDataInput#1{}\AtDataInput[bo¦ok]{code}",
+        r"\def\take#1{}\take{\AtDataInput[bo¦ok]{code}}",
+        r"\noexpand\AtDataInput[bo¦ok]{code}",
+        r"\detokenize{\AtDataInput[bo¦ok]{code}}",
+        r"\verb|\AtDataInput[bo¦ok]{code}|",
+        r"\let\oninput\AtDataInput\oninput[bo¦ok]{code}",
+        "\\AtDataInput[b% split\r\no¦ok]{code}",
+        "\\AtDataInput[% bo¦ok\r\nbook]{code}",
+        r"\AtDataInput[outer[bo¦ok]{code}",
+    ] {
+        let (ws, uri) = setup(&marked.replace('¦', ""));
+        let at = ws.documents[&uri].text.position(marked.find('¦').unwrap());
+        assert!(
+            !features::completion(&ws, &uri, at)
+                .iter()
+                .any(|item| item.label == "book"),
+            "{marked}"
+        );
+    }
+    let marked = r"\AtDataInput[bo¦ok]{code}";
+    let (mut ws, uri) = setup(&marked.replace('¦', ""));
+    ws.index_truncated.insert("maxFiles".into());
+    let at = ws.documents[&uri].text.position(marked.find('¦').unwrap());
+    assert!(!features::completion(&ws, &uri, at)
+        .iter()
+        .any(|item| item.label == "book"));
+}
+
+#[test]
+fn shared_input_hook_selectors_require_consistent_consumer_meanings_and_refresh() {
+    let dir = tempfile::tempdir().unwrap();
+    for (name, source) in [
+        (
+            "a.tex",
+            r"\documentclass{article}\def\oninput{\AtDataInput}\input{shared}",
+        ),
+        (
+            "b.tex",
+            r"\documentclass{article}\def\oninput#1{}\input{shared}",
+        ),
+        ("other.tex", r"\documentclass{article}\def\AtDataInput#1{}"),
+        ("shared.tex", r"\oninput[book]{code}"),
+    ] {
+        std::fs::write(dir.path().join(name), source).unwrap();
+    }
+    let mut ws = Workspace::default();
+    ws.config.distribution.enabled = false;
+    ws.add_root(dir.path().into());
+    let shared = Url::from_file_path(dir.path().join("shared.tex")).unwrap();
+    let b = Url::from_file_path(dir.path().join("b.tex")).unwrap();
+    let at = Position::new(0, 11);
+    assert!(!features::completion(&ws, &shared, at)
+        .iter()
+        .any(|item| item.label == "book"));
+    ws.open(
+        b,
+        r"\documentclass{article}\def\oninput{\AtDataInput}\input{shared}".into(),
+        8,
+    );
+    assert!(features::completion(&ws, &shared, at)
+        .iter()
+        .any(|item| item.label == "book"));
 }

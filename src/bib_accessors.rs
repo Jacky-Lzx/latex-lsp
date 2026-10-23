@@ -167,6 +167,90 @@ fn valid_name(name: &str) -> bool {
             .all(|ch| ch.is_alphanumeric() || matches!(ch, '_' | ':' | '-'))
 }
 
+fn input_hook_context(
+    workspace: &Workspace,
+    uri: &Url,
+    offset: usize,
+) -> Option<(Kind, Span<usize>, Vec<Span<usize>>)> {
+    if !workspace.index_truncated.is_empty() {
+        return None;
+    }
+    let doc = workspace.documents.get(uri)?;
+    let source = &doc.text.source;
+    let start = source[..offset]
+        .rmatch_indices('[')
+        .take(128)
+        .find(|(at, _)| !doc.syntax.is_ignored(*at))?
+        .0;
+    let name =
+        syntax::active_commented_name_argument(source, start, b'[', offset, false, valid_name)
+            .or_else(|| {
+                syntax::active_label_argument(source, start, b'[', offset)
+                    .filter(|span| {
+                        let value = source[span.clone()].trim();
+                        value.is_empty() || valid_name(value)
+                    })
+                    .map(|span| (span, vec![]))
+            })?;
+    let mut found = false;
+    let mut bytes = 0usize;
+    let mut commands = 0usize;
+    let mut definitions = 0usize;
+    for (scope, consumers) in crate::environment_calls::project_contexts(workspace) {
+        if !consumers.contains(uri) {
+            continue;
+        }
+        let docs: Vec<_> = scope
+            .iter()
+            .filter_map(|uri| workspace.documents.get(uri))
+            .filter(|doc| doc.kind == DocumentKind::Latex)
+            .collect();
+        bytes = bytes.saturating_add(docs.iter().map(|doc| doc.text.source.len()).sum::<usize>());
+        commands = commands.saturating_add(
+            docs.iter()
+                .map(|doc| doc.syntax.commands.len())
+                .sum::<usize>(),
+        );
+        definitions = definitions.saturating_add(
+            docs.iter()
+                .map(|doc| doc.syntax.definitions.len() + doc.syntax.environments.len())
+                .sum::<usize>(),
+        );
+        if bytes > 32 * 1024 * 1024 || commands > 200_000 || definitions > 8192 {
+            return None;
+        }
+        let signatures = signature::CommandSignatures::new(
+            docs.iter()
+                .map(|doc| (doc.text.source.as_str(), &doc.syntax)),
+        );
+        let context = crate::named_references::Context::new(doc, &signatures);
+        let empty = BTreeSet::new();
+        let known = doc
+            .syntax
+            .commands
+            .iter()
+            .enumerate()
+            .rev()
+            .filter(|(_, command)| command.span.end <= start)
+            .take(128)
+            .any(|(index, command)| {
+                if context.operand(doc, command.span.start) {
+                    return false;
+                }
+                let (name, span) = signatures
+                    .named_invocation(source, &doc.syntax, index, &empty, &context.declarations)
+                    .unwrap_or((&command.name, command.span.clone()));
+                syntax::skip_space(source, span.end) == start
+                    && signatures.invokes_builtin(name, "AtDataInput")
+            });
+        if !known {
+            return None;
+        }
+        found = true;
+    }
+    found.then_some((Kind::EntryType, name.0, name.1))
+}
+
 fn context(
     workspace: &Workspace,
     uri: &Url,
@@ -176,6 +260,9 @@ fn context(
     let doc = workspace.documents.get(uri)?;
     if doc.kind != DocumentKind::Latex || doc.syntax.is_ignored(offset.saturating_sub(1)) {
         return None;
+    }
+    if let Some(context) = input_hook_context(workspace, uri, offset) {
+        return Some(context);
     }
     let source = &doc.text.source;
     for command in doc
