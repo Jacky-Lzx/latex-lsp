@@ -412,6 +412,7 @@ pub fn fixes(
     let mut seen = BTreeSet::new();
     let mut examined = 0;
     let mut comparisons = 0;
+    let citation_resources = std::cell::OnceCell::new();
     for (root, diagnostics) in &workspace.build_diagnostics {
         let Some(diagnostics) = diagnostics.get(uri) else {
             continue;
@@ -635,6 +636,26 @@ pub fn fixes(
             let Some((kind, key)) = target(doc, diagnostic, invocation_signatures) else {
                 continue;
             };
+            let citation_scope = if kind == Kind::Citation {
+                if let Some(resources) = citation_resources
+                    .get_or_init(|| crate::bib_section_keys::occurrence_resources(workspace, uri))
+                {
+                    let (Some(start), Some(end)) = (
+                        doc.text.offset(diagnostic.range.start),
+                        doc.text.offset(diagnostic.range.end),
+                    ) else {
+                        continue;
+                    };
+                    let Some(resources) = resources.get(&(start, end)) else {
+                        continue;
+                    };
+                    Some(resources)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
             let counter_conflicts = if kind == Kind::Counter {
                 crate::counters::replacement_conflicts(doc, diagnostic.range)
             } else {
@@ -665,11 +686,12 @@ pub fn fixes(
             for document in project
                 .iter()
                 .filter(|uri| {
-                    kind != Kind::Anchor
-                        || workspace
-                            .build_diagnostic_sources
-                            .get(root)
-                            .is_none_or(|sources| sources.contains(*uri))
+                    citation_scope.is_none_or(|resources| resources.contains(*uri))
+                        && (kind != Kind::Anchor
+                            || workspace
+                                .build_diagnostic_sources
+                                .get(root)
+                                .is_none_or(|sources| sources.contains(*uri)))
                 })
                 .filter_map(|uri| workspace.documents.get(uri))
             {

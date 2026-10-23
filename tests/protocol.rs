@@ -29436,3 +29436,130 @@ fn section_citation_completions_keep_selected_metadata_and_refresh_shared_root_c
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+#[test]
+fn section_citation_diagnostics_and_fixes_follow_unsaved_library_edits_over_push_and_pull() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let bib = main.join("section.bib").unwrap();
+    let source = "\\documentclass{article}\\usepackage{biblatex}\\addbibresource{default.bib}\\addsectionbib[label=chosen]{section.bib}\\begin{document}😀\r\n\\newrefsection[chosen]\\cite{defautonly,sectononly}\\ref{missinglabel}\\end{document}";
+    let library = "@book{sectiononly,title={Selected}}";
+    for (name, contents) in [
+        ("main.tex", source),
+        ("default.bib", "@book{defaultonly,title={Default}}"),
+        ("section.bib", library),
+    ] {
+        std::fs::write(dir.path().join(name), contents).unwrap();
+    }
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{"textDocument":{"codeAction":{"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix"]}}}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    for (uri, language, text, version) in
+        [(&main, "latex", source, 5), (&bib, "bibtex", library, 3)]
+    {
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"languageId":language,"version":version,"text":text}}),
+        );
+    }
+    let report = server.request(
+        2,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":main}}),
+    );
+    let original_result_id = report["resultId"].clone();
+    let missing: Vec<_> = report["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| item["code"] == "undefined-citation")
+        .collect();
+    assert_eq!(missing.len(), 2, "{report}");
+    for (stage, diagnostic) in missing.into_iter().enumerate() {
+        assert_eq!(diagnostic["range"]["start"]["line"], 1);
+        let actions = server.request(3 + stage as u64,"textDocument/codeAction",json!({"textDocument":{"uri":main},"range":diagnostic["range"],"context":{"diagnostics":[diagnostic]}}));
+        let actions = actions.as_array().unwrap();
+        assert!(
+            !actions.iter().any(|action| action["title"]
+                .as_str()
+                .is_some_and(|title| title.contains("defaultonly"))),
+            "{actions:?}"
+        );
+        if stage == 1 {
+            assert!(
+                actions
+                    .iter()
+                    .any(|action| action["title"] == "Replace with citation `sectiononly`"),
+                "{actions:?}"
+            );
+        }
+    }
+    server.pending.borrow_mut().clear();
+    server.notify("textDocument/didChange",json!({"textDocument":{"uri":bib,"version":4},"contentChanges":[{"text":"@book{defautonly,title={Now defined}}\n@book{sectononly,title={Also defined}}"}]}));
+    server.until(|message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["uri"] == main.as_str()
+            && message["params"]["version"] == 5
+            && message["params"]["diagnostics"]
+                .as_array()
+                .is_some_and(|items| {
+                    !items
+                        .iter()
+                        .any(|item| item["code"] == "undefined-citation")
+                        && items
+                            .iter()
+                            .any(|item| item["code"] == "undefined-reference")
+                })
+    });
+    let report = server.request(
+        10,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":main},"previousResultId":original_result_id.clone()}),
+    );
+    assert_eq!(report["kind"], "full", "{report}");
+    assert_ne!(report["resultId"], original_result_id);
+    let cleared_result_id = report["resultId"].clone();
+    assert!(
+        !report["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["code"] == "undefined-citation"),
+        "{report}"
+    );
+    server.pending.borrow_mut().clear();
+    server.notify("textDocument/didClose", json!({"textDocument":{"uri":bib}}));
+    server.until(|message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["uri"] == main.as_str()
+            && message["params"]["version"] == 5
+            && message["params"]["diagnostics"]
+                .as_array()
+                .is_some_and(|items| {
+                    items
+                        .iter()
+                        .filter(|item| item["code"] == "undefined-citation")
+                        .count()
+                        == 2
+                })
+    });
+    let report = server.request(
+        11,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":main},"previousResultId":cleared_result_id.clone()}),
+    );
+    assert_eq!(report["kind"], "full", "{report}");
+    assert_ne!(report["resultId"], cleared_result_id);
+    assert_eq!(
+        report["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|item| item["code"] == "undefined-citation")
+            .count(),
+        2,
+        "{report}"
+    );
+    server.request(12, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

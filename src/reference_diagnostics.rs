@@ -3,18 +3,30 @@ use crate::{
     syntax,
     workspace::{DocumentKind, Workspace},
 };
-use std::{collections::BTreeSet, ops::Range};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ops::Range,
+};
 use tower_lsp::lsp_types::*;
 
-pub(crate) fn occurrences(ws: &Workspace, uri: &Url) -> Vec<(bool, Range<usize>)> {
-    occurrences_for(ws, uri, false)
+fn occurrences(
+    ws: &Workspace,
+    uri: &Url,
+    resources: Option<&crate::bib_section_keys::ResourceMap>,
+) -> Vec<(bool, Range<usize>)> {
+    occurrences_for(ws, uri, false, resources)
 }
 
 pub(crate) fn hint_occurrences(ws: &Workspace, uri: &Url) -> Vec<(bool, Range<usize>)> {
-    occurrences_for(ws, uri, true)
+    occurrences_for(ws, uri, true, None)
 }
 
-fn occurrences_for(ws: &Workspace, uri: &Url, printing: bool) -> Vec<(bool, Range<usize>)> {
+fn occurrences_for(
+    ws: &Workspace,
+    uri: &Url,
+    printing: bool,
+    resources: Option<&crate::bib_section_keys::ResourceMap>,
+) -> Vec<(bool, Range<usize>)> {
     let Some(doc) = ws.documents.get(uri) else {
         return vec![];
     };
@@ -97,7 +109,14 @@ fn occurrences_for(ws: &Workspace, uri: &Url, printing: bool) -> Vec<(bool, Rang
         result.extend(
             crate::reference_calls::keys(source, command, true)
                 .into_iter()
-                .filter(|(citation, _)| !*citation || !selected_resources),
+                .filter(|(citation, span)| {
+                    !*citation
+                        || !selected_resources
+                        || !printing
+                            && resources.is_some_and(|resources| {
+                                resources.contains_key(&(span.start, span.end))
+                            })
+                }),
         );
     }
     result.sort_by_key(|(citation, span)| (span.start, span.end, *citation));
@@ -106,6 +125,19 @@ fn occurrences_for(ws: &Workspace, uri: &Url, printing: bool) -> Vec<(bool, Rang
 }
 
 pub(crate) fn diagnostics(ws: &Workspace, uri: &Url) -> Vec<Diagnostic> {
+    let resources = ws
+        .settings(uri)
+        .diagnostics
+        .undefined_citations
+        .then(|| crate::bib_section_keys::occurrence_resources(ws, uri))
+        .flatten();
+    diagnostics_for(ws, uri, resources.as_ref())
+}
+fn diagnostics_for(
+    ws: &Workspace,
+    uri: &Url,
+    resources: Option<&crate::bib_section_keys::ResourceMap>,
+) -> Vec<Diagnostic> {
     let Some(doc) = ws.documents.get(uri) else {
         return vec![];
     };
@@ -117,18 +149,25 @@ pub(crate) fn diagnostics(ws: &Workspace, uri: &Url) -> Vec<Diagnostic> {
     let scope = ws.symbol_scope(uri);
     let mut labels = BTreeSet::new();
     let mut citations = BTreeSet::new();
+    let mut citation_files = BTreeMap::<&str, BTreeSet<&Url>>::new();
     for (uri, doc) in &ws.documents {
         if !scope.contains(uri) {
             continue;
         }
         labels.extend(doc.syntax.labels.iter().map(|entry| entry.name.as_str()));
-        citations.extend(
-            doc.syntax
-                .citations
-                .iter()
-                .chain(&doc.syntax.bibliography_aliases)
-                .map(|entry| entry.name.as_str()),
-        );
+        let names = doc
+            .syntax
+            .citations
+            .iter()
+            .chain(&doc.syntax.bibliography_aliases)
+            .map(|entry| entry.name.as_str());
+        if resources.is_some() {
+            for name in names {
+                citation_files.entry(name).or_default().insert(uri);
+            }
+        } else {
+            citations.extend(names);
+        }
     }
     let auxiliary = crate::auxiliary::labels(ws, uri);
     labels.extend(
@@ -137,16 +176,28 @@ pub(crate) fn diagnostics(ws: &Workspace, uri: &Url) -> Vec<Diagnostic> {
             .filter(|(_, info)| info.external)
             .map(|(name, _)| name.as_str()),
     );
-    occurrences(ws, uri)
+    occurrences(ws, uri, resources)
         .into_iter()
         .filter_map(|(citation, span)| {
             let name = &doc.text.source[span.clone()];
             let (enabled, known, kind) = if citation {
-                (config.undefined_citations, &citations, "citation")
+                let known = if let Some(resources) = resources {
+                    let files = resources.get(&(span.start, span.end))?;
+                    citation_files.get(name).is_some_and(|definitions| {
+                        definitions.iter().any(|uri| files.contains(*uri))
+                    })
+                } else {
+                    citations.contains(name)
+                };
+                (config.undefined_citations, known, "citation")
             } else {
-                (config.undefined_references, &labels, "reference")
+                (
+                    config.undefined_references,
+                    labels.contains(name),
+                    "reference",
+                )
             };
-            if !enabled || name == "*" || known.contains(name) {
+            if !enabled || name == "*" || known {
                 return None;
             }
             // An identical compiler-confirmed warning already carries more context.
@@ -189,7 +240,13 @@ pub(crate) fn fixes(
     let scope = ws.symbol_scope(uri);
     let auxiliary = crate::auxiliary::labels(ws, uri);
     let mut result = Vec::new();
-    for diagnostic in diagnostics(ws, uri)
+    let section_resources = ws
+        .settings(uri)
+        .diagnostics
+        .undefined_citations
+        .then(|| crate::bib_section_keys::occurrence_resources(ws, uri))
+        .flatten();
+    for diagnostic in diagnostics_for(ws, uri, section_resources.as_ref())
         .into_iter()
         .filter(|diag| {
             diag.range.start <= range.end
@@ -205,6 +262,24 @@ pub(crate) fn fixes(
             continue;
         };
         let citation = data["citation"].as_bool().unwrap_or(false);
+        let citation_scope = if citation {
+            if let Some(resources) = &section_resources {
+                let (Some(start), Some(end)) = (
+                    doc.text.offset(diagnostic.range.start),
+                    doc.text.offset(diagnostic.range.end),
+                ) else {
+                    continue;
+                };
+                let Some(resources) = resources.get(&(start, end)) else {
+                    continue;
+                };
+                Some(resources)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         let length = key.chars().count();
         if !(3..=128).contains(&length) {
             continue;
@@ -212,7 +287,10 @@ pub(crate) fn fixes(
         let mut candidates: BTreeSet<_> = ws
             .documents
             .iter()
-            .filter(|(uri, _)| scope.contains(*uri))
+            .filter(|(uri, _)| {
+                scope.contains(*uri)
+                    && citation_scope.is_none_or(|resources| resources.contains(*uri))
+            })
             .flat_map(|(_, doc)| {
                 if citation {
                     doc.syntax

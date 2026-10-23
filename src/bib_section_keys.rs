@@ -9,7 +9,11 @@ use crate::{
     syntax::{self, Command},
     workspace::{Document, DocumentKind, Workspace},
 };
-use std::{collections::BTreeSet, ops::Range};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ops::Range,
+    sync::Arc,
+};
 use tower_lsp::lsp_types::{Hover, HoverContents, Location, MarkupContent, MarkupKind, Url};
 
 #[derive(Clone, Copy)]
@@ -198,7 +202,9 @@ struct Analysis<'a, 'b> {
     registry: Registry,
     origin: &'a Url,
     query: Option<Query>,
-    resource_sets: BTreeSet<BTreeSet<Url>>,
+    resource_sets: BTreeSet<Arc<BTreeSet<Url>>>,
+    collect_keys: bool,
+    keys: BTreeMap<(usize, usize), Option<Arc<BTreeSet<Url>>>>,
     active: BTreeSet<Url>,
     answer: Option<BTreeSet<Url>>,
     visited: BTreeSet<Url>,
@@ -210,6 +216,23 @@ struct Analysis<'a, 'b> {
     ended: bool,
 }
 impl Analysis<'_, '_> {
+    // Share one retained resource set across all keys in that section.
+    fn intern_resources(&mut self) -> Option<Arc<BTreeSet<Url>>> {
+        if let Some(resources) = self.resource_sets.get(&self.active) {
+            return Some(resources.clone());
+        }
+        self.work += self
+            .active
+            .iter()
+            .map(|uri| uri.as_str().len() + std::mem::size_of::<Url>())
+            .sum::<usize>();
+        if self.work > 32 * 1024 * 1024 {
+            return None;
+        }
+        let resources = Arc::new(self.active.clone());
+        self.resource_sets.insert(resources.clone());
+        Some(resources)
+    }
     fn walk(&mut self, uri: &Url) -> Option<()> {
         self.visits += 1;
         if self.visits > 1024 || self.stack.len() >= 32 || !self.stack.insert(uri.clone()) {
@@ -308,6 +331,36 @@ impl Analysis<'_, '_> {
                 // Deferred code and ordinary macro parameters can change the
                 // state later; textual ordering cannot prove when they run.
                 return None;
+            }
+            if self.collect_keys
+                && uri == self.origin
+                && self.document
+                && positions.contains(&lexical.span.start)
+                && !context.operand(doc, lexical.span.start)
+                && syntax::is_citation(name)
+                && self.signatures.command_unchanged(name)
+            {
+                let command = crate::reference_calls::resolved_command(source, name, span.clone());
+                let resources = self.intern_resources()?;
+                for (citation, key) in crate::reference_calls::keys(source, &command, true) {
+                    if !citation {
+                        continue;
+                    }
+                    let key = (key.start, key.end);
+                    if let Some(previous) = self.keys.get_mut(&key) {
+                        if previous
+                            .as_ref()
+                            .is_some_and(|previous| !Arc::ptr_eq(previous, &resources))
+                        {
+                            *previous = None;
+                        }
+                    } else {
+                        if self.keys.len() >= 100_000 {
+                            return None;
+                        }
+                        self.keys.insert(key, Some(resources.clone()));
+                    }
+                }
             }
             if uri == self.origin
                 && self
@@ -428,21 +481,23 @@ impl Analysis<'_, '_> {
             None
         };
         self.active = self.registry.resources(self.root, selected.as_deref())?;
-        // Navigation only needs the requested section. Whole-project checks
-        // retain distinct sets, charging their storage to the existing budget.
-        if self.query.is_none() && !self.resource_sets.contains(&self.active) {
-            self.work += self
-                .active
-                .iter()
-                .map(|uri| uri.as_str().len() + std::mem::size_of::<Url>())
-                .sum::<usize>();
-            if self.work > 32 * 1024 * 1024 {
-                return None;
-            }
-            self.resource_sets.insert(self.active.clone());
+        if self.query.is_none() {
+            self.intern_resources()?;
         }
         Some(())
     }
+}
+
+fn signature_budget(docs: &[(Url, &Document)]) -> bool {
+    docs.iter()
+        .map(|(_, doc)| doc.syntax.commands.len())
+        .sum::<usize>()
+        <= 100_000
+        && docs
+            .iter()
+            .map(|(_, doc)| doc.syntax.definitions.len() + doc.syntax.environments.len())
+            .sum::<usize>()
+            <= 4096
 }
 
 // All resource consumers share the same execution and path checks. A failed
@@ -472,7 +527,7 @@ fn valid_sources(docs: &[(Url, &Document)], signatures: &CommandSignatures<'_>) 
 pub(crate) enum Coexistence {
     Union,
     Unknown,
-    Sections(BTreeSet<BTreeSet<Url>>),
+    Sections(BTreeSet<Arc<BTreeSet<Url>>>),
 }
 impl Coexistence {
     pub(crate) fn permits(&self, a: &Url, b: &Url) -> bool {
@@ -490,6 +545,9 @@ pub(crate) fn coexistence(ws: &Workspace, root: &Url, scope: &BTreeSet<Url>) -> 
     let Some(docs) = crate::source_inputs::bounded_latex_sources(ws, scope) else {
         return Coexistence::Unknown;
     };
+    if !signature_budget(&docs) {
+        return Coexistence::Unknown;
+    }
     let signatures = CommandSignatures::new(
         docs.iter()
             .map(|(_, doc)| (doc.text.source.as_str(), &doc.syntax)),
@@ -537,7 +595,9 @@ pub(crate) fn coexistence(ws: &Workspace, root: &Url, scope: &BTreeSet<Url>) -> 
             registry,
             origin: root,
             query: None,
-            resource_sets: BTreeSet::from([active.clone()]),
+            resource_sets: BTreeSet::from([Arc::new(active.clone())]),
+            collect_keys: false,
+            keys: BTreeMap::new(),
             active,
             answer: None,
             visited: BTreeSet::new(),
@@ -587,6 +647,60 @@ fn incomplete(
     };
     supported.then_some(None)
 }
+struct Project<'a> {
+    root: Url,
+    docs: Vec<(Url, &'a Document)>,
+    signatures: CommandSignatures<'a>,
+}
+fn section_projects<'a>(ws: &'a Workspace, uri: &Url) -> Option<(bool, Vec<Project<'a>>)> {
+    let mut roots: BTreeSet<_> = ws.source_roots(uri).into_iter().collect();
+    // Opened roots consume shared files even before their own path is saved.
+    for candidate in ws
+        .documents
+        .keys()
+        .filter(|candidate| ws.is_root(candidate))
+    {
+        if ws.project_documents(candidate).contains(uri) {
+            roots.insert(candidate.clone());
+        }
+        if roots.len() > 64 {
+            return None;
+        }
+    }
+    let mut projects = Vec::new();
+    let mut selected = false;
+    let mut bytes = 0usize;
+    for root in roots {
+        let mut scope = ws.project_documents(&root);
+        scope.insert(root.clone());
+        let docs = crate::source_inputs::bounded_latex_sources(ws, &scope)?;
+        if !signature_budget(&docs) {
+            return None;
+        }
+        bytes += docs
+            .iter()
+            .map(|(_, doc)| doc.text.source.len())
+            .sum::<usize>();
+        if bytes > 16 * 1024 * 1024 {
+            return None;
+        }
+        let signatures = CommandSignatures::new(
+            docs.iter()
+                .map(|(_, doc)| (doc.text.source.as_str(), &doc.syntax)),
+        );
+        selected |= crate::bib_sections::selects_resources(
+            &docs.iter().map(|(_, doc)| *doc).collect::<Vec<_>>(),
+            &signatures,
+        );
+        projects.push(Project {
+            root,
+            docs,
+            signatures,
+        });
+    }
+    Some((selected, projects))
+}
+
 /// None leaves ordinary projects to the existing symbol model; Some(None)
 /// owns a section-dependent citation whose provenance cannot be certified.
 fn target(ws: &Workspace, uri: &Url, offset: usize, purpose: Purpose) -> Option<Option<Target>> {
@@ -602,56 +716,24 @@ fn target(ws: &Workspace, uri: &Url, offset: usize, purpose: Purpose) -> Option<
     {
         return None;
     }
-    let mut roots: BTreeSet<_> = ws.source_roots(uri).into_iter().collect();
-    // Opened roots consume shared files even before their own path is saved.
-    for candidate in ws
-        .documents
-        .keys()
-        .filter(|candidate| ws.is_root(candidate))
-    {
-        if ws.project_documents(candidate).contains(uri) {
-            roots.insert(candidate.clone());
-        }
-        if roots.len() > 64 {
-            return incomplete(ws, uri, offset, purpose);
-        }
-    }
-    let mut projects = Vec::new();
-    let mut selected = false;
-    let mut bytes = 0usize;
-    for root in roots {
-        let mut scope = ws.project_documents(&root);
-        scope.insert(root.clone());
-        let Some(docs) = crate::source_inputs::bounded_latex_sources(ws, &scope) else {
-            return incomplete(ws, uri, offset, purpose);
-        };
-        bytes += docs
-            .iter()
-            .map(|(_, doc)| doc.text.source.len())
-            .sum::<usize>();
-        if bytes > 16 * 1024 * 1024 {
-            return incomplete(ws, uri, offset, purpose);
-        }
-        let signatures = CommandSignatures::new(
-            docs.iter()
-                .map(|(_, doc)| (doc.text.source.as_str(), &doc.syntax)),
-        );
-        selected |= crate::bib_sections::selects_resources(
-            &docs.iter().map(|(_, doc)| *doc).collect::<Vec<_>>(),
-            &signatures,
-        );
-        projects.push((root, docs, signatures));
-    }
+    let Some((selected, projects)) = section_projects(ws, uri) else {
+        return incomplete(ws, uri, offset, purpose);
+    };
     if !selected
         || !projects
             .iter()
-            .any(|(_, _, signatures)| citation_candidate(doc, signatures, offset, purpose))
+            .any(|project| citation_candidate(doc, &project.signatures, offset, purpose))
     {
         return None;
     }
     Some((|| {
         let mut result: Option<Target> = None;
-        for (root, docs, signatures) in &projects {
+        for Project {
+            root,
+            docs,
+            signatures,
+        } in &projects
+        {
             let query = query(doc, signatures, offset, purpose)?;
             if !valid_sources(docs, signatures) {
                 return None;
@@ -666,6 +748,8 @@ fn target(ws: &Workspace, uri: &Url, offset: usize, purpose: Purpose) -> Option<
                 origin: uri,
                 query: Some(query.clone()),
                 resource_sets: BTreeSet::new(),
+                collect_keys: false,
+                keys: BTreeMap::new(),
                 active,
                 answer: None,
                 visited: BTreeSet::new(),
@@ -796,4 +880,100 @@ pub(crate) fn completion(
         }
     }
     Some(items)
+}
+
+pub(crate) type ResourceMap = BTreeMap<(usize, usize), Arc<BTreeSet<Url>>>;
+/// None uses ordinary project semantics. Some owns section-dependent calls;
+/// missing spans are unproved and must not fall back to a bibliography union.
+pub(crate) fn occurrence_resources(ws: &Workspace, uri: &Url) -> Option<ResourceMap> {
+    let doc = ws.documents.get(uri)?;
+    if doc.kind != DocumentKind::Latex
+        || !ws
+            .documents
+            .values()
+            .any(|doc| doc.kind == DocumentKind::Latex && doc.text.source.contains("refsection"))
+    {
+        return None;
+    }
+    let Some((selected, projects)) = section_projects(ws, uri) else {
+        return Some(BTreeMap::new());
+    };
+    if !selected {
+        return None;
+    }
+    Some(
+        (|| {
+            if !ws.index_truncated.is_empty() {
+                return None;
+            }
+            let mut result: Option<ResourceMap> = None;
+            for Project {
+                root,
+                docs,
+                signatures,
+            } in &projects
+            {
+                if !valid_sources(docs, signatures) {
+                    return None;
+                }
+                let registry = Registry::new(root, docs, signatures);
+                let active = registry.resources(root, None)?;
+                let mut analysis = Analysis {
+                    ws,
+                    root,
+                    signatures,
+                    registry,
+                    origin: uri,
+                    query: None,
+                    resource_sets: BTreeSet::from([Arc::new(active.clone())]),
+                    collect_keys: true,
+                    keys: BTreeMap::new(),
+                    active,
+                    answer: None,
+                    visited: BTreeSet::new(),
+                    stack: BTreeSet::new(),
+                    visits: 0,
+                    commands: 0,
+                    work: 0,
+                    document: false,
+                    ended: false,
+                };
+                analysis.walk(root)?;
+                if docs.iter().any(|(uri, _)| !analysis.visited.contains(uri))
+                    || analysis.resource_sets.iter().any(|resources| {
+                        resources.iter().any(|uri| {
+                            !ws.documents
+                                .get(uri)
+                                .is_some_and(|doc| doc.kind == DocumentKind::Bibtex)
+                        })
+                    })
+                {
+                    return None;
+                }
+                let keys: ResourceMap = analysis
+                    .keys
+                    .into_iter()
+                    .filter_map(|(span, resources)| resources.map(|resources| (span, resources)))
+                    .collect();
+                if let Some(previous) = &mut result {
+                    let mut agreement = BTreeMap::new();
+                    previous.retain(|span, resources| {
+                        keys.get(span).is_some_and(|candidate| {
+                            let identity = (
+                                Arc::as_ptr(resources) as usize,
+                                Arc::as_ptr(candidate) as usize,
+                            );
+                            *agreement
+                                .entry(identity)
+                                .or_insert_with(|| resources.as_ref() == candidate.as_ref())
+                        })
+                    });
+                } else {
+                    result = Some(keys);
+                }
+            }
+            result
+        })()
+        .unwrap_or_default(),
+    )
 }

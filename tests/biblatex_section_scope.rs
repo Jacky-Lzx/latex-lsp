@@ -81,10 +81,11 @@ fn selected_sections_do_not_bind_keys_to_the_default_database_or_offer_partial_e
             references.iter().all(|location| location.uri != main),
             "{header}"
         );
-        assert!(
-            !ws.diagnostics(&main)
+        assert_eq!(
+            ws.diagnostics(&main)
                 .iter()
                 .any(|diagnostic| diagnostic.message == "Undefined citation `absent`"),
+            !definitions.is_empty(),
             "{header}"
         );
         let at = text.position(source.find(r"\ref{collision").unwrap() + 7);
