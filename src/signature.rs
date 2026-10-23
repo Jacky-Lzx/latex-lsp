@@ -176,6 +176,26 @@ pub(crate) fn has_existing_arguments(
     {
         return true;
     }
+    if name == "Verb"
+        && uses_builtin(workspace, name, scope)
+        && [false, true].into_iter().any(|ordinary| {
+            crate::fancyvrb::inline_start(following, 0, ordinary).is_some_and(|(at, _)| {
+                following[at..]
+                    .chars()
+                    .next()
+                    .is_some_and(|delimiter| delimiter != '}')
+            })
+        })
+    {
+        return true;
+    }
+    if (crate::fancyvrb::is_inline_save(name) || crate::fancyvrb::is_use(name))
+        && uses_builtin(workspace, name, scope)
+        && crate::fancyvrb::inline_start(following, 0, true)
+            .is_some_and(|(at, _)| crate::fancyvrb::name_argument(following, at).is_some())
+    {
+        return true;
+    }
     signature(workspace, name, scope)
         .is_some_and(|signature| existing_arguments(&signature, following))
 }
@@ -474,6 +494,10 @@ fn builtin(name: &str) -> Option<Signature> {
         "lstinputlisting" => (&[("options", true), ("file", false)], false),
         "lstinline" => (&[("options", true)], false),
         "Verb" => (&[("options", true)], true),
+        name if crate::fancyvrb::is_inline_save(name) || crate::fancyvrb::is_use(name) => {
+            (&[("options", true), ("name", false)], true)
+        }
+        "fvset" | "fvinlineset" => (&[("options", false)], false),
         "mintinline" | "mint" => (
             &[("options", true), ("language", false), ("code", false)],
             false,
@@ -965,6 +989,8 @@ fn builtin(name: &str) -> Option<Signature> {
             || crate::minted::is_inline(name)
             || name == "inputminted"
             || crate::fancyvrb::is_input(name)
+            || crate::fancyvrb::is_inline(name)
+            || crate::fancyvrb::is_use(name)
             || syntax::is_citation(name)
             || syntax::loader_extension(name).is_some()
             || syntax::declares_traditional_command(name)
@@ -4838,12 +4864,18 @@ pub fn help(workspace: &Workspace, uri: &Url, position: Position) -> Option<Sign
                         .is_some_and(|argument| argument.span == *span)
             })
             && !doc.syntax.commands.iter().any(|command| {
-                (matches!(command.name.as_str(), "url" | "href" | "hyperref")
-                    || crate::minted::is_inline(&command.name))
-                    && command
-                        .argument
-                        .as_ref()
-                        .is_some_and(|argument| argument.span == *span)
+                command.argument.as_ref().is_some_and(|argument| {
+                    argument.span == *span
+                        && (matches!(command.name.as_str(), "url" | "href" | "hyperref")
+                            || crate::minted::is_inline(&command.name)
+                            || (crate::fancyvrb::is_inline_save(&command.name)
+                                || crate::fancyvrb::is_use(&command.name))
+                                && !crate::fancyvrb::header_comment(
+                                    &doc.text.source,
+                                    argument.span.start,
+                                    cursor,
+                                ))
+                })
             })
     }) {
         return None;

@@ -2256,32 +2256,40 @@ impl Syntax {
                         None
                     };
                     if inline_name == Some("Verb") {
-                        if let Some(at) = file_name_argument_start(source, "Verb", command_end) {
-                            if fancyverb_context.uses_extra(source, command_end) {
-                                let code = skip_space(source, at);
-                                let body = source[code..]
+                        let ordinary = fancyverb_context.verb_header(source, command_end, true);
+                        let body = ordinary.as_ref().map_or(source.len(), |header| {
+                            if header.extra {
+                                source[header.code..]
                                     .chars()
                                     .next()
-                                    .map_or(code, |delimiter| code + delimiter.len_utf8());
-                                let tokenized = inline_tokenization.contains(
-                                    source,
-                                    &result,
-                                    &control_operands,
-                                    body,
-                                );
+                                    .map_or(header.code, |delimiter| {
+                                        header.code + delimiter.len_utf8()
+                                    })
+                            } else {
+                                crate::fancyvrb::inline_header(source, header.code)
+                                    .map_or(header.code, |header| header.body)
+                            }
+                        });
+                        let tokenized =
+                            inline_tokenization.contains(source, &result, &control_operands, body);
+                        let header = if tokenized {
+                            ordinary
+                        } else {
+                            fancyverb_context.verb_header(source, command_end, false)
+                        };
+                        if let Some(header) = header {
+                            if header.extra {
                                 if let Some(span) =
-                                    crate::minted::inline_span(source, at, tokenized)
+                                    crate::minted::inline_span(source, header.code, tokenized)
                                 {
                                     literal_arguments.insert(span.start, (span.clone(), span.end));
                                 }
-                            } else if let Some(header) = crate::fancyvrb::inline_header(source, at)
-                            {
-                                if inline_tokenization.contains(
-                                    source,
-                                    &result,
-                                    &control_operands,
-                                    header.body,
-                                ) {
+                            } else if let Some(header) = crate::fancyvrb::inline_header_mode(
+                                source,
+                                header.code,
+                                header.prefetched,
+                            ) {
+                                if tokenized {
                                     let open = header.start..header.body;
                                     literal_arguments.insert(open.start, (open.clone(), open.end));
                                     if let Some(close) = header.closing_marker(source) {

@@ -47,6 +47,12 @@ pub(crate) struct InlineContext {
     scopes: Vec<InlineSettings>,
 }
 
+pub(crate) struct VerbHeader {
+    pub code: usize,
+    pub extra: bool,
+    pub prefetched: bool,
+}
+
 impl InlineContext {
     pub(crate) fn enter(&mut self) {
         self.scopes.push(self.settings);
@@ -89,18 +95,66 @@ impl InlineContext {
     }
 
     pub(crate) fn uses_extra(&self, source: &str, command_end: usize) -> bool {
-        if !self.settings.fvextra {
-            return false;
-        }
-        let mut at = syntax::skip_space(source, command_end);
-        if source.as_bytes().get(at) == Some(&b'*') {
-            at = syntax::skip_space(source, at + 1);
-        }
-        syntax::bracket_argument(source, at)
-            .and_then(|(argument, _)| extra_option(&argument.value))
-            .or(self.settings.inline_extra)
-            .unwrap_or(self.settings.extra)
+        self.verb_header(source, command_end, true)
+            .is_some_and(|header| header.extra)
     }
+
+    pub(crate) fn verb_header(
+        &self,
+        source: &str,
+        command_end: usize,
+        tokenized: bool,
+    ) -> Option<VerbHeader> {
+        let ordinary = tokenized || !self.settings.fvextra;
+        let (mut code, options) = inline_start(source, command_end, ordinary)?;
+        let extra = self.settings.fvextra
+            && options
+                .as_ref()
+                .and_then(|argument| extra_option(&argument.value))
+                .or(self.settings.inline_extra)
+                .unwrap_or(self.settings.extra);
+        // FV@@Command peeks at a delimiter with other catcodes when no
+        // options intervene. Original FancyVerb otherwise reads the delimiter
+        // before changing body catcodes, even when fvextra is loaded.
+        let prefetched = !ordinary && options.is_none();
+        if !extra && !prefetched {
+            code = syntax::skip_space(source, code);
+        }
+        Some(VerbHeader {
+            code,
+            extra,
+            prefetched,
+        })
+    }
+}
+
+pub(crate) fn inline_start(
+    source: &str,
+    at: usize,
+    ordinary: bool,
+) -> Option<(usize, Option<syntax::Argument>)> {
+    let skip = |at| {
+        if ordinary {
+            syntax::skip_space(source, at)
+        } else {
+            at + source[at..]
+                .bytes()
+                .take_while(u8::is_ascii_whitespace)
+                .count()
+        }
+    };
+    let mut at = skip(at);
+    if source.as_bytes().get(at) == Some(&b'*') {
+        at = skip(at + 1);
+    }
+    let options = if source.as_bytes().get(at) == Some(&b'[') {
+        let (argument, end) = syntax::bracket_argument(source, at)?;
+        at = skip(end);
+        Some(argument)
+    } else {
+        None
+    };
+    Some((at, options))
 }
 
 fn extra_option(source: &str) -> Option<bool> {
@@ -196,7 +250,19 @@ impl InlineHeader {
 /// before it still continue lines. Direct source changes body catcodes, while
 /// Verb in an already collected argument executes its original control tokens.
 pub(crate) fn inline_header(source: &str, at: usize) -> Option<InlineHeader> {
-    let start = syntax::skip_space(source, at);
+    inline_header_mode(source, at, false)
+}
+
+pub(crate) fn inline_header_mode(
+    source: &str,
+    at: usize,
+    prefetched: bool,
+) -> Option<InlineHeader> {
+    let start = if prefetched {
+        at
+    } else {
+        syntax::skip_space(source, at)
+    };
     let (delimiter, body) = if source.as_bytes().get(start) == Some(&b'{') {
         let (argument, end) = syntax::group(source, start, b'{', b'}')?;
         let mut chars = argument.value.chars();
@@ -209,7 +275,10 @@ pub(crate) fn inline_header(source: &str, at: usize) -> Option<InlineHeader> {
         let delimiter = source.get(start..)?.chars().next()?;
         (delimiter, start + delimiter.len_utf8())
     };
-    if delimiter.is_whitespace() || matches!(delimiter, '{' | '}' | '\\' | '%') {
+    if delimiter.is_whitespace()
+        || matches!(delimiter, '{' | '}')
+        || !prefetched && matches!(delimiter, '\\' | '%')
+    {
         return None;
     }
     Some(InlineHeader {

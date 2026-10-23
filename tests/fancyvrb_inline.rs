@@ -1085,3 +1085,107 @@ fn verb_aliases_replace_reserved_command_headers_and_symbol_operations() {
         );
     }
 }
+
+#[test]
+fn fvextra_raw_header_peeks_preserve_special_delimiters_and_following_source() {
+    let main = Url::parse("file:///fancy-inline/main.tex").unwrap();
+    for (settings, options) in [
+        ("", ""),
+        ("", "*[showspaces=true]"),
+        (r"\fvset{extra=false}", ""),
+        (r"\fvset{extra=false}", "*"),
+        (r"\fvset{extra=false}", "[extra=true]"),
+    ] {
+        for body in [
+            r"%\label{phantom}\input{fake}%",
+            " v%line one\r\n[extra=false]\\label{phantom}v",
+            r"\label{phantom}\ ",
+        ] {
+            if body.contains('\n') && !settings.is_empty() && options != "[extra=true]" {
+                continue;
+            }
+            for declaration in ["", r"\let\code\Verb", r"\newcommand{\code}{\Verb}"] {
+                // A literal % within a v-delimited body cannot alter the
+                // actual header options or expose the following code tokens.
+                let command = if declaration.is_empty() {
+                    "Verb"
+                } else {
+                    "code"
+                };
+                let source = format!("\\usepackage{{fvextra}}{settings}{declaration}\\{command}{options}{body}\\label{{real}}");
+                let doc = Document::new(&main, source.clone(), Some(7));
+                assert!(
+                    doc.syntax.diagnostics.is_empty(),
+                    "{source}: {:?}",
+                    doc.syntax.diagnostics
+                );
+                assert_eq!(doc.syntax.labels.len(), 1, "{source}");
+                assert_eq!(doc.syntax.labels[0].name, "real");
+            }
+        }
+    }
+    let source =
+        "\\usepackage{fvextra}\\Verb%line one\r\n[extra=false]\\label{phantom}%\\label{real}"
+            .to_owned();
+    let doc = Document::new(&main, source.clone(), Some(7));
+    assert!(doc.syntax.diagnostics.is_empty(), "{source}");
+    assert_eq!(doc.syntax.labels.len(), 1, "{source}");
+    assert_eq!(doc.syntax.labels[0].name, "real");
+}
+
+#[test]
+#[ignore = "requires pdflatex, xelatex, and fvextra"]
+fn real_fvextra_special_delimiters_keep_following_labels_editable_after_rename() {
+    for engine in ["pdflatex", "xelatex"] {
+        for (settings, options) in [
+            ("", ""),
+            ("", "*[showspaces=true]"),
+            (r"\fvset{extra=false}", ""),
+            (r"\fvset{extra=false}", "*"),
+            (r"\fvset{extra=false}", "[extra=true]"),
+        ] {
+            for body in [r"%\label{phantom}\input{fake}%", r"\label{phantom}\ "] {
+                let directory = tempfile::tempdir().unwrap();
+                let root = directory.path();
+                let main = Url::from_file_path(root.join("main.tex")).unwrap();
+                let source = format!("\\documentclass{{article}}\n\\usepackage{{fvextra}}\n{settings}\\let\\code\\Verb\n\\begin{{document}}\n\\code{options}{body}\\label{{real}}\n\\end{{document}}\n");
+                let mut workspace = Workspace {
+                    versioned_edits: true,
+                    ..Default::default()
+                };
+                workspace.open(main.clone(), source.clone(), 7);
+                let doc = &workspace.documents[&main];
+                assert!(doc.syntax.diagnostics.is_empty(), "{source}");
+                let at = doc.text.position(source.rfind("real").unwrap());
+                let updated = apply(
+                    &source,
+                    features::rename(&workspace, &main, at, "changed")
+                        .unwrap()
+                        .unwrap(),
+                    &main,
+                );
+                assert!(updated.contains(body));
+                std::fs::write(root.join("main.tex"), updated).unwrap();
+                let outcome = build::run(
+                    &root.join("main.tex"),
+                    &latex_lsp::config::BuildConfig {
+                        executable: engine.into(),
+                        ..Default::default()
+                    },
+                    &AtomicBool::new(false),
+                );
+                assert_eq!(
+                    outcome.status, "success",
+                    "{engine}/{settings}/{options}/{body}: {}",
+                    outcome.output
+                );
+                let aux = std::fs::read_to_string(root.join("build/latex-lsp/main.aux")).unwrap();
+                assert!(aux.contains("newlabel{changed}"), "{aux}");
+                assert!(
+                    !aux.contains("newlabel{real}") && !aux.contains("newlabel{phantom}"),
+                    "{aux}"
+                );
+            }
+        }
+    }
+}

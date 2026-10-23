@@ -23305,6 +23305,40 @@ fn fancyvrb_inline_body_execution_follows_incremental_macro_wrapping_over_stdio(
             true,
         ),
         (body.to_owned(), false),
+        (
+            format!("\\usepackage{{fvextra}}{}", body.replace('|', "%")),
+            false,
+        ),
+        (
+            format!(
+                "\\usepackage{{fvextra}}\\fvset{{extra=false}}{}",
+                body.replace('|', "%")
+            ),
+            false,
+        ),
+        (
+            format!(
+                "\\usepackage{{fvextra}}{}",
+                body.replace("Verb|", "Verb%header\r\n[extra=false]")
+                    .replace('|', "%")
+            ),
+            false,
+        ),
+        (
+            format!(
+                "\\usepackage{{fvextra}}\\textbf{{{}}}",
+                body.replace("Verb|", "Verb% header\r\n|")
+            ),
+            false,
+        ),
+        (
+            format!(
+                "\\usepackage{{fvextra}}\\fvset{{extra=false}}\\textbf{{{}}}",
+                body.replace("Verb|", "Verb% header\r\n|")
+            ),
+            true,
+        ),
+        (body.to_owned(), false),
     ]
     .into_iter()
     .enumerate()
@@ -23374,6 +23408,73 @@ fn fancyvrb_inline_body_execution_follows_incremental_macro_wrapping_over_stdio(
                 "{source}: {edit}"
             );
         }
+    }
+    server.request(1000, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+fn fancyvrb_inline_completions_and_saved_name_hints_follow_incremental_edits_over_stdio() {
+    use latex_lsp::text::Text;
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = Url::from_file_path(root.join("main.tex")).unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(root).unwrap(),"capabilities":{"textDocument":{"completion":{"completionItem":{"snippetSupport":true}}}}}));
+    server.notify("initialized", json!({}));
+    let mut source = "% 😀\r\n\\Ve".to_owned();
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":main,"languageId":"latex","version":7,"text":source}}),
+    );
+    let items = server.request(2, "textDocument/completion", json!({"textDocument":{"uri":main},"position":Text::new(source.clone()).position(source.len())}));
+    let item = items
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["label"] == "Verb")
+        .unwrap();
+    assert_eq!(item["insertTextFormat"], 2);
+    assert_eq!(item["textEdit"]["newText"], "Verb|${1:code}|");
+    let range = Text::new(source.clone()).range(source.len(), source.len());
+    let suffix = "rb|literal code|";
+    server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":8},"contentChanges":[{"range":range,"text":suffix}]}));
+    source.push_str(suffix);
+    let position = Text::new(source.clone()).position(source.find("Verb").unwrap() + 2);
+    let items = server.request(
+        3,
+        "textDocument/completion",
+        json!({"textDocument":{"uri":main},"position":position}),
+    );
+    let item = items
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["label"] == "Verb")
+        .unwrap();
+    assert_eq!(item["insertTextFormat"], 1);
+    assert_eq!(item["textEdit"]["newText"], "Verb");
+    let hover = server.request(
+        4,
+        "textDocument/hover",
+        json!({"textDocument":{"uri":main},"position":position}),
+    );
+    assert!(hover.to_string().contains("fancyvrb"), "{hover}");
+    for (stage, (code, label)) in [
+        (r"\SaveVerb[frame=single]{na", r"\SaveVerb[options]{name}"),
+        (r"\UseVerb[label=[literal]{na", r"\UseVerb[options]{name}"),
+        (r"\newcommand{\UseVerb}[1]{#1}\UseVerb{na", r"\UseVerb{#1}"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let range = Text::new(source.clone()).range(0, source.len());
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":9+stage},"contentChanges":[{"range":range,"text":code}]}));
+        source = code.to_owned();
+        let help = server.request(10 + stage as u64, "textDocument/signatureHelp", json!({"textDocument":{"uri":main},"position":Text::new(source.clone()).position(source.len())}));
+        assert_eq!(help["signatures"][0]["label"], label, "{source}: {help}");
+        assert_eq!(help["activeParameter"], if stage == 2 { 0 } else { 1 });
     }
     server.request(100, "shutdown", Value::Null);
     server.notify("exit", Value::Null);
