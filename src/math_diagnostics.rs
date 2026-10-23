@@ -1,4 +1,4 @@
-//! Conservative, opt-in checks of literal math delimiters, without macro expansion.
+//! Conservative, opt-in math checks using static project command meanings.
 use crate::{
     signature::CommandSignatures,
     syntax,
@@ -43,12 +43,97 @@ struct Open {
     span: Span<usize>,
 }
 
+#[derive(Default, PartialEq)]
+struct Semantics {
+    operands: BTreeSet<usize>,
+    dollars: BTreeSet<usize>,
+    markers: BTreeMap<usize, (usize, Mode, bool)>,
+}
+impl Semantics {
+    fn new(doc: &Document, signatures: &CommandSignatures<'_>) -> Option<Self> {
+        let source = &doc.text.source;
+        let mut operands = signatures.known_argument_tokens(source, &doc.syntax);
+        let literals: Vec<_> = source
+            .char_indices()
+            .filter_map(|(at, ch)| {
+                (ch == '$'
+                    || ch == '\\'
+                        && source
+                            .as_bytes()
+                            .get(at + 1)
+                            .is_some_and(|next| matches!(next, b'(' | b')' | b'[' | b']')))
+                .then_some(at)
+            })
+            .collect();
+        // Literal argument queries revisit the command stream. Bound their
+        // combined work before asking about punctuation in a large source.
+        if literals
+            .len()
+            .saturating_mul(doc.syntax.commands.len().max(1))
+            > 4_000_000
+        {
+            return None;
+        }
+        let mut dollars = BTreeSet::new();
+        for at in literals {
+            if signatures.known_literal_is_argument(source, &doc.syntax, at) {
+                if source.as_bytes()[at] == b'$' {
+                    dollars.insert(at);
+                } else {
+                    operands.insert(at);
+                }
+            }
+        }
+        let declarations = doc
+            .syntax
+            .definitions
+            .iter()
+            .map(|entry| (entry.span.start, entry.span.end))
+            .collect();
+        let mut markers = BTreeMap::new();
+        for (index, command) in doc.syntax.commands.iter().enumerate() {
+            if operands.contains(&command.span.start)
+                || doc.syntax.control_operands.contains(&command.span.start)
+            {
+                continue;
+            }
+            let (name, span) = signatures
+                .named_invocation(source, &doc.syntax, index, &operands, &declarations)
+                .unwrap_or((&command.name, command.span.clone()));
+            let Some(delimiter) = ["(", ")", "[", "]"]
+                .into_iter()
+                .find(|delimiter| signatures.invokes_builtin(name, delimiter))
+            else {
+                continue;
+            };
+            markers.insert(
+                span.start,
+                (
+                    span.end,
+                    if matches!(delimiter, "(" | ")") {
+                        Mode::Inline
+                    } else {
+                        Mode::Display
+                    },
+                    matches!(delimiter, "(" | "["),
+                ),
+            );
+        }
+        Some(Self {
+            operands,
+            dollars,
+            markers,
+        })
+    }
+}
+
 #[derive(Default)]
 struct Context {
     continuation: bool,
     unsafe_catcodes: bool,
     boundaries: BTreeMap<usize, usize>,
     potential_inputs: BTreeSet<String>,
+    semantics: Option<Semantics>,
 }
 #[derive(Default)]
 pub(crate) struct Index {
@@ -82,6 +167,29 @@ impl Index {
         // than rebuilding the whole project separately for every requested file.
         for (root, consumers) in roots {
             let scope = workspace.symbol_scope(&root);
+            let docs: Vec<_> = scope
+                .iter()
+                .filter_map(|uri| workspace.documents.get(uri))
+                .filter(|doc| doc.kind == DocumentKind::Latex)
+                .collect();
+            if !workspace.index_truncated.is_empty()
+                || docs.iter().map(|doc| doc.text.source.len()).sum::<usize>() > 16 * 1024 * 1024
+                || docs
+                    .iter()
+                    .map(|doc| doc.syntax.commands.len())
+                    .sum::<usize>()
+                    > 100_000
+                || docs
+                    .iter()
+                    .map(|doc| doc.syntax.definitions.len() + doc.syntax.environments.len())
+                    .sum::<usize>()
+                    > 4096
+            {
+                for uri in consumers {
+                    contexts.entry(uri).or_default().unsafe_catcodes = true;
+                }
+                continue;
+            }
             let signatures = CommandSignatures::new(scope.iter().filter_map(|uri| {
                 workspace
                     .documents
@@ -130,6 +238,17 @@ impl Index {
                 let context = contexts.entry(uri.clone()).or_default();
                 context.continuation |= uri != root || inputs.incomplete;
                 context.unsafe_catcodes |= unsafe_catcodes;
+                if let Some(semantics) = Semantics::new(&workspace.documents[&uri], &signatures) {
+                    // A shared source must have the same math and parameter
+                    // interpretation in every consuming project.
+                    context.unsafe_catcodes |= context
+                        .semantics
+                        .as_ref()
+                        .is_some_and(|previous| previous != &semantics);
+                    context.semantics.get_or_insert(semantics);
+                } else {
+                    context.unsafe_catcodes = true;
+                }
                 // Captured meanings remain possible mode boundaries even
                 // when dependency discovery cannot certify their execution.
                 context
@@ -240,6 +359,7 @@ fn check(doc: &Document, uri: &Url, context: Context) -> Vec<Diagnostic> {
     if context.unsafe_catcodes {
         return vec![];
     }
+    let semantics = context.semantics.unwrap_or_default();
     let source = &doc.text.source;
     let bytes = source.as_bytes();
     let mut opaque: Vec<_> = doc
@@ -270,6 +390,7 @@ fn check(doc: &Document, uri: &Url, context: Context) -> Vec<Diagnostic> {
             .get(deferred_index)
             .is_some_and(|span| span.contains(&command.span.start))
             || doc.syntax.control_operands.contains(&command.span.start)
+            || semantics.operands.contains(&command.span.start)
         {
             continue;
         }
@@ -289,7 +410,9 @@ fn check(doc: &Document, uri: &Url, context: Context) -> Vec<Diagnostic> {
         }
         if command.name == "endcsname" {
             if let Some(start) = names.pop() {
-                opaque.push(start..command.span.end);
+                if !semantics.markers.contains_key(&start) {
+                    opaque.push(start..command.span.end);
+                }
             }
         }
         if command.name == "end"
@@ -431,7 +554,7 @@ fn check(doc: &Document, uri: &Url, context: Context) -> Vec<Diagnostic> {
                 continue;
             }
         }
-        if doc.syntax.punctuation_operands.contains(&at) {
+        if doc.syntax.punctuation_operands.contains(&at) || semantics.dollars.contains(&at) {
             at += 1;
             continue;
         }
@@ -441,14 +564,22 @@ fn check(doc: &Document, uri: &Url, context: Context) -> Vec<Diagnostic> {
             b'\\' => {
                 let token = syntax::token(source, at).unwrap_or("\\");
                 width = token.len();
-                if !doc.syntax.control_operands.contains(&at) {
-                    marker = match token {
-                        "\\(" => Some((Mode::Inline, true)),
-                        "\\[" => Some((Mode::Display, true)),
-                        "\\)" => Some((Mode::Inline, false)),
-                        "\\]" => Some((Mode::Display, false)),
-                        _ => None,
-                    };
+                if !doc.syntax.control_operands.contains(&at) && !semantics.operands.contains(&at) {
+                    if let Some((end, mode, opening)) = semantics.markers.get(&at) {
+                        width = end - at;
+                        marker = Some((*mode, *opening));
+                    } else {
+                        // The syntax command list indexes control words;
+                        // literal control-symbol delimiters still come from
+                        // the token stream, with the same operand filtering.
+                        marker = match token {
+                            "\\(" => Some((Mode::Inline, true)),
+                            "\\[" => Some((Mode::Display, true)),
+                            "\\)" => Some((Mode::Inline, false)),
+                            "\\]" => Some((Mode::Display, false)),
+                            _ => None,
+                        };
+                    }
                     if token == "\\endinput" {
                         open = None;
                         break;

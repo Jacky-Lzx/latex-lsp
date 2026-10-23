@@ -1415,6 +1415,26 @@ fn environment_start_signature(
     Some(signature)
 }
 
+// These control symbols can be called literally by csuse/csname without
+// widening the identifier grammar of labels, colors or other namespaces.
+fn static_invocation_name(name: &str) -> bool {
+    syntax::is_static_key(name) || matches!(name, "(" | ")" | "[" | "]")
+}
+fn literal_invocation_name(
+    source: &str,
+    commands: &[syntax::Command],
+    index: usize,
+) -> Option<std::ops::Range<usize>> {
+    let command = commands
+        .get(index)
+        .filter(|command| command.name == "csname")?;
+    let end = commands
+        .get(index + 1)
+        .filter(|command| command.name == "endcsname")?;
+    let name = syntax::skip_space(source, command.span.end).min(end.span.start)..end.span.start;
+    static_invocation_name(&source[name.clone()]).then_some(name)
+}
+
 fn body_alias(source: &str, body: &syntax::Argument) -> Option<String> {
     let start = syntax::skip_space(source, body.span.start);
     let token = syntax::token(source, start)?;
@@ -2562,12 +2582,23 @@ impl<'a> CommandSignatures<'a> {
     ) -> Option<(&'b str, usize, usize, bool)> {
         let command = parsed.commands.get(index)?;
         let local = &self.local;
+        // A literal csname's opening command reads a name; its closing
+        // command anchors the synthetic call below. Do not apply unknown
+        // macro argument heuristics to a name such as `[`.
+        if command.name == "csname"
+            && !local.contains_key("csname")
+            && !local.contains_key("endcsname")
+            && literal_invocation_name(source, &parsed.commands, index).is_some()
+        {
+            return None;
+        }
+
         // Grouped csuse names leave following spaces intact; a literal
         // endcsname, like an ordinary control word, discards lexical blanks.
         let named = command.argument.as_ref().filter(|argument| {
             command.name == "csuse"
                 && !local.contains_key("csuse")
-                && syntax::is_static_key(&argument.value)
+                && static_invocation_name(&argument.value)
         });
         let literal = (command.name == "endcsname"
             && !local.contains_key("csname")
@@ -2575,7 +2606,7 @@ impl<'a> CommandSignatures<'a> {
         .then(|| {
             index.checked_sub(1).and_then(|index| {
                 (!operands.contains(&parsed.commands[index].span.start))
-                    .then(|| syntax::literal_csname(source, &parsed.commands, index))
+                    .then(|| literal_invocation_name(source, &parsed.commands, index))
                     .flatten()
             })
         })
@@ -2614,12 +2645,12 @@ impl<'a> CommandSignatures<'a> {
                     && command
                         .argument
                         .as_ref()
-                        .is_some_and(|argument| syntax::is_static_key(&argument.value)) =>
+                        .is_some_and(|argument| static_invocation_name(&argument.value)) =>
             {
                 index
             }
             "csname" if self.command_unchanged("csname") && self.command_unchanged("endcsname") => {
-                syntax::literal_csname(source, &parsed.commands, index)?;
+                literal_invocation_name(source, &parsed.commands, index)?;
                 index + 1
             }
             _ => return None,
@@ -3301,6 +3332,19 @@ impl<'a> CommandSignatures<'a> {
         at: usize,
     ) -> bool {
         self.argument_tokens_with_literal(source, parsed, Some(at), false, false, true)
+            .contains(&at)
+            || self.possible_literal_argument(source, parsed, at)
+    }
+
+    /// Literal tokens consumed by a known parameter grammar. Math scanning
+    /// keeps legacy handling of unknown primitives such as sized TeX boxes.
+    pub(crate) fn known_literal_is_argument(
+        &self,
+        source: &str,
+        parsed: &syntax::Syntax,
+        at: usize,
+    ) -> bool {
+        self.argument_tokens_with_literal(source, parsed, Some(at), false, true, false)
             .contains(&at)
             || self.possible_literal_argument(source, parsed, at)
     }

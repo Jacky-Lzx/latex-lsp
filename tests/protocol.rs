@@ -27739,3 +27739,86 @@ fn forwarding_reference_keys_refresh_diagnostics_hints_completion_and_versioned_
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+fn math_semantics_diagnostics_refresh_from_unsaved_cross_file_alias_and_parameter_changes() {
+    use latex_lsp::text::Text;
+    for pull in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+        let macros = Url::from_file_path(dir.path().join("macros.tex")).unwrap();
+        let source = "\\documentclass{article}\r\n\\input{macros}\r\n\\begin{document}\r\n😀 \\csuse{open}x\\) \\take\\( Body\r\n\\end{document}";
+        let definition = r"\def\open{\(}\def\take#1{}";
+        std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+        std::fs::write(macros.to_file_path().unwrap(), definition).unwrap();
+        let mut server = Server::start();
+        let capabilities = if pull {
+            json!({"textDocument":{"diagnostic":{}}})
+        } else {
+            json!({})
+        };
+        server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":capabilities,"initializationOptions":{"distribution":{"enabled":false},"diagnostics":{"mathDelimiters":true}}}));
+        server.notify("initialized", json!({}));
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"languageId":"latex","version":5,"text":source}}),
+        );
+        server.notify("textDocument/didOpen", json!({"textDocument":{"uri":macros,"languageId":"latex","version":1,"text":definition}}));
+        let text = Text::new(source.into());
+        let mut id = 2;
+        for (version, definitions, expected, marker) in [
+            (1, definition, None, ""),
+            (
+                2,
+                r"\def\open{\[}\def\take#1{}",
+                Some("mismatched-math"),
+                r"\)",
+            ),
+            (3, r"\def\open{\(}\def\take{}", Some("unclosed-math"), r"\("),
+            (4, definition, None, ""),
+        ] {
+            if version > 1 {
+                server.notify("textDocument/didChange", json!({"textDocument":{"uri":macros,"version":version},"contentChanges":[{"text":definitions}]}));
+            }
+            let report = server.request(
+                id,
+                "textDocument/diagnostic",
+                json!({"textDocument":{"uri":uri}}),
+            );
+            id += 1;
+            let items = report["items"].as_array().unwrap();
+            assert_eq!(
+                items.len(),
+                usize::from(expected.is_some()),
+                "version {version}: {report}"
+            );
+            if let Some(code) = expected {
+                assert_eq!(items[0]["code"], code);
+                let at = source.find(marker).unwrap();
+                assert_eq!(items[0]["range"], json!(text.range(at, at + marker.len())));
+                if code == "mismatched-math" {
+                    let at = source.find(r"\csuse{open}").unwrap();
+                    assert_eq!(
+                        items[0]["relatedInformation"][0]["location"],
+                        json!({"uri":uri,"range":text.range(at, at + r"\csuse{open}".len())})
+                    );
+                }
+            }
+            if !pull {
+                let pushed = server.until(|message| {
+                    message["method"] == "textDocument/publishDiagnostics"
+                        && message["params"]["uri"] == uri.as_str()
+                        && message["params"]["version"] == 5
+                        && message["params"]["diagnostics"] == report["items"]
+                });
+                assert_eq!(pushed["params"]["diagnostics"], report["items"]);
+            }
+        }
+        server.request(id, "shutdown", Value::Null);
+        if pull {
+            assert_no_pushed_diagnostics(&server);
+        }
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}

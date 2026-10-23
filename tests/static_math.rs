@@ -334,3 +334,225 @@ fn real_tex_accepts_mixed_spellings_and_data_and_rejects_reported_errors() {
         );
     }
 }
+
+#[test]
+fn static_math_calls_follow_pure_aliases_and_literal_named_delimiters() {
+    for source in [
+        r"\def\open{\(}\open x\)",
+        r"\def\open{\[}\open x\]",
+        r"\newcommand{\open}{\(}\def\next{\open}\def\close{\)}\next x\close",
+        r"\csname (\endcsname x\)",
+        r"\csuse{[}x\csuse{]}",
+        r"\def\open{\(}\csuse{open}x\csname )\endcsname",
+        r"\def\open{\[}\csname open\endcsname x\]",
+        r"\def\open{\(}\textbf{\open x\)}",
+    ] {
+        let (ws, uri) = setup(source);
+        assert!(
+            math(&ws, &uri).is_empty(),
+            "{source}: {:?}",
+            math(&ws, &uri)
+        );
+    }
+}
+
+#[test]
+fn alias_math_errors_point_to_actual_invocations_and_link_their_openers() {
+    for (body, expected, marker, opener) in [
+        (r"\open x", "unclosed-math", r"\open", None),
+        (r"\csuse{open}x", "unclosed-math", r"\csuse{open}", None),
+        (
+            r"\csname open\endcsname x",
+            "unclosed-math",
+            r"\csname open\endcsname",
+            None,
+        ),
+        (
+            r"\open x\close",
+            "mismatched-math",
+            r"\close",
+            Some(r"\open"),
+        ),
+        (
+            r"\csuse{open}x\csuse{close}",
+            "mismatched-math",
+            r"\csuse{close}",
+            Some(r"\csuse{open}"),
+        ),
+        (
+            r"\open x\csname open\endcsname y\)",
+            "nested-math",
+            r"\csname open\endcsname",
+            Some(r"\open"),
+        ),
+        (r"\close", "unexpected-math-end", r"\close", None),
+    ] {
+        let prefix = "\\def\\open{\\(}\\def\\close{\\]}\r\n😀 ";
+        let source = format!("{prefix}{body}");
+        let (ws, uri) = setup(&source);
+        let items = math(&ws, &uri);
+        assert_eq!(items.len(), 1, "{source}: {items:?}");
+        assert_eq!(code(&items[0]), expected, "{source}");
+        let text = Text::new(source.clone());
+        let at = source.rfind(marker).unwrap();
+        assert_eq!(items[0].range, text.range(at, at + marker.len()));
+        if let Some(opener) = opener {
+            let at = prefix.len() + body.find(opener).unwrap();
+            assert_eq!(
+                items[0].related_information.as_ref().unwrap()[0]
+                    .location
+                    .range,
+                text.range(at, at + opener.len())
+            );
+        }
+    }
+}
+
+#[test]
+fn project_macro_arguments_do_not_execute_math_delimiters() {
+    for source in [
+        r"\def\take#1{}\take$ Body",
+        r"\def\take#1{}\take\( Body",
+        r"\def\take#1{}\take{\( Body}",
+        r"\newcommand{\take}[1][]{}\take[$] Body",
+        r"\def\take#1STOP{}\take\( $ STOP Body",
+        r"\def\open{\(}\def\take#1{}\take\open Body",
+        r"\def\open{\(}\def\take#1{}\take{\csuse{open} Body}",
+        r"\def\take#1{}\csuse{take}{$} Body",
+        r"\def\take#1{}\csname take\endcsname\( Body",
+        r"\def\take#1{}\def\next{\take}\next\( Body",
+        r"\def\open{\(}\noexpand\open Body",
+        r"\def\open{\(}\meaning\open Body",
+        r"\def\open{\(}\detokenize{\open x\]}",
+    ] {
+        let (ws, uri) = setup(source);
+        assert!(
+            math(&ws, &uri).is_empty(),
+            "{source}: {:?}",
+            math(&ws, &uri)
+        );
+    }
+    for source in [
+        r"\def\take#1{}\take H$x",
+        r"\textbf{$x}",
+        r"\def\open{\(}\emph{\open x}",
+    ] {
+        let (ws, uri) = setup(source);
+        assert_eq!(math(&ws, &uri).len(), 1, "{source}: {:?}", math(&ws, &uri));
+    }
+}
+
+#[test]
+fn math_call_meanings_follow_unsaved_project_definitions_and_ignore_independent_roots() {
+    let dir = tempfile::tempdir().unwrap();
+    for (name, source) in [
+        (
+            "main.tex",
+            r"\documentclass{article}\input{macros}\begin{document}\open x\)\end{document}",
+        ),
+        ("macros.tex", r"\def\open{\(}"),
+        ("independent.tex", r"\documentclass{article}\def\open{\[}"),
+    ] {
+        std::fs::write(dir.path().join(name), source).unwrap();
+    }
+    let mut ws = Workspace {
+        config: enabled(),
+        ..Workspace::default()
+    };
+    ws.add_root(dir.path().into());
+    let uri = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let macros = Url::from_file_path(dir.path().join("macros.tex")).unwrap();
+    assert!(math(&ws, &uri).is_empty());
+    ws.open(macros.clone(), r"\def\open{\[}".into(), 2);
+    let items = math(&ws, &uri);
+    assert_eq!(items.len(), 1, "{items:?}");
+    assert_eq!(code(&items[0]), "mismatched-math");
+    ws.open(macros, r"\def\open{\(}".into(), 3);
+    assert!(math(&ws, &uri).is_empty());
+}
+
+#[test]
+fn shared_math_aliases_require_consistent_interpretations_in_all_consumers() {
+    let dir = tempfile::tempdir().unwrap();
+    for (name, source) in [
+        (
+            "a.tex",
+            r"\documentclass{article}\def\open{\(}\begin{document}\input{shared}\end{document}",
+        ),
+        (
+            "b.tex",
+            r"\documentclass{article}\def\open{\[}\begin{document}\input{shared}\end{document}",
+        ),
+        ("shared.tex", r"\open x\]"),
+    ] {
+        std::fs::write(dir.path().join(name), source).unwrap();
+    }
+    let mut ws = Workspace {
+        config: enabled(),
+        ..Workspace::default()
+    };
+    ws.add_root(dir.path().into());
+    let shared = Url::from_file_path(dir.path().join("shared.tex")).unwrap();
+    assert!(math(&ws, &shared).is_empty());
+    let b = Url::from_file_path(dir.path().join("b.tex")).unwrap();
+    ws.open(
+        b,
+        r"\documentclass{article}\def\open{\(}\begin{document}\input{shared}\end{document}".into(),
+        2,
+    );
+    let items = math(&ws, &shared);
+    assert_eq!(items.len(), 1, "{items:?}");
+    assert_eq!(code(&items[0]), "mismatched-math");
+}
+
+#[test]
+fn math_analysis_skips_incomplete_projects_and_bounds_literal_argument_queries() {
+    let (mut ws, uri) = setup("$x");
+    ws.index_truncated.insert("maxFiles".into());
+    assert!(math(&ws, &uri).is_empty());
+    let source = format!("{}{}", r"\relax ".repeat(2100), "$".repeat(2001));
+    let (ws, uri) = setup(&source);
+    assert!(math(&ws, &uri).is_empty());
+}
+
+#[test]
+#[ignore = "requires pdflatex and etoolbox"]
+fn real_math_alias_and_parameter_contexts_match_tex_success_and_failure() {
+    for (body, valid) in [
+        (r"\def\open{\(}\open x\)", true),
+        (r"\def\open{\[}\def\close{\]}\csuse{open}x\close", true),
+        (r"\csname (\endcsname x\)", true),
+        (r"\def\take#1{}\take$ Body", true),
+        (r"\def\take#1{}\take\( Body", true),
+        (r"\def\take#1{}\take{\( Body}", true),
+        (r"\def\open{\(}\open x\]", false),
+        (r"\def\open{\(}\csuse{open}x", false),
+    ] {
+        let source = format!("\\documentclass{{article}}\n\\usepackage{{etoolbox}}\n\\begin{{document}}\n{body}\n\\end{{document}}\n");
+        let (ws, uri) = setup(&source);
+        assert_eq!(
+            math(&ws, &uri).is_empty(),
+            valid,
+            "{source}: {:?}",
+            math(&ws, &uri)
+        );
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("main.tex"), &source).unwrap();
+        let output = std::process::Command::new("pdflatex")
+            .args([
+                "-no-shell-escape",
+                "-interaction=nonstopmode",
+                "-halt-on-error",
+                "main.tex",
+            ])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.success(),
+            valid,
+            "{body}: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+}

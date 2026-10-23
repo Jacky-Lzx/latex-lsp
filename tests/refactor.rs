@@ -481,6 +481,9 @@ fn real_refactors_after_balanced_math_groups_and_named_environments_compile() {
 #[test]
 fn pure_forwarding_math_delimiters_block_structural_refactors_inside_formulae() {
     for source in [
+        r"\begin{document}\csuse{(}Hello ¦world¦\)\end{document}",
+        r"\begin{document}\csname (\endcsname Hello ¦world¦\)\end{document}",
+        r"\begin{document}\csuse{[}Hello ¦world¦\]\end{document}",
         r"\def\open{\(}\begin{document}\open Hello ¦world¦\)\end{document}",
         r"\def\open{\[}\begin{document}\open Hello ¦world¦\]\end{document}",
         r"\newcommand{\open}{\(}\def\next{\open}\begin{document}\next Hello ¦world¦\)\end{document}",
@@ -499,6 +502,8 @@ fn pure_forwarding_math_delimiters_block_structural_refactors_inside_formulae() 
 #[test]
 fn balanced_math_aliases_redefinitions_and_parameter_data_keep_plain_body_refactorable() {
     for source in [
+        r"\begin{document}\csuse{(}x\csuse{)}¦body text¦\end{document}",
+        r"\begin{document}\csname [\endcsname x\csname ]\endcsname ¦body text¦\end{document}",
         r"\def\open{\(}\def\close{\)}\begin{document}\open x\close ¦body text¦\end{document}",
         r"\def\open{\[}\def\close{\]}\begin{document}\csuse{open}x\csname close\endcsname ¦body text¦\end{document}",
         r"\newcommand{\take}[1]{}\def\open{\(}\begin{document}\take{\open}¦body text¦\end{document}",
