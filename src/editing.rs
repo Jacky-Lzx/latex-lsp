@@ -1,5 +1,5 @@
 use crate::{
-    features, navigation, spelling_fixes,
+    features, navigation, spelling_fixes, syntax,
     workspace::{Document, Workspace},
 };
 use tower_lsp::lsp_types::*;
@@ -242,6 +242,92 @@ fn symbol_spans(
     }
 }
 
+fn reference_selection_spans(doc: &Document, spans: &mut Vec<std::ops::Range<usize>>) {
+    let source = &doc.text.source;
+    if doc.kind == crate::workspace::DocumentKind::Bibtex {
+        spans.extend(
+            doc.syntax
+                .citation_references
+                .iter()
+                .chain(&doc.syntax.bibliography_aliases)
+                .map(|entry| entry.span.clone()),
+        );
+    }
+    for argument in doc
+        .syntax
+        .citation_fields
+        .iter()
+        .map(|field| &field.argument)
+        .chain(&doc.syntax.bibliography_alias_values)
+    {
+        spans.extend([argument.span.clone(), argument.outer_span.clone()]);
+    }
+    for command in &doc.syntax.commands {
+        if doc.syntax.control_operands.contains(&command.span.start) {
+            continue;
+        }
+        if let Some(style) = crate::citations::style(&command.name) {
+            let arguments = crate::citations::arguments(source, command.span.end, style);
+            for field in &arguments.fields {
+                spans.extend([
+                    field.argument.span.clone(),
+                    field.argument.outer_span.clone(),
+                ]);
+            }
+            for argument in arguments.keys() {
+                spans.extend(crate::citations::key_spans(source, argument, style));
+            }
+            if let Some(last) = arguments.fields.last() {
+                // The diagnostic end includes a lookahead token. A selection
+                // ends at the final actual argument, before any following text.
+                spans.push(command.span.start..last.argument.outer_span.end);
+            }
+        } else if let Some(argument) = &command.argument {
+            if syntax::is_citation(&command.name) {
+                if syntax::is_single_citation(&command.name) {
+                    if syntax::is_static_citation_key(&argument.value) {
+                        spans.push(argument.span.clone());
+                    }
+                } else {
+                    spans.extend(syntax::citation_list_spans(source, argument.span.clone()));
+                }
+                if command.name == "defcitealias" {
+                    if let Some((display, _)) = syntax::group(
+                        source,
+                        syntax::skip_space(source, argument.outer_span.end),
+                        b'{',
+                        b'}',
+                    ) {
+                        spans.extend([
+                            display.span,
+                            display.outer_span.clone(),
+                            command.span.start..display.outer_span.end,
+                        ]);
+                    }
+                }
+            } else if syntax::is_reference(&command.name) {
+                if syntax::is_single_reference(&command.name) {
+                    if syntax::is_static_reference_key(&argument.value) {
+                        spans.push(argument.span.clone());
+                    }
+                } else {
+                    spans.extend(syntax::reference_list_spans(source, argument.span.clone()));
+                }
+            }
+        }
+        for argument in syntax::separate_label_argument(source, command)
+            .into_iter()
+            .chain(syntax::range_reference_end(source, command))
+        {
+            spans.extend([
+                argument.span,
+                argument.outer_span.clone(),
+                command.span.start..argument.outer_span.end,
+            ]);
+        }
+    }
+}
+
 /// Return strict containment chains, preserving the client's input order.
 pub fn selection_ranges(doc: &Document, positions: &[Position]) -> Option<Vec<SelectionRange>> {
     let source = &doc.text.source;
@@ -255,6 +341,21 @@ pub fn selection_ranges(doc: &Document, positions: &[Position]) -> Option<Vec<Se
             spans.push(command.span.start..argument.outer_span.end);
         }
     }
+    reference_selection_spans(doc, &mut spans);
+    spans.extend(
+        doc.syntax
+            .bibliography_strings
+            .selection_spans
+            .iter()
+            .cloned(),
+    );
+    spans.extend(
+        doc.syntax
+            .bibliography_completion
+            .types
+            .iter()
+            .filter_map(|ty| ty.entry_span.clone()),
+    );
     spans.extend(doc.syntax.ignored.iter().cloned());
     symbol_spans(doc, &features::symbols(doc), &mut spans);
     for fold in navigation::folding_ranges(doc, None) {
@@ -268,7 +369,26 @@ pub fn selection_ranges(doc: &Document, positions: &[Position]) -> Option<Vec<Se
     let mut groups = Vec::new();
     let mut i = 0;
     let mut ignored = doc.syntax.ignored.iter().peekable();
+    let mut literals = doc
+        .syntax
+        .bibliography_strings
+        .literal_spans
+        .iter()
+        .peekable();
+    let mut literal_scope: Option<(usize, usize)> = None;
     while i < source.len() {
+        // Unmatched punctuation in one literal cannot pair with a later value.
+        if let Some((_, depth)) = literal_scope.filter(|(end, _)| *end <= i) {
+            groups.truncate(depth);
+            literal_scope = None;
+        }
+        while literals.peek().is_some_and(|span| span.end <= i) {
+            literals.next();
+        }
+        if let Some(span) = literals.peek().filter(|span| span.start == i) {
+            literal_scope = Some((span.end, groups.len()));
+            literals.next();
+        }
         while ignored.peek().is_some_and(|span| span.end <= i) {
             ignored.next();
         }
@@ -280,6 +400,15 @@ pub fn selection_ranges(doc: &Document, positions: &[Position]) -> Option<Vec<Se
             continue;
         }
         match source.as_bytes()[i] {
+            b'%' if doc.kind == crate::workspace::DocumentKind::Bibtex
+                && literal_scope.is_none() =>
+            {
+                let start = i;
+                while i < source.len() && source.as_bytes()[i] != b'\n' {
+                    i += 1;
+                }
+                spans.push(start..i);
+            }
             b'\\' => {
                 i += 1;
                 if i < source.len() {
@@ -304,6 +433,13 @@ pub fn selection_ranges(doc: &Document, positions: &[Position]) -> Option<Vec<Se
                 i += 1;
             }
             _ => i += 1,
+        }
+    }
+    // Comment spans end immediately before LF and can therefore include CR.
+    // LSP line columns exclude line endings, including the CR in CRLF.
+    for span in &mut spans {
+        if span.start < span.end && source[..span.end].ends_with('\r') {
+            span.end -= 1;
         }
     }
     positions
@@ -337,7 +473,16 @@ pub fn selection_ranges(doc: &Document, positions: &[Position]) -> Option<Vec<Se
                 .filter(|span| span.start <= offset && offset <= span.end)
                 .cloned()
                 .collect();
-            candidates.push(line_start..line_end);
+            let line = line_start..line_end;
+            // A partial line at the end of a multiline call can extend into
+            // following prose. Do not let that crossing range displace the
+            // enclosing argument or command from the containment chain.
+            if candidates.iter().all(|span| {
+                span.start <= line.start && line.end <= span.end
+                    || line.start <= span.start && span.end <= line.end
+            }) {
+                candidates.push(line);
+            }
             if start < end {
                 candidates.push(start..end);
             }

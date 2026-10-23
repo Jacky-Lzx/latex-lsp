@@ -18157,3 +18157,371 @@ fn quoted_citation_keys_complete_and_rename_across_files_with_incremental_update
         server.wait_exit(0);
     }
 }
+
+#[test]
+fn citation_and_bibliography_selection_ranges_refresh_incremental_utf16_edits_over_stdio() {
+    use latex_lsp::text::Text;
+    use tower_lsp::lsp_types::{Range, SelectionRange};
+    fn check(
+        selection: &Value,
+        source: &str,
+        position: tower_lsp::lsp_types::Position,
+        expected: &[&str],
+    ) {
+        let text = Text::new(source.into());
+        let selection: SelectionRange = serde_json::from_value(selection.clone()).unwrap();
+        let mut current = &selection;
+        let mut ranges = vec![];
+        loop {
+            assert!(current.range.start <= position && position <= current.range.end);
+            assert!(text.offset(current.range.start).is_some());
+            assert!(
+                text.offset(current.range.end).is_some(),
+                "{source:?}: {:?}",
+                current.range
+            );
+            ranges.push(current.range);
+            let Some(parent) = &current.parent else {
+                break;
+            };
+            assert!(
+                parent.range.start <= current.range.start && current.range.end <= parent.range.end
+            );
+            assert_ne!(parent.range, current.range);
+            current = parent;
+        }
+        for needle in expected {
+            let start = source.find(needle).unwrap();
+            assert!(
+                ranges.contains(&text.range(start, start + needle.len())),
+                "missing {needle:?} in {ranges:?}: {source}"
+            );
+        }
+        assert_eq!(ranges.last(), Some(&text.range(0, source.len())));
+    }
+    let mut server = Server::start();
+    let uri = Url::parse("untitled:selection.tex").unwrap();
+    let bib = Url::parse("untitled:selection.data").unwrap();
+    let initialized = server.request(1, "initialize", json!({"processId":null,"capabilities":{}}));
+    assert_eq!(initialized["capabilities"]["selectionRangeProvider"], true);
+    server.notify("initialized", json!({}));
+    let call = "\\parencites(Global note with enough words to cross the final line)\r\n[After]{other,O\"Connor,last}";
+    let source = format!("% 😀\r\n{call} Following prose\r\n");
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"latex","version":1,"text":source}}),
+    );
+    let text = Text::new(source.clone());
+    let key_start = source.find("O\"Connor").unwrap();
+    let positions = [
+        text.position(source.find("Connor").unwrap() + 1),
+        text.position(source.find("Global").unwrap() + 1),
+        text.position(source.len()),
+        text.position(0),
+    ];
+    let selections = server.request(
+        2,
+        "textDocument/selectionRange",
+        json!({"textDocument":{"uri":uri},"positions":positions}),
+    );
+    assert_eq!(selections.as_array().unwrap().len(), positions.len());
+    check(
+        &selections[0],
+        &source,
+        positions[0],
+        &["O\"Connor", "other,O\"Connor,last", call],
+    );
+    check(
+        &selections[1],
+        &source,
+        positions[1],
+        &[
+            "(Global note with enough words to cross the final line)",
+            call,
+        ],
+    );
+    check(&selections[2], &source, positions[2], &[]);
+    check(&selections[3], &source, positions[3], &["% 😀"]);
+    let key_range = text.range(key_start, key_start + "O\"Connor".len());
+    server.notify("textDocument/didChange",json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"range":key_range,"text":"(中文😀)"}]}));
+    let updated = source.replace("O\"Connor", "(中文😀)");
+    let position = Text::new(updated.clone()).position(updated.find("中文").unwrap() + 3);
+    let selections = server.request(
+        3,
+        "textDocument/selectionRange",
+        json!({"textDocument":{"uri":uri},"positions":[position]}),
+    );
+    check(
+        &selections[0],
+        &updated,
+        position,
+        &[
+            "(中文😀)",
+            "other,(中文😀),last",
+            &call.replace("O\"Connor", "(中文😀)"),
+        ],
+    );
+    // Breaking the key group must discard the prior static key selection.
+    let end = updated.find(",last}").unwrap() + ",last".len();
+    let text = Text::new(updated.clone());
+    server.notify("textDocument/didChange",json!({"textDocument":{"uri":uri,"version":3},"contentChanges":[{"range":text.range(end,end+1),"text":""}]}));
+    let broken = updated.replacen(",last}", ",last", 1);
+    let selections = server.request(
+        4,
+        "textDocument/selectionRange",
+        json!({"textDocument":{"uri":uri},"positions":[position]}),
+    );
+    let mut selection: SelectionRange = serde_json::from_value(selections[0].clone()).unwrap();
+    let key = Text::new(broken.clone()).range(key_start, key_start + "(中文😀)".len());
+    loop {
+        assert_ne!(selection.range, key);
+        let Some(parent) = selection.parent else {
+            break;
+        };
+        selection = *parent;
+    }
+    let bib_source = "% 😀\r\n@misc{child,\r\n related = \"other,\r\n book(old), last\"\r\n}\r\n";
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":bib,"languageId":"bibtex","version":1,"text":bib_source}}),
+    );
+    let text = Text::new(bib_source.into());
+    let position = text.position(bib_source.find("old").unwrap() + 1);
+    let selections = server.request(
+        5,
+        "textDocument/selectionRange",
+        json!({"textDocument":{"uri":bib},"positions":[position]}),
+    );
+    check(
+        &selections[0],
+        bib_source,
+        position,
+        &[
+            "book(old)",
+            "other,\r\n book(old), last",
+            "\"other,\r\n book(old), last\"",
+            "related = \"other,\r\n book(old), last\"",
+            "@misc{child,\r\n related = \"other,\r\n book(old), last\"\r\n}",
+        ],
+    );
+    let start = bib_source.find("\"other").unwrap();
+    let end = bib_source.rfind('"').unwrap() + 1;
+    server.notify("textDocument/didChange",json!({"textDocument":{"uri":bib,"version":2},"contentChanges":[{"range":text.range(start,end),"text":"{other,\r\n O\"Connor, last}"}]}));
+    let updated = bib_source.replace(
+        "\"other,\r\n book(old), last\"",
+        "{other,\r\n O\"Connor, last}",
+    );
+    let position = Text::new(updated.clone()).position(updated.find("Connor").unwrap() + 1);
+    let selections = server.request(
+        6,
+        "textDocument/selectionRange",
+        json!({"textDocument":{"uri":bib},"positions":[position]}),
+    );
+    check(
+        &selections[0],
+        &updated,
+        position,
+        &[
+            "O\"Connor",
+            "other,\r\n O\"Connor, last",
+            "{other,\r\n O\"Connor, last}",
+            "related = {other,\r\n O\"Connor, last}",
+        ],
+    );
+    // Selection requests reject a UTF-16 position inside an emoji surrogate pair.
+    server.send(json!({"jsonrpc":"2.0","id":7,"method":"textDocument/selectionRange","params":{"textDocument":{"uri":uri},"positions":[{"line":0,"character":3}]}}));
+    let rejected = server.until(|message| message["id"] == 7);
+    assert_eq!(rejected["error"]["code"], -32602);
+    server.notify("textDocument/didClose", json!({"textDocument":{"uri":bib}}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":bib,"languageId":"bibtex","version":1,"text":bib_source}}),
+    );
+    let selections = server.request(8,"textDocument/selectionRange",json!({"textDocument":{"uri":bib},"positions":[text.position(bib_source.find("old").unwrap()+1)]}));
+    let restored: SelectionRange = serde_json::from_value(selections[0].clone()).unwrap();
+    assert_eq!(
+        restored.range,
+        Range::new(
+            text.position(bib_source.find("old").unwrap()),
+            text.position(bib_source.find("old").unwrap() + 3)
+        )
+    );
+    server.request(9, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+fn bibtex_expression_selection_ranges_refresh_literals_concatenations_and_preambles_over_stdio() {
+    use latex_lsp::text::Text;
+    use tower_lsp::lsp_types::SelectionRange;
+    fn selected(
+        server: &mut Server,
+        id: u64,
+        uri: &Url,
+        source: &str,
+        needle: &str,
+        expected: &[&str],
+    ) {
+        let text = Text::new(source.into());
+        let cursor = text.position(source.find(needle).unwrap() + 1);
+        let response = server.request(
+            id,
+            "textDocument/selectionRange",
+            json!({"textDocument":{"uri":uri},"positions":[cursor]}),
+        );
+        let selection: SelectionRange = serde_json::from_value(response[0].clone()).unwrap();
+        let mut current = &selection;
+        let mut ranges = vec![];
+        loop {
+            assert!(current.range.start <= cursor && cursor <= current.range.end);
+            assert!(text.offset(current.range.start).is_some());
+            assert!(text.offset(current.range.end).is_some());
+            ranges.push(current.range);
+            let Some(parent) = &current.parent else {
+                break;
+            };
+            assert!(
+                parent.range.start <= current.range.start && current.range.end <= parent.range.end
+            );
+            assert_ne!(parent.range, current.range);
+            current = parent;
+        }
+        for expected in expected {
+            let start = source.find(expected).unwrap();
+            assert!(
+                ranges.contains(&text.range(start, start + expected.len())),
+                "missing {expected:?} in {ranges:?}"
+            );
+        }
+        assert_eq!(ranges.last(), Some(&text.range(0, source.len())));
+    }
+    let mut server = Server::start();
+    let uri = Url::parse("untitled:expression.data").unwrap();
+    server.request(1, "initialize", json!({"processId":null,"capabilities":{}}));
+    server.notify("initialized", json!({}));
+    let source = "% 😀\r\n@string{Journal={Defined}}\r\n@misc{entry,\r\n title = \"Some title\",year=2026\r\n}\r\n@preamble(Journal # \"First words\")\r\n";
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"bibtex","version":1,"text":source}}),
+    );
+    selected(
+        &mut server,
+        2,
+        &uri,
+        source,
+        "Some",
+        &[
+            "Some title",
+            "\"Some title\"",
+            "title = \"Some title\"",
+            "@misc{entry,\r\n title = \"Some title\",year=2026\r\n}",
+        ],
+    );
+    selected(
+        &mut server,
+        3,
+        &uri,
+        source,
+        "First",
+        &[
+            "First words",
+            "\"First words\"",
+            "Journal # \"First words\"",
+            "@preamble(Journal # \"First words\")",
+        ],
+    );
+    let text = Text::new(source.into());
+    let start = source.find("\"Some title\"").unwrap();
+    let replacement = "{中文😀 {Nested words}} # Journal # \"Tail text\"";
+    server.notify("textDocument/didChange",json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"range":text.range(start,start+"\"Some title\"".len()),"text":replacement}]}));
+    let updated = source.replace("\"Some title\"", replacement);
+    selected(
+        &mut server,
+        4,
+        &uri,
+        &updated,
+        "Nested",
+        &[
+            "Nested words",
+            "{Nested words}",
+            "中文😀 {Nested words}",
+            "{中文😀 {Nested words}}",
+            replacement,
+            &format!("title = {replacement}"),
+        ],
+    );
+    selected(
+        &mut server,
+        5,
+        &uri,
+        &updated,
+        "Tail",
+        &["Tail text", "\"Tail text\"", replacement],
+    );
+    // Changing only the last operand leaves abbreviation navigation intact.
+    let journal = updated.find("# Journal #").unwrap() + 2;
+    let definitions = server.request(6,"textDocument/definition",json!({"textDocument":{"uri":uri},"position":Text::new(updated.clone()).position(journal+1)}));
+    assert_eq!(definitions.as_array().unwrap().len(), 1);
+    assert_eq!(
+        definitions[0]["range"],
+        json!(Text::new(updated.clone()).range(
+            updated.find("Journal").unwrap(),
+            updated.find("Journal").unwrap() + 7
+        ))
+    );
+    let text = Text::new(updated.clone());
+    let tail = updated.find("\"Tail text\"").unwrap();
+    server.notify("textDocument/didChange",json!({"textDocument":{"uri":uri,"version":3},"contentChanges":[{"range":text.range(tail,updated.len()),"text":"\"Unfinished tail  "}]}));
+    let unfinished = format!("{}\"Unfinished tail  ", &updated[..tail]);
+    selected(
+        &mut server,
+        7,
+        &uri,
+        &unfinished,
+        "Unfinished",
+        &[
+            "Unfinished tail  ",
+            "\"Unfinished tail  ",
+            "{中文😀 {Nested words}} # Journal # \"Unfinished tail  ",
+            "title = {中文😀 {Nested words}} # Journal # \"Unfinished tail  ",
+        ],
+    );
+    server.notify("textDocument/didClose", json!({"textDocument":{"uri":uri}}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"bibtex","version":1,"text":source}}),
+    );
+    selected(
+        &mut server,
+        8,
+        &uri,
+        source,
+        "Some",
+        &["Some title", "\"Some title\""],
+    );
+    let preamble = source.find("@preamble").unwrap();
+    let text = Text::new(source.into());
+    server.notify("textDocument/didChange",json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"range":text.range(preamble,source.len()),"text":"@string(Alias = Journal # \"New words\")\r\n"}]}));
+    let updated = format!(
+        "{}@string(Alias = Journal # \"New words\")\r\n",
+        &source[..preamble]
+    );
+    selected(
+        &mut server,
+        9,
+        &uri,
+        &updated,
+        "New",
+        &[
+            "New words",
+            "\"New words\"",
+            "Journal # \"New words\"",
+            "Alias = Journal # \"New words\"",
+            "@string(Alias = Journal # \"New words\")",
+        ],
+    );
+    server.request(10, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
