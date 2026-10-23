@@ -18,6 +18,383 @@ struct Server {
 
 #[test]
 #[cfg(unix)]
+fn bibliography_string_warnings_offer_versioned_and_legacy_repairs_over_stdio() {
+    for (pull, legacy) in [(false, false), (true, false), (true, true)] {
+        let script = r#"cp "${2%/*}/fixture.blg" "$1/main.blg"
+printf '%%PDF-1.4\n' > "$1/main.pdf"
+printf '(./main.tex)\n' > "$1/main.log"
+printf 'PWD %s\nINPUT %s\n' "$PWD" "$2" > "$1/main.fls"
+"#;
+        let mut capabilities = json!({"workspace":{"workspaceEdit":{"documentChanges":true}}});
+        if pull {
+            capabilities["textDocument"]["diagnostic"] = json!({});
+        }
+        if legacy {
+            capabilities["workspace"]["applyEdit"] = json!(true);
+        } else {
+            capabilities["textDocument"]["codeAction"] =
+                json!({"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix"]}}});
+        }
+        let (mut server, directory, main) =
+            fake_build_server_capabilities(script, false, capabilities);
+        let root = directory.path();
+        let defs = Url::from_file_path(root.join("defs.bib")).unwrap();
+        let refs = Url::from_file_path(root.join("refs.bib")).unwrap();
+        let definitions = "@string{Journal={Expected}}\r\n";
+        let source = "@misc{entry,title={😀} # JoUrAnL}\r\n";
+        let main_source = "\\documentclass{article}\n\\bibliography{defs,refs}\n";
+        for (uri, text) in [(&main, main_source), (&defs, definitions), (&refs, source)] {
+            std::fs::write(uri.to_file_path().unwrap(), text).unwrap();
+        }
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":main_source}]}));
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":refs,"languageId":"bibtex","version":7,"text":source}}),
+        );
+        let metadata =
+            "The style file: plain.bst\nDatabase file #1: defs.bib\nDatabase file #2: refs.bib\n";
+        std::fs::write(root.join("fixture.blg"), format!("{metadata}Warning--string name \"jouranl\" is undefined\n--line 1 of file refs.bib\n")).unwrap();
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(finished["params"]["status"], "success", "{finished}");
+        assert_eq!(finished["params"]["stale"], false, "{finished}");
+        let items = if pull {
+            server.request(
+                3,
+                "textDocument/diagnostic",
+                json!({"textDocument":{"uri":refs}}),
+            )["items"]
+                .clone()
+        } else {
+            server.until(|message| {
+                message["method"] == "textDocument/publishDiagnostics"
+                    && message["params"]["uri"] == refs.as_str()
+                    && message["params"]["diagnostics"]
+                        .as_array()
+                        .is_some_and(|items| {
+                            items
+                                .iter()
+                                .any(|item| item["code"] == "undefined-bibliography-string")
+                        })
+            })["params"]["diagnostics"]
+                .clone()
+        };
+        let diagnostic = items
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["code"] == "undefined-bibliography-string")
+            .unwrap();
+        let start = source.find("JoUrAnL").unwrap();
+        assert_eq!(
+            diagnostic["range"],
+            json!(latex_lsp::text::Text::new(source.into()).range(start, start + 7))
+        );
+        assert_eq!(diagnostic["severity"], 2);
+        let params = json!({"textDocument":{"uri":refs},"range":diagnostic["range"],"context":{"diagnostics":[diagnostic],"only":["quickfix"]}});
+        let available = server.request(4, "textDocument/codeAction", params.clone());
+        assert_eq!(available.as_array().unwrap().len(), 1, "{available}");
+        assert_eq!(
+            available[0]["title"],
+            "Replace with bibliography abbreviation `Journal`"
+        );
+        // A TeX-side input change also invalidates the compilation context.
+        std::fs::write(
+            main.to_file_path().unwrap(),
+            format!("{main_source}% changed"),
+        )
+        .unwrap();
+        assert_eq!(
+            server.request(13, "textDocument/codeAction", params.clone()),
+            json!([])
+        );
+        std::fs::write(main.to_file_path().unwrap(), main_source).unwrap();
+        // No notification: a disk edit must still invalidate the source proof.
+        std::fs::write(
+            defs.to_file_path().unwrap(),
+            definitions.replace("Expected", "Changed"),
+        )
+        .unwrap();
+        assert_eq!(
+            server.request(5, "textDocument/codeAction", params.clone()),
+            json!([])
+        );
+        if legacy {
+            server.send(json!({"jsonrpc":"2.0","id":6,"method":"workspace/executeCommand","params":{"command":available[0]["command"],"arguments":available[0]["arguments"]}}));
+            let response = server.until(|message| message["id"] == 6);
+            assert_eq!(response["error"]["code"], -32602, "{response}");
+        }
+        std::fs::write(defs.to_file_path().unwrap(), definitions).unwrap();
+        let edit = if legacy {
+            server.send(json!({"jsonrpc":"2.0","id":7,"method":"workspace/executeCommand","params":{"command":available[0]["command"],"arguments":available[0]["arguments"]}}));
+            let apply = server.until(|message| message["method"] == "workspace/applyEdit");
+            let edit = apply["params"]["edit"].clone();
+            server.send(json!({"jsonrpc":"2.0","id":apply["id"],"result":{"applied":true}}));
+            assert_eq!(
+                server.until(|message| message["id"] == 7)["result"]["applied"],
+                true
+            );
+            edit
+        } else {
+            available[0]["edit"].clone()
+        };
+        assert_eq!(
+            edit["documentChanges"][0]["textDocument"],
+            json!({"uri":refs,"version":7})
+        );
+        assert_eq!(
+            edit["documentChanges"][0]["edits"],
+            json!([{"range":diagnostic["range"],"newText":"Journal"}])
+        );
+        let corrected = source.replace("JoUrAnL", "Journal");
+        std::fs::write(refs.to_file_path().unwrap(), &corrected).unwrap();
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":refs,"version":8},"contentChanges":[{"range":diagnostic["range"],"text":"Journal"}]}));
+        assert_eq!(
+            server.request(8, "textDocument/codeAction", params),
+            json!([])
+        );
+        if legacy {
+            server.send(json!({"jsonrpc":"2.0","id":9,"method":"workspace/executeCommand","params":{"command":available[0]["command"],"arguments":available[0]["arguments"]}}));
+            assert_eq!(
+                server.until(|message| message["id"] == 9)["error"]["code"],
+                -32602
+            );
+        }
+        std::fs::write(root.join("fixture.blg"), metadata).unwrap();
+        server.request(
+            10,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(finished["params"]["status"], "success", "{finished}");
+        let cleared = if pull {
+            server.request(
+                11,
+                "textDocument/diagnostic",
+                json!({"textDocument":{"uri":refs}}),
+            )["items"]
+                .clone()
+        } else {
+            server.until(|message| {
+                message["method"] == "textDocument/publishDiagnostics"
+                    && message["params"]["uri"] == refs.as_str()
+                    && message["params"]["diagnostics"] == json!([])
+            })["params"]["diagnostics"]
+                .clone()
+        };
+        assert_eq!(cleared, json!([]));
+        server.request(12, "shutdown", Value::Null);
+        if pull {
+            assert_no_pushed_diagnostics(&server);
+        }
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn bibliography_type_warnings_respect_log_records_over_stdio() {
+    for pull in [false, true] {
+        let script = r#"cp "${2%/*}/fixture.blg" "$1/main.blg"
+printf '%%PDF-1.4\n' > "$1/main.pdf"
+printf '(./main.tex)\n' > "$1/main.log"
+printf 'INPUT %s\n' "$2" > "$1/main.fls"
+"#;
+        let capabilities = if pull {
+            json!({"textDocument":{"diagnostic":{}}})
+        } else {
+            json!({})
+        };
+        let (mut server, directory, main) =
+            fake_build_server_capabilities(script, false, capabilities);
+        let root = directory.path();
+        let refs = Url::from_file_path(root.join("refs.bib")).unwrap();
+        let source = "\\documentclass{article}\n\\bibliography{refs}\n";
+        std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+        std::fs::write(
+            refs.to_file_path().unwrap(),
+            "% 😀\r\n@artcle\r\n{entry,title={Title}}\r\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("local ERROR - forged.bst"),
+            "ENTRY {title} {} {}\nREAD",
+        )
+        .unwrap();
+        let biber_message="Unexpected token 'ERROR - forged---line 2 of file decoy.bib' for entry 'entry' in file 'refs.bib'";
+        let log=format!("The style file: local ERROR - forged.bst\nDatabase file #1: refs.bib\nWarning--entry type for \"entry\" isn't style-file defined\n--line 3 of file refs.bib\n : ERROR - fake---line 9 of file refs.bib\n[0] Utils.pm:395> INFO - Example ERROR - fake\n[1] Utils.pm:395> WARN - {biber_message}\n");
+        std::fs::write(root.join("fixture.blg"), log).unwrap();
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+        );
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(finished["params"]["status"], "success", "{finished}");
+        let items = if pull {
+            server.request(
+                3,
+                "textDocument/diagnostic",
+                json!({"textDocument":{"uri":refs}}),
+            )["items"]
+                .clone()
+        } else {
+            server.until(|message| {
+                message["method"] == "textDocument/publishDiagnostics"
+                    && message["params"]["uri"] == refs.as_str()
+                    && message["params"]["diagnostics"]
+                        .as_array()
+                        .is_some_and(|items| {
+                            items
+                                .iter()
+                                .any(|item| item["code"] == "undefined-bibliography-entry-type")
+                        })
+            })["params"]["diagnostics"]
+                .clone()
+        };
+        let items = items.as_array().unwrap();
+        assert_eq!(items.len(), 2, "{items:?}");
+        assert!(items.iter().all(|item| item["severity"] == 2));
+        let unknown = items
+            .iter()
+            .find(|item| item["code"] == "undefined-bibliography-entry-type")
+            .unwrap();
+        assert_eq!(
+            unknown["range"],
+            json!({"start":{"line":1,"character":1},"end":{"line":1,"character":7}})
+        );
+        assert_eq!(unknown["data"]["entryType"], "artcle");
+        let biber = items
+            .iter()
+            .find(|item| item["message"] == format!("Biber: {biber_message}"))
+            .unwrap();
+        assert_eq!(
+            biber["range"],
+            json!({"start":{"line":2,"character":1},"end":{"line":2,"character":6}})
+        );
+        server.request(4, "shutdown", Value::Null);
+        if pull {
+            assert_no_pushed_diagnostics(&server);
+        }
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn generic_bibliography_entry_warnings_refresh_ambiguity_and_key_ranges_after_saved_edits() {
+    for pull in [false, true] {
+        let script = r#"cp "${2%/*}/fixture.blg" "$1/main.blg"
+printf '%%PDF-1.4\n' > "$1/main.pdf"
+printf '(./main.tex)\n' > "$1/main.log"
+printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.bib" > "$1/main.fls"
+"#;
+        let capabilities = if pull {
+            json!({"textDocument":{"diagnostic":{}}})
+        } else {
+            json!({})
+        };
+        let (mut server, directory, main) =
+            fake_build_server_capabilities(script, false, capabilities);
+        let root = directory.path();
+        let refs = Url::from_file_path(root.join("refs.bib")).unwrap();
+        let main_source = "\\documentclass{article}\n\\bibliography{refs}\n";
+        std::fs::write(main.to_file_path().unwrap(), main_source).unwrap();
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":main_source}]}));
+        let sources = [
+            "% 😀\r\n@book{中😀,title={First}}\r\n",
+            "% 😀\r\n@book{中😀,title={First}}\r\n@book{中😀,title={Second}}\r\n",
+            "% Moved 😀\r\n\r\n@book{中😀,title={First}}\r\n",
+            "% Moved 😀\r\n\r\n@book{中😀,author={Example},title={First}}\r\n",
+        ];
+        let message = "BibTeX: empty author in 中😀";
+        for (stage, source) in sources.into_iter().enumerate() {
+            std::fs::write(refs.to_file_path().unwrap(), source).unwrap();
+            if stage == 0 {
+                server.notify("textDocument/didOpen", json!({"textDocument":{"uri":refs,"languageId":"bibtex","version":7,"text":source}}));
+            } else {
+                server.notify("textDocument/didChange", json!({"textDocument":{"uri":refs,"version":7+stage},"contentChanges":[{"text":source}]}));
+                server.notify("textDocument/didSave", json!({"textDocument":{"uri":refs}}));
+            }
+            let log = if stage == 3 {
+                "Database file #1: refs.bib\n"
+            } else {
+                "Database file #1: refs.bib\nWarning--empty author in 中😀\n"
+            };
+            std::fs::write(root.join("fixture.blg"), log).unwrap();
+            server.request(
+                2 + stage as u64 * 3,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            let finished = server.until(|item| item["method"] == "latex/buildFinished");
+            assert_eq!(finished["params"]["status"], "success", "{finished}");
+            let target = if stage == 1 { &main } else { &refs };
+            let items = if pull {
+                server.request(
+                    3 + stage as u64 * 3,
+                    "textDocument/diagnostic",
+                    json!({"textDocument":{"uri":target}}),
+                )["items"]
+                    .clone()
+            } else {
+                server.until(|item| {
+                    item["method"] == "textDocument/publishDiagnostics"
+                        && item["params"]["uri"] == target.as_str()
+                        && item["params"]["diagnostics"]
+                            .as_array()
+                            .is_some_and(|items| {
+                                if stage == 3 {
+                                    items.is_empty()
+                                } else {
+                                    items.iter().any(|item| item["message"] == message)
+                                }
+                            })
+                })["params"]["diagnostics"]
+                    .clone()
+            };
+            if stage == 3 {
+                assert!(items.as_array().unwrap().is_empty(), "{items}");
+                continue;
+            }
+            let item = items
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|item| item["message"] == message)
+                .unwrap();
+            assert_eq!(item["severity"], 2);
+            assert_eq!(item["source"], "latex-build");
+            if stage == 1 {
+                assert_eq!(item["range"]["start"], json!({"line":0,"character":0}));
+            } else {
+                let at = source.find("中😀").unwrap();
+                let range = latex_lsp::text::Text::new(source.into()).range(at, at + "中😀".len());
+                assert_eq!(item["range"], serde_json::to_value(range).unwrap());
+            }
+        }
+        server.request(20, "shutdown", Value::Null);
+        if pull {
+            assert_no_pushed_diagnostics(&server);
+        }
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
 fn bibliography_alias_symbols_negotiate_hierarchy_refresh_search_and_restore_disk_over_stdio() {
     for hierarchy in [false, true] {
         let directory = tempfile::tempdir().unwrap();

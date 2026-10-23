@@ -128,6 +128,41 @@ pub(crate) fn classified_bibliography_inputs(
     result
 }
 
+/// Biber's level belongs to the log record, not text inside its message.
+/// Support its plain and log4perl timestamp/source-location formats.
+pub(crate) fn biber_record(mut line: &str) -> Option<(&str, &str)> {
+    if let Some(tail) = line.strip_prefix('[') {
+        let (stamp, tail) = tail.split_once(']')?;
+        if stamp.is_empty() || !stamp.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+        line = tail.trim_start();
+    }
+    fn level(line: &str) -> Option<(&str, &str)> {
+        let (level, message) = line.split_once(" - ")?;
+        matches!(
+            level,
+            "ERROR" | "WARN" | "INFO" | "DEBUG" | "TRACE" | "FATAL"
+        )
+        .then_some((level, message))
+    }
+    if let Some(record) = level(line) {
+        return Some(record);
+    }
+    let (source, message) = line.split_once("> ")?;
+    let (module, number) = source.rsplit_once(':')?;
+    if module.is_empty()
+        || module
+            .chars()
+            .any(|ch| ch.is_whitespace() || matches!(ch, '\'' | '"' | '{' | '}'))
+        || number.is_empty()
+        || !number.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    level(message)
+}
+
 pub(crate) fn bibliography_source(line: &str) -> Option<&str> {
     bibliography_database_source(line).or_else(|| {
         line.strip_prefix("The style file: ")
@@ -142,7 +177,8 @@ pub(crate) fn bibliography_database_source(line: &str) -> Option<&str> {
             .map(|(_, name)| name.trim())
             .filter(|name| name.trim_matches('"').ends_with(".bib"))
     } else {
-        line.split_once("INFO - ")
+        biber_record(line)
+            .filter(|(level, _)| *level == "INFO")
             .and_then(|(_, message)| message.strip_prefix("Found BibTeX data source '"))
             .and_then(|tail| tail.strip_suffix('\''))
             .filter(|name| !name.is_empty() && !name.chars().any(char::is_control))

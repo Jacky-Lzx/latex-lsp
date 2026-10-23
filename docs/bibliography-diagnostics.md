@@ -12,6 +12,12 @@ Biber 的完整 `INFO - Found BibTeX data source '文件名'` 记录确认该文
 
 数据库的完整日志名称也用于警告中的引号路径、裸路径和条目字段定位，包括 Biber 的 `Duplicate entry key` 和 `Datamodel: Entry` 消息。无法确认的显式文件保留在主文档，不借用其他数据库的同名条目。
 
+## 日志记录边界
+
+BibTeX 的数据库、样式和辅助文件记录按完整文件名处理；路径中的 `ERROR -`、`WARN -`、`---line … of file …` 等文字不会生成额外错误。语法错误后的 ` : ` 源码回显也保留为上下文，里面的日志样式文本不会成为新诊断。
+
+Biber 的级别从当前记录头读取，支持普通 `WARN - …`、`[0] WARN - …` 和 `[0] Utils.pm:395> WARN - …` 格式。警告正文中的 `ERROR -` 不改变级别，正文中的 BibTeX 行号样式不改变诊断来源。`INFO` / `DEBUG` 消息里的错误示例不会产生错误；数据库角色只采纳实际 `INFO` 记录中完整的 `Found BibTeX data source '…'` 消息。
+
 ## 缺失样式文件
 
 BibTeX 报告无法打开样式文件时，诊断代码为 `missing-bibliography-style`。最终 TeX 日志确认读取的来源中只有一个对应的静态 `bibliographystyle` 声明时，错误定位到精确样式名，并提供最多 5 个同目录本地 `.bst` 拼写建议；保留逗号名称、显式后缀和周围注释。动态或拼接名称、声明歧义、来源不完整及扫描超限时保留主文档中的错误，不提供猜测修复。样式已经恢复或诊断过期时不再修复。
@@ -33,6 +39,35 @@ LSP 编译结果也会定位静态命名调用和纯别名中的缺失文献库�
 ## latexmk 的缺库警告
 
 默认 latexmk 确认数据库缺失并跳过 BibTeX 时，服务器也会产生 `missing-bibliography-database` 警告，提供相同的精确定位和修复。编译继续遵守 latexmk 的策略及现有输入一致性检查，预生成 `.bbl` 的项目仍可生成 PDF。警告只采纳本次最后一次目标日志检查后的完整驱动列表，已有的原生 BibTeX 错误优先；没有输出新列表的空操作编译不会新增缺库警告。其他可执行程序、不同作业日志、不完整或截断的输出不进入这项解析。
+
+## 未定义字符串缩写
+
+BibTeX 的两行 `Warning--string name "jouranl" is undefined` / `--line 2 of file refs.bib` 警告使用诊断代码 `undefined-bibliography-string`，精确标记该行中唯一的裸缩写引用。支持字段、`@string`、`@preamble` 和多行 `#` 拼接，按 ASCII 大小写不敏感匹配，并保留 UTF-16 与 CRLF 位置。字面值、声明名、文献键和注释不充当引用；同一行重复引用时保留整行诊断，不猜测修改位置。来源缺失、位置无效或位置行不紧随警告时也保留警告。
+
+快速修复最多提供 5 个相近名称，只取警告发生前已读取数据库中的有效 `@string` 声明，以及当前库中位于引用之前的声明。同名声明使用最近一次的拼写；后置声明、独立项目和隐含月份名不作为候选。月份缩写由样式提供，服务器不解析 `.bst` 宏定义。
+
+修复复查已读取数据库和可定位样式的内容、当前缓冲区、版本及编译输入快照，兼容版本化编辑与旧客户端。日志截断、数据库历史缺失或异常、此前发生语法错误、来源超限或输入变化时保留诊断并停止提供修复。单文件最多读取 2 MiB，累计最多 16 MiB；不完整的 `@string` 赋值不作为修复候选。
+
+验证命令：
+
+```sh
+cargo test --locked --test bibliography_string_diagnostics
+cargo test --locked --test bibliography_string_diagnostics real_bibtex -- --include-ignored
+cargo test --locked --test protocol bibliography_string_warnings_
+```
+
+## 未定义条目类型
+
+BibTeX 的两行 `Warning--entry type for "entry" isn't style-file defined` / `--line 2 of file refs.bib` 使用诊断代码 `undefined-bibliography-entry-type`。警告行号指向键名所在行，服务器通过解析索引记录的键和类型关系，标记对应条目的类型名称。例如 `@artcle` 标记 `artcle`，类型与键分行时也能定位。
+
+来源、行号和完整键共同确定条目；同名键出现在多个数据库或不同行时，使用明确报告的数据库与行号。支持 Unicode、CRLF、两种定界符和未完成正文；相同行中有多个匹配键时保留整行警告。来源或位置缺失时保留主文档警告，辅助文件和样式的别名不会因指向相同数据库而提供类型范围。
+
+类型是否受支持由当前文献样式决定，此处只采纳编译器确认的警告。服务器尚未解析样式中的类型定义，因此不生成类型拼写修复；条目类型的编辑补全仍可使用。
+
+```sh
+cargo test --locked --test bibliography_type_diagnostics -- --include-ignored
+cargo test --locked --test protocol bibliography_type_warnings_
+```
 
 ## 来源与条目定位
 

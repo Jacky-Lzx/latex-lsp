@@ -107,6 +107,39 @@ fn biber_database_roles_require_complete_input_records() {
 }
 
 #[test]
+fn biber_database_roles_require_the_actual_info_record_level() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::write(root.join("refs.tex"), "@book{entry,title={Actual}}").unwrap();
+    for record in [
+        "WARN - Example INFO - Found BibTeX data source 'refs.tex'",
+        "ERROR - INFO - Found BibTeX data source 'refs.tex'",
+        "INFO - Example: INFO - Found BibTeX data source 'refs.tex'",
+        "[0] Utils.pm:395> WARN - INFO - Found BibTeX data source 'refs.tex'",
+        " : INFO - Found BibTeX data source 'refs.tex'",
+        "Example INFO - Found BibTeX data source 'refs.tex'",
+        "[invalid] INFO - Found BibTeX data source 'refs.tex'",
+    ] {
+        assert!(
+            recorder::bibliography_inputs(
+                &root.join("main.tex"),
+                &root.join("main.blg"),
+                &format!("{record}\n")
+            )
+            .is_empty(),
+            "{record}"
+        );
+    }
+    for prefix in ["", "[0] ", "[17] Utils.pm:395> ", "Utils.pm:395> "] {
+        let log = format!("{prefix}INFO - Found BibTeX data source 'refs.tex'\n");
+        assert_eq!(
+            recorder::bibliography_inputs(&root.join("main.tex"), &root.join("main.blg"), &log),
+            [uri(&root.join("refs.tex"))].into()
+        );
+    }
+}
+
+#[test]
 #[ignore = "requires biber"]
 fn real_biber_data_sources_preserve_dependencies_and_warning_locations() {
     for name in [
@@ -117,14 +150,15 @@ fn real_biber_data_sources_preserve_dependencies_and_warning_locations() {
     ] {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();
-        let source = "@book{alpha,title={Alpha},year={2020}}\n@book{alpha,title={Duplicate}}\n";
+        let source = "% Duplicate keys have no unambiguous declaration range\n@book{alpha,title={Alpha},year={2020}}\n@book{alpha,title={Duplicate}}\n";
         std::fs::write(root.join(name), source).unwrap();
         let output = std::process::Command::new("biber")
-            .args(["--tool", name])
+            .args(["--tool", "--output-file=processed.bib", name])
             .current_dir(root)
             .output()
             .unwrap();
         assert!(output.status.success(), "{output:?}");
+        assert_eq!(std::fs::read_to_string(root.join(name)).unwrap(), source);
         let log_path = root.join(format!("{name}.blg"));
         let log = std::fs::read_to_string(&log_path).unwrap();
         assert!(log.contains("Duplicate entry key:"), "{log}");
@@ -136,7 +170,7 @@ fn real_biber_data_sources_preserve_dependencies_and_warning_locations() {
             build_log::parse_bibliography_log(&root.join("main.tex"), &log_path, &log);
         assert_eq!(
             diagnostics[&uri(&root.join(name))][0].range,
-            Range::new(Position::new(0, 6), Position::new(0, 11))
+            Text::new(source.into()).range(0, source.find('\n').unwrap())
         );
     }
 }

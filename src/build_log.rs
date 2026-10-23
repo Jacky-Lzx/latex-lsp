@@ -1376,6 +1376,11 @@ pub(crate) fn undefined_reference_ranges(text: &Text, line: u32, message: &str) 
     let Some((citation, key)) = undefined_reference_key(message) else {
         return vec![];
     };
+    let valid = if citation {
+        crate::syntax::is_static_citation_key
+    } else {
+        crate::syntax::is_static_reference_key
+    };
     let syntax = crate::syntax::Syntax::latex(text);
     let hyper_link = message.contains("Hyper reference `") || message.contains("Hyper reference '");
     let mut ranges = Vec::new();
@@ -1408,9 +1413,7 @@ pub(crate) fn undefined_reference_ranges(text: &Text, line: u32, message: &str) 
                 && text.position(arguments.end.saturating_sub(1)).line >= line
             {
                 for argument in arguments.keys() {
-                    for span in
-                        crate::syntax::reference_list_spans(&text.source, argument.span.clone())
-                    {
+                    for span in crate::citations::key_spans(&text.source, argument, style) {
                         if text.source[span.clone()] == *key {
                             ranges.push(text.range(span.start, span.end));
                         }
@@ -1462,8 +1465,7 @@ pub(crate) fn undefined_reference_ranges(text: &Text, line: u32, message: &str) 
             } else {
                 Some(key)
             };
-            if let Some(key) = source_key.filter(|key| crate::syntax::is_static_reference_key(key))
-            {
+            if let Some(key) = source_key.filter(|key| valid(key)) {
                 for argument in std::iter::once(argument).chain(range_end.as_ref()) {
                     if argument.value == key {
                         ranges.push(text.range(argument.span.start, argument.span.end));
@@ -1472,7 +1474,7 @@ pub(crate) fn undefined_reference_ranges(text: &Text, line: u32, message: &str) 
             }
             continue;
         }
-        if !crate::syntax::is_static_reference_key(key) {
+        if !valid(key) {
             continue;
         }
         for segment in crate::syntax::key_list_segments(&text.source, argument.span.clone()) {
@@ -5456,18 +5458,58 @@ pub(crate) fn parse_bibliography_in(
     log: &str,
 ) -> BTreeMap<Url, Vec<Diagnostic>> {
     let mut result = BTreeMap::new();
+    let mut databases_complete = true;
     let databases: Vec<_> = log
         .lines()
         .filter_map(crate::recorder::bibliography_database_source)
-        .filter_map(|name| paths.resolve(name))
+        .filter_map(|name| {
+            let path = paths.resolve(name);
+            databases_complete &= path.is_some();
+            path
+        })
         .collect();
     let mut previous = "";
-    for line in log.lines() {
+    let mut bibliography_context = crate::bib_diagnostics::Context::new(log);
+    let mut lines = log.lines().peekable();
+    while let Some(line) = lines.next() {
+        let biber = crate::recorder::biber_record(line);
+        let native_warning = line.starts_with("Warning--");
+        if biber.is_none() && !native_warning && !line.starts_with(" :") {
+            bibliography_context.record(paths, line);
+        }
+        // Never interpret literal paths, source echoes, or an INFO/DEBUG
+        // message containing an error-looking substring as another record.
+        if crate::bib_diagnostics::metadata(line)
+            || line.starts_with(" :")
+            || biber.is_some_and(|(level, _)| !matches!(level, "ERROR" | "WARN"))
+        {
+            previous = "";
+            continue;
+        }
+        if let Some(warning) = crate::bib_diagnostics::warning(line) {
+            let location = lines
+                .peek()
+                .copied()
+                .and_then(crate::bib_diagnostics::position);
+            if location.is_some() {
+                lines.next();
+            }
+            if let Some((uri, diagnostic)) =
+                bibliography_context.diagnostic(root, paths, warning, location)
+            {
+                result.entry(uri).or_insert_with(Vec::new).push(diagnostic);
+            }
+            previous = "";
+            continue;
+        }
         if line == crate::output::TRUNCATED {
             previous = "Error context omitted from a large bibliography log";
             continue;
         }
-        if let Some((message, tail)) = line.split_once("---line ") {
+        if let Some((message, tail)) = line
+            .split_once("---line ")
+            .filter(|_| biber.is_none() && !native_warning)
+        {
             if let Some((number, name)) = tail.split_once(" of file ") {
                 if let Ok(number) = number.trim().parse::<u32>() {
                     // The logged input name identifies its role. A source
@@ -5530,7 +5572,10 @@ pub(crate) fn parse_bibliography_in(
         if !line.trim().is_empty() {
             previous = line.trim();
         }
-        if let Some((message, _)) = line.split_once("---while reading file ") {
+        if let Some((message, _)) = line
+            .split_once("---while reading file ")
+            .filter(|_| biber.is_none() && !native_warning)
+        {
             emit(
                 &mut result,
                 root,
@@ -5542,9 +5587,9 @@ pub(crate) fn parse_bibliography_in(
         }
         let (message, severity, tool) = if let Some(message) = line.strip_prefix("Warning--") {
             (message, DiagnosticSeverity::WARNING, "BibTeX")
-        } else if let Some((_, message)) = line.split_once("ERROR - ") {
+        } else if let Some(("ERROR", message)) = biber {
             (message, DiagnosticSeverity::ERROR, "Biber")
-        } else if let Some((_, message)) = line.split_once("WARN - ") {
+        } else if let Some(("WARN", message)) = biber {
             (message, DiagnosticSeverity::WARNING, "Biber")
         } else {
             continue;
@@ -5600,33 +5645,30 @@ pub(crate) fn parse_bibliography_in(
                 _ => None,
             })
         };
-        let mut entry = None;
-        if let Some(key) = key {
-            let candidates: Vec<_> = explicit_path
-                .iter()
-                .chain(databases.iter())
-                .filter_map(|path| {
-                    let text = Text::new(std::fs::read_to_string(path).ok()?);
-                    let syntax = crate::syntax::Syntax::bibtex(&text);
-                    let declaration = syntax.citations.iter().find(|entry| entry.name == key)?;
-                    Some((
-                        path.clone(),
-                        text.range(declaration.span.start, declaration.span.end),
-                    ))
-                })
-                .collect();
-            if let Some(first) = candidates
-                .first()
-                .filter(|first| candidates.iter().all(|candidate| candidate == *first))
-            {
-                entry = Some(first.clone());
-            }
-        }
+        let entry = key
+            .filter(|_| explicit_path.is_some() || databases_complete)
+            .and_then(|key| {
+                bibliography_context.entry(explicit_path.iter().chain(databases.iter()), key)
+            });
         let path = explicit_path
             .as_deref()
             .or_else(|| entry.as_ref().map(|(path, _)| path.as_path()))
             .unwrap_or(root);
         let diagnostic_message = format!("{tool}: {}", message.trim());
+        if number.is_none() {
+            if let Some((path, range)) = &entry {
+                if let Ok(uri) = Url::from_file_path(path) {
+                    result.entry(uri).or_default().push(Diagnostic {
+                        range: *range,
+                        severity: Some(severity),
+                        source: Some("latex-build".into()),
+                        message: diagnostic_message,
+                        ..Default::default()
+                    });
+                }
+                continue;
+            }
+        }
         emit_with_context(
             &mut result,
             path,
@@ -5640,13 +5682,6 @@ pub(crate) fn parse_bibliography_in(
             None,
             source_confirmed,
         );
-        if number.is_none() {
-            if let Some((_, range)) = &entry {
-                if let Ok(uri) = Url::from_file_path(path) {
-                    result.get_mut(&uri).unwrap().last_mut().unwrap().range = *range;
-                }
-            }
-        }
     }
     for diagnostics in result.values_mut() {
         diagnostics.sort_by_key(|diagnostic| (diagnostic.range.start, diagnostic.message.clone()));
@@ -7025,13 +7060,13 @@ mod tests {
             std::fs::write(&main, "\\cite{entry}\n").unwrap();
             std::fs::write(
                 &database,
-                "% database\n@book{entry,title={Book}}\n@book{entry,title={Duplicate}}\n",
+                "% database\n@book{entry,title={Book}}\n@book{entry,title={Duplicate}}\n@book{unique,title={Warning}}\n",
             )
             .unwrap();
             std::fs::write(&style, "ENTRY {title} {} {}\nFUNCTION {broken} {unknown}\n").unwrap();
             std::os::unix::fs::symlink(&database, root.join("with spaces.bib")).unwrap();
             std::os::unix::fs::symlink(&style, root.join("local.bst")).unwrap();
-            let diagnostics = parse_bibliography(&main, "Database file #1: with spaces.bib\nThe style file: local.bst\nRepeated entry---line 3 of file \"with spaces.bib\"\nunknown is an unknown function---line 2 of file local.bst\nWarning--empty author in entry\n");
+            let diagnostics = parse_bibliography(&main, "Database file #1: with spaces.bib\nThe style file: local.bst\nRepeated entry---line 3 of file \"with spaces.bib\"\nunknown is an unknown function---line 2 of file local.bst\nWarning--empty author in unique\n");
             let database_uri = Url::from_file_path(&database).unwrap();
             let style_uri = Url::from_file_path(&style).unwrap();
             assert_eq!(diagnostics.len(), 2, "{extension}: {diagnostics:?}");
@@ -7044,8 +7079,8 @@ mod tests {
                     && item.severity == Some(DiagnosticSeverity::ERROR)));
             assert!(errors
                 .iter()
-                .any(|item| item.message == "BibTeX: empty author in entry"
-                    && item.range.start == Position::new(1, 6)
+                .any(|item| item.message == "BibTeX: empty author in unique"
+                    && item.range.start == Position::new(3, 6)
                     && item.severity == Some(DiagnosticSeverity::WARNING)));
             assert_eq!(diagnostics[&style_uri][0].range.start.line, 1);
             assert_eq!(
@@ -8695,7 +8730,7 @@ mod tests {
     }
 
     #[test]
-    fn bibliography_errors_and_entry_warnings_point_to_the_database() {
+    fn bibliography_line_errors_keep_the_database_and_ambiguous_entry_warnings_keep_the_root() {
         let directory = tempfile::tempdir().unwrap();
         let main = directory.path().join("main.tex");
         let bib = directory.path().join("with spaces.bib");
@@ -8707,19 +8742,22 @@ mod tests {
         .unwrap();
         let log = "Database file #1: with spaces.bib\nRepeated entry---line 5 of file with spaces.bib\nI was expecting a `,' or a `}'---line 3 of file with spaces.bib\nWarning--empty author in example\n";
         let diagnostics = parse_bibliography(&main, log);
-        let diagnostics = &diagnostics[&Url::from_file_path(&bib).unwrap()];
-        assert_eq!(diagnostics.len(), 3);
-        assert_eq!(diagnostics[0].range.start, Position::new(1, 6));
-        assert_eq!(diagnostics[0].severity, Some(DiagnosticSeverity::WARNING));
-        assert_eq!(diagnostics[1].range.start.line, 2);
-        assert_eq!(diagnostics[2].range.start.line, 4);
+        let entries = &diagnostics[&Url::from_file_path(&bib).unwrap()];
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].range.start.line, 2);
+        assert_eq!(entries[1].range.start.line, 4);
+        let warning = &diagnostics[&Url::from_file_path(&main).unwrap()][0];
+        assert_eq!(warning.range.start, Position::new(0, 0));
+        assert_eq!(warning.severity, Some(DiagnosticSeverity::WARNING));
         let log = "[0] INFO - Found BibTeX data source 'with spaces.bib'\n[1] ERROR - syntax error in file 'with spaces.bib', line 3\n[2] WARN - Missing required field for entry 'example'\n";
         let diagnostics = parse_bibliography(&main, log);
-        let diagnostics = &diagnostics[&Url::from_file_path(&bib).unwrap()];
-        assert_eq!(diagnostics.len(), 2);
-        assert_eq!(diagnostics[0].range.start.line, 1);
-        assert_eq!(diagnostics[1].range.start.line, 2);
-        assert!(diagnostics[1].message.starts_with("Biber:"));
+        let entries = &diagnostics[&Url::from_file_path(&bib).unwrap()];
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].range.start.line, 2);
+        assert!(entries[0].message.starts_with("Biber:"));
+        let warning = &diagnostics[&Url::from_file_path(&main).unwrap()][0];
+        assert_eq!(warning.range.start.line, 0);
+        assert_eq!(warning.severity, Some(DiagnosticSeverity::WARNING));
         let diagnostics = parse_bibliography(&main,"I couldn't open database file missing.bib\n---line 4 of file main.aux\nI found no database files---while reading file main.aux\n");
         let diagnostics = &diagnostics[&Url::from_file_path(&main).unwrap()];
         assert_eq!(diagnostics.len(), 2);
