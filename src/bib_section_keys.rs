@@ -12,6 +12,12 @@ use crate::{
 use std::{collections::BTreeSet, ops::Range};
 use tower_lsp::lsp_types::{Hover, HoverContents, Location, MarkupContent, MarkupKind, Url};
 
+#[derive(Clone, Copy)]
+enum Purpose {
+    Key,
+    Completion,
+}
+
 const STATE: &[&str] = &[
     "newrefsection",
     "refsection",
@@ -76,12 +82,18 @@ fn unsafe_control(name: &str) -> bool {
         )
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone)]
 struct Query {
     span: Range<usize>,
     command: usize,
+    call: Command,
 }
-fn query(doc: &Document, signatures: &CommandSignatures<'_>, offset: usize) -> Option<Query> {
+fn query(
+    doc: &Document,
+    signatures: &CommandSignatures<'_>,
+    offset: usize,
+    purpose: Purpose,
+) -> Option<Query> {
     let context = Context::new(doc, signatures);
     let source = &doc.text.source;
     for (index, lexical) in doc.syntax.commands.iter().enumerate() {
@@ -102,19 +114,46 @@ fn query(doc: &Document, signatures: &CommandSignatures<'_>, offset: usize) -> O
             continue;
         }
         let command = crate::reference_calls::resolved_command(source, name, span);
-        for (citation, span) in crate::reference_calls::keys(source, &command, false) {
-            if citation && span.start <= offset && offset <= span.end {
-                return Some(Query {
-                    span,
-                    command: lexical.span.start,
-                });
-            }
+        let span = match purpose {
+            Purpose::Key => crate::reference_calls::keys(source, &command, false)
+                .into_iter()
+                .find(|(citation, span)| *citation && span.start <= offset && offset <= span.end)
+                .map(|(_, span)| span),
+            Purpose::Completion => completion_span(doc, &command, offset).map(|(span, _)| span),
+        };
+        if let Some(span) = span {
+            return Some(Query {
+                span,
+                command: lexical.span.start,
+                call: command,
+            });
         }
     }
     None
 }
 
-fn citation_candidate(doc: &Document, signatures: &CommandSignatures<'_>, offset: usize) -> bool {
+fn completion_span(
+    doc: &Document,
+    command: &Command,
+    offset: usize,
+) -> Option<(Range<usize>, Vec<Range<usize>>)> {
+    if !syntax::is_citation(&command.name) {
+        return None;
+    }
+    if syntax::is_single_citation(&command.name) {
+        crate::features::completion_name_argument(&doc.text.source, command, offset)
+    } else {
+        crate::citation_search::search_span(&doc.text.source, command, offset)
+            .map(|span| (span, Vec::new()))
+    }
+}
+
+fn citation_candidate(
+    doc: &Document,
+    signatures: &CommandSignatures<'_>,
+    offset: usize,
+    purpose: Purpose,
+) -> bool {
     let context = Context::new(doc, signatures);
     doc.syntax
         .commands
@@ -141,10 +180,13 @@ fn citation_candidate(doc: &Document, signatures: &CommandSignatures<'_>, offset
                     )
                 })
             });
-            command.is_some_and(|command| {
-                crate::reference_calls::keys(&doc.text.source, &command, false)
+            command.is_some_and(|command| match purpose {
+                Purpose::Key => crate::reference_calls::keys(&doc.text.source, &command, false)
                     .iter()
-                    .any(|(citation, span)| *citation && span.start <= offset && offset <= span.end)
+                    .any(|(citation, span)| {
+                        *citation && span.start <= offset && offset <= span.end
+                    }),
+                Purpose::Completion => completion_span(doc, &command, offset).is_some(),
             })
         })
 }
@@ -518,18 +560,36 @@ pub(crate) fn coexistence(ws: &Workspace, root: &Url, scope: &BTreeSet<Url>) -> 
 struct Target {
     span: Range<usize>,
     resources: BTreeSet<Url>,
+    call: Command,
 }
 // If a resource analysis limit is reached, do not fall back to a union
 // target that the ordinary key index would otherwise expose.
-fn incomplete(ws: &Workspace, uri: &Url, offset: usize) -> Option<Option<Target>> {
-    crate::named_references::Index::new(ws, uri)
-        .target(uri, offset)
-        .filter(|(citation, _)| *citation)
-        .map(|_| None)
+fn incomplete(
+    ws: &Workspace,
+    uri: &Url,
+    offset: usize,
+    purpose: Purpose,
+) -> Option<Option<Target>> {
+    let supported = match purpose {
+        Purpose::Key => crate::named_references::Index::new(ws, uri)
+            .target(uri, offset)
+            .is_some_and(|(citation, _)| citation),
+        Purpose::Completion => {
+            crate::named_references::completion_context(ws, uri, offset, |command| {
+                if !syntax::is_citation(&command.name) {
+                    return None;
+                }
+                let doc = ws.documents.get(uri)?;
+                completion_span(doc, command, offset).map(|(span, _)| span.start..offset)
+            })
+            .is_some()
+        }
+    };
+    supported.then_some(None)
 }
 /// None leaves ordinary projects to the existing symbol model; Some(None)
 /// owns a section-dependent citation whose provenance cannot be certified.
-fn target(ws: &Workspace, uri: &Url, offset: usize) -> Option<Option<Target>> {
+fn target(ws: &Workspace, uri: &Url, offset: usize, purpose: Purpose) -> Option<Option<Target>> {
     let doc = ws
         .documents
         .get(uri)
@@ -553,7 +613,7 @@ fn target(ws: &Workspace, uri: &Url, offset: usize) -> Option<Option<Target>> {
             roots.insert(candidate.clone());
         }
         if roots.len() > 64 {
-            return incomplete(ws, uri, offset);
+            return incomplete(ws, uri, offset, purpose);
         }
     }
     let mut projects = Vec::new();
@@ -563,14 +623,14 @@ fn target(ws: &Workspace, uri: &Url, offset: usize) -> Option<Option<Target>> {
         let mut scope = ws.project_documents(&root);
         scope.insert(root.clone());
         let Some(docs) = crate::source_inputs::bounded_latex_sources(ws, &scope) else {
-            return incomplete(ws, uri, offset);
+            return incomplete(ws, uri, offset, purpose);
         };
         bytes += docs
             .iter()
             .map(|(_, doc)| doc.text.source.len())
             .sum::<usize>();
         if bytes > 16 * 1024 * 1024 {
-            return incomplete(ws, uri, offset);
+            return incomplete(ws, uri, offset, purpose);
         }
         let signatures = CommandSignatures::new(
             docs.iter()
@@ -585,14 +645,14 @@ fn target(ws: &Workspace, uri: &Url, offset: usize) -> Option<Option<Target>> {
     if !selected
         || !projects
             .iter()
-            .any(|(_, _, signatures)| citation_candidate(doc, signatures, offset))
+            .any(|(_, _, signatures)| citation_candidate(doc, signatures, offset, purpose))
     {
         return None;
     }
     Some((|| {
         let mut result: Option<Target> = None;
         for (root, docs, signatures) in &projects {
-            let query = query(doc, signatures, offset)?;
+            let query = query(doc, signatures, offset, purpose)?;
             if !valid_sources(docs, signatures) {
                 return None;
             }
@@ -631,13 +691,17 @@ fn target(ws: &Workspace, uri: &Url, offset: usize) -> Option<Option<Target>> {
                 return None;
             }
             if result.as_ref().is_some_and(|previous| {
-                previous.span != query.span || previous.resources != resources
+                previous.span != query.span
+                    || previous.resources != resources
+                    || previous.call.name != query.call.name
+                    || previous.call.span != query.call.span
             }) {
                 return None;
             }
             result = Some(Target {
                 span: query.span,
                 resources,
+                call: query.call,
             });
         }
         result
@@ -645,7 +709,7 @@ fn target(ws: &Workspace, uri: &Url, offset: usize) -> Option<Option<Target>> {
 }
 
 pub(crate) fn definitions(ws: &Workspace, uri: &Url, offset: usize) -> Option<Vec<Location>> {
-    let Some(target) = target(ws, uri, offset)? else {
+    let Some(target) = target(ws, uri, offset, Purpose::Key)? else {
         return Some(Vec::new());
     };
     let name = &ws.documents[uri].text.source[target.span];
@@ -669,7 +733,7 @@ pub(crate) fn definitions(ws: &Workspace, uri: &Url, offset: usize) -> Option<Ve
     )
 }
 pub(crate) fn hover(ws: &Workspace, uri: &Url, offset: usize) -> Option<Option<Hover>> {
-    let target = target(ws, uri, offset)?;
+    let target = target(ws, uri, offset, Purpose::Key)?;
     Some(target.and_then(|target| {
         let source = &ws.documents[uri];
         let name = &source.text.source[target.span.clone()];
@@ -700,4 +764,36 @@ pub(crate) fn hover(ws: &Workspace, uri: &Url, offset: usize) -> Option<Option<H
             range: Some(source.text.range(target.span.start, target.span.end)),
         })
     }))
+}
+
+pub(crate) fn completion(
+    ws: &Workspace,
+    uri: &Url,
+    offset: usize,
+) -> Option<Vec<tower_lsp::lsp_types::CompletionItem>> {
+    let Some(target) = target(ws, uri, offset, Purpose::Completion)? else {
+        return Some(Vec::new());
+    };
+    let doc = ws.documents.get(uri)?;
+    let Some((_, removals)) = completion_span(doc, &target.call, offset) else {
+        return Some(Vec::new());
+    };
+    let mut items =
+        crate::citation_search::items(ws, doc, offset, target.span, &target.resources, true)
+            .unwrap_or_default();
+    if !removals.is_empty() {
+        let removals: Vec<_> = removals
+            .into_iter()
+            .map(|span| tower_lsp::lsp_types::TextEdit {
+                range: doc.text.range(span.start, span.end),
+                new_text: String::new(),
+            })
+            .collect();
+        for item in &mut items {
+            item.additional_text_edits
+                .get_or_insert_with(Vec::new)
+                .extend(removals.iter().cloned());
+        }
+    }
+    Some(items)
 }

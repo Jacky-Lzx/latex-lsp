@@ -1,9 +1,9 @@
 //! Search bibliography previews without changing the inserted citation key.
 use crate::{
     syntax,
-    workspace::{DocumentKind, Workspace},
+    workspace::{Document, DocumentKind, Workspace},
 };
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, ops::Range};
 use tower_lsp::lsp_types::*;
 
 fn score(name: &str, metadata: &str, query: &str) -> Option<u8> {
@@ -41,6 +41,131 @@ fn score(name: &str, metadata: &str, query: &str) -> Option<u8> {
     None
 }
 
+pub(crate) fn search_span(
+    source: &str,
+    command: &syntax::Command,
+    offset: usize,
+) -> Option<Range<usize>> {
+    let args: Vec<_> = if let Some(style) = crate::citations::style(&command.name) {
+        crate::citations::arguments(source, command.span.end, style)
+            .fields
+            .into_iter()
+            .filter(|field| field.role == crate::citations::Role::Keys)
+            .map(|field| field.argument)
+            .collect()
+    } else {
+        let argument = command.argument.clone().or_else(|| {
+            let start = syntax::citation_argument_start(source, &command.name, command.span.end)?;
+            (source.as_bytes().get(start) == Some(&b'{')).then(|| syntax::Argument {
+                value: source[start + 1..].into(),
+                span: start + 1..source.len(),
+                outer_span: start..source.len(),
+            })
+        });
+        argument.into_iter().collect()
+    };
+    for arg in args {
+        if !(arg.span.start <= offset && offset <= arg.span.end) {
+            continue;
+        }
+        let multiple = !syntax::is_single_citation(&command.name);
+        let segment = if multiple {
+            syntax::key_list_segments(source, arg.span.clone())
+                .into_iter()
+                .find(|span| span.start <= offset && offset <= span.end)?
+        } else {
+            arg.span
+        };
+        // Comments and expansions retain the established literal-key editor.
+        if source[segment.clone()].contains(['%', '\\', '{', '}']) {
+            return None;
+        }
+        let mut span = syntax::trimmed_span(source, segment);
+        span.start = span.start.min(offset);
+        span.end = span.end.max(offset);
+        return Some(span);
+    }
+    None
+}
+
+pub(crate) fn items(
+    ws: &Workspace,
+    doc: &Document,
+    offset: usize,
+    span: Range<usize>,
+    scope: &BTreeSet<Url>,
+    unique: bool,
+) -> Option<Vec<CompletionItem>> {
+    let source = &doc.text.source;
+    let mut ambiguous = BTreeSet::new();
+    if unique {
+        let mut names = BTreeSet::new();
+        for (uri, doc) in &ws.documents {
+            if !scope.contains(uri) {
+                continue;
+            }
+            for entry in doc
+                .syntax
+                .citations
+                .iter()
+                .chain(&doc.syntax.bibliography_aliases)
+            {
+                if !names.insert(&entry.name) {
+                    ambiguous.insert(entry.name.clone());
+                }
+            }
+        }
+    }
+    let query = source[span.start..offset].trim();
+    if query.chars().count() > 128 {
+        return Some(vec![]);
+    }
+    let (range, extra) = syntax::name_completion_ranges(&doc.text, span, offset)?;
+    let main_start = doc.text.offset(range.start)?;
+    let filter_prefix = &source[main_start..offset];
+    let mut ranked = Vec::new();
+    let mut seen = BTreeSet::new();
+    for (entry_uri, doc) in &ws.documents {
+        if !scope.contains(entry_uri) {
+            continue;
+        }
+        for entry in doc
+            .syntax
+            .citations
+            .iter()
+            .chain(&doc.syntax.bibliography_aliases)
+        {
+            if !syntax::is_static_citation_key(&entry.name)
+                || ambiguous.contains(&entry.name)
+                || !seen.insert(entry.name.clone())
+            {
+                continue;
+            }
+            let Some(rank) = score(&entry.name, &entry.detail, query) else {
+                continue;
+            };
+            ranked.push((
+                rank,
+                CompletionItem {
+                    label: entry.name.clone(),
+                    kind: Some(CompletionItemKind::REFERENCE),
+                    detail: Some(format!("{} — {}", entry.detail, entry_uri.path())),
+                    filter_text: Some(format!("{filter_prefix} {} {}", entry.name, entry.detail)),
+                    sort_text: Some(format!("{rank:02}{}", entry.name)),
+                    text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                        range,
+                        new_text: entry.name.clone(),
+                    })),
+                    additional_text_edits: (!extra.is_empty()).then(|| extra.clone()),
+                    ..Default::default()
+                },
+            ));
+        }
+    }
+    ranked.sort_by(|(a, ia), (b, ib)| a.cmp(b).then_with(|| ia.label.cmp(&ib.label)));
+    Some(ranked.into_iter().map(|(_, item)| item).collect())
+}
+
 pub(crate) fn completion(
     ws: &Workspace,
     uri: &Url,
@@ -51,108 +176,22 @@ pub(crate) fn completion(
     if doc.kind != DocumentKind::Latex {
         return None;
     }
-    let source = &doc.text.source;
-    for command in doc.syntax.commands.iter().rev().filter(|cmd| {
-        syntax::is_citation(&cmd.name)
-            && !syntax::is_single_citation(&cmd.name)
-            && !doc.syntax.control_operands.contains(&cmd.span.start)
+    for command in doc.syntax.commands.iter().rev().filter(|command| {
+        syntax::is_citation(&command.name)
+            && !syntax::is_single_citation(&command.name)
+            && !doc.syntax.control_operands.contains(&command.span.start)
     }) {
-        let args: Vec<_> = if let Some(style) = crate::citations::style(&command.name) {
-            crate::citations::arguments(source, command.span.end, style)
-                .fields
-                .into_iter()
-                .filter(|field| field.role == crate::citations::Role::Keys)
-                .map(|field| field.argument)
-                .collect()
-        } else {
-            let argument = command.argument.clone().or_else(|| {
-                let start =
-                    syntax::citation_argument_start(source, &command.name, command.span.end)?;
-                (source.as_bytes().get(start) == Some(&b'{')).then(|| syntax::Argument {
-                    value: source[start + 1..].into(),
-                    span: start + 1..source.len(),
-                    outer_span: start..source.len(),
-                })
-            });
-            argument.into_iter().collect()
+        let Some(span) = search_span(&doc.text.source, command, offset) else {
+            continue;
         };
-        for arg in args {
-            if !(arg.span.start <= offset && offset <= arg.span.end) {
-                continue;
-            }
-            let multiple = !syntax::is_single_citation(&command.name);
-            let segment = if multiple {
-                syntax::key_list_segments(source, arg.span.clone())
-                    .into_iter()
-                    .find(|span| span.start <= offset && offset <= span.end)?
-            } else {
-                arg.span
-            };
-            // Comments and expansions retain the established literal-key editor.
-            if source[segment.clone()].contains(['%', '\\', '{', '}']) {
-                return None;
-            }
-            let mut span = syntax::trimmed_span(source, segment);
-            span.start = span.start.min(offset);
-            span.end = span.end.max(offset);
-            if crate::named_references::completion_context(ws, uri, offset, |candidate| {
-                (candidate.span == command.span).then_some(span.start..offset)
-            })
-            .is_none()
-            {
-                return Some(vec![]);
-            }
-            let query = source[span.start..offset].trim();
-            if query.chars().count() > 128 {
-                return Some(vec![]);
-            }
-            let (range, extra) = syntax::name_completion_ranges(&doc.text, span, offset)?;
-            let main_start = doc.text.offset(range.start)?;
-            let filter_prefix = &source[main_start..offset];
-            let mut ranked = Vec::new();
-            let mut seen = BTreeSet::new();
-            for (entry_uri, doc) in &ws.documents {
-                if !scope.contains(entry_uri) {
-                    continue;
-                }
-                for entry in doc
-                    .syntax
-                    .citations
-                    .iter()
-                    .chain(&doc.syntax.bibliography_aliases)
-                {
-                    if !syntax::is_static_citation_key(&entry.name)
-                        || !seen.insert(entry.name.clone())
-                    {
-                        continue;
-                    }
-                    let Some(rank) = score(&entry.name, &entry.detail, query) else {
-                        continue;
-                    };
-                    ranked.push((
-                        rank,
-                        CompletionItem {
-                            label: entry.name.clone(),
-                            kind: Some(CompletionItemKind::REFERENCE),
-                            detail: Some(format!("{} — {}", entry.detail, entry_uri.path())),
-                            filter_text: Some(format!(
-                                "{filter_prefix} {} {}",
-                                entry.name, entry.detail
-                            )),
-                            sort_text: Some(format!("{rank:02}{}", entry.name)),
-                            text_edit: Some(CompletionTextEdit::Edit(TextEdit {
-                                range,
-                                new_text: entry.name.clone(),
-                            })),
-                            additional_text_edits: (!extra.is_empty()).then(|| extra.clone()),
-                            ..Default::default()
-                        },
-                    ));
-                }
-            }
-            ranked.sort_by(|(a, ia), (b, ib)| a.cmp(b).then_with(|| ia.label.cmp(&ib.label)));
-            return Some(ranked.into_iter().map(|(_, item)| item).collect());
+        if crate::named_references::completion_context(ws, uri, offset, |candidate| {
+            (candidate.span == command.span).then_some(span.start..offset)
+        })
+        .is_none()
+        {
+            return Some(Vec::new());
         }
+        return items(ws, doc, offset, span, scope, false);
     }
     None
 }

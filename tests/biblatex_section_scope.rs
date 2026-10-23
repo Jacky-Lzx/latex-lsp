@@ -57,12 +57,17 @@ fn selected_sections_do_not_bind_keys_to_the_default_database_or_offer_partial_e
             "{header}"
         );
         assert!(editing::highlights(&ws, &main, at).is_empty(), "{header}");
-        assert!(
-            !features::completion(&ws, &main, at)
-                .iter()
-                .any(|item| item.label == "collision"),
-            "{header}"
-        );
+        let candidate = features::completion(&ws, &main, at)
+            .into_iter()
+            .find(|item| item.label == "collision");
+        assert_eq!(candidate.is_some(), !definitions.is_empty(), "{header}");
+        if let Some(candidate) = candidate {
+            let detail = candidate.detail.unwrap();
+            assert!(
+                detail.contains("Selected") && detail.contains("section.bib"),
+                "{header}: {detail}"
+            );
+        }
         assert!(
             features::rename(&ws, &bib, Position::new(0, 8), "updated").is_err(),
             "{header}"

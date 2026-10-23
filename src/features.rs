@@ -867,7 +867,7 @@ pub fn workspace_edit(
 }
 
 /// Works for incomplete groups too, so typing `\ref{` can offer completions.
-fn completion_name_argument(
+pub(crate) fn completion_name_argument(
     source: &str,
     command: &Command,
     offset: usize,
@@ -1211,6 +1211,11 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
     }
     if !name_command {
         if let Some(items) = crate::imports::completion(workspace, uri, offset) {
+            return items;
+        }
+    }
+    if !name_command {
+        if let Some(items) = crate::bib_section_keys::completion(workspace, uri, offset) {
             return items;
         }
     }

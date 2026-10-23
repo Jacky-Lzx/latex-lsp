@@ -29292,3 +29292,147 @@ fn section_duplicate_keys_refresh_push_and_pull_when_unsaved_registration_roles_
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+#[test]
+fn section_citation_completions_keep_selected_metadata_and_refresh_shared_root_context_over_stdio()
+{
+    let dir = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let child = Url::from_file_path(dir.path().join("chapter.tex")).unwrap();
+    let source = r"\documentclass{article}\usepackage{biblatex}\addbibresource{default.bib}\addglobalbib{global.bib}\addsectionbib[label=chosen]{section.bib}\begin{document}\newrefsection[chosen]\input{chapter}\end{document}";
+    for (name, content) in [
+        ("main.tex", source),
+        ("chapter.tex", r"\cite{colBAD}"),
+        (
+            "default.bib",
+            "@book{collision,title={Default}}\n@book{default_only,title={Default only}}",
+        ),
+        (
+            "section.bib",
+            "@book{collision,title={Selected}}\n@book{section_only,title={Selected only}}",
+        ),
+        ("global.bib", "@book{always,title={Global}}"),
+    ] {
+        std::fs::write(dir.path().join(name), content).unwrap();
+    }
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{"textDocument":{"completion":{"completionItem":{"resolveSupport":{"properties":["documentation"]}}}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":main,"languageId":"latex","version":5,"text":source}}),
+    );
+    server.notify("textDocument/didOpen", json!({"textDocument":{"uri":child,"languageId":"latex","version":3,"text":r"\cite{colBAD}"}}));
+    let items = server.request(
+        10,
+        "textDocument/completion",
+        json!({"textDocument":{"uri":child},"position":{"line":0,"character":9}}),
+    );
+    let original = items
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["label"] == "collision")
+        .unwrap()
+        .clone();
+    assert!(
+        original["detail"].as_str().unwrap().contains("Selected"),
+        "{original}"
+    );
+    assert!(
+        original["detail"].as_str().unwrap().contains("section.bib"),
+        "{original}"
+    );
+    assert_eq!(
+        original["textEdit"],
+        json!({"range":{"start":{"line":0,"character":6},"end":{"line":0,"character":12}},"newText":"collision"})
+    );
+    let updated = source.replace("[chosen]", "[]");
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":6},"contentChanges":[{"text":updated}]}),
+    );
+    let resolved = server.request(11, "completionItem/resolve", original.clone());
+    assert_eq!(resolved, original);
+    let items = server.request(
+        12,
+        "textDocument/completion",
+        json!({"textDocument":{"uri":child},"position":{"line":0,"character":9}}),
+    );
+    let item = items
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["label"] == "collision")
+        .unwrap();
+    assert!(
+        item["detail"].as_str().unwrap().contains("Default"),
+        "{item}"
+    );
+    assert_eq!(item["textEdit"], original["textEdit"]);
+    let unsaved = main.join("new-root.tex").unwrap();
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":unsaved,"languageId":"latex","version":2,"text":source}}),
+    );
+    let items = server.request(
+        13,
+        "textDocument/completion",
+        json!({"textDocument":{"uri":child},"position":{"line":0,"character":9}}),
+    );
+    assert!(
+        !items
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["label"] == "collision"),
+        "{items}"
+    );
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":child,"version":4},"contentChanges":[{"text":r"\cite{}"}]}),
+    );
+    let items = server.request(
+        14,
+        "textDocument/completion",
+        json!({"textDocument":{"uri":child},"position":{"line":0,"character":6}}),
+    );
+    assert!(
+        !items
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["label"] == "collision"),
+        "{items}"
+    );
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":unsaved}}),
+    );
+    let items = server.request(
+        15,
+        "textDocument/completion",
+        json!({"textDocument":{"uri":child},"position":{"line":0,"character":6}}),
+    );
+    let items = items.as_array().unwrap();
+    for key in ["collision", "default_only", "always"] {
+        assert!(items.iter().any(|item| item["label"] == key), "{items:?}");
+    }
+    assert!(!items.iter().any(|item| item["label"] == "section_only"));
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":7},"contentChanges":[{"text":source}]}),
+    );
+    let items = server.request(
+        16,
+        "textDocument/completion",
+        json!({"textDocument":{"uri":child},"position":{"line":0,"character":6}}),
+    );
+    let items = items.as_array().unwrap();
+    for key in ["collision", "section_only", "always"] {
+        assert!(items.iter().any(|item| item["label"] == key), "{items:?}");
+    }
+    assert!(!items.iter().any(|item| item["label"] == "default_only"));
+    server.request(1000, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
