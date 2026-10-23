@@ -330,13 +330,12 @@ fn bibliography_path_completion_preserves_indirect_forms_comments_and_style_comm
 }
 
 #[test]
-fn indirect_bibliography_paths_ignore_macro_operands_deferred_bodies_and_uncertain_names() {
+fn indirect_bibliography_paths_ignore_macro_operands_and_uncertain_names() {
     for command in ["bibliography", "nobibliography", "bibliographystyle"] {
         for form in ["named", "literal", "alias", "named-alias", "literal-alias"] {
             let ctrl = call(form, command);
             for body in [
                 format!("\\newcommand{{\\hold}}[1]{{}}\\hold{{{ctrl}{{fix|ture}}}}"),
-                format!("\\newcommand{{\\later}}{{{ctrl}{{fix|ture}}}}"),
                 format!("\\renewcommand{{\\{command}}}[1]{{}}{ctrl}{{fix|ture}}"),
                 format!("{ctrl}{{\\filename|}}"),
                 format!("\\endinput{ctrl}{{fix|ture}}"),
@@ -366,6 +365,66 @@ fn indirect_bibliography_paths_ignore_macro_operands_deferred_bodies_and_uncerta
                     "{command}/{form}/{body}"
                 );
             }
+        }
+    }
+}
+
+#[test]
+fn deferred_indirect_bibliography_paths_are_editable_without_loading_their_resources() {
+    for command in ["bibliography", "nobibliography", "bibliographystyle"] {
+        for form in ["named", "literal", "alias", "named-alias", "literal-alias"] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let ctrl = call(form, command);
+            let source = format!(
+                "\\def\\loadpkg{{\\{command}}}\\newcommand{{\\later}}{{{ctrl}{{fix|ture}}}}"
+            );
+            let mut ws = project(
+                root,
+                &[
+                    ("main.tex", &source.replace('|', "")),
+                    ("fixture.bib", ""),
+                    ("fixture.bst", ""),
+                ],
+            );
+            let main = uri(root, "main.tex");
+            let target = uri(
+                root,
+                if command == "bibliographystyle" {
+                    "fixture.bst"
+                } else {
+                    "fixture.bib"
+                },
+            );
+            let links = navigation::document_links(&ws, &main);
+            assert_eq!(links.len(), 1, "{source}: {links:?}");
+            assert_eq!(links[0].target.as_ref(), Some(&target));
+            assert!(ws.dependencies(&main).is_empty(), "{source}");
+            assert!(
+                !file_items(&items(&mut ws, &main, &source)).is_empty(),
+                "{source}"
+            );
+            let new = uri(
+                root,
+                if command == "bibliographystyle" {
+                    "renamed.bst"
+                } else {
+                    "renamed.bib"
+                },
+            );
+            let edit = file_operations::will_rename(
+                &ws,
+                &[FileRename {
+                    old_uri: target.into(),
+                    new_uri: new.into(),
+                }],
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(
+                apply(&ws, &edit, &main),
+                source.replace('|', "").replace("{fixture}", "{renamed}")
+            );
         }
     }
 }

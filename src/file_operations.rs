@@ -507,7 +507,7 @@ pub fn will_rename(workspace: &Workspace, files: &[FileRename]) -> Result<Option
                 .into_iter()
                 .chain(inputs.loaders.remove(uri).unwrap_or_default())
                 .chain(inputs.forwarders.remove(uri).unwrap_or_default())
-                .chain(inputs.resources.remove(uri).unwrap_or_default())
+                .chain(inputs.resource_references.remove(uri).unwrap_or_default())
                 .chain(inputs.selectors.remove(uri).unwrap_or_default())
                 .chain(inputs.checks.remove(uri).unwrap_or_default())
                 .chain(

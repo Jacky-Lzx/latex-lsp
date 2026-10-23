@@ -3017,6 +3017,32 @@ impl<'a> CommandSignatures<'a> {
         )
     }
 
+    /// Static filenames in complete deferred code remain references, while
+    /// their presence cannot establish that the resource has been loaded.
+    pub(crate) fn indirect_bibliography_references(
+        &self,
+        source: &str,
+        parsed: &syntax::Syntax,
+        active: &BTreeSet<usize>,
+    ) -> Vec<SourceCall> {
+        let bodies = definition_body_spans(source, parsed);
+        let positions = parsed
+            .commands
+            .iter()
+            .filter(|command| {
+                active.contains(&command.span.start)
+                    || bodies.iter().any(|body| body.contains(&command.span.start))
+            })
+            .map(|command| command.span.start)
+            .collect();
+        let mut calls = self.indirect_bibliography_invocations(source, parsed, &positions);
+        if !calls.is_empty() {
+            let operands = self.editing_argument_tokens(source, parsed);
+            calls.retain(|call| !operands.contains(&call.command.span.start));
+        }
+        calls
+    }
+
     pub(crate) fn indirect_graphics_path_invocations(
         &self,
         source: &str,

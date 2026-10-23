@@ -16,6 +16,7 @@ pub(crate) struct Index {
     pub loaders: BTreeMap<Url, Vec<SourceCall>>,
     pub forwarders: BTreeMap<Url, Vec<SourceCall>>,
     pub resources: BTreeMap<Url, Vec<SourceCall>>,
+    pub resource_references: BTreeMap<Url, Vec<SourceCall>>,
     pub section_labels: BTreeSet<String>,
     pub selectors: BTreeMap<Url, Vec<SourceCall>>,
     pub checks: BTreeMap<Url, Vec<SourceCall>>,
@@ -43,6 +44,7 @@ impl Index {
             let mut loader_calls = BTreeMap::new();
             let mut forwarders = BTreeMap::new();
             let mut resources = BTreeMap::new();
+            let mut resource_references = BTreeMap::new();
             let mut selectors = BTreeMap::new();
             let mut checks = BTreeMap::new();
             index.calls = scope
@@ -104,6 +106,14 @@ impl Index {
                     if !bibliography.is_empty() {
                         resources.insert(uri.clone(), bibliography);
                     }
+                    let references = signatures.indirect_bibliography_references(
+                        &doc.text.source,
+                        &doc.syntax,
+                        &positions,
+                    );
+                    if !references.is_empty() {
+                        resource_references.insert(uri.clone(), references);
+                    }
                     let calls = signatures.indirect_source_invocations(
                         &doc.text.source,
                         &doc.syntax,
@@ -116,6 +126,10 @@ impl Index {
                 Some(selection) => {
                     index.section_labels = selection.labels;
                     for (uri, calls) in selection.calls {
+                        resource_references
+                            .entry(uri.clone())
+                            .or_default()
+                            .extend(calls.clone());
                         resources.entry(uri).or_default().extend(calls);
                     }
                 }
@@ -124,6 +138,7 @@ impl Index {
             index.loaders = loader_calls;
             index.forwarders = forwarders;
             index.resources = resources;
+            index.resource_references = resource_references;
             index.selectors = selectors;
             index.checks = checks;
             index.literal = Some(literal);
@@ -141,6 +156,7 @@ impl Index {
             loaders: BTreeMap::new(),
             forwarders: BTreeMap::new(),
             resources: BTreeMap::new(),
+            resource_references: BTreeMap::new(),
             section_labels: BTreeSet::new(),
             selectors: BTreeMap::new(),
             checks: BTreeMap::new(),

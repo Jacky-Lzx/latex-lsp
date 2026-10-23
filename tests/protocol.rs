@@ -28890,3 +28890,82 @@ fn resource_links_do_not_reinterpret_precollected_comments_after_unsaved_changes
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+fn deferred_named_resource_paths_follow_imported_unsaved_aliases_over_stdio() {
+    use latex_lsp::text::Text;
+    let directory = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+    let provider = Url::from_file_path(directory.path().join("provider.sty")).unwrap();
+    let bib = Url::from_file_path(directory.path().join("refs.bib")).unwrap();
+    let renamed = Url::from_file_path(directory.path().join("renamed.bib")).unwrap();
+    let native = r"\def\register{\addbibresource}";
+    let source = "% 😀\r\n\\documentclass{article}\\usepackage{provider}\\newcommand\\future{\\csuse{register}{refs.bib}}\\cite{paper}";
+    for (name, text) in [
+        ("main.tex", source),
+        ("provider.sty", native),
+        ("refs.bib", "@book{paper,title={Paper}}"),
+    ] {
+        std::fs::write(directory.path().join(name), text).unwrap();
+    }
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(directory.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":main,"languageId":"latex","version":5,"text":source}}),
+    );
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":provider,"languageId":"latex","version":7,"text":native}}),
+    );
+    for (stage, definition) in [native, r"\newcommand\register[1]{}", native]
+        .into_iter()
+        .enumerate()
+    {
+        let id = 10 + stage as u64 * 10;
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":provider,"version":8+stage},"contentChanges":[{"text":definition}]}));
+        let links = server.request(
+            id,
+            "textDocument/documentLink",
+            json!({"textDocument":{"uri":main}}),
+        );
+        assert_eq!(
+            links
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|link| link["target"] == bib.as_str()),
+            stage != 1,
+            "{links}"
+        );
+        let edit = server.request(
+            id + 1,
+            "workspace/willRenameFiles",
+            json!({"files":[{"oldUri":bib,"newUri":renamed}]}),
+        );
+        if stage == 1 {
+            assert!(edit.is_null(), "{edit}");
+        } else {
+            assert_eq!(edit["documentChanges"][0]["textDocument"]["version"], 5);
+            assert_eq!(
+                edit["documentChanges"][0]["edits"][0]["newText"],
+                "renamed.bib"
+            );
+        }
+        let at = Text::new(source.into()).position(source.rfind("paper").unwrap() + 2);
+        let definitions = server.request(
+            id + 2,
+            "textDocument/definition",
+            json!({"textDocument":{"uri":main},"position":at}),
+        );
+        assert_eq!(
+            definitions,
+            json!([]),
+            "A deferred file reference must not load its entries: {definitions}"
+        );
+    }
+    server.request(1000, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

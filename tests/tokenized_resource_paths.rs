@@ -31,35 +31,43 @@ fn tokenized_resource_names_never_link_comment_parameter_or_translated_source_sp
             ("refs##data.bib", "refs##data.bib"),
             ("refs^^61data.bib", "refs^^61data.bib"),
         ] {
-            let body = format!(r"\def\future{{\{command}{{{argument}}}}}\future");
-            let (dir, ws, main, source) = setup(&body);
-            let false_uri = Url::from_file_path(dir.path().join(false_name)).unwrap();
-            assert!(!ws.project_files(&main).contains(&false_uri), "{source}");
-            let links = latex_lsp::navigation::document_links(&ws, &main);
-            assert!(
-                links
-                    .iter()
-                    .all(|link| link.target.as_ref() != Some(&false_uri)),
-                "{source}: {links:?}"
-            );
-            let at = Text::new(source.clone()).position(source.find("refs").unwrap() + 3);
-            assert!(
-                features::completion(&ws, &main, at)
-                    .iter()
-                    .all(|item| item.kind != Some(CompletionItemKind::FILE)),
-                "{source}"
-            );
-            let edit = file_operations::will_rename(
-                &ws,
-                &[FileRename {
-                    old_uri: false_uri.into(),
-                    new_uri: Url::from_file_path(dir.path().join("changed.bib"))
-                        .unwrap()
-                        .into(),
-                }],
-            )
-            .unwrap();
-            assert!(edit.is_none(), "{source}: {edit:?}");
+            for environment in [false, true] {
+                let body = if environment {
+                    format!(
+                        r"\newenvironment{{future}}{{\{command}{{{argument}}}}}{{}}\begin{{future}}\end{{future}}"
+                    )
+                } else {
+                    format!(r"\def\future{{\{command}{{{argument}}}}}\future")
+                };
+                let (dir, ws, main, source) = setup(&body);
+                let false_uri = Url::from_file_path(dir.path().join(false_name)).unwrap();
+                assert!(!ws.project_files(&main).contains(&false_uri), "{source}");
+                let links = latex_lsp::navigation::document_links(&ws, &main);
+                assert!(
+                    links
+                        .iter()
+                        .all(|link| link.target.as_ref() != Some(&false_uri)),
+                    "{source}: {links:?}"
+                );
+                let at = Text::new(source.clone()).position(source.find("refs").unwrap() + 3);
+                assert!(
+                    features::completion(&ws, &main, at)
+                        .iter()
+                        .all(|item| item.kind != Some(CompletionItemKind::FILE)),
+                    "{source}"
+                );
+                let edit = file_operations::will_rename(
+                    &ws,
+                    &[FileRename {
+                        old_uri: false_uri.into(),
+                        new_uri: Url::from_file_path(dir.path().join("changed.bib"))
+                            .unwrap()
+                            .into(),
+                    }],
+                )
+                .unwrap();
+                assert!(edit.is_none(), "{source}: {edit:?}");
+            }
         }
     }
 }
@@ -67,31 +75,45 @@ fn tokenized_resource_names_never_link_comment_parameter_or_translated_source_sp
 #[test]
 fn resource_moves_reject_comment_parameter_and_character_translation_in_macro_bodies() {
     for command in ["addbibresource", "addglobalbib", "addsectionbib"] {
-        for declaration in ["def", "newcommand"] {
-            let body = format!(r"\{declaration}\future{{\{command}{{refs.bib}}}}\future");
-            let (dir, ws, main, source) = setup(&body);
-            for (name, rejected) in [
-                ("new%data.bib", true),
-                ("new#data.bib", true),
-                ("new^^61data.bib", true),
-                ("new$&^~data.bib", false),
-                ("new 中文.bib", false),
+        for declaration in ["def", "newcommand", "newenvironment"] {
+            for call in [
+                format!(r"\{command}"),
+                format!(r"\csuse{{{command}}}"),
+                format!(r"\csname {command}\endcsname"),
+                r"\register".into(),
             ] {
-                let result = file_operations::will_rename(
-                    &ws,
-                    &[FileRename {
-                        old_uri: Url::from_file_path(dir.path().join("refs.bib"))
-                            .unwrap()
-                            .into(),
-                        new_uri: Url::from_file_path(dir.path().join(name)).unwrap().into(),
-                    }],
-                );
-                if rejected {
-                    assert!(result.is_err(), "{body}/{name}: {result:?}");
+                let declaration = if declaration == "newenvironment" {
+                    format!(
+                        r"\newenvironment{{future}}{{{call}{{refs.bib}}}}{{}}\begin{{future}}\end{{future}}"
+                    )
                 } else {
-                    let edit = result.unwrap().unwrap().changes.unwrap();
-                    assert_eq!(edit[&main].len(), 1, "{source}/{name}");
-                    assert_eq!(edit[&main][0].new_text, name);
+                    format!(r"\{declaration}\future{{{call}{{refs.bib}}}}\future")
+                };
+                let body = format!(r"\def\register{{\{command}}}{declaration}");
+                let (dir, ws, main, source) = setup(&body);
+                for (name, rejected) in [
+                    ("new%data.bib", true),
+                    ("new#data.bib", true),
+                    ("new^^61data.bib", true),
+                    ("new$&^~data.bib", false),
+                    ("new 中文.bib", false),
+                ] {
+                    let result = file_operations::will_rename(
+                        &ws,
+                        &[FileRename {
+                            old_uri: Url::from_file_path(dir.path().join("refs.bib"))
+                                .unwrap()
+                                .into(),
+                            new_uri: Url::from_file_path(dir.path().join(name)).unwrap().into(),
+                        }],
+                    );
+                    if rejected {
+                        assert!(result.is_err(), "{body}/{name}: {result:?}");
+                    } else {
+                        let edit = result.unwrap().unwrap().changes.unwrap();
+                        assert_eq!(edit[&main].len(), 1, "{source}/{name}");
+                        assert_eq!(edit[&main][0].new_text, name);
+                    }
                 }
             }
         }
@@ -101,33 +123,86 @@ fn resource_moves_reject_comment_parameter_and_character_translation_in_macro_bo
 #[test]
 #[ignore = "requires pdflatex and biblatex"]
 fn real_tokenized_resource_moves_preserve_the_native_database_name() {
-    let body = r"\usepackage{biblatex}\def\future{\addbibresource{refs.bib}}\future\begin{document}Text.\end{document}";
-    let (dir, ws, main, source) = setup(body);
-    for name in ["renamed.bib", "renamed$&^~data.bib"] {
-        let result = file_operations::will_rename(
+    for (call, environment) in [
+        (r"\addbibresource", false),
+        (r"\csuse{addbibresource}", false),
+        (r"\csname addbibresource\endcsname", false),
+        (r"\register", false),
+        (r"\csuse{addbibresource}", true),
+    ] {
+        let deferred = if environment {
+            format!(
+                r"\newenvironment{{future}}{{{call}{{refs.bib}}}}{{}}\begin{{future}}\end{{future}}"
+            )
+        } else {
+            format!(r"\def\future{{{call}{{refs.bib}}}}\future")
+        };
+        let body = format!(
+            r"\usepackage{{biblatex}}\def\register{{\addbibresource}}{deferred}\begin{{document}}Text.\end{{document}}"
+        );
+        let (dir, ws, main, source) = setup(&body);
+        for name in ["renamed.bib", "renamed$&^~data.bib"] {
+            let result = file_operations::will_rename(
+                &ws,
+                &[FileRename {
+                    old_uri: Url::from_file_path(dir.path().join("refs.bib"))
+                        .unwrap()
+                        .into(),
+                    new_uri: Url::from_file_path(dir.path().join(name)).unwrap().into(),
+                }],
+            )
+            .unwrap()
+            .unwrap()
+            .changes
+            .unwrap();
+            let edit = &result[&main][0];
+            let changed = Text::new(source.clone())
+                .changed(vec![TextDocumentContentChangeEvent {
+                    range: Some(edit.range),
+                    range_length: None,
+                    text: edit.new_text.clone(),
+                }])
+                .unwrap()
+                .source;
+            std::fs::write(dir.path().join("main.tex"), changed).unwrap();
+            std::fs::copy(dir.path().join("refs.bib"), dir.path().join(name)).unwrap();
+            let output = std::process::Command::new("pdflatex")
+                .args([
+                    "-no-shell-escape",
+                    "-interaction=nonstopmode",
+                    "-halt-on-error",
+                    "main.tex",
+                ])
+                .current_dir(dir.path())
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+            let bcf = std::fs::read_to_string(dir.path().join("main.bcf"))
+                .unwrap()
+                .replace("&amp;", "&");
+            assert!(bcf.contains(&format!(">{name}</bcf:datasource>")), "{bcf}");
+        }
+        let rejected = file_operations::will_rename(
             &ws,
             &[FileRename {
                 old_uri: Url::from_file_path(dir.path().join("refs.bib"))
                     .unwrap()
                     .into(),
-                new_uri: Url::from_file_path(dir.path().join(name)).unwrap().into(),
+                new_uri: Url::from_file_path(dir.path().join("bad%data.bib"))
+                    .unwrap()
+                    .into(),
             }],
+        );
+        assert!(rejected.is_err());
+        std::fs::write(
+            dir.path().join("main.tex"),
+            source.replace("refs.bib", "bad%data.bib"),
         )
-        .unwrap()
-        .unwrap()
-        .changes
         .unwrap();
-        let edit = &result[&main][0];
-        let changed = Text::new(source.clone())
-            .changed(vec![TextDocumentContentChangeEvent {
-                range: Some(edit.range),
-                range_length: None,
-                text: edit.new_text.clone(),
-            }])
-            .unwrap()
-            .source;
-        std::fs::write(dir.path().join("main.tex"), changed).unwrap();
-        std::fs::copy(dir.path().join("refs.bib"), dir.path().join(name)).unwrap();
         let output = std::process::Command::new("pdflatex")
             .args([
                 "-no-shell-escape",
@@ -138,44 +213,8 @@ fn real_tokenized_resource_moves_preserve_the_native_database_name() {
             .current_dir(dir.path())
             .output()
             .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stdout)
-        );
-        let bcf = std::fs::read_to_string(dir.path().join("main.bcf"))
-            .unwrap()
-            .replace("&amp;", "&");
-        assert!(bcf.contains(&format!(">{name}</bcf:datasource>")), "{bcf}");
+        assert!(!output.status.success());
     }
-    let rejected = file_operations::will_rename(
-        &ws,
-        &[FileRename {
-            old_uri: Url::from_file_path(dir.path().join("refs.bib"))
-                .unwrap()
-                .into(),
-            new_uri: Url::from_file_path(dir.path().join("bad%data.bib"))
-                .unwrap()
-                .into(),
-        }],
-    );
-    assert!(rejected.is_err());
-    std::fs::write(
-        dir.path().join("main.tex"),
-        source.replace("refs.bib", "bad%data.bib"),
-    )
-    .unwrap();
-    let output = std::process::Command::new("pdflatex")
-        .args([
-            "-no-shell-escape",
-            "-interaction=nonstopmode",
-            "-halt-on-error",
-            "main.tex",
-        ])
-        .current_dir(dir.path())
-        .output()
-        .unwrap();
-    assert!(!output.status.success());
 }
 
 #[test]
@@ -233,11 +272,9 @@ fn resource_completions_filter_only_names_changed_by_precollected_tokens() {
             for call in [
                 format!(r"\{command}"),
                 format!(r"\csuse{{{command}}}"),
+                format!(r"\csname {command}\endcsname"),
                 r"\register".into(),
             ] {
-                if wrapped && call != format!(r"\{command}") {
-                    continue;
-                }
                 let call = format!("{call}{{refs.bib}}");
                 let body = format!(
                     r"\def\register{{\{command}}}{}",
