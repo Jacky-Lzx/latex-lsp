@@ -19,6 +19,7 @@
 - [上下文选项补全](options.md)：宏包、文档类、图片和设置命令的键与枚举值。
 - [补全](completion.md)：调用片段、已有参数、命令名操作数及名称替换。
 - [参数提示](signatures.md)：跨文件签名、声明参数、可选参数边界与注释中的数量。
+- [文献检索补全](citation-search.md)：作者、标题、年份、组合查询和模糊键匹配。
 - [文献](bibliography.md)：文献键、biblatex 别名、natbib、手写文献、条目关系、字符串缩写及 URL/DOI 链接。
 - [biblatex 文献资源](biblatex-resources.md)：加载命令、路径编辑和静态支持范围。
 - [biblatex 引用](biblatex.md)：字段、列表、姓名、单次、多组和卷号引用。

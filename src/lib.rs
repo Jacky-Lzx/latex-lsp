@@ -11,6 +11,7 @@ pub mod build;
 pub mod build_log;
 pub mod catalog;
 mod chktex;
+mod citation_search;
 mod citations;
 mod code_inputs;
 pub mod code_lens;
