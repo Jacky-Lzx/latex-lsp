@@ -19,7 +19,7 @@ pub(crate) fn is_inline_save(name: &str) -> bool {
 }
 
 pub(crate) fn is_inline(name: &str) -> bool {
-    name == "Verb" || is_inline_save(name)
+    matches!(name, "Verb" | "EscVerb") || is_inline_save(name)
 }
 
 #[derive(Clone, Copy)]
@@ -184,6 +184,18 @@ pub(crate) fn inline_start(
         None
     };
     Some((at, options))
+}
+
+/// EscVerb reads ordinary balanced tokens, after fvextra's raw header peek.
+/// An intervening options argument ends that peek before its code is read.
+pub(crate) fn escaped_inline_start(source: &str, at: usize, tokenized: bool) -> Option<usize> {
+    let (at, options) = inline_start(source, at, tokenized)?;
+    let at = if options.is_some() {
+        syntax::skip_space(source, at)
+    } else {
+        at
+    };
+    (source.as_bytes().get(at) == Some(&b'{')).then_some(at)
 }
 
 fn extra_option(source: &str) -> Option<bool> {

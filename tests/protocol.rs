@@ -23541,3 +23541,156 @@ fn fvextra_environment_settings_refresh_symbols_dependencies_and_rename_over_std
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+fn escaped_inline_code_refreshes_aliases_redefinitions_and_unfinished_arguments_over_stdio() {
+    use latex_lsp::text::Text;
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::write(root.join("chapter.tex"), "Chapter text").unwrap();
+    let main = Url::from_file_path(root.join("main.tex")).unwrap();
+    let mut source =
+        "% 😀\r\n\\usepackage{fvextra}\r\n\\label{kept}\r\n\r\n\\ref{kept}\r\n".to_owned();
+    std::fs::write(root.join("main.tex"), &source).unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(root).unwrap(),"capabilities":{"textDocument":{"diagnostic":{},"completion":{"completionItem":{"snippetSupport":true}}},"workspace":{"workspaceEdit":{"documentChanges":true}}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":main,"languageId":"latex","version":7,"text":source}}),
+    );
+    let body = r"\label{live}\ref{kept}\input{chapter}";
+    for (stage, (code, live, unclosed)) in [
+        (
+            format!("\\EscVerb[showspaces=true]{{{body}}}"),
+            false,
+            false,
+        ),
+        (format!("\\textbf{{\\EscVerb{{{body}}}}}"), false, false),
+        (
+            format!("\\let\\code\\EscVerb\\code{{{body}}}"),
+            false,
+            false,
+        ),
+        (
+            format!("\\newcommand{{\\code}}{{\\EscVerb}}\\code{{{body}}}"),
+            false,
+            false,
+        ),
+        (
+            format!("\\renewcommand{{\\EscVerb}}[1]{{#1}}\\EscVerb{{{body}}}"),
+            true,
+            false,
+        ),
+        (format!("\\EscVerb{{{body}"), false, true),
+        (format!("\\EscVerb{{{body}}}"), false, false),
+        (format!("\\EscVerb% header\r\n{{{body}}}"), true, false),
+        (
+            format!("\\EscVerb[showspaces=true]% header\r\n{{{body}}}"),
+            false,
+            false,
+        ),
+        (
+            format!("\\textbf{{\\EscVerb% header\r\n{{{body}}}}}"),
+            false,
+            false,
+        ),
+        (format!("\\EscVerb{{{body}}}"), false, false),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let start = source.find("\\label{kept}\r\n").unwrap() + "\\label{kept}\r\n".len();
+        let end = source.rfind("\r\n\\ref").unwrap();
+        let version = 8 + stage;
+        let range = Text::new(source.clone()).range(start, end);
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":version},"contentChanges":[{"range":range,"text":code}]}));
+        source.replace_range(start..end, &code);
+        let id = 10 + stage as u64 * 6;
+        let diagnostics = server.request(
+            id,
+            "textDocument/diagnostic",
+            json!({"textDocument":{"uri":main}}),
+        );
+        let items = diagnostics["items"].as_array().unwrap();
+        assert_eq!(
+            items.len(),
+            usize::from(unclosed),
+            "{source}: {diagnostics}"
+        );
+        if unclosed {
+            assert_eq!(items[0]["message"], "Unclosed brace");
+        }
+        let position = Text::new(source.clone()).position(source.find("kept").unwrap());
+        let edit = server.request(
+            id + 1,
+            "textDocument/rename",
+            json!({"textDocument":{"uri":main},"position":position,"newName":"changed"}),
+        );
+        assert_eq!(
+            edit["documentChanges"][0]["textDocument"]["version"],
+            version
+        );
+        assert_eq!(
+            edit["documentChanges"][0]["edits"]
+                .as_array()
+                .unwrap()
+                .len(),
+            if unclosed { 1 } else { 2 + usize::from(live) },
+            "{source}: {edit}"
+        );
+        let links = server.request(
+            id + 2,
+            "textDocument/documentLink",
+            json!({"textDocument":{"uri":main}}),
+        );
+        assert_eq!(
+            links.as_array().unwrap().len(),
+            // Custom macro operands keep the existing conservative file-link rules.
+            usize::from(live && stage != 4),
+            "{source}: {links}"
+        );
+        let symbols = server.request(
+            id + 3,
+            "textDocument/documentSymbol",
+            json!({"textDocument":{"uri":main}}),
+        );
+        assert_eq!(
+            symbols
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|symbol| symbol["name"] == "live"),
+            live,
+            "{source}: {symbols}"
+        );
+        if stage == 0 {
+            let text = Text::new(source.clone());
+            let position = text.position(source.find("EscVerb").unwrap() + 3);
+            let completion = server.request(
+                id + 4,
+                "textDocument/completion",
+                json!({"textDocument":{"uri":main},"position":position}),
+            );
+            let item = completion
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|item| item["label"] == "EscVerb")
+                .unwrap();
+            assert_eq!(item["insertTextFormat"], 1);
+            assert_eq!(item["textEdit"]["newText"], "EscVerb");
+            let position = text.position(source.find("true").unwrap());
+            let help = server.request(
+                id + 5,
+                "textDocument/signatureHelp",
+                json!({"textDocument":{"uri":main},"position":position}),
+            );
+            assert_eq!(help["signatures"][0]["label"], "\\EscVerb[options]{code}");
+            assert_eq!(help["activeParameter"], 0);
+        }
+    }
+    server.request(1000, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

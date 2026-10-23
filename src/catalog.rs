@@ -931,6 +931,7 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
         "Typeset literal inline code, with optional settings, matching delimiters or braces. A star is a delimiter; braced code ends at the first right brace. Requires listings.",
     ),
     ("Verb", "Verb|${1:code}|", "Typeset inline verbatim text with optional formatting and a visible-space star. Requires fancyvrb; fvextra also accepts braced code."),
+    ("EscVerb", "EscVerb{${1:code}}", "Typeset inline verbatim text from a balanced TeX argument with backslash escapes for ASCII symbols and punctuation. Supports formatting options and a visible-space star. Requires fvextra."),
     ("SaveVerb", "SaveVerb{${1:name}}|${2:code}|", "Save inline verbatim text for UseVerb. Requires fancyvrb."),
     ("SaveGVerb", "SaveGVerb{${1:name}}|${2:code}|", "Save inline verbatim text globally for UseMVerb. Requires fancyvrb."),
     ("UseVerb", "UseVerb{${1:name}}", "Insert saved inline verbatim text with optional formatting. Requires fancyvrb."),

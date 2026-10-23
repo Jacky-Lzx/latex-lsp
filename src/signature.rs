@@ -494,6 +494,7 @@ fn builtin(name: &str) -> Option<Signature> {
         "lstinputlisting" => (&[("options", true), ("file", false)], false),
         "lstinline" => (&[("options", true)], false),
         "Verb" => (&[("options", true)], true),
+        "EscVerb" => (&[("options", true), ("code", false)], true),
         name if crate::fancyvrb::is_inline_save(name) || crate::fancyvrb::is_use(name) => {
             (&[("options", true), ("name", false)], true)
         }
@@ -944,7 +945,7 @@ fn builtin(name: &str) -> Option<Signature> {
                     && index == 0
             {
                 Kind::CommandToken
-            } else if name == "verbatiminput"
+            } else if matches!(name, "verbatiminput" | "EscVerb")
                 || crate::minted::is_inline(name)
                 || name == "inputminted"
                 || syntax::is_range_reference(name)
@@ -1975,7 +1976,10 @@ impl InlineTokenization {
             let mut visited = BTreeSet::new();
             let mut found = false;
             while let Some(name) = pending.pop() {
-                if matches!(name, "lstinline" | "mintinline" | "mint" | "Verb") {
+                if matches!(
+                    name,
+                    "lstinline" | "mintinline" | "mint" | "Verb" | "EscVerb"
+                ) {
                     found = true;
                     break;
                 }
@@ -1992,7 +1996,7 @@ impl InlineTokenization {
         }
         self.refresh(source, parsed);
         let signatures = self.signatures.as_ref().unwrap();
-        ["lstinline", "mintinline", "mint", "Verb"]
+        ["lstinline", "mintinline", "mint", "Verb", "EscVerb"]
             .into_iter()
             .find(|builtin| signatures.invokes_builtin(name, builtin))
     }

@@ -2246,7 +2246,8 @@ impl Syntax {
                         }
                     }
                     let inline_name = if operands_known
-                        && (matches!(name, "lstinline" | "Verb") || crate::minted::is_inline(name))
+                        && (matches!(name, "lstinline" | "Verb" | "EscVerb")
+                            || crate::minted::is_inline(name))
                     {
                         Some(name)
                     } else if !control_operands.contains(&start) && assigned_controls.contains(name)
@@ -2255,6 +2256,23 @@ impl Syntax {
                     } else {
                         None
                     };
+                    if inline_name == Some("EscVerb") {
+                        let ordinary =
+                            crate::fancyvrb::escaped_inline_start(source, command_end, true);
+                        let tokenized = ordinary.is_some_and(|at| {
+                            inline_tokenization.contains(source, &result, &control_operands, at + 1)
+                        });
+                        if let Some(at) =
+                            crate::fancyvrb::escaped_inline_start(source, command_end, tokenized)
+                        {
+                            for argument in crate::string_tests::arguments(source, at, 1) {
+                                literal_arguments
+                                    .insert(argument.start, (argument.span, argument.end));
+                            }
+                        }
+                        result.commands.push(probe);
+                        continue;
+                    }
                     if inline_name == Some("Verb") {
                         let ordinary = fancyverb_context.verb_header(source, command_end, true);
                         let body = ordinary.as_ref().map_or(source.len(), |header| {
