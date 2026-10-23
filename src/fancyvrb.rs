@@ -44,7 +44,12 @@ impl Default for InlineSettings {
 #[derive(Default)]
 pub(crate) struct InlineContext {
     settings: InlineSettings,
-    scopes: Vec<InlineSettings>,
+    scopes: Vec<InlineScope>,
+}
+
+struct InlineScope {
+    settings: InlineSettings,
+    environment: Option<String>,
 }
 
 pub(crate) struct VerbHeader {
@@ -55,12 +60,36 @@ pub(crate) struct VerbHeader {
 
 impl InlineContext {
     pub(crate) fn enter(&mut self) {
-        self.scopes.push(self.settings);
+        self.scopes.push(InlineScope {
+            settings: self.settings,
+            environment: None,
+        });
     }
 
     pub(crate) fn leave(&mut self) {
-        if let Some(settings) = self.scopes.pop() {
-            self.settings = settings;
+        // An unmatched closing group must not consume an environment frame.
+        if let Some(scope) = self.scopes.pop_if(|scope| scope.environment.is_none()) {
+            self.settings = scope.settings;
+        }
+    }
+
+    pub(crate) fn enter_environment(&mut self, name: &str) {
+        self.scopes.push(InlineScope {
+            settings: self.settings,
+            environment: Some(name.into()),
+        });
+    }
+
+    pub(crate) fn leave_environment(&mut self, name: &str) {
+        if let Some(index) = self
+            .scopes
+            .iter()
+            .rposition(|scope| scope.environment.as_deref() == Some(name))
+        {
+            // Use the same named recovery as the environment diagnostics,
+            // discarding unfinished inner scopes when an outer one closes.
+            self.settings = self.scopes[index].settings;
+            self.scopes.truncate(index);
         }
     }
 

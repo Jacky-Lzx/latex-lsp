@@ -2865,6 +2865,9 @@ impl Syntax {
                                         i = after;
                                     }
                                 } else {
+                                    if operands_known && environment_argument.is_some() {
+                                        fancyverb_context.enter_environment(env);
+                                    }
                                     environments.push((
                                         true,
                                         arg.clone(),
@@ -2873,6 +2876,9 @@ impl Syntax {
                                 }
                             }
                             "end" => {
+                                if operands_known && environment_argument.is_some() {
+                                    fancyverb_context.leave_environment(&arg.value);
+                                }
                                 environments.push((false, arg.clone(), start..arg.outer_span.end));
                             }
                             _ => {}

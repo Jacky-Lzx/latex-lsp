@@ -348,11 +348,12 @@ cargo test --locked --test protocol listings_inline_
 
 ## FancyVerb 行内正文
 
-`fancyvrb_inline` 覆盖 `Verb` 在已知宏参数、复制包装与宏定义中的正文命令、注释续行、嵌套分组和分组分隔符，核对标签与宏重命名、文件依赖和普通格式命令中的文件移动。另覆盖普通作用域、零参数包装、只读取头部及被消费的格式控制词，保证这些场景继续隔离逐字正文；项目重定义后恢复普通参数索引。stdio 回归增量添加和移除宏包装、fvextra / minted 包加载与 `extra=false`，核对诊断、版本化重命名、文件链接和符号刷新。默认及原生回归另覆盖 fvextra 的平衡花括号、多行代码、保存正文、调用级开关、全局与行内设置优先级及分组恢复。 静态别名回归覆盖复制链、传统及 TeX 转发、转发后复制、别名重命名、代码中的同名命令隔离、保留字的读取规则替换和不确定声明反例；原生编译比较 FancyVerb、fvextra 默认及 `extra=false` 下重命名前后的标签和实际输入。stdio 增量添加、替换及移除复制和转发声明，检查正文隔离与版本化别名编辑。 头部回归另覆盖 fvextra 的 `%` / 反斜杠分隔符、选项对预读的影响和宏参数内的注释续行。`fancyvrb_completion` 验证片段协商、代码与裸名称保留、保存名称提示、首个未受保护右方括号、注释与逐字正文拒绝及项目重定义；原生编译填入实际补全片段后核对保存与读取行为和伪命令隔离。协议回归同步验证增量补全、悬停和参数提示。
+`fancyvrb_inline` 覆盖 `Verb` 在已知宏参数、复制包装与宏定义中的正文命令、注释续行、嵌套分组和分组分隔符，核对标签与宏重命名、文件依赖和普通格式命令中的文件移动。另覆盖普通作用域、零参数包装、只读取头部及被消费的格式控制词，保证这些场景继续隔离逐字正文；项目重定义后恢复普通参数索引。stdio 回归增量添加和移除宏包装、fvextra / minted 包加载与 `extra=false`，核对诊断、版本化重命名、文件链接和符号刷新。默认及原生回归另覆盖 fvextra 的平衡花括号、多行代码、保存正文、调用级开关、全局与行内设置优先级及分组恢复。 静态别名回归覆盖复制链、传统及 TeX 转发、转发后复制、别名重命名、代码中的同名命令隔离、保留字的读取规则替换和不确定声明反例；原生编译比较 FancyVerb、fvextra 默认及 `extra=false` 下重命名前后的标签和实际输入。stdio 增量添加、替换及移除复制和转发声明，检查正文隔离与版本化别名编辑。 头部回归另覆盖 fvextra 的 `%` / 反斜杠分隔符、选项对预读的影响和宏参数内的注释续行。`fancyvrb_completion` 验证片段协商、代码与裸名称保留、保存名称提示、首个未受保护右方括号、注释与逐字正文拒绝及项目重定义；原生编译填入实际补全片段后核对保存与读取行为和伪命令隔离。协议回归同步验证增量补全、悬停和参数提示。`fvextra_scopes` 核对嵌套环境的设置优先级、单 token 名称、分组混用、逐字环境中的伪关闭标记和错误恢复，并比较符号、文件依赖及重命名范围；原生编译验证重命名前后的 aux 标签和实际输入。作用域 stdio 回归增量添加、移除和嵌套环境，核对未闭合诊断及各编辑索引刷新。
 
 ```sh
-cargo test --locked --test fancyvrb_inline --test fancyvrb_completion
+cargo test --locked --test fancyvrb_inline --test fancyvrb_completion --test fvextra_scopes
 cargo test --locked --test protocol fancyvrb_inline_
+cargo test --locked --test protocol fvextra_environment_
 ```
 
 安装 pdfLaTeX 与 XeLaTeX 后，为第一个命令添加 `-- --include-ignored`；原生回归核对正文命令实际执行、aux 标签、编译输入和重命名前后的输出。`minted` 的原生回归另比较 listings、minted 和 FancyVerb 仅头部作为宏参数时的直接源码行为，需要 listings 与 minted v3。

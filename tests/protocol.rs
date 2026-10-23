@@ -23480,3 +23480,64 @@ fn fancyvrb_inline_completions_and_saved_name_hints_follow_incremental_edits_ove
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+fn fvextra_environment_settings_refresh_symbols_dependencies_and_rename_over_stdio() {
+    use latex_lsp::text::Text;
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::write(root.join("chapter.tex"), "Chapter text").unwrap();
+    let main = Url::from_file_path(root.join("main.tex")).unwrap();
+    let mut source =
+        "% 😀\r\n\\usepackage{fvextra}\r\n\\label{kept}\r\n\r\n\\ref{kept}\r\n".to_owned();
+    std::fs::write(root.join("main.tex"), &source).unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(root).unwrap(),"capabilities":{"textDocument":{"diagnostic":{}},"workspace":{"workspaceEdit":{"documentChanges":true}}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":main,"languageId":"latex","version":7,"text":source}}),
+    );
+    let body = r"\textbf{\Verb|\label{live}\ref{kept}\input{chapter}|}";
+    let literal = "\\begin{Verbatim}\r\n\\end{quote}\\fvset{extra=true}\r\n\\end{Verbatim}\r\n";
+    for (stage, (code, live, unclosed)) in [
+        (format!("\\begin{{quote}}\\fvset{{extra=false}}\\end{{quote}}{body}"), false, false),
+        (format!("\\begin{{quote}}\\fvset{{extra=false}}{body}\\end{{quote}}"), true, false),
+        (format!("\\begin{{quote}}\\fvset{{extra=false}}{body}"), true, true),
+        (format!("\\begin{{quote}}\\fvset{{extra=false}}\\end{{quote}}{body}"), false, false),
+        (format!("\\fvset{{extra=false}}\\begin{{quote}}\\fvinlineset{{extra=true}}\\end{{quote}}{body}"), true, false),
+        (format!("\\fvset{{extra=false}}\\begin{{quote}}\\fvinlineset{{extra=true}}{body}\\end{{quote}}"), false, false),
+        (format!("\\begin{{quote}}\\fvset{{extra=false}}\\begin{{center}}\\fvinlineset{{extra=true}}\\end{{center}}{body}\\end{{quote}}"), true, false),
+        (format!("\\begin{{quote}}\\fvset{{extra=false}}\r\n{literal}{body}\\end{{quote}}"), true, false),
+        (format!("\\begin{{quote}}\\fvset{{extra=false}}\r\n{literal}\\end{{quote}}{body}"), false, false),
+        (format!("\\newenvironment{{q}}{{}}{{}}\\begin q\\fvinlineset{{extra=false}}\\end q{body}"), false, false),
+        (body.into(), false, false),
+    ].into_iter().enumerate() {
+        let start = source.find("\\label{kept}\r\n").unwrap() + "\\label{kept}\r\n".len();
+        let end = source.rfind("\r\n\\ref").unwrap();
+        let version = 8 + stage;
+        let range = Text::new(source.clone()).range(start, end);
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":version},"contentChanges":[{"range":range,"text":code}]}));
+        source.replace_range(start..end, &code);
+        let id = 10 + stage as u64 * 4;
+        let diagnostics = server.request(id, "textDocument/diagnostic", json!({"textDocument":{"uri":main}}));
+        let items = diagnostics["items"].as_array().unwrap();
+        if unclosed {
+            assert_eq!(items.len(), 1, "{source}: {diagnostics}");
+            assert!(items[0]["message"].as_str().unwrap().contains("Unclosed environment `quote`"));
+        } else {
+            assert!(items.is_empty(), "{source}: {diagnostics}");
+        }
+        let position = Text::new(source.clone()).position(source.rfind("kept").unwrap());
+        let edit = server.request(id + 1, "textDocument/rename", json!({"textDocument":{"uri":main},"position":position,"newName":"changed"}));
+        assert_eq!(edit["documentChanges"][0]["textDocument"]["version"], version);
+        assert_eq!(edit["documentChanges"][0]["edits"].as_array().unwrap().len(), 2 + usize::from(live), "{source}: {edit}");
+        let links = server.request(id + 2, "textDocument/documentLink", json!({"textDocument":{"uri":main}}));
+        assert_eq!(links.as_array().unwrap().len(), usize::from(live), "{source}: {links}");
+        let symbols = server.request(id + 3, "textDocument/documentSymbol", json!({"textDocument":{"uri":main}}));
+        assert_eq!(symbols.as_array().unwrap().iter().any(|symbol| symbol["name"] == "live"), live, "{source}: {symbols}");
+    }
+    server.request(1000, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
