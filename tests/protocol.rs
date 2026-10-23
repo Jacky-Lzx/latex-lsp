@@ -28416,7 +28416,11 @@ fn section_resource_changes_reject_default_database_renames_and_restore_empty_li
             "textDocument/definition",
             json!({"textDocument":{"uri":main},"position":at}),
         );
-        assert_eq!(definition, json!([]));
+        assert_eq!(definition.as_array().unwrap().len(), 1);
+        assert_eq!(
+            definition[0]["uri"],
+            main.join("section.bib").unwrap().as_str()
+        );
         server.send(json!({"jsonrpc":"2.0","id":3,"method":"textDocument/rename","params":{"textDocument":{"uri":bib},"position":{"line":0,"character":8},"newName":"updated"}}));
         let response = server.until(|message| message["id"] == 3);
         assert_eq!(response["error"]["code"], -32602, "{response}");
@@ -29056,4 +29060,112 @@ fn imported_parameter_sections_refresh_key_protection_without_changing_parent_ve
         server.notify("exit", Value::Null);
         server.wait_exit(0);
     }
+}
+
+#[test]
+fn selected_section_citation_targets_and_hover_follow_unsaved_root_changes_over_stdio() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+    let chapter = Url::from_file_path(directory.path().join("chapter.tex")).unwrap();
+    let source = r"\documentclass{article}\usepackage{biblatex}\addbibresource{default.bib}\addsectionbib[label=chosen]{section.bib}\begin{document}\newrefsection[chosen]\input{chapter}\end{document}";
+    for (name, text) in [
+        ("main.tex", source),
+        ("chapter.tex", r"\cite{collision}"),
+        ("default.bib", "@book{collision,title={Default}}"),
+        ("section.bib", "@book{collision,title={Selected}}"),
+        ("other.bib", "@book{collision,title={Other}}"),
+    ] {
+        std::fs::write(directory.path().join(name), text).unwrap();
+    }
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(directory.path()).unwrap(),"capabilities":{},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":main,"languageId":"latex","version":5,"text":source}}),
+    );
+    server.notify("textDocument/didOpen", json!({"textDocument":{"uri":chapter,"languageId":"latex","version":3,"text":r"\cite{collision}"}}));
+    for (stage, (selector, expected)) in [
+        ("chosen", "section.bib"),
+        ("other.bib", "other.bib"),
+        ("", "default.bib"),
+        ("chosen", "section.bib"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if stage != 0 {
+            let updated = source.replace("[chosen]", &format!("[{selector}]"));
+            server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":5 + stage},"contentChanges":[{"text":updated}]}));
+        }
+        let id = 10 + stage as u64 * 3;
+        let positions = server.request(
+            id,
+            "textDocument/definition",
+            json!({"textDocument":{"uri":chapter},"position":{"line":0,"character":8}}),
+        );
+        assert_eq!(positions.as_array().unwrap().len(), 1, "{positions}");
+        assert_eq!(positions[0]["uri"], main.join(expected).unwrap().as_str());
+        let hover = server.request(
+            id + 1,
+            "textDocument/hover",
+            json!({"textDocument":{"uri":chapter},"position":{"line":0,"character":8}}),
+        );
+        assert!(
+            hover["contents"]["value"]
+                .as_str()
+                .unwrap()
+                .contains(expected),
+            "{hover}"
+        );
+        assert_eq!(
+            hover["range"],
+            json!({"start":{"line":0,"character":6},"end":{"line":0,"character":15}})
+        );
+        if !selector.is_empty() {
+            let bib = main.join(expected).unwrap();
+            server.send(json!({"jsonrpc":"2.0","id":id + 2,"method":"textDocument/rename","params":{"textDocument":{"uri":bib},"position":{"line":0,"character":8},"newName":"updated"}}));
+            let response = server.until(|message| message["id"] == id + 2);
+            assert_eq!(response["error"]["code"], -32602, "{response}");
+        }
+    }
+    let default_source = source.replace("[chosen]", "[]");
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":9},"contentChanges":[{"text":default_source}]}),
+    );
+    let unsaved = main.join("new-root.tex").unwrap();
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":unsaved,"languageId":"latex","version":2,"text":source}}),
+    );
+    let positions = server.request(
+        900,
+        "textDocument/definition",
+        json!({"textDocument":{"uri":chapter},"position":{"line":0,"character":8}}),
+    );
+    assert_eq!(positions, json!([]));
+    let hover = server.request(
+        901,
+        "textDocument/hover",
+        json!({"textDocument":{"uri":chapter},"position":{"line":0,"character":8}}),
+    );
+    assert_eq!(hover, Value::Null);
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":unsaved}}),
+    );
+    let positions = server.request(
+        902,
+        "textDocument/definition",
+        json!({"textDocument":{"uri":chapter},"position":{"line":0,"character":8}}),
+    );
+    assert_eq!(positions.as_array().unwrap().len(), 1);
+    assert_eq!(
+        positions[0]["uri"],
+        main.join("default.bib").unwrap().as_str()
+    );
+    server.request(1000, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
 }

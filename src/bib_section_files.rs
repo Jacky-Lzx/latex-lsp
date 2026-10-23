@@ -38,10 +38,12 @@ struct Registration {
     target: Option<Url>,
 }
 #[derive(Default)]
-struct Registry {
+pub(crate) struct Registry {
     paths: BTreeMap<String, Option<Registration>>,
     labels: BTreeMap<String, Option<Registration>>,
     uncertain: bool,
+    defaults: Option<BTreeSet<Url>>,
+    globals: Option<BTreeSet<Url>>,
 }
 fn bind(
     map: &mut BTreeMap<String, Option<Registration>>,
@@ -116,9 +118,24 @@ fn lookup(root: &Url, uri: &Url, name: &str, value: &str) -> Option<Url> {
     resolve_file_path(root, name, value, &["bib"])
         .or_else(|| resolve_file_path(uri, name, value, &["bib"]))
 }
+// Biber resolves these names from the compilation root. The input-relative
+// fallback remains useful for file links, but cannot certify a citation target.
+fn root_target(root: &Url, registration: &Registration) -> Option<Url> {
+    let name = &registration.command.argument.as_ref()?.value;
+    let target = lookup(root, root, EXACT, name)?;
+    (registration.target.as_ref() == Some(&target)).then_some(target)
+}
 impl Registry {
-    fn new(root: &Url, docs: &[(Url, &Document)], signatures: &CommandSignatures<'_>) -> Self {
-        let mut result = Self::default();
+    pub(crate) fn new(
+        root: &Url,
+        docs: &[(Url, &Document)],
+        signatures: &CommandSignatures<'_>,
+    ) -> Self {
+        let mut result = Self {
+            defaults: Some(BTreeSet::new()),
+            globals: Some(BTreeSet::new()),
+            ..Default::default()
+        };
         // A copied registration can preserve an earlier resource meaning.
         // It cannot certify an unregistered filename or a unique label here.
         for (_, doc) in docs {
@@ -180,6 +197,23 @@ impl Registry {
                 if !crate::bib_resources::literal_path(&raw.value) {
                     result.uncertain = true;
                 }
+                let resources = match name {
+                    "addbibresource" => Some(&mut result.defaults),
+                    "addglobalbib" => Some(&mut result.globals),
+                    _ => None,
+                };
+                if let Some(resources) = resources {
+                    if let Some(target) = registration
+                        .as_ref()
+                        .and_then(|entry| root_target(root, entry))
+                    {
+                        if let Some(resources) = resources.as_mut() {
+                            resources.insert(target);
+                        }
+                    } else {
+                        *resources = None;
+                    }
+                }
                 bind(&mut result.paths, raw.value, registration.clone());
                 if let Some(label) = label {
                     bind(&mut result.labels, label, registration);
@@ -187,6 +221,37 @@ impl Registry {
             }
         }
         result
+    }
+
+    /// Roles are collected independently of the path map: registering a path
+    /// for a section first must not erase its later default or global role.
+    pub(crate) fn resources(
+        &self,
+        root: &Url,
+        selected: Option<&[String]>,
+    ) -> Option<BTreeSet<Url>> {
+        if self.uncertain {
+            return None;
+        }
+        let mut result = self.globals.clone()?;
+        if let Some(selected) = selected.filter(|items| !items.is_empty()) {
+            for item in selected {
+                let target = if let Some(binding) = self.labels.get(item) {
+                    root_target(root, binding.as_ref()?)?
+                } else if let Some(binding) = self.paths.get(item) {
+                    root_target(root, binding.as_ref()?)?
+                } else {
+                    if !editable_item(item) {
+                        return None;
+                    }
+                    lookup(root, root, INFERRED, item)?
+                };
+                result.insert(target);
+            }
+        } else {
+            result.extend(self.defaults.clone()?);
+        }
+        Some(result)
     }
 }
 

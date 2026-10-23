@@ -1708,6 +1708,9 @@ pub fn definitions(workspace: &Workspace, uri: &Url, position: Position) -> Vec<
             }
         }
     }
+    if let Some(result) = crate::bib_section_keys::definitions(workspace, uri, offset) {
+        return result;
+    }
     let Some(target) = target(workspace, uri, offset) else {
         return vec![];
     };
@@ -2129,6 +2132,9 @@ pub fn hover(workspace: &Workspace, uri: &Url, position: Position) -> Option<Hov
                 }
             }
         }
+    }
+    if let Some(hover) = crate::bib_section_keys::hover(workspace, uri, offset) {
+        return hover;
     }
     let target = target(workspace, uri, offset)?;
     let scope = workspace.symbol_scope(uri);

@@ -42,12 +42,20 @@ fn selected_sections_do_not_bind_keys_to_the_default_database_or_offer_partial_e
         let (_dir, ws, main, bib, source) = setup(header);
         let text = Text::new(source.clone());
         let at = text.position(source.find(r"\cite{collision").unwrap() + 8);
-        assert!(features::definitions(&ws, &main, at).is_empty(), "{header}");
+        let definitions = features::definitions(&ws, &main, at);
+        assert!(
+            definitions.iter().all(|location| location.uri != bib),
+            "{header}: {definitions:?}"
+        );
         assert!(
             features::prepare_rename(&ws, &main, at).unwrap().is_none(),
             "{header}"
         );
-        assert!(features::hover(&ws, &main, at).is_none(), "{header}");
+        assert_eq!(
+            features::hover(&ws, &main, at).is_some(),
+            !definitions.is_empty(),
+            "{header}"
+        );
         assert!(editing::highlights(&ws, &main, at).is_empty(), "{header}");
         assert!(
             !features::completion(&ws, &main, at)
@@ -215,7 +223,9 @@ fn real_section_resources_reject_the_partial_rename_that_breaks_biber_resolution
             }
         }
         let at = Text::new(source.clone()).position(source.find(r"\cite{collision").unwrap() + 8);
-        assert!(features::definitions(&ws, &main, at).is_empty());
+        assert!(features::definitions(&ws, &main, at)
+            .iter()
+            .all(|location| location.uri != bib));
     }
 }
 

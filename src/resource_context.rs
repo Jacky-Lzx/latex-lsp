@@ -138,7 +138,7 @@ fn prefix(syntax: &Syntax, end: usize) -> Syntax {
     result.command_undefinitions.retain(|at, _| *at < end);
     result
 }
-fn grouped(source: &str, parsed: &Syntax, end: usize) -> bool {
+pub(crate) fn grouped(source: &str, parsed: &Syntax, end: usize) -> bool {
     let mut depth = 0usize;
     let mut at = 0;
     let mut ignored: Vec<_> = parsed.ignored.iter().collect();
