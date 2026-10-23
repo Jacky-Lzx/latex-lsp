@@ -133,3 +133,5 @@ Biber 输入历史仅对这三种确切模板保留可恢复状态：真实工�
 代码按职责拆分：`text.rs` 处理位置与编辑，`syntax.rs` 解析 LaTeX/BibTeX，`citations.rs` 共享多组、卷号及字段和列表引用的参数边界，`bib_resources.rs` 统一 biblatex 静态本地资源的选项、完整文件名与补全边界，`workspace.rs` 管理文件索引与根文档，`features.rs` 实现语言功能，`signature.rs` 提供命令参数提示，`navigation.rs` 处理工作区搜索和链接，`folding.rs` 处理语法折叠及客户端能力，`editing.rs` 处理快速修复、高亮和选择范围，`file_operations.rs` 维护文件移动后的引用，`graphics_settings.rs` 按源码顺序跟踪图片目录和扩展名的局部与全局设置，`build.rs` 管理后台编译，`build_log.rs` 分析日志，`recorder.rs` 读取实际输入记录，`synctex.rs` 查询源码/PDF 映射，`config.rs` 校验配置，`dispatch.rs` 保留消息顺序并释放耗时查询的等待，`lib.rs` 对接 LSP，`main.rs` 启动服务。
 
 `ifentrycategory` 使用 `EntryCategoryQuery`：`Keys`、`Category`、`Code(0)`、`Code(1)` 分别保存显式文献键、分类和两个分支。复用单键校验／补全与项目索引；分类参数继续由独立分类索引负责，缺失引用诊断与普通引用的编译警告定位均排除查询自身。
+
+`named_references::Index` 同时解释直接引用、静态命名调用和纯转发别名。`features` 的键目标与引用集合以此索引为准，语法层声明仍独立保留；正文参数补全与元数据检索使用相同的消费者一致性核验，避免旧语法路径绕过重定义／操作数保护。

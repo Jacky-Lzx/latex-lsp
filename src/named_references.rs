@@ -1,7 +1,8 @@
-//! Named label/citation keys whose meanings agree in every consuming project.
+//! Label/citation keys whose meanings agree in every consuming project.
 use crate::{
     reference_calls,
     signature::CommandSignatures,
+    syntax,
     workspace::{Document, DocumentKind, Workspace},
 };
 use std::{
@@ -100,6 +101,9 @@ fn calls(doc: &Document, signatures: &CommandSignatures<'_>) -> Option<Calls> {
     let empty = BTreeSet::new();
     let mut result = BTreeMap::new();
     for (index, lexical) in doc.syntax.commands.iter().enumerate() {
+        if context.literal(lexical.span.start) {
+            continue;
+        }
         let Some(command) = reference_calls::named_command(
             source,
             &doc.syntax,
@@ -107,7 +111,8 @@ fn calls(doc: &Document, signatures: &CommandSignatures<'_>) -> Option<Calls> {
             signatures,
             &empty,
             &context.declarations,
-        ) else {
+        )
+        .or_else(|| direct_reference(&lexical.name).then(|| lexical.clone())) else {
             continue;
         };
         if !signatures.command_unchanged(&command.name) {
@@ -132,6 +137,11 @@ fn calls(doc: &Document, signatures: &CommandSignatures<'_>) -> Option<Calls> {
     }
     Some(result)
 }
+fn direct_reference(name: &str) -> bool {
+    syntax::is_reference(name)
+        || syntax::has_separate_label_argument(name)
+        || syntax::is_citation(name)
+}
 fn candidate_names(workspace: &Workspace) -> BTreeSet<&str> {
     workspace
         .documents
@@ -149,6 +159,7 @@ fn has_calls(doc: &Document, names: &BTreeSet<&str>) -> bool {
     doc.kind == DocumentKind::Latex
         && doc.syntax.commands.iter().any(|command| {
             matches!(command.name.as_str(), "csuse" | "csname")
+                || direct_reference(&command.name)
                 || names.contains(command.name.as_str())
         })
 }
@@ -302,14 +313,14 @@ impl Index {
         name: &str,
     ) -> jsonrpc::Result<()> {
         if self.incomplete {
-            return Err(jsonrpc::Error::invalid_params("Named reference analysis is incomplete or exceeds its budget; reindex or narrow the project before renaming"));
+            return Err(jsonrpc::Error::invalid_params("Reference analysis is incomplete or exceeds its budget; reindex or narrow the project before renaming"));
         }
         if self
             .ambiguous
             .iter()
             .any(|(uri, kind, key)| scope.contains(uri) && *kind == citation && key == name)
         {
-            return Err(jsonrpc::Error::invalid_params("Rename is ambiguous: a named reference is used as data or has different meanings in its projects"));
+            return Err(jsonrpc::Error::invalid_params("Rename is ambiguous: a reference is used as data or has different meanings in its projects"));
         }
         Ok(())
     }
@@ -387,7 +398,8 @@ pub(crate) fn completion_context(
                     &signatures,
                     &context.operands,
                     &context.declarations,
-                )?;
+                )
+                .or_else(|| direct_reference(&lexical.name).then(|| lexical.clone()))?;
                 if !signatures.command_unchanged(&command.name) {
                     return None;
                 }

@@ -335,6 +335,23 @@ fn target<'a>(workspace: &'a Workspace, uri: &Url, offset: usize) -> Option<Targ
     if doc.syntax.is_ignored(offset) && raw.is_none() && !counter_operand {
         return None;
     }
+    if let Some(raw) = raw.as_ref().filter(|raw| {
+        doc.kind == DocumentKind::Latex
+            && matches!(raw.kind, TargetKind::Label | TargetKind::Citation)
+            && !entries(doc, raw.kind).any(|entry| entry.span == raw.span)
+    }) {
+        let (citation, span) =
+            crate::named_references::Index::new(workspace, uri).target(uri, offset)?;
+        if citation != (raw.kind == TargetKind::Citation) {
+            return None;
+        }
+        return Some(Target {
+            kind: raw.kind,
+            name: &doc.text.source[span.clone()],
+            span,
+            control_word: false,
+        });
+    }
     if raw
         .as_ref()
         .is_some_and(|target| target.kind != TargetKind::Command)
@@ -1218,6 +1235,11 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
     let context = (!name_command)
         .then(|| {
             argument_context(doc, offset)
+                .filter(|(command, _)| {
+                    !syntax::is_reference(&command.name)
+                        && !syntax::has_separate_label_argument(&command.name)
+                        && !syntax::is_citation(&command.name)
+                })
                 .map(|(command, span)| (std::borrow::Cow::Borrowed(command), span))
                 .or_else(|| {
                     crate::named_references::completion_context(workspace, uri, offset, |command| {
@@ -1824,10 +1846,10 @@ fn all_references(
                     }),
             );
         }
-        if target.kind == TargetKind::Citation {
+        if target.kind == TargetKind::Color {
             result.extend(
                 doc.syntax
-                    .citation_references
+                    .color_references
                     .iter()
                     .filter(|entry| entry.name == target.name)
                     .map(|entry| Location {
@@ -1836,10 +1858,10 @@ fn all_references(
                     }),
             );
         }
-        if target.kind == TargetKind::Color {
+        if target.kind == TargetKind::Citation && doc.kind == DocumentKind::Bibtex {
             result.extend(
                 doc.syntax
-                    .color_references
+                    .citation_references
                     .iter()
                     .filter(|entry| entry.name == target.name)
                     .map(|entry| Location {
@@ -1857,6 +1879,9 @@ fn all_references(
                         range: doc.text.range(entry.span.start, entry.span.end),
                     }),
             );
+        }
+        if matches!(target.kind, TargetKind::Label | TargetKind::Citation) {
+            continue;
         }
         if target.kind == TargetKind::Command {
             result.extend(

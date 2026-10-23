@@ -198,6 +198,7 @@ fn entry_category_query_keys_support_named_calls_aliases_and_user_redefinitions(
     let at = ws.documents[&main]
         .text
         .position(source.find("alpha").unwrap() + 2);
+    assert!(features::definitions(&ws, &main, at).is_empty());
     assert_eq!(
         signature::help(&ws, &main, at).unwrap().signatures[0].label,
         "\\ifentrycategory{#1}"

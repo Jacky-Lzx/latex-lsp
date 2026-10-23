@@ -95,6 +95,13 @@ pub(crate) fn completion(
             let mut span = syntax::trimmed_span(source, segment);
             span.start = span.start.min(offset);
             span.end = span.end.max(offset);
+            if crate::named_references::completion_context(ws, uri, offset, |candidate| {
+                (candidate.span == command.span).then_some(span.start..offset)
+            })
+            .is_none()
+            {
+                return Some(vec![]);
+            }
             let query = source[span.start..offset].trim();
             if query.chars().count() > 128 {
                 return Some(vec![]);

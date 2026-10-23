@@ -303,6 +303,7 @@ fn builtin(name: &str) -> Option<Signature> {
         | "subincludefrom" => (&[("directory", false), ("file", false)], true),
         "DeclareBibliographyCategory" => (&[("category", false)], false),
         "printbibliography" => (&[("options", true)], false),
+        "item" => (&[("label", true)], false),
         "ifcategory" => (
             &[("category", false), ("true", false), ("false", false)],
             false,
@@ -3765,6 +3766,25 @@ fn argument_free(name: &str) -> bool {
             | "ExplSyntaxOff"
             | "noindent"
             | "indent"
+            | "maketitle"
+            | "tableofcontents"
+            | "listoffigures"
+            | "listoftables"
+            | "appendix"
+            | "newpage"
+            | "clearpage"
+            | "cleardoublepage"
+            | "newblock"
+            | "centering"
+            | "raggedright"
+            | "raggedleft"
+            | "TeX"
+            | "LaTeX"
+            | "LaTeXe"
+            | "quad"
+            | "qquad"
+            | "enspace"
+            | "thinspace"
             | "normalfont"
             | "selectfont"
             | "bfseries"

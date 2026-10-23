@@ -672,3 +672,12 @@ cargo test --locked --test biblatex_entry_categories
 cargo test --locked --test protocol biblatex_entry_queries_keep_branch_roles
 cargo test --locked --test biblatex_entry_categories real_entry_category_query -- --include-ignored
 ```
+
+
+直接引用键的项目语义测试覆盖重定义参数、用户参数／token 操作数、静态宏正文、字面示例、共享消费者、索引预算和标准排版命令之后的引用。真实 pdfLaTeX 对照确认标签改名不会改变重定义引用的普通文字输出：
+
+```sh
+cargo test --locked --test direct_reference_keys
+cargo test --locked --test protocol direct_reference_keys_refresh
+cargo test --locked --test direct_reference_keys real_label_rename -- --include-ignored
+```

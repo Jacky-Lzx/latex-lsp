@@ -27929,3 +27929,95 @@ fn bibliography_category_names_support_versioned_cross_file_edits_and_unsaved_re
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+fn direct_reference_keys_refresh_project_semantics_and_reject_partial_renames_over_stdio() {
+    use latex_lsp::text::Text;
+    let dir = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let definitions = Url::from_file_path(dir.path().join("definitions.tex")).unwrap();
+    let source =
+        "\\documentclass{article}\r\n\\input{definitions}\r\n😀 \\label{paper}\\ref{paper}";
+    std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+    std::fs::write(definitions.to_file_path().unwrap(), "").unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":main,"languageId":"latex","version":5,"text":source}}),
+    );
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":definitions,"languageId":"latex","version":2,"text":""}}),
+    );
+    let text = Text::new(source.into());
+    let reference = json!({"textDocument":{"uri":main},"position":text.position(source.rfind("paper").unwrap()+2)});
+    let declaration = text.position(source.find("paper").unwrap() + 2);
+    assert_eq!(
+        server
+            .request(2, "textDocument/definition", reference.clone())
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let rename = json!({"textDocument":{"uri":main},"position":declaration,"newName":"updated"});
+    assert_eq!(
+        server.request(3, "textDocument/rename", rename.clone())["documentChanges"][0]["edits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    server.notify("textDocument/didChange",json!({"textDocument":{"uri":definitions,"version":3},"contentChanges":[{"text":"\\def\\ref#1{}"}]}));
+    assert_eq!(
+        server.request(4, "textDocument/definition", reference.clone()),
+        json!([])
+    );
+    assert!(server
+        .request(5, "textDocument/prepareRename", reference.clone())
+        .is_null());
+    assert!(!server
+        .request(6, "textDocument/completion", reference.clone())
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["label"] == "paper"));
+    let edit = server.request(7, "textDocument/rename", rename.clone());
+    assert_eq!(edit["documentChanges"][0]["textDocument"]["version"], 5);
+    assert_eq!(
+        edit["documentChanges"][0]["edits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":definitions,"version":4},"contentChanges":[{"text":""}]}),
+    );
+    assert_eq!(
+        server
+            .request(8, "textDocument/definition", reference)
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let source = format!("{source}\\def\\take#1{{}}\\take{{\\ref{{paper}}}}");
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":6},"contentChanges":[{"text":source}]}),
+    );
+    server.send(json!({"jsonrpc":"2.0","id":9,"method":"textDocument/rename","params":rename}));
+    let error = server.until(|message| message["id"] == 9);
+    assert_eq!(error["error"]["code"], -32602);
+    assert!(error["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("used as data"));
+    server.request(10, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
