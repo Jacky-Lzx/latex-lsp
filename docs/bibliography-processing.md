@@ -44,6 +44,10 @@ biblatex / Biber 项目：
 
 BibTeX 的工作目录为暂存目录；Biber 的工作目录为主文档目录。服务器在 `BIBINPUTS` / `BSTINPUTS` 中前置主文档目录和实际产物目录，保留原有搜索项和默认搜索路径，并把原有相对目录绑定到主文档目录。数据库和本地样式继续从项目中读取，TeX 在产物目录生成的数据库也可被找到，搜索路径同时用于处理日志的来源定位。
 
+`filecontents` 等方式在实际产物目录生成 `.bib` 时，只有本次完整 recorder 的 `OUTPUT` 记录、显式后端的实际数据库读取和稳定的内容／路径快照共同确认后，才作为本次生成输入接受；首次编译和之后更新均可保留正常分析结果。该例外限于产物目录内的普通数据库文件，不接纳符号链接、缺少写入记录的动态来源或已打开的数据库缓冲区，也不改变其他来源及文件条件的校验。
+
+显式管线运行期间，产物目录内 `.bib` 的文件监视通知交给最终内容与后端快照检查，避免编译器自己的写入取消任务。没有生成证据的外部改动仍使结果过期；后端执行期间改写已确认的生成数据库会使阶段失败并保留旧 `.bbl`。其他来源、目录及显式文件操作通知继续使用既有取消规则。
+
 退出成功、生成新的普通 `.bbl` / `.blg`、辅助输入和显式依赖未变化，且处理日志没有错误诊断后，才原子替换正式 `.bbl`。后端失败、取消、超时、输出缺失或受监控输入变化时保留该阶段原有 `.bbl`。不把符号链接、目录或 FIFO 当成新输出；正式 `.bbl` 为符号链接时拒绝处理。
 
 本次产生的有效 `.blg` 会保存在实际产物目录，包括工具失败时的处理日志。日志复用现有 BibTeX / Biber 诊断解析、数据库定位和依赖记录；处理日志中的错误即使伴随退出码 0，也会使阶段失败并保留旧 `.bbl`。失败结果不返回成功 PDF。
@@ -78,6 +82,9 @@ biblatex 明确要求文献后端时，仅在当前配置后端匹配、且警�
 ```sh
 cargo test --locked --test bibliography_workflow
 cargo test --locked --test protocol bibliography_workflow
+cargo test --locked --lib generated_bibliography
+cargo test --locked --test protocol generated_bibliography
+cargo test --locked --test protocol generated_bibliography_with_real_tex_and_bibtex -- --ignored
 cargo test --locked --test rebuild_actions
 cargo test --locked --test bibliography_workflow real_bibtex -- --ignored
 cargo test --locked --test bibliography_workflow real_biber -- --ignored

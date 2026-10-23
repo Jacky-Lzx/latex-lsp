@@ -31,6 +31,48 @@ pub fn inputs(root: &Path, contents: &str) -> BTreeSet<Url> {
     classified_inputs(root, contents).all
 }
 
+/// Only this invocation's complete recorder may authorize generated databases.
+/// Keep original names for binding checks; exclude aliases and out-of-tree writes.
+pub(crate) fn bibliography_outputs(
+    root: &Path,
+    output: &Path,
+    contents: &str,
+) -> BTreeSet<PathBuf> {
+    if crate::output::truncated(contents) || contents.lines().count() > 32768 {
+        return BTreeSet::new();
+    }
+    let Some(output) = output.canonicalize().ok() else {
+        return BTreeSet::new();
+    };
+    let mut directory = root.parent().unwrap_or_else(|| Path::new(".")).to_owned();
+    let mut result = BTreeSet::new();
+    for line in contents.lines() {
+        if let Some(value) = line.strip_prefix("PWD ") {
+            let path = Path::new(value.trim_matches('"'));
+            if path.is_absolute() {
+                directory = path.to_owned();
+            }
+        } else if let Some(value) = line.strip_prefix("OUTPUT ") {
+            let path = directory.join(value.trim_matches('"'));
+            if !path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("bib"))
+                || !std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_file())
+                || !path
+                    .canonicalize()
+                    .is_ok_and(|target| target.starts_with(&output))
+            {
+                continue;
+            }
+            result.insert(path);
+            if result.len() > 4096 {
+                return BTreeSet::new();
+            }
+        }
+    }
+    result
+}
+
 #[derive(Default)]
 pub(crate) struct InputFiles {
     pub all: BTreeSet<Url>,
@@ -970,5 +1012,47 @@ mod suffixed_style_names {
         let paths = BibliographyPaths::new(&main, &blg, log)
             .with_search_output("BSTINPUTS='../styles:'.\n");
         assert_eq!(paths.resolve("local.bst.bst.bst"), Some(input));
+    }
+}
+
+#[cfg(test)]
+mod generated_bibliography_tests {
+    use super::*;
+
+    #[test]
+    fn generated_databases_require_output_records_regular_files_and_the_actual_output_tree() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("main.tex");
+        let output = directory.path().join("out space");
+        std::fs::create_dir(&output).unwrap();
+        for name in ["generated.bib", "data.BIB", "ordinary.tex"] {
+            std::fs::write(output.join(name), "data").unwrap();
+        }
+        std::fs::write(directory.path().join("outside.bib"), "data").unwrap();
+        let log = format!("PWD {}\nINPUT out space/generated.bib\nOUTPUT out space/generated.bib\nOUTPUT \"out space/data.BIB\"\nOUTPUT out space/ordinary.tex\nOUTPUT outside.bib\nOUTPUT out space/missing.bib\n", directory.path().display());
+        let files = bibliography_outputs(&root, &output, &log);
+        assert_eq!(
+            files,
+            [output.join("generated.bib"), output.join("data.BIB")].into()
+        );
+        assert!(
+            bibliography_outputs(&root, &output, &format!("{log}{}", "other\n".repeat(32769)))
+                .is_empty()
+        );
+        assert!(bibliography_outputs(&root, &output, "INPUT out space/generated.bib\n").is_empty());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn generated_database_aliases_do_not_authorize_a_source_replacement() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("main.tex");
+        let source = directory.path().join("source.bib");
+        let output = directory.path().join("out");
+        std::fs::create_dir(&output).unwrap();
+        std::fs::write(&source, "data").unwrap();
+        std::os::unix::fs::symlink(&source, output.join("alias.bib")).unwrap();
+        let log = format!("PWD {}\nOUTPUT out/alias.bib\n", directory.path().display());
+        assert!(bibliography_outputs(&root, &output, &log).is_empty());
     }
 }

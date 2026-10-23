@@ -43,6 +43,7 @@ pub(crate) struct Processed {
     pub output: String,
     pub search_output: String,
     pub tool: serde_json::Value,
+    pub generated: Vec<Watched>,
     watched: Vec<Watched>,
     auxiliaries: Vec<Auxiliary>,
 }
@@ -90,7 +91,11 @@ impl Plan {
             dependencies,
         }))
     }
-    pub(crate) fn run(&self, cancel: &AtomicBool) -> Result<Processed, Failed> {
+    pub(crate) fn run(
+        &self,
+        cancel: &AtomicBool,
+        generated: &[Watched],
+    ) -> Result<Processed, Failed> {
         let executable = self
             .config
             .executable
@@ -212,6 +217,24 @@ impl Plan {
             failure.output = format!("{search_output}\n{output}\n{log}");
             return Err(Failed { failure, report });
         }
+        let generated: Vec<_> = generated
+            .iter()
+            .filter(|input| {
+                input.snapshot().is_some_and(|(uri, _)| {
+                    report
+                        .as_ref()
+                        .is_some_and(|report| report.inputs.bibliography_databases.contains(&uri))
+                })
+            })
+            .cloned()
+            .collect();
+        if generated.iter().any(|input| !input.unchanged()) {
+            return Err(Failure::error(
+                "Generated bibliography input changed while the backend was running; build again"
+                    .into(),
+            )
+            .into());
+        }
         let mut convergence_watched = if self.config.backend == BibliographyBackend::Bibtex {
             self.dependencies.clone()
         } else {
@@ -242,6 +265,7 @@ impl Plan {
             failure.output = format!("{search_output}\n{output}\n{log}");
             return Err(Failed { failure, report });
         }
+        convergence_watched.extend(generated.iter().cloned());
         Ok(Processed {
             output: format!("{search_output}\n{output}"),
             search_output,
@@ -251,6 +275,7 @@ impl Plan {
             // actual directives to decide whether another backend pass is needed.
             watched: convergence_watched,
             auxiliaries,
+            generated,
         })
     }
 }

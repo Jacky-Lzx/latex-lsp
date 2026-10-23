@@ -608,6 +608,25 @@ impl Snapshot {
         }
     }
 
+    /// A verified pipeline may create a previously missing database itself.
+    /// Do not relax existing identities or any other conditional candidate.
+    pub(crate) fn with_generated_bibliography(
+        &self,
+        generated: &[crate::build_tools::Watched],
+    ) -> Self {
+        let mut updated = self.clone();
+        for (path, before) in &mut updated.paths {
+            if before.is_none()
+                && generated
+                    .iter()
+                    .any(|input| input.matches_path(path) && input.unchanged())
+            {
+                *before = file(path);
+            }
+        }
+        updated
+    }
+
     pub(crate) fn input_changed(&self, uri: &Url) -> bool {
         // Unknown inputs invalidate conservatively, including newly resolved
         // dependencies and histories evicted by the root limit.
@@ -2875,5 +2894,62 @@ mod quoted_file_conditions {
             std::fs::write(root.join(format!("refs.{extension}")), "Potential input.\n").unwrap();
             assert!(snapshot.changed_path().is_some(), "{source}: {snapshot:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod generated_bibliography_tests {
+    use super::*;
+
+    #[test]
+    fn verified_database_creation_preserves_other_file_conditions_and_changed_contents() {
+        let directory = tempfile::tempdir().unwrap();
+        let generated = directory.path().join("generated.bib");
+        let unrelated = directory.path().join("other.tex");
+        let before = Snapshot {
+            paths: [(generated.clone(), None), (unrelated.clone(), None)].into(),
+            ..Default::default()
+        };
+        std::fs::write(&generated, "database").unwrap();
+        let watched = crate::build_tools::Watched::capture(&generated)
+            .unwrap_or_else(|_| panic!("capture database"));
+        let updated = before.with_generated_bibliography(std::slice::from_ref(&watched));
+        assert!(updated.changed_path().is_none());
+        std::fs::write(&unrelated, "new source").unwrap();
+        assert_eq!(updated.changed_path(), Some(unrelated.as_path()));
+        std::fs::remove_file(&unrelated).unwrap();
+        std::fs::write(&generated, "modified").unwrap();
+        assert_eq!(
+            before
+                .with_generated_bibliography(&[watched])
+                .changed_path(),
+            Some(generated.as_path())
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn generated_database_evidence_does_not_rebind_existing_source_aliases() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("old.bib");
+        let generated = directory.path().join("generated.bib");
+        let alias = directory.path().join("alias.bib");
+        std::fs::write(&source, "old").unwrap();
+        std::fs::write(&generated, "new").unwrap();
+        std::os::unix::fs::symlink(&source, &alias).unwrap();
+        let before = Snapshot {
+            paths: [(alias.clone(), Some(source))].into(),
+            ..Default::default()
+        };
+        let watched = crate::build_tools::Watched::capture(&generated)
+            .unwrap_or_else(|_| panic!("capture database"));
+        std::fs::remove_file(&alias).unwrap();
+        std::os::unix::fs::symlink(&generated, &alias).unwrap();
+        assert_eq!(
+            before
+                .with_generated_bibliography(&[watched])
+                .changed_path(),
+            Some(alias.as_path())
+        );
     }
 }

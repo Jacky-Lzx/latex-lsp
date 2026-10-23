@@ -49,6 +49,7 @@ struct Record {
     checks: Arc<crate::file_checks::Snapshot>,
     artifact: Option<PathBuf>,
     index_artifacts: BTreeSet<PathBuf>,
+    bibliography_output_directory: Option<PathBuf>,
 }
 
 struct QueuedBuild {
@@ -331,6 +332,12 @@ impl BuildManager {
             record.checks = checks.clone();
             record.artifact = artifact;
             record.index_artifacts = index_artifacts;
+            record.bibliography_output_directory =
+                config.bibliography_tool.as_ref().and_then(|_| {
+                    config
+                        .output_path(&root_path)
+                        .map(|path| crate::workspace::normalize_path(&path))
+                });
             self.tasks.fetch_add(1, Ordering::SeqCst);
         }
         self.launch(
@@ -682,9 +689,44 @@ impl BuildManager {
                         });
                 }
             }
+            // Accept only writes confirmed by a fresh recorder and consumed by
+            // a successful explicit backend. Open buffers retain their original
+            // version/content checks, even when TeX overwrites their disk file.
+            let generated_changed = outcome
+                .generated_bibliography
+                .iter()
+                .any(|input| !input.unchanged());
+            let generated: Vec<_> = outcome
+                .generated_bibliography
+                .iter()
+                .filter(|input| {
+                    outcome.status == "success"
+                        && outcome.pdf_updated
+                        && input.unchanged()
+                        && input.snapshot().is_some_and(|(uri, _)| {
+                            snapshots
+                                .get(&uri)
+                                .is_none_or(|(version, _)| version.is_none())
+                                && current
+                                    .documents
+                                    .get(&uri)
+                                    .is_none_or(|doc| doc.version.is_none())
+                        })
+                })
+                .cloned()
+                .collect();
+            let generated_inputs: BTreeMap<_, _> = generated
+                .iter()
+                .filter_map(|input| input.snapshot())
+                .collect();
+            checks = Arc::new(checks.with_generated_bibliography(&generated));
             let stale =
-                checks.changed_path().is_some()
+                generated_changed
+                    || checks.changed_path().is_some()
                     || project.iter().any(|uri| {
+                        if let Some(before) = generated_inputs.get(uri) {
+                            return before.changed(uri);
+                        }
                         if let Some((version, text)) = snapshots.get(uri) {
                             current.documents.get(uri).is_none_or(|doc| {
                                 doc.version != *version || doc.text.source != *text
@@ -779,7 +821,9 @@ impl BuildManager {
                     project
                         .union(&artifact_inputs)
                         .map(|uri| {
-                            let snapshot = if let Some(before) = file_snapshots.get(uri) {
+                            let snapshot = if let Some(generated) = generated_inputs.get(uri) {
+                                generated.clone()
+                            } else if let Some(before) = file_snapshots.get(uri) {
                                 before.clone()
                             } else if let Some((_, text)) = snapshots.get(uri) {
                                 InputSnapshot::text(text)
@@ -1064,11 +1108,35 @@ impl BuildManager {
         {
             let mut state = self.state.lock().unwrap();
             for (root, record) in state.iter_mut() {
+                // TeX may rewrite a database itself (e.g. filecontents).
+                // Watch notifications cannot identify the writer. For explicit
+                // pipelines, validate databases inside the output directory at
+                // completion using recorder/backend snapshots instead.
+                let defer_generated_database = |uri: &Url| {
+                    verify_inputs
+                        && record.active.is_some()
+                        && uri.to_file_path().is_ok_and(|path| {
+                            path.extension()
+                                .is_some_and(|ext| ext.eq_ignore_ascii_case("bib"))
+                                && record.bibliography_output_directory.as_ref().is_some_and(
+                                    |directory| {
+                                        crate::workspace::normalize_path(&path)
+                                            .starts_with(directory)
+                                    },
+                                )
+                        })
+                };
                 if (!verify_inputs && affects(root))
                     || record.inputs.iter().any(|(uri, snapshot)| {
-                        affects(uri) && (!verify_inputs || snapshot.changed(uri))
+                        !defer_generated_database(uri)
+                            && affects(uri)
+                            && (!verify_inputs || snapshot.changed(uri))
                     })
-                    || (record.checks.watched().iter().any(&affects)
+                    || (record
+                        .checks
+                        .watched()
+                        .iter()
+                        .any(|uri| !defer_generated_database(uri) && affects(uri))
                         && record.checks.changed_path().is_some())
                 {
                     record.queued = None;
@@ -1119,6 +1187,7 @@ pub struct Outcome {
     pub bibliography_bindings: BTreeMap<PathBuf, PathBuf>,
     pub bibliography_unresolved_bindings: BTreeSet<PathBuf>,
     pub pdf_updated: bool,
+    pub(crate) generated_bibliography: Vec<crate::build_tools::Watched>,
 }
 
 impl Outcome {
@@ -1143,6 +1212,7 @@ impl Outcome {
             bibliography_databases: BTreeSet::new(),
             bibliography_bindings: BTreeMap::new(),
             bibliography_unresolved_bindings: BTreeSet::new(),
+            generated_bibliography: vec![],
             pdf_updated: false,
         }
     }
@@ -1344,7 +1414,7 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool, rebuild: bo
     for round in 1..=4 {
         let bibliography_processed = match bibliography
             .as_ref()
-            .map(|plan| plan.run(cancel))
+            .map(|plan| plan.run(cancel, &first.generated_bibliography))
             .transpose()
         {
             Ok(processed) => processed,
@@ -1430,6 +1500,9 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool, rebuild: bo
                 .as_ref()
                 .is_none_or(|processed| processed.inputs_unchanged())
         {
+            first.generated_bibliography = bibliography_processed
+                .as_ref()
+                .map_or_else(Vec::new, |processed| processed.generated.clone());
             first.diagnostics_truncated |= processed.report.truncated;
             for (uri, diagnostics) in processed.report.diagnostics {
                 first
@@ -1648,10 +1721,17 @@ fn run_single(
     let recorder_after = ArtifactFingerprint::capture(&recorder_path);
     if recorder_after.is_some() && recorder_after != recorder_before {
         // Partial dependency lists must not replace the last complete recorder.
-        if let Some(inputs) = read_log(&recorder_path)
-            .filter(|log| !crate::output::truncated(log))
-            .map(|log| crate::recorder::classified_inputs(root, &log))
+        if let Some(recorder) =
+            read_log(&recorder_path).filter(|log| !crate::output::truncated(log))
         {
+            if config.bibliography_tool.is_some() {
+                outcome.generated_bibliography =
+                    crate::recorder::bibliography_outputs(root, &output_dir, &recorder)
+                        .iter()
+                        .filter_map(|path| crate::build_tools::Watched::capture(path).ok())
+                        .collect();
+            }
+            let inputs = crate::recorder::classified_inputs(root, &recorder);
             outcome.inputs = Some(inputs.all);
             outcome.binary_inputs = inputs.binary;
             outcome.bindings = inputs.bindings;

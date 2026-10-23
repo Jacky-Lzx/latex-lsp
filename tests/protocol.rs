@@ -25567,3 +25567,222 @@ fn on_type_formatting_validates_utf16_supports_untitled_buffers_and_ignores_othe
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[cfg(unix)]
+fn generated_bibliography_server(
+    output: &str,
+    announced: bool,
+) -> (Server, tempfile::TempDir, Url) {
+    let body = format!(
+        r#"artifact="$root/{output}"
+cat "$artifact/generated.bib" > "$directory/$job.bbl"
+printf 'This is BibTeX, Version 0.99d\nThe top-level auxiliary file: ./%s.aux\nThe style file: custom.bst\nDatabase file #1: generated.bib\n' "$job" > "$directory/$job.blg"
+if test -f "$root/tamper"; then printf tampered > "$artifact/generated.bib"; fi
+"#
+    );
+    let (mut server, directory, uri) = bibliography_workflow_server(&body, "bibtex");
+    std::fs::write(directory.path().join("payload"), "first database").unwrap();
+    let compiler = format!(
+        r#"set -eu
+cat "$PWD/payload" > "$1/generated.bib"
+printf '\\citation{{key}}\n\\bibdata{{generated}}\n\\bibstyle{{custom}}\n' > "$1/main.aux"
+printf '%%PDF-generated\n' > "$1/main.pdf"
+printf '(./main.tex\nOutput written on main.pdf (1 page, 18 bytes).\n)\n' > "$1/main.log"
+printf 'PWD %s\nINPUT %s\n' "$PWD" "$2" > "$1/main.fls"
+{}
+"#,
+        if announced {
+            "printf 'OUTPUT %s/generated.bib\\n' \"$1\" >> \"$1/main.fls\""
+        } else {
+            ""
+        }
+    );
+    std::fs::write(directory.path().join("compiler.sh"), compiler).unwrap();
+    let source =
+        "\\documentclass{article}\n\\begin{document}\n\\bibliography{generated}\n\\end{document}\n";
+    std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"text":source}]}),
+    );
+    let arguments = json!([directory.path().join("compiler.sh"), "%o", "%f"]);
+    server.notify("workspace/didChangeConfiguration", json!({"settings":{"distribution":{"enabled":false},"build":{"executable":"/bin/sh","arguments":arguments,"rebuildArguments":arguments,"outputDirectory":output,"bibliographyTool":{"executable":"/bin/sh","arguments":[directory.path().join("bibliography-tool.sh"),directory.path()],"dependencies":["custom.bst"]}}}}));
+    (server, directory, uri)
+}
+
+#[test]
+#[cfg(unix)]
+fn generated_bibliography_first_builds_and_regeneration_keep_valid_diagnostics_and_history() {
+    for output in ["build/latex-lsp", "."] {
+        let (mut server, directory, uri) = generated_bibliography_server(output, true);
+        for (id, database) in [(2, "first database"), (3, "second database")] {
+            std::fs::write(directory.path().join("payload"), database).unwrap();
+            server.request(
+                id,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[uri]}),
+            );
+            let result = server.until(|message| message["method"] == "latex/buildFinished");
+            assert_eq!(result["params"]["status"], "success", "{result}");
+            assert_eq!(result["params"]["stale"], false, "{result}");
+            assert_eq!(
+                result["params"]["analysis"]["bibliographyProcessingRounds"],
+                1
+            );
+            assert_eq!(
+                std::fs::read_to_string(directory.path().join(output).join("main.bbl")).unwrap(),
+                database
+            );
+        }
+        server.request(4, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn generated_bibliography_requires_write_evidence_and_stable_backend_inputs() {
+    for tamper in [false, true] {
+        let (mut server, directory, uri) = generated_bibliography_server("build/latex-lsp", tamper);
+        let artifacts = directory.path().join("build/latex-lsp");
+        std::fs::create_dir_all(&artifacts).unwrap();
+        std::fs::write(artifacts.join("main.bbl"), "old bibliography").unwrap();
+        if tamper {
+            std::fs::write(directory.path().join("tamper"), "").unwrap();
+        }
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[uri]}),
+        );
+        let result = server.until(|message| message["method"] == "latex/buildFinished");
+        if tamper {
+            assert_eq!(result["params"]["status"], "error", "{result}");
+            assert!(result["params"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("Generated bibliography input changed"));
+            assert_eq!(
+                std::fs::read_to_string(artifacts.join("main.bbl")).unwrap(),
+                "old bibliography"
+            );
+        } else {
+            assert_eq!(result["params"]["status"], "success", "{result}");
+            assert_eq!(result["params"]["stale"], true, "{result}");
+            assert_eq!(result["params"]["analysis"], Value::Null);
+        }
+        server.request(3, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn generated_bibliography_does_not_adopt_a_compiler_overwrite_of_an_open_buffer() {
+    let (mut server, directory, uri) = generated_bibliography_server("build/latex-lsp", true);
+    server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[uri]}),
+    );
+    let first = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(first["params"]["stale"], false, "{first}");
+    let generated =
+        Url::from_file_path(directory.path().join("build/latex-lsp/generated.bib")).unwrap();
+    server.notify("textDocument/didOpen", json!({"textDocument":{"uri":generated,"languageId":"bibtex","version":1,"text":"first database"}}));
+    std::fs::write(directory.path().join("payload"), "second database").unwrap();
+    server.request(
+        3,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[uri]}),
+    );
+    let result = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(result["params"]["stale"], true, "{result}");
+    assert_eq!(result["params"]["analysis"], Value::Null);
+    server.request(4, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[ignore = "requires pdflatex, bibtex and plain.bst"]
+fn generated_bibliography_with_real_tex_and_bibtex_is_fresh_over_stdio() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let source = "\\documentclass{article}\n\\begin{filecontents*}[overwrite]{generated.bib}\n@book{key,author={A. Author},title={Generated bibliography},year={2026},publisher={Press}}\n\\end{filecontents*}\n\\begin{document}\nText \\cite{key}.\\bibliographystyle{plain}\\bibliography{generated}\n\\end{document}\n";
+    std::fs::write(root.join("main.tex"), source).unwrap();
+    let uri = Url::from_file_path(root.join("main.tex")).unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(root).unwrap(),"capabilities":{},"initializationOptions":{"distribution":{"enabled":false},"build":{"executable":"pdflatex","outputDirectory":"build output","bibliographyTool":{}}}}));
+    server.notify("initialized", json!({}));
+    for (id, title) in [(2, "Generated bibliography"), (3, "Updated bibliography")] {
+        std::fs::write(
+            root.join("main.tex"),
+            source.replace("Generated bibliography", title),
+        )
+        .unwrap();
+        server.request(
+            id,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[uri]}),
+        );
+        let result = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(result["params"]["status"], "success", "{result}");
+        assert_eq!(result["params"]["stale"], false, "{result}");
+        assert_eq!(
+            result["params"]["analysis"]["rerunRequired"], false,
+            "{result}"
+        );
+        assert!(std::fs::read_to_string(root.join("build output/main.bbl"))
+            .unwrap()
+            .contains(title));
+    }
+    server.request(4, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+fn generated_bibliography_watcher_events_wait_for_pipeline_validation() {
+    for output in ["build/latex-lsp", "."] {
+        let (mut server, directory, uri) = generated_bibliography_server(output, true);
+        let root = directory.path();
+        let tool = root.join("bibliography-tool.sh");
+        let mut script = std::fs::read_to_string(&tool).unwrap();
+        script.push_str("\ntouch \"$root/backend-started\"\nwhile test ! -f \"$root/release\"; do sleep 0.02; done\n");
+        std::fs::write(tool, script).unwrap();
+        for (round, database) in [(0, "first database"), (1, "second database")] {
+            std::fs::write(root.join("payload"), database).unwrap();
+            let _ = std::fs::remove_file(root.join("backend-started"));
+            let _ = std::fs::remove_file(root.join("release"));
+            let id = 2 + round * 2;
+            server.request(
+                id,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[uri]}),
+            );
+            wait_for_file(&root.join("backend-started"));
+            let generated = Url::from_file_path(root.join(output).join("generated.bib")).unwrap();
+            server.notify(
+                "workspace/didChangeWatchedFiles",
+                json!({"changes":[{"uri":generated,"type":if round == 0 { 1 } else { 2 }}]}),
+            );
+            let status = server.request(
+                id + 1,
+                "workspace/executeCommand",
+                json!({"command":"latex.buildStatus","arguments":[uri]}),
+            );
+            assert_eq!(status["status"], "running", "{status}");
+            std::fs::write(root.join("release"), "").unwrap();
+            let result = server.until(|message| message["method"] == "latex/buildFinished");
+            assert_eq!(result["params"]["status"], "success", "{result}");
+            assert_eq!(result["params"]["stale"], false, "{result}");
+        }
+        server.request(6, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}

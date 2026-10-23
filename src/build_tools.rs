@@ -30,6 +30,16 @@ pub(crate) struct Watched {
     contents: InputSnapshot,
 }
 impl Watched {
+    pub(crate) fn snapshot(&self) -> Option<(Url, InputSnapshot)> {
+        Some((
+            Url::from_file_path(&self.target).ok()?,
+            self.contents.clone(),
+        ))
+    }
+    pub(crate) fn matches_path(&self, path: &Path) -> bool {
+        let path = crate::workspace::normalize_path(path);
+        path == crate::workspace::normalize_path(&self.path) || path == self.target
+    }
     pub(crate) fn capture(path: &Path) -> Result<Self, Failure> {
         let target = path
             .canonicalize()
