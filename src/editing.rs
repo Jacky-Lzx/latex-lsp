@@ -10,18 +10,23 @@ pub fn code_actions(
     range: Range,
     context: &CodeActionContext,
 ) -> CodeActionResponse {
-    if context.only.as_ref().is_some_and(|kinds| {
-        !kinds.iter().any(|kind| {
-            let kind = kind.as_str();
-            kind.is_empty() || kind == CodeActionKind::QUICKFIX.as_str()
-        })
-    }) {
-        return vec![];
-    }
     let Some(doc) = workspace.documents.get(uri) else {
         return vec![];
     };
-    let mut actions = rebuild_actions(workspace, uri, range, context);
+    let mut actions = Vec::new();
+    if workspace.code_action_literals || workspace.apply_edits {
+        actions.extend(crate::refactor::actions(workspace, uri, range, context).into_iter().map(|action| {
+            if workspace.code_action_literals { CodeActionOrCommand::CodeAction(action) }
+            else { CodeActionOrCommand::Command(Command {
+                title: action.title.clone(), command: "latex.applyCodeAction".into(),
+                arguments: Some(vec![serde_json::json!({"uri":uri,"version":doc.version,"range":range,"kind":action.kind,"title":action.title})]),
+            }) }
+        }));
+    }
+    if !crate::refactor::allows(context, &CodeActionKind::QUICKFIX) {
+        return actions;
+    }
+    actions.extend(rebuild_actions(workspace, uri, range, context));
     if !workspace.code_action_literals && !workspace.apply_edits {
         return actions;
     }

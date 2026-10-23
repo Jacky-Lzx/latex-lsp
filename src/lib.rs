@@ -56,6 +56,7 @@ mod project_config;
 mod project_diagnostics;
 mod project_environments;
 pub mod recorder;
+mod refactor;
 mod reference_diagnostics;
 mod right_delimiters;
 mod saved_text;
@@ -498,7 +499,12 @@ impl LanguageServer for Backend {
                 )),
                 code_action_provider: Some(CodeActionProviderCapability::Options(
                     CodeActionOptions {
-                        code_action_kinds: Some(vec![CodeActionKind::QUICKFIX]),
+                        code_action_kinds: Some(vec![
+                            CodeActionKind::QUICKFIX,
+                            CodeActionKind::REFACTOR_REWRITE,
+                            CodeActionKind::REFACTOR_EXTRACT,
+                            CodeActionKind::SOURCE_FIX_ALL,
+                        ]),
                         resolve_provider: Some(false),
                         ..Default::default()
                     },
@@ -518,6 +524,7 @@ impl LanguageServer for Backend {
                         "latex.forwardSearch".into(),
                         "latex.inverseSearch".into(),
                         "latex.applyQuickFix".into(),
+                        "latex.applyCodeAction".into(),
                     ],
                     ..Default::default()
                 }),
@@ -750,6 +757,23 @@ impl LanguageServer for Backend {
                 )
             })?;
         match params.command.as_str() {
+            "latex.applyCodeAction" => {
+                let mut request: refactor::Request = serde_json::from_value(
+                    argument.cloned().unwrap_or_default(),
+                )
+                .map_err(|_| {
+                    tower_lsp::jsonrpc::Error::invalid_params("Invalid code action request")
+                })?;
+                request.uri = document_uri(request.uri);
+                let edit =
+                    refactor::resolve(&*self.workspace.read().await, request).ok_or_else(|| {
+                        tower_lsp::jsonrpc::Error::invalid_params(
+                            "Code action is outdated; request code actions again",
+                        )
+                    })?;
+                let response = self.client.apply_edit(edit).await?;
+                Ok(Some(serde_json::to_value(response).unwrap()))
+            }
             "latex.applyQuickFix" => {
                 let mut request: editing::FixRequest =
                     serde_json::from_value(argument.cloned().unwrap_or_default()).map_err(
