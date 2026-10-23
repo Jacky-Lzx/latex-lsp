@@ -396,11 +396,21 @@ fn source(
         if call.begin && syntax::is_verbatim_environment(&call.argument.value) {
             // Only the parser's actual raw region proves a literal terminator.
             let ending = format!("\\end{{{}}}", call.argument.value);
+            // VerbEnv can recover after consuming a code/closing line without
+            // closing its group. A marker in that data is not a terminator.
+            let verb_environment_end = (call.argument.value == "VerbEnv").then(|| {
+                crate::fancyvrb::verb_environment_end(
+                    &doc.text.source,
+                    call.argument.outer_span.end,
+                )
+                .closing
+            });
             let terminator = doc.syntax.ignored.iter().find_map(|raw| {
                 let start = raw.end.checked_sub(ending.len())?;
                 (call.direct
                     && raw.start == call.argument.outer_span.end
                     && start >= raw.start
+                    && verb_environment_end.is_none_or(|end| end == Some(raw.end))
                     && doc.text.source.get(start..raw.end) == Some(ending.as_str()))
                 .then_some((start, raw.end))
             });

@@ -2841,7 +2841,12 @@ impl Syntax {
                                 if is_verbatim_environment(env) {
                                     let body_start = arg.outer_span.end;
                                     let ending = format!("\\end{{{env}}}");
-                                    let end = if crate::fancyvrb::is_environment(env) {
+                                    let verb_environment = (env == "VerbEnv").then(|| {
+                                        crate::fancyvrb::verb_environment_end(source, body_start)
+                                    });
+                                    let end = if let Some(environment) = &verb_environment {
+                                        environment.closing
+                                    } else if crate::fancyvrb::is_environment(env) {
                                         crate::fancyvrb::environment_end(source, body_start, env)
                                     } else if env == "minted" {
                                         crate::minted::environment_end(source, body_start)
@@ -2854,6 +2859,18 @@ impl Syntax {
                                     };
                                     if let Some(end) = end {
                                         i = end;
+                                    } else if let Some(environment) = verb_environment {
+                                        i = environment.consumed;
+                                        // An invalid VerbEnv closing line is raw data,
+                                        // but later source executes in its still-open group.
+                                        if operands_known && environment_argument.is_some() {
+                                            fancyverb_context.enter_environment(env);
+                                        }
+                                        environments.push((
+                                            true,
+                                            arg.clone(),
+                                            start..arg.outer_span.end,
+                                        ));
                                     } else {
                                         result.fix(
                                             text,

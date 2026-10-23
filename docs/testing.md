@@ -363,10 +363,12 @@ cargo test --locked --test protocol escaped_inline_
 
 `fvextra_environments` 另覆盖 `VerbatimWrite` 与 `VerbatimBuffer` 的头部、正文隔离、跨平台换行、关闭标记、折叠与联动编辑、语义高亮、依赖及版本化重命名。原生回归核对实际写入文本、缓冲长度与内容、aux 标签及未读取的伪输入；作用域回归保证这两种环境不会提前关闭外层环境，stdio 头部回归增量完成选项和正文。
 
+`verb_environment` 覆盖 `VerbEnv` 的单行代码、头部注释和分组续行、严格关闭行、无效关闭后的索引和设置恢复、代码行中的同名标记，以及 Unicode 和 CRLF 源码每个字符边界处的未完成输入。原生回归比较 pdfLaTeX、XeLaTeX 在有效及错误关闭时重命名前后的 aux 标签和输入，核对错误后继续执行的源码及后续修复环境作用域；stdio 头部回归同步检查增量选项提示。
+
 默认回归覆盖 FancyVerb 十种环境的选项、保存名称和输出文件提示，包含未完成参数、注释续行、CRLF、Unicode、首个未受花括号保护的右方括号、无选项时的活动换行、项目重定义与未保存设置刷新。协议回归逐次输入头部、完成参数并添加正文和关闭行尾部，核对提示及依赖隔离：
 
 ```sh
-cargo test --locked --test fancyvrb_environments --test fvextra_environments
+cargo test --locked --test fancyvrb_environments --test fvextra_environments --test verb_environment
 cargo test --locked --test protocol fancyvrb_environment_header_
 ```
 

@@ -1353,6 +1353,7 @@ pub const ENVIRONMENTS: &[&str] = &[
     "VerbatimOut*",
     "VerbatimWrite",
     "VerbatimBuffer",
+    "VerbEnv",
     "lstlisting",
     "minted",
     "theorem",

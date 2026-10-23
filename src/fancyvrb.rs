@@ -330,11 +330,87 @@ pub(crate) fn inline_header_mode(
 }
 
 pub(crate) fn is_environment(name: &str) -> bool {
-    matches!(name, "VerbatimWrite" | "VerbatimBuffer")
+    matches!(name, "VerbatimWrite" | "VerbatimBuffer" | "VerbEnv")
         || matches!(
             name.strip_suffix('*').unwrap_or(name),
             "Verbatim" | "LVerbatim" | "BVerbatim" | "SaveVerbatim" | "VerbatimOut"
         )
+}
+
+pub(crate) struct VerbEnvironmentEnd {
+    /// A valid closing marker; invalid closing lines do not end the TeX group.
+    pub closing: Option<usize>,
+    /// The header, one code line and (unless the code already contains an end
+    /// marker) one closing line are consumed even when validation fails.
+    pub consumed: usize,
+}
+
+pub(crate) fn verb_environment_end(source: &str, header_start: usize) -> VerbEnvironmentEnd {
+    let incomplete = |consumed| VerbEnvironmentEnd {
+        closing: None,
+        consumed,
+    };
+    let Some((_, mut at)) = environment_header_end(source, header_start, "VerbEnv") else {
+        return incomplete(source.len());
+    };
+    // The header is still ordinary TeX with active line endings. Its comments
+    // can continue lines; code and closing lines subsequently use raw characters.
+    while at < source.len() {
+        match source.as_bytes()[at] {
+            b'{' => {
+                let Some((_, end)) = syntax::group(source, at, b'{', b'}') else {
+                    return incomplete(source.len());
+                };
+                at = end;
+            }
+            b'%' => {
+                at = source[at..]
+                    .find('\n')
+                    .map_or(source.len(), |end| at + end + 1);
+            }
+            b'\\' => {
+                at += 1;
+                if source[at..].starts_with("\r\n") {
+                    at += 2;
+                } else if at < source.len() {
+                    at += source[at..].chars().next().unwrap().len_utf8();
+                }
+            }
+            b'\n' => {
+                at += 1;
+                break;
+            }
+            _ => at += 1,
+        }
+    }
+    let line = |at: usize| {
+        let end = source[at..]
+            .find('\n')
+            .map_or(source.len(), |offset| at + offset);
+        let content_end = if end > at && source[..end].ends_with('\r') {
+            end - 1
+        } else {
+            end
+        };
+        (content_end, if end < source.len() { end + 1 } else { end })
+    };
+    let (code_end, after_code) = line(at);
+    let ending = r"\end{VerbEnv}";
+    if source[at..code_end].contains(ending) || after_code == source.len() {
+        return incomplete(after_code);
+    }
+    let (end, consumed) = line(after_code);
+    let closing_line = &source[after_code..end];
+    let closing = closing_line.find(ending).and_then(|offset| {
+        (closing_line[..offset]
+            .bytes()
+            .all(|byte| matches!(byte, b' ' | b'\t'))
+            && closing_line[offset + ending.len()..]
+                .bytes()
+                .all(|byte| byte == b' '))
+        .then_some(after_code + offset + ending.len())
+    });
+    VerbEnvironmentEnd { closing, consumed }
 }
 
 /// FancyVerb checks the first literal end marker on each line. A different
