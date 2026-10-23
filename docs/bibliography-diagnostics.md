@@ -301,6 +301,17 @@ cargo test --locked --test protocol repeated_bibliography_fields_
 
 ## 来源与条目定位
 
+普通 BibTeX 样式警告（如 `Warning--empty author in entry`）和 Biber 条目消息复用本次日志的有界数据库解析缓存，避免每条警告重新读取、解析整个文献库。没有独立行号时，只有候选数据库均可读取、且完整键名对应唯一条目，才使用精确键范围；同一库或多个库的重复键不会默认选择首个条目。名称按原始大小写匹配，数据库符号链接与重复输入路径按实际文件去重。
+
+显式来源只在该文件内查找；其他数据库不可读时不影响明确来源。没有显式来源时，已记录但缺失、不可读或超过缓存上限的数据库会阻止猜测条目位置，消息仍保留在主文档。单文件 2 MiB、累计 16 MiB、最多 1024 个文件的限制与其他原生文献诊断共用；缓存随本次日志解析结束而释放，保存修改后重编译重新定位。
+
+原生 BibTeX `Repeated entry---line … of file …` 错误使用诊断代码 `repeated-bibliography-entry`。报告行中只有一个文献条目键时，精确标记该键，并通过标准 `relatedInformation` 列出此前已读取数据库中的同名条目位置，最多 16 项。按 BibTeX 规则忽略 ASCII 大小写，保留原键的拼写；支持键与条目类型分行、UTF-16、CRLF 及符号链接。后置条目、尚未读取的数据库、字符串声明和注释不会提供相关位置。同一行有多个可能条目、来源缺失或行号无效时保留原行诊断，不猜测文献键。
+
+```sh
+cargo test --locked --test bibliography_duplicate_diagnostics -- --include-ignored
+cargo test --locked --test protocol repeated_bibliography_entries_
+```
+
 BibTeX 带行号的文献库及样式错误按日志中的输入名称识别类型，再定位到符号链接的实际文件；目标使用无关扩展名时仍保留正确行号。辅助文件不会因链接目标带有源码扩展名而被误当成文献来源；路径缺失或实际为目录时，诊断保留在主文件。
 
 Biber 消息中的文献路径按完整文件名边界匹配，`refs.bib.backup`、`refs.bib2` 或目录名中的 `.bib` 不会借用已有 `refs.bib` 的位置。显式的 `in file refs.bib` 和 `in file 'refs.bib'` 优先于错误正文中的文件名；普通文本 `in parser` 不会阻止识别后面的真实来源。引号内的 `in 'wrong.bib'` 或 `file 'wrong.bib'` 不会覆盖显式来源；无法确认的来源保留原错误信息并在主文件显示。

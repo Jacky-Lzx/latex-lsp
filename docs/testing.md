@@ -12,7 +12,58 @@ cargo test --locked -- --include-ignored
 
 只安装部分工具时，按下面的命令选择对应测试。
 
+## 编辑器语言识别
+
+默认回归覆盖编辑器语言类型、非标准文件名、未命名文档与项目输入角色的优先级。真实 Neovim 回归需要 Neovim 0.11+，验证未保存的 `.data` 文件设置 `bib` 文件类型后，条目符号、增量编辑与补全均使用 BibTeX 解析：
+
+```sh
+cargo test --locked --test language_ids -- --include-ignored
+cargo test --locked --test protocol language
+```
+
+biblatex 的 `.bbx`、`.cbx`、`.lbx`、`.dbx` 额外核对根目录扫描、动态监听注册、磁盘创建/更新/删除、未保存缓冲区优先与关闭恢复。字体定义 `.fd` 与 Babel 语言文件 `.ldf` 共用这些扫描和监听回归。显式输入回归检查项目作用域、路径补全、文件移动，以及 `.bbx.tex` 等同名后缀文件的原生优先顺序；`.fd` / `.ldf` 则核对精确文件优先。日志回归包含四种 biblatex 文件与两种字体/语言文件的嵌套上下文、缺失来源屏障、UTF-16 和编号定位，recorder 回归确认输入角色。
+
+```sh
+cargo test --locked --test language_ids --test path_completion
+cargo test --locked --test protocol latex_and_biblatex_sources_
+cargo test --locked --test generated_log real_corrupt_sources_ -- --include-ignored
+```
+
+最后一项需要 pdfLaTeX，在 `.aux`、`.bbl`、`.toc` 和六种支持源码中触发错误，分别验证传统与文件行号日志的实际来源。
+
+## 文献字段诊断
+
+重复字段诊断回归覆盖原生值结束行、后移的逗号和关闭符、同一行多个重复项及完整记录顺序、截断和歧义回退、大小写与引号键、UTF-16、CRLF 和来源角色。原生 BibTeX 确认首个值保留；stdio 回归检查 push/pull 诊断在保存增量编辑后移动及修复后清除：
+
+```sh
+cargo test --locked --test bibliography_field_diagnostics -- --include-ignored
+cargo test --locked --test protocol repeated_bibliography_fields_
+```
+
+## 语义高亮
+
+语义高亮回归覆盖 BibTeX 类型、字段、字符串和数字操作数、运算符、关系键、注释及未完成输入。协议回归核对扩展 legend、UTF-16 范围查询、字段/值/注释的连续增量编辑、delta 还原、未变化结果和重开文档：
+
+```sh
+cargo test --locked --test semantic
+cargo test --locked --test protocol semantic_token
+```
+
+自定义字段名回归检查合法标点和 Unicode、完整字段补全范围、后续元数据和关系引用、缩写导航与重命名；原生测试使用自定义 `.bst` 读取这些字段：
+
+```sh
+cargo test --locked --test bibtex_field_names -- --include-ignored
+cargo test --locked --test protocol bibtex_custom_field_names
+```
+
 ## 补全
+
+BibTeX 自定义字段回归覆盖跨文献资源候选、项目隔离、本地拼写优先、大小写去重和排序，以及含 `$`、反斜杠、中文与 emoji 的完整字段替换。真实 Neovim 验证片段展开后的字面名称，原生 BibTeX 验证补全保留已有赋值及后续字段；需要同时安装两个工具。协议测试检查未保存的资源增量编辑、打开文件期间的磁盘通知、关闭后恢复磁盘候选和客户端片段能力：
+
+```sh
+cargo test --locked --test bibliography_completion -- --include-ignored
+cargo test --locked --test protocol custom_bibliography_field_completions
+```
 
 命令名操作数回归覆盖内置与跨文件用户命令、声明目标、复制来源、`meaning`、空命令前缀、尚未闭合的名称分组、注释续行、词中替换及 UTF-16 范围；核对未完成输入不会产生空名称声明，注释、逐字和文字化内容不提供命令补全，同时确认普通调用、`futurelet` 继续执行的命令和本文件显式重定义后的调用仍提供参数片段：
 
@@ -31,16 +82,6 @@ cargo test --locked --test signature commented_argument_counts -- --include-igno
 ```sh
 cargo test --locked --test signature optional_default_previews -- --include-ignored
 ```
-
-biblatex 的 `.bbx`、`.cbx`、`.lbx`、`.dbx` 额外核对根目录扫描、动态监听注册、磁盘创建/更新/删除、未保存缓冲区优先与关闭恢复。字体定义 `.fd` 与 Babel 语言文件 `.ldf` 共用这些扫描和监听回归。显式输入回归检查项目作用域、路径补全、文件移动，以及 `.bbx.tex` 等同名后缀文件的原生优先顺序；`.fd` / `.ldf` 则核对精确文件优先。日志回归包含四种 biblatex 文件与两种字体/语言文件的嵌套上下文、缺失来源屏障、UTF-16 和编号定位，recorder 回归确认输入角色。
-
-```sh
-cargo test --locked --test language_ids --test path_completion
-cargo test --locked --test protocol latex_and_biblatex_sources_
-cargo test --locked --test generated_log real_corrupt_sources_ -- --include-ignored
-```
-
-最后一项需要 pdfLaTeX，在 `.aux`、`.bbl`、`.toc` 和六种支持源码中触发错误，分别验证传统与文件行号日志的实际来源。
 
 ## 重命名
 
@@ -293,6 +334,213 @@ cargo test --locked --test quoted_graphics real_ -- --ignored
 
 ## 文献与编译诊断
 
+动态集合回归核对声明与成员的独立重命名、含引号的新键、注释与未完成列表补全、两个参数的提示、命令片段、语义声明与选择范围、项目隔离、同名及新键冲突、错误形式和缓冲区更新。真实 Biber 通过普通模式控制文件处理索引中的集合，比较集合键、成员键依次重命名后的完整 `.bbl`；此测试不运行 biblatex 宏。stdio 覆盖旧客户端与版本化编辑、范围移动、动态名称移除声明、关闭文档后恢复磁盘定义及成员编辑：
+
+```sh
+cargo test --locked --test biblatex_sets -- --include-ignored
+cargo test --locked --test protocol bibliography_dynamic_sets_
+```
+
+扩展姓名组成部分回归覆盖完整模板、字段与条目边界、Unicode 模型字段、NFD 键、字面值与宏表达式、字段重复和模型碰撞、映射字段、来源顺序和失效、超限缓存及无猜测修复。真实 Biber 验证 AUTHOR 与 TRANſLATOR、Unicode 未知组成部分、范围移动及修复清除、字符串宏、模型碰撞和 source map；只需 Biber。stdio 检查推送和拉取、增量移动、宏表达式范围、映射字段的键回退和修复清除：
+
+```sh
+cargo test --locked --test biber_namepart_diagnostics -- --include-ignored
+cargo test --locked --test protocol biber_nameparts_
+```
+
+Biber 集合回归覆盖三种原生模板、字段名的 Unicode 模型匹配、动态值、重复及不完整字段、来源历史顺序和失效、规范化键歧义、超限来源与无猜测修复。真实 Biber 测试从安装的 `--tool-config` 及其 `Constants.pm` 构造匹配版本的 `.bcf`，移除工具默认 source map 后在普通模式运行，验证原生 `.blg` 和 `.bbl`、范围移动、修复清除、模型名称碰撞及 source map 生成的字段；只需 Biber，不依赖 `biblatex.sty`。stdio 检查推送和拉取、增量编辑、字段与键回退、警告下成功构建及修复清除：
+
+```sh
+cargo test --locked --test biber_set_diagnostics -- --include-ignored
+cargo test --locked --test protocol biber_sets_
+```
+
+Biber 循环继承回归核对致命错误发生前的来源、跨库读取顺序、超限来源、错误后的字段警告回退、后续输入无法恢复历史、规范化键歧义、字段回退、自引用、相关位置上限和完整模板。真实 Biber 验证普通与 XDATA 的双条目循环、自循环、字段级 XDATA、宏、source map 及别名引用，比较源码移动和打断循环后的结果。stdio 同时验证推送和拉取、增量移动、动态字段与字段级 XDATA、后续警告来源失效、失败构建和修复后的清除及成功状态：
+
+```sh
+cargo test --locked --test biber_cycle_diagnostics -- --include-ignored
+cargo test --locked --test protocol biber_inheritance_cycles_
+```
+
+Biber 别名冲突回归覆盖三种完整模板、静态与动态字段、跨库读取顺序、NFD 与大小写、重复所属键及候选上限、历史失效，以及单行 1500 条混合 Unicode 别名冲突的全部 UTF-16 范围。真实 Biber 验证两种条目顺序下三类冲突的范围移动与修复清除，以及宏展开别名的主文档回退和 source map 移走 IDS 后的原始范围；stdio 同时检查推送和拉取、增量移动、动态别名回退到主文档、相关位置和无猜测修复：
+
+```sh
+cargo test --locked --test biber_alias_diagnostics -- --include-ignored
+cargo test --locked --test protocol biber_alias_conflicts_
+```
+
+biblatex `ids` 别名回归覆盖静态列表、ASCII 字段名匹配、主键与别名独立重命名、歧义拒绝、项目隔离、UTF-16/CRLF、语义声明及增量更新。真实 Biber 使用 `--tool --output-resolve-crossrefs` 核对别名和主键重命名后子条目仍继承同一标题，并验证双引号列表改为含引号的新别名；只需 Biber。stdio 同时检查旧客户端及版本化编辑、范围移动、动态字段移除索引和关闭文档后恢复磁盘内容：
+
+```sh
+cargo test --locked --test bibliography_aliases -- --include-ignored
+cargo test --locked --test protocol bibliography_ids_aliases_
+```
+
+文献日志记录边界回归覆盖输入路径、源码回显和 Biber 消息中的级别/行号样式文本，另核对实际 `INFO` 记录才可建立数据库角色。条目类型诊断回归验证类型与键的对应关系、分行头、歧义、来源角色和 UTF-16；真实 BibTeX 测试在修正类型后重新编译，协议用例覆盖推送与拉取诊断：
+
+```sh
+cargo test --locked --test bibliography_log_records --test bibliography_type_diagnostics -- --include-ignored
+cargo test --locked --test biber_data_sources biber_database_roles_
+cargo test --locked --test protocol bibliography_type_warnings_
+```
+
+BibTeX 字符串缩写的默认回归覆盖值表达式、补全、大小写、UTF-16、项目隔离、共享引用和安全重命名。真实工具回归只需 BibTeX，比较跨数据库、preamble 和自引用在重命名前后的完整 `.bbl` 内容：
+
+```sh
+cargo test --locked --test bibliography_strings -- --include-ignored
+cargo test --locked --test protocol bibliography_abbreviations_
+```
+
+未定义字符串缩写回归覆盖两行日志、精确范围、输入顺序、无效声明、歧义位置和旧修复失效。真实 BibTeX 测试在修复后重新编译并检查警告消失及 `.bbl` 内容；stdio 测试同时验证推送/拉取诊断、版本化编辑与旧客户端的 `workspace/applyEdit`：
+
+```sh
+cargo test --locked --test bibliography_string_diagnostics -- --include-ignored
+cargo test --locked --test protocol bibliography_string_warnings_
+```
+
+重复文献条目测试核对大小写等价键、分行键头、同一行歧义、数据库顺序、来源角色及相关位置上限。真实 BibTeX 回归验证实际报错的行号与跨库原始位置，stdio 测试覆盖推送和拉取诊断中的精确范围与 `relatedInformation`：
+
+```sh
+cargo test --locked --test bibliography_duplicate_diagnostics -- --include-ignored
+cargo test --locked --test protocol repeated_bibliography_entries_
+```
+
+Biber 字段诊断回归覆盖无效字段、条目类型限制、日期与日期范围、数据类型、边界及模式约束、ISBN/ISSN/ISMN、完整特殊文件名、数据库角色、源码回显、级别与记录完整性。另核对字面值、空值、字符串拼接、字段归属、继承与歧义回退、Unicode 规范化碰撞、CRLF、缓存更新和单行 6000 条诊断的全部范围。输入及模型字段匹配另有单行 1500 个条目、7500 条混合诊断逐项核对，覆盖完整 Unicode 折叠、原始拼写分别定位及碰撞后的键回退。无文件名的默认年份、月份、ISBN 和畸形范围警告额外核对完整此前历史、跨库规范化键唯一性、不可读候选、读取及来源数量上限、符号链接去重，以及值内类似日志文字的边界。真实 Biber 使用最小自定义模型验证组合/分解字符、ß/ẞ、两种 sigma、带点/无点 I 和连字，核对值移动、修复清除、模型字段碰撞及未知字段独立定位；默认模式额外核对 `IſBN` 别名及其与 `ISBN` 的碰撞、月份修复，以及 `PAGES` / `Pageſ` 畸形范围的独立原始值定位。stdio 同时验证输入及模型命名空间的推送和拉取、增量保存、警告模式切换、默认字段五项并列警告清除与成功构建：
+
+```sh
+cargo test --locked --test biber_field_diagnostics -- --include-ignored
+cargo test --locked --test protocol biber_field_warnings_
+cargo test --locked --test protocol biber_unqualified_field_warnings_
+```
+
+Biber XDATA 回归覆盖三种完整模板、section 边界、原生级别、静态列表精确项、宏及拼接、继承、重复字段与规范等价目标、未闭合条目、此前历史及跨库键唯一性。单行 1500 个条目中的 4500 个 XDATA 引用与 1500 条年份警告混合验证全部 UTF-16 范围。真实 Biber 核对缺失目标的两条消息、错误目标类型、列表项移动、补齐后的清除，以及实际宏展开、source map、重复字段和目标的键回退。stdio 验证推送、拉取、保存后的移动、动态字段回退和修复清除：
+
+```sh
+cargo test --locked --test biber_xdata_diagnostics -- --include-ignored
+cargo test --locked --test protocol biber_xdata_warnings_
+```
+
+字段级 XDATA 测试覆盖四种原生消息、字段与键边界、原生源位置文本、单一字面值和完整表达式、输入及模型命名空间区别、规范等价字段碰撞、继承/映射/不完整字段回退和历史失效。单行 1500 个条目、6000 条混合字段警告逐项验证 UTF-16 范围，包含 `Straße` 与 `STRASSE` 的独立位置。真实 Biber 验证姓名列表和普通列表的位置修复、源字段补齐、类型修复、值移动和清除，并确认宏原始表达式、source map 生成字段及自定义模型的定位。stdio 覆盖四种警告并列、推送与拉取、增量移动、映射字段回退、保存后清除及成功构建：
+
+```sh
+cargo test --locked --test biber_xdata_field_diagnostics -- --include-ignored
+cargo test --locked --test protocol biber_granular_xdata_warnings_
+```
+
+Biber 关系引用回归覆盖四种原生关系模板、section 与级别边界、单值和列表目标、同目标跨字段的独立范围、动态/继承/重复字段回退、此前输入顺序、缓存建立后的历史失效及规范化键碰撞。单行 1500 个条目的 6000 条普通关系警告与 1500 条 XDATA 警告逐项核对 UTF-16 位置。真实 Biber 验证四种关系的目标移动和补齐清除，以及字符串宏和实际 source map 的键回退；stdio 同时核对四类诊断的推送、拉取、增量保存、动态字段回退和成功构建状态：
+
+```sh
+cargo test --locked --test biber_relation_diagnostics -- --include-ignored
+cargo test --locked --test protocol biber_relation_warnings_
+```
+
+Biber 姓名回归覆盖三种原生模板、原生级别、规范化键唯一性、特殊键引号、姓名中的文件名及类似后缀文字、此前输入顺序、来源不可读或超限、不猜测姓名修复，以及单行 3000 条混合错误和警告的全部 UTF-16 键范围。真实 Biber 验证两个姓名错误之后的年份警告仍能精确定位，并核对 LaTeX 解码后的姓名、连续 `and`、Unicode 自定义模型姓名字段、范围移动和修复清除。未知或不完整错误继续使后续历史失效。stdio 同时核对推送和拉取、两个错误后的字段位置、键移动、仅警告时的成功状态及全部清除：
+
+```sh
+cargo test --locked --test biber_name_diagnostics -- --include-ignored
+cargo test --locked --test protocol biber_name_errors_
+```
+
+Biber 日期覆盖回归核对被覆盖的原始值与关联日期各自的唯一性、完整模板、此前输入历史、规范化键碰撞、继承边界、无自动删除或改写，以及单行 1500 个条目、3000 条警告的主范围及关联范围。真实 Biber 对两种字段顺序和日期范围分别验证移动及分量一致后的清除，实际 source map 验证日期、年份或两者改名后的原始范围回退。stdio 同时验证推送和拉取、增量编辑、关联日期消失、原始年份缺失时的键回退及修复清除：
+
+```sh
+cargo test --locked --test biber_overwritten_diagnostics -- --include-ignored
+cargo test --locked --test protocol biber_overwritten_fields_
+```
+
+Biber 条目类型回归核对原生记录完整性、特殊文件名、精确条目归属、规范化键碰撞、未闭合正文、未确认及不可读来源、类型不一致时的键回退和无自动 `misc` 替换。Unicode 折叠覆盖组合/分解形式、ß/ẞ 展开、希腊两种 sigma、带点与无点 I、连字，单行 3000 个条目和 6000 条类型及字段警告逐项验证原始 UTF-16 范围。真实 Biber 逐项验证范围移动、类型修复清除，并使用实际 source map 将有效 `book` 改为无效 `boook`，确认只标记键；stdio 验证类型移动、原始类型与映射类型不一致时的回退及清除，均覆盖推送和拉取：
+
+```sh
+cargo test --locked --test biber_type_diagnostics -- --include-ignored
+cargo test --locked --test protocol biber_type_warnings_
+```
+
+Biber 必填字段回归区分单一字段与至少填写一项的字段组，核对原始要求、完整特殊文件名、数据库角色、单字段和组模板边界、Unicode 规范化碰撞、来源失败、不借用其他库，以及保存后范围刷新和无猜测插入修复。单行 1500 个组合字符键对应 3000 条单字段及备选组警告，逐项核对原始 UTF-16 范围。真实 Biber 校验空条目、条目键移动、补齐必填要求后的警告清除；stdio 同时验证推送、拉取、增量保存和成功构建状态：
+
+```sh
+cargo test --locked --test biber_required_diagnostics -- --include-ignored
+cargo test --locked --test protocol biber_required_fields_
+```
+
+Biber 重复键回归覆盖无行号歧义、同文件全部候选、跨库顺序、精确大小写、来源缺失及超限、特殊文件名、符号链接、记录级别和语法错误后的截断键。Unicode 回归核对组合/分解形式、韩文与组合标记的规范等价碰撞、兼容字符区别，以及多种规范等价拼写共享的候选上限。另验证同一 Unicode 长行中 3000 个重复键及 3000 对大小写键的全部范围、每键上限之后的 CRLF 位置，以及缓存建立后发生错误时停止跨库关联。真实 Biber 测试比较默认模式与 `--noskipduplicates` 的实际输出，并验证规范等价声明的位置移动和修复清除；stdio 同时验证 ASCII 与规范化 Unicode 跨库相关位置、增量保存、成功构建以及推送与拉取：
+
+```sh
+cargo test --locked --test biber_duplicate_diagnostics -- --include-ignored
+cargo test --locked --test protocol biber_duplicate_warnings_
+```
+
+Biber 数据库键大小写警告回归覆盖区分大小写的规范等价键、跨库读取顺序、主键规范化碰撞、关联键的多个规范等价候选及相关位置上限、错误与截断历史、来源角色、完整特殊文件名、符号链接、UTF-16/CRLF 和有界读取。真实 Biber 测试确认两种拼写均保留于输出，源码组合字符与日志分解字符精确对应，保存后诊断移动、修复后清除；stdio 验证 ASCII 及 Unicode 的推送与拉取、跨库相关位置及成功构建状态：
+
+```sh
+cargo test --locked --test bibliography_case_diagnostics -- --include-ignored
+cargo test --locked --test protocol biber_case_warnings_
+```
+
+`crossref` 错误与嵌套警告测试核对字段所属条目、字面值范围、重复键与字段、动态值、来源角色、日志截断、扫描上限及相关父条目位置。真实 BibTeX 回归验证父条目缺失、前置未引用、后置、显式引用、通配引用、空值、外围空白，以及普通嵌套、自引用、循环、动态上级引用和缺失祖先。嵌套警告与祖先缺失错误须独立定位、保留各自级别；不匹配或缺失续行不能吞掉下一条记录。stdio 覆盖推送、拉取、警告下构建成功、警告与错误共存，以及修复后重编译清除诊断：
+
+```sh
+cargo test --locked --test bibliography_crossref_diagnostics -- --include-ignored
+cargo test --locked --test protocol bibliography_crossref_errors_
+cargo test --locked --test protocol bibliography_nested_crossrefs_
+```
+
+文献大纲回归核对完整条目与字符串范围、字段层次、赋值范围、未完成构造、注释和嵌套字面量、重复键和字段、UTF-16/CRLF、语言类型及大文件的字段归属。静态 IDS 别名核对字段子符号、所属主键、重复声明与动态值排除，以及单行 2000 个 Unicode 别名的全部选择范围。真实 BibTeX 回归验证无字段花括号条目、分行键和引号键；stdio 覆盖层级与平铺客户端、未命名及其他扩展名文档、增量编辑和旧字段清除，另检查别名搜索、静态转动态后清除及关闭文档恢复磁盘内容。
+
+```sh
+cargo test --locked --test bibliography_symbols -- --include-ignored
+cargo test --locked --test protocol bibliography_outlines_
+cargo test --locked --test protocol bibliography_alias_symbols_
+```
+
+引号文献键回归覆盖各类引用参数、手写文献、条目关系列表、双引号字段转花括号、UTF-16/CRLF、注释和说明保留、动态值排除、项目隔离及共享歧义。stdio 验证版本化与传统工作区编辑、补全后增量更新和跨文件重命名；真实 pdfLaTeX/BibTeX 回归连续重命名父条目，比较完整 `.bbl` 并核对 crossref 继承和缺失引用警告。
+
+```sh
+cargo test --locked --test quoted_citations -- --include-ignored
+cargo test --locked --test protocol quoted_citation_keys_
+```
+
+选择范围回归核对完整文献键、标签列表和范围端点、结构化引用的说明/页码/键/字段角色、BibTeX 关系值与条目层级、跨行命令及尾随正文、CRLF 注释、UTF-16 和未完成参数。stdio 回归验证键名及字段定界符增量修改后范围刷新、关闭重开、位置顺序及无效代理对位置拒绝。
+
+另覆盖 BibTeX 普通字段、字符串赋值与 preamble 的字面内容/定界符/操作数/拼接表达式/完整构造，两种条目定界符、受保护的引号与百分号、跨值标点隔离、末尾空白、空表达式和未完成输入。实际 stdio 编辑在引号、嵌套花括号、拼接与未闭合值之间转换，核对范围刷新并复查缩写导航；真实 BibTeX 字符串回归验证既有输出保持一致。
+
+```sh
+cargo test --locked --test selection_ranges
+cargo test --locked --test protocol selection_ranges
+```
+
+`entrydata` 默认回归覆盖普通与星号调用、单键与代码角色、注释和跨行补全、Unicode/引号键、语义 token、选择范围、动态键及列表排除、别名、项目隔离、共享含义歧义和嵌套普通引用的警告归属。stdio 回归覆盖导航、悬停、补全、参数提示、引用、高亮、两种工作区编辑格式，以及增量改为键列表后清除原先的引用：
+
+```sh
+cargo test --locked --test biblatex_entrydata
+cargo test --locked --test protocol biblatex_entrydata_
+```
+
+条目条件查询回归覆盖两个命令的单键编辑、两个分支与等待参数、片段、用户签名、注释/UTF-16、语义与选择范围、动态键及不支持的调用、别名项目隔离、共享歧义和嵌套引用警告归属。stdio 检查两种工作区编辑、三个参数角色、增量转成列表后的引用清除及关闭重开：
+
+```sh
+cargo test --locked --test biblatex_entry_queries
+cargo test --locked --test protocol biblatex_entry_queries_
+```
+
+数据选择器回归覆盖六个命令的字段/字面列表/姓名列表候选隔离、大小写与词中替换、注释和未完成参数、UTF-16/CRLF、可选格式的方括号边界、精确悬停及与文献键的独立性。另核对动态参数、逐字内容、命令名操作数、用户定义及别名改写的排除，并验证缓冲区改写后的候选刷新。stdio 在普通文本和片段客户端中应用实际增量补全，再核对悬停、原有键导航、三个参数类型、用户重定义清除和关闭重开恢复：
+
+字段读取和三个 undef 检查额外覆盖首参数与两个分支的独立性、参数提示、计数器/别名计数器/定理及 newif 派生命令冲突，还有其他项目的声明隔离；相同 stdio 回归扩展到全部十一个命令。
+
+字段比较回归检查两个字段参数的独立替换、字符串/命令操作数与分支边界、动态首参数后的第二字段、注释续行及未完成参数。五个比较命令同时核对列表类型隔离、四参数签名、嵌套调用、用户定义与 `newif` 覆盖，以及缓冲区恢复。
+
+宏比较目标还覆盖命令名的纯文本补全、空前缀、未完成分组，以及被比较的文献、声明、逐字命令不被执行。复用 `operand_completion` 回归检查执行分支及显式重新定义后的调用片段；stdio 同时检查比较目标的词中替换和外层四参数提示。
+
+`ifentrytype` 额外核对默认输出类型与特殊条目/输入别名的区分、共享类型描述、与同名文献键及字段的独立性、跨行注释编辑、分支参数提示、用户定义及 `newif` 覆盖后的恢复。
+
+派生命令回归另检查命令名补全采用纯名称、撤下不再适用的内置说明与签名，以及移除覆盖后恢复文献参数片段。
+
+```sh
+cargo test --locked --test biblatex_data_selectors
+cargo test --locked --test biblatex_data_comparisons
+cargo test --locked --test biblatex_entry_types
+cargo test --locked --test protocol biblatex_data_selectors_
+```
+
 连续 latexmk 编译回归覆盖已有产物、缓存失败后的错误位置保留、成功的无操作编译、修正后的诊断清空，以及自定义输出目录和作业名；真实工具部分需要 pdfLaTeX 和 XeLaTeX。默认测试另核对启动失败、超时及其他工具失败不会误用旧日志，并通过 stdio 验证重复诊断发布与修正后的清空：
 
 ```sh
@@ -332,4 +580,18 @@ cargo test --locked --test biber_data_sources real_biber -- --ignored
 ```
 
 该测试使用 Biber `--tool` 读取不同后缀及无扩展名数据库，验证依赖发现和重复文献键警告的定位；不要求匹配版本的 biblatex，也不生成 PDF。默认协议回归覆盖数据库角色、导航、版本化重命名、文件移动及编译期间输入变更。
+
+普通文献警告回归覆盖同库及跨库重复键、完整大小写、不可读或超限数据库、符号链接去重、特殊后缀、UTF-16/CRLF、独立行号及多警告数据库。真实 BibTeX 验证样式生成的字段警告在条目移动后更新、字段补齐后消失；stdio 覆盖 push/pull、保存编辑后唯一与歧义状态的切换及修复后清除。
+
+```sh
+cargo test --locked --test bibliography_log_records -- --include-ignored
+cargo test --locked --test protocol generic_bibliography_entry_warnings_
+```
+
+重复字段诊断另覆盖 3000 个同一行 Unicode 值、跨行值与 Unicode 字段名、交错的数据库警告组，以及首次警告后出现语法错误时的回退。真实 BibTeX 同样验证 3000 个被忽略的字段逐一定位、首次值仍用于输出、移除重复字段后诊断清空；stdio 核对同组多个警告在保存增量编辑后一起移动、保留相关首次赋值并在修复后清除。
+
+```sh
+cargo test --locked --test bibliography_field_diagnostics -- --include-ignored
+cargo test --locked --test protocol repeated_bibliography_fields_
+```
 
