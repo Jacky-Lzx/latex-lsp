@@ -247,7 +247,7 @@ pub struct Workspace {
     pub watch_files: bool,
     pub hierarchical_symbols: bool,
     pub versioned_edits: bool,
-    pub folding_limit: Option<u32>,
+    pub folding_capabilities: tower_lsp::lsp_types::FoldingRangeClientCapabilities,
     pub build_progress: bool,
     pub code_action_literals: bool,
     pub apply_edits: bool,

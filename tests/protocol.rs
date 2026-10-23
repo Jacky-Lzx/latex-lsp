@@ -8116,6 +8116,95 @@ fn custom_bibliography_field_completions_refresh_project_resources_and_negotiate
 }
 
 #[test]
+fn folding_negotiates_columns_labels_and_refreshes_unsaved_tex_and_bibtex_over_stdio() {
+    let directory = tempfile::tempdir().unwrap();
+    let tex = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+    let bib = Url::from_file_path(directory.path().join("refs.bib")).unwrap();
+    for line_only in [false, true] {
+        let mut server = Server::start();
+        let init = server.request(
+            1,
+            "initialize",
+            json!({
+                "processId": null,
+                "capabilities": {"textDocument": {"foldingRange": {
+                    "lineFoldingOnly": line_only,
+                    "rangeLimit": 8,
+                    "foldingRange": {"collapsedText": true}
+                }}}
+            }),
+        );
+        assert_eq!(init["capabilities"]["foldingRangeProvider"], true);
+        server.notify("initialized", json!({}));
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument": {
+                "uri": tex, "languageId": "latex", "version": 1,
+                "text": "前😀 \\[\r\nx\r\n\\] 尾\r\n"
+            }}),
+        );
+        let folds = server.request(
+            2,
+            "textDocument/foldingRange",
+            json!({"textDocument": {"uri": tex}}),
+        );
+        assert_eq!(folds.as_array().unwrap().len(), 1);
+        assert_eq!(folds[0]["startLine"], 0);
+        assert_eq!(folds[0]["endLine"], 2);
+        assert_eq!(folds[0]["collapsedText"], "\\[ …");
+        if line_only {
+            assert!(folds[0].get("startCharacter").is_none());
+            assert!(folds[0].get("endCharacter").is_none());
+        } else {
+            assert_eq!(folds[0]["startCharacter"], 4);
+            assert_eq!(folds[0]["endCharacter"], 2);
+        }
+        server.notify("textDocument/didChange", json!({
+            "textDocument": {"uri": tex, "version": 2},
+            "contentChanges": [{"range": {"start": {"line": 2, "character": 0}, "end": {"line": 2, "character": 2}}, "text": ""}]
+        }));
+        assert_eq!(
+            server.request(
+                3,
+                "textDocument/foldingRange",
+                json!({"textDocument": {"uri": tex}})
+            ),
+            json!([])
+        );
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument": {
+                "uri": bib, "languageId": "bibtex", "version": 5,
+                "text": "@article(中文😀,\r\n title = \"A ) title\"\r\n)\r\n"
+            }}),
+        );
+        let folds = server.request(
+            4,
+            "textDocument/foldingRange",
+            json!({"textDocument": {"uri": bib}}),
+        );
+        assert_eq!(folds.as_array().unwrap().len(), 1);
+        assert_eq!(folds[0]["endLine"], 2);
+        assert_eq!(folds[0]["collapsedText"], "@article(中文😀, …");
+        server.notify("textDocument/didChange", json!({
+            "textDocument": {"uri": bib, "version": 6},
+            "contentChanges": [{"range": {"start": {"line": 2, "character": 0}, "end": {"line": 2, "character": 1}}, "text": ""}]
+        }));
+        assert_eq!(
+            server.request(
+                5,
+                "textDocument/foldingRange",
+                json!({"textDocument": {"uri": bib}})
+            ),
+            json!([])
+        );
+        server.request(6, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
 fn navigation_capabilities_and_requests_work_over_stdio() {
     let directory = tempfile::tempdir().unwrap();
     let root = Url::from_directory_path(directory.path()).unwrap();
@@ -8143,6 +8232,9 @@ fn navigation_capabilities_and_requests_work_over_stdio() {
     );
     assert_eq!(folds.as_array().unwrap().len(), 1);
     assert_eq!(folds[0]["startLine"], 0);
+    assert!(folds[0].get("startCharacter").is_none());
+    assert!(folds[0].get("endCharacter").is_none());
+    assert!(folds[0].get("collapsedText").is_none());
     let links = server.request(
         4,
         "textDocument/documentLink",

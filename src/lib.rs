@@ -2,9 +2,9 @@ mod anchors;
 mod bib_aliases;
 mod bib_completion;
 mod bib_links;
+mod bib_resources;
 mod bib_strings;
 mod bib_symbols;
-mod bib_resources;
 pub mod build;
 pub mod build_log;
 pub mod catalog;
@@ -26,6 +26,7 @@ pub mod features;
 mod file_checks;
 mod file_fixes;
 pub mod file_operations;
+mod folding;
 mod generated;
 pub mod graphics;
 mod graphics_settings;
@@ -280,12 +281,13 @@ impl LanguageServer for Backend {
             .as_ref()
             .and_then(|doc| doc.code_action.as_ref())
             .is_some_and(|action| action.code_action_literal_support.is_some());
-        workspace.folding_limit = params
+        workspace.folding_capabilities = params
             .capabilities
             .text_document
             .as_ref()
             .and_then(|doc| doc.folding_range.as_ref())
-            .and_then(|folding| folding.range_limit);
+            .cloned()
+            .unwrap_or_default();
         if let Some(folders) = params.workspace_folders {
             for folder in folders {
                 if let Ok(root) = folder.uri.to_file_path() {
@@ -972,7 +974,7 @@ impl LanguageServer for Backend {
         Ok(workspace
             .documents
             .get(&document_uri(params.text_document.uri))
-            .map(|doc| navigation::folding_ranges(doc, workspace.folding_limit)))
+            .map(|doc| navigation::folding_ranges_for_client(doc, &workspace.folding_capabilities)))
     }
 
     async fn document_color(&self, params: DocumentColorParams) -> Result<Vec<ColorInformation>> {

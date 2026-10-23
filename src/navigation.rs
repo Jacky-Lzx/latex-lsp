@@ -1,10 +1,11 @@
 use crate::{
     features, syntax,
-    workspace::{resolve_file_path, resolve_path, root_directive, Document, DocumentKind, Workspace},
+    workspace::{
+        resolve_file_path, resolve_path, root_directive, Document, DocumentKind, Workspace,
+    },
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
-    ops::Range as Span,
     path::PathBuf,
 };
 use tower_lsp::lsp_types::*;
@@ -52,162 +53,7 @@ pub fn workspace_symbols(workspace: &Workspace, query: &str) -> Vec<SymbolInform
         .collect()
 }
 
-fn fold(doc: &Document, span: Span<usize>, kind: FoldingRangeKind) -> Option<FoldingRange> {
-    let start = doc.text.position(span.start);
-    let end = doc.text.position(span.end);
-    let end_line = if end.character == 0 {
-        end.line.saturating_sub(1)
-    } else {
-        end.line
-    };
-    (end_line > start.line).then_some(FoldingRange {
-        start_line: start.line,
-        end_line,
-        kind: Some(kind),
-        ..Default::default()
-    })
-}
-
-fn heading_folds(symbols: &[DocumentSymbol], result: &mut Vec<FoldingRange>) {
-    for symbol in symbols {
-        if symbol.kind == SymbolKind::NAMESPACE {
-            let range = symbol.range;
-            let end = range
-                .end
-                .line
-                .saturating_sub(u32::from(range.end.character == 0));
-            if end > range.start.line {
-                result.push(FoldingRange {
-                    start_line: range.start.line,
-                    end_line: end,
-                    kind: Some(FoldingRangeKind::Region),
-                    ..Default::default()
-                });
-            }
-        }
-        if let Some(children) = &symbol.children {
-            heading_folds(children, result);
-        }
-    }
-}
-
-pub fn folding_ranges(doc: &Document, limit: Option<u32>) -> Vec<FoldingRange> {
-    let mut result = Vec::new();
-    heading_folds(&features::symbols(doc), &mut result);
-    let mut environments = Vec::new();
-    for command in &doc.syntax.commands {
-        let Some(argument) = &command.argument else {
-            continue;
-        };
-        if command.name == "begin" {
-            if let Some(raw) = doc
-                .syntax
-                .ignored
-                .iter()
-                .find(|span| span.start == argument.outer_span.end)
-            {
-                result.extend(fold(
-                    doc,
-                    command.span.start..raw.end,
-                    FoldingRangeKind::Region,
-                ));
-            } else {
-                environments.push((argument.value.as_str(), command.span.start));
-            }
-        } else if command.name == "end" {
-            if let Some(index) = environments
-                .iter()
-                .rposition(|(name, _)| *name == argument.value)
-            {
-                result.extend(fold(
-                    doc,
-                    environments[index].1..argument.outer_span.end,
-                    FoldingRangeKind::Region,
-                ));
-                environments.truncate(index);
-            }
-        }
-    }
-    let source = &doc.text.source;
-    let bytes = source.as_bytes();
-    let mut braces = Vec::new();
-    let mut ignored = doc.syntax.ignored.iter().peekable();
-    let mut i = 0;
-    while i < bytes.len() {
-        while ignored.peek().is_some_and(|span| span.end <= i) {
-            ignored.next();
-        }
-        if let Some(span) = ignored
-            .peek()
-            .filter(|span| span.start <= i && i < span.end)
-        {
-            i = span.end;
-            continue;
-        }
-        match bytes[i] {
-            b'\\' => {
-                i += 1;
-                if i < bytes.len() {
-                    i += source[i..].chars().next().unwrap().len_utf8();
-                }
-            }
-            b'%' => {
-                while i < bytes.len() && bytes[i] != b'\n' {
-                    i += 1;
-                }
-            }
-            b'{' => {
-                braces.push(i);
-                i += 1;
-            }
-            b'}' => {
-                if let Some(start) = braces.pop() {
-                    result.extend(fold(doc, start..i + 1, FoldingRangeKind::Region));
-                }
-                i += 1;
-            }
-            _ => i += 1,
-        }
-    }
-    let comments: Vec<_> = doc
-        .syntax
-        .ignored
-        .iter()
-        .filter_map(|span| {
-            if !source[span.clone()].starts_with('%') {
-                return None;
-            }
-            let position = doc.text.position(span.start);
-            let start = doc.text.offset(Position::new(position.line, 0))?;
-            source[start..span.start]
-                .trim()
-                .is_empty()
-                .then_some(position.line)
-        })
-        .collect();
-    let mut run: Option<(u32, u32)> = None;
-    for line in comments.into_iter().chain(std::iter::once(u32::MAX)) {
-        if let Some((start, end)) = run {
-            if line == end + 1 {
-                run = Some((start, line));
-                continue;
-            }
-            if end > start {
-                result.push(FoldingRange {
-                    start_line: start,
-                    end_line: end,
-                    kind: Some(FoldingRangeKind::Comment),
-                    ..Default::default()
-                });
-            }
-        }
-        run = Some((line, line));
-    }
-    result.sort_by_key(|range| (range.start_line, std::cmp::Reverse(range.end_line)));
-    result.dedup_by(|a, b| a.start_line == b.start_line && a.end_line == b.end_line);
-    result.truncate(limit.unwrap_or(u32::MAX) as usize);
-    result
-}
+pub use crate::folding::{folding_ranges, folding_ranges_for_client};
 
 fn unescape(value: &str) -> String {
     let mut value = value.to_owned();
