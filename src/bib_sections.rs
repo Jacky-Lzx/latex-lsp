@@ -11,6 +11,8 @@ use std::collections::{BTreeMap, BTreeSet};
 /// bibliography entries cannot certify a citation target or a complete rename.
 /// Captured readers remain possible even after their original is redefined.
 pub(crate) fn selects_resources(docs: &[&Document], signatures: &CommandSignatures<'_>) -> bool {
+    let discarded = std::cell::OnceCell::new();
+    let mut parameter_work = 0usize;
     let mut users = BTreeMap::<String, Vec<(String, bool)>>::new();
     for doc in docs {
         for entry in &doc.syntax.definitions {
@@ -88,11 +90,25 @@ pub(crate) fn selects_resources(docs: &[&Document], signatures: &CommandSignatur
             if source.as_bytes().get(at) != Some(&b'[') {
                 continue;
             }
-            if context
-                .get_or_init(|| Context::new(doc, signatures))
-                .operand(doc, command.span.start)
-            {
+            let context = context.get_or_init(|| Context::new(doc, signatures));
+            if context.literal(command.span.start) {
                 continue;
+            }
+            if context.operand(doc, command.span.start) {
+                // An ordinary macro can execute its argument. Only a known
+                // discarded argument proves that a selection is inert.
+                parameter_work += source.len() + doc.syntax.commands.len();
+                if parameter_work > 16 * 1024 * 1024 {
+                    return true;
+                }
+                if signatures.discarded_parameter_token(
+                    source,
+                    &doc.syntax,
+                    command.span.start,
+                    discarded.get_or_init(|| discarded_commands(docs, signatures)),
+                ) {
+                    continue;
+                }
             }
             let argument = if doc.syntax.raw_resource_brackets.contains(&at) {
                 syntax::verbatim_file_bracket(source, at)
@@ -125,4 +141,51 @@ pub(crate) fn selects_resources(docs: &[&Document], signatures: &CommandSignatur
         }
     }
     false
+}
+
+fn discarded_commands(docs: &[&Document], signatures: &CommandSignatures<'_>) -> BTreeSet<String> {
+    let mut definitions = BTreeMap::<String, Vec<(bool, Option<String>)>>::new();
+    for doc in docs {
+        for entry in &doc.syntax.definitions {
+            let declaration = entry.detail.strip_prefix("Defined with \\").unwrap_or("");
+            let plain = signatures.command_unchanged(declaration)
+                && (syntax::declares_traditional_command(declaration)
+                    || matches!(declaration, "def" | "gdef" | "csdef" | "csgdef"));
+            let alias = plain
+                .then(|| source_alias(&doc.text.source, &doc.syntax, entry))
+                .flatten();
+            // A zero-argument forwarding body must inherit its target's
+            // argument behavior. A body without # is not sufficient for it.
+            let dropped = plain
+                && alias.is_none()
+                && crate::signature::command_definition_body(&doc.text.source, &doc.syntax, entry)
+                    .is_some_and(|body| !body.value.contains('#'));
+            definitions
+                .entry(entry.name.clone())
+                .or_default()
+                .push((dropped, alias));
+        }
+    }
+    let mut result: BTreeSet<_> = definitions
+        .iter()
+        .filter(|(_, entries)| entries.len() == 1 && entries[0].0)
+        .map(|(name, _)| name.clone())
+        .collect();
+    for _ in 0..32 {
+        let before = result.len();
+        for (name, entries) in &definitions {
+            if entries.len() == 1
+                && entries[0]
+                    .1
+                    .as_ref()
+                    .is_some_and(|target| result.contains(target))
+            {
+                result.insert(name.clone());
+            }
+        }
+        if result.len() == before {
+            break;
+        }
+    }
+    result
 }

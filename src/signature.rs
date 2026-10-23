@@ -3316,6 +3316,86 @@ impl<'a> CommandSignatures<'a> {
         shapes.argument_tokens(source, parsed)
     }
 
+    /// Prove only that a known caller discards all of the tokens it reads.
+    /// The caller's replacement text and alias chain are checked separately.
+    pub(crate) fn discarded_parameter_token(
+        &self,
+        source: &str,
+        parsed: &syntax::Syntax,
+        at: usize,
+        discarded: &BTreeSet<String>,
+    ) -> bool {
+        if discarded.is_empty() {
+            return false;
+        }
+        let declarations = parsed
+            .definitions
+            .iter()
+            .map(|entry| (entry.span.start, entry.span.end))
+            .collect();
+        for (index, lexical) in parsed
+            .commands
+            .iter()
+            .enumerate()
+            .take_while(|(_, command)| command.span.start < at)
+        {
+            if parsed.control_operands.contains(&lexical.span.start) {
+                continue;
+            }
+            let Some((name, _, end, spaces)) = self.invocation(
+                source,
+                parsed,
+                index,
+                &parsed.control_operands,
+                &declarations,
+            ) else {
+                continue;
+            };
+            if !discarded.contains(name)
+                || !(self.local.get(name).and_then(Option::as_ref).is_some()
+                    || self
+                        .tex_operands
+                        .get(name)
+                        .and_then(Option::as_ref)
+                        .is_some())
+            {
+                continue;
+            }
+            let shape = parsed.contextual_command_shapes.get(&lexical.span.start);
+            let tex = shape
+                .and_then(|shape| shape.tex.as_ref())
+                .or_else(|| self.tex_operands.get(name).and_then(Option::as_ref));
+            if let Some(tex) = tex {
+                if tex
+                    .end_mode(source, end, spaces, true)
+                    .is_some_and(|end| (lexical.span.end..end).contains(&at))
+                {
+                    return true;
+                }
+                continue;
+            }
+            let signature = shape
+                .and_then(|shape| shape.signature.as_ref())
+                .or_else(|| self.local.get(name).and_then(Option::as_ref));
+            if let Some(signature) = signature {
+                let mut tokens = BTreeSet::new();
+                argument_tokens(
+                    (source, parsed),
+                    end,
+                    spaces,
+                    signature,
+                    true,
+                    Some(at),
+                    &mut tokens,
+                );
+                if tokens.contains(&at) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// Positions confirmed by a known parameter grammar, excluding the
     /// conservative operand assumed after an unresolved or ambiguous macro.
     pub(crate) fn known_argument_tokens(
