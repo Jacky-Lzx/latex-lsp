@@ -330,8 +330,14 @@ impl Workspace {
             })
     }
 
+    /// Editor defaults, ancestor project files, then the selected root's override.
+    pub fn settings(&self, uri: &Url) -> crate::config::Config {
+        let root = self.root_document(uri).ok();
+        crate::project_config::load(self, uri, root.as_ref()).0
+    }
+
     pub fn build_config(&self, root: &Url) -> crate::config::BuildConfig {
-        let mut config = self.config.build.clone();
+        let mut config = crate::project_config::load(self, root, Some(root)).0.build;
         let latexmk = Path::new(&config.executable)
             .file_stem()
             .and_then(|name| name.to_str())
@@ -367,6 +373,19 @@ impl Workspace {
                 let version = self.documents.get(&uri).and_then(|doc| doc.version);
                 let mut diagnostics = self.local_and_build_diagnostics(&uri);
                 diagnostics.extend(crate::reference_diagnostics::diagnostics(self, &uri));
+                let root = self.root_document(&uri).ok();
+                for message in crate::project_config::load(self, &uri, root.as_ref()).1 {
+                    diagnostics.push(tower_lsp::lsp_types::Diagnostic {
+                        range: Default::default(),
+                        severity: Some(tower_lsp::lsp_types::DiagnosticSeverity::WARNING),
+                        source: Some("latex-lsp".into()),
+                        code: Some(tower_lsp::lsp_types::NumberOrString::String(
+                            "project-configuration".into(),
+                        )),
+                        message,
+                        ..Default::default()
+                    });
+                }
                 if let Some(doc) = self.documents.get(&uri) {
                     environments.replace_diagnostics(&uri, doc, &mut diagnostics);
                 }
@@ -621,9 +640,20 @@ impl Workspace {
 
     pub(crate) fn symbol_projects(&self, uri: &Url) -> SymbolProjects {
         let regions = self.saved_projects();
-        let selected = self.root_document(uri).ok().filter(|root| {
-            regions.contains_key(root) || *root != *uri || self.config.build.root_file.is_some()
-        });
+        let selected = self
+            .is_root(uri)
+            .then(|| uri.clone())
+            .or_else(|| self.root_document(uri).ok())
+            .filter(|root| {
+                self.is_root(uri)
+                    || regions.contains_key(root)
+                    || *root != *uri
+                    || crate::project_config::load(self, uri, None)
+                        .0
+                        .build
+                        .root_file
+                        .is_some()
+            });
         let mut scope: BTreeSet<_> = if let Some(root) = selected {
             self.project_documents(&root)
         } else {
@@ -635,15 +665,44 @@ impl Workspace {
         };
         if scope.is_empty() {
             // Unassociated buffers retain workspace-wide editing before saving.
-            scope.extend(self.documents.keys().cloned());
+            let folder = uri.to_file_path().ok().and_then(|path| {
+                self.roots
+                    .iter()
+                    .filter(|root| path.starts_with(root))
+                    .max_by_key(|root| root.components().count())
+            });
+            scope.extend(
+                self.documents
+                    .keys()
+                    .filter(|other| {
+                        folder.is_none_or(|folder| {
+                            other
+                                .to_file_path()
+                                .is_ok_and(|path| path.starts_with(folder))
+                        })
+                    })
+                    .cloned(),
+            );
         }
         scope.insert(uri.clone());
         SymbolProjects { scope, regions }
     }
 
     pub(crate) fn symbol_scope(&self, uri: &Url) -> BTreeSet<Url> {
+        if self.is_root(uri) {
+            let mut scope = self.project_documents(uri);
+            scope.insert(uri.clone());
+            return scope;
+        }
         if let Ok(root) = self.root_document(uri) {
-            if root != *uri || self.config.build.root_file.is_some() || self.is_root(&root) {
+            if root != *uri
+                || crate::project_config::load(self, uri, None)
+                    .0
+                    .build
+                    .root_file
+                    .is_some()
+                || self.is_root(&root)
+            {
                 let mut scope = self.project_documents(&root);
                 scope.insert(uri.clone());
                 return scope;
@@ -712,7 +771,8 @@ impl Workspace {
         let path = uri
             .to_file_path()
             .map_err(|_| "Compilation requires a local file URI")?;
-        if let Some(root_file) = &self.config.build.root_file {
+        let folder_config = crate::project_config::load(self, uri, None).0;
+        if let Some(root_file) = &folder_config.build.root_file {
             // Build notifications expose resolved roots. Recognize those URIs
             // before applying a relative setting again in a different folder.
             let requested = path
@@ -961,6 +1021,16 @@ impl Workspace {
     }
 
     pub(crate) fn refresh_paths(&mut self, paths: &[PathBuf]) -> BTreeSet<Url> {
+        if paths.iter().any(|path| {
+            path.file_name()
+                .is_some_and(|name| name == ".latex-lsp.json")
+        }) {
+            crate::project_config::invalidate();
+            self.lint_diagnostics.clear();
+            for uri in self.documents.keys().cloned().collect::<Vec<_>>() {
+                self.load_dependencies(&uri, 0);
+            }
+        }
         let matches = |uri: &Url| {
             uri.to_file_path()
                 .is_ok_and(|path| paths.iter().any(|changed| path.starts_with(changed)))

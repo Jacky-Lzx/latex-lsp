@@ -47,6 +47,7 @@ mod output;
 mod packages;
 pub mod path_completion;
 mod primitives;
+mod project_config;
 mod project_diagnostics;
 mod project_environments;
 pub mod recorder;
@@ -174,7 +175,7 @@ impl Backend {
 
     async fn lint(&self, uri: &Url) {
         let workspace = self.workspace.read().await;
-        let config = workspace.config.diagnostics.chktex.clone();
+        let config = workspace.settings(uri).diagnostics.chktex.clone();
         let Some(doc) = workspace
             .documents
             .get(uri)
@@ -200,7 +201,7 @@ impl Backend {
             Err(error) => Err(error),
         };
         let mut workspace = self.workspace.write().await;
-        if workspace.config.diagnostics.chktex != config
+        if workspace.settings(uri).diagnostics.chktex != config
             || !workspace.documents.get(uri).is_some_and(|doc| {
                 doc.version == version && doc.version.is_some() && doc.text.source == source
             })
@@ -517,7 +518,7 @@ impl LanguageServer for Backend {
                     "watchers": [
                         {"globPattern": format!("**/*.{{{}}}",workspace::SOURCE_EXTENSIONS.join(",")), "kind": 7},
                         {"globPattern": format!("**/*.{{{binary_inputs}}}"), "kind": 7},
-                        {"globPattern": "**/{.latexmkrc,latexmkrc}", "kind": 7},
+                        {"globPattern": "**/{.latexmkrc,latexmkrc,.latex-lsp.json}", "kind": 7},
                         {"globPattern": "**/*", "kind": 5}
                     ]
                 })),
@@ -586,7 +587,7 @@ impl LanguageServer for Backend {
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
         let uri = document_uri(params.text_document.uri);
         self.publish_open().await;
-        let on_save = self.workspace.read().await.config.build.on_save;
+        let on_save = self.workspace.read().await.settings(&uri).build.on_save;
         if on_save {
             if let Err(error) = self.builds.on_save(uri.clone()).await {
                 self.client
@@ -632,6 +633,7 @@ impl LanguageServer for Backend {
                 {
                     let mut workspace = self.workspace.write().await;
                     workspace.lint_diagnostics.clear();
+                    project_config::invalidate();
                     workspace.config = config;
                 }
                 if distribution_changed {
@@ -912,7 +914,7 @@ impl LanguageServer for Backend {
         }
         let text = doc.text.clone();
         let version = doc.version;
-        let config = workspace.config.formatting.clone();
+        let config = workspace.settings(&uri).formatting.clone();
         let directory = uri
             .to_file_path()
             .ok()
@@ -930,7 +932,7 @@ impl LanguageServer for Backend {
         dispatch::release();
         let formatted = task.wait().await?;
         let workspace = self.workspace.read().await;
-        if workspace.config.formatting != config
+        if workspace.settings(&uri).formatting != config
             || !workspace.documents.get(&uri).is_some_and(|doc| {
                 doc.version == version
                     && doc.text.source == text.source

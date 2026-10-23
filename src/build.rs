@@ -910,7 +910,8 @@ impl BuildManager {
             });
             if let Some((queued, generation)) = queued {
                 if !manager.closing.load(Ordering::SeqCst)
-                    && (queued.rebuild || workspace.read().await.config.build.on_save)
+                    && (queued.rebuild
+                        || workspace.read().await.settings(&queued.uri).build.on_save)
                 {
                     if let Err(error) = manager
                         .start_request(

@@ -76,7 +76,8 @@ pub(crate) fn diagnostics(ws: &Workspace, uri: &Url) -> Vec<Diagnostic> {
     let Some(doc) = ws.documents.get(uri) else {
         return vec![];
     };
-    let config = &ws.config.diagnostics;
+    let settings = ws.settings(uri);
+    let config = &settings.diagnostics;
     if !config.undefined_references && !config.undefined_citations {
         return vec![];
     }
