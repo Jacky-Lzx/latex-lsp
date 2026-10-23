@@ -84,6 +84,26 @@ cargo test --locked --test protocol biber_field_warnings_
 cargo test --locked --test protocol biber_unqualified_field_warnings_
 ```
 
+## Biber XDATA 引用
+
+Biber 报告 `xdata` 目标缺失或目标不是 XDATA 条目时，使用 `invalid-bibliography-xdata`。支持完整的 `I didn't find a database entry for xdata entry … - ignoring (section …)`、`Entry … references XDATA entry … which does not exist, not resolving (section …)` 和 `which is not an XDATA entry` 模板，保留原生消息、级别和 section 编号。缺失目标可能产生两条不同的原生消息，均保留。
+
+此前数据库历史完整且条目键在所有可读输入中唯一时，诊断标记该条目 `xdata` 字面列表中的唯一目标项，保留其他列表项、空白、Unicode 和 CRLF。条目键及目标按区分大小写的 NFD 匹配。宏、拼接、继承、source map 生成的字段、重复字段、重复目标或未闭合条目回退到唯一条目键；来源缺失、不可读、超限、历史错误或规范等价键碰撞时保留主文档诊断。section 编号用于保留工具上下文，来源选择仍保守检查此前全部数据库。不自动猜测缺失条目、不改变目标类型或展开宏。
+
+```sh
+cargo test --locked --test biber_xdata_diagnostics -- --include-ignored
+cargo test --locked --test protocol biber_xdata_warnings_
+```
+
+字段级 XDATA 消息也使用 `invalid-bibliography-xdata`，覆盖引用未指定源字段、源字段不存在、两侧字段类型不兼容，以及姓名列表或普通列表的源位置不存在。消息明确给出引用字段时，诊断标记其唯一原始赋值的完整值；字符串宏、拼接与混合列表保留整个值表达式，不猜测某个内部片段。原始字段缺失、重复或不完整时回退到所属键，来源与历史限制沿用上述规则。
+
+这类原生消息保留输入字段拼写，按组合后 ASCII 小写及 NFD 匹配，`Straße` 和 `STRASSE` 分别定位；不使用数据模型的完整 Unicode 折叠。诊断保留消息明确给出的 `parent`、`sourceField` 及文本形式的 `sourcePosition`，未指定源字段的消息不推测父条目。XDATA 标记和分隔符可以配置，因此服务器不从原始值中自行解析或改写引用。
+
+```sh
+cargo test --locked --test biber_xdata_field_diagnostics -- --include-ignored
+cargo test --locked --test protocol biber_granular_xdata_warnings_
+```
+
 ## Biber 关系引用
 
 Biber 的完整 `I didn't find a database entry for … 'parent' in entry 'child' - ignoring (section …)` 消息使用 `missing-bibliography-relation`，支持 `crossref`、`xref`、`related entry` 和 `static set member` 四种原生关系。它们分别对应原始 `crossref`、`xref`、`related` 和 `entryset` 字段，保留原生消息、级别及 section 编号；静态集合成员警告由 Biber 实际处理集合条目时报告。

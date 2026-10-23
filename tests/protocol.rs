@@ -1633,6 +1633,137 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main
 
 #[test]
 #[cfg(unix)]
+fn biber_xdata_warnings_refresh_list_items_dynamic_fallbacks_and_repairs_over_push_and_pull() {
+    for pull in [false, true] {
+        let script = r#"cp "${2%/*}/fixture.blg" "$1/main.blg"
+printf '%%PDF-1.4\n' > "$1/main.pdf"
+printf '(./main.tex)\n' > "$1/main.log"
+printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main.fls"
+"#;
+        let capabilities = if pull {
+            json!({"textDocument":{"diagnostic":{}}})
+        } else {
+            json!({})
+        };
+        let (mut server, directory, main) =
+            fake_build_server_capabilities(script, false, capabilities);
+        let root = directory.path();
+        let refs = Url::from_file_path(root.join("refs.data")).unwrap();
+        let main_source = "\\documentclass{article}\n\\addbibresource{refs.data}\n";
+        std::fs::write(main.to_file_path().unwrap(), main_source).unwrap();
+        server.notify("textDocument/didChange",json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":main_source}]}));
+        let mut current = "% 😀\r\n@book{café😀,xdata={valid, pére😀}}\r\n@xdata{valid,publisher={Publisher}}\r\n".to_string();
+        std::fs::write(refs.to_file_path().unwrap(), &current).unwrap();
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":refs,"languageId":"bibtex","version":7,"text":current}}),
+        );
+        for stage in 0..5 {
+            let replacement = match stage {
+                1 => Some((current.find("pére😀").unwrap(), 0, "\r\n ")),
+                2 => Some((current.len(), 0, "@book{pére😀,title={Parent}}\r\n")),
+                3 => {
+                    let start = current.find("xdata=").unwrap() + "xdata=".len();
+                    let length = current[start..].find('}').unwrap() + 1;
+                    Some((start, length, "inherit"))
+                }
+                4 => {
+                    let start = current.find("inherit").unwrap();
+                    Some((start, "inherit".len(), "{valid}"))
+                }
+                _ => None,
+            };
+            if let Some((start, length, replacement)) = replacement {
+                let range =
+                    latex_lsp::text::Text::new(current.clone()).range(start, start + length);
+                current.replace_range(start..start + length, replacement);
+                std::fs::write(refs.to_file_path().unwrap(), &current).unwrap();
+                server.notify("textDocument/didChange",json!({"textDocument":{"uri":refs,"version":7+stage},"contentChanges":[{"range":range,"text":replacement}]}));
+                server.notify("textDocument/didSave", json!({"textDocument":{"uri":refs}}));
+            }
+            let mut log = "INFO - Found BibTeX data source 'refs.data'\n".to_string();
+            let messages: Vec<String> = if stage == 4 {
+                Vec::new()
+            } else if stage == 2 {
+                vec!["Entry 'café😀' references XDATA entry 'pére😀' which is not an XDATA entry, not resolving (section 7)".into()]
+            } else {
+                vec![
+                    "I didn't find a database entry for xdata entry 'pére😀' in entry 'café😀' - ignoring (section 7)".into(),
+                    "Entry 'café😀' references XDATA entry 'pére😀' which does not exist, not resolving (section 7)".into(),
+                ]
+            };
+            for message in &messages {
+                log.push_str(&format!("WARN - {message}\n"));
+            }
+            std::fs::write(root.join("fixture.blg"), log).unwrap();
+            let marker = if stage == 3 { "café😀" } else { "pére😀" };
+            let expected_range = (stage < 4).then(|| {
+                let start = current.find(marker).unwrap();
+                serde_json::to_value(
+                    latex_lsp::text::Text::new(current.clone()).range(start, start + marker.len()),
+                )
+                .unwrap()
+            });
+            let mut expected_data = json!({"key":"café😀","parent":"pére😀","field":"xdata","section":7,"reason":if stage==2 {"non-xdata-entry"} else {"missing-entry"}});
+            if stage == 3 {
+                expected_data["unresolvedField"] = true.into();
+            }
+            server.request(
+                2 + stage * 2,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            let finished = server.until(|item| item["method"] == "latex/buildFinished");
+            assert_eq!(finished["params"]["status"], "success", "{finished}");
+            let matches_expected = |items: &[Value]| {
+                items.len() == messages.len()
+                    && items.iter().all(|item| {
+                        item["code"] == "invalid-bibliography-xdata"
+                            && item["range"] == *expected_range.as_ref().unwrap()
+                            && item["severity"] == 2
+                            && item["data"] == expected_data
+                            && messages
+                                .iter()
+                                .any(|message| item["message"] == format!("Biber: {message}"))
+                    })
+            };
+            let items = if pull {
+                server.request(
+                    3 + stage * 2,
+                    "textDocument/diagnostic",
+                    json!({"textDocument":{"uri":refs}}),
+                )["items"]
+                    .clone()
+            } else {
+                server.until(|item| {
+                    item["method"] == "textDocument/publishDiagnostics"
+                        && item["params"]["uri"] == refs.as_str()
+                        && item["params"]["diagnostics"]
+                            .as_array()
+                            .is_some_and(|items| matches_expected(items))
+                })["params"]["diagnostics"]
+                    .clone()
+            };
+            assert!(
+                matches_expected(items.as_array().unwrap()),
+                "stage {stage}: {items}"
+            );
+            for item in items.as_array().unwrap() {
+                assert_eq!(item["source"], "latex-build");
+                assert!(item["relatedInformation"].is_null());
+            }
+        }
+        server.request(12, "shutdown", Value::Null);
+        if pull {
+            assert_no_pushed_diagnostics(&server);
+        }
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
 fn bibliography_alias_symbols_negotiate_hierarchy_refresh_search_and_restore_disk_over_stdio() {
     for hierarchy in [false, true] {
         let directory = tempfile::tempdir().unwrap();
