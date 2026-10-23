@@ -1417,9 +1417,12 @@ fn environment_start_signature(
 
 fn body_alias(source: &str, body: &syntax::Argument) -> Option<String> {
     let start = syntax::skip_space(source, body.span.start);
-    let word = syntax::control_word(source, start)?;
-    (syntax::skip_space(source, word.end) == body.span.end)
-        .then(|| source[word.start + 1..word.end].into())
+    let token = syntax::token(source, start)?;
+    let name = token.strip_prefix('\\')?;
+    if syntax::control_word(source, start).is_none() && !matches!(name, "(" | ")" | "[" | "]") {
+        return None;
+    }
+    (syntax::skip_space(source, start + token.len()) == body.span.end).then(|| name.into())
 }
 
 fn environment_bodies(
@@ -1450,7 +1453,7 @@ fn environment_bodies(
     Some((begin, end))
 }
 
-/// A body containing exactly one control word forwards to its current meaning.
+/// A single control word or math delimiter forwards to its current meaning.
 /// This recognizes lexical aliases without evaluating arbitrary replacement text.
 pub(crate) fn source_alias(source: &str, parsed: &syntax::Syntax, entry: &Entry) -> Option<String> {
     body_alias(source, &source_alias_body(source, parsed, entry)?)
@@ -3696,6 +3699,10 @@ fn argument_free(name: &str) -> bool {
     matches!(
         name,
         "relax"
+            | "("
+            | ")"
+            | "["
+            | "]"
             | "ExplSyntaxOn"
             | "ExplSyntaxOff"
             | "noindent"

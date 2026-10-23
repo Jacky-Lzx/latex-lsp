@@ -477,3 +477,72 @@ fn real_refactors_after_balanced_math_groups_and_named_environments_compile() {
         );
     }
 }
+
+#[test]
+fn pure_forwarding_math_delimiters_block_structural_refactors_inside_formulae() {
+    for source in [
+        r"\def\open{\(}\begin{document}\open Hello ¦world¦\)\end{document}",
+        r"\def\open{\[}\begin{document}\open Hello ¦world¦\]\end{document}",
+        r"\newcommand{\open}{\(}\def\next{\open}\begin{document}\next Hello ¦world¦\)\end{document}",
+        r"\def\open{\[}\begin{document}\csuse{open}Hello ¦world¦\]\end{document}",
+        r"\def\open{\(}\begin{document}\csname open\endcsname Hello ¦world¦\)\end{document}",
+        r"\def\open{\(}\def\close{\]}\begin{document}\open x\close ¦body text¦\end{document}",
+    ] {
+        let (ws, uri, range, context) = setup(source, CodeActionKind::REFACTOR);
+        assert!(
+            editing::code_actions(&ws, &uri, range, &context).is_empty(),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn balanced_math_aliases_redefinitions_and_parameter_data_keep_plain_body_refactorable() {
+    for source in [
+        r"\def\open{\(}\def\close{\)}\begin{document}\open x\close ¦body text¦\end{document}",
+        r"\def\open{\[}\def\close{\]}\begin{document}\csuse{open}x\csname close\endcsname ¦body text¦\end{document}",
+        r"\newcommand{\take}[1]{}\def\open{\(}\begin{document}\take{\open}¦body text¦\end{document}",
+        r"\def\open{\[}\begin{document}\noexpand\open ¦body text¦\end{document}",
+        r"\def\open{\(}\begin{document}\meaning\open ¦body text¦\end{document}",
+        r"\def\open{\[}\begin{document}\let\saved=\open ¦body text¦\end{document}",
+        r"\def\open#1{}\begin{document}\open H¦ello world¦\end{document}",
+        r"\def\later{\(}\begin{document}¦body text¦\end{document}",
+    ] {
+        let (ws, uri, range, context) = setup(source, CodeActionKind::REFACTOR);
+        assert_eq!(
+            editing::code_actions(&ws, &uri, range, &context).len(),
+            4,
+            "{source}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex"]
+fn real_formula_aliases_compile_and_only_offer_refactors_after_closing_math() {
+    for (open, close) in [(r"\(", r"\)"), (r"\[", r"\]")] {
+        let source = format!("\\documentclass{{article}}\n\\def\\open{{{open}}}\\def\\close{{{close}}}\n\\begin{{document}}\n\\open Hello ¦world¦\\close\n\\end{{document}}");
+        let (ws, uri, range, context) = setup(&source, CodeActionKind::REFACTOR);
+        assert!(editing::code_actions(&ws, &uri, range, &context).is_empty());
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("main.tex"), &ws.documents[&uri].text.source).unwrap();
+        let output = std::process::Command::new("pdflatex")
+            .args([
+                "-no-shell-escape",
+                "-interaction=nonstopmode",
+                "-halt-on-error",
+                "main.tex",
+            ])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        let after = source.replace("¦world¦\\close", "world\\close ¦body text¦");
+        let (ws, uri, range, context) = setup(&after, CodeActionKind::REFACTOR);
+        assert_eq!(editing::code_actions(&ws, &uri, range, &context).len(), 4);
+    }
+}

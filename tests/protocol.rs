@@ -27531,3 +27531,74 @@ fn named_key_completions_return_precise_edits_and_track_unsaved_redefinitions_ov
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+fn refactor_math_alias_contexts_follow_unsaved_cross_file_definitions_over_stdio() {
+    use latex_lsp::text::Text;
+    let dir = tempfile::tempdir().unwrap();
+    let uri = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let macros = Url::from_file_path(dir.path().join("macros.tex")).unwrap();
+    let source = "\\documentclass{article}\r\n\\input{macros}\r\n\\begin{document}\r\n😀 \\open Hello world\\close Body text\r\n\\end{document}";
+    std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+    std::fs::write(
+        macros.to_file_path().unwrap(),
+        r"\def\open{\(}\def\close{\)}",
+    )
+    .unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{"textDocument":{"codeAction":{"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["refactor"]}},"dataSupport":true,"resolveSupport":{"properties":["edit"]}}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"latex","version":1,"text":source}}),
+    );
+    let text = Text::new(source.into());
+    let params = |selected: &str| {
+        let at = source.find(selected).unwrap();
+        json!({"textDocument":{"uri":uri},"range":text.range(at,at+selected.len()),"context":{"diagnostics":[],"only":["refactor"]}})
+    };
+    assert_eq!(
+        server.request(2, "textDocument/codeAction", params("world")),
+        json!([])
+    );
+    let after = server.request(3, "textDocument/codeAction", params("Body text"));
+    assert_eq!(after.as_array().unwrap().len(), 4);
+    server.notify("textDocument/didOpen", json!({"textDocument":{"uri":macros,"languageId":"latex","version":1,"text":"\\def\\open{}\\def\\close{}"}}));
+    assert_eq!(
+        server
+            .request(4, "textDocument/codeAction", params("world"))
+            .as_array()
+            .unwrap()
+            .len(),
+        4
+    );
+    server.send(json!({"jsonrpc":"2.0","id":5,"method":"codeAction/resolve","params":after[0]}));
+    assert_eq!(
+        server.until(|message| message["id"] == 5)["error"]["code"],
+        -32801
+    );
+    assert_eq!(
+        server
+            .request(6, "textDocument/codeAction", params("Body text"))
+            .as_array()
+            .unwrap()
+            .len(),
+        4
+    );
+    server.notify("textDocument/didChange", json!({"textDocument":{"uri":macros,"version":2},"contentChanges":[{"text":"\\def\\open{\\[}\\def\\close{\\]}"}]}));
+    assert_eq!(
+        server.request(7, "textDocument/codeAction", params("world")),
+        json!([])
+    );
+    assert_eq!(
+        server
+            .request(8, "textDocument/codeAction", params("Body text"))
+            .as_array()
+            .unwrap()
+            .len(),
+        4
+    );
+    server.request(9, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

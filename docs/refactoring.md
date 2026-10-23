@@ -12,7 +12,7 @@
 
 提取命令时，一次收集当前项目的直接控制词、用户声明、环境及其他派生控制词、命名接口的静态名称和字面 `csname` 使用，环境调用也保留其开始／结束命令名。跨文件和未保存声明参与检查，独立项目的名称互不影响。沿用最多 26 个候选名称的预算；没有可用名称时，仅保留正文包裹操作。此检查不执行动态名称展开。
 
-上下文检查区分单美元与双美元公式、显式 `begingroup` / `endgroup` 和 `bgroup` / `egroup` 分组，并识别静态命名调用及纯转发别名的分组与环境边界。公式、分组和环境完整关闭后的正文仍可重构；参数数据、声明正文和 token 操作数不会制造执行边界。不能确认配对或数学分析超过工作预算时跳过结构重构。
+上下文检查区分单美元与双美元公式、行内／显示数学控制符及其静态纯转发别名（含别名链、命名调用与跨文件未保存定义）、显式 `begingroup` / `endgroup` 和 `bgroup` / `egroup` 分组，并识别静态命名调用及纯转发别名的分组与环境边界。公式、分组和环境完整关闭后的正文仍可重构；参数数据、声明正文和 token 操作数不会制造执行边界。不能确认配对或数学分析超过工作预算时跳过结构重构。
 
 项目中重新定义的样式命令不能按内置单参数调用提取。包裹操作分别检查 `emph`、`textbf`、`quote` / `endquote` 的原有意义，提取操作要求 `newcommand` 未被改写；只隐藏依赖被改写命令的操作。正文入口通过静态环境调用确认，`begin` / `end` 或数学控制符被改写时保守跳过。
 
@@ -34,4 +34,6 @@ cargo test --locked --test refactor real_refactors_after_consumed -- --include-i
 cargo test --locked --test refactor real_extractions_preserve -- --include-ignored
 cargo test --locked --test refactor real_refactors_after_balanced -- --include-ignored
 cargo test --locked --test protocol structural_refactors_track_math_groups
+cargo test --locked --test protocol refactor_math_alias_contexts
+cargo test --locked --test refactor real_formula_aliases -- --include-ignored
 ```

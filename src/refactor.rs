@@ -274,7 +274,7 @@ fn selection(
                 depth -= 1;
                 expl_mode = previous;
             }
-            if matches!(name, "(" | "[" | ")" | "]") {
+            if let Some(name) = ["(", ")", "[", "]"].into_iter().find(|name| invokes(name)) {
                 let mode = if matches!(name, "(" | ")") {
                     Math::Inline
                 } else {
