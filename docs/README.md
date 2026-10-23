@@ -27,6 +27,7 @@
 - [biblatex 文献分类](bibliography-categories.md)：分类分配、文献键编辑及重命名边界。
 - [biblatex 文献集合](bibliography-sets.md)：动态集合声明、成员引用、独立重命名及原生集合诊断。
 - [minted 代码](minted.md)：逐字代码、文件路径编辑、构建依赖及缺失文件修复。
+- [expl3 编辑](expl3.md)：完整函数名、变量声明、导航、重命名和参数提示。
 - [结构重构与批量修复](refactoring.md)：正文包裹、命令提取与安全的全部修复。
 - [术语、缩略语与索引符号](glossary-index-symbols.md)：独立命名空间、补全、导航、重命名和诊断。
 - [符号与重命名](symbols.md)：宏、环境、计数器等符号的支持范围。

@@ -182,7 +182,20 @@ fn candidates(doc: &Document) -> Vec<Token> {
         .iter()
         .filter(|entry| entry.kind.valid(&entry.name))
     {
-        push(&mut tokens, entry.span.clone(), KEY, entry.declaration);
+        if entry.kind.is_expl3() {
+            tokens.push(Token {
+                span: entry.span.start.saturating_sub(1)..entry.span.end,
+                kind: if entry.kind == crate::extra_symbols::Kind::Expl3Variable {
+                    VARIABLE
+                } else {
+                    MACRO
+                },
+                modifiers: u32::from(entry.declaration) * DECLARATION,
+                priority: 40,
+            });
+        } else {
+            push(&mut tokens, entry.span.clone(), KEY, entry.declaration);
+        }
     }
     for entry in &doc.syntax.definitions {
         push(

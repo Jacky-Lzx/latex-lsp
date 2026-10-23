@@ -16,6 +16,8 @@ pub(crate) enum Kind {
     Glossary,
     IndexTerm,
     IndexStream,
+    Expl3Command,
+    Expl3Variable,
 }
 #[derive(Clone, Debug)]
 pub(crate) struct Occurrence {
@@ -31,9 +33,17 @@ impl Kind {
             Self::Glossary => "glossary entry",
             Self::IndexTerm => "index term",
             Self::IndexStream => "index stream",
+            Self::Expl3Command => "expl3 function",
+            Self::Expl3Variable => "expl3 variable",
         }
     }
+    pub(crate) fn is_expl3(self) -> bool {
+        matches!(self, Self::Expl3Command | Self::Expl3Variable)
+    }
     pub(crate) fn valid(self, name: &str) -> bool {
+        if self.is_expl3() {
+            return crate::expl3::valid(name, self == Self::Expl3Variable);
+        }
         if self == Self::IndexTerm {
             !name.trim().is_empty()
                 && name.trim() == name
@@ -104,13 +114,15 @@ fn occurrences(doc: &Document) -> Vec<Occurrence> {
         &doc.syntax,
     )))
     .source_command_positions(source, &doc.syntax);
+    let expl3 = crate::expl3::occurrences(doc);
     let mut result = Vec::new();
-    for cmd in doc
-        .syntax
-        .commands
-        .iter()
-        .filter(|cmd| positions.contains(&cmd.span.start))
-    {
+    for cmd in doc.syntax.commands.iter().filter(|cmd| {
+        positions.contains(&cmd.span.start)
+            && !expl3
+                .bodies
+                .iter()
+                .any(|span| span.contains(&cmd.span.start))
+    }) {
         if let Some(declaration) = glossary(&cmd.name) {
             let Some(arg) = first(source, cmd) else {
                 continue;
@@ -201,6 +213,7 @@ fn occurrences(doc: &Document) -> Vec<Occurrence> {
             }
         }
     }
+    result.extend(expl3.entries);
     result
 }
 pub(crate) fn entries(doc: &Document) -> &[Occurrence] {
@@ -210,7 +223,13 @@ pub(crate) fn entries(doc: &Document) -> &[Occurrence] {
 }
 pub(crate) fn at(doc: &Document, offset: usize) -> Option<&Occurrence> {
     entries(doc).iter().find(|entry| {
-        entry.kind.valid(&entry.name) && entry.span.start <= offset && offset <= entry.span.end
+        entry.kind.valid(&entry.name)
+            && entry
+                .span
+                .start
+                .saturating_sub(usize::from(entry.kind.is_expl3()))
+                <= offset
+            && offset <= entry.span.end
     })
 }
 fn indexed<'a>(ws: &'a Workspace, scope: &BTreeSet<Url>) -> Vec<(&'a Url, &'a Occurrence)> {
@@ -331,6 +350,25 @@ pub(crate) fn rename(
     entry: &Occurrence,
     name: &str,
 ) -> Result<Option<WorkspaceEdit>> {
+    let name = if entry.kind.is_expl3() {
+        name.strip_prefix('\\').unwrap_or(name)
+    } else {
+        name
+    };
+    if entry.kind.is_expl3()
+        && (crate::expl3::builtin(name).is_some()
+            || (entry.kind == Kind::Expl3Command
+                && entry.name.split_once(':').map(|(_, suffix)| suffix)
+                    != name.split_once(':').map(|(_, suffix)| suffix))
+            || (entry.kind == Kind::Expl3Variable
+                && (entry.name.rsplit_once('_').map(|(_, kind)| kind)
+                    != name.rsplit_once('_').map(|(_, kind)| kind)
+                    || entry.name.get(..2) != name.get(..2))))
+    {
+        return Err(Error::invalid_params(
+            "Preserve expl3 argument signatures and variable scope/type conventions",
+        ));
+    }
     if !entry.kind.valid(name) {
         return Err(Error::invalid_params("Invalid symbol name"));
     }
@@ -365,6 +403,11 @@ pub(crate) fn hover(ws: &Workspace, uri: &Url, entry: &Occurrence) -> Hover {
         })
         .map(|(uri, entry)| format!("{}\n{}", entry.detail, uri.path()))
         .unwrap_or_default();
+    let detail = if detail.is_empty() && entry.kind.is_expl3() {
+        crate::expl3::builtin(&entry.name).unwrap_or("").into()
+    } else {
+        detail
+    };
     Hover {
         contents: HoverContents::Markup(MarkupContent {
             kind: MarkupKind::PlainText,
@@ -376,7 +419,8 @@ pub(crate) fn hover(ws: &Workspace, uri: &Url, entry: &Occurrence) -> Hover {
 pub(crate) fn completion(ws: &Workspace, uri: &Url, offset: usize) -> Option<Vec<CompletionItem>> {
     let doc = ws.documents.get(uri)?;
     let context = entries(doc).iter().find(|entry| {
-        entry.span.start <= offset
+        !entry.kind.is_expl3()
+            && entry.span.start <= offset
             && offset <= entry.span.end
             && (entry.kind == Kind::IndexTerm || !entry.declaration)
     })?;
@@ -422,10 +466,11 @@ pub(crate) fn symbols(doc: &Document) -> Vec<DocumentSymbol> {
         .map(|entry| DocumentSymbol {
             name: entry.name.clone(),
             detail: Some(format!("{} — {}", entry.kind.description(), entry.detail)),
-            kind: if entry.kind == Kind::IndexStream {
-                SymbolKind::NAMESPACE
-            } else {
-                SymbolKind::KEY
+            kind: match entry.kind {
+                Kind::IndexStream => SymbolKind::NAMESPACE,
+                Kind::Expl3Command => SymbolKind::FUNCTION,
+                Kind::Expl3Variable => SymbolKind::VARIABLE,
+                _ => SymbolKind::KEY,
             },
             tags: None,
             deprecated: None,
@@ -442,10 +487,9 @@ pub(crate) fn diagnostics(ws: &Workspace, uri: &Url) -> Vec<Diagnostic> {
     let config = ws.settings(uri).diagnostics;
     let index = indexed(ws, &ws.symbol_scope(uri));
     let mut result = Vec::new();
-    for entry in entries(doc)
-        .iter()
-        .filter(|entry| entry.kind.valid(&entry.name) && entry.kind != Kind::IndexTerm)
-    {
+    for entry in entries(doc).iter().filter(|entry| {
+        entry.kind.valid(&entry.name) && !entry.kind.is_expl3() && entry.kind != Kind::IndexTerm
+    }) {
         let declarations: Vec<_> = index
             .iter()
             .filter(|(_, other)| {

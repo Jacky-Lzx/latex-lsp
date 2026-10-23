@@ -13,7 +13,7 @@
 
 ## 支持范围与参数签名
 
-这是可运行的基础版本，使用静态解析，不执行 TeX 宏展开或读取 TeX 发行版的包数据库。自定义命令支持 `\newcommand`、`\renewcommand`、`\providecommand`、`\DeclareMathOperator`、`\DeclareRobustCommand` 和 xparse 的 `\NewDocumentCommand` 等声明，包含花括号与直接控制序列形式；也识别 `\def` / `\gdef` / `\edef` / `\xdef` 和 `\let`。BibTeX 支持常见 `{...}` / `(...)` 条目和嵌套字段。
+这是可运行的基础版本，使用静态解析，不执行 TeX 宏展开；发行版文件查找与精选命令帮助见 [TeX 发行版与宏包](distribution.md)。自定义命令支持 `\newcommand`、`\renewcommand`、`\providecommand`、`\DeclareMathOperator`、`\DeclareRobustCommand` 和 xparse 的 `\NewDocumentCommand` 等声明，包含花括号与直接控制序列形式；也识别 `\def` / `\gdef` / `\edef` / `\xdef` 和 `\let`。BibTeX 支持常见 `{...}` / `(...)` 条目和嵌套字段。
 
 用户宏参数提示识别 `\newcommand` 系列和 `\DeclareRobustCommand` 的参数数量/首个可选参数默认值，xparse 的 `m` / `o` / `O{...}` / `s` / `t+` / `d<>` / `D<>{默认值}` / `r()` / `R(){默认值}`，以及 `\def` 系列连续的 `#1#2...` 参数。传统宏及环境的可选参数和默认值在首个未受花括号保护的 `]` 处结束，保留字面量 `[`；xparse 调用仍匹配嵌套方括号。直接调用、`csuse` 和静态 `csname` 使用所调用命令的规则，支持星号、嵌套调用、转义和多行注释。`t` 标志支持字符、控制序列及 Unicode token，保留有无标志时的后续参数编号；分隔参数支持字符、控制序列和 Unicode 分隔符，匹配嵌套、花括号保护及完整 token；缺失必需分隔符时保守回退。不支持的参数规格、字符串求值或定义有歧义时暂不推断签名；不在注释和逐字文本中提示。
 
@@ -112,3 +112,5 @@ etoolbox 的 `csuse` / `csmeaning`、`ifcsdef` / `ifcsundef` / `ifcsvoid`、宏�
 `cslet`、`letcs`、`csletcs` 的静态别名声明区分目标与来源：别名有独立的符号、导航和重命名，来源参数关联原宏；重命名原宏会维护这些引用。支持有花括号和无花括号的控制序列参数、名称补全、片段与声明参数提示。纯名称别名可改为中文名称；动态目标不会把来源误记为声明，不展开动态名称，也不根据来源推断别名调用的参数签名或模拟后续重新赋值。
 
 `\expandafter\letcs\csname alias\endcsname{source}` 同时识别字面别名目标和展开后的来源名称，支持名称补全、参数提示、跨文件与共享项目重命名，以及环境、计数器、开关等派生命令作为来源的情况。只有相邻的显式 `expandafter` 和完整静态 `csname` 才沿用此规则；动态目标不推断来源参数的位置。
+
+术语、缩略语和索引项见[术语与索引符号](glossary-index-symbols.md)；expl3 的完整名称、变量和函数签名见 [expl3 编辑](expl3.md)。

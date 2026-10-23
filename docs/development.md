@@ -26,9 +26,11 @@ cargo test --locked
 
 ## 解析范围
 
-采用静态解析，不执行任意 TeX 宏展开，不读取 TeX 发行版的包数据库。不内置 PDF 预览、格式化或数学语义检查；重命名和修复遇到歧义时会拒绝编辑。
+采用静态解析，不执行任意 TeX 宏展开。通过 kpsewhich 与 ls-R 索引发行版文件名，使用精选宏包元数据提供命令帮助；格式化调用 tex-fmt（默认）或 latexindent。不内置 PDF 预览或数学语义检查；重命名和修复遇到歧义时会拒绝编辑。
 
 ## 代码结构与分析缓存
+
+`extra_symbols.rs` 为术语、索引和 expl3 提供独立命名空间、项目作用域与重命名冲突检查。`expl3.rs` 单独处理语法模式和完整名称，避免改变普通 LaTeX 的控制词规则。符号结果按 Document 缓存，在文本或解析上下文变化时失效；语义令牌另受进程级令牌预算限制。`refactor.rs` 提供保守的正文重构和排除冲突编辑的批量修复，旧客户端命令会重新计算操作。
 
 `minted.rs` 共享 `mintinline` / `mint` 的头部及原始代码边界，分别读取普通选项、语言参数和 fvextra 的逐字参数。宏参数中的预分词上下文与 listings 共用 `InlineTokenization`，通过 `syntax::tokenized_code_end` 读取普通 token 和分组，普通源码仍使用 fvextra 的原始字符规则。语言与代码在语法主扫描中登记不透明范围，保留命令和可执行的头部选项；语义高亮、导航与重命名读取同一份范围。`inputminted` 的第三实参通过文件参数入口读取，使用面向 Python 字符串的无引号文件名包装，与 FancyVerb 通过 `code_inputs` 共享编辑分派、项目数据角色与构建快照。minted 的设置检查独立于 listings，复用 FancyVerb 的全局执行设置保护；原生和回退模式的缺失文件错误共用精确源码回显核对及版本化拼写修复。
 

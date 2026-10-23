@@ -4857,6 +4857,9 @@ pub fn help(workspace: &Workspace, uri: &Url, position: Position) -> Option<Sign
         return None;
     }
     let cursor = doc.text.offset(position)?;
+    if let Some(help) = crate::expl3::help(workspace, uri, cursor) {
+        return Some(help);
+    }
     if let Some((command, name, header)) = verbatim_environment_header(doc, cursor) {
         if crate::fancyvrb::header_comment(&doc.text.source, header.start, cursor) {
             return None;

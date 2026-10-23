@@ -1113,6 +1113,11 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
         return vec![];
     }
     if !name_command {
+        if let Some(items) = crate::expl3::completion(workspace, uri, offset) {
+            return items;
+        }
+    }
+    if !name_command {
         if let Some(items) = crate::extra_symbols::completion(workspace, uri, offset) {
             return items;
         }

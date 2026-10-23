@@ -127,3 +127,22 @@ fn fix_all_applies_independent_errors_but_skips_conflicting_insertions() {
     context.only = None;
     assert!(!editing::code_actions(&ws,&uri,range,&context).iter().any(|a| matches!(a,CodeActionOrCommand::CodeAction(a) if a.kind==Some(CodeActionKind::SOURCE_FIX_ALL))));
 }
+#[test]
+fn completed_expl3_regions_and_deferred_switches_do_not_block_plain_body_text() {
+    for (source, expected) in [
+        (r"\ExplSyntaxOn\ExplSyntaxOff ¦plain text¦", 3),
+        (r"{\ExplSyntaxOn} ¦plain text¦", 3),
+        (r"\newcommand{\later}{\ExplSyntaxOn} ¦plain text¦", 3),
+        (
+            r"\ExplSyntaxOn\cs_new:Npn \demo_later: {\ExplSyntaxOff} ¦plain text¦",
+            0,
+        ),
+    ] {
+        let (ws, uri, range, context) = setup(source, CodeActionKind::REFACTOR);
+        assert_eq!(
+            editing::code_actions(&ws, &uri, range, &context).len(),
+            expected,
+            "{source}"
+        );
+    }
+}

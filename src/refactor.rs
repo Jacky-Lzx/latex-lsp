@@ -143,9 +143,19 @@ fn selection(doc: &Document, range: Range) -> Option<(usize, usize, Option<usize
     let mut depth = 0i32;
     let mut math = false;
     let mut environments = Vec::new();
+    let mut expl_mode = false;
+    let mut group_modes = Vec::new();
+    let deferred = crate::expl3::occurrences(doc).bodies;
     let mut at = 0;
     let bytes = source.as_bytes();
     while at < start {
+        if let Some(body) = deferred.iter().find(|body| body.contains(&at)) {
+            if body.end > start {
+                return None;
+            }
+            at = body.end;
+            continue;
+        }
         if let Some(ignored) = doc.syntax.ignored.iter().find(|span| span.contains(&at)) {
             at = ignored.end;
             continue;
@@ -154,9 +164,21 @@ fn selection(doc: &Document, range: Range) -> Option<(usize, usize, Option<usize
             if let Some(cmd) = doc.syntax.commands.iter().find(|cmd| cmd.span.start == at) {
                 if matches!(
                     cmd.name.as_str(),
-                    "catcode" | "ExplSyntaxOn" | "verb" | "lstinline" | "mintinline"
+                    "catcode" | "verb" | "lstinline" | "mintinline"
                 ) {
                     return None;
+                }
+                if matches!(
+                    cmd.name.as_str(),
+                    "ExplSyntaxOn"
+                        | "ProvidesExplPackage"
+                        | "ProvidesExplClass"
+                        | "ProvidesExplFile"
+                ) {
+                    expl_mode = true;
+                }
+                if cmd.name == "ExplSyntaxOff" {
+                    expl_mode = false;
                 }
                 if matches!(cmd.name.as_str(), "(" | "[" | ")" | "]") {
                     math = matches!(cmd.name.as_str(), "(" | "[");
@@ -188,8 +210,16 @@ fn selection(doc: &Document, range: Range) -> Option<(usize, usize, Option<usize
             continue;
         }
         match bytes[at] {
-            b'{' => depth += 1,
-            b'}' => depth -= 1,
+            b'{' => {
+                depth += 1;
+                group_modes.push(expl_mode);
+            }
+            b'}' => {
+                depth -= 1;
+                if let Some(previous) = group_modes.pop() {
+                    expl_mode = previous;
+                }
+            }
             b'$' => math = !math,
             _ => {}
         }
@@ -202,6 +232,7 @@ fn selection(doc: &Document, range: Range) -> Option<(usize, usize, Option<usize
         || at != start
         || depth != 0
         || math
+        || expl_mode
         || environments.iter().any(|name| *name != "document")
     {
         return None;

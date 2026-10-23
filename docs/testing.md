@@ -651,3 +651,15 @@ cargo test --locked --test bibliography_field_diagnostics -- --include-ignored
 cargo test --locked --test protocol repeated_bibliography_fields_
 ```
 
+
+## 新增编辑与外部工具
+
+```sh
+cargo test --locked --test extra_symbols --test refactor --test expl3
+cargo test --locked --test expl3 real_expl3_renames -- --ignored
+cargo test --locked --test distribution -- --include-ignored
+cargo test --locked --test protocol formatting_with_real_tex_fmt -- --ignored
+cargo test --locked --test protocol chktex_with_real_tool -- --ignored
+```
+
+expl3 的真实测试使用 pdfLaTeX 比较函数及变量重命名前后的展开结果；发行版测试需要 kpsewhich。真实格式化与静态检查分别需要 tex-fmt 和 ChkTeX。其余专项测试不依赖外部工具。

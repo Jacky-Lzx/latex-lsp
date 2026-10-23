@@ -27,6 +27,7 @@ pub mod distribution;
 pub mod editing;
 mod environment_calls;
 mod environment_diagnostics;
+mod expl3;
 mod extra_symbols;
 mod fancyvrb;
 pub mod features;

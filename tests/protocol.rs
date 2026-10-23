@@ -24190,3 +24190,65 @@ fn escaped_inline_code_refreshes_aliases_redefinitions_and_unfinished_arguments_
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+fn glossary_expl3_and_structural_actions_work_over_stdio() {
+    use latex_lsp::text::Text;
+    let mut server = Server::start();
+    let uri = Url::parse("file:///new-symbol-protocol/main.tex").unwrap();
+    let initialized=server.request(1,"initialize",json!({"processId":null,"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}},"textDocument":{"codeAction":{"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix","refactor","source.fixAll"]}}}}}}));
+    let kinds = initialized["capabilities"]["codeActionProvider"]["codeActionKinds"]
+        .as_array()
+        .unwrap();
+    assert!(kinds.contains(&json!("refactor.extract")));
+    assert!(kinds.contains(&json!("source.fixAll")));
+    server.notify("initialized", json!({}));
+    let source="\\documentclass{article}\n\\newacronym{cpu}{CPU}{Processor}\n\\ExplSyntaxOn\n\\tl_new:N \\l_demo_tl\n\\cs_new:Npn \\demo_id:n #1 {#1}\n\\demo_id:n {hello}\n\\ExplSyntaxOff\n\\begin{document}\n\\gls{cpu}\nplain words\n\\end{document}\n\\end{quote}";
+    let text = Text::new(source.into());
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"latex","version":5,"text":source}}),
+    );
+    let glossary = text.position(source.find("gls{cpu}").unwrap() + 6);
+    let definitions = server.request(
+        2,
+        "textDocument/definition",
+        json!({"textDocument":{"uri":uri},"position":glossary}),
+    );
+    assert_eq!(definitions.as_array().unwrap().len(), 1);
+    assert_eq!(definitions[0]["range"]["start"]["line"], 1);
+    let renamed=server.request(3,"textDocument/rename",json!({"textDocument":{"uri":uri},"position":text.position(source.find("demo_id:n").unwrap()+5),"newName":"demo_identity:n"}));
+    assert_eq!(renamed["documentChanges"][0]["textDocument"]["version"], 5);
+    assert_eq!(
+        renamed["documentChanges"][0]["edits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    let hint=server.request(4,"textDocument/signatureHelp",json!({"textDocument":{"uri":uri},"position":text.position(source.find("hello").unwrap()+2)}));
+    assert!(hint["signatures"][0]["label"]
+        .as_str()
+        .unwrap()
+        .contains("demo_id:n"));
+    let start = source.find("plain words").unwrap();
+    let actions=server.request(5,"textDocument/codeAction",json!({"textDocument":{"uri":uri},"range":text.range(start,start+11),"context":{"diagnostics":[],"only":["refactor"]}}));
+    assert_eq!(actions.as_array().unwrap().len(), 4);
+    assert!(actions
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|action| action["kind"] == "refactor.extract"));
+    let actions=server.request(6,"textDocument/codeAction",json!({"textDocument":{"uri":uri},"range":text.range(0,source.len()),"context":{"diagnostics":[],"only":["source.fixAll"]}}));
+    assert_eq!(actions.as_array().unwrap().len(), 1);
+    assert_eq!(
+        actions[0]["edit"]["documentChanges"][0]["edits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    server.request(7, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
