@@ -545,6 +545,98 @@ if [ -f "${2%/*}/fail" ]; then exit 1; fi
 
 #[test]
 #[cfg(unix)]
+fn repeated_bibliography_entries_publish_exact_ranges_and_related_definitions() {
+    for pull in [false, true] {
+        let script = r#"cp "${2%/*}/fixture.blg" "$1/main.blg"
+printf 'INPUT %s\n' "$2" > "$1/main.fls"
+exit 1
+"#;
+        let capabilities = if pull {
+            json!({"textDocument":{"diagnostic":{}}})
+        } else {
+            json!({})
+        };
+        let (mut server, directory, main) =
+            fake_build_server_capabilities(script, false, capabilities);
+        let root = directory.path();
+        let defs = Url::from_file_path(root.join("defs.bib")).unwrap();
+        let refs = Url::from_file_path(root.join("refs.bib")).unwrap();
+        let source = "\\documentclass{article}\n\\bibliography{defs,refs}\n";
+        std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+        std::fs::write(
+            defs.to_file_path().unwrap(),
+            "@misc{entry,title={First}}\r\n",
+        )
+        .unwrap();
+        std::fs::write(
+            refs.to_file_path().unwrap(),
+            "% 😀\r\n@misc\r\n{Entry\r\n,title={Second}}\r\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("fixture.blg"), "Database file #1: defs.bib\nDatabase file #2: refs.bib\nRepeated entry---line 3 of file refs.bib\n").unwrap();
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+        );
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(finished["params"]["status"], "error", "{finished}");
+        let items = if pull {
+            server.request(
+                3,
+                "textDocument/diagnostic",
+                json!({"textDocument":{"uri":refs}}),
+            )["items"]
+                .clone()
+        } else {
+            server.until(|message| {
+                message["method"] == "textDocument/publishDiagnostics"
+                    && message["params"]["uri"] == refs.as_str()
+                    && message["params"]["diagnostics"]
+                        .as_array()
+                        .is_some_and(|items| {
+                            items
+                                .iter()
+                                .any(|item| item["code"] == "repeated-bibliography-entry")
+                        })
+            })["params"]["diagnostics"]
+                .clone()
+        };
+        let diagnostic = items
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["code"] == "repeated-bibliography-entry")
+            .unwrap();
+        assert_eq!(diagnostic["severity"], 1);
+        assert_eq!(
+            diagnostic["range"],
+            json!({"start":{"line":2,"character":1},"end":{"line":2,"character":6}})
+        );
+        assert_eq!(diagnostic["data"]["key"], "Entry");
+        assert_eq!(
+            diagnostic["relatedInformation"].as_array().unwrap().len(),
+            1
+        );
+        assert_eq!(
+            diagnostic["relatedInformation"][0]["location"],
+            json!({"uri":defs,"range":{"start":{"line":0,"character":6},"end":{"line":0,"character":11}}})
+        );
+        server.request(4, "shutdown", Value::Null);
+        if pull {
+            assert_no_pushed_diagnostics(&server);
+        }
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
 fn generic_bibliography_entry_warnings_refresh_ambiguity_and_key_ranges_after_saved_edits() {
     for pull in [false, true] {
         let script = r#"cp "${2%/*}/fixture.blg" "$1/main.blg"

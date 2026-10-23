@@ -5536,6 +5536,9 @@ pub(crate) fn parse_bibliography_in(
                     )
                     .then(|| paths.resolve(name))
                     .flatten();
+                    let entry_path = location
+                        .clone()
+                        .filter(|path| bibliography_context.is_database(name, path));
                     let (path, number) = location
                         .map(|path| (path, number))
                         .unwrap_or_else(|| (root.into(), 1));
@@ -5565,6 +5568,27 @@ pub(crate) fn parse_bibliography_in(
                         message.clone(),
                         DiagnosticSeverity::ERROR,
                     );
+                    if message == "BibTeX: Repeated entry" {
+                        if let Ok(uri) = Url::from_file_path(&path) {
+                            if let Some(entries) = result.get_mut(&uri) {
+                                for diagnostic in entries.iter_mut().filter(|diagnostic| {
+                                    diagnostic.message == message
+                                        && (diagnostic.range.start.line == number.saturating_sub(1)
+                                            || diagnostic.data.as_ref().is_some_and(|data| {
+                                                data.get("reportedLine")
+                                                    .and_then(serde_json::Value::as_u64)
+                                                    == Some(number.into())
+                                            }))
+                                }) {
+                                    bibliography_context.repeated(
+                                        entry_path.as_deref(),
+                                        number,
+                                        diagnostic,
+                                    );
+                                }
+                            }
+                        }
+                    }
                     if let (Some((kind, file)), Ok(uri)) = (missing_file, Url::from_file_path(root))
                     {
                         if let Some(entries) = result.get_mut(&uri) {
