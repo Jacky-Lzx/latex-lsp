@@ -308,6 +308,145 @@ fn minted_environment_boundaries_refresh_diagnostics_and_linked_names_over_stdio
 }
 
 #[test]
+fn listings_environment_header_boundaries_refresh_after_incremental_changes_over_stdio() {
+    use latex_lsp::text::Text;
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = Url::from_file_path(root.join("main.tex")).unwrap();
+    let source = "% 😀\r\n\\begin{lstlisting}[frame=single]\r\n\\label{kept}\\input{fake}\r\n\\end{other}\\end{lstlisting}\\label{kept}\\ref{kept}\r\n";
+    std::fs::write(root.join("main.tex"), source).unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(root).unwrap(),"capabilities":{"textDocument":{"diagnostic":{},"foldingRange":{"lineFoldingOnly":false}},"workspace":{"workspaceEdit":{"documentChanges":true}}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":main,"languageId":"latex","version":7,"text":source}}),
+    );
+    let text = Text::new(source.into());
+    let start = source.find("[frame=single]").unwrap();
+    let range = text.range(start, start + "[frame=single]".len());
+    let header = "[title={\\detokenize{\\end{lstlisting}}}] ignored \\end{lstlisting}";
+    server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":8},"contentChanges":[{"range":range,"text":header}]}));
+    let updated = text
+        .changed(vec![tower_lsp::lsp_types::TextDocumentContentChangeEvent {
+            range: Some(range),
+            range_length: None,
+            text: header.into(),
+        }])
+        .unwrap();
+    let diagnostics = server.request(
+        2,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":main}}),
+    );
+    assert_eq!(diagnostics["items"], json!([]), "{diagnostics}");
+    let source = &updated.source;
+    let close = source.rfind("\\end{lstlisting}").unwrap();
+    let open = source.find("lstlisting").unwrap();
+    let linked = server.request(
+        3,
+        "textDocument/linkedEditingRange",
+        json!({"textDocument":{"uri":main},"position":updated.position(open+1)}),
+    );
+    assert_eq!(
+        linked["ranges"],
+        json!([
+            updated.range(open, open + 10),
+            updated.range(close + 5, close + 15)
+        ])
+    );
+    let fake = source.find("\\end{lstlisting}").unwrap();
+    assert_eq!(
+        server.request(
+            4,
+            "textDocument/linkedEditingRange",
+            json!({"textDocument":{"uri":main},"position":updated.position(fake+6)})
+        ),
+        Value::Null
+    );
+    let folds = server.request(
+        5,
+        "textDocument/foldingRange",
+        json!({"textDocument":{"uri":main}}),
+    );
+    assert_eq!(folds.as_array().unwrap().len(), 1);
+    assert_eq!(folds[0]["endLine"], 3);
+    assert_eq!(
+        folds[0]["endCharacter"],
+        updated
+            .position(close + "\\end{lstlisting}".len())
+            .character
+    );
+    let position = updated.position(source.rfind("kept").unwrap());
+    let edit = server.request(
+        6,
+        "textDocument/rename",
+        json!({"textDocument":{"uri":main},"position":position,"newName":"changed"}),
+    );
+    assert_eq!(edit["documentChanges"][0]["textDocument"]["version"], 8);
+    assert_eq!(
+        edit["documentChanges"][0]["edits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        server.request(
+            7,
+            "textDocument/documentLink",
+            json!({"textDocument":{"uri":main}})
+        ),
+        json!([])
+    );
+    let range = updated.range(close + 5, close + 15);
+    server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":9},"contentChanges":[{"range":range,"text":"other"}]}));
+    let broken = updated
+        .clone()
+        .changed(vec![tower_lsp::lsp_types::TextDocumentContentChangeEvent {
+            range: Some(range),
+            range_length: None,
+            text: "other".into(),
+        }])
+        .unwrap();
+    let diagnostics = server.request(
+        8,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":main}}),
+    );
+    let items = diagnostics["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{diagnostics}");
+    assert_eq!(items[0]["message"], "Unclosed environment `lstlisting`");
+    assert_eq!(
+        server.request(
+            9,
+            "textDocument/documentSymbol",
+            json!({"textDocument":{"uri":main}})
+        ),
+        json!([])
+    );
+    server.notify("textDocument/didChange",json!({"textDocument":{"uri":main,"version":10},"contentChanges":[{"range":broken.range(close+5,close+10),"text":"lstlisting"}]}));
+    let diagnostics = server.request(
+        10,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":main}}),
+    );
+    assert_eq!(diagnostics["items"], json!([]));
+    let symbols = server.request(
+        11,
+        "textDocument/documentSymbol",
+        json!({"textDocument":{"uri":main}}),
+    );
+    assert_eq!(symbols.as_array().unwrap().len(), 1);
+    assert_eq!(symbols[0]["name"], "kept");
+    let references=server.request(12,"textDocument/references",json!({"textDocument":{"uri":main},"position":position,"context":{"includeDeclaration":true}}));
+    assert_eq!(references.as_array().unwrap().len(), 2);
+    server.request(13, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
 fn fancyvrb_environment_header_signatures_follow_incremental_edits_over_stdio() {
     use latex_lsp::text::Text;
     let directory = tempfile::tempdir().unwrap();

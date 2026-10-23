@@ -207,6 +207,23 @@ pub(crate) fn skip_space(source: &str, mut i: usize) -> usize {
     }
 }
 
+/// Skip horizontal space and comment continuations while ordinary line
+/// endings remain active tokens during verbatim header lookahead.
+pub(crate) fn skip_space_with_active_eol(source: &str, mut at: usize) -> usize {
+    loop {
+        while matches!(source.as_bytes().get(at), Some(b' ' | b'\t')) {
+            at += 1;
+        }
+        if source.as_bytes().get(at) != Some(&b'%') {
+            return at;
+        }
+        let Some(newline) = source[at..].find('\n') else {
+            return source.len();
+        };
+        at += newline + 1;
+    }
+}
+
 /// Read a literal TeX integer without expanding arbitrary controls. The caller
 /// identifies controls that prove the end of a numeric token sequence.
 pub(crate) fn literal_integer(
@@ -2667,6 +2684,8 @@ impl Syntax {
                                         crate::fancyvrb::environment_end(source, body_start, env)
                                     } else if env == "minted" {
                                         crate::minted::environment_end(source, body_start)
+                                    } else if env == "lstlisting" {
+                                        crate::listings::environment_end(source, body_start)
                                     } else {
                                         source[body_start..]
                                             .find(&ending)

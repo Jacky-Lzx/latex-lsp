@@ -332,6 +332,17 @@ cargo test --locked --test quoted_graphics real_ -- --ignored
 
 默认回归另覆盖完整和未完成路径的别名补全、跨输入文件与本地宏包的别名、recorder 来源中的宏定义与参数边界、仅作代码展示的文件排除、共享根文件冲突、未执行和不确定调用的排除，以及目录补全和缺图建议的作用域、共享源码歧义、候选图片的过期检查及版本化 stdio 文件移动。
 
+## listings 环境边界
+
+`listings_environments` 覆盖头部选项、名称分组、注释续行及首行尾部中的伪关闭标记，核对正文和关闭行尾部的符号、依赖、版本化重命名及文件移动；另覆盖活动换行、CRLF、Unicode、精确关闭字符串、折叠列、联动编辑、高亮和未闭合修复。协议回归增量修改头部及真实关闭标记，检查诊断、符号与编辑范围的刷新：
+
+```sh
+cargo test --locked --test listings_environments
+cargo test --locked --test protocol listings_environment_header_
+```
+
+安装 pdfLaTeX、XeLaTeX 和 listings 后，为第一个命令添加 `-- --include-ignored`；原生回归核对标签重命名前后的实际编译输入、aux 标签、头部伪关闭标记及正文结束规则。
+
 ## FancyVerb 环境参数提示
 
 默认回归覆盖十种环境的选项、保存名称和输出文件提示，包含未完成参数、注释续行、CRLF、Unicode、首个未受花括号保护的右方括号、无选项时的活动换行、项目重定义与未保存设置刷新。协议回归逐次输入头部、完成参数并添加正文和关闭行尾部，核对提示及依赖隔离：

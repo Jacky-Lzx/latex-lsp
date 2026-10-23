@@ -142,21 +142,6 @@ pub(crate) fn header_comment(source: &str, start: usize, cursor: usize) -> bool 
     false
 }
 
-fn header_space(source: &str, mut at: usize) -> usize {
-    loop {
-        while matches!(source.as_bytes().get(at), Some(b' ' | b'\t')) {
-            at += 1;
-        }
-        if source.as_bytes().get(at) != Some(&b'%') {
-            return at;
-        }
-        let Some(newline) = source[at..].find('\n') else {
-            return source.len();
-        };
-        at += newline + 1;
-    }
-}
-
 fn environment_body_start(source: &str, header_start: usize, name: &str) -> Option<usize> {
     let (_, at) = environment_header_end(source, header_start, name)?;
     // FV@BeginScanning discards the remainder of the header line. Markers in
@@ -173,7 +158,7 @@ pub(crate) fn environment_header_end(
 ) -> Option<(usize, usize)> {
     // FV@Environment makes end-of-line active before looking for an optional
     // argument. Comments may continue the header; a plain newline cannot.
-    let mut at = header_space(source, header_start);
+    let mut at = syntax::skip_space_with_active_eol(source, header_start);
     let options = source.as_bytes().get(at) == Some(&b'[');
     if options {
         at = syntax::bracket_argument(source, at)?.1;
@@ -187,7 +172,7 @@ pub(crate) fn environment_header_end(
         at = if options {
             syntax::skip_space(source, at)
         } else {
-            header_space(source, at)
+            syntax::skip_space_with_active_eol(source, at)
         };
         let start = at;
         at = match source.as_bytes().get(at)? {
@@ -217,7 +202,7 @@ pub(crate) fn saved_environment_argument(
     source: &str,
     header_start: usize,
 ) -> Option<syntax::Argument> {
-    let mut at = header_space(source, header_start);
+    let mut at = syntax::skip_space_with_active_eol(source, header_start);
     if source.as_bytes().get(at) == Some(&b'[') {
         at = syntax::skip_space(source, syntax::bracket_argument(source, at)?.1);
     }
@@ -225,8 +210,11 @@ pub(crate) fn saved_environment_argument(
 }
 
 pub(crate) fn environment_options(source: &str, header_start: usize) -> Option<syntax::Argument> {
-    syntax::bracket_argument(source, header_space(source, header_start))
-        .map(|(argument, _)| argument)
+    syntax::bracket_argument(
+        source,
+        syntax::skip_space_with_active_eol(source, header_start),
+    )
+    .map(|(argument, _)| argument)
 }
 
 fn safe_options(source: &str) -> bool {

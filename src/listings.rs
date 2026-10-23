@@ -1,5 +1,32 @@
-//! Conservative support for listings' default filename search.
+//! listings environment boundaries and conservative default filename search.
 use crate::syntax;
+
+/// listings reads its optional settings and one name token before changing
+/// the body catcodes. A newline name token starts the body immediately; any
+/// other name makes lstenv@Process discard the remainder of its header line.
+pub(crate) fn environment_end(source: &str, header_start: usize) -> Option<usize> {
+    let mut at = syntax::skip_space_with_active_eol(source, header_start);
+    if source.as_bytes().get(at) == Some(&b'[') {
+        at = syntax::bracket_argument(source, at)?.1;
+    }
+    at = syntax::skip_space_with_active_eol(source, at);
+    let body_start = match source.as_bytes().get(at)? {
+        b'\r' if source[at..].starts_with("\r\n") => at + 2,
+        b'\r' | b'\n' => at + 1,
+        _ => {
+            let end = if source.as_bytes()[at] == b'{' {
+                syntax::group(source, at, b'{', b'}')?.1
+            } else {
+                at + syntax::token(source, at)?.len()
+            };
+            end + source[end..].find('\n')? + 1
+        }
+    };
+    let ending = "\\end{lstlisting}";
+    source[body_start..]
+        .find(ending)
+        .map(|offset| body_start + offset + ending.len())
+}
 
 // Styles, custom keys, and macro-valued options may alter inputpath. Only
 // infer the default search when all relevant settings are understood.
