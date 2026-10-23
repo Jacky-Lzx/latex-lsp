@@ -17,6 +17,270 @@ struct Server {
 }
 
 #[test]
+fn bibliography_ids_aliases_refresh_navigation_and_independent_renames_over_stdio() {
+    for versioned in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let main = Url::from_file_path(root.join("main.tex")).unwrap();
+        let bib = Url::from_file_path(root.join("refs.bib")).unwrap();
+        let main_source="\\documentclass{article}\n\\addbibresource{refs.bib}\n😀 \\cite{legacy😀,main} \\citefield{legacy😀}{title}\n";
+        let saved="% 😀\r\n@book{main,IDS={ legacy😀,other},title={Literal legacy😀}}\r\n@book{child,crossref={legacy😀}}";
+        std::fs::write(main.to_file_path().unwrap(), main_source).unwrap();
+        std::fs::write(bib.to_file_path().unwrap(), saved).unwrap();
+        let mut server = Server::start();
+        server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(root).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":versioned}}}}));
+        server.notify("initialized", json!({}));
+        for (uri, source, version, language) in
+            [(&main, main_source, 5, "latex"), (&bib, saved, 7, "bibtex")]
+        {
+            server.notify("textDocument/didOpen",json!({"textDocument":{"uri":uri,"languageId":language,"version":version,"text":source}}));
+        }
+        let position = latex_lsp::text::Text::new(main_source.into())
+            .position(main_source.find("legacy😀").unwrap() + "legacy😀".len());
+        let target = json!({"textDocument":{"uri":main},"position":position});
+        let alias_start = saved.find("IDS={ ").unwrap() + "IDS={ ".len();
+        let alias_range = serde_json::to_value(
+            latex_lsp::text::Text::new(saved.into())
+                .range(alias_start, alias_start + "legacy😀".len()),
+        )
+        .unwrap();
+        let definition = server.request(2, "textDocument/definition", target.clone());
+        assert_eq!(definition, json!([{"uri":bib,"range":alias_range}]));
+        let hover = server.request(3, "textDocument/hover", target.clone());
+        assert!(hover["contents"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("alias for main"));
+        let completions = server.request(4, "textDocument/completion", target.clone());
+        assert!(completions
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["label"] == "legacy😀"));
+        let mut references = target.clone();
+        references["context"] = json!({"includeDeclaration":true});
+        assert_eq!(
+            server
+                .request(5, "textDocument/references", references)
+                .as_array()
+                .unwrap()
+                .len(),
+            4
+        );
+        assert_eq!(
+            server.request(6, "textDocument/prepareRename", target.clone())["placeholder"],
+            "legacy😀"
+        );
+        let mut rename = target.clone();
+        rename["newName"] = "newalias😀".into();
+        let edit = server.request(7, "textDocument/rename", rename);
+        let mut edits = Vec::new();
+        if versioned {
+            let documents = edit["documentChanges"].as_array().unwrap();
+            assert_eq!(documents.len(), 2);
+            for document in documents {
+                let uri = document["textDocument"]["uri"].as_str().unwrap();
+                assert_eq!(
+                    document["textDocument"]["version"],
+                    if uri == bib.as_str() { 7 } else { 5 }
+                );
+                for edit in document["edits"].as_array().unwrap() {
+                    edits.push((uri, edit));
+                }
+            }
+            assert!(edit["changes"].is_null());
+        } else {
+            let documents = edit["changes"].as_object().unwrap();
+            assert_eq!(documents.len(), 2);
+            for (uri, changes) in documents {
+                for edit in changes.as_array().unwrap() {
+                    edits.push((uri.as_str(), edit));
+                }
+            }
+            assert!(edit["documentChanges"].is_null());
+        }
+        assert_eq!(edits.len(), 4);
+        for (uri, edit) in edits {
+            let source = if uri == bib.as_str() {
+                saved
+            } else {
+                main_source
+            };
+            let text = latex_lsp::text::Text::new(source.into());
+            let range: tower_lsp::lsp_types::Range =
+                serde_json::from_value(edit["range"].clone()).unwrap();
+            assert_eq!(
+                &source[text.offset(range.start).unwrap()..text.offset(range.end).unwrap()],
+                "legacy😀"
+            );
+            assert_eq!(edit["newText"], "newalias😀");
+            if uri == bib.as_str() {
+                assert_ne!(
+                    range.start,
+                    text.position(saved.find("Literal legacy😀").unwrap() + "Literal ".len())
+                );
+            }
+        }
+        let mut live = saved.to_string();
+        live.insert_str(alias_start, "\r\n ");
+        let insert = latex_lsp::text::Text::new(saved.into()).range(alias_start, alias_start);
+        server.notify("textDocument/didChange",json!({"textDocument":{"uri":bib,"version":8},"contentChanges":[{"range":insert,"text":"\r\n "}]}));
+        let definition = server.request(8, "textDocument/definition", target.clone());
+        let start = alias_start + "\r\n ".len();
+        assert_eq!(
+            definition[0]["range"],
+            json!(latex_lsp::text::Text::new(live.clone()).range(start, start + "legacy😀".len()))
+        );
+        let begin = live.find("IDS=").unwrap() + "IDS=".len();
+        let end = begin + live[begin..].find('}').unwrap() + 1;
+        let replace = latex_lsp::text::Text::new(live).range(begin, end);
+        server.notify("textDocument/didChange",json!({"textDocument":{"uri":bib,"version":9},"contentChanges":[{"range":replace,"text":"dynamic"}]}));
+        assert_eq!(
+            server.request(9, "textDocument/definition", target.clone()),
+            json!([])
+        );
+        let completions = server.request(10, "textDocument/completion", target.clone());
+        assert!(completions
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item["label"] != "legacy😀"));
+        server.notify("textDocument/didClose", json!({"textDocument":{"uri":bib}}));
+        assert_eq!(
+            server.request(11, "textDocument/definition", target),
+            json!([{"uri":bib,"range":alias_range}])
+        );
+        server.request(12, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+fn bibliography_abbreviations_refresh_navigation_completion_and_versioned_renames_over_stdio() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let defs = Url::from_file_path(root.join("defs.bib")).unwrap();
+    let refs = Url::from_file_path(root.join("refs.bib")).unwrap();
+    let saved = "% 😀\r\n@string{Journal={Saved}}\r\n";
+    let live = saved.replace("Saved", "Live");
+    let source = "@book{Journal,title=JOURNAL # {Journal},month=jan}\r\n";
+    std::fs::write(
+        root.join("main.tex"),
+        r"\documentclass{article}\bibliography{defs,refs}",
+    )
+    .unwrap();
+    std::fs::write(defs.to_file_path().unwrap(), saved).unwrap();
+    std::fs::write(refs.to_file_path().unwrap(), source).unwrap();
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(root).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}},"textDocument":{"completion":{"completionItem":{"snippetSupport":true}}}}}));
+    server.notify("initialized", json!({}));
+    for (uri, text, version) in [(&defs, live.as_str(), 7), (&refs, source, 9)] {
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"languageId":"bibtex","version":version,"text":text}}),
+        );
+    }
+    let target = json!({"textDocument":{"uri":refs},"position":{"line":0,"character":23}});
+    let definition = server.request(2, "textDocument/definition", target.clone());
+    assert_eq!(definition[0]["uri"], json!(defs));
+    assert_eq!(
+        definition[0]["range"],
+        json!({"start":{"line":1,"character":8},"end":{"line":1,"character":15}})
+    );
+    let hover = server.request(3, "textDocument/hover", target.clone());
+    assert!(hover["contents"]["value"]
+        .as_str()
+        .unwrap()
+        .contains("{Live}"));
+    let items = server.request(4, "textDocument/completion", target.clone());
+    let journal = items
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["label"] == "Journal")
+        .unwrap();
+    assert_eq!(journal["insertTextFormat"], 1);
+    assert_eq!(journal["textEdit"]["newText"], "Journal");
+    assert_eq!(
+        journal["textEdit"]["range"],
+        json!({"start":{"line":0,"character":20},"end":{"line":0,"character":27}})
+    );
+    let mut references = target.clone();
+    references["context"] = json!({"includeDeclaration":true});
+    assert_eq!(
+        server
+            .request(5, "textDocument/references", references)
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    let prepared = server.request(6, "textDocument/prepareRename", target.clone());
+    assert_eq!(prepared["placeholder"], "JOURNAL");
+    let mut rename = target.clone();
+    rename["newName"] = json!("NewName");
+    let edit = server.request(7, "textDocument/rename", rename);
+    let changes = edit["documentChanges"].as_array().unwrap();
+    assert_eq!(changes.len(), 2);
+    for change in changes {
+        assert_eq!(
+            change["textDocument"]["version"],
+            if change["textDocument"]["uri"] == json!(defs) {
+                7
+            } else {
+                9
+            }
+        );
+        assert_eq!(change["edits"].as_array().unwrap().len(), 1);
+        assert_eq!(change["edits"][0]["newText"], "NewName");
+    }
+    server.notify("textDocument/didChange",json!({"textDocument":{"uri":defs,"version":8},"contentChanges":[{"range":definition[0]["range"],"text":"Magazine"}]}));
+    assert_eq!(
+        server.request(8, "textDocument/definition", target.clone()),
+        json!([])
+    );
+    server.notify("textDocument/didChange",json!({"textDocument":{"uri":refs,"version":10},"contentChanges":[{"range":journal["textEdit"]["range"],"text":"MAGAZINE"}]}));
+    let definition = server.request(9, "textDocument/definition", target.clone());
+    assert_eq!(definition[0]["uri"], json!(defs));
+    let hover = server.request(10, "textDocument/hover", target.clone());
+    assert!(hover["contents"]["value"]
+        .as_str()
+        .unwrap()
+        .contains("Magazine"));
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":defs}}),
+    );
+    assert_eq!(
+        server.request(11, "textDocument/definition", target.clone()),
+        json!([])
+    );
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":refs,"version":11},"contentChanges":[{"text":source}]}),
+    );
+    let hover = server.request(12, "textDocument/hover", target.clone());
+    assert!(hover["contents"]["value"]
+        .as_str()
+        .unwrap()
+        .contains("{Saved}"));
+    std::fs::write(defs.to_file_path().unwrap(), saved.replace("Saved", "Disk")).unwrap();
+    server.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({"changes":[{"uri":defs,"type":2}]}),
+    );
+    let hover = server.request(13, "textDocument/hover", target);
+    assert!(hover["contents"]["value"]
+        .as_str()
+        .unwrap()
+        .contains("{Disk}"));
+    server.request(14, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
 fn imported_string_predicate_operands_refresh_signatures_and_renames_without_main_changes() {
     let directory = tempfile::tempdir().unwrap();
     let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
@@ -16997,6 +17261,183 @@ printf '%s\n' "Package rerunfilecheck Warning: File \`main.idx' has changed." "(
             "normal\nnormal\nforce\n"
         );
         server.request(11, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+fn quoted_citation_keys_complete_and_rename_across_files_with_incremental_updates_over_stdio() {
+    use latex_lsp::text::Text;
+    use tower_lsp::lsp_types::{
+        DocumentChanges, OneOf, TextDocumentContentChangeEvent, TextEdit, WorkspaceEdit,
+    };
+    for (versioned, multiline) in [(false, false), (true, false), (false, true), (true, true)] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let main = Url::from_file_path(root.join("main.tex")).unwrap();
+        let bib = Url::from_file_path(root.join("refs.bib")).unwrap();
+        let main_source = "% 😀\r\n\\documentclass{article}\\bibliography{refs}\r\n\\begin{document}\\cite{O\"Connor}\\end{document}\r\n";
+        let bib_source = if multiline {
+            "@misc{O\"Connor,title={Metadata}}\r\n@misc{child,crossref={O\"Connor},related=\"keep,\r\n O\r\n\"}\r\n"
+        } else {
+            "@misc{O\"Connor,title={Metadata}}\r\n@misc{child,crossref={O\"Connor},related=\"keep, O\"}\r\n"
+        };
+        std::fs::write(main.to_file_path().unwrap(), main_source).unwrap();
+        std::fs::write(bib.to_file_path().unwrap(), bib_source).unwrap();
+        let mut server = Server::start();
+        server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(root).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":versioned}}}}));
+        server.notify("initialized", json!({}));
+        for (uri, source, language, version) in [
+            (&main, main_source, "latex", 3),
+            (&bib, bib_source, "bibtex", 7),
+        ] {
+            server.notify("textDocument/didOpen", json!({"textDocument":{"uri":uri,"text":source,"languageId":language,"version":version}}));
+        }
+        let cursor = Text::new(bib_source.into()).position(bib_source.rfind('O').unwrap() + 1);
+        let completions = server.request(
+            2,
+            "textDocument/completion",
+            json!({"textDocument":{"uri":bib},"position":cursor}),
+        );
+        let completion = completions
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["label"] == "O\"Connor")
+            .unwrap();
+        assert_eq!(
+            completion["textEdit"]["newText"],
+            if multiline {
+                "{keep,\r\n O\"Connor\r\n}"
+            } else {
+                "{keep, O\"Connor}"
+            }
+        );
+        let edit: TextEdit = serde_json::from_value(completion["textEdit"].clone()).unwrap();
+        assert_eq!(edit.range.start.line, edit.range.end.line);
+        assert!(edit.range.start <= cursor && cursor <= edit.range.end);
+        let mut edits: Vec<TextEdit> = serde_json::from_value(
+            completion
+                .get("additionalTextEdits")
+                .cloned()
+                .unwrap_or_else(|| json!([])),
+        )
+        .unwrap();
+        if multiline {
+            assert_eq!(edits.len(), 2);
+        }
+        edits.push(edit);
+        edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
+        let content_changes = edits
+            .into_iter()
+            .map(|edit| TextDocumentContentChangeEvent {
+                range: Some(edit.range),
+                range_length: None,
+                text: edit.new_text,
+            })
+            .collect::<Vec<_>>();
+        let bib_completed = Text::new(bib_source.into())
+            .changed(content_changes.clone())
+            .unwrap()
+            .source;
+        assert_eq!(
+            bib_completed,
+            if multiline {
+                "@misc{O\"Connor,title={Metadata}}\r\n@misc{child,crossref={O\"Connor},related={keep,\r\n O\"Connor\r\n}}\r\n"
+            } else {
+                "@misc{O\"Connor,title={Metadata}}\r\n@misc{child,crossref={O\"Connor},related={keep, O\"Connor}}\r\n"
+            }
+        );
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":bib,"version":8},"contentChanges":content_changes}),
+        );
+        let origin = json!({"textDocument":{"uri":bib},"position":Text::new(bib_completed.clone()).position(8)});
+        let references = server.request(3,"textDocument/references",json!({"textDocument":origin["textDocument"],"position":origin["position"],"context":{"includeDeclaration":true}}));
+        assert_eq!(references.as_array().unwrap().len(), 4, "{references}");
+        let rename = server.request(4,"textDocument/rename",json!({"textDocument":origin["textDocument"],"position":origin["position"],"newName":"New\"Key"}));
+        let edit: WorkspaceEdit = serde_json::from_value(rename).unwrap();
+        let changes = if versioned {
+            let Some(DocumentChanges::Edits(changes)) = edit.document_changes else {
+                panic!()
+            };
+            changes
+                .into_iter()
+                .map(|change| {
+                    let uri = change.text_document.uri;
+                    assert_eq!(
+                        change.text_document.version,
+                        Some(if uri == bib { 8 } else { 3 })
+                    );
+                    (
+                        uri,
+                        change
+                            .edits
+                            .into_iter()
+                            .map(|edit| match edit {
+                                OneOf::Left(edit) => edit,
+                                _ => panic!(),
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        } else {
+            edit.changes.unwrap().into_iter().collect::<Vec<_>>()
+        };
+        assert_eq!(changes.len(), 2);
+        let mut main_updated = String::new();
+        let mut bib_updated = String::new();
+        for (uri, mut edits) in changes {
+            let source = if uri == main {
+                main_source
+            } else {
+                &bib_completed
+            };
+            edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
+            let content_changes = edits
+                .into_iter()
+                .map(|edit| TextDocumentContentChangeEvent {
+                    range: Some(edit.range),
+                    range_length: None,
+                    text: edit.new_text,
+                })
+                .collect::<Vec<_>>();
+            let updated = Text::new(source.into())
+                .changed(content_changes.clone())
+                .unwrap()
+                .source;
+            assert_eq!(updated, source.replace("O\"Connor", "New\"Key"));
+            server.notify(
+                "textDocument/didChange",
+                json!({"textDocument":{"uri":uri,"version":9},"contentChanges":content_changes}),
+            );
+            if uri == main {
+                main_updated = updated;
+            } else {
+                bib_updated = updated;
+            }
+        }
+        let main_text = Text::new(main_updated.clone());
+        let pos = main_text.position(main_updated.find("New\"Key").unwrap() + 1);
+        let definitions = server.request(
+            5,
+            "textDocument/definition",
+            json!({"textDocument":{"uri":main},"position":pos}),
+        );
+        assert_eq!(definitions[0]["uri"], json!(bib));
+        assert_eq!(
+            definitions[0]["range"],
+            json!(Text::new(bib_updated).range(6, 13))
+        );
+        let prepared = server.request(
+            6,
+            "textDocument/prepareRename",
+            json!({"textDocument":{"uri":main},"position":pos}),
+        );
+        assert_eq!(prepared["placeholder"], "New\"Key");
+        server.request(7, "shutdown", Value::Null);
         server.notify("exit", Value::Null);
         server.wait_exit(0);
     }

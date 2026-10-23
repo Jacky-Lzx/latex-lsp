@@ -14,6 +14,7 @@ enum TargetKind {
     Label,
     Anchor,
     Citation,
+    BibString,
     Command,
     Environment,
     Counter,
@@ -25,6 +26,14 @@ enum TargetKind {
 }
 
 impl TargetKind {
+    fn same_name(self, left: &str, right: &str) -> bool {
+        if self == Self::BibString {
+            left.eq_ignore_ascii_case(right)
+        } else {
+            left == right
+        }
+    }
+
     fn saved_kind(self) -> Option<crate::saved_text::Kind> {
         match self {
             Self::SavedText => Some(crate::saved_text::Kind::Saved),
@@ -45,10 +54,11 @@ impl TargetKind {
 }
 
 fn static_target_name(kind: TargetKind, name: &str) -> bool {
-    if matches!(
-        kind,
-        TargetKind::Label | TargetKind::Citation | TargetKind::Anchor
-    ) {
+    if kind == TargetKind::BibString {
+        crate::bib_strings::identifier(name)
+    } else if kind == TargetKind::Citation {
+        syntax::is_static_citation_key(name)
+    } else if matches!(kind, TargetKind::Label | TargetKind::Anchor) {
         syntax::is_static_reference_key(name)
     } else {
         syntax::is_static_key(name)
@@ -56,7 +66,9 @@ fn static_target_name(kind: TargetKind, name: &str) -> bool {
 }
 
 fn target_key_spans(source: &str, span: Span<usize>, kind: TargetKind) -> Vec<Span<usize>> {
-    if matches!(kind, TargetKind::Label | TargetKind::Citation) {
+    if kind == TargetKind::Citation {
+        syntax::citation_list_spans(source, span)
+    } else if kind == TargetKind::Label {
         syntax::reference_list_spans(source, span)
     } else {
         syntax::key_list_spans(source, span)
@@ -71,6 +83,21 @@ struct Target<'a> {
 }
 
 fn raw_target(doc: &Document, offset: usize) -> Option<Target<'_>> {
+    if let Some(entry) = doc
+        .syntax
+        .bibliography_strings
+        .definitions
+        .iter()
+        .chain(&doc.syntax.bibliography_strings.references)
+        .find(|entry| entry.span.start <= offset && offset <= entry.span.end)
+    {
+        return Some(Target {
+            kind: TargetKind::BibString,
+            name: &entry.name,
+            span: entry.span.clone(),
+            control_word: false,
+        });
+    }
     for kind in [TargetKind::SavedText, TargetKind::MovingText] {
         let saved_kind = kind.saved_kind().unwrap();
         if let Some(entry) = crate::saved_text::declarations(doc, saved_kind)
@@ -268,6 +295,7 @@ fn raw_target(doc: &Document, offset: usize) -> Option<Target<'_>> {
         .syntax
         .citations
         .iter()
+        .chain(&doc.syntax.bibliography_aliases)
         .chain(&doc.syntax.citation_references)
     {
         if entry.span.start <= offset && offset <= entry.span.end {
@@ -359,11 +387,12 @@ fn target<'a>(workspace: &'a Workspace, uri: &Url, offset: usize) -> Option<Targ
     raw
 }
 
-fn entries(doc: &Document, kind: TargetKind) -> &[Entry] {
-    match kind {
+fn entries(doc: &Document, kind: TargetKind) -> impl Iterator<Item = &Entry> {
+    let primary: &[Entry] = match kind {
         TargetKind::Label => &doc.syntax.labels,
         TargetKind::Anchor => &doc.syntax.anchors,
         TargetKind::Citation => &doc.syntax.citations,
+        TargetKind::BibString => &doc.syntax.bibliography_strings.definitions,
         TargetKind::Command => &doc.syntax.definitions,
         TargetKind::Environment => &doc.syntax.environments,
         TargetKind::Counter => &doc.syntax.counters,
@@ -372,7 +401,13 @@ fn entries(doc: &Document, kind: TargetKind) -> &[Entry] {
         TargetKind::SavedText => &doc.syntax.saved_text,
         TargetKind::MovingText => &doc.syntax.moving_text,
         TargetKind::Color => &doc.syntax.colors,
-    }
+    };
+    let aliases: &[Entry] = if kind == TargetKind::Citation {
+        &doc.syntax.bibliography_aliases
+    } else {
+        &[]
+    };
+    primary.iter().chain(aliases)
 }
 
 fn rename_target<'a>(
@@ -391,6 +426,9 @@ fn rename_target<'a>(
         return Ok(None);
     };
     let crate::workspace::SymbolProjects { mut scope, regions } = workspace.symbol_projects(uri);
+    if target.kind == TargetKind::BibString && crate::bib_strings::builtin(target.name).is_some() {
+        return Ok(None);
+    }
     if let Some(kind) = target.kind.saved_kind() {
         crate::saved_text::validate(workspace, &scope, kind)?;
     }
@@ -407,8 +445,7 @@ fn rename_target<'a>(
             .filter(|(uri, _)| scope.contains(*uri))
             .flat_map(|(uri, doc)| {
                 entries(doc, target.kind)
-                    .iter()
-                    .filter(|entry| entry.name == target.name)
+                    .filter(|entry| target.kind.same_name(&entry.name, target.name))
                     .map(move |_| uri.clone())
             })
             .collect()
@@ -507,12 +544,14 @@ pub fn rename(
                 "Invalid saved-text name: use a nonempty literal name without TeX expansion or comments"
             } else if target.kind == TargetKind::Color {
                 "Invalid color name: start with an ASCII letter, digit or underscore; use only letters, digits, underscore, hyphen and dot"
+            } else if target.kind == TargetKind::BibString {
+                "Invalid BibTeX abbreviation: use one identifier without an initial digit or value delimiters"
             } else {
                 "Invalid name: use a single TeX command name or a reference key without separators"
             },
         ));
     }
-    if new_name == target.name {
+    if new_name == target.name && target.kind != TargetKind::BibString {
         return Ok(Some(WorkspaceEdit::default()));
     }
     let conflicts = workspace
@@ -520,9 +559,18 @@ pub fn rename(
         .iter()
         .filter(|(uri, _)| scope.contains(*uri))
         .any(|(_, doc)| {
-            entries(doc, target.kind)
-                .iter()
-                .any(|entry| entry.name == new_name)
+            entries(doc, target.kind).any(|entry| {
+                target.kind.same_name(&entry.name, new_name)
+                    && !(target.kind == TargetKind::BibString
+                        && target.kind.same_name(target.name, new_name))
+            }) || target.kind == TargetKind::BibString
+                && !target.kind.same_name(target.name, new_name)
+                && doc
+                    .syntax
+                    .bibliography_strings
+                    .references
+                    .iter()
+                    .any(|entry| entry.name.eq_ignore_ascii_case(new_name))
                 || target.kind == TargetKind::Environment
                     && doc.syntax.definitions.iter().any(|entry| {
                         entry.name == new_name || entry.name == format!("end{new_name}")
@@ -538,6 +586,7 @@ pub fn rename(
         });
     let builtin = match target.kind {
         TargetKind::Color => crate::named_colors::builtin(new_name),
+        TargetKind::BibString => crate::bib_strings::builtin(new_name).is_some(),
         TargetKind::Command | TargetKind::Environment => {
             COMMANDS.iter().any(|(name, _, _)| *name == new_name)
                 || syntax::declares_register(new_name)
@@ -643,11 +692,53 @@ pub fn rename(
             ));
         }
     }
-    for edits in changes.values_mut() {
+    for (uri, edits) in &mut changes {
         edits.sort_by_key(|edit| (edit.range.start, edit.range.end));
         edits.dedup_by(|a, b| a.range == b.range);
+        if target.kind == TargetKind::Citation && new_name.contains('"') {
+            brace_quoted_citation_edits(&workspace.documents[uri], edits);
+        }
     }
     Ok(Some(workspace_edit(workspace, changes)))
+}
+
+/// Merge edits in a quoted BibTeX relationship or IDS value before changing its
+/// delimiters. This keeps repeated keys in one list from producing overlapping
+/// edits, and preserves the surrounding list members and whitespace.
+fn brace_quoted_citation_edits(doc: &Document, edits: &mut Vec<TextEdit>) {
+    for argument in doc
+        .syntax
+        .citation_fields
+        .iter()
+        .map(|field| &field.argument)
+        .chain(&doc.syntax.bibliography_alias_values)
+    {
+        if doc.text.source.as_bytes().get(argument.outer_span.start) != Some(&b'"') {
+            continue;
+        }
+        let inner = doc.text.range(argument.span.start, argument.span.end);
+        let matching = edits
+            .iter()
+            .filter(|edit| inner.start <= edit.range.start && edit.range.end <= inner.end)
+            .collect::<Vec<_>>();
+        if matching.is_empty() {
+            continue;
+        }
+        let mut value = doc.text.source[argument.span.clone()].to_owned();
+        for edit in matching.into_iter().rev() {
+            let start = doc.text.offset(edit.range.start).unwrap() - argument.span.start;
+            let end = doc.text.offset(edit.range.end).unwrap() - argument.span.start;
+            value.replace_range(start..end, &edit.new_text);
+        }
+        edits.retain(|edit| !(inner.start <= edit.range.start && edit.range.end <= inner.end));
+        edits.push(TextEdit {
+            range: doc
+                .text
+                .range(argument.outer_span.start, argument.outer_span.end),
+            new_text: format!("{{{value}}}"),
+        });
+    }
+    edits.sort_by_key(|edit| (edit.range.start, edit.range.end));
 }
 
 pub fn workspace_edit(
@@ -684,6 +775,9 @@ fn completion_name_argument(
     command: &Command,
     offset: usize,
 ) -> Option<(Span<usize>, Vec<Span<usize>>)> {
+    if crate::citations::style(&command.name).is_some_and(|style| style.single_key()) {
+        return crate::citations::single_key_context(source, command, offset);
+    }
     let (start, open) = if syntax::declares_environment_copy(&command.name) {
         (
             syntax::environment_copy_source_start(source, command)?,
@@ -717,7 +811,9 @@ fn completion_name_argument(
                 open,
                 offset,
                 !hyperlink || open != b'[',
-                if reference {
+                if syntax::is_single_citation(&command.name) {
+                    syntax::is_static_citation_key
+                } else if reference {
                     syntax::is_static_reference_key
                 } else {
                     syntax::is_static_key
@@ -726,7 +822,9 @@ fn completion_name_argument(
                 return Some(context);
             }
         }
-        let span = if reference {
+        let span = if syntax::is_single_citation(&command.name) {
+            syntax::active_citation_argument(source, start, open, offset)
+        } else if reference {
             syntax::active_reference_argument(source, start, open, offset)
         } else {
             syntax::active_name_argument(source, start, open, offset)
@@ -948,7 +1046,16 @@ fn argument_span(doc: &Document, command: &Command, offset: usize) -> Option<Spa
         at
     };
     if syntax::is_reference(&command.name) || syntax::is_citation(&command.name) {
-        return syntax::active_key_list_prefix(source, at, offset, syntax::is_static_reference_key);
+        return syntax::active_key_list_prefix(
+            source,
+            at,
+            offset,
+            if syntax::is_citation(&command.name) {
+                syntax::is_static_citation_key
+            } else {
+                syntax::is_static_reference_key
+            },
+        );
     }
     let value = source.get(at..offset)?.strip_prefix('{')?;
     if value.contains(['{', '}', '%'])
@@ -1069,6 +1176,10 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
                     continue;
                 }
                 for entry in entries(entry_doc, kind) {
+                    if kind == TargetKind::Citation && !syntax::is_static_citation_key(&entry.name)
+                    {
+                        continue;
+                    }
                     candidates.push((
                         entry.name.clone(),
                         format!("{} — {}", entry.detail, entry_uri.path()),
@@ -1321,7 +1432,7 @@ fn bibliography_completion(
         .documents
         .iter()
         .filter(|(uri, _)| scope.contains(*uri))
-        .flat_map(|(uri, doc)| doc.syntax.citations.iter().map(move |entry| (uri, entry)))
+        .flat_map(|(uri, doc)| entries(doc, TargetKind::Citation).map(move |entry| (uri, entry)))
         .filter(|(_, entry)| {
             syntax::is_static_citation_key(&entry.name)
                 && entry.name.starts_with(key)
@@ -1385,8 +1496,7 @@ pub fn definitions(workspace: &Workspace, uri: &Url, position: Position) -> Vec<
         .filter(|(uri, _)| scope.contains(*uri))
         .flat_map(|(uri, doc)| {
             entries(doc, target.kind)
-                .iter()
-                .filter(|entry| entry.name == target.name)
+                .filter(|entry| target.kind.same_name(&entry.name, target.name))
                 .map(|entry| Location {
                     uri: uri.clone(),
                     range: doc.text.range(entry.span.start, entry.span.end),
@@ -1418,8 +1528,7 @@ pub fn references(
         .filter(|(uri, _)| scope.contains(*uri))
         .flat_map(|(uri, doc)| {
             entries(doc, target.kind)
-                .iter()
-                .filter(|entry| entry.name == target.name)
+                .filter(|entry| target.kind.same_name(&entry.name, target.name))
                 .map(move |_| uri)
         })
         .collect();
@@ -1460,6 +1569,21 @@ fn all_references(
         .then(|| crate::environment_calls::Index::new(workspace));
     let mut result = Vec::new();
     for (uri, doc) in &workspace.documents {
+        if target.kind == TargetKind::BibString {
+            result.extend(
+                doc.syntax
+                    .bibliography_strings
+                    .references
+                    .iter()
+                    .chain(entries(doc, target.kind).filter(|_| include_declaration))
+                    .filter(|entry| entry.name.eq_ignore_ascii_case(target.name))
+                    .map(|entry| Location {
+                        uri: uri.clone(),
+                        range: doc.text.range(entry.span.start, entry.span.end),
+                    }),
+            );
+            continue;
+        }
         if let Some(calls) = &environment_calls {
             result.extend(calls.references(uri, target.name).map(|argument| Location {
                 uri: uri.clone(),
@@ -1472,9 +1596,7 @@ fn all_references(
                     .into_iter()
                     .filter(|reference| {
                         !matches!(target.kind, TargetKind::Conditional | TargetKind::Toggle)
-                            || !entries(doc, target.kind)
-                                .iter()
-                                .any(|entry| entry.span == reference.span)
+                            || !entries(doc, target.kind).any(|entry| entry.span == reference.span)
                     })
                     .map(|reference| Location {
                         uri: uri.clone(),
@@ -1509,7 +1631,6 @@ fn all_references(
         if include_declaration {
             result.extend(
                 entries(doc, target.kind)
-                    .iter()
                     .filter(|entry| entry.name == target.name)
                     .map(|entry| Location {
                         uri: uri.clone(),
@@ -1631,7 +1752,10 @@ fn all_references(
                         || syntax::has_separate_label_argument(&command.name)
                 }
                 TargetKind::Citation => syntax::is_citation(&command.name),
-                TargetKind::Command | TargetKind::Anchor | TargetKind::Color => false,
+                TargetKind::Command
+                | TargetKind::Anchor
+                | TargetKind::Color
+                | TargetKind::BibString => false,
                 TargetKind::Counter | TargetKind::Conditional | TargetKind::Toggle => false,
                 TargetKind::SavedText | TargetKind::MovingText => false,
                 TargetKind::Environment => matches!(command.name.as_str(), "begin" | "end"),
@@ -1711,8 +1835,7 @@ pub fn hover(workspace: &Workspace, uri: &Url, position: Position) -> Option<Hov
             continue;
         }
         if let Some(entry) = entries(entry_doc, target.kind)
-            .iter()
-            .find(|entry| entry.name == target.name)
+            .find(|entry| target.kind.same_name(&entry.name, target.name))
         {
             value = Some(format!(
                 "{}\n\n{}\n{}:{}",
@@ -1729,6 +1852,14 @@ pub fn hover(workspace: &Workspace, uri: &Url, position: Position) -> Option<Hov
             .iter()
             .find(|(name, _, _)| *name == target.name)
             .map(|(name, _, docs)| format!("\\{name}\n\n{docs}"));
+    }
+    if value.is_none() && target.kind == TargetKind::BibString {
+        value = crate::bib_strings::builtin(target.name).map(|month| {
+            format!(
+                "{}\n\nCommon BibTeX month abbreviation: {month}",
+                target.name
+            )
+        });
     }
     if value.is_none()
         && target.kind == TargetKind::Environment
