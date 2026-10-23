@@ -147,7 +147,7 @@ impl Registry {
                 else {
                     continue;
                 };
-                let command = Command {
+                let mut command = Command {
                     name: name.into(),
                     span,
                     argument: None,
@@ -159,12 +159,15 @@ impl Registry {
                         continue;
                     }
                 };
-                let Some((raw, _)) = crate::bib_resources::start(source, command.span.end)
-                    .and_then(|at| syntax::verbatim_file_group(source, at))
-                else {
+                let Some(raw) = crate::bib_resources::read_argument(
+                    source,
+                    command.span.end,
+                    signatures.resource_is_tokenized(source, &doc.syntax, command.span.start),
+                ) else {
                     result.uncertain = true;
                     continue;
                 };
+                command.argument = Some(raw.clone());
                 let local = crate::bib_resources::argument(source, &command);
                 let registration = local.map(|argument| Registration {
                     uri: uri.clone(),

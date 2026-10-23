@@ -2270,8 +2270,11 @@ impl Syntax {
                     let name = &source[name_start..i];
                     let command_end = i;
                     let reader = readers.get(&start);
+                    let tokenized_resource = crate::bib_resources::references_file(name)
+                        && inline_tokenization.contains(source, &result, &control_operands, start);
                     let native_resource = crate::bib_resources::references_file(name)
-                        && !reader.is_some_and(Option::is_none);
+                        && !reader.is_some_and(Option::is_none)
+                        && !tokenized_resource;
                     if control_operands.contains(&start) {
                         result.commands.push(Command {
                             name: name.into(),
@@ -2493,7 +2496,7 @@ impl Syntax {
                     } else if is_citation(name) {
                         arg_start = citation_argument_start(source, name, command_end)
                             .unwrap_or(source.len());
-                    } else if native_resource
+                    } else if crate::bib_resources::references_file(name)
                         || loader_extension(name).is_some()
                         || name == "bibliographystyle"
                         || code_input_command(name)
@@ -2570,6 +2573,13 @@ impl Syntax {
                         span: start..command_end,
                         argument,
                     };
+                    if tokenized_resource
+                        && command.argument.as_ref().is_some_and(|argument| {
+                            crate::bib_resources::changes_when_tokenized(&argument.value)
+                        })
+                    {
+                        command.argument = None;
+                    }
                     if let Some(Some(reader)) =
                         reader.filter(|_| !matches!(name, "csuse" | "csname" | "endcsname"))
                     {

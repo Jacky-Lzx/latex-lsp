@@ -28837,3 +28837,56 @@ fn precollected_resource_path_edits_follow_unsaved_macro_boundaries_over_stdio()
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+fn resource_links_do_not_reinterpret_precollected_comments_after_unsaved_changes_over_stdio() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+    let bib = Url::from_file_path(directory.path().join("refs%data.bib")).unwrap();
+    std::fs::write(
+        directory.path().join("refs%data.bib"),
+        "@book{fake,title={Fake}}",
+    )
+    .unwrap();
+    std::fs::write(
+        directory.path().join("refs.bib"),
+        "@book{actual,title={Actual}}",
+    )
+    .unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(directory.path()).unwrap(),"capabilities":{},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    for (stage, wrapped) in [false, true, false].into_iter().enumerate() {
+        let body = if wrapped {
+            "\\def\\future{\\addbibresource{refs%data.bib}\r\n.bib}}\\future"
+        } else {
+            r"\addbibresource{refs%data.bib}"
+        };
+        let source = format!("% 😀\r\n\\documentclass{{article}}{body}");
+        if stage == 0 {
+            server.notify(
+                "textDocument/didOpen",
+                json!({"textDocument":{"uri":main,"languageId":"latex","version":5,"text":source}}),
+            );
+        } else {
+            server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":5+stage},"contentChanges":[{"text":source}]}));
+        }
+        let links = server.request(
+            10 + stage as u64,
+            "textDocument/documentLink",
+            json!({"textDocument":{"uri":main}}),
+        );
+        assert_eq!(
+            links
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|link| link["target"] == bib.as_str()),
+            !wrapped,
+            "{source}: {links}"
+        );
+    }
+    server.request(1000, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

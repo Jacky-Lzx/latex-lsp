@@ -22,6 +22,24 @@ pub(crate) fn complete_source(
     command: &syntax::Command,
     span: Range<usize>,
 ) -> Vec<CompletionItem> {
+    if crate::bib_resources::references_file(&command.name) {
+        let Some(doc) = workspace.documents.get(uri) else {
+            return vec![];
+        };
+        if crate::bib_resources::read_argument(&doc.text.source, command.span.end, false)
+            .is_some_and(|argument| {
+                !crate::bib_resources::insertion_preserves_filename(
+                    workspace,
+                    uri,
+                    &workspace.source_roots(uri),
+                    Some(command.span.start),
+                    &argument.value,
+                )
+            })
+        {
+            return vec![];
+        }
+    }
     // Forwarding stores options in command.argument; its filename follows in
     // the second group. An unfinished filename uses the suffix scanner below.
     let argument = if syntax::passes_options(&command.name) {

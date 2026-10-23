@@ -63,6 +63,16 @@ pub(crate) fn start(source: &str, command_end: usize) -> Option<usize> {
     Some(at)
 }
 
+pub(crate) fn read_argument(source: &str, end: usize, tokenized: bool) -> Option<Argument> {
+    let at = start(source, end)?;
+    let (argument, _) = if tokenized {
+        syntax::group(source, at, b'{', b'}')
+    } else {
+        syntax::verbatim_file_group(source, at)
+    }?;
+    (!tokenized || !changes_when_tokenized(&argument.value)).then_some(argument)
+}
+
 fn local_options(source: &str, command_end: usize) -> bool {
     let at = syntax::skip_space(source, command_end);
     if source.as_bytes().get(at) != Some(&b'[') {
@@ -124,7 +134,10 @@ pub(crate) fn argument(source: &str, command: &Command) -> Option<Argument> {
     if !local_options(source, command.span.end) {
         return None;
     }
-    let (argument, _) = syntax::verbatim_file_group(source, start(source, command.span.end)?)?;
+    let argument = command.argument.clone()?;
+    if argument.outer_span.start != start(source, command.span.end)? {
+        return None;
+    }
     literal_path(&argument.value).then_some(argument)
 }
 

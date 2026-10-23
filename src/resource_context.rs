@@ -506,11 +506,10 @@ fn analyze_root(analysis: &mut Analysis, ws: &Workspace, root: &Url, names: &BTr
     if !bounded || analysis.incomplete {
         for uri in &scope {
             analysis.visited.insert(uri.clone());
-            if let Some(doc) = ws
-                .documents
-                .get(uri)
-                .filter(|doc| doc.kind == DocumentKind::Latex && doc.text.source.contains('%'))
-            {
+            if let Some(doc) = ws.documents.get(uri).filter(|doc| {
+                doc.kind == DocumentKind::Latex
+                    && crate::bib_resources::changes_when_tokenized(&doc.text.source)
+            }) {
                 // Ordinary tokenization is the common safe prefix whenever a
                 // resource reader cannot be certified within this root's budget.
                 let readers = doc
@@ -568,7 +567,7 @@ pub(crate) fn refresh(ws: &mut Workspace) -> BTreeSet<Url> {
     let resource_names = names(ws, false);
     let needed = ws.documents.values().any(|doc| {
         doc.kind == DocumentKind::Latex
-            && doc.text.source.contains('%')
+            && crate::bib_resources::changes_when_tokenized(&doc.text.source)
             && (doc.syntax.commands.iter().any(|command| {
                 (resource_names.contains(&command.name)
                     && (command.name != "begin"
@@ -610,7 +609,7 @@ pub(crate) fn refresh(ws: &mut Workspace) -> BTreeSet<Url> {
         let Some(doc) = ws.documents.get_mut(&uri) else {
             continue;
         };
-        if !doc.text.source.contains('%') {
+        if !crate::bib_resources::changes_when_tokenized(&doc.text.source) {
             readers.clear();
         }
         if doc.syntax.contextual_resource_readers == readers {

@@ -9,6 +9,7 @@ fn setup(body: &str) -> (tempfile::TempDir, Workspace, Url, String) {
         "refs.bib",
         "refs%data.bib",
         "refs#data.bib",
+        "refs##data.bib",
         "refs^^61data.bib",
         "refs$&^~data.bib",
     ] {
@@ -20,6 +21,47 @@ fn setup(body: &str) -> (tempfile::TempDir, Workspace, Url, String) {
     ws.add_root(dir.path().into());
     ws.open(main.clone(), source.clone(), 7);
     (dir, ws, main, source)
+}
+
+#[test]
+fn tokenized_resource_names_never_link_comment_parameter_or_translated_source_spelling() {
+    for command in ["addbibresource", "addglobalbib", "addsectionbib"] {
+        for (argument, false_name) in [
+            ("refs%data.bib}\n.bib", "refs%data.bib"),
+            ("refs##data.bib", "refs##data.bib"),
+            ("refs^^61data.bib", "refs^^61data.bib"),
+        ] {
+            let body = format!(r"\def\future{{\{command}{{{argument}}}}}\future");
+            let (dir, ws, main, source) = setup(&body);
+            let false_uri = Url::from_file_path(dir.path().join(false_name)).unwrap();
+            assert!(!ws.project_files(&main).contains(&false_uri), "{source}");
+            let links = latex_lsp::navigation::document_links(&ws, &main);
+            assert!(
+                links
+                    .iter()
+                    .all(|link| link.target.as_ref() != Some(&false_uri)),
+                "{source}: {links:?}"
+            );
+            let at = Text::new(source.clone()).position(source.find("refs").unwrap() + 3);
+            assert!(
+                features::completion(&ws, &main, at)
+                    .iter()
+                    .all(|item| item.kind != Some(CompletionItemKind::FILE)),
+                "{source}"
+            );
+            let edit = file_operations::will_rename(
+                &ws,
+                &[FileRename {
+                    old_uri: false_uri.into(),
+                    new_uri: Url::from_file_path(dir.path().join("changed.bib"))
+                        .unwrap()
+                        .into(),
+                }],
+            )
+            .unwrap();
+            assert!(edit.is_none(), "{source}: {edit:?}");
+        }
+    }
 }
 
 #[test]
@@ -134,6 +176,54 @@ fn real_tokenized_resource_moves_preserve_the_native_database_name() {
         .output()
         .unwrap();
     assert!(!output.status.success());
+}
+
+#[test]
+#[ignore = "requires pdflatex and biblatex"]
+fn real_precollected_spelling_is_not_the_native_resource_name() {
+    for (argument, actual) in [
+        ("refs%data.bib}\n.bib", Some("refs.bib")),
+        ("refs##data.bib", None),
+        ("refs^^61data.bib", Some("refsadata.bib")),
+    ] {
+        let body = format!(
+            r"\usepackage{{biblatex}}\def\future{{\addbibresource{{{argument}}}}}\future\begin{{document}}Text.\end{{document}}"
+        );
+        let (dir, ws, main, _) = setup(&body);
+        let links = latex_lsp::navigation::document_links(&ws, &main);
+        assert!(
+            links.iter().all(|link| link
+                .target
+                .as_ref()
+                .is_none_or(|target| !target.path().ends_with(".bib"))),
+            "{links:?}"
+        );
+        let output = std::process::Command::new("pdflatex")
+            .args([
+                "-no-shell-escape",
+                "-interaction=nonstopmode",
+                "-halt-on-error",
+                "main.tex",
+            ])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        if actual.is_none() {
+            assert!(!output.status.success());
+            assert!(String::from_utf8_lossy(&output.stdout).contains("Illegal parameter number"));
+            continue;
+        }
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        let bcf = std::fs::read_to_string(dir.path().join("main.bcf")).unwrap();
+        assert!(
+            bcf.contains(&format!(">{}</bcf:datasource>", actual.unwrap())),
+            "{bcf}"
+        );
+    }
 }
 
 #[test]

@@ -3119,18 +3119,17 @@ impl<'a> CommandSignatures<'a> {
                     command: syntax::Command {
                         name: builtin.into(),
                         span: start..end,
-                        argument: if syntax::loader_extension(builtin).is_some()
+                        argument: if crate::bib_resources::references_file(builtin) {
+                            crate::bib_resources::read_argument(
+                                source,
+                                end,
+                                self.resource_is_tokenized(source, parsed, command.span.start),
+                            )
+                        } else if syntax::loader_extension(builtin).is_some()
                             || matches!(builtin, "bibliographystyle" | "includegraphics")
-                            || crate::bib_resources::references_file(builtin)
                         {
                             syntax::file_name_argument_start(source, builtin, end)
-                                .and_then(|start| {
-                                    if crate::bib_resources::references_file(builtin) {
-                                        syntax::verbatim_file_group(source, start)
-                                    } else {
-                                        syntax::group(source, start, b'{', b'}')
-                                    }
-                                })
+                                .and_then(|start| syntax::group(source, start, b'{', b'}'))
                                 .map(|(argument, _)| argument)
                         } else {
                             syntax::source_input_argument(source, builtin, end)
