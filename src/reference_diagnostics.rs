@@ -54,9 +54,15 @@ pub(crate) fn occurrences(ws: &Workspace, uri: &Url) -> Vec<(bool, Range<usize>)
             merged.push(span);
         }
     }
+    let declarations = doc
+        .syntax
+        .definitions
+        .iter()
+        .map(|entry| (entry.span.start, entry.span.end))
+        .collect();
     let mut opaque = 0;
     let mut result = Vec::new();
-    for command in &doc.syntax.commands {
+    for (index, command) in doc.syntax.commands.iter().enumerate() {
         let at = command.span.start;
         while merged.get(opaque).is_some_and(|span| span.end <= at) {
             opaque += 1;
@@ -64,8 +70,47 @@ pub(crate) fn occurrences(ws: &Workspace, uri: &Url) -> Vec<(bool, Range<usize>)
         if doc.syntax.control_operands.contains(&at)
             || operands.contains(&at)
             || merged.get(opaque).is_some_and(|span| span.contains(&at))
-            || !signatures.command_unchanged(&command.name)
         {
+            continue;
+        }
+        let resolved;
+        let command = if let Some((name, span)) =
+            signatures.named_invocation(source, &doc.syntax, index, &operands, &declarations)
+        {
+            if !syntax::warns_on_undefined_reference(name)
+                && !syntax::has_separate_label_argument(name)
+                && !syntax::warns_on_undefined_citation(name)
+            {
+                continue;
+            }
+            let start = if syntax::is_reference(name) {
+                syntax::reference_argument_start(source, name, span.end)
+            } else if syntax::is_citation(name) {
+                syntax::citation_argument_start(source, name, span.end)
+            } else {
+                None
+            };
+            let argument = start
+                .and_then(|at| syntax::group(source, at, b'{', b'}'))
+                .map(|(argument, _)| {
+                    if syntax::is_single_reference(name) {
+                        syntax::single_reference_argument(source, argument)
+                    } else if syntax::is_single_citation(name) {
+                        syntax::single_citation_argument(source, argument)
+                    } else {
+                        argument
+                    }
+                });
+            resolved = syntax::Command {
+                name: name.into(),
+                span,
+                argument,
+            };
+            &resolved
+        } else {
+            command
+        };
+        if !signatures.command_unchanged(&command.name) {
             continue;
         }
         if syntax::warns_on_undefined_citation(&command.name) {

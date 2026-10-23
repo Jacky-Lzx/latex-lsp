@@ -659,7 +659,7 @@ pub(crate) fn single_key_argument(source: &str, argument: Argument) -> Argument 
     literal_key_argument(source, argument, is_static_key)
 }
 
-fn single_reference_argument(source: &str, argument: Argument) -> Argument {
+pub(crate) fn single_reference_argument(source: &str, argument: Argument) -> Argument {
     literal_key_argument(source, argument, is_static_reference_key)
 }
 

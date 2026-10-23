@@ -27240,3 +27240,93 @@ fn reference_diagnostics_and_inlay_hints_follow_unsaved_parameter_and_command_se
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+fn named_references_publish_exact_warnings_hints_and_follow_interface_redefinitions() {
+    use latex_lsp::text::Text;
+    let dir = tempfile::tempdir().unwrap();
+    let uri = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let macros = Url::from_file_path(dir.path().join("macros.tex")).unwrap();
+    let source = "\\documentclass{article}\r\n\\input{macros}\r\n\\begin{document}\r\n😀 \\label{x} \\csuse{ref}{x} \\csname ref\\endcsname{x}\r\n\\csuse{ref}{missing} \\csname ref\\endcsname{other} \\csuse{cite}{absent}\r\n\\end{document}";
+    std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+    std::fs::write(macros.to_file_path().unwrap(), "").unwrap();
+    std::fs::write(
+        dir.path().join("main.aux"),
+        "\\newlabel{x}{{4}{9}{Title}{}}\n",
+    )
+    .unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"latex","version":1,"text":source}}),
+    );
+    let diagnostic_params = json!({"textDocument":{"uri":uri}});
+    let hint_params = json!({"textDocument":{"uri":uri},"range":{"start":{"line":0,"character":0},"end":{"line":6,"character":0}}});
+    let text = Text::new(source.into());
+    let mut id = 2;
+    for (step, definition, expected_errors, expected_hints) in [
+        (0, "", 3, 2),
+        (1, r"\def\csuse#1#2{}", 1, 1),
+        (2, r"\def\endcsname{}", 2, 1),
+        (
+            3,
+            r"\renewcommand{\ref}[1]{#1}\renewcommand{\cite}[1]{#1}",
+            0,
+            0,
+        ),
+    ] {
+        if step == 1 {
+            server.notify("textDocument/didOpen", json!({"textDocument":{"uri":macros,"languageId":"latex","version":1,"text":definition}}));
+        } else if step > 1 {
+            server.notify("textDocument/didChange", json!({"textDocument":{"uri":macros,"version":step},"contentChanges":[{"text":definition}]}));
+        }
+        let report = server.request(id, "textDocument/diagnostic", diagnostic_params.clone());
+        id += 1;
+        let errors: Vec<_> = report["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item["code"].as_str(),
+                    Some("undefined-reference" | "undefined-citation")
+                )
+            })
+            .collect();
+        assert_eq!(errors.len(), expected_errors, "step {step}: {report}");
+        if step == 0 {
+            for key in ["missing", "other", "absent"] {
+                let at = source.find(key).unwrap();
+                assert!(errors
+                    .iter()
+                    .any(|item| item["range"] == json!(text.range(at, at + key.len()))));
+            }
+            let pushed = server.until(|message| {
+                message["method"] == "textDocument/publishDiagnostics"
+                    && message["params"]["uri"] == uri.as_str()
+            });
+            assert!(pushed["params"]["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["code"] == "undefined-reference"));
+        }
+        let hints = server.request(id, "textDocument/inlayHint", hint_params.clone());
+        id += 1;
+        assert_eq!(
+            hints.as_array().unwrap().len(),
+            expected_hints,
+            "step {step}: {hints}"
+        );
+        assert!(hints
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|hint| hint["label"] == "→ 4, p. 9"));
+    }
+    server.request(id, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
