@@ -237,6 +237,12 @@ fn builtin(name: &str) -> Option<Signature> {
             parameters: citation_parameters(style, 1),
             documentation: if style.category_membership() {
                 "Assign bibliography keys to a declared category. This does not cite the entries. Requires biblatex."
+            } else if style.set_definition() {
+                "Define a dynamic bibliography set with a citation key and a list of member keys. Requires biblatex with Biber."
+            } else if style.context_codes() == 2 {
+                "Test a bibliography entry by key and provide code for its two branches. Requires biblatex."
+            } else if style.single_key() {
+                "Execute code in one bibliography entry's data context. Supports the starred form. Requires biblatex."
             } else {
                 "Biblatex citation arguments. Repeated calls accept up to two overall notes in parentheses; volume citations separate the volume and optional pages from bibliography keys. Data citations select a field or list after an optional format. Requires biblatex."
             }.into(),
@@ -4072,12 +4078,37 @@ fn active_parameter(
 }
 
 fn citation_parameters(style: crate::citations::Style, groups: usize) -> Vec<Parameter> {
-    if style.category_membership() {
+    if style.single_key() {
+        let labels: &[&str] = if style.context_codes() == 2 {
+            &["{key}", "{true}", "{false}"]
+        } else {
+            &["{key}", "{code}"]
+        };
+        return labels
+            .iter()
+            .enumerate()
+            .map(|(index, label)| Parameter {
+                obey_spaces: false,
+                kind: if index == 0 {
+                    Kind::CitationKeys(style)
+                } else {
+                    Kind::Required
+                },
+                label: (*label).into(),
+            })
+            .collect();
+    }
+    if style.category_membership() || style.set_definition() {
         return vec![
             Parameter {
                 obey_spaces: false,
                 kind: Kind::Required,
-                label: "{category}".into(),
+                label: if style.set_definition() {
+                    "{set key}"
+                } else {
+                    "{category}"
+                }
+                .into(),
             },
             Parameter {
                 obey_spaces: false,
@@ -4159,9 +4190,16 @@ fn citation_parameter(
     role: crate::citations::Role,
 ) -> usize {
     use crate::citations::Role;
-    if style.category_membership() {
+    if style.single_key() {
         return match role {
-            Role::Category => 0,
+            Role::Keys => 0,
+            Role::Code(index) => index + 1,
+            _ => unreachable!(),
+        };
+    }
+    if style.category_membership() || style.set_definition() {
+        return match role {
+            Role::Category | Role::SetKey => 0,
             Role::Keys => 1,
             _ => unreachable!(),
         };
@@ -4184,7 +4222,7 @@ fn citation_parameter(
         }
         Role::Format => 3,
         Role::Selector => 4,
-        Role::Overall(_) | Role::Category => unreachable!(),
+        Role::Overall(_) | Role::Category | Role::SetKey | Role::Code(_) => unreachable!(),
     }
 }
 

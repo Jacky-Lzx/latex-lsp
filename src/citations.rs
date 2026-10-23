@@ -9,6 +9,9 @@ pub(crate) enum Style {
     MultiVolume,
     Data(&'static str),
     Category,
+    Set,
+    EntryData,
+    EntryQuery,
 }
 
 impl Style {
@@ -25,16 +28,35 @@ impl Style {
         }
     }
     pub fn accepts_star(self) -> bool {
-        matches!(self, Self::Multi | Self::Volume | Self::MultiVolume)
+        matches!(
+            self,
+            Self::Multi | Self::Volume | Self::MultiVolume | Self::EntryData
+        )
     }
     pub fn category_membership(self) -> bool {
         matches!(self, Self::Category)
+    }
+    pub fn set_definition(self) -> bool {
+        matches!(self, Self::Set)
+    }
+    pub fn single_key(self) -> bool {
+        self.context_codes() > 0
+    }
+    pub fn context_codes(self) -> usize {
+        match self {
+            Self::EntryData => 1,
+            Self::EntryQuery => 2,
+            _ => 0,
+        }
     }
 }
 
 pub(crate) fn style(name: &str) -> Option<Style> {
     match name {
         "addtocategory" => Some(Style::Category),
+        "defbibentryset" => Some(Style::Set),
+        "entrydata" => Some(Style::EntryData),
+        "ifentryexists" | "ifentryinbib" => Some(Style::EntryQuery),
         "citefield" => Some(Style::Data("field")),
         "citelist" => Some(Style::Data("literal list")),
         "citename" => Some(Style::Data("name list")),
@@ -65,6 +87,8 @@ pub(crate) enum Role {
     Format,
     Selector,
     Category,
+    SetKey,
+    Code(usize),
 }
 
 pub(crate) struct Field {
@@ -96,7 +120,7 @@ impl Arguments {
 }
 
 // A blank line supplies a paragraph token, rather than ignorable TeX spaces.
-fn space(source: &str, mut at: usize) -> usize {
+pub(crate) fn space(source: &str, mut at: usize) -> usize {
     let bytes = source.as_bytes();
     let mut newline = false;
     loop {
@@ -200,8 +224,25 @@ pub(crate) fn arguments(source: &str, end: usize, style: Style) -> Arguments {
         at = space(source, at + 1);
         result.end = at;
     }
-    if style.category_membership() {
-        for role in [Role::Category, Role::Keys] {
+    if style.single_key() {
+        for role in std::iter::once(Role::Keys).chain((0..style.context_codes()).map(Role::Code)) {
+            if source.as_bytes().get(at) != Some(&b'{') {
+                wait_for(source, end, at, &mut result, 1, role);
+                break;
+            }
+            if !push(source, &mut result, &mut at, b'{', 1, role) {
+                return result;
+            }
+        }
+        return result;
+    }
+    if style.category_membership() || style.set_definition() {
+        let name = if style.set_definition() {
+            Role::SetKey
+        } else {
+            Role::Category
+        };
+        for role in [name, Role::Keys] {
             if source.as_bytes().get(at) != Some(&b'{') {
                 wait_for(source, end, at, &mut result, 1, role);
                 break;
@@ -299,7 +340,13 @@ pub(crate) fn arguments(source: &str, end: usize, style: Style) -> Arguments {
 }
 
 pub(crate) fn prefix(source: &str, command: &Command, cursor: usize) -> Option<Range<usize>> {
-    let parsed = arguments(source, command.span.end, style(&command.name)?);
+    let style = style(&command.name)?;
+    if style.single_key() {
+        let (span, _) = single_key_context(source, command, cursor)?;
+        let prefix = source[span.start..cursor].trim_start();
+        return Some(cursor - prefix.len()..cursor);
+    }
+    let parsed = arguments(source, command.span.end, style);
     parsed.fields.iter().find_map(|field| {
         (field.role == Role::Keys)
             .then(|| {
@@ -307,9 +354,43 @@ pub(crate) fn prefix(source: &str, command: &Command, cursor: usize) -> Option<R
                     source,
                     field.argument.outer_span.start,
                     cursor,
-                    syntax::is_static_reference_key,
+                    syntax::is_static_citation_key,
                 )
             })
             .flatten()
+    })
+}
+
+pub(crate) fn key_spans(source: &str, argument: &Argument, style: Style) -> Vec<Range<usize>> {
+    if style.single_key() {
+        let argument = syntax::single_citation_argument(source, argument.clone());
+        if syntax::is_static_citation_key(&argument.value) {
+            vec![argument.span]
+        } else {
+            Vec::new()
+        }
+    } else {
+        syntax::citation_list_spans(source, argument.span.clone())
+    }
+}
+
+pub(crate) fn single_key_context(
+    source: &str,
+    command: &Command,
+    cursor: usize,
+) -> Option<(Range<usize>, Vec<Range<usize>>)> {
+    let style = style(&command.name).filter(|style| style.single_key())?;
+    let parsed = arguments(source, command.span.end, style);
+    let start = parsed.fields.first()?.argument.outer_span.start;
+    syntax::active_commented_name_argument(
+        source,
+        start,
+        b'{',
+        cursor,
+        true,
+        syntax::is_static_citation_key,
+    )
+    .or_else(|| {
+        syntax::active_citation_argument(source, start, b'{', cursor).map(|span| (span, Vec::new()))
     })
 }

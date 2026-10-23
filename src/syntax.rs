@@ -104,11 +104,23 @@ pub struct Syntax {
     /// Also retain control symbols and unfinished backslashes for completion;
     /// these positions need not correspond to an indexed command/definition.
     pub control_operands: std::collections::BTreeSet<usize>,
+    /// Literal braces and math shifts consumed by direct token inspection or
+    /// copying, rather than acting as grouping or formula delimiters.
+    pub(crate) punctuation_operands: std::collections::BTreeSet<usize>,
     pub labels: Vec<Entry>,
     pub anchors: Vec<Entry>,
     pub anchor_references: Vec<Entry>,
     pub citations: Vec<Entry>,
+    /// Static IDS secondary keys do not declare independent database entries.
+    pub(crate) bibliography_aliases: Vec<Entry>,
+    pub(crate) bibliography_alias_values: Vec<Argument>,
     pub citation_fields: Vec<CitationField>,
+    /// Complete BibTeX constructs, including special entries. Reuse the same
+    /// quote/brace/header boundaries for folding as for citation indexing.
+    pub(crate) bibliography_entries: Vec<(Range<usize>, bool)>,
+    pub(crate) bibliography_links: Vec<crate::bib_links::Link>,
+    pub(crate) bibliography_completion: crate::bib_completion::Index,
+    pub(crate) bibliography_strings: crate::bib_strings::Index,
     pub citation_references: Vec<Entry>,
     pub definitions: Vec<Entry>,
     pub environments: Vec<Entry>,
@@ -634,6 +646,10 @@ fn single_reference_argument(source: &str, argument: Argument) -> Argument {
     literal_key_argument(source, argument, is_static_reference_key)
 }
 
+pub(crate) fn single_citation_argument(source: &str, argument: Argument) -> Argument {
+    literal_key_argument(source, argument, is_static_citation_key)
+}
+
 fn literal_key_argument(source: &str, mut argument: Argument, valid: fn(&str) -> bool) -> Argument {
     if !argument.value.contains('%') {
         return argument;
@@ -835,6 +851,13 @@ pub(crate) fn reference_list_spans(source: &str, span: Range<usize>) -> Vec<Rang
     key_list_segments(source, span)
         .into_iter()
         .filter_map(|segment| key_list_name(source, segment, is_static_reference_key))
+        .collect()
+}
+
+pub(crate) fn citation_list_spans(source: &str, span: Range<usize>) -> Vec<Range<usize>> {
+    key_list_segments(source, span)
+        .into_iter()
+        .filter_map(|segment| key_list_name(source, segment, is_static_citation_key))
         .collect()
 }
 
@@ -1587,6 +1610,22 @@ pub(crate) fn active_reference_argument(
     )
 }
 
+pub(crate) fn active_citation_argument(
+    source: &str,
+    start: usize,
+    open: u8,
+    cursor: usize,
+) -> Option<Range<usize>> {
+    active_name_argument_mode(
+        source,
+        start,
+        open,
+        cursor,
+        open != b'[',
+        is_static_citation_key,
+    )
+}
+
 /// Complete a single key without deleting comments. Whitespace outside the
 /// literal name is removed separately, since accepting a name must not retain
 /// spaces that would make it refer to a different key.
@@ -1854,13 +1893,25 @@ pub fn is_citation(name: &str) -> bool {
         )
 }
 
-/// Inline entries and alias definitions name one key rather than a key list.
+/// Inline entries, aliases and data contexts name one key rather than a list.
 pub(crate) fn is_single_citation(name: &str) -> bool {
-    matches!(name, "bibentry" | "defcitealias")
+    matches!(
+        name,
+        "bibentry" | "defcitealias" | "entrydata" | "ifentryexists" | "ifentryinbib"
+    )
 }
 
 pub(crate) fn warns_on_undefined_citation(name: &str) -> bool {
-    is_citation(name) && !matches!(name, "defcitealias" | "addtocategory")
+    is_citation(name)
+        && !matches!(
+            name,
+            "defcitealias"
+                | "addtocategory"
+                | "defbibentryset"
+                | "entrydata"
+                | "ifentryexists"
+                | "ifentryinbib"
+        )
 }
 
 pub(crate) fn citation_accepts_star(name: &str) -> bool {
@@ -1885,7 +1936,15 @@ pub(crate) fn citation_accepts_notes(name: &str) -> bool {
     is_citation(name)
         && !matches!(
             name,
-            "nocite" | "citenum" | "bibentry" | "defcitealias" | "addtocategory"
+            "nocite"
+                | "citenum"
+                | "bibentry"
+                | "defcitealias"
+                | "addtocategory"
+                | "defbibentryset"
+                | "entrydata"
+                | "ifentryexists"
+                | "ifentryinbib"
         )
 }
 
@@ -2014,7 +2073,7 @@ impl Syntax {
         let mut environments = Vec::new();
         let mut literal_arguments = std::collections::BTreeMap::new();
         let mut control_operands = std::collections::BTreeSet::new();
-        let mut brace_operands = std::collections::BTreeSet::new();
+        let mut punctuation_operands = std::collections::BTreeSet::new();
         let mut assigned_controls = std::collections::BTreeSet::<String>::new();
         let mut conversion_arguments = std::collections::BTreeMap::new();
         let mut i = 0;
@@ -2044,7 +2103,7 @@ impl Syntax {
                 }
                 // A consumed brace token is data, not a group. Retain its
                 // position so later operands do not read it as an argument.
-                b'{' | b'}' if brace_operands.contains(&i) => {
+                b'{' | b'}' if punctuation_operands.contains(&i) => {
                     i += 1;
                 }
                 b'{' => {
@@ -2238,11 +2297,9 @@ impl Syntax {
                         .filter(|_| !(starred && loader_extension(name).is_some()))
                     };
                     let argument = parsed.as_ref().map(|(argument, _)| {
-                        if name == "label"
-                            || is_single_reference(name)
-                            || name == "bibitem"
-                            || is_single_citation(name)
-                        {
+                        if name == "bibitem" || is_single_citation(name) {
+                            single_citation_argument(source, argument.clone())
+                        } else if name == "label" || is_single_reference(name) {
                             single_reference_argument(source, argument.clone())
                         } else {
                             argument.clone()
@@ -2253,6 +2310,39 @@ impl Syntax {
                         span: start..command_end,
                         argument,
                     };
+                    if name == "newif" && operands_known {
+                        let operand = skip_space(source, command_end);
+                        if bytes.get(operand) == Some(&b'\\') {
+                            control_operands.insert(operand);
+                        }
+                        if let Some(target) = control_word(source, operand).filter(|span| {
+                            source[span.start + 1..span.end]
+                                .strip_prefix("if")
+                                .is_some_and(|name| !name.is_empty())
+                        }) {
+                            assigned_controls.insert(source[target.start + 1..target.end].into());
+                        }
+                    }
+                    if operands_known
+                        && matches!(name, "iffieldequals" | "iflistequals" | "ifnameequals")
+                    {
+                        // The second argument names a macro whose replacement
+                        // text is compared; that control token is not called.
+                        if let Some((_, end)) = group(
+                            source,
+                            crate::citations::space(source, command_end),
+                            b'{',
+                            b'}',
+                        ) {
+                            let mut operand = crate::citations::space(source, end);
+                            if bytes.get(operand) == Some(&b'{') {
+                                operand = crate::citations::space(source, operand + 1);
+                            }
+                            if bytes.get(operand) == Some(&b'\\') {
+                                control_operands.insert(operand);
+                            }
+                        }
+                    }
                     if operands_known
                         && matches!(name, "ifdefcounter" | "ifdeflength" | "ifdefdimen")
                     {
@@ -2270,21 +2360,37 @@ impl Syntax {
                         let operand = skip_space(source, command_end);
                         if bytes.get(operand) == Some(&b'\\') {
                             control_operands.insert(operand);
-                        } else if matches!(bytes.get(operand), Some(b'{' | b'}'))
+                        } else if matches!(bytes.get(operand), Some(b'{' | b'}' | b'$'))
                             && !result.commands.iter().any(|previous| {
                                 !control_operands.contains(&previous.span.start)
-                                    && !brace_operands
+                                    && !punctuation_operands
                                         .contains(&skip_space(source, previous.span.end))
                                     && crate::signature::reads_brace(source, previous, operand)
                             })
                         {
-                            brace_operands.insert(operand);
+                            punctuation_operands.insert(operand);
                         }
                     }
                     if let Some(style) = crate::citations::style(name) {
                         let arguments = crate::citations::arguments(source, command_end, style);
+                        if style.set_definition() && arguments.keys().next().is_some() {
+                            if let Some(field) =
+                                arguments.fields.first().filter(|field| field.complete)
+                            {
+                                let argument =
+                                    single_citation_argument(source, field.argument.clone());
+                                if is_static_citation_key(&argument.value) {
+                                    result.citations.push(Entry {
+                                        name: argument.value,
+                                        span: argument.span,
+                                        detail: "Dynamic bibliography set".into(),
+                                        is_variable: false,
+                                    });
+                                }
+                            }
+                        }
                         for argument in arguments.keys() {
-                            for span in reference_list_spans(source, argument.span.clone()) {
+                            for span in crate::citations::key_spans(source, argument, style) {
                                 result.citation_references.push(Entry {
                                     name: source[span.clone()].into(),
                                     span,
@@ -2462,15 +2568,15 @@ impl Syntax {
                             if bytes.get(operand) == Some(&b'\\') {
                                 control_operands.insert(operand);
                             } else if name == "let"
-                                && matches!(bytes.get(operand), Some(b'{' | b'}'))
+                                && matches!(bytes.get(operand), Some(b'{' | b'}' | b'$'))
                                 && !result.commands.iter().any(|previous| {
                                     !control_operands.contains(&previous.span.start)
-                                        && !brace_operands
+                                        && !punctuation_operands
                                             .contains(&skip_space(source, previous.span.end))
                                         && crate::signature::reads_brace(source, previous, operand)
                                 })
                             {
-                                brace_operands.insert(operand);
+                                punctuation_operands.insert(operand);
                             }
                         }
                     }
@@ -2517,7 +2623,7 @@ impl Syntax {
                             "label" if is_static_reference_key(&arg.value) => {
                                 result.labels.push(entry())
                             }
-                            "bibitem" if is_static_reference_key(&arg.value) => {
+                            "bibitem" if is_static_citation_key(&arg.value) => {
                                 result.citations.push(entry())
                             }
                             "begin" => {
@@ -2626,6 +2732,7 @@ impl Syntax {
             .fixes
             .extend(result.environment_fixes.iter().cloned());
         result.control_operands = control_operands;
+        result.punctuation_operands = punctuation_operands;
         for (index, commands) in result.commands.windows(3).enumerate() {
             let [expand, declaration, target] = commands else {
                 unreachable!()
@@ -2703,7 +2810,6 @@ impl Syntax {
                 while i < bytes.len() && bytes[i] != b'\n' {
                     i += 1;
                 }
-                result.ignored.push(start..i);
                 result.comments.push(start..i);
                 continue;
             }
@@ -2712,6 +2818,7 @@ impl Syntax {
                 continue;
             }
             let entry_start = i;
+            let comment_start = result.comments.len();
             i += 1;
             while bytes.get(i).is_some_and(u8::is_ascii_whitespace) {
                 i += 1;
@@ -2719,7 +2826,17 @@ impl Syntax {
             let kind_start = i;
             i = bib_identifier_end(source, i);
             let kind = &source[kind_start..i];
-            i = skip_space(source, i);
+            let kind_span = kind_start..i;
+            i = bib_space(source, i, &mut result.comments);
+            result
+                .bibliography_completion
+                .types
+                .push(crate::bib_completion::Type {
+                    span: kind_span,
+                    has_body: matches!(bytes.get(i), Some(b'{' | b'(')),
+                    entry_span: None,
+                    key: None,
+                });
             let Some(&open @ (b'{' | b'(')) = bytes.get(i) else {
                 continue;
             };
@@ -2732,16 +2849,46 @@ impl Syntax {
                     "comment" | "string" | "preamble"
                 );
             let header = (!special)
-                .then(|| bib_literal_header(source, content))
+                .then(|| bib_literal_header(source, content, close))
                 .flatten();
             // A proven literal header can contain parentheses, including the
-            // entry's closing delimiter. Start balancing after its comma.
+            // entry's closing delimiter. Start balancing after its comma,
+            // or at the final brace of a fieldless entry.
             // Unproven headers keep the conservative delimiter recovery.
-            let body_start = header.as_ref().map_or(content, |(_, comma)| comma + 1);
-            let (end, closed) = bib_entry_end(source, body_start, close);
+            let body_start = header.as_ref().map_or(content, |(_, delimiter)| {
+                delimiter + usize::from(bytes[*delimiter] == b',')
+            });
+            if header.is_some() {
+                bib_space(source, content, &mut result.comments);
+            }
+            let (end, closed) = bib_entry_end(source, body_start, close, &mut result.comments);
+            result
+                .bibliography_completion
+                .types
+                .last_mut()
+                .unwrap()
+                .entry_span = Some(entry_start..end);
+            if closed
+                && !kind.is_empty()
+                && !kind.as_bytes().first().is_some_and(u8::is_ascii_digit)
+            {
+                result
+                    .bibliography_entries
+                    .push((entry_start..end, kind.eq_ignore_ascii_case("comment")));
+            }
             if kind.eq_ignore_ascii_case("comment") {
-                result.ignored.push(entry_start..end);
+                result.comments.truncate(comment_start);
                 result.comments.push(entry_start..end);
+            }
+            let body_end = if closed { end - 1 } else { end };
+            if kind.eq_ignore_ascii_case("string") {
+                result
+                    .bibliography_strings
+                    .declaration(source, content, body_end, closed);
+            } else if kind.eq_ignore_ascii_case("preamble") {
+                result
+                    .bibliography_strings
+                    .preamble(source, content, body_end);
             }
             if !special {
                 let key_start = skip_space(source, content);
@@ -2751,9 +2898,19 @@ impl Syntax {
                 }
                 let (span, key_end) =
                     header.unwrap_or_else(|| (trimmed_span(source, key_start..key_end), key_end));
-                if !span.is_empty() && key_end < end && bytes.get(key_end) == Some(&b',') {
-                    let body_end = if closed { end - 1 } else { end };
-                    let metadata = result.bibliography_fields(source, key_end + 1, body_end);
+                let has_fields = key_end < end && bytes.get(key_end) == Some(&b',');
+                let empty_body = closed
+                    && open == b'{'
+                    && key_end == body_end
+                    && is_static_citation_key(&source[span.clone()]);
+                if !span.is_empty() && (has_fields || empty_body) {
+                    result.bibliography_completion.types.last_mut().unwrap().key =
+                        Some(span.clone());
+                    let metadata = if has_fields {
+                        result.bibliography_fields(source, key_end + 1, body_end, kind)
+                    } else {
+                        [None, None, None]
+                    };
                     let mut detail = format!("BibTeX {kind}");
                     for (label, value) in ["Title", "Author", "Year"].into_iter().zip(metadata) {
                         if let Some(value) = value {
@@ -2770,6 +2927,11 @@ impl Syntax {
             }
             i = end;
         }
+        result.ignored = result.comments.clone();
+        (
+            result.bibliography_aliases,
+            result.bibliography_alias_values,
+        ) = crate::bib_aliases::index(source, &result);
         result
     }
 
@@ -2778,31 +2940,72 @@ impl Syntax {
         source: &str,
         mut i: usize,
         end: usize,
+        kind: &str,
     ) -> [Option<String>; 3] {
         let bytes = source.as_bytes();
         let mut metadata = [None, None, None];
         let mut seen = [false; 3];
-        while i < end {
-            i = skip_space(source, i);
+        let mut links = std::collections::BTreeMap::new();
+        let mut completion = crate::bib_completion::Entry {
+            kind: kind.to_ascii_lowercase(),
+            ..Default::default()
+        };
+        while i <= end {
+            let gap_start = i;
+            i = skip_space(source, i).min(end);
+            completion.gaps.push(gap_start..i);
+            if i == end {
+                break;
+            }
             if bytes.get(i) == Some(&b',') {
                 i += 1;
                 continue;
             }
             let start = i;
-            while i < end && (bytes[i].is_ascii_alphanumeric() || matches!(bytes[i], b'_' | b'-')) {
-                i += 1;
-            }
-            if start == i {
+            i = bib_identifier_end(source, i).min(end);
+            if !crate::bib_strings::identifier(&source[start..i]) {
                 break;
             }
             let name = source[start..i].to_ascii_lowercase();
+            let span = start..i;
             i = skip_space(source, i);
+            completion.fields.push(crate::bib_completion::Field {
+                name: name.clone(),
+                range: span.clone(),
+                span,
+                assigned: bytes.get(i) == Some(&b'='),
+                value_valid: false,
+            });
             if bytes.get(i) != Some(&b'=') {
                 break;
             }
-            let start = skip_space(source, i + 1);
+            self.bibliography_strings.operator_spans.push(i..i + 1);
+            let value_start = i + 1;
+            let start = skip_space(source, value_start);
             let value_end = bib_value_end(source, start, end);
+            let field = completion.fields.last_mut().unwrap();
+            field.range.end =
+                field.span.start + source[field.span.start..value_end].trim_end().len();
+            field.value_valid =
+                self.bibliography_strings
+                    .expression(source, value_start, value_end);
+            self.bibliography_strings
+                .selection_spans
+                .push(field.span.start..value_end);
             i = value_end + 1;
+            if matches!(name.as_str(), "url" | "doi") {
+                match links.entry(name.clone()) {
+                    std::collections::btree_map::Entry::Vacant(entry) => {
+                        entry.insert(crate::bib_links::field(source, &name, start, value_end));
+                    }
+                    std::collections::btree_map::Entry::Occupied(mut entry) => {
+                        // Duplicate fields are ambiguous even when only one
+                        // of their values is a parseable literal link.
+                        entry.insert(None);
+                    }
+                }
+                continue;
+            }
             let metadata_index = match name.as_str() {
                 "title" => Some(0),
                 "author" => Some(1),
@@ -2829,7 +3032,7 @@ impl Syntax {
             };
             // Macro concatenations, escaped values and nested TeX groups cannot
             // be renamed safely without evaluating BibTeX's string language.
-            if argument.value.contains(['\\', '{', '}', '%', '#', '"']) {
+            if argument.value.contains(['\\', '{', '}', '%', '#']) {
                 continue;
             }
             let multiple = matches!(name.as_str(), "xdata" | "related" | "entryset");
@@ -2840,7 +3043,7 @@ impl Syntax {
                 vec![argument.value.as_str()]
             } {
                 let span = trimmed_span(source, offset..offset + key.len());
-                if !span.is_empty() {
+                if is_static_citation_key(&source[span.clone()]) {
                     self.citation_references.push(Entry {
                         name: source[span.clone()].into(),
                         span,
@@ -2852,6 +3055,9 @@ impl Syntax {
             }
             self.citation_fields.push(CitationField { name, argument });
         }
+        self.bibliography_links
+            .extend(links.into_values().flatten());
+        self.bibliography_completion.entries.push(completion);
         metadata
     }
 
@@ -2941,8 +3147,8 @@ fn environment_end(text: &Text, name: &str) -> TextEdit {
 }
 
 /// BibTeX identifiers are byte tokens. Punctuation and non-ASCII bytes
-/// belong to a type name; a leading ASCII digit is rejected by the caller.
-fn bib_identifier_end(source: &str, start: usize) -> usize {
+/// belong to the name; a leading ASCII digit is rejected by the caller.
+pub(crate) fn bib_identifier_end(source: &str, start: usize) -> usize {
     let bytes = source.as_bytes();
     let mut end = start;
     while let Some(&byte) = bytes.get(end) {
@@ -2960,16 +3166,17 @@ fn bib_identifier_end(source: &str, start: usize) -> usize {
     end
 }
 
-/// Prove a contiguous literal key followed only by whitespace and a comma.
+/// Prove a literal key followed only by whitespace and a comma, or the final
+/// brace of a fieldless entry. BibTeX requires a comma for parenthesized entries.
 /// A closing parenthesis may belong to the key; a line break may separate it
 /// from the comma. Never cross another token, group or comment to find it.
-fn bib_literal_header(source: &str, content: usize) -> Option<(Range<usize>, usize)> {
+fn bib_literal_header(source: &str, content: usize, close: u8) -> Option<(Range<usize>, usize)> {
     let start = skip_space(source, content);
     let end = source[start..]
         .find(|ch: char| ch.is_ascii_whitespace() || matches!(ch, ',' | '{' | '}'))
         .map(|offset| start + offset)?;
     let span = trimmed_span(source, start..end);
-    if !is_static_reference_key(&source[span.clone()]) {
+    if !is_static_citation_key(&source[span.clone()]) {
         return None;
     }
     let bytes = source.as_bytes();
@@ -2977,10 +3184,40 @@ fn bib_literal_header(source: &str, content: usize) -> Option<(Range<usize>, usi
     while bytes.get(comma).is_some_and(u8::is_ascii_whitespace) {
         comma += 1;
     }
-    (bytes.get(comma) == Some(&b',')).then_some((span, comma))
+    (bytes.get(comma) == Some(&b',') || close == b'}' && bytes.get(comma) == Some(&b'}'))
+        .then_some((span, comma))
 }
 
-fn bib_entry_end(source: &str, start: usize, close: u8) -> (usize, bool) {
+/// Literal citation keys also allow quotes. Keep label and general identifier
+/// validation separate, while sharing the remaining static-name restrictions.
+pub(crate) fn is_static_citation_key(key: &str) -> bool {
+    !key.is_empty()
+        && key
+            .split('"')
+            .filter(|part| !part.is_empty())
+            .all(is_static_reference_key)
+}
+
+/// Record only the comments consumed as whitespace, never literal contents.
+fn bib_space(source: &str, start: usize, comments: &mut Vec<Range<usize>>) -> usize {
+    let end = skip_space(source, start);
+    let mut at = start;
+    while let Some(offset) = source[at..end].find('%') {
+        let begin = at + offset;
+        at = source[begin..end]
+            .find('\n')
+            .map_or(end, |offset| begin + offset);
+        comments.push(begin..at);
+    }
+    end
+}
+
+fn bib_entry_end(
+    source: &str,
+    start: usize,
+    close: u8,
+    comments: &mut Vec<Range<usize>>,
+) -> (usize, bool) {
     let bytes = source.as_bytes();
     let mut depth = 0u32;
     let mut quoted = false;
@@ -2992,9 +3229,11 @@ fn bib_entry_end(source: &str, start: usize, close: u8) -> (usize, bool) {
                 continue;
             }
             b'%' if depth == 0 && !quoted => {
+                let start = i;
                 while i < bytes.len() && bytes[i] != b'\n' {
                     i += 1;
                 }
+                comments.push(start..i);
                 continue;
             }
             b'"' if depth == 0 => quoted = !quoted,
@@ -3008,7 +3247,7 @@ fn bib_entry_end(source: &str, start: usize, close: u8) -> (usize, bool) {
     (bytes.len(), false)
 }
 
-fn bib_value_end(source: &str, start: usize, end: usize) -> usize {
+pub(crate) fn bib_value_end(source: &str, start: usize, end: usize) -> usize {
     let bytes = source.as_bytes();
     let mut depth = 0usize;
     let mut quoted = false;
@@ -3040,7 +3279,7 @@ fn bib_literal(source: &str, start: usize, end: usize) -> Option<Argument> {
     bib_literal_mode(source, start, end, true)
 }
 
-fn bib_literal_mode(
+pub(crate) fn bib_literal_mode(
     source: &str,
     start: usize,
     end: usize,
