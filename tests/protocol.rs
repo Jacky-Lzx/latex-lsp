@@ -27117,3 +27117,64 @@ fn command_extraction_reserves_project_names_and_revalidates_deferred_collisions
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+fn structural_refactors_track_math_groups_and_unsaved_wrapper_meanings_over_stdio() {
+    use latex_lsp::text::Text;
+    let dir = tempfile::tempdir().unwrap();
+    let uri = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let macros = Url::from_file_path(dir.path().join("macros.tex")).unwrap();
+    std::fs::write(macros.to_file_path().unwrap(), "").unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{"textDocument":{"codeAction":{"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["refactor"]}},"dataSupport":true,"resolveSupport":{"properties":["edit"]}}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    let mut id = 2;
+    for (index, (before, after, expected)) in [
+        ("$$", "$$", 0),
+        (r"\begingroup", r"\endgroup", 0),
+        (r"\csuse{begin}{quote}", r"\csuse{end}{quote}", 0),
+        (r"$$x$$ ", "", 4),
+        (r"\begingroup text\endgroup ", "", 4),
+        (r"\csuse{begin}{quote}text\csuse{end}{quote} ", "", 4),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let source = format!("\\documentclass{{article}}\r\n\\input{{macros}}\r\n\\begin{{document}}\r\n😀 {before}Body text{after}\r\n\\end{{document}}");
+        if index == 0 {
+            server.notify(
+                "textDocument/didOpen",
+                json!({"textDocument":{"uri":uri,"languageId":"latex","version":1,"text":source}}),
+            );
+        } else {
+            server.notify("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":index+1},"contentChanges":[{"text":source}]}));
+        }
+        let at = source.find("Body text").unwrap();
+        let range = Text::new(source).range(at, at + "Body text".len());
+        let params = json!({"textDocument":{"uri":uri},"range":range,"context":{"diagnostics":[],"only":["refactor"]}});
+        let actions = server.request(id, "textDocument/codeAction", params.clone());
+        id += 1;
+        assert_eq!(actions.as_array().unwrap().len(), expected, "{before}");
+        if index == 5 {
+            server.notify("textDocument/didOpen", json!({"textDocument":{"uri":macros,"languageId":"latex","version":1,"text":"\\renewcommand{\\emph}[2]{#1:#2}\\renewenvironment{quote}{}{}\\def\\newcommand{}"}}));
+            server.send(
+                json!({"jsonrpc":"2.0","id":id,"method":"codeAction/resolve","params":actions[0]}),
+            );
+            assert_eq!(
+                server.until(|message| message["id"] == id)["error"]["code"],
+                -32801
+            );
+            id += 1;
+            let updated = server.request(id, "textDocument/codeAction", params);
+            id += 1;
+            assert_eq!(updated.as_array().unwrap().len(), 1, "{updated}");
+            assert_eq!(updated[0]["title"], "Wrap selection in \\textbf");
+            let resolved = server.request(id, "codeAction/resolve", updated[0].clone());
+            id += 1;
+            assert!(resolved.get("edit").is_some());
+        }
+    }
+    server.request(id, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

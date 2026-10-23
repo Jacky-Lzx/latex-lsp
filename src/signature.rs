@@ -3696,6 +3696,8 @@ fn argument_free(name: &str) -> bool {
     matches!(
         name,
         "relax"
+            | "ExplSyntaxOn"
+            | "ExplSyntaxOff"
             | "noindent"
             | "indent"
             | "normalfont"

@@ -98,7 +98,11 @@ fn fix_all(ws: &Workspace, uri: &Url, doc: &Document) -> Option<CodeAction> {
 
 /// Only plain text and complete, known inline text commands at top level.
 /// Reject partially selected arguments, formulae, comments and special catcodes.
-fn selection(doc: &Document, range: Range) -> Option<(usize, usize, Option<usize>)> {
+fn selection(
+    doc: &Document,
+    range: Range,
+    signatures: &crate::signature::CommandSignatures<'_>,
+) -> Option<(usize, usize, Option<usize>)> {
     if doc.kind != DocumentKind::Latex {
         return None;
     }
@@ -120,16 +124,36 @@ fn selection(doc: &Document, range: Range) -> Option<(usize, usize, Option<usize
     {
         return None;
     }
-    let begin = doc.syntax.commands.iter().find(|cmd| {
-        cmd.name == "begin"
-            && cmd
+    if !signatures.environment_primitives_unchanged()
+        || ["(", ")", "[", "]"]
+            .iter()
+            .any(|name| !signatures.command_unchanged(name))
+    {
+        return None;
+    }
+    let operands = signatures.argument_tokens(source, &doc.syntax);
+    let declarations = doc
+        .syntax
+        .definitions
+        .iter()
+        .map(|entry| (entry.span.start, entry.span.end))
+        .collect();
+    let boundaries = signatures.environment_boundaries(source, &doc.syntax);
+    let boundaries: BTreeMap<_, _> = boundaries
+        .iter()
+        .filter(|boundary| !boundary.operand && !boundary.deferred)
+        .map(|boundary| (boundary.span.start, boundary))
+        .collect();
+    let begin = boundaries.values().find(|boundary| {
+        boundary.begin
+            && boundary
                 .argument
                 .as_ref()
                 .is_some_and(|arg| arg.value == "document")
     });
-    let insertion = begin.map(|cmd| cmd.span.start);
+    let insertion = begin.map(|boundary| boundary.span.start);
     if let Some(begin) = begin {
-        if start < begin.argument.as_ref()?.outer_span.end {
+        if start < begin.span.end {
             return None;
         }
     } else if doc
@@ -140,14 +164,37 @@ fn selection(doc: &Document, range: Range) -> Option<(usize, usize, Option<usize
     {
         return None;
     }
+    #[derive(Clone, Copy, PartialEq)]
+    enum Math {
+        Inline,
+        Display,
+    }
     let mut depth = 0i32;
-    let mut math = false;
+    let mut math = None;
     let mut environments = Vec::new();
     let mut expl_mode = false;
+    // begingroup/endgroup pairs cannot close a simple brace/bgroup frame.
     let mut group_modes = Vec::new();
     let deferred = crate::expl3::occurrences(doc).bodies;
+    let mut opaque: Vec<_> = doc
+        .syntax
+        .ignored
+        .iter()
+        .chain(&doc.syntax.literal_conversions)
+        .chain(&doc.syntax.literal_tests)
+        .chain(&doc.syntax.ambiguous_string_tests)
+        .cloned()
+        .collect();
+    opaque.extend(crate::expl3::math_data_spans(doc));
+    if opaque
+        .iter()
+        .any(|span| span.start < end && start < span.end)
+    {
+        return None;
+    }
     let mut at = 0;
     let bytes = source.as_bytes();
+    let mut math_work = 0usize;
     while at < start {
         if let Some(body) = deferred.iter().find(|body| body.contains(&at)) {
             if body.end > start {
@@ -156,82 +203,150 @@ fn selection(doc: &Document, range: Range) -> Option<(usize, usize, Option<usize
             at = body.end;
             continue;
         }
-        if let Some(ignored) = doc.syntax.ignored.iter().find(|span| span.contains(&at)) {
+        if let Some(ignored) = opaque.iter().find(|span| span.contains(&at)) {
             at = ignored.end;
             continue;
         }
+        if let Some(boundary) = boundaries.get(&at) {
+            let argument = boundary.argument.as_ref()?;
+            if boundary.span.end > start {
+                return None;
+            }
+            if boundary.begin {
+                environments.push(argument.value.as_str());
+            } else if environments.pop() != Some(argument.value.as_str()) {
+                return None;
+            }
+            at = boundary.span.end;
+            continue;
+        }
         if bytes[at] == b'\\' {
-            if let Some(cmd) = doc.syntax.commands.iter().find(|cmd| cmd.span.start == at) {
-                if matches!(
-                    cmd.name.as_str(),
-                    "catcode" | "verb" | "lstinline" | "mintinline"
-                ) {
-                    return None;
-                }
-                if matches!(
-                    cmd.name.as_str(),
-                    "ExplSyntaxOn"
-                        | "ProvidesExplPackage"
-                        | "ProvidesExplClass"
-                        | "ProvidesExplFile"
-                ) {
-                    expl_mode = true;
-                }
-                if cmd.name == "ExplSyntaxOff" {
-                    expl_mode = false;
-                }
-                if matches!(cmd.name.as_str(), "(" | "[" | ")" | "]") {
-                    math = matches!(cmd.name.as_str(), "(" | "[");
-                }
-                if matches!(cmd.name.as_str(), "begin" | "end") {
-                    if let Some(arg) = &cmd.argument {
-                        if cmd.name == "begin" {
-                            environments.push(arg.value.as_str());
-                        } else if environments.pop() != Some(arg.value.as_str()) {
-                            return None;
-                        }
-                    }
-                }
-                if cmd.span.end > start {
-                    return None;
-                }
-                at = cmd.span.end;
+            let token = syntax::token(source, at)?;
+            let mut next = at + token.len();
+            if doc.syntax.control_operands.contains(&at) || operands.contains(&at) {
+                at = next;
                 continue;
             }
-            // Control symbols are not all retained in the command index.
-            let next = source[at + 1..].chars().next()?;
-            if matches!(next, '(' | '[') {
-                math = true;
+            let index = doc
+                .syntax
+                .commands
+                .binary_search_by_key(&at, |cmd| cmd.span.start)
+                .ok();
+            let invocation = index.and_then(|index| {
+                signatures.named_invocation(source, &doc.syntax, index, &operands, &declarations)
+            });
+            let name = if let Some((name, span)) = invocation {
+                next = span.end;
+                name
+            } else {
+                token.strip_prefix('\\')?
+            };
+            if next > start {
+                return None;
             }
-            if matches!(next, ')' | ']') {
-                math = false;
+            if matches!(name, "catcode" | "verb" | "lstinline" | "mintinline") {
+                return None;
             }
-            at += 1 + next.len_utf8();
+            if matches!(
+                name,
+                "ExplSyntaxOn" | "ProvidesExplPackage" | "ProvidesExplClass" | "ProvidesExplFile"
+            ) {
+                if !signatures.command_unchanged(name) {
+                    return None;
+                }
+                expl_mode = true;
+            }
+            if name == "ExplSyntaxOff" {
+                if !signatures.command_unchanged(name) {
+                    return None;
+                }
+                expl_mode = false;
+            }
+            let invokes = |builtin| signatures.invokes_builtin(name, builtin);
+            if invokes("begingroup") || invokes("bgroup") {
+                depth += 1;
+                group_modes.push((invokes("begingroup"), expl_mode));
+            } else if invokes("endgroup") || invokes("egroup") {
+                let (semi_simple, previous) = group_modes.pop()?;
+                if semi_simple != invokes("endgroup") {
+                    return None;
+                }
+                depth -= 1;
+                expl_mode = previous;
+            }
+            if matches!(name, "(" | "[" | ")" | "]") {
+                let mode = if matches!(name, "(" | ")") {
+                    Math::Inline
+                } else {
+                    Math::Display
+                };
+                if matches!(name, "(" | "[") {
+                    if math.is_some() {
+                        return None;
+                    }
+                    math = Some(mode);
+                } else if math.take() != Some(mode) {
+                    return None;
+                }
+            }
+            at = next;
+            continue;
+        }
+        if doc.syntax.punctuation_operands.contains(&at) {
+            at += 1;
             continue;
         }
         match bytes[at] {
             b'{' => {
                 depth += 1;
-                group_modes.push(expl_mode);
+                group_modes.push((false, expl_mode));
             }
             b'}' => {
-                depth -= 1;
-                if let Some(previous) = group_modes.pop() {
-                    expl_mode = previous;
+                let (semi_simple, previous) = group_modes.pop()?;
+                if semi_simple {
+                    return None;
                 }
+                depth -= 1;
+                expl_mode = previous;
             }
-            b'$' => math = !math,
+            b'$' => {
+                // Bound repeated argument queries for punctuation in large files.
+                math_work = math_work.checked_add(doc.syntax.commands.len().max(1))?;
+                if math_work > 4_000_000 {
+                    return None;
+                }
+                if signatures.literal_is_argument(source, &doc.syntax, at) {
+                    at += 1;
+                    continue;
+                }
+                let width = if bytes.get(at + 1) == Some(&b'$') {
+                    2
+                } else {
+                    1
+                };
+                let mode = if width == 2 {
+                    Math::Display
+                } else {
+                    Math::Inline
+                };
+                if math == Some(mode) {
+                    math = None;
+                } else if math.is_some() {
+                    return None;
+                } else {
+                    math = Some(mode);
+                }
+                at += width;
+                continue;
+            }
             _ => {}
-        }
-        if depth < 0 {
-            return None;
         }
         at += 1;
     }
     if (begin.is_some() && !environments.contains(&"document"))
         || at != start
         || depth != 0
-        || math
+        || math.is_some()
         || expl_mode
         || environments.iter().any(|name| *name != "document")
     {
@@ -242,7 +357,7 @@ fn selection(doc: &Document, range: Range) -> Option<(usize, usize, Option<usize
     while at < end {
         if bytes[at] == b'\\' {
             if let Some(cmd) = doc.syntax.commands.iter().find(|cmd| cmd.span.start == at) {
-                if cmd.span.end > end {
+                if cmd.span.end > end || !signatures.command_unchanged(&cmd.name) {
                     return None;
                 }
                 match cmd.name.as_str() {
@@ -297,12 +412,17 @@ pub(crate) fn actions(
             result.push(action);
         }
     }
-    if !context.diagnostics.is_empty() {
+    if !context.diagnostics.is_empty()
+        || !allows(context, &CodeActionKind::REFACTOR_REWRITE)
+            && !allows(context, &CodeActionKind::REFACTOR_EXTRACT)
+        || doc
+            .text
+            .offset(range.start)
+            .zip(doc.text.offset(range.end))
+            .is_none_or(|(start, end)| start >= end || end - start > 65536)
+    {
         return result;
     }
-    let Some((start, end, insertion)) = selection(doc, range) else {
-        return result;
-    };
     let scope = ws.symbol_scope(uri);
     let documents: Vec<_> = ws
         .documents
@@ -334,6 +454,9 @@ pub(crate) fn actions(
             .iter()
             .map(|doc| (doc.text.source.as_str(), &doc.syntax)),
     );
+    let Some((start, end, insertion)) = selection(doc, range, &signatures) else {
+        return result;
+    };
     let anchor = syntax::skip_space(&doc.text.source, start);
     if signatures.is_parameter_token(&doc.text.source, &doc.syntax, start)
         || anchor < end
@@ -344,13 +467,19 @@ pub(crate) fn actions(
     }
     let selected = &doc.text.source[start..end];
     if allows(context, &CodeActionKind::REFACTOR_REWRITE) {
-        for (title, replacement) in [
-            ("Wrap selection in \\emph", format!("\\emph{{{selected}}}")),
+        for (name, title, replacement) in [
             (
+                "emph",
+                "Wrap selection in \\emph",
+                format!("\\emph{{{selected}}}"),
+            ),
+            (
+                "textbf",
                 "Wrap selection in \\textbf",
                 format!("\\textbf{{{selected}}}"),
             ),
             (
+                "quote",
                 "Wrap selection in quote environment",
                 format!(
                     "\\begin{{quote}}{}{selected}{}\\end{{quote}}",
@@ -359,6 +488,11 @@ pub(crate) fn actions(
                 ),
             ),
         ] {
+            if !signatures.command_unchanged(name)
+                || name == "quote" && !signatures.command_unchanged("endquote")
+            {
+                continue;
+            }
             result.push(action(
                 ws,
                 uri,
@@ -371,7 +505,9 @@ pub(crate) fn actions(
             ));
         }
     }
-    if allows(context, &CodeActionKind::REFACTOR_EXTRACT) {
+    if allows(context, &CodeActionKind::REFACTOR_EXTRACT)
+        && signatures.command_unchanged("newcommand")
+    {
         if let Some(insertion) = insertion {
             let mut used = BTreeSet::new();
             for document in &documents {

@@ -281,8 +281,8 @@ fn extraction_reserves_named_declared_generated_and_static_invocation_names() {
         r"\newenvironment{extractedcommand}{}{}",
         r"\NewDocumentEnvironment{extractedcommand}{}{}{}",
         r"\newtheorem{extractedcommand}{Theorem}",
-        r"\csuse{extractedcommand}",
-        r"\csname extractedcommand\endcsname",
+        r"\newcommand{\later}{\csuse{extractedcommand}}",
+        r"\newcommand{\later}{\csname extractedcommand\endcsname}",
         r"\begin{extractedcommand}\end{extractedcommand}",
         r"\def\open{\begin}\def\close{\end}\open{extractedcommand}\close{extractedcommand}",
     ] {
@@ -363,5 +363,117 @@ fn real_extractions_preserve_existing_named_macros_and_environment_commands() {
             );
         }
         assert_eq!(meanings[0], meanings[1]);
+    }
+}
+
+#[test]
+fn mathematical_group_and_named_environment_contexts_do_not_offer_structural_refactors() {
+    for source in [
+        r"\begin{document}$$¦math text¦$$\end{document}",
+        r"\begin{document}\[¦math text¦\]\end{document}",
+        r"\begin{document}\begingroup¦group text¦\endgroup\end{document}",
+        r"\begin{document}\bgroup¦group text¦\egroup\end{document}",
+        r"\begin{document}\csuse{begingroup}¦group text¦\csuse{endgroup}\end{document}",
+        r"\def\open{\begingroup}\begin{document}\open¦group text¦\endgroup\end{document}",
+        r"\begin{document}\csuse{begin}{quote}¦quote text¦\csuse{end}{quote}\end{document}",
+        r"\begin{document}\csname begin\endcsname{quote}¦quote text¦\csname end\endcsname{quote}\end{document}",
+        r"\def\open{\begin}\begin{document}\open{quote}¦quote text¦\end{quote}\end{document}",
+        r"\renewcommand{\emph}[2]{#1:#2}\begin{document}¦\emph{Hello}¦{world}\end{document}",
+        r"\def\begin#1{}\begin{document}¦body text¦\end{document}",
+        r"\begin{document}\begingroup}¦text¦\end{document}",
+        r"\begin{document}\bgroup\endgroup¦text¦\end{document}",
+        r"\begin{document}$$bad$ ¦text¦\end{document}",
+    ] {
+        let (ws, uri, range, context) = setup(source, CodeActionKind::REFACTOR);
+        assert!(
+            editing::code_actions(&ws, &uri, range, &context).is_empty(),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn completed_structures_and_literal_data_keep_later_plain_text_refactorable() {
+    for source in [
+        r"\begin{document}$$math$$ ¦body text¦\end{document}",
+        r"\begin{document}$math$ ¦body text¦\end{document}",
+        r"\begin{document}\[math\] ¦body text¦\end{document}",
+        r"\begin{document}\begingroup group\endgroup ¦body text¦\end{document}",
+        r"\begin{document}\bgroup group} ¦body text¦\end{document}",
+        r"\begin{document}{group\egroup ¦body text¦\end{document}",
+        r"\begin{document}\csuse{begingroup}group\csname endgroup\endcsname ¦body text¦\end{document}",
+        r"\begin{document}\csuse{begin}{quote}quote\csuse{end}{quote} ¦body text¦\end{document}",
+        r"\newcommand{\take}[1][]{}\begin{document}\take[$] ¦body text¦\end{document}",
+        r"\newcommand{\take}[1][$]{}\begin{document}¦body text¦\end{document}",
+        r"\newcommand{\later}{\begingroup$\begin{quote}}\begin{document}¦body text¦\end{document}",
+        r"\begin{document}\noexpand\begingroup ¦body text¦\end{document}",
+        r"\begin{document}\meaning\begingroup ¦body text¦\end{document}",
+        r"\begin{document}\let\mark=$ ¦body text¦\end{document}",
+        r"\begin{document}\let\mark=\begingroup ¦body text¦\end{document}",
+    ] {
+        let (ws, uri, range, context) = setup(source, CodeActionKind::REFACTOR);
+        assert_eq!(
+            editing::code_actions(&ws, &uri, range, &context).len(),
+            4,
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn redefined_wrapper_commands_only_suppress_actions_that_need_their_builtin_meanings() {
+    for (declaration, missing) in [
+        (
+            r"\renewcommand{\emph}[2]{#1:#2}",
+            "Wrap selection in \\emph",
+        ),
+        (
+            r"\renewcommand{\textbf}[2]{#1:#2}",
+            "Wrap selection in \\textbf",
+        ),
+        (
+            r"\renewenvironment{quote}{}{}",
+            "Wrap selection in quote environment",
+        ),
+        (r"\def\newcommand{}", "Extract selection into a new command"),
+    ] {
+        let source = format!("{declaration}\\begin{{document}}¦body text¦\\end{{document}}");
+        let (ws, uri, range, context) = setup(&source, CodeActionKind::REFACTOR);
+        let actions = editing::code_actions(&ws, &uri, range, &context);
+        assert_eq!(actions.len(), 3, "{source}: {actions:?}");
+        assert!(!actions.iter().any(|action| matches!(action, CodeActionOrCommand::CodeAction(action) if action.title == missing)));
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex and etoolbox"]
+fn real_refactors_after_balanced_math_groups_and_named_environments_compile() {
+    let marked = "\\documentclass{article}\n\\usepackage{etoolbox}\n\\begin{document}\n$$x$$\n\\begingroup grouped text\\endgroup\n\\csuse{begin}{quote}quoted text\\csuse{end}{quote}\n¦Hello world¦\n\\end{document}";
+    let (ws, uri, range, context) = setup(marked, CodeActionKind::REFACTOR);
+    let actions = editing::code_actions(&ws, &uri, range, &context);
+    assert_eq!(actions.len(), 4);
+    let dir = tempfile::tempdir().unwrap();
+    for action in &actions {
+        let CodeActionOrCommand::CodeAction(action) = action else {
+            panic!()
+        };
+        let result = changed(&ws, &uri, &actions, &action.title);
+        std::fs::write(dir.path().join("main.tex"), result).unwrap();
+        let output = std::process::Command::new("pdflatex")
+            .args([
+                "-no-shell-escape",
+                "-interaction=nonstopmode",
+                "-halt-on-error",
+                "main.tex",
+            ])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}: {}",
+            action.title,
+            String::from_utf8_lossy(&output.stdout)
+        );
     }
 }
