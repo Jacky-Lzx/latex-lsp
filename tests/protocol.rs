@@ -1732,6 +1732,136 @@ fn bibliography_alias_symbols_negotiate_hierarchy_refresh_search_and_restore_dis
 
 #[test]
 #[cfg(unix)]
+fn biber_nameparts_refresh_literal_macro_and_key_ranges_and_clear_over_push_and_pull() {
+    for pull in [false, true] {
+        let script = r#"cp "${2%/*}/fixture.blg" "$1/main.blg"
+printf '%%PDF-1.4\n' > "$1/main.pdf"
+printf '(./main.tex)\n' > "$1/main.log"
+printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main.fls"
+"#;
+        let capabilities = if pull {
+            json!({"textDocument":{"diagnostic":{}}})
+        } else {
+            json!({})
+        };
+        let (mut server, directory, main) =
+            fake_build_server_capabilities(script, false, capabilities);
+        let root = directory.path();
+        let refs = Url::from_file_path(root.join("refs.data")).unwrap();
+        let main_source = "\\documentclass{article}\n\\addbibresource{refs.data}\n";
+        std::fs::write(main.to_file_path().unwrap(), main_source).unwrap();
+        server.notify("textDocument/didChange",json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":main_source}]}));
+        let body = "family=Doe, given=Jane, bogus=Extra";
+        let mut current = format!("% 😀\r\n@book{{café😀,TRANſLATOR={{{body}}}}}\r\n");
+        std::fs::write(refs.to_file_path().unwrap(), &current).unwrap();
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":refs,"languageId":"bibtex","version":7,"text":current}}),
+        );
+        let message="Invalid namepart 'bogus' found in extended name format name 'translator' in entry 'café😀', ignoring";
+        for stage in 0..5 {
+            let changes = if stage == 1 {
+                let range = latex_lsp::text::Text::new(current.clone()).range(0, 0);
+                current.insert_str(0, "% moved 😀\r\n");
+                vec![json!({"range":range,"text":"% moved 😀\r\n"})]
+            } else if stage == 2 {
+                current =
+                    format!("@string{{names={{{body}}}}}\r\n@book{{café😀,TRANſLATOR=names}}\r\n");
+                vec![json!({"text":current})]
+            } else if stage == 3 {
+                current = current.replace("TRANſLATOR", "note");
+                vec![json!({"text":current})]
+            } else if stage == 4 {
+                current = "@book{café😀,translator={family=Doe, given=Jane}}\r\n".into();
+                vec![json!({"text":current})]
+            } else {
+                vec![]
+            };
+            if !changes.is_empty() {
+                std::fs::write(refs.to_file_path().unwrap(), &current).unwrap();
+                server.notify(
+                    "textDocument/didChange",
+                    json!({"textDocument":{"uri":refs,"version":7+stage},"contentChanges":changes}),
+                );
+                server.notify("textDocument/didSave", json!({"textDocument":{"uri":refs}}));
+            }
+            let log = if stage < 4 {
+                format!("INFO - Found BibTeX data source 'refs.data'\nWARN - {message}\n")
+            } else {
+                "INFO - Found BibTeX data source 'refs.data'\n".into()
+            };
+            std::fs::write(root.join("fixture.blg"), log).unwrap();
+            server.request(
+                2 + stage * 3,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            let finished = server.until(|item| item["method"] == "latex/buildFinished");
+            assert_eq!(finished["params"]["status"], "success");
+            let matches = |items: &[Value]| {
+                items
+                    .iter()
+                    .filter(|item| item["code"] == "invalid-bibliography-namepart")
+                    .count()
+                    == if stage < 4 { 1 } else { 0 }
+            };
+            let items = if pull {
+                server.request(
+                    3 + stage * 3,
+                    "textDocument/diagnostic",
+                    json!({"textDocument":{"uri":refs}}),
+                )["items"]
+                    .clone()
+            } else {
+                server.until(|item| {
+                    item["method"] == "textDocument/publishDiagnostics"
+                        && item["params"]["uri"] == refs.as_str()
+                        && item["params"]["diagnostics"]
+                            .as_array()
+                            .is_some_and(|items| matches(items))
+                })["params"]["diagnostics"]
+                    .clone()
+            };
+            assert!(matches(items.as_array().unwrap()), "{stage}: {items}");
+            if stage == 4 {
+                continue;
+            }
+            let item = items
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|item| item["code"] == "invalid-bibliography-namepart")
+                .unwrap();
+            let (start, marker) = if stage < 2 {
+                (current.find(body).unwrap(), body)
+            } else if stage == 2 {
+                (current.rfind("names}").unwrap(), "names")
+            } else {
+                (current.find("café😀").unwrap(), "café😀")
+            };
+            let expected =
+                latex_lsp::text::Text::new(current.clone()).range(start, start + marker.len());
+            assert_eq!(item["range"], json!(expected));
+            assert_eq!(item["severity"], 2);
+            assert_eq!(item["message"], format!("Biber: {message}"));
+            let mut data = json!({"key":"café😀","field":"translator","namepart":"bogus"});
+            if stage == 3 {
+                data["unresolvedField"] = true.into();
+            }
+            assert_eq!(item["data"], data);
+            assert_eq!(server.request(4+stage*3,"textDocument/codeAction",json!({"textDocument":{"uri":refs},"range":expected,"context":{"diagnostics":[item],"only":["quickfix"]}})),json!([]));
+        }
+        server.request(30, "shutdown", Value::Null);
+        if pull {
+            assert_no_pushed_diagnostics(&server);
+        }
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
 fn bibliography_dynamic_sets_refresh_declarations_and_independent_renames_over_stdio() {
     for versioned in [false, true] {
         let directory = tempfile::tempdir().unwrap();

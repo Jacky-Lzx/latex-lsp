@@ -40,6 +40,19 @@ LSP 编译结果也会定位静态命名调用和纯别名中的缺失文献库�
 
 默认 latexmk 确认数据库缺失并跳过 BibTeX 时，服务器也会产生 `missing-bibliography-database` 警告，提供相同的精确定位和修复。编译继续遵守 latexmk 的策略及现有输入一致性检查，预生成 `.bbl` 的项目仍可生成 PDF。警告只采纳本次最后一次目标日志检查后的完整驱动列表，已有的原生 BibTeX 错误优先；没有输出新列表的空操作编译不会新增缺库警告。其他可执行程序、不同作业日志、不完整或截断的输出不进入这项解析。
 
+## Biber 扩展姓名组成部分
+
+Biber 的完整 `Invalid namepart 'part' found in extended name format name 'field' in entry 'key', ignoring` 警告使用 `invalid-bibliography-namepart`。例如 `author={family=Doe, given=Jane, bogus=Extra}` 中的 `bogus` 可由工具报告为未知组成部分；有效名称由实际 Biber 数据模型决定，服务器不静态否定自定义姓名部分。
+
+诊断保留原生 `namepart`、所属键及模型字段名，定位到完整原始字段值。字面值使用内部范围，空值保留定界符，字符串宏和拼接表达式使用整个右值。Biber 可能已展开或转换姓名，因此不从日志猜测某个原始词的位置，也不自动重写姓名或数据模型。
+
+字段匹配使用 Biber 的完整 Unicode 折叠，例如 `TRANſLATOR` 对应 `translator`。字段缺失、重复、模型名碰撞或条目不完整时回退到唯一条目键；所有此前输入均可读且所属键按规范分解后唯一时才定位数据库。来源历史失效、键歧义及缓存超限时保留主文档诊断。保存后重新编译更新位置，修复后清除 push/pull 诊断。
+
+```sh
+cargo test --locked --test biber_namepart_diagnostics -- --include-ignored
+cargo test --locked --test protocol biber_nameparts_
+```
+
 ## Biber 文献集合
 
 Biber 原生的集合警告使用 `invalid-bibliography-set`：集合条目中已不需要的 `crossref`、集合成员中已不需要的 `entryset`，以及集合缺少 `entryset`。前两类标记原始字段名，数据中的 `reason` 为 `obsolete-field`；后一类标记所属条目键，`reason` 为 `missing-entryset`。诊断保留工具报告的级别与消息，不在没有原生报告时静态判断集合是否合法。
