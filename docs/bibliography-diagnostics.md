@@ -40,6 +40,36 @@ LSP 编译结果也会定位静态命名调用和纯别名中的缺失文献库�
 
 默认 latexmk 确认数据库缺失并跳过 BibTeX 时，服务器也会产生 `missing-bibliography-database` 警告，提供相同的精确定位和修复。编译继续遵守 latexmk 的策略及现有输入一致性检查，预生成 `.bbl` 的项目仍可生成 PDF。警告只采纳本次最后一次目标日志检查后的完整驱动列表，已有的原生 BibTeX 错误优先；没有输出新列表的空操作编译不会新增缺库警告。其他可执行程序、不同作业日志、不完整或截断的输出不进入这项解析。
 
+## Biber 重复文献键
+
+完整的 `Duplicate entry key: 'alpha' in file 'refs.bib', skipping ...` 消息使用诊断代码 `duplicate-bibliography-key`；开启 `--noskipduplicates` 时没有 `, skipping ...` 的原生格式也受支持。主键仅在明确命名的数据库中区分大小写匹配，唯一声明使用精确键范围；同一文件有多个同名声明时保留文件首行范围，通过 `relatedInformation` 列出候选，不凭无行号消息猜测具体声明。
+
+匹配遵守 Biber 的 Unicode 规范分解，组合形式 `café` 与分解形式 `café` 属于同一键；同库同时存在两种形式时保留歧义并列出原始声明范围，不把报告中的分解形式误当作唯一声明。大小写和兼容字符仍按各自键匹配，不执行兼容分解。规范等价拼写共享 16 项候选上限。
+
+相关位置取当前文件及此前日志确认读取的数据库，最多 16 项，符号链接按实际目标去重；唯一主位置不会再次列为相关位置。未解析来源、不可读或超限文件保留主文档警告；缺失主键不借用其他数据库。日志截断、语法或未知错误、不完整来源历史会停止跨库关联，仍可显示当前明确文件中的候选。沿用大小写警告的完整文件名、数据库角色和有界缓存规则。
+
+诊断保留原生级别与消息。Biber 的重复键选择随选项变化，服务器不把候选位置标为保留或删除项，也不提供自动删除或重命名。保存后重编译会刷新相关位置，修复后清除推送与拉取诊断。同一次日志中按来源缓存键的 UTF-16 范围和首行范围，支持大量条目集中在同一长行的数据库。
+
+```sh
+cargo test --locked --test biber_duplicate_diagnostics -- --include-ignored
+cargo test --locked --test protocol biber_duplicate_warnings_
+```
+
+## Biber 文献键大小写警告
+
+Biber 的完整 `Possible typo (case mismatch) between datasource keys: 'ALPHA' and 'alpha' in file 'refs.bib'` 消息使用诊断代码 `bibliography-key-case-mismatch`，精确标记明确报告的数据库中唯一的第一个键。匹配区分大小写，支持 Unicode、UTF-16、CRLF 和含撇号的完整文件名；其他后缀的文件须已确认数据库角色。
+
+主键与关联键均按 Biber 的 Unicode 规范分解匹配，但范围指向原始源码。例如日志中的 `CAFÉ` / `café` 可以对应源码中的 `CAFÉ` / `café`。规范化后主键仍有多个声明时保留文件首行；另一种拼写的多个规范等价声明保留为独立关联位置。普通 BibTeX 导航及其他后端的名称规则不受影响。
+
+`relatedInformation` 链接另一种拼写在当前数据库及此前已确认读取数据库中的位置，最多 16 处；同名声明有多个时保留多个候选。后续数据库不参与定位。日志截断、此前 Biber 语法或未知错误、来源未解析或读取历史超限时，只使用当前明确命名的数据库；缺失或重复的主键保留文件首行警告，不借用其他数据库。来源不可读、未确认或超出有界解析缓存时保留主文档警告，相关键缺失不影响原始消息。
+
+Biber 将这两个键视为不同条目，并可能保留两者；诊断维持原生警告级别，不提供自动合并或重命名。引用键与数据库键之间的大小写消息仍按原有日志规则处理。修复并重新编译后，推送和拉取诊断同步清除旧结果。
+
+```sh
+cargo test --locked --test bibliography_case_diagnostics -- --include-ignored
+cargo test --locked --test protocol biber_case_warnings_
+```
+
 ## 未定义字符串缩写
 
 BibTeX 的两行 `Warning--string name "jouranl" is undefined` / `--line 2 of file refs.bib` 警告使用诊断代码 `undefined-bibliography-string`，精确标记该行中唯一的裸缩写引用。支持字段、`@string`、`@preamble` 和多行 `#` 拼接，按 ASCII 大小写不敏感匹配，并保留 UTF-16 与 CRLF 位置。字面值、声明名、文献键和注释不充当引用；同一行重复引用时保留整行诊断，不猜测修改位置。来源缺失、位置无效或位置行不紧随警告时也保留警告。

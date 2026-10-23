@@ -6,6 +6,8 @@ description = "A lightweight LaTeX language server"
 license = "MIT"
 
 [dependencies]
+icu_casemap = { version = "~2.3.0", default-features = false, features = ["compiled_data"] }
+icu_normalizer = { version = "2.3", default-features = false, features = ["compiled_data"] }
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["io-std", "macros", "rt-multi-thread", "sync", "time"] }

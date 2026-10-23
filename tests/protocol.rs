@@ -739,6 +739,169 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.bib" > "$1/main.
 
 #[test]
 #[cfg(unix)]
+fn biber_case_warnings_link_other_databases_and_refresh_saved_key_ranges_over_push_and_pull() {
+    assert_biber_key_warnings_refresh(false, false);
+}
+
+#[test]
+#[cfg(unix)]
+fn biber_duplicate_warnings_link_other_databases_and_refresh_saved_key_ranges_over_push_and_pull() {
+    assert_biber_key_warnings_refresh(true, false);
+}
+
+#[test]
+#[cfg(unix)]
+fn biber_case_warnings_normalize_unicode_keys_and_refresh_over_push_and_pull() {
+    assert_biber_key_warnings_refresh(false, true);
+}
+
+#[test]
+#[cfg(unix)]
+fn biber_duplicate_warnings_normalize_unicode_keys_and_refresh_over_push_and_pull() {
+    assert_biber_key_warnings_refresh(true, true);
+}
+
+#[cfg(unix)]
+fn assert_biber_key_warnings_refresh(duplicate: bool, normalized: bool) {
+    let (key, other, reported_key, reported_other) = match (duplicate, normalized) {
+        (true, true) => ("café😀", "café😀", "café😀", "café😀"),
+        (false, true) => ("CAFÉ😀", "café😀", "CAFÉ😀", "café😀"),
+        (true, false) => ("alpha😀", "alpha😀", "alpha😀", "alpha😀"),
+        (false, false) => ("ALPHA😀", "alpha😀", "ALPHA😀", "alpha😀"),
+    };
+    let code = if duplicate {
+        "duplicate-bibliography-key"
+    } else {
+        "bibliography-key-case-mismatch"
+    };
+    for pull in [false, true] {
+        let script = r#"cp "${2%/*}/fixture.blg" "$1/main.blg"
+printf '%%PDF-1.4\n' > "$1/main.pdf"
+printf '(./main.tex)\n' > "$1/main.log"
+printf 'PWD %s\nINPUT %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" "${2%/*}/parents.data" > "$1/main.fls"
+"#;
+        let capabilities = if pull {
+            json!({"textDocument":{"diagnostic":{}}})
+        } else {
+            json!({})
+        };
+        let (mut server, directory, main) =
+            fake_build_server_capabilities(script, false, capabilities);
+        let root = directory.path();
+        let refs = Url::from_file_path(root.join("refs.data")).unwrap();
+        let parents = Url::from_file_path(root.join("parents.data")).unwrap();
+        let main_source = "\\documentclass{article}\n\\addbibresource{parents.data}\n\\addbibresource{refs.data}\n";
+        std::fs::write(main.to_file_path().unwrap(), main_source).unwrap();
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":main_source}]}));
+        let mut current = format!("% 😀\r\n@book{{{key},title={{Current}}}}\r\n");
+        let mut earlier = format!("% Parent 😀\r\n@book{{{other},title={{Other}}}}\r\n");
+        for (uri, source, version) in [(&refs, &current, 7), (&parents, &earlier, 9)] {
+            std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+            server.notify("textDocument/didOpen", json!({"textDocument":{"uri":uri,"languageId":"bibtex","version":version,"text":source}}));
+        }
+        for stage in 0..3 {
+            if stage == 1 {
+                for (uri, source, version) in
+                    [(&refs, &mut current, 8), (&parents, &mut earlier, 10)]
+                {
+                    source.insert_str(0, "\r\n");
+                    std::fs::write(uri.to_file_path().unwrap(), source.as_str()).unwrap();
+                    server.notify("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":version},"contentChanges":[{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}},"text":"\r\n"}]}));
+                    server.notify("textDocument/didSave", json!({"textDocument":{"uri":uri}}));
+                }
+            } else if stage == 2 {
+                let at = current.find(key).unwrap();
+                let end = at + key.len();
+                let range = latex_lsp::text::Text::new(current.clone()).range(at, end);
+                current.replace_range(at..end, "different😀");
+                std::fs::write(refs.to_file_path().unwrap(), &current).unwrap();
+                server.notify("textDocument/didChange", json!({"textDocument":{"uri":refs,"version":9},"contentChanges":[{"range":range,"text":"different😀"}]}));
+                server.notify("textDocument/didSave", json!({"textDocument":{"uri":refs}}));
+            }
+            let mut log = "INFO - Found BibTeX data source 'parents.data'\nINFO - Found BibTeX data source 'refs.data'\n".to_string();
+            if stage < 2 {
+                if duplicate {
+                    log.push_str(&format!(
+                        "WARN - Duplicate entry key: '{reported_key}' in file 'refs.data', skipping ...\n"
+                    ));
+                } else {
+                    log.push_str(&format!("WARN - Possible typo (case mismatch) between datasource keys: '{reported_key}' and '{reported_other}' in file 'refs.data'\n"));
+                }
+            }
+            std::fs::write(root.join("fixture.blg"), log).unwrap();
+            server.request(
+                2 + stage * 2,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            let finished = server.until(|item| item["method"] == "latex/buildFinished");
+            assert_eq!(finished["params"]["status"], "success", "{finished}");
+            let items = if pull {
+                server.request(
+                    3 + stage * 2,
+                    "textDocument/diagnostic",
+                    json!({"textDocument":{"uri":refs}}),
+                )["items"]
+                    .clone()
+            } else {
+                server.until(|item| {
+                    item["method"] == "textDocument/publishDiagnostics"
+                        && item["params"]["uri"] == refs.as_str()
+                        && item["params"]["diagnostics"]
+                            .as_array()
+                            .is_some_and(|items| {
+                                if stage == 2 {
+                                    items.is_empty()
+                                } else {
+                                    items.iter().any(|item| {
+                                        item["code"] == code
+                                            && item["range"]["start"]["line"] == stage + 1
+                                    })
+                                }
+                            })
+                })["params"]["diagnostics"]
+                    .clone()
+            };
+            if stage == 2 {
+                assert!(items.as_array().unwrap().is_empty(), "{items}");
+                continue;
+            }
+            let item = items
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|item| item["code"] == code)
+                .unwrap();
+            let at = current.find(key).unwrap();
+            assert_eq!(
+                item["range"],
+                serde_json::to_value(
+                    latex_lsp::text::Text::new(current.clone()).range(at, at + key.len())
+                )
+                .unwrap()
+            );
+            assert_eq!(item["severity"], 2);
+            assert_eq!(item["data"]["key"], reported_key);
+            if !duplicate {
+                assert_eq!(item["data"]["otherKey"], reported_other);
+            }
+            let at = earlier.find(other).unwrap();
+            assert_eq!(
+                item["relatedInformation"][0]["location"],
+                json!({"uri":parents,"range":latex_lsp::text::Text::new(earlier.clone()).range(at, at + other.len())})
+            );
+        }
+        server.request(8, "shutdown", Value::Null);
+        if pull {
+            assert_no_pushed_diagnostics(&server);
+        }
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
 fn bibliography_alias_symbols_negotiate_hierarchy_refresh_search_and_restore_disk_over_stdio() {
     for hierarchy in [false, true] {
         let directory = tempfile::tempdir().unwrap();

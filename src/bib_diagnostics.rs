@@ -1,4 +1,5 @@
 //! BibTeX diagnostics retain database roles, token ranges and input order.
+pub(crate) mod biber_keys;
 pub(crate) mod crossref;
 pub(crate) mod fields;
 
@@ -8,7 +9,7 @@ use std::{
     hash::{DefaultHasher, Hash, Hasher},
     io::Read,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, OnceLock},
 };
 use tower_lsp::lsp_types::*;
 
@@ -108,6 +109,7 @@ struct Parsed {
     syntax: syntax::Syntax,
     hash: u64,
     entry_keys: BTreeMap<String, Option<std::ops::Range<usize>>>,
+    biber_locations: OnceLock<biber_keys::Locations>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -124,6 +126,7 @@ pub(crate) struct Context {
     documents: BTreeMap<PathBuf, Option<Arc<Parsed>>>,
     bytes: usize,
     field_warnings: fields::Warnings,
+    biber_sources: biber_keys::Sources,
 }
 
 impl Context {
@@ -135,6 +138,7 @@ impl Context {
             documents: BTreeMap::new(),
             bytes: 0,
             field_warnings: fields::Warnings::new(log),
+            biber_sources: biber_keys::Sources::new(log),
         }
     }
 
@@ -206,6 +210,7 @@ impl Context {
                     syntax,
                     hash: fingerprint,
                     entry_keys,
+                    biber_locations: OnceLock::new(),
                 }))
             })
             .clone()

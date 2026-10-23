@@ -5473,6 +5473,9 @@ pub(crate) fn parse_bibliography_in(
     let mut lines = log.lines().peekable();
     while let Some(line) = lines.next() {
         let biber = crate::recorder::biber_record(line);
+        if biber.is_some() {
+            bibliography_context.biber_key_record(paths, line);
+        }
         let native_warning = line.starts_with("Warning--");
         if biber.is_none() && !native_warning && !line.starts_with(" :") {
             bibliography_context.record(paths, line);
@@ -5658,6 +5661,16 @@ pub(crate) fn parse_bibliography_in(
                         ));
                         item.data = Some(serde_json::json!({"file":file,"unresolvedSource":true}));
                     }
+                }
+                continue;
+            }
+        }
+        if tool == "Biber" {
+            if let Some(warning) = crate::bib_diagnostics::biber_keys::record(message) {
+                if let Some((uri, diagnostic)) =
+                    bibliography_context.biber_key_warning(root, paths, warning, message, severity)
+                {
+                    result.entry(uri).or_default().push(diagnostic);
                 }
                 continue;
             }
