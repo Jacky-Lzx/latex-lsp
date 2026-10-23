@@ -332,6 +332,9 @@ fn listings_inline_literal_boundaries_follow_incremental_edits_over_stdio() {
         Some("\\textbf{\\lstinline{a{\\label{kept}\\input{fake}}b}} "),
         Some("\\textbf{\\lstinline|a% ignored |\r\n\\label{kept}\\input{fake}|} "),
         Some("\\lstinline{\\label kept {\\input fake} "),
+        Some("\\let\\strong\\textbf\\strong{\\lstinline{a{\\label{kept}\\input{fake}}b}} "),
+        Some("\\let\\strong\\relax\\strong{\\lstinline{\\label kept {\\input fake}} "),
+        Some("\\lstinline*\\label{kept}\\input{fake}* "),
     ]
     .into_iter()
     .enumerate()
@@ -357,7 +360,12 @@ fn listings_inline_literal_boundaries_follow_incremental_edits_over_stdio() {
             "textDocument/documentSymbol",
             json!({"textDocument":{"uri":main}}),
         );
-        assert_eq!(symbols.as_array().unwrap().len(), 1, "{source}: {symbols}");
+        let symbol_count = if stage == 8 || stage == 9 { 2 } else { 1 };
+        assert_eq!(
+            symbols.as_array().unwrap().len(),
+            symbol_count,
+            "{source}: {symbols}"
+        );
         let position = text.position(source.rfind("kept").unwrap());
         let references=server.request(id+2,"textDocument/references",json!({"textDocument":{"uri":main},"position":position,"context":{"includeDeclaration":true}}));
         let count = if stage == 3 { 2 } else { 3 };

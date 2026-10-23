@@ -1907,7 +1907,8 @@ impl InlineTokenization {
         }
         let declarations = (parsed.definitions.len(), parsed.environments.len());
         if self.signatures.is_none() || self.declarations != declarations {
-            let signatures = CommandSignatures::source_context([(source, parsed)]);
+            let mut signatures = CommandSignatures::source_context([(source, parsed)]);
+            signatures.inline_copy_operands(parsed);
             self.signatures = Some(CommandSignatures {
                 local: signatures
                     .local
@@ -2835,6 +2836,69 @@ impl<'a> CommandSignatures<'a> {
         parsed: &syntax::Syntax,
     ) -> BTreeSet<usize> {
         self.argument_tokens_with_literal(source, parsed, None, false, true)
+    }
+
+    /// A stable copy can establish argument tokenization without certifying
+    /// its expansion for navigation. Keep this inference in the inline lexer:
+    /// unresolved, repeated or later source declarations cannot prove a copy's
+    /// captured grammar. Pure forwarders retain their late-bound target.
+    fn inline_copy_operands(&mut self, parsed: &syntax::Syntax) {
+        let mut entries = BTreeMap::new();
+        for entry in parsed.definitions.iter().chain(&parsed.environments) {
+            entries
+                .entry(entry.name.as_str())
+                .and_modify(|known| *known = None)
+                .or_insert(Some(entry));
+        }
+        let pending: Vec<_> = self
+            .literal_operands
+            .iter()
+            .filter_map(|(name, operands)| {
+                let (target, copied) = match operands.as_slice() {
+                    [LiteralOperands::Copy(target)] => (target, true),
+                    [LiteralOperands::Alias(target)] => (target, false),
+                    _ => return None,
+                };
+                let entry = entries.get(name.as_ref())?.as_ref()?;
+                if copied {
+                    let declaration = entry.detail.strip_prefix("Defined with \\")?;
+                    if self.local.contains_key(declaration) {
+                        return None;
+                    }
+                    if self.local.contains_key(target.as_str()) {
+                        let original = entries.get(target.as_str())?.as_ref()?;
+                        if original.span.start >= entry.span.start {
+                            return None;
+                        }
+                    }
+                }
+                Some((name.clone(), target.as_str()))
+            })
+            .collect();
+        for _ in 0..pending.len() {
+            let mut changed = false;
+            for (name, target) in &pending {
+                let signature = self
+                    .local
+                    .get(*target)
+                    .cloned()
+                    .unwrap_or_else(|| operand_builtin(target));
+                let tex = self.tex_operands.get(*target).cloned().flatten();
+                if signature.is_none() && tex.is_none() {
+                    continue;
+                }
+                if self.local.get(name) != Some(&signature)
+                    || self.tex_operands.get(name) != Some(&tex)
+                {
+                    self.local.insert(name.clone(), signature);
+                    self.tex_operands.insert(name.clone(), tex);
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
     }
 
     /// Catcode-changing inline commands see ordinary tokens when a known

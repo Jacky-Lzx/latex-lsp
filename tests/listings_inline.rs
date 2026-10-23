@@ -147,6 +147,13 @@ fn macro_arguments_keep_balanced_tokens_comments_and_multiline_code_opaque() {
         r"\NewDocumentCommand{\one}{m}{#1}\one{\lstinline{a{b}c}}",
         "\\textbf{\\lstinline|a{b|c}d|\\lstinline{a\r\nb}}",
         r"\textbf{\lstinline{a{\label{fake}\input{fake}}c}}",
+        r"\let\strong\textbf\strong{\lstinline{a{b}c}}",
+        r"\NewCommandCopy{\strong}{\textbf}\strong{\lstinline{a{b}c}}",
+        r"\newcommand{\one}[1]{#1}\let\strong\one\strong{\lstinline{a{b}c}}",
+        r"\def\one#1;{#1}\let\strong\one\strong\lstinline|a{b|c}d|;",
+        "\\let\\strong\\textbf\\let\\stronger\\strong\\stronger{\\lstinline{a\r\nb}}",
+        r"\let\strong\textbf\newcommand{\stronger}{\strong}\stronger{\lstinline{a{b}c}}",
+        r"\newcommand{\one}[1]{#1}\newcommand{\forward}{\one}\let\strong\forward\strong{\lstinline{a{b}c}}",
     ] {
         let source = format!("{literal}\\label{{real}}\\ref{{real}}");
         let mut workspace = Workspace::default();
@@ -199,6 +206,13 @@ fn ordinary_groups_and_consumed_formatter_controls_keep_source_catcodes() {
         r"\let\unused\textbf{",
         r"\unknown{",
         r"{\textbf{\lstinline{abc}}",
+        r"\let\zero\relax\zero{",
+        r"\newcommand{\none}{}\let\zero\none\zero{",
+        r"\let\strong\textbf\newcommand{\gobble}[1]{}\gobble\strong{",
+        r"\let\unknown\undefined\unknown{",
+        r"\let\unknown\later\newcommand{\later}[1]{#1}\unknown{",
+        r"\let\zero\textbf\let\zero\relax\zero{",
+        r"\newcommand{\one}[1]{#1}\renewcommand{\one}{}\let\zero\one\zero{",
     ] {
         let inline = if prefix.ends_with(r"\lstinline{") {
             "a{b}"
@@ -383,6 +397,13 @@ fn real_inline_forms_preserve_native_labels_inputs_and_header_commands_after_ren
             r"\def\example{\lstinline{a{b}c}}\example",
             r"\relax{\lstinline{a{b}c}",
             r"\newcommand{\zero}{}\zero{\lstinline{a{b}c}",
+            r"\let\strong\textbf\strong{\lstinline{a{b}c}}",
+            r"\NewCommandCopy{\strong}{\textbf}\strong{\lstinline{a{b}c}}",
+            r"\newcommand{\one}[1]{#1}\let\strong\one\strong{\lstinline{a{b}c}}",
+            r"\def\one#1;{#1}\let\strong\one\strong\lstinline|a{b|c}d|;",
+            "\\let\\strong\\textbf\\let\\stronger\\strong\\stronger{\\lstinline{a\nb}}",
+            r"\let\strong\textbf\newcommand{\stronger}{\strong}\stronger{\lstinline{a{b}c}}",
+            r"\let\zero\relax\zero{\lstinline{a{b}c}",
         ] {
             let directory = tempfile::tempdir().unwrap();
             let root = directory.path();
