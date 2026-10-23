@@ -2901,6 +2901,126 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main
         server.wait_exit(0);
     }
 }
+#[test]
+#[cfg(unix)]
+fn biber_required_fields_and_groups_refresh_key_ranges_over_push_and_pull_after_saved_edits() {
+    for pull in [false, true] {
+        let script = r#"cp "${2%/*}/fixture.blg" "$1/main.blg"
+printf '%%PDF-1.4\n' > "$1/main.pdf"
+printf '(./main.tex)\n' > "$1/main.log"
+printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main.fls"
+"#;
+        let capabilities = if pull {
+            json!({"textDocument":{"diagnostic":{}}})
+        } else {
+            json!({})
+        };
+        let (mut server, directory, main) =
+            fake_build_server_capabilities(script, false, capabilities);
+        let root = directory.path();
+        let refs = Url::from_file_path(root.join("refs.data")).unwrap();
+        let main_source = "\\documentclass{article}\n\\addbibresource{refs.data}\n";
+        std::fs::write(main.to_file_path().unwrap(), main_source).unwrap();
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":main_source}]}));
+        let mut current = "% 😀\r\n@book{café😀,}\r\n".to_string();
+        std::fs::write(refs.to_file_path().unwrap(), &current).unwrap();
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":refs,"languageId":"bibtex","version":7,"text":current}}),
+        );
+        for stage in 0..3 {
+            if stage > 0 {
+                let (at, replacement) = if stage == 1 {
+                    (current.find("café😀").unwrap(), "\r\n ")
+                } else {
+                    (
+                        current.find(",}").unwrap() + 1,
+                        "title={Title},author={Doe, Jane},date={2026}",
+                    )
+                };
+                let range = latex_lsp::text::Text::new(current.clone()).range(at, at);
+                current.insert_str(at, replacement);
+                std::fs::write(refs.to_file_path().unwrap(), &current).unwrap();
+                server.notify("textDocument/didChange", json!({"textDocument":{"uri":refs,"version":7+stage},"contentChanges":[{"range":range,"text":replacement}]}));
+                server.notify("textDocument/didSave", json!({"textDocument":{"uri":refs}}));
+            }
+            let mut log = "INFO - Found BibTeX data source 'refs.data'\n".to_string();
+            if stage < 2 {
+                for requirement in [
+                    "'author'",
+                    "'title'",
+                    "- one of 'date, year' must be defined",
+                ] {
+                    log.push_str(&format!("WARN - Datamodel: Entry 'café😀' (refs.data): Missing mandatory field {requirement}\n"));
+                }
+            }
+            std::fs::write(root.join("fixture.blg"), log).unwrap();
+            server.request(
+                2 + stage * 2,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            let finished = server.until(|item| item["method"] == "latex/buildFinished");
+            assert_eq!(finished["params"]["status"], "success", "{finished}");
+            let items = if pull {
+                server.request(
+                    3 + stage * 2,
+                    "textDocument/diagnostic",
+                    json!({"textDocument":{"uri":refs}}),
+                )["items"]
+                    .clone()
+            } else {
+                server.until(|item| {
+                    item["method"] == "textDocument/publishDiagnostics"
+                        && item["params"]["uri"] == refs.as_str()
+                        && item["params"]["diagnostics"]
+                            .as_array()
+                            .is_some_and(|items| {
+                                if stage == 2 {
+                                    items.is_empty()
+                                } else {
+                                    items.iter().any(|item| {
+                                        item["code"] == "missing-bibliography-field"
+                                            && item["range"]["start"]["line"] == stage + 1
+                                    })
+                                }
+                            })
+                })["params"]["diagnostics"]
+                    .clone()
+            };
+            let items = items.as_array().unwrap();
+            if stage == 2 {
+                assert!(items.is_empty(), "{items:?}");
+                continue;
+            }
+            assert_eq!(items.len(), 3, "{items:?}");
+            let at = current.find("café😀").unwrap();
+            let range = serde_json::to_value(
+                latex_lsp::text::Text::new(current.clone()).range(at, at + "café😀".len()),
+            )
+            .unwrap();
+            for item in items {
+                assert_eq!(item["range"], range);
+                assert_eq!(item["code"], "missing-bibliography-field");
+                assert_eq!(item["severity"], 2);
+                assert_eq!(item["data"]["key"], "café😀");
+                assert!(item["data"].get("unresolvedEntry").is_none());
+            }
+            assert!(items
+                .iter()
+                .any(|item| item["data"]["fields"] == json!(["date", "year"])));
+            for field in ["author", "title"] {
+                assert!(items.iter().any(|item| item["data"]["field"] == field));
+            }
+        }
+        server.request(8, "shutdown", Value::Null);
+        if pull {
+            assert_no_pushed_diagnostics(&server);
+        }
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
 
 #[test]
 #[cfg(unix)]

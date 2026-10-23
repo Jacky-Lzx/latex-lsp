@@ -6,6 +6,7 @@ pub(crate) mod biber_keys;
 pub(crate) mod biber_nameparts;
 pub(crate) mod biber_names;
 pub(crate) mod biber_relations;
+pub(crate) mod biber_required;
 pub(crate) mod biber_xdata;
 pub(crate) mod biber_xdata_fields;
 pub(crate) mod crossref;

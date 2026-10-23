@@ -160,6 +160,19 @@ cargo test --locked --test biber_overwritten_diagnostics -- --include-ignored
 cargo test --locked --test protocol biber_overwritten_fields_
 ```
 
+## Biber 必填字段
+
+Biber 数据模型校验的完整 `Missing mandatory field 'author'` 和 `Missing mandatory field - one of 'date, year' must be defined` 消息使用诊断代码 `missing-bibliography-field`。只采纳实际工具报告的要求，不静态假定条目必须有哪些字段；字段组表示至少填写一项，不会被拆成多条全部必填的错误。诊断数据中单字段保存在 `field`，备选组保存在 `fields`。
+
+警告定位到明确命名数据库中的唯一条目键，按 Biber 的 Unicode 规范分解匹配并保留原始 UTF-16 范围。键缺失或规范化后有多个声明时使用该文件首行，不借用其他库；来源缺失、未确认、不可读或超限时保留主文档。完整特殊文件名、其他后缀的数据库及符号链接沿用现有来源规则。
+
+消息和级别保持原生结果，不猜测字段值、不替用户选择备选字段，也不自动插入字段。保存后重新编译会更新条目键位置，补齐要求后清除推送与拉取诊断；同一日志的多条警告复用有界键位置缓存。
+
+```sh
+cargo test --locked --test biber_required_diagnostics -- --include-ignored
+cargo test --locked --test protocol biber_required_fields_
+```
+
 ## Biber 文献别名冲突
 
 Biber 的三类完整 `ids` 警告使用 `conflicting-bibliography-alias`：`Entry alias … already has an alias …, skipping ...`、`Citekey alias … is also a real entry key, skipping ...`（也接受 `Entry alias` 前缀）和 `BAD RECURSION! Entry alias … is identical to the entry key, skipping ...`。它们分别表示别名已被其他条目占用、别名与真实主键冲突、别名等于自身主键；保留原生消息与级别，不在没有编译器报告时自行生成警告。
