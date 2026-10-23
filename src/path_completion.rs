@@ -122,6 +122,7 @@ fn complete_with_argument(
         .root_document(uri)
         .map(|root| vec![root])
         .unwrap_or_else(|_| workspace.source_roots(uri));
+    let raw_resource_insertion = std::cell::OnceCell::new();
     if syntax::code_input_command(command)
         && !doc.syntax.commands.iter().any(|candidate| {
             candidate.name == command
@@ -257,6 +258,20 @@ fn complete_with_argument(
             if crate::bib_section_files::file_command(command)
                 && (!crate::bib_section_files::editable_item(&new_text)
                     || section_labels.contains(&new_text))
+            {
+                continue;
+            }
+            if crate::bib_resources::references_file(command)
+                && crate::bib_resources::changes_when_tokenized(&new_text)
+                && !raw_resource_insertion.get_or_init(|| {
+                    crate::bib_resources::insertion_preserves_filename(
+                        workspace,
+                        uri,
+                        &workspace.source_roots(uri),
+                        call_start,
+                        "%",
+                    )
+                })
             {
                 continue;
             }

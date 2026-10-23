@@ -2,6 +2,42 @@
 use crate::syntax::{self, Argument, Command};
 use std::ops::Range;
 
+pub(crate) fn changes_when_tokenized(value: &str) -> bool {
+    value.contains(['%', '#']) || value.contains("^^")
+}
+
+/// File-verb catcodes cannot recover comments, parameter tokens or TeX's
+/// character translation after an enclosing macro has collected the filename.
+pub(crate) fn insertion_preserves_filename(
+    workspace: &crate::workspace::Workspace,
+    uri: &tower_lsp::lsp_types::Url,
+    roots: &[tower_lsp::lsp_types::Url],
+    at: Option<usize>,
+    value: &str,
+) -> bool {
+    if !changes_when_tokenized(value) {
+        return true;
+    }
+    let Some((doc, at)) = workspace.documents.get(uri).zip(at) else {
+        return false;
+    };
+    !roots.is_empty()
+        && roots.iter().all(|root| {
+            let mut scope = workspace.project_documents(root);
+            scope.insert(uri.clone());
+            let Some(documents) = crate::source_inputs::bounded_latex_sources(workspace, &scope)
+            else {
+                return false;
+            };
+            let signatures = crate::signature::CommandSignatures::source_context(
+                documents
+                    .iter()
+                    .map(|(_, doc)| (doc.text.source.as_str(), &doc.syntax)),
+            );
+            !signatures.resource_is_tokenized(&doc.text.source, &doc.syntax, at)
+        })
+}
+
 pub(crate) fn loads(name: &str) -> bool {
     matches!(name, "addbibresource" | "addglobalbib")
         || crate::bib_section_files::resource_command(name)

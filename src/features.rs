@@ -1272,7 +1272,11 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
             {
                 return vec![];
             }
-            return crate::path_completion::complete(workspace, uri, &command.name, span);
+            return if crate::bib_resources::references_file(&command.name) {
+                crate::path_completion::complete_source(workspace, uri, command, span)
+            } else {
+                crate::path_completion::complete(workspace, uri, &command.name, span)
+            };
         }
         let prefix = &doc.text.source[span.clone()];
         // Replace the rest of this key too when completing inside an existing

@@ -28781,3 +28781,59 @@ fn imported_resource_reader_meanings_refresh_without_changing_parent_versions_ov
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+fn precollected_resource_path_edits_follow_unsaved_macro_boundaries_over_stdio() {
+    use latex_lsp::text::Text;
+    let directory = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+    let bib = Url::from_file_path(directory.path().join("refs.bib")).unwrap();
+    let special = Url::from_file_path(directory.path().join("refs%data.bib")).unwrap();
+    for name in ["refs.bib", "refs%data.bib", "refs$&^~data.bib"] {
+        std::fs::write(directory.path().join(name), "@book{paper,title={Paper}}").unwrap();
+    }
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(directory.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    for (stage, wrapped) in [false, true, false].into_iter().enumerate() {
+        let call = r"\addbibresource{refs.bib}";
+        let body = if wrapped {
+            format!(r"\def\future{{{call}}}\future")
+        } else {
+            call.into()
+        };
+        let source = format!("% 😀\r\n\\documentclass{{article}}{body}");
+        let version = 5 + stage;
+        if stage == 0 {
+            server.notify("textDocument/didOpen", json!({"textDocument":{"uri":main,"languageId":"latex","version":version,"text":source}}));
+        } else {
+            server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":version},"contentChanges":[{"text":source}]}));
+        }
+        let id = 10 + stage as u64 * 10;
+        let at = Text::new(source.clone()).position(source.find("refs.bib").unwrap() + 4);
+        let items = server.request(
+            id,
+            "textDocument/completion",
+            json!({"textDocument":{"uri":main},"position":at}),
+        );
+        let items = items.get("items").unwrap_or(&items).as_array().unwrap();
+        assert_eq!(
+            items.iter().any(|item| item["label"] == "refs%data.bib"),
+            !wrapped
+        );
+        assert!(items.iter().any(|item| item["label"] == "refs$&^~data.bib"));
+        server.send(json!({"jsonrpc":"2.0","id":id+1,"method":"workspace/willRenameFiles","params":{"files":[{"oldUri":bib,"newUri":special}]}}));
+        let response = server.until(|message| message["id"] == id + 1);
+        if wrapped {
+            assert_eq!(response["error"]["code"], -32602, "{response}");
+        } else {
+            let edit = &response["result"]["documentChanges"][0];
+            assert_eq!(edit["textDocument"]["version"], version);
+            assert_eq!(edit["edits"].as_array().unwrap().len(), 1);
+            assert_eq!(edit["edits"][0]["newText"], "refs%data.bib");
+        }
+    }
+    server.request(1000, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

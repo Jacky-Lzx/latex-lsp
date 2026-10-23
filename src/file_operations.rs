@@ -650,6 +650,20 @@ pub fn will_rename(workspace: &Workspace, files: &[FileRename]) -> Result<Option
                 };
                 if new_text != original
                     && command.is_some_and(|command| {
+                        crate::bib_resources::references_file(&command.name)
+                            && !crate::bib_resources::insertion_preserves_filename(
+                                workspace,
+                                uri,
+                                std::slice::from_ref(root),
+                                Some(command.span.start),
+                                &new_text,
+                            )
+                    })
+                {
+                    return Err(Error::invalid_params("Renamed resource filename would change meaning in a precollected macro argument"));
+                }
+                if new_text != original
+                    && command.is_some_and(|command| {
                         crate::bib_section_files::file_command(&command.name)
                     })
                     && (!crate::bib_section_files::editable_item(&new_text)
