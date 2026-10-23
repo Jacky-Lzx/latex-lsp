@@ -161,6 +161,7 @@ pub enum Formatter {
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct FormattingConfig {
+    pub on_type: bool,
     pub formatter: Formatter,
     pub executable: Option<String>,
     pub arguments: Option<Vec<String>>,
@@ -170,6 +171,7 @@ pub struct FormattingConfig {
 impl Default for FormattingConfig {
     fn default() -> Self {
         Self {
+            on_type: true,
             formatter: Formatter::TexFmt,
             executable: None,
             arguments: None,

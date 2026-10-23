@@ -55,6 +55,7 @@ mod minted;
 mod named_colors;
 mod named_commands;
 pub mod navigation;
+mod on_type_formatting;
 mod options;
 mod output;
 mod packages;
@@ -562,6 +563,10 @@ impl LanguageServer for Backend {
                 inlay_hint_provider: Some(OneOf::Left(true)),
                 document_formatting_provider: Some(OneOf::Left(true)),
                 document_range_formatting_provider: Some(OneOf::Left(true)),
+                document_on_type_formatting_provider: Some(DocumentOnTypeFormattingOptions {
+                    first_trigger_character: "\n".into(),
+                    more_trigger_character: Some(vec!["}".into()]),
+                }),
                 signature_help_provider: Some(SignatureHelpOptions {
                     trigger_characters: Some(
                         ["{", "[", ",", "<", "(", "|", "*", "+"]
@@ -1106,6 +1111,30 @@ impl LanguageServer for Backend {
     ) -> Result<Option<Vec<TextEdit>>> {
         self.format_document(params.text_document.uri, params.options, Some(params.range))
             .await
+    }
+
+    async fn on_type_formatting(
+        &self,
+        params: DocumentOnTypeFormattingParams,
+    ) -> Result<Option<Vec<TextEdit>>> {
+        let uri = document_uri(params.text_document_position.text_document.uri);
+        let workspace = self.workspace.read().await;
+        let Some(doc) = workspace.documents.get(&uri) else {
+            return Ok(None);
+        };
+        if doc.kind != workspace::DocumentKind::Latex {
+            return Ok(None);
+        }
+        if !workspace.settings(&uri).formatting.on_type {
+            return Ok(Some(vec![]));
+        }
+        on_type_formatting::edits(
+            doc,
+            params.text_document_position.position,
+            &params.ch,
+            &params.options,
+        )
+        .map(Some)
     }
 
     async fn inlay_hint(&self, params: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {

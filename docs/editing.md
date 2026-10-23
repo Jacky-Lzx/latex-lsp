@@ -14,6 +14,8 @@
 
 - 全文格式化：支持 `textDocument/formatting`，默认 tex-fmt，可选 latexindent；使用当前缓冲区、保留 LF / CRLF，并拒绝过期结果。配置及工具要求见[格式化](formatting.md)。
 
+- 范围与输入时格式化：支持 `textDocument/rangeFormatting`；换行和输入 `}` 后还可用内置 `textDocument/onTypeFormatting` 调整当前行缩进，支持配置关闭、UTF-16、CRLF 与逐字代码保护，详见[格式化](formatting.md)。
+
 - 文档同步：完整或增量更新，使用 UTF-16 位置，支持中文、emoji 和 CRLF；拒绝无效编辑和过期版本。
 
 - 语言识别：打开文档时识别编辑器的 `languageId`，支持 `latex` / `tex` / `plaintex`、`bibtex` / `bib` 和 `bst` / `bibtex-style`，未命名缓冲区和非标准扩展名也可获得对应功能。项目已确认的源码、数据库或样式角色优先；未知语言类型继续按扩展名识别。编辑器语言设置随增量编辑和文件移动保留，关闭后恢复磁盘内容及项目、扩展名规则；未保存文档仍需保存为可用主文档后才能编译。

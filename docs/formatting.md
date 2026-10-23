@@ -9,6 +9,7 @@
 ```json
 {
   "formatting": {
+    "onType": true,
     "formatter": "tex-fmt",
     "executable": null,
     "arguments": null,
@@ -18,6 +19,7 @@
 ```
 
 - `formatter`：`tex-fmt`（默认）或 `latexindent`。
+- `onType`：默认 `true`，启用下述内置输入时缩进；设为 `false` 可单独关闭。
 - `executable`：默认采用所选工具的名称；可指定完整路径。
 - `arguments`：`null` 使用下述默认参数；数组会完整替换默认参数。自定义时必须保留工具的标准输入模式，`tex-fmt` 使用 `--stdin`，`latexindent` 使用 `-`。参数直接传给进程，不经过 shell。
 - `timeoutSeconds`：默认 10 秒，允许 1–3600 秒。
@@ -42,6 +44,16 @@ init_options = {
 
 返回的多个编辑互不重叠，使用原始文档的 UTF-16 坐标。超出行长的列号按 LSP 规则收敛到行尾；归一化后为空的范围返回空编辑列表。逆序、不存在的行或切开 UTF-16 代理对的范围返回 `InvalidParams`。行对齐限制中间匹配表的大小，超过预算的连续改写按一个整体处理，避免大文件消耗无界内存。取消、超时、文档或配置变更与全文格式化采用相同保护。
 
+## 输入时缩进
+
+支持标准 `textDocument/onTypeFormatting`，触发字符为换行和 `}`，需要客户端启用输入时格式化。使用内置局部缩进器，不依赖 `tex-fmt` / `latexindent`，也不读取它们的配置。`formatting.onType: false` 可关闭；目录配置同样生效。
+
+换行时，以前一行的缩进为基础，根据该行未抵消的环境和花括号分组增加或减少一级；支持 `\\begingroup` / `\\endgroup`、`\\bgroup` / `\\egroup`，`document` 环境不增加一级。当前行开头的 `}` 或 `\\end{环境}` 会减少一级；输入闭合的 `}` 时也会调整该行。前一行开头的关闭符已反映在其缩进中，不会重复减少。
+
+只替换当前行行首的空格和制表符，沿用客户端 `tabSize` / `insertSpaces`；不修改文字、命令、注释或换行。支持未保存缓冲区、UTF-16 和 CRLF。注释中的括号、转义花括号、逐字内容及已知 token 操作数不计入结构；逐字块内部不格式化。已完成宏定义中的环境和分组命令不会影响定义后的缩进，定义正文的花括号仍可提供缩进。BibTeX 和 `.bst` 暂无输入时格式化。
+
+这是相邻行的缩进辅助，不执行宏展开，也不会重排整个文档。跨行环境名、超过 64 KiB 的行、超过 4096 列的缩进、超过 2 MiB 的缓冲区或超过 1024 个定义会跳过；在正文中间的换行请求和普通命令参数结束处输入 `}` 不会触发整行重排。可用全文或范围格式化统一已有文档的布局。
+
 ## BibTeX 格式化
 
 BibTeX / biblatex 文献缓冲区支持全文与范围格式化，无需安装外部工具。服务器复用文献条目及表达式解析，只调整完整普通条目的字段外部空白：每个字段换行并缩进，`=` 两侧各保留一个空格，关闭定界符另起一行。缩进采用请求的 `tabSize` / `insertSpaces`；不添加或删除逗号。
@@ -58,6 +70,8 @@ BibTeX / biblatex 文献缓冲区支持全文与范围格式化，无需安装�
 
 ```sh
 cargo test --locked --lib formatting
+cargo test --locked --lib on_type_formatting
+cargo test --locked --test protocol on_type_formatting
 cargo test --locked --lib bib_formatting -- --include-ignored
 cargo test --locked --test protocol formatting_
 cargo test --locked --test protocol bibliography_formatting_

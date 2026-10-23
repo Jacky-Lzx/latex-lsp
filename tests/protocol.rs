@@ -25476,3 +25476,94 @@ fi
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+fn on_type_formatting_advertises_triggers_uses_live_buffers_and_can_be_disabled() {
+    let directory = tempfile::tempdir().unwrap();
+    let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+    std::fs::write(directory.path().join("main.tex"), "disk contents").unwrap();
+    let mut server = Server::start();
+    let initialized = server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(directory.path()).unwrap(),"capabilities":{},"initializationOptions":{"distribution":{"enabled":false},"formatting":{"executable":"/missing/external/formatter"}}}));
+    assert_eq!(
+        initialized["capabilities"]["documentOnTypeFormattingProvider"],
+        json!({"firstTriggerCharacter":"\n","moreTriggerCharacter":["}"]})
+    );
+    server.notify("initialized", json!({}));
+    server.notify("textDocument/didOpen", json!({"textDocument":{"uri":uri,"languageId":"latex","version":1,"text":"\\begin{itemize} % 😀\r\n "}}));
+    let params = json!({"textDocument":{"uri":uri},"position":{"line":1,"character":1},"ch":"\n","options":{"tabSize":4,"insertSpaces":true}});
+    let expected = json!([{"range":{"start":{"line":1,"character":0},"end":{"line":1,"character":1}},"newText":"    "}]);
+    assert_eq!(
+        server.request(2, "textDocument/onTypeFormatting", params.clone()),
+        expected
+    );
+    server.notify(
+        "workspace/didChangeConfiguration",
+        json!({"settings":{"formatting":{"onType":false}}}),
+    );
+    assert_eq!(
+        server.request(3, "textDocument/onTypeFormatting", params.clone()),
+        json!([])
+    );
+    server.notify(
+        "workspace/didChangeConfiguration",
+        json!({"settings":{"formatting":{"onType":true}}}),
+    );
+    assert_eq!(
+        server.request(4, "textDocument/onTypeFormatting", params),
+        expected
+    );
+    server.notify("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"text":"\\begin{itemize}\r\n    😀 text\r\n    \\end{itemize}"}]}));
+    assert_eq!(server.request(5, "textDocument/onTypeFormatting", json!({"textDocument":{"uri":uri},"position":{"line":2,"character":17},"ch":"}","options":{"tabSize":4,"insertSpaces":true}})), json!([{"range":{"start":{"line":2,"character":0},"end":{"line":2,"character":4}},"newText":""}]));
+    let sub = directory.path().join("disabled");
+    std::fs::create_dir(&sub).unwrap();
+    std::fs::write(
+        sub.join(".latex-lsp.json"),
+        r#"{"formatting":{"onType":false}}"#,
+    )
+    .unwrap();
+    let disabled = Url::from_file_path(sub.join("sub.tex")).unwrap();
+    server.notify("textDocument/didOpen", json!({"textDocument":{"uri":disabled,"languageId":"latex","version":1,"text":"\\begin{itemize}\n"}}));
+    assert_eq!(server.request(6, "textDocument/onTypeFormatting", json!({"textDocument":{"uri":disabled},"position":{"line":1,"character":0},"ch":"\n","options":{"tabSize":2,"insertSpaces":true}})), json!([]));
+    assert_eq!(
+        std::fs::read_to_string(directory.path().join("main.tex")).unwrap(),
+        "disk contents"
+    );
+    server.request(7, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+fn on_type_formatting_validates_utf16_supports_untitled_buffers_and_ignores_other_languages() {
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":null,"capabilities":{},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    let uri = Url::parse("untitled:on-type").unwrap();
+    server.notify("textDocument/didOpen", json!({"textDocument":{"uri":uri,"languageId":"latex","version":1,"text":"  \\begin{itemize}\n"}}));
+    let mut params = json!({"textDocument":{"uri":uri},"position":{"line":1,"character":999},"ch":"\n","options":{"tabSize":2,"insertSpaces":false}});
+    assert_eq!(
+        server.request(2, "textDocument/onTypeFormatting", params.clone()),
+        json!([{"range":{"start":{"line":1,"character":0},"end":{"line":1,"character":0}},"newText":"\t\t"}])
+    );
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"text":"  text\n😀"}]}),
+    );
+    params["position"]["character"] = json!(1);
+    server.send(
+        json!({"jsonrpc":"2.0","id":3,"method":"textDocument/onTypeFormatting","params":params}),
+    );
+    assert_eq!(
+        server.until(|message| message["id"] == 3)["error"]["code"],
+        -32602
+    );
+    let bib = Url::parse("untitled:references").unwrap();
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":bib,"languageId":"bibtex","version":1,"text":"@book{key,\n"}}),
+    );
+    assert_eq!(server.request(4, "textDocument/onTypeFormatting", json!({"textDocument":{"uri":bib},"position":{"line":1,"character":0},"ch":"\n","options":{"tabSize":2,"insertSpaces":true}})), Value::Null);
+    server.request(5, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
