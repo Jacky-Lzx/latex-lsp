@@ -292,7 +292,7 @@ pub(crate) fn duplicate_label_key(message: &str) -> Option<&str> {
 
 enum BiblatexRerun {
     Latex,
-    Bibliography(&'static str),
+    Bibliography(&'static str, String),
 }
 
 fn biblatex_rerun(diagnostic: &Diagnostic) -> Option<BiblatexRerun> {
@@ -323,12 +323,12 @@ fn biblatex_rerun(diagnostic: &Diagnostic) -> Option<BiblatexRerun> {
         ("biber", "Please (re)run Biber on the file: "),
         ("bibtex", "Please (re)run BibTeX on the file(s): "),
     ] {
-        if body
+        if let Some(files) = body
             .strip_prefix(prefix)
             .and_then(|tail| tail.strip_suffix(" and rerun LaTeX afterwards."))
-            .is_some_and(|files| !files.trim().is_empty())
+            .filter(|files| !files.trim().is_empty())
         {
-            return Some(BiblatexRerun::Bibliography(tool));
+            return Some(BiblatexRerun::Bibliography(tool, files.into()));
         }
     }
     None
@@ -336,7 +336,14 @@ fn biblatex_rerun(diagnostic: &Diagnostic) -> Option<BiblatexRerun> {
 
 pub(crate) fn required_bibliography_tool(diagnostic: &Diagnostic) -> Option<&'static str> {
     match biblatex_rerun(diagnostic)? {
-        BiblatexRerun::Bibliography(tool) => Some(tool),
+        BiblatexRerun::Bibliography(tool, _) => Some(tool),
+        BiblatexRerun::Latex => None,
+    }
+}
+
+pub(crate) fn required_bibliography_job(diagnostic: &Diagnostic) -> Option<String> {
+    match biblatex_rerun(diagnostic)? {
+        BiblatexRerun::Bibliography(_, files) => Some(files),
         BiblatexRerun::Latex => None,
     }
 }

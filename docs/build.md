@@ -62,7 +62,7 @@ end
 
 rerunfilecheck 的请求格式、hyperref 反向文献引用、文件名折行及重编译标记清除规则见[文件变更与重编译](build-analysis.md#文件变更与重编译)。
 
-biblatex 明确要求先运行 BibTeX 或 Biber 时，默认参数的 latexmk 也提供该操作，由 latexmk 调度文献处理与后续 LaTeX 编译。直接 TeX 引擎及自定义 `arguments` / `rebuildArguments` 的流程保留提示和所需工具摘要，但不为这类提示提供重编译操作；请先完成对应的文献处理。切换为无法处理文献的配置后，旧菜单操作会失效。
+biblatex 明确要求先运行 BibTeX 或 Biber 时，默认参数的 latexmk 也提供该操作，由 latexmk 调度文献处理与后续 LaTeX 编译。直接 TeX 引擎或自定义流程可配置 [`build.bibliographyTool`](bibliography-processing.md)；后端和根任务名称匹配时也提供操作，否则保留提示和工具摘要。切换为无法处理所请求文献的配置后，旧菜单操作会失效。
 
 索引与术语表的明确 makeindex 请求提供[所需工具摘要](index-processing.md)，并标记后续需要运行 LaTeX；可以配置 `build.indexTools` 让编译任务执行工具及后续 LaTeX 遍次。警告的输入名称、类型与当前根配置任务匹配时，也提供上述菜单操作；执行时重新核对配置。
 

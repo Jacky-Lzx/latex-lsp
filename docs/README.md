@@ -80,6 +80,7 @@
 - [字体声明、诊断与结果分析](fonts.md)：NFSS 声明补全与参数提示、字体和字号替换、缺字摘要及定位边界。
 - [排版警告分析](typesetting.md)：Overfull / Underfull 分类统计与最大指标。
 - [浮动体高度警告](floats.md)：过高图表的源码行、警告数量与最大超出量。
+- [显式文献处理流程](bibliography-processing.md)：直接 TeX 引擎的 BibTeX / Biber 后端、暂存产物、后续遍次和取消。
 - [文献编译诊断](bibliography-diagnostics.md)：BibTeX / Biber 来源定位、缺失资源和文件名修复。
 - [SyncTeX 双向查询](synctex.md)：源码与 PDF 的查询协议。
 

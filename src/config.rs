@@ -181,6 +181,7 @@ impl Default for FormattingConfig {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct BuildConfig {
+    pub bibliography_tool: Option<BibliographyToolConfig>,
     pub index_tools: Vec<IndexToolConfig>,
     pub executable: String,
     pub arguments: Option<Vec<String>>,
@@ -196,6 +197,7 @@ pub struct BuildConfig {
 impl Default for BuildConfig {
     fn default() -> Self {
         Self {
+            bibliography_tool: None,
             index_tools: vec![],
             executable: "latexmk".into(),
             arguments: None,
@@ -207,6 +209,66 @@ impl Default for BuildConfig {
             on_save: false,
             timeout_seconds: 120,
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum BibliographyBackend {
+    #[default]
+    Bibtex,
+    Biber,
+}
+impl BibliographyBackend {
+    pub(crate) fn executable(self) -> &'static str {
+        match self {
+            Self::Bibtex => "bibtex",
+            Self::Biber => "biber",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct BibliographyToolConfig {
+    pub backend: BibliographyBackend,
+    pub executable: Option<String>,
+    pub arguments: Vec<String>,
+    pub dependencies: Vec<String>,
+    pub timeout_seconds: u64,
+}
+impl Default for BibliographyToolConfig {
+    fn default() -> Self {
+        Self {
+            backend: BibliographyBackend::Bibtex,
+            executable: None,
+            arguments: vec![],
+            dependencies: vec![],
+            timeout_seconds: 60,
+        }
+    }
+}
+impl BibliographyToolConfig {
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        if !(1..=3600).contains(&self.timeout_seconds)
+            || self
+                .executable
+                .as_ref()
+                .is_some_and(|name| name.trim().is_empty() || name.contains('\0'))
+        {
+            return Err("Bibliography tools need a nonempty executable and timeoutSeconds between 1 and 3600".into());
+        }
+        if self.arguments.len() > 128
+            || self.arguments.iter().any(|arg| arg.contains('\0'))
+            || self.dependencies.len() > 128
+            || self
+                .dependencies
+                .iter()
+                .any(|path| path.trim().is_empty() || path.contains('\0'))
+        {
+            return Err("Bibliography tools support at most 128 literal arguments and 128 nonempty dependency paths, without NUL characters".into());
+        }
+        Ok(())
     }
 }
 
@@ -382,7 +444,10 @@ impl Config {
                 return Err("Multiple index tools write the same output; choose different jobName or outputExtension".into());
             }
         }
-        if !config.build.index_tools.is_empty() {
+        if let Some(tool) = &config.build.bibliography_tool {
+            tool.validate()?;
+        }
+        if !config.build.index_tools.is_empty() || config.build.bibliography_tool.is_some() {
             config.build.rebuild_arguments()?;
         }
         Ok(config)
@@ -499,9 +564,12 @@ impl BuildConfig {
         }
     }
 
-    /// Only the known default driver promises a bibliography processing cycle.
-    /// Custom argument lists can disable it or invoke only a TeX engine.
-    pub(crate) fn rebuilds_bibliography(&self) -> bool {
+    /// Explicit backends process their own type. Otherwise only the known
+    /// default driver promises a bibliography cycle with arbitrary requests.
+    pub(crate) fn rebuilds_bibliography(&self, required: &str) -> bool {
+        if let Some(tool) = &self.bibliography_tool {
+            return tool.validate().is_ok() && tool.backend.executable() == required;
+        }
         self.arguments.is_none()
             && self.rebuild_arguments.is_none()
             && Path::new(&self.executable).file_stem() == Some(OsStr::new("latexmk"))

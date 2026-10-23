@@ -1,62 +1,16 @@
 //! Explicit index/glossary stages owned by the normal build task.
 use crate::{
+    build_tools::{Failure, Watched},
     config::{BuildConfig, IndexToolConfig},
-    file_checks::InputSnapshot,
 };
 use std::{
     collections::BTreeSet,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Command,
     sync::atomic::{AtomicBool, Ordering},
-    time::{Duration, Instant},
 };
 use tower_lsp::lsp_types::Url;
 
-pub(crate) struct Failure {
-    pub status: &'static str,
-    pub exit_code: Option<i32>,
-    pub message: String,
-    pub output: String,
-}
-impl Failure {
-    fn error(message: String) -> Self {
-        Self {
-            status: "error",
-            exit_code: None,
-            message,
-            output: String::new(),
-        }
-    }
-}
-#[derive(Clone)]
-struct Watched {
-    path: PathBuf,
-    target: PathBuf,
-    contents: InputSnapshot,
-}
-impl Watched {
-    fn capture(path: &Path) -> Result<Self, Failure> {
-        let target = path
-            .canonicalize()
-            .map_err(|error| Failure::error(format!("Cannot read {}: {error}", path.display())))?;
-        let contents = InputSnapshot::file(path);
-        if matches!(contents, InputSnapshot::File(None)) {
-            return Err(Failure::error(format!(
-                "Index input is not a readable regular file: {}",
-                path.display()
-            )));
-        }
-        Ok(Self {
-            path: path.to_owned(),
-            target,
-            contents,
-        })
-    }
-    fn unchanged(&self) -> bool {
-        self.path.canonicalize().ok().as_ref() == Some(&self.target)
-            && Url::from_file_path(&self.path).is_ok_and(|uri| !self.contents.changed(&uri))
-    }
-}
 struct Stage {
     config: IndexToolConfig,
     input: PathBuf,
@@ -261,7 +215,14 @@ impl Plan {
                 .iter()
                 .map(|argument| expand(argument, &substitutions))
                 .collect::<Vec<_>>();
-            let stage_output = execute(&stage.config, &arguments, &self.output, cancel)?;
+            let mut command = Command::new(&stage.config.executable);
+            command.args(&arguments).current_dir(&self.output);
+            let stage_output = crate::build_tools::execute(
+                command,
+                &stage.config.executable,
+                stage.config.timeout_seconds,
+                cancel,
+            )?;
             if cancel.load(Ordering::Relaxed) {
                 return Err(cancelled());
             }
@@ -387,97 +348,4 @@ fn expand(template: &str, substitutions: &[(char, &str)]) -> String {
     }
     expanded.push_str(tail);
     expanded
-}
-fn execute(
-    config: &IndexToolConfig,
-    arguments: &[String],
-    directory: &Path,
-    cancel: &AtomicBool,
-) -> Result<String, Failure> {
-    if cancel.load(Ordering::Relaxed) {
-        return Err(cancelled());
-    }
-    let mut command = Command::new(&config.executable);
-    command
-        .args(arguments)
-        .current_dir(directory)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        command.process_group(0);
-    }
-    let mut retries = 0;
-    let mut child = loop {
-        match command.spawn() {
-            Ok(child) => break child,
-            Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy && retries < 3 => {
-                std::thread::sleep(Duration::from_millis(10 << retries));
-                retries += 1;
-            }
-            Err(error) => {
-                return Err(Failure::error(format!(
-                    "Cannot start {}: {error}",
-                    config.executable
-                )))
-            }
-        }
-    };
-    let stdout = child.stdout.take().unwrap();
-    let stderr = child.stderr.take().unwrap();
-    let stdout = std::thread::spawn(move || crate::build::capture(stdout));
-    let stderr = std::thread::spawn(move || crate::build::capture(stderr));
-    let started = Instant::now();
-    let result = loop {
-        if cancel.load(Ordering::Relaxed) {
-            break Err(cancelled());
-        }
-        if started.elapsed() >= Duration::from_secs(config.timeout_seconds) {
-            break Err(Failure {
-                status: "timeout",
-                exit_code: None,
-                message: format!("{} timed out", config.executable),
-                output: String::new(),
-            });
-        }
-        match child.try_wait() {
-            Ok(Some(status)) if status.success() => break Ok(()),
-            Ok(Some(status)) => {
-                break Err(Failure {
-                    status: "error",
-                    exit_code: status.code(),
-                    message: format!("{} exited with {status}", config.executable),
-                    output: String::new(),
-                })
-            }
-            Err(error) => {
-                break Err(Failure::error(format!(
-                    "Cannot wait for {}: {error}",
-                    config.executable
-                )))
-            }
-            _ => std::thread::sleep(Duration::from_millis(25)),
-        }
-    };
-    crate::build::kill_group(&mut child);
-    let _ = child.wait();
-    let output = format!(
-        "{}\n{}",
-        crate::build_log::decode_output(&stdout.join().unwrap_or_default()),
-        crate::build_log::decode_output(&stderr.join().unwrap_or_default())
-    );
-    let output: String = output
-        .chars()
-        .rev()
-        .take(8192)
-        .collect::<String>()
-        .chars()
-        .rev()
-        .collect();
-    result.map(|()| output.clone()).map_err(|mut failure| {
-        failure.output = output;
-        failure
-    })
 }

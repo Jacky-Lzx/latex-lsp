@@ -74,8 +74,8 @@ pub fn code_actions(
     actions
 }
 
-// Explicit index stages must match this root and warning. Only the known
-// latexmk cycle can also satisfy bibliography requests before rerunning TeX.
+// Explicit stages must match this root and warning. The default latexmk cycle
+// can also satisfy bibliography requests without explicit stages.
 fn rebuild_warning(
     root: &Url,
     config: &crate::config::BuildConfig,
@@ -86,8 +86,14 @@ fn rebuild_warning(
             || root.to_file_path().is_ok_and(|root| {
                 crate::index_processing::handles_warning(&root, config, diagnostic)
             }))
-        && (crate::build_log::required_bibliography_tool(diagnostic).is_none()
-            || config.rebuilds_bibliography())
+        && crate::build_log::required_bibliography_tool(diagnostic).is_none_or(|required| {
+            config.rebuilds_bibliography(required)
+                && (config.bibliography_tool.is_none()
+                    || root.to_file_path().is_ok_and(|path| {
+                        crate::build_log::required_bibliography_job(diagnostic).as_deref()
+                            == config.job_name(&path).and_then(|name| name.to_str())
+                    }))
+        })
 }
 
 /// Rebuild the project that produced a current warning, even when the source

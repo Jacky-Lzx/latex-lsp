@@ -21,7 +21,7 @@
 
 ## 显式编译管线
 
-`build.indexTools` 默认是空列表。配置后，`latex.build`、`latex.rebuild` 和保存后编译均在同一个后台任务中执行：先运行 LaTeX 生成输入，再按配置顺序处理索引，最后强制运行 LaTeX 读取结果。无需从日志猜测工具参数，也不启动独立于编译任务的并发流程。
+`build.indexTools` 默认是空列表。配置后，`latex.build`、`latex.rebuild` 和保存后编译均在同一个后台任务中执行：先运行 LaTeX 生成输入，再按配置顺序处理索引，最后强制运行 LaTeX 读取结果；同时配置[文献阶段](bibliography-processing.md)时，工具后运行两遍 TeX。无需从日志猜测工具参数，也不启动独立于编译任务的并发流程。
 
 普通索引可使用默认 makeindex 设置：
 

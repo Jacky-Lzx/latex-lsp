@@ -185,6 +185,7 @@ impl BuildManager {
             project.extend(
                 crate::index_processing::dependencies(&path, &config)
                     .into_iter()
+                    .chain(crate::bibliography_processing::dependencies(&path, &config))
                     .flat_map(|path| {
                         let physical = path.canonicalize().ok();
                         [Some(path), physical].into_iter().flatten()
@@ -1307,8 +1308,8 @@ fn outdated_pdf_input(
 }
 
 fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool, rebuild: bool) -> Outcome {
-    if config.index_tools.is_empty() {
-        return run_single(root, config, cancel, rebuild, None);
+    if config.index_tools.is_empty() && config.bibliography_tool.is_none() {
+        return run_single(root, config, cancel, rebuild, None, None);
     }
     // Validate the entire explicit workflow before the first compiler touches
     // logs, including custom forced-pass arguments and style dependencies.
@@ -1319,11 +1320,15 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool, rebuild: bo
         Ok(plan) => plan,
         Err(failure) => return Outcome::error(failure.message),
     };
+    let bibliography = match crate::bibliography_processing::Plan::prepare(root, config) {
+        Ok(plan) => plan,
+        Err(failure) => return Outcome::error(failure.message),
+    };
     let bibliography_before = config
         .output_path(root)
         .map(|output| bibliography_logs(&output))
         .unwrap_or_default();
-    let mut first = run_single(root, config, cancel, rebuild, None);
+    let mut first = run_single(root, config, cancel, rebuild, None, None);
     // An index-only document can legitimately have no pages until its first
     // .ind has been generated. A successful TeX process can still feed tools.
     if !matches!(first.status, "success" | "error")
@@ -1337,18 +1342,33 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool, rebuild: bo
         return first;
     }
     for round in 1..=4 {
+        let bibliography_processed = match bibliography
+            .as_ref()
+            .map(|plan| plan.run(cancel))
+            .transpose()
+        {
+            Ok(processed) => processed,
+            Err(failed) => {
+                if let Some(report) = failed.report {
+                    first.diagnostics_truncated |= report.truncated;
+                    for (uri, diagnostics) in report.diagnostics {
+                        first
+                            .diagnostics
+                            .entry(uri)
+                            .or_default()
+                            .extend(diagnostics);
+                    }
+                    first.bibliography_inputs = Some(report.inputs.all);
+                    first.bibliography_databases = report.inputs.bibliography_databases;
+                    first.bibliography_bindings = report.inputs.bindings;
+                    first.bibliography_unresolved_bindings = report.inputs.unresolved_bindings;
+                }
+                return stage_failure(first, failed.failure);
+            }
+        };
         let processed = match plan.run(config, cancel) {
             Ok(processed) => processed,
-            Err(failure) => {
-                first.status = failure.status;
-                first.exit_code = failure.exit_code;
-                first.message = failure.message;
-                first.pdf = None;
-                first.pages = None;
-                first.analysis = None;
-                first.output = output_tail(&format!("{}\n{}", first.output, failure.output));
-                return first;
-            }
+            Err(failure) => return stage_failure(first, failure),
         };
         if cancel.load(Ordering::Relaxed) {
             return Outcome {
@@ -1356,43 +1376,80 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool, rebuild: bo
                 ..Outcome::error("Compilation cancelled".into())
             };
         }
-        let mut final_pass = run_single(root, config, cancel, true, Some(&bibliography_before));
-        final_pass.output = output_tail(&format!(
+        first.output = output_tail(&format!(
             "{}\n{}\n{}",
-            first.output, processed.output, final_pass.output
+            first.output,
+            bibliography_processed
+                .as_ref()
+                .map_or("", |processed| processed.output.as_str()),
+            processed.output
         ));
-        final_pass.pdf_updated |= first.pdf_updated;
-        if let Some(inputs) = first.inputs.take() {
-            final_pass
-                .inputs
-                .get_or_insert_with(BTreeSet::new)
-                .extend(inputs);
-            final_pass.binary_inputs.extend(first.binary_inputs);
-            for (path, target) in first.bindings {
-                final_pass.bindings.entry(path).or_insert(target);
+        for _ in 0..if bibliography.is_some() { 2 } else { 1 } {
+            let mut final_pass = run_single(
+                root,
+                config,
+                cancel,
+                true,
+                Some(&bibliography_before),
+                bibliography_processed
+                    .as_ref()
+                    .map(|processed| processed.search_output.as_str()),
+            );
+            final_pass.output = output_tail(&format!("{}\n{}", first.output, final_pass.output));
+            final_pass.pdf_updated |= first.pdf_updated;
+            if let Some(inputs) = first.inputs.take() {
+                final_pass
+                    .inputs
+                    .get_or_insert_with(BTreeSet::new)
+                    .extend(inputs);
+                final_pass.binary_inputs.extend(first.binary_inputs);
+                for (path, target) in first.bindings {
+                    final_pass.bindings.entry(path).or_insert(target);
+                }
+                final_pass
+                    .unresolved_bindings
+                    .extend(first.unresolved_bindings);
             }
-            final_pass
-                .unresolved_bindings
-                .extend(first.unresolved_bindings);
-        }
-        if final_pass.status != "success" {
-            return final_pass;
-        }
-        if processed.inputs_unchanged() {
-            if let Some(analysis) = final_pass.analysis.as_mut().and_then(Value::as_object_mut) {
-                analysis.insert("processedIndexTools".into(), Value::Array(processed.tools));
-                analysis.insert("indexProcessingRounds".into(), Value::from(round));
+            first = final_pass;
+            if first.status != "success" {
+                return first;
             }
-            return final_pass;
         }
-        first = final_pass;
+        if processed.inputs_unchanged()
+            && bibliography_processed
+                .as_ref()
+                .is_none_or(|processed| processed.inputs_unchanged())
+        {
+            if let Some(analysis) = first.analysis.as_mut().and_then(Value::as_object_mut) {
+                if !config.index_tools.is_empty() {
+                    analysis.insert("processedIndexTools".into(), Value::Array(processed.tools));
+                    analysis.insert("indexProcessingRounds".into(), Value::from(round));
+                }
+                if let Some(processed) = bibliography_processed {
+                    analysis.insert("processedBibliographyTool".into(), processed.tool);
+                    analysis.insert("bibliographyProcessingRounds".into(), Value::from(round));
+                }
+            }
+            return first;
+        }
     }
     first.status = "error";
     first.pdf = None;
     first.pages = None;
     first.analysis = None;
-    first.message = "Index inputs did not stabilize after four processing rounds; check the document and build again".into();
+    first.message = "Build tool inputs did not stabilize after four processing rounds; check the document and build again".into();
     first
+}
+
+fn stage_failure(mut outcome: Outcome, failure: crate::build_tools::Failure) -> Outcome {
+    outcome.status = failure.status;
+    outcome.exit_code = failure.exit_code;
+    outcome.message = failure.message;
+    outcome.pdf = None;
+    outcome.pages = None;
+    outcome.analysis = None;
+    outcome.output = output_tail(&format!("{}\n{}", outcome.output, failure.output));
+    outcome
 }
 
 fn output_tail(output: &str) -> String {
@@ -1412,6 +1469,7 @@ fn run_single(
     cancel: &AtomicBool,
     rebuild: bool,
     bibliography_baseline: Option<&BTreeMap<PathBuf, ArtifactFingerprint>>,
+    bibliography_search: Option<&str>,
 ) -> Outcome {
     let Some(parent) = root.parent() else {
         return Outcome::error("Invalid root path".into());
@@ -1542,6 +1600,11 @@ fn run_single(
         build_log::decode_output(&stdout),
         build_log::decode_output(&stderr)
     );
+    let output = if let Some(search) = bibliography_search {
+        format!("{search}\n{output}")
+    } else {
+        output
+    };
     // An unchanged transcript is authoritative only when latexmk explicitly
     // reuses its previous invocation. Spawn failures return above; timeouts,
     // cancellation and unrelated tool failures must not revive an old log.

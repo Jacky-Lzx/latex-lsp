@@ -25073,3 +25073,314 @@ fn index_workflow_source_edits_and_style_file_events_invalidate_inflight_results
         server.wait_exit(0);
     }
 }
+
+#[cfg(unix)]
+fn bibliography_workflow_server(body: &str, backend: &str) -> (Server, tempfile::TempDir, Url) {
+    let compiler = r#"set -eu
+printf x >> "$1/passes"
+printf '\\citation{key}\n\\bibdata{refs}\n\\bibstyle{custom}\n' > "$1/main.aux"
+printf 'bcf fixture\n' > "$1/main.bcf"
+printf '%%PDF-bibliography\n' > "$1/main.pdf"
+printf '(./main.tex\n' > "$1/main.log"
+if test ! -f "$1/main.bbl"; then
+ printf 'Package biblatex Warning: Please (re)run BibTeX on the file(s): main and rerun LaTeX afterwards.\n' >> "$1/main.log"
+fi
+printf 'Output written on main.pdf (1 page, 18 bytes).\n)\n' >> "$1/main.log"
+printf 'PWD %s\nINPUT %s\n' "$PWD" "$2" > "$1/main.fls"
+"#;
+    let (mut server, directory, uri) = fake_build_server(compiler, false);
+    let tool = directory.path().join("bibliography-tool.sh");
+    let header = r#"set -eu
+root="$1"; shift
+if test "$1" = --input-directory; then
+  directory="$4"; job="$5"
+else
+  directory="$PWD"; job=${1#./}; job=${job%.aux}
+fi
+printf 'This is BibTeX, Version 0.99d\nThe top-level auxiliary file: ./%s.aux\nThe style file: custom.bst\nDatabase file #1: refs.bib\n' "$job" > "$directory/$job.blg"
+"#;
+    std::fs::write(&tool, format!("{header}\n{body}\n")).unwrap();
+    std::fs::write(
+        directory.path().join("refs.bib"),
+        "@book{key,title={One}}\n@book{key,title={Two}}\n",
+    )
+    .unwrap();
+    std::fs::write(directory.path().join("custom.bst"), "style").unwrap();
+    let arguments = json!([directory.path().join("compiler.sh"), "%o", "%f"]);
+    server.notify("workspace/didChangeConfiguration", json!({"settings":{"distribution":{"enabled":false},"build":{"executable":"/bin/sh","arguments":arguments,"rebuildArguments":arguments,"bibliographyTool":{"backend":backend,"executable":"/bin/sh","arguments":[tool,directory.path()],"dependencies":["refs.bib","custom.bst"],"timeoutSeconds":10}}}}));
+    (server, directory, uri)
+}
+
+#[test]
+#[cfg(unix)]
+fn bibliography_workflow_over_stdio_checks_saved_dependencies_and_reports_final_artifacts() {
+    for backend in ["bibtex", "biber"] {
+        let (mut server, directory, uri) = bibliography_workflow_server(
+            "printf 'bibliography entries\\n' > \"$directory/$job.bbl\"",
+            backend,
+        );
+        let style = Url::from_file_path(directory.path().join("custom.bst")).unwrap();
+        server.notify("textDocument/didOpen", json!({"textDocument":{"uri":style,"languageId":"plaintext","version":1,"text":"unsaved style"}}));
+        server.send(json!({"jsonrpc":"2.0","id":2,"method":"workspace/executeCommand","params":{"command":"latex.build","arguments":[uri]}}));
+        let rejected = server.until(|message| message["id"] == 2);
+        assert_eq!(rejected["error"]["code"], -32602, "{rejected}");
+        assert!(!directory.path().join("build/latex-lsp/passes").exists());
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":style}}),
+        );
+        server.request(
+            3,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[uri]}),
+        );
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        let result = &finished["params"];
+        assert_eq!(result["status"], "success", "{result}");
+        assert_eq!(result["stale"], false);
+        assert_eq!(result["analysis"]["rerunRequired"], false);
+        assert_eq!(
+            result["analysis"]["processedBibliographyTool"]["backend"],
+            backend
+        );
+        assert_eq!(result["analysis"]["bibliographyProcessingRounds"], 1);
+        assert_eq!(
+            std::fs::read(directory.path().join("build/latex-lsp/passes"))
+                .unwrap()
+                .len(),
+            3
+        );
+        let status = server.request(
+            4,
+            "workspace/executeCommand",
+            json!({"command":"latex.buildStatus","arguments":[uri]}),
+        );
+        assert_eq!(status, *result);
+        server.request(5, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn bibliography_workflow_failures_publish_database_errors_and_preserve_previous_bbl() {
+    let body = r#"printf 'new bibliography\n' > "$directory/$job.bbl"
+if test ! -f "$root/repaired"; then
+ printf 'Repeated entry---line 2 of file refs.bib\n' >> "$directory/$job.blg"
+ exit 2
+fi
+"#;
+    let (mut server, directory, uri) = bibliography_workflow_server(body, "bibtex");
+    let output = directory.path().join("build/latex-lsp");
+    std::fs::create_dir_all(&output).unwrap();
+    std::fs::write(output.join("main.bbl"), "old bibliography").unwrap();
+    let bib = Url::from_file_path(directory.path().join("refs.bib")).unwrap();
+    for repaired in [false, true] {
+        if repaired {
+            std::fs::write(directory.path().join("repaired"), "").unwrap();
+        }
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[uri]}),
+        );
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(
+            finished["params"]["status"],
+            if repaired { "success" } else { "error" },
+            "{finished}"
+        );
+        let published = server.until(|message| {
+            message["method"] == "textDocument/publishDiagnostics"
+                && message["params"]["uri"] == bib.as_str()
+                && message["params"]["diagnostics"]
+                    .as_array()
+                    .is_some_and(|items| {
+                        items.iter().any(|item| {
+                            item["message"]
+                                .as_str()
+                                .is_some_and(|text| text.contains("Repeated entry"))
+                        }) != repaired
+                    })
+        });
+        if !repaired {
+            let diagnostic = published["params"]["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|item| {
+                    item["message"]
+                        .as_str()
+                        .is_some_and(|text| text.contains("Repeated entry"))
+                })
+                .unwrap();
+            assert_eq!(diagnostic["range"]["start"]["line"], 1);
+            assert_eq!(
+                std::fs::read_to_string(output.join("main.bbl")).unwrap(),
+                "old bibliography"
+            );
+            assert!(finished["params"]["pdfUri"].is_null());
+        } else {
+            assert_eq!(
+                std::fs::read_to_string(output.join("main.bbl")).unwrap(),
+                "new bibliography\n"
+            );
+        }
+    }
+    server.request(3, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+fn bibliography_workflow_cancellation_and_dependency_events_remain_responsive() {
+    for change in ["cancel", "style-event", "source-edit"] {
+        let body = "printf ready > \"$root/ready\"\nwhile test ! -f \"$root/release\"; do sleep 0.02; done\nprintf generated > \"$directory/$job.bbl\"";
+        let (mut server, directory, uri) = bibliography_workflow_server(body, "bibtex");
+        let output = directory.path().join("build/latex-lsp");
+        std::fs::create_dir_all(&output).unwrap();
+        std::fs::write(output.join("main.bbl"), "old bibliography").unwrap();
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[uri]}),
+        );
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !directory.path().join("ready").exists() {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let symbols = server.request(
+            3,
+            "textDocument/documentSymbol",
+            json!({"textDocument":{"uri":uri}}),
+        );
+        assert!(symbols.is_array());
+        if change == "style-event" {
+            let style = directory.path().join("custom.bst");
+            std::fs::write(&style, "changed style").unwrap();
+            server.notify(
+                "workspace/didChangeWatchedFiles",
+                json!({"changes":[{"uri":Url::from_file_path(style).unwrap(),"type":2}]}),
+            );
+        } else if change == "source-edit" {
+            let source = std::fs::read_to_string(uri.to_file_path().unwrap()).unwrap();
+            server.notify("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"text":format!("{source}% changed source\n")}]}));
+            std::fs::write(directory.path().join("release"), "").unwrap();
+        } else {
+            server.request(
+                4,
+                "workspace/executeCommand",
+                json!({"command":"latex.cancelBuild","arguments":[uri]}),
+            );
+        }
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        if change == "source-edit" {
+            assert_eq!(finished["params"]["stale"], true, "{finished}");
+            assert!(finished["params"]["analysis"].is_null());
+            assert_eq!(server.request(4, "textDocument/codeAction", json!({"textDocument":{"uri":uri},"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}},"context":{"diagnostics":[],"only":["quickfix"]}})), json!([]));
+        } else {
+            assert_eq!(finished["params"]["status"], "cancelled", "{finished}");
+            assert_eq!(
+                std::fs::read_to_string(output.join("main.bbl")).unwrap(),
+                "old bibliography"
+            );
+        }
+        server.request(5, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn bibliography_workflow_guarded_rebuild_actions_recheck_backend_job_and_removed_configuration() {
+    for change in ["execute", "backend", "job", "remove"] {
+        let (mut server, directory, uri) =
+            bibliography_workflow_server("printf bibliography > \"$directory/$job.bbl\"", "bibtex");
+        let arguments = json!([directory.path().join("compiler.sh"), "%o", "%f"]);
+        let mut settings = json!({"distribution":{"enabled":false},"build":{"executable":"/bin/sh","arguments":arguments,"rebuildArguments":arguments,"bibliographyTool":null}});
+        server.notify(
+            "workspace/didChangeConfiguration",
+            json!({"settings":settings}),
+        );
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[uri]}),
+        );
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(finished["params"]["status"], "success", "{finished}");
+        let published = server.until(|message| {
+            message["method"] == "textDocument/publishDiagnostics"
+                && message["params"]["uri"] == uri.as_str()
+                && message["params"]["diagnostics"]
+                    .as_array()
+                    .is_some_and(|items| items.iter().any(|item| item["source"] == "latex-build"))
+        });
+        let diagnostic = published["params"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["source"] == "latex-build")
+            .unwrap();
+        let request = json!({"textDocument":{"uri":uri},"range":diagnostic["range"],"context":{"diagnostics":[diagnostic],"only":["quickfix"]}});
+        assert_eq!(
+            server.request(3, "textDocument/codeAction", request.clone()),
+            json!([])
+        );
+        settings["build"]["bibliographyTool"] = json!({"backend":"bibtex","executable":"/bin/sh","arguments":[directory.path().join("bibliography-tool.sh"),directory.path()],"dependencies":["refs.bib","custom.bst"]});
+        server.notify(
+            "workspace/didChangeConfiguration",
+            json!({"settings":settings}),
+        );
+        let actions = server.request(4, "textDocument/codeAction", request.clone());
+        assert_eq!(actions.as_array().unwrap().len(), 1, "{change}: {actions}");
+        match change {
+            "backend" => settings["build"]["bibliographyTool"]["backend"] = json!("biber"),
+            "job" => settings["build"]["jobName"] = json!("other"),
+            "remove" => settings["build"]["bibliographyTool"] = Value::Null,
+            "execute" => {}
+            _ => unreachable!(),
+        }
+        if change != "execute" {
+            server.notify(
+                "workspace/didChangeConfiguration",
+                json!({"settings":settings}),
+            );
+            assert_eq!(
+                server.request(5, "textDocument/codeAction", request),
+                json!([])
+            );
+        }
+        server.send(
+            json!({"jsonrpc":"2.0","id":6,"method":"workspace/executeCommand","params":actions[0]}),
+        );
+        let response = server.until(|message| message["id"] == 6);
+        if change == "execute" {
+            assert_eq!(response["result"]["status"], "started", "{response}");
+            let finished = server.until(|message| message["method"] == "latex/buildFinished");
+            assert_eq!(finished["params"]["status"], "success", "{finished}");
+            assert_eq!(finished["params"]["analysis"]["rerunRequired"], false);
+            assert_eq!(
+                std::fs::read(directory.path().join("build/latex-lsp/passes"))
+                    .unwrap()
+                    .len(),
+                4
+            );
+        } else {
+            assert_eq!(response["error"]["code"], -32602, "{change}: {response}");
+            assert_eq!(
+                std::fs::read(directory.path().join("build/latex-lsp/passes"))
+                    .unwrap()
+                    .len(),
+                1
+            );
+        }
+        server.request(7, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}

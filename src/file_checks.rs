@@ -469,7 +469,12 @@ impl Snapshot {
                 break;
             }
         }
-        for path in crate::index_processing::dependencies(&root_path, &config) {
+        for path in crate::index_processing::dependencies(&root_path, &config)
+            .into_iter()
+            .chain(crate::bibliography_processing::dependencies(
+                &root_path, &config,
+            ))
+        {
             let binding = file(&path);
             let contents = InputSnapshot::file(&path);
             configuration.insert(path, (binding, contents));

@@ -15,7 +15,8 @@
     "rootFile": null,
     "onSave": false,
     "timeoutSeconds": 120,
-    "indexTools": []
+    "indexTools": [],
+    "bibliographyTool": null
   }
 }
 ```
@@ -34,10 +35,12 @@ $out_dir = 'build';
 
 `build.rebuildArguments` 单独指定强制编译的完整参数列表，也支持 `%f`、`%o`、`%j`；普通 `latex.build` 仍使用 `arguments`。自定义了 `arguments` 或使用未知编译工具时，必须显式设置 `rebuildArguments` 才能调用 `latex.rebuild`，否则在修改旧日志前报错。例如自定义 latexmk 参数时，可设 `"rebuildArguments": ["-g", "-pdf", "-interaction=nonstopmode", "-file-line-error", "-synctex=1", "-no-shell-escape", "-outdir=%o", "%f"]`；参数应包含工具所需的完整编译选项，设置 `jobName` 时也需自行传入 `%j`。使用这份自定义参数的重编译通知中，`engine` 为 `null`。
 
-例如 Neovim 配置中可加入 `init_options = { build = { executable = 'xelatex', onSave = true } }`。手动使用 XeLaTeX/pdfLaTeX 时只运行一遍，需要多遍处理文献和交叉引用的项目建议使用 latexmk，并自行配置对应引擎参数。
+例如 Neovim 配置中可加入 `init_options = { build = { executable = 'xelatex', onSave = true } }`。未配置显式后续处理时，手动使用 XeLaTeX/pdfLaTeX 只运行一遍；需要多遍处理时可以使用 latexmk，或配置下述文献与索引管线。
 
 `build.jobName` 可设置 PDF、日志、recorder 和 SyncTeX 的共同文件名，例如 `"jobName": "论文 draft.v2"` 生成 `论文 draft.v2.pdf`，主文件仍可以叫 `main.tex`。latexmk 和三个直接 TeX 引擎会自动添加 `-jobname`；自定义 `arguments` 需自行传递 `%j`。名称支持字母、数字、空格、点、下划线和短横线，不能包含目录或前后空格。Tectonic 默认调用不支持该选项。开始和完成通知的 `jobName` 返回实际产物名称；两个项目若将写入同一个 PDF，会拒绝并行编译，待前一次结束后可再次编译。
 
 使用 latexmk 时，`engine` 可设为 `pdflatex`、`xelatex` 或 `lualatex`，服务器会选择相应的多遍编译模式。未指定时，优先读取主文件前 20 行的 `% !TeX program = xelatex` 或 `% !TeX TS-program = lualatex`，否则使用 pdfLaTeX；指令忽略大小写和逐字环境，只接受这三个引擎名称。子文件中的 program 指令不会覆盖主文件。显式 `engine` 优先于指令，显式选择的直接引擎 `executable` 和自定义 `arguments` 保持其调用方式。例如 `init_options = { build = { engine = 'xelatex', onSave = true } }` 可用 latexmk 自动处理 XeLaTeX 的多遍编译及文献。
 
 `build.indexTools` 可显式配置[索引与术语表处理管线](index-processing.md#显式编译管线)，在生成输入后运行工具并强制重编译；默认不启用。工具任务与当前编译共享取消、保存和产物冲突检查。
+
+`build.bibliographyTool` 可显式配置 [BibTeX / Biber 流程](bibliography-processing.md)，暂存文献产物、核对处理日志并运行后续 TeX 遍次；默认不启用，可与索引任务共同配置。

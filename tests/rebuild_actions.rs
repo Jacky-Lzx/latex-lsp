@@ -1,4 +1,9 @@
-use latex_lsp::{build_log, config::IndexToolConfig, editing, workspace::Workspace};
+use latex_lsp::{
+    build_log,
+    config::{BibliographyBackend, BibliographyToolConfig, IndexToolConfig},
+    editing,
+    workspace::Workspace,
+};
 use tower_lsp::lsp_types::*;
 
 const RERUN: &str =
@@ -445,4 +450,34 @@ fn shared_source_index_actions_use_each_roots_own_task_configuration() {
         command(&actions[0]).arguments.as_ref().unwrap()[0]["uri"],
         serde_json::json!(project.root)
     );
+}
+
+#[test]
+fn bibliography_actions_require_the_configured_backend_and_the_single_root_job() {
+    for backend in [BibliographyBackend::Bibtex, BibliographyBackend::Biber] {
+        let mut project = Project::new(true, false);
+        project.workspace.config.build.executable = "pdflatex".into();
+        project.workspace.config.build.bibliography_tool = Some(BibliographyToolConfig {
+            backend,
+            ..Default::default()
+        });
+        for (requested, field, expected) in [
+            ("BibTeX", "file(s):", backend == BibliographyBackend::Bibtex),
+            ("Biber", "file:", backend == BibliographyBackend::Biber),
+        ] {
+            for (job, matches) in [("main", true), ("other", false), ("main, other", false)] {
+                let mut diagnostic = project.diagnostic.clone();
+                diagnostic.message = format!("Package biblatex Warning: Please (re)run {requested} on the {field} {job} and rerun LaTeX afterwards.");
+                project.workspace.build_diagnostics.insert(
+                    project.root.clone(),
+                    [(project.root.clone(), vec![diagnostic])].into(),
+                );
+                assert_eq!(
+                    project.actions(vec![]).len(),
+                    usize::from(expected && matches),
+                    "{backend:?}/{job}/{requested}"
+                );
+            }
+        }
+    }
 }
