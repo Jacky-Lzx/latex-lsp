@@ -1,4 +1,5 @@
 //! BibTeX diagnostics retain database roles, token ranges and input order.
+pub(crate) mod biber_cycles;
 pub(crate) mod biber_fields;
 pub(crate) mod biber_keys;
 pub(crate) mod biber_nameparts;

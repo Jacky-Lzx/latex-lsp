@@ -2276,6 +2276,180 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main
 
 #[test]
 #[cfg(unix)]
+fn biber_inheritance_cycles_use_pre_error_sources_refresh_and_clear_over_push_and_pull() {
+    for (xdata, pull) in [(false, false), (false, true), (true, false), (true, true)] {
+        let script = r#"cp "${2%/*}/fixture.blg" "$1/main.blg"
+printf '%%PDF-1.4\n' > "$1/main.pdf"
+printf '(./main.tex)\n' > "$1/main.log"
+printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main.fls"
+"#;
+        let capabilities = if pull {
+            json!({"textDocument":{"diagnostic":{}}})
+        } else {
+            json!({})
+        };
+        let (mut server, directory, main) =
+            fake_build_server_capabilities(script, false, capabilities);
+        let root = directory.path();
+        let refs = Url::from_file_path(root.join("refs.data")).unwrap();
+        let main_source = "\\documentclass{article}\n\\addbibresource{refs.data}\n";
+        std::fs::write(main.to_file_path().unwrap(), main_source).unwrap();
+        server.notify("textDocument/didChange",json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":main_source}]}));
+        let initial = if xdata {
+            "% 😀\r\n@xdata{café😀,xdata={pére😀}}\r\n@xdata{pére😀,xdata={café😀}}\r\n@book{last😀,year={bad}}\r\n"
+        } else {
+            "% 😀\r\n@book{café😀,crossref={pére😀}}\r\n@book{pére😀,crossref={café😀}}\r\n@book{last😀,year={bad}}\r\n"
+        };
+        let mut current = initial.to_string();
+        std::fs::write(refs.to_file_path().unwrap(), &current).unwrap();
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":refs,"languageId":"bibtex","version":7,"text":current}}),
+        );
+        let message = format!(
+            "Circular {}inheritance between 'café😀'<->'pére😀'",
+            if xdata { "XDATA " } else { "" }
+        );
+        for stage in 0..4 {
+            let mut changes = Vec::new();
+            if stage == 1 {
+                let range = latex_lsp::text::Text::new(current.clone()).range(0, 0);
+                current.insert_str(0, "% moved 😀\r\n");
+                changes.push(json!({"range":range,"text":"% moved 😀\r\n"}));
+                if !xdata {
+                    let at = current.rfind("crossref={").unwrap() + "crossref={".len();
+                    let range = latex_lsp::text::Text::new(current.clone()).range(at, at);
+                    current.insert_str(at, "\r\n ");
+                    changes.push(json!({"range":range,"text":"\r\n "}));
+                }
+            } else if stage == 2 {
+                current=if xdata {"% 😀\r\n@xdata{café😀,title={xdata=pére😀-title}}\r\n@xdata{pére😀,title={xdata=café😀-title}}\r\n@book{last😀,year={bad}}\r\n"} else {"% 😀\r\n@string{names={café😀}}\r\n@book{café😀,crossref={pére😀}}\r\n@book{pére😀,crossref=names}\r\n@book{last😀,year={bad}}\r\n"}.into();
+                changes.push(json!({"text":current}));
+            } else if stage == 3 {
+                current="% 😀\r\n@book{café😀,title={First}}\r\n@book{pére😀,title={Parent}}\r\n@book{last😀,year={2026}}\r\n".into();
+                changes.push(json!({"text":current}));
+            }
+            if !changes.is_empty() {
+                std::fs::write(refs.to_file_path().unwrap(), &current).unwrap();
+                server.notify(
+                    "textDocument/didChange",
+                    json!({"textDocument":{"uri":refs,"version":7+stage},"contentChanges":changes}),
+                );
+                server.notify("textDocument/didSave", json!({"textDocument":{"uri":refs}}));
+            }
+            let log = if stage < 3 {
+                format!("INFO - Found BibTeX data source 'refs.data'\nERROR - {message}\nWARN - legacy year field 'bad' in entry 'last😀' is not an integer - this will probably not sort properly.\n")
+            } else {
+                "INFO - Found BibTeX data source 'refs.data'\n".into()
+            };
+            std::fs::write(root.join("fixture.blg"), log).unwrap();
+            server.request(
+                2 + stage * 3,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            let finished = server.until(|item| item["method"] == "latex/buildFinished");
+            assert_eq!(
+                finished["params"]["status"],
+                if stage < 3 { "error" } else { "success" },
+                "{finished}"
+            );
+            for (i, target) in [&refs, &main].into_iter().enumerate() {
+                let code = if target == &refs {
+                    "cyclic-bibliography-inheritance"
+                } else {
+                    "invalid-bibliography-field-value"
+                };
+                let matches = |items: &[Value]| {
+                    items.iter().filter(|item| item["code"] == code).count()
+                        == if stage < 3 { 1 } else { 0 }
+                };
+                let items = if pull {
+                    server.request(
+                        3 + stage * 3 + i as u64,
+                        "textDocument/diagnostic",
+                        json!({"textDocument":{"uri":target}}),
+                    )["items"]
+                        .clone()
+                } else {
+                    server.until(|item| {
+                        item["method"] == "textDocument/publishDiagnostics"
+                            && item["params"]["uri"] == target.as_str()
+                            && item["params"]["diagnostics"]
+                                .as_array()
+                                .is_some_and(|items| matches(items))
+                    })["params"]["diagnostics"]
+                        .clone()
+                };
+                assert!(
+                    matches(items.as_array().unwrap()),
+                    "{xdata}: stage {stage}: {target}: {items}"
+                );
+                if stage == 3 {
+                    continue;
+                }
+                let item = items
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|item| item["code"] == code)
+                    .unwrap();
+                if target == &main {
+                    assert_eq!(item["severity"], 2);
+                    assert_eq!(item["data"]["key"], "last😀");
+                    assert_eq!(item["data"]["unresolvedSource"], true);
+                    assert!(items
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .all(|item| item["code"] != "cyclic-bibliography-inheritance"));
+                    continue;
+                }
+                assert_eq!(item["severity"], 1);
+                assert_eq!(item["message"], format!("Biber: {message}"));
+                let text = latex_lsp::text::Text::new(current.clone());
+                let syntax = latex_lsp::syntax::Syntax::bibtex(&text);
+                let entry = syntax
+                    .citations
+                    .iter()
+                    .find(|entry| entry.name == "pére😀")
+                    .unwrap();
+                let expected = if !xdata && stage < 2 {
+                    let at = current.rfind("crossref={").unwrap() + "crossref={".len();
+                    let start = at + current[at..].find("café😀").unwrap();
+                    text.range(start, start + "café😀".len())
+                } else {
+                    text.range(entry.span.start, entry.span.end)
+                };
+                assert_eq!(item["range"], json!(expected));
+                let mut data = json!({"key":"pére😀","parent":"café😀","inheritance":if xdata {"xdata"} else {"crossref"}});
+                if !xdata && stage == 2 {
+                    data["unresolvedField"] = true.into();
+                }
+                assert_eq!(item["data"], data);
+                let parent = syntax
+                    .citations
+                    .iter()
+                    .find(|entry| entry.name == "café😀")
+                    .unwrap();
+                assert_eq!(
+                    item["relatedInformation"][0]["location"],
+                    json!({"uri":refs,"range":text.range(parent.span.start,parent.span.end)})
+                );
+                assert_eq!(server.request(20+stage,"textDocument/codeAction",json!({"textDocument":{"uri":refs},"range":item["range"],"context":{"diagnostics":[item],"only":["quickfix"]}})),json!([]));
+            }
+        }
+        server.request(25, "shutdown", Value::Null);
+        if pull {
+            assert_no_pushed_diagnostics(&server);
+        }
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
 fn biber_relation_warnings_refresh_each_field_dynamic_fallback_and_repair_over_push_and_pull() {
     for pull in [false, true] {
         let script = r#"cp "${2%/*}/fixture.blg" "$1/main.blg"

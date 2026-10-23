@@ -115,6 +115,19 @@ cargo test --locked --test biber_relation_diagnostics -- --include-ignored
 cargo test --locked --test protocol biber_relation_warnings_
 ```
 
+## Biber 循环继承
+
+Biber 的完整 `Circular inheritance between 'parent'<->'child'` 和 `Circular XDATA inheritance between 'parent'<->'child'` 使用 `cyclic-bibliography-inheritance`，保留原生错误级别及两个条目键。只使用当前错误发生前完整的数据库读取历史，所有候选须可读且被报告的子键按区分大小写的 NFD 匹配后唯一。
+
+普通循环继承可定位到子条目唯一静态 `crossref` 中的父键；字符串宏、拼接、重复字段、source map 生成字段或通过 `ids` 别名引用父条目时，回退到子条目键。XDATA 的条目级和字段级循环使用同一原生模板，均标记子条目键，不猜测具体字段。通过 `relatedInformation` 链接被报告的父条目；子键歧义时保留主文档错误，并列出最多 16 个候选位置。自循环不会重复列出与主诊断相同的范围。
+
+循环继承是致命错误。当前消息使用报错前的输入记录，之后的诊断仍按失效历史处理，后续输入也不会恢复这一状态。此前已有未知错误、来源缺失或超限、不可读文件或日志截断时，当前循环同样保留主文档错误。不自动删除字段或打断引用链；保存后重新编译刷新位置，修复后清除推送与拉取诊断。
+
+```sh
+cargo test --locked --test biber_cycle_diagnostics -- --include-ignored
+cargo test --locked --test protocol biber_inheritance_cycles_
+```
+
 ## Biber 姓名格式
 
 Biber 的完整姓名消息使用 `malformed-bibliography-name`，覆盖以下原生情况：

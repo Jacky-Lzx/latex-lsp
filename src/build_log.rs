@@ -5473,6 +5473,11 @@ pub(crate) fn parse_bibliography_in(
     let mut lines = log.lines().peekable();
     while let Some(line) = lines.next() {
         let biber = crate::recorder::biber_record(line);
+        // Only this exact cycle may use the input history before its fatal
+        // record. Recording the level still invalidates every later query.
+        let cycle_inputs = biber
+            .and_then(|(_, message)| crate::bib_diagnostics::biber_cycles::record(message))
+            .and_then(|_| bibliography_context.biber_cycle_history());
         if biber.is_some() {
             bibliography_context.biber_key_record(paths, line);
         }
@@ -5670,6 +5675,20 @@ pub(crate) fn parse_bibliography_in(
                 if let Some((uri, diagnostic)) =
                     bibliography_context.biber_key_warning(root, paths, warning, message, severity)
                 {
+                    result.entry(uri).or_default().push(diagnostic);
+                }
+                continue;
+            }
+        }
+        if tool == "Biber" {
+            if let Some(warning) = crate::bib_diagnostics::biber_cycles::record(message) {
+                if let Some((uri, diagnostic)) = bibliography_context.biber_cycle_diagnostic(
+                    root,
+                    warning,
+                    cycle_inputs.as_deref(),
+                    message,
+                    severity,
+                ) {
                     result.entry(uri).or_default().push(diagnostic);
                 }
                 continue;
