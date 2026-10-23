@@ -89,7 +89,7 @@ pub(crate) fn load(ws: &Workspace, uri: &Url, project: Option<&Url>) -> (Config,
             let object = patch
                 .as_object_mut()
                 .ok_or("Expected a JSON settings object")?;
-            if object.contains_key("distribution") { return Err("distribution is a server setting; configure it through initializationOptions or didChangeConfiguration".into()); }
+            if object.contains_key("distribution") || object.contains_key("indexing") { return Err("distribution and indexing are server settings; configure it through initializationOptions or didChangeConfiguration".into()); }
             let projects = object.remove("projects");
             let mut candidate = value.clone();
             merge(&mut candidate, patch);

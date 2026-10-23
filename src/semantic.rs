@@ -3,6 +3,30 @@ use crate::{syntax, workspace::Document};
 use std::{collections::BTreeSet, ops::Range as Span};
 use tower_lsp::{jsonrpc, lsp_types::*};
 
+static CACHED_TOKENS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+#[derive(Debug)]
+pub(crate) struct Snapshot {
+    tokens: SemanticTokens,
+}
+impl Drop for Snapshot {
+    fn drop(&mut self) {
+        CACHED_TOKENS.fetch_sub(self.tokens.data.len(), std::sync::atomic::Ordering::Relaxed);
+    }
+}
+impl Snapshot {
+    fn retain(tokens: SemanticTokens) -> Option<std::sync::Arc<Self>> {
+        let count = tokens.data.len();
+        CACHED_TOKENS
+            .fetch_update(
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+                |current| current.checked_add(count).filter(|total| *total <= 65_536),
+            )
+            .ok()?;
+        Some(std::sync::Arc::new(Self { tokens }))
+    }
+}
+
 const MACRO: u32 = 0;
 const VARIABLE: u32 = 1;
 const TYPE: u32 = 2;
@@ -319,6 +343,11 @@ fn range_offset(doc: &Document, position: Position) -> Option<usize> {
 }
 
 pub fn tokens(doc: &Document, range: Option<Range>) -> jsonrpc::Result<SemanticTokens> {
+    if range.is_none() {
+        if let Some(cached) = doc.semantic_full.get() {
+            return Ok(cached.tokens.clone());
+        }
+    }
     let source = &doc.text.source;
     let requested = match range {
         Some(range) => {
@@ -372,8 +401,14 @@ pub fn tokens(doc: &Document, range: Option<Range>) -> jsonrpc::Result<SemanticT
             cursor += line.len();
         }
     }
-    Ok(SemanticTokens {
+    let tokens = SemanticTokens {
         result_id: None,
         data,
-    })
+    };
+    if range.is_none() {
+        if let Some(snapshot) = Snapshot::retain(tokens.clone()) {
+            let _ = doc.semantic_full.set(snapshot);
+        }
+    }
+    Ok(tokens)
 }

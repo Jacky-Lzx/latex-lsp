@@ -1,0 +1,24 @@
+# 索引预算与缓存
+
+初始化的文件读取和语法分析在受限后台工作线程中执行，初始化响应返回前完成索引，以便首次导航与补全使用一致的项目快照。扫描期间不会占用 Tokio 执行线程；断开连接后在扫描目录和文件的边界检查取消。
+
+```json
+{
+  "latex": {
+    "indexing": {
+      "maxFiles": 1024,
+      "maxFileSize": 2097152,
+      "maxTotalBytes": 67108864,
+      "maxDepth": 16,
+      "completionLimit": 256,
+      "exclude": ["target", "build", "node_modules", "vendor"]
+    }
+  }
+}
+```
+
+这些是服务器级配置，不能写入项目 `.latex-lsp.json`。隐藏目录默认跳过；`exclude` 按目录名称匹配。磁盘索引受文件数量、单文件字节数、总字节数和目录/依赖深度限制，编辑器已打开的缓冲区仍可使用。
+
+`workspace/executeCommand` 的 `latex.indexingStatus` 返回 `files`、`truncated` 和 `limits`，无需 URI 参数。`truncated` 列出触及的限制，补全达到数量上限或索引被截断时返回 `CompletionList`，并设置 `isIncomplete: true`。`latex.reindex` 在后台工作线程中重建磁盘索引并返回相同状态，保留未保存的缓冲区。通过配置通知修改预算后会自动重建索引。
+
+每个文档版本缓存其完整语义令牌结果；仅变更的文档重新生成。跨文件语义变化重新解析相应文档时会清除该缓存。已有的有界 LSP delta 缓存继续用于计算差量；该语义结果缓存共保留至多 65536 个令牌，预算不足时直接返回结果，不额外保留副本。当前仍以整篇文档为语法重解析单位。

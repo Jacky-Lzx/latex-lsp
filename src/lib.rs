@@ -173,6 +173,38 @@ impl Backend {
         }
     }
 
+    async fn reindex(&self) -> Result<serde_json::Value> {
+        let mut workspace = self.workspace.write().await;
+        let state = Arc::new(std::sync::Mutex::new(Some(std::mem::take(&mut *workspace))));
+        let input = state.clone();
+        let task = self.external_tasks.start(move |cancel| {
+            let mut indexed = input.lock().unwrap().take().unwrap();
+            let roots = std::mem::take(&mut indexed.roots);
+            indexed.documents.retain(|_, doc| doc.version.is_some());
+            indexed.index_truncated.clear();
+            for root in roots {
+                indexed.add_root_in_background(root, &|| cancel.cancelled());
+            }
+            Ok(indexed)
+        });
+        let result = match task {
+            Ok(mut task) => task.wait().await,
+            Err(error) => Err(error),
+        };
+        match result {
+            Ok(indexed) => *workspace = indexed,
+            Err(error) => {
+                if let Some(original) = state.lock().unwrap().take() {
+                    *workspace = original;
+                }
+                return Err(error);
+            }
+        }
+        Ok(
+            serde_json::json!({"files":workspace.documents.len(),"truncated":workspace.index_truncated,"limits":workspace.config.indexing}),
+        )
+    }
+
     async fn lint(&self, uri: &Url) {
         let workspace = self.workspace.read().await;
         let config = workspace.settings(uri).diagnostics.chktex.clone();
@@ -370,20 +402,32 @@ impl LanguageServer for Backend {
             .and_then(|doc| doc.folding_range.as_ref())
             .cloned()
             .unwrap_or_default();
+        let mut scan_roots = Vec::new();
         if let Some(folders) = params.workspace_folders {
             for folder in folders {
                 if let Ok(root) = folder.uri.to_file_path() {
-                    workspace.add_root(root);
+                    scan_roots.push(root);
                 }
             }
         }
-        if workspace.roots.is_empty() {
+        if scan_roots.is_empty() {
             if let Some(uri) = params.root_uri {
                 if let Ok(root) = uri.to_file_path() {
-                    workspace.add_root(root);
+                    scan_roots.push(root);
                 }
             }
         }
+        let mut indexed = std::mem::take(&mut *workspace);
+        let mut task = self.external_tasks.start(move |cancel| {
+            for root in scan_roots {
+                if cancel.cancelled() {
+                    return Err(tower_lsp::jsonrpc::Error::request_cancelled());
+                }
+                indexed.add_root_in_background(root, &|| cancel.cancelled());
+            }
+            Ok(indexed)
+        })?;
+        *workspace = task.wait().await?;
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 position_encoding: Some(PositionEncodingKind::UTF16),
@@ -450,6 +494,8 @@ impl LanguageServer for Backend {
                 })),
                 execute_command_provider: Some(ExecuteCommandOptions {
                     commands: vec![
+                        "latex.indexingStatus".into(),
+                        "latex.reindex".into(),
                         "latex.build".into(),
                         "latex.rebuild".into(),
                         "latex.cancelBuild".into(),
@@ -628,6 +674,8 @@ impl LanguageServer for Backend {
     async fn did_change_configuration(&self, params: DidChangeConfigurationParams) {
         match config::Config::parse(params.settings) {
             Ok(config) => {
+                let indexing_changed =
+                    self.workspace.read().await.config.indexing != config.indexing;
                 let distribution_changed =
                     self.workspace.read().await.config.distribution != config.distribution;
                 {
@@ -635,6 +683,13 @@ impl LanguageServer for Backend {
                     workspace.lint_diagnostics.clear();
                     project_config::invalidate();
                     workspace.config = config;
+                }
+                if indexing_changed {
+                    if let Err(error) = self.reindex().await {
+                        self.client
+                            .log_message(MessageType::WARNING, error.message)
+                            .await;
+                    }
                 }
                 if distribution_changed {
                     self.reload_distribution().await;
@@ -649,6 +704,17 @@ impl LanguageServer for Backend {
         &self,
         params: ExecuteCommandParams,
     ) -> Result<Option<serde_json::Value>> {
+        if params.command == "latex.reindex" {
+            let status = self.reindex().await?;
+            self.publish_open().await;
+            return Ok(Some(status));
+        }
+        if params.command == "latex.indexingStatus" {
+            let workspace = self.workspace.read().await;
+            return Ok(Some(
+                serde_json::json!({"files":workspace.documents.len(),"truncated":workspace.index_truncated,"limits":workspace.config.indexing}),
+            ));
+        }
         let argument = params.arguments.first();
         if params.command == "latex.cancelBuild" && argument.is_none() {
             return Ok(Some(
@@ -951,11 +1017,23 @@ impl LanguageServer for Backend {
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let position = params.text_document_position;
-        Ok(Some(CompletionResponse::Array(features::completion(
-            &*self.workspace.read().await,
+        let workspace = self.workspace.read().await;
+        let mut items = features::completion(
+            &workspace,
             &document_uri(position.text_document.uri),
             position.position,
-        ))))
+        );
+        let limit = workspace.config.indexing.completion_limit;
+        let incomplete = items.len() >= limit || !workspace.index_truncated.is_empty();
+        items.truncate(limit);
+        Ok(Some(if incomplete {
+            CompletionResponse::List(CompletionList {
+                is_incomplete: true,
+                items,
+            })
+        } else {
+            CompletionResponse::Array(items)
+        }))
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {

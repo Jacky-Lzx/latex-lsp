@@ -42,6 +42,32 @@ pub struct Config {
     pub formatting: FormattingConfig,
     pub distribution: DistributionConfig,
     pub diagnostics: DiagnosticsConfig,
+    pub indexing: IndexingConfig,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct IndexingConfig {
+    pub max_files: usize,
+    pub max_file_size: u64,
+    pub max_total_bytes: u64,
+    pub max_depth: usize,
+    pub completion_limit: usize,
+    pub exclude: Vec<String>,
+}
+impl Default for IndexingConfig {
+    fn default() -> Self {
+        Self {
+            max_files: 1024,
+            max_file_size: 2 * 1024 * 1024,
+            max_total_bytes: 64 * 1024 * 1024,
+            max_depth: 16,
+            completion_limit: 256,
+            exclude: ["target", "build", "node_modules", "vendor"]
+                .map(String::from)
+                .to_vec(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -161,6 +187,14 @@ impl Config {
         let value = value.get("latex").unwrap_or(&value);
         let config: Self = serde_json::from_value(value.clone())
             .map_err(|error| format!("Invalid LaTeX configuration: {error}"))?;
+        if !(1..=100_000).contains(&config.indexing.max_files)
+            || !(1..=64 * 1024 * 1024).contains(&config.indexing.max_file_size)
+            || !(1..=1024 * 1024 * 1024).contains(&config.indexing.max_total_bytes)
+            || !(1..=128).contains(&config.indexing.max_depth)
+            || !(1..=10_000).contains(&config.indexing.completion_limit)
+        {
+            return Err("Invalid indexing limits: maxFiles 1..100000, maxFileSize 1..64 MiB, maxTotalBytes 1..1 GiB, maxDepth 1..128, completionLimit 1..10000".into());
+        }
         if config.diagnostics.chktex.executable.trim().is_empty()
             || !(1..=3600).contains(&config.diagnostics.chktex.timeout_seconds)
         {

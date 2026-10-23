@@ -17,6 +17,53 @@ struct Server {
 }
 
 #[test]
+fn indexing_limits_are_visible_and_completion_reports_incompleteness() {
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["a.tex", "b.tex"] {
+        std::fs::write(dir.path().join(name), "text").unwrap();
+    }
+    let uri = Url::from_file_path(dir.path().join("a.tex")).unwrap();
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{},"initializationOptions":{"distribution":{"enabled":false},"indexing":{"maxFiles":1,"completionLimit":3}}}));
+    server.notify("initialized", json!({}));
+    let status = server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.indexingStatus"}),
+    );
+    assert_eq!(status["files"], 1);
+    assert_eq!(status["truncated"], json!(["maxFiles"]));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"latex","version":1,"text":"\\"}}),
+    );
+    let response = server.request(
+        3,
+        "textDocument/completion",
+        json!({"textDocument":{"uri":uri},"position":{"line":0,"character":1}}),
+    );
+    assert_eq!(response["isIncomplete"], true);
+    assert_eq!(response["items"].as_array().unwrap().len(), 3);
+    server.notify("workspace/didChangeConfiguration",json!({"settings":{"distribution":{"enabled":false},"indexing":{"maxFiles":4,"completionLimit":3}}}));
+    let status = server.request(
+        4,
+        "workspace/executeCommand",
+        json!({"command":"latex.indexingStatus"}),
+    );
+    assert_eq!(status["files"], 2);
+    assert_eq!(status["truncated"], json!([]));
+    let status = server.request(
+        5,
+        "workspace/executeCommand",
+        json!({"command":"latex.reindex"}),
+    );
+    assert_eq!(status["files"], 2);
+    server.request(6, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
 #[cfg(unix)]
 fn chktex_checks_buffer_on_save_and_discards_stale_results() {
     use std::os::unix::fs::PermissionsExt;

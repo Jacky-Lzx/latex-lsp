@@ -394,6 +394,6 @@ fn complete_with_argument(
     }
     let mut result: Vec<_> = candidates.into_values().collect();
     result.sort_by(|a, b| a.sort_text.cmp(&b.sort_text));
-    result.truncate(256);
+    result.truncate(workspace.config.indexing.completion_limit);
     result
 }

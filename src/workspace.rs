@@ -7,8 +7,6 @@ use tower_lsp::lsp_types::Url;
 
 use crate::{syntax::Syntax, text::Text};
 
-const MAX_FILES: usize = 1024;
-const MAX_FILE_SIZE: u64 = 2 * 1024 * 1024;
 pub const SOURCE_EXTENSIONS: &[&str] = &[
     "tex", "ltx", "bib", "bst", "sty", "cls", "def", "clo", "fd", "ldf", "bbx", "cbx", "lbx", "dbx",
 ];
@@ -89,6 +87,7 @@ pub struct Document {
     pub kind_hint: Option<DocumentKind>,
     /// Editor language selection, valid only while this document is open.
     client_kind: Option<DocumentKind>,
+    pub(crate) semantic_full: std::sync::OnceLock<std::sync::Arc<crate::semantic::Snapshot>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -148,6 +147,7 @@ impl Document {
             kind,
             kind_hint,
             client_kind,
+            semantic_full: Default::default(),
         }
     }
 
@@ -178,6 +178,7 @@ impl Document {
         if self.kind != kind {
             self.kind = kind;
             self.syntax = Self::parse(&self.text, kind);
+            self.semantic_full = Default::default();
         }
         self.kind_hint = Some(kind);
     }
@@ -242,6 +243,7 @@ fn magic_directive(doc: &Document, fields: &[&str]) -> Option<crate::syntax::Arg
 #[derive(Default)]
 pub struct Workspace {
     pub distribution: crate::distribution::Distribution,
+    pub index_truncated: BTreeSet<String>,
     pub lint_diagnostics: BTreeMap<Url, Vec<tower_lsp::lsp_types::Diagnostic>>,
     pub documents: BTreeMap<Url, Document>,
     pub roots: BTreeSet<PathBuf>,
@@ -598,7 +600,7 @@ impl Workspace {
                             || self.roots.iter().any(|root| path.starts_with(root))
                     })
             })
-            .take(MAX_FILES)
+            .take(self.config.indexing.max_files)
             .cloned()
             .collect()
     }
@@ -869,8 +871,29 @@ impl Workspace {
         }
     }
 
+    pub(crate) fn add_root_in_background(&mut self, root: PathBuf, cancelled: &impl Fn() -> bool) {
+        if self.roots.insert(root.clone()) {
+            self.scan_with(&root, 0, cancelled);
+        }
+        if !cancelled() {
+            crate::string_test_context::refresh(self);
+        }
+    }
+
     fn scan(&mut self, directory: &Path, depth: usize) {
-        if depth > 16 || self.documents.len() >= MAX_FILES {
+        self.scan_with(directory, depth, &|| false);
+    }
+    fn scan_with(&mut self, directory: &Path, depth: usize, cancelled: &impl Fn() -> bool) {
+        if cancelled() {
+            self.index_truncated.insert("cancelled".into());
+            return;
+        }
+        if depth > self.config.indexing.max_depth {
+            self.index_truncated.insert("maxDepth".into());
+            return;
+        }
+        if self.documents.len() >= self.config.indexing.max_files {
+            self.index_truncated.insert("maxFiles".into());
             return;
         }
         let Ok(entries) = std::fs::read_dir(directory) else {
@@ -879,7 +902,12 @@ impl Workspace {
         let mut entries = entries.flatten().collect::<Vec<_>>();
         entries.sort_by_key(|entry| entry.file_name());
         for entry in entries {
-            if self.documents.len() >= MAX_FILES {
+            if cancelled() {
+                self.index_truncated.insert("cancelled".into());
+                break;
+            }
+            if self.documents.len() >= self.config.indexing.max_files {
+                self.index_truncated.insert("maxFiles".into());
                 break;
             }
             let Ok(kind) = entry.file_type() else {
@@ -890,12 +918,14 @@ impl Workspace {
                 let name = entry.file_name();
                 let name = name.to_string_lossy();
                 if !name.starts_with('.')
-                    && !matches!(
-                        name.as_ref(),
-                        "target" | "build" | "node_modules" | "vendor"
-                    )
+                    && !self
+                        .config
+                        .indexing
+                        .exclude
+                        .iter()
+                        .any(|excluded| excluded == name.as_ref())
                 {
-                    self.scan(&path, depth + 1);
+                    self.scan_with(&path, depth + 1, cancelled);
                 }
             } else if kind.is_file() && is_source(&path) {
                 if let Ok(uri) = Url::from_file_path(&path) {
@@ -990,7 +1020,10 @@ impl Workspace {
             }
             return;
         }
-        if self.documents.len() >= MAX_FILES && !self.documents.contains_key(uri) {
+        if self.documents.len() >= self.config.indexing.max_files
+            && !self.documents.contains_key(uri)
+        {
+            self.index_truncated.insert("maxFiles".into());
             return;
         }
         let source = uri.to_file_path().ok().and_then(|path| {
@@ -1005,7 +1038,21 @@ impl Workspace {
                 return None;
             }
             let metadata = std::fs::metadata(&path).ok()?;
-            if !metadata.is_file() || metadata.len() > MAX_FILE_SIZE {
+            if !metadata.is_file() {
+                return None;
+            }
+            if metadata.len() > self.config.indexing.max_file_size {
+                self.index_truncated.insert("maxFileSize".into());
+                return None;
+            }
+            let total: u64 = self
+                .documents
+                .iter()
+                .filter(|(other, _)| *other != uri)
+                .map(|(_, doc)| doc.text.source.len() as u64)
+                .sum();
+            if total.saturating_add(metadata.len()) > self.config.indexing.max_total_bytes {
+                self.index_truncated.insert("maxTotalBytes".into());
                 return None;
             }
             std::fs::read_to_string(path).ok()
@@ -1143,7 +1190,11 @@ impl Workspace {
         visited: &mut BTreeSet<Url>,
         refresh: bool,
     ) {
-        if depth >= 16 || !visited.insert(uri.clone()) {
+        if depth >= self.config.indexing.max_depth {
+            self.index_truncated.insert("maxDepth".into());
+            return;
+        }
+        if !visited.insert(uri.clone()) {
             return;
         }
         if refresh {
@@ -1156,7 +1207,7 @@ impl Workspace {
                 .into_iter()
                 .filter(|dependency| !followed.contains(dependency))
                 .collect();
-            if dependencies.is_empty() || followed.len() >= MAX_FILES {
+            if dependencies.is_empty() || followed.len() >= self.config.indexing.max_files {
                 break;
             }
             let sources: BTreeMap<_, _> = self
