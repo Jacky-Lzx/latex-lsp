@@ -116,6 +116,108 @@ impl BuildManager {
         self.start_request(uri, None, true, None).await
     }
 
+    pub(crate) async fn clean(&self, uri: Url, artifacts: bool, dry_run: bool) -> Result<Value> {
+        let mut workspace = self.workspace.write().await;
+        let root = workspace
+            .root_document(&uri)
+            .map_err(Error::invalid_params)?;
+        workspace.refresh_project(&root);
+        let config = workspace.build_config(&root);
+        let root_path = root
+            .to_file_path()
+            .map_err(|_| Error::invalid_params("Cleanup requires a local file"))?;
+        let physical = |path: PathBuf| {
+            let path = crate::workspace::normalize_path(&path);
+            path.canonicalize()
+                .ok()
+                .or_else(|| {
+                    path.parent()?
+                        .canonicalize()
+                        .ok()
+                        .map(|parent| parent.join(path.file_name().unwrap()))
+                })
+                .unwrap_or(path)
+        };
+        let artifact = config.artifact_path(&root_path, "pdf").map(physical);
+        let index_artifacts: BTreeSet<_> = crate::index_processing::outputs(&root_path, &config)
+            .into_iter()
+            .map(physical)
+            .collect();
+        let directory = config.output_path(&root_path).map(physical);
+        let (result, affected) = {
+            // Serialize with build reservation and queued generation checks.
+            // No process is cancelled implicitly by a cleanup request.
+            let mut state = self.state.lock().unwrap();
+            if self.closing.load(Ordering::SeqCst) {
+                return Err(Error::invalid_request());
+            }
+            for (owner, record) in state.iter() {
+                let shared = artifact.is_some() && artifact == record.artifact
+                    || !index_artifacts.is_disjoint(&record.index_artifacts);
+                let same_directory = record
+                    .artifact
+                    .as_ref()
+                    .and_then(|path| path.parent())
+                    .zip(directory.as_deref())
+                    .is_some_and(|(a, b)| a == b)
+                    || record
+                        .index_artifacts
+                        .iter()
+                        .any(|path| directory.as_ref().is_some_and(|dir| path.starts_with(dir)));
+                if record.active.is_some() && (owner == &root || shared || same_directory) {
+                    return Err(Error::invalid_params(format!(
+                        "Wait for the active build of {owner} before cleaning its output directory"
+                    )));
+                }
+                if owner != &root && shared {
+                    return Err(Error::invalid_params(format!("Build artifacts are shared with {owner}; choose a separate jobName or outputDirectory before cleaning")));
+                }
+            }
+            let plan = crate::build_clean::Plan::prepare(&workspace, &root, &config, artifacts)
+                .map_err(Error::invalid_params)?;
+            let mut result = plan.execute(dry_run).map_err(Error::invalid_params)?;
+            result["rootUri"] = json!(root);
+            result["outputDirectory"] = json!(Url::from_directory_path(&plan.directory).ok());
+            result["artifacts"] = json!(artifacts);
+            let mut affected = BTreeSet::new();
+            if !dry_run {
+                let record = state.entry(root.clone()).or_default();
+                record.queued = None;
+                record.cancel_generation = record.cancel_generation.wrapping_add(1);
+                record.result = None;
+                record.inputs.clear();
+                record.checks = Arc::default();
+                if let Some(old) = workspace.build_diagnostics.remove(&root) {
+                    affected.extend(old.into_keys());
+                }
+                workspace.build_diagnostic_sources.remove(&root);
+                workspace.build_checks.remove(&root);
+                if artifacts {
+                    workspace.pdf_checks.remove(&root);
+                }
+                affected.insert(root.clone());
+                affected.extend(
+                    workspace
+                        .documents
+                        .iter()
+                        .filter_map(|(uri, doc)| doc.version.is_some().then_some(uri.clone())),
+                );
+            }
+            (result, affected)
+        };
+        let delivery = workspace.diagnostic_delivery.clone();
+        let notifications = if delivery.is_pull() {
+            vec![]
+        } else {
+            workspace.diagnostic_snapshots(affected)
+        };
+        drop(workspace);
+        if !dry_run {
+            delivery.publish(&self.client, notifications).await;
+        }
+        Ok(result)
+    }
+
     pub(crate) async fn rebuild_guarded(
         &self,
         uri: Url,

@@ -25995,3 +25995,191 @@ fn user_command_documentation_hover_supports_untitled_buffers_and_suppresses_amb
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+#[test]
+#[cfg(unix)]
+fn cleanup_preview_preserves_outputs_and_execution_clears_build_state_and_diagnostics() {
+    for pull in [false, true] {
+        let capabilities = if pull {
+            json!({"textDocument":{"diagnostic":{}}})
+        } else {
+            json!({})
+        };
+        let script = r#"printf '%%PDF-1.4\n' > "$1/main.pdf"
+printf 'main.tex:2: Undefined control sequence.\nl.2 \\missing\n' > "$1/main.log"
+printf 'auxiliary\n' > "$1/main.aux"
+printf 'sync\n' > "$1/main.synctex.gz"
+exit 1
+"#;
+        let (mut server, dir, uri) = fake_build_server_capabilities(script, false, capabilities);
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[uri]}),
+        );
+        server.until(|message| message["method"] == "latex/buildFinished");
+        let before = server.request(
+            3,
+            "workspace/executeCommand",
+            json!({"command":"latex.buildStatus","arguments":[uri]}),
+        );
+        assert_eq!(before["status"], "error");
+        let preview = server.request(
+            4,
+            "workspace/executeCommand",
+            json!({"command":"latex.cleanAuxiliary","arguments":[{"uri":uri,"dryRun":true}]}),
+        );
+        assert_eq!(preview["dryRun"], true);
+        assert_eq!(preview["files"].as_array().unwrap().len(), 2);
+        assert_eq!(preview["removed"], json!([]));
+        let out = dir.path().join("build/latex-lsp");
+        assert!(out.join("main.aux").exists());
+        assert_eq!(
+            server.request(
+                5,
+                "workspace/executeCommand",
+                json!({"command":"latex.buildStatus","arguments":[uri]})
+            ),
+            before
+        );
+        let result = server.request(
+            6,
+            "workspace/executeCommand",
+            json!({"command":"latex.cleanAuxiliary","arguments":[uri]}),
+        );
+        assert_eq!(result["errors"], json!([]));
+        assert_eq!(result["removed"].as_array().unwrap().len(), 2);
+        assert!(!out.join("main.aux").exists());
+        assert!(out.join("main.pdf").exists());
+        assert!(out.join("main.synctex.gz").exists());
+        assert_eq!(
+            server.request(
+                7,
+                "workspace/executeCommand",
+                json!({"command":"latex.buildStatus","arguments":[uri]})
+            )["status"],
+            "idle"
+        );
+        if pull {
+            let report = server.request(
+                8,
+                "textDocument/diagnostic",
+                json!({"textDocument":{"uri":uri}}),
+            );
+            assert!(!report["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["source"] == "latex-build"));
+        } else {
+            server.until(|message| {
+                message["method"] == "textDocument/publishDiagnostics"
+                    && message["params"]["uri"] == uri.as_str()
+                    && !message["params"]["diagnostics"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|item| item["source"] == "latex-build")
+            });
+        }
+        let full = server.request(
+            9,
+            "workspace/executeCommand",
+            json!({"command":"latex.cleanArtifacts","arguments":[uri]}),
+        );
+        assert_eq!(full["removed"].as_array().unwrap().len(), 2);
+        assert!(!out.join("main.pdf").exists());
+        assert!(uri.to_file_path().unwrap().exists());
+        server.request(10, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn cleanup_rejects_running_builds_without_cancelling_them() {
+    let script = r#"touch started
+while [ ! -e release ]; do sleep 0.01; done
+printf '%%PDF-1.4\n' > "$1/main.pdf"
+: > "$1/main.log"
+exit 0
+"#;
+    let (mut server, dir, uri) = fake_build_server(script, false);
+    server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[uri]}),
+    );
+    wait_for_file(&dir.path().join("started"));
+    for (id, command) in [(3, "latex.cleanAuxiliary"), (4, "latex.cleanArtifacts")] {
+        server.send(json!({"jsonrpc":"2.0","id":id,"method":"workspace/executeCommand","params":{"command":command,"arguments":[{"uri":uri,"dryRun":true}]}}));
+        let response = server.until(|message| message["id"] == id);
+        assert_eq!(response["error"]["code"], -32602);
+        assert!(response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("active build"));
+    }
+    assert_eq!(
+        server.request(
+            5,
+            "workspace/executeCommand",
+            json!({"command":"latex.buildStatus","arguments":[uri]})
+        )["status"],
+        "running"
+    );
+    std::fs::write(dir.path().join("release"), "").unwrap();
+    server.until(|message| message["method"] == "latex/buildFinished");
+    server.request(6, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+fn cleanup_rejects_artifacts_shared_with_another_completed_project() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = "\\documentclass{article}\n";
+    let first = Url::from_file_path(dir.path().join("first.tex")).unwrap();
+    let second = Url::from_file_path(dir.path().join("second.tex")).unwrap();
+    for uri in [&first, &second] {
+        std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+    }
+    let compiler = dir.path().join("compiler.sh");
+    std::fs::write(
+        &compiler,
+        "printf '%%PDF-1.4\\n' > \"$1/shared.pdf\"\n: > \"$1/shared.log\"\n",
+    )
+    .unwrap();
+    let mut server = Server::start();
+    let init = server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{},"initializationOptions":{"distribution":{"enabled":false},"build":{"executable":"/bin/sh","arguments":[compiler,"%o"],"jobName":"shared"}}}));
+    assert!(init["capabilities"]["executeCommandProvider"]["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|command| command == "latex.cleanAuxiliary"));
+    server.notify("initialized", json!({}));
+    for uri in [&first, &second] {
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"languageId":"latex","version":1,"text":source}}),
+        );
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[uri]}),
+        );
+        server.until(|message| message["method"] == "latex/buildFinished");
+    }
+    server.send(json!({"jsonrpc":"2.0","id":3,"method":"workspace/executeCommand","params":{"command":"latex.cleanArtifacts","arguments":[first]}}));
+    let response = server.until(|message| message["id"] == 3);
+    assert_eq!(response["error"]["code"], -32602);
+    assert!(response["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("shared"));
+    assert!(dir.path().join("build/latex-lsp/shared.pdf").exists());
+    server.request(4, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

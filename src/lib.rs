@@ -12,6 +12,7 @@ mod bib_strings;
 mod bib_symbols;
 mod bibliography_processing;
 pub mod build;
+mod build_clean;
 pub mod build_log;
 mod build_tools;
 mod call_hierarchy;
@@ -614,6 +615,8 @@ impl LanguageServer for Backend {
                         "latex.reindex".into(),
                         "latex.build".into(),
                         "latex.rebuild".into(),
+                        "latex.cleanAuxiliary".into(),
+                        "latex.cleanArtifacts".into(),
                         "latex.cancelBuild".into(),
                         "latex.buildStatus".into(),
                         "latex.forwardSearch".into(),
@@ -885,6 +888,18 @@ impl LanguageServer for Backend {
                 Ok(Some(serde_json::to_value(response).unwrap()))
             }
             "latex.build" => self.builds.start(uri).await.map(Some),
+            "latex.cleanAuxiliary" | "latex.cleanArtifacts" => {
+                let dry_run = match argument.and_then(|value| value.get("dryRun")) {
+                    None => false,
+                    Some(value) => value.as_bool().ok_or_else(|| {
+                        tower_lsp::jsonrpc::Error::invalid_params("dryRun must be a boolean")
+                    })?,
+                };
+                self.builds
+                    .clean(uri, params.command == "latex.cleanArtifacts", dry_run)
+                    .await
+                    .map(Some)
+            }
             "latex.rebuild" => {
                 if let Some(value) = argument.and_then(|value| value.get("rebuildGuard")) {
                     let mut guard: editing::RebuildGuard = serde_json::from_value(value.clone())
