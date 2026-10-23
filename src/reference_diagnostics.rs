@@ -1,19 +1,71 @@
 //! Conservative, project-scoped references that do not require a compiler run.
 use crate::{
     syntax,
-    workspace::{Document, DocumentKind, Workspace},
+    workspace::{DocumentKind, Workspace},
 };
 use std::{collections::BTreeSet, ops::Range};
 use tower_lsp::lsp_types::*;
 
-pub(crate) fn occurrences(doc: &Document) -> Vec<(bool, Range<usize>)> {
-    if doc.kind != DocumentKind::Latex {
+pub(crate) fn occurrences(ws: &Workspace, uri: &Url) -> Vec<(bool, Range<usize>)> {
+    let Some(doc) = ws.documents.get(uri) else {
+        return vec![];
+    };
+    if doc.kind != DocumentKind::Latex || !ws.index_truncated.is_empty() {
         return vec![];
     }
+    let scope = ws.symbol_scope(uri);
+    let docs: Vec<_> = scope
+        .iter()
+        .filter_map(|uri| ws.documents.get(uri))
+        .filter(|doc| doc.kind == DocumentKind::Latex)
+        .collect();
+    if docs.iter().map(|doc| doc.text.source.len()).sum::<usize>() > 16 * 1024 * 1024
+        || docs
+            .iter()
+            .map(|doc| doc.syntax.commands.len())
+            .sum::<usize>()
+            > 100_000
+        || docs
+            .iter()
+            .map(|doc| doc.syntax.definitions.len() + doc.syntax.environments.len())
+            .sum::<usize>()
+            > 4096
+    {
+        return vec![];
+    }
+    let signatures = crate::signature::CommandSignatures::new(
+        docs.iter()
+            .map(|doc| (doc.text.source.as_str(), &doc.syntax)),
+    );
     let source = &doc.text.source;
+    let operands = signatures.argument_tokens(source, &doc.syntax);
+    let mut opaque = crate::signature::definition_data_spans(source, &doc.syntax);
+    opaque.extend(crate::expl3::math_data_spans(doc));
+    opaque.extend(doc.syntax.ignored.iter().cloned());
+    opaque.extend(doc.syntax.literal_conversions.iter().cloned());
+    opaque.extend(doc.syntax.literal_tests.iter().cloned());
+    opaque.extend(doc.syntax.ambiguous_string_tests.iter().cloned());
+    opaque.sort_unstable_by_key(|span| span.start);
+    let mut merged: Vec<Range<usize>> = Vec::new();
+    for span in opaque {
+        if let Some(last) = merged.last_mut().filter(|last| span.start <= last.end) {
+            last.end = last.end.max(span.end);
+        } else {
+            merged.push(span);
+        }
+    }
+    let mut opaque = 0;
     let mut result = Vec::new();
     for command in &doc.syntax.commands {
-        if doc.syntax.control_operands.contains(&command.span.start) {
+        let at = command.span.start;
+        while merged.get(opaque).is_some_and(|span| span.end <= at) {
+            opaque += 1;
+        }
+        if doc.syntax.control_operands.contains(&at)
+            || operands.contains(&at)
+            || merged.get(opaque).is_some_and(|span| span.contains(&at))
+            || !signatures.command_unchanged(&command.name)
+        {
             continue;
         }
         if syntax::warns_on_undefined_citation(&command.name) {
@@ -104,7 +156,7 @@ pub(crate) fn diagnostics(ws: &Workspace, uri: &Url) -> Vec<Diagnostic> {
             .filter(|(_, info)| info.external)
             .map(|(name, _)| name.as_str()),
     );
-    occurrences(doc)
+    occurrences(ws, uri)
         .into_iter()
         .filter_map(|(citation, span)| {
             let name = &doc.text.source[span.clone()];

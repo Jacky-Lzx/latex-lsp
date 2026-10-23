@@ -291,7 +291,7 @@ pub(crate) fn hints(ws: &Workspace, uri: &Url, range: Range) -> Vec<InlayHint> {
         return vec![];
     };
     let labels = labels(ws, uri);
-    crate::reference_diagnostics::occurrences(doc)
+    crate::reference_diagnostics::occurrences(ws, uri)
         .into_iter()
         .filter(|(citation, _)| !*citation)
         .filter_map(|(_, span)| {

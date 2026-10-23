@@ -27178,3 +27178,65 @@ fn structural_refactors_track_math_groups_and_unsaved_wrapper_meanings_over_stdi
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+fn reference_diagnostics_and_inlay_hints_follow_unsaved_parameter_and_command_semantics() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let macros = Url::from_file_path(dir.path().join("macros.tex")).unwrap();
+    let source = "\\documentclass{article}\r\n\\input{macros}\r\n\\begin{document}\r\n😀 \\label{x}\\take{\\ref{x}\\ref{missing}\\cite{absent}} \\textbf{\\ref{x}}\r\n\\end{document}";
+    std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+    std::fs::write(macros.to_file_path().unwrap(), r"\newcommand{\take}[1]{}").unwrap();
+    std::fs::write(
+        dir.path().join("main.aux"),
+        "\\newlabel{x}{{2}{7}{Title}{}}\n",
+    )
+    .unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"latex","version":1,"text":source}}),
+    );
+    let diagnostic_params = json!({"textDocument":{"uri":uri}});
+    let hint_params = json!({"textDocument":{"uri":uri},"range":{"start":{"line":0,"character":0},"end":{"line":5,"character":0}}});
+    let mut id = 2;
+    for (step, expected_errors, expected_hints) in [(0, 0, 1), (1, 2, 2), (2, 0, 0), (3, 0, 1)] {
+        match step {
+            1 => server.notify("textDocument/didOpen", json!({"textDocument":{"uri":macros,"languageId":"latex","version":1,"text":"\\newcommand{\\take}{}"}})),
+            2 => server.notify("textDocument/didChange", json!({"textDocument":{"uri":macros,"version":2},"contentChanges":[{"text":"\\newcommand{\\take}{}\\renewcommand{\\ref}[1]{#1}\\renewcommand{\\cite}[1]{#1}"}]})),
+            3 => server.notify("textDocument/didClose", json!({"textDocument":{"uri":macros}})),
+            _ => {},
+        }
+        let report = server.request(id, "textDocument/diagnostic", diagnostic_params.clone());
+        id += 1;
+        let errors: Vec<_> = report["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item["code"].as_str(),
+                    Some("undefined-reference" | "undefined-citation")
+                )
+            })
+            .collect();
+        assert_eq!(errors.len(), expected_errors, "step {step}: {report}");
+        let hints = server.request(id, "textDocument/inlayHint", hint_params.clone());
+        id += 1;
+        assert_eq!(
+            hints.as_array().unwrap().len(),
+            expected_hints,
+            "step {step}: {hints}"
+        );
+        assert!(hints
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|hint| hint["label"] == "→ 2, p. 7"));
+    }
+    server.request(id, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
