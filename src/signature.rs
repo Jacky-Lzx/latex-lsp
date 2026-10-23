@@ -1094,6 +1094,8 @@ fn builtin(name: &str) -> Option<Signature> {
                     | "subparagraph"
                     | "caption"
                     | "AtDataInput"
+                    | "item"
+                    | "printbibliography"
             )),
     })
 }

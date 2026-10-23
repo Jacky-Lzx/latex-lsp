@@ -3234,6 +3234,33 @@ fn heading_caption_and_root_signatures_end_optional_arguments_at_unbraced_closin
 }
 
 #[test]
+fn item_and_bibliography_options_end_at_the_first_unprotected_closing_bracket() {
+    for (name, parameter) in [("item", "label"), ("printbibliography", "options")] {
+        for call in [
+            format!("\\{name}"),
+            format!("\\csuse{{{name}}}"),
+            format!("\\csname {name}\\endcsname"),
+            r"\display".into(),
+        ] {
+            let declaration = format!("\\def\\display{{\\{name}}}");
+            let label = format!("{call}[{parameter}]");
+            for tail in ["[literal [ope¦ning]", "[{protected ] clo¦sing}]", "[open¦"] {
+                check("", &format!("{declaration}{call}{tail}"), &label, 0);
+            }
+            for tail in [
+                "[literal [opening] body¦",
+                "[{protected ] closing}] body¦",
+                "[literal [opening] % ignored ]\r\nbody¦",
+            ] {
+                let marked = format!("{declaration}😀 {call}{tail}");
+                let (workspace, uri, at) = setup("", &marked);
+                assert!(signature::help(&workspace, &uri, at).is_none(), "{marked}");
+            }
+        }
+    }
+}
+
+#[test]
 fn starred_headings_hint_the_title_and_do_not_accept_a_short_title() {
     for name in [
         "part",
