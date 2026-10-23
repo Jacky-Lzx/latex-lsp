@@ -271,3 +271,97 @@ fn real_refactors_after_consumed_arguments_preserve_tex_tokenization() {
         assert!(log.lines().any(|line| line == "CAPTURE:H"), "{log}");
     }
 }
+
+#[test]
+fn extraction_reserves_named_declared_generated_and_static_invocation_names() {
+    for declaration in [
+        r"\csdef{extractedcommand}{old}",
+        r"\csletcs{extractedcommand}{relax}",
+        r"\expandafter\def\csname extractedcommand\endcsname{old}",
+        r"\newenvironment{extractedcommand}{}{}",
+        r"\NewDocumentEnvironment{extractedcommand}{}{}{}",
+        r"\newtheorem{extractedcommand}{Theorem}",
+        r"\csuse{extractedcommand}",
+        r"\csname extractedcommand\endcsname",
+        r"\begin{extractedcommand}\end{extractedcommand}",
+        r"\def\open{\begin}\def\close{\end}\open{extractedcommand}\close{extractedcommand}",
+    ] {
+        let source = format!(
+            "{declaration}\r\n\\begin{{document}}\r\n😀 ¦Hello world¦\r\n\\end{{document}}"
+        );
+        let (ws, uri, range, context) = setup(&source, CodeActionKind::REFACTOR_EXTRACT);
+        let actions = editing::code_actions(&ws, &uri, range, &context);
+        let result = changed(&ws, &uri, &actions, "Extract selection into a new command");
+        assert!(
+            result.contains("\\newcommand{\\extractedcommandb}{Hello world}\r\n"),
+            "{declaration}: {result}"
+        );
+        assert!(result.contains("😀 \\extractedcommandb{}"));
+    }
+}
+
+#[test]
+fn exhausted_extraction_names_keep_only_nonconflicting_rewrite_actions() {
+    let declarations = (0..26)
+        .map(|index| {
+            let name = if index == 0 {
+                "extractedcommand".into()
+            } else {
+                format!("extractedcommand{}", char::from(b'a' + index))
+            };
+            format!("\\csdef{{{name}}}{{old}}\n")
+        })
+        .collect::<String>();
+    let source = format!("{declarations}\\begin{{document}}¦Hello¦\\end{{document}}");
+    let (ws, uri, range, context) = setup(&source, CodeActionKind::REFACTOR);
+    let actions = editing::code_actions(&ws, &uri, range, &context);
+    assert_eq!(actions.len(), 3);
+    assert!(actions.iter().all(|action| matches!(action, CodeActionOrCommand::CodeAction(action) if action.kind == Some(CodeActionKind::REFACTOR_REWRITE))));
+}
+
+#[test]
+#[ignore = "requires pdflatex and etoolbox"]
+fn real_extractions_preserve_existing_named_macros_and_environment_commands() {
+    for declaration in [
+        r"\csdef{extractedcommand}{old}",
+        r"\newenvironment{extractedcommand}{old}{}",
+    ] {
+        let marked = format!("\\documentclass{{article}}\n\\usepackage{{etoolbox}}\n{declaration}\n\\begin{{document}}\n\\typeout{{ORIGINAL:\\meaning\\extractedcommand}}\n¦Hello world¦\n\\end{{document}}");
+        let (ws, uri, range, context) = setup(&marked, CodeActionKind::REFACTOR_EXTRACT);
+        let actions = editing::code_actions(&ws, &uri, range, &context);
+        let original = &ws.documents[&uri].text.source;
+        let extracted = changed(&ws, &uri, &actions, "Extract selection into a new command");
+        let dir = tempfile::tempdir().unwrap();
+        let mut meanings = Vec::new();
+        for (name, source) in [
+            ("original.tex", original.as_str()),
+            ("extracted.tex", extracted.as_str()),
+        ] {
+            std::fs::write(dir.path().join(name), source).unwrap();
+            let output = std::process::Command::new("pdflatex")
+                .args([
+                    "-no-shell-escape",
+                    "-interaction=nonstopmode",
+                    "-halt-on-error",
+                    name,
+                ])
+                .current_dir(dir.path())
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+            let log =
+                std::fs::read_to_string(dir.path().join(name.replace(".tex", ".log"))).unwrap();
+            meanings.push(
+                log.lines()
+                    .find(|line| line.starts_with("ORIGINAL:"))
+                    .unwrap()
+                    .to_owned(),
+            );
+        }
+        assert_eq!(meanings[0], meanings[1]);
+    }
+}

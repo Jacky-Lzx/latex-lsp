@@ -27061,3 +27061,59 @@ fn refactor_parameter_context_rejects_data_and_tracks_project_definitions_over_s
         server.wait_exit(0);
     }
 }
+
+#[test]
+fn command_extraction_reserves_project_names_and_revalidates_deferred_collisions() {
+    use latex_lsp::text::Text;
+    let dir = tempfile::tempdir().unwrap();
+    let uri = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let macros = Url::from_file_path(dir.path().join("macros.tex")).unwrap();
+    let source = "\\documentclass{article}\r\n\\input{macros}\r\n\\begin{document}\r\n😀 Hello world\r\n\\end{document}";
+    std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+    std::fs::write(
+        macros.to_file_path().unwrap(),
+        "\\csdef{extractedcommand}{old}",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("other.tex"),
+        "\\documentclass{article}\n\\newenvironment{extractedcommandb}{}{}",
+    )
+    .unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}},"textDocument":{"codeAction":{"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["refactor.extract"]}},"dataSupport":true,"resolveSupport":{"properties":["edit"]}}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"latex","version":7,"text":source}}),
+    );
+    let at = source.find("Hello world").unwrap();
+    let range = Text::new(source.into()).range(at, at + "Hello world".len());
+    let params = json!({"textDocument":{"uri":uri},"range":range,"context":{"diagnostics":[],"only":["refactor.extract"]}});
+    let first = server.request(2, "textDocument/codeAction", params.clone());
+    assert_eq!(first.as_array().unwrap().len(), 1);
+    let resolved = server.request(3, "codeAction/resolve", first[0].clone());
+    assert_eq!(
+        resolved["edit"]["documentChanges"][0]["edits"][0]["newText"],
+        "\\newcommand{\\extractedcommandb}{Hello world}\r\n"
+    );
+    assert_eq!(
+        resolved["edit"]["documentChanges"][0]["textDocument"]["version"],
+        7
+    );
+    server.notify("textDocument/didOpen", json!({"textDocument":{"uri":macros,"languageId":"latex","version":1,"text":"\\csdef{extractedcommand}{old}\r\n\\newenvironment{extractedcommandb}{}{}"}}));
+    server.send(json!({"jsonrpc":"2.0","id":4,"method":"codeAction/resolve","params":first[0]}));
+    assert_eq!(
+        server.until(|message| message["id"] == 4)["error"]["code"],
+        -32801
+    );
+    let updated = server.request(5, "textDocument/codeAction", params);
+    let resolved = server.request(6, "codeAction/resolve", updated[0].clone());
+    assert_eq!(
+        resolved["edit"]["documentChanges"][0]["edits"][0]["newText"],
+        "\\newcommand{\\extractedcommandc}{Hello world}\r\n"
+    );
+    server.request(7, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

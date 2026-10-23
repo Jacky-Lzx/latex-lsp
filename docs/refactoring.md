@@ -10,6 +10,8 @@
 
 参数边界复用当前项目的静态签名，包含无花括号的单 token 参数、可选参数、TeX / xparse 分隔参数、标志和静态 `csuse` / `csname` 调用。纯转发别名、未保存的跨文件定义、歧义和未知调用使用相同的保守检查。例如，`\take Hello` 会读取首个 `H` 时，不将 `Hello` 包成新命令或分组；选择已消费的 `H` 之后的正文仍可重构。`noexpand` 等单 token 操作数也保留原边界，完整选择顶层样式调用继续可用。
 
+提取命令时，一次收集当前项目的直接控制词、用户声明、环境及其他派生控制词、命名接口的静态名称和字面 `csname` 使用，环境调用也保留其开始／结束命令名。跨文件和未保存声明参与检查，独立项目的名称互不影响。沿用最多 26 个候选名称的预算；没有可用名称时，仅保留正文包裹操作。此检查不执行动态名称展开。
+
 项目索引不完整，或分析范围超过 16 MiB 源码、100000 个命令或 4096 个定义时，不提供结构重构。此限制不改变已有快速修复与显式 `source.fixAll` 的入口。
 
 编辑使用客户端协商的文档版本。旧客户端通过 `latex.applyCodeAction` 应用操作时，服务器会重新计算并核对文档版本与操作类型；过期或伪造操作不会执行。
@@ -25,4 +27,5 @@ cargo test --locked --lib code_action_resolve
 cargo test --locked --test protocol code_action_resolution
 cargo test --locked --test refactor --test rebuild_actions
 cargo test --locked --test refactor real_refactors_after_consumed -- --include-ignored
+cargo test --locked --test refactor real_extractions_preserve -- --include-ignored
 ```

@@ -3,7 +3,7 @@ use crate::{
     features, syntax,
     workspace::{Document, DocumentKind, Workspace},
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use tower_lsp::lsp_types::*;
 
 pub(crate) fn allows(context: &CodeActionContext, kind: &CodeActionKind) -> bool {
@@ -373,13 +373,42 @@ pub(crate) fn actions(
     }
     if allows(context, &CodeActionKind::REFACTOR_EXTRACT) {
         if let Some(insertion) = insertion {
-            let scope = ws.symbol_scope(uri);
-            let used = |name: &str| {
-                ws.documents
-                    .iter()
-                    .filter(|(uri, _)| scope.contains(*uri))
-                    .any(|(_, doc)| doc.syntax.commands.iter().any(|cmd| cmd.name == name))
-            };
+            let mut used = BTreeSet::new();
+            for document in &documents {
+                used.extend(
+                    document
+                        .syntax
+                        .commands
+                        .iter()
+                        .map(|command| command.name.clone()),
+                );
+                used.extend(
+                    document
+                        .syntax
+                        .definitions
+                        .iter()
+                        .map(|entry| entry.name.clone()),
+                );
+                used.extend(crate::generated::commands(document));
+                for (index, command) in document.syntax.commands.iter().enumerate() {
+                    for span in crate::named_commands::spans(document, command) {
+                        used.insert(document.text.source[span].to_owned());
+                    }
+                    if let Some(span) = syntax::literal_csname(
+                        &document.text.source,
+                        &document.syntax.commands,
+                        index,
+                    ) {
+                        used.insert(document.text.source[span].to_owned());
+                    }
+                }
+                for call in
+                    signatures.environment_invocations(&document.text.source, &document.syntax)
+                {
+                    used.insert(format!("end{}", call.argument.value));
+                    used.insert(call.argument.value);
+                }
+            }
             let name = (0..26)
                 .map(|index| {
                     if index == 0 {
@@ -388,7 +417,7 @@ pub(crate) fn actions(
                         format!("extractedcommand{}", char::from(b'a' + index))
                     }
                 })
-                .find(|name| !used(name));
+                .find(|name| !used.contains(name));
             if let Some(name) = name {
                 result.push(action(
                     ws,
