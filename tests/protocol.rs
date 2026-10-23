@@ -971,6 +971,127 @@ fn bibliography_dynamic_sets_refresh_declarations_and_independent_renames_over_s
 }
 
 #[test]
+#[cfg(unix)]
+fn repeated_bibliography_fields_publish_related_assignments_and_refresh_after_saved_edits() {
+    for pull in [false, true] {
+        let script = r#"cp "${2%/*}/fixture.blg" "$1/main.blg"
+printf '%%PDF-1.4\n' > "$1/main.pdf"
+printf '(./main.tex)\n' > "$1/main.log"
+printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.bib" > "$1/main.fls"
+"#;
+        let capabilities = if pull {
+            json!({"textDocument":{"diagnostic":{}}})
+        } else {
+            json!({})
+        };
+        let (mut server, directory, main) =
+            fake_build_server_capabilities(script, false, capabilities);
+        let root = directory.path();
+        let refs = Url::from_file_path(root.join("refs.bib")).unwrap();
+        let main_source = "\\documentclass{article}\n\\bibliography{refs}\n";
+        std::fs::write(main.to_file_path().unwrap(), main_source).unwrap();
+        server.notify("textDocument/didChange",json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":main_source}]}));
+        let initial = "% 😀\r\n@book{😀,title={First},TiTlE={Second},TITLE={Third}}\r\n";
+        std::fs::write(refs.to_file_path().unwrap(), initial).unwrap();
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":refs,"languageId":"bibtex","version":7,"text":initial}}),
+        );
+        let mut live = initial.to_string();
+        for stage in 0..3 {
+            if stage > 0 {
+                let edits = if stage == 1 {
+                    vec![("TiTlE", "\r\n ")]
+                } else {
+                    vec![("TiTlE", "note"), ("TITLE", "year")]
+                };
+                let mut changes = Vec::new();
+                for (marker, new_text) in edits {
+                    let at = live.find(marker).unwrap();
+                    let end = at + if stage == 1 { 0 } else { marker.len() };
+                    let range = latex_lsp::text::Text::new(live.clone()).range(at, end);
+                    live.replace_range(at..end, new_text);
+                    changes.push(json!({"range":range,"text":new_text}));
+                }
+                std::fs::write(refs.to_file_path().unwrap(), &live).unwrap();
+                server.notify(
+                    "textDocument/didChange",
+                    json!({"textDocument":{"uri":refs,"version":7+stage},"contentChanges":changes}),
+                );
+                server.notify("textDocument/didSave", json!({"textDocument":{"uri":refs}}));
+            }
+            let log = if stage == 2 {
+                "Database file #1: refs.bib\n".into()
+            } else {
+                format!("Database file #1: refs.bib\n{}",format!("Warning--I'm ignoring 😀's extra \"title\" field\n--line {} of file refs.bib\n",stage+2).repeat(2))
+            };
+            std::fs::write(root.join("fixture.blg"), log).unwrap();
+            server.request(
+                2 + stage * 2,
+                "workspace/executeCommand",
+                json!({"command":"latex.build","arguments":[main]}),
+            );
+            let finished = server.until(|message| message["method"] == "latex/buildFinished");
+            assert_eq!(finished["params"]["status"], "success", "{finished}");
+            let items = if pull {
+                server.request(
+                    3 + stage * 2,
+                    "textDocument/diagnostic",
+                    json!({"textDocument":{"uri":refs}}),
+                )["items"]
+                    .clone()
+            } else {
+                server.until(|message| {
+                    message["method"] == "textDocument/publishDiagnostics"
+                        && message["params"]["uri"] == refs.as_str()
+                        && message["params"]["diagnostics"]
+                            .as_array()
+                            .is_some_and(|items| {
+                                if stage == 2 {
+                                    items.is_empty()
+                                } else {
+                                    items.iter().any(|item| {
+                                        item["code"] == "repeated-bibliography-field"
+                                            && item["range"]["start"]["line"] == stage + 1
+                                    })
+                                }
+                            })
+                })["params"]["diagnostics"]
+                    .clone()
+            };
+            if stage == 2 {
+                assert!(items.as_array().unwrap().is_empty());
+                continue;
+            }
+            let items: Vec<_> = items
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|item| item["code"] == "repeated-bibliography-field")
+                .collect();
+            assert_eq!(items.len(), 2);
+            for (item, marker) in items.into_iter().zip(["TiTlE", "TITLE"]) {
+                let at = live.find(marker).unwrap();
+                let range = latex_lsp::text::Text::new(live.clone()).range(at, at + marker.len());
+                assert_eq!(item["range"], serde_json::to_value(range).unwrap());
+                assert_eq!(item["severity"], 2);
+                assert_eq!(item["data"]["key"], "😀");
+                assert_eq!(
+                    item["relatedInformation"][0]["location"],
+                    json!({"uri":refs,"range":{"start":{"line":1,"character":9},"end":{"line":1,"character":14}}})
+                );
+            }
+        }
+        server.request(8, "shutdown", Value::Null);
+        if pull {
+            assert_no_pushed_diagnostics(&server);
+        }
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
 fn bibliography_ids_aliases_refresh_navigation_and_independent_renames_over_stdio() {
     for versioned in [false, true] {
         let directory = tempfile::tempdir().unwrap();

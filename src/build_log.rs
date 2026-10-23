@@ -5502,6 +5502,22 @@ pub(crate) fn parse_bibliography_in(
             previous = "";
             continue;
         }
+        if let Some((key, field)) = crate::bib_diagnostics::fields::record(line) {
+            let location = lines
+                .peek()
+                .copied()
+                .and_then(crate::bib_diagnostics::position);
+            if location.is_some() {
+                lines.next();
+            }
+            if let Some((uri, diagnostic)) =
+                bibliography_context.extra_field(root, paths, key, field, location)
+            {
+                result.entry(uri).or_insert_with(Vec::new).push(diagnostic);
+            }
+            previous = "";
+            continue;
+        }
         if let Some((kind, child)) = crate::bib_diagnostics::crossref::record(line) {
             let parent = lines.peek().copied().and_then(|line| kind.parent(line));
             if parent.is_some() {

@@ -97,6 +97,21 @@ cargo test --locked --test bibliography_crossref_diagnostics -- --include-ignore
 cargo test --locked --test protocol bibliography_nested_crossrefs_
 ```
 
+## 重复字段
+
+原生 BibTeX 的 `Warning--I'm ignoring entry's extra "title" field` 及紧随的 `--line … of file …` 使用诊断代码 `repeated-bibliography-field`。诊断精确标记被忽略的字段名，`relatedInformation` 链接同一条目中首次赋值的字段名。保留警告级别、原始键和字段信息，支持 ASCII 大小写变化、含引号或撇号的键、自定义字段名、UTF-16、CRLF、两种条目定界符及数据库符号链接。
+
+BibTeX 的报告行指向解析完字段值后看到的逗号或条目关闭符，可能位于字段名之后数行。定位复用完整值表达式和解析边界，包含 `#` 拼接及后移到下一行的定界符。同一行存在多个重复字段时，只有完整日志中的对应警告数与源码候选数一致，才按源码顺序分别定位；不同字段或报告行独立计数。
+
+同组警告复用字段匹配和位置转换结果，数千个重复字段仍逐一显示精确范围及首次赋值。跨行字面值、Unicode 字段名和 CRLF 均保留原始位置；后续语法错误使读取历史不完整时，后续警告重新核对顺序定位条件。位置缓存仅在本次日志中使用，并与实际解析的来源绑定。
+
+缺失续行或未确认的数据库来源保留主文档警告；行号无效、字段或条目有歧义、赋值无效、日志不完整或无法确认顺序时，保留可确认的报告行。字面文本、注释、特殊构造和其他条目不提供字段位置。该警告按编译器实际忽略的值定位；保存修改并重编译后，push/pull 诊断更新位置，消除重复后清除旧结果。
+
+```sh
+cargo test --locked --test bibliography_field_diagnostics -- --include-ignored
+cargo test --locked --test protocol repeated_bibliography_fields_
+```
+
 ## 来源与条目定位
 
 BibTeX 带行号的文献库及样式错误按日志中的输入名称识别类型，再定位到符号链接的实际文件；目标使用无关扩展名时仍保留正确行号。辅助文件不会因链接目标带有源码扩展名而被误当成文献来源；路径缺失或实际为目录时，诊断保留在主文件。

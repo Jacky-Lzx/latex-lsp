@@ -1,5 +1,6 @@
 //! BibTeX diagnostics retain database roles, token ranges and input order.
 pub(crate) mod crossref;
+pub(crate) mod fields;
 
 use crate::{bib_strings, recorder::BibliographyPaths, syntax, text::Text, workspace::Workspace};
 use std::{
@@ -122,6 +123,7 @@ pub(crate) struct Context {
     complete: bool,
     documents: BTreeMap<PathBuf, Option<Arc<Parsed>>>,
     bytes: usize,
+    field_warnings: fields::Warnings,
 }
 
 impl Context {
@@ -132,6 +134,7 @@ impl Context {
             complete: !crate::output::truncated(log),
             documents: BTreeMap::new(),
             bytes: 0,
+            field_warnings: fields::Warnings::new(log),
         }
     }
 
