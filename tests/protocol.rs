@@ -29169,3 +29169,126 @@ fn selected_section_citation_targets_and_hover_follow_unsaved_root_changes_over_
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+#[test]
+fn section_duplicate_keys_refresh_push_and_pull_when_unsaved_registration_roles_change() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = Url::from_file_path(root.join("main.tex")).unwrap();
+    let provider = main.join("setup.tex").unwrap();
+    let default = main.join("default.bib").unwrap();
+    let selected = main.join("section.bib").unwrap();
+    let source = r"\documentclass{article}\usepackage{biblatex}\addbibresource{default.bib}\input{setup}\begin{document}\cite{collision}\newrefsection[chosen]\cite{collision}\end{document}";
+    let registration = r"\addsectionbib[label=chosen]{section.bib}";
+    for (name, contents) in [
+        ("main.tex", source),
+        ("setup.tex", registration),
+        ("default.bib", "@book{collision,title={Default}}"),
+        ("section.bib", "@book{collision,title={Selected}}"),
+    ] {
+        std::fs::write(root.join(name), contents).unwrap();
+    }
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(root).unwrap(),"capabilities":{"textDocument":{"publishDiagnostics":{"relatedInformation":true}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    for (uri, language, contents, version) in [
+        (&main, "latex", source, 5),
+        (&provider, "latex", registration, 3),
+        (&default, "bibtex", "@book{collision,title={Default}}", 7),
+        (&selected, "bibtex", "@book{collision,title={Selected}}", 8),
+    ] {
+        server.notify("textDocument/didOpen", json!({"textDocument":{"uri":uri,"languageId":language,"version":version,"text":contents}}));
+    }
+    let mut request = 2;
+    for uri in [&default, &selected] {
+        let result = server.request(
+            request,
+            "textDocument/diagnostic",
+            json!({"textDocument":{"uri":uri}}),
+        );
+        request += 1;
+        assert!(
+            !result["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["code"] == "duplicate-definition"),
+            "{result}"
+        );
+    }
+    server.pending.borrow_mut().clear();
+    server.notify("textDocument/didChange", json!({"textDocument":{"uri":provider,"version":4},"contentChanges":[{"text":registration.replace("addsectionbib", "addbibresource")}]}));
+    for (uri, other, version) in [(&default, &selected, 7), (&selected, &default, 8)] {
+        let push = server.until(|message| {
+            message["method"] == "textDocument/publishDiagnostics"
+                && message["params"]["uri"] == uri.as_str()
+                && message["params"]["version"] == version
+                && message["params"]["diagnostics"]
+                    .as_array()
+                    .is_some_and(|items| {
+                        items
+                            .iter()
+                            .any(|item| item["code"] == "duplicate-definition")
+                    })
+        });
+        let duplicate = push["params"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["code"] == "duplicate-definition")
+            .unwrap();
+        assert_eq!(
+            duplicate["relatedInformation"][0]["location"]["uri"],
+            other.as_str()
+        );
+        let pull = server.request(
+            request,
+            "textDocument/diagnostic",
+            json!({"textDocument":{"uri":uri}}),
+        );
+        request += 1;
+        assert!(
+            pull["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["code"] == "duplicate-definition"),
+            "{pull}"
+        );
+    }
+    server.pending.borrow_mut().clear();
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":provider}}),
+    );
+    for (uri, version) in [(&default, 7), (&selected, 8)] {
+        server.until(|message| {
+            message["method"] == "textDocument/publishDiagnostics"
+                && message["params"]["uri"] == uri.as_str()
+                && message["params"]["version"] == version
+                && message["params"]["diagnostics"]
+                    .as_array()
+                    .is_some_and(|items| {
+                        !items
+                            .iter()
+                            .any(|item| item["code"] == "duplicate-definition")
+                    })
+        });
+        let pull = server.request(
+            request,
+            "textDocument/diagnostic",
+            json!({"textDocument":{"uri":uri}}),
+        );
+        request += 1;
+        assert!(
+            !pull["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["code"] == "duplicate-definition"),
+            "{pull}"
+        );
+    }
+    server.request(request, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

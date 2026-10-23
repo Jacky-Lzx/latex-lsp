@@ -1,4 +1,4 @@
-//! Read-only citation provenance for statically ordered reference sections.
+//! Citation resource provenance for statically ordered reference sections.
 //!
 //! This deliberately does not certify references or renames. Those operations
 //! also need the identity of every declaration and bibliography relation.
@@ -155,7 +155,8 @@ struct Analysis<'a, 'b> {
     signatures: &'b CommandSignatures<'a>,
     registry: Registry,
     origin: &'a Url,
-    query: Query,
+    query: Option<Query>,
+    resource_sets: BTreeSet<BTreeSet<Url>>,
     active: BTreeSet<Url>,
     answer: Option<BTreeSet<Url>>,
     visited: BTreeSet<Url>,
@@ -266,7 +267,12 @@ impl Analysis<'_, '_> {
                 // state later; textual ordering cannot prove when they run.
                 return None;
             }
-            if uri == self.origin && lexical.span.start == self.query.command {
+            if uri == self.origin
+                && self
+                    .query
+                    .as_ref()
+                    .is_some_and(|query| lexical.span.start == query.command)
+            {
                 if !self.document || !positions.contains(&lexical.span.start) {
                     return None;
                 }
@@ -380,8 +386,133 @@ impl Analysis<'_, '_> {
             None
         };
         self.active = self.registry.resources(self.root, selected.as_deref())?;
+        // Navigation only needs the requested section. Whole-project checks
+        // retain distinct sets, charging their storage to the existing budget.
+        if self.query.is_none() && !self.resource_sets.contains(&self.active) {
+            self.work += self
+                .active
+                .iter()
+                .map(|uri| uri.as_str().len() + std::mem::size_of::<Url>())
+                .sum::<usize>();
+            if self.work > 32 * 1024 * 1024 {
+                return None;
+            }
+            self.resource_sets.insert(self.active.clone());
+        }
         Some(())
     }
+}
+
+// All resource consumers share the same execution and path checks. A failed
+// proof suppresses cross-library diagnostics rather than asserting a union.
+fn valid_sources(docs: &[(Url, &Document)], signatures: &CommandSignatures<'_>) -> bool {
+    !STATE.iter().any(|name| !signatures.command_unchanged(name))
+        && docs.iter().all(|(_, doc)| {
+            if doc
+                .syntax
+                .contextual_resource_readers
+                .values()
+                .flatten()
+                .any(|reader| reader.opaque)
+            {
+                return false;
+            }
+            let compact: String = doc
+                .text
+                .source
+                .chars()
+                .filter(|ch| !ch.is_whitespace())
+                .collect();
+            !compact.contains("refsection=") && !compact.contains("^^")
+        })
+}
+
+pub(crate) enum Coexistence {
+    Union,
+    Unknown,
+    Sections(BTreeSet<BTreeSet<Url>>),
+}
+impl Coexistence {
+    pub(crate) fn permits(&self, a: &Url, b: &Url) -> bool {
+        match self {
+            Self::Union => true,
+            Self::Unknown => false,
+            Self::Sections(sections) => sections
+                .iter()
+                .any(|resources| resources.contains(a) && resources.contains(b)),
+        }
+    }
+}
+
+pub(crate) fn coexistence(ws: &Workspace, root: &Url, scope: &BTreeSet<Url>) -> Coexistence {
+    let Some(docs) = crate::source_inputs::bounded_latex_sources(ws, scope) else {
+        return Coexistence::Unknown;
+    };
+    let signatures = CommandSignatures::new(
+        docs.iter()
+            .map(|(_, doc)| (doc.text.source.as_str(), &doc.syntax)),
+    );
+    let modern = docs.iter().any(|(_, doc)| {
+        let context = Context::new(doc, &signatures);
+        doc.syntax
+            .commands
+            .iter()
+            .enumerate()
+            .any(|(index, command)| {
+                if context.literal(command.span.start) {
+                    return false;
+                }
+                let (name, _) = signatures
+                    .named_invocation(
+                        &doc.text.source,
+                        &doc.syntax,
+                        index,
+                        &BTreeSet::new(),
+                        &context.declarations,
+                    )
+                    .unwrap_or((&command.name, command.span.clone()));
+                ["addbibresource", "addglobalbib", "addsectionbib"]
+                    .iter()
+                    .any(|builtin| signatures.invokes_builtin(name, builtin))
+            })
+    }) || crate::bib_sections::selects_resources(
+        &docs.iter().map(|(_, doc)| *doc).collect::<Vec<_>>(),
+        &signatures,
+    );
+    if !modern {
+        return Coexistence::Union;
+    }
+    let sections = (|| {
+        if !ws.index_truncated.is_empty() || !valid_sources(&docs, &signatures) {
+            return None;
+        }
+        let registry = Registry::new(root, &docs, &signatures);
+        let active = registry.resources(root, None)?;
+        let mut analysis = Analysis {
+            ws,
+            root,
+            signatures: &signatures,
+            registry,
+            origin: root,
+            query: None,
+            resource_sets: BTreeSet::from([active.clone()]),
+            active,
+            answer: None,
+            visited: BTreeSet::new(),
+            stack: BTreeSet::new(),
+            visits: 0,
+            commands: 0,
+            work: 0,
+            document: false,
+            ended: false,
+        };
+        analysis.walk(root)?;
+        if docs.iter().any(|(uri, _)| !analysis.visited.contains(uri)) {
+            return None;
+        }
+        Some(analysis.resource_sets)
+    })();
+    sections.map_or(Coexistence::Unknown, Coexistence::Sections)
 }
 
 struct Target {
@@ -462,28 +593,8 @@ fn target(ws: &Workspace, uri: &Url, offset: usize) -> Option<Option<Target>> {
         let mut result: Option<Target> = None;
         for (root, docs, signatures) in &projects {
             let query = query(doc, signatures, offset)?;
-            for (_, doc) in docs {
-                if doc
-                    .syntax
-                    .contextual_resource_readers
-                    .values()
-                    .flatten()
-                    .any(|reader| reader.opaque)
-                {
-                    return None;
-                }
-                let compact: String = doc
-                    .text
-                    .source
-                    .chars()
-                    .filter(|ch| !ch.is_whitespace())
-                    .collect();
-                if compact.contains("refsection=") || compact.contains("^^") {
-                    return None;
-                }
-                if STATE.iter().any(|name| !signatures.command_unchanged(name)) {
-                    return None;
-                }
+            if !valid_sources(docs, signatures) {
+                return None;
             }
             let registry = Registry::new(root, docs, signatures);
             let active = registry.resources(root, None)?;
@@ -493,7 +604,8 @@ fn target(ws: &Workspace, uri: &Url, offset: usize) -> Option<Option<Target>> {
                 signatures,
                 registry,
                 origin: uri,
-                query: query.clone(),
+                query: Some(query.clone()),
+                resource_sets: BTreeSet::new(),
                 active,
                 answer: None,
                 visited: BTreeSet::new(),

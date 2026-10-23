@@ -1,5 +1,9 @@
 //! Find conflicting definitions only where they coexist in a saved project.
-use crate::{syntax, workspace::Workspace};
+use crate::{
+    bib_section_keys::{self, Coexistence},
+    syntax,
+    workspace::{DocumentKind, Workspace},
+};
 use std::collections::{BTreeMap, BTreeSet};
 use tower_lsp::lsp_types::*;
 
@@ -26,17 +30,22 @@ pub(crate) fn duplicates(
     workspace: &Workspace,
     requested: &BTreeSet<Url>,
 ) -> BTreeMap<Url, Vec<Diagnostic>> {
-    let mut projects: Vec<_> = workspace.saved_projects().into_values().collect();
+    let mut projects: Vec<_> = workspace
+        .saved_projects()
+        .into_iter()
+        .map(|(root, scope)| (Some(root), scope))
+        .collect();
     if projects.is_empty() {
-        projects.push(workspace.documents.keys().cloned().collect());
+        projects.push((None, workspace.documents.keys().cloned().collect()));
     }
     // A shared declaration can conflict in several consumers. Merge locations
     // before emitting so one occurrence receives one diagnostic.
     let mut conflicts = BTreeMap::<(Kind, String, Definition), BTreeSet<Definition>>::new();
-    for project in projects {
+    for (root, project) in projects {
         if project.is_disjoint(requested) {
             continue;
         }
+        let coexistence = std::cell::OnceCell::new();
         let mut index = BTreeMap::<(Kind, &str), Vec<Definition>>::new();
         for uri in &project {
             let Some(doc) = workspace.documents.get(uri) else {
@@ -72,16 +81,36 @@ pub(crate) fn duplicates(
                 if !requested.contains(&definition.0) {
                     continue;
                 }
-                let related = conflicts
-                    .entry((kind, name.into(), definition.clone()))
-                    .or_default();
-                related.extend(
-                    definitions
-                        .iter()
-                        .filter(|other| *other != definition)
-                        .take(16)
-                        .cloned(),
-                );
+                let related: BTreeSet<_> = definitions
+                    .iter()
+                    .filter(|other| {
+                        *other != definition && (kind != Kind::Citation || other.0 != definition.0)
+                    })
+                    .filter(|other| {
+                        kind != Kind::Citation
+                            || ![&definition.0, &other.0].iter().all(|uri| {
+                                workspace
+                                    .documents
+                                    .get(*uri)
+                                    .is_some_and(|doc| doc.kind == DocumentKind::Bibtex)
+                            })
+                            || coexistence
+                                .get_or_init(|| {
+                                    root.as_ref().map_or(Coexistence::Union, |root| {
+                                        bib_section_keys::coexistence(workspace, root, &project)
+                                    })
+                                })
+                                .permits(&definition.0, &other.0)
+                    })
+                    .take(16)
+                    .cloned()
+                    .collect();
+                if !related.is_empty() {
+                    conflicts
+                        .entry((kind, name.into(), definition.clone()))
+                        .or_default()
+                        .extend(related);
+                }
             }
         }
     }
