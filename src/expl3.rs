@@ -104,16 +104,29 @@ fn variable_declaration(name: &str) -> bool {
 pub(crate) struct Analysis {
     pub entries: Vec<Occurrence>,
     pub bodies: Vec<std::ops::Range<usize>>,
+    pub data: Vec<std::ops::Range<usize>>,
 }
 pub(crate) fn occurrences(doc: &Document) -> Analysis {
+    analyze(doc, false)
+}
+pub(crate) fn math_data_spans(doc: &Document) -> Vec<std::ops::Range<usize>> {
+    analyze(doc, true).data
+}
+fn analyze(doc: &Document, include_data: bool) -> Analysis {
     if doc.kind != DocumentKind::Latex {
         return Analysis {
             entries: vec![],
             bodies: vec![],
+            data: vec![],
         };
     }
     let source = &doc.text.source;
     let mut deferred = crate::signature::definition_body_spans(source, &doc.syntax);
+    let mut data = if include_data {
+        crate::signature::definition_data_spans(source, &doc.syntax)
+    } else {
+        vec![]
+    };
     let mut declarations = BTreeMap::new();
     let mut result = Vec::new();
     let mut at = 0;
@@ -199,7 +212,8 @@ pub(crate) fn occurrences(doc: &Document) -> Analysis {
                 } else {
                     Kind::Expl3Command
                 };
-                if kind.valid(&target) {
+                if kind.valid(&target) || include_data {
+                    let valid_target = kind.valid(&target);
                     let mut detail = format!("Declared with \\{name}");
                     if function_declaration(name) {
                         let mut body = syntax::skip_space(source, span.end);
@@ -245,13 +259,27 @@ pub(crate) fn occurrences(doc: &Document) -> Analysis {
                             }
                         }
                         if let Some((body, _)) = syntax::group(source, body, b'{', b'}') {
-                            deferred.push(body.span);
+                            if include_data {
+                                data.push(slash..body.outer_span.end);
+                            }
+                            if valid_target {
+                                deferred.push(body.span);
+                            }
                         }
                         if !ordinary {
                             detail.push_str(" (unsupported parameter text)");
                         }
                     }
-                    declarations.insert(span.start, (kind, detail));
+                    if include_data && variable_declaration(name) {
+                        if let Some((value, _)) =
+                            syntax::group(source, syntax::skip_space(source, span.end), b'{', b'}')
+                        {
+                            data.push(slash..value.outer_span.end);
+                        }
+                    }
+                    if valid_target {
+                        declarations.insert(span.start, (kind, detail));
+                    }
                 }
             }
         }
@@ -276,6 +304,7 @@ pub(crate) fn occurrences(doc: &Document) -> Analysis {
     Analysis {
         entries: result,
         bodies: deferred,
+        data,
     }
 }
 

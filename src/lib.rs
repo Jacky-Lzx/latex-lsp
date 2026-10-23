@@ -46,6 +46,7 @@ mod imports;
 mod label_diagnostics;
 mod lengths;
 mod listings;
+mod math_diagnostics;
 mod minted;
 mod named_colors;
 mod named_commands;

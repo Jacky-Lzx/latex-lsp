@@ -109,6 +109,7 @@ impl Default for DistributionConfig {
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct DiagnosticsConfig {
+    pub math_delimiters: bool,
     pub duplicate_bibliography_fields: bool,
     pub undefined_references: bool,
     pub undefined_citations: bool,
@@ -119,6 +120,7 @@ pub struct DiagnosticsConfig {
 impl Default for DiagnosticsConfig {
     fn default() -> Self {
         Self {
+            math_delimiters: false,
             duplicate_bibliography_fields: true,
             undefined_references: true,
             undefined_citations: true,

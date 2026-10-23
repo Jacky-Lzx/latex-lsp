@@ -374,12 +374,14 @@ impl Workspace {
         let uris: BTreeSet<_> = uris.into_iter().collect();
         let mut duplicates = crate::project_diagnostics::duplicates(self, &uris);
         let environments = crate::environment_diagnostics::Index::new(self, &uris);
+        let mut math = crate::math_diagnostics::Index::new(self, &uris);
         uris.into_iter()
             .map(|uri| {
                 let version = self.documents.get(&uri).and_then(|doc| doc.version);
                 let mut diagnostics = self.local_and_build_diagnostics(&uri);
                 diagnostics.extend(crate::reference_diagnostics::diagnostics(self, &uri));
                 diagnostics.extend(crate::bib_field_diagnostics::diagnostics(self, &uri));
+                diagnostics.extend(math.take(&uri));
                 diagnostics.extend(crate::extra_symbols::diagnostics(self, &uri));
                 let root = self.root_document(&uri).ok();
                 for message in crate::project_config::load(self, &uri, root.as_ref()).1 {

@@ -1,4 +1,4 @@
-# 编辑时引用、文献字段诊断与 ChkTeX
+# 编辑时引用、文献字段、数学定界符诊断与 ChkTeX
 
 未定义的静态标签引用和文献引用在编辑时即可显示警告，无需运行 TeX。检查使用当前项目的源码和文献数据库，支持引用列表、范围引用、结构化 biblatex 引用及 IDS 别名。动态键、注释和逐字代码不会作为静态键检查。修正名称或增加声明后，警告随编辑更新；可使用项目内名称的拼写修复。同一位置已有编译器确认的引用警告时，省略重复静态警告。
 
@@ -9,6 +9,7 @@
       "undefinedReferences": true,
       "undefinedCitations": true,
       "duplicateBibliographyFields": true,
+      "mathDelimiters": false,
       "chktex": {
         "enabled": false,
         "executable": "chktex",
@@ -32,6 +33,27 @@
 cargo test --locked --test static_bibliography_fields
 cargo test --locked --test protocol bibliography_field
 ```
+
+数学定界符检查通过 `diagnostics.mathDelimiters: true` 开启，默认关闭。检查当前 LaTeX 缓冲区中的 `$`、`$$`、`\(` / `\)` 和 `\[` / `\]`，在编辑时报告以下警告（来源为 `latex-lsp`）：
+
+- `unclosed-math`：根文件结束前仍未关闭的公式。
+- `unexpected-math-end`：没有对应起点的显式关闭定界符。
+- `mismatched-math`：行内公式与显示公式的定界符错配，关联起始位置。
+- `nested-math`：公式内直接使用显式起始定界符，关联已有起点。
+
+检查按行内／显示模式配对。基础 LaTeX 接受 `$x\)`、`\(x$`、`$$x\]` 和 `\[x$$`；不同宏包可改变这些命令的含义，相关额外约束由实际编译器检查。注释、逐字代码、字面量转换／测试、token 操作数、命令／环境定义的参数头和替换正文、受支持的 expl3 定义、`csname` 名称及文件／引用参数不作为公式正文扫描。已有数学环境、`ensuremath` 以及公式中的文本盒内容独立选择数学模式，按不透明区域处理。
+
+跨文件输入及静态纯转发别名构成不确定边界；共享文件取所有消费项目的边界并集。检查不推断子文件开头和结尾的数学模式，因此不报告可能跨文件的孤立起止；边界内明确写出的显式错配仍可报告。项目中存在字符类别修改或定界符重定义时跳过检查。条件分支会使当前模式失效。每个文档最多报告 128 项，相关索引只在启用检查时建立。
+
+此检查不展开任意宏，不检查宏包内部实现，也不自动修复定界符。通过运行时宏开启／关闭数学模式的项目可保持关闭。修复缓冲区或关闭设置后，推送及拉取诊断随即清除。
+
+```sh
+cargo test --locked --test static_math
+cargo test --locked --test protocol math_delimiters
+cargo test --locked --test static_math -- --include-ignored
+```
+
+最后一项使用 pdfLaTeX 和 amsmath，对照合法混合写法、定义参数数据和实际拒绝的公式。共享文件、目录配置、UTF-16／CRLF 定位与即时清除由默认测试覆盖。
 
 ChkTeX 默认关闭，开启后在保存时检查当前缓冲区，以文档所在目录运行，因此可以读取本地 `.chktexrc`。`arguments` 用于附加警告开关或 rc 文件参数。服务器随后追加输出格式、`-I0` 和 `TabSize=1`，不跟随 `input` 读取其他文件。输出转换为 UTF-16 范围，诊断来源为 `chktex`。
 

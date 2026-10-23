@@ -1448,7 +1448,7 @@ fn environment_bodies(
 
 /// A body containing exactly one control word forwards to its current meaning.
 /// This recognizes lexical aliases without evaluating arbitrary replacement text.
-fn source_alias(source: &str, parsed: &syntax::Syntax, entry: &Entry) -> Option<String> {
+pub(crate) fn source_alias(source: &str, parsed: &syntax::Syntax, entry: &Entry) -> Option<String> {
     body_alias(source, &source_alias_body(source, parsed, entry)?)
 }
 
@@ -1657,6 +1657,90 @@ pub(crate) fn definition_body_spans(
     source: &str,
     parsed: &syntax::Syntax,
 ) -> Vec<std::ops::Range<usize>> {
+    definition_spans(source, parsed, false)
+}
+
+/// Parameter headers and replacement text are data, not executed math shifts.
+pub(crate) fn definition_data_spans(
+    source: &str,
+    parsed: &syntax::Syntax,
+) -> Vec<std::ops::Range<usize>> {
+    let mut spans = definition_spans(source, parsed, true);
+    // Symbol targets and unfinished definitions need not enter the symbol
+    // index, but their parameter/replacement tokens are still data.
+    for command in &parsed.commands {
+        if parsed.control_operands.contains(&command.span.start) {
+            continue;
+        }
+        let primitive = matches!(
+            command.name.as_str(),
+            "def" | "gdef" | "edef" | "xdef" | "csdef" | "csgdef" | "csedef" | "csxdef"
+        );
+        let environment = matches!(
+            command.name.as_str(),
+            "newenvironment"
+                | "renewenvironment"
+                | "provideenvironment"
+                | "NewDocumentEnvironment"
+                | "RenewDocumentEnvironment"
+                | "ProvideDocumentEnvironment"
+                | "DeclareDocumentEnvironment"
+        );
+        let document = syntax::declares_document_command(&command.name)
+            || (environment && command.name.contains("Document"));
+        if !primitive
+            && !environment
+            && !syntax::declares_traditional_command(&command.name)
+            && !document
+        {
+            continue;
+        }
+        let end = (|| {
+            let mut at = syntax::skip_space(source, command.span.end);
+            if source.as_bytes().get(at) == Some(&b'*') {
+                at = syntax::skip_space(source, at + 1);
+            }
+            at = if source.as_bytes().get(at) == Some(&b'{') {
+                syntax::group(source, at, b'{', b'}')?.1
+            } else {
+                at + syntax::token(source, at)?.len()
+            };
+            at = syntax::skip_space(source, at);
+            if primitive {
+                for _ in 0..4096 {
+                    at = syntax::skip_space(source, at);
+                    if source.as_bytes().get(at) == Some(&b'{') {
+                        break;
+                    }
+                    at += syntax::token(source, at)?.len();
+                }
+            } else if document {
+                at = syntax::group(source, at, b'{', b'}')?.1;
+            } else {
+                for _ in 0..2 {
+                    at = syntax::skip_space(source, at);
+                    if source.as_bytes().get(at) == Some(&b'[') {
+                        at = syntax::bracket_argument(source, at)?.1;
+                    }
+                }
+            }
+            for _ in 0..if environment { 2 } else { 1 } {
+                at = syntax::skip_space(source, at);
+                at = syntax::group(source, at, b'{', b'}')?.1;
+            }
+            Some(at)
+        })()
+        .unwrap_or(source.len());
+        spans.push(command.span.start..end);
+    }
+    spans
+}
+
+fn definition_spans(
+    source: &str,
+    parsed: &syntax::Syntax,
+    include_headers: bool,
+) -> Vec<std::ops::Range<usize>> {
     let mut spans = Vec::new();
     for entry in &parsed.definitions {
         let body = (|| {
@@ -1680,12 +1764,20 @@ pub(crate) fn definition_body_spans(
             syntax::group(source, syntax::skip_space(source, at), b'{', b'}').map(|(body, _)| body)
         })();
         if let Some(body) = body {
-            spans.push(body.span);
+            spans.push(if include_headers {
+                entry.span.start..body.outer_span.end
+            } else {
+                body.span
+            });
         }
     }
     for entry in &parsed.environments {
         if let Some((begin, end)) = environment_bodies(source, parsed, entry) {
-            spans.extend([begin.span, end.span]);
+            if include_headers {
+                spans.push(entry.span.start..end.outer_span.end);
+            } else {
+                spans.extend([begin.span, end.span]);
+            }
         }
     }
     spans

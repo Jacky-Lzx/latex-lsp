@@ -56,7 +56,7 @@
 
 ## 编译与诊断
 
-- [编辑时静态诊断与 ChkTeX](static-diagnostics.md)：未定义引用、重复文献字段、即时拼写修复和保存时检查。
+- [编辑时静态诊断与 ChkTeX](static-diagnostics.md)：未定义引用、重复文献字段、可选数学定界符检查、即时拼写修复和保存时检查。
 - [静态花括号诊断](brace-diagnostics.md)：编辑时的配对检查、单 token 复制、宏正文和快速修复边界。
 - [编译](build.md)：入口、命令、通知和重编译操作。
 - [编译配置](build-configuration.md)：编译器、引擎、参数模板和产物名称。

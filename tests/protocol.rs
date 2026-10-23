@@ -24680,3 +24680,69 @@ fn range_formatting_clamps_oversized_columns_for_latex_and_bibliography() {
         server.wait_exit(0);
     }
 }
+
+#[test]
+fn math_delimiters_publish_pull_and_clear_with_edits_and_settings() {
+    for pull in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+        let source = "% 😀\r\n\\(x\\]";
+        let mut server = Server::start();
+        let capabilities = if pull {
+            json!({"textDocument":{"diagnostic":{}}})
+        } else {
+            json!({})
+        };
+        server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(directory.path()).unwrap(),"capabilities":capabilities,"initializationOptions":{"distribution":{"enabled":false},"diagnostics":{"mathDelimiters":true}}}));
+        server.notify("initialized", json!({}));
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"languageId":"latex","version":1,"text":source}}),
+        );
+        let report = |server: &mut Server, id, version, count| -> Value {
+            if pull {
+                server.request(
+                    id,
+                    "textDocument/diagnostic",
+                    json!({"textDocument":{"uri":uri}}),
+                )["items"]
+                    .clone()
+            } else {
+                server.until(|message| {
+                    message["method"] == "textDocument/publishDiagnostics"
+                        && message["params"]["uri"] == uri.as_str()
+                        && message["params"]["version"] == version
+                        && message["params"]["diagnostics"]
+                            .as_array()
+                            .is_some_and(|items| items.len() == count)
+                })["params"]["diagnostics"]
+                    .clone()
+            }
+        };
+        let items = report(&mut server, 2, 1, 1);
+        assert_eq!(items[0]["code"], "mismatched-math");
+        assert_eq!(
+            items[0]["range"],
+            json!({"start":{"line":1,"character":3},"end":{"line":1,"character":5}})
+        );
+        assert_eq!(
+            items[0]["relatedInformation"][0]["location"]["uri"],
+            uri.as_str()
+        );
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"range":{"start":{"line":1,"character":3},"end":{"line":1,"character":5}},"text":"\\)"}]}));
+        assert_eq!(report(&mut server, 3, 2, 0), json!([]));
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":uri,"version":3},"contentChanges":[{"text":source}]}),
+        );
+        assert_eq!(report(&mut server, 4, 3, 1).as_array().unwrap().len(), 1);
+        server.notify("workspace/didChangeConfiguration", json!({"settings":{"distribution":{"enabled":false},"diagnostics":{"mathDelimiters":false}}}));
+        assert_eq!(report(&mut server, 5, 3, 0), json!([]));
+        server.request(6, "shutdown", Value::Null);
+        if pull {
+            assert_no_pushed_diagnostics(&server);
+        }
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
