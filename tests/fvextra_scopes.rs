@@ -131,7 +131,14 @@ fn check(source: &str, root: &std::path::Path, expected: &[&str]) -> String {
 fn environment_settings_restore_inline_precedence_symbols_dependencies_and_rename() {
     for (initial, outer, inner, expected) in cases() {
         for caller in ["Verb", "code"] {
-            for literal in ["", "Verbatim", "lstlisting", "comment"] {
+            for literal in [
+                "",
+                "Verbatim",
+                "lstlisting",
+                "comment",
+                "VerbatimWrite",
+                "VerbatimBuffer",
+            ] {
                 let directory = tempfile::tempdir().unwrap();
                 let source = source(initial, outer, inner, caller, literal);
                 check(&source, directory.path(), expected);

@@ -4257,7 +4257,7 @@ fn builtin_environment(name: &str) -> Option<Signature> {
         "alignedat" => &[("position", true), ("column pairs", false)],
         "minted" => &[("options", true), ("language", false)],
         "Verbatim" | "Verbatim*" | "LVerbatim" | "LVerbatim*" | "BVerbatim" | "BVerbatim*"
-        | "lstlisting" => &[("options", true)],
+        | "VerbatimWrite" | "VerbatimBuffer" | "lstlisting" => &[("options", true)],
         "SaveVerbatim" | "SaveVerbatim*" => &[("options", true), ("name", false)],
         "VerbatimOut" | "VerbatimOut*" => &[("options", true), ("file", false)],
         _ => return None,

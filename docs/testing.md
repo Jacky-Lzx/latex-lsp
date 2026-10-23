@@ -361,14 +361,16 @@ cargo test --locked --test protocol escaped_inline_
 
 ## FancyVerb 环境参数提示
 
-默认回归覆盖十种环境的选项、保存名称和输出文件提示，包含未完成参数、注释续行、CRLF、Unicode、首个未受花括号保护的右方括号、无选项时的活动换行、项目重定义与未保存设置刷新。协议回归逐次输入头部、完成参数并添加正文和关闭行尾部，核对提示及依赖隔离：
+`fvextra_environments` 另覆盖 `VerbatimWrite` 与 `VerbatimBuffer` 的头部、正文隔离、跨平台换行、关闭标记、折叠与联动编辑、语义高亮、依赖及版本化重命名。原生回归核对实际写入文本、缓冲长度与内容、aux 标签及未读取的伪输入；作用域回归保证这两种环境不会提前关闭外层环境，stdio 头部回归增量完成选项和正文。
+
+默认回归覆盖 FancyVerb 十种环境的选项、保存名称和输出文件提示，包含未完成参数、注释续行、CRLF、Unicode、首个未受花括号保护的右方括号、无选项时的活动换行、项目重定义与未保存设置刷新。协议回归逐次输入头部、完成参数并添加正文和关闭行尾部，核对提示及依赖隔离：
 
 ```sh
-cargo test --locked --test fancyvrb_environments
+cargo test --locked --test fancyvrb_environments --test fvextra_environments
 cargo test --locked --test protocol fancyvrb_environment_header_
 ```
 
-安装 pdfLaTeX、XeLaTeX 和 fancyvrb 后，为第一个命令添加 `-- --include-ignored`；原生回归在实际编译及版本化标签重命名场景中核对头部提示与逐字正文边界。
+安装 pdfLaTeX、XeLaTeX、fancyvrb 和 fvextra 后，为第一个命令添加 `-- --include-ignored`；原生回归在实际编译及版本化标签重命名场景中核对头部提示与逐字正文边界。
 
 ## minted 代码
 

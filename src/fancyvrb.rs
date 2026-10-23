@@ -330,10 +330,11 @@ pub(crate) fn inline_header_mode(
 }
 
 pub(crate) fn is_environment(name: &str) -> bool {
-    matches!(
-        name.strip_suffix('*').unwrap_or(name),
-        "Verbatim" | "LVerbatim" | "BVerbatim" | "SaveVerbatim" | "VerbatimOut"
-    )
+    matches!(name, "VerbatimWrite" | "VerbatimBuffer")
+        || matches!(
+            name.strip_suffix('*').unwrap_or(name),
+            "Verbatim" | "LVerbatim" | "BVerbatim" | "SaveVerbatim" | "VerbatimOut"
+        )
 }
 
 /// FancyVerb checks the first literal end marker on each line. A different

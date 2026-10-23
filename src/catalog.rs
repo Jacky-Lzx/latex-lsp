@@ -1351,6 +1351,8 @@ pub const ENVIRONMENTS: &[&str] = &[
     "SaveVerbatim*",
     "VerbatimOut",
     "VerbatimOut*",
+    "VerbatimWrite",
+    "VerbatimBuffer",
     "lstlisting",
     "minted",
     "theorem",

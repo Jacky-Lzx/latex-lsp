@@ -775,6 +775,8 @@ fn fancyvrb_environment_header_signatures_follow_incremental_edits_over_stdio() 
         "SaveVerbatim*",
         "VerbatimOut",
         "VerbatimOut*",
+        "VerbatimWrite",
+        "VerbatimBuffer",
     ]
     .into_iter()
     .enumerate()
