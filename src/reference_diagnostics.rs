@@ -7,6 +7,14 @@ use std::{collections::BTreeSet, ops::Range};
 use tower_lsp::lsp_types::*;
 
 pub(crate) fn occurrences(ws: &Workspace, uri: &Url) -> Vec<(bool, Range<usize>)> {
+    occurrences_for(ws, uri, false)
+}
+
+pub(crate) fn hint_occurrences(ws: &Workspace, uri: &Url) -> Vec<(bool, Range<usize>)> {
+    occurrences_for(ws, uri, true)
+}
+
+fn occurrences_for(ws: &Workspace, uri: &Url, printing: bool) -> Vec<(bool, Range<usize>)> {
     let Some(doc) = ws.documents.get(uri) else {
         return vec![];
     };
@@ -38,7 +46,7 @@ pub(crate) fn occurrences(ws: &Workspace, uri: &Url) -> Vec<(bool, Range<usize>)
             .map(|doc| (doc.text.source.as_str(), &doc.syntax)),
     );
     let source = &doc.text.source;
-    let operands = signatures.argument_tokens(source, &doc.syntax);
+    let operands = signatures.editing_argument_tokens(source, &doc.syntax);
     let mut opaque = crate::signature::definition_data_spans(source, &doc.syntax);
     opaque.extend(crate::expl3::math_data_spans(doc));
     opaque.extend(doc.syntax.ignored.iter().cloned());
@@ -82,7 +90,7 @@ pub(crate) fn occurrences(ws: &Workspace, uri: &Url) -> Vec<(bool, Range<usize>)
             &declarations,
         );
         let command = resolved.as_ref().unwrap_or(command);
-        if !signatures.command_unchanged(&command.name) {
+        if !signatures.command_unchanged(&command.name) || printing && command.name == "nocite" {
             continue;
         }
         result.extend(crate::reference_calls::keys(source, command, true));

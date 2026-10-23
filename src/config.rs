@@ -52,6 +52,7 @@ pub struct InlayHintsConfig {
     pub enabled: bool,
     pub numbers: bool,
     pub pages: bool,
+    pub citations: bool,
 }
 impl Default for InlayHintsConfig {
     fn default() -> Self {
@@ -59,6 +60,7 @@ impl Default for InlayHintsConfig {
             enabled: true,
             numbers: true,
             pages: true,
+            citations: true,
         }
     }
 }

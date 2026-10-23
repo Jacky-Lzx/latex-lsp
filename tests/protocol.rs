@@ -28150,3 +28150,59 @@ fn captured_reference_renames_reject_partial_edits_and_refresh_unsaved_copy_defi
         server.wait_exit(0);
     }
 }
+#[test]
+fn compiled_citation_hints_follow_root_outputs_printing_semantics_and_configuration() {
+    let dir = tempfile::tempdir().unwrap();
+    let chapter = Url::from_file_path(dir.path().join("chapter.tex")).unwrap();
+    let source = "😀 \\cite{paper,second}\\nocite{paper}\\entrydata{paper}{}";
+    std::fs::write(
+        dir.path().join("main.tex"),
+        r"\documentclass{article}\input{chapter}",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("chapter.tex"), source).unwrap();
+    std::fs::create_dir(dir.path().join("build output")).unwrap();
+    let aux = dir.path().join("build output/custom.aux");
+    std::fs::write(&aux, r"\bibcite{paper}{7}\bibcite{second}{Doe26}").unwrap();
+    std::fs::write(dir.path().join("main.aux"), r"\bibcite{paper}{wrong}").unwrap();
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{},"initializationOptions":{"distribution":{"enabled":false},"build":{"outputDirectory":"build output","jobName":"custom"}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":chapter,"languageId":"latex","version":3,"text":source}}),
+    );
+    let params = json!({"textDocument":{"uri":chapter},"range":{"start":{"line":0,"character":0},"end":{"line":1,"character":0}}});
+    let hints = server.request(2, "textDocument/inlayHint", params.clone());
+    assert_eq!(hints.as_array().unwrap().len(), 2, "{hints}");
+    assert_eq!(hints[0]["label"], "→ 7");
+    assert_eq!(hints[1]["label"], "→ Doe26");
+    assert_eq!(hints[0]["position"]["character"], 14);
+    assert!(hints[0]["tooltip"]
+        .as_str()
+        .unwrap()
+        .contains("may be stale"));
+    let empty=server.request(3,"textDocument/inlayHint",json!({"textDocument":{"uri":chapter},"range":{"start":{"line":1,"character":0},"end":{"line":2,"character":0}}}));
+    assert_eq!(empty, json!([]));
+    std::fs::write(
+        &aux,
+        r"\bibcite{paper}{{1}{2026}{{Doe}}{{Doe}}}\bibcite{second}{Updated26}",
+    )
+    .unwrap();
+    let hints = server.request(4, "textDocument/inlayHint", params.clone());
+    assert_eq!(hints.as_array().unwrap().len(), 1, "{hints}");
+    assert_eq!(hints[0]["label"], "→ Updated26");
+    server.notify("workspace/didChangeConfiguration",json!({"settings":{"distribution":{"enabled":false},"build":{"outputDirectory":"build output","jobName":"custom"},"inlayHints":{"citations":false}}}));
+    assert_eq!(
+        server.request(5, "textDocument/inlayHint", params.clone()),
+        json!([])
+    );
+    server.notify("workspace/didChangeConfiguration",json!({"settings":{"distribution":{"enabled":false},"build":{"outputDirectory":"build output","jobName":"custom"},"inlayHints":{"numbers":false,"pages":false,"citations":true}}}));
+    assert_eq!(
+        server.request(6, "textDocument/inlayHint", params)[0]["label"],
+        "→ Updated26"
+    );
+    server.request(7, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

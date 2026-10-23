@@ -50,6 +50,8 @@ BibTeX 自定义条目类型支持数字后缀、下划线、连字符等合法�
 
 普通 `cite`、`nocite`、natbib 和已支持的 biblatex 命令共用文献键索引。
 
+传统 LaTeX／BibTeX 的平面 `bibcite` 编译记录可在输出引用旁显示文献标签，支持独立开关、请求范围与辅助文件更新；结构化 natbib 和 biblatex 专用记录暂不推断。配置和边界见[辅助文件引用](auxiliary-references.md)。
+
 natbib 的 `citealt` / `citealp`、`citenum`、`citeyearpar`、`citefullauthor` 及 `Citet` / `Citep` / `Citealt` / `Citealp` / `Citeauthor` 支持文献键补全、导航、引用、语义高亮、安全重命名、编译警告定位及拼写修复，并提供命令片段与参数提示。识别支持的星号形式及星号前后的空白和注释，保留引用列表、注释参数和正文。
 
 biblatex 的单次、多组和卷号引用及其星号形式见 [biblatex 引用指南](biblatex.md)，包括标题、日期、URL、脚注和仅记录文献键的说明引用。
