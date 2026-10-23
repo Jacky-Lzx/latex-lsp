@@ -1101,7 +1101,9 @@ pub(crate) fn code_input_command(name: &str) -> bool {
 
 pub fn file_extensions(name: &str) -> Option<&'static [&'static str]> {
     Some(match name {
-        "input" | "InputIfFileExists" => &["tex", "ltx", "sty", "cls", "def", "clo"],
+        "input" | "InputIfFileExists" => &[
+            "tex", "ltx", "sty", "cls", "def", "clo", "fd", "ldf", "bbx", "cbx", "lbx", "dbx",
+        ],
         "IfFileExists" => &["tex"],
         // Empty suffix means an exact arbitrary file, never an appended dot.
         name if code_input_command(name) => &[""],

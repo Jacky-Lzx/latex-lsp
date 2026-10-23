@@ -9,7 +9,9 @@ use crate::{syntax::Syntax, text::Text};
 
 const MAX_FILES: usize = 1024;
 const MAX_FILE_SIZE: u64 = 2 * 1024 * 1024;
-pub const SOURCE_EXTENSIONS: &[&str] = &["tex", "ltx", "bib", "bst", "sty", "cls", "def", "clo"];
+pub const SOURCE_EXTENSIONS: &[&str] = &[
+    "tex", "ltx", "bib", "bst", "sty", "cls", "def", "clo", "fd", "ldf", "bbx", "cbx", "lbx", "dbx",
+];
 
 pub fn is_source(path: &Path) -> bool {
     path.extension()

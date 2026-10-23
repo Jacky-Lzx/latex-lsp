@@ -32,6 +32,12 @@ fn unavailable_traditional_sources_never_borrow_parent_error_contexts() {
         "\"./missing file.tex\"".to_owned(),
         "./missing(paren).sty".to_owned(),
         "\"./missing (quoted).def\"".to_owned(),
+        "./missing.bbx".to_owned(),
+        "./missing.cbx".to_owned(),
+        "./missing.lbx".to_owned(),
+        "./missing.dbx".to_owned(),
+        "./missing.fd".to_owned(),
+        "./missing.ldf".to_owned(),
         root.join("missing absolute.tex")
             .to_string_lossy()
             .into_owned(),

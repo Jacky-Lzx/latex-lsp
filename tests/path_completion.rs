@@ -57,6 +57,12 @@ fn input_completions_keep_non_tex_extensions_and_links_do_not_infer_them() {
         "defaults.clo",
         "chapter.ltx",
         "local.sty",
+        "bibliography.bbx",
+        "citations.cbx",
+        "language.lbx",
+        "datamodel.dbx",
+        "font.fd",
+        "locale.ldf",
     ] {
         std::fs::write(root.join(name), "").unwrap();
     }
@@ -75,21 +81,110 @@ fn input_completions_keep_non_tex_extensions_and_links_do_not_infer_them() {
         ),
         (r"\input{chap|ter}", "chapter.ltx", r"\input{chapter.ltx}"),
         (r"\input{lo|cal}", "local.sty", r"\input{local.sty}"),
+        (
+            r"\input{biblio|graphy}",
+            "bibliography.bbx",
+            r"\input{bibliography.bbx}",
+        ),
+        (
+            r"\input{cita|tions}",
+            "citations.cbx",
+            r"\input{citations.cbx}",
+        ),
+        (
+            r"\input{lang|uage}",
+            "language.lbx",
+            r"\input{language.lbx}",
+        ),
+        (
+            r"\input{data|model}",
+            "datamodel.dbx",
+            r"\input{datamodel.dbx}",
+        ),
+        (
+            r"\InputIfFileExists{biblio|graphy}{}{}",
+            "bibliography.bbx",
+            r"\InputIfFileExists{bibliography.bbx}{}{}",
+        ),
+        (r"\input{fo|nt}", "font.fd", r"\input{font.fd}"),
+        (
+            r"\InputIfFileExists{loc|ale}{}{}",
+            "locale.ldf",
+            r"\InputIfFileExists{locale.ldf}{}{}",
+        ),
     ] {
         assert_eq!(
             apply_completion(&mut workspace, &uri, marked, label),
             expected
         );
     }
-    let source =
-        "\\input{commands}\n\\input{commands.def}\n\\input{chapter}\n\\input{chapter.ltx}\n";
+    let source = "\\input{commands}\n\\input{commands.def}\n\\input{chapter}\n\\input{chapter.ltx}\n\\input{bibliography}\n\\input{bibliography.bbx}\n\\input{citations}\n\\input{citations.cbx}\n\\input{language}\n\\input{language.lbx}\n\\input{datamodel}\n\\input{datamodel.dbx}\n\\input{font}\n\\input{font.fd}\n\\input{locale}\n\\input{locale.ldf}\n";
     workspace
         .documents
         .insert(uri.clone(), Document::new(&uri, source.into(), Some(1)));
     let links = latex_lsp::navigation::document_links(&workspace, &uri);
-    assert_eq!(links.len(), 2);
+    assert_eq!(links.len(), 8);
     assert_eq!(links[0].range.start.line, 1);
     assert_eq!(links[1].range.start.line, 3);
+    for (index, name) in [
+        "bibliography.bbx",
+        "citations.cbx",
+        "language.lbx",
+        "datamodel.dbx",
+        "font.fd",
+        "locale.ldf",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_eq!(links[index + 2].range.start.line, 5 + index as u32 * 2);
+        assert_eq!(
+            links[index + 2].target,
+            Some(Url::from_file_path(root.join(name)).unwrap())
+        );
+    }
+}
+
+#[test]
+fn support_source_input_completions_preserve_native_suffix_priority() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = Url::from_file_path(root.join("main.tex")).unwrap();
+    std::fs::write(root.join("main.tex"), "").unwrap();
+    let mut workspace = Workspace::default();
+    for extension in ["bbx", "cbx", "lbx", "dbx", "fd", "ldf"] {
+        let name = format!("local.{extension}");
+        let shadow = format!("{name}.tex");
+        let exact = matches!(extension, "fd" | "ldf");
+        std::fs::write(root.join(&name), "Exact").unwrap();
+        std::fs::write(root.join(&shadow), "Shadow").unwrap();
+        for loader in ["input", "InputIfFileExists"] {
+            let tail = if loader == "input" { "" } else { "{}{}" };
+            let marked = format!("\\{loader}{{local.{extension}¦}}{tail}");
+            let source = marked.replace('¦', "");
+            workspace.open(main.clone(), source.clone(), 1);
+            let at = Text::new(source).position(marked.find('¦').unwrap());
+            let items = features::completion(&workspace, &main, at);
+            assert_eq!(
+                items.iter().any(|item| item.label == name),
+                exact,
+                "{marked}: {items:?}"
+            );
+            assert_eq!(
+                items.iter().any(|item| item.label == shadow),
+                !exact,
+                "{marked}: {items:?}"
+            );
+            let marked = marked.replace('¦', "|");
+            let chosen = if exact { &name } else { &shadow };
+            let completed = apply_completion(&mut workspace, &main, &marked, chosen);
+            workspace.open(main.clone(), completed, 2);
+            assert_eq!(
+                latex_lsp::navigation::document_links(&workspace, &main)[0].target,
+                Some(Url::from_file_path(root.join(chosen)).unwrap())
+            );
+        }
+    }
 }
 
 #[test]

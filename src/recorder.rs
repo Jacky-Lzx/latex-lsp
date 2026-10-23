@@ -859,13 +859,24 @@ mod tests {
             "local.sty",
             "main.aux",
             "figure.PNG",
+            "local.bbx",
+            "local.cbx",
+            "local.lbx",
+            "local.dbx",
+            "local.fd",
+            "local.ldf",
         ] {
             std::fs::write(directory.path().join(name), "").unwrap();
         }
         let root = directory.path().join("main.tex");
-        let contents = format!("PWD {}\nINPUT main.tex\nINPUT ./main.tex\nOUTPUT local.sty\nINPUT local.sty\nINPUT main.aux\nINPUT figure.PNG\nINPUT missing.tex\nPWD {}\nINPUT 中文 file.tex\n",directory.path().display(),directory.path().join("chapters").display());
+        let contents = format!("PWD {}\nINPUT main.tex\nINPUT ./main.tex\nOUTPUT local.sty\nINPUT local.sty\nINPUT main.aux\nINPUT figure.PNG\nINPUT local.bbx\nINPUT local.cbx\nINPUT local.lbx\nINPUT local.dbx\nINPUT local.fd\nINPUT local.ldf\nINPUT missing.tex\nPWD {}\nINPUT 中文 file.tex\n",directory.path().display(),directory.path().join("chapters").display());
         let inputs = inputs(&root, &contents);
-        assert_eq!(inputs.len(), 4);
+        assert_eq!(inputs.len(), 10);
+        for extension in ["bbx", "cbx", "lbx", "dbx", "fd", "ldf"] {
+            assert!(inputs.contains(
+                &Url::from_file_path(directory.path().join(format!("local.{extension}"))).unwrap()
+            ));
+        }
         assert!(inputs.contains(
             &Url::from_file_path(directory.path().join("chapters/中文 file.tex")).unwrap()
         ));

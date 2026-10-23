@@ -5993,9 +5993,9 @@ fn real_engine_directives_select_the_root_engine_and_explicit_configuration_over
 }
 
 #[test]
-fn ltx_def_and_clo_sources_are_indexed_and_included_in_dynamic_watch_registration() {
+fn latex_and_biblatex_sources_are_indexed_and_included_in_dynamic_watch_registration() {
     let directory = tempfile::tempdir().unwrap();
-    for extension in ["ltx", "def", "clo"] {
+    for extension in ["ltx", "def", "clo", "bbx", "cbx", "lbx", "dbx", "fd", "ldf"] {
         std::fs::write(
             directory.path().join(format!("source.{extension}")),
             format!("\\label{{source:{extension}}}"),
@@ -6010,7 +6010,9 @@ fn ltx_def_and_clo_sources_are_indexed_and_included_in_dynamic_watch_registratio
         ["globPattern"]
         .as_str()
         .unwrap();
-    for extension in ["tex", "ltx", "bib", "sty", "cls", "def", "clo"] {
+    for extension in [
+        "tex", "ltx", "bib", "sty", "cls", "def", "clo", "bbx", "cbx", "lbx", "dbx", "fd", "ldf",
+    ] {
         assert!(pattern.contains(extension));
     }
     let watchers = registration["params"]["registrations"][0]["registerOptions"]["watchers"]
@@ -6055,7 +6057,7 @@ fn ltx_def_and_clo_sources_are_indexed_and_included_in_dynamic_watch_registratio
     }
     server.send(json!({"jsonrpc":"2.0","id":registration["id"],"result":null}));
     let symbols = server.request(2, "workspace/symbol", json!({"query":"source:"}));
-    assert_eq!(symbols.as_array().unwrap().len(), 3);
+    assert_eq!(symbols.as_array().unwrap().len(), 9);
     let definitions = directory.path().join("source.def");
     std::fs::write(&definitions, "\\label{updated:definitions}").unwrap();
     server.notify(
@@ -6079,7 +6081,95 @@ fn ltx_def_and_clo_sources_are_indexed_and_included_in_dynamic_watch_registratio
             .len(),
         1
     );
-    server.request(5, "shutdown", Value::Null);
+    for (index, extension) in ["bbx", "cbx", "lbx", "dbx", "fd", "ldf"]
+        .into_iter()
+        .enumerate()
+    {
+        let id = 10 + index as u64 * 10;
+        let path = directory.path().join(format!("source.{extension}"));
+        let uri = Url::from_file_path(&path).unwrap();
+        server.notify("textDocument/didOpen", json!({"textDocument":{"uri":uri,"languageId":"latex","version":9,"text":format!("\\label{{unsaved:{extension}}}")}}));
+        std::fs::write(&path, format!("\\label{{updated:{extension}}}")).unwrap();
+        server.notify(
+            "workspace/didChangeWatchedFiles",
+            json!({"changes":[{"uri":uri,"type":2}]}),
+        );
+        assert_eq!(
+            server
+                .request(
+                    id,
+                    "workspace/symbol",
+                    json!({"query":format!("unsaved:{extension}")})
+                )
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(server
+            .request(
+                id + 1,
+                "workspace/symbol",
+                json!({"query":format!("updated:{extension}")})
+            )
+            .as_array()
+            .unwrap()
+            .is_empty());
+        server.notify("textDocument/didClose", json!({"textDocument":{"uri":uri}}));
+        assert_eq!(
+            server
+                .request(
+                    id + 2,
+                    "workspace/symbol",
+                    json!({"query":format!("updated:{extension}")})
+                )
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(server
+            .request(
+                id + 3,
+                "workspace/symbol",
+                json!({"query":format!("unsaved:{extension}")})
+            )
+            .as_array()
+            .unwrap()
+            .is_empty());
+        std::fs::remove_file(&path).unwrap();
+        server.notify(
+            "workspace/didChangeWatchedFiles",
+            json!({"changes":[{"uri":uri,"type":3}]}),
+        );
+        assert!(server
+            .request(
+                id + 4,
+                "workspace/symbol",
+                json!({"query":format!("updated:{extension}")})
+            )
+            .as_array()
+            .unwrap()
+            .is_empty());
+        std::fs::write(&path, format!("\\label{{recreated:{extension}}}")).unwrap();
+        server.notify(
+            "workspace/didChangeWatchedFiles",
+            json!({"changes":[{"uri":uri,"type":1}]}),
+        );
+        assert_eq!(
+            server
+                .request(
+                    id + 5,
+                    "workspace/symbol",
+                    json!({"query":format!("recreated:{extension}")})
+                )
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+    server.request(99, "shutdown", Value::Null);
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
@@ -6119,6 +6209,163 @@ fn real_ltx_root_and_dynamically_input_definition_files_compile_and_keep_root_de
     server.request(4, "shutdown", Value::Null);
     server.notify("exit", Value::Null);
     server.wait_exit(0);
+}
+
+#[test]
+fn nfss_declarations_and_selectors_negotiate_snippets_and_refresh_signatures_over_stdio() {
+    use latex_lsp::text::Text;
+
+    let declarations = [
+        (
+            "DeclareFontEncoding",
+            &["encoding", "text settings", "math settings"][..],
+        ),
+        (
+            "DeclareFontEncodingDefaults",
+            &["text settings", "math settings"][..],
+        ),
+        (
+            "DeclareFontFamily",
+            &["encoding", "family", "loading settings"][..],
+        ),
+        (
+            "DeclareFontShape",
+            &[
+                "encoding",
+                "family",
+                "series",
+                "shape",
+                "size specification",
+                "loading settings",
+            ][..],
+        ),
+        (
+            "DeclareFontSubstitution",
+            &["encoding", "family", "series", "shape"][..],
+        ),
+        (
+            "DeclareMathSizes",
+            &["text size", "math size", "script size", "scriptscript size"][..],
+        ),
+        ("fontencoding", &["encoding"][..]),
+        ("fontfamily", &["family"][..]),
+        ("fontseries", &["series"][..]),
+        ("fontshape", &["shape"][..]),
+        ("linespread", &["factor"][..]),
+        ("fontsize", &["size", "baseline skip"][..]),
+        ("usefont", &["encoding", "family", "series", "shape"][..]),
+    ];
+    for snippets in [false, true] {
+        let mut server = Server::start();
+        server.request(1, "initialize", json!({"processId":null,"capabilities":{"textDocument":{"completion":{"completionItem":{"snippetSupport":snippets}}}}}));
+        server.notify("initialized", json!({}));
+        let uri = "file:///nfss-protocol/lsplsptest.fd";
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"languageId":"latex","version":1,"text":""}}),
+        );
+        let mut version = 1;
+        let mut id = 1;
+        for (name, parameters) in declarations {
+            let expected_label = format!(
+                "\\{name}{}",
+                parameters
+                    .iter()
+                    .map(|label| format!("{{{label}}}"))
+                    .collect::<String>()
+            );
+            for mode in ["bare", "existing", "override", "restored"] {
+                let prefix = if mode == "override" {
+                    format!("\\newcommand\\{name}[1]{{#1}}\r\n")
+                } else {
+                    String::new()
+                };
+                let tail = if mode == "existing" {
+                    "{existing}{arguments}"
+                } else {
+                    ""
+                };
+                let source = format!("{prefix}% 😀\r\n\\{name}{tail}");
+                let text = Text::new(source.clone());
+                let cursor = source.rfind(name).unwrap() + name.len();
+                version += 1;
+                server.notify("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":version},"contentChanges":[{"text":source}]}));
+                id += 1;
+                let result = server.request(
+                    id,
+                    "textDocument/completion",
+                    json!({"textDocument":{"uri":uri},"position":text.position(cursor)}),
+                );
+                let item = result
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|item| item["label"] == name)
+                    .unwrap();
+                let inserted = item["textEdit"]["newText"].as_str().unwrap();
+                assert_eq!(
+                    item["textEdit"]["range"],
+                    json!(text.range(cursor - name.len(), cursor))
+                );
+                if snippets && mode != "existing" {
+                    assert_eq!(item["insertTextFormat"], 2);
+                    if mode == "override" {
+                        assert_eq!(inserted, format!("{name}{{${{1:arg1}}}}"));
+                    } else {
+                        assert!(inserted.starts_with(&format!("{name}{{${{1:")), "{item}");
+                        for number in 1..=parameters.len() {
+                            assert!(inserted.contains(&format!("${{{number}:")), "{item}");
+                        }
+                        assert!(!item["documentation"].is_null());
+                    }
+                } else {
+                    assert_eq!(inserted, name);
+                }
+            }
+            for star in if name == "DeclareMathSizes" {
+                &["", "*"][..]
+            } else {
+                &[""][..]
+            } {
+                let mut source = format!("% 😀\r\n\\{name}% declaration\r\n{star}");
+                let mut positions = Vec::new();
+                for _ in parameters {
+                    source.push_str("{% before\r\n{{value}}% after\r\n}");
+                    positions.push(source.rfind("value").unwrap() + 2);
+                }
+                version += 1;
+                server.notify("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":version},"contentChanges":[{"text":source}]}));
+                let text = Text::new(source);
+                for (parameter, cursor) in positions.into_iter().enumerate() {
+                    id += 1;
+                    let help = server.request(
+                        id,
+                        "textDocument/signatureHelp",
+                        json!({"textDocument":{"uri":uri},"position":text.position(cursor)}),
+                    );
+                    assert_eq!(help["signatures"][0]["label"], expected_label);
+                    assert_eq!(help["activeParameter"], parameter);
+                    assert_eq!(
+                        help["signatures"][0]["parameters"]
+                            .as_array()
+                            .unwrap()
+                            .len(),
+                        parameters.len()
+                    );
+                }
+            }
+            let source = format!("\\newcommand\\{name}[1]{{#1}}\r\n\\{name}{{value}}");
+            version += 1;
+            server.notify("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":version},"contentChanges":[{"text":source}]}));
+            id += 1;
+            let help = server.request(id, "textDocument/signatureHelp", json!({"textDocument":{"uri":uri},"position":Text::new(source.clone()).position(source.rfind("value").unwrap() + 2)}));
+            assert_eq!(help["signatures"][0]["label"], format!("\\{name}{{#1}}"));
+            assert_eq!(help["activeParameter"], 0);
+        }
+        server.request(id + 1, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
 }
 
 #[test]
@@ -16508,165 +16755,6 @@ printf '%s\n' "Package rerunfilecheck Warning: File \`main.idx' has changed." "(
             "normal\nnormal\nforce\n"
         );
         server.request(11, "shutdown", Value::Null);
-        server.notify("exit", Value::Null);
-        server.wait_exit(0);
-    }
-}
-
-
-
-#[test]
-fn nfss_declarations_and_selectors_negotiate_snippets_and_refresh_signatures_over_stdio() {
-    use latex_lsp::text::Text;
-
-    let declarations = [
-        (
-            "DeclareFontEncoding",
-            &["encoding", "text settings", "math settings"][..],
-        ),
-        (
-            "DeclareFontEncodingDefaults",
-            &["text settings", "math settings"][..],
-        ),
-        (
-            "DeclareFontFamily",
-            &["encoding", "family", "loading settings"][..],
-        ),
-        (
-            "DeclareFontShape",
-            &[
-                "encoding",
-                "family",
-                "series",
-                "shape",
-                "size specification",
-                "loading settings",
-            ][..],
-        ),
-        (
-            "DeclareFontSubstitution",
-            &["encoding", "family", "series", "shape"][..],
-        ),
-        (
-            "DeclareMathSizes",
-            &["text size", "math size", "script size", "scriptscript size"][..],
-        ),
-        ("fontencoding", &["encoding"][..]),
-        ("fontfamily", &["family"][..]),
-        ("fontseries", &["series"][..]),
-        ("fontshape", &["shape"][..]),
-        ("linespread", &["factor"][..]),
-        ("fontsize", &["size", "baseline skip"][..]),
-        ("usefont", &["encoding", "family", "series", "shape"][..]),
-    ];
-    for snippets in [false, true] {
-        let mut server = Server::start();
-        server.request(1, "initialize", json!({"processId":null,"capabilities":{"textDocument":{"completion":{"completionItem":{"snippetSupport":snippets}}}}}));
-        server.notify("initialized", json!({}));
-        let uri = "file:///nfss-protocol/lsplsptest.fd";
-        server.notify(
-            "textDocument/didOpen",
-            json!({"textDocument":{"uri":uri,"languageId":"latex","version":1,"text":""}}),
-        );
-        let mut version = 1;
-        let mut id = 1;
-        for (name, parameters) in declarations {
-            let expected_label = format!(
-                "\\{name}{}",
-                parameters
-                    .iter()
-                    .map(|label| format!("{{{label}}}"))
-                    .collect::<String>()
-            );
-            for mode in ["bare", "existing", "override", "restored"] {
-                let prefix = if mode == "override" {
-                    format!("\\newcommand\\{name}[1]{{#1}}\r\n")
-                } else {
-                    String::new()
-                };
-                let tail = if mode == "existing" {
-                    "{existing}{arguments}"
-                } else {
-                    ""
-                };
-                let source = format!("{prefix}% 😀\r\n\\{name}{tail}");
-                let text = Text::new(source.clone());
-                let cursor = source.rfind(name).unwrap() + name.len();
-                version += 1;
-                server.notify("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":version},"contentChanges":[{"text":source}]}));
-                id += 1;
-                let result = server.request(
-                    id,
-                    "textDocument/completion",
-                    json!({"textDocument":{"uri":uri},"position":text.position(cursor)}),
-                );
-                let item = result
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .find(|item| item["label"] == name)
-                    .unwrap();
-                let inserted = item["textEdit"]["newText"].as_str().unwrap();
-                assert_eq!(
-                    item["textEdit"]["range"],
-                    json!(text.range(cursor - name.len(), cursor))
-                );
-                if snippets && mode != "existing" {
-                    assert_eq!(item["insertTextFormat"], 2);
-                    if mode == "override" {
-                        assert_eq!(inserted, format!("{name}{{${{1:arg1}}}}"));
-                    } else {
-                        assert!(inserted.starts_with(&format!("{name}{{${{1:")), "{item}");
-                        for number in 1..=parameters.len() {
-                            assert!(inserted.contains(&format!("${{{number}:")), "{item}");
-                        }
-                        assert!(!item["documentation"].is_null());
-                    }
-                } else {
-                    assert_eq!(inserted, name);
-                }
-            }
-            for star in if name == "DeclareMathSizes" {
-                &["", "*"][..]
-            } else {
-                &[""][..]
-            } {
-                let mut source = format!("% 😀\r\n\\{name}% declaration\r\n{star}");
-                let mut positions = Vec::new();
-                for _ in parameters {
-                    source.push_str("{% before\r\n{{value}}% after\r\n}");
-                    positions.push(source.rfind("value").unwrap() + 2);
-                }
-                version += 1;
-                server.notify("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":version},"contentChanges":[{"text":source}]}));
-                let text = Text::new(source);
-                for (parameter, cursor) in positions.into_iter().enumerate() {
-                    id += 1;
-                    let help = server.request(
-                        id,
-                        "textDocument/signatureHelp",
-                        json!({"textDocument":{"uri":uri},"position":text.position(cursor)}),
-                    );
-                    assert_eq!(help["signatures"][0]["label"], expected_label);
-                    assert_eq!(help["activeParameter"], parameter);
-                    assert_eq!(
-                        help["signatures"][0]["parameters"]
-                            .as_array()
-                            .unwrap()
-                            .len(),
-                        parameters.len()
-                    );
-                }
-            }
-            let source = format!("\\newcommand\\{name}[1]{{#1}}\r\n\\{name}{{value}}");
-            version += 1;
-            server.notify("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":version},"contentChanges":[{"text":source}]}));
-            id += 1;
-            let help = server.request(id, "textDocument/signatureHelp", json!({"textDocument":{"uri":uri},"position":Text::new(source.clone()).position(source.rfind("value").unwrap() + 2)}));
-            assert_eq!(help["signatures"][0]["label"], format!("\\{name}{{#1}}"));
-            assert_eq!(help["activeParameter"], 0);
-        }
-        server.request(id + 1, "shutdown", Value::Null);
         server.notify("exit", Value::Null);
         server.wait_exit(0);
     }

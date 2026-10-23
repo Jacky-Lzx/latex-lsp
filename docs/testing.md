@@ -32,6 +32,16 @@ cargo test --locked --test signature commented_argument_counts -- --include-igno
 cargo test --locked --test signature optional_default_previews -- --include-ignored
 ```
 
+biblatex 的 `.bbx`、`.cbx`、`.lbx`、`.dbx` 额外核对根目录扫描、动态监听注册、磁盘创建/更新/删除、未保存缓冲区优先与关闭恢复。字体定义 `.fd` 与 Babel 语言文件 `.ldf` 共用这些扫描和监听回归。显式输入回归检查项目作用域、路径补全、文件移动，以及 `.bbx.tex` 等同名后缀文件的原生优先顺序；`.fd` / `.ldf` 则核对精确文件优先。日志回归包含四种 biblatex 文件与两种字体/语言文件的嵌套上下文、缺失来源屏障、UTF-16 和编号定位，recorder 回归确认输入角色。
+
+```sh
+cargo test --locked --test language_ids --test path_completion
+cargo test --locked --test protocol latex_and_biblatex_sources_
+cargo test --locked --test generated_log real_corrupt_sources_ -- --include-ignored
+```
+
+最后一项需要 pdfLaTeX，在 `.aux`、`.bbl`、`.toc` 和六种支持源码中触发错误，分别验证传统与文件行号日志的实际来源。
+
 ## 重命名
 
 标签、命令、环境、计数器与 PDF 目标的回归覆盖跨文件编辑、注释保留、名称冲突和特殊字符边界。真实编译还核对连续改名后的 PDF 链接、书签和引用值；组合目标覆盖空名称及配对或不配对的方括号，并保留同名普通标签。
