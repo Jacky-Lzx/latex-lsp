@@ -49,6 +49,18 @@ impl Text {
         (units == position.character).then_some(start + line.len())
     }
 
+    /// LSP query positions clamp oversized columns to the line end. Editing
+    /// notifications keep using strict `offset` to validate entire batches.
+    pub(crate) fn clamped_offset(&self, position: Position) -> Option<usize> {
+        if let Some(offset) = self.offset(position) {
+            return Some(offset);
+        }
+        let start = *self.lines.get(position.line as usize)?;
+        let line = self.source[start..].split('\n').next()?;
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        (position.character as usize > line.encode_utf16().count()).then_some(start + line.len())
+    }
+
     pub fn position(&self, offset: usize) -> Position {
         let mut offset = offset.min(self.source.len());
         while !self.source.is_char_boundary(offset) {
@@ -97,6 +109,23 @@ mod tests {
         assert_eq!(text.position(10), Position::new(1, 0));
         assert_eq!(text.offset(Position::new(2, 0)), Some(14));
         assert_eq!(text.offset(Position::new(3, 0)), None);
+    }
+
+    #[test]
+    fn query_columns_clamp_without_accepting_invalid_incremental_edits() {
+        let text = Text::new("中😀a\r\n文\n".into());
+        assert_eq!(text.clamped_offset(Position::new(0, 999)), Some(8));
+        assert_eq!(text.clamped_offset(Position::new(1, 999)), Some(13));
+        assert_eq!(text.clamped_offset(Position::new(2, 999)), Some(14));
+        assert_eq!(text.clamped_offset(Position::new(0, 2)), None);
+        assert_eq!(text.clamped_offset(Position::new(3, 0)), None);
+        assert!(text
+            .changed(vec![TextDocumentContentChangeEvent {
+                range: Some(Range::new(Position::new(0, 999), Position::new(0, 1000))),
+                range_length: None,
+                text: "replacement".into(),
+            }])
+            .is_none());
     }
 
     #[test]

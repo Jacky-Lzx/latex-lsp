@@ -5,14 +5,13 @@ use tower_lsp::{
     lsp_types::{Range, TextEdit},
 };
 
-pub(crate) fn validate(text: &Text, range: Range) -> Result<()> {
-    if range.start > range.end
-        || text.offset(range.start).is_none()
-        || text.offset(range.end).is_none()
-    {
+pub(crate) fn normalize(text: &Text, range: Range) -> Result<Range> {
+    let start = text.clamped_offset(range.start);
+    let end = text.clamped_offset(range.end);
+    if range.start > range.end || start.is_none() || end.is_none() {
         return Err(Error::invalid_params("Invalid formatting range"));
     }
-    Ok(())
+    Ok(text.range(start.unwrap(), end.unwrap()))
 }
 
 /// Align lines by their content, allowing indentation changes at each anchor.
@@ -203,20 +202,31 @@ mod tests {
     }
 
     #[test]
-    fn invalid_ranges_reject_surrogates_reversed_and_nonexistent_positions() {
+    fn invalid_ranges_reject_surrogates_reversed_and_nonexistent_lines() {
         let text = Text::new("😀\r\nx".into());
-        for (start, end) in [
-            ((0, 1), (0, 2)),
-            ((0, 0), (2, 0)),
-            ((1, 1), (0, 0)),
-            ((0, 0), (0, 3)),
-        ] {
-            assert!(validate(
+        for (start, end) in [((0, 1), (0, 2)), ((0, 0), (2, 0)), ((1, 1), (0, 0))] {
+            assert!(normalize(
                 &text,
                 Range::new(Position::new(start.0, start.1), Position::new(end.0, end.1))
             )
             .is_err());
         }
-        assert!(validate(&text, text.range(0, text.source.len())).is_ok());
+        assert!(normalize(&text, text.range(0, text.source.len())).is_ok());
+        assert_eq!(
+            normalize(
+                &text,
+                Range::new(Position::new(0, 999), Position::new(1, 999))
+            )
+            .unwrap(),
+            Range::new(Position::new(0, 2), Position::new(1, 1))
+        );
+        assert_eq!(
+            normalize(
+                &text,
+                Range::new(Position::new(1, 999), Position::new(1, 1000))
+            )
+            .unwrap(),
+            Range::new(Position::new(1, 1), Position::new(1, 1))
+        );
     }
 }

@@ -344,21 +344,12 @@ fn advance(source: &str, from: usize, to: usize, position: &mut Position) {
 }
 
 fn range_offset(doc: &Document, position: Position) -> Option<usize> {
-    if let Some(offset) = doc.text.offset(position) {
-        return Some(offset);
-    }
-    // Editors use (line count, 0) for a viewport ending at EOF, including
-    // buffers without a final newline. Keep this normalization local to queries.
-    if position.line as usize == doc.text.text_line_count() && position.character == 0 {
-        return Some(doc.text.source.len());
-    }
-    let start = doc.text.offset(Position::new(position.line, 0))?;
-    let tail = &doc.text.source[start..];
-    let line = tail.split('\n').next()?;
-    let line = line.strip_suffix('\r').unwrap_or(line);
-    // LSP columns past the end of a line clamp to its length. A position
-    // inside a surrogate pair remains invalid.
-    (position.character as usize > line.encode_utf16().count()).then_some(start + line.len())
+    doc.text.clamped_offset(position).or_else(|| {
+        // Editors use (line count, 0) for a viewport ending at EOF, including
+        // buffers without a final newline. Keep this extension local to queries.
+        (position.line as usize == doc.text.text_line_count() && position.character == 0)
+            .then_some(doc.text.source.len())
+    })
 }
 
 pub fn tokens(doc: &Document, range: Option<Range>) -> jsonrpc::Result<SemanticTokens> {

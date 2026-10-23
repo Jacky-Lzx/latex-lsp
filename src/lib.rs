@@ -201,8 +201,10 @@ impl Backend {
         ) {
             return Ok(None);
         }
+        let range = range
+            .map(|range| range_formatting::normalize(&doc.text, range))
+            .transpose()?;
         if let Some(range) = range {
-            range_formatting::validate(&doc.text, range)?;
             formatting::validate_options(&options)?;
             if range.start == range.end {
                 return Ok(Some(vec![]));

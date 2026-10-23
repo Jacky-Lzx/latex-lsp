@@ -24621,3 +24621,62 @@ fn static_bibliography_field_diagnostics_refresh_push_and_pull_without_building(
         server.wait_exit(0);
     }
 }
+
+#[test]
+#[cfg(unix)]
+fn range_formatting_clamps_oversized_columns_for_latex_and_bibliography() {
+    use latex_lsp::text::Text;
+    use tower_lsp::lsp_types::{TextDocumentContentChangeEvent, TextEdit};
+    for language in ["latex", "bibtex"] {
+        let (mut server, directory, uri) = formatting_server("sed 's/^/  /'", 10);
+        let (source, expected) = if language == "latex" {
+            (
+                "% outside\r\n😀 selected\r\nuntouched\r\n",
+                "% outside\r\n  😀 selected\r\nuntouched\r\n",
+            )
+        } else {
+            (
+                "% outside\r\n@book{k,title={😀}}\r\nuntouched\r\n",
+                "% outside\r\n@book{k,\r\n    title = {😀}\r\n}\r\nuntouched\r\n",
+            )
+        };
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"languageId":language,"version":1,"text":source}}),
+        );
+        let mut params = formatting_params(&uri);
+        params["range"] =
+            json!({"start":{"line":1,"character":0},"end":{"line":1,"character":4294967295u32}});
+        let edits: Vec<TextEdit> = serde_json::from_value(server.request(
+            2,
+            "textDocument/rangeFormatting",
+            params.clone(),
+        ))
+        .unwrap();
+        let result = Text::new(source.into())
+            .changed(
+                edits
+                    .into_iter()
+                    .rev()
+                    .map(|edit| TextDocumentContentChangeEvent {
+                        range: Some(edit.range),
+                        range_length: None,
+                        text: edit.new_text,
+                    })
+                    .collect(),
+            )
+            .unwrap()
+            .source;
+        assert_eq!(result, expected);
+        std::fs::remove_file(directory.path().join("formatter with spaces")).unwrap();
+        params["range"] =
+            json!({"start":{"line":1,"character":999},"end":{"line":1,"character":1000}});
+        assert_eq!(
+            server.request(3, "textDocument/rangeFormatting", params),
+            json!([])
+        );
+        server.request(4, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}

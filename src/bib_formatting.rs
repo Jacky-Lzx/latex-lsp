@@ -46,7 +46,7 @@ fn run(
     }
     let text = Text::new(source);
     let selected = if let Some(range) = range {
-        crate::range_formatting::validate(&text, range)?;
+        let range = crate::range_formatting::normalize(&text, range)?;
         Some(text.offset(range.start).unwrap()..text.offset(range.end).unwrap())
     } else {
         None
