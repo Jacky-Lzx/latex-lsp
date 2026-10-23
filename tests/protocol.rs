@@ -23224,3 +23224,105 @@ fn bibtex_expression_selection_ranges_refresh_literals_concatenations_and_preamb
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+fn fancyvrb_inline_body_execution_follows_incremental_macro_wrapping_over_stdio() {
+    use latex_lsp::text::Text;
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::write(root.join("chapter.tex"), "Chapter text").unwrap();
+    let main = Url::from_file_path(root.join("main.tex")).unwrap();
+    let mut source = "% 😀\r\n\\label{kept}\r\n\r\n\\ref{kept}\r\n".to_owned();
+    std::fs::write(root.join("main.tex"), &source).unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(root).unwrap(),"capabilities":{"textDocument":{"diagnostic":{}},"workspace":{"workspaceEdit":{"documentChanges":true}}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":main,"languageId":"latex","version":7,"text":source}}),
+    );
+    let body = r"\Verb|\label{live}\ref{kept}\input{chapter}|";
+    for (stage, (code, live)) in [
+        (body.to_owned(), false),
+        (format!("\\textbf{{{body}}}"), true),
+        (format!("\\relax{{{body}}}"), false),
+        (format!("\\textit{{{body}}}"), true),
+        (
+            format!("\\newcommand{{\\two}}[2]{{#1#2}}\\two{body}"),
+            false,
+        ),
+        (
+            format!("\\newcommand{{\\one}}[1]{{#1}}\\one{{{body}}}"),
+            true,
+        ),
+        (body.to_owned(), false),
+        (format!("\\usepackage{{fvextra}}\\textbf{{{body}}}"), false),
+        (
+            format!(
+                "\\usepackage{{fvextra}}\\textbf{{{}}}",
+                body.replace("Verb|", "Verb[extra=false]|")
+            ),
+            true,
+        ),
+        (
+            format!("\\usepackage[verbatim]{{minted}}\\textbf{{{body}}}"),
+            false,
+        ),
+        (
+            format!("\\usepackage{{fvextra}}\\fvset{{extra=false}}\\textbf{{{body}}}"),
+            true,
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let start = source.find("\\label{kept}\r\n").unwrap() + "\\label{kept}\r\n".len();
+        let end = source.rfind("\r\n\\ref").unwrap();
+        let version = 8 + stage;
+        let range = Text::new(source.clone()).range(start, end);
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":version},"contentChanges":[{"range":range,"text":code}]}));
+        source.replace_range(start..end, &code);
+        let id = 10 + stage as u64 * 5;
+        let diagnostics = server.request(
+            id,
+            "textDocument/diagnostic",
+            json!({"textDocument":{"uri":main}}),
+        );
+        assert_eq!(diagnostics["items"], json!([]), "{source}: {diagnostics}");
+        let position = Text::new(source.clone()).position(source.rfind("kept").unwrap());
+        let edit = server.request(
+            id + 1,
+            "textDocument/rename",
+            json!({"textDocument":{"uri":main},"position":position,"newName":"changed"}),
+        );
+        assert_eq!(
+            edit["documentChanges"][0]["textDocument"]["version"],
+            version
+        );
+        let edits = edit["documentChanges"][0]["edits"].as_array().unwrap();
+        assert_eq!(edits.len(), if live { 3 } else { 2 }, "{source}: {edit}");
+        let links = server.request(
+            id + 2,
+            "textDocument/documentLink",
+            json!({"textDocument":{"uri":main}}),
+        );
+        assert_eq!(
+            links.as_array().unwrap().len(),
+            usize::from(live && stage != 5),
+            "{source}: {links}"
+        );
+        let symbols = server.request(
+            id + 3,
+            "textDocument/documentSymbol",
+            json!({"textDocument":{"uri":main}}),
+        );
+        assert_eq!(
+            symbols.as_array().unwrap().len(),
+            1 + usize::from(live) + usize::from(stage == 4 || stage == 5),
+            "{source}: {symbols}"
+        );
+    }
+    server.request(100, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

@@ -2981,8 +2981,8 @@ impl<'a> CommandSignatures<'a> {
     }
 
     /// Catcode-changing inline commands see ordinary tokens when a known
-    /// macro has already collected their code as an argument. Test the code
-    /// delimiter itself: consuming only the inline control does not tokenize
+    /// macro has already collected their code as an argument. Query the first
+    /// body position: consuming only the control and delimiter does not tokenize
     /// the following source. Unknown arities cannot establish this context.
     fn pretokenized_literal_end(
         &self,

@@ -459,3 +459,59 @@ fn real_minted_verbatim_mode_confirms_code_boundaries_without_shell_escape() {
         );
     }
 }
+
+#[test]
+fn macro_consuming_only_header_leaves_minted_body_catcodes_direct() {
+    for command in ["mintinline", "mint"] {
+        let source = format!("\\newcommand{{\\three}}[3]{{#1{{#2}}#3}}\\three\\{command}{{latex}}|a\\|\\label{{live}} tail|\\ref{{live}}");
+        let main = uri();
+        let mut workspace = Workspace::default();
+        workspace.open(main.clone(), source.clone(), 7);
+        let doc = &workspace.documents[&main];
+        assert!(doc.syntax.diagnostics.is_empty(), "{source}");
+        assert_eq!(doc.syntax.labels.len(), 1, "{source}");
+        let at = doc.text.position(source.rfind("live").unwrap());
+        let edit = features::rename(&workspace, &main, at, "changed")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            apply(&source, edit.changes.unwrap()[&main].clone()),
+            source.replace("live", "changed")
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex, xelatex, listings, and minted v3"]
+fn real_partial_header_arguments_leave_inline_code_readers_in_direct_source() {
+    for engine in ["pdflatex", "xelatex"] {
+        for code in [
+            r"\newcommand{\two}[2]{#1#2}\two\lstinline|a\|\label{live} tail|",
+            r"\newcommand{\three}[3]{#1{#2}#3}\three\mintinline{latex}|a\|\label{live} tail|",
+            r"\newcommand{\two}[2]{#1#2}\two\Verb|\label{phantom}\input{fake}|\label{live}",
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            let source = format!("\\documentclass{{article}}\n\\usepackage{{listings,fancyvrb}}\n\\usepackage[verbatim]{{minted}}\n\\begin{{document}}\n{code}\n\\end{{document}}\n");
+            let doc = Document::new(&uri(), source.clone(), Some(7));
+            assert!(doc.syntax.diagnostics.is_empty(), "{source}");
+            assert_eq!(doc.syntax.labels.len(), 1, "{source}");
+            std::fs::write(root.join("main.tex"), source).unwrap();
+            let output = std::process::Command::new(engine)
+                .args([
+                    "-interaction=nonstopmode",
+                    "-halt-on-error",
+                    "-no-shell-escape",
+                    "main.tex",
+                ])
+                .current_dir(root)
+                .output()
+                .unwrap();
+            let log = std::fs::read_to_string(root.join("main.log")).unwrap();
+            assert!(output.status.success(), "{engine}/{code}: {log}");
+            let aux = std::fs::read_to_string(root.join("main.aux")).unwrap();
+            assert!(aux.contains("newlabel{live}"), "{aux}");
+            assert!(!aux.contains("newlabel{phantom}"), "{aux}");
+        }
+    }
+}

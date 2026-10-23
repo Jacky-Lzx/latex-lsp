@@ -22,6 +22,119 @@ pub(crate) fn is_inline(name: &str) -> bool {
     name == "Verb" || is_inline_save(name)
 }
 
+#[derive(Clone, Copy)]
+struct InlineSettings {
+    fvextra: bool,
+    extra: bool,
+    inline_extra: Option<bool>,
+}
+
+impl Default for InlineSettings {
+    fn default() -> Self {
+        Self {
+            fvextra: false,
+            extra: true,
+            inline_extra: None,
+        }
+    }
+}
+
+/// Local source settings only. Imported package state and arbitrary keyval
+/// expansion require project execution context rather than lexical guessing.
+#[derive(Default)]
+pub(crate) struct InlineContext {
+    settings: InlineSettings,
+    scopes: Vec<InlineSettings>,
+}
+
+impl InlineContext {
+    pub(crate) fn enter(&mut self) {
+        self.scopes.push(self.settings);
+    }
+
+    pub(crate) fn leave(&mut self) {
+        if let Some(settings) = self.scopes.pop() {
+            self.settings = settings;
+        }
+    }
+
+    pub(crate) fn observe(&mut self, command: &syntax::Command) {
+        match command.name.as_str() {
+            "begingroup" | "bgroup" => self.enter(),
+            "endgroup" | "egroup" => self.leave(),
+            name if syntax::loader_extension(name) == Some("sty") => {
+                if command.argument.as_ref().is_some_and(|argument| {
+                    compact_tokens(&argument.value)
+                        .split(',')
+                        .any(|name| matches!(name, "fvextra" | "minted"))
+                }) {
+                    self.settings.fvextra = true;
+                }
+            }
+            "fvset" | "fvinlineset" if self.settings.fvextra => {
+                if let Some(extra) = command
+                    .argument
+                    .as_ref()
+                    .and_then(|argument| extra_option(&argument.value))
+                {
+                    if command.name == "fvset" {
+                        self.settings.extra = extra;
+                    } else {
+                        self.settings.inline_extra = Some(extra);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub(crate) fn uses_extra(&self, source: &str, command_end: usize) -> bool {
+        if !self.settings.fvextra {
+            return false;
+        }
+        let mut at = syntax::skip_space(source, command_end);
+        if source.as_bytes().get(at) == Some(&b'*') {
+            at = syntax::skip_space(source, at + 1);
+        }
+        syntax::bracket_argument(source, at)
+            .and_then(|(argument, _)| extra_option(&argument.value))
+            .or(self.settings.inline_extra)
+            .unwrap_or(self.settings.extra)
+    }
+}
+
+fn extra_option(source: &str) -> Option<bool> {
+    let mut extra = None;
+    for span in syntax::key_list_segments(source, 0..source.len()) {
+        let segment = compact_tokens(&source[span]);
+        let (key, value) = segment.split_once('=').unwrap_or((&segment, "true"));
+        if key != "extra" {
+            continue;
+        }
+        let value = value.trim();
+        let value = syntax::group(value, 0, b'{', b'}')
+            .filter(|(_, end)| *end == value.len())
+            .map_or_else(|| value.to_owned(), |(argument, _)| argument.value);
+        // Unknown expansions retain isolation rather than exposing code as
+        // executable source. Only an explicit false selects original FancyVerb.
+        extra = Some(value.trim() != "false");
+    }
+    extra
+}
+
+fn compact_tokens(source: &str) -> String {
+    let mut value = String::new();
+    let mut at = 0;
+    loop {
+        at = syntax::skip_space(source, at);
+        let Some(token) = syntax::token(source, at) else {
+            return value;
+        };
+        value.push_str(token);
+        at += token.len();
+    }
+}
+
 /// Saved names are ordinary TeX arguments, including a single unbraced token.
 pub(crate) fn name_argument(source: &str, at: usize) -> Option<(syntax::Argument, usize)> {
     if source.as_bytes().get(at) == Some(&b'{') {
@@ -53,9 +166,36 @@ pub(crate) fn name_argument(source: &str, at: usize) -> Option<(syntax::Argument
     ))
 }
 
-/// The delimiter is read with ordinary catcodes; only the following text is
-/// verbatim. In particular, comments before the delimiter still continue lines.
-pub(crate) fn inline_span(source: &str, at: usize) -> Option<Range<usize>> {
+pub(crate) struct InlineHeader {
+    pub start: usize,
+    pub body: usize,
+    delimiter: char,
+}
+
+impl InlineHeader {
+    pub(crate) fn raw_span(&self, source: &str) -> Range<usize> {
+        let line_end = source[self.body..]
+            .find(['\r', '\n'])
+            .map_or(source.len(), |offset| self.body + offset);
+        let end = source[self.body..line_end]
+            .find(self.delimiter)
+            .map_or(line_end, |offset| {
+                self.body + offset + self.delimiter.len_utf8()
+            });
+        self.start..end
+    }
+
+    pub(crate) fn closing_marker(&self, source: &str) -> Option<Range<usize>> {
+        let delimiter = self.delimiter.to_string();
+        let end = syntax::tokenized_delimited_end(source, self.body, &delimiter)?;
+        Some(end - delimiter.len()..end)
+    }
+}
+
+/// The delimiter is an ordinary token or a single-character group. Comments
+/// before it still continue lines. Direct source changes body catcodes, while
+/// Verb in an already collected argument executes its original control tokens.
+pub(crate) fn inline_header(source: &str, at: usize) -> Option<InlineHeader> {
     let start = syntax::skip_space(source, at);
     let (delimiter, body) = if source.as_bytes().get(start) == Some(&b'{') {
         let (argument, end) = syntax::group(source, start, b'{', b'}')?;
@@ -72,13 +212,11 @@ pub(crate) fn inline_span(source: &str, at: usize) -> Option<Range<usize>> {
     if delimiter.is_whitespace() || matches!(delimiter, '{' | '}' | '\\' | '%') {
         return None;
     }
-    let line_end = source[body..]
-        .find(['\r', '\n'])
-        .map_or(source.len(), |offset| body + offset);
-    let end = source[body..line_end]
-        .find(delimiter)
-        .map_or(line_end, |offset| body + offset + delimiter.len_utf8());
-    Some(start..end)
+    Some(InlineHeader {
+        start,
+        body,
+        delimiter,
+    })
 }
 
 pub(crate) fn is_environment(name: &str) -> bool {

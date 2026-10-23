@@ -1791,7 +1791,14 @@ pub(crate) fn tokenized_code_end(source: &str, start: usize) -> Option<usize> {
     {
         return None;
     }
-    let mut at = start + delimiter.len();
+    tokenized_delimited_end(source, start + delimiter.len(), delimiter)
+}
+
+pub(crate) fn tokenized_delimited_end(
+    source: &str,
+    mut at: usize,
+    delimiter: &str,
+) -> Option<usize> {
     loop {
         at = skip_space(source, at);
         let value = token(source, at)?;
@@ -2126,6 +2133,7 @@ impl Syntax {
         let mut assigned_controls = std::collections::BTreeSet::<String>::new();
         let mut conversion_arguments = std::collections::BTreeMap::new();
         let mut inline_tokenization = crate::signature::InlineTokenization::default();
+        let mut fancyverb_context = crate::fancyvrb::InlineContext::default();
         let mut i = 0;
         while i < bytes.len() {
             // Literal conversions suppress command indexing but retain source
@@ -2158,9 +2166,11 @@ impl Syntax {
                 }
                 b'{' => {
                     braces.push(i);
+                    fancyverb_context.enter();
                     i += 1;
                 }
                 b'}' => {
+                    fancyverb_context.leave();
                     if braces.pop().is_none() {
                         result.fix(
                             text,
@@ -2253,11 +2263,15 @@ impl Syntax {
                                 (argument.span.clone(), argument.outer_span.end),
                             );
                             let code = skip_space(source, argument.outer_span.end);
+                            let body = source[code..]
+                                .chars()
+                                .next()
+                                .map_or(code, |delimiter| code + delimiter.len_utf8());
                             let tokenized = inline_tokenization.contains(
                                 source,
                                 &result,
                                 &control_operands,
-                                code,
+                                body,
                             );
                             if let Some(span) = crate::minted::inline_span(
                                 source,
@@ -2279,7 +2293,7 @@ impl Syntax {
                                 source,
                                 &result,
                                 &control_operands,
-                                at,
+                                at + source[at..].chars().next().unwrap().len_utf8(),
                             );
                             let span = crate::listings::inline_body(source, at, tokenized);
                             literal_arguments.insert(span.start, (span.clone(), span.end));
@@ -2380,9 +2394,10 @@ impl Syntax {
                     let url_argument = matches!(name, "url" | "href")
                         || name == "hyperref"
                             && bytes.get(skip_space(source, command_end)) == Some(&b'{');
-                    let parsed = if name == "Verb" || (name == "meaning" && operands_known) {
+                    let parsed = if matches!(name, "Verb" | "meaning") && operands_known {
                         None
-                    } else if crate::fancyvrb::is_inline_save(name) || crate::fancyvrb::is_use(name)
+                    } else if operands_known
+                        && (crate::fancyvrb::is_inline_save(name) || crate::fancyvrb::is_use(name))
                     {
                         crate::fancyvrb::name_argument(source, arg_start)
                     } else {
@@ -2415,6 +2430,9 @@ impl Syntax {
                         span: start..command_end,
                         argument,
                     };
+                    if operands_known {
+                        fancyverb_context.observe(&command);
+                    }
                     if name == "newif" && operands_known {
                         let operand = skip_space(source, command_end);
                         if bytes.get(operand) == Some(&b'\\') {
@@ -2529,22 +2547,61 @@ impl Syntax {
                             conversion_arguments.insert(at, end);
                         }
                     }
-                    if crate::fancyvrb::is_inline_save(name) || crate::fancyvrb::is_use(name) {
+                    if operands_known
+                        && (crate::fancyvrb::is_inline_save(name) || crate::fancyvrb::is_use(name))
+                    {
                         if let Some((argument, end)) = &parsed {
                             literal_arguments
                                 .insert(argument.outer_span.start, (argument.span.clone(), *end));
                         }
                     }
-                    if crate::fancyvrb::is_inline(name) {
+                    if operands_known && crate::fancyvrb::is_inline(name) {
                         let start = if crate::fancyvrb::is_inline_save(name) {
                             parsed.as_ref().map(|(_, end)| *end)
                         } else {
                             Some(arg_start)
                         };
-                        if let Some(span) =
-                            start.and_then(|at| crate::fancyvrb::inline_span(source, at))
+                        if name != "SaveGVerb" && fancyverb_context.uses_extra(source, command_end)
                         {
-                            literal_arguments.insert(span.start, (span.clone(), span.end));
+                            if let Some(start) = start {
+                                let code = skip_space(source, start);
+                                let body = source[code..]
+                                    .chars()
+                                    .next()
+                                    .map_or(code, |delimiter| code + delimiter.len_utf8());
+                                let tokenized = inline_tokenization.contains(
+                                    source,
+                                    &result,
+                                    &control_operands,
+                                    body,
+                                );
+                                if let Some(span) =
+                                    crate::minted::inline_span(source, start, tokenized)
+                                {
+                                    literal_arguments.insert(span.start, (span.clone(), span.end));
+                                }
+                            }
+                        } else if let Some(header) =
+                            start.and_then(|at| crate::fancyvrb::inline_header(source, at))
+                        {
+                            if name == "Verb"
+                                && inline_tokenization.contains(
+                                    source,
+                                    &result,
+                                    &control_operands,
+                                    header.body,
+                                )
+                            {
+                                let open = header.start..header.body;
+                                literal_arguments.insert(open.start, (open.clone(), open.end));
+                                if let Some(close) = header.closing_marker(source) {
+                                    literal_arguments
+                                        .insert(close.start, (close.clone(), close.end));
+                                }
+                            } else {
+                                let span = header.raw_span(source);
+                                literal_arguments.insert(span.start, (span.clone(), span.end));
+                            }
                         }
                     }
                     if let Some((declaration, entry)) = crate::anchors::entry(source, &command) {

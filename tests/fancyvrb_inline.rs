@@ -80,7 +80,11 @@ fn literal_bodies_do_not_import_symbols_files_or_rename_edits() {
                 assert_eq!(doc.syntax.definitions.len(), 1, "{literal}");
                 let chapter = Url::from_file_path(root.join("chapter.tex")).unwrap();
                 assert_eq!(workspace.dependencies(&main), vec![chapter.clone()]);
-                assert_eq!(navigation::document_links(&workspace, &main).len(), 1);
+                assert_eq!(
+                    navigation::document_links(&workspace, &main).len(),
+                    1,
+                    "{source}"
+                );
                 for key in ["phantom", "fakelabel"] {
                     assert!(
                         features::definitions(
@@ -526,6 +530,323 @@ fn real_inline_bodies_preserve_literal_text_and_executable_options_after_rename(
                         "{aux}"
                     );
                 }
+            }
+        }
+    }
+}
+
+#[test]
+fn collected_verb_bodies_keep_executable_commands_and_file_edits() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::write(root.join("chapter.tex"), r"\label{chapterlabel}").unwrap();
+    let main = Url::from_file_path(root.join("main.tex")).unwrap();
+    for body in [
+        r"|\label{kept}\say\input{chapter}|",
+        r"|a{b|\label{kept}\say\input{chapter}}d|",
+        "|a% ignored |\\label{phantom}\r\n\\label{kept}\\say\\input{chapter}b|",
+        r"{|}\label{kept}\say\input{chapter}|",
+        r"*[showspaces=true]|\label{kept}\say\input{chapter}|",
+    ] {
+        for (before, after) in [
+            (r"\textbf{", "}"),
+            (r"\let\strong\textbf\strong{", "}"),
+            (r"\newcommand{\one}[1]{#1}\one{", "}"),
+            (r"\def\one#1;{#1}\one", ";"),
+            (r"\def\example{", r"}\example"),
+        ] {
+            let source = format!(
+                "\\newcommand{{\\say}}{{Text}}{before}\\Verb{body}{after}\\ref{{kept}}\\say"
+            );
+            let mut workspace = Workspace {
+                versioned_edits: true,
+                ..Default::default()
+            };
+            workspace.add_root(root.into());
+            workspace.open(main.clone(), source.clone(), 7);
+            let doc = &workspace.documents[&main];
+            assert!(
+                doc.syntax.diagnostics.is_empty(),
+                "{source}: {:?}",
+                doc.syntax.diagnostics
+            );
+            assert_eq!(doc.syntax.labels.len(), 1, "{source}");
+            assert_eq!(doc.syntax.labels[0].name, "kept");
+            let chapter = Url::from_file_path(root.join("chapter.tex")).unwrap();
+            assert_eq!(
+                workspace.dependencies(&main),
+                vec![chapter.clone()],
+                "{source}"
+            );
+            if before == r"\textbf{" {
+                assert_eq!(
+                    navigation::document_links(&workspace, &main).len(),
+                    1,
+                    "{source}"
+                );
+            }
+            let at = doc.text.position(source.rfind("kept").unwrap());
+            assert_eq!(features::definitions(&workspace, &main, at).len(), 1);
+            for (old, new) in [("kept", "changed"), ("say", "speak")] {
+                let at = doc.text.position(source.rfind(old).unwrap());
+                let updated = apply(
+                    &source,
+                    features::rename(&workspace, &main, at, new)
+                        .unwrap()
+                        .unwrap(),
+                    &main,
+                );
+                assert_eq!(updated, source.replace(old, new), "{source}");
+            }
+            if before != r"\textbf{" {
+                continue;
+            }
+            let edit = file_operations::will_rename(
+                &workspace,
+                &[FileRename {
+                    old_uri: chapter.into(),
+                    new_uri: Url::from_file_path(root.join("renamed.tex"))
+                        .unwrap()
+                        .into(),
+                }],
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(
+                apply(&source, edit, &main),
+                source.replace("{chapter}", "{renamed}")
+            );
+        }
+    }
+}
+
+#[test]
+fn scopes_and_partial_macro_operands_leave_verb_body_literal() {
+    for (before, after) in [
+        ("{", "}"),
+        (r"\relax{", "}"),
+        (r"\newcommand{\zero}{}\zero{", "}"),
+        (r"\newcommand{\one}[1]{#1}\one", ""),
+        (r"\newcommand{\two}[2]{#1#2}\two", ""),
+        (r"\newcommand{\gobble}[1]{}\gobble\textbf{", "}"),
+    ] {
+        let source =
+            format!("{before}\\Verb|\\label{{phantom}}\\input{{fake}}|{after}\\label{{real}}");
+        let main = Url::parse("file:///fancy-inline/main.tex").unwrap();
+        let doc = Document::new(&main, source.clone(), Some(7));
+        assert!(
+            doc.syntax.diagnostics.is_empty(),
+            "{source}: {:?}",
+            doc.syntax.diagnostics
+        );
+        assert_eq!(doc.syntax.labels.len(), 1, "{source}");
+        assert_eq!(doc.syntax.labels[0].name, "real");
+        assert!(
+            !doc.syntax
+                .commands
+                .iter()
+                .any(|command| command.name == "input"),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn redefined_fancyverb_commands_keep_their_ordinary_argument_commands() {
+    for name in [
+        "Verb",
+        "SaveVerb",
+        "SaveGVerb",
+        "UseVerb",
+        "UseVerbatim",
+        "UseMVerb",
+    ] {
+        let source =
+            format!("\\renewcommand{{\\{name}}}[1]{{#1}}\\{name}{{\\label{{live}}}}\\ref{{live}}");
+        let main = Url::parse("file:///fancy-inline/main.tex").unwrap();
+        let doc = Document::new(&main, source.clone(), Some(7));
+        assert!(doc.syntax.diagnostics.is_empty(), "{source}");
+        assert_eq!(doc.syntax.labels.len(), 1, "{source}");
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex and xelatex"]
+fn real_collected_verb_executes_body_commands_before_and_after_rename() {
+    for engine in ["pdflatex", "xelatex"] {
+        for body in [
+            r"|\typeout{LIVEBODY}\label{kept}\input{chapter}|",
+            r"|a{b|\typeout{LIVEBODY}\label{kept}\input{chapter}}d|",
+            "|a% ignored |\\label{phantom}\n\\typeout{LIVEBODY}\\label{kept}\\input{chapter}b|",
+            r"{|}\typeout{LIVEBODY}\label{kept}\input{chapter}|",
+            r"*[showspaces=true]|\typeout{LIVEBODY}\label{kept}\input{chapter}|",
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path();
+            std::fs::write(root.join("chapter.tex"), "Chapter text").unwrap();
+            let main = Url::from_file_path(root.join("main.tex")).unwrap();
+            let source = format!("\\documentclass{{article}}\n\\usepackage{{fancyvrb}}\n\\begin{{document}}\n\\textbf{{\\Verb{body}}}\\ref{{kept}}\n\\end{{document}}\n");
+            let mut workspace = Workspace {
+                versioned_edits: true,
+                ..Default::default()
+            };
+            workspace.add_root(root.into());
+            workspace.open(main.clone(), source.clone(), 7);
+            let at = workspace.documents[&main]
+                .text
+                .position(source.rfind("kept").unwrap());
+            let updated = apply(
+                &source,
+                features::rename(&workspace, &main, at, "changed")
+                    .unwrap()
+                    .unwrap(),
+                &main,
+            );
+            assert_eq!(updated, source.replace("kept", "changed"));
+            for (content, expected, absent) in
+                [(&source, "kept", "changed"), (&updated, "changed", "kept")]
+            {
+                std::fs::write(root.join("main.tex"), content).unwrap();
+                let outcome = build::run(
+                    &root.join("main.tex"),
+                    &latex_lsp::config::BuildConfig {
+                        executable: engine.into(),
+                        ..Default::default()
+                    },
+                    &AtomicBool::new(false),
+                );
+                assert_eq!(
+                    outcome.status, "success",
+                    "{engine}/{body}: {}",
+                    outcome.output
+                );
+                assert!(outcome.output.lines().any(|line| line == "LIVEBODY"));
+                let aux = std::fs::read_to_string(root.join("build/latex-lsp/main.aux")).unwrap();
+                assert!(aux.contains(&format!("newlabel{{{expected}}}")), "{aux}");
+                assert!(!aux.contains(&format!("newlabel{{{absent}}}")), "{aux}");
+                assert!(!aux.contains("newlabel{phantom}"), "{aux}");
+                let fls = std::fs::read_to_string(root.join("build/latex-lsp/main.fls")).unwrap();
+                assert!(fls.contains("chapter.tex"), "{fls}");
+            }
+        }
+    }
+}
+
+#[test]
+fn fvextra_and_minted_loaders_keep_inline_code_opaque_with_scoped_extra_settings() {
+    let main = Url::parse("file:///fancy-inline/main.tex").unwrap();
+    for package in [
+        r"\usepackage{fvextra}",
+        r"\RequirePackage{fvextra}",
+        r"\usepackage[verbatim]{minted}",
+        r"\usepackage{fancyvrb,fvextra}",
+        "\\usepackage{fancyvrb,% package\r\nfvextra}",
+    ] {
+        for code in [
+            r"\Verb{\label{phantom}\input{fake}}",
+            r"\textbf{\Verb|a{b|\label{phantom}\input{fake}}d|}",
+            r"\textbf{\Verb{a\}\label{phantom}\input{fake}b}}",
+            "\\Verb|a\r\n\\label{phantom}\\input{fake}|",
+            r"\SaveVerb{saved}{\label{phantom}\input{fake}}\UseVerb{saved}",
+        ] {
+            let source = format!("{package}{code}\\label{{real}}");
+            let doc = Document::new(&main, source.clone(), Some(7));
+            assert!(
+                doc.syntax.diagnostics.is_empty(),
+                "{source}: {:?}",
+                doc.syntax.diagnostics
+            );
+            assert_eq!(doc.syntax.labels.len(), 1, "{source}");
+            assert_eq!(doc.syntax.labels[0].name, "real");
+        }
+        for (settings, expected) in [
+            ("", vec![]),
+            (r"\fvset{extra=false}", vec!["first", "second"]),
+            (r"\fvinlineset{extra=false}", vec!["first", "second"]),
+            (r"\fvset{extra=false}\fvinlineset{extra=true}", vec![]),
+            (
+                "\\fvset{extra=false}\\fvinlineset{extra% key\r\n=true}",
+                vec![],
+            ),
+        ] {
+            let source = format!("{package}{settings}\\textbf{{\\Verb|\\label{{first}}|}}\\textbf{{\\Verb|\\label{{second}}|}}");
+            let doc = Document::new(&main, source.clone(), Some(7));
+            assert!(doc.syntax.diagnostics.is_empty(), "{source}");
+            assert_eq!(
+                doc.syntax
+                    .labels
+                    .iter()
+                    .map(|entry| entry.name.as_str())
+                    .collect::<Vec<_>>(),
+                expected,
+                "{source}"
+            );
+        }
+        for scoped in [
+            r"{\fvset{extra=false}\textbf{\Verb|\label{live}|}}",
+            r"\begingroup\fvset{extra=false}\textbf{\Verb|\label{live}|}\endgroup",
+            r"{\fvinlineset{extra=false}\textbf{\Verb|\label{live}|}}",
+            r"\textbf{\Verb[extra={false}]|\label{live}|}",
+        ] {
+            let source =
+                format!("{package}{scoped}\\textbf{{\\Verb|\\label{{phantom}}|}}\\label{{real}}");
+            let doc = Document::new(&main, source.clone(), Some(7));
+            assert!(doc.syntax.diagnostics.is_empty(), "{source}");
+            assert_eq!(
+                doc.syntax
+                    .labels
+                    .iter()
+                    .map(|entry| entry.name.as_str())
+                    .collect::<Vec<_>>(),
+                ["live", "real"],
+                "{source}"
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex, xelatex, fvextra, and minted v3"]
+fn real_fvextra_verb_defaults_and_extra_false_preserve_native_body_execution() {
+    for engine in ["pdflatex", "xelatex"] {
+        for package in ["fvextra", "minted"] {
+            for (settings, options, live) in [
+                ("", "", false),
+                ("", "[extra=false]", true),
+                (r"\fvset{extra=false}", "", true),
+                (r"\fvinlineset{extra=false}", "", true),
+                (r"\fvset{extra=false}\fvinlineset{extra=true}", "", false),
+            ] {
+                let directory = tempfile::tempdir().unwrap();
+                let root = directory.path();
+                let source = format!("\\documentclass{{article}}\n\\usepackage{}{{{package}}}\n{settings}\n\\begin{{document}}\n\\textbf{{\\Verb{options}|a{{b|\\typeout{{LIVEBODY}}\\label{{inside}}}}d|}}\\label{{real}}\n\\end{{document}}\n", if package == "minted" { "[verbatim]" } else { "" });
+                let main = Url::from_file_path(root.join("main.tex")).unwrap();
+                let doc = Document::new(&main, source.clone(), Some(7));
+                assert!(doc.syntax.diagnostics.is_empty(), "{source}");
+                assert_eq!(doc.syntax.labels.len(), 1 + usize::from(live), "{source}");
+                std::fs::write(root.join("main.tex"), source).unwrap();
+                let outcome = build::run(
+                    &root.join("main.tex"),
+                    &latex_lsp::config::BuildConfig {
+                        executable: engine.into(),
+                        ..Default::default()
+                    },
+                    &AtomicBool::new(false),
+                );
+                assert_eq!(
+                    outcome.status, "success",
+                    "{engine}/{package}/{settings}/{options}: {}",
+                    outcome.output
+                );
+                assert_eq!(
+                    outcome.output.lines().any(|line| line == "LIVEBODY"),
+                    live,
+                    "{}",
+                    outcome.output
+                );
+                let aux = std::fs::read_to_string(root.join("build/latex-lsp/main.aux")).unwrap();
+                assert_eq!(aux.contains("newlabel{inside}"), live, "{aux}");
+                assert!(aux.contains("newlabel{real}"), "{aux}");
             }
         }
     }

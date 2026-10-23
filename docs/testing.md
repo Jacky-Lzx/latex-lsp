@@ -346,6 +346,17 @@ cargo test --locked --test protocol listings_inline_
 
 安装 pdfLaTeX、XeLaTeX 和 listings 后，为第一个命令添加 `-- --include-ignored`；原生回归核对标签重命名前后的实际编译输入、aux 标签、头部提示、伪关闭标记及正文结束规则。行内代码回归另核对头部命令的实际执行，以及保留原生行尾错误时后续标签的恢复。
 
+## FancyVerb 行内正文
+
+`fancyvrb_inline` 覆盖 `Verb` 在已知宏参数、复制包装与宏定义中的正文命令、注释续行、嵌套分组和分组分隔符，核对标签与宏重命名、文件依赖和普通格式命令中的文件移动。另覆盖普通作用域、零参数包装、只读取头部及被消费的格式控制词，保证这些场景继续隔离逐字正文；项目重定义后恢复普通参数索引。stdio 回归增量添加和移除宏包装、fvextra / minted 包加载与 `extra=false`，核对诊断、版本化重命名、文件链接和符号刷新。默认及原生回归另覆盖 fvextra 的平衡花括号、多行代码、保存正文、调用级开关、全局与行内设置优先级及分组恢复。
+
+```sh
+cargo test --locked --test fancyvrb_inline
+cargo test --locked --test protocol fancyvrb_inline_
+```
+
+安装 pdfLaTeX 与 XeLaTeX 后，为第一个命令添加 `-- --include-ignored`；原生回归核对正文命令实际执行、aux 标签、编译输入和重命名前后的输出。`minted` 的原生回归另比较 listings、minted 和 FancyVerb 仅头部作为宏参数时的直接源码行为，需要 listings 与 minted v3。
+
 ## FancyVerb 环境参数提示
 
 默认回归覆盖十种环境的选项、保存名称和输出文件提示，包含未完成参数、注释续行、CRLF、Unicode、首个未受花括号保护的右方括号、无选项时的活动换行、项目重定义与未保存设置刷新。协议回归逐次输入头部、完成参数并添加正文和关闭行尾部，核对提示及依赖隔离：

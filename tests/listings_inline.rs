@@ -604,3 +604,22 @@ fn real_unfinished_code_recovers_at_eol_without_changing_the_compiler_error_afte
         }
     }
 }
+
+#[test]
+fn macro_consuming_only_command_and_delimiter_keeps_body_catcodes_direct() {
+    let source = r"\newcommand{\two}[2]{#1#2}\two\lstinline|a\|\label{live} tail|\ref{live}";
+    let main = uri();
+    let mut workspace = Workspace::default();
+    workspace.open(main.clone(), source.into(), 7);
+    let doc = &workspace.documents[&main];
+    assert!(doc.syntax.diagnostics.is_empty());
+    assert_eq!(doc.syntax.labels.len(), 1);
+    let at = doc.text.position(source.rfind("live").unwrap());
+    let edit = features::rename(&workspace, &main, at, "changed")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        apply(source, edit.changes.unwrap()[&main].clone()),
+        source.replace("live", "changed")
+    );
+}
