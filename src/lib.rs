@@ -1175,7 +1175,8 @@ impl LanguageServer for Backend {
             return Ok(Some(vec![]));
         }
         on_type_formatting::edits(
-            doc,
+            &workspace,
+            &uri,
             params.text_document_position.position,
             &params.ch,
             &params.options,

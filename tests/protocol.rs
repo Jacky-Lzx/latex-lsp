@@ -26906,3 +26906,100 @@ fn code_action_resolution_supports_syntax_quickfixes_and_source_fix_all() {
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+fn on_type_formatting_uses_project_parameters_and_updates_unsaved_macro_context() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let macros = Url::from_file_path(dir.path().join("macros.tex")).unwrap();
+    let source = "\\documentclass{article}\r\n\\input{macros}\r\n  \\take\\begin{itemize}\r\n";
+    std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+    std::fs::write(macros.to_file_path().unwrap(), "\\newcommand{\\take}[1]{}").unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"latex","version":1,"text":source}}),
+    );
+    let params = json!({"textDocument":{"uri":uri},"position":{"line":3,"character":0},"ch":"\n","options":{"tabSize":2,"insertSpaces":true}});
+    let expected = |indent: &str| json!([{"range":{"start":{"line":3,"character":0},"end":{"line":3,"character":0}},"newText":indent}]);
+    assert_eq!(
+        server.request(2, "textDocument/onTypeFormatting", params.clone()),
+        expected("  ")
+    );
+    server.notify("textDocument/didOpen", json!({"textDocument":{"uri":macros,"languageId":"latex","version":1,"text":"\\newcommand{\\take}{}"}}));
+    assert_eq!(
+        server.request(3, "textDocument/onTypeFormatting", params.clone()),
+        expected("    ")
+    );
+    server.notify("textDocument/didChange", json!({"textDocument":{"uri":macros,"version":2},"contentChanges":[{"text":"\\NewDocumentCommand{\\take}{m}{}"}]}));
+    assert_eq!(
+        server.request(4, "textDocument/onTypeFormatting", params.clone()),
+        expected("  ")
+    );
+    server.notify("textDocument/didChange", json!({"textDocument":{"uri":macros,"version":3},"contentChanges":[{"text":"\\newcommand{\\take}{}"}]}));
+    assert_eq!(
+        server.request(5, "textDocument/onTypeFormatting", params.clone()),
+        expected("    ")
+    );
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":macros}}),
+    );
+    assert_eq!(
+        server.request(6, "textDocument/onTypeFormatting", params),
+        expected("  ")
+    );
+    server.request(7, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+fn on_type_formatting_respects_noexpand_spaces_named_calls_and_user_redefinitions() {
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":null,"capabilities":{},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    let uri = Url::parse("untitled:indent-context.tex").unwrap();
+    let mut id = 2;
+    for (index, (declaration, call, indent)) in [
+        ("", "\\noexpand\\begin{itemize}", "  "),
+        ("", "\\csuse{noexpand}\\begin{itemize}", "  "),
+        ("", "\\csuse{noexpand} \\begin{itemize}", "    "),
+        ("", "\\csname noexpand\\endcsname \\begin{itemize}", "  "),
+        ("", "\\noexpand{\\begin{itemize}}", "    "),
+        ("\\def\\noexpand{}", "\\noexpand\\begin{itemize}", "    "),
+        ("\\def\\noexpand#1{}", "\\noexpand\\begin{itemize}", "  "),
+        ("", "\\csuse{begin}{itemize}", "    "),
+        ("\\def\\begin#1{}", "\\csuse{begin}{itemize}", "  "),
+        (
+            "\\newcommand{\\take}[1]{}",
+            "\\take{\\begin{itemize}}",
+            "  ",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let source = format!("{declaration}\r\n  {call} % 中文😀\r\n");
+        if index == 0 {
+            server.notify(
+                "textDocument/didOpen",
+                json!({"textDocument":{"uri":uri,"languageId":"latex","version":1,"text":source}}),
+            );
+        } else {
+            server.notify("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":index as i32 + 1},"contentChanges":[{"text":source}]}));
+        }
+        let edits = server.request(id, "textDocument/onTypeFormatting", json!({"textDocument":{"uri":uri},"position":{"line":2,"character":0},"ch":"\n","options":{"tabSize":2,"insertSpaces":true}}));
+        id += 1;
+        assert_eq!(
+            edits,
+            json!([{"range":{"start":{"line":2,"character":0},"end":{"line":2,"character":0}},"newText":indent}]),
+            "{source}"
+        );
+    }
+    server.request(id, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
