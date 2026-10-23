@@ -4,11 +4,16 @@ use std::ops::Range;
 
 pub(crate) fn loads(name: &str) -> bool {
     matches!(name, "addbibresource" | "addglobalbib")
+        || crate::bib_section_files::resource_command(name)
 }
 
 /// Both loading and registration commands expose a literal file reference.
 pub(crate) fn references_file(name: &str) -> bool {
     loads(name) || name == "addsectionbib"
+}
+
+pub(crate) fn exact_filename(name: &str) -> bool {
+    references_file(name) && name != crate::bib_section_files::INFERRED
 }
 
 pub(crate) fn start(source: &str, command_end: usize) -> Option<usize> {
@@ -74,6 +79,12 @@ pub(crate) fn literal_path(value: &str) -> bool {
 }
 
 pub(crate) fn argument(source: &str, command: &Command) -> Option<Argument> {
+    if crate::bib_section_files::resource_command(&command.name) {
+        return command
+            .argument
+            .clone()
+            .filter(|argument| literal_path(&argument.value));
+    }
     if !local_options(source, command.span.end) {
         return None;
     }
@@ -82,6 +93,11 @@ pub(crate) fn argument(source: &str, command: &Command) -> Option<Argument> {
 }
 
 pub(crate) fn prefix(source: &str, command: &Command, cursor: usize) -> Option<Range<usize>> {
+    if crate::bib_section_files::file_command(&command.name) {
+        let argument = command.argument.as_ref()?;
+        return (argument.span.start <= cursor && cursor <= argument.span.end)
+            .then_some(argument.span.start..cursor);
+    }
     if !local_options(source, command.span.end) {
         return None;
     }

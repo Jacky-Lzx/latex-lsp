@@ -139,6 +139,14 @@ fn complete_with_argument(
     {
         return vec![];
     }
+    let section_labels: BTreeSet<_> = if crate::bib_section_files::file_command(command) {
+        roots
+            .iter()
+            .flat_map(|root| crate::source_inputs::Index::new(workspace, root).section_labels)
+            .collect()
+    } else {
+        BTreeSet::new()
+    };
     let mut candidates = BTreeMap::new();
     let allow_spaces = command != "inputminted"
         || roots
@@ -192,6 +200,7 @@ fn complete_with_argument(
                 continue;
             };
             if !name.starts_with(name_prefix)
+                || crate::bib_section_files::file_command(command) && name.contains([',', ']'])
                 || !allow_spaces && name.chars().any(char::is_whitespace)
                 || name.starts_with('.') && !name_prefix.starts_with('.')
                 || (compact || syntax::passes_options(command) || command == "bibliographystyle")
@@ -244,6 +253,12 @@ fn complete_with_argument(
                 {
                     new_text.truncate(new_text.len() - extension.len() - 1);
                 }
+            }
+            if crate::bib_section_files::file_command(command)
+                && (!crate::bib_section_files::editable_item(&new_text)
+                    || section_labels.contains(&new_text))
+            {
+                continue;
             }
             if !folder {
                 let resolved = if command == "includegraphics" {

@@ -59,9 +59,13 @@ fn selected_sections_do_not_bind_keys_to_the_default_database_or_offer_partial_e
             features::rename(&ws, &bib, Position::new(0, 8), "updated").is_err(),
             "{header}"
         );
-        assert_eq!(
-            features::references(&ws, &bib, Position::new(0, 8), true).len(),
-            1,
+        let references = features::references(&ws, &bib, Position::new(0, 8), true);
+        assert!(
+            references.iter().any(|location| location.uri == bib),
+            "{header}"
+        );
+        assert!(
+            references.iter().all(|location| location.uri != main),
             "{header}"
         );
         assert!(

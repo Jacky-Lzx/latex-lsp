@@ -16,6 +16,7 @@ pub(crate) struct Index {
     pub loaders: BTreeMap<Url, Vec<SourceCall>>,
     pub forwarders: BTreeMap<Url, Vec<SourceCall>>,
     pub resources: BTreeMap<Url, Vec<SourceCall>>,
+    pub section_labels: BTreeSet<String>,
     pub selectors: BTreeMap<Url, Vec<SourceCall>>,
     pub checks: BTreeMap<Url, Vec<SourceCall>>,
     pub incomplete: bool,
@@ -111,6 +112,15 @@ impl Index {
                     (!calls.is_empty()).then_some((uri.clone(), calls))
                 })
                 .collect();
+            match crate::bib_section_files::calls(workspace, root, &scope, &signatures) {
+                Some(selection) => {
+                    index.section_labels = selection.labels;
+                    for (uri, calls) in selection.calls {
+                        resources.entry(uri).or_default().extend(calls);
+                    }
+                }
+                None => index.incomplete = true,
+            }
             index.loaders = loader_calls;
             index.forwarders = forwarders;
             index.resources = resources;
@@ -131,6 +141,7 @@ impl Index {
             loaders: BTreeMap::new(),
             forwarders: BTreeMap::new(),
             resources: BTreeMap::new(),
+            section_labels: BTreeSet::new(),
             selectors: BTreeMap::new(),
             checks: BTreeMap::new(),
             incomplete: true,

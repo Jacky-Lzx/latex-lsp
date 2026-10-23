@@ -648,6 +648,15 @@ pub fn will_rename(workspace: &Workspace, files: &[FileRename]) -> Result<Option
                 } else {
                     original.into()
                 };
+                if new_text != original
+                    && command.is_some_and(|command| {
+                        crate::bib_section_files::file_command(&command.name)
+                    })
+                    && (!crate::bib_section_files::editable_item(&new_text)
+                        || inputs.section_labels.contains(&new_text))
+                {
+                    return Err(Error::invalid_params("Renamed section resource would change list syntax or select a resource label instead of its file"));
+                }
                 if let Some((previous, count)) = links.get_mut(&(start, end)) {
                     if *previous != new_text {
                         return Err(Error::invalid_params("Shared file reference would require different replacements in different projects"));

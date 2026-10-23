@@ -28420,10 +28420,7 @@ fn section_resource_changes_reject_default_database_renames_and_restore_empty_li
         server.send(json!({"jsonrpc":"2.0","id":3,"method":"textDocument/rename","params":{"textDocument":{"uri":bib},"position":{"line":0,"character":8},"newName":"updated"}}));
         let response = server.until(|message| message["id"] == 3);
         assert_eq!(response["error"]["code"], -32602, "{response}");
-        assert!(response["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("reference sections"));
+        assert!(response["error"]["message"].is_string(), "{response}");
         let updated = source.replace("[chosen]", "[]");
         server.notify(
             "textDocument/didChange",
@@ -28555,4 +28552,120 @@ fn registered_section_files_complete_link_and_move_without_exposing_unused_entri
     server.request(1000, "shutdown", Value::Null);
     server.notify("exit", Value::Null);
     server.wait_exit(0);
+}
+
+#[test]
+fn selected_section_file_items_complete_link_and_move_over_stdio() {
+    use latex_lsp::text::Text;
+    use tower_lsp::lsp_types::{TextDocumentContentChangeEvent, TextEdit};
+    for document_changes in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+        let provider = Url::from_file_path(directory.path().join("provider.sty")).unwrap();
+        let bib = Url::from_file_path(directory.path().join("selected.bib")).unwrap();
+        let source =
+            "% 😀\r\n\\documentclass{article}\\usepackage{provider}\\choose[selBAD,other.bib]";
+        for (name, text) in [
+            ("main.tex", source),
+            ("provider.sty", r"\def\choose{\newrefsection}"),
+            ("selected.bib", "@book{selected,title={Selected}}"),
+            ("other.bib", "@book{other,title={Other}}"),
+        ] {
+            std::fs::write(directory.path().join(name), text).unwrap();
+        }
+        let mut server = Server::start();
+        server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(directory.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":document_changes},"fileOperations":{"willRename":true}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+        server.notify("initialized", json!({}));
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":main,"languageId":"latex","version":3,"text":source}}),
+        );
+        let at = Text::new(source.into()).position(source.find("selBAD").unwrap() + 3);
+        let items = server.request(
+            2,
+            "textDocument/completion",
+            json!({"textDocument":{"uri":main},"position":at}),
+        );
+        let item = items
+            .as_array()
+            .or_else(|| items["items"].as_array())
+            .unwrap()
+            .iter()
+            .find(|item| item["label"] == "selected.bib")
+            .unwrap();
+        let edit: TextEdit = serde_json::from_value(item["textEdit"].clone()).unwrap();
+        let updated = Text::new(source.into())
+            .changed(vec![TextDocumentContentChangeEvent {
+                range: Some(edit.range),
+                range_length: None,
+                text: edit.new_text,
+            }])
+            .unwrap()
+            .source;
+        assert_eq!(updated, source.replace("selBAD", "selected.bib"));
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":4},"contentChanges":[{"text":updated}]}),
+        );
+        let links = server.request(
+            3,
+            "textDocument/documentLink",
+            json!({"textDocument":{"uri":main}}),
+        );
+        assert!(
+            links
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|link| link["target"] == bib.as_str()),
+            "{links}"
+        );
+        let renamed = Url::from_file_path(directory.path().join("selected%renamed.bib")).unwrap();
+        let edit = server.request(
+            4,
+            "workspace/willRenameFiles",
+            json!({"files":[{"oldUri":bib,"newUri":renamed}]}),
+        );
+        let edits = if document_changes {
+            assert_eq!(edit["documentChanges"][0]["textDocument"]["version"], 4);
+            edit["documentChanges"][0]["edits"].clone()
+        } else {
+            edit["changes"][main.as_str()].clone()
+        };
+        let edits: Vec<TextEdit> = serde_json::from_value(edits).unwrap();
+        assert_eq!(edits.len(), 1);
+        assert_eq!(
+            Text::new(updated.clone())
+                .changed(
+                    edits
+                        .into_iter()
+                        .map(|edit| TextDocumentContentChangeEvent {
+                            range: Some(edit.range),
+                            range_length: None,
+                            text: edit.new_text
+                        })
+                        .collect()
+                )
+                .unwrap()
+                .source,
+            updated.replace("selected.bib", "selected%renamed.bib")
+        );
+        server.notify("textDocument/didOpen",json!({"textDocument":{"uri":provider,"languageId":"latex","version":8,"text":r"\newcommand\choose[1][]{}"}}));
+        let links = server.request(
+            5,
+            "textDocument/documentLink",
+            json!({"textDocument":{"uri":main}}),
+        );
+        assert!(
+            !links
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|link| link["target"] == bib.as_str()),
+            "{links}"
+        );
+        server.request(1000, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
 }

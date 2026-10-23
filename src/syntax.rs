@@ -812,6 +812,14 @@ pub(crate) fn is_static_reference_key(key: &str) -> bool {
 /// Split a TeX key list without interpreting commas inside comments, groups,
 /// or control symbols. Ranges always refer to the original document.
 pub(crate) fn key_list_segments(source: &str, span: Range<usize>) -> Vec<Range<usize>> {
+    key_list_segments_mode(source, span, true)
+}
+
+pub(crate) fn verbatim_list_segments(source: &str, span: Range<usize>) -> Vec<Range<usize>> {
+    key_list_segments_mode(source, span, false)
+}
+
+fn key_list_segments_mode(source: &str, span: Range<usize>, comments: bool) -> Vec<Range<usize>> {
     let bytes = source.as_bytes();
     let mut result = Vec::new();
     let mut start = span.start;
@@ -826,7 +834,7 @@ pub(crate) fn key_list_segments(source: &str, span: Range<usize>) -> Vec<Range<u
                 }
                 continue;
             }
-            b'%' => {
+            b'%' if comments => {
                 while at < span.end && bytes[at] != b'\n' {
                     at += 1;
                 }
@@ -884,7 +892,11 @@ pub(crate) fn citation_list_spans(source: &str, span: Range<usize>) -> Vec<Range
         .collect()
 }
 
-fn literal_file_span(source: &str, segment: Range<usize>, compact: bool) -> Option<Range<usize>> {
+pub(crate) fn literal_file_span(
+    source: &str,
+    segment: Range<usize>,
+    compact: bool,
+) -> Option<Range<usize>> {
     let mut pieces = name_literal_pieces(source, segment)
         .into_iter()
         .map(|span| trimmed_span(source, span))
@@ -1030,6 +1042,13 @@ fn file_list_argument<'a>(source: &str, command: &'a Command) -> Option<&'a Argu
 /// and package names discard TeX spaces, while chapter names preserve them.
 /// Do not infer macro expansion or join separate pieces across a comment.
 pub(crate) fn file_list_spans(source: &str, command: &Command) -> Option<Vec<Range<usize>>> {
+    if crate::bib_section_files::file_command(&command.name) {
+        return command
+            .argument
+            .as_ref()
+            .map(|argument| vec![argument.span.clone()]);
+    }
+
     if !file_list(&command.name) {
         return None;
     }
@@ -1053,6 +1072,13 @@ pub(crate) fn complete_file_list_spans(
     source: &str,
     command: &Command,
 ) -> Option<Vec<Range<usize>>> {
+    if crate::bib_section_files::file_command(&command.name) {
+        return command
+            .argument
+            .as_ref()
+            .map(|argument| vec![argument.span.clone()]);
+    }
+
     let argument = file_list_argument(source, command)?;
     let compact = file_name_ignores_spaces(&command.name);
     key_list_segments(source, argument.span.clone())
@@ -1151,6 +1177,9 @@ pub(crate) fn code_input_command(name: &str) -> bool {
 }
 
 pub fn file_extensions(name: &str) -> Option<&'static [&'static str]> {
+    if name == crate::bib_section_files::DEPENDENCY {
+        return None;
+    }
     Some(match name {
         "input" | "InputIfFileExists" | "loadglsentries" => &[
             "tex", "ltx", "sty", "cls", "def", "clo", "fd", "ldf", "bbx", "cbx", "lbx", "dbx",
@@ -1185,21 +1214,22 @@ pub(crate) fn is_literal_file_path(value: &str) -> bool {
 }
 
 pub fn file_list(name: &str) -> bool {
-    matches!(
-        name,
-        "bibliography"
-            | "nobibliography"
-            | "usepackage"
-            | "RequirePackage"
-            | "RequirePackageWithOptions"
-            | "includeonly"
-    )
+    crate::bib_section_files::file_command(name)
+        || matches!(
+            name,
+            "bibliography"
+                | "nobibliography"
+                | "usepackage"
+                | "RequirePackage"
+                | "RequirePackageWithOptions"
+                | "includeonly"
+        )
 }
 
 /// Completion can offer explicit source extensions that TeX does not infer.
 pub(crate) fn inferred_file_extensions(name: &str) -> Option<&'static [&'static str]> {
     let extensions = file_extensions(name)?;
-    Some(if crate::bib_resources::references_file(name) {
+    Some(if crate::bib_resources::exact_filename(name) {
         &[""]
     } else if matches!(name, "input" | "InputIfFileExists") {
         &extensions[..1]
@@ -1343,7 +1373,7 @@ pub(crate) fn file_lookup_names<'a>(
     let literal = normalized.as_deref().unwrap_or(value);
     let empty = literal.is_empty();
     let extension = loader.unwrap_or(match command {
-        "bibliography" | "nobibliography" => "bib",
+        "bibliography" | "nobibliography" | crate::bib_section_files::INFERRED => "bib",
         "bibliographystyle" => "bst",
         _ => "tex",
     });
@@ -1352,9 +1382,10 @@ pub(crate) fn file_lookup_names<'a>(
             "include" | "includeonly" => !value.ends_with(".tex"),
             "input" | "InputIfFileExists" | "IfFileExists" => !recognized,
             name if code_input_command(name) => !recognized,
-            "bibliography" | "nobibliography" | "bibliographystyle" => {
-                !literal.ends_with(&format!(".{extension}"))
-            }
+            "bibliography"
+            | "nobibliography"
+            | "bibliographystyle"
+            | crate::bib_section_files::INFERRED => !literal.ends_with(&format!(".{extension}")),
             _ => loader.is_some(),
         };
     let preferred = if append {
