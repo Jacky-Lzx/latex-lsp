@@ -40,6 +40,7 @@ pub(crate) fn fixes(
         "missing-listing" => "lstinputlisting",
         "missing-verbatim-input" => "verbatiminput",
         "missing-fancyverb-input" => "VerbatimInput",
+        "missing-minted-input" => "inputminted",
         "missing-include" => "include",
         "missing-bibliography-style" => "bibliographystyle",
         "missing-bibliography-database" => {
@@ -94,6 +95,9 @@ pub(crate) fn fixes(
     let compact = syntax::file_name_ignores_spaces(command_name);
     let reported = if fancyverb {
         build_log::missing_fancyverb_name(&diagnostic.message)
+    } else if command_name == "inputminted" {
+        build_log::missing_minted_name(&diagnostic.message)
+            .or_else(|| build_log::missing_fancyverb_name(&diagnostic.message))
     } else if command_name == "verbatiminput" {
         build_log::missing_verbatim_name(&diagnostic.message)
     } else if listing {
@@ -230,7 +234,11 @@ pub(crate) fn fixes(
             }
             for span in spans {
                 let value = &doc.text.source[span.clone()];
-                let matches_report = if command_name == "verbatiminput" || fancyverb || resource {
+                let matches_report = if command_name == "verbatiminput"
+                    || fancyverb
+                    || resource
+                    || command_name == "inputminted"
+                {
                     value == reported
                 } else if listing {
                     crate::listings::missing_report(value) == reported
@@ -312,6 +320,8 @@ pub(crate) fn fixes(
         vec![]
     };
     let mut candidates = Vec::new();
+    let allow_spaces =
+        command_name != "inputminted" || crate::code_inputs::allows_spaces(workspace, uri, root);
     for entry in files.take(4096).flatten() {
         let Ok(name) = entry.file_name().into_string() else {
             continue;
@@ -333,11 +343,13 @@ pub(crate) fn fixes(
         }) else {
             continue;
         };
-        if !(if resource {
-            crate::bib_resources::literal_path(&name)
-        } else {
-            syntax::is_literal_file_path(&name)
-        }) || name.starts_with('.') && !original.starts_with('.')
+        if !allow_spaces && name.chars().any(char::is_whitespace)
+            || !(if resource {
+                crate::bib_resources::literal_path(&name)
+            } else {
+                syntax::is_literal_file_path(&name)
+            })
+            || name.starts_with('.') && !original.starts_with('.')
             || (command_name == "bibliographystyle" || database)
                 && name.chars().any(char::is_whitespace)
             || database && name.contains(',')
@@ -413,9 +425,9 @@ pub(crate) fn fixes(
                 continue;
             }
         }
-        let edit = if crate::fancyvrb::is_input(command_name) {
+        let edit = if crate::code_inputs::wrapped_filename(command_name) {
             let Some(edit) =
-                crate::fancyvrb::filename_edit(&doc.text, command, replacement.clone())
+                crate::code_inputs::filename_edit(&doc.text, command, replacement.clone())
             else {
                 continue;
             };

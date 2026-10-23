@@ -955,6 +955,10 @@ pub(crate) fn file_name_argument_start(
     if crate::bib_resources::loads(name) {
         return crate::bib_resources::start(source, command_end);
     }
+    if name == "inputminted" {
+        return crate::minted::language(source, command_end)
+            .map(|argument| skip_space(source, argument.outer_span.end));
+    }
     let mut start = skip_space(source, command_end);
     if source.as_bytes().get(start) == Some(&b'*') {
         if name != "includegraphics"
@@ -1119,7 +1123,8 @@ pub(crate) fn active_key_list_prefix(
 
 /// Files displayed as literal code, rather than executed as TeX source.
 pub(crate) fn code_input_command(name: &str) -> bool {
-    matches!(name, "lstinputlisting" | "verbatiminput") || crate::fancyvrb::is_input(name)
+    matches!(name, "lstinputlisting" | "verbatiminput" | "inputminted")
+        || crate::fancyvrb::is_input(name)
 }
 
 pub fn file_extensions(name: &str) -> Option<&'static [&'static str]> {
@@ -1264,8 +1269,8 @@ pub(crate) fn file_argument<'a>(
             .argument
             .as_ref()
             .filter(|argument| argument.outer_span.start == start)?;
-        let span = if crate::fancyvrb::is_input(&command.name) {
-            crate::fancyvrb::filename(source, argument.span.clone(), false)?
+        let span = if crate::code_inputs::wrapped_filename(&command.name) {
+            crate::code_inputs::filename(source, &command.name, argument.span.clone(), false)?
         } else if code_input_command(&command.name) {
             is_literal_file_path(&argument.value).then_some(argument.span.clone())?
         } else if command.name == "bibliographystyle" {
@@ -2203,6 +2208,14 @@ impl Syntax {
                             ..probe
                         });
                         continue;
+                    }
+                    if operands_known && name == "inputminted" {
+                        if let Some(argument) = crate::minted::language(source, command_end) {
+                            literal_arguments.insert(
+                                argument.outer_span.start,
+                                (argument.span, argument.outer_span.end),
+                            );
+                        }
                     }
                     let starred = !matches!(
                         name,

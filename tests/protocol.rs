@@ -81,6 +81,127 @@ fn minted_inline_code_stays_opaque_after_incremental_changes_over_stdio() {
     assert_eq!(symbols[0]["name"], "kept");
     server.request(8, "shutdown", Value::Null);
     server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+fn minted_missing_files_publish_and_pull_versioned_repairs_and_clear_after_rebuilding() {
+    use latex_lsp::text::Text;
+    use tower_lsp::lsp_types::TextEdit;
+    for pull in [false, true] {
+        let script = r#"cp "${2%/*}/fixture.log" "$1/main.log"
+printf '%%PDF-1.4\n' > "$1/main.pdf"
+printf 'PWD %s\nINPUT %s\n' "$PWD" "$2" > "$1/main.fls"
+"#;
+        let mut capabilities = json!({
+            "workspace":{"workspaceEdit":{"documentChanges":true}},
+            "textDocument":{"codeAction":{"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix"]}}}}
+        });
+        if pull {
+            capabilities["textDocument"]["diagnostic"] = json!({});
+        }
+        let (mut server, directory, main) =
+            fake_build_server_capabilities(script, false, capabilities);
+        let root = directory.path();
+        let source =
+            "% 😀\r\n\\documentclass{article}\r\n\\inputminted[linenos]{rust}{smaple.rs}\r\n";
+        std::fs::write(root.join("main.tex"), source).unwrap();
+        std::fs::write(root.join("sample.rs"), "Code.\n").unwrap();
+        std::fs::write(root.join("fixture.log"), "(./main.tex\n./main.tex:3: Package minted Error: Cannot find input file \"smaple.rs\"; inserting placeholder.\n\nl.3 \\inputminted[linenos]{rust}{smaple.rs}\n)\n").unwrap();
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":2},"contentChanges":[{"text":source}]}),
+        );
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(finished["params"]["stale"], false, "{finished}");
+        let items = if pull {
+            server.request(
+                3,
+                "textDocument/diagnostic",
+                json!({"textDocument":{"uri":main}}),
+            )["items"]
+                .clone()
+        } else {
+            server.until(|message| {
+                message["method"] == "textDocument/publishDiagnostics"
+                    && message["params"]["uri"] == main.as_str()
+                    && message["params"]["diagnostics"]
+                        .as_array()
+                        .is_some_and(|items| {
+                            items
+                                .iter()
+                                .any(|item| item["code"] == "missing-minted-input")
+                        })
+            })["params"]["diagnostics"]
+                .clone()
+        };
+        let item = items
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["code"] == "missing-minted-input")
+            .unwrap_or_else(|| panic!("{items}"));
+        let at = source.find("smaple.rs").unwrap();
+        assert_eq!(
+            item["range"],
+            serde_json::to_value(Text::new(source.into()).range(at, at + "smaple.rs".len()))
+                .unwrap()
+        );
+        let actions = server.request(4, "textDocument/codeAction", json!({"textDocument":{"uri":main},"range":item["range"],"context":{"diagnostics":[item],"only":["quickfix"]}}));
+        assert_eq!(actions.as_array().unwrap().len(), 1, "{actions}");
+        assert_eq!(
+            actions[0]["edit"]["documentChanges"][0]["textDocument"]["version"],
+            2
+        );
+        let edit: TextEdit =
+            serde_json::from_value(actions[0]["edit"]["documentChanges"][0]["edits"][0].clone())
+                .unwrap();
+        let updated = Text::new(source.into())
+            .changed(vec![tower_lsp::lsp_types::TextDocumentContentChangeEvent {
+                range: Some(edit.range),
+                range_length: None,
+                text: edit.new_text,
+            }])
+            .unwrap();
+        assert_eq!(updated.source, source.replace("smaple.rs", "sample.rs"));
+        std::fs::write(root.join("main.tex"), &updated.source).unwrap();
+        std::fs::write(root.join("fixture.log"), "(./main.tex)\n").unwrap();
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":3},"contentChanges":[{"text":updated.source}]}));
+        server.request(
+            5,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(finished["params"]["status"], "success", "{finished}");
+        assert_eq!(finished["params"]["stale"], false, "{finished}");
+        let items = if pull {
+            server.request(
+                6,
+                "textDocument/diagnostic",
+                json!({"textDocument":{"uri":main}}),
+            )["items"]
+                .clone()
+        } else {
+            server.until(|message| {
+                message["method"] == "textDocument/publishDiagnostics"
+                    && message["params"]["uri"] == main.as_str()
+                    && message["params"]["version"] == 3
+                    && message["params"]["diagnostics"] == json!([])
+            })["params"]["diagnostics"]
+                .clone()
+        };
+        assert_eq!(items, json!([]));
+        server.request(7, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
 }
 
 #[test]
@@ -18871,6 +18992,7 @@ fn static_code_inputs_keep_pdf_and_synctex_history_without_a_recorder_entry() {
         "VerbatimInput *",
         "LVerbatimInput *",
         "BVerbatimInput *",
+        "inputminted{latex}",
     ]
     .into_iter()
     .flat_map(|command| ["unknown", "", "rs", "tex"].map(|extension| (command, extension)))
@@ -18974,6 +19096,7 @@ fn static_code_content_changes_invalidate_the_first_build_without_recorder_evide
         "VerbatimInput *",
         "LVerbatimInput *",
         "BVerbatimInput *",
+        "inputminted{latex}",
     ]
     .into_iter()
     .flat_map(|command| {
@@ -19049,6 +19172,7 @@ fn in_flight_code_path_edits_do_not_erase_the_original_pdf_input_history() {
         "VerbatimInput *",
         "LVerbatimInput *",
         "BVerbatimInput *",
+        "inputminted{latex}",
     ] {
         check_in_flight_code_input_history(command);
     }

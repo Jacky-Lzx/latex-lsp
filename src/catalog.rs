@@ -931,6 +931,11 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
         "Typeset inline highlighted code, in braces or between matching delimiters. Requires minted.",
     ),
     (
+        "inputminted",
+        "inputminted{${1:python}}{${2:file}}",
+        "Insert a highlighted source file without importing LaTeX symbols. Requires minted.",
+    ),
+    (
         "mint",
         "mint{${1:python}}{${2:code}}",
         "Typeset a single highlighted code block, in braces or between matching delimiters. Requires minted.",

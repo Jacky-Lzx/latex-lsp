@@ -124,8 +124,8 @@ fn complete_with_argument(
     if syntax::code_input_command(command)
         && !doc.syntax.commands.iter().any(|candidate| {
             candidate.name == command
-                && (if crate::fancyvrb::is_input(command) {
-                    crate::fancyvrb::prefix(&doc.text.source, candidate, span.end)
+                && (if crate::code_inputs::wrapped_filename(command) {
+                    crate::code_inputs::prefix(&doc.text.source, candidate, span.end)
                         == Some(span.clone())
                 } else {
                     syntax::file_name_argument_start(&doc.text.source, command, candidate.span.end)
@@ -139,6 +139,10 @@ fn complete_with_argument(
         return vec![];
     }
     let mut candidates = BTreeMap::new();
+    let allow_spaces = command != "inputminted"
+        || roots
+            .iter()
+            .all(|root| crate::code_inputs::allows_spaces(workspace, uri, root));
     let mut insertions = BTreeSet::new();
     let mut directories = roots
         .iter()
@@ -187,6 +191,7 @@ fn complete_with_argument(
                 continue;
             };
             if !name.starts_with(name_prefix)
+                || !allow_spaces && name.chars().any(char::is_whitespace)
                 || name.starts_with('.') && !name_prefix.starts_with('.')
                 || (compact || syntax::passes_options(command) || command == "bibliographystyle")
                     && name.contains([' ', '\t', '\r', '\n'])
@@ -283,14 +288,14 @@ fn complete_with_argument(
                     }
                 }
             }
-            if crate::fancyvrb::is_input(command) {
+            if crate::code_inputs::wrapped_filename(command) {
                 let candidate = doc.syntax.commands.iter().find(|candidate| {
                     candidate.name == command
-                        && crate::fancyvrb::prefix(&doc.text.source, candidate, span.end)
+                        && crate::code_inputs::prefix(&doc.text.source, candidate, span.end)
                             == Some(span.clone())
                 });
                 let Some(edit) = candidate.and_then(|candidate| {
-                    crate::fancyvrb::completion_edit(
+                    crate::code_inputs::completion_edit(
                         &doc.text,
                         candidate,
                         new_text.clone(),

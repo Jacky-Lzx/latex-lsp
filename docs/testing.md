@@ -332,6 +332,19 @@ cargo test --locked --test quoted_graphics real_ -- --ignored
 
 默认回归另覆盖完整和未完成路径的别名补全、跨输入文件与本地宏包的别名、recorder 来源中的宏定义与参数边界、仅作代码展示的文件排除、共享根文件冲突、未执行和不确定调用的排除，以及目录补全和缺图建议的作用域、共享源码歧义、候选图片的过期检查及版本化 stdio 文件移动。
 
+## minted 代码
+
+minted 的默认回归覆盖内联逐字代码、跨行和 Unicode 定界符、参数提示、文件补全与移动、数据/源码角色、全局设置保护和缺失文件修复。协议回归还检查代码文件内容变化和构建中路径编辑对 PDF / SyncTeX 历史的影响：
+
+```sh
+cargo test --locked --test minted --test minted_inputs --test missing_minted_inputs
+cargo test --locked --test protocol minted_inline_
+cargo test --locked --test protocol static_code_
+cargo test --locked --test protocol in_flight_code_path_
+```
+
+安装 pdfLaTeX 与 minted v3 后，为三个测试目标添加 `-- --include-ignored`。内联代码使用关闭 shell escape 的逐字模式；路径及双模式缺失文件修复回归另需 PATH 上的 `latexminted`。高亮回归使用受限 shell escape 和立即高亮模式，核对生成文件中的独立内容标记，确认 Python 实际读取的空格及 Unicode 文件名。支持范围见 [minted 代码](minted.md)。
+
 ## 文献与编译诊断
 
 动态集合回归核对声明与成员的独立重命名、含引号的新键、注释与未完成列表补全、两个参数的提示、命令片段、语义声明与选择范围、项目隔离、同名及新键冲突、错误形式和缓冲区更新。真实 Biber 通过普通模式控制文件处理索引中的集合，比较集合键、成员键依次重命名后的完整 `.bbl`；此测试不运行 biblatex 宏。stdio 覆盖旧客户端与版本化编辑、范围移动、动态名称移除声明、关闭文档后恢复磁盘定义及成员编辑：

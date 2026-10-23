@@ -971,8 +971,8 @@ fn argument_span(doc: &Document, command: &Command, offset: usize) -> Option<Spa
             offset,
         );
     }
-    if crate::fancyvrb::is_input(&command.name) {
-        return crate::fancyvrb::prefix(source, command, offset);
+    if crate::code_inputs::wrapped_filename(&command.name) {
+        return crate::code_inputs::prefix(source, command, offset);
     }
     if command.name == "includegraphics" {
         return crate::graphics::prefix(source, command, offset);

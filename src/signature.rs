@@ -470,6 +470,10 @@ fn builtin(name: &str) -> Option<Signature> {
             &[("options", true), ("language", false), ("code", false)],
             false,
         ),
+        "inputminted" => (
+            &[("options", true), ("language", false), ("file", false)],
+            false,
+        ),
         "documentclass" | "usepackage" | "RequirePackage" | "LoadClass" => (
             &[
                 ("options", true),
@@ -910,6 +914,7 @@ fn builtin(name: &str) -> Option<Signature> {
                 Kind::CommandToken
             } else if name == "verbatiminput"
                 || crate::minted::is_inline(name)
+                || name == "inputminted"
                 || syntax::is_range_reference(name)
                 || index == 1
                     && matches!(
@@ -950,6 +955,7 @@ fn builtin(name: &str) -> Option<Signature> {
         starred,
         nested_brackets: !(name == "lstinputlisting"
             || crate::minted::is_inline(name)
+            || name == "inputminted"
             || crate::fancyvrb::is_input(name)
             || syntax::is_citation(name)
             || syntax::loader_extension(name).is_some()
@@ -4366,6 +4372,11 @@ pub fn help(workspace: &Workspace, uri: &Url, position: Position) -> Option<Sign
         span.start <= cursor.saturating_sub(1)
             && cursor.saturating_sub(1) < span.end
             && !doc.syntax.literal_tests.contains(span)
+            && !doc.syntax.commands.iter().any(|command| {
+                command.name == "inputminted"
+                    && crate::minted::language(&doc.text.source, command.span.end)
+                        .is_some_and(|argument| argument.span == *span)
+            })
             && !doc.syntax.commands.iter().any(|command| {
                 (matches!(command.name.as_str(), "url" | "href" | "hyperref")
                     || crate::minted::is_inline(&command.name))

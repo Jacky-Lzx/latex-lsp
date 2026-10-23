@@ -1884,8 +1884,21 @@ pub(crate) fn missing_fancyverb_name(message: &str) -> Option<&str> {
     crate::syntax::is_literal_file_path(name).then_some(name)
 }
 
+pub(crate) fn missing_minted_name(message: &str) -> Option<&str> {
+    let name = message
+        .strip_prefix("Package minted Error: Cannot find input file \"")?
+        .strip_suffix("\"; inserting placeholder.")?;
+    let name = name
+        .strip_prefix('"')
+        .and_then(|name| name.strip_suffix('"'))
+        .unwrap_or(name);
+    crate::syntax::is_literal_file_path(name).then_some(name)
+}
+
 fn missing_read_file(message: &str) -> bool {
-    missing_file_name(message).is_some() || missing_listing_name(message).is_some()
+    missing_file_name(message).is_some()
+        || missing_listing_name(message).is_some()
+        || missing_minted_name(message).is_some()
 }
 
 pub(crate) fn missing_graphic_name(message: &str) -> Option<&str> {
@@ -2043,7 +2056,7 @@ fn missing_path_range(
                 crate::graphics::unquote(name).is_some_and(|reported| value == reported)
             } else if command_name == "lstinputlisting" {
                 crate::listings::missing_report(value) == name
-            } else if fancyverb {
+            } else if fancyverb || command_name == "inputminted" {
                 value == name
             } else {
                 crate::syntax::file_lookup_names(command_name, value)
@@ -2059,7 +2072,7 @@ fn missing_path_range(
             }
             let consumed = &text.source[start..argument.outer_span.end];
             let matched = shortened.map_or(consumed == prefix, |suffix| {
-                (fancyverb && !suffix.is_empty()
+                ((fancyverb || command_name == "inputminted") && !suffix.is_empty()
                     || suffix.ends_with(&text.source[argument.outer_span.clone()]))
                     && consumed.ends_with(suffix)
             });
@@ -3082,6 +3095,12 @@ fn emit_with_context(
         .filter(|_| reported_line.checked_sub(1) == Some(line))
         .and_then(|name| missing_path_range(&text, line, context?, name, "VerbatimInput", &[]));
     ranges.extend(fancyverb_range);
+    let minted_range = missing_minted_name(&message)
+        .or_else(|| missing_fancyverb_name(&message))
+        .filter(|_| !project_stale)
+        .filter(|_| reported_line.checked_sub(1) == Some(line))
+        .and_then(|name| missing_path_range(&text, line, context?, name, "inputminted", &[]));
+    ranges.extend(minted_range);
     let loader_range = missing_file
         .filter(|_| !project_stale)
         .and_then(|name| {
@@ -3169,6 +3188,7 @@ fn emit_with_context(
                     .or_else(|| input_range.map(|_| "missing-input"))
                     .or_else(|| listing_range.map(|_| "missing-listing"))
                     .or_else(|| fancyverb_range.map(|_| "missing-fancyverb-input"))
+                    .or_else(|| minted_range.map(|_| "missing-minted-input"))
                     .or_else(|| loader_range.map(|(_, command)| if crate::syntax::loader_extension(command) == Some("sty") { "missing-package" } else { "missing-class" }))
                     .or_else(|| clash_range.map(|_| "package-option-clash"))
                     .or_else(|| graphic_range.map(|_| "missing-image"))
@@ -3212,6 +3232,11 @@ fn emit_with_context(
                         serde_json::json!({"file":&text.source[start..end]})
                     }))
                     .or_else(|| fancyverb_range.map(|range| {
+                        let start = text.offset(range.start).unwrap();
+                        let end = text.offset(range.end).unwrap();
+                        serde_json::json!({"file":&text.source[start..end]})
+                    }))
+                    .or_else(|| minted_range.map(|range| {
                         let start = text.offset(range.start).unwrap();
                         let end = text.offset(range.end).unwrap();
                         serde_json::json!({"file":&text.source[start..end]})

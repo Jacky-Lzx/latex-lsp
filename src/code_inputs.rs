@@ -1,23 +1,84 @@
 //! Static file inputs displayed as code, with independent package guards.
 use crate::{
     listings, syntax,
+    text::Text,
     workspace::{resolve_file_path, Workspace},
 };
-use std::collections::{BTreeMap, BTreeSet};
-use tower_lsp::lsp_types::Url;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ops::Range,
+};
+use tower_lsp::lsp_types::{TextEdit, Url};
 
-const COMMANDS: [&str; 5] = [
+const COMMANDS: [&str; 6] = [
     "lstinputlisting",
     "verbatiminput",
     "VerbatimInput",
     "LVerbatimInput",
     "BVerbatimInput",
+    "inputminted",
 ];
+
+/// Code readers with filename wrappers beyond a plain literal group.
+pub(crate) fn wrapped_filename(name: &str) -> bool {
+    crate::fancyvrb::is_input(name) || name == "inputminted"
+}
+
+pub(crate) fn filename(
+    source: &str,
+    name: &str,
+    span: Range<usize>,
+    partial: bool,
+) -> Option<Range<usize>> {
+    if name == "inputminted" {
+        crate::minted::filename(source, span, partial)
+    } else {
+        crate::fancyvrb::filename(source, span, partial)
+    }
+}
+
+pub(crate) fn prefix(
+    source: &str,
+    command: &syntax::Command,
+    cursor: usize,
+) -> Option<Range<usize>> {
+    if command.name == "inputminted" {
+        crate::minted::prefix(source, command, cursor)
+    } else {
+        crate::fancyvrb::prefix(source, command, cursor)
+    }
+}
+
+pub(crate) fn filename_edit(
+    text: &Text,
+    command: &syntax::Command,
+    value: String,
+) -> Option<TextEdit> {
+    if command.name == "inputminted" {
+        crate::minted::filename_edit(text, command, value)
+    } else {
+        crate::fancyvrb::filename_edit(text, command, value)
+    }
+}
+
+pub(crate) fn completion_edit(
+    text: &Text,
+    command: &syntax::Command,
+    value: String,
+    end: usize,
+) -> Option<TextEdit> {
+    if command.name == "inputminted" {
+        crate::minted::completion_edit(text, command, value, end)
+    } else {
+        crate::fancyvrb::completion_edit(text, command, value, end)
+    }
+}
 
 pub(crate) fn safe_syntax(source: &str, parsed: &syntax::Syntax, name: &str) -> bool {
     match name {
         name if crate::fancyvrb::is_input(name) => crate::fancyvrb::safe_syntax(source, parsed),
         "lstinputlisting" => listings::safe_syntax(source, parsed),
+        "inputminted" => crate::minted::safe_syntax(source, parsed),
         "verbatiminput" => !parsed.definitions.iter().any(|definition| {
             matches!(
                 definition.name.as_str(),
@@ -29,6 +90,25 @@ pub(crate) fn safe_syntax(source: &str, parsed: &syntax::Syntax, name: &str) -> 
 }
 
 fn safe_project(workspace: &Workspace, sources: &BTreeSet<Url>, name: &str) -> bool {
+    if name == "inputminted"
+        && sources
+            .iter()
+            .filter_map(|uri| workspace.documents.get(uri))
+            .any(|doc| crate::minted::raw_file_reader(&doc.text.source, &doc.syntax))
+        && sources
+            .iter()
+            .filter_map(|uri| workspace.documents.get(uri))
+            .any(|doc| {
+                doc.syntax
+                    .commands
+                    .iter()
+                    .filter(|command| command.name == "inputminted")
+                    .filter_map(|command| syntax::file_argument(&doc.text.source, command))
+                    .any(|argument| argument.value.chars().any(char::is_whitespace))
+            })
+    {
+        return false;
+    }
     sources
         .iter()
         .filter_map(|uri| workspace.documents.get(uri))
@@ -38,6 +118,7 @@ fn safe_project(workspace: &Workspace, sources: &BTreeSet<Url>, name: &str) -> b
 pub(crate) fn safe_call(source: &str, command: &syntax::Command) -> bool {
     match command.name.as_str() {
         "lstinputlisting" => listings::safe_call(source, command),
+        "inputminted" => crate::minted::safe_call(source, command),
         name if crate::fancyvrb::is_input(name) => crate::fancyvrb::safe_call(source, command),
         _ => true,
     }
@@ -120,6 +201,13 @@ fn context_sources(workspace: &Workspace, uri: &Url, root: &Url) -> BTreeSet<Url
         sources.extend(recorded.difference(&displayed).cloned());
     }
     sources
+}
+
+pub(crate) fn allows_spaces(workspace: &Workspace, uri: &Url, root: &Url) -> bool {
+    context_sources(workspace, uri, root)
+        .iter()
+        .filter_map(|uri| workspace.documents.get(uri))
+        .all(|doc| !crate::minted::raw_file_reader(&doc.text.source, &doc.syntax))
 }
 
 pub(crate) fn displayed(workspace: &Workspace, root: &Url) -> BTreeSet<Url> {
