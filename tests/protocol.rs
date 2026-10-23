@@ -298,7 +298,7 @@ fn formatting_uses_buffer_text_default_tex_fmt_and_configurable_latexindent() {
     );
     assert_eq!(
         server.request(6, "textDocument/formatting", formatting_params(&bib)),
-        Value::Null
+        json!([])
     );
     server.request(7, "shutdown", Value::Null);
     server.notify("exit", Value::Null);
@@ -24409,6 +24409,143 @@ fn range_formatting_with_real_tex_fmt_preserves_context_verbatim_and_is_idempote
     );
     assert!(!directory.path().join("main.tex").exists());
     server.request(4, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+fn bibliography_formatting_uses_native_fields_preserves_values_and_is_idempotent() {
+    use latex_lsp::text::Text;
+    use tower_lsp::lsp_types::{TextDocumentContentChangeEvent, TextEdit};
+    let dir = tempfile::tempdir().unwrap();
+    let uri = Url::from_file_path(dir.path().join("refs.bib")).unwrap();
+    std::fs::write(dir.path().join("refs.bib"), "disk content").unwrap();
+    let source = "% 😀\r\n@book{key,title={A\r\n  B\nC},year=2026}\r\n";
+    let expected = "% 😀\r\n@book{key,\r\n    title = {A\r\n  B\nC},\r\n    year = 2026\r\n}\r\n";
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{},"initializationOptions":{"distribution":{"enabled":false},"formatting":{"executable":"/does/not/exist/formatter"}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"bibtex","version":1,"text":source}}),
+    );
+    let edits: Vec<TextEdit> = serde_json::from_value(server.request(
+        2,
+        "textDocument/formatting",
+        formatting_params(&uri),
+    ))
+    .unwrap();
+    let formatted = Text::new(source.into())
+        .changed(
+            edits
+                .into_iter()
+                .rev()
+                .map(|edit| TextDocumentContentChangeEvent {
+                    range: Some(edit.range),
+                    range_length: None,
+                    text: edit.new_text,
+                })
+                .collect(),
+        )
+        .unwrap()
+        .source;
+    assert_eq!(formatted, expected);
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("refs.bib")).unwrap(),
+        "disk content"
+    );
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"text":formatted}]}),
+    );
+    assert_eq!(
+        server.request(3, "textDocument/formatting", formatting_params(&uri)),
+        json!([])
+    );
+    let mut params = formatting_params(&uri);
+    params["options"]["insertSpaces"] = json!(false);
+    let edits: Vec<TextEdit> =
+        serde_json::from_value(server.request(4, "textDocument/formatting", params.clone()))
+            .unwrap();
+    let tabs = Text::new(formatted)
+        .changed(
+            edits
+                .into_iter()
+                .rev()
+                .map(|edit| TextDocumentContentChangeEvent {
+                    range: Some(edit.range),
+                    range_length: None,
+                    text: edit.new_text,
+                })
+                .collect(),
+        )
+        .unwrap()
+        .source;
+    assert!(tabs.contains("\r\n\ttitle = {A\r\n  B\nC}"));
+    params["options"]["tabSize"] = json!(0);
+    server.send(json!({"jsonrpc":"2.0","id":5,"method":"textDocument/formatting","params":params}));
+    assert_eq!(
+        server.until(|message| message["id"] == 5)["error"]["code"],
+        -32602
+    );
+    server.request(6, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+fn bibliography_formatting_ranges_work_for_adjacent_entries_and_untitled_buffers() {
+    use latex_lsp::text::Text;
+    use tower_lsp::lsp_types::{TextDocumentContentChangeEvent, TextEdit};
+    let first = "@book{one,title={😀}}";
+    let second = "@book{two,title={Outside}}";
+    let source = format!("{first}{second}");
+    let uri = Url::parse("untitled:References").unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":null,"capabilities":{},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"bibtex","version":1,"text":source}}),
+    );
+    let mut params = formatting_params(&uri);
+    params["range"] =
+        serde_json::to_value(Text::new(source.clone()).range(0, first.len())).unwrap();
+    let edits: Vec<TextEdit> =
+        serde_json::from_value(server.request(2, "textDocument/rangeFormatting", params)).unwrap();
+    let formatted = Text::new(source)
+        .changed(
+            edits
+                .into_iter()
+                .rev()
+                .map(|edit| TextDocumentContentChangeEvent {
+                    range: Some(edit.range),
+                    range_length: None,
+                    text: edit.new_text,
+                })
+                .collect(),
+        )
+        .unwrap()
+        .source;
+    assert_eq!(
+        formatted,
+        format!("@book{{one,\n    title = {{😀}}\n}}{second}")
+    );
+    // A differently named document still follows the editor's bibliography language.
+    let other = Url::parse("untitled:Other.txt").unwrap();
+    server.notify("textDocument/didOpen", json!({"textDocument":{"uri":other,"languageId":"bibtex","version":1,"text":"@book{k,title={T}}"}}));
+    assert!(!server
+        .request(3, "textDocument/formatting", formatting_params(&other))
+        .as_array()
+        .unwrap()
+        .is_empty());
+    let style = Url::parse("untitled:plain.bst").unwrap();
+    server.notify("textDocument/didOpen", json!({"textDocument":{"uri":style,"languageId":"bst","version":1,"text":"ENTRY {} {} {}"}}));
+    assert_eq!(
+        server.request(4, "textDocument/formatting", formatting_params(&style)),
+        Value::Null
+    );
+    server.request(5, "shutdown", Value::Null);
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }

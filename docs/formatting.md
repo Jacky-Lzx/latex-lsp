@@ -34,13 +34,21 @@ init_options = {
 
 默认 `latexindent` 参数包括 `-l '-y=defaultIndent: "缩进"' -`，并通过 `-c` / `-g` 将辅助文件和日志放入独立临时目录，任务结束后删除。`-l` 加载工具支持的本地设置，`defaultIndent` 采用客户端的 `tabSize` 和 `insertSpaces`。使用自定义参数时，缩进、日志和本地配置均由这份参数决定。
 
-服务器将当前缓冲区文本写入工具的标准输入，以标准输出生成一个排除相同前后缀的 UTF-16 文本编辑；不覆盖源文件。保持原文档的 LF / CRLF，内容未变化时返回空编辑列表。未保存的 LaTeX 缓冲区同样支持；BibTeX 与 `.bst` 暂不格式化。
+服务器将当前 LaTeX 缓冲区文本写入工具的标准输入，以标准输出生成一个排除相同前后缀的 UTF-16 文本编辑；不覆盖源文件。保持原文档的 LF / CRLF，内容未变化时返回空编辑列表。未保存的缓冲区同样支持；BibTeX 使用下述内置格式化器，`.bst` 暂不格式化。
 
 ## 范围格式化
 
 支持标准 `textDocument/rangeFormatting`。使用与全文格式化相同的工具、配置和完整缓冲区输入，因此选中的条目仍使用外层环境的缩进，逐字代码也保留完整上下文。服务器按行内容对齐格式化前后的文本，只返回完全位于请求范围内的修改，选区外内容保持原样。跨越选区边界的换行、合并或其他不可拆分修改会被跳过；可扩大选区或使用全文格式化。需要整理整行缩进时，请从该行第 0 列开始选择。
 
 返回的多个编辑互不重叠，使用原始文档的 UTF-16 坐标。空范围返回空编辑列表；逆序、越界或切开 UTF-16 代理对的范围返回 `InvalidParams`。行对齐限制中间匹配表的大小，超过预算的连续改写按一个整体处理，避免大文件消耗无界内存。取消、超时、文档或配置变更与全文格式化采用相同保护。
+
+## BibTeX 格式化
+
+BibTeX / biblatex 文献缓冲区支持全文与范围格式化，无需安装外部工具。服务器复用文献条目及表达式解析，只调整完整普通条目的字段外部空白：每个字段换行并缩进，`=` 两侧各保留一个空格，关闭定界符另起一行。缩进采用请求的 `tabSize` / `insertSpaces`；不添加或删除逗号。
+
+字段值及其内部换行、花括号保护、大小写、字符串拼接、键名、字段和条目顺序保持原样。注释及维持注释边界的空白保持原样，因此含注释的部分可能保留原有布局。新换行沿用文档的 LF / CRLF，原有混合换行不会被统一。不完整条目、无效赋值、无字段条目以及 `@string`、`@preamble`、`@comment` 保持原样。
+
+范围请求直接筛选位于选区内的空白修改，支持相邻单行条目和未命名文献缓冲区。LaTeX 的 `formatter`、`executable` 和 `arguments` 不用于文献格式化。任务在后台运行，共用并发上限、取消及过期结果校验；输出同样限制为 16 MiB。服务器只返回编辑，不写入文献数据库。
 
 格式化在后台执行，期间仍可编辑和发送其他请求。文档内容、版本、语言类型或格式化配置变化后，返回 `ContentModified`，请重新请求格式化。最多同时运行 4 个格式化任务。取消请求、超时、shutdown 和连接断开会终止任务；Unix 同时终止子进程组。
 
@@ -50,7 +58,9 @@ init_options = {
 
 ```sh
 cargo test --locked --lib formatting
+cargo test --locked --lib bib_formatting -- --include-ignored
 cargo test --locked --test protocol formatting_
+cargo test --locked --test protocol bibliography_formatting_
 cargo test --locked --test protocol range_formatting_
 cargo test --locked --test protocol range_formatting_with_real_tex_fmt -- --ignored
 cargo test --locked --test protocol formatting_with_real_tex_fmt -- --ignored

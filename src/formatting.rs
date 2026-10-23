@@ -36,7 +36,7 @@ pub(crate) fn validate_options(options: &FormattingOptions) -> Result<()> {
     Ok(())
 }
 
-fn failure(message: impl Into<String>) -> Error {
+pub(crate) fn failure(message: impl Into<String>) -> Error {
     Error {
         code: tower_lsp::jsonrpc::ErrorCode::ServerError(-32803),
         message: message.into().into(),

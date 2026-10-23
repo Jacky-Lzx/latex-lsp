@@ -12,7 +12,7 @@
 ## 编辑与项目
 
 - [编辑功能](editing.md)：补全、导航、高亮和颜色。
-- [格式化](formatting.md)：全文与范围格式化、默认 tex-fmt、可选 latexindent、参数与项目设置。
+- [格式化](formatting.md)：LaTeX 与 BibTeX 全文和范围格式化、默认 tex-fmt、可选 latexindent、参数与项目设置。
 - [文档折叠](folding.md)：章节、环境、多行公式、BibTeX 条目及客户端能力。
 - [外部文档与编译引用信息](auxiliary-references.md)：xr 前缀、aux 编号/页码/标题、悬停和行内提示。
 - [标签与交叉引用](labels.md)：键名、注释、范围引用及 hyperref 标签。

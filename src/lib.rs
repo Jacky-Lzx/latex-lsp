@@ -4,6 +4,7 @@ mod bib_accessors;
 mod bib_aliases;
 mod bib_completion;
 mod bib_diagnostics;
+mod bib_formatting;
 mod bib_links;
 mod bib_resources;
 mod bib_strings;
@@ -192,7 +193,11 @@ impl Backend {
         let Some(doc) = workspace.documents.get(&uri) else {
             return Ok(None);
         };
-        if doc.kind != workspace::DocumentKind::Latex {
+        let kind = doc.kind;
+        if !matches!(
+            kind,
+            workspace::DocumentKind::Latex | workspace::DocumentKind::Bibtex
+        ) {
             return Ok(None);
         }
         if let Some(range) = range {
@@ -211,22 +216,24 @@ impl Backend {
             .and_then(|path| path.parent().map(std::path::Path::to_path_buf))
             .filter(|path| path.is_dir())
             .or_else(|| workspace.roots.iter().next().cloned());
-        let mut task = formatting::start(
-            &self.external_tasks,
-            config.clone(),
-            options,
-            text.source.clone(),
-            directory,
-        )?;
+        let mut task = if kind == workspace::DocumentKind::Bibtex {
+            bib_formatting::start(&self.external_tasks, options, text.source.clone(), range)?
+        } else {
+            formatting::start(
+                &self.external_tasks,
+                config.clone(),
+                options,
+                text.source.clone(),
+                directory,
+            )?
+        };
         drop(workspace);
         dispatch::release();
         let formatted = task.wait().await?;
         let workspace = self.workspace.read().await;
         if workspace.settings(&uri).formatting != config
             || !workspace.documents.get(&uri).is_some_and(|doc| {
-                doc.version == version
-                    && doc.text.source == text.source
-                    && doc.kind == workspace::DocumentKind::Latex
+                doc.version == version && doc.text.source == text.source && doc.kind == kind
             })
         {
             return Err(tower_lsp::jsonrpc::Error {
@@ -238,8 +245,15 @@ impl Backend {
         }
         drop(workspace);
         Ok(Some(match range {
-            Some(range) => range_formatting::edits(&text, formatted, range),
-            None => formatting::edits(&text, formatted),
+            _ if kind == workspace::DocumentKind::Bibtex => {
+                formatting::replacement(&text, 0..text.source.len(), &formatted)
+                    .into_iter()
+                    .collect()
+            }
+            Some(range) if kind == workspace::DocumentKind::Latex => {
+                range_formatting::edits(&text, formatted, range)
+            }
+            _ => formatting::edits(&text, formatted),
         }))
     }
 
