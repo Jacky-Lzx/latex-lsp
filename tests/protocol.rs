@@ -27457,3 +27457,77 @@ fn named_reference_keys_navigate_and_return_versioned_cross_file_renames_over_st
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+fn named_key_completions_return_precise_edits_and_track_unsaved_redefinitions_over_stdio() {
+    use latex_lsp::text::Text;
+    let dir = tempfile::tempdir().unwrap();
+    let uri = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let macros = Url::from_file_path(dir.path().join("macros.tex")).unwrap();
+    let definitions = r"\label{known}\bibitem{paper}";
+    std::fs::write(macros.to_file_path().unwrap(), definitions).unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    let mut id = 2;
+    for (index, call, typed, label, redefinition) in [
+        (
+            0,
+            r"\csuse{ref}{knBAD}",
+            "knBAD",
+            "known",
+            r"\renewcommand{\ref}[1]{#1}",
+        ),
+        (
+            1,
+            r"\csname cite\endcsname{paBAD}",
+            "paBAD",
+            "paper",
+            r"\renewcommand{\cite}[1]{#1}",
+        ),
+    ] {
+        let source = format!("\\documentclass{{article}}\r\n\\input{{macros}}\r\n😀 {call}");
+        if index == 0 {
+            server.notify(
+                "textDocument/didOpen",
+                json!({"textDocument":{"uri":uri,"languageId":"latex","version":1,"text":source}}),
+            );
+        } else {
+            server.notify("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":index+1},"contentChanges":[{"text":source}]}));
+        }
+        let text = Text::new(source.clone());
+        let at = source.find(typed).unwrap();
+        let params = json!({"textDocument":{"uri":uri},"position":text.position(at + 2)});
+        let completion = server.request(id, "textDocument/completion", params.clone());
+        id += 1;
+        let item = completion
+            .as_array()
+            .or_else(|| completion["items"].as_array())
+            .unwrap()
+            .iter()
+            .find(|item| item["label"] == label)
+            .unwrap();
+        assert_eq!(
+            item["textEdit"]["range"],
+            json!(text.range(at, at + typed.len()))
+        );
+        assert_eq!(item["textEdit"]["newText"], label);
+        let changed = format!("{definitions}{redefinition}");
+        if index == 0 {
+            server.notify("textDocument/didOpen", json!({"textDocument":{"uri":macros,"languageId":"latex","version":1,"text":changed}}));
+        } else {
+            server.notify("textDocument/didChange", json!({"textDocument":{"uri":macros,"version":index+1},"contentChanges":[{"text":changed}]}));
+        }
+        let completion = server.request(id, "textDocument/completion", params);
+        id += 1;
+        assert!(!completion
+            .as_array()
+            .or_else(|| completion["items"].as_array())
+            .unwrap()
+            .iter()
+            .any(|item| item["label"] == label));
+    }
+    server.request(id, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

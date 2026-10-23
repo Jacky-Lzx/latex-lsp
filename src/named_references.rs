@@ -42,27 +42,54 @@ fn contains(spans: &[Range<usize>], at: usize) -> bool {
         .checked_sub(1)
         .is_some_and(|index| spans[index].contains(&at))
 }
+struct Context {
+    operands: BTreeSet<usize>,
+    declarations: BTreeSet<(usize, usize)>,
+    declaration_data: Vec<Range<usize>>,
+    bodies: Vec<Range<usize>>,
+    opaque: Vec<Range<usize>>,
+}
+impl Context {
+    fn new(doc: &Document, signatures: &CommandSignatures<'_>) -> Self {
+        let source = &doc.text.source;
+        let operands = signatures.argument_tokens(source, &doc.syntax);
+        let declarations = doc
+            .syntax
+            .definitions
+            .iter()
+            .map(|entry| (entry.span.start, entry.span.end))
+            .collect();
+        let declaration_data = merged(crate::expl3::math_data_spans(doc));
+        let bodies = merged(crate::expl3::occurrences(doc).bodies);
+        let opaque: Vec<_> = doc
+            .syntax
+            .ignored
+            .iter()
+            .chain(&doc.syntax.literal_conversions)
+            .chain(&doc.syntax.literal_tests)
+            .chain(&doc.syntax.ambiguous_string_tests)
+            .cloned()
+            .collect();
+        let opaque = merged(opaque);
+        Self {
+            operands,
+            declarations,
+            declaration_data,
+            bodies,
+            opaque,
+        }
+    }
+    fn operand(&self, doc: &Document, at: usize) -> bool {
+        self.operands.contains(&at)
+            || doc.syntax.control_operands.contains(&at)
+            || contains(&self.opaque, at)
+            || contains(&self.declaration_data, at) && !contains(&self.bodies, at)
+    }
+}
+
 fn calls(doc: &Document, signatures: &CommandSignatures<'_>) -> Option<Calls> {
     let source = &doc.text.source;
-    let operands = signatures.argument_tokens(source, &doc.syntax);
-    let declarations = doc
-        .syntax
-        .definitions
-        .iter()
-        .map(|entry| (entry.span.start, entry.span.end))
-        .collect();
-    let declaration_data = merged(crate::expl3::math_data_spans(doc));
-    let bodies = merged(crate::expl3::occurrences(doc).bodies);
-    let opaque: Vec<_> = doc
-        .syntax
-        .ignored
-        .iter()
-        .chain(&doc.syntax.literal_conversions)
-        .chain(&doc.syntax.literal_tests)
-        .chain(&doc.syntax.ambiguous_string_tests)
-        .cloned()
-        .collect();
-    let opaque = merged(opaque);
+    let context = Context::new(doc, signatures);
     let empty = BTreeSet::new();
     let mut result = BTreeMap::new();
     for (index, lexical) in doc.syntax.commands.iter().enumerate() {
@@ -72,7 +99,7 @@ fn calls(doc: &Document, signatures: &CommandSignatures<'_>) -> Option<Calls> {
             index,
             signatures,
             &empty,
-            &declarations,
+            &context.declarations,
         ) else {
             continue;
         };
@@ -80,10 +107,7 @@ fn calls(doc: &Document, signatures: &CommandSignatures<'_>) -> Option<Calls> {
             continue;
         }
         let at = lexical.span.start;
-        let operand = operands.contains(&at)
-            || doc.syntax.control_operands.contains(&at)
-            || contains(&opaque, at)
-            || contains(&declaration_data, at) && !contains(&bodies, at);
+        let operand = context.operand(doc, at);
         for (citation, span) in reference_calls::keys(source, &command, false) {
             if result.len() >= 20_000 {
                 return None;
@@ -266,4 +290,83 @@ pub(crate) fn may_contain_key(doc: &Document, offset: usize) -> bool {
     doc.syntax.commands.iter().any(|command| {
         matches!(command.name.as_str(), "csuse" | "csname") && command.span.start < offset
     })
+}
+
+pub(crate) fn completion_context(
+    workspace: &Workspace,
+    uri: &Url,
+    offset: usize,
+    prefix: impl Fn(&crate::syntax::Command) -> Option<Range<usize>>,
+) -> Option<(crate::syntax::Command, Range<usize>)> {
+    let doc = workspace.documents.get(uri).filter(|doc| has_calls(doc))?;
+    if !workspace.index_truncated.is_empty() {
+        return None;
+    }
+    let mut selected: Option<(crate::syntax::Command, Range<usize>)> = None;
+    let mut bytes = 0usize;
+    let mut commands = 0usize;
+    let mut definitions = 0usize;
+    for (scope, consumers) in crate::environment_calls::project_contexts(workspace) {
+        if !consumers.contains(uri) {
+            continue;
+        }
+        let docs: Vec<_> = scope
+            .iter()
+            .filter_map(|uri| workspace.documents.get(uri))
+            .filter(|doc| doc.kind == DocumentKind::Latex)
+            .collect();
+        bytes = bytes.saturating_add(docs.iter().map(|doc| doc.text.source.len()).sum::<usize>());
+        commands = commands.saturating_add(
+            docs.iter()
+                .map(|doc| doc.syntax.commands.len())
+                .sum::<usize>(),
+        );
+        definitions = definitions.saturating_add(
+            docs.iter()
+                .map(|doc| doc.syntax.definitions.len() + doc.syntax.environments.len())
+                .sum::<usize>(),
+        );
+        if bytes > 32 * 1024 * 1024 || commands > 200_000 || definitions > 8192 {
+            return None;
+        }
+        let signatures = CommandSignatures::new(
+            docs.iter()
+                .map(|doc| (doc.text.source.as_str(), &doc.syntax)),
+        );
+        let context = Context::new(doc, &signatures);
+        let candidate = doc
+            .syntax
+            .commands
+            .iter()
+            .enumerate()
+            .rev()
+            .filter(|(_, command)| command.span.end <= offset)
+            .find_map(|(index, lexical)| {
+                if context.operand(doc, lexical.span.start) {
+                    return None;
+                }
+                let command = reference_calls::named_command(
+                    &doc.text.source,
+                    &doc.syntax,
+                    index,
+                    &signatures,
+                    &context.operands,
+                    &context.declarations,
+                )?;
+                if !signatures.command_unchanged(&command.name) {
+                    return None;
+                }
+                let span = prefix(&command)?;
+                Some((command, span))
+            })?;
+        if selected.as_ref().is_some_and(|(command, span)| {
+            command.name != candidate.0.name
+                || command.span != candidate.0.span
+                || *span != candidate.1
+        }) {
+            return None;
+        }
+        selected = Some(candidate);
+    }
+    selected
 }

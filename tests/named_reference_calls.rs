@@ -237,3 +237,135 @@ fn excessive_named_key_lists_reject_renames_instead_of_returning_partial_edits()
     let position = Text::new(source).position(at + 1);
     assert!(features::rename(&ws, &uri, position, "updated").is_err());
 }
+
+#[test]
+fn named_key_completions_preserve_notes_lists_suffixes_and_utf16_ranges() {
+    let declarations = "😀 \\label{known}\\bibitem{paper}\r\n";
+    for (marked, label, expected) in [
+        (r"\csuse{ref}{kn¦OWN}", "known", r"\csuse{ref}{known}"),
+        (
+            r"\csname ref\endcsname{k¦nown}",
+            "known",
+            r"\csname ref\endcsname{known}",
+        ),
+        (
+            r"\csuse{cref}{other,k¦nown,other}",
+            "known",
+            r"\csuse{cref}{other,known,other}",
+        ),
+        (
+            r"\csuse{crefrange}{known}{k¦nown}",
+            "known",
+            r"\csuse{crefrange}{known}{known}",
+        ),
+        (
+            r"\csuse{vref}[note]{k¦nown}",
+            "known",
+            r"\csuse{vref}[note]{known}",
+        ),
+        (
+            r"\csuse{hyperref}[k¦nown]{text}",
+            "known",
+            r"\csuse{hyperref}[known]{text}",
+        ),
+        (
+            r"\csuse{cite}[before][after]{p¦aper}",
+            "paper",
+            r"\csuse{cite}[before][after]{paper}",
+        ),
+        (
+            r"\csname cites\endcsname[before]{paper}[after]{p¦aper}",
+            "paper",
+            r"\csname cites\endcsname[before]{paper}[after]{paper}",
+        ),
+        (r"\csuse{ref}{k¦", "known", r"\csuse{ref}{known"),
+        (
+            r"\newcommand{\later}{\csuse{ref}{k¦nown}}",
+            "known",
+            r"\newcommand{\later}{\csuse{ref}{known}}",
+        ),
+    ] {
+        let marked = format!("{declarations}{marked}");
+        let at = marked.find('¦').unwrap();
+        let source = marked.replace('¦', "");
+        let (ws, uri) = setup(&source);
+        let items = features::completion(&ws, &uri, Text::new(source.clone()).position(at));
+        let item = items
+            .iter()
+            .find(|item| item.label == label)
+            .unwrap_or_else(|| panic!("{marked}: {items:?}"));
+        let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+            panic!("{item:?}")
+        };
+        let mut edits = vec![edit.clone()];
+        edits.extend(item.additional_text_edits.clone().unwrap_or_default());
+        assert_eq!(apply(&source, edits), format!("{declarations}{expected}"));
+    }
+}
+
+#[test]
+fn named_key_completion_excludes_command_names_notes_and_unconfirmed_meanings() {
+    for marked in [
+        r"\csuse{r¦ef}{known}",
+        r"\csuse{ref}[k¦nown]{known}",
+        r"\csuse{cite}[p¦aper]{paper}",
+        r"\csuse{cites}(p¦aper){paper}",
+        r"\newcommand{\discard}[1]{}\discard{\csuse{ref}{k¦nown}}",
+        r"\noexpand\csuse{ref}{k¦nown}",
+        r"\renewcommand{\ref}[1]{#1}\csuse{ref}{k¦nown}",
+        r"\def\csuse#1#2{}\csuse{ref}{k¦nown}",
+        r"\csuse{\dynamic}{k¦nown}",
+        r"\detokenize{\csuse{ref}{k¦nown}}",
+    ] {
+        let marked = format!("\\label{{known}}\\bibitem{{paper}}\r\n{marked}");
+        let at = marked.find('¦').unwrap();
+        let source = marked.replace('¦', "");
+        let (ws, uri) = setup(&source);
+        let items = features::completion(&ws, &uri, Text::new(source).position(at));
+        assert!(
+            !items
+                .iter()
+                .any(|item| item.label == "known" || item.label == "paper"),
+            "{marked}: {items:?}"
+        );
+    }
+}
+
+#[test]
+fn shared_named_completion_contexts_follow_unsaved_consumer_semantics() {
+    let dir = tempfile::tempdir().unwrap();
+    for (name, source) in [
+        (
+            "a.tex",
+            r"\documentclass{article}\label{known}\input{shared}",
+        ),
+        (
+            "b.tex",
+            r"\documentclass{article}\renewcommand{\ref}[1]{#1}\label{known}\input{shared}",
+        ),
+        ("shared.tex", r"\csuse{ref}{kn}"),
+    ] {
+        std::fs::write(dir.path().join(name), source).unwrap();
+    }
+    let mut ws = Workspace::default();
+    ws.config.distribution.enabled = false;
+    ws.add_root(dir.path().into());
+    let uri = Url::from_file_path(dir.path().join("shared.tex")).unwrap();
+    let position = Position::new(0, 14);
+    assert!(!features::completion(&ws, &uri, position)
+        .iter()
+        .any(|item| item.label == "known"));
+    let b = Url::from_file_path(dir.path().join("b.tex")).unwrap();
+    ws.open(
+        b,
+        r"\documentclass{article}\label{known}\input{shared}".into(),
+        1,
+    );
+    assert!(features::completion(&ws, &uri, position)
+        .iter()
+        .any(|item| item.label == "known"));
+    ws.index_truncated.insert("maxFiles".into());
+    assert!(!features::completion(&ws, &uri, position)
+        .iter()
+        .any(|item| item.label == "known"));
+}

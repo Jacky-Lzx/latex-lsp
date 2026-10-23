@@ -1192,7 +1192,20 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
             return crate::path_completion::complete_source(workspace, uri, &command, span);
         }
     }
-    if let Some((command, span)) = argument_context(doc, offset).filter(|_| !name_command) {
+    let context = (!name_command)
+        .then(|| {
+            argument_context(doc, offset)
+                .map(|(command, span)| (std::borrow::Cow::Borrowed(command), span))
+                .or_else(|| {
+                    crate::named_references::completion_context(workspace, uri, offset, |command| {
+                        argument_span(doc, command, offset)
+                    })
+                    .map(|(command, span)| (std::borrow::Cow::Owned(command), span))
+                })
+        })
+        .flatten();
+    if let Some((command, span)) = context {
+        let command = command.as_ref();
         if syntax::file_extensions(&command.name).is_some() {
             if (command.name == "includegraphics"
                 || crate::source_inputs::editable_file_command(&command.name))

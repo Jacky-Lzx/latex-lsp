@@ -4,6 +4,8 @@
 
 `\csuse{ref}{key}`、`\csname ref\endcsname{key}` 及相应文献调用的实际键支持跳转、悬浮、引用查找、文档高亮、准备重命名和跨文件重命名。引用列表、范围、可选说明和结构化 biblatex 参数沿用直接调用的键边界；命令名称分组和说明文字不属于引用键。标签与文献名称分别解析。
 
+实际键参数也提供上下文补全。已输入的键前缀和剩余后缀一起替换，保留其他列表成员、可选说明及后续参数；支持未完成分组、UTF-16 和 CRLF。补全沿用直接调用的标签／文献候选与参数解析，在命令名称参数、说明文字、动态名称和参数数据中不提供引用键候选。共享来源只有在所有消费者中都能确认同一调用与键位置时才补全，相关未保存重定义会立即更新结果。
+
 例如：
 
 ```tex
@@ -26,4 +28,5 @@
 cargo test --locked --test named_reference_calls
 cargo test --locked --test named_reference_calls real_named_key -- --include-ignored
 cargo test --locked --test protocol named_reference_keys_navigate
+cargo test --locked --test protocol named_key_completions_return_precise
 ```
