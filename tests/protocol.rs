@@ -16,6 +16,302 @@ struct Server {
     pending: RefCell<Vec<Value>>,
 }
 
+#[cfg(unix)]
+fn formatting_server(script: &str, timeout: u64) -> (Server, tempfile::TempDir, Url) {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let executable = root.join("formatter with spaces");
+    std::fs::write(&executable, format!("#!/bin/sh\n{script}\n")).unwrap();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let uri = Url::from_file_path(root.join("main.tex")).unwrap();
+    std::fs::write(root.join("main.tex"), "original disk contents").unwrap();
+    let mut server = Server::start();
+    let initialized = server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(root).unwrap(),"capabilities":{},"initializationOptions":{"formatting":{"executable":executable,"timeoutSeconds":timeout}}}));
+    assert_eq!(
+        initialized["capabilities"]["documentFormattingProvider"],
+        true
+    );
+    server.notify("initialized", json!({}));
+    (server, directory, uri)
+}
+
+#[cfg(unix)]
+fn open_formatting_document(server: &mut Server, uri: &Url, source: &str) {
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"latex","version":1,"text":source}}),
+    );
+}
+
+fn formatting_params(uri: &Url) -> Value {
+    json!({"textDocument":{"uri":uri},"options":{"tabSize":4,"insertSpaces":true}})
+}
+
+#[test]
+#[cfg(unix)]
+fn formatting_uses_buffer_text_default_tex_fmt_and_configurable_latexindent() {
+    use latex_lsp::text::Text;
+    use tower_lsp::lsp_types::{TextDocumentContentChangeEvent, TextEdit};
+    let (mut server, directory, uri) = formatting_server(
+        "printf '%s\\n' \"$@\" > arguments\ncat > input\nsed 's/hello/formatted/' input",
+        10,
+    );
+    let root = directory.path();
+    let source = "% 😀中文\r\n\\begin{itemize}\r\n\\item hello\r\n\\end{itemize}\r\n";
+    open_formatting_document(&mut server, &uri, source);
+    let edits = server.request(2, "textDocument/formatting", formatting_params(&uri));
+    let edits: Vec<TextEdit> = serde_json::from_value(edits).unwrap();
+    assert_eq!(edits.len(), 1);
+    let edits = edits
+        .into_iter()
+        .map(|edit| TextDocumentContentChangeEvent {
+            range: Some(edit.range),
+            range_length: None,
+            text: edit.new_text,
+        })
+        .collect();
+    assert_eq!(
+        Text::new(source.into()).changed(edits).unwrap().source,
+        source.replace("hello", "formatted")
+    );
+    assert_eq!(std::fs::read_to_string(root.join("input")).unwrap(), source);
+    assert_eq!(
+        std::fs::read_to_string(root.join("arguments")).unwrap(),
+        "--stdin\n--tabsize\n4\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join("main.tex")).unwrap(),
+        "original disk contents"
+    );
+    server.notify("workspace/didChangeConfiguration", json!({"settings":{"formatting":{"formatter":"latexindent","executable":root.join("formatter with spaces")}}}));
+    let mut params = formatting_params(&uri);
+    params["options"]["insertSpaces"] = json!(false);
+    server.request(3, "textDocument/formatting", params);
+    let arguments = std::fs::read_to_string(root.join("arguments")).unwrap();
+    assert!(arguments.contains("-l\n"));
+    assert!(arguments
+        .lines()
+        .any(|arg| arg.starts_with("-g=") && arg.ends_with("/indent.log")));
+    let scratch = arguments
+        .lines()
+        .find_map(|arg| arg.strip_prefix("-c="))
+        .unwrap();
+    assert!(!std::path::Path::new(scratch).exists());
+    assert!(arguments.contains("-y=defaultIndent: \"\\t\"\n"));
+    assert!(arguments.ends_with("-\n"));
+    assert!(!root.join("indent.log").exists());
+    server.notify("workspace/didChangeConfiguration", json!({"settings":{"formatting":{"executable":root.join("formatter with spaces"),"arguments":["literal;$(false)","--stdin"]}}}));
+    server.request(4, "textDocument/formatting", formatting_params(&uri));
+    assert_eq!(
+        std::fs::read_to_string(root.join("arguments")).unwrap(),
+        "literal;$(false)\n--stdin\n"
+    );
+    open_formatting_document(&mut server, &uri, "% unchanged\r\n");
+    assert_eq!(
+        server.request(5, "textDocument/formatting", formatting_params(&uri)),
+        json!([])
+    );
+    let bib = Url::from_file_path(root.join("refs.bib")).unwrap();
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":bib,"languageId":"bibtex","version":1,"text":"@book{key}"}}),
+    );
+    assert_eq!(
+        server.request(6, "textDocument/formatting", formatting_params(&bib)),
+        Value::Null
+    );
+    server.request(7, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+fn formatting_reports_process_failures_invalid_output_and_timeout() {
+    for (script, expected) in [
+        (
+            "cat >/dev/null; echo formatter-failed >&2; exit 2",
+            "formatter-failed",
+        ),
+        ("cat >/dev/null; printf '\\377'", "invalid UTF-8"),
+        ("cat >/dev/null", "empty output"),
+        ("sleep 30", "timed out"),
+        (
+            "cat >/dev/null; head -c 16777217 /dev/zero",
+            "exceeds 16 MiB",
+        ),
+    ] {
+        let (mut server, _directory, uri) = formatting_server(script, 1);
+        open_formatting_document(&mut server, &uri, "hello\n");
+        server.send(json!({"jsonrpc":"2.0","id":2,"method":"textDocument/formatting","params":formatting_params(&uri)}));
+        let response = server.until(|message| message["id"] == 2);
+        assert_eq!(response["error"]["code"], -32803, "{response}");
+        assert!(
+            response["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains(expected),
+            "{response}"
+        );
+        server.request(3, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+    let (mut server, directory, uri) = formatting_server("cat", 10);
+    open_formatting_document(&mut server, &uri, "hello\n");
+    server.notify("workspace/didChangeConfiguration", json!({"settings":{"formatting":{"executable":directory.path().join("missing-formatter")}}}));
+    server.send(json!({"jsonrpc":"2.0","id":2,"method":"textDocument/formatting","params":formatting_params(&uri)}));
+    let response = server.until(|message| message["id"] == 2);
+    assert!(response["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("Cannot start formatter"));
+    server.request(3, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+fn formatting_rejects_stale_results_and_keeps_other_requests_responsive() {
+    for change_configuration in [false, true] {
+        let (mut server, directory, uri) = formatting_server(
+            "cat > input; touch ready; while [ ! -f continue ]; do sleep 0.01; done; cat input",
+            10,
+        );
+        open_formatting_document(&mut server, &uri, "hello\n");
+        server.send(json!({"jsonrpc":"2.0","id":2,"method":"textDocument/formatting","params":formatting_params(&uri)}));
+        wait_for_file(&directory.path().join("ready"));
+        if change_configuration {
+            server.notify(
+                "workspace/didChangeConfiguration",
+                json!({"settings":{"formatting":{"formatter":"latexindent"}}}),
+            );
+        } else {
+            server.notify("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"text":"edited\n"}]}));
+        }
+        server.request(
+            3,
+            "textDocument/documentSymbol",
+            json!({"textDocument":{"uri":uri}}),
+        );
+        std::fs::write(directory.path().join("continue"), "").unwrap();
+        let response = server.until(|message| message["id"] == 2);
+        assert_eq!(response["error"]["code"], -32801, "{response}");
+        server.request(4, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn formatting_cancellation_and_disconnect_reap_subprocesses() {
+    for mode in ["cancel", "exit", "eof", "shutdown"] {
+        let (mut server, directory, uri) = formatting_server(
+            "sleep 30 &\nprintf '%s' \"$!\" > descendant\ntouch ready\nwait",
+            30,
+        );
+        open_formatting_document(&mut server, &uri, "hello\n");
+        server.send(json!({"jsonrpc":"2.0","id":2,"method":"textDocument/formatting","params":formatting_params(&uri)}));
+        wait_for_file(&directory.path().join("ready"));
+        let pid: i32 = std::fs::read_to_string(directory.path().join("descendant"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        if mode == "cancel" {
+            server.notify("$/cancelRequest", json!({"id":2}));
+            let response = server.until(|message| message["id"] == 2);
+            assert_eq!(response["error"]["code"], -32800);
+            server.request(3, "shutdown", Value::Null);
+            server.notify("exit", Value::Null);
+            server.wait_exit(0);
+        } else if mode == "shutdown" {
+            // The pending formatting request may return cancellation before shutdown responds.
+            server.send(json!({"jsonrpc":"2.0","id":3,"method":"shutdown"}));
+            server.until(|message| message["id"] == 2);
+            server.until(|message| message["id"] == 3);
+            server.notify("exit", Value::Null);
+            server.wait_exit(0);
+        } else {
+            let status = server.terminate_transport(mode);
+            assert_eq!(status.code(), Some(if mode == "exit" { 1 } else { 0 }));
+        }
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while unsafe { libc::kill(pid, 0) } == 0 {
+            // Reparented children can remain zombies briefly; they have already stopped.
+            if std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                .is_ok_and(|stat| stat.contains(") Z"))
+            {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "formatter descendant survived {mode}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires tex-fmt on PATH"]
+fn formatting_with_real_tex_fmt_preserves_verbatim_and_is_idempotent() {
+    real_formatter_roundtrip("tex-fmt");
+}
+
+#[test]
+#[ignore = "requires latexindent on PATH"]
+fn formatting_with_real_latexindent_preserves_verbatim_and_is_idempotent() {
+    real_formatter_roundtrip("latexindent");
+}
+
+fn real_formatter_roundtrip(formatter: &str) {
+    use latex_lsp::text::Text;
+    use tower_lsp::lsp_types::{TextDocumentContentChangeEvent, TextEdit};
+    let directory = tempfile::tempdir().unwrap();
+    let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+    let source = "% 😀\r\n\\begin{itemize}\r\n\\item hello\r\n\\end{itemize}\r\n\\begin{verbatim}\r\n   raw   data\r\n\\end{verbatim}\r\n";
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(directory.path()).unwrap(),"capabilities":{},"initializationOptions":{"formatting":{"formatter":formatter}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"latex","version":1,"text":source}}),
+    );
+    let edits: Vec<TextEdit> = serde_json::from_value(server.request(
+        2,
+        "textDocument/formatting",
+        formatting_params(&uri),
+    ))
+    .unwrap();
+    assert!(!edits.is_empty());
+    let edits = edits
+        .into_iter()
+        .map(|edit| TextDocumentContentChangeEvent {
+            range: Some(edit.range),
+            range_length: None,
+            text: edit.new_text,
+        })
+        .collect();
+    let formatted = Text::new(source.into()).changed(edits).unwrap().source;
+    assert!(formatted.contains("    \\item hello\r\n"), "{formatted:?}");
+    assert!(formatted.contains("\r\n   raw   data\r\n"));
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"text":formatted}]}),
+    );
+    assert_eq!(
+        server.request(3, "textDocument/formatting", formatting_params(&uri)),
+        json!([])
+    );
+    assert!(!directory.path().join("main.tex").exists());
+    server.request(4, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
 #[test]
 fn minted_inline_code_stays_opaque_after_incremental_changes_over_stdio() {
     use latex_lsp::text::Text;

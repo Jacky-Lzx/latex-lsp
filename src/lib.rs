@@ -29,6 +29,7 @@ mod file_checks;
 mod file_fixes;
 pub mod file_operations;
 mod folding;
+mod formatting;
 mod generated;
 pub mod graphics;
 mod graphics_settings;
@@ -98,6 +99,7 @@ pub struct Backend {
     workspace: Arc<RwLock<Workspace>>,
     builds: build::BuildManager,
     sync_queries: synctex::Queries,
+    formatters: formatting::Formatters,
     shutdown_requested: AtomicBool,
     semantic_cache: Mutex<semantic_cache::Cache>,
     diagnostic_cache: Mutex<diagnostic::Cache>,
@@ -109,6 +111,7 @@ impl Backend {
         Self {
             builds: build::BuildManager::new(client.clone(), workspace.clone()),
             sync_queries: synctex::Queries::default(),
+            formatters: formatting::Formatters::default(),
             client,
             workspace,
             shutdown_requested: AtomicBool::new(false),
@@ -121,9 +124,10 @@ impl Backend {
     pub fn cleanup(&self) -> impl std::future::Future<Output = ()> + Send + 'static {
         let builds = self.builds.clone();
         let queries = self.sync_queries.clone();
+        let formatters = self.formatters.clone();
         let workspace = self.workspace.clone();
         async move {
-            queries.shutdown().await;
+            tokio::join!(queries.shutdown(), formatters.shutdown());
             builds.shutdown().await;
             workspace.read().await.diagnostic_delivery.close();
         }
@@ -335,6 +339,7 @@ impl LanguageServer for Backend {
                     })
                 }),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
+                document_formatting_provider: Some(OneOf::Left(true)),
                 signature_help_provider: Some(SignatureHelpOptions {
                     trigger_characters: Some(
                         ["{", "[", ",", "<", "(", "|", "*", "+"]
@@ -808,6 +813,51 @@ impl LanguageServer for Backend {
             })
             .collect();
         Ok(WorkspaceDiagnosticReport { items }.into())
+    }
+
+    async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
+        let uri = document_uri(params.text_document.uri);
+        let workspace = self.workspace.read().await;
+        let Some(doc) = workspace.documents.get(&uri) else {
+            return Ok(None);
+        };
+        if doc.kind != workspace::DocumentKind::Latex {
+            return Ok(None);
+        }
+        let text = doc.text.clone();
+        let version = doc.version;
+        let config = workspace.config.formatting.clone();
+        let directory = uri
+            .to_file_path()
+            .ok()
+            .and_then(|path| path.parent().map(std::path::Path::to_path_buf))
+            .filter(|path| path.is_dir())
+            .or_else(|| workspace.roots.iter().next().cloned());
+        let mut task = self.formatters.start(
+            config.clone(),
+            params.options,
+            text.source.clone(),
+            directory,
+        )?;
+        drop(workspace);
+        dispatch::release();
+        let formatted = task.wait().await?;
+        let workspace = self.workspace.read().await;
+        if workspace.config.formatting != config
+            || !workspace.documents.get(&uri).is_some_and(|doc| {
+                doc.version == version
+                    && doc.text.source == text.source
+                    && doc.kind == workspace::DocumentKind::Latex
+            })
+        {
+            return Err(tower_lsp::jsonrpc::Error {
+                code: tower_lsp::jsonrpc::ErrorCode::ServerError(-32801),
+                message: "Document or formatting configuration changed; request formatting again"
+                    .into(),
+                data: None,
+            });
+        }
+        Ok(Some(formatting::edits(&text, formatted)))
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {

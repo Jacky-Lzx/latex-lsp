@@ -39,6 +39,36 @@ impl Engine {
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct Config {
     pub build: BuildConfig,
+    pub formatting: FormattingConfig,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+pub enum Formatter {
+    #[serde(rename = "latexindent")]
+    Latexindent,
+    #[default]
+    #[serde(rename = "tex-fmt")]
+    TexFmt,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct FormattingConfig {
+    pub formatter: Formatter,
+    pub executable: Option<String>,
+    pub arguments: Option<Vec<String>>,
+    pub timeout_seconds: u64,
+}
+
+impl Default for FormattingConfig {
+    fn default() -> Self {
+        Self {
+            formatter: Formatter::TexFmt,
+            executable: None,
+            arguments: None,
+            timeout_seconds: 10,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -76,6 +106,17 @@ impl Config {
         let value = value.get("latex").unwrap_or(&value);
         let config: Self = serde_json::from_value(value.clone())
             .map_err(|error| format!("Invalid LaTeX configuration: {error}"))?;
+        if config
+            .formatting
+            .executable
+            .as_ref()
+            .is_some_and(|value| value.trim().is_empty())
+        {
+            return Err("Formatting executable must not be empty".into());
+        }
+        if !(1..=3600).contains(&config.formatting.timeout_seconds) {
+            return Err("Formatting timeoutSeconds must be between 1 and 3600".into());
+        }
         if config.build.executable.trim().is_empty()
             || config
                 .build

@@ -43,6 +43,8 @@ vim.lsp.enable('latex_lsp')
 
 新建未命名文档或打开非标准扩展名时，可先设置 `:setfiletype tex` 或 `:setfiletype bib`。客户端连接并发送相应语言类型后，服务器即可提供编辑功能，无需先保存为 `.tex` / `.bib`；编译仍需可用的已保存主文档。
 
+调用 `vim.lsp.buf.format()` 可使用默认 tex-fmt 全文格式化；切换 latexindent 及自定义参数见[格式化](formatting.md)。请将所选工具安装到服务器的 `PATH`。
+
 输入命令参数时，可通过 `vim.lsp.buf.signature_help()` 查看签名；支持自动参数提示的插件也可使用标准 `textDocument/signatureHelp`。
 
 自动提示的触发字符包括 `{`、`[`、`<`、`(`、`|`、`*`、`+` 和逗号，并在常见结束分隔符处更新当前参数。其他自定义分隔符可手动请求提示。

@@ -2,7 +2,7 @@
 
 [返回项目 README](../README.md)
 
-支持补全、导航、跨文件重命名、诊断、快速修复和后台编译。初次使用请先[安装服务器](install.md)，再[配置编辑器](editors.md)；生成 PDF 的配置见[编译指南](build.md)。
+支持补全、导航、跨文件重命名、格式化、诊断、快速修复和后台编译。初次使用请先[安装服务器](install.md)，再[配置编辑器](editors.md)；生成 PDF 的配置见[编译指南](build.md)。
 
 ## 入门
 
@@ -12,6 +12,7 @@
 ## 编辑与项目
 
 - [编辑功能](editing.md)：补全、导航、高亮和颜色。
+- [格式化](formatting.md)：默认 tex-fmt、可选 latexindent、参数与项目设置。
 - [文档折叠](folding.md)：章节、环境、多行公式、BibTeX 条目及客户端能力。
 - [标签与交叉引用](labels.md)：键名、注释、范围引用及 hyperref 标签。
 - [PDF 目标与书签](pdf-destinations.md)：内部链接、组合目标和书签重命名。
