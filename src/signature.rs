@@ -1883,6 +1883,72 @@ pub(crate) struct CommandSignatures<'a> {
     detokenize_boundary_known: bool,
 }
 
+/// Incremental lexical context for catcode-changing inline commands. Keep the
+/// resolved grammar until another declaration occurs, and scan each preceding
+/// invocation once rather than rebuilding the document prefix for every call.
+#[derive(Default)]
+pub(crate) struct InlineTokenization {
+    signatures: Option<CommandSignatures<'static>>,
+    declarations: (usize, usize),
+    scanned: usize,
+    end: usize,
+}
+
+impl InlineTokenization {
+    pub(crate) fn contains(
+        &mut self,
+        source: &str,
+        parsed: &syntax::Syntax,
+        controls: &BTreeSet<usize>,
+        at: usize,
+    ) -> bool {
+        if at < self.end {
+            return true;
+        }
+        let declarations = (parsed.definitions.len(), parsed.environments.len());
+        if self.signatures.is_none() || self.declarations != declarations {
+            let signatures = CommandSignatures::source_context([(source, parsed)]);
+            self.signatures = Some(CommandSignatures {
+                local: signatures
+                    .local
+                    .into_iter()
+                    .map(|(name, value)| (Cow::Owned(name.into_owned()), value))
+                    .collect(),
+                tex_operands: signatures
+                    .tex_operands
+                    .into_iter()
+                    .map(|(name, value)| (Cow::Owned(name.into_owned()), value))
+                    .collect(),
+                literal_operands: signatures
+                    .literal_operands
+                    .into_iter()
+                    .map(|(name, value)| (Cow::Owned(name.into_owned()), value))
+                    .collect(),
+                detokenize_boundary_known: signatures.detokenize_boundary_known,
+            });
+            self.declarations = declarations;
+            self.scanned = 0;
+        }
+        self.scanned = self.scanned.max(
+            parsed
+                .commands
+                .partition_point(|command| command.span.start < self.end),
+        );
+        if let Some(end) = self.signatures.as_ref().unwrap().pretokenized_literal_end(
+            source,
+            parsed,
+            controls,
+            at,
+            &mut self.scanned,
+        ) {
+            self.end = end;
+            true
+        } else {
+            false
+        }
+    }
+}
+
 /// Possible declarations only exclude literal edits; they never establish a
 /// unique command meaning for navigation, source loading or signature help.
 enum LiteralOperands {
@@ -2771,6 +2837,76 @@ impl<'a> CommandSignatures<'a> {
         self.argument_tokens_with_literal(source, parsed, None, false, true)
     }
 
+    /// Catcode-changing inline commands see ordinary tokens when a known
+    /// macro has already collected their code as an argument. Test the code
+    /// delimiter itself: consuming only the inline control does not tokenize
+    /// the following source. Unknown arities cannot establish this context.
+    fn pretokenized_literal_end(
+        &self,
+        source: &str,
+        parsed: &syntax::Syntax,
+        controls: &BTreeSet<usize>,
+        at: usize,
+        scanned: &mut usize,
+    ) -> Option<usize> {
+        if let Some(span) = definition_body_spans(source, parsed)
+            .into_iter()
+            .find(|span| span.contains(&at))
+        {
+            return Some(span.end);
+        }
+        let mut operands = controls.clone();
+        let declarations = parsed
+            .definitions
+            .iter()
+            .map(|entry| (entry.span.start, entry.span.end))
+            .collect();
+        for (index, command) in parsed.commands.iter().enumerate().skip(*scanned) {
+            *scanned = index + 1;
+            if operands.contains(&command.span.start) {
+                continue;
+            }
+            let Some((name, _, end, spaces)) =
+                self.invocation(source, parsed, index, &operands, &declarations)
+            else {
+                continue;
+            };
+            let shape = parsed.contextual_command_shapes.get(&command.span.start);
+            let tex = shape
+                .and_then(|shape| shape.tex.as_ref())
+                .or_else(|| self.tex_operands.get(name).and_then(Option::as_ref));
+            let end = if let Some(end) = tex.and_then(|tex| tex.end(source, end, spaces)) {
+                mark_operand_tokens(parsed, command.span.end, end, Some(at), &mut operands);
+                end
+            } else {
+                let builtin = (!self.local.contains_key(name))
+                    .then(|| operand_builtin(name))
+                    .flatten();
+                let signature = shape
+                    .and_then(|shape| shape.signature.as_ref())
+                    .or_else(|| self.local.get(name).and_then(Option::as_ref))
+                    .or(builtin.as_ref());
+                if let Some(signature) = signature {
+                    argument_tokens(
+                        (source, parsed),
+                        end,
+                        spaces,
+                        signature,
+                        true,
+                        Some(at),
+                        &mut operands,
+                    )
+                } else {
+                    end
+                }
+            };
+            if operands.contains(&at) {
+                return Some(end);
+            }
+        }
+        None
+    }
+
     pub(crate) fn literal_is_argument(
         &self,
         source: &str,
@@ -3606,7 +3742,7 @@ fn argument_tokens(
     opaque: bool,
     literal: Option<usize>,
     result: &mut BTreeSet<usize>,
-) {
+) -> usize {
     let (source, parsed) = document;
     let mut starred = false;
     if signature.starred {
@@ -3632,7 +3768,7 @@ fn argument_tokens(
             Kind::Optional | Kind::UnstarredOptional | Kind::RequiredBracket => {
                 if source.as_bytes().get(at) != Some(&b'[') {
                     if matches!(parameter.kind, Kind::RequiredBracket) {
-                        return;
+                        return at;
                     }
                     at = before;
                     continue;
@@ -3671,10 +3807,10 @@ fn argument_tokens(
                         at = before;
                         continue;
                     }
-                    return;
+                    return at;
                 }
                 let Some(end) = operand_delimited_end(source, at, open, close) else {
-                    return;
+                    return at;
                 };
                 if let Some(parsed) = opaque {
                     mark_operand_tokens(parsed, at, end, literal, result);
@@ -3702,7 +3838,7 @@ fn argument_tokens(
                     if bracket { b']' } else { b'}' },
                 )
             };
-            let Some((_, end)) = group else { return };
+            let Some((_, end)) = group else { return at };
             if let Some(parsed) = opaque {
                 mark_operand_tokens(parsed, at, end, literal, result);
             }
@@ -3710,10 +3846,10 @@ fn argument_tokens(
             control_spaces = false;
         } else {
             if matches!(parameter.kind, Kind::RequiredGroup) {
-                return;
+                return at;
             }
             let Some(value) = required_token(source, at) else {
-                return;
+                return at;
             };
             let word = syntax::control_word(source, at).is_some();
             if word || literal == Some(at) {
@@ -3723,6 +3859,7 @@ fn argument_tokens(
             control_spaces = word || value == "\\ ";
         }
     }
+    at
 }
 
 /// Preserve an existing bare argument on this logical line. A normal newline

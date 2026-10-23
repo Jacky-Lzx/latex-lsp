@@ -325,15 +325,18 @@ fn listings_inline_literal_boundaries_follow_incremental_edits_over_stdio() {
     let mut source = initial.to_owned();
     for (stage, literal) in [
         None,
-        Some("{\\label kept {\\input fake} "),
-        Some("[title=[literal]% continue\r\n|\\label{kept}\\input{fake}| "),
-        Some("|\\label{kept}\\input{fake} }%"),
-        Some("*\\label{kept}\\input{fake}* "),
+        Some("\\lstinline{\\label kept {\\input fake} "),
+        Some("\\lstinline[title=[literal]% continue\r\n|\\label{kept}\\input{fake}| "),
+        Some("\\lstinline|\\label{kept}\\input{fake} }%"),
+        Some("\\lstinline*\\label{kept}\\input{fake}* "),
+        Some("\\textbf{\\lstinline{a{\\label{kept}\\input{fake}}b}} "),
+        Some("\\textbf{\\lstinline|a% ignored |\r\n\\label{kept}\\input{fake}|} "),
+        Some("\\lstinline{\\label kept {\\input fake} "),
     ]
     .into_iter()
     .enumerate()
     {
-        let start = source.find("\\lstinline").unwrap() + "\\lstinline".len();
+        let start = source.find("\\label{kept}\r\n").unwrap() + "\\label{kept}\r\n".len();
         if let Some(literal) = literal {
             let end = source.find("\\ref{kept}").unwrap();
             let text = Text::new(source.clone());

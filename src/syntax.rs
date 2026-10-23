@@ -2098,6 +2098,7 @@ impl Syntax {
         let mut punctuation_operands = std::collections::BTreeSet::new();
         let mut assigned_controls = std::collections::BTreeSet::<String>::new();
         let mut conversion_arguments = std::collections::BTreeMap::new();
+        let mut inline_tokenization = crate::signature::InlineTokenization::default();
         let mut i = 0;
         while i < bytes.len() {
             // Literal conversions suppress command indexing but retain source
@@ -2227,7 +2228,14 @@ impl Syntax {
                         continue;
                     }
                     if operands_known && name == "lstinline" {
-                        if let Some(span) = crate::listings::inline_span(source, command_end) {
+                        if let Some(at) = crate::listings::inline_start(source, command_end) {
+                            let tokenized = inline_tokenization.contains(
+                                source,
+                                &result,
+                                &control_operands,
+                                at,
+                            );
+                            let span = crate::listings::inline_body(source, at, tokenized);
                             literal_arguments.insert(span.start, (span.clone(), span.end));
                         }
                         result.commands.push(probe);

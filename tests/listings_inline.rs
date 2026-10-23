@@ -126,6 +126,119 @@ fn braced_code_uses_the_first_literal_closing_brace_and_recovers_at_line_end() {
 }
 
 #[test]
+fn macro_arguments_keep_balanced_tokens_comments_and_multiline_code_opaque() {
+    for literal in [
+        r"\textbf{\lstinline{a{b}c}}",
+        "\\textbf{\\lstinline{a% ignored }\r\nb}}",
+        r"\textbf{\lstinline{a\}b}}",
+        r"\textbf{\lstinline|a{b|c}d|}",
+        "\\textbf{\\lstinline|a% ignored |\r\nb|}",
+        "\\textbf{\\lstinline|a\r\nb|}",
+        "\\textbf{\\lstinline{a\r\nb}}",
+        r"\textbf{\lstinline|a\|b|}",
+        r"\textcolor{blue}{\lstinline{a{b}c}}",
+        r"\newcommand{\one}[1]{#1}\one{\lstinline{a{b}c}}",
+        r"\def\one#1{#1}\one{\lstinline{a{b}c}}",
+        r"\def\one#1;{#1}\one\lstinline|a{b|c}d|;",
+        r"\newcommand{\strong}{\textbf}\strong{\lstinline{a{b}c}}",
+        r"\newcommand{\one}[1]{#1}\newcommand{\strong}{\one}\strong{\lstinline{a{b}c}}",
+        r"\def\example{\lstinline{a{b}c}}\example",
+        r"\newcommand{\example}{\lstinline{a{b}c}}\example",
+        r"\NewDocumentCommand{\one}{m}{#1}\one{\lstinline{a{b}c}}",
+        "\\textbf{\\lstinline|a{b|c}d|\\lstinline{a\r\nb}}",
+        r"\textbf{\lstinline{a{\label{fake}\input{fake}}c}}",
+    ] {
+        let source = format!("{literal}\\label{{real}}\\ref{{real}}");
+        let mut workspace = Workspace::default();
+        let main = uri();
+        workspace.open(main.clone(), source.clone(), 7);
+        let doc = &workspace.documents[&main];
+        assert!(
+            doc.syntax.diagnostics.is_empty(),
+            "{source}: {:?}",
+            doc.syntax.diagnostics
+        );
+        assert_eq!(doc.syntax.labels.len(), 1, "{source}");
+        let at = doc.text.position(source.rfind("real").unwrap());
+        let edit = features::rename(&workspace, &main, at, "changed")
+            .unwrap()
+            .unwrap();
+        let updated = apply(&source, edit.changes.unwrap()[&main].clone());
+        assert_eq!(
+            updated,
+            format!("{literal}\\label{{changed}}\\ref{{changed}}")
+        );
+        let code = source
+            .find("a{")
+            .or_else(|| source.find("a%"))
+            .or_else(|| source.find("a\\"))
+            .or_else(|| source.find("a\r"))
+            .unwrap();
+        let inside = doc.text.position(code + 1);
+        assert!(
+            features::completion(&workspace, &main, inside).is_empty(),
+            "{source}"
+        );
+        assert!(
+            signature::help(&workspace, &main, inside).is_none(),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn ordinary_groups_and_consumed_formatter_controls_keep_source_catcodes() {
+    for prefix in [
+        "{",
+        r"\relax{",
+        r"\iftrue{",
+        r"\newcommand{\zero}{}\zero{",
+        r"\renewcommand{\textbf}{}\textbf{",
+        r"\newcommand{\one}[1]{#1}\one\lstinline{",
+        r"\newcommand{\gobble}[1]{}\gobble\textbf{",
+        r"\let\unused\textbf{",
+        r"\unknown{",
+        r"{\textbf{\lstinline{abc}}",
+    ] {
+        let inline = if prefix.ends_with(r"\lstinline{") {
+            "a{b}"
+        } else {
+            r"\lstinline{a{b}c}"
+        };
+        let suffix = if prefix.starts_with(r"\iftrue") {
+            r"\fi"
+        } else {
+            ""
+        };
+        let source = format!("{prefix}{inline}{suffix}\\label{{real}}");
+        let doc = Document::new(&uri(), source.clone(), Some(7));
+        assert!(
+            doc.syntax.diagnostics.is_empty(),
+            "{source}: {:?}",
+            doc.syntax.diagnostics
+        );
+        assert_eq!(doc.syntax.labels.len(), 1, "{source}");
+        assert_eq!(doc.syntax.labels[0].name, "real");
+    }
+    let source =
+        "\\def\\one#1;{#1}{\\one\\lstinline|a\nb|;\\lstinline|a\n\\label{real}|}\\label{tail}";
+    let doc = Document::new(&uri(), source.into(), Some(7));
+    assert!(
+        doc.syntax.diagnostics.is_empty(),
+        "{:?}",
+        doc.syntax.diagnostics
+    );
+    assert_eq!(
+        doc.syntax
+            .labels
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect::<Vec<_>>(),
+        ["real", "tail"]
+    );
+}
+
+#[test]
 fn headers_have_signatures_hover_snippets_and_preserve_existing_code() {
     let main = uri();
     let mut workspace = Workspace {
@@ -258,6 +371,18 @@ fn real_inline_forms_preserve_native_labels_inputs_and_header_commands_after_ren
             r"\lstinline[title={A]B}] |\label{kept}\input{fake}|",
             "\\lstinline% comment\n[language=TeX]% comment\n|\\label{kept}\\input{fake}|",
             r"\lstinline[basicstyle={\style}]|\label{kept}\input{fake}|",
+            r"\textbf{\lstinline{a{b}c}}",
+            "\\textbf{\\lstinline{a% ignored }\nb}}",
+            r"\textbf{\lstinline{a\}b}}",
+            r"\textbf{\lstinline|a{b|c}d|}",
+            "\\textbf{\\lstinline|a% ignored |\nb|}",
+            "\\textbf{\\lstinline|a\nb|}",
+            "\\textbf{\\lstinline{a\nb}}",
+            r"\textbf{\lstinline|a\|b|}",
+            r"\newcommand{\one}[1]{#1}\one{\lstinline{a{b}c}}",
+            r"\def\example{\lstinline{a{b}c}}\example",
+            r"\relax{\lstinline{a{b}c}",
+            r"\newcommand{\zero}{}\zero{\lstinline{a{b}c}",
         ] {
             let directory = tempfile::tempdir().unwrap();
             let root = directory.path();

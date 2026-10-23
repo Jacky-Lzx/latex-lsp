@@ -2,10 +2,8 @@
 use crate::syntax;
 use std::ops::Range;
 
-/// lstinline reads an ordinary optional argument before its delimiter. Braced
-/// code ends at the first literal right brace; body catcodes neither balance
-/// braces nor recognize escapes or comments. An unfinished body ends at EOL.
-pub(crate) fn inline_span(source: &str, command_end: usize) -> Option<Range<usize>> {
+/// The header uses ordinary TeX syntax in both source and tokenized arguments.
+pub(crate) fn inline_start(source: &str, command_end: usize) -> Option<usize> {
     let mut start = syntax::skip_space(source, command_end);
     if source.as_bytes().get(start) == Some(&b'[') {
         start = syntax::skip_space(source, syntax::bracket_argument(source, start)?.1);
@@ -13,6 +11,47 @@ pub(crate) fn inline_span(source: &str, command_end: usize) -> Option<Range<usiz
     let delimiter = source.get(start..)?.chars().next()?;
     if delimiter.is_whitespace() || matches!(delimiter, '}' | '\\' | '#' | '%') {
         return None;
+    }
+    Some(start)
+}
+
+/// Direct source changes catcodes: braces, escapes and comments are literal,
+/// and an unfinished body ends at EOL. Already collected macro arguments keep
+/// ordinary TeX tokens, balanced groups and commented-out line endings.
+pub(crate) fn inline_span(source: &str, command_end: usize) -> Option<Range<usize>> {
+    let start = inline_start(source, command_end)?;
+    Some(inline_body(source, start, false))
+}
+
+pub(crate) fn inline_body(source: &str, start: usize, tokenized: bool) -> Range<usize> {
+    let delimiter = source[start..].chars().next().unwrap();
+    if tokenized {
+        if delimiter == '{' {
+            if let Some((_, end)) = syntax::group(source, start, b'{', b'}') {
+                return start..end;
+            }
+        } else {
+            let mut at = start + delimiter.len_utf8();
+            loop {
+                at = syntax::skip_space(source, at);
+                let Some(value) = syntax::token(source, at) else {
+                    break;
+                };
+                if value.starts_with(delimiter) {
+                    return start..at + value.len();
+                }
+                if value == "{" {
+                    let Some((_, end)) = syntax::group(source, at, b'{', b'}') else {
+                        break;
+                    };
+                    at = end;
+                } else if value == "}" {
+                    break;
+                } else {
+                    at += value.len();
+                }
+            }
+        }
     }
     let close = if delimiter == '{' { '}' } else { delimiter };
     let body = start + delimiter.len_utf8();
@@ -22,7 +61,7 @@ pub(crate) fn inline_span(source: &str, command_end: usize) -> Option<Range<usiz
     let end = source[body..line_end]
         .find(close)
         .map_or(line_end, |offset| body + offset + close.len_utf8());
-    Some(start..end)
+    start..end
 }
 
 /// listings reads its optional settings and one name token before changing
