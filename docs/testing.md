@@ -334,14 +334,14 @@ cargo test --locked --test quoted_graphics real_ -- --ignored
 
 ## listings 环境边界
 
-`listings_environments` 覆盖头部选项、名称分组、注释续行及首行尾部中的伪关闭标记，核对正文和关闭行尾部的符号、依赖、版本化重命名及文件移动；另覆盖活动换行、CRLF、Unicode、精确关闭字符串、折叠列、联动编辑、高亮和未闭合修复。协议回归增量修改头部及真实关闭标记，检查诊断、符号与编辑范围的刷新：
+`listings_environments` 覆盖头部选项、名称分组、注释续行及首行尾部中的伪关闭标记，核对正文和关闭行尾部的符号、依赖、版本化重命名及文件移动；另覆盖活动换行、CRLF、Unicode、精确关闭字符串、折叠列、联动编辑、高亮和未闭合修复。头部签名回归覆盖完整及未完成选项、注释和参数边界、项目重定义、内部读取器覆盖与未保存设置刷新。协议回归增量修改头部及真实关闭标记，检查诊断、符号、参数提示与编辑范围的刷新：
 
 ```sh
 cargo test --locked --test listings_environments
-cargo test --locked --test protocol listings_environment_header_
+cargo test --locked --test protocol listings_environment_
 ```
 
-安装 pdfLaTeX、XeLaTeX 和 listings 后，为第一个命令添加 `-- --include-ignored`；原生回归核对标签重命名前后的实际编译输入、aux 标签、头部伪关闭标记及正文结束规则。
+安装 pdfLaTeX、XeLaTeX 和 listings 后，为第一个命令添加 `-- --include-ignored`；原生回归核对标签重命名前后的实际编译输入、aux 标签、头部提示、伪关闭标记及正文结束规则。
 
 ## FancyVerb 环境参数提示
 

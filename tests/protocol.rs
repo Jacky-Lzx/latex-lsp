@@ -447,6 +447,93 @@ fn listings_environment_header_boundaries_refresh_after_incremental_changes_over
 }
 
 #[test]
+fn listings_environment_option_signatures_follow_incremental_edits_and_project_overrides() {
+    use latex_lsp::text::Text;
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = Url::from_file_path(root.join("main.tex")).unwrap();
+    let settings = Url::from_file_path(root.join("settings.sty")).unwrap();
+    let initial = "% 😀\r\n\\documentclass{article}\\usepackage{settings}\r\n\\begin{lstlisting}[title={A]B},frame=sin";
+    std::fs::write(root.join("main.tex"), initial).unwrap();
+    std::fs::write(root.join("settings.sty"), "").unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(root).unwrap(),"capabilities":{}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":main,"languageId":"latex","version":7,"text":initial}}),
+    );
+    let text = Text::new(initial.into());
+    let help = server.request(
+        2,
+        "textDocument/signatureHelp",
+        json!({"textDocument":{"uri":main},"position":text.position(initial.len())}),
+    );
+    assert_eq!(
+        help["signatures"][0]["label"],
+        r"\begin{lstlisting}[options]"
+    );
+    assert_eq!(help["activeParameter"], 1);
+    server.notify("textDocument/didChange",json!({"textDocument":{"uri":main,"version":8},"contentChanges":[{"range":text.range(initial.len(),initial.len()),"text":"gle]"}]}));
+    let partial = format!("{initial}gle]");
+    let text = Text::new(partial.clone());
+    assert_eq!(
+        server.request(
+            3,
+            "textDocument/signatureHelp",
+            json!({"textDocument":{"uri":main},"position":text.position(partial.len())})
+        ),
+        Value::Null
+    );
+    let suffix = "\r\n\\frac{a}{b}\\input{fake}\r\n\\end{lstlisting}\\frac{c}{d}\r\n";
+    server.notify("textDocument/didChange",json!({"textDocument":{"uri":main,"version":9},"contentChanges":[{"range":text.range(partial.len(),partial.len()),"text":suffix}]}));
+    let complete = format!("{partial}{suffix}");
+    let text = Text::new(complete.clone());
+    assert_eq!(server.request(4,"textDocument/signatureHelp",json!({"textDocument":{"uri":main},"position":text.position(complete.find("{b}").unwrap()+2)})),Value::Null);
+    let help=server.request(5,"textDocument/signatureHelp",json!({"textDocument":{"uri":main},"position":text.position(complete.find("{d}").unwrap()+2)}));
+    assert_eq!(
+        help["signatures"][0]["label"],
+        r"\frac{numerator}{denominator}"
+    );
+    assert_eq!(help["activeParameter"], 1);
+    let target = json!({"textDocument":{"uri":main},"position":text.position(complete.find("single").unwrap()+2)});
+    assert_eq!(
+        server.request(6, "textDocument/signatureHelp", target.clone())["activeParameter"],
+        1
+    );
+    server.notify("textDocument/didOpen",json!({"textDocument":{"uri":settings,"languageId":"latex","version":1,"text":"\\renewenvironment{lstlisting}[1]{}{}"}}));
+    assert_eq!(
+        server.request(7, "textDocument/signatureHelp", target.clone()),
+        Value::Null
+    );
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":settings,"version":2},"contentChanges":[{"text":""}]}),
+    );
+    let help = server.request(8, "textDocument/signatureHelp", target);
+    assert_eq!(
+        help["signatures"][0]["label"],
+        r"\begin{lstlisting}[options]"
+    );
+    assert_eq!(help["activeParameter"], 1);
+    assert_eq!(
+        server
+            .request(
+                9,
+                "textDocument/documentLink",
+                json!({"textDocument":{"uri":main}})
+            )
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    server.request(10, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
 fn fancyvrb_environment_header_signatures_follow_incremental_edits_over_stdio() {
     use latex_lsp::text::Text;
     let directory = tempfile::tempdir().unwrap();

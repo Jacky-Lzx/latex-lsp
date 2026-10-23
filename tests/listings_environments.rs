@@ -45,6 +45,144 @@ fn versioned(edit: WorkspaceEdit, main: &Url) -> Vec<TextEdit> {
 }
 
 #[test]
+fn environment_option_signatures_respect_unfinished_groups_comments_and_unicode() {
+    let main = Url::parse("file:///listings-environments/signatures.tex").unwrap();
+    let mut workspace = Workspace::default();
+    for marked in [
+        r"\begin{lstlisting}¦",
+        r"\begin{lstlisting} ¦",
+        r"\begin{lstlisting}[frame=sin¦gle]",
+        r"\begin{lstlisting}[title={A]B},frame=sin¦gle]",
+        r"\begin{lstlisting}[title=[lite¦ral]",
+        r"\begin{lstlisting}[title={\detokenize{\end{lstlisting}}},frame=sin¦gle]",
+        r"\begin{lstlisting}[title={\%literal¦}]",
+        "\\begin{lstlisting}% continue\r\n [frame=sin¦gle]",
+        "\\begin{lstlisting}[title={A% ] ignored\r\nB¦}]",
+        "\\begin{lstlisting}[title={😀中文¦}]",
+        r"\begin{lstlisting}[frame=¦",
+        r"\begin{lstlisting}[title={nested[bracket]¦",
+    ] {
+        let marked = format!("% 😀\r\n{marked}");
+        let offset = marked.find('¦').unwrap();
+        let source = marked.replace('¦', "");
+        workspace.open(main.clone(), source.clone(), 7);
+        let help = signature::help(&workspace, &main, Text::new(source).position(offset))
+            .unwrap_or_else(|| panic!("missing signature: {marked}"));
+        assert_eq!(
+            help.signatures[0].label, r"\begin{lstlisting}[options]",
+            "{marked}"
+        );
+        assert_eq!(help.active_parameter, Some(1), "{marked}");
+        assert_eq!(help.signatures[0].active_parameter, Some(1));
+        assert_eq!(help.signatures[0].parameters.as_ref().unwrap().len(), 2);
+        assert!(help.signatures[0].documentation.is_some());
+    }
+}
+
+#[test]
+fn completed_options_names_comments_and_raw_bodies_do_not_continue_header_hints() {
+    let main = Url::parse("file:///listings-environments/no-signatures.tex").unwrap();
+    let mut workspace = Workspace::default();
+    for marked in [
+        "\\begin{lstlisting}% comm¦ent\r\n[frame=single]",
+        "\\begin{lstlisting}[title={A% comm¦ent\r\nB}]",
+        "\\begin{lstlisting}[title={\\\\% comm¦ent\r\nB}]",
+        r"\begin{lstlisting}[frame=single]¦",
+        r"\begin{lstlisting}[title=[literal]¦",
+        r"\begin{lstlisting}{na¦me}",
+        r"\begin{lstlisting}[frame=single]{na¦me}",
+        r"\begin{lstlisting}[frame=single] ignored¦",
+        "\\begin{lstlisting}\r\n[frame=sin¦gle]",
+        "\\begin{lstlisting}\r\n{na¦me}",
+        "\\begin{lstlisting}\r\n\\frac{a}{b¦}\r\n\\end{lstlisting}",
+        "\\begin{lstlisting}[frame=single]\r\n\\frac{a}{b¦}\r\n\\end{lstlisting}",
+        "\\begin{verbatim}\r\n\\begin{lstlisting}[frame=sin¦gle]\r\n\\end{verbatim}",
+        r"% \begin{lstlisting}[frame=sin¦gle]",
+        r"\begin{ lstlisting}[frame=sin¦gle]",
+        r"\begin{lstlisting }[frame=sin¦gle]",
+    ] {
+        let offset = marked.find('¦').unwrap();
+        let source = marked.replace('¦', "");
+        workspace.open(main.clone(), source.clone(), 7);
+        assert!(
+            signature::help(&workspace, &main, Text::new(source).position(offset)).is_none(),
+            "{marked}"
+        );
+    }
+    // Closing-line commands are ordinary TeX and keep their own signatures.
+    let source = "\\begin{lstlisting}\r\ncode\r\n\\end{lstlisting}\\frac{a}{b}";
+    workspace.open(main.clone(), source.into(), 7);
+    let help = signature::help(
+        &workspace,
+        &main,
+        Text::new(source.into()).position(source.rfind('b').unwrap() + 1),
+    )
+    .unwrap();
+    assert_eq!(help.signatures[0].label, r"\frac{numerator}{denominator}");
+    assert_eq!(help.active_parameter, Some(1));
+}
+
+#[test]
+fn project_overrides_and_unsaved_settings_refresh_listings_header_signatures() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = uri(root, "main.tex");
+    let settings = uri(root, "settings.sty");
+    let unrelated = root.join("other-project");
+    std::fs::create_dir(&unrelated).unwrap();
+    std::fs::write(
+        unrelated.join("main.tex"),
+        r"\documentclass{article}\def\begin#1{}",
+    )
+    .unwrap();
+    let source="\\documentclass{article}\\usepackage{settings}\r\n\\begin{lstlisting}[frame=single]\r\ncode\r\n\\end{lstlisting}\r\n";
+    std::fs::write(root.join("main.tex"), source).unwrap();
+    let at = Text::new(source.into()).position(source.find("single").unwrap() + 2);
+    for definition in [
+        r"\renewenvironment{lstlisting}[1]{}{}",
+        r"\NewDocumentEnvironment{lstlisting}{mm}{}{}",
+        r"\RenewEnvironmentCopy{lstlisting}{other}",
+        r"\def\lstlisting#1{#1}",
+        r"\let\lstlisting\other",
+        r"\csundef{lstlisting}",
+        r"\def\lstlisting@#1{#1}",
+        r"\csundef{lstlisting@}",
+        r"\lstnewenvironment{lstlisting}[1]{}{}",
+        r"\lstnewenvironment{\dynamic}{}{}",
+        r"\def\begin#1{}",
+        r"\csundef{\dynamic}",
+    ] {
+        std::fs::write(root.join("settings.sty"), definition).unwrap();
+        let mut workspace = Workspace::default();
+        workspace.add_root(root.into());
+        workspace.add_root(unrelated.clone());
+        workspace.open(main.clone(), source.into(), 7);
+        assert!(
+            signature::help(&workspace, &main, at).is_none(),
+            "{definition}"
+        );
+        workspace.open(settings.clone(), String::new(), 8);
+        assert_eq!(
+            signature::help(&workspace, &main, at).unwrap().signatures[0].label,
+            r"\begin{lstlisting}[options]"
+        );
+    }
+    for definition in [
+        r"\lstnewenvironment{Other}[1]{}{}",
+        r"\renewenvironment{lstlisting*}{}{}",
+    ] {
+        std::fs::write(root.join("settings.sty"), definition).unwrap();
+        let mut workspace = Workspace::default();
+        workspace.add_root(root.into());
+        workspace.open(main.clone(), source.into(), 7);
+        assert!(
+            signature::help(&workspace, &main, at).is_some(),
+            "{definition}"
+        );
+    }
+}
+
+#[test]
 fn header_markers_and_discarded_header_text_preserve_real_source_renames() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
@@ -323,6 +461,21 @@ fn real_headers_and_body_markers_preserve_native_labels_after_versioned_renames(
                 "{engine}/{header}/{prefix}: {:?}",
                 doc.syntax.diagnostics
             );
+            if let Some(offset) = source
+                .find("frame=single")
+                .or_else(|| source.find("title="))
+            {
+                let help =
+                    signature::help(&workspace, &main, doc.text.position(offset + 2)).unwrap();
+                assert_eq!(help.signatures[0].label, r"\begin{lstlisting}[options]");
+                assert_eq!(help.active_parameter, Some(1));
+            }
+            assert!(signature::help(
+                &workspace,
+                &main,
+                doc.text.position(source.find(body).unwrap() + 9)
+            )
+            .is_none());
             let at = doc.text.position(source.rfind("kept").unwrap());
             assert_eq!(features::references(&workspace, &main, at, true).len(), 2);
             let updated = apply(

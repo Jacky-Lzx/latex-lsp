@@ -3887,9 +3887,8 @@ fn builtin_environment(name: &str) -> Option<Signature> {
         "alignat" | "alignat*" => &[("column pairs", false)],
         "alignedat" => &[("position", true), ("column pairs", false)],
         "minted" => &[("options", true), ("language", false)],
-        "Verbatim" | "Verbatim*" | "LVerbatim" | "LVerbatim*" | "BVerbatim" | "BVerbatim*" => {
-            &[("options", true)]
-        }
+        "Verbatim" | "Verbatim*" | "LVerbatim" | "LVerbatim*" | "BVerbatim" | "BVerbatim*"
+        | "lstlisting" => &[("options", true)],
         "SaveVerbatim" | "SaveVerbatim*" => &[("options", true), ("name", false)],
         "VerbatimOut" | "VerbatimOut*" => &[("options", true), ("file", false)],
         _ => return None,
@@ -3917,7 +3916,8 @@ fn builtin_environment(name: &str) -> Option<Signature> {
         parameters,
         documentation: format!("Arguments of the {name} environment."),
         starred: false,
-        nested_brackets: name != "minted" && !crate::fancyvrb::is_environment(name),
+        nested_brackets: !matches!(name, "minted" | "lstlisting")
+            && !crate::fancyvrb::is_environment(name),
     })
 }
 
@@ -4401,7 +4401,8 @@ fn verbatim_environment_header(
         return None;
     }
     let argument = syntax::environment_name_argument(&doc.text.source, command.span.end)?;
-    if (argument.value != "minted" && !crate::fancyvrb::is_environment(&argument.value))
+    if (!matches!(argument.value.as_str(), "minted" | "lstlisting")
+        && !crate::fancyvrb::is_environment(&argument.value))
         || cursor < argument.outer_span.end
     {
         return None;
@@ -4413,6 +4414,8 @@ fn verbatim_environment_header(
         .find(|span| span.start == argument.outer_span.end)?;
     let end = if argument.value == "minted" {
         crate::minted::environment_header_end(&doc.text.source, raw.start)
+    } else if argument.value == "lstlisting" {
+        crate::listings::environment_options_end(&doc.text.source, raw.start)
     } else {
         crate::fancyvrb::environment_header_end(&doc.text.source, raw.start, &argument.value)
             .map(|(boundary, _)| boundary)
@@ -4432,6 +4435,9 @@ pub fn help(workspace: &Workspace, uri: &Url, position: Position) -> Option<Sign
             return None;
         }
         let scope = workspace.symbol_scope(uri);
+        let changes_header = |target: &str| {
+            target == "begin" || target == name || name == "lstlisting" && target == "lstlisting@"
+        };
         if workspace
             .documents
             .iter()
@@ -4441,12 +4447,20 @@ pub fn help(workspace: &Workspace, uri: &Url, position: Position) -> Option<Sign
                     .definitions
                     .iter()
                     .chain(&doc.syntax.environments)
-                    .any(|entry| entry.name == "begin" || entry.name == name)
+                    .any(|entry| changes_header(&entry.name))
                     || doc.syntax.command_undefinitions.values().any(|target| {
                         target
                             .as_ref()
-                            .is_none_or(|target| target.name == "begin" || target.name == name)
+                            .is_none_or(|target| changes_header(&target.name))
                     })
+                    || name == "lstlisting"
+                        && doc.syntax.commands.iter().any(|command| {
+                            command.name == "lstnewenvironment"
+                                && command.argument.as_ref().is_none_or(|argument| {
+                                    !syntax::is_static_key(&argument.value)
+                                        || argument.value == name
+                                })
+                        })
                     || crate::fancyvrb::is_environment(&name)
                         && doc.syntax.commands.iter().any(|command| {
                             matches!(

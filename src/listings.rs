@@ -5,11 +5,8 @@ use crate::syntax;
 /// the body catcodes. A newline name token starts the body immediately; any
 /// other name makes lstenv@Process discard the remainder of its header line.
 pub(crate) fn environment_end(source: &str, header_start: usize) -> Option<usize> {
-    let mut at = syntax::skip_space_with_active_eol(source, header_start);
-    if source.as_bytes().get(at) == Some(&b'[') {
-        at = syntax::bracket_argument(source, at)?.1;
-    }
-    at = syntax::skip_space_with_active_eol(source, at);
+    let at = environment_options_end(source, header_start)?;
+    let at = syntax::skip_space_with_active_eol(source, at);
     let body_start = match source.as_bytes().get(at)? {
         b'\r' if source[at..].starts_with("\r\n") => at + 2,
         b'\r' | b'\n' => at + 1,
@@ -26,6 +23,16 @@ pub(crate) fn environment_end(source: &str, header_start: usize) -> Option<usize
     source[body_start..]
         .find(ending)
         .map(|offset| body_start + offset + ending.len())
+}
+
+/// The public header has one optional settings list. Share its boundary with
+/// signature help, stopping lookahead at an ordinary active newline.
+pub(crate) fn environment_options_end(source: &str, header_start: usize) -> Option<usize> {
+    let mut at = syntax::skip_space_with_active_eol(source, header_start);
+    if source.as_bytes().get(at) == Some(&b'[') {
+        at = syntax::bracket_argument(source, at)?.1;
+    }
+    Some(at)
 }
 
 // Styles, custom keys, and macro-valued options may alter inputpath. Only
