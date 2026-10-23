@@ -27,6 +27,7 @@
 - [biblatex 文献分类](bibliography-categories.md)：分类分配、文献键编辑及重命名边界。
 - [biblatex 文献集合](bibliography-sets.md)：动态集合声明、成员引用、独立重命名及原生集合诊断。
 - [minted 代码](minted.md)：逐字代码、文件路径编辑、构建依赖及缺失文件修复。
+- [术语、缩略语与索引符号](glossary-index-symbols.md)：独立命名空间、补全、导航、重命名和诊断。
 - [符号与重命名](symbols.md)：宏、环境、计数器等符号的支持范围。
 - [字符串测试](string-tests.md)：etoolbox 的字面数据、条件分支和参数提示；[跨文件上下文](string-test-projects.md)说明重定义、加载顺序和共享文件重命名边界。
 - [字符串命令的保存与恢复](string-test-copies.md)：静态复制、恢复后的字面数据和跨文件参数边界。

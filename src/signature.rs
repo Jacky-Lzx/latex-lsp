@@ -277,6 +277,27 @@ fn builtin(name: &str) -> Option<Signature> {
         });
     }
     let (arguments, starred): (&[(&str, bool)], bool) = match name {
+        "newglossaryentry" | "DeclareAcronym" => (&[("key", false), ("fields", false)], false),
+        "longnewglossaryentry" => (
+            &[("key", false), ("fields", false), ("description", false)],
+            false,
+        ),
+        "newacronym" | "newabbreviation" => (
+            &[
+                ("options", true),
+                ("key", false),
+                ("short", false),
+                ("long", false),
+            ],
+            false,
+        ),
+        "newacro" | "acrodef" => (&[("key", false), ("short", true), ("long", false)], false),
+        "gls" | "Gls" | "glspl" | "Glspl" | "acrshort" | "acrlong" | "acrfull" | "ac" | "acs"
+        | "acl" | "acf" => (&[("options", true), ("key", false)], true),
+        "glslink" | "glsdisp" => (&[("options", true), ("key", false), ("text", false)], true),
+        "index" | "sindex" => (&[("index", true), ("entry", false)], false),
+        "makeindex" | "printindex" => (&[("index", true)], false),
+        "loadglsentries" => (&[("type", true), ("file", false)], false),
         "externaldocument" => (&[("prefix", true), ("file", false), ("URL", true)], false),
         "import" | "subimport" | "inputfrom" | "subinputfrom" | "includefrom"
         | "subincludefrom" => (&[("directory", false), ("file", false)], true),

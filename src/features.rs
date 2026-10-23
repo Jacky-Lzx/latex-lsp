@@ -504,6 +504,13 @@ pub fn prepare_rename(
     uri: &Url,
     position: Position,
 ) -> tower_lsp::jsonrpc::Result<Option<PrepareRenameResponse>> {
+    if let Some(entry) = workspace.documents.get(uri).and_then(|doc| {
+        doc.text
+            .offset(position)
+            .and_then(|offset| crate::extra_symbols::at(doc, offset))
+    }) {
+        return crate::extra_symbols::prepare(workspace, uri, entry);
+    }
     let Some((target, _)) = rename_target(workspace, uri, position)? else {
         return Ok(None);
     };
@@ -521,6 +528,13 @@ pub fn rename(
     position: Position,
     new_name: &str,
 ) -> tower_lsp::jsonrpc::Result<Option<WorkspaceEdit>> {
+    if let Some(entry) = workspace.documents.get(uri).and_then(|doc| {
+        doc.text
+            .offset(position)
+            .and_then(|offset| crate::extra_symbols::at(doc, offset))
+    }) {
+        return crate::extra_symbols::rename(workspace, uri, entry, new_name);
+    }
     let Some((target, scope)) = rename_target(workspace, uri, position)? else {
         return Ok(None);
     };
@@ -1099,6 +1113,11 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
         return vec![];
     }
     if !name_command {
+        if let Some(items) = crate::extra_symbols::completion(workspace, uri, offset) {
+            return items;
+        }
+    }
+    if !name_command {
         if let Some(items) = crate::imports::completion(workspace, uri, offset) {
             return items;
         }
@@ -1543,6 +1562,10 @@ pub fn definitions(workspace: &Workspace, uri: &Url, position: Position) -> Vec<
     let Some(offset) = doc.text.offset(position) else {
         return vec![];
     };
+
+    if let Some(entry) = crate::extra_symbols::at(doc, offset) {
+        return crate::extra_symbols::definitions(workspace, uri, entry);
+    }
     for link in crate::navigation::document_links(workspace, uri) {
         if link.range.start <= position && position <= link.range.end {
             if let Some(uri) = link.target.filter(|uri| uri.scheme() == "file") {
@@ -1587,6 +1610,13 @@ pub fn references(
     let Some(doc) = workspace.documents.get(uri) else {
         return vec![];
     };
+    if let Some(entry) = doc
+        .text
+        .offset(position)
+        .and_then(|offset| crate::extra_symbols::at(doc, offset))
+    {
+        return crate::extra_symbols::references(workspace, uri, entry, include_declaration);
+    }
     let Some(target) = doc
         .text
         .offset(position)
@@ -1903,6 +1933,10 @@ fn all_references(
 pub fn hover(workspace: &Workspace, uri: &Url, position: Position) -> Option<Hover> {
     let doc = workspace.documents.get(uri)?;
     let offset = doc.text.offset(position)?;
+    if let Some(entry) = crate::extra_symbols::at(doc, offset) {
+        return Some(crate::extra_symbols::hover(workspace, uri, entry));
+    }
+
     if let Some(hover) = crate::bib_completion::hover(doc, offset) {
         return Some(hover);
     }
@@ -2093,6 +2127,7 @@ pub fn symbols(doc: &Document) -> Vec<DocumentSymbol> {
             children: None,
         }));
     }
+    result.extend(crate::extra_symbols::symbols(doc));
     result.sort_by_key(|symbol| (symbol.range.start.line, symbol.range.start.character));
     let mut nested = Vec::new();
     for symbol in result {

@@ -466,7 +466,13 @@ fn direct_file_positions(
 pub(crate) fn source_file_command(name: &str) -> bool {
     matches!(
         name,
-        "input" | "include" | "subfile" | "InputIfFileExists" | "IfFileExists" | "includeonly"
+        "input"
+            | "include"
+            | "subfile"
+            | "InputIfFileExists"
+            | "IfFileExists"
+            | "includeonly"
+            | "loadglsentries"
     )
 }
 

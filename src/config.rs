@@ -111,6 +111,8 @@ impl Default for DistributionConfig {
 pub struct DiagnosticsConfig {
     pub undefined_references: bool,
     pub undefined_citations: bool,
+    pub undefined_glossary: bool,
+    pub undefined_indexes: bool,
     pub chktex: ChktexConfig,
 }
 impl Default for DiagnosticsConfig {
@@ -118,6 +120,8 @@ impl Default for DiagnosticsConfig {
         Self {
             undefined_references: true,
             undefined_citations: true,
+            undefined_glossary: true,
+            undefined_indexes: true,
             chktex: ChktexConfig::default(),
         }
     }

@@ -178,6 +178,12 @@ fn candidates(doc: &Document) -> Vec<Token> {
             }
         }
     }
+    for entry in crate::extra_symbols::entries(doc)
+        .iter()
+        .filter(|entry| entry.kind.valid(&entry.name))
+    {
+        push(&mut tokens, entry.span.clone(), KEY, entry.declaration);
+    }
     for entry in &doc.syntax.definitions {
         push(
             &mut tokens,

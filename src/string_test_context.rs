@@ -627,6 +627,7 @@ pub(crate) fn refresh(workspace: &mut Workspace) {
         {
             doc.syntax = Syntax::latex(&doc.text);
             doc.semantic_full = Default::default();
+            doc.extra_symbols = Default::default();
         }
         return;
     }
@@ -784,6 +785,7 @@ pub(crate) fn refresh(workspace: &mut Workspace) {
             syntax.contextual_string_tests = true;
             doc.syntax = syntax;
             doc.semantic_full = Default::default();
+            doc.extra_symbols = Default::default();
         }
         break;
     }

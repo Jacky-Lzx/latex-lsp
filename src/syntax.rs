@@ -1146,7 +1146,7 @@ pub(crate) fn code_input_command(name: &str) -> bool {
 
 pub fn file_extensions(name: &str) -> Option<&'static [&'static str]> {
     Some(match name {
-        "input" | "InputIfFileExists" => &[
+        "input" | "InputIfFileExists" | "loadglsentries" => &[
             "tex", "ltx", "sty", "cls", "def", "clo", "fd", "ldf", "bbx", "cbx", "lbx", "dbx",
         ],
         "IfFileExists" => &["tex"],

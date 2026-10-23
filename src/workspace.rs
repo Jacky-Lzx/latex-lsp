@@ -87,6 +87,7 @@ pub struct Document {
     pub kind_hint: Option<DocumentKind>,
     /// Editor language selection, valid only while this document is open.
     client_kind: Option<DocumentKind>,
+    pub(crate) extra_symbols: std::sync::OnceLock<Vec<crate::extra_symbols::Occurrence>>,
     pub(crate) semantic_full: std::sync::OnceLock<std::sync::Arc<crate::semantic::Snapshot>>,
 }
 
@@ -148,6 +149,7 @@ impl Document {
             kind_hint,
             client_kind,
             semantic_full: Default::default(),
+            extra_symbols: Default::default(),
         }
     }
 
@@ -179,6 +181,7 @@ impl Document {
             self.kind = kind;
             self.syntax = Self::parse(&self.text, kind);
             self.semantic_full = Default::default();
+            self.extra_symbols = Default::default();
         }
         self.kind_hint = Some(kind);
     }
@@ -376,6 +379,7 @@ impl Workspace {
                 let version = self.documents.get(&uri).and_then(|doc| doc.version);
                 let mut diagnostics = self.local_and_build_diagnostics(&uri);
                 diagnostics.extend(crate::reference_diagnostics::diagnostics(self, &uri));
+                diagnostics.extend(crate::extra_symbols::diagnostics(self, &uri));
                 let root = self.root_document(&uri).ok();
                 for message in crate::project_config::load(self, &uri, root.as_ref()).1 {
                     diagnostics.push(tower_lsp::lsp_types::Diagnostic {
@@ -521,7 +525,7 @@ impl Workspace {
                 .collect();
         }
         let extension = match command.name.as_str() {
-            "input" | "InputIfFileExists" | "include" | "subfile" => "tex",
+            "input" | "InputIfFileExists" | "include" | "subfile" | "loadglsentries" => "tex",
             "bibliography" | "nobibliography" => "bib",
             name if crate::bib_resources::loads(name) => "bib",
             "bibliographystyle" => "bst",
