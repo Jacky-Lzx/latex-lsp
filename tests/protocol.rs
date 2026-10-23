@@ -7596,6 +7596,112 @@ fn bibliography_type_and_field_completion_negotiate_snippets_and_refresh_over_st
 }
 
 #[test]
+fn bibliography_links_refresh_unsaved_fields_and_restore_current_disk_content_over_stdio() {
+    let directory = tempfile::tempdir().unwrap();
+    let uri = Url::from_file_path(directory.path().join("中文 references.bib")).unwrap();
+    let disk = "@book{key,url={https://example.org/disk},doi={10.1234/disk}}";
+    std::fs::write(uri.to_file_path().unwrap(), disk).unwrap();
+    let mut server = Server::start();
+    let initialized = server.request(
+        1,
+        "initialize",
+        json!({
+            "processId": null,
+            "rootUri": Url::from_directory_path(directory.path()).unwrap(),
+            "capabilities": {}
+        }),
+    );
+    assert!(initialized["capabilities"]["documentLinkProvider"].is_object());
+    server.notify("initialized", json!({}));
+    let request = json!({"textDocument": {"uri": uri}});
+    let disk_links = server.request(2, "textDocument/documentLink", request.clone());
+    assert_eq!(disk_links.as_array().unwrap().len(), 2);
+    assert_eq!(disk_links[0]["target"], "https://example.org/disk");
+    let source = "@book{😀,url={https://example.org/buffer},doi={10.1234/a?b#c}}\r\n";
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument": {
+            "uri": uri, "languageId": "bibtex", "version": 10, "text": source
+        }}),
+    );
+    let links = server.request(3, "textDocument/documentLink", request.clone());
+    assert_eq!(links[0]["target"], "https://example.org/buffer");
+    assert_eq!(links[0]["range"]["start"]["character"], 14);
+    assert_eq!(links[1]["target"], "https://doi.org/10.1234/a%3Fb%23c");
+    let tokens = server.request(30, "textDocument/semanticTokens/full", request.clone());
+    assert_eq!(tokens["data"].as_array().unwrap().len(), 60);
+    let text = latex_lsp::text::Text::new(source.into());
+    let start = source.find("10.1234/").unwrap();
+    let end = source[start..].find('}').unwrap() + start;
+    server.notify(
+        "textDocument/didChange",
+        json!({
+            "textDocument": {"uri": uri, "version": 11},
+            "contentChanges": [{"range": text.range(start, end), "text": "10.5678/changed"}]
+        }),
+    );
+    let links = server.request(4, "textDocument/documentLink", request.clone());
+    assert_eq!(links[1]["target"], "https://doi.org/10.5678/changed");
+    let source = source.replace("10.1234/a?b#c", "10.5678/changed");
+    let text = latex_lsp::text::Text::new(source.clone());
+    let start = source.find("{https://").unwrap();
+    let end = source[start..].find('}').unwrap() + start + 1;
+    server.notify(
+        "textDocument/didChange",
+        json!({
+            "textDocument": {"uri": uri, "version": 12},
+            "contentChanges": [{"range": text.range(start, end), "text": "baseurl"}]
+        }),
+    );
+    let links = server.request(5, "textDocument/documentLink", request.clone());
+    assert_eq!(links.as_array().unwrap().len(), 1);
+    assert_eq!(links[0]["target"], "https://doi.org/10.5678/changed");
+    let tokens = server.request(31, "textDocument/semanticTokens/full", request.clone());
+    // The URL abbreviation is a variable reference; the DOI stays a string.
+    assert_eq!(
+        tokens["data"],
+        json!([
+            0, 1, 4, 2, 0, 0, 5, 2, 3, 1, 0, 3, 3, 6, 0, 0, 3, 1, 8, 0, 0, 1, 7, 1, 0, 0, 8, 3, 6,
+            0, 0, 3, 1, 8, 0, 0, 1, 1, 4, 0, 0, 1, 15, 4, 0, 0, 15, 1, 4, 0
+        ])
+    );
+    std::fs::write(
+        uri.to_file_path().unwrap(),
+        "@book{key,url={https://example.org/updated-disk}}",
+    )
+    .unwrap();
+    server.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({"changes": [{"uri": uri,"type":2}]}),
+    );
+    assert_eq!(
+        server.request(6, "textDocument/documentLink", request.clone()),
+        links
+    );
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument": {"uri": uri}}),
+    );
+    let links = server.request(7, "textDocument/documentLink", request.clone());
+    assert_eq!(links.as_array().unwrap().len(), 1);
+    assert_eq!(links[0]["target"], "https://example.org/updated-disk");
+    std::fs::write(
+        uri.to_file_path().unwrap(),
+        "@book{key,url={https://example.org/reloaded}}",
+    )
+    .unwrap();
+    server.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({"changes": [{"uri": uri,"type":2}]}),
+    );
+    let links = server.request(8, "textDocument/documentLink", request);
+    assert_eq!(links[0]["target"], "https://example.org/reloaded");
+    server.request(9, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
 fn custom_bibliography_field_completions_refresh_project_resources_and_negotiate_snippets() {
     for snippets in [false, true] {
         let directory = tempfile::tempdir().unwrap();

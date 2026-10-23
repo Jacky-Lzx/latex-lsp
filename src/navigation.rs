@@ -291,8 +291,11 @@ fn file_link(
 }
 
 pub fn document_links(workspace: &Workspace, uri: &Url) -> Vec<DocumentLink> {
-    if !workspace.documents.contains_key(uri) {
+    let Some(doc) = workspace.documents.get(uri) else {
         return vec![];
+    };
+    if doc.kind != DocumentKind::Latex {
+        return crate::bib_links::document_links(doc);
     }
     if let Ok(root) = workspace.root_document(uri) {
         return document_links_in(workspace, uri, &root);
