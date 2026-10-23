@@ -153,8 +153,10 @@ fn indirect_bibliography_dependencies_keep_data_roles_and_link_each_real_name() 
                     ],
                 )
             };
+            // Bound the undefined probe: its unknown arity must not consume
+            // the later citation used to check database completion.
             let source = format!(
-                "\\documentclass{{article}}\\def\\loadpkg{{\\{command}}}\n{}{argument}\n\\leaked",
+                "\\documentclass{{article}}\\def\\loadpkg{{\\{command}}}\n{}{argument}\n{{\\leaked}}",
                 call(form, command)
             );
             let mut all = vec![("main.tex", source.as_str())];
@@ -195,9 +197,12 @@ fn indirect_bibliography_dependencies_keep_data_roles_and_link_each_real_name() 
             .is_empty());
             if !style {
                 let marked = format!("{source}\n\\cite{{fix|ture}}");
-                assert!(items(&mut workspace, &main, &marked)
-                    .iter()
-                    .any(|item| item.label == "fixture"));
+                assert!(
+                    items(&mut workspace, &main, &marked)
+                        .iter()
+                        .any(|item| item.label == "fixture"),
+                    "{marked}"
+                );
             }
         }
     }
