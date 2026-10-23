@@ -332,16 +332,19 @@ cargo test --locked --test quoted_graphics real_ -- --ignored
 
 默认回归另覆盖完整和未完成路径的别名补全、跨输入文件与本地宏包的别名、recorder 来源中的宏定义与参数边界、仅作代码展示的文件排除、共享根文件冲突、未执行和不确定调用的排除，以及目录补全和缺图建议的作用域、共享源码歧义、候选图片的过期检查及版本化 stdio 文件移动。
 
-## listings 环境边界
+## listings 代码
 
 `listings_environments` 覆盖头部选项、名称分组、注释续行及首行尾部中的伪关闭标记，核对正文和关闭行尾部的符号、依赖、版本化重命名及文件移动；另覆盖活动换行、CRLF、Unicode、精确关闭字符串、折叠列、联动编辑、高亮和未闭合修复。头部签名回归覆盖完整及未完成选项、注释和参数边界、项目重定义、内部读取器覆盖与未保存设置刷新。协议回归增量修改头部及真实关闭标记，检查诊断、符号、参数提示与编辑范围的刷新：
 
+`listings_inline` 覆盖 `*` 与 Unicode 分隔符、花括号的首个字面右括号、头部空白及注释续行、头部命令索引、行尾恢复、重定义、代码隔离、补全片段、已有代码保留、悬停、参数提示与高亮。协议回归在星号、花括号、带选项及缺少结束符的形式之间增量切换，核对版本化重命名范围和逐字隔离。
+
 ```sh
-cargo test --locked --test listings_environments
+cargo test --locked --test listings_inline --test listings_environments
 cargo test --locked --test protocol listings_environment_
+cargo test --locked --test protocol listings_inline_
 ```
 
-安装 pdfLaTeX、XeLaTeX 和 listings 后，为第一个命令添加 `-- --include-ignored`；原生回归核对标签重命名前后的实际编译输入、aux 标签、头部提示、伪关闭标记及正文结束规则。
+安装 pdfLaTeX、XeLaTeX 和 listings 后，为第一个命令添加 `-- --include-ignored`；原生回归核对标签重命名前后的实际编译输入、aux 标签、头部提示、伪关闭标记及正文结束规则。行内代码回归另核对头部命令的实际执行，以及保留原生行尾错误时后续标签的恢复。
 
 ## FancyVerb 环境参数提示
 

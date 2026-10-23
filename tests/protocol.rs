@@ -308,6 +308,105 @@ fn minted_environment_boundaries_refresh_diagnostics_and_linked_names_over_stdio
 }
 
 #[test]
+fn listings_inline_literal_boundaries_follow_incremental_edits_over_stdio() {
+    use latex_lsp::text::Text;
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = Url::from_file_path(root.join("main.tex")).unwrap();
+    let initial="% 😀\r\n\\label{kept}\r\n\\lstinline*\\label{kept}\\input{fake}* \\ref{kept}\r\n\\ref{kept}\r\n";
+    std::fs::write(root.join("main.tex"), initial).unwrap();
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(root).unwrap(),"capabilities":{"textDocument":{"diagnostic":{}},"workspace":{"workspaceEdit":{"documentChanges":true}}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":main,"languageId":"latex","version":7,"text":initial}}),
+    );
+    let mut source = initial.to_owned();
+    for (stage, literal) in [
+        None,
+        Some("{\\label kept {\\input fake} "),
+        Some("[title=[literal]% continue\r\n|\\label{kept}\\input{fake}| "),
+        Some("|\\label{kept}\\input{fake} }%"),
+        Some("*\\label{kept}\\input{fake}* "),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let start = source.find("\\lstinline").unwrap() + "\\lstinline".len();
+        if let Some(literal) = literal {
+            let end = source.find("\\ref{kept}").unwrap();
+            let text = Text::new(source.clone());
+            let range = text.range(start, end);
+            server.notify("textDocument/didChange",json!({"textDocument":{"uri":main,"version":7+stage},"contentChanges":[{"range":range,"text":literal}]}));
+            source.replace_range(start..end, literal);
+        }
+        let text = Text::new(source.clone());
+        let id = 10 + stage as u64 * 10;
+        let diagnostics = server.request(
+            id,
+            "textDocument/diagnostic",
+            json!({"textDocument":{"uri":main}}),
+        );
+        assert_eq!(diagnostics["items"], json!([]), "{source}: {diagnostics}");
+        let symbols = server.request(
+            id + 1,
+            "textDocument/documentSymbol",
+            json!({"textDocument":{"uri":main}}),
+        );
+        assert_eq!(symbols.as_array().unwrap().len(), 1, "{source}: {symbols}");
+        let position = text.position(source.rfind("kept").unwrap());
+        let references=server.request(id+2,"textDocument/references",json!({"textDocument":{"uri":main},"position":position,"context":{"includeDeclaration":true}}));
+        let count = if stage == 3 { 2 } else { 3 };
+        assert_eq!(
+            references.as_array().unwrap().len(),
+            count,
+            "{source}: {references}"
+        );
+        let edit = server.request(
+            id + 3,
+            "textDocument/rename",
+            json!({"textDocument":{"uri":main},"position":position,"newName":"changed"}),
+        );
+        assert_eq!(
+            edit["documentChanges"][0]["textDocument"]["version"],
+            7 + stage
+        );
+        let edits = edit["documentChanges"][0]["edits"].as_array().unwrap();
+        assert_eq!(edits.len(), count);
+        let body = start + source[start..].find("\\label").unwrap();
+        let inside = text.position(body + 3);
+        assert_eq!(
+            server.request(
+                id + 4,
+                "textDocument/definition",
+                json!({"textDocument":{"uri":main},"position":inside})
+            ),
+            json!([])
+        );
+        assert_eq!(
+            server.request(
+                id + 5,
+                "textDocument/signatureHelp",
+                json!({"textDocument":{"uri":main},"position":inside})
+            ),
+            Value::Null
+        );
+        assert_eq!(
+            server.request(
+                id + 6,
+                "textDocument/documentLink",
+                json!({"textDocument":{"uri":main}})
+            ),
+            json!([])
+        );
+    }
+    server.request(100, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
 fn listings_environment_header_boundaries_refresh_after_incremental_changes_over_stdio() {
     use latex_lsp::text::Text;
     let directory = tempfile::tempdir().unwrap();

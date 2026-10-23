@@ -202,10 +202,10 @@ impl Source {
         let mut uncertain = BTreeSet::new();
         let mut lexical_probes = Vec::new();
         let mut syntax = Syntax::latex_with_string_tests(text, |command, known| {
-            // Verbatim commands are omitted from the normal command index.
-            // Keep their invocation visible to the ordered analysis: a prior
+            // The primitive verb is omitted from the normal command index.
+            // Keep its invocation visible to the ordered analysis: a prior
             // assignment may have replaced their delimiter-based grammar.
-            if matches!(command.name.as_str(), "verb" | "lstinline") {
+            if command.name == "verb" {
                 lexical_probes.push(command.clone());
             }
             let meaning = literal(command, known);

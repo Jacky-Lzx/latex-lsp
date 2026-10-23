@@ -227,7 +227,7 @@ fn candidates(doc: &Document) -> Vec<Token> {
         .collect();
     for span in &doc.syntax.ignored {
         let comment = comments.contains(&(span.start, span.end));
-        // Inline verbatim commands do not enter the ordinary command index.
+        // The primitive verb command does not enter the ordinary command index.
         // Recover only their immediately preceding, explicit control word.
         let end = span.start - usize::from(source[..span.start].ends_with('*'));
         let start = source[..end]
@@ -235,7 +235,7 @@ fn candidates(doc: &Document) -> Vec<Token> {
             .unwrap_or(end);
         if !comment
             && source.as_bytes().get(start) == Some(&b'\\')
-            && matches!(&source[start + 1..end], "verb" | "lstinline")
+            && &source[start + 1..end] == "verb"
         {
             push(&mut tokens, start..end, MACRO, false);
         }

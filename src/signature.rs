@@ -170,6 +170,12 @@ pub(crate) fn has_existing_arguments(
     scope: &BTreeSet<Url>,
     following: &str,
 ) -> bool {
+    if name == "lstinline"
+        && uses_builtin(workspace, name, scope)
+        && crate::listings::inline_span(following, 0).is_some()
+    {
+        return true;
+    }
     signature(workspace, name, scope)
         .is_some_and(|signature| existing_arguments(&signature, following))
 }
@@ -466,6 +472,7 @@ fn builtin(name: &str) -> Option<Signature> {
         name if crate::fancyvrb::is_input(name) => (&[("options", true), ("file", false)], true),
         "verbatiminput" => (&[("file", false)], true),
         "lstinputlisting" => (&[("options", true), ("file", false)], false),
+        "lstinline" => (&[("options", true)], false),
         "mintinline" | "mint" => (
             &[("options", true), ("language", false), ("code", false)],
             false,
@@ -953,7 +960,7 @@ fn builtin(name: &str) -> Option<Signature> {
         parameters,
         documentation,
         starred,
-        nested_brackets: !(name == "lstinputlisting"
+        nested_brackets: !(matches!(name, "lstinputlisting" | "lstinline")
             || crate::minted::is_inline(name)
             || name == "inputminted"
             || crate::fancyvrb::is_input(name)

@@ -926,6 +926,11 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
         "Insert a source file as code without importing LaTeX symbols. Requires listings.",
     ),
     (
+        "lstinline",
+        "lstinline|${1:code}|",
+        "Typeset literal inline code, with optional settings, matching delimiters or braces. A star is a delimiter; braced code ends at the first right brace. Requires listings.",
+    ),
+    (
         "mintinline",
         "mintinline{${1:python}}{${2:code}}",
         "Typeset inline highlighted code, in braces or between matching delimiters. Requires minted.",

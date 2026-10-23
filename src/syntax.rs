@@ -2226,6 +2226,13 @@ impl Syntax {
                         });
                         continue;
                     }
+                    if operands_known && name == "lstinline" {
+                        if let Some(span) = crate::listings::inline_span(source, command_end) {
+                            literal_arguments.insert(span.start, (span.clone(), span.end));
+                        }
+                        result.commands.push(probe);
+                        continue;
+                    }
                     if operands_known && name == "inputminted" {
                         if let Some(argument) = crate::minted::language(source, command_end) {
                             literal_arguments.insert(
@@ -2248,13 +2255,8 @@ impl Syntax {
                     if starred {
                         i += 1;
                     }
-                    if matches!(name, "verb" | "lstinline") {
+                    if name == "verb" {
                         let raw_start = i;
-                        if name == "lstinline" {
-                            if let Some((_, end)) = group(source, i, b'[', b']') {
-                                i = end;
-                            }
-                        }
                         if let Some(delimiter) =
                             source[i..].chars().next().filter(|ch| !ch.is_whitespace())
                         {

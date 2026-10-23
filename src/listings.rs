@@ -1,5 +1,29 @@
 //! listings environment boundaries and conservative default filename search.
 use crate::syntax;
+use std::ops::Range;
+
+/// lstinline reads an ordinary optional argument before its delimiter. Braced
+/// code ends at the first literal right brace; body catcodes neither balance
+/// braces nor recognize escapes or comments. An unfinished body ends at EOL.
+pub(crate) fn inline_span(source: &str, command_end: usize) -> Option<Range<usize>> {
+    let mut start = syntax::skip_space(source, command_end);
+    if source.as_bytes().get(start) == Some(&b'[') {
+        start = syntax::skip_space(source, syntax::bracket_argument(source, start)?.1);
+    }
+    let delimiter = source.get(start..)?.chars().next()?;
+    if delimiter.is_whitespace() || matches!(delimiter, '}' | '\\' | '#' | '%') {
+        return None;
+    }
+    let close = if delimiter == '{' { '}' } else { delimiter };
+    let body = start + delimiter.len_utf8();
+    let line_end = source[body..]
+        .find(['\r', '\n'])
+        .map_or(source.len(), |offset| body + offset);
+    let end = source[body..line_end]
+        .find(close)
+        .map_or(line_end, |offset| body + offset + close.len_utf8());
+    Some(start..end)
+}
 
 /// listings reads its optional settings and one name token before changing
 /// the body catcodes. A newline name token starts the body immediately; any
