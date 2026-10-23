@@ -12,7 +12,7 @@
 ## 编辑与项目
 
 - [编辑功能](editing.md)：补全、导航、高亮和颜色。
-- [格式化](formatting.md)：默认 tex-fmt、可选 latexindent、参数与项目设置。
+- [格式化](formatting.md)：全文与范围格式化、默认 tex-fmt、可选 latexindent、参数与项目设置。
 - [文档折叠](folding.md)：章节、环境、多行公式、BibTeX 条目及客户端能力。
 - [外部文档与编译引用信息](auxiliary-references.md)：xr 前缀、aux 编号/页码/标题、悬停和行内提示。
 - [标签与交叉引用](labels.md)：键名、注释、范围引用及 hyperref 标签。
@@ -86,4 +86,5 @@
 ## 开发与测试
 
 - [开发与测试](development.md)：检查命令和代码结构。
+- [功能审阅与实现队列](roadmap.md)：按重要性排序的功能缺口、实现状态及后续审阅。
 - [真实工具回归](testing.md)：外部程序要求、PDF 编译及编辑器测试命令。

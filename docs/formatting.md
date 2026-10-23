@@ -34,7 +34,13 @@ init_options = {
 
 默认 `latexindent` 参数包括 `-l '-y=defaultIndent: "缩进"' -`，并通过 `-c` / `-g` 将辅助文件和日志放入独立临时目录，任务结束后删除。`-l` 加载工具支持的本地设置，`defaultIndent` 采用客户端的 `tabSize` 和 `insertSpaces`。使用自定义参数时，缩进、日志和本地配置均由这份参数决定。
 
-服务器将当前缓冲区文本写入工具的标准输入，以标准输出生成一个排除相同前后缀的 UTF-16 文本编辑；不覆盖源文件。保持原文档的 LF / CRLF，内容未变化时返回空编辑列表。未保存的 LaTeX 缓冲区同样支持；BibTeX 与 `.bst` 暂不格式化。不提供范围格式化。
+服务器将当前缓冲区文本写入工具的标准输入，以标准输出生成一个排除相同前后缀的 UTF-16 文本编辑；不覆盖源文件。保持原文档的 LF / CRLF，内容未变化时返回空编辑列表。未保存的 LaTeX 缓冲区同样支持；BibTeX 与 `.bst` 暂不格式化。
+
+## 范围格式化
+
+支持标准 `textDocument/rangeFormatting`。使用与全文格式化相同的工具、配置和完整缓冲区输入，因此选中的条目仍使用外层环境的缩进，逐字代码也保留完整上下文。服务器按行内容对齐格式化前后的文本，只返回完全位于请求范围内的修改，选区外内容保持原样。跨越选区边界的换行、合并或其他不可拆分修改会被跳过；可扩大选区或使用全文格式化。需要整理整行缩进时，请从该行第 0 列开始选择。
+
+返回的多个编辑互不重叠，使用原始文档的 UTF-16 坐标。空范围返回空编辑列表；逆序、越界或切开 UTF-16 代理对的范围返回 `InvalidParams`。行对齐限制中间匹配表的大小，超过预算的连续改写按一个整体处理，避免大文件消耗无界内存。取消、超时、文档或配置变更与全文格式化采用相同保护。
 
 格式化在后台执行，期间仍可编辑和发送其他请求。文档内容、版本、语言类型或格式化配置变化后，返回 `ContentModified`，请重新请求格式化。最多同时运行 4 个格式化任务。取消请求、超时、shutdown 和连接断开会终止任务；Unix 同时终止子进程组。
 
@@ -45,6 +51,8 @@ init_options = {
 ```sh
 cargo test --locked --lib formatting
 cargo test --locked --test protocol formatting_
+cargo test --locked --test protocol range_formatting_
+cargo test --locked --test protocol range_formatting_with_real_tex_fmt -- --ignored
 cargo test --locked --test protocol formatting_with_real_tex_fmt -- --ignored
 cargo test --locked --test protocol formatting_with_real_latexindent -- --ignored
 ```

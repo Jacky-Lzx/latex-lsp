@@ -24252,3 +24252,163 @@ fn glossary_expl3_and_structural_actions_work_over_stdio() {
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+#[cfg(unix)]
+fn range_formatting_uses_context_preserves_outside_and_validates_utf16_ranges() {
+    use latex_lsp::text::Text;
+    use tower_lsp::lsp_types::{TextDocumentContentChangeEvent, TextEdit};
+    let (mut server, directory, uri) = formatting_server("cat > input; sed 's/^/  /' input", 10);
+    let source = "% outside\r\n😀 selected\r\nuntouched\r\n";
+    open_formatting_document(&mut server, &uri, source);
+    let mut params = formatting_params(&uri);
+    params["range"] = json!({"start":{"line":1,"character":0},"end":{"line":2,"character":0}});
+    let response = server.request(2, "textDocument/rangeFormatting", params.clone());
+    let edits: Vec<TextEdit> = serde_json::from_value(response).unwrap();
+    assert_eq!(edits.len(), 1);
+    let changes = edits
+        .into_iter()
+        .rev()
+        .map(|edit| TextDocumentContentChangeEvent {
+            range: Some(edit.range),
+            range_length: None,
+            text: edit.new_text,
+        })
+        .collect();
+    assert_eq!(
+        Text::new(source.into()).changed(changes).unwrap().source,
+        source.replace("😀", "  😀")
+    );
+    assert_eq!(
+        std::fs::read_to_string(directory.path().join("input")).unwrap(),
+        source
+    );
+    assert_eq!(
+        std::fs::read_to_string(directory.path().join("main.tex")).unwrap(),
+        "original disk contents"
+    );
+    for (i, range) in [
+        json!({"start":{"line":1,"character":1},"end":{"line":2,"character":0}}),
+        json!({"start":{"line":2,"character":0},"end":{"line":1,"character":0}}),
+        json!({"start":{"line":0,"character":0},"end":{"line":99,"character":0}}),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        params["range"] = range;
+        let id = 3 + i as u32;
+        server.send(json!({"jsonrpc":"2.0","id":id,"method":"textDocument/rangeFormatting","params":params}));
+        let response = server.until(|message| message["id"] == id);
+        assert_eq!(response["error"]["code"], -32602, "{response}");
+    }
+    params["range"] = json!({"start":{"line":1,"character":0},"end":{"line":1,"character":0}});
+    std::fs::remove_file(directory.path().join("formatter with spaces")).unwrap();
+    assert_eq!(
+        server.request(6, "textDocument/rangeFormatting", params),
+        json!([])
+    );
+    server.request(7, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+fn range_formatting_rejects_stale_results_and_honors_cancellation() {
+    for mode in ["edit", "config", "cancel"] {
+        let (mut server, directory, uri) = formatting_server(
+            "cat > input; touch ready; while [ ! -f continue ]; do sleep 0.01; done; cat input",
+            10,
+        );
+        open_formatting_document(&mut server, &uri, "hello\n");
+        let mut params = formatting_params(&uri);
+        params["range"] = json!({"start":{"line":0,"character":0},"end":{"line":1,"character":0}});
+        server.send(
+            json!({"jsonrpc":"2.0","id":2,"method":"textDocument/rangeFormatting","params":params}),
+        );
+        wait_for_file(&directory.path().join("ready"));
+        match mode {
+            "edit" => server.notify("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"text":"changed\n"}]})),
+            "config" => server.notify("workspace/didChangeConfiguration", json!({"settings":{"formatting":{"formatter":"latexindent"}}})),
+            _ => server.notify("$/cancelRequest", json!({"id":2})),
+        }
+        if mode != "cancel" {
+            server.request(
+                3,
+                "textDocument/documentSymbol",
+                json!({"textDocument":{"uri":uri}}),
+            );
+        }
+        std::fs::write(directory.path().join("continue"), "").unwrap();
+        let response = server.until(|message| message["id"] == 2);
+        assert_eq!(
+            response["error"]["code"],
+            if mode == "cancel" { -32800 } else { -32801 },
+            "{mode}: {response}"
+        );
+        if mode == "cancel" {
+            server.request(
+                3,
+                "textDocument/documentSymbol",
+                json!({"textDocument":{"uri":uri}}),
+            );
+        }
+        server.request(4, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+#[ignore = "requires tex-fmt on PATH"]
+fn range_formatting_with_real_tex_fmt_preserves_context_verbatim_and_is_idempotent() {
+    use latex_lsp::text::Text;
+    use tower_lsp::lsp_types::{TextDocumentContentChangeEvent, TextEdit};
+    let directory = tempfile::tempdir().unwrap();
+    let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+    let source = "\\begin{itemize}\r\n\\item 😀 selected\r\n\\item outside\r\n\\end{itemize}\r\n\\begin{verbatim}\r\n   raw   data\r\n\\end{verbatim}\r\n";
+    let mut server = Server::start();
+    let initialized = server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(directory.path()).unwrap(),"capabilities":{},"initializationOptions":{"distribution":{"enabled":false}}}));
+    assert_eq!(
+        initialized["capabilities"]["documentRangeFormattingProvider"],
+        true
+    );
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"latex","version":1,"text":source}}),
+    );
+    let mut params = formatting_params(&uri);
+    params["range"] = json!({"start":{"line":1,"character":0},"end":{"line":2,"character":0}});
+    let edits: Vec<TextEdit> =
+        serde_json::from_value(server.request(2, "textDocument/rangeFormatting", params.clone()))
+            .unwrap();
+    assert!(!edits.is_empty());
+    let formatted = Text::new(source.into())
+        .changed(
+            edits
+                .into_iter()
+                .rev()
+                .map(|edit| TextDocumentContentChangeEvent {
+                    range: Some(edit.range),
+                    range_length: None,
+                    text: edit.new_text,
+                })
+                .collect(),
+        )
+        .unwrap()
+        .source;
+    assert_eq!(formatted, source.replacen("\\item", "    \\item", 1));
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":uri,"version":2},"contentChanges":[{"text":formatted}]}),
+    );
+    assert_eq!(
+        server.request(3, "textDocument/rangeFormatting", params),
+        json!([])
+    );
+    assert!(!directory.path().join("main.tex").exists());
+    server.request(4, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

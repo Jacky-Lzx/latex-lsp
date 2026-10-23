@@ -56,6 +56,7 @@ mod primitives;
 mod project_config;
 mod project_diagnostics;
 mod project_environments;
+mod range_formatting;
 pub mod recorder;
 mod refactor;
 mod reference_diagnostics;
@@ -178,6 +179,68 @@ impl Backend {
                 self.workspace.write().await.distribution = distribution;
             }
         }
+    }
+
+    async fn format_document(
+        &self,
+        uri: Url,
+        options: FormattingOptions,
+        range: Option<Range>,
+    ) -> Result<Option<Vec<TextEdit>>> {
+        let uri = document_uri(uri);
+        let workspace = self.workspace.read().await;
+        let Some(doc) = workspace.documents.get(&uri) else {
+            return Ok(None);
+        };
+        if doc.kind != workspace::DocumentKind::Latex {
+            return Ok(None);
+        }
+        if let Some(range) = range {
+            range_formatting::validate(&doc.text, range)?;
+            formatting::validate_options(&options)?;
+            if range.start == range.end {
+                return Ok(Some(vec![]));
+            }
+        }
+        let text = doc.text.clone();
+        let version = doc.version;
+        let config = workspace.settings(&uri).formatting.clone();
+        let directory = uri
+            .to_file_path()
+            .ok()
+            .and_then(|path| path.parent().map(std::path::Path::to_path_buf))
+            .filter(|path| path.is_dir())
+            .or_else(|| workspace.roots.iter().next().cloned());
+        let mut task = formatting::start(
+            &self.external_tasks,
+            config.clone(),
+            options,
+            text.source.clone(),
+            directory,
+        )?;
+        drop(workspace);
+        dispatch::release();
+        let formatted = task.wait().await?;
+        let workspace = self.workspace.read().await;
+        if workspace.settings(&uri).formatting != config
+            || !workspace.documents.get(&uri).is_some_and(|doc| {
+                doc.version == version
+                    && doc.text.source == text.source
+                    && doc.kind == workspace::DocumentKind::Latex
+            })
+        {
+            return Err(tower_lsp::jsonrpc::Error {
+                code: tower_lsp::jsonrpc::ErrorCode::ServerError(-32801),
+                message: "Document or formatting configuration changed; request formatting again"
+                    .into(),
+                data: None,
+            });
+        }
+        drop(workspace);
+        Ok(Some(match range {
+            Some(range) => range_formatting::edits(&text, formatted, range),
+            None => formatting::edits(&text, formatted),
+        }))
     }
 
     async fn reindex(&self) -> Result<serde_json::Value> {
@@ -476,6 +539,7 @@ impl LanguageServer for Backend {
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 inlay_hint_provider: Some(OneOf::Left(true)),
                 document_formatting_provider: Some(OneOf::Left(true)),
+                document_range_formatting_provider: Some(OneOf::Left(true)),
                 signature_help_provider: Some(SignatureHelpOptions {
                     trigger_characters: Some(
                         ["{", "[", ",", "<", "(", "|", "*", "+"]
@@ -1010,49 +1074,16 @@ impl LanguageServer for Backend {
     }
 
     async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
-        let uri = document_uri(params.text_document.uri);
-        let workspace = self.workspace.read().await;
-        let Some(doc) = workspace.documents.get(&uri) else {
-            return Ok(None);
-        };
-        if doc.kind != workspace::DocumentKind::Latex {
-            return Ok(None);
-        }
-        let text = doc.text.clone();
-        let version = doc.version;
-        let config = workspace.settings(&uri).formatting.clone();
-        let directory = uri
-            .to_file_path()
-            .ok()
-            .and_then(|path| path.parent().map(std::path::Path::to_path_buf))
-            .filter(|path| path.is_dir())
-            .or_else(|| workspace.roots.iter().next().cloned());
-        let mut task = formatting::start(
-            &self.external_tasks,
-            config.clone(),
-            params.options,
-            text.source.clone(),
-            directory,
-        )?;
-        drop(workspace);
-        dispatch::release();
-        let formatted = task.wait().await?;
-        let workspace = self.workspace.read().await;
-        if workspace.settings(&uri).formatting != config
-            || !workspace.documents.get(&uri).is_some_and(|doc| {
-                doc.version == version
-                    && doc.text.source == text.source
-                    && doc.kind == workspace::DocumentKind::Latex
-            })
-        {
-            return Err(tower_lsp::jsonrpc::Error {
-                code: tower_lsp::jsonrpc::ErrorCode::ServerError(-32801),
-                message: "Document or formatting configuration changed; request formatting again"
-                    .into(),
-                data: None,
-            });
-        }
-        Ok(Some(formatting::edits(&text, formatted)))
+        self.format_document(params.text_document.uri, params.options, None)
+            .await
+    }
+
+    async fn range_formatting(
+        &self,
+        params: DocumentRangeFormattingParams,
+    ) -> Result<Option<Vec<TextEdit>>> {
+        self.format_document(params.text_document.uri, params.options, Some(params.range))
+            .await
     }
 
     async fn inlay_hint(&self, params: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {

@@ -23,12 +23,17 @@ pub(crate) fn start(
     source: String,
     directory: Option<PathBuf>,
 ) -> Result<crate::tasks::Task<String>> {
+    validate_options(&options)?;
+    tasks.start(move |cancel| run(&config, &options, source, directory, || cancel.cancelled()))
+}
+
+pub(crate) fn validate_options(options: &FormattingOptions) -> Result<()> {
     if !(1..=256).contains(&options.tab_size) {
         return Err(Error::invalid_params(
             "Formatting tabSize must be between 1 and 256",
         ));
     }
-    tasks.start(move |cancel| run(&config, &options, source, directory, || cancel.cancelled()))
+    Ok(())
 }
 
 fn failure(message: impl Into<String>) -> Error {
@@ -193,9 +198,20 @@ pub fn edits(text: &Text, formatted: String) -> Vec<TextEdit> {
     let formatted = formatted
         .replace("\r\n", "\n")
         .replace('\n', text.newline());
-    let source = &text.source;
-    if *source == formatted {
-        return vec![];
+    replacement(text, 0..text.source.len(), &formatted)
+        .into_iter()
+        .collect()
+}
+
+/// A minimal edit for an already newline-normalized replacement.
+pub(crate) fn replacement(
+    text: &Text,
+    span: std::ops::Range<usize>,
+    formatted: &str,
+) -> Option<TextEdit> {
+    let source = &text.source[span.clone()];
+    if source == formatted {
+        return None;
     }
     let mut start: usize = source
         .chars()
@@ -223,10 +239,10 @@ pub fn edits(text: &Text, formatted: String) -> Vec<TextEdit> {
         end += 1;
         new_end += 1;
     }
-    vec![TextEdit {
-        range: text.range(start, end),
+    Some(TextEdit {
+        range: text.range(span.start + start, span.start + end),
         new_text: formatted[start..new_end].into(),
-    }]
+    })
 }
 
 #[cfg(test)]
