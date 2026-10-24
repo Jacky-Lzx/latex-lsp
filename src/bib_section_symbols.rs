@@ -267,43 +267,14 @@ pub(crate) fn completion(
             if !ws.index_truncated.is_empty() || doc.text.source.len() > 16 * 1024 * 1024 {
                 return None;
             }
-            let body = doc
-                .syntax
-                .bibliography_completion
-                .types
-                .iter()
-                .filter_map(|owner| owner.entry_span.as_ref())
-                .find(|body| {
-                    body.start < field.argument.span.start && field.argument.span.end <= body.end
-                })?;
-            let mut count = 0usize;
-            let mut examined = 0usize;
-            for candidate in doc
-                .syntax
-                .bibliography_completion
-                .entries
-                .iter()
-                .flat_map(|entry| &entry.fields)
-            {
-                examined += 1;
-                if examined > 100_000 {
-                    return None;
-                }
-                if body.start < candidate.span.start
-                    && candidate.range.end <= body.end
-                    && candidate.name == field.name
-                {
-                    count += 1;
-                }
-            }
-            if count != 1 {
+            if !valid_relation_completion_field(doc, field) {
                 return None;
             }
             let resources = resources(ws, uri, projects)?;
             let mut allowed = BTreeSet::new();
             let mut blocked = BTreeSet::new();
             let mut bytes = 0usize;
-            examined = 0;
+            let mut examined = 0usize;
             for resource in &resources.all {
                 let doc = ws.documents.get(resource)?;
                 bytes += doc.text.source.len();
@@ -336,4 +307,46 @@ pub(crate) fn completion(
         })()
         .unwrap_or_default(),
     )
+}
+
+/// Completion permits unfinished literal values while retaining an unambiguous
+/// owner and a single field assignment, independently of candidate identities.
+pub(crate) fn valid_relation_completion_field(
+    doc: &Document,
+    field: &crate::syntax::CitationField,
+) -> bool {
+    if doc.text.source.len() > 16 * 1024 * 1024 {
+        return false;
+    }
+    let Some(body) = doc
+        .syntax
+        .bibliography_completion
+        .types
+        .iter()
+        .filter_map(|owner| owner.entry_span.as_ref())
+        .find(|body| body.start < field.argument.span.start && field.argument.span.end <= body.end)
+    else {
+        return false;
+    };
+    let mut count = 0usize;
+    let mut examined = 0usize;
+    for candidate in doc
+        .syntax
+        .bibliography_completion
+        .entries
+        .iter()
+        .flat_map(|entry| &entry.fields)
+    {
+        examined += 1;
+        if examined > 100_000 {
+            return false;
+        }
+        if body.start < candidate.span.start
+            && candidate.range.end <= body.end
+            && candidate.name == field.name
+        {
+            count += 1;
+        }
+    }
+    count == 1
 }

@@ -1667,6 +1667,9 @@ fn bibliography_completion(
     if let Some(items) = crate::bib_strings::completion(workspace, doc, offset, scope) {
         return items;
     }
+    if let Some(items) = crate::bib_source_catalog::completion(workspace, uri, offset) {
+        return items;
+    }
     if let Some(items) = crate::bib_section_symbols::completion(workspace, uri, offset) {
         return items;
     }
@@ -1679,6 +1682,24 @@ pub(crate) fn bibliography_relation_completions(
     offset: usize,
     scope: &BTreeSet<Url>,
     allowed: Option<&BTreeSet<String>>,
+) -> Vec<CompletionItem> {
+    let candidates = workspace
+        .documents
+        .iter()
+        .filter(|(uri, _)| scope.contains(*uri))
+        .flat_map(|(uri, doc)| {
+            entries(doc, TargetKind::Citation)
+                .map(move |entry| (uri, entry.name.as_str(), entry.detail.as_str()))
+        })
+        .filter(|(_, name, _)| allowed.is_none_or(|allowed| allowed.contains(*name)));
+    bibliography_relation_edits(doc, offset, candidates, usize::MAX)
+}
+
+pub(crate) fn bibliography_relation_edits<'a>(
+    doc: &Document,
+    offset: usize,
+    candidates: impl Iterator<Item = (&'a Url, &'a str, &'a str)>,
+    limit: usize,
 ) -> Vec<CompletionItem> {
     let Some(field) = doc
         .syntax
@@ -1700,19 +1721,14 @@ pub(crate) fn bibliography_relation_completions(
     let remaining = suffix[..remaining].trim_end().len();
     let key_span = offset - key.len()..offset + remaining;
     let mut seen = BTreeSet::new();
-    workspace
-        .documents
-        .iter()
-        .filter(|(uri, _)| scope.contains(*uri))
-        .flat_map(|(uri, doc)| entries(doc, TargetKind::Citation).map(move |entry| (uri, entry)))
-        .filter(|(_, entry)| {
-            syntax::is_static_citation_key(&entry.name)
-                && allowed.is_none_or(|allowed| allowed.contains(&entry.name))
-                && entry.name.starts_with(key)
-                && seen.insert(entry.name.clone())
+    candidates
+        .filter(|(_, name, _)| {
+            syntax::is_static_citation_key(name)
+                && name.starts_with(key)
+                && seen.insert((*name).to_string())
         })
-        .filter_map(|(uri, entry)| {
-            let (span, new_text) = if entry.name.contains('"')
+        .filter_map(|(uri, name, detail)| {
+            let (span, new_text) = if name.contains('"')
                 && doc
                     .text
                     .source
@@ -1724,21 +1740,22 @@ pub(crate) fn bibliography_relation_completions(
                 let after = &doc.text.source[offset + remaining..field.argument.span.end];
                 (
                     field.argument.outer_span.clone(),
-                    format!("{{{before}{}{after}}}", entry.name),
+                    format!("{{{before}{}{after}}}", name),
                 )
             } else {
-                (key_span.clone(), entry.name.clone())
+                (key_span.clone(), name.to_string())
             };
             let (range, additional) = syntax::name_completion_ranges(&doc.text, span, offset)?;
             Some(CompletionItem {
-                label: entry.name.clone(),
-                detail: Some(format!("{} — {}", entry.detail, uri.path())),
+                label: name.to_string(),
+                detail: Some(format!("{} — {}", detail, uri.path())),
                 kind: Some(CompletionItemKind::REFERENCE),
                 text_edit: Some(CompletionTextEdit::Edit(TextEdit { range, new_text })),
                 additional_text_edits: (!additional.is_empty()).then_some(additional),
                 ..Default::default()
             })
         })
+        .take(limit)
         .collect()
 }
 

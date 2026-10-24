@@ -30553,3 +30553,126 @@ fn source_set_relation_targets_follow_unsaved_execution_and_consumers_over_stdio
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+#[test]
+fn source_set_relation_completion_tracks_unsaved_identities_metadata_edits_and_limits_over_stdio() {
+    use latex_lsp::text::Text;
+    let dir = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let bib = main.join("section.bib").unwrap();
+    let other = main.join("unsaved.tex").unwrap();
+    let source = r"\documentclass{article}\usepackage{biblatex}\addsectionbib[label=chosen]{section.bib}\begin{document}\newrefsection[chosen]\defbibentryset{parent}{member}\cite{child,parent}\end{document}";
+    let library = "% 😀\r\n@book{parent,title={Selected parent}}\r\n@book{member,title={Selected member}}\r\n@inbook{child,crossref={paBAD}}";
+    for (name, text) in [("main.tex", source), ("section.bib", library)] {
+        std::fs::write(dir.path().join(name), text).unwrap();
+    }
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{},"initializationOptions":{"distribution":{"enabled":false},"indexing":{"completionLimit":1}}}));
+    server.notify("initialized", json!({}));
+    for (uri, text, language) in [(&main, source, "latex"), (&bib, library, "bibtex")] {
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"languageId":language,"version":5,"text":text}}),
+        );
+    }
+    let at = library.find("paBAD").unwrap();
+    let text = Text::new(library.into());
+    let params = json!({"textDocument":{"uri":bib},"position":text.position(at+2)});
+    let initial = server.request(2, "textDocument/completion", params.clone());
+    // Reaching the configured cap uses the server's established incomplete list contract.
+    assert_eq!(initial["isIncomplete"], true, "{initial}");
+    assert_eq!(initial["items"].as_array().unwrap().len(), 1, "{initial}");
+    let parent = &initial["items"][0];
+    assert_eq!(parent["label"], "parent");
+    assert!(
+        parent["detail"]
+            .as_str()
+            .unwrap()
+            .contains("Dynamic bibliography set: member"),
+        "{parent}"
+    );
+    assert!(
+        parent["detail"].as_str().unwrap().contains(main.path()),
+        "{parent}"
+    );
+    assert_eq!(
+        parent["textEdit"],
+        json!({"range":text.range(at,at+5),"newText":"parent"})
+    );
+    let many = server.request(
+        3,
+        "textDocument/completion",
+        json!({"textDocument":{"uri":bib},"position":text.position(at)}),
+    );
+    assert_eq!(many["isIncomplete"], true, "{many}");
+    assert_eq!(many["items"].as_array().unwrap().len(), 1);
+    let early = source.replace(r"\defbibentryset", r"\cite{parent}\defbibentryset");
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":6},"contentChanges":[{"text":early}]}),
+    );
+    let book = server.request(4, "textDocument/completion", params.clone());
+    assert!(
+        book["items"][0]["detail"]
+            .as_str()
+            .unwrap()
+            .contains("Selected parent"),
+        "{book}"
+    );
+    assert!(
+        !book["items"][0]["detail"]
+            .as_str()
+            .unwrap()
+            .contains("Dynamic bibliography set"),
+        "{book}"
+    );
+    let ambiguous = source.replace(
+        r"\end{document}",
+        r"\newrefsection[chosen]\cite{parent,child}\end{document}",
+    );
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":7},"contentChanges":[{"text":ambiguous}]}),
+    );
+    let hidden = server.request(5, "textDocument/completion", params.clone());
+    assert_eq!(hidden, json!([]), "{hidden}");
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":main}}),
+    );
+    assert_eq!(
+        server.request(6, "textDocument/completion", params.clone()),
+        initial
+    );
+    server.notify("textDocument/didOpen",json!({"textDocument":{"uri":other,"languageId":"latex","version":8,"text":r"\documentclass{article}\usepackage{biblatex}\addbibresource{section.bib}\begin{document}\cite{parent,child}\end{document}"}}));
+    assert_eq!(
+        server.request(7, "textDocument/completion", params.clone()),
+        json!([])
+    );
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":other}}),
+    );
+    assert_eq!(
+        server.request(8, "textDocument/completion", params.clone()),
+        initial
+    );
+    let unfinished = library.replace("paBAD}}", "pa");
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":bib,"version":9},"contentChanges":[{"text":unfinished}]}),
+    );
+    let completion = server.request(9, "textDocument/completion", params.clone());
+    assert_eq!(completion["items"][0]["label"], "parent", "{completion}");
+    assert_eq!(
+        completion["items"][0]["textEdit"],
+        json!({"range":text.range(at,at+2),"newText":"parent"})
+    );
+    server.notify("textDocument/didClose", json!({"textDocument":{"uri":bib}}));
+    assert_eq!(
+        server.request(10, "textDocument/completion", params),
+        initial
+    );
+    server.request(1000, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

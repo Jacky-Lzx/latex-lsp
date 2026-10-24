@@ -18,7 +18,7 @@
 
 集合与数据库条目、手写文献及 `ids` 别名共用文献键命名空间。同名定义或新名称冲突会拒绝歧义重命名；项目隔离、共享来源检查和版本化编辑沿用文献编辑规则。普通项目保持上述符号编辑规则。含资源选择的 `refsection` 项目按数字分区和实际输入顺序认证静态集合的定义跳转与悬停，详见[分区文献身份](bibliography.md)。同一资源列表的不同数字分区不合并，先显式引用再定义集合时仍可能使用数据库条目。分组不会使集合定义恢复到分组前的状态。
 
-分区集合的补全、完整引用与改名尚待完整执行图认证；动态或延迟定义、冲突声明、嵌套集合、含 IDS 或可执行 `@preamble` 的资源和手写文献仍保留保护。索引不执行任意宏展开。
+分区项目的数据库关系字段补全按全部数字分区认证候选，展示实际生效的源码集合或书籍信息，支持静态命名集合及未完成输入。TeX 引用和集合成员补全、完整引用与改名尚待完整执行图认证；动态或延迟定义、冲突声明、嵌套集合、含 IDS 或可执行 `@preamble` 的资源和手写文献仍保留保护。索引不执行任意宏展开。
 
 未保存编辑立即更新声明和成员索引。关闭缓冲区后，已加载的项目来源恢复磁盘内容。Biber 对静态 `@set` 和成员字段的原生警告另见[集合诊断](bibliography-diagnostics.md#biber-文献集合)。
 
@@ -43,4 +43,11 @@ cargo test --locked --test protocol source_set_navigation_
 ```sh
 cargo test --locked --test biblatex_source_relations -- --include-ignored
 cargo test --locked --test protocol source_set_relation_
+```
+
+源码集合的关系字段补全回归覆盖五类字段、完整键替换、引号转换、未完成输入及候选身份冲突；原生测试接受补全后比较实际条目类型、继承字段和最终编译结果：
+
+```sh
+cargo test --locked --test biblatex_source_completion -- --include-ignored
+cargo test --locked --test protocol source_set_relation_completion_
 ```
