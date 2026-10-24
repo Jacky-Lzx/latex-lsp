@@ -206,6 +206,11 @@ fn resolve(
     }
     let mut answer = None;
     for section in views {
+        // Relations cannot use a source-only key as a database parent. The
+        // backend checks that namespace before materializing dynamic sets.
+        if kind == QueryKind::Relation && binding(section)?.is_none() {
+            return Err(());
+        }
         let state = states.entry(section).or_default();
         // Native behavior for explicit requests combined with later wildcard
         // loading needs a separate proof; keep that combination protected.

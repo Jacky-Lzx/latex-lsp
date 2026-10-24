@@ -84,31 +84,40 @@ fn distinct_numeric_namespaces_remove_conflicting_candidates_but_keep_common_boo
     assert!(items.iter().any(|item| item.label == "member"));
 }
 #[test]
-fn statically_named_declarations_can_supply_candidates_absent_from_databases() {
+fn source_only_named_declarations_are_not_database_parent_candidates() {
     for declaration in [
         r"\csuse{defbibentryset}",
         r"\csname defbibentryset\endcsname",
     ] {
-        let body = format!(
-            r"\newrefsection[chosen]{declaration}{{collected}}{{member}}\cite{{collected,child}}"
+        let (_dir, ws, main) = setup(
+            "",
+            &format!(
+                r"\newrefsection[chosen]{declaration}{{collected}}{{member}}\cite{{collected,child}}"
+            ),
         );
-        let (_dir, mut ws, main) = setup("", &body);
         let bib = main.join("section.bib").unwrap();
-        let source = ws.documents[&bib]
-            .text
-            .source
-            .replace("crossref={parent}", "crossref={collected}");
-        ws.open(bib.clone(), source, 9);
-        let item = candidate(&ws, &bib, "crossref={coll", "collected");
-        assert!(
-            item.detail
-                .as_ref()
-                .unwrap()
-                .contains("Dynamic bibliography set: member"),
-            "{item:?}"
+        let items = completions(&ws, &bib, "crossref={");
+        assert!(!items.iter().any(|item| item.label == "collected"));
+        assert!(items.iter().any(|item| item.label == "member"));
+        let (_dir, ws, main) = setup(
+            "",
+            &format!(
+                r"\newrefsection[chosen]{declaration}{{parent}}{{member}}\cite{{parent,child}}"
+            ),
         );
+        let item = candidate(
+            &ws,
+            &main.join("section.bib").unwrap(),
+            "crossref={pa",
+            "parent",
+        );
+        assert!(item
+            .detail
+            .unwrap()
+            .contains("Dynamic bibliography set: member"));
     }
 }
+
 #[test]
 fn repeated_execution_of_one_physical_declaration_is_a_consistent_candidate() {
     let (dir, mut ws, main) = setup(
@@ -193,13 +202,28 @@ fn apply(source: &str, item: &CompletionItem) -> String {
         .source
 }
 #[test]
-fn all_five_relation_edits_preserve_utf16_suffixes_and_neighboring_list_items() {
-    for (field, marked, expected) in [
-        ("crossref", "paBAD", "parent"),
-        ("xref", "paBAD", "parent"),
-        ("xdata", "member, paBAD,member", "member, parent,member"),
-        ("related", "member, paBAD,member", "member, parent,member"),
-        ("entryset", "member, paBAD,member", "member, parent,member"),
+fn relation_edits_preserve_utf16_suffixes_lists_and_only_valid_source_parent_types() {
+    for (field, marked, expected, name) in [
+        ("crossref", "paBAD", "parent", "parent"),
+        ("xref", "paBAD", "parent", "parent"),
+        (
+            "xdata",
+            "child, meBAD,child",
+            "child, member,child",
+            "member",
+        ),
+        (
+            "related",
+            "child, meBAD,child",
+            "child, member,child",
+            "member",
+        ),
+        (
+            "entryset",
+            "child, meBAD,child",
+            "child, member,child",
+            "member",
+        ),
     ] {
         let (_dir, mut ws, main) = setup(
             "",
@@ -210,30 +234,36 @@ fn all_five_relation_edits_preserve_utf16_suffixes_and_neighboring_list_items() 
             "% 😀\r\n@book{{parent}} @book{{member}}\r\n@book{{child,{field}={{{marked}}}}}"
         );
         ws.open(bib.clone(), source.clone(), 7);
-        let prefix = format!("{field}={{{}", marked.split_once("paBAD").unwrap().0);
-        let item = candidate(&ws, &bib, &(prefix + "pa"), "parent");
+        let marker = if name == "parent" { "paBAD" } else { "meBAD" };
+        let prefix = format!("{field}={{{}", marked.split_once(marker).unwrap().0);
+        let item = candidate(&ws, &bib, &(prefix + &marker[..2]), name);
         assert_eq!(apply(&source, &item), source.replace(marked, expected));
-        assert!(item
-            .detail
-            .unwrap()
-            .contains("Dynamic bibliography set: member"));
+        assert_eq!(
+            item.detail
+                .unwrap()
+                .contains("Dynamic bibliography set: member"),
+            name == "parent"
+        );
+        if name == "member" {
+            let items = completions(&ws, &bib, &format!("{field}={{"));
+            assert!(!items.iter().any(|item| item.label == "parent"));
+        }
     }
 }
+
 #[test]
-fn a_quoted_source_key_converts_the_entire_quoted_list_to_braces() {
+fn a_quoted_source_parent_key_converts_the_entire_quoted_value_to_braces() {
     let (_dir, mut ws, main) = setup(
         "",
         r#"\newrefsection[chosen]\defbibentryset{s"et}{member}\cite{s"et}"#,
     );
     let bib = main.join("section.bib").unwrap();
-    let source = "% 😀\r\n@book{member}\r\n@book{child,related=\"member, sBAD,member\"}";
+    let source = "% 😀\r\n@book{s\"et} @book{member}\r\n@book{child,xref=\"sBAD\"}";
     ws.open(bib.clone(), source.into(), 8);
-    let item = candidate(&ws, &bib, "related=\"member, s", "s\"et");
-    assert_eq!(
-        apply(source, &item),
-        source.replace("\"member, sBAD,member\"", "{member, s\"et,member}")
-    );
+    let item = candidate(&ws, &bib, "xref=\"s", "s\"et");
+    assert_eq!(apply(source, &item), source.replace("\"sBAD\"", "{s\"et}"));
 }
+
 #[test]
 fn early_explicit_and_wildcard_mixtures_do_not_offer_an_unproved_identity() {
     let (_dir, ws, main) = setup(
@@ -403,5 +433,167 @@ fn accepted_relation_completions_compile_with_the_previewed_set_or_book_identity
             !blg.contains("ERROR") && !blg.contains("I didn't find"),
             "{blg}"
         );
+    }
+}
+
+#[test]
+fn source_only_parent_keys_keep_tex_navigation_without_database_relation_previews() {
+    let (_dir, mut ws, main) = setup(
+        "",
+        r"\newrefsection[chosen]\defbibentryset{collected}{member}\cite{collected,child}",
+    );
+    let bib = main.join("section.bib").unwrap();
+    let source = "@book{member,title={Member}}\n@book{child,crossref={collected}}";
+    ws.open(bib.clone(), source.into(), 9);
+    let relation = key(&ws, &bib, "crossref={", "collected");
+    assert!(completions(&ws, &bib, "crossref={coll").is_empty());
+    assert!(features::definitions(&ws, &bib, relation.range.start).is_empty());
+    assert!(features::hover(&ws, &bib, relation.range.start).is_none());
+    let declaration = key(&ws, &main, r"\defbibentryset{", "collected");
+    let citation = key(&ws, &main, r"\cite{", "collected");
+    assert_eq!(
+        features::definitions(&ws, &main, citation.range.start),
+        vec![declaration.clone()]
+    );
+    ws.open(
+        bib.clone(),
+        format!("@book{{collected,title={{Underlying parent}}}}\n{source}"),
+        10,
+    );
+    assert!(candidate(&ws, &bib, "crossref={coll", "collected")
+        .detail
+        .unwrap()
+        .contains("Dynamic bibliography set"));
+    assert_eq!(
+        features::definitions(
+            &ws,
+            &bib,
+            key(&ws, &bib, "crossref={", "collected").range.start
+        ),
+        vec![declaration]
+    );
+}
+
+fn native_relation_fixture(dir: &std::path::Path, cyclic_set: bool) -> (String, String) {
+    for (stage, (program, args)) in [
+        (
+            "pdflatex",
+            vec![
+                "-no-shell-escape",
+                "-interaction=nonstopmode",
+                "-halt-on-error",
+                "main.tex",
+            ],
+        ),
+        ("biber", vec!["main"]),
+        (
+            "pdflatex",
+            vec![
+                "-no-shell-escape",
+                "-interaction=nonstopmode",
+                "-halt-on-error",
+                "main.tex",
+            ],
+        ),
+        (
+            "pdflatex",
+            vec![
+                "-no-shell-escape",
+                "-interaction=nonstopmode",
+                "-halt-on-error",
+                "main.tex",
+            ],
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let output = std::process::Command::new(program)
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        if cyclic_set && stage >= 2 {
+            assert!(
+                !output.status.success(),
+                "nested source set unexpectedly compiled"
+            );
+            assert!(String::from_utf8_lossy(&output.stdout).contains("TeX capacity exceeded"));
+            break;
+        }
+        assert!(
+            output.status.success(),
+            "{program}: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    (
+        std::fs::read_to_string(dir.join("main.bbl")).unwrap(),
+        std::fs::read_to_string(dir.join("main.blg")).unwrap(),
+    )
+}
+#[test]
+#[ignore = "requires pdflatex, biblatex and biber"]
+fn native_biber_source_parents_need_database_entries_and_supported_relation_types() {
+    for field in ["crossref", "xref"] {
+        for database in [false, true] {
+            let (dir, mut ws, main) = setup(
+                "",
+                r"\newrefsection[chosen]\defbibentryset{collected}{member}\cite{collected,child}\printbibliography",
+            );
+            let bib = main.join("section.bib").unwrap();
+            let base=format!("@book{{member,title={{Member}}}}\n@book{{child,title={{Child}},{field}={{collBAD}}}}");
+            let library = if database {
+                format!("@book{{collected,title={{Database parent}}}}\n{base}")
+            } else {
+                base
+            };
+            ws.open(bib.clone(), library.clone(), 8);
+            let candidate = completions(&ws, &bib, &format!("{field}={{coll"))
+                .into_iter()
+                .find(|item| item.label == "collected");
+            assert_eq!(candidate.is_some(), database, "{field}");
+            let completed = if let Some(item) = candidate {
+                apply(&library, &item)
+            } else {
+                library.replace("collBAD", "collected")
+            };
+            std::fs::write(dir.path().join("section.bib"), completed).unwrap();
+            let (bbl, blg) = native_relation_fixture(dir.path(), false);
+            assert!(bbl.contains(r"\entry{collected}{set}"), "{bbl}");
+            assert_eq!(
+                blg.contains(&format!(
+                    "I didn't find a database entry for {field} 'collected'"
+                )),
+                !database,
+                "{blg}"
+            );
+            assert_eq!(
+                bbl.contains(&format!("\\strng{{{field}}}{{collected}}")),
+                database,
+                "{bbl}"
+            );
+        }
+    }
+    for (field, warning) in [
+        ("xdata", "not an XDATA entry"),
+        ("related", "has no entryset field"),
+        ("entryset", "no longer needed in set member entries"),
+    ] {
+        let (dir, mut ws, main) = setup(
+            "",
+            r"\newrefsection[chosen]\defbibentryset{parent}{member}\cite{parent,child}\printbibliography",
+        );
+        let bib = main.join("section.bib").unwrap();
+        let entry = if field == "entryset" { "set" } else { "book" };
+        let library=format!("@book{{parent,title={{Database parent}}}}\n@book{{member,title={{Member}}}}\n@{entry}{{child,title={{Child}},{field}={{parent}}}}");
+        ws.open(bib.clone(), library.clone(), 8);
+        assert!(!completions(&ws, &bib, &format!("{field}={{"))
+            .iter()
+            .any(|item| item.label == "parent"));
+        std::fs::write(dir.path().join("section.bib"), library).unwrap();
+        let (_, blg) = native_relation_fixture(dir.path(), field == "entryset");
+        assert!(blg.contains(warning), "{blg}");
     }
 }

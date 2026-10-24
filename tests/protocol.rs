@@ -30672,6 +30672,43 @@ fn source_set_relation_completion_tracks_unsaved_identities_metadata_edits_and_l
         server.request(10, "textDocument/completion", params),
         initial
     );
+    let missing = library.replace("@book{parent,title={Selected parent}}\r\n", "");
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":bib,"languageId":"bibtex","version":10,"text":missing}}),
+    );
+    let at_missing = missing.find("paBAD").unwrap();
+    let missing_params = json!({"textDocument":{"uri":bib},"position":Text::new(missing.clone()).position(at_missing+2)});
+    assert_eq!(
+        server.request(11, "textDocument/completion", missing_params.clone()),
+        json!([])
+    );
+    assert_eq!(
+        server.request(12, "textDocument/definition", missing_params),
+        json!([])
+    );
+    for (index, field) in ["xdata", "related", "entryset"].into_iter().enumerate() {
+        let source = library.replace("crossref", field);
+        server.notify("textDocument/didChange",json!({"textDocument":{"uri":bib,"version":11+index},"contentChanges":[{"text":source}]}));
+        let point = Text::new(source.clone()).position(source.find("paBAD").unwrap() + 2);
+        assert_eq!(
+            server.request(
+                13 + index as u64,
+                "textDocument/completion",
+                json!({"textDocument":{"uri":bib},"position":point})
+            ),
+            json!([])
+        );
+    }
+    server.notify("textDocument/didClose", json!({"textDocument":{"uri":bib}}));
+    assert_eq!(
+        server.request(
+            16,
+            "textDocument/completion",
+            json!({"textDocument":{"uri":bib},"position":text.position(at+2)})
+        ),
+        initial
+    );
     server.request(1000, "shutdown", Value::Null);
     server.notify("exit", Value::Null);
     server.wait_exit(0);

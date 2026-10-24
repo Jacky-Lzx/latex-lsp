@@ -161,7 +161,12 @@ impl Catalog {
         }
         Ok(())
     }
-    fn candidates(mut self, ws: &Workspace, origin: &Url) -> Result<BTreeMap<String, Candidate>> {
+    fn candidates(
+        mut self,
+        ws: &Workspace,
+        origin: &Url,
+        field: &str,
+    ) -> Result<BTreeMap<String, Candidate>> {
         if self.contexts == 0 {
             return Err(());
         }
@@ -215,6 +220,14 @@ impl Catalog {
                 }
             }
         }
+        // Biber resolves crossref/xref parents in the database before it
+        // materializes dynamic sets. A source-only key is not a valid parent.
+        // XDATA and the related/nested-set transformations cannot consume an
+        // active dynamic set as an ordinary parent either.
+        self.sources.retain(|_, (set, _)| {
+            matches!(field, "crossref" | "xref")
+                && base.get(&set.key.name).is_some_and(Option::is_some)
+        });
         let mut answer: BTreeMap<_, _> = base
             .into_iter()
             .filter_map(|(name, candidate)| {
@@ -302,7 +315,7 @@ pub(crate) fn completion(ws: &Workspace, uri: &Url, offset: usize) -> Option<Vec
                 )?;
                 catalog.trace(&trace, uri).ok()?;
             }
-            let candidates = catalog.candidates(ws, uri).ok()?;
+            let candidates = catalog.candidates(ws, uri, &field.name).ok()?;
             Some(crate::features::bibliography_relation_edits(
                 doc,
                 offset,
