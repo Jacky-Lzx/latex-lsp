@@ -319,3 +319,10 @@ cargo test --locked --test protocol handwritten_items_keep_biblatex_
 cargo test --locked --test biblatex_source_textual_queries -- --include-ignored
 cargo test --locked --test protocol source_textual_predicates_
 ```
+
+项目包含独立源码集合时，分属不同数字分区且共享 IDS 的真实数据库所属主键可以耦合改名：按实际资源分配检查冲突，完整收集经别名相连的所有所属条目及其引用。集合成员、通配加载和跨库关系继续参与检查；源码集合遮蔽所属主键、相交的别名、不同所属主键、未认证消费者或新名称捕获仍拒绝编辑。真正的源码集合所属主键与多个跨库先决条目耦合暂待后续认证。
+
+```sh
+cargo test --locked --test biblatex_source_shared_owners -- --include-ignored
+cargo test --locked --test protocol source_shared_raw_owners_
+```

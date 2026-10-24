@@ -1142,8 +1142,9 @@ fn validate_edit(symbol: &Symbol<'_>) -> Result<()> {
 // book identity in any consumer. Raw-entry queries keep their ordinary identity.
 fn edit_symbol<'a>(mut target: Symbol<'a>, shared: &BTreeSet<Identity>) -> Result<Symbol<'a>> {
     // An alias-only edit preserves its globally certified primary spelling.
-    // Owner edits still require the complete disjoint-resource proof.
+    // Raw owner edits certify each actual resource allocation independently.
     let alias_key = is_alias(&target);
+    let source_key = is_source(&target);
     for project in target
         .graphs
         .projects
@@ -1163,18 +1164,37 @@ fn edit_symbol<'a>(mut target: Symbol<'a>, shared: &BTreeSet<Identity>) -> Resul
             .keys()
             .map(|(uri, start, end)| &target.graphs.ws.documents[uri].text.source[*start..*end])
             .collect();
-        target.graphs.work.set(
-            target.graphs.work.get()
-                + crate::bib_source_aliases::certify(
-                    target.graphs.ws,
-                    &project.resources,
-                    &names,
-                    &members,
-                )
-                .ok_or(())?,
-        );
-        if target.graphs.work.get() > 32 * 1024 * 1024 {
-            return Err(());
+        let certify = |resources: &BTreeSet<Url>| -> Result<()> {
+            target.graphs.work.set(
+                target.graphs.work.get()
+                    + crate::bib_source_aliases::certify(
+                        target.graphs.ws,
+                        resources,
+                        &names,
+                        &members,
+                    )
+                    .ok_or(())?,
+            );
+            (target.graphs.work.get() <= 32 * 1024 * 1024)
+                .then_some(())
+                .ok_or(())
+        };
+        if source_key {
+            // Source prerequisites still need the original complete union
+            // proof. Their cross-library coupling is a separate operation.
+            certify(&project.resources)?;
+        } else {
+            // Equal IDS in disjoint sections are not duplicate declarations.
+            // The complete raw owner closure below couples their edits.
+            let mut allocations = BTreeSet::new();
+            for view in project
+                .graph
+                .sections
+                .iter()
+                .filter(|view| allocations.insert(Arc::as_ptr(&view.resources) as usize))
+            {
+                certify(&view.resources)?;
+            }
         }
     }
 
@@ -1418,13 +1438,18 @@ fn edit_symbols<'a>(target: Symbol<'a>) -> Result<Vec<Symbol<'a>>> {
     }
     if symbols.len() > 1
         && symbols.iter().any(|target| {
-            target
-                .graphs
-                .projects
-                .values()
-                .any(|project| project.graph.sources.is_some())
+            is_source(target)
+                || target.graphs.projects.values().any(|project| {
+                    project.graph.sections.iter().any(|view| {
+                        view.namespace
+                            .as_ref()
+                            .is_some_and(|state| state.declared.contains_key(&target.name))
+                    })
+                })
         })
     {
+        // Coupling a source shadow with multiple raw prerequisites still
+        // needs a separate proof. Unrelated source sets keep their identities.
         return Err(());
     }
     let mut edited = Vec::new();
