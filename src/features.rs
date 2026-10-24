@@ -1727,6 +1727,9 @@ pub fn definitions(workspace: &Workspace, uri: &Url, position: Position) -> Vec<
             }
         }
     }
+    if let Some(result) = crate::bib_section_symbols::definitions(workspace, uri, offset) {
+        return result;
+    }
     if let Some(result) = crate::bib_section_keys::definitions(workspace, uri, offset) {
         return result;
     }
@@ -1784,6 +1787,11 @@ pub fn references(
         .and_then(|offset| crate::extra_symbols::at(doc, offset))
     {
         return crate::extra_symbols::references(workspace, uri, entry, include_declaration);
+    }
+    if let Some(offset) = doc.text.offset(position) {
+        if let Some(result) = crate::bib_section_symbols::references(workspace, uri, offset) {
+            return result;
+        }
     }
     let Some(target) = doc
         .text
@@ -2161,6 +2169,9 @@ pub fn hover(workspace: &Workspace, uri: &Url, position: Position) -> Option<Hov
                 }
             }
         }
+    }
+    if let Some(hover) = crate::bib_section_symbols::hover(workspace, uri, offset) {
+        return hover;
     }
     if let Some(hover) = crate::bib_section_keys::hover(workspace, uri, offset) {
         return hover;

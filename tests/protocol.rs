@@ -29782,3 +29782,94 @@ fn section_resource_label_edits_validate_all_consumers_and_filename_capture_over
         server.wait_exit(0);
     }
 }
+#[test]
+fn section_bibliography_relations_follow_unsaved_metadata_and_shared_consumers_over_stdio() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let section = main.join("section.bib").unwrap();
+    let parents = main.join("parents.bib").unwrap();
+    let source = r"\documentclass{article}\usepackage{biblatex}\addbibresource{default.bib}\addsectionbib[label=chosen]{section.bib}\begin{document}\newrefsection[chosen,parents.bib]\cite{child}\end{document}";
+    let library = "% 😀\r\n@inbook{child,crossref={parent}}";
+    for (name, contents) in [
+        ("main.tex", source),
+        ("default.bib", "@book{parent,title={Default parent}}"),
+        ("section.bib", library),
+        ("parents.bib", "@book{parent,title={Selected parent}}"),
+    ] {
+        std::fs::write(dir.path().join(name), contents).unwrap();
+    }
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    for (uri, language, text, version) in [
+        (&main, "latex", source, 5),
+        (&section, "bibtex", library, 3),
+    ] {
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"languageId":language,"version":version,"text":text}}),
+        );
+    }
+    let params = json!({"textDocument":{"uri":section},"position":{"line":1,"character":26}});
+    let definitions = server.request(2, "textDocument/definition", params.clone());
+    assert_eq!(
+        definitions,
+        json!([{"uri":parents,"range":{"start":{"line":0,"character":6},"end":{"line":0,"character":12}}}])
+    );
+    let hover = server.request(3, "textDocument/hover", params.clone());
+    assert!(
+        hover["contents"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("Selected parent"),
+        "{hover}"
+    );
+    server.notify("textDocument/didOpen", json!({"textDocument":{"uri":parents,"languageId":"bibtex","version":7,"text":"@book{parent,title={Unsaved parent}}"}}));
+    let hover = server.request(4, "textDocument/hover", params.clone());
+    assert!(
+        hover["contents"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("Unsaved parent"),
+        "{hover}"
+    );
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":parents}}),
+    );
+    let hover = server.request(5, "textDocument/hover", params.clone());
+    assert!(
+        hover["contents"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("Selected parent"),
+        "{hover}"
+    );
+    let unsaved = main.join("unsaved.tex").unwrap();
+    server.notify("textDocument/didOpen", json!({"textDocument":{"uri":unsaved,"languageId":"latex","version":8,"text":r"\documentclass{article}\usepackage{biblatex}\addbibresource{default.bib}\addbibresource{section.bib}\begin{document}\cite{child}\end{document}"}}));
+    assert_eq!(
+        server.request(6, "textDocument/definition", params.clone()),
+        json!([])
+    );
+    assert!(server
+        .request(7, "textDocument/hover", params.clone())
+        .is_null());
+    // The declaration has a lexical identity even when a shared relation differs.
+    let own = server.request(
+        8,
+        "textDocument/definition",
+        json!({"textDocument":{"uri":parents},"position":{"line":0,"character":8}}),
+    );
+    assert_eq!(own.as_array().unwrap().len(), 1, "{own}");
+    assert_eq!(own[0]["uri"], parents.as_str());
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":unsaved}}),
+    );
+    let definitions = server.request(9, "textDocument/definition", params);
+    assert_eq!(definitions.as_array().unwrap().len(), 1, "{definitions}");
+    assert_eq!(definitions[0]["uri"], parents.as_str());
+    server.request(1000, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

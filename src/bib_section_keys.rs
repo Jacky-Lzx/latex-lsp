@@ -695,6 +695,38 @@ fn valid_sources(docs: &[(Url, &Document)], signatures: &CommandSignatures<'_>) 
         })
 }
 
+// Dynamic sets and handwritten bibliography items share the key namespace.
+// A resource-only model cannot certify their section-dependent identities.
+fn database_only(docs: &[(Url, &Document)], signatures: &CommandSignatures<'_>) -> bool {
+    docs.iter().all(|(_, doc)| {
+        if !doc.syntax.citations.is_empty() {
+            return false;
+        }
+        let context = Context::new(doc, signatures);
+        !doc.syntax
+            .commands
+            .iter()
+            .enumerate()
+            .any(|(index, command)| {
+                if context.literal(command.span.start) {
+                    return false;
+                }
+                let (name, _) = signatures
+                    .named_invocation(
+                        &doc.text.source,
+                        &doc.syntax,
+                        index,
+                        &BTreeSet::new(),
+                        &context.declarations,
+                    )
+                    .unwrap_or((&command.name, command.span.clone()));
+                ["defbibentryset", "bibitem"]
+                    .iter()
+                    .any(|builtin| name == *builtin || signatures.invokes_builtin(name, builtin))
+            })
+    })
+}
+
 pub(crate) enum Coexistence {
     Union,
     Unknown,
@@ -723,6 +755,10 @@ pub(crate) fn coexistence(ws: &Workspace, root: &Url, scope: &BTreeSet<Url>) -> 
         docs.iter()
             .map(|(_, doc)| (doc.text.source.as_str(), &doc.syntax)),
     );
+    let selected = crate::bib_sections::selects_resources(
+        &docs.iter().map(|(_, doc)| *doc).collect::<Vec<_>>(),
+        &signatures,
+    );
     let modern = docs.iter().any(|(_, doc)| {
         let context = Context::new(doc, &signatures);
         doc.syntax
@@ -746,12 +782,12 @@ pub(crate) fn coexistence(ws: &Workspace, root: &Url, scope: &BTreeSet<Url>) -> 
                     .iter()
                     .any(|builtin| signatures.invokes_builtin(name, builtin))
             })
-    }) || crate::bib_sections::selects_resources(
-        &docs.iter().map(|(_, doc)| *doc).collect::<Vec<_>>(),
-        &signatures,
-    );
+    }) || selected;
     if !modern {
         return Coexistence::Union;
+    }
+    if selected && !database_only(&docs, &signatures) {
+        return Coexistence::Unknown;
     }
     let sections = (|| {
         if !ws.index_truncated.is_empty() || !valid_sources(&docs, &signatures) {
@@ -910,7 +946,7 @@ fn target(ws: &Workspace, uri: &Url, offset: usize, purpose: Purpose) -> Option<
         } in &projects
         {
             let query = query(doc, signatures, offset, purpose)?;
-            if !valid_sources(docs, signatures) {
+            if !valid_sources(docs, signatures) || !database_only(docs, signatures) {
                 return None;
             }
             let registry = Registry::new(root, docs, signatures);
@@ -1089,7 +1125,7 @@ pub(crate) fn occurrence_resources(ws: &Workspace, uri: &Url) -> Option<Resource
                 signatures,
             } in &projects
             {
-                if !valid_sources(docs, signatures) {
+                if !valid_sources(docs, signatures) || !database_only(docs, signatures) {
                     return None;
                 }
                 let registry = Registry::new(root, docs, signatures);
