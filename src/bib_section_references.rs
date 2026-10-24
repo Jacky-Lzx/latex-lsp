@@ -1028,6 +1028,13 @@ fn is_source(symbol: &Symbol<'_>) -> bool {
             .is_some_and(|sources| sources.contains(&symbol.declaration))
     })
 }
+fn is_alias(symbol: &Symbol<'_>) -> bool {
+    symbol.graphs.ws.documents[&symbol.declaration.uri]
+        .syntax
+        .bibliography_aliases
+        .iter()
+        .any(|alias| alias.span == (symbol.declaration.start..symbol.declaration.end))
+}
 fn consumes(view: &View, declaration: &Identity, name: &str, source: bool) -> bool {
     if source {
         view.namespace
@@ -1115,13 +1122,14 @@ fn validate_edit(symbol: &Symbol<'_>) -> Result<()> {
 // Couple only a uniquely proved backend prerequisite that has no independent
 // book identity in any consumer. Raw-entry queries keep their ordinary identity.
 fn edit_symbol(mut target: Symbol<'_>) -> Result<Symbol<'_>> {
-    // Biber's alias map is shared across numeric sections. Per-view identity
-    // proves reads, but edits retain the complete disjoint-resource proof.
+    // An alias-only edit preserves its globally certified primary spelling.
+    // Owner edits still require the complete disjoint-resource proof.
+    let alias_key = is_alias(&target);
     for project in target
         .graphs
         .projects
         .values()
-        .filter(|project| project.graph.sources.is_some())
+        .filter(|project| !alias_key && project.graph.sources.is_some())
     {
         let names = project
             .graph
@@ -1341,7 +1349,7 @@ pub(crate) fn rename(
         }
         if name == symbol.name { return Ok(Some(WorkspaceEdit::default())); }
         let source_key = is_source(&symbol);
-        let alias_key = ws.documents[&symbol.declaration.uri].syntax.bibliography_aliases.iter().any(|alias| alias.span == (symbol.declaration.start..symbol.declaration.end));
+        let alias_key = is_alias(&symbol);
         if !source_key && symbol.graphs.databases[&symbol.declaration.uri].declarations.contains_key(name) {
             return Err(jsonrpc::Error::invalid_params("The bibliography key or IDS alias already exists in the declaration database"));
         }

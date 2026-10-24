@@ -255,4 +255,13 @@ cargo test --locked --test biblatex_numeric_alias_owners -- --include-ignored
 cargo test --locked --test protocol numeric_ids_source_owners_
 ```
 
-原生测试对照默认库书籍和选中库源码集合，并核验接受候选后的 BBL；所属主键及别名编辑在本阶段继续保护。
+原生测试对照默认库书籍和选中库源码集合，并核验接受候选后的 BBL；所属主键编辑继续保护；下一阶段的独立别名编辑另有原生对照。
+
+跨分区别名自身安全编辑回归：
+
+```sh
+cargo test --locked --test biblatex_numeric_alias_edits -- --include-ignored
+cargo test --locked --test protocol numeric_ids_alias_edits_
+```
+
+原生测试比较两个分区改名前后的完整 BBL，归一化改变的别名后要求一致；协议核验两种编辑格式、全部受影响文件的版本、未保存缓存导入及关闭恢复。

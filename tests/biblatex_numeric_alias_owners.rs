@@ -127,7 +127,12 @@ fn distinct_resource_allocations_keep_same_spelling_ids_declarations_and_referen
         let references = features::references(&ws, &query.uri, query.range.start, true);
         assert_eq!(references.len(), count, "{references:?}");
         assert!(references.iter().all(|loc| loc.uri != default));
-        assert!(features::rename(&ws, &query.uri, query.range.start, "newname").is_err());
+        let edit = features::rename(&ws, &query.uri, query.range.start, "newname");
+        if query.uri == bib {
+            assert!(edit.unwrap().is_some());
+        } else {
+            assert!(edit.is_err());
+        }
     }
     assert!(missing(&ws, &main).is_empty());
 }
@@ -255,7 +260,9 @@ fn native_numeric_owner_identities_match_the_readonly_graph_and_candidate_loadin
     let source = key(&ws, &main, r"\defbibentryset{", "parent");
     assert!(features::rename(&ws, &main, source.range.start, "newset").is_err());
     let alias = key(&ws, &bib, "ids={", "old");
-    assert!(features::rename(&ws, &bib, alias.range.start, "newalias").is_err());
+    assert!(features::rename(&ws, &bib, alias.range.start, "newalias")
+        .unwrap()
+        .is_some());
 }
 
 #[test]

@@ -32901,3 +32901,157 @@ fn numeric_ids_source_owners_keep_disjoint_read_identities_and_shared_occurrence
     let recovered=server.request(8,"textDocument/references",json!({"textDocument":{"uri":selected},"position":alias.start,"context":{"includeDeclaration":true}}));
     assert_eq!(recovered, refs);
 }
+
+#[test]
+fn numeric_ids_alias_edits_keep_exact_versions_and_global_capture_protection() {
+    use latex_lsp::text::Text;
+    for versioned in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+        let default = main.join("default.bib").unwrap();
+        let selected = main.join("section.bib").unwrap();
+        let source = "% 😀\r\n\\documentclass{article}\\usepackage{biblatex}\\addbibresource{default.bib}\\addsectionbib[label=chosen]{section.bib}\\begin{document}\\cite{old}\\newrefsection[chosen]\\defbibentryset{parent}{member}\\cite{parent,old,child}\\end{document}";
+        let library = "% 😀\r\n@book{parent,ids={old}} @book{member} @book{child,crossref={old}}";
+        // The later capture check must not also trigger the independent
+        // cached-owner guard through an uncited IDS relation in section 2.
+        let default_library = library.replace("crossref={old}", "crossref={parent}");
+        for (name, text) in [
+            ("main.tex", source),
+            ("default.bib", default_library.as_str()),
+            ("section.bib", library),
+        ] {
+            std::fs::write(dir.path().join(name), text).unwrap();
+        }
+        let span = |text: &str, prefix: &str, name: &str| {
+            let start = text.find(prefix).unwrap() + prefix.len();
+            assert_eq!(&text[start..start + name.len()], name);
+            Text::new(text.into()).range(start, start + name.len())
+        };
+        let alias = span(library, "ids={", "old");
+        let relation = span(library, "crossref={", "old");
+        let call = span(source, r"\cite{parent,", "old");
+        let mut server = Server::start();
+        server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":versioned}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+        server.notify("initialized", json!({}));
+        for (uri, text, language, version) in [
+            (&main, source, "latex", 5),
+            (&default, default_library.as_str(), "bibtex", 7),
+            (&selected, library, "bibtex", 8),
+        ] {
+            server.notify("textDocument/didOpen",json!({"textDocument":{"uri":uri,"text":text,"languageId":language,"version":version}}));
+        }
+        let params =
+            json!({"textDocument":{"uri":selected},"position":alias.start,"newName":"freshalias"});
+        let prepare = server.request(
+            2,
+            "textDocument/prepareRename",
+            json!({"textDocument":{"uri":selected},"position":alias.start}),
+        );
+        assert_eq!(prepare, json!({"range":alias,"placeholder":"old"}));
+        let edit = server.request(3, "textDocument/rename", params.clone());
+        let expected = [
+            (&main, 5, json!([{"range":call,"newText":"freshalias"}])),
+            (
+                &selected,
+                8,
+                json!([{"range":alias,"newText":"freshalias"},{"range":relation,"newText":"freshalias"}]),
+            ),
+        ];
+        if versioned {
+            assert!(edit["changes"].is_null());
+            let docs = edit["documentChanges"].as_array().unwrap();
+            assert_eq!(docs.len(), 2);
+            for (uri, version, edits) in &expected {
+                let doc = docs
+                    .iter()
+                    .find(|doc| doc["textDocument"]["uri"] == uri.as_str())
+                    .unwrap();
+                assert_eq!(doc["textDocument"]["version"], *version);
+                assert_eq!(&doc["edits"], edits);
+            }
+        } else {
+            let changes = edit["changes"].as_object().unwrap();
+            assert_eq!(changes.len(), 2);
+            for (uri, _, edits) in &expected {
+                assert_eq!(&changes[uri.as_str()], edits);
+            }
+        }
+        let capture = source.replace(
+            r"\end{document}",
+            r"\newrefsection\cite{capture}\end{document}",
+        );
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":6},"contentChanges":[{"text":capture}]}),
+        );
+        let mut captured = params.clone();
+        captured["newName"] = json!("capture");
+        server
+            .send(json!({"jsonrpc":"2.0","id":4,"method":"textDocument/rename","params":captured}));
+        assert_eq!(
+            server.until(|message| message["id"] == 4)["error"]["code"],
+            -32602
+        );
+        let imported = library.replace(",ids={old}", "");
+        server.notify("textDocument/didChange",json!({"textDocument":{"uri":selected,"version":9},"contentChanges":[{"text":imported}]}));
+        server.send(json!({"jsonrpc":"2.0","id":5,"method":"textDocument/rename","params":{"textDocument":{"uri":default},"position":alias.start,"newName":"freshalias"}}));
+        assert_eq!(
+            server.until(|message| message["id"] == 5)["error"]["code"],
+            -32602
+        );
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":selected}}),
+        );
+        let recovered = server.request(6, "textDocument/rename", params);
+        if versioned {
+            let docs = recovered["documentChanges"].as_array().unwrap();
+            assert_eq!(docs.len(), 2);
+            for (uri, _, edits) in &expected {
+                let doc = docs
+                    .iter()
+                    .find(|doc| doc["textDocument"]["uri"] == uri.as_str())
+                    .unwrap();
+                assert_eq!(
+                    doc["textDocument"]["version"],
+                    if **uri == main { json!(6) } else { Value::Null }
+                );
+                assert_eq!(&doc["edits"], edits);
+            }
+        } else {
+            assert_eq!(recovered, edit);
+        }
+        let changed = source.replace(
+            r"\cite{parent,old,child}",
+            r"\cite{parent,freshalias,child}",
+        );
+        let library_changed = library.replace("old", "freshalias");
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":7},"contentChanges":[{"text":changed}]}),
+        );
+        server.notify("textDocument/didOpen",json!({"textDocument":{"uri":selected,"languageId":"bibtex","version":10,"text":library_changed}}));
+        let newalias = span(&library_changed, "ids={", "freshalias");
+        let late = span(&changed, r"\cite{parent,", "freshalias");
+        assert_eq!(
+            server.request(
+                7,
+                "textDocument/definition",
+                json!({"textDocument":{"uri":main},"position":late.start})
+            ),
+            json!([{"uri":selected,"range":newalias}])
+        );
+        let early = span(&changed, r"\cite{", "old");
+        assert_eq!(
+            server.request(
+                8,
+                "textDocument/definition",
+                json!({"textDocument":{"uri":main},"position":early.start})
+            ),
+            json!([{"uri":default,"range":alias}])
+        );
+        server.request(1000, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
