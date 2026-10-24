@@ -487,7 +487,7 @@ fn unproved_assignment_execution_and_context_forms_keep_numeric_hints_guarded() 
         r"\def\assign{\assignrefcontextentries}\assign[labelprefix=A]{a}",
         r"\newcommand\future{\assignrefcontextentries[labelprefix=A]{a}}",
         r"\newcommand\run[1]{#1}\run{\assignrefcontextentries[labelprefix=A]{a}}",
-        r"\assignrefcontextkeyws[labelprefix=A]{chosen}",
+        r"\assignrefcontextkeyws[labelprefix=A]{\dynamic}",
     ] {
         let (_dir, ws, uri) = setup(&format!("{assignment} Text \\cite{{a}}"), &bbl, &aux);
         assert!(hints(&ws, &uri).is_empty(), "{assignment}");
@@ -1748,3 +1748,6 @@ fn native_context_assignment_lists_keep_literal_trailing_spaces() {
         r"\DeclareBibliographyCategory{x}\addtocategory{x}{a}",
     );
 }
+
+#[path = "bib_context_keyword_tests.rs"]
+mod keywords;

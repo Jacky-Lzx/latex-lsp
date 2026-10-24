@@ -864,6 +864,7 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("addtocategory", "addtocategory{${1:category}}{${2:keys}}", "Assign bibliography keys to a declared category without citing them. Requires biblatex."),
     ("assignrefcontextentries", "assignrefcontextentries[${1:options}]{${2:keys}}", "Assign entry keys to a reference context without citing them. The options bracket is required; the starred form applies weak assignments. Requires biblatex."),
     ("assignrefcontextcats", "assignrefcontextcats[${1:options}]{${2:categories}}", "Assign bibliography categories to a reference context. The options bracket is required; the starred form applies weak assignments. Requires biblatex."),
+    ("assignrefcontextkeyws", "assignrefcontextkeyws[${1:options}]{${2:keywords}}", "Assign bibliography keywords to a reference context. The options bracket is required; the starred form applies weak assignments. Requires biblatex."),
     ("defbibentryset", "defbibentryset{${1:set key}}{${2:keys}}", "Define a dynamic bibliography set from its citation key and member keys. Requires biblatex with Biber."),
     ("entrydata", "entrydata{${1:key}}{${2:code}}", "Execute code in a bibliography entry's data context. Requires biblatex."),
     ("ifentryexists", "ifentryexists{${1:key}}{${2:true}}{${3:false}}", "Test whether bibliography data contains an entry key. Requires biblatex."),

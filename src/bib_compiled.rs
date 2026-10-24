@@ -341,6 +341,22 @@ pub(crate) fn numbers(
         } else {
             BTreeMap::new()
         };
+        let has_keywords = trace.assignments.as_ref().is_some_and(|assignments| {
+            assignments.iter().any(|assignment| {
+                assignment.target == crate::bib_context_assignments::Target::Keywords
+            })
+        });
+        let keyword_members = if has_keywords {
+            match crate::bib_bbl::keyword_members(ws, &project.root) {
+                Some((members, bytes)) => {
+                    work += bytes;
+                    members
+                }
+                None => return Some(Vec::new()),
+            }
+        } else {
+            BTreeMap::new()
+        };
         let global_sorting = has_assignments
             .then(|| {
                 crate::bib_context_assignments::global_sorting(&project.docs, &project.signatures)
@@ -369,8 +385,8 @@ pub(crate) fn numbers(
             (u32, crate::bib_context_assignments::Target, bool, String),
             std::sync::Arc<crate::bib_context_assignments::Selection>,
         >::new();
-        let mut category_order = BTreeMap::new();
-        let mut next_category = 0usize;
+        let mut group_order = BTreeMap::new();
+        let mut next_group = 0usize;
         let mut occurrences = BTreeMap::new();
         for (index, event) in trace.events.into_iter().enumerate() {
             while assignments
@@ -384,9 +400,9 @@ pub(crate) fn numbers(
                     if work > 32 * 1024 * 1024 || active_assignments.len() >= 100_000 {
                         return Some(Vec::new());
                     }
-                    if assignment.target == crate::bib_context_assignments::Target::Categories {
-                        next_category += 1;
-                        category_order.insert(key.clone(), next_category);
+                    if assignment.target != crate::bib_context_assignments::Target::Entries {
+                        next_group += 1;
+                        group_order.insert((assignment.target, key.clone()), next_group);
                     }
                     active_assignments.insert(
                         (assignment.section, assignment.target, assignment.weak, key),
@@ -403,33 +419,42 @@ pub(crate) fn numbers(
             }
             use crate::bib_context_assignments::Target;
             let weak = !trace.explicit_requests.contains(&index);
-            let category = category_members
-                .get(&key.name)
-                .into_iter()
-                .flatten()
-                .filter_map(|name| {
-                    let selection = active_assignments
-                        .get(&(section, Target::Categories, false, name.clone()))
-                        .or_else(|| {
-                            weak.then(|| {
-                                active_assignments.get(&(
-                                    section,
-                                    Target::Categories,
-                                    true,
-                                    name.clone(),
-                                ))
-                            })
-                            .flatten()
-                        })?;
-                    Some((category_order.get(name)?, selection))
-                })
-                .max_by_key(|(order, _)| *order)
-                .map(|(_, selection)| selection);
-            work += category_members.get(&key.name).map_or(0, |members| {
-                members.iter().map(|name| name.len() + 64).sum::<usize>()
-            });
-            if work > 32 * 1024 * 1024 {
-                return Some(Vec::new());
+            let mut automatic = None;
+            // The category pass overrides the keyword pass, regardless of
+            // strength or when the two commands were executed. Each pass has
+            // its own global append order and section-local assignments.
+            for (target, members) in [
+                (
+                    Target::Keywords,
+                    keyword_members.get(&(section, key.name.clone())),
+                ),
+                (Target::Categories, category_members.get(&key.name)),
+            ] {
+                work += members.map_or(0, |members| {
+                    members.iter().map(|name| name.len() + 96).sum::<usize>()
+                });
+                if work > 32 * 1024 * 1024 {
+                    return Some(Vec::new());
+                }
+                let selected = members
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|name| {
+                        let selection = active_assignments
+                            .get(&(section, target, false, name.clone()))
+                            .or_else(|| {
+                                weak.then(|| {
+                                    active_assignments.get(&(section, target, true, name.clone()))
+                                })
+                                .flatten()
+                            })?;
+                        Some((group_order.get(&(target, name.clone()))?, selection))
+                    })
+                    .max_by_key(|(order, _)| *order)
+                    .map(|(_, selection)| selection);
+                if selected.is_some() {
+                    automatic = selected;
+                }
             }
             let selected = active_assignments
                 .get(&(section, Target::Entries, false, "*".to_string()))
@@ -451,7 +476,7 @@ pub(crate) fn numbers(
                     })
                     .flatten()
                 })
-                .or(category);
+                .or(automatic);
             let number = if let Some(selection) = selected {
                 assigned_labels.as_ref().and_then(|compiled| {
                     compiled.label(section, &key.name, selection, global_sorting.as_deref())

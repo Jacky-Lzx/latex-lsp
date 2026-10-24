@@ -9,6 +9,7 @@ mod bib_completion;
 mod bib_context;
 mod bib_context_assignments;
 mod bib_context_categories;
+mod bib_context_keywords;
 mod bib_context_scope;
 #[cfg(test)]
 mod bib_context_tests;

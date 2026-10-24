@@ -41,18 +41,28 @@ cargo test --locked --lib bib_context_tests:: -- --include-ignored
 cargo test --locked --test protocol local_context_citation_hints_
 ```
 
-直接且未重定义的强分配 `\assignrefcontextentries[options]{keys}` 支持普通资源的 deferred 数字提示，选项限于字面 `sorting` 和 `labelprefix`。省略 `sorting` 时，要求 biblatex 包选项明确给出字面排序；暂不推断样式的排序默认值。分类自动分配另按下述成员规则认证；关键词分配、源码集合和 IDS 相交继续保护。
+直接且未重定义的强分配 `\assignrefcontextentries[options]{keys}` 支持普通资源的 deferred 数字提示，选项限于字面 `sorting` 和 `labelprefix`。省略 `sorting` 时，要求 biblatex 包选项明确给出字面排序；暂不推断样式的排序默认值。分类自动分配另按下述成员规则认证；关键词自动分配另按下述 BBL 成员认证；源码集合和 IDS 相交继续保护。
 
 星号弱分配 `\assignrefcontextentries*[options]{keys}` 也支持相同的字面选项与编译记录。强分配优先于弱分配，各自先查通配再查单键；同类分配按最后一次执行更新。弱分配只在显式上下文外生效；进入显式上下文时，跳过弱分配并使用 AUX 默认记录，不直接采用该环境的前缀。直接原生 `refcontext` 环境及 `refcontext/newrefcontext/endrefcontext` 命令按实际分组认证局部开关：花括号、普通环境和原生 `begingroup/endgroup`、`bgroup/egroup` 结束时恢复进入前的状态；条目分配本身仍全局保存。分组与上下文边界可跨输入文件，文件名参数不会制造包围输入执行的分组。未知／错配作用域、命名／转发的分组控制、宏正文中的隐式分组或数学切换继续跳过弱提示。普通公式可以出现在上下文命令前后；美元及括号数学内部的上下文切换尚不认证。直接且未重定义的 `endinput` 只执行当前行，随后忽略的括号不影响调用文件的分组；命名／转发的终止调用继续保护。作用域深度最多 128，沿用 32 MiB 分析预算。
 
 静态 `assignrefcontextcats[options]{categories}` 及其星号形式也支持 deferred 数字提示，包括静态命名调用和前言中已执行的纯转发声明。选项沿用条目分配的字面 `sorting`／`labelprefix` 认证。每个分类的分配值按数字分区保存，分类的迭代顺序则全局保存；再次分配同名分类会将它移到最后。每次引用取最后一个匹配分类的有效分配，同一分类中强分配优先于弱分配，不同分类仍按顺序覆盖。最后再应用条目分配，因此条目弱分配也可覆盖分类强分配。分类名 `*` 是字面名称，不是条目通配。
 
-成员需由当前源码中可确认的 `DeclareBibliographyCategory`／`addtocategory` 建立，并与所选输出目录、jobName 及递归 AUX 中的全部分类成员一致。分类成员为全局集合，且原生会在正文前从 AUX 预载，所以较晚添加的成员也可影响较早的引用。未保存成员变化在 AUX 更新前、宏正文／回调／捕获／未知参数中的潜在更新、重定义、数据库生成代码、源码集合及未认证的 IDS 均继续跳过相关提示。缺失、畸形或不匹配的分类记录不借用默认编号；它们不影响独立的条目分配提示。关键词自动分配尚待认证。
+成员需由当前源码中可确认的 `DeclareBibliographyCategory`／`addtocategory` 建立，并与所选输出目录、jobName 及递归 AUX 中的全部分类成员一致。分类成员为全局集合，且原生会在正文前从 AUX 预载，所以较晚添加的成员也可影响较早的引用。未保存成员变化在 AUX 更新前、宏正文／回调／捕获／未知参数中的潜在更新、重定义、数据库生成代码、源码集合及未认证的 IDS 均继续跳过相关提示。缺失、畸形或不匹配的分类记录不借用默认编号；它们不影响独立的条目分配提示。关键词自动分配按下述 BBL 成员独立认证。
 
 ```sh
 cargo test --locked --lib automatic_categories_
 cargo test --locked --lib native_automatic_category_hints_ -- --ignored --test-threads=1
 cargo test --locked --test protocol automatic_category_hints_
+```
+
+静态 `assignrefcontextkeyws[options]{keywords}` 及其星号形式支持普通资源的 deferred 数字提示，包括静态命名调用和前言中已执行的纯转发。关键词成员只取完整认证 BBL 的 `keyw` 记录，按数字分区累积全部加载上下文的成员；不直接推断原始数据库字段，因此 Biber 已处理的字符串及 XDATA 继承沿用真实输出。关键词使用独立的全局追加顺序和逐分区强／弱映射，先应用关键词，再应用分类，最后应用条目分配；显式上下文内仍跳过弱分配。
+
+关键词初期认证限于无展开、无嵌套分组的 ASCII 字面列表。内部普通空格、制表符及换行按 TeX 归一化，注释去掉当前行剩余内容和换行；项目前的空格忽略，末尾空格保留，`*` 是字面关键词。空列表不改变分配。分配自身不加载条目，也不产生提示。未知代码、空行产生的段落、非 ASCII 名称、未认证的源码集合／IDS 及不完整 BBL 继续省略相关提示。关键词索引的展开工作沿用 32 MiB 上限；复杂关键词数据或索引超限不影响独立条目分配中已经认证的编号。
+
+```sh
+cargo test --locked --lib bib_context_tests::keywords::
+cargo test --locked --lib native_automatic_keywords_ -- --ignored --test-threads=1
+cargo test --locked --test protocol automatic_keyword_hints_
 ```
 
 条目分配按实际执行顺序更新各数字分区的全局状态，TeX 花括号分组结束不会撤销它；同一键在分配前后可显示不同标签。通配 `*` 优先于单键分配，空列表不改变状态。原生列表忽略项目前的空白，但保留末尾空白；`a ` 或 `* ` 不会被当成静态键 `a` 或通配 `*`，分类名同理。提示只显示在真正输出的引用后，分配命令自身不加载条目，也不产生提示。重复输入和共享主文档仍要求同一物理引用的所有执行取得相同完整标签。

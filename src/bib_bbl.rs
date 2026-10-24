@@ -9,6 +9,12 @@ use tower_lsp::lsp_types::Url;
 type Labels = BTreeMap<(u32, String), Option<String>>;
 type Records = BTreeMap<(u32, String, String), (u32, Option<String>)>;
 pub(crate) type Prefixes = BTreeMap<(u32, String, String), String>;
+pub(crate) type KeywordMembers = BTreeMap<(u32, String), Vec<String>>;
+#[derive(Default)]
+struct KeywordIndex {
+    members: BTreeMap<(u32, String), BTreeSet<String>>,
+    work: usize,
+}
 
 fn fields(source: &str, at: &mut usize, count: usize) -> Option<Vec<syntax::Argument>> {
     let mut result = Vec::new();
@@ -42,7 +48,11 @@ fn context(value: &str, prefixed: bool) -> bool {
 fn compact(value: &str) -> String {
     value.chars().filter(|ch| !ch.is_whitespace()).collect()
 }
-fn records(source: &str, prefixed: bool) -> Option<Records> {
+fn records(
+    source: &str,
+    prefixed: bool,
+    mut keywords: Option<&mut KeywordIndex>,
+) -> Option<Records> {
     let mut lines = source.lines();
     if lines.next()? != "% $ biblatex auxiliary file $"
         || lines.next()? != "% $ biblatex bbl format version 3.3 $"
@@ -159,8 +169,29 @@ fn records(source: &str, prefixed: bool) -> Option<Records> {
                     return None;
                 }
             }
-            name @ (r"\name" | r"\list" | r"\strng" | r"\range" | r"\keyw" | r"\true"
-            | r"\false" | r"\warn") => {
+            r"\keyw" => {
+                let key = &entry.as_ref()?.0;
+                let args = fields(source, &mut at, 1)?;
+                if let Some(index) = keywords.as_deref_mut() {
+                    index.work += args[0].value.len();
+                    for name in crate::bib_context_keywords::list(&args[0].value)? {
+                        index.work += key.len() + name.len() + 128;
+                        if index.work > 32 * 1024 * 1024 {
+                            return None;
+                        }
+                        // biblatex accumulates membership from every loaded
+                        // context in this numeric section, not just the one
+                        // ultimately chosen for a particular citation.
+                        index
+                            .members
+                            .entry((section?, key.clone()))
+                            .or_default()
+                            .insert(name);
+                    }
+                }
+            }
+            name @ (r"\name" | r"\list" | r"\strng" | r"\range" | r"\true" | r"\false"
+            | r"\warn") => {
                 entry.as_ref()?;
                 let count = match name {
                     r"\name" => 4,
@@ -246,7 +277,7 @@ fn read(ws: &Workspace, root: &Url) -> Option<String> {
 }
 fn parse(source: &str) -> Option<Labels> {
     Some(
-        records(source, false)?
+        records(source, false, None)?
             .into_iter()
             .map(|((section, _, key), (number, _))| ((section, key), Some(number.to_string())))
             .collect(),
@@ -258,13 +289,27 @@ pub(crate) fn numeric_labels(ws: &Workspace, root: &Url) -> Option<(Labels, usiz
 }
 pub(crate) fn prefixes(ws: &Workspace, root: &Url) -> Option<(Prefixes, usize)> {
     let source = read(ws, root)?;
-    let entries = records(&source, true)?;
+    let entries = records(&source, true, None)?;
     Some((
         entries
             .into_iter()
             .map(|(key, (_, prefix))| (key, prefix.unwrap_or_default()))
             .collect(),
         source.len(),
+    ))
+}
+
+pub(crate) fn keyword_members(ws: &Workspace, root: &Url) -> Option<(KeywordMembers, usize)> {
+    let source = read(ws, root)?;
+    let mut index = KeywordIndex::default();
+    records(&source, true, Some(&mut index))?;
+    Some((
+        index
+            .members
+            .into_iter()
+            .map(|(key, names)| (key, names.into_iter().collect()))
+            .collect(),
+        source.len() + index.work,
     ))
 }
 

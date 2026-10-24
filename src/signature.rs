@@ -263,14 +263,19 @@ const BIBLATEX_TEXT_FORWARDS: &[(&str, &str)] = &[
 ];
 
 fn builtin(name: &str) -> Option<Signature> {
-    if name == "assignrefcontextcats" {
+    if matches!(name, "assignrefcontextcats" | "assignrefcontextkeyws") {
+        let keywords = name == "assignrefcontextkeyws";
         return Some(Signature {
             name: name.into(),
             parameters: vec![
                 Parameter { obey_spaces: false, kind: Kind::RequiredBracket, label: "[options]".into() },
-                Parameter { obey_spaces: false, kind: Kind::RequiredGroup, label: "{categories}".into() },
+                Parameter { obey_spaces: false, kind: Kind::RequiredGroup, label: if keywords { "{keywords}" } else { "{categories}" }.into() },
             ],
-            documentation: "Assign bibliography categories to a reference context. The options bracket is required, including when empty; the starred form applies weak assignments. Category names are independent of entry keys. Requires biblatex.".into(),
+            documentation: if keywords {
+                "Assign bibliography keywords to a reference context. The options bracket is required, including when empty; the starred form applies weak assignments. Keywords are independent of entry keys and categories. Requires biblatex."
+            } else {
+                "Assign bibliography categories to a reference context. The options bracket is required, including when empty; the starred form applies weak assignments. Category names are independent of entry keys. Requires biblatex."
+            }.into(),
             starred: true,
             nested_brackets: false,
         });
@@ -4538,7 +4543,8 @@ fn builtin_argument_data(signature: &Signature, parameter: usize) -> bool {
         | "newrefcontext"
         | "refcontext"
         | "assignrefcontextentries"
-        | "assignrefcontextcats" => true,
+        | "assignrefcontextcats"
+        | "assignrefcontextkeyws" => true,
         "begin" => {
             parameter == 1
                 && signature

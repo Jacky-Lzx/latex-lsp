@@ -1,17 +1,23 @@
-//! Hint-only certification of literal entry and category context assignments.
+//! Hint-only certification of literal entry, category and keyword assignments.
 use crate::syntax;
 use std::collections::{BTreeMap, BTreeSet};
 
-pub(crate) const COMMANDS: &[&str] = &["assignrefcontextentries", "assignrefcontextcats"];
+pub(crate) const COMMANDS: &[&str] = &[
+    "assignrefcontextentries",
+    "assignrefcontextcats",
+    "assignrefcontextkeyws",
+];
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Target {
     Entries,
     Categories,
+    Keywords,
 }
 pub(crate) fn target(name: &str) -> Option<Target> {
     match name {
         "assignrefcontextentries" => Some(Target::Entries),
         "assignrefcontextcats" => Some(Target::Categories),
+        "assignrefcontextkeyws" => Some(Target::Keywords),
         _ => None,
     }
 }
@@ -123,6 +129,14 @@ pub(crate) fn parse(source: &str, end: usize, name: &str) -> Option<Parsed> {
         }
     }
     let (argument, _) = syntax::group(source, syntax::skip_space(source, end), b'{', b'}')?;
+    if target == Target::Keywords {
+        return Some(Parsed {
+            target,
+            selection,
+            keys: crate::bib_context_keywords::list(&argument.value)?,
+            weak,
+        });
+    }
     if argument
         .value
         .chars()
@@ -144,6 +158,7 @@ pub(crate) fn parse(source: &str, end: usize, name: &str) -> Option<Parsed> {
         if !(match target {
             Target::Entries => syntax::is_static_citation_key(literal),
             Target::Categories => syntax::is_static_reference_key(literal),
+            Target::Keywords => unreachable!(),
         }) || keys.len() >= 100_000
         {
             return None;
