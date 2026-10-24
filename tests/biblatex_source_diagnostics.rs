@@ -164,7 +164,7 @@ fn unsafe_source_namespaces_do_not_restore_union_diagnostics_or_fixes() {
     let (_dir, mut ws, main) =
         setup(r"\newrefsection[chosen]\defbibentryset{collected}{member}\cite{absent}");
     for bib in [
-        "@book{parent,ids={collected}} @book{member}",
+        "@book{parent,ids={collected}} @book{member} @book{child,crossref={collected}}",
         "@book{member} @preamble{\"code\"}",
     ] {
         ws.open(main.join("section.bib").unwrap(), bib.into(), 8);

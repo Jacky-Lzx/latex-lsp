@@ -283,3 +283,12 @@ cargo test --locked --test protocol numeric_nonloading_keys_
 ```
 
 覆盖普通与静态命名调用的完整引用及版本化编辑、未定义名称捕获、被覆盖的缓存所属关系和条件查询保护。原生验证非加载调用不会预读资源，并比较应用改名后的完整 BBL。
+
+IDS 名称与源码集合同名的只读身份回归：
+
+```sh
+cargo test --locked --test biblatex_source_named_aliases -- --include-ignored
+cargo test --locked --test protocol source_named_ids_reads_
+```
+
+原生覆盖默认／所选分区的早晚请求、同时存在所属主键与别名名称的两个集合、另一个别名及独立集合成员。协议验证精确引用、拒绝相交改名、未保存静态／字符串／拼接关系撤销认证和关闭恢复。原生反例确认关系宏展开也会在无警告时抑制集合。

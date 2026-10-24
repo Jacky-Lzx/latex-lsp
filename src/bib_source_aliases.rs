@@ -15,6 +15,28 @@ pub(crate) fn certify(
     sources: &BTreeSet<&str>,
     members: &BTreeSet<&str>,
 ) -> Option<usize> {
+    certify_inner(ws, resources, sources, members, false)
+}
+
+/// Read source-name aliases only when no wildcard or database relation can
+/// resolve that alias before the dynamic source set is materialized.
+pub(crate) fn certify_reads(
+    ws: &Workspace,
+    resources: &BTreeSet<Url>,
+    sources: &BTreeSet<&str>,
+    members: &BTreeSet<&str>,
+    wildcard: bool,
+) -> Option<usize> {
+    certify_inner(ws, resources, sources, members, !wildcard)
+}
+
+fn certify_inner(
+    ws: &Workspace,
+    resources: &BTreeSet<Url>,
+    sources: &BTreeSet<&str>,
+    members: &BTreeSet<&str>,
+    source_aliases: bool,
+) -> Option<usize> {
     let mut work = 0usize;
     let mut bytes = 0usize;
     let mut has_ids = false;
@@ -36,6 +58,66 @@ pub(crate) fn certify(
     }
     if !has_ids {
         return Some(work);
+    }
+    let mut relations = BTreeSet::new();
+    let mut uncertain_relations = false;
+    if source_aliases {
+        for uri in resources {
+            let doc = ws.documents.get(uri)?;
+            for field in doc
+                .syntax
+                .bibliography_completion
+                .entries
+                .iter()
+                .flat_map(|entry| &entry.fields)
+                .filter(|field| {
+                    matches!(
+                        field.name.as_str(),
+                        "crossref" | "xref" | "xdata" | "related" | "entryset"
+                    )
+                })
+            {
+                work += field.range.len() + 64;
+                if work > 32 * 1024 * 1024 {
+                    return None;
+                }
+                if !field.assigned || !field.value_valid {
+                    uncertain_relations = true;
+                    continue;
+                }
+                let assignment = syntax::skip_space(&doc.text.source, field.span.end);
+                let start = syntax::skip_space(&doc.text.source, assignment + 1);
+                let Some(literal) =
+                    syntax::bib_literal_mode(&doc.text.source, start, field.range.end, false)
+                else {
+                    // A string macro or concatenation can resolve to an alias
+                    // even when that name has no literal reference occurrence.
+                    uncertain_relations = true;
+                    continue;
+                };
+                if literal.value.contains(['\\', '{', '}', '%', '#'])
+                    || matches!(field.name.as_str(), "crossref" | "xref")
+                        && literal.value.contains(',')
+                {
+                    uncertain_relations = true;
+                    continue;
+                }
+                let mut offset = literal.span.start;
+                for part in literal.value.split(',') {
+                    let span = syntax::trimmed_span(&doc.text.source, offset..offset + part.len());
+                    let name = &doc.text.source[span];
+                    offset += part.len() + 1;
+                    work += name.len() + 64;
+                    if work > 32 * 1024 * 1024 || relations.len() >= 100_000 {
+                        return None;
+                    }
+                    if !name.is_empty() {
+                        uncertain_relations |= !syntax::is_static_citation_key(name);
+                        relations.insert(name);
+                    }
+                }
+            }
+        }
     }
     let mut names = BTreeMap::<&str, usize>::new();
     for uri in resources {
@@ -117,6 +199,7 @@ pub(crate) fn certify(
                     || name.is_empty()
                     || !syntax::is_static_citation_key(name)
                     || sources.contains(name)
+                        && (!source_aliases || uncertain_relations || relations.contains(name))
                     || sources.contains(primary) && members.contains(name)
                     || names.get(name) != Some(&1)
                     || !aliases.insert((span.start, span.end))

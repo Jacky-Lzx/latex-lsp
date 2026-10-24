@@ -33275,3 +33275,93 @@ fn numeric_nonloading_keys_keep_complete_versions_without_preloading_resources()
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+fn source_named_ids_reads_refresh_unsaved_relations_and_preserve_edit_protection() {
+    use latex_lsp::text::Text;
+    let dir = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let default = main.join("default.bib").unwrap();
+    let selected = main.join("section.bib").unwrap();
+    let source="% 😀\r\n\\documentclass{article}\\usepackage{biblatex}\\addbibresource{default.bib}\\addsectionbib[label=chosen]{section.bib}\\begin{document}\\newrefsection[chosen]\\defbibentryset{old}{member}\\cite{old}\\end{document}";
+    let library = "% 😀\r\n@book{parent,title={Parent},ids={old}} @book{member,title={Member}}";
+    for (name, text) in [
+        ("main.tex", source),
+        ("default.bib", library),
+        ("section.bib", library),
+    ] {
+        std::fs::write(dir.path().join(name), text).unwrap();
+    }
+    let span = |text: &str, prefix: &str, name: &str| {
+        let start = text.find(prefix).unwrap() + prefix.len();
+        assert_eq!(&text[start..start + name.len()], name);
+        Text::new(text.into()).range(start, start + name.len())
+    };
+    let set = span(source, r"\defbibentryset{", "old");
+    let call = span(source, r"\cite{", "old");
+    let alias = span(library, "ids={", "old");
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    for (uri, text, language, version) in [
+        (&main, source, "latex", 5),
+        (&default, library, "bibtex", 7),
+        (&selected, library, "bibtex", 8),
+    ] {
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"text":text,"languageId":language,"version":version}}),
+        );
+    }
+    let query = json!({"textDocument":{"uri":main},"position":call.start});
+    let target = json!([{"uri":main,"range":set}]);
+    assert_eq!(
+        server.request(2, "textDocument/definition", query.clone()),
+        target
+    );
+    let references = json!({"textDocument":{"uri":main},"position":set.start,"context":{"includeDeclaration":true}});
+    let refs = server.request(3, "textDocument/references", references.clone());
+    assert_eq!(
+        refs,
+        json!([{"uri":main,"range":set},{"uri":main,"range":call}])
+    );
+    for (id, uri, position) in [(4, &main, set.start), (5, &selected, alias.start)] {
+        server.send(json!({"jsonrpc":"2.0","id":id,"method":"textDocument/rename","params":{"textDocument":{"uri":uri},"position":position,"newName":"fresh"}}));
+        assert_eq!(
+            server.until(|message| message["id"] == id)["error"]["code"],
+            -32602
+        );
+    }
+    server.notify("textDocument/didChange",json!({"textDocument":{"uri":selected,"version":9},"contentChanges":[{"text":format!("{library} @book{{child,crossref={{old}}}}") }]}));
+    assert_eq!(
+        server.request(6, "textDocument/definition", query.clone()),
+        json!([])
+    );
+    assert_eq!(
+        server.request(7, "textDocument/references", references.clone()),
+        json!([])
+    );
+    for (id, value) in [(10, "alias"), (12, "{o} # {ld}")] {
+        server.notify("textDocument/didChange",json!({"textDocument":{"uri":selected,"version":id},"contentChanges":[{"text":format!("@string{{alias=\"old\"}} {library} @book{{child,crossref={value}}}") }]}));
+        assert_eq!(
+            server.request(id, "textDocument/definition", query.clone()),
+            json!([])
+        );
+        assert_eq!(
+            server.request(id + 1, "textDocument/references", references.clone()),
+            json!([])
+        );
+    }
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":selected}}),
+    );
+    assert_eq!(server.request(8, "textDocument/definition", query), target);
+    assert_eq!(
+        server.request(9, "textDocument/references", references),
+        refs
+    );
+    server.request(1000, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

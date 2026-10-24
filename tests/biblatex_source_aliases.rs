@@ -121,7 +121,10 @@ fn disjoint_aliases_are_candidates_with_their_owner_metadata_and_types() {
 #[test]
 fn intersecting_alias_names_and_uncertain_ids_values_stay_protected() {
     for (set, bib) in [
-        ("old", "@book{parent,ids={old}} @book{member}"),
+        (
+            "old",
+            "@book{parent,ids={old}} @book{member} @book{child,crossref={old}}",
+        ),
         ("collected", "@book{parent,ids=alias} @book{member}"),
         (
             "collected",

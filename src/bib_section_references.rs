@@ -477,6 +477,10 @@ impl<'a> Graphs<'a> {
             if self.work.get() > 32 * 1024 * 1024 {
                 return Err(());
             }
+            let wildcard = graph
+                .sections
+                .iter()
+                .any(|view| view.namespace.as_ref().is_some_and(|state| state.wildcard));
             allocations.clear();
             for view in graph
                 .sections
@@ -485,11 +489,12 @@ impl<'a> Graphs<'a> {
             {
                 self.work.set(
                     self.work.get()
-                        + crate::bib_source_aliases::certify(
+                        + crate::bib_source_aliases::certify_reads(
                             self.ws,
                             &view.resources,
                             &names,
                             &members,
+                            wildcard,
                         )
                         .ok_or(())?,
                 );

@@ -351,8 +351,13 @@ fn target(ws: &Workspace, uri: &Url, offset: usize) -> Option<Option<Answer>> {
             if work > 32 * 1024 * 1024 {
                 return None;
             }
+            let wildcard = trace
+                .events
+                .iter()
+                .any(|event| matches!(event, SourceEvent::Request(_, _, true)));
             for view in views.values() {
-                work += crate::bib_source_aliases::certify(ws, view, &names, &members)?;
+                work +=
+                    crate::bib_source_aliases::certify_reads(ws, view, &names, &members, wildcard)?;
                 if work > 32 * 1024 * 1024 {
                     return None;
                 }
