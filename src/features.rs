@@ -560,6 +560,9 @@ pub fn prepare_rename(
         .get(uri)
         .and_then(|doc| doc.text.offset(position))
     {
+        if let Some(result) = crate::bib_section_references::prepare(workspace, uri, offset) {
+            return result;
+        }
         if let Some(result) = crate::bib_section_labels::prepare(workspace, uri, offset) {
             return result;
         }
@@ -609,6 +612,11 @@ fn rename_impl(
         .get(uri)
         .and_then(|doc| doc.text.offset(position))
     {
+        if let Some(result) =
+            crate::bib_section_references::rename(workspace, uri, offset, new_name)
+        {
+            return result;
+        }
         if let Some(result) = crate::bib_section_labels::rename(workspace, uri, offset, new_name) {
             return result;
         }
@@ -808,40 +816,59 @@ fn rename_impl(
 /// Merge edits in a quoted BibTeX relationship or IDS value before changing its
 /// delimiters. This keeps repeated keys in one list from producing overlapping
 /// edits, and preserves the surrounding list members and whitespace.
-fn brace_quoted_citation_edits(doc: &Document, edits: &mut Vec<TextEdit>) {
-    for argument in doc
+pub(crate) fn brace_quoted_citation_edits(doc: &Document, edits: &mut Vec<TextEdit>) {
+    let mut arguments: Vec<_> = doc
         .syntax
         .citation_fields
         .iter()
         .map(|field| &field.argument)
         .chain(&doc.syntax.bibliography_alias_values)
-    {
-        if doc.text.source.as_bytes().get(argument.outer_span.start) != Some(&b'"') {
-            continue;
-        }
+        .filter(|argument| doc.text.source.as_bytes().get(argument.outer_span.start) == Some(&b'"'))
+        .collect();
+    arguments.sort_by_key(|argument| argument.span.start);
+    arguments.dedup_by_key(|argument| (argument.span.start, argument.span.end));
+    edits.sort_by_key(|edit| (edit.range.start, edit.range.end));
+    let mut pending = std::mem::take(edits).into_iter().peekable();
+    let mut result = Vec::new();
+    for argument in arguments {
         let inner = doc.text.range(argument.span.start, argument.span.end);
-        let matching = edits
-            .iter()
-            .filter(|edit| inner.start <= edit.range.start && edit.range.end <= inner.end)
-            .collect::<Vec<_>>();
-        if matching.is_empty() {
+        while pending
+            .peek()
+            .is_some_and(|edit| edit.range.start < inner.start)
+        {
+            result.push(pending.next().unwrap());
+        }
+        if !pending
+            .peek()
+            .is_some_and(|edit| edit.range.end <= inner.end)
+        {
             continue;
         }
-        let mut value = doc.text.source[argument.span.clone()].to_owned();
-        for edit in matching.into_iter().rev() {
-            let start = doc.text.offset(edit.range.start).unwrap() - argument.span.start;
-            let end = doc.text.offset(edit.range.end).unwrap() - argument.span.start;
-            value.replace_range(start..end, &edit.new_text);
+        let mut value = String::from("{");
+        let mut cursor = argument.span.start;
+        while pending
+            .peek()
+            .is_some_and(|edit| edit.range.end <= inner.end)
+        {
+            let edit = pending.next().unwrap();
+            let start = doc.text.offset(edit.range.start).unwrap();
+            let end = doc.text.offset(edit.range.end).unwrap();
+            value.push_str(&doc.text.source[cursor..start]);
+            value.push_str(&edit.new_text);
+            cursor = end;
         }
-        edits.retain(|edit| !(inner.start <= edit.range.start && edit.range.end <= inner.end));
-        edits.push(TextEdit {
+        value.push_str(&doc.text.source[cursor..argument.span.end]);
+        value.push('}');
+        result.push(TextEdit {
             range: doc
                 .text
                 .range(argument.outer_span.start, argument.outer_span.end),
-            new_text: format!("{{{value}}}"),
+            new_text: value,
         });
     }
-    edits.sort_by_key(|edit| (edit.range.start, edit.range.end));
+    result.extend(pending);
+    result.sort_by_key(|edit| (edit.range.start, edit.range.end));
+    *edits = result;
 }
 
 pub fn workspace_edit(

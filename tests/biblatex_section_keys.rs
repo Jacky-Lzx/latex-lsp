@@ -47,7 +47,7 @@ fn check(ws: &Workspace, uri: &Url, key: &str, targets: &[&str]) {
 }
 
 #[test]
-fn citations_resolve_in_default_selected_and_global_resources_without_enabling_partial_renames() {
+fn citations_resolve_and_rename_complete_default_selected_and_global_identities() {
     let (_dir, ws, main, source) = setup(
         r"\addglobalbib{global.bib}",
         r"\cite{collision}\newrefsection[chosen]\cite{collision}\cite{always}\newrefsection[]\cite{collision}\refsection[other]\cite{collision}\endrefsection\cite{collision}",
@@ -66,12 +66,23 @@ fn citations_resolve_in_default_selected_and_global_resources_without_enabling_p
     );
     check(&ws, &main, "always", &["global.bib"]);
     let at = Text::new(source.clone()).position(source.find(r"\cite{collision}").unwrap() + 7);
-    assert!(features::rename(&ws, &main, at, "updated")
-        .unwrap_or(None)
-        .is_none());
-    for name in ["default.bib", "section.bib", "global.bib"] {
+    let edit = features::rename(&ws, &main, at, "updated")
+        .unwrap()
+        .unwrap();
+    let changes = edit.changes.unwrap();
+    assert_eq!(changes.len(), 2);
+    assert_eq!(changes[&main].len(), 3);
+    assert_eq!(changes[&main.join("default.bib").unwrap()].len(), 1);
+    for (name, count) in [("default.bib", 3), ("section.bib", 1), ("global.bib", 1)] {
         let bib = main.join(name).unwrap();
-        assert!(features::rename(&ws, &bib, Position::new(0, 8), "updated").is_err());
+        let changes = features::rename(&ws, &bib, Position::new(0, 8), "updated")
+            .unwrap()
+            .unwrap()
+            .changes
+            .unwrap();
+        assert_eq!(changes.len(), 2, "{name}");
+        assert_eq!(changes[&bib].len(), 1, "{name}");
+        assert_eq!(changes[&main].len(), count, "{name}");
     }
 }
 

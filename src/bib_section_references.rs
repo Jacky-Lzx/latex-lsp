@@ -12,7 +12,10 @@ use std::{
     ops::Range,
     sync::Arc,
 };
-use tower_lsp::lsp_types::{Location, Url};
+use tower_lsp::{
+    jsonrpc,
+    lsp_types::{Location, PrepareRenameResponse, TextEdit, Url, WorkspaceEdit},
+};
 
 type Result<T> = std::result::Result<T, ()>;
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -164,6 +167,7 @@ struct Graphs<'a> {
     bytes: usize,
     stored: usize,
     name: Option<String>,
+    // Bindings belong to `name`; changing a rename candidate clears this cache.
     bindings: RefCell<BTreeMap<usize, Result<Option<Identity>>>>,
     work: Cell<usize>,
 }
@@ -343,10 +347,15 @@ impl<'a> Graphs<'a> {
     }
 }
 
-struct Symbol {
+struct Symbol<'a> {
     declaration: Identity,
     occurrences: BTreeMap<Url, BTreeSet<(usize, usize)>>,
+    name: String,
+    query: Range<usize>,
+    graphs: Graphs<'a>,
+    lexical: Index,
 }
+
 fn query_span(
     doc: &Document,
     offset: usize,
@@ -384,7 +393,7 @@ fn query_span(
     let (citation, span) = lexical.target(uri, offset)?;
     citation.then(|| (doc.text.source[span.clone()].to_string(), span, None))
 }
-fn symbol(ws: &Workspace, uri: &Url, offset: usize) -> Option<Result<Symbol>> {
+fn symbol<'a>(ws: &'a Workspace, uri: &Url, offset: usize) -> Option<Result<Symbol<'a>>> {
     let doc = ws.documents.get(uri)?;
     if !ws
         .documents
@@ -562,6 +571,10 @@ fn symbol(ws: &Workspace, uri: &Url, offset: usize) -> Option<Result<Symbol>> {
         Ok(Symbol {
             declaration,
             occurrences,
+            name,
+            query: span,
+            graphs,
+            lexical,
         })
     })())
 }
@@ -597,4 +610,107 @@ pub(crate) fn references(
             })
             .unwrap_or_default(),
     )
+}
+
+fn edit_error() -> jsonrpc::Error {
+    jsonrpc::Error::invalid_params("The bibliography key has an incomplete or ambiguous declaration identity across its consumers")
+}
+
+fn validate_edit(symbol: &Symbol<'_>) -> Result<()> {
+    let database = Database::new(
+        &symbol.declaration.uri,
+        &symbol.graphs.ws.documents[&symbol.declaration.uri],
+    )?;
+    if database.declarations.get(&symbol.name).map(Vec::as_slice)
+        != Some(std::slice::from_ref(&symbol.declaration))
+    {
+        return Err(());
+    }
+    for project in symbol.graphs.projects.values() {
+        crate::resource_context::validate_rename(symbol.graphs.ws, &project.scope, &symbol.name)
+            .map_err(|_| ())?;
+        for view in project
+            .graph
+            .sections
+            .iter()
+            .filter(|view| view.contains(&symbol.declaration.uri))
+        {
+            if symbol.graphs.bind(&symbol.name, std::iter::once(view))?
+                != Some(symbol.declaration.clone())
+            {
+                return Err(());
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn prepare(
+    ws: &Workspace,
+    uri: &Url,
+    offset: usize,
+) -> Option<jsonrpc::Result<Option<PrepareRenameResponse>>> {
+    Some(
+        symbol(ws, uri, offset)?
+            .and_then(|symbol| {
+                validate_edit(&symbol)?;
+                Ok(Some(PrepareRenameResponse::RangeWithPlaceholder {
+                    range: ws.documents[uri]
+                        .text
+                        .range(symbol.query.start, symbol.query.end),
+                    placeholder: symbol.name,
+                }))
+            })
+            .map_err(|_| edit_error()),
+    )
+}
+
+pub(crate) fn rename(
+    ws: &Workspace,
+    uri: &Url,
+    offset: usize,
+    name: &str,
+) -> Option<jsonrpc::Result<Option<WorkspaceEdit>>> {
+    Some(symbol(ws, uri, offset)?.map_err(|_| edit_error()).and_then(|mut symbol| {
+        validate_edit(&symbol).map_err(|_| edit_error())?;
+        if !syntax::is_static_citation_key(name) || name == "*" {
+            return Err(jsonrpc::Error::invalid_params("Invalid bibliography key: use a nonempty literal key without separators or TeX expansion"));
+        }
+        if name == symbol.name { return Ok(Some(WorkspaceEdit::default())); }
+        let database = Database::new(&symbol.declaration.uri, &ws.documents[&symbol.declaration.uri]).map_err(|_| edit_error())?;
+        if database.declarations.contains_key(name) {
+            return Err(jsonrpc::Error::invalid_params("The bibliography key or IDS alias already exists in the declaration database"));
+        }
+        symbol.graphs.name = Some(name.into());
+        symbol.graphs.bindings.borrow_mut().clear();
+        let relation_owners: BTreeSet<_> = symbol.graphs.databases.iter().filter(|(_, database)| database.references.iter().any(|reference| reference.name == name)).map(|(uri, _)| uri).collect();
+        for project in symbol.graphs.projects.values() {
+            symbol.lexical.validate(&project.scope, true, name)?;
+            crate::resource_context::validate_rename(ws, &project.scope, name)?;
+            for view in project.graph.sections.iter().filter(|view| view.contains(&symbol.declaration.uri)) {
+                if symbol.graphs.bind(name, std::iter::once(view)).map_err(|_| edit_error())?.is_some() {
+                    return Err(jsonrpc::Error::invalid_params("The bibliography key or IDS alias already exists in a section consuming this declaration"));
+                }
+            }
+            for source in project.scope.iter().filter(|uri| ws.documents.get(*uri).is_some_and(|doc| doc.kind == DocumentKind::Latex)) {
+                for span in symbol.lexical.references(source, true, name) {
+                    let views = project.graph.occurrences.get(&(source.clone(), span.start, span.end)).ok_or_else(edit_error)?;
+                    if views.iter().any(|view| view.contains(&symbol.declaration.uri)) {
+                        return Err(jsonrpc::Error::invalid_params("Renaming this bibliography key would capture an existing citation"));
+                    }
+                }
+            }
+            if project.graph.sections.iter().filter(|view| view.contains(&symbol.declaration.uri)).any(|view| view.iter().any(|resource| relation_owners.contains(resource))) {
+                return Err(jsonrpc::Error::invalid_params("Renaming this bibliography key would capture an existing bibliography relation"));
+            }
+        }
+        let mut changes = BTreeMap::new();
+        for (uri, spans) in symbol.occurrences {
+            let doc = &ws.documents[&uri];
+            let mut edits: Vec<_> = spans.into_iter().map(|(start,end)| TextEdit {range: doc.text.range(start,end),new_text:name.into()}).collect();
+            if name.contains('"') { crate::features::brace_quoted_citation_edits(doc, &mut edits); }
+            changes.insert(uri, edits);
+        }
+        Ok(Some(crate::features::workspace_edit(ws, changes)))
+    }))
 }

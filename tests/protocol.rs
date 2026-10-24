@@ -28387,7 +28387,7 @@ fn bibliography_sections_preserve_raw_resource_headers_and_incremental_reference
     server.wait_exit(0);
 }
 #[test]
-fn section_resource_changes_reject_default_database_renames_and_restore_empty_list_interactions_over_stdio(
+fn section_resource_changes_rename_exact_default_identities_and_restore_empty_list_calls_over_stdio(
 ) {
     use latex_lsp::text::Text;
     for document_changes in [false, true] {
@@ -28423,8 +28423,18 @@ fn section_resource_changes_reject_default_database_renames_and_restore_empty_li
         );
         server.send(json!({"jsonrpc":"2.0","id":3,"method":"textDocument/rename","params":{"textDocument":{"uri":bib},"position":{"line":0,"character":8},"newName":"updated"}}));
         let response = server.until(|message| message["id"] == 3);
-        assert_eq!(response["error"]["code"], -32602, "{response}");
-        assert!(response["error"]["message"].is_string(), "{response}");
+        assert!(response.get("error").is_none(), "{response}");
+        let edit = &response["result"];
+        if document_changes {
+            let changes = edit["documentChanges"].as_array().unwrap();
+            assert_eq!(changes.len(), 1);
+            assert_eq!(changes[0]["textDocument"], json!({"uri":bib,"version":7}));
+            assert_eq!(changes[0]["edits"].as_array().unwrap().len(), 1);
+        } else {
+            let changes = edit["changes"].as_object().unwrap();
+            assert_eq!(changes.len(), 1);
+            assert_eq!(changes[bib.as_str()].as_array().unwrap().len(), 1);
+        }
         let updated = source.replace("[chosen]", "[]");
         server.notify(
             "textDocument/didChange",
@@ -29122,12 +29132,13 @@ fn selected_section_citation_targets_and_hover_follow_unsaved_root_changes_over_
             hover["range"],
             json!({"start":{"line":0,"character":6},"end":{"line":0,"character":15}})
         );
-        if !selector.is_empty() {
-            let bib = main.join(expected).unwrap();
-            server.send(json!({"jsonrpc":"2.0","id":id + 2,"method":"textDocument/rename","params":{"textDocument":{"uri":bib},"position":{"line":0,"character":8},"newName":"updated"}}));
-            let response = server.until(|message| message["id"] == id + 2);
-            assert_eq!(response["error"]["code"], -32602, "{response}");
-        }
+        let bib = main.join(expected).unwrap();
+        let edit=server.request(id+2,"textDocument/rename",json!({"textDocument":{"uri":bib},"position":{"line":0,"character":8},"newName":"updated"}));
+        let changes = edit["changes"].as_object().unwrap();
+        assert_eq!(changes.len(), 2, "{edit}");
+        let expected = json!([{"newText":"updated","range":{"start":{"line":0,"character":6},"end":{"line":0,"character":15}}}]);
+        assert_eq!(changes[bib.as_str()], expected);
+        assert_eq!(changes[chapter.as_str()], expected);
     }
     let default_source = source.replace("[chosen]", "[]");
     server.notify(
@@ -30029,4 +30040,158 @@ fn section_key_references_and_highlights_refresh_all_shared_consumers_over_stdio
     server.request(1000, "shutdown", Value::Null);
     server.notify("exit", Value::Null);
     server.wait_exit(0);
+}
+
+#[test]
+fn section_key_renames_preserve_versions_and_reject_capture_or_shared_conflicts_over_stdio() {
+    use latex_lsp::text::Text;
+    for versioned in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+        let selected = main.join("section.bib").unwrap();
+        let default = main.join("default.bib").unwrap();
+        let chapter = main.join("chapter.tex").unwrap();
+        let source = r"\documentclass{article}\usepackage{biblatex}\addbibresource{default.bib}\addsectionbib[label=chosen]{section.bib}\begin{document}\cite{parent,legacy}\newrefsection[chosen]\input{chapter}\end{document}";
+        let library =
+            "% 😀\r\n@book{parent,ids={legacy}}\r\n@book{child,crossref={parent},xref={legacy}}";
+        let calls = "% 😀\r\n\\cite{parent,legacy}";
+        for (name, text) in [
+            ("main.tex", source),
+            ("default.bib", library),
+            ("section.bib", library),
+            ("chapter.tex", calls),
+        ] {
+            std::fs::write(dir.path().join(name), text).unwrap();
+        }
+        let mut server = Server::start();
+        server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":versioned}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+        server.notify("initialized", json!({}));
+        for (uri, lang, text, version) in [
+            (&main, "latex", source, 5),
+            (&selected, "bibtex", library, 7),
+            (&chapter, "latex", calls, 9),
+        ] {
+            server.notify(
+                "textDocument/didOpen",
+                json!({"textDocument":{"uri":uri,"languageId":lang,"version":version,"text":text}}),
+            );
+        }
+        let declaration = Text::new(library.into()).range(
+            library.find("parent").unwrap(),
+            library.find("parent").unwrap() + 6,
+        );
+        let params = json!({"textDocument":{"uri":selected},"position":declaration.start});
+        assert_eq!(
+            server.request(2, "textDocument/prepareRename", params.clone()),
+            json!({"range":declaration,"placeholder":"parent"})
+        );
+        let mut rename = params.clone();
+        rename["newName"] = json!("updated");
+        let edit = server.request(3, "textDocument/rename", rename.clone());
+        let changes: std::collections::BTreeMap<Url, Vec<tower_lsp::lsp_types::TextEdit>> =
+            if versioned {
+                assert!(edit["changes"].is_null());
+                let changes = edit["documentChanges"].as_array().unwrap();
+                assert_eq!(changes.len(), 2);
+                changes
+                    .iter()
+                    .map(|change| {
+                        let uri: Url =
+                            serde_json::from_value(change["textDocument"]["uri"].clone()).unwrap();
+                        assert_eq!(
+                            change["textDocument"]["version"],
+                            if uri == selected { 7 } else { 9 }
+                        );
+                        (
+                            uri,
+                            serde_json::from_value(change["edits"].clone()).unwrap(),
+                        )
+                    })
+                    .collect()
+            } else {
+                assert!(edit["documentChanges"].is_null());
+                serde_json::from_value(edit["changes"].clone()).unwrap()
+            };
+        assert_eq!(changes.len(), 2);
+        assert!(!changes.contains_key(&main));
+        assert!(!changes.contains_key(&default));
+        assert_eq!(changes[&selected].len(), 2);
+        assert_eq!(changes[&chapter].len(), 1);
+        for (uri, mut edits) in changes {
+            let text = if uri == selected { library } else { calls };
+            edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
+            let updated = Text::new(text.into())
+                .changed(
+                    edits
+                        .into_iter()
+                        .map(
+                            |edit| tower_lsp::lsp_types::TextDocumentContentChangeEvent {
+                                range: Some(edit.range),
+                                range_length: None,
+                                text: edit.new_text,
+                            },
+                        )
+                        .collect(),
+                )
+                .unwrap()
+                .source;
+            server.notify("textDocument/didChange",json!({"textDocument":{"uri":uri,"version":if uri==selected{8}else{10}},"contentChanges":[{"text":updated}]}));
+        }
+        let references=server.request(4,"textDocument/references",json!({"textDocument":{"uri":selected},"position":declaration.start,"context":{"includeDeclaration":true}}));
+        assert_eq!(references.as_array().unwrap().len(), 3);
+        let default_references=server.request(5,"textDocument/references",json!({"textDocument":{"uri":default},"position":declaration.start,"context":{"includeDeclaration":true}}));
+        assert_eq!(default_references.as_array().unwrap().len(), 3);
+        assert!(default_references
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(
+                |location| location["uri"] == default.as_str() || location["uri"] == main.as_str()
+            ));
+        let other = main.join("unsaved.tex").unwrap();
+        server.notify("textDocument/didOpen",json!({"textDocument":{"uri":other,"languageId":"latex","version":11,"text":r"\documentclass{article}\usepackage{biblatex}\addbibresource{default.bib}\begin{document}\input{chapter}\end{document}"}}));
+        for (id, method, p) in [
+            (6, "textDocument/prepareRename", params.clone()),
+            (7, "textDocument/rename", rename.clone()),
+        ] {
+            server.send(json!({"jsonrpc":"2.0","id":id,"method":method,"params":p}));
+            let response = server.until(|message| message["id"] == id);
+            assert_eq!(response["error"]["code"], -32602, "{response}");
+        }
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":other}}),
+        );
+        server.notify("textDocument/didOpen",json!({"textDocument":{"uri":other,"languageId":"latex","version":12,"text":r"\documentclass{article}\usepackage{biblatex}\addbibresource{section.bib}\begin{document}\cite{updated,occupied}\end{document}"}}));
+        rename["newName"] = json!("occupied");
+        server.send(json!({"jsonrpc":"2.0","id":8,"method":"textDocument/rename","params":rename}));
+        let response = server.until(|message| message["id"] == 8);
+        assert_eq!(response["error"]["code"], -32602, "{response}");
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":other}}),
+        );
+        let edit = server.request(
+            9,
+            "textDocument/rename",
+            json!({"textDocument":{"uri":selected},"position":declaration.start,"newName":"again"}),
+        );
+        if versioned {
+            for change in edit["documentChanges"].as_array().unwrap() {
+                assert_eq!(
+                    change["textDocument"]["version"],
+                    if change["textDocument"]["uri"] == selected.as_str() {
+                        8
+                    } else {
+                        10
+                    }
+                );
+            }
+        } else {
+            assert_eq!(edit["changes"].as_object().unwrap().len(), 2);
+        }
+        server.request(1000, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
 }

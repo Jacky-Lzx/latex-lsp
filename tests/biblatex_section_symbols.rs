@@ -69,7 +69,13 @@ fn declarations_and_crossrefs_keep_default_and_selected_database_identities() {
         check(&ws, &bib, "@book{", Some((&bib, "parent")));
         check(&ws, &bib, "crossref={", Some((&bib, "parent")));
         check(&ws, &bib, "ids={", Some((&bib, "old")));
-        assert!(features::rename(&ws, &bib, Position::new(0, 8), "renamed").is_err());
+        let changes = features::rename(&ws, &bib, Position::new(0, 8), "renamed")
+            .unwrap()
+            .unwrap()
+            .changes
+            .unwrap();
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[&bib].len(), 2);
     }
 }
 

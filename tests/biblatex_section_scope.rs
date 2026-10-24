@@ -22,7 +22,7 @@ fn setup(header: &str) -> (tempfile::TempDir, Workspace, Url, Url, String) {
 }
 
 #[test]
-fn selected_sections_do_not_bind_keys_to_the_default_database_or_offer_partial_edits() {
+fn selected_sections_keep_their_identities_and_reject_unproved_edits() {
     for header in [
         r"\newrefsection[chosen]",
         r"\refsection[section.bib]",
@@ -47,8 +47,12 @@ fn selected_sections_do_not_bind_keys_to_the_default_database_or_offer_partial_e
             definitions.iter().all(|location| location.uri != bib),
             "{header}: {definitions:?}"
         );
-        assert!(
-            features::prepare_rename(&ws, &main, at).unwrap().is_none(),
+        assert_eq!(
+            features::prepare_rename(&ws, &main, at)
+                .ok()
+                .flatten()
+                .is_some(),
+            !definitions.is_empty(),
             "{header}"
         );
         assert_eq!(
@@ -79,8 +83,9 @@ fn selected_sections_do_not_bind_keys_to_the_default_database_or_offer_partial_e
                 "{header}: {detail}"
             );
         }
-        assert!(
-            features::rename(&ws, &bib, Position::new(0, 8), "updated").is_err(),
+        assert_eq!(
+            features::rename(&ws, &bib, Position::new(0, 8), "updated").is_ok(),
+            !definitions.is_empty(),
             "{header}"
         );
         let references = features::references(&ws, &bib, Position::new(0, 8), true);
@@ -185,13 +190,20 @@ fn imported_unsaved_section_readers_refresh_key_protection_and_preserve_independ
 
 #[test]
 #[ignore = "requires pdflatex, biblatex and Biber"]
-fn real_section_resources_reject_the_partial_rename_that_breaks_biber_resolution() {
+fn real_section_resources_never_repeat_a_partial_rename_that_breaks_biber_resolution() {
     for header in [
         r"\newrefsection[chosen]",
         r"\newcommand\run[1]{#1}\run{\newrefsection[chosen]}",
     ] {
         let (dir, ws, main, bib, source) = setup(header);
-        assert!(features::rename(&ws, &bib, Position::new(0, 8), "updated").is_err());
+        let edit = features::rename(&ws, &bib, Position::new(0, 8), "updated");
+        if !header.contains("run") {
+            let changes = edit.unwrap().unwrap().changes.unwrap();
+            assert_eq!(changes.len(), 1);
+            assert_eq!(changes[&bib].len(), 1);
+        } else {
+            assert!(edit.is_err());
+        }
         let source = source
             .replace(",absent", "")
             .replace(r"\end{document}", r"\printbibliography\end{document}");
