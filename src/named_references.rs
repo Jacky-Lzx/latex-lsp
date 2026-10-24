@@ -452,6 +452,16 @@ impl Index {
     }
 }
 pub(crate) fn may_contain_key(workspace: &Workspace, doc: &Document, offset: usize) -> bool {
+    // Literal reference keys cannot overlap a control sequence's own name.
+    // Keep the end boundary available for an adjacent single-token argument.
+    if doc
+        .syntax
+        .commands
+        .iter()
+        .any(|command| command.span.start <= offset && offset < command.span.end)
+    {
+        return false;
+    }
     let names = candidate_names(workspace);
     doc.syntax.commands.iter().any(|command| {
         (matches!(command.name.as_str(), "csuse" | "csname")

@@ -3173,9 +3173,26 @@ impl<'a> CommandSignatures<'a> {
         parsed: &syntax::Syntax,
     ) -> BTreeSet<usize> {
         let operands = self.argument_tokens(source, parsed);
-        let bodies = definition_body_spans(source, parsed);
-        let active =
-            |start| !operands.contains(&start) && !bodies.iter().any(|span| span.contains(&start));
+        let mut bodies = definition_body_spans(source, parsed);
+        bodies.sort_unstable_by_key(|span| span.start);
+        let mut merged: Vec<std::ops::Range<usize>> = Vec::new();
+        for span in bodies {
+            if let Some(previous) = merged
+                .last_mut()
+                .filter(|previous| span.start <= previous.end)
+            {
+                previous.end = previous.end.max(span.end);
+            } else {
+                merged.push(span);
+            }
+        }
+        let active = |start| {
+            !operands.contains(&start)
+                && !merged
+                    .partition_point(|span| span.start <= start)
+                    .checked_sub(1)
+                    .is_some_and(|index| merged[index].contains(&start))
+        };
         // A redefined endinput also ends the region we can interpret safely.
         let stop = parsed
             .commands

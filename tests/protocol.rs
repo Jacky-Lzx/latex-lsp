@@ -32056,3 +32056,97 @@ fn source_set_default_cross_file_requests_track_unsaved_early_book_or_missing_id
         server.wait_exit(0);
     }
 }
+
+#[test]
+fn large_source_projects_keep_navigation_and_unsaved_dependency_updates_responsive() {
+    use latex_lsp::text::Text;
+    let dir = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let mut source = String::from(r"\documentclass{article}\begin{document}");
+    let mut provider = String::new();
+    for file in 0..64 {
+        let mut body = String::new();
+        for item in 0..16 {
+            let mut index = file * 16 + item;
+            let mut name = String::from("symbol");
+            loop {
+                name.push((b'a' + (index % 26) as u8) as char);
+                index /= 26;
+                if index == 0 {
+                    break;
+                }
+            }
+            body.push_str(&format!(r"\newcommand{{\{name}}}{{Value}}"));
+        }
+        if file == 63 {
+            body.push_str(r"\newcommand{\lasttarget}{Done}");
+            provider = body.clone();
+        }
+        std::fs::write(dir.path().join(format!("chapter{file}.tex")), body).unwrap();
+        source.push_str(&format!(r"\input{{chapter{file}}}"));
+    }
+    source.push_str(r"\lasttarget\end{document}");
+    std::fs::write(dir.path().join("main.tex"), &source).unwrap();
+    std::fs::write(
+        dir.path().join("unrelated.tex"),
+        r"\newcommand{\lasttarget}{Outside}",
+    )
+    .unwrap();
+    let dependency = main.join("chapter63.tex").unwrap();
+    let span = |text: &str, needle: &str| {
+        let at = text.rfind(needle).unwrap() + 1;
+        Text::new(text.into()).range(at, at + needle.len() - 1)
+    };
+    let query = span(&source, r"\lasttarget");
+    let start = source.rfind(r"\lasttarget").unwrap();
+    let query_edit = Text::new(source.clone()).range(start, start + r"\lasttarget".len());
+    let start = provider.rfind(r"\lasttarget").unwrap();
+    let definition = Text::new(provider.clone()).range(start, start + r"\lasttarget".len());
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":main,"languageId":"latex","version":5,"text":source}}),
+    );
+    let request = json!({"textDocument":{"uri":main},"position":query.start});
+    let expected = json!([{"uri":dependency,"range":definition}]);
+    assert_eq!(
+        server.request(2, "textDocument/definition", request.clone()),
+        expected
+    );
+    let edit = server.request(
+        3,
+        "textDocument/rename",
+        json!({"textDocument":{"uri":main},"position":query.start,"newName":"renamedtarget"}),
+    );
+    let edits = edit["documentChanges"].as_array().unwrap();
+    assert_eq!(edits.len(), 2, "{edit}");
+    for (uri, version, range) in [
+        (&main, json!(5), query_edit),
+        (&dependency, json!(null), definition),
+    ] {
+        let entry = edits
+            .iter()
+            .find(|entry| entry["textDocument"]["uri"] == uri.as_str())
+            .unwrap();
+        assert_eq!(entry["textDocument"]["version"], version);
+        assert_eq!(
+            entry["edits"],
+            json!([{"range":range,"newText":r"\renamedtarget"}])
+        );
+    }
+    server.notify("textDocument/didOpen",json!({"textDocument":{"uri":dependency,"languageId":"latex","version":8,"text":provider.replace("lasttarget","othertarget")}}));
+    assert_eq!(
+        server.request(4, "textDocument/definition", request.clone()),
+        json!([])
+    );
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":dependency}}),
+    );
+    assert_eq!(
+        server.request(5, "textDocument/definition", request),
+        expected
+    );
+}

@@ -301,7 +301,14 @@ impl Workspace {
                 .flat_map(|uri| self.source_roots(uri))
                 .collect();
             for root in roots {
-                self.load_dependencies_inner(&root, &root, 0, &mut BTreeSet::new(), false);
+                self.load_dependencies_inner(
+                    &root,
+                    &root,
+                    0,
+                    &mut BTreeSet::new(),
+                    false,
+                    &mut None,
+                );
             }
         }
     }
@@ -469,7 +476,24 @@ impl Workspace {
         if !self.documents.contains_key(uri) {
             return vec![];
         }
-        let mut dependencies = self.source_dependencies_from(uri, root);
+        let inputs = crate::source_inputs::Index::new(self, root);
+        self.dependencies_with_inputs(uri, root, &inputs)
+    }
+
+    fn dependencies_with_inputs(
+        &self,
+        uri: &Url,
+        root: &Url,
+        inputs: &crate::source_inputs::Index,
+    ) -> Vec<Url> {
+        if !self.documents.contains_key(uri) {
+            return vec![];
+        }
+        let mut dependencies = self
+            .source_dependencies_with_inputs(uri, root, inputs)
+            .into_iter()
+            .map(|(uri, _)| uri)
+            .collect::<Vec<_>>();
         if uri == root {
             if let Some(recorded) = self.recorded_inputs.get(root) {
                 // Recorder suffixes cannot distinguish displayed TeX code
@@ -485,15 +509,12 @@ impl Workspace {
         dependencies
     }
 
-    fn source_dependencies_from(&self, uri: &Url, root: &Url) -> Vec<Url> {
-        self.source_dependencies_with_kinds(uri, root)
-            .into_iter()
-            .map(|(uri, _)| uri)
-            .collect()
-    }
-
-    fn source_dependencies_with_kinds(&self, uri: &Url, root: &Url) -> Vec<(Url, DocumentKind)> {
-        let inputs = crate::source_inputs::Index::new(self, root);
+    fn source_dependencies_with_inputs(
+        &self,
+        uri: &Url,
+        root: &Url,
+        inputs: &crate::source_inputs::Index,
+    ) -> Vec<(Url, DocumentKind)> {
         let mut dependencies = inputs.literal_dependencies(self, uri, root);
         dependencies.extend(
             inputs
@@ -643,22 +664,37 @@ impl Workspace {
 
     /// Explicit source traversal, independent of recorder and data inputs.
     pub(crate) fn source_documents_from(&self, source: &Url, root: &Url) -> BTreeSet<Url> {
+        let inputs = crate::source_inputs::Index::new(self, root);
         let mut visited = BTreeSet::new();
         let mut pending = vec![source.clone()];
         while let Some(uri) = pending.pop() {
             if visited.insert(uri.clone()) {
-                pending.extend(self.source_dependencies_from(&uri, root));
+                pending.extend(
+                    self.source_dependencies_with_inputs(&uri, root, &inputs)
+                        .into_iter()
+                        .map(|(uri, _)| uri),
+                );
             }
         }
         visited
     }
 
     pub(crate) fn project_documents_from(&self, source: &Url, root: &Url) -> BTreeSet<Url> {
+        let inputs = crate::source_inputs::Index::new(self, root);
+        self.project_documents_with_inputs(source, root, &inputs)
+    }
+
+    fn project_documents_with_inputs(
+        &self,
+        source: &Url,
+        root: &Url,
+        inputs: &crate::source_inputs::Index,
+    ) -> BTreeSet<Url> {
         let mut visited = BTreeSet::new();
         let mut pending = vec![source.clone()];
         while let Some(uri) = pending.pop() {
             if visited.insert(uri.clone()) {
-                pending.extend(self.dependencies_from(&uri, root));
+                pending.extend(self.dependencies_with_inputs(&uri, root, inputs));
             }
         }
         visited
@@ -689,7 +725,10 @@ impl Workspace {
                         .is_some()
             });
         let mut scope: BTreeSet<_> = if let Some(root) = selected {
-            self.project_documents(&root)
+            regions
+                .get(&root)
+                .cloned()
+                .unwrap_or_else(|| self.project_documents(&root))
         } else {
             regions
                 .values()
@@ -784,9 +823,10 @@ impl Workspace {
     /// Static bibliography references retain their role even when their
     /// physical targets have unrelated suffixes or cannot be parsed as UTF-8.
     pub(crate) fn bibliography_files(&self, root: &Url) -> BTreeSet<Url> {
-        self.project_documents(root)
+        let inputs = crate::source_inputs::Index::new(self, root);
+        self.project_documents_with_inputs(root, root, &inputs)
             .into_iter()
-            .flat_map(|uri| self.source_dependencies_with_kinds(&uri, root))
+            .flat_map(|uri| self.source_dependencies_with_inputs(&uri, root, &inputs))
             .filter_map(|(uri, kind)| (kind != DocumentKind::Latex).then_some(uri))
             .collect()
     }
@@ -795,8 +835,14 @@ impl Workspace {
     pub fn project_files(&self, root: &Url) -> BTreeSet<Url> {
         let mut files = self.project_documents(root);
         files.extend(crate::code_inputs::inputs(self, root));
+        let image_calls = crate::graphics::calls(self, root);
         let images: BTreeSet<_> = files
             .iter()
+            .filter(|uri| {
+                image_calls
+                    .get(*uri)
+                    .is_some_and(|calls| calls.iter().any(|call| call.certain))
+            })
             .flat_map(|uri| crate::graphics::images_in(self, uri, root))
             .collect();
         files.extend(images);
@@ -888,7 +934,8 @@ impl Workspace {
             .filter(|(candidate, _)| {
                 *candidate != uri
                     && self.is_saved_root(candidate)
-                    && self.project_files(candidate).contains(uri)
+                    && (self.project_documents(candidate).contains(uri)
+                        || self.project_files(candidate).contains(uri))
             })
             .map(|(uri, _)| uri.clone())
             .collect::<Vec<_>>();
@@ -1199,14 +1246,14 @@ impl Workspace {
     }
 
     pub fn load_dependencies(&mut self, uri: &Url, depth: usize) {
-        self.load_dependencies_inner(uri, uri, depth, &mut BTreeSet::new(), false);
+        self.load_dependencies_inner(uri, uri, depth, &mut BTreeSet::new(), false, &mut None);
         self.refresh_context();
     }
 
     /// Reload each saved dependency before walking its includes: closed child
     /// files may have gained new dependencies since the previous build.
     pub fn refresh_project(&mut self, root: &Url) {
-        self.load_dependencies_inner(root, root, 0, &mut BTreeSet::new(), true);
+        self.load_dependencies_inner(root, root, 0, &mut BTreeSet::new(), true, &mut None);
         self.refresh_context();
         // Displayed .tex files may already have been scanned as documents.
         // Refresh closed text without following its apparent LaTeX commands.
@@ -1224,8 +1271,10 @@ impl Workspace {
         depth: usize,
         visited: &mut BTreeSet<Url>,
         refresh: bool,
+        inputs: &mut Option<crate::source_inputs::Index>,
     ) {
         if depth >= self.config.indexing.max_depth {
+            *inputs = None;
             self.index_truncated.insert("maxDepth".into());
             return;
         }
@@ -1234,11 +1283,15 @@ impl Workspace {
         }
         if refresh {
             self.reload_document(uri, self.documents.contains_key(uri));
+            *inputs = None;
         }
         let mut followed = BTreeSet::new();
         loop {
+            // Share a root interpretation until loading or reparsing changes
+            // its inputs. Parent loops then rebuild to discover new aliases.
+            let index = inputs.get_or_insert_with(|| crate::source_inputs::Index::new(self, root));
             let dependencies: Vec<_> = self
-                .dependencies_from(uri, root)
+                .dependencies_with_inputs(uri, root, index)
                 .into_iter()
                 .filter(|dependency| !followed.contains(dependency))
                 .collect();
@@ -1246,7 +1299,7 @@ impl Workspace {
                 break;
             }
             let sources: BTreeMap<_, _> = self
-                .source_dependencies_with_kinds(uri, root)
+                .source_dependencies_with_inputs(uri, root, index)
                 .into_iter()
                 .collect();
             for dependency in dependencies {
@@ -1255,16 +1308,28 @@ impl Workspace {
                 }
                 if let Some(kind) = sources.get(&dependency) {
                     if let Some(doc) = self.documents.get_mut(&dependency) {
+                        if doc.kind != *kind {
+                            *inputs = None;
+                        }
                         doc.set_kind_hint(*kind);
                     } else {
                         self.reload_document_as(&dependency, true, Some(*kind));
+                        *inputs = None;
                     }
                 } else if !self.documents.contains_key(&dependency) {
                     // Recorder-only data stays unparsed; explicit includes
                     // retain their source role even for unusual extensions.
                     self.reload_document(&dependency, false);
+                    *inputs = None;
                 }
-                self.load_dependencies_inner(&dependency, root, depth + 1, visited, refresh);
+                self.load_dependencies_inner(
+                    &dependency,
+                    root,
+                    depth + 1,
+                    visited,
+                    refresh,
+                    inputs,
+                );
             }
             // Newly loaded local declarations can expose another source alias
             // in this parent, even when the parent itself did not change.
