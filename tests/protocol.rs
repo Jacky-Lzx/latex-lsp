@@ -33816,3 +33816,120 @@ fn textual_bibliography_tests_follow_versions_and_unsaved_predicate_meanings() {
         server.wait_exit(0);
     }
 }
+
+#[test]
+fn nondeferred_compiled_citation_hints_follow_bbl_artifacts_modes_and_updates() {
+    use latex_lsp::text::Text;
+    let dir = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let bib = main.join("data.bib").unwrap();
+    let source="% 😀\r\n\\documentclass{article}\\usepackage[style=numeric,sorting=none]{biblatex}\\addbibresource{data.bib}\\begin{document}\\cite{z,a}\\newrefsection\\cite{a}\\nocite{z}\\label{target}\\ref{target}\\end{document}";
+    std::fs::write(dir.path().join("main.tex"), source).unwrap();
+    std::fs::write(
+        dir.path().join("data.bib"),
+        "@book{a,title={Alpha}} @book{z,title={Zulu}}",
+    )
+    .unwrap();
+    std::fs::create_dir(dir.path().join("build output")).unwrap();
+    let prologue = r"% $ biblatex auxiliary file $
+% $ biblatex bbl format version 3.3 $
+\begingroup\makeatletter\@ifundefined{ver@biblatex.sty}{\@latex@error{Missing 'biblatex' package}{The bibliography requires the 'biblatex' package.}\aftergroup\endinput}{}\endgroup
+";
+    let context = "none/global//global/global/global";
+    let list = |section, keys: &[&str]| {
+        format!(
+            r"\refsection{{{section}}}\datalist[entry]{{{context}}}{}\enddatalist\endrefsection",
+            keys.iter()
+                .map(|key| format!(
+                    r"\entry{{{key}}}{{book}}{{}}{{}}\field{{title}}{{Data}}\endentry"
+                ))
+                .collect::<String>()
+        )
+    };
+    let normal = prologue.to_string() + &list(0, &["z", "a"]) + &list(1, &["a"]) + r"\endinput";
+    let changed = prologue.to_string() + &list(0, &["a", "z"]) + &list(1, &["a"]) + r"\endinput";
+    let artifact = dir.path().join("build output/custom.bbl");
+    std::fs::write(&artifact, &normal).unwrap();
+    std::fs::write(dir.path().join("main.bbl"), &changed).unwrap();
+    let record = |section, key, number| {
+        format!(
+            r"\abx@aux@number{{99}}{{{key}}}{{{section}}}{{{context}}}{{{number}}}\abx@aux@defaultrefcontext{{{section}}}{{{key}}}{{{context}}}"
+        )
+    };
+    std::fs::write(
+        dir.path().join("build output/custom.aux"),
+        record(0, "z", 7)
+            + &record(0, "a", 8)
+            + &record(1, "a", 9)
+            + r"\bibcite{a}{99}\newlabel{target}{{4}{9}}",
+    )
+    .unwrap();
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{},"initializationOptions":{"distribution":{"enabled":false},"build":{"outputDirectory":"build output","jobName":"custom"}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":main,"languageId":"latex","version":3,"text":source}}),
+    );
+    let params = json!({"textDocument":{"uri":main},"range":{"start":{"line":0,"character":0},"end":{"line":3,"character":0}}});
+    let labels = |value: &Value| {
+        value
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|hint| hint["label"].clone())
+            .collect::<Vec<_>>()
+    };
+    let initial = server.request(2, "textDocument/inlayHint", params.clone());
+    assert_eq!(
+        labels(&initial),
+        vec![json!("→ 1"), json!("→ 2"), json!("→ 1"), json!("→ 4, p. 9")]
+    );
+    let at = source.find(r"\cite{z,a}").unwrap() + 7;
+    assert_eq!(
+        initial[0]["position"],
+        serde_json::to_value(Text::new(source.into()).position(at)).unwrap()
+    );
+    server.notify("textDocument/didChange",json!({"textDocument":{"uri":main,"version":4},"contentChanges":[{"text":source.replace("sorting=none","sorting=none,defernumbers=true")}]}));
+    assert_eq!(
+        labels(&server.request(3, "textDocument/inlayHint", params.clone())),
+        vec![json!("→ 7"), json!("→ 8"), json!("→ 9"), json!("→ 4, p. 9")]
+    );
+    std::fs::write(&artifact, normal.clone() + r"\unknown").unwrap();
+    assert_eq!(
+        labels(&server.request(4, "textDocument/inlayHint", params.clone())),
+        vec![json!("→ 7"), json!("→ 8"), json!("→ 9"), json!("→ 4, p. 9")]
+    );
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":main}}),
+    );
+    assert_eq!(
+        labels(&server.request(5, "textDocument/inlayHint", params.clone())),
+        vec![json!("→ 4, p. 9")]
+    );
+    std::fs::write(&artifact, &changed).unwrap();
+    assert_eq!(
+        labels(&server.request(6, "textDocument/inlayHint", params.clone())),
+        vec![json!("→ 2"), json!("→ 1"), json!("→ 1"), json!("→ 4, p. 9")]
+    );
+    server.notify("textDocument/didOpen",json!({"textDocument":{"uri":bib,"languageId":"bibtex","version":8,"text":"@preamble{\\unknown} @book{a} @book{z}"}}));
+    assert_eq!(
+        labels(&server.request(7, "textDocument/inlayHint", params.clone())),
+        vec![json!("→ 4, p. 9")]
+    );
+    server.notify("textDocument/didClose", json!({"textDocument":{"uri":bib}}));
+    assert_eq!(
+        labels(&server.request(8, "textDocument/inlayHint", params.clone())),
+        vec![json!("→ 2"), json!("→ 1"), json!("→ 1"), json!("→ 4, p. 9")]
+    );
+    assert_eq!(server.request(9,"textDocument/inlayHint",json!({"textDocument":{"uri":main},"range":{"start":{"line":2,"character":0},"end":{"line":3,"character":0}}})),json!([]));
+    server.notify("workspace/didChangeConfiguration",json!({"settings":{"distribution":{"enabled":false},"build":{"outputDirectory":"build output","jobName":"custom"},"inlayHints":{"citations":false}}}));
+    assert_eq!(
+        labels(&server.request(10, "textDocument/inlayHint", params)),
+        vec![json!("→ 4, p. 9")]
+    );
+    server.request(11, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

@@ -13,17 +13,17 @@ use tower_lsp::lsp_types::{Position, Range, Url};
 enum Mode {
     Classic,
     Unknown,
-    Numeric,
+    Numeric(bool),
 }
 
 fn numeric_style(value: &str) -> bool {
     matches!(value, "numeric" | "numeric-comp" | "numeric-verb")
 }
 
-fn options(source: &str, end: usize) -> Option<bool> {
+fn options(source: &str, end: usize) -> Option<(bool, bool)> {
     let at = syntax::skip_space(source, end);
     if source.as_bytes().get(at) != Some(&b'[') {
-        return Some(false);
+        return Some((false, false));
     }
     let end = syntax::optional_note_end(source, at)?;
     let source = &source[at + 1..end - 1];
@@ -31,6 +31,7 @@ fn options(source: &str, end: usize) -> Option<bool> {
         return None;
     }
     let mut numeric = false;
+    let mut deferred = false;
     for span in syntax::key_list_segments(source, 0..source.len()) {
         let option = source[span].trim();
         if option.is_empty() {
@@ -53,10 +54,15 @@ fn options(source: &str, end: usize) -> Option<bool> {
                 return None;
             }
             numeric |= key != "bibstyle";
+        } else if key == "defernumbers" {
+            deferred = match value.as_str() {
+                "true" => true,
+                "false" => false,
+                _ => return None,
+            };
         } else if !matches!(
             key,
             "sorting"
-                | "defernumbers"
                 | "backend"
                 | "maxnames"
                 | "minnames"
@@ -74,11 +80,12 @@ fn options(source: &str, end: usize) -> Option<bool> {
             return None;
         }
     }
-    Some(numeric)
+    Some((numeric, deferred))
 }
 
 fn mode(docs: &[(Url, &Document)], signatures: &CommandSignatures<'_>) -> Mode {
     let mut backend = false;
+    let mut deferred = false;
     let mut numeric = false;
     let mut uncertain = false;
     let mut packages = 0usize;
@@ -116,6 +123,8 @@ fn mode(docs: &[(Url, &Document)], signatures: &CommandSignatures<'_>) -> Mode {
                             | "AtEveryCitekey"
                             | "AtEveryBibitem"
                             | "AtDataInput"
+                            | "AtEveryEntrykey"
+                            | "AtBeginBibliography"
                             | "clearfield"
                             | "restorefield"
                             | "DeclareFieldInputHandler"
@@ -161,7 +170,10 @@ fn mode(docs: &[(Url, &Document)], signatures: &CommandSignatures<'_>) -> Mode {
             uncertain |=
                 canonical != name || names.len() != 1 || canonical == "RequirePackageWithOptions";
             match options(source, span.end) {
-                Some(value) => numeric |= value,
+                Some((value, defer)) => {
+                    numeric |= value;
+                    deferred = defer;
+                }
                 None => uncertain = true,
             }
         }
@@ -171,7 +183,7 @@ fn mode(docs: &[(Url, &Document)], signatures: &CommandSignatures<'_>) -> Mode {
     } else if uncertain || packages != 1 || !numeric {
         Mode::Unknown
     } else {
-        Mode::Numeric
+        Mode::Numeric(deferred)
     }
 }
 
@@ -204,7 +216,7 @@ pub(crate) fn numbers(
     if modes.iter().all(|mode| *mode == Mode::Classic) {
         return None;
     }
-    if modes.iter().any(|mode| *mode != Mode::Numeric) {
+    if modes.iter().any(|mode| !matches!(mode, Mode::Numeric(_))) {
         return Some(Vec::new());
     }
     let printing: BTreeSet<_> = crate::reference_diagnostics::section_hint_occurrences(ws, uri)
@@ -217,9 +229,13 @@ pub(crate) fn numbers(
     }
     let mut common = None::<BTreeMap<(usize, usize), Option<String>>>;
     let mut work = 0usize;
-    for project in projects {
-        let Some((labels, bytes)) = crate::auxiliary::numeric_citation_labels(ws, &project.root)
-        else {
+    for (project, mode) in projects.into_iter().zip(modes) {
+        let compiled = if mode == Mode::Numeric(true) {
+            crate::auxiliary::numeric_citation_labels(ws, &project.root)
+        } else {
+            crate::bib_bbl::numeric_labels(ws, &project.root)
+        };
+        let Some((labels, bytes)) = compiled else {
             return Some(Vec::new());
         };
         work += bytes;

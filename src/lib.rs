@@ -2,6 +2,7 @@ mod anchors;
 mod auxiliary;
 mod bib_accessors;
 mod bib_aliases;
+mod bib_bbl;
 mod bib_categories;
 mod bib_compiled;
 mod bib_completion;
