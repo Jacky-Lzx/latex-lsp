@@ -11,6 +11,9 @@ use std::collections::{BTreeMap, BTreeSet};
 /// bibliography entries cannot certify a citation target or a complete rename.
 /// Captured readers remain possible even after their original is redefined.
 pub(crate) fn selects_resources(docs: &[&Document], signatures: &CommandSignatures<'_>) -> bool {
+    if crate::bib_manual::needed(docs, signatures) {
+        return true;
+    }
     let discarded = std::cell::OnceCell::new();
     let mut parameter_work = 0usize;
     let mut users = BTreeMap::<String, Vec<(String, bool)>>::new();

@@ -773,7 +773,7 @@ fn symbol<'a>(ws: &'a Workspace, uri: &Url, offset: usize) -> Option<Result<Symb
     let doc = ws.documents.get(uri)?;
     if !ws.documents.values().any(|doc| {
         doc.kind == DocumentKind::Latex
-            && (doc.text.source.contains("refsection")
+            && ((doc.text.source.contains("refsection") || doc.text.source.contains("bibitem"))
                 || doc.syntax.commands.iter().any(|command| {
                     matches!(command.name.as_str(), "defbibentryset" | "csuse" | "csname")
                 }))

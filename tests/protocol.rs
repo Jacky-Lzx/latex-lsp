@@ -33492,3 +33492,117 @@ fn coupled_raw_ids_owners_keep_exact_edits_versions_and_unsaved_closure() {
         server.wait_exit(0);
     }
 }
+
+#[test]
+fn handwritten_items_keep_biblatex_namespaces_versions_and_unsaved_providers_separate() {
+    use latex_lsp::text::Text;
+    for numeric in [false, true] {
+        for document_changes in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+            let bib = main.join("data.bib").unwrap();
+            let provider = main.join("manual.tex").unwrap();
+            let source = format!("% 😀\r\n\\documentclass{{article}}\\usepackage{{biblatex}}\\addbibresource{{data.bib}}\\begin{{document}}{}\\cite{{parent,manual}}\\input{{manual}}\\end{{document}}", if numeric {r"\newrefsection"} else {""});
+            let library = "% 😀\r\n@book{parent,title={Database parent}}";
+            let items = "% 😀\r\n\\begin{thebibliography}{9}\\bibitem{parent}Manual parent\\bibitem{manual}Manual only\\end{thebibliography}";
+            for (name, text) in [
+                ("main.tex", source.as_str()),
+                ("data.bib", library),
+                ("manual.tex", items),
+            ] {
+                std::fs::write(dir.path().join(name), text).unwrap();
+            }
+            std::fs::write(
+                dir.path().join("main.aux"),
+                r"\bibcite{parent}{Manual}\bibcite{manual}{2}",
+            )
+            .unwrap();
+            let range = |source: &str, prefix: &str, key: &str| {
+                let at = source.find(prefix).unwrap() + prefix.len();
+                assert_eq!(&source[at..at + key.len()], key);
+                Text::new(source.into()).range(at, at + key.len())
+            };
+            let call = range(&source, r"\cite{", "parent");
+            let missing = range(&source, r"\cite{parent,", "manual");
+            let declaration = range(library, "@book{", "parent");
+            let mut server = Server::start();
+            server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":document_changes}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+            server.notify("initialized", json!({}));
+            for (uri, text, language, version) in [
+                (&main, source.as_str(), "latex", 5),
+                (&bib, library, "bibtex", 7),
+            ] {
+                server.notify("textDocument/didOpen",json!({"textDocument":{"uri":uri,"languageId":language,"version":version,"text":text}}));
+            }
+            let query = json!({"textDocument":{"uri":main},"position":call.start});
+            let params =
+                json!({"textDocument":{"uri":main},"position":call.start,"newName":"fresh"});
+            assert_eq!(
+                server.request(2, "textDocument/definition", query.clone()),
+                json!([{"uri":bib,"range":declaration}])
+            );
+            assert_eq!(
+                server.request(
+                    3,
+                    "textDocument/definition",
+                    json!({"textDocument":{"uri":main},"position":missing.start})
+                ),
+                json!([])
+            );
+            let report = server.request(
+                4,
+                "textDocument/diagnostic",
+                json!({"textDocument":{"uri":main}}),
+            );
+            let warnings: Vec<_> = report["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|item| item["code"] == "undefined-citation")
+                .collect();
+            assert_eq!(warnings.len(), 1, "{report}");
+            assert_eq!(warnings[0]["range"], json!(missing));
+            assert_eq!(server.request(40,"textDocument/inlayHint",json!({"textDocument":{"uri":main},"range":{"start":{"line":0,"character":0},"end":{"line":3,"character":0}}})),json!([]));
+            assert_eq!(server.request(5,"textDocument/references",json!({"textDocument":{"uri":main},"position":call.start,"context":{"includeDeclaration":true}})).as_array().unwrap().len(),2);
+            let edit = server.request(6, "textDocument/rename", params.clone());
+            for (uri, version, range) in [(&main, 5, call), (&bib, 7, declaration)] {
+                let expected = json!([{"range":range,"newText":"fresh"}]);
+                if document_changes {
+                    let docs = edit["documentChanges"].as_array().unwrap();
+                    assert_eq!(docs.len(), 2);
+                    let doc = docs
+                        .iter()
+                        .find(|doc| doc["textDocument"]["uri"] == uri.as_str())
+                        .unwrap();
+                    assert_eq!(doc["textDocument"]["version"], version);
+                    assert_eq!(doc["edits"], expected);
+                } else {
+                    assert_eq!(edit["changes"].as_object().unwrap().len(), 2);
+                    assert_eq!(edit["changes"][uri.as_str()], expected);
+                }
+            }
+            server.notify("textDocument/didOpen",json!({"textDocument":{"uri":provider,"languageId":"latex","version":8,"text":r"\renewcommand\bibitem[1]{}\bibitem{parent}"}}));
+            assert_eq!(
+                server.request(7, "textDocument/definition", query.clone()),
+                json!([])
+            );
+            server.send(json!({"jsonrpc":"2.0","id":8,"method":"textDocument/rename","params":params.clone()}));
+            assert_eq!(
+                server.until(|message| message["id"] == 8)["error"]["code"],
+                -32602
+            );
+            server.notify(
+                "textDocument/didClose",
+                json!({"textDocument":{"uri":provider}}),
+            );
+            assert_eq!(
+                server.request(9, "textDocument/definition", query),
+                json!([{"uri":bib,"range":declaration}])
+            );
+            assert_eq!(server.request(10, "textDocument/rename", params), edit);
+            server.request(1000, "shutdown", Value::Null);
+            server.notify("exit", Value::Null);
+            server.wait_exit(0);
+        }
+    }
+}

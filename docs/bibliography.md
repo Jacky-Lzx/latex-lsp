@@ -301,3 +301,12 @@ cargo test --locked --test protocol coupled_raw_ids_owners_
 ```
 
 测试核验两个分区的完整 BBL 在改名归一化后一致、三个库经多个别名关联时的完整编辑、独立项目隔离及未保存消费者。协议精确验证两种工作区编辑格式、六处编辑、三个文件的版本与关闭恢复；普通引用结果仍只包含各自声明身份。
+
+手写文献与 biblatex 后台命名空间回归：
+
+```sh
+cargo test --locked --test biblatex_manual_namespace -- --include-ignored
+cargo test --locked --test protocol handwritten_items_keep_biblatex_
+```
+
+覆盖普通项目、数字分区、静态命名条目、完整数据库改名、候选及缺失诊断、未保存输入与关闭恢复。原生对照核验改名前后完整 BBL 一致，手写条目的 `bibcite` 保持不动；协议精确验证两种编辑格式、版本、UTF-16 位置及传统辅助记录不会误用于后台引用提示。

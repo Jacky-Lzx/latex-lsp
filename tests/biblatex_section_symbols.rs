@@ -429,7 +429,24 @@ fn source_key_declarations_protect_database_targets_without_disabling_resource_l
         let static_set = declaration.starts_with(r"\defbibentryset")
             || declaration.starts_with(r"\csuse{")
             || declaration.starts_with(r"\csname ");
-        if static_set {
+        let handwritten = declaration.starts_with(r"\begin{thebibliography}");
+        if handwritten {
+            let bib = main.join("section.bib").unwrap();
+            let entry = &ws.documents[&bib].syntax.citations[0];
+            assert_eq!(
+                features::definitions(&ws, &main, position),
+                vec![Location::new(
+                    bib.clone(),
+                    ws.documents[&bib]
+                        .text
+                        .range(entry.span.start, entry.span.end)
+                )]
+            );
+            assert!(features::hover(&ws, &main, position).is_some());
+            assert!(features::completion(&ws, &main, position)
+                .iter()
+                .any(|item| item.label == "parent"));
+        } else if static_set {
             let start = doc.text.source.find("{parent}").unwrap() + 1;
             assert_eq!(
                 features::definitions(&ws, &main, position),
@@ -450,7 +467,9 @@ fn source_key_declarations_protect_database_targets_without_disabling_resource_l
         }
         for name in ["default.bib", "section.bib"] {
             let bib = main.join(name).unwrap();
-            if static_set {
+            if handwritten {
+                check(&ws, &bib, "crossref={", Some((&bib, "parent")));
+            } else if static_set {
                 check(
                     &ws,
                     &bib,

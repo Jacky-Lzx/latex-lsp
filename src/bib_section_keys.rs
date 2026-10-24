@@ -1047,11 +1047,17 @@ fn valid_sources(docs: &[(Url, &Document)], signatures: &CommandSignatures<'_>) 
         })
 }
 
-// Dynamic sets and handwritten bibliography items share the key namespace.
-// A resource-only model cannot certify their section-dependent identities.
+// Dynamic sets need a separate model. Native handwritten bibliography entries
+// belong to the traditional bibliography namespace, independent of biblatex keys.
 fn database_only(docs: &[(Url, &Document)], signatures: &CommandSignatures<'_>) -> bool {
-    docs.iter().all(|(_, doc)| {
-        if !doc.syntax.citations.is_empty() {
+    let manual = crate::bib_manual::items(docs, signatures);
+    docs.iter().all(|(uri, doc)| {
+        if doc.syntax.citations.iter().any(|entry| {
+            !manual
+                .as_ref()
+                .and_then(|items| items.get(uri))
+                .is_some_and(|spans| spans.contains(&(entry.span.start, entry.span.end)))
+        }) {
             return false;
         }
         let context = Context::new(doc, signatures);
@@ -1074,6 +1080,7 @@ fn database_only(docs: &[(Url, &Document)], signatures: &CommandSignatures<'_>) 
                     .unwrap_or((&command.name, command.span.clone()));
                 ["defbibentryset", "bibitem"]
                     .iter()
+                    .filter(|builtin| **builtin != "bibitem" || manual.is_none())
                     .any(|builtin| name == *builtin || signatures.invokes_builtin(name, builtin))
             })
     })
@@ -1391,17 +1398,25 @@ fn target(ws: &Workspace, uri: &Url, offset: usize, purpose: Purpose) -> Option<
         .documents
         .get(uri)
         .filter(|doc| doc.kind == DocumentKind::Latex)?;
-    if !ws
-        .documents
-        .values()
-        .any(|doc| doc.kind == DocumentKind::Latex && doc.text.source.contains("refsection"))
-        || !ws.index_truncated.is_empty()
+    if !ws.documents.values().any(|doc| {
+        doc.kind == DocumentKind::Latex
+            && (doc.text.source.contains("refsection") || doc.text.source.contains("bibitem"))
+    }) || !ws.index_truncated.is_empty()
     {
         return None;
     }
     let Some((selected, projects)) = section_projects(ws, uri) else {
         return incomplete(ws, uri, offset, purpose);
     };
+    if selected
+        && doc
+            .syntax
+            .citations
+            .iter()
+            .any(|entry| entry.span.start <= offset && offset <= entry.span.end)
+    {
+        return Some(None);
+    }
     if !selected
         || !projects
             .iter()
@@ -1585,10 +1600,10 @@ pub(crate) type ResourceMap = BTreeMap<(usize, usize), Arc<BTreeSet<Url>>>;
 pub(crate) fn occurrence_resources(ws: &Workspace, uri: &Url) -> Option<ResourceMap> {
     let doc = ws.documents.get(uri)?;
     if doc.kind != DocumentKind::Latex
-        || !ws
-            .documents
-            .values()
-            .any(|doc| doc.kind == DocumentKind::Latex && doc.text.source.contains("refsection"))
+        || !ws.documents.values().any(|doc| {
+            doc.kind == DocumentKind::Latex
+                && (doc.text.source.contains("refsection") || doc.text.source.contains("bibitem"))
+        })
     {
         return None;
     }
