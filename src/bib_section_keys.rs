@@ -688,6 +688,42 @@ impl Analysis<'_, '_> {
                 }
                 self.labels.as_mut().unwrap().seen = true;
             }
+            if name == "assignrefcontextentries"
+                && self
+                    .trace
+                    .as_ref()
+                    .is_some_and(|trace| trace.assignments.is_some())
+            {
+                if lexical.name != name
+                    || !positions.contains(&lexical.span.start)
+                    || context.operand(doc, lexical.span.start)
+                    || !self.signatures.command_unchanged(name)
+                    || self.signatures.resource_is_tokenized(
+                        source,
+                        &doc.syntax,
+                        lexical.span.start,
+                    )
+                {
+                    return None;
+                }
+                let (selection, keys) = crate::bib_context_assignments::parse(source, span.end)?;
+                self.work += keys.iter().map(|key| key.len() + 64).sum::<usize>()
+                    + selection.prefix.len()
+                    + selection.sorting.as_ref().map_or(0, String::len)
+                    + 128;
+                let trace = self.trace.as_mut()?;
+                let assignments = trace.assignments.as_mut()?;
+                if self.work > 32 * 1024 * 1024 || assignments.len() >= 100_000 {
+                    return None;
+                }
+                assignments.push(crate::bib_context_assignments::Assignment {
+                    before: trace.events.len(),
+                    section: trace.current,
+                    selection,
+                    keys,
+                });
+                continue;
+            }
             if self.trace.is_some() {
                 let declaration = self
                     .trace
@@ -1944,8 +1980,16 @@ pub(crate) fn validate_primary_rename(
             .map(|(_, doc)| (doc.text.source.as_str(), &doc.syntax)),
     );
     if has_source_sets(&docs, &signatures) {
-        source_trace_query(ws, root, &docs, &signatures, root, None, Some(rename))
-            .map(|trace| trace.work)
+        source_trace_query(
+            ws,
+            root,
+            &docs,
+            &signatures,
+            root,
+            None,
+            TracePurpose::Keys(Some(rename)),
+        )
+        .map(|trace| trace.work)
     } else {
         key_graph_after_rename(ws, root, &docs, &signatures, Some(rename)).map(|(_, work)| work)
     }
@@ -2050,6 +2094,7 @@ pub(crate) struct SourceTrace {
     pub resources: BTreeMap<u32, Arc<BTreeSet<Url>>>,
     pub events: Vec<SourceEvent>,
     pub probes: Vec<(u32, usize)>,
+    pub assignments: Option<Vec<crate::bib_context_assignments::Assignment>>,
     declarations: SourceDeclarations,
     current: u32,
     next: u32,
@@ -2245,7 +2290,25 @@ pub(crate) fn source_trace(
     docs: &[(Url, &Document)],
     signatures: &CommandSignatures<'_>,
 ) -> Option<SourceTrace> {
-    source_trace_query(ws, root, docs, signatures, root, None, None)
+    source_trace_query(
+        ws,
+        root,
+        docs,
+        signatures,
+        root,
+        None,
+        TracePurpose::Keys(None),
+    )
+}
+/// Context assignment certification belongs only to displayed labels. Source
+/// sets and edit graphs keep the ordinary trace's nonloading-consumer guards.
+pub(crate) fn hint_trace(
+    ws: &Workspace,
+    root: &Url,
+    docs: &[(Url, &Document)],
+    signatures: &CommandSignatures<'_>,
+) -> Option<SourceTrace> {
+    source_trace_query(ws, root, docs, signatures, root, None, TracePurpose::Hints)
 }
 pub(crate) struct SourceCompletion {
     pub trace: SourceTrace,
@@ -2280,7 +2343,15 @@ pub(crate) fn source_completion_trace(
         return None;
     }
     let member = query.call.name == "defbibentryset";
-    let trace = source_trace_query(ws, root, docs, signatures, origin, Some(query), None)?;
+    let trace = source_trace_query(
+        ws,
+        root,
+        docs,
+        signatures,
+        origin,
+        Some(query),
+        TracePurpose::Keys(None),
+    )?;
     if trace.probes.is_empty() {
         return None;
     }
@@ -2292,6 +2363,10 @@ pub(crate) fn source_completion_trace(
         nonloading,
     })
 }
+enum TracePurpose<'a> {
+    Keys(Option<crate::bib_source_aliases::PrimaryRename<'a>>),
+    Hints,
+}
 fn source_trace_query(
     ws: &Workspace,
     root: &Url,
@@ -2299,8 +2374,12 @@ fn source_trace_query(
     signatures: &CommandSignatures<'_>,
     origin: &Url,
     query: Option<Query>,
-    rename: Option<crate::bib_source_aliases::PrimaryRename<'_>>,
+    purpose: TracePurpose<'_>,
 ) -> Option<SourceTrace> {
+    let (rename, hint_assignments) = match purpose {
+        TracePurpose::Keys(rename) => (rename, false),
+        TracePurpose::Hints => (None, true),
+    };
     if !ws.index_truncated.is_empty()
         || !valid_sources(docs, signatures)
         || !static_databases(ws, root)
@@ -2327,6 +2406,7 @@ fn source_trace_query(
         resources: BTreeMap::from([(0, resources.clone())]),
         events: Vec::new(),
         probes: Vec::new(),
+        assignments: hint_assignments.then(Vec::new),
         declarations,
         current: 0,
         next: 0,
@@ -2375,7 +2455,15 @@ fn source_trace_query(
         return None;
     }
     let mut trace = analysis.trace?;
-    if nonloading_completion
+    let assigned = trace
+        .assignments
+        .as_ref()
+        .is_some_and(|assignments| !assignments.is_empty());
+    if assigned && !trace.declarations.is_empty() {
+        return None;
+    }
+    if assigned
+        || nonloading_completion
         || trace
             .events
             .iter()

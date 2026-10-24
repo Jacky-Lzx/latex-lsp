@@ -129,7 +129,9 @@ fn mode(docs: &[(Url, &Document)], signatures: &CommandSignatures<'_>) -> Mode {
                             .iter()
                             .any(|entry| entry.name == "refcontext")
                     })
-                    && crate::bib_context::static_context(source, canonical, span.end);
+                    && (crate::bib_context::static_context(source, canonical, span.end)
+                        || canonical == "assignrefcontextentries"
+                            && crate::bib_context_assignments::parse(source, span.end).is_some());
                 uncertain |= !safe;
                 contexts |= safe;
             }
@@ -266,11 +268,8 @@ pub(crate) fn numbers(
         if work > 32 * 1024 * 1024 {
             return Some(Vec::new());
         }
-        if labels.values().all(Option::is_none) {
-            return Some(Vec::new());
-        }
         let Some(trace) =
-            bib_section_keys::source_trace(ws, &project.root, &project.docs, &project.signatures)
+            bib_section_keys::hint_trace(ws, &project.root, &project.docs, &project.signatures)
         else {
             return Some(Vec::new());
         };
@@ -297,8 +296,57 @@ pub(crate) fn numbers(
         {
             return Some(Vec::new());
         }
+        let has_assignments = trace
+            .assignments
+            .as_ref()
+            .is_some_and(|assignments| !assignments.is_empty());
+        if !has_assignments && labels.values().all(Option::is_none) {
+            return Some(Vec::new());
+        }
+        let global_sorting = has_assignments
+            .then(|| {
+                crate::bib_context_assignments::global_sorting(&project.docs, &project.signatures)
+            })
+            .flatten();
+        let assigned_labels = if has_assignments {
+            (|| {
+                let (records, bytes) =
+                    crate::auxiliary::numeric_citation_records(ws, &project.root)?;
+                work += bytes;
+                let (prefixes, bytes) = crate::bib_bbl::prefixes(ws, &project.root)?;
+                work += bytes;
+                let compiled =
+                    crate::bib_context_assignments::Compiled::new(&records.numbers, prefixes)?;
+                work += compiled.work;
+                Some(compiled)
+            })()
+        } else {
+            None
+        };
+        if work > 32 * 1024 * 1024 {
+            return Some(Vec::new());
+        }
+        let mut assignments = trace.assignments.unwrap_or_default().into_iter().peekable();
+        let mut active_assignments = BTreeMap::<
+            (u32, String),
+            std::sync::Arc<crate::bib_context_assignments::Selection>,
+        >::new();
         let mut occurrences = BTreeMap::new();
-        for event in trace.events {
+        for (index, event) in trace.events.into_iter().enumerate() {
+            while assignments
+                .peek()
+                .is_some_and(|assignment| assignment.before <= index)
+            {
+                let assignment = assignments.next().unwrap();
+                let selection = std::sync::Arc::new(assignment.selection);
+                for key in assignment.keys {
+                    work += key.len() + 64;
+                    if work > 32 * 1024 * 1024 || active_assignments.len() >= 100_000 {
+                        return Some(Vec::new());
+                    }
+                    active_assignments.insert((assignment.section, key), selection.clone());
+                }
+            }
             let SourceEvent::Request(section, key, false) = event else {
                 continue;
             };
@@ -306,7 +354,16 @@ pub(crate) fn numbers(
             if key.uri != *uri || !printing.contains(&span) {
                 continue;
             }
-            let number = labels.get(&(section, key.name)).cloned().flatten();
+            let selected = active_assignments
+                .get(&(section, "*".to_string()))
+                .or_else(|| active_assignments.get(&(section, key.name.clone())));
+            let number = if let Some(selection) = selected {
+                assigned_labels.as_ref().and_then(|compiled| {
+                    compiled.label(section, &key.name, selection, global_sorting.as_deref())
+                })
+            } else {
+                labels.get(&(section, key.name)).cloned().flatten()
+            };
             work += 64 + number.as_ref().map_or(0, String::len);
             if work > 32 * 1024 * 1024 {
                 return Some(Vec::new());

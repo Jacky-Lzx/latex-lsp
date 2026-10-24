@@ -410,3 +410,266 @@ fn direct_literal_context_forms_preserve_the_recorded_unprefixed_default() {
         assert!(hints(&ws, &uri).is_empty(), "{body}");
     }
 }
+
+#[test]
+fn strong_entry_assignment_hints_use_each_requests_execution_state() {
+    let bbl = compiled(
+        list(A, "A", &["a", "z"]) + &list(B, "B", &["a", "z"]) + &list(GLOBAL, "", &["a", "z"]),
+    );
+    let aux = number("a", A, 3) + &number("a", B, 8) + &number("a", GLOBAL, 5) + &default("a", B);
+    for (body, expected) in [
+        (
+            r"\cite{a}\assignrefcontextentries[labelprefix=A]{a} Text \cite{a}\assignrefcontextentries[labelprefix=B]{a} Text \cite{a}",
+            vec!["→ B8", "→ A3", "→ B8"],
+        ),
+        (
+            r"{\assignrefcontextentries[labelprefix=A]{a}} Text \cite{a}",
+            vec!["→ A3"],
+        ),
+        (
+            r"\assignrefcontextentries[labelprefix=A]{*}\assignrefcontextentries[labelprefix=B]{a} Text \cite{a}",
+            vec!["→ A3"],
+        ),
+        (
+            r"\assignrefcontextentries[labelprefix=A]{a}\assignrefcontextentries[]{a} Text \cite{a}",
+            vec!["→ 5"],
+        ),
+        (
+            r"\assignrefcontextentries[labelprefix=A]{} Text \cite{a}",
+            vec!["→ B8"],
+        ),
+        (
+            r"\assignrefcontextentries[labelprefix=A]{a}\begin{refcontext}[labelprefix=B]\cite{a}\end{refcontext}",
+            vec!["→ A3"],
+        ),
+    ] {
+        let (_dir, ws, uri) = setup(body, &bbl, &aux);
+        assert_eq!(hints(&ws, &uri), expected, "{body}");
+    }
+}
+
+#[test]
+fn assigned_context_hints_never_borrow_the_defaults_number_or_a_different_prefix() {
+    let bbl = compiled(list(A, "A", &["a"]) + &list(B, "B", &["a"]));
+    let body = r"\cite{a}\assignrefcontextentries[labelprefix=A]{a} Text \cite{a}";
+    for aux in [
+        number("a", B, 8) + &default("a", B),
+        number("a", B, 8) + &number("a", A, 3) + &number("a", A, 4) + &default("a", B),
+    ] {
+        let (_dir, ws, uri) = setup(body, &bbl, &aux);
+        assert_eq!(hints(&ws, &uri), ["→ B8"]);
+    }
+    let aux = number("a", A, 3) + &number("a", B, 8) + &default("a", B);
+    for invalid in [
+        compiled(list(A, "Wrong", &["a"]) + &list(B, "B", &["a"])),
+        compiled(
+            list(A, "A", &["a"])
+                + &list("none/global/other/global/global/global", "A", &["a"])
+                + &list(B, "B", &["a"]),
+        ),
+        compiled(list(&A.replace("none/", "nty/"), "A", &["a"]) + &list(B, "B", &["a"])),
+    ] {
+        let (_dir, ws, uri) = setup(body, &invalid, &aux);
+        assert_eq!(hints(&ws, &uri), ["→ B8"]);
+    }
+}
+
+#[test]
+fn unproved_assignment_execution_and_context_forms_keep_numeric_hints_guarded() {
+    let bbl = compiled(list(A, "A", &["a"]) + &list(B, "B", &["a"]));
+    let aux = number("a", A, 3) + &number("a", B, 8) + &default("a", B);
+    for assignment in [
+        r"\assignrefcontextentries*[labelprefix=A]{a}",
+        r"\assignrefcontextentries[labelprefix=\unknown]{a}",
+        r"\assignrefcontextentries[name=chosen]{a}",
+        r"\assignrefcontextentries[labelprefix=A,labelprefix=B]{a}",
+        r"\assignrefcontextentries[labelprefix=A]{\unknown}",
+        r"\assignrefcontextentries{a}",
+        r"\csuse{assignrefcontextentries}[labelprefix=A]{a}",
+        r"\csname assignrefcontextentries\endcsname[labelprefix=A]{a}",
+        r"\def\assign{\assignrefcontextentries}\assign[labelprefix=A]{a}",
+        r"\newcommand\future{\assignrefcontextentries[labelprefix=A]{a}}",
+        r"\newcommand\run[1]{#1}\run{\assignrefcontextentries[labelprefix=A]{a}}",
+        r"\assignrefcontextcats[labelprefix=A]{chosen}",
+        r"\assignrefcontextkeyws[labelprefix=A]{chosen}",
+    ] {
+        let (_dir, ws, uri) = setup(&format!("{assignment} Text \\cite{{a}}"), &bbl, &aux);
+        assert!(hints(&ws, &uri).is_empty(), "{assignment}");
+    }
+}
+
+#[test]
+fn shared_physical_assignment_hints_require_all_executions_to_select_the_same_label() {
+    let bbl = compiled(list(A, "A", &["a"]) + &list(B, "B", &["a"]));
+    let aux = number("a", A, 3) + &number("a", B, 8) + &default("a", B);
+    let body = r"\input{chapter}\assignrefcontextentries[labelprefix=A]{a}\input{chapter}";
+    let (dir, mut ws, uri) = setup(body, &bbl, &aux);
+    std::fs::write(dir.path().join("chapter.tex"), "% 😀\r\n\\cite{a}").unwrap();
+    ws.refresh_project(&uri);
+    let child = uri.join("chapter.tex").unwrap();
+    assert!(hints(&ws, &child).is_empty());
+    let source = ws.documents[&uri].text.source.replace(
+        body,
+        r"\assignrefcontextentries[labelprefix=A]{a}\input{chapter}\input{chapter}",
+    );
+    ws.open(uri.clone(), source.clone(), 6);
+    assert_eq!(hints(&ws, &child), ["→ A3"]);
+    let other = uri.join("other.tex").unwrap();
+    std::fs::write(dir.path().join("other.aux"), &aux).unwrap();
+    std::fs::write(dir.path().join("other.bbl"), &bbl).unwrap();
+    ws.open(
+        other.clone(),
+        source.replace("labelprefix=A", "labelprefix=B"),
+        7,
+    );
+    assert!(hints(&ws, &child).is_empty());
+    ws.open(other, source, 8);
+    assert_eq!(hints(&ws, &child), ["→ A3"]);
+}
+
+#[test]
+fn assigned_numbers_do_not_require_a_default_context_record() {
+    let bbl = compiled(list(A, "A", &["a"]));
+    let (_dir, ws, uri) = setup(
+        r"\assignrefcontextentries[sorting=none,labelprefix=A]{a} Text \cite{a}",
+        &bbl,
+        &number("a", A, 3),
+    );
+    assert_eq!(hints(&ws, &uri), ["→ A3"]);
+}
+
+#[test]
+fn strong_assignment_storage_uses_the_executing_numeric_section() {
+    let bbl = format!(
+        r"{PROLOGUE}\refsection{{0}}{}{}\endrefsection\refsection{{1}}{}{}\endrefsection\endinput",
+        list(A, "A", &["a"]),
+        list(B, "B", &["a"]),
+        list(A, "A", &["a"]),
+        list(B, "B", &["a"])
+    );
+    let aux = number("a", A, 3)
+        + &number("a", B, 8)
+        + &default("a", B)
+        + &format!(
+            r"\abx@aux@number{{100}}{{a}}{{1}}{{{A}}}{{4}}\abx@aux@number{{101}}{{a}}{{1}}{{{B}}}{{9}}\abx@aux@defaultrefcontext{{1}}{{a}}{{{B}}}"
+        );
+    let body = r"\assignrefcontextentries[labelprefix=A]{a} Text \cite{a}\begin{refsection}\cite{a}\assignrefcontextentries[labelprefix=A]{a} Text \cite{a}\end{refsection}\cite{a}";
+    let (_dir, ws, uri) = setup(body, &bbl, &aux);
+    assert_eq!(hints(&ws, &uri), ["→ A3", "→ B9", "→ A4", "→ A3"]);
+}
+#[test]
+#[ignore = "requires pdflatex and biber with biblatex"]
+fn native_strong_assignment_hints_match_actual_labels_and_keep_the_complete_bbl() {
+    let cases = [
+        (
+            r"\assignrefcontextentries[labelprefix=A]{a}\cite{a}\begin{refcontext}[labelprefix=A]\nocite{a}\printbibliography\end{refcontext}\begin{refcontext}[labelprefix=B]\nocite{a}\printbibliography\end{refcontext}",
+            vec!["A1"],
+        ),
+        (
+            r"\cite{a}\assignrefcontextentries[labelprefix=A]{a}\cite{a}\begin{refcontext}[labelprefix=A]\nocite{a}\printbibliography\end{refcontext}\begin{refcontext}[labelprefix=B]\nocite{a}\printbibliography\end{refcontext}",
+            vec!["B1", "A1"],
+        ),
+        (
+            r"\assignrefcontextentries[labelprefix=A]{a}\cite{a}\assignrefcontextentries[labelprefix=B]{a}\cite{a}\begin{refcontext}[labelprefix=A]\nocite{a}\printbibliography\end{refcontext}\begin{refcontext}[labelprefix=B]\nocite{a}\printbibliography\end{refcontext}",
+            vec!["A1", "B1"],
+        ),
+        (
+            r"{\assignrefcontextentries[labelprefix=A]{a}}\cite{a}\begin{refcontext}[labelprefix=A]\nocite{a}\printbibliography\end{refcontext}\begin{refcontext}[labelprefix=B]\nocite{a}\printbibliography\end{refcontext}",
+            vec!["A1"],
+        ),
+        (
+            r"\assignrefcontextentries[labelprefix=A]{*}\assignrefcontextentries[labelprefix=B]{a}\cite{a}\begin{refcontext}[labelprefix=A]\nocite{a}\printbibliography\end{refcontext}\begin{refcontext}[labelprefix=B]\nocite{a}\printbibliography\end{refcontext}",
+            vec!["A1"],
+        ),
+        (
+            r"\assignrefcontextentries[]{a}\cite{a}\nocite{z,a}\printbibliography\begin{refcontext}[labelprefix={}]\nocite{a}\printbibliography\end{refcontext}",
+            vec!["1"],
+        ),
+        (
+            r"\assignrefcontextentries[labelprefix={}]{a}\cite{a}\nocite{z,a}\printbibliography\begin{refcontext}[labelprefix={}]\nocite{a}\printbibliography\end{refcontext}",
+            vec!["1"],
+        ),
+    ];
+    for (body, expected) in cases {
+        let (dir, mut ws, uri) = setup(body, "", "");
+        let source = ws.documents[&uri].text.source.clone();
+        let compile = |source: &str| {
+            for extension in ["aux", "bcf", "bbl", "run.xml"] {
+                let path = dir.path().join(format!("main.{extension}"));
+                if path.exists() {
+                    std::fs::remove_file(path).unwrap();
+                }
+            }
+            std::fs::write(dir.path().join("main.tex"), source).unwrap();
+            for program in ["pdflatex", "biber", "pdflatex", "pdflatex", "pdflatex"] {
+                let args = if program == "biber" {
+                    vec!["main"]
+                } else {
+                    vec![
+                        "-no-shell-escape",
+                        "-interaction=nonstopmode",
+                        "-halt-on-error",
+                        "main.tex",
+                    ]
+                };
+                let output = std::process::Command::new(program)
+                    .args(args)
+                    .current_dir(dir.path())
+                    .output()
+                    .unwrap();
+                assert!(
+                    output.status.success(),
+                    "{program}: {}\n{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            let log = std::fs::read_to_string(dir.path().join("main.log")).unwrap();
+            let blg = std::fs::read_to_string(dir.path().join("main.blg")).unwrap();
+            assert!(
+                !log.contains("undefined") && !log.contains("Warning"),
+                "{log}"
+            );
+            assert!(!blg.contains("WARN") && !blg.contains("ERROR"), "{blg}");
+            (
+                std::fs::read_to_string(dir.path().join("main.bbl")).unwrap(),
+                log,
+            )
+        };
+        let (plain, _) = compile(&source);
+        let expected_hints: Vec<_> = expected.iter().map(|label| format!("→ {label}")).collect();
+        assert_eq!(hints(&ws, &uri), expected_hints, "{body}");
+        let instrumented = source.replace(r"\begin{document}", r"\AtEveryCitekey{\typeout{LSP-LABEL:\thefield{labelprefix}\thefield{labelnumber}}}\begin{document}");
+        let (observed, log) = compile(&instrumented);
+        assert_eq!(observed, plain);
+        let actual: Vec<_> = log
+            .lines()
+            .filter_map(|line| line.strip_prefix("LSP-LABEL:"))
+            .collect();
+        assert_eq!(actual, expected, "{body}");
+        ws.open(uri.clone(), instrumented, 7);
+        assert!(hints(&ws, &uri).is_empty());
+    }
+}
+
+#[test]
+fn explicit_empty_assignment_prefix_cannot_borrow_the_unhashed_global_context() {
+    let empty = "none/global/D41D8CD98F00B204E9800998ECF8427E/global/global/global";
+    let bbl = compiled(list(GLOBAL, "", &["a"]) + &list(empty, "", &["a"]) + &list(B, "B", &["a"]));
+    let aux =
+        number("a", GLOBAL, 5) + &number("a", empty, 6) + &number("a", B, 8) + &default("a", B);
+    for (options, expected) in [("", "→ 5"), ("labelprefix={}", "→ 6")] {
+        let (_dir, ws, uri) = setup(
+            &format!(r"\assignrefcontextentries[{options}]{{a}} Text \cite{{a}}"),
+            &bbl,
+            &aux,
+        );
+        assert_eq!(hints(&ws, &uri), [expected]);
+    }
+    let (_dir, ws, uri) = setup(
+        r"\assignrefcontextentries[]{a} Text \cite{a}",
+        &compiled(list(empty, "", &["a"])),
+        &number("a", empty, 6),
+    );
+    assert!(hints(&ws, &uri).is_empty());
+}

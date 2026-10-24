@@ -34,9 +34,20 @@
 
 非空前缀通过 AUX 的真实分区、默认上下文及编号，联结 BBL 同一分区／上下文／键的 `labelprefix` 字段。上下文中的哈希只用于联结，不反推前缀，不从列表顺序猜测编号。前缀路径允许多个不同上下文的完整标准列表；重复上下文、重复条目、缺损字段、TeX 格式、集合及未知记录会撤销整个前缀证明，独立的空前缀 AUX 标签与标签引用仍保留。最多 4096 个列表和总条目、2 MiB BBL；前缀及最终标签各最多 256 字符。
 
-命名上下文声明、显式 `assignrefcontext*`、`localrefcontext`、动态选项、转发／命名上下文调用、重定义、钩子和自定义格式继续跳过数字提示。
+命名上下文声明、弱分配、分类／关键词分配、`localrefcontext`、动态选项、转发／命名上下文调用、重定义、钩子和自定义格式继续跳过数字提示。
 
 ```sh
 cargo test --locked --lib bib_context_tests:: -- --include-ignored
 cargo test --locked --test protocol local_context_citation_hints_
+```
+
+直接且未重定义的强分配 `\assignrefcontextentries[options]{keys}` 支持普通资源的 deferred 数字提示，选项限于字面 `sorting` 和 `labelprefix`。省略 `sorting` 时，要求 biblatex 包选项明确给出字面排序；暂不推断样式的排序默认值。星号弱分配、分类／关键词分配、静态命名／纯转发分配、源码集合和 IDS 相交继续保护。
+
+分配按实际执行顺序更新各数字分区的全局状态，TeX 花括号分组结束不会撤销它；同一键在分配前后可显示不同标签。通配 `*` 优先于单键分配，空列表不改变状态。提示只显示在真正输出的引用后，分配命令自身不加载条目，也不产生提示。重复输入和共享主文档仍要求同一物理引用的所有执行取得相同完整标签。
+
+已分配的引用使用完整 AUX `(分区, 键, 上下文)` 编号，并联合严格加载的 BBL 排序及真实前缀认证；对应记录缺失或冲突时省略该处提示，不借用默认上下文编号。未写 `labelprefix` 与显式 `labelprefix={}` 分别认证原生的空上下文分量和空字符串摘要；后者允许 Biber 省略空前缀字段，其他未知摘要仍要求真实字段。该显示分析不放宽源码集合或完整改名的认证边界。
+
+```sh
+cargo test --locked --lib bib_context_tests:: -- --include-ignored
+cargo test --locked --test protocol strong_context_assignment_hints_
 ```

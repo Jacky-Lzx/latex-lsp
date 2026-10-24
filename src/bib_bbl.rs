@@ -173,7 +173,16 @@ fn records(source: &str, prefixed: bool) -> Option<Records> {
             r"\endentry" => {
                 let (key, prefix) = entry.take()?;
                 let context = list_context.as_ref()?;
-                if prefixed && context.split('/').nth(2) != Some("") && prefix.is_none() {
+                // Biber omits the field for an explicitly empty prefix.
+                // Its known empty digest differs from an unspecified prefix;
+                // other hashes still require the actual literal field.
+                if prefixed
+                    && !matches!(
+                        context.split('/').nth(2),
+                        Some("" | "D41D8CD98F00B204E9800998ECF8427E")
+                    )
+                    && prefix.is_none()
+                {
                     return None;
                 }
                 if labels

@@ -261,10 +261,14 @@ fn retain<K: Ord, V: Eq>(
 type NumericLabels = BTreeMap<(u32, String), Option<String>>;
 pub(crate) type NumericContexts = BTreeMap<(u32, String), Option<(String, String)>>;
 
-pub(crate) fn numeric_citation_contexts(
+pub(crate) struct NumericRecords {
+    pub numbers: BTreeMap<(u32, String, String), Option<String>>,
+    pub defaults: BTreeMap<(u32, String), Option<String>>,
+}
+pub(crate) fn numeric_citation_records(
     ws: &Workspace,
     root: &Url,
-) -> Option<(NumericContexts, usize)> {
+) -> Option<(NumericRecords, usize)> {
     let path = root.to_file_path().ok()?;
     let path = ws
         .build_config(root)
@@ -301,9 +305,22 @@ pub(crate) fn numeric_citation_contexts(
             pending.extend(data.inputs.iter().map(|input| parent.join(input)));
         }
     }
+    Some((
+        NumericRecords {
+            numbers,
+            defaults: contexts,
+        },
+        work,
+    ))
+}
+pub(crate) fn numeric_citation_contexts(
+    ws: &Workspace,
+    root: &Url,
+) -> Option<(NumericContexts, usize)> {
+    let (records, work) = numeric_citation_records(ws, root)?;
     let mut result = BTreeMap::new();
-    for ((section, key, context), number) in numbers {
-        if contexts.get(&(section, key.clone())) == Some(&Some(context.clone())) {
+    for ((section, key, context), number) in records.numbers {
+        if records.defaults.get(&(section, key.clone())) == Some(&Some(context.clone())) {
             retain(
                 &mut result,
                 (section, key),
