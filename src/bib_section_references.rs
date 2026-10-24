@@ -179,6 +179,7 @@ struct Graph {
     sections: Vec<Arc<View>>,
     occurrences: BTreeMap<OccurrenceKey, Vec<Arc<View>>>,
     sources: Option<BTreeSet<Identity>>,
+    members: BTreeMap<OccurrenceKey, Identity>,
     work: usize,
 }
 impl Graph {
@@ -211,6 +212,7 @@ impl Graph {
             sections: views.into_values().collect(),
             occurrences,
             sources: None,
+            members: BTreeMap::new(),
             work: 0,
         })
     }
@@ -226,6 +228,7 @@ impl Graph {
             .collect();
         let mut namespaces = BTreeMap::<u32, Namespace>::new();
         let mut sources = BTreeSet::new();
+        let mut members = BTreeMap::new();
         let mut visits = BTreeMap::<OccurrenceKey, BTreeSet<u32>>::new();
         for event in &trace.events {
             match event {
@@ -251,8 +254,12 @@ impl Graph {
                     {
                         return Err(());
                     }
-                    sources.insert(identity);
+                    sources.insert(identity.clone());
                     for key in &set.members {
+                        members.insert(
+                            (key.uri.clone(), key.span.start, key.span.end),
+                            identity.clone(),
+                        );
                         visits
                             .entry((key.uri.clone(), key.span.start, key.span.end))
                             .or_default()
@@ -305,6 +312,7 @@ impl Graph {
             sections: views.into_values().collect(),
             occurrences,
             sources: Some(sources),
+            members,
             work: trace.work,
         })
     }
@@ -428,6 +436,11 @@ impl<'a> Graphs<'a> {
             .iter()
             .map(|((uri, _, _), visits)| uri.as_str().len() + 128 + visits.len() * 32)
             .sum::<usize>();
+        self.stored += graph
+            .members
+            .iter()
+            .map(|((uri, _, _), owner)| uri.as_str().len() + owner.uri.as_str().len() + 192)
+            .sum::<usize>();
         if self.stored > 32 * 1024 * 1024 {
             return Err(());
         }
@@ -503,8 +516,7 @@ impl<'a> Graphs<'a> {
             }
             self.databases.insert(resource.clone(), database);
         }
-        if graph.sources.is_some() {
-            let name = self.name.as_deref().ok_or(())?;
+        if let (true, Some(name)) = (graph.sources.is_some(), self.name.as_deref()) {
             for resource in &resources {
                 if self.databases[resource]
                     .declarations
@@ -1166,4 +1178,101 @@ pub(crate) fn certified_relation(
             .find(|reference| reference.span == candidate.span)?;
         Some((reference.name, reference.span))
     })())
+}
+
+/// Missing-key proofs for every physical citation in a source-set project.
+/// None retains ordinary diagnostics; an empty owned map suppresses guesses.
+pub(crate) type SourceStatuses = BTreeMap<(usize, usize), bool>;
+pub(crate) fn source_statuses(ws: &Workspace, uri: &Url) -> Option<SourceStatuses> {
+    let doc = ws.documents.get(uri)?;
+    if doc.kind != DocumentKind::Latex
+        || !ws
+            .documents
+            .values()
+            .any(|doc| doc.kind == DocumentKind::Latex && doc.text.source.contains("refsection"))
+        || !ws.documents.values().any(|doc| {
+            doc.kind == DocumentKind::Latex && doc.text.source.contains("defbibentryset")
+        })
+    {
+        return None;
+    }
+    let (selected, projects) = bib_section_keys::section_projects(ws, uri)?;
+    if !selected
+        || !projects
+            .iter()
+            .any(|project| bib_section_keys::has_source_sets(&project.docs, &project.signatures))
+    {
+        return None;
+    }
+    Some(
+        (|| {
+            let mut graphs = Graphs::new(ws).ok()?;
+            for project in &projects {
+                graphs.ensure(&project.root).ok()?;
+            }
+            let mut names = BTreeMap::<&str, BTreeSet<(usize, usize)>>::new();
+            for project in graphs.projects.values() {
+                for (source, start, end) in project.graph.occurrences.keys() {
+                    if source == uri {
+                        names
+                            .entry(&doc.text.source[*start..*end])
+                            .or_default()
+                            .insert((*start, *end));
+                    }
+                }
+            }
+            let mut statuses = BTreeMap::new();
+            for (name, spans) in names {
+                graphs.name = Some(name.into());
+                graphs.bindings.get_mut().clear();
+                graphs.database_bindings.get_mut().clear();
+                for (start, end) in spans {
+                    let mut answer: Option<Option<Identity>> = None;
+                    let mut proved = true;
+                    for project in graphs.projects.values() {
+                        let Some(views) = project.graph.occurrences.get(&(uri.clone(), start, end))
+                        else {
+                            proved = false;
+                            break;
+                        };
+                        // A suppressed declaration must not report members
+                        // that Biber never materializes. Check its final source
+                        // identity without changing the current name cache.
+                        if let Some(owner) = project.graph.members.get(&(uri.clone(), start, end)) {
+                            let owner_name =
+                                &ws.documents[&owner.uri].text.source[owner.start..owner.end];
+                            if !views.iter().all(|view| {
+                                view.namespace.as_ref().is_some_and(|state| {
+                                    (match state.first.get(owner_name) {
+                                        Some(first) => first.as_ref(),
+                                        None => state.declared.get(owner_name),
+                                    }) == Some(owner)
+                                })
+                            }) {
+                                proved = false;
+                                break;
+                            }
+                        }
+                        let Ok(found) = graphs.bind(name, views) else {
+                            proved = false;
+                            break;
+                        };
+                        if answer.as_ref().is_some_and(|previous| *previous != found) {
+                            proved = false;
+                            break;
+                        }
+                        answer = Some(found);
+                    }
+                    if graphs.work.get() > 32 * 1024 * 1024 {
+                        return None;
+                    }
+                    if let (true, Some(found)) = (proved, answer) {
+                        statuses.insert((start, end), found.is_some());
+                    }
+                }
+            }
+            Some(statuses)
+        })()
+        .unwrap_or_default(),
+    )
 }

@@ -413,6 +413,7 @@ pub fn fixes(
     let mut examined = 0;
     let mut comparisons = 0;
     let citation_resources = std::cell::OnceCell::new();
+    let source_statuses = std::cell::OnceCell::new();
     for (root, diagnostics) in &workspace.build_diagnostics {
         let Some(diagnostics) = diagnostics.get(uri) else {
             continue;
@@ -636,6 +637,32 @@ pub fn fixes(
             let Some((kind, key)) = target(doc, diagnostic, invocation_signatures) else {
                 continue;
             };
+            if kind == Kind::Citation {
+                if let Some(statuses) = source_statuses
+                    .get_or_init(|| crate::bib_section_references::source_statuses(workspace, uri))
+                {
+                    let span = doc
+                        .text
+                        .offset(diagnostic.range.start)
+                        .zip(doc.text.offset(diagnostic.range.end));
+                    if span.is_some_and(|span| statuses.get(&span) == Some(&false)) {
+                        for fix in crate::bib_source_citations::repairs(workspace, uri, diagnostic)
+                        {
+                            if seen.insert((
+                                diagnostic.range.start,
+                                diagnostic.range.end,
+                                fix.edit.new_text.clone(),
+                            )) {
+                                result.push(fix);
+                                if result.len() >= 256 {
+                                    return result;
+                                }
+                            }
+                        }
+                    }
+                    continue;
+                }
+            }
             let citation_scope = if kind == Kind::Citation {
                 if let Some(resources) = citation_resources
                     .get_or_init(|| crate::bib_section_keys::occurrence_resources(workspace, uri))

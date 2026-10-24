@@ -13,12 +13,13 @@ fn occurrences(
     ws: &Workspace,
     uri: &Url,
     resources: Option<&crate::bib_section_keys::ResourceMap>,
+    sources: Option<&crate::bib_section_references::SourceStatuses>,
 ) -> Vec<(bool, Range<usize>)> {
-    occurrences_for(ws, uri, false, resources)
+    occurrences_for(ws, uri, false, resources, sources)
 }
 
 pub(crate) fn hint_occurrences(ws: &Workspace, uri: &Url) -> Vec<(bool, Range<usize>)> {
-    occurrences_for(ws, uri, true, None)
+    occurrences_for(ws, uri, true, None, None)
 }
 
 fn occurrences_for(
@@ -26,6 +27,7 @@ fn occurrences_for(
     uri: &Url,
     printing: bool,
     resources: Option<&crate::bib_section_keys::ResourceMap>,
+    sources: Option<&crate::bib_section_references::SourceStatuses>,
 ) -> Vec<(bool, Range<usize>)> {
     let Some(doc) = ws.documents.get(uri) else {
         return vec![];
@@ -113,30 +115,55 @@ fn occurrences_for(
                     !*citation
                         || !selected_resources
                         || !printing
-                            && resources.is_some_and(|resources| {
-                                resources.contains_key(&(span.start, span.end))
-                            })
+                            && sources.map_or_else(
+                                || {
+                                    resources.is_some_and(|resources| {
+                                        resources.contains_key(&(span.start, span.end))
+                                    })
+                                },
+                                |sources| sources.contains_key(&(span.start, span.end)),
+                            )
                 }),
         );
+    }
+    if !printing {
+        if let Some(sources) = sources {
+            result.extend(sources.keys().map(|&(start, end)| (true, start..end)));
+        }
     }
     result.sort_by_key(|(citation, span)| (span.start, span.end, *citation));
     result.dedup();
     result
 }
 
+fn citation_contexts(
+    ws: &Workspace,
+    uri: &Url,
+) -> (
+    Option<crate::bib_section_keys::ResourceMap>,
+    Option<crate::bib_section_references::SourceStatuses>,
+) {
+    if !ws.settings(uri).diagnostics.undefined_citations {
+        return (None, None);
+    }
+    let sources = crate::bib_section_references::source_statuses(ws, uri);
+    let resources = if sources.is_none() {
+        crate::bib_section_keys::occurrence_resources(ws, uri)
+    } else {
+        None
+    };
+    (resources, sources)
+}
+
 pub(crate) fn diagnostics(ws: &Workspace, uri: &Url) -> Vec<Diagnostic> {
-    let resources = ws
-        .settings(uri)
-        .diagnostics
-        .undefined_citations
-        .then(|| crate::bib_section_keys::occurrence_resources(ws, uri))
-        .flatten();
-    diagnostics_for(ws, uri, resources.as_ref())
+    let (resources, sources) = citation_contexts(ws, uri);
+    diagnostics_for(ws, uri, resources.as_ref(), sources.as_ref())
 }
 fn diagnostics_for(
     ws: &Workspace,
     uri: &Url,
     resources: Option<&crate::bib_section_keys::ResourceMap>,
+    sources: Option<&crate::bib_section_references::SourceStatuses>,
 ) -> Vec<Diagnostic> {
     let Some(doc) = ws.documents.get(uri) else {
         return vec![];
@@ -176,12 +203,14 @@ fn diagnostics_for(
             .filter(|(_, info)| info.external)
             .map(|(name, _)| name.as_str()),
     );
-    occurrences(ws, uri, resources)
+    occurrences(ws, uri, resources, sources)
         .into_iter()
         .filter_map(|(citation, span)| {
             let name = &doc.text.source[span.clone()];
             let (enabled, known, kind) = if citation {
-                let known = if let Some(resources) = resources {
+                let known = if let Some(sources) = sources {
+                    *sources.get(&(span.start, span.end))?
+                } else if let Some(resources) = resources {
                     let files = resources.get(&(span.start, span.end))?;
                     citation_files.get(name).is_some_and(|definitions| {
                         definitions.iter().any(|uri| files.contains(*uri))
@@ -240,13 +269,8 @@ pub(crate) fn fixes(
     let scope = ws.symbol_scope(uri);
     let auxiliary = crate::auxiliary::labels(ws, uri);
     let mut result = Vec::new();
-    let section_resources = ws
-        .settings(uri)
-        .diagnostics
-        .undefined_citations
-        .then(|| crate::bib_section_keys::occurrence_resources(ws, uri))
-        .flatten();
-    for diagnostic in diagnostics_for(ws, uri, section_resources.as_ref())
+    let (section_resources, sources) = citation_contexts(ws, uri);
+    for diagnostic in diagnostics_for(ws, uri, section_resources.as_ref(), sources.as_ref())
         .into_iter()
         .filter(|diag| {
             diag.range.start <= range.end
@@ -262,6 +286,10 @@ pub(crate) fn fixes(
             continue;
         };
         let citation = data["citation"].as_bool().unwrap_or(false);
+        if citation && sources.is_some() {
+            result.extend(crate::bib_source_citations::repairs(ws, uri, &diagnostic));
+            continue;
+        }
         let citation_scope = if citation {
             if let Some(resources) = &section_resources {
                 let (Some(start), Some(end)) = (

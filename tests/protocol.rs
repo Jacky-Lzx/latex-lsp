@@ -31361,3 +31361,185 @@ fn source_set_citation_completions_refresh_probe_identities_metadata_limits_and_
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+fn source_set_missing_citations_and_repairs_refresh_unsaved_consumers_over_push_and_pull() {
+    use latex_lsp::text::Text;
+    let dir = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let sets = main.join("sets.tex").unwrap();
+    let child = main.join("chapter.tex").unwrap();
+    let other = main.join("unsaved.tex").unwrap();
+    let source = r"\documentclass{article}\usepackage{biblatex}\addsectionbib[label=chosen]{section.bib}\begin{document}\newrefsection[chosen]\input{sets}\input{chapter}\end{document}";
+    let declaration = r"\defbibentryset{collected}{member}";
+    let text = "% 😀\r\n\\csuse{cite}{collectd}\\ref{missinglabel}";
+    for (name, value) in [
+        ("main.tex", source),
+        ("sets.tex", declaration),
+        ("chapter.tex", text),
+        ("section.bib", "@book{member,title={Member}}"),
+    ] {
+        std::fs::write(dir.path().join(name), value).unwrap();
+    }
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}},"textDocument":{"codeAction":{"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix"]}}}}},"initializationOptions":{"distribution":{"enabled":false},"indexing":{"completionLimit":1}}}));
+    server.notify("initialized", json!({}));
+    for (uri, value, version) in [
+        (&main, source, 5),
+        (&sets, declaration, 3),
+        (&child, text, 7),
+    ] {
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"languageId":"latex","version":version,"text":value}}),
+        );
+    }
+    let missing = |report: &Value| {
+        report["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|item| item["code"] == "undefined-citation")
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let report = server.request(
+        2,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":child}}),
+    );
+    let initial_id = report["resultId"].clone();
+    let diagnostics = missing(&report);
+    assert_eq!(diagnostics.len(), 1, "{report}");
+    let diagnostic = &diagnostics[0];
+    let at = text.find("collectd").unwrap();
+    let range = Text::new(text.into()).range(at, at + 8);
+    assert_eq!(diagnostic["range"], json!(range));
+    let params =
+        json!({"textDocument":{"uri":child},"range":range,"context":{"diagnostics":[diagnostic]}});
+    let actions = server.request(3, "textDocument/codeAction", params.clone());
+    let action = actions
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["title"] == "Replace with citation `collected`")
+        .unwrap();
+    assert_eq!(
+        action["edit"]["documentChanges"],
+        json!([{"textDocument":{"uri":child,"version":7},"edits":[{"range":range,"newText":"collected"}]}])
+    );
+    server.pending.borrow_mut().clear();
+    server.notify("textDocument/didChange",json!({"textDocument":{"uri":sets,"version":4},"contentChanges":[{"text":r"\defbibentryset{collectd}{member}"}]}));
+    server.until(|m| {
+        m["method"] == "textDocument/publishDiagnostics"
+            && m["params"]["uri"] == child.as_str()
+            && m["params"]["version"] == 7
+            && m["params"]["diagnostics"].as_array().is_some_and(|items| {
+                !items.iter().any(|i| i["code"] == "undefined-citation")
+                    && items.iter().any(|i| i["code"] == "undefined-reference")
+            })
+    });
+    let report = server.request(
+        4,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":child},"previousResultId":initial_id}),
+    );
+    assert_eq!(report["kind"], "full");
+    assert!(missing(&report).is_empty());
+    server.pending.borrow_mut().clear();
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":sets}}),
+    );
+    server.until(|m| {
+        m["method"] == "textDocument/publishDiagnostics"
+            && m["params"]["uri"] == child.as_str()
+            && m["params"]["version"] == 7
+            && m["params"]["diagnostics"].as_array().is_some_and(|items| {
+                items
+                    .iter()
+                    .filter(|i| i["code"] == "undefined-citation")
+                    .count()
+                    == 1
+            })
+    });
+    server.notify("textDocument/didOpen",json!({"textDocument":{"uri":other,"languageId":"latex","version":8,"text":r"\documentclass{article}\usepackage{biblatex}\addbibresource{section.bib}\begin{document}\defbibentryset{collectd}{member}\input{chapter}\end{document}"}}));
+    let report = server.request(
+        5,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":child}}),
+    );
+    assert!(missing(&report).is_empty(), "{report}");
+    assert!(!server
+        .request(6, "textDocument/codeAction", params.clone())
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|a| a["title"]
+            .as_str()
+            .is_some_and(|t| t.starts_with("Replace with citation"))));
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":other}}),
+    );
+    let report = server.request(
+        7,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":child}}),
+    );
+    assert_eq!(missing(&report).len(), 1);
+    server.notify("textDocument/didOpen",json!({"textDocument":{"uri":sets,"languageId":"latex","version":9,"text":r"\cite{collected}\defbibentryset{collected}{member}"}}));
+    assert!(!server
+        .request(8, "textDocument/codeAction", params.clone())
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|a| a["title"] == "Replace with citation `collected`"));
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":sets}}),
+    );
+    assert!(server
+        .request(9, "textDocument/codeAction", params)
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|a| a["title"] == "Replace with citation `collected`"));
+    let broken_members = r"\defbibentryset{collected}{membr}";
+    server.notify("textDocument/didOpen",json!({"textDocument":{"uri":sets,"languageId":"latex","version":10,"text":broken_members}}));
+    let report = server.request(
+        20,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":sets}}),
+    );
+    let member_diagnostics = missing(&report);
+    assert_eq!(member_diagnostics.len(), 1, "{report}");
+    let at = broken_members.find("membr").unwrap();
+    let member_range = Text::new(broken_members.into()).range(at, at + 5);
+    assert_eq!(member_diagnostics[0]["range"], json!(member_range));
+    let repairs=server.request(21,"textDocument/codeAction",json!({"textDocument":{"uri":sets},"range":member_range,"context":{"diagnostics":[member_diagnostics[0]]}}));
+    let action = repairs
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["title"] == "Replace with citation `member`")
+        .unwrap();
+    assert_eq!(
+        action["edit"]["documentChanges"],
+        json!([{"textDocument":{"uri":sets,"version":10},"edits":[{"range":member_range,"newText":"member"}]}])
+    );
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":sets}}),
+    );
+    server.notify("workspace/didChangeConfiguration",json!({"settings":{"distribution":{"enabled":false},"diagnostics":{"undefinedCitations":false}}}));
+    let report = server.request(
+        10,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":child}}),
+    );
+    assert!(missing(&report).is_empty());
+    server.request(11, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
