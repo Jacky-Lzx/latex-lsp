@@ -36315,6 +36315,30 @@ fn automatic_category_hints_certify_preloaded_members_unsaved_sources_and_shared
         labels(server.request(29, "textDocument/inlayHint", params(&child))),
         vec![json!("→ A3")]
     );
+    for (index, call) in [
+        r"\assignrefcontextentries[labelprefix=A]{a }",
+        r"\assignrefcontextentries*[labelprefix=A]{* }",
+        r"\assignrefcontextcats[labelprefix=A]{x }",
+        r"\assignrefcontextcats*[labelprefix=A]{ x }",
+    ]
+    .iter()
+    .enumerate()
+    {
+        server.notify("textDocument/didOpen",json!({"textDocument":{"uri":provider,"languageId":"latex","version":30+index,"text":call}}));
+        assert_eq!(
+            labels(server.request(40 + index as u64, "textDocument/inlayHint", params(&child))),
+            vec![json!("→ B8")],
+            "{call}"
+        );
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":provider}}),
+        );
+        assert_eq!(
+            labels(server.request(50 + index as u64, "textDocument/inlayHint", params(&child))),
+            vec![json!("→ A3")]
+        );
+    }
     server.request(1000, "shutdown", Value::Null);
     server.notify("exit", Value::Null);
     server.wait_exit(0);

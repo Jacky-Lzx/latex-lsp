@@ -134,12 +134,16 @@ pub(crate) fn parse(source: &str, end: usize, name: &str) -> Option<Parsed> {
     for key in argument
         .value
         .split(',')
-        .map(str::trim)
+        .map(str::trim_start)
         .filter(|key| !key.is_empty())
     {
+        // Native docsvlist skips leading spaces but preserves trailing ones
+        // in the assigned control-sequence name. Such names cannot match a
+        // static citation/category key; never turn `a ` or `* ` into `a`/`*`.
+        let literal = key.trim_end_matches(|ch: char| ch.is_ascii_whitespace());
         if !(match target {
-            Target::Entries => syntax::is_static_citation_key(key),
-            Target::Categories => syntax::is_static_reference_key(key),
+            Target::Entries => syntax::is_static_citation_key(literal),
+            Target::Categories => syntax::is_static_reference_key(literal),
         }) || keys.len() >= 100_000
         {
             return None;

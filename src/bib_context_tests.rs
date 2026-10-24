@@ -1673,3 +1673,78 @@ fn automatic_categories_keep_literal_stars_and_every_physical_execution() {
     ws.open(uri.clone(), source, 6);
     assert_eq!(hints(&ws, &child), ["→ A3"]);
 }
+
+#[test]
+fn context_assignment_lists_do_not_strip_literal_trailing_spaces() {
+    for (body, expected) in [
+        (
+            r"\assignrefcontextentries[labelprefix=A]{a }\cite{a,z}",
+            vec!["→ B8", "→ B9"],
+        ),
+        (
+            r"\assignrefcontextentries[labelprefix=A]{* }\cite{a,z}",
+            vec!["→ B8", "→ B9"],
+        ),
+        (
+            r"\assignrefcontextentries[labelprefix=A]{a , z}\cite{a,z}",
+            vec!["→ B8", "→ A4"],
+        ),
+        (
+            r"\assignrefcontextentries*[labelprefix=A]{ a }\cite{a,z}",
+            vec!["→ B8", "→ B9"],
+        ),
+        (
+            r"\assignrefcontextcats[labelprefix=A]{x }\cite{a,z}",
+            vec!["→ B8", "→ B9"],
+        ),
+        (
+            r"\assignrefcontextcats*[labelprefix=A]{ x }\cite{a,z}",
+            vec!["→ B8", "→ B9"],
+        ),
+        (
+            r"\assignrefcontextentries[labelprefix=A]{ a}\cite{a,z}",
+            vec!["→ A3", "→ B9"],
+        ),
+        (
+            r"\assignrefcontextcats[labelprefix=A]{ x}\cite{a,z}",
+            vec!["→ A3", "→ B9"],
+        ),
+    ] {
+        let (_dir, ws, uri) = category_setup(body, "");
+        assert_eq!(hints(&ws, &uri), expected, "{body}");
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex and biber with biblatex"]
+fn native_context_assignment_lists_keep_literal_trailing_spaces() {
+    let printing = r"\begin{refcontext}[labelprefix=A]\nocite{a,z}\printbibliography\end{refcontext}\begin{refcontext}[labelprefix=B]\nocite{a,z}\printbibliography\end{refcontext}";
+    let bodies: Vec<_> = [
+        r"\assignrefcontextentries[labelprefix=A]{a }\cite{a,z}",
+        r"\assignrefcontextentries[labelprefix=A]{* }\cite{a,z}",
+        r"\assignrefcontextentries[labelprefix=A]{a , z}\cite{a,z}",
+        r"\assignrefcontextcats[labelprefix=A]{x }\cite{a,z}",
+        r"\assignrefcontextentries[labelprefix=A]{ a}\cite{a,z}",
+        r"\assignrefcontextcats[labelprefix=A]{ x}\cite{a,z}",
+    ]
+    .iter()
+    .map(|body| format!("{body}{printing}"))
+    .collect();
+    let cases: Vec<_> = bodies
+        .iter()
+        .zip([
+            vec!["B1", "B2"],
+            vec!["B1", "B2"],
+            vec!["B1", "A2"],
+            vec!["B1", "B2"],
+            vec!["A1", "B2"],
+            vec!["A1", "B2"],
+        ])
+        .map(|(body, expected)| (body.as_str(), expected))
+        .collect();
+    native_assignment_preamble(
+        &cases,
+        &[],
+        r"\DeclareBibliographyCategory{x}\addtocategory{x}{a}",
+    );
+}
