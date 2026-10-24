@@ -34,14 +34,16 @@
 
 非空前缀通过 AUX 的真实分区、默认上下文及编号，联结 BBL 同一分区／上下文／键的 `labelprefix` 字段。上下文中的哈希只用于联结，不反推前缀，不从列表顺序猜测编号。前缀路径允许多个不同上下文的完整标准列表；重复上下文、重复条目、缺损字段、TeX 格式、集合及未知记录会撤销整个前缀证明，独立的空前缀 AUX 标签与标签引用仍保留。最多 4096 个列表和总条目、2 MiB BBL；前缀及最终标签各最多 256 字符。
 
-命名上下文声明、弱分配、分类／关键词分配、`localrefcontext`、动态选项、转发／命名上下文调用、重定义、钩子和自定义格式继续跳过数字提示。
+命名上下文声明、分类／关键词分配、`localrefcontext`、动态选项、转发／命名上下文调用、重定义、钩子和自定义格式继续跳过数字提示。
 
 ```sh
 cargo test --locked --lib bib_context_tests:: -- --include-ignored
 cargo test --locked --test protocol local_context_citation_hints_
 ```
 
-直接且未重定义的强分配 `\assignrefcontextentries[options]{keys}` 支持普通资源的 deferred 数字提示，选项限于字面 `sorting` 和 `labelprefix`。省略 `sorting` 时，要求 biblatex 包选项明确给出字面排序；暂不推断样式的排序默认值。星号弱分配、分类／关键词分配、静态命名／纯转发分配、源码集合和 IDS 相交继续保护。
+直接且未重定义的强分配 `\assignrefcontextentries[options]{keys}` 支持普通资源的 deferred 数字提示，选项限于字面 `sorting` 和 `labelprefix`。省略 `sorting` 时，要求 biblatex 包选项明确给出字面排序；暂不推断样式的排序默认值。分类／关键词分配、静态命名／纯转发分配、源码集合和 IDS 相交继续保护。
+
+星号弱分配 `\assignrefcontextentries*[options]{keys}` 也支持相同的字面选项与编译记录。强分配优先于弱分配，各自先查通配再查单键；同类分配按最后一次执行更新。弱分配只在显式上下文外生效；进入显式上下文时，跳过弱分配并使用 AUX 默认记录，不直接采用该环境的前缀。初期仅认证成对的直接原生 `refcontext` 环境，支持跨输入文件的开始与结束；出现直接 `refcontext/newrefcontext/endrefcontext`、嵌套或未配对的上下文时，弱分配提示继续保守跳过。直接命令的局部开关可能随任意 TeX 分组恢复，尚未将其等同于环境状态。
 
 分配按实际执行顺序更新各数字分区的全局状态，TeX 花括号分组结束不会撤销它；同一键在分配前后可显示不同标签。通配 `*` 优先于单键分配，空列表不改变状态。提示只显示在真正输出的引用后，分配命令自身不加载条目，也不产生提示。重复输入和共享主文档仍要求同一物理引用的所有执行取得相同完整标签。
 
@@ -49,5 +51,5 @@ cargo test --locked --test protocol local_context_citation_hints_
 
 ```sh
 cargo test --locked --lib bib_context_tests:: -- --include-ignored
-cargo test --locked --test protocol strong_context_assignment_hints_
+cargo test --locked --test protocol context_assignment_hints_
 ```

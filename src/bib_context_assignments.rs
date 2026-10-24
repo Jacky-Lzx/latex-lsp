@@ -1,4 +1,4 @@
-//! Hint-only certification of literal strong entry-context assignments.
+//! Hint-only certification of literal entry-context assignments.
 use crate::syntax;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -14,10 +14,21 @@ pub(crate) struct Assignment {
     pub section: u32,
     pub selection: Selection,
     pub keys: Vec<String>,
+    pub weak: bool,
 }
 
-pub(crate) fn parse(source: &str, end: usize) -> Option<(Selection, Vec<String>)> {
-    let at = syntax::skip_space(source, end);
+pub(crate) struct Parsed {
+    pub selection: Selection,
+    pub keys: Vec<String>,
+    pub weak: bool,
+}
+
+pub(crate) fn parse(source: &str, end: usize) -> Option<Parsed> {
+    let mut at = syntax::skip_space(source, end);
+    let weak = source.as_bytes().get(at) == Some(&b'*');
+    if weak {
+        at = syntax::skip_space(source, at + 1);
+    }
     if source.as_bytes().get(at) != Some(&b'[') {
         return None;
     }
@@ -87,7 +98,11 @@ pub(crate) fn parse(source: &str, end: usize) -> Option<(Selection, Vec<String>)
         }
         keys.push(key.to_string());
     }
-    Some((selection, keys))
+    Some(Parsed {
+        selection,
+        keys,
+        weak,
+    })
 }
 
 type Numbers = BTreeMap<(u32, String, String), Option<String>>;

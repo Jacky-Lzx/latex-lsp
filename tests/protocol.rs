@@ -35211,7 +35211,7 @@ fn strong_context_assignment_hints_follow_order_unsaved_inputs_and_shared_new_ro
     server.notify("textDocument/didChange",json!({"textDocument":{"uri":provider,"version":9},"contentChanges":[{"text":assignment.replace("entries[","entries*[")}] }));
     assert_eq!(
         labels(server.request(6, "textDocument/inlayHint", params(&main))),
-        vec![json!("→ 4, p. 9")]
+        vec![json!("→ B8"), json!("→ A3"), json!("→ 4, p. 9")]
     );
     server.notify(
         "textDocument/didClose",
@@ -35257,6 +35257,135 @@ fn strong_context_assignment_hints_follow_order_unsaved_inputs_and_shared_new_ro
         vec![json!("→ A3")]
     );
     server.request(13, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+fn weak_context_assignment_hints_follow_explicit_environments_and_unsaved_inputs() {
+    use latex_lsp::text::Text;
+    let dir = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let child = main.join("child.tex").unwrap();
+    let source = "% 😀\r\n\\documentclass{article}\\usepackage[style=numeric,sorting=none,defernumbers=true]{biblatex}\\addbibresource{data.bib}\\begin{document}\\assignrefcontextentries*[labelprefix=A]{a}\\cite{a}\\begin{refcontext}[labelprefix=A]\\input{child}\\cite{a}\\end{refcontext}\\cite{a}\\end{document}";
+    let child_source = "% 😀\r\n😀 \\cite{a}";
+    let a = "none/global/7FC56270E7A70FA81A5935B72EACBE29/global/global/global";
+    let b = "none/global/9D5ED678FE57BCCA610140957AFAB571/global/global/global";
+    let prologue = r"% $ biblatex auxiliary file $
+% $ biblatex bbl format version 3.3 $
+\begingroup\makeatletter\@ifundefined{ver@biblatex.sty}{\@latex@error{Missing 'biblatex' package}{The bibliography requires the 'biblatex' package.}\aftergroup\endinput}{}\endgroup
+";
+    let list = |context, prefix| {
+        format!(
+            r"\datalist[entry]{{{context}}}\entry{{a}}{{book}}{{}}{{}}\field{{labelprefix}}{{{prefix}}}\field{{title}}{{Alpha}}\endentry\enddatalist"
+        )
+    };
+    let bbl = format!(
+        r"{prologue}\refsection{{0}}{}{}\endrefsection\endinput",
+        list(a, "A"),
+        list(b, "B")
+    );
+    let numbers = format!(
+        r"\abx@aux@number{{99}}{{a}}{{0}}{{{a}}}{{3}}\abx@aux@number{{100}}{{a}}{{0}}{{{b}}}{{8}}\abx@aux@defaultrefcontext{{0}}{{a}}{{{b}}}"
+    );
+    for (name, content) in [
+        ("main.tex", source),
+        ("child.tex", child_source),
+        ("data.bib", "@book{a,title={Alpha}}"),
+        ("main.aux", &numbers),
+        ("main.bbl", &bbl),
+    ] {
+        std::fs::write(dir.path().join(name), content).unwrap();
+    }
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    for (uri, text, version) in [(&main, source, 3), (&child, child_source, 5)] {
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"languageId":"latex","version":version,"text":text}}),
+        );
+    }
+    let params = |uri: &Url| json!({"textDocument":{"uri":uri},"range":{"start":{"line":0,"character":0},"end":{"line":3,"character":0}}});
+    let labels = |value: &Value| {
+        value
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|hint| hint["label"].clone())
+            .collect::<Vec<_>>()
+    };
+    let initial = server.request(2, "textDocument/inlayHint", params(&main));
+    assert_eq!(
+        labels(&initial),
+        vec![json!("→ A3"), json!("→ B8"), json!("→ A3")]
+    );
+    for (hint, (at, _)) in initial
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(source.match_indices(r"\cite{a}"))
+    {
+        assert_eq!(
+            hint["position"],
+            serde_json::to_value(Text::new(source.into()).position(at + 7)).unwrap()
+        );
+    }
+    let initial = server.request(3, "textDocument/inlayHint", params(&child));
+    assert_eq!(labels(&initial), vec![json!("→ B8")]);
+    assert_eq!(initial[0]["position"], json!({"line":1,"character":10}));
+    // The parent version stays unchanged; child execution adds a strong
+    // assignment globally, overriding the weak selection after its environment.
+    let changed = format!("{child_source}\\assignrefcontextentries[labelprefix=B]{{a}}");
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":child,"version":6},"contentChanges":[{"text":changed}]}),
+    );
+    assert_eq!(
+        labels(&server.request(4, "textDocument/inlayHint", params(&main))),
+        vec![json!("→ A3"), json!("→ B8"), json!("→ B8")]
+    );
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":child}}),
+    );
+    assert_eq!(
+        labels(&server.request(5, "textDocument/inlayHint", params(&main))),
+        vec![json!("→ A3"), json!("→ B8"), json!("→ A3")]
+    );
+    let unproved = source
+        .replace(
+            r"\begin{refcontext}[labelprefix=A]",
+            r"{\refcontext[labelprefix=A]",
+        )
+        .replace(r"\end{refcontext}", "}");
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":4},"contentChanges":[{"text":unproved}]}),
+    );
+    assert_eq!(
+        server.request(6, "textDocument/inlayHint", params(&main)),
+        json!([])
+    );
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":main}}),
+    );
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":main,"languageId":"latex","version":8,"text":source}}),
+    );
+    assert_eq!(
+        labels(&server.request(7, "textDocument/inlayHint", params(&main))),
+        vec![json!("→ A3"), json!("→ B8"), json!("→ A3")]
+    );
+    let missing = numbers.replace(&format!(r"\abx@aux@number{{99}}{{a}}{{0}}{{{a}}}{{3}}"), "");
+    std::fs::write(dir.path().join("main.aux"), missing).unwrap();
+    assert_eq!(
+        labels(&server.request(8, "textDocument/inlayHint", params(&main))),
+        vec![json!("→ B8")]
+    );
+    server.request(9, "shutdown", Value::Null);
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }

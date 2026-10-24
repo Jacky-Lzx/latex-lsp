@@ -328,7 +328,7 @@ pub(crate) fn numbers(
         }
         let mut assignments = trace.assignments.unwrap_or_default().into_iter().peekable();
         let mut active_assignments = BTreeMap::<
-            (u32, String),
+            (u32, bool, String),
             std::sync::Arc<crate::bib_context_assignments::Selection>,
         >::new();
         let mut occurrences = BTreeMap::new();
@@ -344,7 +344,10 @@ pub(crate) fn numbers(
                     if work > 32 * 1024 * 1024 || active_assignments.len() >= 100_000 {
                         return Some(Vec::new());
                     }
-                    active_assignments.insert((assignment.section, key), selection.clone());
+                    active_assignments.insert(
+                        (assignment.section, assignment.weak, key),
+                        selection.clone(),
+                    );
                 }
             }
             let SourceEvent::Request(section, key, false) = event else {
@@ -355,8 +358,19 @@ pub(crate) fn numbers(
                 continue;
             }
             let selected = active_assignments
-                .get(&(section, "*".to_string()))
-                .or_else(|| active_assignments.get(&(section, key.name.clone())));
+                .get(&(section, false, "*".to_string()))
+                .or_else(|| active_assignments.get(&(section, false, key.name.clone())))
+                .or_else(|| {
+                    (!trace.explicit_requests.contains(&index))
+                        .then(|| {
+                            active_assignments
+                                .get(&(section, true, "*".to_string()))
+                                .or_else(|| {
+                                    active_assignments.get(&(section, true, key.name.clone()))
+                                })
+                        })
+                        .flatten()
+                });
             let number = if let Some(selection) = selected {
                 assigned_labels.as_ref().and_then(|compiled| {
                     compiled.label(section, &key.name, selection, global_sorting.as_deref())

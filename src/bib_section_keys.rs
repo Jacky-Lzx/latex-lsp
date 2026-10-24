@@ -706,7 +706,11 @@ impl Analysis<'_, '_> {
                 {
                     return None;
                 }
-                let (selection, keys) = crate::bib_context_assignments::parse(source, span.end)?;
+                let crate::bib_context_assignments::Parsed {
+                    selection,
+                    keys,
+                    weak,
+                } = crate::bib_context_assignments::parse(source, span.end)?;
                 self.work += keys.iter().map(|key| key.len() + 64).sum::<usize>()
                     + selection.prefix.len()
                     + selection.sorting.as_ref().map_or(0, String::len)
@@ -721,8 +725,35 @@ impl Analysis<'_, '_> {
                     section: trace.current,
                     selection,
                     keys,
+                    weak,
                 });
                 continue;
+            }
+            if let Some(trace) = self.trace.as_mut().filter(|trace| trace.weak_contexts) {
+                // Bare context commands set a local toggle: arbitrary TeX
+                // groups can restore it without an endrefcontext command.
+                // Initially certify only balanced native context environments.
+                if matches!(name, "refcontext" | "newrefcontext" | "endrefcontext") {
+                    return None;
+                }
+                if environment
+                    .as_ref()
+                    .is_some_and(|env| env.value == "refcontext")
+                {
+                    if lexical.name != name
+                        || !positions.contains(&lexical.span.start)
+                        || context.operand(doc, lexical.span.start)
+                        || self.signatures.resource_is_tokenized(
+                            source,
+                            &doc.syntax,
+                            lexical.span.start,
+                        )
+                        || (name == "begin") == trace.explicit_context
+                    {
+                        return None;
+                    }
+                    trace.explicit_context = name == "begin";
+                }
             }
             if self.trace.is_some() {
                 let declaration = self
@@ -866,12 +897,22 @@ impl Analysis<'_, '_> {
                                     trace.probes.push((trace.current, trace.events.len()));
                                     continue;
                                 };
-                                self.work += key.uri.as_str().len() + key.name.len() + 96;
+                                self.work += key.uri.as_str().len()
+                                    + key.name.len()
+                                    + 96
+                                    + if self.trace.as_ref()?.explicit_context {
+                                        32
+                                    } else {
+                                        0
+                                    };
                                 let trace = self.trace.as_mut()?;
                                 if self.work > 32 * 1024 * 1024 || trace.events.len() >= 100_000 {
                                     return None;
                                 }
                                 let wildcard = key.name == "*";
+                                if trace.explicit_context {
+                                    trace.explicit_requests.insert(trace.events.len());
+                                }
                                 trace.events.push(SourceEvent::Request(
                                     trace.current,
                                     key,
@@ -2095,6 +2136,9 @@ pub(crate) struct SourceTrace {
     pub events: Vec<SourceEvent>,
     pub probes: Vec<(u32, usize)>,
     pub assignments: Option<Vec<crate::bib_context_assignments::Assignment>>,
+    pub explicit_requests: BTreeSet<usize>,
+    weak_contexts: bool,
+    explicit_context: bool,
     declarations: SourceDeclarations,
     current: u32,
     next: u32,
@@ -2407,6 +2451,20 @@ fn source_trace_query(
         events: Vec::new(),
         probes: Vec::new(),
         assignments: hint_assignments.then(Vec::new),
+        explicit_requests: BTreeSet::new(),
+        weak_contexts: hint_assignments
+            && docs.iter().any(|(_, doc)| {
+                doc.syntax.commands.iter().any(|command| {
+                    command.name == "assignrefcontextentries"
+                        && doc
+                            .text
+                            .source
+                            .as_bytes()
+                            .get(syntax::skip_space(&doc.text.source, command.span.end))
+                            == Some(&b'*')
+                })
+            }),
+        explicit_context: false,
         declarations,
         current: 0,
         next: 0,
@@ -2455,6 +2513,9 @@ fn source_trace_query(
         return None;
     }
     let mut trace = analysis.trace?;
+    if trace.explicit_context {
+        return None;
+    }
     let assigned = trace
         .assignments
         .as_ref()
