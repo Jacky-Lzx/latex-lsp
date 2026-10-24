@@ -1215,6 +1215,11 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
         }
     }
     if !name_command {
+        if let Some(items) = crate::bib_section_labels::completion(workspace, uri, offset) {
+            return items;
+        }
+    }
+    if !name_command {
         if let Some(items) = crate::bib_section_keys::completion(workspace, uri, offset) {
             return items;
         }
@@ -1703,6 +1708,9 @@ pub fn definitions(workspace: &Workspace, uri: &Url, position: Position) -> Vec<
     if let Some(entry) = crate::extra_symbols::at(doc, offset) {
         return crate::extra_symbols::definitions(workspace, uri, entry);
     }
+    if let Some(result) = crate::bib_section_labels::definitions(workspace, uri, offset) {
+        return result;
+    }
     for link in crate::navigation::document_links(workspace, uri) {
         if link.range.start <= position && position <= link.range.end {
             if let Some(uri) = link.target.filter(|uri| uri.scheme() == "file") {
@@ -2102,6 +2110,9 @@ pub fn hover(workspace: &Workspace, uri: &Url, position: Position) -> Option<Hov
         return Some(crate::extra_symbols::hover(workspace, uri, entry));
     }
 
+    if let Some(hover) = crate::bib_section_labels::hover(workspace, uri, offset) {
+        return Some(hover);
+    }
     if let Some(hover) = crate::bib_completion::hover(doc, offset) {
         return Some(hover);
     }

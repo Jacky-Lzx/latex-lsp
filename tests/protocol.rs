@@ -29563,3 +29563,108 @@ fn section_citation_diagnostics_and_fixes_follow_unsaved_library_edits_over_push
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+#[test]
+fn section_resource_labels_refresh_navigation_hover_and_completion_from_unsaved_providers() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let provider = main.join("resources.tex").unwrap();
+    let chapter = main.join("chapter.tex").unwrap();
+    let root = r"\documentclass{article}\usepackage{biblatex}\input{resources}\begin{document}\input{chapter}\end{document}";
+    let registration = r"\addsectionbib[label={chosen}]{section.bib}";
+    let body = "😀\r\n\\newrefsection[chosen]";
+    for (name, source) in [
+        ("main.tex", root),
+        ("resources.tex", registration),
+        ("chapter.tex", body),
+        ("section.bib", "@book{paper,title={Selected}}"),
+        ("spare.bib", "@book{spare,title={Spare}}"),
+    ] {
+        std::fs::write(dir.path().join(name), source).unwrap();
+    }
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    for (uri, contents, version) in [
+        (&main, root, 5),
+        (&provider, registration, 3),
+        (&chapter, body, 7),
+    ] {
+        server.notify("textDocument/didOpen", json!({"textDocument":{"uri":uri,"languageId":"latex","version":version,"text":contents}}));
+    }
+    let params = json!({"textDocument":{"uri":chapter},"position":{"line":1,"character":17}});
+    let expected = json!([{"uri":provider,"range":{"start":{"line":0,"character":22},"end":{"line":0,"character":28}}}]);
+    assert_eq!(
+        server.request(2, "textDocument/definition", params.clone()),
+        expected
+    );
+    let hover = server.request(3, "textDocument/hover", params.clone());
+    assert!(
+        hover["contents"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("section.bib"),
+        "{hover}"
+    );
+    let completion = server.request(4, "textDocument/completion", params.clone());
+    let item = completion
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["label"] == "chosen")
+        .unwrap();
+    assert_eq!(
+        item["textEdit"],
+        json!({"range":{"start":{"line":1,"character":15},"end":{"line":1,"character":21}},"newText":"chosen"})
+    );
+    server.notify("textDocument/didChange", json!({"textDocument":{"uri":provider,"version":4},"contentChanges":[{"text":registration.replace("chosen", "other")}]}));
+    assert_eq!(
+        server.request(5, "textDocument/definition", params.clone()),
+        json!([])
+    );
+    assert!(server
+        .request(6, "textDocument/hover", params.clone())
+        .is_null());
+    let completion = server.request(7, "textDocument/completion", params.clone());
+    assert!(!completion
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["label"] == "chosen"));
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":provider}}),
+    );
+    assert_eq!(
+        server.request(8, "textDocument/definition", params.clone()),
+        expected
+    );
+    let unsaved = main.join("new-root.tex").unwrap();
+    server.notify("textDocument/didOpen", json!({"textDocument":{"uri":unsaved,"languageId":"latex","version":2,"text":root.replace(r"\input{resources}", r"\addsectionbib[label={chosen}]{spare.bib}")}}));
+    assert_eq!(
+        server.request(9, "textDocument/definition", params.clone()),
+        json!([])
+    );
+    assert!(server
+        .request(10, "textDocument/hover", params.clone())
+        .is_null());
+    let completion = server.request(11, "textDocument/completion", params.clone());
+    assert!(!completion
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["label"] == "chosen"));
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":unsaved}}),
+    );
+    assert_eq!(
+        server.request(12, "textDocument/definition", params),
+        expected
+    );
+    // Symbol editing remains unavailable until every use and filename capture
+    // can be checked together; read-only support must not enable partial edits.
+    assert!(server.request(13, "textDocument/rename", json!({"textDocument":{"uri":chapter},"position":{"line":1,"character":17},"newName":"other"})).is_null());
+    server.request(1000, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

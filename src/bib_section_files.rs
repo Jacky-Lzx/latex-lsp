@@ -37,10 +37,18 @@ struct Registration {
     command: Command,
     target: Option<Url>,
 }
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct LabelBinding {
+    pub uri: Url,
+    pub span: std::ops::Range<usize>,
+    pub filename: String,
+    target: Option<Url>,
+}
 #[derive(Default)]
 pub(crate) struct Registry {
     paths: BTreeMap<String, Option<Registration>>,
     labels: BTreeMap<String, Option<Registration>>,
+    declarations: BTreeMap<String, Option<LabelBinding>>,
     uncertain: bool,
     defaults: Option<BTreeSet<Url>>,
     globals: Option<BTreeSet<Url>>,
@@ -84,7 +92,7 @@ fn resolved<'a>(
     let name = signatures.forwarded_builtin(name).unwrap_or(name);
     signatures.command_unchanged(name).then_some((name, span))
 }
-fn resource_label(source: &str, end: usize) -> Result<Option<String>, ()> {
+pub(crate) fn resource_label(source: &str, end: usize) -> Result<Option<Argument>, ()> {
     let at = syntax::skip_space(source, end);
     if source.as_bytes().get(at) != Some(&b'[') {
         return Ok(None);
@@ -95,22 +103,30 @@ fn resource_label(source: &str, end: usize) -> Result<Option<String>, ()> {
     }
     let mut label = None;
     for segment in syntax::key_list_segments(source, argument.span) {
-        let option = source[segment].trim();
-        let Some((key, value)) = option.split_once('=') else {
+        let segment = syntax::trimmed_span(source, segment);
+        let option = &source[segment.clone()];
+        let Some(equal) = option.find('=') else {
             continue;
         };
-        if key.trim() != "label" {
+        if option[..equal].trim() != "label" {
             continue;
         }
-        let value = value.trim();
-        let value = value
-            .strip_prefix('{')
-            .and_then(|value| value.strip_suffix('}'))
-            .unwrap_or(value);
+        let outer_span = syntax::trimmed_span(source, segment.start + equal + 1..segment.end);
+        let mut span = outer_span.clone();
+        if let Some((argument, end)) = syntax::group(source, span.start, b'{', b'}') {
+            if end == span.end {
+                span = argument.span;
+            }
+        }
+        let value = &source[span.clone()];
         if !syntax::is_static_key(value) {
             return Err(());
         }
-        label = Some(value.into());
+        label = Some(Argument {
+            value: value.into(),
+            span,
+            outer_span,
+        });
     }
     Ok(label)
 }
@@ -216,11 +232,37 @@ impl Registry {
                 }
                 bind(&mut result.paths, raw.value, registration.clone());
                 if let Some(label) = label {
-                    bind(&mut result.labels, label, registration);
+                    let binding = registration.as_ref().map(|entry| LabelBinding {
+                        uri: uri.clone(),
+                        span: label.span,
+                        filename: entry.command.argument.as_ref().unwrap().value.clone(),
+                        target: entry.target.clone(),
+                    });
+                    result
+                        .declarations
+                        .entry(label.value.clone())
+                        .and_modify(|previous| {
+                            if *previous != binding {
+                                *previous = None;
+                            }
+                        })
+                        .or_insert(binding);
+                    bind(&mut result.labels, label.value, registration);
                 }
             }
         }
         result
+    }
+
+    pub(crate) fn label_bindings(&self) -> Option<BTreeMap<String, LabelBinding>> {
+        (!self.uncertain).then(|| {
+            self.declarations
+                .iter()
+                .filter_map(|(name, binding)| {
+                    binding.clone().map(|binding| (name.clone(), binding))
+                })
+                .collect()
+        })
     }
 
     /// Roles are collected independently of the path map: registering a path

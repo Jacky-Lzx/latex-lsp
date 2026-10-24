@@ -195,6 +195,13 @@ fn citation_candidate(
         })
 }
 
+struct LabelProof {
+    command: usize,
+    seen: bool,
+    aliases: BTreeMap<String, String>,
+    environments: Vec<String>,
+}
+
 struct Analysis<'a, 'b> {
     ws: &'a Workspace,
     root: &'a Url,
@@ -202,6 +209,8 @@ struct Analysis<'a, 'b> {
     registry: Registry,
     origin: &'a Url,
     query: Option<Query>,
+    // Label lookup proves execution without resolving unfinished selections.
+    labels: Option<LabelProof>,
     resource_sets: BTreeSet<Arc<BTreeSet<Url>>>,
     collect_keys: bool,
     keys: BTreeMap<(usize, usize), Option<Arc<BTreeSet<Url>>>>,
@@ -249,6 +258,29 @@ impl Analysis<'_, '_> {
         let positions = self
             .signatures
             .source_command_positions(source, &doc.syntax);
+        let alias_declarations: BTreeMap<_, _> = if self.labels.is_some() {
+            doc.syntax
+                .definitions
+                .iter()
+                .filter_map(|entry| {
+                    let builtin = self.signatures.forwarded_builtin(&entry.name)?;
+                    if !STATE.contains(&builtin) && !loader(builtin) {
+                        return None;
+                    }
+                    let target = crate::signature::source_alias(source, &doc.syntax, entry)?;
+                    let body =
+                        crate::signature::command_definition_body(source, &doc.syntax, entry)?;
+                    let at = crate::signature::command_declaration_start(&doc.syntax, entry)?;
+                    Some((at, (entry.name.clone(), target, body.span)))
+                })
+                .collect()
+        } else {
+            BTreeMap::new()
+        };
+        let forwarding_bodies: Vec<_> = alias_declarations
+            .values()
+            .map(|(_, _, body)| body)
+            .collect();
         for (index, lexical) in doc.syntax.commands.iter().enumerate() {
             if self.ended {
                 break;
@@ -257,7 +289,30 @@ impl Analysis<'_, '_> {
             if self.commands > 100_000 {
                 return None;
             }
-            if context.literal(lexical.span.start) {
+            if let Some((name, target, _)) = alias_declarations.get(&lexical.span.start) {
+                let labels = self.labels.as_mut()?;
+                self.work += source.len();
+                if self.work > 32 * 1024 * 1024 {
+                    return None;
+                }
+                if positions.contains(&lexical.span.start)
+                    && !context.literal(lexical.span.start)
+                    && !doc.syntax.control_operands.contains(&lexical.span.start)
+                    && labels.environments.is_empty()
+                    && !crate::resource_context::grouped(source, &doc.syntax, lexical.span.start)
+                {
+                    labels.aliases.insert(name.clone(), target.clone());
+                }
+            }
+            if context.literal(lexical.span.start)
+                || self.labels.is_some()
+                    && context
+                        .declarations
+                        .contains(&(lexical.span.start, lexical.span.end))
+                || forwarding_bodies
+                    .iter()
+                    .any(|body| body.contains(&lexical.span.start))
+            {
                 continue;
             }
             if unsafe_control(&lexical.name) {
@@ -276,6 +331,31 @@ impl Analysis<'_, '_> {
                     &context.declarations,
                 )
                 .unwrap_or((&lexical.name, lexical.span.clone()));
+            let name = if let Some(labels) = self.labels.as_ref() {
+                if let Some(builtin) = self
+                    .signatures
+                    .forwarded_builtin(name)
+                    .filter(|builtin| STATE.contains(builtin) || loader(builtin))
+                {
+                    let mut current = name;
+                    let mut confirmed = false;
+                    for _ in 0..64 {
+                        if current == builtin {
+                            confirmed = true;
+                            break;
+                        }
+                        current = labels.aliases.get(current)?;
+                    }
+                    if !confirmed {
+                        return None;
+                    }
+                    builtin
+                } else {
+                    name
+                }
+            } else {
+                name
+            };
             if matches!(name, "csuse" | "csname") {
                 return None;
             }
@@ -307,6 +387,24 @@ impl Analysis<'_, '_> {
             } else {
                 None
             };
+            if let Some(labels) = self.labels.as_mut().filter(|_| {
+                positions.contains(&lexical.span.start) && !context.operand(doc, lexical.span.start)
+            }) {
+                if let Some(environment) =
+                    environment.as_ref().filter(|env| env.value != "document")
+                {
+                    if name == "begin" {
+                        if labels.environments.len() >= 64 {
+                            return None;
+                        }
+                        labels.environments.push(environment.value.clone());
+                    } else if labels.environments.pop().as_deref()
+                        != Some(environment.value.as_str())
+                    {
+                        return None;
+                    }
+                }
+            }
             let relevant = (STATE.contains(&name)
                 && environment
                     .as_ref()
@@ -331,6 +429,17 @@ impl Analysis<'_, '_> {
                 // Deferred code and ordinary macro parameters can change the
                 // state later; textual ordering cannot prove when they run.
                 return None;
+            }
+            if uri == self.origin
+                && self
+                    .labels
+                    .as_ref()
+                    .is_some_and(|labels| labels.command == lexical.span.start)
+            {
+                if !relevant {
+                    return None;
+                }
+                self.labels.as_mut().unwrap().seen = true;
             }
             if self.collect_keys
                 && uri == self.origin
@@ -409,15 +518,22 @@ impl Analysis<'_, '_> {
                 } else if environment.value == "refsection" {
                     if name == "begin" {
                         self.select(doc, environment.outer_span.end)?;
-                    } else {
+                    } else if self.labels.is_none() {
                         self.active = self.registry.resources(self.root, None)?;
                     }
                 }
             } else if matches!(name, "newrefsection" | "refsection") {
                 self.select(doc, span.end)?;
             } else if name == "endrefsection" {
-                self.active = self.registry.resources(self.root, None)?;
+                if self.labels.is_none() {
+                    self.active = self.registry.resources(self.root, None)?;
+                }
             } else if loader(name) {
+                if self.labels.is_some()
+                    && crate::resource_context::grouped(source, &doc.syntax, span.start)
+                {
+                    return None;
+                }
                 let command = doc.syntax.potential_file_command(source, &command);
                 let static_name = if syntax::file_list(name) {
                     syntax::complete_file_list_spans(source, &command).is_some()
@@ -455,11 +571,23 @@ impl Analysis<'_, '_> {
         }
         let selected = if source.as_bytes().get(at) == Some(&b'[') {
             let raw = doc.syntax.raw_resource_brackets.contains(&at);
-            let (argument, _) = if raw {
+            let parsed = if raw {
                 syntax::verbatim_file_bracket(source, at)
             } else {
                 syntax::bracket_argument(source, at)
-            }?;
+            };
+            let argument = if let Some((argument, _)) = parsed {
+                argument
+            } else if self.labels.is_some() {
+                syntax::Argument {
+                    value: source[at + 1..].into(),
+                    span: at + 1..source.len(),
+                    outer_span: at..source.len(),
+                }
+            } else {
+                return None;
+            };
+
             let segments = if raw {
                 syntax::verbatim_list_segments(source, argument.span)
             } else {
@@ -480,6 +608,9 @@ impl Analysis<'_, '_> {
         } else {
             None
         };
+        if self.labels.is_some() {
+            return Some(());
+        }
         self.active = self.registry.resources(self.root, selected.as_deref())?;
         if self.query.is_none() {
             self.intern_resources()?;
@@ -595,6 +726,7 @@ pub(crate) fn coexistence(ws: &Workspace, root: &Url, scope: &BTreeSet<Url>) -> 
             registry,
             origin: root,
             query: None,
+            labels: None,
             resource_sets: BTreeSet::from([Arc::new(active.clone())]),
             collect_keys: false,
             keys: BTreeMap::new(),
@@ -647,12 +779,15 @@ fn incomplete(
     };
     supported.then_some(None)
 }
-struct Project<'a> {
-    root: Url,
-    docs: Vec<(Url, &'a Document)>,
-    signatures: CommandSignatures<'a>,
+pub(crate) struct Project<'a> {
+    pub root: Url,
+    pub docs: Vec<(Url, &'a Document)>,
+    pub signatures: CommandSignatures<'a>,
 }
-fn section_projects<'a>(ws: &'a Workspace, uri: &Url) -> Option<(bool, Vec<Project<'a>>)> {
+pub(crate) fn section_projects<'a>(
+    ws: &'a Workspace,
+    uri: &Url,
+) -> Option<(bool, Vec<Project<'a>>)> {
     let mut roots: BTreeSet<_> = ws.source_roots(uri).into_iter().collect();
     // Opened roots consume shared files even before their own path is saved.
     for candidate in ws
@@ -747,6 +882,7 @@ fn target(ws: &Workspace, uri: &Url, offset: usize, purpose: Purpose) -> Option<
                 registry,
                 origin: uri,
                 query: Some(query.clone()),
+                labels: None,
                 resource_sets: BTreeSet::new(),
                 collect_keys: false,
                 keys: BTreeMap::new(),
@@ -925,6 +1061,7 @@ pub(crate) fn occurrence_resources(ws: &Workspace, uri: &Url) -> Option<Resource
                     registry,
                     origin: uri,
                     query: None,
+                    labels: None,
                     resource_sets: BTreeSet::from([Arc::new(active.clone())]),
                     collect_keys: true,
                     keys: BTreeMap::new(),
@@ -976,4 +1113,53 @@ pub(crate) fn occurrence_resources(ws: &Workspace, uri: &Url) -> Option<Resource
         })()
         .unwrap_or_default(),
     )
+}
+
+/// Certify the registration dictionary separately from the selected resources.
+/// Incomplete names can be completed without pretending they already resolve.
+pub(crate) fn label_bindings(
+    ws: &Workspace,
+    root: &Url,
+    docs: &[(Url, &Document)],
+    signatures: &CommandSignatures<'_>,
+    uri: &Url,
+    command: usize,
+) -> Option<BTreeMap<String, crate::bib_section_files::LabelBinding>> {
+    if !valid_sources(docs, signatures) {
+        return None;
+    }
+    let registry = Registry::new(root, docs, signatures);
+    let mut analysis = Analysis {
+        ws,
+        root,
+        signatures,
+        registry,
+        origin: uri,
+        query: None,
+        labels: Some(LabelProof {
+            command,
+            seen: false,
+            aliases: BTreeMap::new(),
+            environments: Vec::new(),
+        }),
+        resource_sets: BTreeSet::new(),
+        collect_keys: false,
+        keys: BTreeMap::new(),
+        active: BTreeSet::new(),
+        answer: None,
+        visited: BTreeSet::new(),
+        stack: BTreeSet::new(),
+        visits: 0,
+        commands: 0,
+        work: 0,
+        document: false,
+        ended: false,
+    };
+    analysis.walk(root)?;
+    if !analysis.labels.as_ref()?.seen
+        || docs.iter().any(|(uri, _)| !analysis.visited.contains(uri))
+    {
+        return None;
+    }
+    analysis.registry.label_bindings()
 }
