@@ -468,9 +468,18 @@ impl<'a> Graphs<'a> {
                 .filter_map(|view| view.namespace.as_ref())
                 .flat_map(|state| state.declared.keys().map(String::as_str))
                 .collect();
+            let members = graph
+                .members
+                .keys()
+                .map(|(uri, start, end)| &self.ws.documents[uri].text.source[*start..*end])
+                .collect::<BTreeSet<_>>();
+            self.work.set(self.work.get() + members.len() * 32);
+            if self.work.get() > 32 * 1024 * 1024 {
+                return Err(());
+            }
             self.work.set(
                 self.work.get()
-                    + crate::bib_source_aliases::independent(self.ws, &resources, &names)
+                    + crate::bib_source_aliases::readonly(self.ws, &resources, &names, &members)
                         .ok_or(())?,
             );
             if self.work.get() > 32 * 1024 * 1024 {
@@ -1091,6 +1100,25 @@ fn validate_edit(symbol: &Symbol<'_>) -> Result<()> {
 // Couple only a uniquely proved backend prerequisite that has no independent
 // book identity in any consumer. Raw-entry queries keep their ordinary identity.
 fn edit_symbol(mut target: Symbol<'_>) -> Result<Symbol<'_>> {
+    if is_source(&target) {
+        // IDS retains its primary owner even when only the alias is cited.
+        // Renaming just the source declaration would turn that alias into a
+        // book request; coupling these otherwise unseen owners needs a proof.
+        for uri in target.graphs.databases.keys() {
+            let doc = &target.graphs.ws.documents[uri];
+            for alias in &doc.syntax.bibliography_aliases {
+                target
+                    .graphs
+                    .work
+                    .set(target.graphs.work.get() + alias.name.len() + 64);
+                if target.graphs.work.get() > 32 * 1024 * 1024
+                    || crate::bib_source_aliases::owner(doc, alias) == Some(target.name.as_str())
+                {
+                    return Err(());
+                }
+            }
+        }
+    }
     if is_source(&target)
         && target
             .occurrences

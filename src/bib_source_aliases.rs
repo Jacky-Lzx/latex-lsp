@@ -19,7 +19,8 @@ pub(crate) fn independent(
 
 /// A unique primary owner may become a source set without changing the IDS
 /// declaration. Its alias must not indirectly introduce a nested set member.
-/// Editing and candidates still require the independent namespace proof.
+/// Candidates require the independent namespace proof; edits additionally
+/// validate the complete occurrence graph and any raw primary dependency.
 pub(crate) fn readonly(
     ws: &Workspace,
     resources: &BTreeSet<Url>,

@@ -152,7 +152,7 @@ fn intersecting_alias_names_and_uncertain_ids_values_stay_protected() {
     }
 }
 #[test]
-fn unsaved_alias_owner_changes_keep_readonly_navigation_and_revoke_editing() {
+fn unsaved_alias_owner_changes_keep_navigation_and_diagnostics_but_protect_source_edits() {
     let (_dir, mut ws, main, bib) = setup(
         r"\defbibentryset{collected}{member}\cite{collected,absent}",
         "@book{parent,ids={old}} @book{member}",
@@ -172,7 +172,7 @@ fn unsaved_alias_owner_changes_keep_readonly_navigation_and_revoke_editing() {
         vec![key(&ws, &main, r"\defbibentryset{", "collected")]
     );
     assert!(features::prepare_rename(&ws, &main, query.range.start).is_err());
-    assert!(missing(&ws, &main).is_empty());
+    assert_eq!(missing(&ws, &main), ["absent"]);
     ws.open(bib, "@book{parent,ids={old}} @book{member}".into(), 9);
     assert_eq!(
         features::definitions(&ws, &main, query.range.start).len(),

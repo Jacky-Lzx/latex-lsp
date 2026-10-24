@@ -60,8 +60,13 @@ fn source_overridden_alias_owners_keep_the_alias_and_primary_readonly_identities
                 "{contents:?}"
             );
             assert!(!contents.value.contains("Raw parent"), "{contents:?}");
-            assert!(features::references(&ws, &main, source.range.start, true).is_empty());
-            assert!(features::prepare_rename(&ws, &bib, alias.range.start).is_err());
+            assert_eq!(
+                features::references(&ws, &main, source.range.start, true).len(),
+                2
+            );
+            assert!(features::prepare_rename(&ws, &bib, alias.range.start)
+                .unwrap()
+                .is_some());
             assert!(features::rename(&ws, &main, source.range.start, "newset").is_err());
         }
     }
