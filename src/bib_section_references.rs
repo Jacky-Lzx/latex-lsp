@@ -461,39 +461,29 @@ impl<'a> Graphs<'a> {
         if self.stored > 32 * 1024 * 1024 {
             return Err(());
         }
+        if graph.sources.is_some() {
+            let names = graph
+                .sections
+                .iter()
+                .filter_map(|view| view.namespace.as_ref())
+                .flat_map(|state| state.declared.keys().map(String::as_str))
+                .collect();
+            self.work.set(
+                self.work.get()
+                    + crate::bib_source_aliases::independent(self.ws, &resources, &names)
+                        .ok_or(())?,
+            );
+            if self.work.get() > 32 * 1024 * 1024 {
+                return Err(());
+            }
+        }
         for resource in &resources {
             if self.databases.contains_key(resource) {
-                if graph.sources.is_some()
-                    && self
-                        .ws
-                        .documents
-                        .get(resource)
-                        .ok_or(())?
-                        .syntax
-                        .bibliography_completion
-                        .entries
-                        .iter()
-                        .flat_map(|entry| &entry.fields)
-                        .any(|field| field.name == "ids")
-                {
-                    return Err(());
-                }
                 continue;
             }
             let doc = self.ws.documents.get(resource).ok_or(())?;
             self.bytes += doc.text.source.len();
             if self.bytes > 16 * 1024 * 1024 {
-                return Err(());
-            }
-            if graph.sources.is_some()
-                && doc
-                    .syntax
-                    .bibliography_completion
-                    .entries
-                    .iter()
-                    .flat_map(|entry| &entry.fields)
-                    .any(|field| field.name == "ids")
-            {
                 return Err(());
             }
             let database = Database::new(resource, doc)?;

@@ -156,6 +156,13 @@ fn citation_contexts(
 }
 
 pub(crate) fn diagnostics(ws: &Workspace, uri: &Url) -> Vec<Diagnostic> {
+    if !ws
+        .documents
+        .get(uri)
+        .is_some_and(|doc| doc.kind == DocumentKind::Latex)
+    {
+        return vec![];
+    }
     let (resources, sources) = citation_contexts(ws, uri);
     diagnostics_for(ws, uri, resources.as_ref(), sources.as_ref())
 }
@@ -171,6 +178,10 @@ fn diagnostics_for(
     let settings = ws.settings(uri);
     let config = &settings.diagnostics;
     if !config.undefined_references && !config.undefined_citations {
+        return vec![];
+    }
+    let occurrences = occurrences(ws, uri, resources, sources);
+    if occurrences.is_empty() {
         return vec![];
     }
     let scope = ws.symbol_scope(uri);
@@ -203,7 +214,7 @@ fn diagnostics_for(
             .filter(|(_, info)| info.external)
             .map(|(name, _)| name.as_str()),
     );
-    occurrences(ws, uri, resources, sources)
+    occurrences
         .into_iter()
         .filter_map(|(citation, span)| {
             let name = &doc.text.source[span.clone()];

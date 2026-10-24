@@ -29,6 +29,7 @@ pub(crate) struct Catalog {
     common: Option<BTreeSet<Url>>,
     loaded: BTreeSet<Url>,
     overrides: BTreeSet<String>,
+    source_names: BTreeSet<String>,
     blocked: BTreeSet<String>,
     sources: BTreeMap<Identity, (Arc<SourceSet>, usize)>,
     work: usize,
@@ -56,6 +57,11 @@ impl Catalog {
                 _ => None,
             })
             .collect();
+        for name in &names {
+            if self.source_names.insert((*name).to_string()) {
+                self.charge(name.len() + 64)?;
+            }
+        }
         let mut states = BTreeMap::<u32, State>::new();
         for event in &trace.events {
             match event {
@@ -175,6 +181,11 @@ impl Catalog {
                 _ => None,
             })
             .collect();
+        for name in &names {
+            if self.source_names.insert((*name).to_string()) {
+                self.charge(name.len() + 64)?;
+            }
+        }
         let mut first_probes = BTreeMap::<u32, usize>::new();
         for &(section, event) in &trace.probes {
             first_probes
@@ -331,6 +342,11 @@ impl Catalog {
         let mut base = BTreeMap::<String, Option<Candidate>>::new();
         let mut bytes = 0usize;
         let loaded = std::mem::take(&mut self.loaded);
+        let source_names = self.source_names.iter().map(String::as_str).collect();
+        self.work += crate::bib_source_aliases::independent(ws, &loaded, &source_names).ok_or(())?;
+        if self.work > LIMIT {
+            return Err(());
+        }
         for uri in loaded {
             let doc = ws.documents.get(&uri).ok_or(())?;
             bytes += doc.text.source.len();
@@ -340,20 +356,13 @@ impl Catalog {
             {
                 return Err(());
             }
-            for field in doc
-                .syntax
-                .bibliography_completion
-                .entries
-                .iter()
-                .flat_map(|entry| &entry.fields)
-            {
-                self.work += 16;
-                if self.work > LIMIT || field.name == "ids" {
-                    return Err(());
-                }
-            }
             let mut seen = BTreeSet::new();
-            for entry in &doc.syntax.citations {
+            for entry in doc
+                .syntax
+                .citations
+                .iter()
+                .chain(&doc.syntax.bibliography_aliases)
+            {
                 if !syntax::is_static_citation_key(&entry.name) {
                     continue;
                 }
@@ -363,7 +372,8 @@ impl Catalog {
                 if !self.all.contains(&uri) {
                     continue;
                 }
-                self.charge(entry.name.len() + entry.detail.len() + uri.as_str().len() + 128)?;
+                let detail = crate::bib_source_aliases::detail(doc, entry);
+                self.charge(entry.name.len() + detail.len() + uri.as_str().len() + 128)?;
                 if !common.contains(&uri)
                     || base.contains_key(&entry.name)
                     || (field == "xdata"
@@ -375,7 +385,7 @@ impl Catalog {
                         entry.name.clone(),
                         Some(Candidate {
                             uri: uri.clone(),
-                            detail: entry.detail.clone(),
+                            detail,
                         }),
                     );
                 }

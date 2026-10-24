@@ -299,7 +299,7 @@ fn ids_expressions_preambles_duplicate_fields_and_truncation_keep_their_guards()
     let bib = main.join("section.bib").unwrap();
     let base = ws.documents[&bib].text.source.clone();
     for suffix in [
-        ",IDS={old}",
+        ",IDS={parent}",
         ",IDS=unknown",
         ",ids={old} # unknown",
         ",CROSSREF={member}",

@@ -31693,3 +31693,129 @@ fn source_set_coupled_parent_renames_track_raw_consumers_versions_and_relation_t
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+fn source_set_disjoint_aliases_refresh_navigation_candidates_and_versioned_edits() {
+    use latex_lsp::text::Text;
+    let dir = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let bib = main.join("section.bib").unwrap();
+    let source="% 😀\r\n\\documentclass{article}\\usepackage{biblatex}\\addsectionbib[label=chosen]{section.bib}\\begin{document}\\newrefsection[chosen]\\defbibentryset{collected}{old}\\cite{collected,old,absent}\\end{document}";
+    let database =
+        "% 😀\r\n@book{parent,title={Alias title},ids={old}} @book{child,crossref={old}}";
+    std::fs::write(dir.path().join("main.tex"), source).unwrap();
+    std::fs::write(dir.path().join("section.bib"), database).unwrap();
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    for (uri, language, text, version) in
+        [(&main, "latex", source, 5), (&bib, "bibtex", database, 7)]
+    {
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"languageId":language,"text":text,"version":version}}),
+        );
+    }
+    let range = |text: &str, prefix: &str, name: &str| {
+        let start = text.find(prefix).unwrap() + prefix.len();
+        Text::new(text.into()).range(start, start + name.len())
+    };
+    let source_key = range(source, r"\defbibentryset{", "collected");
+    let source_cite = range(source, r"\cite{", "collected");
+    let member = range(source, r"\defbibentryset{collected}{", "old");
+    let alias = range(database, "ids={", "old");
+    let definition = json!({"textDocument":{"uri":main},"position":source_cite.start});
+    assert_eq!(
+        server.request(2, "textDocument/definition", definition.clone()),
+        json!([{"uri":main,"range":source_key}])
+    );
+    assert_eq!(
+        server.request(
+            3,
+            "textDocument/definition",
+            json!({"textDocument":{"uri":main},"position":member.start})
+        ),
+        json!([{"uri":bib,"range":alias}])
+    );
+    let candidates=server.request(4,"textDocument/completion",json!({"textDocument":{"uri":main},"position":{"line":member.start.line,"character":member.start.character+1}}));
+    let items = candidates.as_array().unwrap();
+    let old = items.iter().find(|item| item["label"] == "old").unwrap();
+    assert!(old["detail"].as_str().unwrap().contains("Alias title"));
+    let renamed = server.request(
+        5,
+        "textDocument/rename",
+        json!({"textDocument":{"uri":bib},"position":alias.start,"newName":"newalias"}),
+    );
+    let documents = renamed["documentChanges"].as_array().unwrap();
+    assert_eq!(documents.len(), 2, "{renamed}");
+    for (uri, version, expected) in [
+        (
+            &main,
+            5,
+            vec![member, range(source, r"\cite{collected,", "old")],
+        ),
+        (&bib, 7, vec![alias, range(database, "crossref={", "old")]),
+    ] {
+        let document = documents
+            .iter()
+            .find(|change| change["textDocument"]["uri"] == uri.as_str())
+            .unwrap();
+        assert_eq!(document["textDocument"]["version"], version);
+        let edits = document["edits"].as_array().unwrap();
+        assert_eq!(edits.len(), expected.len());
+        for span in expected {
+            assert!(
+                edits
+                    .iter()
+                    .any(|edit| edit["range"] == json!(span) && edit["newText"] == "newalias"),
+                "{renamed}"
+            );
+        }
+    }
+    let diagnostic = json!({"textDocument":{"uri":main}});
+    let report = server.request(6, "textDocument/diagnostic", diagnostic.clone());
+    assert_eq!(
+        report["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|d| d["code"] == "undefined-citation")
+            .count(),
+        1
+    );
+    server.notify("textDocument/didChange",json!({"textDocument":{"uri":bib,"version":8},"contentChanges":[{"text":database.replace("@book{parent,","@book{collected,")}]}));
+    assert_eq!(
+        server.request(7, "textDocument/definition", definition.clone()),
+        json!([])
+    );
+    let report = server.request(8, "textDocument/diagnostic", diagnostic.clone());
+    assert!(!report["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|d| d["code"] == "undefined-citation"));
+    server.send(json!({"jsonrpc":"2.0","id":9,"method":"textDocument/rename","params":{"textDocument":{"uri":main},"position":source_key.start,"newName":"newset"}}));
+    let rejected = server.until(|message| message["id"] == 9);
+    assert!(rejected.get("error").is_some(), "{rejected}");
+    server.notify("textDocument/didClose", json!({"textDocument":{"uri":bib}}));
+    assert_eq!(
+        server.request(10, "textDocument/definition", definition),
+        json!([{"uri":main,"range":source_key}])
+    );
+    let renamed = server.request(
+        11,
+        "textDocument/rename",
+        json!({"textDocument":{"uri":main},"position":source_key.start,"newName":"newset"}),
+    );
+    assert_eq!(renamed["documentChanges"][0]["textDocument"]["version"], 5);
+    assert_eq!(
+        renamed["documentChanges"][0]["edits"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    server.request(12, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

@@ -48,7 +48,6 @@ impl Databases {
         if self.bytes > 16 * 1024 * 1024
             || doc.kind != DocumentKind::Bibtex
             || !doc.syntax.diagnostics.is_empty()
-            || !doc.syntax.bibliography_aliases.is_empty()
         {
             return Err(());
         }
@@ -56,6 +55,7 @@ impl Databases {
             .syntax
             .citations
             .iter()
+            .chain(&doc.syntax.bibliography_aliases)
             .filter(|entry| entry.name == name);
         let found = matched.next().map(|entry| Identity {
             uri: uri.clone(),
@@ -325,6 +325,22 @@ fn target(ws: &Workspace, uri: &Url, offset: usize) -> Option<Option<Answer>> {
                     .entry(Arc::as_ptr(resources) as usize)
                     .or_insert(resources);
             }
+            let resources = views
+                .values()
+                .flat_map(|view| view.iter().cloned())
+                .collect();
+            let names = trace
+                .events
+                .iter()
+                .filter_map(|event| match event {
+                    SourceEvent::Set(_, set) => Some(set.key.name.as_str()),
+                    _ => None,
+                })
+                .collect();
+            work += crate::bib_source_aliases::independent(ws, &resources, &names)?;
+            if work > 32 * 1024 * 1024 {
+                return None;
+            }
             for resources in views.values() {
                 for resource in resources.iter() {
                     databases.prepare(ws, resource, &name).ok()?;
@@ -370,12 +386,14 @@ pub(crate) fn hover(ws: &Workspace, uri: &Url, offset: usize) -> Option<Option<H
             }
             format!("Dynamic bibliography set: {names}")
         } else {
-            doc.syntax
-                .citations
-                .iter()
-                .find(|entry| entry.span == (answer.identity.start..answer.identity.end))?
-                .detail
-                .clone()
+            crate::bib_source_aliases::detail(
+                doc,
+                doc.syntax
+                    .citations
+                    .iter()
+                    .chain(&doc.syntax.bibliography_aliases)
+                    .find(|entry| entry.span == (answer.identity.start..answer.identity.end))?,
+            )
         };
         Some(Hover {
             contents: HoverContents::Markup(MarkupContent {
