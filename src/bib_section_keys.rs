@@ -465,6 +465,19 @@ impl Analysis<'_, '_> {
                     .get(&(uri.clone(), lexical.span.start))
                     .cloned();
                 if let Some(declaration) = declaration {
+                    if uri == self.origin
+                        && self
+                            .query
+                            .as_ref()
+                            .is_some_and(|query| query.command == lexical.span.start)
+                    {
+                        self.work += 64;
+                        if self.work > 32 * 1024 * 1024 {
+                            return None;
+                        }
+                        let trace = self.trace.as_mut()?;
+                        trace.probes.push((trace.current, trace.events.len()));
+                    }
                     // The declaration is shared, but processing its member list
                     // on every execution still consumes the analysis budget.
                     self.work += declaration.key.uri.as_str().len()
@@ -493,29 +506,61 @@ impl Analysis<'_, '_> {
                     }
                     let command =
                         crate::reference_calls::resolved_command(source, name, span.clone());
+                    let pending = self
+                        .query
+                        .as_ref()
+                        .filter(|query| uri == self.origin && query.command == lexical.span.start)
+                        .map(|query| &query.span);
                     let fields = if let Some(style) = crate::citations::style(name) {
                         let arguments = crate::citations::arguments(source, span.end, style);
-                        if arguments.fields.iter().any(|field| !field.complete) {
+                        if arguments.fields.iter().any(|field| {
+                            !field.complete
+                                && !pending.is_some_and(|span| {
+                                    field.argument.span.start <= span.start
+                                        && span.end <= field.argument.span.end
+                                })
+                        }) {
                             return None;
                         }
                         arguments
-                            .keys()
-                            .map(|argument| argument.span.clone())
+                            .fields
+                            .into_iter()
+                            .filter(|field| field.role == crate::citations::Role::Keys)
+                            .map(|field| field.argument.span)
                             .collect::<Vec<_>>()
+                    } else if let Some(argument) = command.argument.as_ref() {
+                        vec![argument.span.clone()]
                     } else {
-                        vec![command.argument.as_ref()?.span.clone()]
+                        let pending = pending?;
+                        let start = syntax::citation_argument_start(source, name, span.end)?;
+                        if source.as_bytes().get(start) != Some(&b'{') || pending.start < start + 1
+                        {
+                            return None;
+                        }
+                        std::iter::once(start + 1..source.len()).collect::<Vec<_>>()
                     };
                     if fields.is_empty() {
                         return None;
                     }
                     for field in fields {
-                        let keys = source_key_list(uri, source, field)?;
-                        if keys.iter().any(|key| key.name == "*")
+                        let pending = pending
+                            .filter(|span| field.start <= span.start && span.end <= field.end);
+                        let keys = source_key_items(uri, source, field, pending)?;
+                        if keys.iter().flatten().any(|key| key.name == "*")
                             && (name != "nocite" || keys.len() != 1)
                         {
                             return None;
                         }
                         for key in keys {
+                            let Some(key) = key else {
+                                self.work += 64;
+                                if self.work > 32 * 1024 * 1024 {
+                                    return None;
+                                }
+                                let trace = self.trace.as_mut()?;
+                                trace.probes.push((trace.current, trace.events.len()));
+                                continue;
+                            };
                             self.work += key.uri.as_str().len() + key.name.len() + 96;
                             let trace = self.trace.as_mut()?;
                             if self.work > 32 * 1024 * 1024 || trace.events.len() >= 100_000 {
@@ -581,17 +626,21 @@ impl Analysis<'_, '_> {
                     .as_ref()
                     .is_some_and(|query| lexical.span.start == query.command)
             {
-                if !self.document || !positions.contains(&lexical.span.start) {
-                    return None;
-                }
-                if self
-                    .answer
-                    .as_ref()
-                    .is_some_and(|previous| *previous != self.active)
+                if (!self.document && !(self.trace.is_some() && name == "defbibentryset"))
+                    || !positions.contains(&lexical.span.start)
                 {
                     return None;
                 }
-                self.answer = Some(self.active.clone());
+                if self.trace.is_none() {
+                    if self
+                        .answer
+                        .as_ref()
+                        .is_some_and(|previous| *previous != self.active)
+                    {
+                        return None;
+                    }
+                    self.answer = Some(self.active.clone());
+                }
             }
             if !relevant {
                 continue;
@@ -748,7 +797,7 @@ impl Analysis<'_, '_> {
             return Some(());
         }
         self.active = self.registry.resources(self.root, selected.as_deref())?;
-        if self.query.is_none() {
+        if self.query.is_none() || self.trace.is_some() {
             let resources = self.intern_resources()?;
             if let Some(trace) = self.trace.as_mut() {
                 self.work += 64;
@@ -1179,6 +1228,9 @@ pub(crate) fn completion(
     uri: &Url,
     offset: usize,
 ) -> Option<Vec<tower_lsp::lsp_types::CompletionItem>> {
+    if let Some(items) = crate::bib_source_citations::completion(ws, uri, offset) {
+        return Some(items);
+    }
     let Some(target) = target(ws, uri, offset, Purpose::Completion)? else {
         return Some(Vec::new());
     };
@@ -1476,6 +1528,7 @@ pub(crate) struct SourceTrace {
     pub work: usize,
     pub resources: BTreeMap<u32, Arc<BTreeSet<Url>>>,
     pub events: Vec<SourceEvent>,
+    pub probes: Vec<(u32, usize)>,
     declarations: SourceDeclarations,
     current: u32,
     next: u32,
@@ -1509,11 +1562,14 @@ pub(crate) fn has_source_sets(
     })
 }
 
-fn source_key_list(
+// Only the pending completion item may be absent or contain search words.
+// Other keys retain the normal complete source-trace validation.
+fn source_key_items(
     uri: &Url,
     source: &str,
     span: std::ops::Range<usize>,
-) -> Option<Vec<SourceKey>> {
+    pending: Option<&std::ops::Range<usize>>,
+) -> Option<Vec<Option<SourceKey>>> {
     if source[span.clone()]
         .bytes()
         .filter(|byte| *byte == b',')
@@ -1525,7 +1581,16 @@ fn source_key_list(
     }
     let mut result = Vec::new();
     let mut stored = 0usize;
+    let mut probed = false;
     for segment in syntax::key_list_segments(source, span) {
+        if pending.is_some_and(|span| segment.start <= span.start && span.end <= segment.end) {
+            if probed {
+                return None;
+            }
+            probed = true;
+            result.push(None);
+            continue;
+        }
         let mut names = syntax::citation_list_spans(source, segment).into_iter();
         let span = names.next()?;
         if names.next().is_some() {
@@ -1535,11 +1600,14 @@ fn source_key_list(
         if stored > 32 * 1024 * 1024 || result.len() >= 100_000 {
             return None;
         }
-        result.push(SourceKey {
+        result.push(Some(SourceKey {
             uri: uri.clone(),
             name: source[span.clone()].into(),
             span,
-        });
+        }));
+    }
+    if pending.is_some() && !probed {
+        return None;
     }
     (!result.is_empty()).then_some(result)
 }
@@ -1547,6 +1615,7 @@ fn source_key_list(
 fn source_declarations(
     docs: &[(Url, &Document)],
     signatures: &CommandSignatures<'_>,
+    pending: Option<(&Url, &Query)>,
 ) -> Option<(SourceDeclarations, usize)> {
     if !signatures.command_unchanged("defbibentryset") {
         return None;
@@ -1583,7 +1652,13 @@ fn source_declarations(
             }
             let arguments =
                 crate::citations::arguments(source, span.end, crate::citations::Style::Set);
-            if arguments.fields.len() != 2 || arguments.fields.iter().any(|field| !field.complete) {
+            let pending = pending
+                .filter(|(origin, query)| *origin == uri && query.command == command.span.start)
+                .map(|(_, query)| &query.span);
+            if arguments.fields.len() != 2
+                || !arguments.fields[0].complete
+                || (!arguments.fields[1].complete && pending.is_none())
+            {
                 return None;
             }
             let key =
@@ -1591,7 +1666,15 @@ fn source_declarations(
             if !syntax::is_static_citation_key(&key.value) || key.value == "*" {
                 return None;
             }
-            let members = source_key_list(uri, source, arguments.fields[1].argument.span.clone())?;
+            let members = source_key_items(
+                uri,
+                source,
+                arguments.fields[1].argument.span.clone(),
+                pending,
+            )?
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
             if members.iter().any(|member| member.name == "*") {
                 return None;
             }
@@ -1637,13 +1720,63 @@ pub(crate) fn source_trace(
     docs: &[(Url, &Document)],
     signatures: &CommandSignatures<'_>,
 ) -> Option<SourceTrace> {
+    source_trace_query(ws, root, docs, signatures, root, None)
+}
+pub(crate) struct SourceCompletion {
+    pub trace: SourceTrace,
+    pub span: std::ops::Range<usize>,
+    pub removals: Vec<std::ops::Range<usize>>,
+    pub member: bool,
+}
+pub(crate) fn source_completion_candidate(
+    doc: &Document,
+    signatures: &CommandSignatures<'_>,
+    offset: usize,
+) -> bool {
+    query(doc, signatures, offset, Purpose::Completion).is_some()
+}
+pub(crate) fn source_completion_trace(
+    ws: &Workspace,
+    root: &Url,
+    docs: &[(Url, &Document)],
+    signatures: &CommandSignatures<'_>,
+    origin: &Url,
+    offset: usize,
+) -> Option<SourceCompletion> {
+    let doc = ws.documents.get(origin)?;
+    let query = query(doc, signatures, offset, Purpose::Completion)?;
+    let (span, removals) = completion_span(doc, &query.call, offset)?;
+    let member = query.call.name == "defbibentryset";
+    let trace = source_trace_query(ws, root, docs, signatures, origin, Some(query))?;
+    if trace.probes.is_empty() {
+        return None;
+    }
+    Some(SourceCompletion {
+        trace,
+        span,
+        removals,
+        member,
+    })
+}
+fn source_trace_query(
+    ws: &Workspace,
+    root: &Url,
+    docs: &[(Url, &Document)],
+    signatures: &CommandSignatures<'_>,
+    origin: &Url,
+    query: Option<Query>,
+) -> Option<SourceTrace> {
     if !ws.index_truncated.is_empty()
         || !valid_sources(docs, signatures)
         || !static_databases(ws, root)
     {
         return None;
     }
-    let (declarations, mut work) = source_declarations(docs, signatures)?;
+    let (declarations, mut work) = source_declarations(
+        docs,
+        signatures,
+        query.as_ref().map(|query| (origin, query)),
+    )?;
     let registry = Registry::new(root, docs, signatures);
     let active = registry.resources(root, None)?;
     work += active
@@ -1658,6 +1791,7 @@ pub(crate) fn source_trace(
         work: 0,
         resources: BTreeMap::from([(0, resources.clone())]),
         events: Vec::new(),
+        probes: Vec::new(),
         declarations,
         current: 0,
         next: 0,
@@ -1667,8 +1801,8 @@ pub(crate) fn source_trace(
         root,
         signatures,
         registry,
-        origin: root,
-        query: None,
+        origin,
+        query,
         labels: None,
         resource_sets: BTreeSet::from([resources]),
         collect_keys: false,

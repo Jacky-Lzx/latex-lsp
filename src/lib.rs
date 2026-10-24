@@ -16,6 +16,7 @@ mod bib_section_references;
 mod bib_section_symbols;
 mod bib_sections;
 mod bib_source_catalog;
+mod bib_source_citations;
 mod bib_source_sections;
 mod bib_strings;
 mod bib_symbols;

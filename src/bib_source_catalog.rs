@@ -1,6 +1,6 @@
-//! Bounded candidate identities for relations in source-set projects.
+//! Bounded candidate identities for relations and TeX in source-set projects.
 use crate::{
-    bib_section_keys::{self, SourceEvent, SourceSet, SourceTrace},
+    bib_section_keys::{self, SourceCompletion, SourceEvent, SourceSet, SourceTrace},
     syntax,
     workspace::{DocumentKind, Workspace},
 };
@@ -12,18 +12,18 @@ use tower_lsp::lsp_types::*;
 type Identity = (Url, usize, usize);
 type Result<T> = std::result::Result<T, ()>;
 const LIMIT: usize = 32 * 1024 * 1024;
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct State {
     declared: BTreeMap<String, Arc<SourceSet>>,
     first: BTreeMap<String, Option<Arc<SourceSet>>>,
     wildcard: bool,
 }
-struct Candidate {
-    uri: Url,
-    detail: String,
+pub(crate) struct Candidate {
+    pub uri: Url,
+    pub detail: String,
 }
 #[derive(Default)]
-struct Catalog {
+pub(crate) struct Catalog {
     contexts: usize,
     all: BTreeSet<Url>,
     common: Option<BTreeSet<Url>>,
@@ -161,7 +161,164 @@ impl Catalog {
         }
         Ok(())
     }
-    fn candidates(
+    pub(crate) fn trace_completion(&mut self, completion: &SourceCompletion) -> Result<()> {
+        let trace = &completion.trace;
+        self.work += trace.work;
+        if self.work > LIMIT {
+            return Err(());
+        }
+        let names: BTreeSet<_> = trace
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                SourceEvent::Set(_, set) => Some(set.key.name.as_str()),
+                _ => None,
+            })
+            .collect();
+        let mut first_probes = BTreeMap::<u32, usize>::new();
+        for &(section, event) in &trace.probes {
+            first_probes
+                .entry(section)
+                .and_modify(|first| *first = (*first).min(event))
+                .or_insert(event);
+        }
+        let mut by_event = BTreeMap::<usize, Vec<u32>>::new();
+        for (section, event) in first_probes {
+            by_event.entry(event).or_default().push(section);
+        }
+        let mut states = BTreeMap::<u32, State>::new();
+        let mut snapshots = BTreeMap::<u32, State>::new();
+        for index in 0..=trace.events.len() {
+            if let Some(sections) = by_event.get(&index) {
+                for section in sections {
+                    let state = states.entry(*section).or_default();
+                    self.work += state
+                        .declared
+                        .keys()
+                        .chain(state.first.keys())
+                        .map(|name| name.len() + 192)
+                        .sum::<usize>()
+                        + 128;
+                    if self.work > LIMIT {
+                        return Err(());
+                    }
+                    snapshots.insert(*section, state.clone());
+                }
+            }
+            let Some(event) = trace.events.get(index) else {
+                break;
+            };
+            match event {
+                SourceEvent::Set(section, set) => {
+                    if set
+                        .members
+                        .iter()
+                        .any(|member| names.contains(member.name.as_str()))
+                    {
+                        return Err(());
+                    }
+                    let previous = states
+                        .entry(*section)
+                        .or_default()
+                        .declared
+                        .insert(set.key.name.clone(), set.clone());
+                    if previous.is_some_and(|previous| previous.key != set.key) {
+                        return Err(());
+                    }
+                }
+                SourceEvent::Request(section, key, wildcard) => {
+                    let state = states.entry(*section).or_default();
+                    if *wildcard {
+                        state.wildcard = true;
+                    } else if names.contains(key.name.as_str())
+                        && !state.first.contains_key(&key.name)
+                    {
+                        state
+                            .first
+                            .insert(key.name.clone(), state.declared.get(&key.name).cloned());
+                    }
+                }
+            }
+        }
+        if completion.member {
+            for name in &names {
+                if self.blocked.insert((*name).into()) {
+                    self.charge(name.len() + 64)?;
+                }
+            }
+        }
+        let mut seen = BTreeSet::new();
+        for resources in trace.resources.values() {
+            if seen.insert(Arc::as_ptr(resources) as usize) {
+                self.work += resources
+                    .iter()
+                    .map(|uri| uri.as_str().len() + 96)
+                    .sum::<usize>();
+                if self.work > LIMIT {
+                    return Err(());
+                }
+                for uri in resources.iter() {
+                    if self.loaded.insert(uri.clone()) {
+                        self.charge(uri.as_str().len() + 96)?;
+                    }
+                }
+            }
+        }
+        seen.clear();
+        for (section, before) in snapshots {
+            let resources = trace.resources.get(&section).ok_or(())?;
+            self.contexts += 1;
+            if self.contexts > 100_000 {
+                return Err(());
+            }
+            if seen.insert(Arc::as_ptr(resources) as usize) {
+                self.work += resources.len() * 96
+                    + self.common.as_ref().map_or(0, |common| common.len() * 96);
+                if self.work > LIMIT {
+                    return Err(());
+                }
+                for uri in resources.iter() {
+                    if self.all.insert(uri.clone()) {
+                        self.charge(2 * (uri.as_str().len() + 96))?;
+                    }
+                }
+                if let Some(common) = self.common.as_mut() {
+                    common.retain(|uri| resources.contains(uri));
+                } else {
+                    self.common = Some(resources.as_ref().clone());
+                }
+            }
+            if completion.member {
+                continue;
+            }
+            let Some(final_state) = states.get(&section) else {
+                continue;
+            };
+            for name in final_state.declared.keys() {
+                let set = match before.first.get(name) {
+                    Some(first) => first.as_ref(),
+                    None => before.declared.get(name),
+                };
+                let Some(set) = set else {
+                    if final_state.wildcard && self.blocked.insert(name.clone()) {
+                        self.charge(name.len() + 64)?;
+                    }
+                    continue;
+                };
+                if self.overrides.insert(name.clone()) {
+                    self.charge(name.len() + 64)?;
+                }
+                let id = (set.key.uri.clone(), set.key.span.start, set.key.span.end);
+                if !self.sources.contains_key(&id) {
+                    self.charge(id.0.as_str().len() + 128)?;
+                    self.sources.insert(id.clone(), (set.clone(), 0));
+                }
+                self.sources.get_mut(&id).ok_or(())?.1 += 1;
+            }
+        }
+        Ok(())
+    }
+    pub(crate) fn candidates(
         mut self,
         ws: &Workspace,
         origin: &Url,
@@ -227,10 +384,12 @@ impl Catalog {
         // Biber resolves crossref/xref parents in the database before it
         // materializes dynamic sets. A source-only key is not a valid parent.
         // XDATA and the related/nested-set transformations cannot consume an
-        // active dynamic set as an ordinary parent either.
+        // active dynamic set as an ordinary parent either. TeX citation keys
+        // can request a source-only set; member completion excludes all sets.
         self.sources.retain(|_, (set, _)| {
-            matches!(field, "crossref" | "xref")
-                && base.get(&set.key.name).is_some_and(Option::is_some)
+            field == "cite"
+                || (matches!(field, "crossref" | "xref")
+                    && base.get(&set.key.name).is_some_and(Option::is_some))
         });
         let mut answer: BTreeMap<_, _> = base
             .into_iter()

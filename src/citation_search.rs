@@ -96,7 +96,6 @@ pub(crate) fn items(
     scope: &BTreeSet<Url>,
     unique: bool,
 ) -> Option<Vec<CompletionItem>> {
-    let source = &doc.text.source;
     let mut ambiguous = BTreeSet::new();
     if unique {
         let mut names = BTreeSet::new();
@@ -116,6 +115,30 @@ pub(crate) fn items(
             }
         }
     }
+    candidate_items(
+        doc,
+        offset,
+        span,
+        ws.documents
+            .iter()
+            .filter(|(uri, _)| scope.contains(*uri))
+            .flat_map(|(uri, doc)| {
+                doc.syntax
+                    .citations
+                    .iter()
+                    .chain(&doc.syntax.bibliography_aliases)
+                    .filter(|entry| !ambiguous.contains(&entry.name))
+                    .map(move |entry| (uri, entry.name.as_str(), entry.detail.as_str()))
+            }),
+    )
+}
+pub(crate) fn candidate_items<'a>(
+    doc: &Document,
+    offset: usize,
+    span: Range<usize>,
+    candidates: impl IntoIterator<Item = (&'a Url, &'a str, &'a str)>,
+) -> Option<Vec<CompletionItem>> {
+    let source = &doc.text.source;
     let query = source[span.start..offset].trim();
     if query.chars().count() > 128 {
         return Some(vec![]);
@@ -125,42 +148,29 @@ pub(crate) fn items(
     let filter_prefix = &source[main_start..offset];
     let mut ranked = Vec::new();
     let mut seen = BTreeSet::new();
-    for (entry_uri, doc) in &ws.documents {
-        if !scope.contains(entry_uri) {
+    for (entry_uri, name, detail) in candidates {
+        if !syntax::is_static_citation_key(name) || !seen.insert(name.to_string()) {
             continue;
         }
-        for entry in doc
-            .syntax
-            .citations
-            .iter()
-            .chain(&doc.syntax.bibliography_aliases)
-        {
-            if !syntax::is_static_citation_key(&entry.name)
-                || ambiguous.contains(&entry.name)
-                || !seen.insert(entry.name.clone())
-            {
-                continue;
-            }
-            let Some(rank) = score(&entry.name, &entry.detail, query) else {
-                continue;
-            };
-            ranked.push((
-                rank,
-                CompletionItem {
-                    label: entry.name.clone(),
-                    kind: Some(CompletionItemKind::REFERENCE),
-                    detail: Some(format!("{} — {}", entry.detail, entry_uri.path())),
-                    filter_text: Some(format!("{filter_prefix} {} {}", entry.name, entry.detail)),
-                    sort_text: Some(format!("{rank:02}{}", entry.name)),
-                    text_edit: Some(CompletionTextEdit::Edit(TextEdit {
-                        range,
-                        new_text: entry.name.clone(),
-                    })),
-                    additional_text_edits: (!extra.is_empty()).then(|| extra.clone()),
-                    ..Default::default()
-                },
-            ));
-        }
+        let Some(rank) = score(name, detail, query) else {
+            continue;
+        };
+        ranked.push((
+            rank,
+            CompletionItem {
+                label: name.into(),
+                kind: Some(CompletionItemKind::REFERENCE),
+                detail: Some(format!("{} — {}", detail, entry_uri.path())),
+                filter_text: Some(format!("{filter_prefix} {} {}", name, detail)),
+                sort_text: Some(format!("{rank:02}{}", name)),
+                text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                    range,
+                    new_text: name.into(),
+                })),
+                additional_text_edits: (!extra.is_empty()).then(|| extra.clone()),
+                ..Default::default()
+            },
+        ));
     }
     ranked.sort_by(|(a, ia), (b, ib)| a.cmp(b).then_with(|| ia.label.cmp(&ib.label)));
     Some(ranked.into_iter().map(|(_, item)| item).collect())
