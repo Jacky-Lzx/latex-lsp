@@ -645,7 +645,7 @@ fn preamble_injected_keys_do_not_receive_false_missing_diagnostics_or_database_c
 }
 
 #[test]
-fn source_declaration_queries_cannot_leak_partial_database_union_references_or_edits() {
+fn source_declaration_queries_return_only_certified_complete_graphs_and_refuse_unproved_edits() {
     for declare in [
         r"\defbibentryset",
         r"\csuse{defbibentryset}",
@@ -657,12 +657,39 @@ fn source_declaration_queries_cannot_leak_partial_database_union_references_or_e
         let point = key(&ws, &main, &format!("{declare}{{"), "parent")
             .range
             .start;
-        assert!(
-            features::references(&ws, &main, point, true).is_empty(),
+        let mut expected = if declare == r"\bibitem" {
+            Vec::new()
+        } else {
+            vec![
+                key(&ws, &main, &format!("{declare}{{"), "parent"),
+                key(&ws, &main, r"\cite{", "parent"),
+                key(
+                    &ws,
+                    &main.join("section.bib").unwrap(),
+                    "crossref={",
+                    "parent",
+                ),
+            ]
+        };
+        let sorted = |mut locations: Vec<Location>| {
+            locations.sort_by_key(|item| {
+                (
+                    item.uri.to_string(),
+                    item.range.start.line,
+                    item.range.start.character,
+                )
+            });
+            locations
+        };
+        assert_eq!(
+            sorted(features::references(&ws, &main, point, true)),
+            sorted(expected.clone()),
             "{declare}"
         );
-        assert!(
-            features::references(&ws, &main, point, false).is_empty(),
+        expected.retain(|item| item.uri != main || item.range.start != point);
+        assert_eq!(
+            sorted(features::references(&ws, &main, point, false)),
+            sorted(expected),
             "{declare}"
         );
         assert!(

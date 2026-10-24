@@ -1,4 +1,4 @@
-//! Complete, bounded occurrence graphs for database keys in reference sections.
+//! Complete, bounded occurrence graphs for bibliography keys in reference sections.
 use crate::{
     bib_section_keys::{self, KeyGraph},
     named_references::Index,
@@ -18,6 +18,7 @@ use tower_lsp::{
 };
 
 type Result<T> = std::result::Result<T, ()>;
+type ResourceBindings = BTreeMap<Url, Result<Option<Identity>>>;
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct Identity {
     uri: Url,
@@ -155,9 +156,164 @@ impl Database {
     }
 }
 
+// Resource allocations can be shared, but each source execution section has
+// its own namespace and must have a distinct binding-cache identity.
+#[derive(Default)]
+struct Namespace {
+    declared: BTreeMap<String, Identity>,
+    first: BTreeMap<String, Option<Identity>>,
+    wildcard: bool,
+}
+struct View {
+    resources: Arc<BTreeSet<Url>>,
+    namespace: Option<Namespace>,
+}
+impl std::ops::Deref for View {
+    type Target = BTreeSet<Url>;
+    fn deref(&self) -> &Self::Target {
+        &self.resources
+    }
+}
+type OccurrenceKey = (Url, usize, usize);
+struct Graph {
+    sections: Vec<Arc<View>>,
+    occurrences: BTreeMap<OccurrenceKey, Vec<Arc<View>>>,
+    sources: Option<BTreeSet<Identity>>,
+    work: usize,
+}
+impl Graph {
+    fn resources(graph: KeyGraph) -> Result<Self> {
+        let views: BTreeMap<_, _> = graph
+            .sections
+            .into_iter()
+            .map(|resources| {
+                (
+                    resources.clone(),
+                    Arc::new(View {
+                        resources,
+                        namespace: None,
+                    }),
+                )
+            })
+            .collect();
+        let occurrences = graph
+            .occurrences
+            .into_iter()
+            .map(|(key, resources)| {
+                let visits = resources
+                    .iter()
+                    .map(|resources| views.get(resources).cloned().ok_or(()))
+                    .collect::<Result<Vec<_>>>()?;
+                Ok((key, visits))
+            })
+            .collect::<Result<_>>()?;
+        Ok(Self {
+            sections: views.into_values().collect(),
+            occurrences,
+            sources: None,
+            work: 0,
+        })
+    }
+    fn source(trace: bib_section_keys::SourceTrace) -> Result<Self> {
+        use bib_section_keys::SourceEvent;
+        let names: BTreeSet<_> = trace
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                SourceEvent::Set(_, set) => Some(set.key.name.as_str()),
+                _ => None,
+            })
+            .collect();
+        let mut namespaces = BTreeMap::<u32, Namespace>::new();
+        let mut sources = BTreeSet::new();
+        let mut visits = BTreeMap::<OccurrenceKey, BTreeSet<u32>>::new();
+        for event in &trace.events {
+            match event {
+                SourceEvent::Set(section, set) => {
+                    if set
+                        .members
+                        .iter()
+                        .any(|key| names.contains(key.name.as_str()))
+                    {
+                        return Err(());
+                    }
+                    let identity = Identity {
+                        uri: set.key.uri.clone(),
+                        start: set.key.span.start,
+                        end: set.key.span.end,
+                    };
+                    if namespaces
+                        .entry(*section)
+                        .or_default()
+                        .declared
+                        .insert(set.key.name.clone(), identity.clone())
+                        .is_some_and(|previous| previous != identity)
+                    {
+                        return Err(());
+                    }
+                    sources.insert(identity);
+                    for key in &set.members {
+                        visits
+                            .entry((key.uri.clone(), key.span.start, key.span.end))
+                            .or_default()
+                            .insert(*section);
+                    }
+                }
+                SourceEvent::Request(section, key, wildcard) => {
+                    let state = namespaces.entry(*section).or_default();
+                    if *wildcard {
+                        state.wildcard = true;
+                    } else {
+                        if names.contains(key.name.as_str()) && !state.first.contains_key(&key.name)
+                        {
+                            state
+                                .first
+                                .insert(key.name.clone(), state.declared.get(&key.name).cloned());
+                        }
+                        visits
+                            .entry((key.uri.clone(), key.span.start, key.span.end))
+                            .or_default()
+                            .insert(*section);
+                    }
+                }
+            }
+        }
+        let views: BTreeMap<_, _> = trace
+            .resources
+            .into_iter()
+            .map(|(section, resources)| {
+                (
+                    section,
+                    Arc::new(View {
+                        resources,
+                        namespace: Some(namespaces.remove(&section).unwrap_or_default()),
+                    }),
+                )
+            })
+            .collect();
+        let occurrences = visits
+            .into_iter()
+            .map(|(key, sections)| {
+                let visits = sections
+                    .into_iter()
+                    .map(|section| views.get(&section).cloned().ok_or(()))
+                    .collect::<Result<Vec<_>>>()?;
+                Ok((key, visits))
+            })
+            .collect::<Result<_>>()?;
+        Ok(Self {
+            sections: views.into_values().collect(),
+            occurrences,
+            sources: Some(sources),
+            work: trace.work,
+        })
+    }
+}
+
 struct Project {
     scope: BTreeSet<Url>,
-    graph: KeyGraph,
+    graph: Graph,
+    resources: BTreeSet<Url>,
 }
 struct Graphs<'a> {
     ws: &'a Workspace,
@@ -170,6 +326,8 @@ struct Graphs<'a> {
     // Bindings belong to `name`; changing a rename candidate clears this cache.
     bindings: RefCell<BTreeMap<usize, Result<Option<Identity>>>>,
     work: Cell<usize>,
+    database_bindings: RefCell<BTreeMap<usize, Result<Option<Identity>>>>,
+    relation_bindings: RefCell<BTreeMap<Url, ResourceBindings>>,
 }
 impl<'a> Graphs<'a> {
     fn new(ws: &'a Workspace) -> Result<Self> {
@@ -201,6 +359,8 @@ impl<'a> Graphs<'a> {
             name: None,
             bindings: RefCell::new(BTreeMap::new()),
             work: Cell::new(0),
+            database_bindings: RefCell::new(BTreeMap::new()),
+            relation_bindings: RefCell::new(BTreeMap::new()),
         })
     }
     fn consumers(&self, uri: &Url) -> Vec<Url> {
@@ -241,10 +401,25 @@ impl<'a> Graphs<'a> {
             docs.iter()
                 .map(|(_, doc)| (doc.text.source.as_str(), &doc.syntax)),
         );
-        let graph = bib_section_keys::key_graph(self.ws, root, &docs, &signatures).ok_or(())?;
+        let graph = if bib_section_keys::has_source_sets(&docs, &signatures) {
+            Graph::source(
+                bib_section_keys::source_trace(self.ws, root, &docs, &signatures).ok_or(())?,
+            )?
+        } else {
+            Graph::resources(
+                bib_section_keys::key_graph(self.ws, root, &docs, &signatures).ok_or(())?,
+            )?
+        };
+        self.work.set(self.work.get() + graph.work);
+        self.stored += graph.work;
+        if self.work.get() > 32 * 1024 * 1024 {
+            return Err(());
+        }
+        let mut allocations = BTreeSet::new();
         self.stored += graph
             .sections
             .iter()
+            .filter(|view| allocations.insert(Arc::as_ptr(&view.resources) as usize))
             .flat_map(|view| view.iter())
             .map(|uri| uri.as_str().len() + 64)
             .sum::<usize>();
@@ -256,22 +431,57 @@ impl<'a> Graphs<'a> {
         if self.stored > 32 * 1024 * 1024 {
             return Err(());
         }
+        allocations.clear();
         let resources: BTreeSet<_> = graph
             .sections
             .iter()
+            .filter(|view| allocations.insert(Arc::as_ptr(&view.resources) as usize))
             .flat_map(|view| view.iter())
             .cloned()
             .collect();
-        for resource in resources {
-            if self.databases.contains_key(&resource) {
+        self.stored += resources
+            .iter()
+            .map(|uri| uri.as_str().len() + 64)
+            .sum::<usize>();
+        if self.stored > 32 * 1024 * 1024 {
+            return Err(());
+        }
+        for resource in &resources {
+            if self.databases.contains_key(resource) {
+                if graph.sources.is_some()
+                    && self
+                        .ws
+                        .documents
+                        .get(resource)
+                        .ok_or(())?
+                        .syntax
+                        .bibliography_completion
+                        .entries
+                        .iter()
+                        .flat_map(|entry| &entry.fields)
+                        .any(|field| field.name == "ids")
+                {
+                    return Err(());
+                }
                 continue;
             }
-            let doc = self.ws.documents.get(&resource).ok_or(())?;
+            let doc = self.ws.documents.get(resource).ok_or(())?;
             self.bytes += doc.text.source.len();
             if self.bytes > 16 * 1024 * 1024 {
                 return Err(());
             }
-            let database = Database::new(&resource, doc)?;
+            if graph.sources.is_some()
+                && doc
+                    .syntax
+                    .bibliography_completion
+                    .entries
+                    .iter()
+                    .flat_map(|entry| &entry.fields)
+                    .any(|field| field.name == "ids")
+            {
+                return Err(());
+            }
+            let database = Database::new(resource, doc)?;
             self.stored += database
                 .declarations
                 .iter()
@@ -291,15 +501,34 @@ impl<'a> Graphs<'a> {
             if self.stored > 32 * 1024 * 1024 {
                 return Err(());
             }
-            self.databases.insert(resource, database);
+            self.databases.insert(resource.clone(), database);
         }
-        self.projects.insert(root.clone(), Project { scope, graph });
+        if graph.sources.is_some() {
+            let name = self.name.as_deref().ok_or(())?;
+            for resource in &resources {
+                if self.databases[resource]
+                    .declarations
+                    .get(name)
+                    .is_some_and(|identities| identities.len() != 1)
+                {
+                    return Err(());
+                }
+            }
+        }
+        self.projects.insert(
+            root.clone(),
+            Project {
+                scope,
+                graph,
+                resources,
+            },
+        );
         Ok(())
     }
     fn bind<'b>(
         &self,
         name: &str,
-        views: impl IntoIterator<Item = &'b Arc<BTreeSet<Url>>>,
+        views: impl IntoIterator<Item = &'b Arc<View>>,
     ) -> Result<Option<Identity>> {
         if self.name.as_deref() != Some(name) {
             return Err(());
@@ -311,27 +540,33 @@ impl<'a> Graphs<'a> {
             let found = if let Some(cached) = cached {
                 cached?
             } else {
-                let mut found = None;
-                for resource in view.iter() {
-                    self.work
-                        .set(self.work.get() + name.len() + resource.as_str().len() + 64);
-                    if self.work.get() > 32 * 1024 * 1024 {
-                        return Err(());
-                    }
-                    if let Some(identities) = self
-                        .databases
-                        .get(resource)
-                        .ok_or(())?
-                        .declarations
-                        .get(name)
-                    {
-                        for identity in identities {
-                            if found.is_some() {
-                                return Err(());
-                            }
-                            found = Some(identity.clone());
-                        }
-                    }
+                let namespace = view.namespace.as_ref();
+                if namespace.is_some_and(|state| {
+                    state.wildcard
+                        && state.declared.contains_key(name)
+                        && state.first.get(name) == Some(&None)
+                }) {
+                    return Err(());
+                }
+                let source = namespace.and_then(|state| match state.first.get(name) {
+                    Some(first) => first.clone(),
+                    None => state.declared.get(name).cloned(),
+                });
+                let found = if let Some(source) = source {
+                    Some(source)
+                } else {
+                    self.database_binding(name, &view.resources)?
+                };
+                self.work.set(
+                    self.work.get()
+                        + name.len()
+                        + found
+                            .as_ref()
+                            .map_or(0, |identity| identity.uri.as_str().len())
+                        + 160,
+                );
+                if self.work.get() > 32 * 1024 * 1024 {
+                    return Err(());
                 }
                 self.bindings
                     .borrow_mut()
@@ -344,6 +579,113 @@ impl<'a> Graphs<'a> {
             answer = Some(found);
         }
         answer.ok_or(())
+    }
+    // Ordinary database lookup is shared by numeric namespaces with the same
+    // resource allocation; the final source binding remains per namespace.
+    fn database_binding(
+        &self,
+        name: &str,
+        resources: &Arc<BTreeSet<Url>>,
+    ) -> Result<Option<Identity>> {
+        let address = Arc::as_ptr(resources) as usize;
+        if let Some(found) = self.database_bindings.borrow().get(&address).cloned() {
+            return found;
+        }
+        let mut found = None;
+        for resource in resources.iter() {
+            self.work
+                .set(self.work.get() + name.len() + resource.as_str().len() + 64);
+            if self.work.get() > 32 * 1024 * 1024 {
+                return Err(());
+            }
+            if let Some(identities) = self
+                .databases
+                .get(resource)
+                .ok_or(())?
+                .declarations
+                .get(name)
+            {
+                for identity in identities {
+                    if found.is_some() {
+                        return Err(());
+                    }
+                    found = Some(identity.clone());
+                }
+            }
+        }
+        self.database_bindings
+            .borrow_mut()
+            .insert(address, Ok(found.clone()));
+        Ok(found)
+    }
+    // Fold all numeric bindings once per root/name. Equal resource allocations
+    // share membership scanning, while differing source identities stay visible.
+    fn relation_binding(&self, root: &Url, owner: &Url) -> Result<Option<Identity>> {
+        if let Some(found) = self
+            .relation_bindings
+            .borrow()
+            .get(root)
+            .and_then(|bindings| bindings.get(owner))
+            .cloned()
+        {
+            return found;
+        }
+        let name = self.name.as_deref().ok_or(())?;
+        let project = self.projects.get(root).ok_or(())?;
+        type Answers = BTreeSet<Result<Option<Identity>>>;
+        let mut allocations = BTreeMap::<usize, (&Arc<BTreeSet<Url>>, Answers)>::new();
+        for view in &project.graph.sections {
+            let answer = self.bind(name, std::iter::once(view)).and_then(|found| {
+                if found.is_some()
+                    && view.namespace.is_some()
+                    && self.database_binding(name, &view.resources)?.is_none()
+                {
+                    return Err(());
+                }
+                Ok(found)
+            });
+            allocations
+                .entry(Arc::as_ptr(&view.resources) as usize)
+                .or_insert_with(|| (&view.resources, BTreeSet::new()))
+                .1
+                .insert(answer);
+        }
+        let mut bindings = BTreeMap::<Url, Result<Option<Identity>>>::new();
+        for (_, (resources, answers)) in allocations {
+            let answer = if answers.len() == 1 {
+                answers.into_iter().next().ok_or(())?
+            } else {
+                Err(())
+            };
+            for resource in resources.iter() {
+                self.work.set(
+                    self.work.get()
+                        + resource.as_str().len()
+                        + answer
+                            .as_ref()
+                            .ok()
+                            .and_then(Option::as_ref)
+                            .map_or(0, |identity| identity.uri.as_str().len())
+                        + 160,
+                );
+                if self.work.get() > 32 * 1024 * 1024 {
+                    return Err(());
+                }
+                bindings
+                    .entry(resource.clone())
+                    .and_modify(|previous| {
+                        if *previous != answer {
+                            *previous = Err(());
+                        }
+                    })
+                    .or_insert_with(|| answer.clone());
+            }
+        }
+        let found = bindings.get(owner).cloned().ok_or(())?;
+        self.relation_bindings
+            .borrow_mut()
+            .insert(root.clone(), bindings);
+        found
     }
 }
 
@@ -444,6 +786,7 @@ fn symbol<'a>(ws: &'a Workspace, uri: &Url, offset: usize) -> Option<Result<Symb
     Some((|| {
         let mut initial = BTreeSet::new();
         let mut resolved = declaration;
+        let own_declaration = resolved.is_some();
         for root in graphs.consumers(uri) {
             graphs.ensure(&root)?;
             initial.insert(root.clone());
@@ -459,6 +802,15 @@ fn symbol<'a>(ws: &'a Workspace, uri: &Url, offset: usize) -> Option<Result<Symb
                 continue;
             }
             let project = &graphs.projects[&root];
+            if own_declaration
+                && project.graph.sources.as_ref().is_some_and(|sources| {
+                    resolved
+                        .as_ref()
+                        .is_some_and(|identity| sources.contains(identity))
+                })
+            {
+                continue;
+            }
             let answer = if doc.kind == DocumentKind::Latex {
                 let views = project
                     .graph
@@ -475,14 +827,7 @@ fn symbol<'a>(ws: &'a Workspace, uri: &Url, offset: usize) -> Option<Result<Symb
                 {
                     return Err(());
                 }
-                graphs.bind(
-                    &name,
-                    project
-                        .graph
-                        .sections
-                        .iter()
-                        .filter(|view| view.contains(uri)),
-                )?
+                graphs.relation_binding(&root, uri)?
             }
             .ok_or(())?;
             if resolved
@@ -496,7 +841,15 @@ fn symbol<'a>(ws: &'a Workspace, uri: &Url, offset: usize) -> Option<Result<Symb
         let declaration = resolved.ok_or(())?;
         // A configured root can name a project without consuming this database.
         // Do not certify a declaration-only graph that omits its own relations.
-        if !graphs.databases.contains_key(&declaration.uri) {
+        if !graphs.databases.contains_key(&declaration.uri)
+            && !graphs.projects.values().any(|project| {
+                project
+                    .graph
+                    .sources
+                    .as_ref()
+                    .is_some_and(|sources| sources.contains(&declaration))
+            })
+        {
             return Err(());
         }
 
@@ -533,25 +886,12 @@ fn symbol<'a>(ws: &'a Workspace, uri: &Url, offset: usize) -> Option<Result<Symb
                     ));
                 }
             }
-            let resources: BTreeSet<_> = project
-                .graph
-                .sections
-                .iter()
-                .flat_map(|view| view.iter())
-                .collect();
-            for resource in resources {
+            for resource in &project.resources {
                 for reference in &graphs.databases[resource].references {
                     if reference.name != name {
                         continue;
                     }
-                    let answer = graphs.bind(
-                        &name,
-                        project
-                            .graph
-                            .sections
-                            .iter()
-                            .filter(|view| view.contains(resource)),
-                    )?;
+                    let answer = graphs.relation_binding(&root, resource)?;
                     choices.push((
                         (resource.clone(), reference.span.start, reference.span.end),
                         answer,
@@ -644,6 +984,14 @@ fn edit_error() -> jsonrpc::Error {
 }
 
 fn validate_edit(symbol: &Symbol<'_>) -> Result<()> {
+    if symbol
+        .graphs
+        .projects
+        .values()
+        .any(|project| project.graph.sources.is_some())
+    {
+        return Err(());
+    }
     let database = Database::new(
         &symbol.declaration.uri,
         &symbol.graphs.ws.documents[&symbol.declaration.uri],
@@ -710,6 +1058,8 @@ pub(crate) fn rename(
         }
         symbol.graphs.name = Some(name.into());
         symbol.graphs.bindings.borrow_mut().clear();
+        symbol.graphs.database_bindings.borrow_mut().clear();
+        symbol.graphs.relation_bindings.borrow_mut().clear();
         let relation_owners: BTreeSet<_> = symbol.graphs.databases.iter().filter(|(_, database)| database.references.iter().any(|reference| reference.name == name)).map(|(uri, _)| uri).collect();
         for project in symbol.graphs.projects.values() {
             symbol.lexical.validate(&project.scope, true, name)?;

@@ -30261,7 +30261,11 @@ fn source_set_navigation_tracks_numeric_sections_and_unsaved_input_order_over_st
         json!([{"uri":sets,"range":setrange}])
     );
     let declaration_params = json!({"textDocument":{"uri":sets},"position":setrange.start});
-    assert_eq!(server.request(40,"textDocument/references",json!({"textDocument":{"uri":sets},"position":setrange.start,"context":{"includeDeclaration":true}})),json!([]));
+    let at = source.find("{parent}").unwrap() + 1;
+    assert_eq!(server.request(40,"textDocument/references",json!({"textDocument":{"uri":sets},"position":setrange.start,"context":{"includeDeclaration":true}})),json!([
+        {"uri":main,"range":text.range(at,at+6)},
+        {"uri":sets,"range":setrange}
+    ]));
     for (id, method, mut params) in [
         (41, "textDocument/prepareRename", declaration_params.clone()),
         (42, "textDocument/rename", declaration_params),
@@ -30859,6 +30863,183 @@ fn xdata_relation_completions_track_named_set_overrides_without_resource_selecti
     assert_eq!(
         server.request(5, "textDocument/completion", params),
         initial
+    );
+    server.request(1000, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+fn source_set_complete_reference_graphs_preserve_numeric_identity_and_unsaved_consumers_over_stdio()
+{
+    use latex_lsp::text::Text;
+    use tower_lsp::lsp_types::Location;
+    fn location(uri: &Url, text: &str, marker: &str, name: &str) -> Location {
+        let start = text.find(marker).unwrap() + marker.len();
+        Location::new(
+            uri.clone(),
+            Text::new(text.into()).range(start, start + name.len()),
+        )
+    }
+    fn calls(uri: &Url, text: &str) -> Vec<Location> {
+        text.match_indices(r"\cite{parent}")
+            .map(|(at, _)| {
+                Location::new(uri.clone(), Text::new(text.into()).range(at + 6, at + 12))
+            })
+            .collect()
+    }
+    fn ordered(mut locations: Vec<Location>) -> Value {
+        locations.sort_by_key(|item| {
+            (
+                item.uri.to_string(),
+                item.range.start.line,
+                item.range.start.character,
+            )
+        });
+        json!(locations)
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let bib = main.join("section.bib").unwrap();
+    let sets = main.join("sets.tex").unwrap();
+    let other = main.join("unsaved.tex").unwrap();
+    let source = r"\documentclass{article}\usepackage{biblatex}\addbibresource{default.bib}\addsectionbib[label=chosen]{section.bib}\begin{document}\newrefsection[chosen]\input{sets}\cite{parent}\newrefsection[chosen]\input{sets}\cite{parent}\cite{member}\end{document}";
+    let declaration_source = "% 😀\r\n\\defbibentryset{parent}{member}";
+    let library="% 😀\r\n@book{parent,title={Selected parent}}\r\n@book{member,title={Selected member}}\r\n@book{child,crossref={parent}}";
+    for (name, text) in [
+        ("main.tex", source),
+        ("sets.tex", declaration_source),
+        ("section.bib", library),
+        (
+            "default.bib",
+            "@book{parent,title={Default}} @book{member,title={Default member}}",
+        ),
+    ] {
+        std::fs::write(dir.path().join(name), text).unwrap();
+    }
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    for (uri, text, language, version) in [
+        (&main, source, "latex", 5),
+        (&sets, declaration_source, "latex", 3),
+        (&bib, library, "bibtex", 4),
+    ] {
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"languageId":language,"version":version,"text":text}}),
+        );
+    }
+    let declaration = location(&sets, declaration_source, r"\defbibentryset{", "parent");
+    let member = location(
+        &sets,
+        declaration_source,
+        r"\defbibentryset{parent}{",
+        "member",
+    );
+    let parent = location(&bib, library, "@book{", "parent");
+    let relation = location(&bib, library, "crossref={", "parent");
+    let member_declaration = location(
+        &bib,
+        library,
+        "@book{parent,title={Selected parent}}\r\n@book{",
+        "member",
+    );
+    let source_params = json!({"textDocument":{"uri":sets},"position":declaration.range.start,"context":{"includeDeclaration":true}});
+    let member_params = json!({"textDocument":{"uri":sets},"position":member.range.start,"context":{"includeDeclaration":true}});
+    let mut expected = vec![declaration.clone(), relation.clone()];
+    expected.extend(calls(&main, source));
+    let expected = ordered(expected);
+    assert_eq!(
+        server.request(2, "textDocument/references", source_params.clone()),
+        expected
+    );
+    let member_citation = location(&main, source, r"\cite{parent}\cite{", "member");
+    let expected_members = ordered(vec![
+        member.clone(),
+        member_declaration.clone(),
+        member_citation,
+    ]);
+    assert_eq!(
+        server.request(3, "textDocument/references", member_params.clone()),
+        expected_members
+    );
+    assert_eq!(
+        server.request(
+            4,
+            "textDocument/documentHighlight",
+            json!({"textDocument":{"uri":sets},"position":declaration.range.start})
+        ),
+        json!([{"range":declaration.range,"kind":3}])
+    );
+    assert_eq!(
+        server.request(
+            5,
+            "textDocument/documentHighlight",
+            json!({"textDocument":{"uri":sets},"position":member.range.start})
+        ),
+        json!([{"range":member.range,"kind":2}])
+    );
+    let early = source.replace(r"\input{sets}", r"\cite{parent}\input{sets}");
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":6},"contentChanges":[{"text":early}]}),
+    );
+    assert_eq!(
+        server.request(6, "textDocument/references", source_params.clone()),
+        json!([declaration.clone()])
+    );
+    let mut books = vec![parent.clone(), relation];
+    books.extend(calls(&main, &early));
+    assert_eq!(server.request(7,"textDocument/references",json!({"textDocument":{"uri":bib},"position":parent.range.start,"context":{"includeDeclaration":true}})),ordered(books));
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":main}}),
+    );
+    assert_eq!(
+        server.request(8, "textDocument/references", source_params.clone()),
+        expected
+    );
+    server.notify("textDocument/didOpen",json!({"textDocument":{"uri":other,"languageId":"latex","version":8,"text":r"\documentclass{article}\usepackage{biblatex}\addbibresource{default.bib}\begin{document}\input{sets}\cite{member}\end{document}"}}));
+    assert_eq!(
+        server.request(9, "textDocument/references", member_params.clone()),
+        json!([])
+    );
+    assert_eq!(
+        server.request(
+            10,
+            "textDocument/documentHighlight",
+            json!({"textDocument":{"uri":sets},"position":member.range.start})
+        ),
+        json!([])
+    );
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":other}}),
+    );
+    assert_eq!(
+        server.request(11, "textDocument/references", member_params),
+        expected_members
+    );
+    server.send(json!({"jsonrpc":"2.0","id":12,"method":"textDocument/rename","params":{"textDocument":{"uri":sets},"position":declaration.range.start,"newName":"renamed"}}));
+    let response = server.until(|message| message["id"] == 12);
+    assert_eq!(response["error"]["code"], -32602, "{response}");
+    let unused = declaration_source.replace("{parent}", "{unused}");
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":sets,"version":9},"contentChanges":[{"text":unused}]}),
+    );
+    assert_eq!(
+        server.request(13, "textDocument/references", source_params.clone()),
+        json!([declaration.clone()])
+    );
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":sets}}),
+    );
+    assert_eq!(
+        server.request(14, "textDocument/references", source_params),
+        expected
     );
     server.request(1000, "shutdown", Value::Null);
     server.notify("exit", Value::Null);
