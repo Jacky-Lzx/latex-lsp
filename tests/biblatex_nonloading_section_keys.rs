@@ -151,11 +151,11 @@ fn new_primary_names_cannot_capture_nonloading_keys_in_their_resource_view() {
     }
 }
 #[test]
-fn source_sets_and_unproved_conditionals_keep_their_query_protection() {
+fn source_sets_and_executable_conditionals_keep_their_query_protection() {
     for call in [
-        r"\ifentrycategory{parent}{group}{}{}",
+        r"\ifentrycategory{parent}{group}{\newrefsection}{}",
         r"\ifentryexists{parent}{}{}",
-        r"\ifentryinbib{parent}{}{}",
+        r"\ifentryinbib{parent}{}{\cite{member}}",
         r"\defbibentryset{parent}{member}\entrydata{parent}{}",
     ] {
         let (_dir, ws, _main, _default, selected) = setup(

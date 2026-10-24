@@ -86,6 +86,62 @@ fn unsafe_control(name: &str) -> bool {
         )
 }
 
+// Only these native biblatex predicates are known to avoid Biber requests.
+// Plain text branches cannot change section/resource state, regardless of the
+// predicate result. Commands, parameter tokens and TeX-active syntax stay opaque.
+fn textual_bibliography_test(
+    source: &str,
+    name: &str,
+    end: usize,
+    signatures: &CommandSignatures<'_>,
+) -> bool {
+    if !matches!(name, "ifentryinbib" | "ifentrycategory") || !signatures.command_unchanged(name) {
+        return false;
+    }
+    let style = crate::citations::style(name).unwrap();
+    let arguments = crate::citations::arguments(source, end, style);
+    let expected = if name == "ifentrycategory" { 4 } else { 3 };
+    arguments.waiting.is_none()
+        && arguments.fields.len() == expected
+        && arguments.fields.iter().all(|field| {
+            if !field.complete {
+                return false;
+            }
+            match field.role {
+                crate::citations::Role::Keys => {
+                    let key = syntax::single_citation_argument(source, field.argument.clone());
+                    key.value != "*" && syntax::is_static_citation_key(&key.value)
+                }
+                crate::citations::Role::Category => {
+                    syntax::is_static_reference_key(&field.argument.value)
+                }
+                crate::citations::Role::Code(_) => {
+                    let value = field.argument.value.as_bytes();
+                    let mut at = 0;
+                    while at < value.len() {
+                        match value[at] {
+                            b'%' => {
+                                while at < value.len() && value[at] != b'\n' {
+                                    at += 1;
+                                }
+                                continue;
+                            }
+                            b'\\' | b'{' | b'}' | b'#' | b'$' | b'&' | b'~' | b'^' | b'_' => {
+                                return false
+                            }
+                            byte if byte.is_ascii_control() && !byte.is_ascii_whitespace() => {
+                                return false
+                            }
+                            _ => at += 1,
+                        }
+                    }
+                    true
+                }
+                _ => false,
+            }
+        })
+}
+
 #[derive(Clone)]
 struct Query {
     span: Range<usize>,
@@ -487,7 +543,12 @@ impl Analysis<'_, '_> {
             {
                 continue;
             }
-            if unsafe_control(&lexical.name) {
+            let textual_test = |name: &str, end| {
+                positions.contains(&lexical.span.start)
+                    && !context.operand(doc, lexical.span.start)
+                    && textual_bibliography_test(source, name, end, self.signatures)
+            };
+            if unsafe_control(&lexical.name) && !textual_test(&lexical.name, lexical.span.end) {
                 return None;
             }
             if lexical.name == "endcsname" {
@@ -531,7 +592,7 @@ impl Analysis<'_, '_> {
             if matches!(name, "csuse" | "csname") {
                 return None;
             }
-            if unsafe_control(name)
+            if unsafe_control(name) && !textual_test(name, span.end)
                 || name.contains("refsection") && !STATE.contains(&name) && name != "therefsection"
             {
                 return None;

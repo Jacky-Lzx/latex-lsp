@@ -33724,3 +33724,95 @@ fn numeric_compiled_citation_hints_keep_sections_outputs_and_unsaved_roots_consi
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+fn textual_bibliography_tests_follow_versions_and_unsaved_predicate_meanings() {
+    use latex_lsp::text::Text;
+    for document_changes in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+        let selected = main.join("section.bib").unwrap();
+        let provider = main.join("macros.tex").unwrap();
+        let source="% 😀\r\n\\documentclass{article}\\usepackage{biblatex}\\DeclareBibliographyCategory{group}\\addbibresource{default.bib}\\addsectionbib[label=chosen]{section.bib}\\input{macros}\\begin{document}\\cite{parent}\\newrefsection[chosen]\\cite{parent}\\ifentryinbib{parent}{Present}{Missing}\\csuse{ifentrycategory}{parent}{group}{Yes}{No}\\end{document}";
+        let library = "% 😀\r\n@book{parent,title={Selected},ids={other}}";
+        for (name, text) in [
+            ("main.tex", source),
+            ("section.bib", library),
+            ("default.bib", "@book{parent,title={Default},ids={old}}"),
+            ("macros.tex", ""),
+        ] {
+            std::fs::write(dir.path().join(name), text).unwrap();
+        }
+        let span = |text: &str, prefix: &str, key: &str| {
+            let at = text.find(prefix).unwrap() + prefix.len();
+            Text::new(text.into()).range(at, at + key.len())
+        };
+        let declaration = span(library, "@book{", "parent");
+        let query = span(source, r"\ifentryinbib{", "parent");
+        let mut server = Server::start();
+        server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":document_changes}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+        server.notify("initialized", json!({}));
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":main,"languageId":"latex","version":3,"text":source}}),
+        );
+        server.notify("textDocument/didOpen",json!({"textDocument":{"uri":selected,"languageId":"bibtex","version":8,"text":library}}));
+        let refs = json!({"textDocument":{"uri":selected},"position":declaration.start,"context":{"includeDeclaration":true}});
+        let values = server.request(2, "textDocument/references", refs.clone());
+        assert_eq!(values.as_array().unwrap().len(), 4, "{values}");
+        let definition = server.request(
+            3,
+            "textDocument/definition",
+            json!({"textDocument":{"uri":main},"position":query.start}),
+        );
+        assert_eq!(definition, json!([{"uri":selected,"range":declaration}]));
+        server.notify("textDocument/didOpen",json!({"textDocument":{"uri":provider,"languageId":"latex","version":10,"text":r"\renewcommand\ifentryinbib[3]{}"}}));
+        assert_eq!(
+            server.request(4, "textDocument/references", refs.clone()),
+            json!([])
+        );
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":provider}}),
+        );
+        assert_eq!(server.request(5, "textDocument/references", refs), values);
+        let edit = server.request(
+            6,
+            "textDocument/rename",
+            json!({"textDocument":{"uri":selected},"position":declaration.start,"newName":"fresh"}),
+        );
+        let mut actual = std::collections::BTreeMap::new();
+        if document_changes {
+            for change in edit["documentChanges"].as_array().unwrap() {
+                let uri = change["textDocument"]["uri"].as_str().unwrap();
+                assert_eq!(
+                    change["textDocument"]["version"],
+                    if uri == main.as_str() { 3 } else { 8 }
+                );
+                actual.insert(uri.to_string(), change["edits"].as_array().unwrap().clone());
+            }
+        } else {
+            for (uri, edits) in edit["changes"].as_object().unwrap() {
+                actual.insert(uri.clone(), edits.as_array().unwrap().clone());
+            }
+        }
+        assert_eq!(actual.len(), 2);
+        let mut expected_main = vec![
+            json!({"range":span(source,r"\newrefsection[chosen]\cite{","parent"),"newText":"fresh"}),
+            json!({"range":query,"newText":"fresh"}),
+            json!({"range":span(source,r"\csuse{ifentrycategory}{","parent"),"newText":"fresh"}),
+        ];
+        let mut main_edits = actual.remove(main.as_str()).unwrap();
+        let order = |edit: &Value| edit["range"].to_string();
+        expected_main.sort_by_key(order);
+        main_edits.sort_by_key(order);
+        assert_eq!(main_edits, expected_main);
+        assert_eq!(
+            actual[selected.as_str()],
+            vec![json!({"range":declaration,"newText":"fresh"})]
+        );
+        server.request(7, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
