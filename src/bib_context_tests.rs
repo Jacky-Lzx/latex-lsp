@@ -484,8 +484,6 @@ fn unproved_assignment_execution_and_context_forms_keep_numeric_hints_guarded() 
         r"\assignrefcontextentries[labelprefix=A,labelprefix=B]{a}",
         r"\assignrefcontextentries[labelprefix=A]{\unknown}",
         r"\assignrefcontextentries{a}",
-        r"\csuse{assignrefcontextentries}[labelprefix=A]{a}",
-        r"\csname assignrefcontextentries\endcsname[labelprefix=A]{a}",
         r"\def\assign{\assignrefcontextentries}\assign[labelprefix=A]{a}",
         r"\newcommand\future{\assignrefcontextentries[labelprefix=A]{a}}",
         r"\newcommand\run[1]{#1}\run{\assignrefcontextentries[labelprefix=A]{a}}",
@@ -598,8 +596,11 @@ fn native_assignment_cases(cases: &[(&str, Vec<&str>)]) {
     native_assignment_files(cases, &[]);
 }
 fn native_assignment_files(cases: &[(&str, Vec<&str>)], files: &[(&str, &str)]) {
+    native_assignment_preamble(cases, files, "");
+}
+fn native_assignment_preamble(cases: &[(&str, Vec<&str>)], files: &[(&str, &str)], preamble: &str) {
     for (body, expected) in cases {
-        let (dir, mut ws, uri) = setup(body, "", "");
+        let (dir, mut ws, uri) = assignment_preamble(preamble, body, "", "");
         for (name, content) in files {
             std::fs::write(dir.path().join(name), content).unwrap();
         }
@@ -1075,4 +1076,255 @@ fn weak_context_scope_termination_wrappers_keep_the_trace_guarded() {
         ws.refresh_project(&uri);
         assert!(hints(&ws, &uri).is_empty(), "{source}");
     }
+}
+
+fn assignment_preamble(
+    preamble: &str,
+    body: &str,
+    bbl: &str,
+    aux: &str,
+) -> (tempfile::TempDir, Workspace, Url) {
+    let (dir, mut ws, uri) = setup(body, bbl, aux);
+    let source = ws.documents[&uri].text.source.replace(
+        r"\begin{document}",
+        &format!(r"{preamble}\begin{{document}}"),
+    );
+    ws.open(uri.clone(), source, 6);
+    (dir, ws, uri)
+}
+
+#[test]
+fn named_and_executed_forwarding_assignments_keep_native_strength_and_context_rules() {
+    let bbl = compiled(list(A, "A", &["a"]) + &list(B, "B", &["a"]));
+    let aux = number("a", A, 3) + &number("a", B, 8) + &default("a", B);
+    for command in [
+        r"\csuse{assignrefcontextentries}",
+        r"\csname assignrefcontextentries\endcsname",
+        r"\assign",
+        r"\outerassign",
+        r"\csuse{outerassign}",
+        r"\csname outerassign\endcsname",
+    ] {
+        let preamble = r"\def\assign{\assignrefcontextentries}\def\outerassign{\assign}";
+        let (_dir, ws, uri) = assignment_preamble(
+            preamble,
+            &format!(r"{command}[labelprefix=A]{{a}} Text \cite{{a}}"),
+            &bbl,
+            &aux,
+        );
+        assert_eq!(hints(&ws, &uri), ["→ A3"], "{command}");
+        // The explicit environment precedes the first weak invocation. Scope
+        // collection must resolve the invocation before executing the trace.
+        let body = format!(
+            r"\begin{{refcontext}}[labelprefix=A]{command}*[labelprefix=A]{{a}} Text \cite{{a}}\end{{refcontext}}\cite{{a}}"
+        );
+        let (_dir, ws, uri) = assignment_preamble(preamble, &body, &bbl, &aux);
+        assert_eq!(hints(&ws, &uri), ["→ B8", "→ A3"], "{command}");
+    }
+}
+
+#[test]
+fn forwarding_assignment_aliases_require_a_native_executed_global_preamble() {
+    let bbl = compiled(list(A, "A", &["a"]) + &list(B, "B", &["a"]));
+    let aux = number("a", A, 3) + &number("a", B, 8) + &default("a", B);
+    for (preamble, body) in [
+        (
+            r"\assign[labelprefix=A]{a}\def\assign{\assignrefcontextentries}",
+            r"\cite{a}",
+        ),
+        (
+            r"{\def\assign{\assignrefcontextentries}}",
+            r"\assign[labelprefix=A]{a}\cite{a}",
+        ),
+        (
+            r"\begingroup\def\assign{\assignrefcontextentries}\endgroup",
+            r"\assign[labelprefix=A]{a}\cite{a}",
+        ),
+        (
+            r"\begin{quote}\def\assign{\assignrefcontextentries}\end{quote}",
+            r"\assign[labelprefix=A]{a}\cite{a}",
+        ),
+        (
+            r"\newcommand\later{\def\assign{\assignrefcontextentries}}",
+            r"\assign[labelprefix=A]{a}\cite{a}",
+        ),
+        (
+            r"\def\outerassign{\assign}\outerassign[labelprefix=A]{a}\def\assign{\assignrefcontextentries}",
+            r"\cite{a}",
+        ),
+        (
+            r"\bgroup\def\assign{\assignrefcontextentries}\egroup",
+            r"\assign[labelprefix=A]{a}\cite{a}",
+        ),
+        (
+            r"$\def\assign{\assignrefcontextentries}$",
+            r"\assign[labelprefix=A]{a}\cite{a}",
+        ),
+        (
+            r"\providecommand\textbf{\assignrefcontextentries}",
+            r"\textbf[labelprefix=A]{a}\cite{a}",
+        ),
+        (
+            r"\ProvideDocumentCommand\textbf{}{\assignrefcontextentries}",
+            r"\textbf[labelprefix=A]{a}\cite{a}",
+        ),
+        (
+            r"\def\def#1#2{}\def\assign{\assignrefcontextentries}",
+            r"\assign[labelprefix=A]{a}\cite{a}",
+        ),
+        (
+            r"\def\newcommand#1#2{}\newcommand\assign{\assignrefcontextentries}",
+            r"\assign[labelprefix=A]{a}\cite{a}",
+        ),
+        (
+            r"\def\csname#1\endcsname{}",
+            r"\csname assignrefcontextentries\endcsname[labelprefix=A]{a}\cite{a}",
+        ),
+        (
+            r"\let\assign\assignrefcontextentries",
+            r"\assign[labelprefix=A]{a}\cite{a}",
+        ),
+        (
+            r"",
+            r"\def\assign{\assignrefcontextentries}\assign[labelprefix=A]{a}\cite{a}",
+        ),
+        (
+            r"\def\assign{\assignrefcontextentries}\def\assignrefcontextentries[#1]#2{}",
+            r"\assign[labelprefix=A]{a}\cite{a}",
+        ),
+        (
+            r"\def\csuse#1{}",
+            r"\csuse{assignrefcontextentries}[labelprefix=A]{a}\cite{a}",
+        ),
+        (
+            r"",
+            r"\csname assignrefcontext\unknown\endcsname[labelprefix=A]{a}\cite{a}",
+        ),
+    ] {
+        let (_dir, ws, uri) = assignment_preamble(preamble, body, &bbl, &aux);
+        assert!(hints(&ws, &uri).is_empty(), "{preamble} {body}");
+    }
+}
+
+#[test]
+fn assignment_alias_declarations_follow_native_unconditional_forms_and_late_binding() {
+    let bbl = compiled(list(A, "A", &["a"]) + &list(B, "B", &["a"]));
+    let aux = number("a", A, 3) + &number("a", B, 8) + &default("a", B);
+    for preamble in [
+        r"\def\assign{\assignrefcontextentries}",
+        r"\gdef\assign{\assignrefcontextentries}",
+        r"\newcommand\assign{\assignrefcontextentries}",
+        r"\NewDocumentCommand\assign{}{\assignrefcontextentries}",
+        r"\DeclareDocumentCommand\assign{}{\assignrefcontextentries}",
+        r"\csdef{assign}{\assignrefcontextentries}",
+        r"\csgdef{assign}{\assignrefcontextentries}",
+        r"\renewcommand\textbf{\assignrefcontextentries}\def\assign{\textbf}",
+        r"\RenewDocumentCommand\textbf{}{\assignrefcontextentries}\def\assign{\textbf}",
+        r"\def\assign{\innerassign}\def\innerassign{\assignrefcontextentries}",
+    ] {
+        let (_dir, ws, uri) = assignment_preamble(
+            preamble,
+            r"\assign[labelprefix=A]{a} Text \cite{a}",
+            &bbl,
+            &aux,
+        );
+        assert_eq!(hints(&ws, &uri), ["→ A3"], "{preamble}");
+    }
+}
+
+#[test]
+fn assignment_forwarding_proof_bounds_executed_chains_to_64_edges() {
+    let bbl = compiled(list(A, "A", &["a"]) + &list(B, "B", &["a"]));
+    let aux = number("a", A, 3) + &number("a", B, 8) + &default("a", B);
+    for count in [64, 65] {
+        let mut preamble = String::new();
+        for index in 0..count {
+            let name = format!("assign{}", "a".repeat(index));
+            let target = if index + 1 == count {
+                "assignrefcontextentries".to_string()
+            } else {
+                format!("assign{}", "a".repeat(index + 1))
+            };
+            preamble.push_str(&format!(r"\def\{name}{{\{target}}}"));
+        }
+        let (_dir, ws, uri) = assignment_preamble(
+            &preamble,
+            r"\assign[labelprefix=A]{a} Text \cite{a}",
+            &bbl,
+            &aux,
+        );
+        let expected = if count == 64 {
+            vec!["→ A3"]
+        } else {
+            Vec::new()
+        };
+        assert_eq!(hints(&ws, &uri), expected, "{count}");
+    }
+}
+
+#[test]
+#[ignore = "requires native pdfLaTeX, Biber, and biblatex"]
+fn native_named_assignment_hints_match_actual_labels_and_keep_the_complete_bbl() {
+    let printing = r"\begin{refcontext}[labelprefix=A]\nocite{a}\printbibliography\end{refcontext}\begin{refcontext}[labelprefix=B]\nocite{a}\printbibliography\end{refcontext}";
+    let mut cases = Vec::new();
+    for (call, weak) in [
+        (r"\csuse{assignrefcontextentries}", false),
+        (r"\csname assignrefcontextentries\endcsname", false),
+        (r"\csuse{assignrefcontextentries}", true),
+        (r"\csname assignrefcontextentries\endcsname", true),
+        (r"\assign", false),
+        (r"\assign", true),
+        (r"\outerassign", false),
+        (r"\csuse{outerassign}", true),
+    ] {
+        let body = if weak {
+            format!(
+                r"{call}*[labelprefix=A]{{a}}\begin{{refcontext}}[labelprefix=A]\cite{{a}}\end{{refcontext}}\cite{{a}}{printing}"
+            )
+        } else {
+            format!(r"{call}[labelprefix=A]{{a}}\cite{{a}}{printing}")
+        };
+        cases.push((body, if weak { vec!["B1", "A1"] } else { vec!["A1"] }));
+    }
+    for call in [r"\csuse{assignrefcontextentries}", r"\outerassign"] {
+        cases.push((format!(r"\begin{{refcontext}}[labelprefix=A]{call}*[labelprefix=A]{{a}}\cite{{a}}\end{{refcontext}}\cite{{a}}{printing}"), vec!["B1", "A1"]));
+    }
+    let borrowed: Vec<_> = cases
+        .iter()
+        .map(|(body, labels)| (body.as_str(), labels.clone()))
+        .collect();
+    native_assignment_preamble(
+        &borrowed,
+        &[],
+        r"\def\outerassign{\assign}\def\assign{\assignrefcontextentries}",
+    );
+    native_assignment_preamble(
+        &borrowed[4..6],
+        &[("aliases.tex", r"\def\assign{\assignrefcontextentries}")],
+        r"\input{aliases}",
+    );
+}
+
+#[test]
+fn assignment_aliases_from_preamble_inputs_follow_unsaved_meanings_and_close_restore() {
+    let bbl = compiled(list(A, "A", &["a"]) + &list(B, "B", &["a"]));
+    let aux = number("a", A, 3) + &number("a", B, 8) + &default("a", B);
+    let (dir, mut ws, uri) = assignment_preamble(
+        r"\input{aliases}",
+        r"\assign*[labelprefix=A]{a} Text \cite{a}",
+        &bbl,
+        &aux,
+    );
+    let child = uri.join("aliases.tex").unwrap();
+    std::fs::write(
+        dir.path().join("aliases.tex"),
+        r"\def\assign{\assignrefcontextentries}",
+    )
+    .unwrap();
+    ws.refresh_project(&uri);
+    assert_eq!(hints(&ws, &uri), ["→ A3"]);
+    ws.open(child.clone(), r"\def\assign#1#2{#2}".into(), 7);
+    assert_eq!(hints(&ws, &uri), ["→ B8"]);
+    ws.close(&child);
+    assert_eq!(hints(&ws, &uri), ["→ A3"]);
 }

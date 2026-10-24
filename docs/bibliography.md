@@ -334,7 +334,7 @@ cargo test --locked --test biblatex_source_prerequisites -- --include-ignored
 cargo test --locked --test protocol source_prerequisite_edits_
 ```
 
-本地数字引用上下文的编译标签支持纯字面 `labelprefix`／`sorting` 和全局 deferred 编号。按 AUX 为键记录的默认上下文联结 BBL 真实前缀；同一键跨打印上下文仍遵循 biblatex 实际默认选择。共享物理引用的所有执行必须得到相同完整标签；显式上下文分配、命名声明、重定义、动态选项和自定义格式继续保护。详见[辅助引用与编号提示](auxiliary-references.md)。
+本地数字引用上下文的编译标签支持纯字面 `labelprefix`／`sorting` 和全局 deferred 编号。按 AUX 为键记录的默认上下文联结 BBL 真实前缀；同一键跨打印上下文仍遵循 biblatex 实际默认选择。共享物理引用的所有执行必须得到相同完整标签；无法认证的上下文分配、命名上下文声明、重定义、动态选项和自定义格式继续保护。详见[辅助引用与编号提示](auxiliary-references.md)。
 
 源码集合项目中的 `ifentryinbib`／`ifentrycategory` 键补全支持直接及静态命名调用：候选采用分区最终的首次真实请求或集合声明，查询本身不会成为提前加载请求。尚未发生真实请求时，可以补全后续声明的集合；确有早期 `cite` 时仍显示原书籍的元数据。普通 `cite` 的候选继续使用光标处请求语义。
 
@@ -347,4 +347,4 @@ cargo test --locked --test protocol source_predicate_completions_
 
 `\assignrefcontextentries[options]{keys}` 及其星号形式支持条目键列表的跳转、预览、补全、引用、高亮和完整改名，也识别静态 `csuse`／`csname` 调用及可认证的纯转发命令。方括号是必需参数，即使选项为空也需写作 `[]{keys}`；签名提示区分选项与键列表。改名只修改真实条目键，不改 `labelprefix` 等选项、普通文字和逐字内容。
 
-此命令分配上下文而不加载或引用条目，因此缺失键及通配 `*` 不触发缺失引用诊断，也不产生引用编号提示。普通资源的数字分区复用非加载型键身份认证；源码集合中的上下文分配、捕获的命令副本和不明确的操作数调用继续拒绝部分改名。普通资源的直接强／弱分配支持按执行顺序显示 deferred 数字标签，选项及编译记录边界见[辅助引用与编号提示](auxiliary-references.md)；弱分配按原生分组恢复上下文开关，分类／关键词分配的数字提示仍待独立认证。分类列表的独立命名空间和完整编辑详见[文献分类](bibliography-categories.md)。
+此命令分配上下文而不加载或引用条目，因此缺失键及通配 `*` 不触发缺失引用诊断，也不产生引用编号提示。普通资源的数字分区复用非加载型键身份认证；源码集合中的上下文分配、捕获的命令副本和不明确的操作数调用继续拒绝部分改名。普通资源的直接、静态命名和已执行纯转发强／弱分配支持按执行顺序显示 deferred 数字标签，选项及编译记录边界见[辅助引用与编号提示](auxiliary-references.md)；弱分配按原生分组恢复上下文开关，分类／关键词分配的数字提示仍待独立认证。分类列表的独立命名空间和完整编辑详见[文献分类](bibliography-categories.md)。

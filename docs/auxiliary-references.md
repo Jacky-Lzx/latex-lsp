@@ -41,7 +41,7 @@ cargo test --locked --lib bib_context_tests:: -- --include-ignored
 cargo test --locked --test protocol local_context_citation_hints_
 ```
 
-直接且未重定义的强分配 `\assignrefcontextentries[options]{keys}` 支持普通资源的 deferred 数字提示，选项限于字面 `sorting` 和 `labelprefix`。省略 `sorting` 时，要求 biblatex 包选项明确给出字面排序；暂不推断样式的排序默认值。分类／关键词分配、静态命名／纯转发分配、源码集合和 IDS 相交继续保护。
+直接且未重定义的强分配 `\assignrefcontextentries[options]{keys}` 支持普通资源的 deferred 数字提示，选项限于字面 `sorting` 和 `labelprefix`。省略 `sorting` 时，要求 biblatex 包选项明确给出字面排序；暂不推断样式的排序默认值。分类／关键词分配、源码集合和 IDS 相交继续保护。
 
 星号弱分配 `\assignrefcontextentries*[options]{keys}` 也支持相同的字面选项与编译记录。强分配优先于弱分配，各自先查通配再查单键；同类分配按最后一次执行更新。弱分配只在显式上下文外生效；进入显式上下文时，跳过弱分配并使用 AUX 默认记录，不直接采用该环境的前缀。直接原生 `refcontext` 环境及 `refcontext/newrefcontext/endrefcontext` 命令按实际分组认证局部开关：花括号、普通环境和原生 `begingroup/endgroup`、`bgroup/egroup` 结束时恢复进入前的状态；条目分配本身仍全局保存。分组与上下文边界可跨输入文件，文件名参数不会制造包围输入执行的分组。未知／错配作用域、命名／转发的分组控制、宏正文中的隐式分组或数学切换继续跳过弱提示。普通公式可以出现在上下文命令前后；美元及括号数学内部的上下文切换尚不认证。直接且未重定义的 `endinput` 只执行当前行，随后忽略的括号不影响调用文件的分组；命名／转发的终止调用继续保护。作用域深度最多 128，沿用 32 MiB 分析预算。
 
@@ -53,3 +53,5 @@ cargo test --locked --test protocol local_context_citation_hints_
 cargo test --locked --lib bib_context_tests:: -- --include-ignored
 cargo test --locked --test protocol context_assignment_hints_
 ```
+
+静态 `csuse`／`csname` 条目分配及零参数纯转发命令支持同样的强弱数字提示。转发声明必须由未重定义的原生声明命令在全局前言中实际执行；支持跨前言输入与最多 64 条已执行转发边，外层声明可以早于内层声明。分组内、文档正文内、延迟执行、条件提供和捕获的命令副本继续保护；命名／转发的上下文及分组控制仍不认证。未保存的提供文件、共享根和编译记录变更会重新检查提示。

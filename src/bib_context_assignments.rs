@@ -23,6 +23,33 @@ pub(crate) struct Parsed {
     pub weak: bool,
 }
 
+// Resolve the actual invocation before inspecting its star: a weak assignment
+// can occur after a context has already opened, including through an alias.
+pub(crate) fn has_weak(
+    doc: &crate::workspace::Document,
+    signatures: &crate::signature::CommandSignatures<'_>,
+) -> bool {
+    let source = &doc.text.source;
+    let context = crate::named_references::Context::new(doc, signatures);
+    doc.syntax
+        .commands
+        .iter()
+        .enumerate()
+        .any(|(index, command)| {
+            let (name, span) = signatures
+                .named_invocation(
+                    source,
+                    &doc.syntax,
+                    index,
+                    &BTreeSet::new(),
+                    &context.declarations,
+                )
+                .unwrap_or((&command.name, command.span.clone()));
+            signatures.forwarded_builtin(name).unwrap_or(name) == "assignrefcontextentries"
+                && source.as_bytes().get(syntax::skip_space(source, span.end)) == Some(&b'*')
+        })
+}
+
 pub(crate) fn parse(source: &str, end: usize) -> Option<Parsed> {
     let mut at = syntax::skip_space(source, end);
     let weak = source.as_bytes().get(at) == Some(&b'*');

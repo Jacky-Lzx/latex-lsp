@@ -95,6 +95,11 @@ fn mode(docs: &[(Url, &Document)], signatures: &CommandSignatures<'_>) -> Mode {
         let context = Context::new(doc, signatures);
         let positions = signatures.source_command_positions(source, &doc.syntax);
         let definitions = crate::signature::definition_data_spans(source, &doc.syntax);
+        let assignment_bodies = signatures.builtin_alias_body_positions(
+            source,
+            &doc.syntax,
+            &["assignrefcontextentries"],
+        );
         for (index, command) in doc.syntax.commands.iter().enumerate() {
             let (name, span) = signatures
                 .named_invocation(
@@ -113,10 +118,20 @@ fn mode(docs: &[(Url, &Document)], signatures: &CommandSignatures<'_>) -> Mode {
             let definition = definitions
                 .iter()
                 .any(|span| span.contains(&command.span.start));
-            if refcontext && (!context.literal(command.span.start) || definition) {
+            // Pure forwarding bodies and their declaration targets are data.
+            // The hint trace separately certifies each declaration's execution.
+            if refcontext
+                && (!context.literal(command.span.start) || definition)
+                && !assignment_bodies.contains(&command.span.start)
+                && !(context
+                    .declarations
+                    .contains(&(command.span.start, command.span.end))
+                    && signatures.forwarded_builtin(&command.name)
+                        == Some("assignrefcontextentries"))
+            {
                 let safe = !definition
-                    && command.name == canonical
-                    && name == canonical
+                    && (canonical == "assignrefcontextentries"
+                        || command.name == canonical && name == canonical)
                     && positions.contains(&command.span.start)
                     && !context.operand(doc, command.span.start)
                     && signatures.command_unchanged(canonical)

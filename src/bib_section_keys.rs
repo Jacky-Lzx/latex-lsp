@@ -493,13 +493,19 @@ impl Analysis<'_, '_> {
         let positions = self
             .signatures
             .source_command_positions(source, &doc.syntax);
-        let alias_declarations: BTreeMap<_, _> = if self.labels.is_some() {
+        let hint_assignments = self
+            .trace
+            .as_ref()
+            .is_some_and(|trace| trace.assignments.is_some());
+        let alias_declarations: BTreeMap<_, _> = if self.labels.is_some() || hint_assignments {
             doc.syntax
                 .definitions
                 .iter()
                 .filter_map(|entry| {
                     let builtin = self.signatures.forwarded_builtin(&entry.name)?;
-                    if !STATE.contains(&builtin) && !loader(builtin) {
+                    if !(self.labels.is_some() && (STATE.contains(&builtin) || loader(builtin))
+                        || hint_assignments && builtin == "assignrefcontextentries")
+                    {
                         return None;
                     }
                     let target = crate::signature::source_alias(source, &doc.syntax, entry)?;
@@ -546,22 +552,52 @@ impl Analysis<'_, '_> {
                 return None;
             }
             if let Some((name, target, _)) = alias_declarations.get(&lexical.span.start) {
-                let labels = self.labels.as_mut()?;
                 self.work += source.len();
                 if self.work > 32 * 1024 * 1024 {
                     return None;
                 }
-                if positions.contains(&lexical.span.start)
+                let executable = positions.contains(&lexical.span.start)
                     && !context.literal(lexical.span.start)
                     && !doc.syntax.control_operands.contains(&lexical.span.start)
-                    && labels.environments.is_empty()
-                    && !crate::resource_context::grouped(source, &doc.syntax, lexical.span.start)
+                    && !crate::resource_context::grouped(source, &doc.syntax, lexical.span.start);
+                if let Some(labels) = self.labels.as_mut() {
+                    if executable && labels.environments.is_empty() {
+                        labels.aliases.insert(name.clone(), target.clone());
+                    }
+                } else if executable
+                    && !self.document
+                    && matches!(
+                        lexical.name.as_str(),
+                        "def"
+                            | "gdef"
+                            | "newcommand"
+                            | "renewcommand"
+                            | "NewDocumentCommand"
+                            | "RenewDocumentCommand"
+                            | "DeclareDocumentCommand"
+                            | "csdef"
+                            | "csgdef"
+                    )
+                    && self.signatures.command_unchanged(&lexical.name)
+                    && !self.signatures.resource_is_tokenized(
+                        source,
+                        &doc.syntax,
+                        lexical.span.start,
+                    )
+                    && self.trace.as_ref()?.scope.as_ref()?.global()
                 {
-                    labels.aliases.insert(name.clone(), target.clone());
+                    self.work += name.len() + target.len() + 96;
+                    if self.work > 32 * 1024 * 1024 {
+                        return None;
+                    }
+                    self.trace
+                        .as_mut()?
+                        .hint_aliases
+                        .insert(name.clone(), target.clone());
                 }
             }
             if context.literal(lexical.span.start)
-                || self.labels.is_some()
+                || (self.labels.is_some() || hint_assignments)
                     && context
                         .declarations
                         .contains(&(lexical.span.start, lexical.span.end))
@@ -613,6 +649,33 @@ impl Analysis<'_, '_> {
                             break;
                         }
                         current = labels.aliases.get(current)?;
+                    }
+                    if !confirmed {
+                        return None;
+                    }
+                    builtin
+                } else {
+                    name
+                }
+            } else {
+                name
+            };
+            let name = if hint_assignments {
+                if let Some(builtin) = self
+                    .signatures
+                    .forwarded_builtin(name)
+                    .filter(|builtin| *builtin == "assignrefcontextentries")
+                {
+                    let mut current = name;
+                    let mut confirmed = false;
+                    // Keep immediate edges: late-bound inner aliases may be
+                    // declared later, but every edge must exist at this call.
+                    for _ in 0..=64 {
+                        if current == builtin {
+                            confirmed = true;
+                            break;
+                        }
+                        current = self.trace.as_ref()?.hint_aliases.get(current)?;
                     }
                     if !confirmed {
                         return None;
@@ -715,8 +778,7 @@ impl Analysis<'_, '_> {
                     .as_ref()
                     .is_some_and(|trace| trace.assignments.is_some())
             {
-                if lexical.name != name
-                    || !positions.contains(&lexical.span.start)
+                if !positions.contains(&lexical.span.start)
                     || context.operand(doc, lexical.span.start)
                     || !self.signatures.command_unchanged(name)
                     || self.signatures.resource_is_tokenized(
@@ -2163,6 +2225,7 @@ pub(crate) struct SourceTrace {
     pub assignments: Option<Vec<crate::bib_context_assignments::Assignment>>,
     pub explicit_requests: BTreeSet<usize>,
     scope: Option<crate::bib_context_scope::Scope>,
+    hint_aliases: BTreeMap<String, String>,
     declarations: SourceDeclarations,
     current: u32,
     next: u32,
@@ -2481,17 +2544,13 @@ fn source_trace_query(
         probes: Vec::new(),
         assignments: hint_assignments.then(Vec::new),
         explicit_requests: BTreeSet::new(),
+        hint_aliases: BTreeMap::new(),
         scope: (hint_assignments
             && docs.iter().any(|(_, doc)| {
-                doc.syntax.commands.iter().any(|command| {
-                    command.name == "assignrefcontextentries"
-                        && doc
-                            .text
-                            .source
-                            .as_bytes()
-                            .get(syntax::skip_space(&doc.text.source, command.span.end))
-                            == Some(&b'*')
-                })
+                crate::bib_context_assignments::has_weak(doc, signatures)
+                    || doc.syntax.definitions.iter().any(|entry| {
+                        signatures.forwarded_builtin(&entry.name) == Some("assignrefcontextentries")
+                    })
             }))
         .then(Default::default),
         declarations,

@@ -107,6 +107,10 @@ impl Scope {
     pub fn complete(&self) -> bool {
         self.frames.is_empty() && self.math.is_none()
     }
+
+    pub fn global(&self) -> bool {
+        self.complete()
+    }
 }
 
 pub(crate) struct Scan<'a, 'b> {
