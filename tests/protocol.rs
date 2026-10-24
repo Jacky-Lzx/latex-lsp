@@ -27308,7 +27308,9 @@ fn named_references_publish_exact_warnings_hints_and_follow_interface_redefiniti
     for (step, definition, expected_errors, expected_hints) in [
         (0, "", 3, 2),
         (1, r"\def\csuse#1#2{}", 1, 1),
-        (2, r"\def\endcsname{}", 2, 1),
+        // The unresolved csname can change the source bibliography namespace;
+        // retain the independent label warning but avoid guessing citations.
+        (2, r"\def\endcsname{}", 1, 1),
         (
             3,
             r"\renewcommand{\ref}[1]{#1}\renewcommand{\cite}[1]{#1}",
