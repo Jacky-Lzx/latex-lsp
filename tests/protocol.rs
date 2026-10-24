@@ -33606,3 +33606,121 @@ fn handwritten_items_keep_biblatex_namespaces_versions_and_unsaved_providers_sep
         }
     }
 }
+
+#[test]
+fn numeric_compiled_citation_hints_keep_sections_outputs_and_unsaved_roots_consistent() {
+    use latex_lsp::text::Text;
+    let dir = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let shared = main.join("shared.tex").unwrap();
+    let source = "% 😀\r\n\\documentclass{article}\\usepackage[style=numeric,defernumbers=true]{biblatex}\\addbibresource{data.bib}\\begin{document}\\cite{z,a}\\newrefsection\\cite{a}\\nocite{z}\\input{shared}\\label{target}\\ref{target}\\end{document}";
+    std::fs::write(dir.path().join("main.tex"), source).unwrap();
+    std::fs::write(dir.path().join("shared.tex"), r"\cite{a}").unwrap();
+    std::fs::write(
+        dir.path().join("data.bib"),
+        "@book{a,title={Alpha}} @book{z,title={Zulu}}",
+    )
+    .unwrap();
+    std::fs::create_dir(dir.path().join("build output")).unwrap();
+    let context = "none/global//global/global/global";
+    let record = |section, key, number| {
+        format!(
+            r"\abx@aux@number{{99}}{{{key}}}{{{section}}}{{{context}}}{{{number}}}\abx@aux@defaultrefcontext{{{section}}}{{{key}}}{{{context}}}"
+        )
+    };
+    let records = record(0, "z", 1) + &record(0, "a", 2) + &record(1, "a", 1);
+    let aux = dir.path().join("build output/custom.aux");
+    std::fs::write(
+        &aux,
+        records.clone() + r"\bibcite{a}{99}\newlabel{target}{{4}{9}}",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("main.aux"), r"\bibcite{a}{wrong}").unwrap();
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{},"initializationOptions":{"distribution":{"enabled":false},"build":{"outputDirectory":"build output","jobName":"custom"}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":main,"languageId":"latex","version":3,"text":source}}),
+    );
+    let params = json!({"textDocument":{"uri":main},"range":{"start":{"line":0,"character":0},"end":{"line":3,"character":0}}});
+    let hints = server.request(2, "textDocument/inlayHint", params.clone());
+    let hint_labels = |value: &Value| {
+        value
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|hint| hint["label"].clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        hint_labels(&hints),
+        vec![json!("→ 1"), json!("→ 2"), json!("→ 1"), json!("→ 4, p. 9")]
+    );
+    let at = source.find(r"\cite{z,a}").unwrap() + 7;
+    assert_eq!(
+        hints[0]["position"],
+        serde_json::to_value(Text::new(source.into()).position(at)).unwrap()
+    );
+    assert_eq!(server.request(3,"textDocument/inlayHint",json!({"textDocument":{"uri":main},"range":{"start":{"line":2,"character":0},"end":{"line":3,"character":0}}})),json!([]));
+    let shared_params = json!({"textDocument":{"uri":shared},"range":{"start":{"line":0,"character":0},"end":{"line":1,"character":0}}});
+    assert_eq!(
+        hint_labels(&server.request(4, "textDocument/inlayHint", shared_params.clone())),
+        vec![json!("→ 1")]
+    );
+    let changed = source.replace("style=numeric", "style=authoryear");
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":4},"contentChanges":[{"text":changed}]}),
+    );
+    assert_eq!(
+        hint_labels(&server.request(5, "textDocument/inlayHint", params.clone())),
+        vec![json!("→ 4, p. 9")]
+    );
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":main}}),
+    );
+    assert_eq!(
+        hint_labels(&server.request(6, "textDocument/inlayHint", params.clone())),
+        hint_labels(&hints)
+    );
+    let other = main.join("other.tex").unwrap();
+    std::fs::write(dir.path().join("build output/other.aux"), record(0, "a", 7)).unwrap();
+    // This unsaved root shares the configured job artifact, but executes the
+    // same physical citation in section zero, where a has number two.
+    let other_source = source.replace(r"\cite{z,a}\newrefsection\cite{a}\nocite{z}", "");
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":other,"languageId":"latex","version":8,"text":other_source}}),
+    );
+    assert_eq!(
+        server.request(7, "textDocument/inlayHint", shared_params.clone()),
+        json!([])
+    );
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":other}}),
+    );
+    assert_eq!(
+        hint_labels(&server.request(8, "textDocument/inlayHint", shared_params.clone())),
+        vec![json!("→ 1")]
+    );
+    std::fs::write(
+        &aux,
+        records + &record(1, "a", 8) + r"\bibcite{a}{99}\newlabel{target}{{4}{9}}",
+    )
+    .unwrap();
+    assert_eq!(
+        hint_labels(&server.request(9, "textDocument/inlayHint", params.clone())),
+        vec![json!("→ 1"), json!("→ 2"), json!("→ 4, p. 9")]
+    );
+    server.notify("workspace/didChangeConfiguration",json!({"settings":{"distribution":{"enabled":false},"build":{"outputDirectory":"build output","jobName":"custom"},"inlayHints":{"citations":false}}}));
+    assert_eq!(
+        hint_labels(&server.request(10, "textDocument/inlayHint", params)),
+        vec![json!("→ 4, p. 9")]
+    );
+    server.request(11, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

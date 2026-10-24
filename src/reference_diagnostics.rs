@@ -15,17 +15,22 @@ fn occurrences(
     resources: Option<&crate::bib_section_keys::ResourceMap>,
     sources: Option<&crate::bib_section_references::SourceStatuses>,
 ) -> Vec<(bool, Range<usize>)> {
-    occurrences_for(ws, uri, false, resources, sources)
+    occurrences_for(ws, uri, false, false, resources, sources)
 }
 
 pub(crate) fn hint_occurrences(ws: &Workspace, uri: &Url) -> Vec<(bool, Range<usize>)> {
-    occurrences_for(ws, uri, true, None, None)
+    occurrences_for(ws, uri, true, false, None, None)
+}
+
+pub(crate) fn section_hint_occurrences(ws: &Workspace, uri: &Url) -> Vec<(bool, Range<usize>)> {
+    occurrences_for(ws, uri, true, true, None, None)
 }
 
 fn occurrences_for(
     ws: &Workspace,
     uri: &Url,
     printing: bool,
+    section_hints: bool,
     resources: Option<&crate::bib_section_keys::ResourceMap>,
     sources: Option<&crate::bib_section_references::SourceStatuses>,
 ) -> Vec<(bool, Range<usize>)> {
@@ -114,6 +119,7 @@ fn occurrences_for(
                 .filter(|(citation, span)| {
                     !*citation
                         || !selected_resources
+                        || printing && section_hints
                         || !printing
                             && sources.map_or_else(
                                 || {

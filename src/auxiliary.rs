@@ -25,6 +25,10 @@ struct Parsed {
     labels: BTreeMap<String, Reference>,
     citations: BTreeMap<String, Option<String>>,
     inputs: Vec<String>,
+    numbers: BTreeMap<(u32, String, String), Option<String>>,
+    contexts: BTreeMap<(u32, String), Option<String>>,
+    bytes: usize,
+    numeric_unknown: bool,
 }
 type Stamp = (Option<SystemTime>, u64);
 type Cache = BTreeMap<PathBuf, (Stamp, Arc<Parsed>)>;
@@ -59,7 +63,10 @@ fn preview(value: &str) -> String {
     value.chars().take(256).collect()
 }
 fn parse(source: &str) -> Parsed {
-    let mut result = Parsed::default();
+    let mut result = Parsed {
+        bytes: source.len(),
+        ..Default::default()
+    };
     let mut at = 0;
     while at < source.len() {
         match source.as_bytes()[at] {
@@ -79,10 +86,51 @@ fn parse(source: &str) -> Parsed {
                 if let Some(word) = syntax::control_word(source, at) {
                     let name = &source[word.clone()];
                     at = word.end;
+                    if matches!(name, r"\abx@aux@number" | r"\abx@aux@defaultrefcontext") {
+                        let count = if name == r"\abx@aux@number" { 5 } else { 3 };
+                        if let Some((fields, end)) = record_fields(source, at, count) {
+                            at = end;
+                            let (section, key, context) = if count == 5 {
+                                (decimal(&fields[2]), &fields[1], &fields[3])
+                            } else {
+                                (decimal(&fields[0]), &fields[1], &fields[2])
+                            };
+                            if let Some(section) = section.filter(|_| {
+                                syntax::is_static_citation_key(key)
+                                    && key != "*"
+                                    && valid_context(context)
+                            }) {
+                                if count == 5 {
+                                    let number = decimal(&fields[0])
+                                        .and_then(|_| decimal(&fields[4]))
+                                        .map(|number| number.to_string());
+                                    retain(
+                                        &mut result.numbers,
+                                        (section, key.clone(), context.clone()),
+                                        number,
+                                        4096,
+                                    );
+                                } else {
+                                    retain(
+                                        &mut result.contexts,
+                                        (section, key.clone()),
+                                        Some(context.clone()),
+                                        4096,
+                                    );
+                                }
+                            } else {
+                                result.numeric_unknown = true;
+                            }
+                        } else {
+                            result.numeric_unknown = true;
+                        }
+                        continue;
+                    }
                     if matches!(name, r"\newlabel" | r"\@input" | r"\bibcite") {
                         let Some((key, end)) =
                             syntax::group(source, syntax::skip_space(source, at), b'{', b'}')
                         else {
+                            result.numeric_unknown |= name == r"\@input";
                             continue;
                         };
                         at = end;
@@ -91,6 +139,8 @@ fn parse(source: &str) -> Parsed {
                                 && syntax::is_literal_file_path(&key.value)
                             {
                                 result.inputs.push(key.value);
+                            } else {
+                                result.numeric_unknown = true;
                             }
                             continue;
                         }
@@ -165,6 +215,102 @@ fn parse(source: &str) -> Parsed {
         at += source[at..].chars().next().unwrap().len_utf8();
     }
     result
+}
+fn decimal(value: &str) -> Option<u32> {
+    (!value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()))
+        .then(|| value.parse().ok())
+        .flatten()
+}
+fn valid_context(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 256
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"/_.-:".contains(&byte))
+}
+fn record_fields(source: &str, mut at: usize, count: usize) -> Option<(Vec<String>, usize)> {
+    let mut fields = Vec::new();
+    for _ in 0..count {
+        let (argument, end) = syntax::group(source, syntax::skip_space(source, at), b'{', b'}')?;
+        fields.push(argument.value);
+        at = end;
+    }
+    Some((fields, at))
+}
+fn retain<K: Ord, V: Eq>(
+    entries: &mut BTreeMap<K, Option<V>>,
+    key: K,
+    value: Option<V>,
+    limit: usize,
+) {
+    if entries.len() >= limit && !entries.contains_key(&key) {
+        return;
+    }
+    match entries.entry(key) {
+        std::collections::btree_map::Entry::Vacant(entry) => {
+            entry.insert(value);
+        }
+        std::collections::btree_map::Entry::Occupied(mut entry) => {
+            if entry.get() != &value {
+                entry.insert(None);
+            }
+        }
+    }
+}
+
+type NumericLabels = BTreeMap<(u32, String), Option<String>>;
+
+pub(crate) fn numeric_citation_labels(
+    ws: &Workspace,
+    root: &Url,
+) -> Option<(NumericLabels, usize)> {
+    let path = root.to_file_path().ok()?;
+    let path = ws
+        .build_config(root)
+        .artifact_path(&path, "aux")
+        .filter(|path| path.is_file())
+        .unwrap_or_else(|| path.with_extension("aux"));
+    let mut numbers = BTreeMap::new();
+    let mut contexts = BTreeMap::new();
+    let mut pending = vec![path];
+    let mut seen = BTreeSet::new();
+    let mut work = 0usize;
+    while let Some(path) = pending.pop() {
+        if !seen.insert(path.clone()) {
+            continue;
+        }
+        if seen.len() > 16 {
+            return None;
+        }
+        let data = read(&path)?;
+        if data.numeric_unknown {
+            return None;
+        }
+        work += data.bytes;
+        if work > 16 * 1024 * 1024 {
+            return None;
+        }
+        for (key, value) in &data.numbers {
+            retain(&mut numbers, key.clone(), value.clone(), 8192);
+        }
+        for (key, value) in &data.contexts {
+            retain(&mut contexts, key.clone(), value.clone(), 8192);
+        }
+        if let Some(parent) = path.parent() {
+            pending.extend(data.inputs.iter().map(|input| parent.join(input)));
+        }
+    }
+    let mut result = BTreeMap::new();
+    for ((section, key, context), number) in numbers {
+        let components: Vec<_> = context.split('/').collect();
+        if components.len() == 6
+            && components[2].is_empty()
+            && contexts.get(&(section, key.clone())) == Some(&Some(context))
+        {
+            retain(&mut result, (section, key), number, 8192);
+        }
+    }
+    Some((result, work))
 }
 // A flat bibcite label is usable without executing TeX. Structured natbib
 // records are deliberately excluded: identical records serve both numeric and
@@ -385,12 +531,17 @@ pub(crate) fn hints(ws: &Workspace, uri: &Url, range: Range) -> Vec<InlayHint> {
     } else {
         BTreeMap::new()
     };
-    let citations = if config.citations {
+    let numeric = if config.citations {
+        crate::bib_compiled::numbers(ws, uri, range)
+    } else {
+        None
+    };
+    let citations = if config.citations && numeric.is_none() {
         citation_labels(ws, uri)
     } else {
         BTreeMap::new()
     };
-    crate::reference_diagnostics::hint_occurrences(ws, uri)
+    let mut result: Vec<_> = crate::reference_diagnostics::hint_occurrences(ws, uri)
         .into_iter()
         .filter_map(|(citation, span)| {
             let position = doc.text.position(span.end);
@@ -421,7 +572,13 @@ pub(crate) fn hints(ws: &Workspace, uri: &Url, range: Range) -> Vec<InlayHint> {
             )))
         })
         .take(1024)
-        .collect()
+        .collect();
+    result.extend(numeric.unwrap_or_default().into_iter().map(|(position, key, number)| {
+        hint(position, number.clone(), format!("Bibliography label for `{key}`: {number}\nValues come from an auxiliary file and may be stale."))
+    }));
+    result.sort_by_key(|hint| hint.position);
+    result.truncate(1024);
+    result
 }
 
 pub(crate) fn document_links(ws: &Workspace, uri: &Url, root: &Url) -> Vec<DocumentLink> {
