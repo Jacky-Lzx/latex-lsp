@@ -983,37 +983,87 @@ fn edit_error() -> jsonrpc::Error {
     jsonrpc::Error::invalid_params("The bibliography key has an incomplete or ambiguous declaration identity across its consumers")
 }
 
-fn validate_edit(symbol: &Symbol<'_>) -> Result<()> {
-    if symbol
-        .graphs
-        .projects
-        .values()
-        .any(|project| project.graph.sources.is_some())
-    {
-        return Err(());
+fn is_source(symbol: &Symbol<'_>) -> bool {
+    symbol.graphs.projects.values().any(|project| {
+        project
+            .graph
+            .sources
+            .as_ref()
+            .is_some_and(|sources| sources.contains(&symbol.declaration))
+    })
+}
+fn consumes(view: &View, declaration: &Identity, name: &str, source: bool) -> bool {
+    if source {
+        view.namespace
+            .as_ref()
+            .is_some_and(|state| state.declared.get(name) == Some(declaration))
+    } else {
+        view.contains(&declaration.uri)
     }
-    let database = Database::new(
-        &symbol.declaration.uri,
-        &symbol.graphs.ws.documents[&symbol.declaration.uri],
-    )?;
-    if database.declarations.get(&symbol.name).map(Vec::as_slice)
-        != Some(std::slice::from_ref(&symbol.declaration))
-    {
-        return Err(());
+}
+fn validate_edit(symbol: &Symbol<'_>) -> Result<()> {
+    let source = is_source(symbol);
+    if source {
+        // A final source identity does not certify Biber's prerequisite raw
+        // database parent. Refuse coupled edits until both roles can be proved.
+        if symbol
+            .occurrences
+            .keys()
+            .any(|uri| symbol.graphs.ws.documents[uri].kind == DocumentKind::Bibtex)
+        {
+            return Err(());
+        }
+    } else {
+        let database = Database::new(
+            &symbol.declaration.uri,
+            &symbol.graphs.ws.documents[&symbol.declaration.uri],
+        )?;
+        if database.declarations.get(&symbol.name).map(Vec::as_slice)
+            != Some(std::slice::from_ref(&symbol.declaration))
+        {
+            return Err(());
+        }
     }
     for project in symbol.graphs.projects.values() {
         crate::resource_context::validate_rename(symbol.graphs.ws, &project.scope, &symbol.name)
             .map_err(|_| ())?;
-        for view in project
-            .graph
-            .sections
-            .iter()
-            .filter(|view| view.contains(&symbol.declaration.uri))
-        {
-            if symbol.graphs.bind(&symbol.name, std::iter::once(view))?
-                != Some(symbol.declaration.clone())
+        if source {
+            for view in project
+                .graph
+                .sections
+                .iter()
+                .filter(|view| consumes(view, &symbol.declaration, &symbol.name, true))
             {
-                return Err(());
+                // An early book request can suppress the old source set.
+                // Giving it a fresh name would materialize an additional set.
+                if symbol.graphs.bind(&symbol.name, std::iter::once(view))?
+                    != Some(symbol.declaration.clone())
+                {
+                    return Err(());
+                }
+                if view.namespace.as_ref().is_some_and(|state| state.wildcard)
+                    && symbol
+                        .graphs
+                        .database_binding(&symbol.name, &view.resources)?
+                        .is_some()
+                {
+                    // Moving the source shadow would expose the old raw entry
+                    // to nocite{*}, adding a bibliography entry after the edit.
+                    return Err(());
+                }
+            }
+        } else {
+            for view in project
+                .graph
+                .sections
+                .iter()
+                .filter(|view| consumes(view, &symbol.declaration, &symbol.name, false))
+            {
+                if symbol.graphs.bind(&symbol.name, std::iter::once(view))?
+                    != Some(symbol.declaration.clone())
+                {
+                    return Err(());
+                }
             }
         }
     }
@@ -1052,8 +1102,8 @@ pub(crate) fn rename(
             return Err(jsonrpc::Error::invalid_params("Invalid bibliography key: use a nonempty literal key without separators or TeX expansion"));
         }
         if name == symbol.name { return Ok(Some(WorkspaceEdit::default())); }
-        let database = Database::new(&symbol.declaration.uri, &ws.documents[&symbol.declaration.uri]).map_err(|_| edit_error())?;
-        if database.declarations.contains_key(name) {
+        let source_key = is_source(&symbol);
+        if !source_key && symbol.graphs.databases[&symbol.declaration.uri].declarations.contains_key(name) {
             return Err(jsonrpc::Error::invalid_params("The bibliography key or IDS alias already exists in the declaration database"));
         }
         symbol.graphs.name = Some(name.into());
@@ -1064,20 +1114,21 @@ pub(crate) fn rename(
         for project in symbol.graphs.projects.values() {
             symbol.lexical.validate(&project.scope, true, name)?;
             crate::resource_context::validate_rename(ws, &project.scope, name)?;
-            for view in project.graph.sections.iter().filter(|view| view.contains(&symbol.declaration.uri)) {
-                if symbol.graphs.bind(name, std::iter::once(view)).map_err(|_| edit_error())?.is_some() {
+            for view in project.graph.sections.iter().filter(|view| consumes(view, &symbol.declaration, &symbol.name, source_key)) {
+                if view.namespace.as_ref().is_some_and(|state| state.declared.contains_key(name))
+                    || symbol.graphs.database_binding(name, &view.resources).map_err(|_| edit_error())?.is_some() {
                     return Err(jsonrpc::Error::invalid_params("The bibliography key or IDS alias already exists in a section consuming this declaration"));
                 }
             }
             for source in project.scope.iter().filter(|uri| ws.documents.get(*uri).is_some_and(|doc| doc.kind == DocumentKind::Latex)) {
                 for span in symbol.lexical.references(source, true, name) {
                     let views = project.graph.occurrences.get(&(source.clone(), span.start, span.end)).ok_or_else(edit_error)?;
-                    if views.iter().any(|view| view.contains(&symbol.declaration.uri)) {
+                    if views.iter().any(|view| consumes(view, &symbol.declaration, &symbol.name, source_key)) {
                         return Err(jsonrpc::Error::invalid_params("Renaming this bibliography key would capture an existing citation"));
                     }
                 }
             }
-            if project.graph.sections.iter().filter(|view| view.contains(&symbol.declaration.uri)).any(|view| view.iter().any(|resource| relation_owners.contains(resource))) {
+            if project.graph.sections.iter().filter(|view| consumes(view, &symbol.declaration, &symbol.name, source_key)).any(|view| view.iter().any(|resource| relation_owners.contains(resource))) {
                 return Err(jsonrpc::Error::invalid_params("Renaming this bibliography key would capture an existing bibliography relation"));
             }
         }

@@ -30266,17 +30266,24 @@ fn source_set_navigation_tracks_numeric_sections_and_unsaved_input_order_over_st
         {"uri":main,"range":text.range(at,at+6)},
         {"uri":sets,"range":setrange}
     ]));
-    for (id, method, mut params) in [
-        (41, "textDocument/prepareRename", declaration_params.clone()),
-        (42, "textDocument/rename", declaration_params),
-    ] {
-        if method == "textDocument/rename" {
-            params["newName"] = json!("renamed");
-        }
-        server.send(json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}));
-        let response = server.until(|message| message["id"] == id);
-        assert_eq!(response["error"]["code"], -32602, "{response}");
-    }
+    assert_eq!(
+        server.request(41, "textDocument/prepareRename", declaration_params),
+        json!({"range":setrange,"placeholder":"parent"})
+    );
+    let edit = server.request(
+        42,
+        "textDocument/rename",
+        json!({"textDocument":{"uri":sets},"position":setrange.start,"newName":"renamed"}),
+    );
+    assert_eq!(edit["changes"].as_object().unwrap().len(), 2, "{edit}");
+    assert_eq!(
+        edit["changes"][main.as_str()],
+        json!([{"range":text.range(at,at+6),"newText":"renamed"}])
+    );
+    assert_eq!(
+        edit["changes"][sets.as_str()],
+        json!([{"range":setrange,"newText":"renamed"}])
+    );
     let params = json!({"textDocument":{"uri":main},"position":points[0]});
     server.notify("textDocument/didChange",json!({"textDocument":{"uri":sets,"version":6},"contentChanges":[{"text":format!("\\cite{{parent}}{declaration}")}]}));
     assert_eq!(
@@ -30300,7 +30307,7 @@ fn source_set_navigation_tracks_numeric_sections_and_unsaved_input_order_over_st
     rename["newName"] = json!("renamed");
     server.send(json!({"jsonrpc":"2.0","id":8,"method":"textDocument/rename","params":rename}));
     let response = server.until(|message| message["id"] == 8);
-    assert_eq!(response["error"]["code"], -32602, "{response}");
+    assert_eq!(response["result"], edit, "{response}");
     server.request(1000, "shutdown", Value::Null);
     server.notify("exit", Value::Null);
     server.wait_exit(0);
@@ -31044,4 +31051,172 @@ fn source_set_complete_reference_graphs_preserve_numeric_identity_and_unsaved_co
     server.request(1000, "shutdown", Value::Null);
     server.notify("exit", Value::Null);
     server.wait_exit(0);
+}
+
+#[test]
+fn source_set_renames_keep_numeric_identity_versions_and_reject_capture_or_raw_dependencies_over_stdio(
+) {
+    use latex_lsp::text::Text;
+    use tower_lsp::lsp_types::{Location, TextEdit};
+    fn item(uri: &Url, text: &str, marker: &str, name: &str) -> Location {
+        let at = text.find(marker).unwrap() + marker.len();
+        Location::new(
+            uri.clone(),
+            Text::new(text.into()).range(at, at + name.len()),
+        )
+    }
+    fn verify(edit: &Value, versioned: bool, expected: &[(Url, i32, Vec<TextEdit>)]) {
+        if versioned {
+            let docs = edit["documentChanges"].as_array().unwrap();
+            assert_eq!(docs.len(), expected.len(), "{edit}");
+            for (uri, version, edits) in expected {
+                let doc = docs
+                    .iter()
+                    .find(|doc| doc["textDocument"]["uri"] == uri.as_str())
+                    .unwrap();
+                assert_eq!(doc["textDocument"]["version"], *version);
+                assert_eq!(doc["edits"], json!(edits));
+            }
+        } else {
+            assert_eq!(edit["changes"].as_object().unwrap().len(), expected.len());
+            for (uri, _, edits) in expected {
+                assert_eq!(edit["changes"][uri.as_str()], json!(edits));
+            }
+        }
+    }
+    for versioned in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+        let sets = main.join("sets.tex").unwrap();
+        let bib = main.join("section.bib").unwrap();
+        let other = main.join("unsaved.tex").unwrap();
+        let source = r"\documentclass{article}\usepackage{biblatex}\addbibresource{default.bib}\addsectionbib[label=chosen]{section.bib}\begin{document}\cite{parent}\newrefsection[chosen]\input{sets}\cite{parent}\newrefsection[chosen]\input{sets}\cite{parent}\cite{member}\end{document}";
+        let declaration = "% 😀\r\n\\csuse{defbibentryset}{parent}{member}";
+        let library = "% 😀\r\n@book{parent,title={Selected}}\r\n@book{member,title={Member}}";
+        for (name, text) in [
+            ("main.tex", source),
+            ("sets.tex", declaration),
+            ("section.bib", library),
+            (
+                "default.bib",
+                "@book{parent,title={Default}} @book{member,title={Default member}}",
+            ),
+        ] {
+            std::fs::write(dir.path().join(name), text).unwrap();
+        }
+        let mut server = Server::start();
+        server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":versioned}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+        server.notify("initialized", json!({}));
+        for (uri, text, language, version) in [
+            (&main, source, "latex", 5),
+            (&sets, declaration, "latex", 3),
+            (&bib, library, "bibtex", 4),
+        ] {
+            server.notify("textDocument/didOpen",json!({"textDocument":{"uri":uri,"languageId":language,"text":text,"version":version}}));
+        }
+        let query = item(&sets, declaration, r"\csuse{defbibentryset}{", "parent");
+        let params = json!({"textDocument":{"uri":sets},"position":query.range.start});
+        assert_eq!(
+            server.request(2, "textDocument/prepareRename", params.clone()),
+            json!({"range":query.range,"placeholder":"parent"})
+        );
+        let rename =
+            json!({"textDocument":{"uri":sets},"position":query.range.start,"newName":"newset"});
+        let maintext = Text::new(source.into());
+        let citations: Vec<_> = source
+            .match_indices(r"\cite{parent}")
+            .skip(1)
+            .map(|(at, _)| TextEdit {
+                range: maintext.range(at + 6, at + 12),
+                new_text: "newset".into(),
+            })
+            .collect();
+        let expected = vec![
+            (main.clone(), 5, citations),
+            (
+                sets.clone(),
+                3,
+                vec![TextEdit {
+                    range: query.range,
+                    new_text: "newset".into(),
+                }],
+            ),
+        ];
+        verify(
+            &server.request(3, "textDocument/rename", rename.clone()),
+            versioned,
+            &expected,
+        );
+        let member = item(
+            &sets,
+            declaration,
+            r"\csuse{defbibentryset}{parent}{",
+            "member",
+        );
+        let book = item(
+            &bib,
+            library,
+            "@book{parent,title={Selected}}\r\n@book{",
+            "member",
+        );
+        let cite = item(&main, source, r"\cite{parent}\cite{", "member");
+        let expected_member = vec![
+            (
+                main.clone(),
+                5,
+                vec![TextEdit {
+                    range: cite.range,
+                    new_text: "newmember".into(),
+                }],
+            ),
+            (
+                sets.clone(),
+                3,
+                vec![TextEdit {
+                    range: member.range,
+                    new_text: "newmember".into(),
+                }],
+            ),
+            (
+                bib.clone(),
+                4,
+                vec![TextEdit {
+                    range: book.range,
+                    new_text: "newmember".into(),
+                }],
+            ),
+        ];
+        verify(&server.request(4,"textDocument/rename",json!({"textDocument":{"uri":sets},"position":member.range.start,"newName":"newmember"})),versioned,&expected_member);
+        server.notify("textDocument/didOpen",json!({"textDocument":{"uri":other,"languageId":"latex","version":8,"text":r"\documentclass{article}\usepackage{biblatex}\addbibresource{section.bib}\begin{document}\input{sets}\cite{newset}\end{document}"}}));
+        server.send(json!({"jsonrpc":"2.0","id":5,"method":"textDocument/rename","params":rename}));
+        let response = server.until(|message| message["id"] == 5);
+        assert_eq!(response["error"]["code"], -32602, "{response}");
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":other}}),
+        );
+        verify(
+            &server.request(6, "textDocument/rename", rename.clone()),
+            versioned,
+            &expected,
+        );
+        server.notify("textDocument/didChange",json!({"textDocument":{"uri":bib,"version":9},"contentChanges":[{"text":format!("{library} @book{{child,crossref={{parent}}}}") }]}));
+        for (id, method, params) in [
+            (7, "textDocument/prepareRename", params),
+            (8, "textDocument/rename", rename.clone()),
+        ] {
+            server.send(json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}));
+            let response = server.until(|message| message["id"] == id);
+            assert_eq!(response["error"]["code"], -32602, "{response}");
+        }
+        server.notify("textDocument/didClose", json!({"textDocument":{"uri":bib}}));
+        verify(
+            &server.request(9, "textDocument/rename", rename),
+            versioned,
+            &expected,
+        );
+        server.request(1000, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
 }
