@@ -3,6 +3,10 @@
 //! Citation references and renames still need the identity of every database
 //! declaration and bibliography relation. Resource labels have a separate graph.
 use crate::{
+    bib_initializers::{
+        initialized_call_argument, initialized_entrydata_spans, native_initializer,
+        uses_initializer_forwards,
+    },
     bib_section_files::Registry,
     named_references::Context,
     signature::CommandSignatures,
@@ -157,129 +161,6 @@ fn textual_bibliography_test(
                 _ => false,
             }
         })
-}
-
-// These native text wrappers initialize biblatex's internal commands before
-// executing their grouped text. Build their union once per visit; queries do
-// not rescan nested group contents. Ordinary document entrydata stays
-// unproved, as do captured/redefined wrappers and parameters consumed as data.
-fn initialized_entrydata_spans(
-    doc: &Document,
-    signatures: &CommandSignatures<'_>,
-    positions: &BTreeSet<usize>,
-    context: &Context,
-    work: &mut usize,
-) -> Option<Vec<Range<usize>>> {
-    let mut spans = Vec::new();
-    let source = &doc.text.source;
-    for (index, command) in doc.syntax.commands.iter().enumerate() {
-        if !matches!(
-            command.name.as_str(),
-            "mkbibparens" | "mkbibbrackets" | "parentext" | "brackettext" | "csuse" | "csname"
-        ) {
-            continue;
-        }
-        *work += 64;
-        if *work > 32 * 1024 * 1024 {
-            return None;
-        }
-        if !positions.contains(&command.span.start) {
-            continue;
-        }
-        if matches!(command.name.as_str(), "csuse" | "csname") {
-            let Some((name, call)) = signatures.named_invocation(
-                source,
-                &doc.syntax,
-                index,
-                &BTreeSet::new(),
-                &context.declarations,
-            ) else {
-                continue;
-            };
-            if !matches!(
-                name,
-                "mkbibparens" | "mkbibbrackets" | "parentext" | "brackettext"
-            ) || !signatures.command_unchanged(name)
-            {
-                continue;
-            }
-            // csuse's parsed argument is the command name, not the text.
-            // Bound the new group scan and copy before reading its contents.
-            let mut limit = source.len().min(call.end + (32 * 1024 * 1024 - *work));
-            while !source.is_char_boundary(limit) {
-                limit -= 1;
-            }
-            let start = syntax::skip_space(&source[..limit], call.end);
-            *work += start - call.end;
-            if source.as_bytes().get(start) != Some(&b'{') {
-                if start == limit && limit != source.len() {
-                    return None;
-                }
-                continue;
-            }
-            let argument = syntax::group(&source[..limit], start, b'{', b'}');
-            if let Some((argument, end)) = argument {
-                *work += end - start;
-                spans.push(argument.span);
-            } else {
-                *work += limit - start;
-                if limit != source.len() {
-                    return None;
-                }
-            }
-            continue;
-        }
-        if !signatures.command_unchanged(&command.name) {
-            continue;
-        }
-        let Some(argument) = &command.argument else {
-            continue;
-        };
-        let start = syntax::skip_space(&doc.text.source, command.span.end);
-        if argument.outer_span.start == start
-            && doc.text.source.as_bytes().get(start) == Some(&b'{')
-        {
-            spans.push(argument.span.clone());
-        }
-    }
-    spans.sort_unstable_by_key(|span| span.start);
-    let mut merged: Vec<Range<usize>> = Vec::new();
-    for span in spans {
-        if let Some(previous) = merged
-            .last_mut()
-            .filter(|previous| span.start <= previous.end)
-        {
-            previous.end = previous.end.max(span.end);
-        } else {
-            merged.push(span);
-        }
-    }
-    Some(merged)
-}
-
-#[cfg(test)]
-mod initializer_tests {
-    use super::*;
-
-    #[test]
-    fn named_initializer_budget_exhaustion_never_returns_partial_ranges() {
-        let source = r"\mkbibparens{Text}\csuse{mkbibparens}{😀\entrydata{collection}{Text}}";
-        let doc = Document::new(
-            &Url::parse("file:///budget.tex").unwrap(),
-            source.into(),
-            None,
-        );
-        let signatures = CommandSignatures::new([(source, &doc.syntax)]);
-        let positions = signatures.source_command_positions(source, &doc.syntax);
-        let context = Context::new(&doc, &signatures);
-        // After the two command costs, the scan limit lies inside the emoji.
-        let mut work = 32 * 1024 * 1024 - 128 - 2;
-        assert!(
-            initialized_entrydata_spans(&doc, &signatures, &positions, &context, &mut work)
-                .is_none()
-        );
-        assert!(work <= 32 * 1024 * 1024);
-    }
 }
 
 #[derive(Clone)]
@@ -648,7 +529,13 @@ impl Analysis<'_, '_> {
             .trace
             .as_ref()
             .is_some_and(|trace| trace.assignments.is_some());
-        let alias_declarations: BTreeMap<_, _> = if self.labels.is_some() || hint_assignments {
+        let initializer_forwards = self
+            .trace
+            .as_ref()
+            .is_some_and(|trace| trace.initializer_forwards);
+        let source_forwards = hint_assignments || initializer_forwards;
+        let mut forwarded_initialized_end = None::<usize>;
+        let alias_declarations: BTreeMap<_, _> = if self.labels.is_some() || source_forwards {
             doc.syntax
                 .definitions
                 .iter()
@@ -656,7 +543,8 @@ impl Analysis<'_, '_> {
                     let builtin = self.signatures.forwarded_builtin(&entry.name)?;
                     if !(self.labels.is_some() && (STATE.contains(&builtin) || loader(builtin))
                         || hint_assignments
-                            && crate::bib_context_assignments::target(builtin).is_some())
+                            && crate::bib_context_assignments::target(builtin).is_some()
+                        || initializer_forwards && native_initializer(builtin))
                     {
                         return None;
                     }
@@ -744,12 +632,12 @@ impl Analysis<'_, '_> {
                     }
                     self.trace
                         .as_mut()?
-                        .hint_aliases
+                        .source_aliases
                         .insert(name.clone(), target.clone());
                 }
             }
             if context.literal(lexical.span.start)
-                || (self.labels.is_some() || hint_assignments)
+                || (self.labels.is_some() || source_forwards)
                     && context
                         .declarations
                         .contains(&(lexical.span.start, lexical.span.end))
@@ -758,6 +646,47 @@ impl Analysis<'_, '_> {
                     .any(|body| body.contains(&lexical.span.start))
             {
                 continue;
+            }
+            let (name, span) = self
+                .signatures
+                .named_invocation(
+                    source,
+                    &doc.syntax,
+                    index,
+                    &BTreeSet::new(),
+                    &context.declarations,
+                )
+                .unwrap_or((&lexical.name, lexical.span.clone()));
+            if initializer_forwards
+                && positions.contains(&lexical.span.start)
+                && !context.operand(doc, lexical.span.start)
+            {
+                if let Some(builtin) = self
+                    .signatures
+                    .forwarded_builtin(name)
+                    .filter(|name| native_initializer(name))
+                {
+                    // Every late-bound edge must already have executed, even
+                    // when its replacement shape was visible in another file.
+                    let mut current = name;
+                    let mut confirmed = false;
+                    for _ in 0..=64 {
+                        if current == builtin {
+                            confirmed = true;
+                            break;
+                        }
+                        current = self.trace.as_ref()?.source_aliases.get(current)?;
+                    }
+                    if !confirmed {
+                        return None;
+                    }
+                    let argument =
+                        initialized_call_argument(source, lexical, &span, &mut self.work)?;
+                    if let Some(argument) = argument {
+                        forwarded_initialized_end =
+                            Some(forwarded_initialized_end.unwrap_or(0).max(argument.end));
+                    }
+                }
             }
             let pending = self
                 .query
@@ -780,7 +709,8 @@ impl Analysis<'_, '_> {
                             .checked_sub(1)
                             .and_then(|index| initialized.get(index))
                             .filter(|span| span.contains(&lexical.span.start))
-                            .map(|span| span.end),
+                            .map(|span| span.end)
+                            .max(forwarded_initialized_end.filter(|end| lexical.span.start < *end)),
                     )
             };
             if unsafe_control(&lexical.name) && !textual_test(&lexical.name, lexical.span.end) {
@@ -789,16 +719,6 @@ impl Analysis<'_, '_> {
             if lexical.name == "endcsname" {
                 continue;
             }
-            let (name, span) = self
-                .signatures
-                .named_invocation(
-                    source,
-                    &doc.syntax,
-                    index,
-                    &BTreeSet::new(),
-                    &context.declarations,
-                )
-                .unwrap_or((&lexical.name, lexical.span.clone()));
             let name = if let Some(labels) = self.labels.as_ref() {
                 if let Some(builtin) = self
                     .signatures
@@ -839,7 +759,7 @@ impl Analysis<'_, '_> {
                             confirmed = true;
                             break;
                         }
-                        current = self.trace.as_ref()?.hint_aliases.get(current)?;
+                        current = self.trace.as_ref()?.source_aliases.get(current)?;
                     }
                     if !confirmed {
                         return None;
@@ -2450,7 +2370,8 @@ pub(crate) struct SourceTrace {
     pub explicit_requests: BTreeSet<usize>,
     pub category_members: BTreeMap<String, BTreeSet<String>>,
     scope: Option<crate::bib_context_scope::Scope>,
-    hint_aliases: BTreeMap<String, String>,
+    source_aliases: BTreeMap<String, String>,
+    initializer_forwards: bool,
     declarations: SourceDeclarations,
     current: u32,
     next: u32,
@@ -2765,6 +2686,7 @@ fn source_trace_query(
         return None;
     }
     let resources = Arc::new(active.clone());
+    let initializer_forwards = uses_initializer_forwards(docs, signatures, &mut work)?;
     let trace = SourceTrace {
         work: 0,
         resources: BTreeMap::from([(0, resources.clone())]),
@@ -2773,17 +2695,19 @@ fn source_trace_query(
         assignments: hint_assignments.then(Vec::new),
         explicit_requests: BTreeSet::new(),
         category_members: BTreeMap::new(),
-        hint_aliases: BTreeMap::new(),
-        scope: (hint_assignments
-            && docs.iter().any(|(_, doc)| {
-                crate::bib_context_assignments::has_weak(doc, signatures)
-                    || doc.syntax.definitions.iter().any(|entry| {
-                        signatures
-                            .forwarded_builtin(&entry.name)
-                            .and_then(crate::bib_context_assignments::target)
-                            .is_some()
-                    })
-            }))
+        source_aliases: BTreeMap::new(),
+        initializer_forwards,
+        scope: (initializer_forwards
+            || hint_assignments
+                && docs.iter().any(|(_, doc)| {
+                    crate::bib_context_assignments::has_weak(doc, signatures)
+                        || doc.syntax.definitions.iter().any(|entry| {
+                            signatures
+                                .forwarded_builtin(&entry.name)
+                                .and_then(crate::bib_context_assignments::target)
+                                .is_some()
+                        })
+                }))
         .then(Default::default),
         declarations,
         current: 0,

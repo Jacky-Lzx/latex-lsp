@@ -35889,7 +35889,9 @@ fn generated_category_code_blocks_partial_edits_across_unsaved_consumers_over_st
 #[test]
 fn initialized_entrydata_keeps_final_sets_exact_versions_and_unsaved_guards() {
     use latex_lsp::text::Text;
-    for document_changes in [false, true] {
+    for (document_changes, forwarded) in
+        [(false, false), (true, false), (false, true), (true, true)]
+    {
         let dir = tempfile::tempdir().unwrap();
         let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
         let child = main.join("query.tex").unwrap();
@@ -35897,13 +35899,22 @@ fn initialized_entrydata_keeps_final_sets_exact_versions_and_unsaved_guards() {
         let provider = main.join("macros.tex").unwrap();
         let other = main.join("other.tex").unwrap();
         let source = "% 😀\r\n\\documentclass{article}\\usepackage{biblatex}\\addbibresource{data.bib}\\input{macros}\\begin{document}\\parentext{\\entrydata{collection}{Text}}\\input{query}\\defbibentryset{collection}{member}\\cite{collection}\\end{document}";
-        let calls = "% queries\r\n😀 \\csuse{mkbibbrackets}{\\entrydata*{collection}{Text}}\\csname parentext\\endcsname{\\csuse{entrydata}{collection}{Text}}\\csuse{brackettext}{\\csname entrydata\\endcsname*{collection}{Text}}";
+        let provider_source = if forwarded {
+            r"\def\wrapbrackets{\mkbibbrackets}\newcommand{\wrapparens}{\parentext}\def\wrapbrackettext{\brackettext}"
+        } else {
+            ""
+        };
+        let calls = if forwarded {
+            "% queries\r\n😀 \\csuse{wrapbrackets}{\\entrydata*{collection}{Text}}\\csname wrapparens\\endcsname{\\csuse{entrydata}{collection}{Text}}\\csuse{wrapbrackettext}{\\csname entrydata\\endcsname*{collection}{Text}}"
+        } else {
+            "% queries\r\n😀 \\csuse{mkbibbrackets}{\\entrydata*{collection}{Text}}\\csname parentext\\endcsname{\\csuse{entrydata}{collection}{Text}}\\csuse{brackettext}{\\csname entrydata\\endcsname*{collection}{Text}}"
+        };
         let library = "@book{collection,title={Raw collection}} @book{member,title={Member}}";
         for (name, text) in [
             ("main.tex", source),
             ("query.tex", calls),
             ("data.bib", library),
-            ("macros.tex", ""),
+            ("macros.tex", provider_source),
         ] {
             std::fs::write(dir.path().join(name), text).unwrap();
         }
@@ -36008,7 +36019,7 @@ fn initialized_entrydata_keeps_final_sets_exact_versions_and_unsaved_guards() {
             edits.sort_by_key(Value::to_string);
         }
         assert_eq!(actual, expected_edits);
-        server.notify("textDocument/didOpen",json!({"textDocument":{"uri":provider,"languageId":"latex","version":10,"text":r"\renewcommand\mkbibbrackets[1]{}"}}));
+        server.notify("textDocument/didOpen",json!({"textDocument":{"uri":provider,"languageId":"latex","version":10,"text":format!("{provider_source}{}", r"\renewcommand\mkbibbrackets[1]{}")}}));
         assert_eq!(
             server.request(8, "textDocument/definition", params.clone()),
             json!([])
@@ -36025,7 +36036,7 @@ fn initialized_entrydata_keeps_final_sets_exact_versions_and_unsaved_guards() {
             server.request(10, "textDocument/definition", params.clone()),
             target
         );
-        server.notify("textDocument/didOpen",json!({"textDocument":{"uri":provider,"languageId":"latex","version":11,"text":r"\renewcommand\mkbibparens[1]{}"}}));
+        server.notify("textDocument/didOpen",json!({"textDocument":{"uri":provider,"languageId":"latex","version":11,"text":format!("{provider_source}{}", r"\renewcommand\mkbibparens[1]{}")}}));
         assert_eq!(
             server.request(11, "textDocument/definition", params.clone()),
             json!([])
@@ -36042,6 +36053,39 @@ fn initialized_entrydata_keeps_final_sets_exact_versions_and_unsaved_guards() {
             server.request(13, "textDocument/definition", params.clone()),
             target
         );
+
+        if forwarded {
+            for (index, declaration) in [
+                r"\def\dormant{\def\wrapbrackets{\mkbibbrackets}}",
+                r"\begingroup\def\wrapbrackets{\mkbibbrackets}\endgroup",
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let changed =
+                    provider_source.replace(r"\def\wrapbrackets{\mkbibbrackets}", declaration);
+                server.notify("textDocument/didOpen", json!({"textDocument":{"uri":provider,"languageId":"latex","version":20+index,"text":changed}}));
+                assert_eq!(
+                    server.request(100, "textDocument/definition", params.clone()),
+                    json!([])
+                );
+                assert_eq!(
+                    server.request(101, "textDocument/references", refs.clone()),
+                    json!([])
+                );
+                server.send(json!({"jsonrpc":"2.0","id":102,"method":"textDocument/rename","params":{"textDocument":{"uri":child},"position":query.start,"newName":"fresh"}}));
+                let response = server.until(|message| message["id"] == 102);
+                assert_eq!(response["error"]["code"], -32602, "{response}");
+                server.notify(
+                    "textDocument/didClose",
+                    json!({"textDocument":{"uri":provider}}),
+                );
+                assert_eq!(
+                    server.request(103, "textDocument/definition", params.clone()),
+                    target
+                );
+            }
+        }
 
         for (version, extra) in [
             (12, " @book{trigger,execute={\\unknown}}"),

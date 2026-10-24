@@ -2,8 +2,12 @@ use latex_lsp::{features, signature, text::Text, workspace::Workspace};
 use tower_lsp::lsp_types::*;
 
 fn setup(body: &str) -> (tempfile::TempDir, Workspace, Url, Url) {
+    setup_with_preamble("", body)
+}
+
+fn setup_with_preamble(preamble: &str, body: &str) -> (tempfile::TempDir, Workspace, Url, Url) {
     let dir = tempfile::tempdir().unwrap();
-    let source = format!("% 😀\r\n\\documentclass{{article}}\\usepackage{{biblatex}}\\addbibresource{{data.bib}}\\begin{{document}}{body}\\end{{document}}");
+    let source = format!("% 😀\r\n\\documentclass{{article}}\\usepackage{{biblatex}}\\addbibresource{{data.bib}}{preamble}\\begin{{document}}{body}\\end{{document}}");
     std::fs::write(dir.path().join("main.tex"), &source).unwrap();
     std::fs::write(
         dir.path().join("data.bib"),
@@ -449,21 +453,43 @@ fn compile_clean(dir: &std::path::Path) -> String {
 #[test]
 #[ignore = "requires pdflatex, biblatex and biber"]
 fn native_initialized_queries_preserve_complete_bbl_after_actual_lsp_edits() {
-    native_initialized_query_edits(&["mkbibparens", "mkbibbrackets", "parentext", "brackettext"]);
+    native_initialized_query_edits(
+        "",
+        &["mkbibparens", "mkbibbrackets", "parentext", "brackettext"],
+    );
 }
 
 #[test]
 #[ignore = "requires pdflatex, biblatex and biber"]
 fn native_named_initialized_queries_preserve_complete_bbl_after_actual_lsp_edits() {
-    native_initialized_query_edits(&[
-        "csuse{mkbibparens}",
-        "csname mkbibbrackets\\endcsname",
-        "csuse{parentext}",
-        "csname brackettext\\endcsname",
-    ]);
+    native_initialized_query_edits(
+        "",
+        &[
+            "csuse{mkbibparens}",
+            "csname mkbibbrackets\\endcsname",
+            "csuse{parentext}",
+            "csname brackettext\\endcsname",
+        ],
+    );
 }
 
-fn native_initialized_query_edits(wrappers: &[&str]) {
+#[test]
+#[ignore = "requires pdflatex, biblatex and biber"]
+fn native_forwarded_initialized_queries_preserve_complete_bbl_after_actual_lsp_edits() {
+    for (preamble, call) in [
+        (r"\def\wrap{\mkbibparens}", "wrap"),
+        (r"\newcommand{\wrap}{\parentext}", "csuse{wrap}"),
+        (
+            r"\NewDocumentCommand{\wrap}{}{\mkbibbrackets}",
+            "csname wrap\\endcsname",
+        ),
+        (r"\def\outer{\inner}\def\inner{\brackettext}", "outer"),
+    ] {
+        native_initialized_query_edits(preamble, &[call]);
+    }
+}
+
+fn native_initialized_query_edits(preamble: &str, wrappers: &[&str]) {
     for wrapper in wrappers {
         for star in ["", "*"] {
             // Query before declaration: entrydata reads the final BBL without
@@ -471,7 +497,7 @@ fn native_initialized_query_edits(wrappers: &[&str]) {
             let body = format!(
                 r"\{wrapper}{{\entrydata{star}{{collection}}{{Text}}}}\defbibentryset{{collection}}{{member}}\cite{{collection}}\printbibliography"
             );
-            let (dir, ws, main, bib) = setup(&body);
+            let (dir, ws, main, bib) = setup_with_preamble(preamble, &body);
             let before = compile_clean(dir.path());
             assert!(before.contains(r"\entry{collection}{set}"), "{before}");
             assert!(!before.contains(r"\entry{collection}{book}"), "{before}");
@@ -564,5 +590,233 @@ fn native_redefined_forward_targets_discard_queries_without_phantom_references()
             features::rename(&ws, &main, declaration.range.start, "fresh"),
             Ok(Some(_))
         ));
+    }
+}
+
+#[test]
+fn executed_preamble_forwards_initialize_their_actual_text_at_each_call() {
+    for (declaration, alias) in [
+        (r"\def\wrap{\mkbibparens}", "wrap"),
+        (r"\newcommand{\wrap}{\parentext}", "wrap"),
+        (r"\NewDocumentCommand{\wrap}{}{\mkbibbrackets}", "wrap"),
+        (r"\def\outer{\inner}\def\inner{\brackettext}", "outer"),
+    ] {
+        for call in [
+            format!("\\{alias}"),
+            format!(r"\csuse{{{alias}}}"),
+            format!("\\csname {alias}\\endcsname"),
+        ] {
+            for star in ["", "*"] {
+                let prefix = format!(r"\entrydata{star}{{");
+                let body = format!(
+                    r"{call}{{\entrydata{star}{{collection}}{{Text}}}}\defbibentryset{{collection}}{{member}}\cite{{collection}}"
+                );
+                let (_dir, ws, main, _bib) = setup_with_preamble(declaration, &body);
+                let query = location(&ws, &main, &prefix, "collection");
+                assert_eq!(
+                    features::definitions(&ws, &main, query.range.start),
+                    vec![location(&ws, &main, r"\defbibentryset{", "collection")],
+                    "{declaration}: {call}{star}"
+                );
+                assert!(features::hover(&ws, &main, query.range.start).is_some());
+                assert!(features::prepare_rename(&ws, &main, query.range.start)
+                    .unwrap()
+                    .is_some());
+                assert_eq!(
+                    features::references(&ws, &main, query.range.start, true).len(),
+                    3
+                );
+                let changes = features::rename(&ws, &main, query.range.start, "fresh")
+                    .unwrap()
+                    .unwrap()
+                    .changes
+                    .unwrap();
+                assert_eq!(changes.len(), 1);
+                assert_eq!(changes[&main].len(), 3);
+                assert_eq!(
+                    apply(&ws.documents[&main].text.source, &changes[&main]),
+                    ws.documents[&main]
+                        .text
+                        .source
+                        .replace("collection", "fresh")
+                );
+                for key in ["coBAD", ""] {
+                    let (_dir, ws, main, _bib) = setup_with_preamble(
+                        declaration,
+                        &body.replacen(
+                            &format!("{prefix}collection"),
+                            &format!("{prefix}{key}"),
+                            1,
+                        ),
+                    );
+                    let doc = &ws.documents[&main];
+                    let at =
+                        doc.text.source.find(&prefix).unwrap() + prefix.len() + key.len().min(2);
+                    let item = features::completion(&ws, &main, doc.text.position(at))
+                        .into_iter()
+                        .find(|item| item.label == "collection")
+                        .expect(&call);
+                    assert!(item
+                        .detail
+                        .as_ref()
+                        .unwrap()
+                        .contains("Dynamic bibliography set"));
+                    let Some(CompletionTextEdit::Edit(edit)) = item.text_edit else {
+                        panic!()
+                    };
+                    assert!(apply(&doc.text.source, &[edit])
+                        .contains(&format!("{prefix}collection}}{{Text}}")));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn unexecuted_local_captured_and_late_forwards_keep_source_rename_complete() {
+    for (preamble, body) in [
+        (
+            r"\def\install{\def\wrap{\mkbibparens}}",
+            r"\wrap{\entrydata{collection}{Text}}",
+        ),
+        (
+            r"\newcommand\discard[1]{}\discard{\def\wrap{\mkbibparens}}",
+            r"\wrap{\entrydata{collection}{Text}}",
+        ),
+        (
+            r"{\def\wrap{\mkbibparens}}",
+            r"\wrap{\entrydata{collection}{Text}}",
+        ),
+        (
+            r"\begingroup\def\wrap{\mkbibparens}\endgroup",
+            r"\wrap{\entrydata{collection}{Text}}",
+        ),
+        (
+            r"\let\wrap\mkbibparens",
+            r"\wrap{\entrydata{collection}{Text}}",
+        ),
+        (
+            r"\edef\wrap{\mkbibparens}",
+            r"\wrap{\entrydata{collection}{Text}}",
+        ),
+        (
+            r"\def\wrap{\inner}\def\install{\def\inner{\mkbibparens}}",
+            r"\wrap{\entrydata{collection}{Text}}",
+        ),
+        (
+            r"\def\wrap{\mkbibparens}",
+            r"\wrap*{\entrydata{collection}{Text}}",
+        ),
+        (
+            r"\def\wrap{\mkbibparens}",
+            r"\wrap{\entrydata{collection}}{Text}",
+        ),
+        (
+            r"\def\wrap{\mkbibparens}",
+            r"\wrap{\entrydata{collection}{\unknown}}",
+        ),
+        (
+            r"\def\wrap{\parentext}\renewcommand\mkbibparens[1]{}",
+            r"\wrap{\entrydata{collection}{Text}}",
+        ),
+        (
+            "",
+            r"\def\wrap{\mkbibparens}\wrap{\entrydata{collection}{Text}}",
+        ),
+    ] {
+        let (_dir, ws, main, _bib) = setup_with_preamble(
+            preamble,
+            &format!(r"{body}\defbibentryset{{collection}}{{member}}\cite{{collection}}"),
+        );
+        let declaration = location(&ws, &main, r"\defbibentryset{", "collection");
+        assert!(
+            !matches!(
+                features::rename(&ws, &main, declaration.range.start, "fresh"),
+                Ok(Some(_))
+            ),
+            "{preamble}: {body}"
+        );
+    }
+}
+
+#[test]
+fn forwarded_queries_keep_early_books_and_refresh_included_preamble_declarations() {
+    let body =
+        r"\wrap{\entrydata{collection}{Text}}\defbibentryset{collection}{member}\cite{collection}";
+    let (_dir, ws, main, bib) = setup_with_preamble(
+        r"\def\wrap{\mkbibparens}",
+        &format!(r"\cite{{collection}}{body}"),
+    );
+    let query = location(&ws, &main, r"\entrydata{", "collection");
+    assert_eq!(
+        features::definitions(&ws, &main, query.range.start),
+        vec![location(&ws, &bib, "@book{", "collection")]
+    );
+
+    let (dir, mut ws, main, _bib) = setup_with_preamble(r"\input{macros}", body);
+    std::fs::write(
+        dir.path().join("macros.tex"),
+        r"\def\wrap{\inner}\def\inner{\mkbibparens}",
+    )
+    .unwrap();
+    ws.open(main.clone(), ws.documents[&main].text.source.clone(), 6);
+    let provider = main.join("macros.tex").unwrap();
+    let query = location(&ws, &main, r"\entrydata{", "collection");
+    let declaration = location(&ws, &main, r"\defbibentryset{", "collection");
+    assert_eq!(
+        features::definitions(&ws, &main, query.range.start),
+        vec![declaration.clone()]
+    );
+    for changed in [
+        r"\def\wrap{\inner}\def\dormant{\def\inner{\mkbibparens}}",
+        r"\def\wrap{\inner}\begingroup\def\inner{\mkbibparens}\endgroup",
+        r"\def\wrap{\inner}\def\inner{\mkbibparens}\renewcommand\mkbibparens[1]{}",
+    ] {
+        ws.open(provider.clone(), changed.into(), 9);
+        assert!(
+            features::definitions(&ws, &main, query.range.start).is_empty(),
+            "{changed}"
+        );
+        assert!(
+            !matches!(
+                features::rename(&ws, &main, declaration.range.start, "fresh"),
+                Ok(Some(_))
+            ),
+            "{changed}"
+        );
+        ws.open(
+            provider.clone(),
+            r"\def\wrap{\inner}\def\inner{\mkbibparens}".into(),
+            10,
+        );
+        assert_eq!(
+            features::definitions(&ws, &main, query.range.start),
+            vec![declaration.clone()]
+        );
+    }
+}
+
+#[test]
+fn unrelated_forward_shapes_preserve_existing_named_sections_and_direct_queries() {
+    for usage in [
+        "",
+        r"\wrap{Text}",
+        r"\csuse{wrap}{\cite{collection}}",
+        r"\wrap{\mkbibparens{\entrydata{collection}{Text}}}",
+        r"\csuse{wrap}{\csname mkbibparens\endcsname{\entrydata{collection}{Text}}}",
+    ] {
+        let body = format!(
+            r"\csuse{{begin}}{{refsection}}\defbibentryset{{collection}}{{member}}{usage}\mkbibparens{{\entrydata{{collection}}{{Text}}}}\cite{{collection}}\csuse{{end}}{{refsection}}"
+        );
+        let (_dir, ws, main, _bib) = setup_with_preamble(r"\def\wrap{\mkbibparens}", &body);
+        let declaration = location(&ws, &main, r"\defbibentryset{", "collection");
+        for prefix in [r"\cite{", r"\entrydata{"] {
+            let query = location(&ws, &main, prefix, "collection");
+            assert_eq!(
+                features::definitions(&ws, &main, query.range.start),
+                vec![declaration.clone()],
+                "{usage}: {prefix}"
+            );
+        }
     }
 }
