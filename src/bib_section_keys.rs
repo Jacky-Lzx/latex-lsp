@@ -247,7 +247,10 @@ struct Analysis<'a, 'b> {
     ended: bool,
 }
 impl Analysis<'_, '_> {
-    fn alias_resources_closed(&mut self) -> Option<()> {
+    fn alias_resources_closed(
+        &mut self,
+        rename: Option<crate::bib_source_aliases::PrimaryRename<'_>>,
+    ) -> Option<()> {
         let mut resources = BTreeSet::new();
         for view in &self.resource_sets {
             for uri in view.iter() {
@@ -385,6 +388,7 @@ impl Analysis<'_, '_> {
             &consumed,
             &aliases,
             &self.alias_processed,
+            rename,
         )?;
         (self.work <= 32 * 1024 * 1024).then_some(())
     }
@@ -1170,7 +1174,7 @@ pub(crate) fn coexistence(ws: &Workspace, root: &Url, scope: &BTreeSet<Url>) -> 
             ended: false,
         };
         analysis.walk(root)?;
-        analysis.alias_resources_closed()?;
+        analysis.alias_resources_closed(None)?;
         if docs.iter().any(|(uri, _)| !analysis.visited.contains(uri)) {
             return None;
         }
@@ -1449,7 +1453,7 @@ fn target(ws: &Workspace, uri: &Url, offset: usize, purpose: Purpose) -> Option<
                 ended: false,
             };
             analysis.walk(root)?;
-            analysis.alias_resources_closed()?;
+            analysis.alias_resources_closed(None)?;
             // A potential input that was never reached must not contribute a
             // resource registration from the project's discovery graph.
             if docs.iter().any(|(uri, _)| !analysis.visited.contains(uri)) {
@@ -1641,7 +1645,7 @@ pub(crate) fn occurrence_resources(ws: &Workspace, uri: &Url) -> Option<Resource
                     ended: false,
                 };
                 analysis.walk(root)?;
-                analysis.alias_resources_closed()?;
+                analysis.alias_resources_closed(None)?;
                 if docs.iter().any(|(uri, _)| !analysis.visited.contains(uri))
                     || analysis.resource_sets.iter().any(|resources| {
                         resources.iter().any(|uri| {
@@ -1773,6 +1777,30 @@ pub(crate) struct KeyGraph {
     pub occurrences: GraphKeys,
 }
 
+/// Recheck actual numeric cache loads after moving one real primary spelling.
+/// Resources and request sections stay fixed; aliases follow their moved owner.
+pub(crate) fn validate_primary_rename(
+    ws: &Workspace,
+    root: &Url,
+    scope: &BTreeSet<Url>,
+    rename: crate::bib_source_aliases::PrimaryRename<'_>,
+) -> Option<usize> {
+    let docs = crate::source_inputs::bounded_latex_sources(ws, scope)?;
+    if !signature_budget(&docs) {
+        return None;
+    }
+    let signatures = CommandSignatures::new(
+        docs.iter()
+            .map(|(_, doc)| (doc.text.source.as_str(), &doc.syntax)),
+    );
+    if has_source_sets(&docs, &signatures) {
+        source_trace_query(ws, root, &docs, &signatures, root, None, Some(rename))
+            .map(|trace| trace.work)
+    } else {
+        key_graph_after_rename(ws, root, &docs, &signatures, Some(rename)).map(|(_, work)| work)
+    }
+}
+
 /// Collect every source occurrence once per root, preserving all resource
 /// views of a repeatedly loaded source for later declaration-identity checks.
 pub(crate) fn key_graph(
@@ -1781,6 +1809,15 @@ pub(crate) fn key_graph(
     docs: &[(Url, &Document)],
     signatures: &CommandSignatures<'_>,
 ) -> Option<KeyGraph> {
+    key_graph_after_rename(ws, root, docs, signatures, None).map(|(graph, _)| graph)
+}
+fn key_graph_after_rename(
+    ws: &Workspace,
+    root: &Url,
+    docs: &[(Url, &Document)],
+    signatures: &CommandSignatures<'_>,
+    rename: Option<crate::bib_source_aliases::PrimaryRename<'_>>,
+) -> Option<(KeyGraph, usize)> {
     if !ws.index_truncated.is_empty()
         || !valid_sources(docs, signatures)
         || !database_only(docs, signatures)
@@ -1818,7 +1855,7 @@ pub(crate) fn key_graph(
         ended: false,
     };
     analysis.walk(root)?;
-    analysis.alias_resources_closed()?;
+    analysis.alias_resources_closed(rename)?;
     if docs.iter().any(|(uri, _)| !analysis.visited.contains(uri))
         || analysis.resource_sets.iter().any(|resources| {
             resources.iter().any(|uri| {
@@ -1830,10 +1867,13 @@ pub(crate) fn key_graph(
     {
         return None;
     }
-    Some(KeyGraph {
-        sections: analysis.resource_sets,
-        occurrences: analysis.all_keys?,
-    })
+    Some((
+        KeyGraph {
+            sections: analysis.resource_sets,
+            occurrences: analysis.all_keys?,
+        },
+        analysis.work,
+    ))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2054,7 +2094,7 @@ pub(crate) fn source_trace(
     docs: &[(Url, &Document)],
     signatures: &CommandSignatures<'_>,
 ) -> Option<SourceTrace> {
-    source_trace_query(ws, root, docs, signatures, root, None)
+    source_trace_query(ws, root, docs, signatures, root, None, None)
 }
 pub(crate) struct SourceCompletion {
     pub trace: SourceTrace,
@@ -2081,7 +2121,7 @@ pub(crate) fn source_completion_trace(
     let query = query(doc, signatures, offset, Purpose::Completion)?;
     let (span, removals) = completion_span(doc, &query.call, offset)?;
     let member = query.call.name == "defbibentryset";
-    let trace = source_trace_query(ws, root, docs, signatures, origin, Some(query))?;
+    let trace = source_trace_query(ws, root, docs, signatures, origin, Some(query), None)?;
     if trace.probes.is_empty() {
         return None;
     }
@@ -2099,6 +2139,7 @@ fn source_trace_query(
     signatures: &CommandSignatures<'_>,
     origin: &Url,
     query: Option<Query>,
+    rename: Option<crate::bib_source_aliases::PrimaryRename<'_>>,
 ) -> Option<SourceTrace> {
     if !ws.index_truncated.is_empty()
         || !valid_sources(docs, signatures)
@@ -2158,7 +2199,7 @@ fn source_trace_query(
         ended: false,
     };
     analysis.walk(root)?;
-    analysis.alias_resources_closed()?;
+    analysis.alias_resources_closed(rename)?;
     if docs.iter().any(|(uri, _)| !analysis.visited.contains(uri))
         || analysis.resource_sets.iter().any(|view| {
             view.iter().any(|uri| {

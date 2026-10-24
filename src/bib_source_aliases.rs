@@ -214,6 +214,18 @@ pub(crate) fn closed_resources(
     Some(work)
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct PrimaryRename<'a> {
+    pub uri: &'a Url,
+    pub from: &'a str,
+    pub to: &'a str,
+}
+fn primary_spelling<'a>(uri: &Url, name: &'a str, rename: Option<PrimaryRename<'a>>) -> &'a str {
+    rename
+        .filter(|rename| rename.uri == uri && rename.from == name)
+        .map_or(name, |rename| rename.to)
+}
+
 /// Each database is parsed once per Biber run. Later files replace equal
 /// primary spellings in GLOBALDS, which cached IDS requests then import.
 pub(crate) fn cached_owners(
@@ -222,6 +234,7 @@ pub(crate) fn cached_owners(
     uses: &BTreeMap<usize, BTreeSet<&str>>,
     aliases: &BTreeSet<&str>,
     processed: &BTreeSet<usize>,
+    rename: Option<PrimaryRename<'_>>,
 ) -> Option<usize> {
     let mut loaded = BTreeSet::new();
     let mut removed = BTreeSet::new();
@@ -245,17 +258,14 @@ pub(crate) fn cached_owners(
                     if work > 32 * 1024 * 1024 || owners.len() >= 100_000 {
                         return None;
                     }
-                    owners.insert(entry.name.as_str(), uri);
-                    parsed.insert(entry.name.as_str());
-                    *keys
-                        .entry(uri)
-                        .or_default()
-                        .entry(entry.name.as_str())
-                        .or_default() += 1;
+                    let primary = primary_spelling(uri, &entry.name, rename);
+                    owners.insert(primary, uri);
+                    parsed.insert(primary);
+                    *keys.entry(uri).or_default().entry(primary).or_default() += 1;
                     // Real entries remove equal aliases even when uncited.
                     // A later re-registration is not yet a certified recovery.
-                    if aliases.contains(entry.name.as_str()) {
-                        removed.insert(entry.name.as_str());
+                    if aliases.contains(primary) {
+                        removed.insert(primary);
                     }
                 }
             }
@@ -303,7 +313,7 @@ pub(crate) fn cached_owners(
                 {
                     continue;
                 }
-                let primary = owner(doc, alias)?;
+                let primary = primary_spelling(uri, owner(doc, alias)?, rename);
                 if removed.contains(alias.name.as_str())
                     || ambiguous.contains(primary)
                     || owners.get(primary) != Some(&uri)

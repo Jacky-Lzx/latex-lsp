@@ -1356,19 +1356,48 @@ pub(crate) fn rename(
         symbol.graphs.name = Some(name.into());
         symbol.graphs.bindings.borrow_mut().clear();
         symbol.graphs.database_bindings.borrow_mut().clear();
+        let raw = symbol.prerequisite.as_ref().or_else(|| {
+            (!source_key && !alias_key && ws.documents[&symbol.declaration.uri].kind == DocumentKind::Bibtex)
+                .then_some(&symbol.declaration)
+        });
+        let owns_ids = raw.is_some_and(|raw| {
+            let doc = &ws.documents[&raw.uri];
+            doc.syntax.bibliography_aliases.iter().any(|alias| crate::bib_source_aliases::owner(doc, alias) == Some(symbol.name.as_str()))
+        });
         symbol.graphs.relation_bindings.borrow_mut().clear();
         let relation_owners: BTreeSet<_> = symbol.graphs.databases.iter().filter(|(_, database)| database.references.iter().any(|reference| reference.name == name)).map(|(uri, _)| uri).collect();
-        for project in symbol.graphs.projects.values() {
+        for (root, project) in &symbol.graphs.projects {
+            let mut check_cache = false;
             // A new real key can delete an earlier IDS mapping from Biber's
             // global cache, breaking later citations in other sections.
             for resource in &project.resources {
+                if owns_ids {
+                    for entry in &ws.documents[resource].syntax.citations {
+                        symbol.graphs.work.set(symbol.graphs.work.get() + entry.name.len() + 64);
+                        if symbol.graphs.work.get() > 32 * 1024 * 1024 { return Err(edit_error()); }
+                        if entry.name == name {
+                            check_cache = true;
+                        }
+                    }
+                }
                 for alias in &ws.documents[resource].syntax.bibliography_aliases {
                     symbol.graphs.work.set(symbol.graphs.work.get() + alias.name.len() + 64);
                     if symbol.graphs.work.get() > 32 * 1024 * 1024 { return Err(edit_error()); }
                     if alias.name == name {
                         return Err(jsonrpc::Error::invalid_params("The new bibliography key conflicts with a global IDS alias in this project"));
                     }
+                    if raw.is_some() && crate::bib_source_aliases::owner(&ws.documents[resource], alias) == Some(name) {
+                        check_cache = true;
+                    }
                 }
+            }
+            if check_cache {
+                let raw = raw.ok_or_else(edit_error)?;
+                let work = bib_section_keys::validate_primary_rename(ws, root, &project.scope,
+                    crate::bib_source_aliases::PrimaryRename { uri: &raw.uri, from: &symbol.name, to: name }
+                ).ok_or_else(|| jsonrpc::Error::invalid_params("The new primary spelling has an unproved global IDS cache owner"))?;
+                symbol.graphs.work.set(symbol.graphs.work.get() + work);
+                if symbol.graphs.work.get() > 32 * 1024 * 1024 { return Err(edit_error()); }
             }
             symbol.lexical.validate(&project.scope, true, name)?;
             crate::resource_context::validate_rename(ws, &project.scope, name)?;

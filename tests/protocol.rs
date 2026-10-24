@@ -33055,3 +33055,120 @@ fn numeric_ids_alias_edits_keep_exact_versions_and_global_capture_protection() {
         server.wait_exit(0);
     }
 }
+
+#[test]
+fn primary_cache_capture_renames_follow_unsaved_libraries_and_coupled_versions() {
+    use latex_lsp::text::Text;
+    let dir = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let default = main.join("default.bib").unwrap();
+    let selected = main.join("section.bib").unwrap();
+    let source="% 😀\r\n\\documentclass{article}\\usepackage{biblatex}\\addbibresource{default.bib}\\addsectionbib[label=chosen]{section.bib}\\begin{document}\\cite{old}\\newrefsection[chosen]\\cite{newparent}\\newrefsection\\cite{old}\\end{document}";
+    let library = "% 😀\r\n@book{parent,title={Default parent},ids={old}}";
+    let other = "% 😀\r\n@book{newparent,title={Selected parent}}";
+    for (name, text) in [
+        ("main.tex", source),
+        ("default.bib", library),
+        ("section.bib", other),
+    ] {
+        std::fs::write(dir.path().join(name), text).unwrap();
+    }
+    let span = |text: &str, prefix: &str, name: &str| {
+        let start = text.find(prefix).unwrap() + prefix.len();
+        assert_eq!(&text[start..start + name.len()], name);
+        Text::new(text.into()).range(start, start + name.len())
+    };
+    let primary = span(library, "@book{", "parent");
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    for (uri, text, language, version) in [
+        (&main, source, "latex", 5),
+        (&default, library, "bibtex", 7),
+        (&selected, other, "bibtex", 8),
+    ] {
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"text":text,"languageId":language,"version":version}}),
+        );
+    }
+    let params =
+        json!({"textDocument":{"uri":default},"position":primary.start,"newName":"newparent"});
+    server.send(json!({"jsonrpc":"2.0","id":2,"method":"textDocument/rename","params":params}));
+    assert_eq!(
+        server.until(|message| message["id"] == 2)["error"]["code"],
+        -32602
+    );
+    let fresh = server.request(
+        3,
+        "textDocument/rename",
+        json!({"textDocument":{"uri":default},"position":primary.start,"newName":"fresh"}),
+    );
+    assert_eq!(
+        fresh,
+        json!({"documentChanges":[{"textDocument":{"uri":default,"version":7},"edits":[{"range":primary,"newText":"fresh"}]}]})
+    );
+    server.notify("textDocument/didChange",json!({"textDocument":{"uri":selected,"version":9},"contentChanges":[{"text":other.replace("newparent","alternate")}]}));
+    assert_eq!(
+        server.request(4, "textDocument/rename", params.clone()),
+        json!({"documentChanges":[{"textDocument":{"uri":default,"version":7},"edits":[{"range":primary,"newText":"newparent"}]}]})
+    );
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":selected}}),
+    );
+    server.send(json!({"jsonrpc":"2.0","id":5,"method":"textDocument/rename","params":params}));
+    assert_eq!(
+        server.until(|message| message["id"] == 5)["error"]["code"],
+        -32602
+    );
+    let coupled = source.replace(
+        r"\cite{newparent}",
+        r"\defbibentryset{member}{leaf}\cite{member,other}",
+    );
+    let selected_library =
+        "% 😀\r\n@book{member,title={Selected parent},ids={other}} @book{leaf,title={Leaf}}";
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":6},"contentChanges":[{"text":coupled}]}),
+    );
+    server.notify("textDocument/didOpen",json!({"textDocument":{"uri":selected,"languageId":"bibtex","version":10,"text":selected_library}}));
+    let set = span(&coupled, r"\defbibentryset{", "member");
+    server.send(json!({"jsonrpc":"2.0","id":6,"method":"textDocument/rename","params":{"textDocument":{"uri":main},"position":set.start,"newName":"parent"}}));
+    assert_eq!(
+        server.until(|message| message["id"] == 6)["error"]["code"],
+        -32602
+    );
+    let safe = server.request(
+        7,
+        "textDocument/rename",
+        json!({"textDocument":{"uri":main},"position":set.start,"newName":"fresh"}),
+    );
+    let docs = safe["documentChanges"].as_array().unwrap();
+    assert_eq!(docs.len(), 2);
+    let declaration = span(selected_library, "@book{", "member");
+    let start = coupled.find(r"\cite{member,other}").unwrap() + 6;
+    let member_call = Text::new(coupled.clone()).range(start, start + 6);
+    for (uri, version, edits) in [
+        (
+            &main,
+            6,
+            json!([{"range":set,"newText":"fresh"},{"range":member_call,"newText":"fresh"}]),
+        ),
+        (
+            &selected,
+            10,
+            json!([{"range":declaration,"newText":"fresh"}]),
+        ),
+    ] {
+        let doc = docs
+            .iter()
+            .find(|doc| doc["textDocument"]["uri"] == uri.as_str())
+            .unwrap();
+        assert_eq!(doc["textDocument"]["version"], version);
+        assert_eq!(doc["edits"], edits);
+    }
+    server.request(1000, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

@@ -265,3 +265,12 @@ cargo test --locked --test protocol numeric_ids_alias_edits_
 ```
 
 原生测试比较两个分区改名前后的完整 BBL，归一化改变的别名后要求一致；协议核验两种编辑格式、全部受影响文件的版本、未保存缓存导入及关闭恢复。
+
+主键改名后的 IDS 全局条目缓存回归：
+
+```sh
+cargo test --locked --test biblatex_primary_cache_rename -- --include-ignored
+cargo test --locked --test protocol primary_cache_capture_renames_
+```
+
+原生测试核验两种强制错误改名都会在没有 Biber 警告时改变后续条目数据，也核验接受的安全同名改名保持 BBL；协议覆盖版本化编辑、未保存数据库、关闭恢复和耦合源码主键。
