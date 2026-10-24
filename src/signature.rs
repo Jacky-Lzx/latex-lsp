@@ -680,7 +680,8 @@ fn builtin(name: &str) -> Option<Signature> {
         }
         "part" | "chapter" | "section" | "subsection" | "subsubsection" | "paragraph"
         | "subparagraph" | "caption" => (&[("short title", true), ("title", false)], true),
-        "footnote" => (&[("number", true), ("text", false)], false),
+        "footnote" | "footnotetext" => (&[("number", true), ("text", false)], false),
+        "footnotemark" => (&[("number", true)], false),
         "textbf" | "textit" | "texttt" | "emph" | "title" | "author" | "date" | "mkbibparens"
         | "mkbibbrackets" | "parentext" | "brackettext" => (&[("text", false)], false),
         "typeout" | "message" => (&[("text", false)], false),
@@ -1145,6 +1146,9 @@ fn builtin(name: &str) -> Option<Signature> {
                     | "paragraph"
                     | "subparagraph"
                     | "caption"
+                    | "footnote"
+                    | "footnotetext"
+                    | "footnotemark"
                     | "AtDataInput"
                     | "item"
                     | "printbibliography"

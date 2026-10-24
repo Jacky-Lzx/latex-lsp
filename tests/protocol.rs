@@ -17,6 +17,136 @@ struct Server {
 }
 
 #[test]
+fn standard_footnotes_negotiate_completion_and_refresh_cross_file_overrides() {
+    use latex_lsp::text::Text;
+
+    for snippets in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+        let provider = uri.join("commands.sty").unwrap();
+        std::fs::write(provider.to_file_path().unwrap(), "").unwrap();
+        let mut server = Server::start();
+        server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(directory.path()).unwrap(),"initializationOptions":{"distribution":{"enabled":false}},"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}},"textDocument":{"completion":{"completionItem":{"snippetSupport":snippets}}}}}));
+        server.notify("initialized", json!({}));
+        let source = "% 😀\r\n\\documentclass{article}\\input{commands.sty}\\begin{document}\\section{Heading}\\label{safe}\\footnotemark[7]\\footnotetext[7]{Note \\ref{safe}}\\footnotemark{\\label{after}}\\ref{after}\\footno\\end{document}";
+        let text = Text::new(source.into());
+        std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"languageId":"latex","version":5,"text":source}}),
+        );
+        let cursor = source.find(r"\footno\end").unwrap() + r"\footno".len();
+        let completion = server.request(
+            2,
+            "textDocument/completion",
+            json!({"textDocument":{"uri":uri},"position":text.position(cursor)}),
+        );
+        for (name, expected) in [
+            ("footnotemark", "footnotemark"),
+            ("footnotetext", "footnotetext{${1:text}}"),
+        ] {
+            let item = completion
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|item| item["label"] == name)
+                .unwrap();
+            assert_eq!(
+                item["textEdit"]["newText"],
+                if snippets { expected } else { name }
+            );
+            assert_eq!(
+                item["textEdit"]["range"],
+                json!(text.range(cursor - 6, cursor))
+            );
+            assert_eq!(item["insertTextFormat"], if snippets { 2 } else { 1 });
+        }
+        for (prefix, label, active) in [
+            (r"\footnotemark[", r"\footnotemark[number]", 0),
+            (r"\footnotetext[", r"\footnotetext[number]{text}", 0),
+            ("{Note ", r"\footnotetext[number]{text}", 1),
+        ] {
+            let offset = source.find(prefix).unwrap() + prefix.len();
+            let help = server.request(
+                3,
+                "textDocument/signatureHelp",
+                json!({"textDocument":{"uri":uri},"position":text.position(offset)}),
+            );
+            assert_eq!(help["signatures"][0]["label"], label);
+            assert_eq!(help["activeParameter"], active);
+        }
+        let query = source.find(r"\ref{after}").unwrap() + 5;
+        let declaration = source.find(r"\label{after}").unwrap() + 7;
+        let params = json!({"textDocument":{"uri":uri},"position":text.position(query)});
+        let expected = json!([{"uri":uri,"range":text.range(declaration, declaration + 5)}]);
+        assert_eq!(
+            server.request(4, "textDocument/definition", params.clone()),
+            expected
+        );
+        let edit = server.request(
+            5,
+            "textDocument/rename",
+            json!({"textDocument":{"uri":uri},"position":text.position(query),"newName":"fresh"}),
+        );
+        assert_eq!(edit["documentChanges"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            edit["documentChanges"][0]["textDocument"],
+            json!({"uri":uri,"version":5})
+        );
+        let edits: Vec<tower_lsp::lsp_types::TextEdit> =
+            serde_json::from_value(edit["documentChanges"][0]["edits"].clone()).unwrap();
+        let mut ranges = edits.iter().map(|edit| edit.range).collect::<Vec<_>>();
+        ranges.sort_by_key(|range| range.start);
+        assert_eq!(
+            ranges,
+            [
+                text.range(declaration, declaration + 5),
+                text.range(query, query + 5)
+            ]
+        );
+        assert!(edits.iter().all(|edit| edit.new_text == "fresh"));
+
+        let inner_at = source.find(r"\ref{safe}").unwrap() + 5;
+        let safe_at = source.find(r"\label{safe}").unwrap() + 7;
+        let inner = json!({"textDocument":{"uri":uri},"position":text.position(inner_at)});
+        let inner_expected = json!([{"uri":uri,"range":text.range(safe_at, safe_at + 4)}]);
+        assert_eq!(
+            server.request(11, "textDocument/definition", inner.clone()),
+            inner_expected
+        );
+        server.notify("textDocument/didOpen", json!({"textDocument":{"uri":provider,"languageId":"latex","version":12,"text":"\\renewcommand\\footnotetext[2][]{}"}}));
+        assert_eq!(
+            server.request(6, "textDocument/definition", inner.clone()),
+            json!([])
+        );
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":provider,"version":13},"contentChanges":[{"text":""}]}),
+        );
+        assert_eq!(
+            server.request(7, "textDocument/definition", inner.clone()),
+            inner_expected
+        );
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":provider,"version":14},"contentChanges":[{"text":"\\renewcommand\\footnotetext[2][]{}"}]}));
+        assert_eq!(
+            server.request(8, "textDocument/definition", inner.clone()),
+            json!([])
+        );
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":provider}}),
+        );
+        assert_eq!(
+            server.request(9, "textDocument/definition", inner),
+            inner_expected
+        );
+        server.request(10, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
 fn compiled_reference_inlay_hints_follow_ranges_configuration_and_aux_changes() {
     let dir = tempfile::tempdir().unwrap();
     let uri = Url::from_file_path(dir.path().join("main.tex")).unwrap();

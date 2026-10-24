@@ -1013,6 +1013,8 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ),
     ("emph", "emph{${1:text}}", "Emphasize text."),
     ("footnote", "footnote{${1:text}}", "Insert a footnote."),
+    ("footnotemark", "footnotemark", "Insert a footnote mark without its text; optionally select a footnote number."),
+    ("footnotetext", "footnotetext{${1:text}}", "Insert footnote text without a mark; optionally select a footnote number."),
     (
         "href",
         "href{${1:url}}{${2:text}}",
