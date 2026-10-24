@@ -138,6 +138,77 @@ fn initialized_entrydata_completes_the_final_namespace_without_loading_a_book() 
 }
 
 #[test]
+fn named_initializers_read_final_sets_and_complete_the_actual_text_argument() {
+    for wrapper in ["mkbibparens", "mkbibbrackets", "parentext", "brackettext"] {
+        for call in [
+            format!(r"\csuse{{{wrapper}}}"),
+            format!("\\csname {wrapper}\\endcsname"),
+        ] {
+            for star in ["", "*"] {
+                let body = format!(
+                    "{call}% 中文\r\n{{😀 \\entrydata{star}{{collection}}{{Text}}}}\\defbibentryset{{collection}}{{member}}\\cite{{collection}}"
+                );
+                let (_dir, ws, main, _bib) = setup(&body);
+                let prefix = format!(r"\entrydata{star}{{");
+                let query = location(&ws, &main, &prefix, "collection");
+                assert_eq!(
+                    features::definitions(&ws, &main, query.range.start),
+                    vec![location(&ws, &main, r"\defbibentryset{", "collection")],
+                    "{call}{star}"
+                );
+                assert!(features::hover(&ws, &main, query.range.start).is_some());
+                assert!(features::prepare_rename(&ws, &main, query.range.start)
+                    .unwrap()
+                    .is_some());
+                assert_eq!(
+                    features::references(&ws, &main, query.range.start, true).len(),
+                    3
+                );
+                let changes = features::rename(&ws, &main, query.range.start, "fresh")
+                    .unwrap()
+                    .unwrap()
+                    .changes
+                    .unwrap();
+                assert_eq!(changes.len(), 1);
+                assert_eq!(changes[&main].len(), 3);
+                assert_eq!(
+                    apply(&ws.documents[&main].text.source, &changes[&main]),
+                    ws.documents[&main]
+                        .text
+                        .source
+                        .replace("collection", "fresh")
+                );
+
+                for key in ["coBAD", ""] {
+                    let (_dir, ws, main, _bib) = setup(&body.replacen(
+                        &format!("{prefix}collection"),
+                        &format!("{prefix}{key}"),
+                        1,
+                    ));
+                    let doc = &ws.documents[&main];
+                    let at =
+                        doc.text.source.find(&prefix).unwrap() + prefix.len() + key.len().min(2);
+                    let item = features::completion(&ws, &main, doc.text.position(at))
+                        .into_iter()
+                        .find(|item| item.label == "collection")
+                        .expect(&call);
+                    assert!(item
+                        .detail
+                        .as_ref()
+                        .unwrap()
+                        .contains("Dynamic bibliography set"));
+                    let Some(CompletionTextEdit::Edit(edit)) = item.text_edit else {
+                        panic!()
+                    };
+                    assert!(apply(&doc.text.source, &[edit])
+                        .contains(&format!(r"\entrydata{star}{{collection}}{{Text}}")));
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn passive_queries_keep_early_books_missing_keys_and_new_name_capture_separate() {
     let (_dir, ws, main, bib) = setup(
         r"\cite{collection}\mkbibparens{\entrydata{collection}{Text}}\defbibentryset{collection}{member}\cite{collection}",
@@ -181,7 +252,17 @@ fn uninitialized_or_executable_entrydata_never_allows_a_partial_source_rename() 
         r"\newcommand{\drop}[1]{}\drop{\mkbibparens{\entrydata{collection}{Text}}}",
         r"\def\dormant{\mkbibparens{\entrydata{collection}{Text}}}",
         r"\let\copied\mkbibparens\copied{\entrydata{collection}{Text}}",
-        r"\csuse{mkbibparens}{\entrydata{collection}{Text}}",
+        r"\csuse{mkbibparens}*{\entrydata{collection}{Text}}",
+        r"\csname mkbibparens\endcsname[note]{\entrydata{collection}{Text}}",
+        r"\csuse{mkbibparens}{\entrydata{collection}}{Text}",
+        r"\csname mkbibparens\endcsname{\entrydata{collection}{\unknown}}",
+        r"\def\csuse#1#2{}\csuse{mkbibparens}{\entrydata{collection}{Text}}",
+        r"\def\mkbibparens#1{}\csuse{mkbibparens}{\entrydata{collection}{Text}}",
+        r"\def\mkbibparens#1{}\csname parentext\endcsname{\entrydata{collection}{Text}}",
+        r"\newcommand{\drop}[1]{}\drop{\csuse{mkbibparens}{\entrydata{collection}{Text}}}",
+        r"\def\dormant{\csname mkbibparens\endcsname{\entrydata{collection}{Text}}}",
+        r"\let\copied\mkbibparens\csuse{copied}{\entrydata{collection}{Text}}",
+        r"\def\wrap{\mkbibparens}\csuse{wrap}{\entrydata{collection}{Text}}",
     ] {
         let (_dir, ws, main, _bib) = setup(&format!(
             r"{query}\defbibentryset{{collection}}{{member}}\cite{{collection}}"
@@ -368,7 +449,22 @@ fn compile_clean(dir: &std::path::Path) -> String {
 #[test]
 #[ignore = "requires pdflatex, biblatex and biber"]
 fn native_initialized_queries_preserve_complete_bbl_after_actual_lsp_edits() {
-    for wrapper in ["mkbibparens", "mkbibbrackets", "parentext", "brackettext"] {
+    native_initialized_query_edits(&["mkbibparens", "mkbibbrackets", "parentext", "brackettext"]);
+}
+
+#[test]
+#[ignore = "requires pdflatex, biblatex and biber"]
+fn native_named_initialized_queries_preserve_complete_bbl_after_actual_lsp_edits() {
+    native_initialized_query_edits(&[
+        "csuse{mkbibparens}",
+        "csname mkbibbrackets\\endcsname",
+        "csuse{parentext}",
+        "csname brackettext\\endcsname",
+    ]);
+}
+
+fn native_initialized_query_edits(wrappers: &[&str]) {
+    for wrapper in wrappers {
         for star in ["", "*"] {
             // Query before declaration: entrydata reads the final BBL without
             // manufacturing an early request for the database's original book.

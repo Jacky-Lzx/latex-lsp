@@ -161,19 +161,21 @@ fn textual_bibliography_test(
 
 // These native text wrappers initialize biblatex's internal commands before
 // executing their grouped text. Build their union once per visit; queries do
-// not rescan or copy nested group contents. Ordinary document entrydata stays
+// not rescan nested group contents. Ordinary document entrydata stays
 // unproved, as do captured/redefined wrappers and parameters consumed as data.
 fn initialized_entrydata_spans(
     doc: &Document,
     signatures: &CommandSignatures<'_>,
     positions: &BTreeSet<usize>,
+    context: &Context,
     work: &mut usize,
 ) -> Option<Vec<Range<usize>>> {
     let mut spans = Vec::new();
-    for command in &doc.syntax.commands {
+    let source = &doc.text.source;
+    for (index, command) in doc.syntax.commands.iter().enumerate() {
         if !matches!(
             command.name.as_str(),
-            "mkbibparens" | "mkbibbrackets" | "parentext" | "brackettext"
+            "mkbibparens" | "mkbibbrackets" | "parentext" | "brackettext" | "csuse" | "csname"
         ) {
             continue;
         }
@@ -181,8 +183,53 @@ fn initialized_entrydata_spans(
         if *work > 32 * 1024 * 1024 {
             return None;
         }
-        if !positions.contains(&command.span.start) || !signatures.command_unchanged(&command.name)
-        {
+        if !positions.contains(&command.span.start) {
+            continue;
+        }
+        if matches!(command.name.as_str(), "csuse" | "csname") {
+            let Some((name, call)) = signatures.named_invocation(
+                source,
+                &doc.syntax,
+                index,
+                &BTreeSet::new(),
+                &context.declarations,
+            ) else {
+                continue;
+            };
+            if !matches!(
+                name,
+                "mkbibparens" | "mkbibbrackets" | "parentext" | "brackettext"
+            ) || !signatures.command_unchanged(name)
+            {
+                continue;
+            }
+            // csuse's parsed argument is the command name, not the text.
+            // Bound the new group scan and copy before reading its contents.
+            let mut limit = source.len().min(call.end + (32 * 1024 * 1024 - *work));
+            while !source.is_char_boundary(limit) {
+                limit -= 1;
+            }
+            let start = syntax::skip_space(&source[..limit], call.end);
+            *work += start - call.end;
+            if source.as_bytes().get(start) != Some(&b'{') {
+                if start == limit && limit != source.len() {
+                    return None;
+                }
+                continue;
+            }
+            let argument = syntax::group(&source[..limit], start, b'{', b'}');
+            if let Some((argument, end)) = argument {
+                *work += end - start;
+                spans.push(argument.span);
+            } else {
+                *work += limit - start;
+                if limit != source.len() {
+                    return None;
+                }
+            }
+            continue;
+        }
+        if !signatures.command_unchanged(&command.name) {
             continue;
         }
         let Some(argument) = &command.argument else {
@@ -208,6 +255,31 @@ fn initialized_entrydata_spans(
         }
     }
     Some(merged)
+}
+
+#[cfg(test)]
+mod initializer_tests {
+    use super::*;
+
+    #[test]
+    fn named_initializer_budget_exhaustion_never_returns_partial_ranges() {
+        let source = r"\mkbibparens{Text}\csuse{mkbibparens}{😀\entrydata{collection}{Text}}";
+        let doc = Document::new(
+            &Url::parse("file:///budget.tex").unwrap(),
+            source.into(),
+            None,
+        );
+        let signatures = CommandSignatures::new([(source, &doc.syntax)]);
+        let positions = signatures.source_command_positions(source, &doc.syntax);
+        let context = Context::new(&doc, &signatures);
+        // After the two command costs, the scan limit lies inside the emoji.
+        let mut work = 32 * 1024 * 1024 - 128 - 2;
+        assert!(
+            initialized_entrydata_spans(&doc, &signatures, &positions, &context, &mut work)
+                .is_none()
+        );
+        assert!(work <= 32 * 1024 * 1024);
+    }
 }
 
 #[derive(Clone)]
@@ -568,7 +640,7 @@ impl Analysis<'_, '_> {
             .signatures
             .source_command_positions(source, &doc.syntax);
         let initialized = if self.trace.is_some() {
-            initialized_entrydata_spans(doc, self.signatures, &positions, &mut self.work)?
+            initialized_entrydata_spans(doc, self.signatures, &positions, &context, &mut self.work)?
         } else {
             Vec::new()
         };

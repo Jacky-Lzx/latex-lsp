@@ -320,9 +320,9 @@ cargo test --locked --test biblatex_source_textual_queries -- --include-ignored
 cargo test --locked --test protocol source_textual_predicates_
 ```
 
-直接且未重定义的 `mkbibparens`、`mkbibbrackets`、`parentext` 和 `brackettext` 会初始化 biblatex 内部命令。在这些包装的完整分组参数内，纯文本代码体的 `entrydata`／`entrydata*` 支持源码集合的导航、悬停、补全、引用及完整改名，包括静态命名的 `entrydata` 调用。键按最终分区身份认证，查询不提前加载数据库书籍；早期真实引用仍保留书籍身份。包装自身也提供 `{text}` 签名，内部普通标签引用可以交互。
+直接且未重定义的 `mkbibparens`、`mkbibbrackets`、`parentext` 和 `brackettext` 会初始化 biblatex 内部命令，也支持以静态 `\csuse{名称}`／`\csname 名称\endcsname` 调用这些包装。在这些包装的完整分组参数内，纯文本代码体的 `entrydata`／`entrydata*` 支持源码集合的导航、悬停、补全、引用及完整改名，包括静态命名的 `entrydata` 调用。键按最终分区身份认证，查询不提前加载数据库书籍；早期真实引用仍保留书籍身份。包装自身也提供 `{text}` 签名，内部普通标签引用可以交互。
 
-普通正文直接调用、包装之外的代码、复制／命名包装、用户重定义、不完整参数和可执行代码体继续保护。`parentext`／`brackettext` 转发的底层 `mkbibparens`／`mkbibbrackets` 被重定义时，同样撤下原生参数执行及初始化认证，保留另一种独立包装。数据库 `execute`／`@preamble`、共享消费者身份和新名称捕获沿用完整认证；未保存更新及关闭后重新计算。
+普通正文直接调用、包装之外的代码、复制／自定义转发包装、动态名称、命名接口或包装的重定义、不完整参数和可执行代码体继续保护。`parentext`／`brackettext` 转发的底层 `mkbibparens`／`mkbibbrackets` 被重定义时，同样撤下原生参数执行及初始化认证，保留另一种独立包装。数据库 `execute`／`@preamble`、共享消费者身份和新名称捕获沿用完整认证；未保存更新及关闭后重新计算。
 
 ```sh
 cargo test --locked --test biblatex_source_entrydata -- --include-ignored

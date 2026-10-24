@@ -35897,7 +35897,7 @@ fn initialized_entrydata_keeps_final_sets_exact_versions_and_unsaved_guards() {
         let provider = main.join("macros.tex").unwrap();
         let other = main.join("other.tex").unwrap();
         let source = "% 😀\r\n\\documentclass{article}\\usepackage{biblatex}\\addbibresource{data.bib}\\input{macros}\\begin{document}\\parentext{\\entrydata{collection}{Text}}\\input{query}\\defbibentryset{collection}{member}\\cite{collection}\\end{document}";
-        let calls = "% queries\r\n😀 \\mkbibbrackets{\\entrydata*{collection}{Text}}\\parentext{\\csuse{entrydata}{collection}{Text}}\\brackettext{\\csname entrydata\\endcsname*{collection}{Text}}";
+        let calls = "% queries\r\n😀 \\csuse{mkbibbrackets}{\\entrydata*{collection}{Text}}\\csname parentext\\endcsname{\\csuse{entrydata}{collection}{Text}}\\csuse{brackettext}{\\csname entrydata\\endcsname*{collection}{Text}}";
         let library = "@book{collection,title={Raw collection}} @book{member,title={Member}}";
         for (name, text) in [
             ("main.tex", source),
