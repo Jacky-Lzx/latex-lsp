@@ -67,7 +67,9 @@ fn source_overridden_alias_owners_keep_the_alias_and_primary_readonly_identities
             assert!(features::prepare_rename(&ws, &bib, alias.range.start)
                 .unwrap()
                 .is_some());
-            assert!(features::rename(&ws, &main, source.range.start, "newset").is_err());
+            assert!(features::rename(&ws, &main, source.range.start, "newset")
+                .unwrap()
+                .is_some());
         }
     }
 }

@@ -6,35 +6,14 @@ use crate::{
 use std::collections::{BTreeMap, BTreeSet};
 use tower_lsp::lsp_types::Url;
 
-/// Intersecting aliases require Biber's alias-loading phase, not the ordinary
-/// first-primary-request model. Certify only static, unique, disjoint owners.
-/// Return charged work so callers retain their complete analysis budgets.
-pub(crate) fn independent(
-    ws: &Workspace,
-    resources: &BTreeSet<Url>,
-    sources: &BTreeSet<&str>,
-) -> Option<usize> {
-    certify(ws, resources, sources, None)
-}
-
-/// A unique primary owner may become a source set without changing the IDS
-/// declaration. Its alias must not indirectly introduce a nested set member.
-/// Candidates require the independent namespace proof; edits additionally
-/// validate the complete occurrence graph and any raw primary dependency.
-pub(crate) fn readonly(
+/// Certify unique static IDS, their source owners and indirect member uses.
+/// Alias names cannot themselves shadow source sets. Complete edits and
+/// candidate fields additionally validate their own execution dependencies.
+pub(crate) fn certify(
     ws: &Workspace,
     resources: &BTreeSet<Url>,
     sources: &BTreeSet<&str>,
     members: &BTreeSet<&str>,
-) -> Option<usize> {
-    certify(ws, resources, sources, Some(members))
-}
-
-fn certify(
-    ws: &Workspace,
-    resources: &BTreeSet<Url>,
-    sources: &BTreeSet<&str>,
-    members: Option<&BTreeSet<&str>>,
 ) -> Option<usize> {
     let mut work = 0usize;
     let mut bytes = 0usize;
@@ -116,9 +95,7 @@ fn certify(
                 || !field.value_valid
                 || doc.text.source[owner.span.clone()].eq_ignore_ascii_case("set")
                 || !syntax::is_static_citation_key(primary)
-                || members.is_none() && sources.contains(primary)
-                || members.is_some()
-                    && sources.contains(primary)
+                || sources.contains(primary)
                     && doc.text.source[owner.span.clone()].eq_ignore_ascii_case("xdata")
                 || names.get(primary) != Some(&1)
             {
@@ -140,8 +117,7 @@ fn certify(
                     || name.is_empty()
                     || !syntax::is_static_citation_key(name)
                     || sources.contains(name)
-                    || members
-                        .is_some_and(|members| sources.contains(primary) && members.contains(name))
+                    || sources.contains(primary) && members.contains(name)
                     || names.get(name) != Some(&1)
                     || !aliases.insert((span.start, span.end))
                 {

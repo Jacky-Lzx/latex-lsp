@@ -31381,10 +31381,19 @@ fn source_set_citation_completions_refresh_probe_identities_metadata_limits_and_
         json!({"settings":{"distribution":{"enabled":false},"indexing":{"completionLimit":50}}}),
     );
     server.notify("textDocument/didChange",json!({"textDocument":{"uri":bib,"version":9},"contentChanges":[{"text":"@book{parent,ids={old}} @book{member}"}]}));
-    assert_eq!(
-        server.request(8, "textDocument/completion", params.clone()),
-        json!([])
-    );
+    let restored = server.request(8, "textDocument/completion", params.clone());
+    let mut labels: Vec<_> = restored
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["label"].as_str().unwrap())
+        .collect();
+    labels.sort_unstable();
+    assert_eq!(labels, ["member", "old", "parent"]);
+    assert!(find(restored)["detail"]
+        .as_str()
+        .unwrap()
+        .contains("Dynamic"));
     server.notify("textDocument/didClose", json!({"textDocument":{"uri":bib}}));
     assert!(
         find(server.request(9, "textDocument/completion", params))["detail"]
@@ -32204,9 +32213,23 @@ fn source_overridden_ids_owners_keep_readonly_navigation_and_refresh_unsaved_con
         assert!(detail.contains("Bibliography alias of parent"), "{hover}");
         assert!(!detail.contains("Raw parent"), "{hover}");
         assert_eq!(hover["range"], json!(alias_query));
-        server.send(json!({"jsonrpc":"2.0","id":5,"method":"textDocument/rename","params":{"textDocument":{"uri":main},"position":parent_query.start,"newName":"newset"}}));
-        let rejected = server.until(|message| message["id"] == 5);
-        assert_eq!(rejected["error"]["code"], -32602, "{rejected}");
+        let coupled = server.request(
+            5,
+            "textDocument/rename",
+            json!({"textDocument":{"uri":main},"position":parent_query.start,"newName":"newset"}),
+        );
+        let primary_start = database.find("@book{").unwrap() + "@book{".len();
+        let primary =
+            Text::new(database.into()).range(primary_start, primary_start + "parent".len());
+        assert_eq!(
+            coupled["changes"][main.as_str()],
+            json!([{"range":declaration,"newText":"newset"},{"range":parent_query,"newText":"newset"}])
+        );
+        assert_eq!(
+            coupled["changes"][bib.as_str()],
+            json!([{"range":primary,"newText":"newset"}])
+        );
+        assert_eq!(coupled["changes"].as_object().unwrap().len(), 2);
         server.notify("textDocument/didOpen",json!({"textDocument":{"uri":bib,"languageId":"bibtex","version":8,"text":database.replace("ids={old}","ids={parent}")}}));
         assert_eq!(
             server.request(6, "textDocument/definition", parent_request.clone()),
@@ -32287,11 +32310,34 @@ fn intersecting_ids_alias_edits_keep_versions_complete_consumers_and_unsaved_own
             json!(ranges.map(|range| json!({"range":range,"newText":"newalias"})))
         );
     }
-    server.send(json!({"jsonrpc":"2.0","id":5,"method":"textDocument/rename","params":{"textDocument":{"uri":main},"position":owner.start,"newName":"newset"}}));
-    assert_eq!(
-        server.until(|message| message["id"] == 5)["error"]["code"],
-        -32602
+    let coupled = server.request(
+        5,
+        "textDocument/rename",
+        json!({"textDocument":{"uri":main},"position":owner.start,"newName":"newset"}),
     );
+    let docs = coupled["documentChanges"].as_array().unwrap();
+    assert_eq!(docs.len(), 2);
+    let parent_at = source.find(r"\cite{parent,").unwrap() + r"\cite{".len();
+    let parent = Text::new(source.into()).range(parent_at, parent_at + "parent".len());
+    for (uri, version, edits) in [
+        (
+            &main,
+            5,
+            json!([{"range":owner,"newText":"newset"},{"range":parent,"newText":"newset"}]),
+        ),
+        (
+            &bib,
+            8,
+            json!([{"range":span(database,"@book{","parent"),"newText":"newset"}]),
+        ),
+    ] {
+        let doc = docs
+            .iter()
+            .find(|doc| doc["textDocument"]["uri"] == uri.as_str())
+            .unwrap();
+        assert_eq!(doc["textDocument"]["version"], version);
+        assert_eq!(doc["edits"], edits);
+    }
     let other = main.join("other.tex").unwrap();
     server.notify("textDocument/didOpen",json!({"textDocument":{"uri":other,"languageId":"latex","version":3,"text":r"\documentclass{article}\usepackage{biblatex}\addbibresource{refs.bib}\begin{document}\defbibentryset{parent}{member}\defbibentryset{nested}{old}\cite{nested}\end{document}"}}));
     server.send(json!({"jsonrpc":"2.0","id":6,"method":"textDocument/rename","params":rename}));
@@ -32324,4 +32370,194 @@ fn intersecting_ids_alias_edits_keep_versions_complete_consumers_and_unsaved_own
         ),
         json!([{"uri":bib,"range":declaration}])
     );
+}
+
+#[test]
+fn intersecting_ids_source_owner_renames_couple_uncited_primary_versions_and_consumers() {
+    use latex_lsp::text::Text;
+    for versioned in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+        let bib = main.join("refs.bib").unwrap();
+        let source="% 😀\r\n\\documentclass{article}\\usepackage{biblatex}\\addbibresource{refs.bib}\\begin{document}\\cite{old}\\defbibentryset{parent}{member}\\cite{parent,old}\\end{document}";
+        let database =
+            "% 😀\r\n@book{parent,title={Raw parent},ids={old}} @book{member,title={Member}}";
+        std::fs::write(dir.path().join("main.tex"), source).unwrap();
+        std::fs::write(dir.path().join("refs.bib"), database).unwrap();
+        let span = |source: &str, prefix: &str, name: &str| {
+            let at = source.find(prefix).unwrap() + prefix.len();
+            assert_eq!(&source[at..at + name.len()], name);
+            Text::new(source.into()).range(at, at + name.len())
+        };
+        let declaration = span(source, r"\defbibentryset{", "parent");
+        let primary = span(database, "@book{", "parent");
+        let parent_at = source.find(r"\cite{parent,old}").unwrap() + r"\cite{".len();
+        let parent = Text::new(source.into()).range(parent_at, parent_at + 6);
+        let mut server = Server::start();
+        server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":versioned}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+        server.notify("initialized", json!({}));
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":main,"languageId":"latex","version":5,"text":source}}),
+        );
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":bib,"languageId":"bibtex","version":8,"text":database}}),
+        );
+        let params =
+            json!({"textDocument":{"uri":main},"position":declaration.start,"newName":"newset"});
+        let refs=server.request(2,"textDocument/references",json!({"textDocument":{"uri":main},"position":declaration.start,"context":{"includeDeclaration":true}}));
+        assert_eq!(
+            refs,
+            json!([{"uri":main,"range":declaration},{"uri":main,"range":parent}])
+        );
+        let edit = server.request(3, "textDocument/rename", params.clone());
+        let main_edits =
+            json!([{"range":declaration,"newText":"newset"},{"range":parent,"newText":"newset"}]);
+        let bib_edits = json!([{"range":primary,"newText":"newset"}]);
+        if versioned {
+            let docs = edit["documentChanges"].as_array().unwrap();
+            assert_eq!(docs.len(), 2);
+            for (uri, version, edits) in [(&main, 5, &main_edits), (&bib, 8, &bib_edits)] {
+                let doc = docs
+                    .iter()
+                    .find(|doc| doc["textDocument"]["uri"] == uri.as_str())
+                    .unwrap();
+                assert_eq!(doc["textDocument"]["version"], version);
+                assert_eq!(&doc["edits"], edits);
+            }
+        } else {
+            assert_eq!(edit["changes"][main.as_str()], main_edits);
+            assert_eq!(edit["changes"][bib.as_str()], bib_edits);
+            assert_eq!(edit["changes"].as_object().unwrap().len(), 2);
+        }
+        let other = main.join("other.tex").unwrap();
+        server.notify("textDocument/didOpen",json!({"textDocument":{"uri":other,"languageId":"latex","version":3,"text":r"\documentclass{article}\usepackage{biblatex}\addbibresource{refs.bib}\begin{document}\cite{old}\end{document}"}}));
+        server.send(json!({"jsonrpc":"2.0","id":4,"method":"textDocument/rename","params":params}));
+        assert_eq!(
+            server.until(|message| message["id"] == 4)["error"]["code"],
+            -32602
+        );
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":other}}),
+        );
+        assert_eq!(server.request(5, "textDocument/rename", params), edit);
+        let changed = source
+            .replace("{parent}", "{newset}")
+            .replace("{parent,old}", "{newset,old}");
+        let changed_bib = database.replacen("@book{parent,", "@book{newset,", 1);
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":6},"contentChanges":[{"text":changed}]}),
+        );
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":bib,"version":9},"contentChanges":[{"text":changed_bib}]}),
+        );
+        let query = span(&changed, r"\cite{newset,", "old");
+        let alias = span(&changed_bib, "ids={", "old");
+        assert_eq!(
+            server.request(
+                6,
+                "textDocument/definition",
+                json!({"textDocument":{"uri":main},"position":query.start})
+            ),
+            json!([{"uri":bib,"range":alias}])
+        );
+    }
+}
+
+#[test]
+fn intersecting_ids_owner_candidates_refresh_types_metadata_and_nested_member_guards() {
+    use latex_lsp::text::Text;
+    let dir = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let bib = main.join("refs.bib").unwrap();
+    let source="% 😀\r\n\\documentclass{article}\\usepackage{biblatex}\\addbibresource{refs.bib}\\begin{document}\\defbibentryset{parent}{member}\\cite{olBAD}\\end{document}";
+    let database="% 😀\r\n@book{parent,title={Raw parent},ids={old}} @book{member} @book{child,crossref={ol}}";
+    std::fs::write(dir.path().join("main.tex"), source).unwrap();
+    std::fs::write(dir.path().join("refs.bib"), database).unwrap();
+    let span = |source: &str, prefix: &str, name: &str| {
+        let at = source.find(prefix).unwrap() + prefix.len();
+        assert_eq!(&source[at..at + name.len()], name);
+        Text::new(source.into()).range(at, at + name.len())
+    };
+    let query = span(source, r"\cite{", "ol");
+    let replace = span(source, r"\cite{", "olBAD");
+    let relation = span(database, "crossref={", "ol");
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":main,"languageId":"latex","version":5,"text":source}}),
+    );
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":bib,"languageId":"bibtex","version":8,"text":database}}),
+    );
+    let params = json!({"textDocument":{"uri":main},"position":query.end});
+    let items = server.request(2, "textDocument/completion", params.clone());
+    let list = items
+        .as_array()
+        .or_else(|| items["items"].as_array())
+        .unwrap();
+    let old = list.iter().find(|item| item["label"] == "old").unwrap();
+    assert!(old["detail"]
+        .as_str()
+        .unwrap()
+        .contains("Bibliography alias of parent"));
+    assert!(!old["detail"].as_str().unwrap().contains("Raw parent"));
+    assert_eq!(old["textEdit"], json!({"range":replace,"newText":"old"}));
+    let params_relation = json!({"textDocument":{"uri":bib},"position":relation.end});
+    let items = server.request(3, "textDocument/completion", params_relation);
+    let list = items
+        .as_array()
+        .or_else(|| items["items"].as_array())
+        .unwrap();
+    assert!(list.iter().any(|item| item["label"] == "old"), "{items}");
+    let nested = source.replace(
+        r"\end{document}",
+        r"\defbibentryset{nested}{old}\end{document}",
+    );
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":6},"contentChanges":[{"text":nested}]}),
+    );
+    let items = server.request(4, "textDocument/completion", params.clone());
+    assert!(
+        items
+            .as_array()
+            .or_else(|| items["items"].as_array())
+            .unwrap()
+            .is_empty(),
+        "{items}"
+    );
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":7},"contentChanges":[{"text":source}]}),
+    );
+    let items = server.request(5, "textDocument/completion", params.clone());
+    assert!(items
+        .as_array()
+        .or_else(|| items["items"].as_array())
+        .unwrap()
+        .iter()
+        .any(|item| item["label"] == "old"));
+    server.notify("textDocument/didChange",json!({"textDocument":{"uri":bib,"version":9},"contentChanges":[{"text":database.replace("@book{parent,","@XDATA{parent,")}]}));
+    let items = server.request(6, "textDocument/completion", params.clone());
+    assert!(items
+        .as_array()
+        .or_else(|| items["items"].as_array())
+        .unwrap()
+        .is_empty());
+    server.notify("textDocument/didClose", json!({"textDocument":{"uri":bib}}));
+    let items = server.request(7, "textDocument/completion", params);
+    assert!(items
+        .as_array()
+        .or_else(|| items["items"].as_array())
+        .unwrap()
+        .iter()
+        .any(|item| item["label"] == "old"));
 }

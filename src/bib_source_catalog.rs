@@ -30,6 +30,7 @@ pub(crate) struct Catalog {
     loaded: BTreeSet<Url>,
     overrides: BTreeSet<String>,
     source_names: BTreeSet<String>,
+    source_members: BTreeSet<String>,
     blocked: BTreeSet<String>,
     sources: BTreeMap<Identity, (Arc<SourceSet>, usize)>,
     work: usize,
@@ -60,6 +61,19 @@ impl Catalog {
         for name in &names {
             if self.source_names.insert((*name).to_string()) {
                 self.charge(name.len() + 64)?;
+            }
+        }
+        for member in trace
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                SourceEvent::Set(_, set) => Some(&set.members),
+                _ => None,
+            })
+            .flatten()
+        {
+            if self.source_members.insert(member.name.clone()) {
+                self.charge(member.name.len() + 64)?;
             }
         }
         let mut states = BTreeMap::<u32, State>::new();
@@ -184,6 +198,19 @@ impl Catalog {
         for name in &names {
             if self.source_names.insert((*name).to_string()) {
                 self.charge(name.len() + 64)?;
+            }
+        }
+        for member in trace
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                SourceEvent::Set(_, set) => Some(&set.members),
+                _ => None,
+            })
+            .flatten()
+        {
+            if self.source_members.insert(member.name.clone()) {
+                self.charge(member.name.len() + 64)?;
             }
         }
         let mut first_probes = BTreeMap::<u32, usize>::new();
@@ -343,7 +370,10 @@ impl Catalog {
         let mut bytes = 0usize;
         let loaded = std::mem::take(&mut self.loaded);
         let source_names = self.source_names.iter().map(String::as_str).collect();
-        self.work += crate::bib_source_aliases::independent(ws, &loaded, &source_names).ok_or(())?;
+        let source_members = self.source_members.iter().map(String::as_str).collect();
+        self.work +=
+            crate::bib_source_aliases::certify(ws, &loaded, &source_names, &source_members)
+                .ok_or(())?;
         if self.work > LIMIT {
             return Err(());
         }
@@ -372,7 +402,24 @@ impl Catalog {
                 if !self.all.contains(&uri) {
                     continue;
                 }
-                let detail = crate::bib_source_aliases::detail(doc, entry);
+                let owner = crate::bib_source_aliases::owner(doc, entry);
+                // A prospective alias member can materialize a source owner,
+                // creating a nested set even if no existing member does so.
+                if owner.is_some_and(|owner| self.source_names.contains(owner)) && field == "member"
+                    || owner.is_some_and(|owner| self.overrides.contains(owner))
+                        && matches!(field, "xdata" | "related" | "entryset")
+                {
+                    if self.blocked.insert(entry.name.clone()) {
+                        self.charge(entry.name.len() + 64)?;
+                    }
+                    continue;
+                }
+                let detail =
+                    if let Some(owner) = owner.filter(|owner| self.source_names.contains(*owner)) {
+                        format!("Bibliography alias of {owner}")
+                    } else {
+                        crate::bib_source_aliases::detail(doc, entry)
+                    };
                 self.charge(entry.name.len() + detail.len() + uri.as_str().len() + 128)?;
                 if !common.contains(&uri)
                     || base.contains_key(&entry.name)

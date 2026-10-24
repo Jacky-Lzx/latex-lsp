@@ -355,7 +355,7 @@ fn target(ws: &Workspace, uri: &Url, offset: usize) -> Option<Option<Answer>> {
             if work > 32 * 1024 * 1024 {
                 return None;
             }
-            work += crate::bib_source_aliases::readonly(ws, &resources, &names, &members)?;
+            work += crate::bib_source_aliases::certify(ws, &resources, &names, &members)?;
             if work > 32 * 1024 * 1024 {
                 return None;
             }

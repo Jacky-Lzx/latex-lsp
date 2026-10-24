@@ -202,7 +202,7 @@ fn source_completion_keeps_ids_preambles_dynamic_execution_and_truncation_guards
     let (_dir, mut ws, main, at) =
         setup(r"\newrefsection[chosen]\defbibentryset{parent}{member}\cite{pa¦}");
     for text in [
-        "@book{parent,ids={old}} @book{member}",
+        "@book{other,ids={parent}} @book{member}",
         "@book{parent} @book{member} @preamble{\"code\"}",
     ] {
         ws.open(main.join("section.bib").unwrap(), text.into(), 8);

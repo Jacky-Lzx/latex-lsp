@@ -141,7 +141,10 @@ fn intersecting_primary_owners_keep_complete_alias_references_and_safe_alias_edi
                         features::references(&ws, &main, source.range.start, true).len(),
                         if phase == r"\cite{parent}" { 1 } else { 2 }
                     );
-                    assert!(features::rename(&ws, &main, source.range.start, "newset").is_err());
+                    assert_eq!(
+                        features::rename(&ws, &main, source.range.start, "newset").is_err(),
+                        phase == r"\cite{parent}"
+                    );
                     assert!(features::rename(&ws, &bib, alias.range.start, "parent").is_err());
                     assert!(features::prepare_rename(&ws, &bib, alias.range.start)
                         .unwrap()
@@ -238,7 +241,10 @@ fn native_alias_only_edits_preserve_overridden_owner_and_member_materialization(
         let before = compile(dir.path());
         let alias = key(&ws, &bib, "ids={", "old");
         let source = key(&ws, &main, r"\defbibentryset{", "parent");
-        assert!(features::rename(&ws, &main, source.range.start, "newset").is_err());
+        assert_eq!(
+            features::rename(&ws, &main, source.range.start, "newset").is_err(),
+            phase == r"\cite{parent}"
+        );
         let edits = features::rename(&ws, &bib, alias.range.start, "newalias")
             .unwrap()
             .unwrap();

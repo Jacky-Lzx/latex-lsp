@@ -479,7 +479,7 @@ impl<'a> Graphs<'a> {
             }
             self.work.set(
                 self.work.get()
-                    + crate::bib_source_aliases::readonly(self.ws, &resources, &names, &members)
+                    + crate::bib_source_aliases::certify(self.ws, &resources, &names, &members)
                         .ok_or(())?,
             );
             if self.work.get() > 32 * 1024 * 1024 {
@@ -1100,10 +1100,10 @@ fn validate_edit(symbol: &Symbol<'_>) -> Result<()> {
 // Couple only a uniquely proved backend prerequisite that has no independent
 // book identity in any consumer. Raw-entry queries keep their ordinary identity.
 fn edit_symbol(mut target: Symbol<'_>) -> Result<Symbol<'_>> {
+    let mut has_ids_owner = false;
     if is_source(&target) {
-        // IDS retains its primary owner even when only the alias is cited.
-        // Renaming just the source declaration would turn that alias into a
-        // book request; coupling these otherwise unseen owners needs a proof.
+        // Biber keeps IDS attached to the raw primary entry even if no
+        // relation names that primary. Move this prerequisite with its set.
         for uri in target.graphs.databases.keys() {
             let doc = &target.graphs.ws.documents[uri];
             for alias in &doc.syntax.bibliography_aliases {
@@ -1111,19 +1111,20 @@ fn edit_symbol(mut target: Symbol<'_>) -> Result<Symbol<'_>> {
                     .graphs
                     .work
                     .set(target.graphs.work.get() + alias.name.len() + 64);
-                if target.graphs.work.get() > 32 * 1024 * 1024
-                    || crate::bib_source_aliases::owner(doc, alias) == Some(target.name.as_str())
-                {
+                if target.graphs.work.get() > 32 * 1024 * 1024 {
                     return Err(());
                 }
+                has_ids_owner |=
+                    crate::bib_source_aliases::owner(doc, alias) == Some(target.name.as_str());
             }
         }
     }
     if is_source(&target)
-        && target
-            .occurrences
-            .keys()
-            .any(|uri| target.graphs.ws.documents[uri].kind == DocumentKind::Bibtex)
+        && (has_ids_owner
+            || target
+                .occurrences
+                .keys()
+                .any(|uri| target.graphs.ws.documents[uri].kind == DocumentKind::Bibtex))
     {
         let mut prerequisite = None;
         for project in target.graphs.projects.values() {
