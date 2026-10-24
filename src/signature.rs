@@ -1706,7 +1706,7 @@ impl CommandShape {
                 result,
             );
         } else {
-            unknown_argument_token(source, command.span.end, parsed, literal, result);
+            unknown_argument_token(source, command.span.end, parsed, literal, true, result);
         }
     }
 }
@@ -2191,6 +2191,7 @@ pub(crate) struct CommandSignatures<'a> {
     tex_operands: BTreeMap<Cow<'a, str>, Option<TexOperands>>,
     literal_operands: BTreeMap<Cow<'a, str>, Vec<LiteralOperands>>,
     detokenize_boundary_known: bool,
+    identity_parameters: BTreeSet<String>,
 }
 
 /// Incremental lexical context for catcode-changing inline commands. Keep the
@@ -2350,6 +2351,7 @@ impl InlineTokenization {
                     .map(|(name, value)| (Cow::Owned(name.into_owned()), value))
                     .collect(),
                 detokenize_boundary_known: signatures.detokenize_boundary_known,
+                identity_parameters: signatures.identity_parameters,
             });
             self.declarations = declarations;
             self.scanned = 0;
@@ -2720,11 +2722,58 @@ impl<'a> CommandSignatures<'a> {
         }
         local.extend(resolve_aliases(&local, &aliases, operand_builtin));
         tex_operands.extend(resolve_aliases(&tex_operands, &aliases, |_| None));
+        // Only a unique, complete single-argument identity proves that a user
+        // macro returns its argument as executable tokens. Inspect raw project
+        // declarations too: source-context filtering must not hide a competing
+        // definition. Delimiter controls are excluded because they remain data.
+        let mut identities = BTreeMap::new();
+        for &(source, parsed) in &documents {
+            for entry in &parsed.definitions {
+                let ordinary = local.get(entry.name.as_str()).and_then(Option::as_ref);
+                let tex = tex_operands
+                    .get(entry.name.as_str())
+                    .and_then(Option::as_ref);
+                let one = tex.map_or_else(
+                    || {
+                        ordinary.is_some_and(|s| {
+                            s.parameters.len() == 1
+                                && matches!(
+                                    s.parameters[0].kind,
+                                    Kind::Required | Kind::RequiredGroup
+                                )
+                        })
+                    },
+                    |t| {
+                        t.prefix.is_empty()
+                            && t.delimiters.len() == 1
+                            && t.delimiters[0].iter().all(|token| !token.starts_with('\\'))
+                    },
+                );
+                let identity = (one
+                    && command_definition_body(source, parsed, entry)
+                        .is_some_and(|body| source[body.span].trim() == "#1"))
+                .then_some(());
+                identities
+                    .entry(Cow::Borrowed(entry.name.as_str()))
+                    .and_modify(|value| *value = None)
+                    .or_insert(identity);
+            }
+            for entry in &parsed.environments {
+                identities.insert(Cow::Borrowed(entry.name.as_str()), None);
+                identities.insert(Cow::Owned(format!("end{}", entry.name)), None);
+            }
+        }
+        identities.extend(resolve_aliases(&identities, &aliases, |_| None));
+        let identity_parameters = identities
+            .into_iter()
+            .filter_map(|(name, identity)| identity.map(|_| name.into_owned()))
+            .collect();
         let mut signatures = Self {
             local,
             tex_operands,
             literal_operands,
             detokenize_boundary_known,
+            identity_parameters,
         };
         // Deferred or forwarded providers can install an unseen definition.
         // Proven displayed file commands cannot execute such a provider.
@@ -3368,7 +3417,14 @@ impl<'a> CommandSignatures<'a> {
     }
 
     pub(crate) fn argument_tokens(&self, source: &str, parsed: &syntax::Syntax) -> BTreeSet<usize> {
-        self.argument_tokens_with_literal(source, parsed, None, false, false, false)
+        self.argument_tokens_with_literal(
+            source,
+            parsed,
+            None,
+            false,
+            false,
+            ParameterRead::Ordinary,
+        )
     }
 
     /// A stable local copy can bound its arguments without making that copy a
@@ -3379,21 +3435,45 @@ impl<'a> CommandSignatures<'a> {
         source: &str,
         parsed: &syntax::Syntax,
     ) -> BTreeSet<usize> {
+        self.editing_tokens(source, parsed, ParameterRead::Ordinary)
+    }
+
+    /// Ordered custom shapes bound string readers, but do not prove that a
+    /// user macro executes argument tokens. Destructive declaration edits also
+    /// require the ordinary project grammar to keep those tokens out of data.
+    /// Unknown calls protect their grouped arguments, but only a known grammar
+    /// establishes that an independent following control is an ungrouped operand.
+    pub(crate) fn declaration_argument_tokens(
+        &self,
+        source: &str,
+        parsed: &syntax::Syntax,
+    ) -> BTreeSet<usize> {
+        self.editing_tokens(source, parsed, ParameterRead::DeclarationData)
+    }
+
+    fn editing_tokens(
+        &self,
+        source: &str,
+        parsed: &syntax::Syntax,
+        parameters: ParameterRead,
+    ) -> BTreeSet<usize> {
         if !parsed
             .definitions
             .iter()
             .any(|entry| literal_copy_target(source, parsed, entry, false).is_some())
         {
-            return self.argument_tokens(source, parsed);
+            return self
+                .argument_tokens_with_literal(source, parsed, None, false, false, parameters);
         }
         let mut shapes = Self {
             local: self.local.clone(),
             tex_operands: self.tex_operands.clone(),
             literal_operands: self.literal_operands.clone(),
             detokenize_boundary_known: self.detokenize_boundary_known,
+            identity_parameters: self.identity_parameters.clone(),
         };
         shapes.inline_copy_operands(parsed);
-        shapes.argument_tokens(source, parsed)
+        shapes.argument_tokens_with_literal(source, parsed, None, false, false, parameters)
     }
 
     /// Prove only that a known caller discards all of the tokens it reads.
@@ -3483,7 +3563,14 @@ impl<'a> CommandSignatures<'a> {
         source: &str,
         parsed: &syntax::Syntax,
     ) -> BTreeSet<usize> {
-        self.argument_tokens_with_literal(source, parsed, None, false, true, false)
+        self.argument_tokens_with_literal(
+            source,
+            parsed,
+            None,
+            false,
+            true,
+            ParameterRead::Ordinary,
+        )
     }
 
     /// A stable copy can establish argument tokenization without certifying
@@ -3654,8 +3741,15 @@ impl<'a> CommandSignatures<'a> {
         parsed: &syntax::Syntax,
         at: usize,
     ) -> bool {
-        self.argument_tokens_with_literal(source, parsed, Some(at), false, false, true)
-            .contains(&at)
+        self.argument_tokens_with_literal(
+            source,
+            parsed,
+            Some(at),
+            false,
+            false,
+            ParameterRead::All,
+        )
+        .contains(&at)
             || self.possible_literal_argument(source, parsed, at)
     }
 
@@ -3667,8 +3761,15 @@ impl<'a> CommandSignatures<'a> {
         parsed: &syntax::Syntax,
         at: usize,
     ) -> bool {
-        self.argument_tokens_with_literal(source, parsed, Some(at), false, true, false)
-            .contains(&at)
+        self.argument_tokens_with_literal(
+            source,
+            parsed,
+            Some(at),
+            false,
+            true,
+            ParameterRead::Ordinary,
+        )
+        .contains(&at)
             || self.possible_literal_argument(source, parsed, at)
     }
 
@@ -3678,8 +3779,15 @@ impl<'a> CommandSignatures<'a> {
         parsed: &syntax::Syntax,
         at: usize,
     ) -> bool {
-        self.argument_tokens_with_literal(source, parsed, Some(at), false, false, false)
-            .contains(&at)
+        self.argument_tokens_with_literal(
+            source,
+            parsed,
+            Some(at),
+            false,
+            false,
+            ParameterRead::Ordinary,
+        )
+        .contains(&at)
             || self.possible_literal_argument(source, parsed, at)
     }
 
@@ -3704,8 +3812,15 @@ impl<'a> CommandSignatures<'a> {
         parsed: &syntax::Syntax,
         at: usize,
     ) -> bool {
-        self.argument_tokens_with_literal(source, parsed, Some(at), true, false, false)
-            .contains(&at)
+        self.argument_tokens_with_literal(
+            source,
+            parsed,
+            Some(at),
+            true,
+            false,
+            ParameterRead::Ordinary,
+        )
+        .contains(&at)
             || self.possible_literal_argument(source, parsed, at)
     }
 
@@ -3811,7 +3926,14 @@ impl<'a> CommandSignatures<'a> {
                             &mut consumed,
                         );
                     } else if !declared {
-                        unknown_argument_token(source, after, parsed, Some(at), &mut consumed);
+                        unknown_argument_token(
+                            source,
+                            after,
+                            parsed,
+                            Some(at),
+                            true,
+                            &mut consumed,
+                        );
                     }
                     if consumed.contains(&at) {
                         return true;
@@ -3853,7 +3975,14 @@ impl<'a> CommandSignatures<'a> {
                             }
                         }
                         LiteralOperands::Unknown => {
-                            unknown_argument_token(source, after, parsed, Some(at), &mut consumed);
+                            unknown_argument_token(
+                                source,
+                                after,
+                                parsed,
+                                Some(at),
+                                true,
+                                &mut consumed,
+                            );
                             if consumed.contains(&at) {
                                 return true;
                             }
@@ -3872,8 +4001,10 @@ impl<'a> CommandSignatures<'a> {
         literal: Option<usize>,
         declared_only: bool,
         known_only: bool,
-        all_parameters: bool,
+        parameters: ParameterRead,
     ) -> BTreeSet<usize> {
+        let all_parameters = matches!(parameters, ParameterRead::All);
+        let unknown_single = !matches!(parameters, ParameterRead::DeclarationData);
         let local = &self.local;
         let mut result = BTreeSet::new();
         let declarations: BTreeSet<_> = parsed
@@ -3908,7 +4039,11 @@ impl<'a> CommandSignatures<'a> {
             if result.contains(&command.span.start) {
                 continue;
             }
-            if let Some(shape) = parsed.contextual_command_shapes.get(&command.span.start) {
+            if let Some(shape) = parsed
+                .contextual_command_shapes
+                .get(&command.span.start)
+                .filter(|_| !matches!(parameters, ParameterRead::DeclarationData))
+            {
                 shape.argument_tokens(source, parsed, command, literal, &mut result);
                 continue;
             }
@@ -3927,7 +4062,14 @@ impl<'a> CommandSignatures<'a> {
                         );
                     }
                 } else if !known_only {
-                    unknown_argument_token(source, command.span.end, parsed, literal, &mut result);
+                    unknown_argument_token(
+                        source,
+                        command.span.end,
+                        parsed,
+                        literal,
+                        unknown_single,
+                        &mut result,
+                    );
                 }
                 continue;
             }
@@ -3974,7 +4116,14 @@ impl<'a> CommandSignatures<'a> {
             if self.invokes_builtin(name, "detokenize") {
                 if !self.detokenize_boundary_known {
                     if !known_only {
-                        unknown_argument_token(source, end, parsed, literal, &mut result);
+                        unknown_argument_token(
+                            source,
+                            end,
+                            parsed,
+                            literal,
+                            unknown_single,
+                            &mut result,
+                        );
                     }
                     continue;
                 }
@@ -3982,7 +4131,14 @@ impl<'a> CommandSignatures<'a> {
                 if let Some((_, after)) = syntax::group(source, at, b'{', b'}') {
                     mark_operand_tokens(parsed, at, after, literal, &mut result);
                 } else if !known_only {
-                    unknown_argument_token(source, end, parsed, literal, &mut result);
+                    unknown_argument_token(
+                        source,
+                        end,
+                        parsed,
+                        literal,
+                        unknown_single,
+                        &mut result,
+                    );
                 }
                 continue;
             }
@@ -3999,6 +4155,12 @@ impl<'a> CommandSignatures<'a> {
             let name = environment.map_or(name, |argument| argument.value.as_str());
             let end = environment.map_or(end, |argument| argument.outer_span.end);
             let control_spaces = environment.is_none() && control_spaces;
+            if matches!(parameters, ParameterRead::DeclarationData)
+                && environment.is_none()
+                && self.identity_parameters.contains(name)
+            {
+                continue;
+            }
             if let Some(end) = self
                 .tex_operands
                 .get(name)
@@ -4036,7 +4198,7 @@ impl<'a> CommandSignatures<'a> {
                             | "fvset"
                             | "includeonly"
                     );
-                argument_tokens(
+                let read = argument_tokens(
                     (source, parsed),
                     end,
                     control_spaces,
@@ -4045,14 +4207,25 @@ impl<'a> CommandSignatures<'a> {
                     literal,
                     &mut result,
                 );
+                if matches!(parameters, ParameterRead::DeclarationData) && opaque && read.unfinished
+                {
+                    mark_operand_tokens(parsed, read.end, source.len(), literal, &mut result);
+                }
             } else if !known_only
                 && (literal.is_none() || !self.literal_operands.contains_key(name))
             {
-                unknown_argument_token(source, end, parsed, literal, &mut result);
+                unknown_argument_token(source, end, parsed, literal, unknown_single, &mut result);
             }
         }
         result
     }
+}
+
+#[derive(Clone, Copy)]
+enum ParameterRead {
+    Ordinary,
+    All,
+    DeclarationData,
 }
 
 fn insert_command_signature<'a>(
@@ -4525,6 +4698,7 @@ fn unknown_argument_token(
     mut at: usize,
     parsed: &syntax::Syntax,
     literal: Option<usize>,
+    single: bool,
     result: &mut BTreeSet<usize>,
 ) {
     loop {
@@ -4542,7 +4716,10 @@ fn unknown_argument_token(
             mark_operand_tokens(parsed, at, end, literal, result);
             at = end;
         } else {
-            if syntax::control_word(source, at).is_some() || literal == Some(at) {
+            if !single && matches!(source.as_bytes().get(at), Some(b'{' | b'[')) {
+                mark_operand_tokens(parsed, at, source.len(), literal, result);
+            }
+            if single && (syntax::control_word(source, at).is_some() || literal == Some(at)) {
                 result.insert(at);
             }
             return;

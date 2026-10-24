@@ -596,7 +596,7 @@ fn collected_verb_bodies_keep_executable_commands_and_file_edits() {
                 let updated = apply(
                     &source,
                     features::rename(&workspace, &main, at, new)
-                        .unwrap()
+                        .unwrap_or_else(|error| panic!("{source}: {error}"))
                         .unwrap(),
                     &main,
                 );

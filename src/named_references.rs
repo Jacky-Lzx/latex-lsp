@@ -89,7 +89,10 @@ impl Context {
         contains(&self.literal, at)
     }
     pub(crate) fn operand(&self, doc: &Document, at: usize) -> bool {
-        self.operands.contains(&at)
+        self.operand_with(doc, at, &self.operands)
+    }
+    fn operand_with(&self, doc: &Document, at: usize, operands: &BTreeSet<usize>) -> bool {
+        operands.contains(&at)
             || doc.syntax.control_operands.contains(&at)
             || contains(&self.opaque, at)
             || contains(&self.declaration_data, at) && !contains(&self.bodies, at)
@@ -105,6 +108,8 @@ fn calls(
 ) -> Option<(Calls, Uncertain)> {
     let source = &doc.text.source;
     let context = Context::new(doc, signatures);
+    let declaration_operands = (!doc.syntax.labels.is_empty())
+        .then(|| signatures.declaration_argument_tokens(source, &doc.syntax));
     let empty = BTreeSet::new();
     let mut result = BTreeMap::new();
     let mut uncertain = Vec::new();
@@ -152,6 +157,40 @@ fn calls(
                     operand,
                 },
             );
+        }
+    }
+    // Lexical declarations may be displayed or discarded as another macro's
+    // argument. They still appear in the structural declaration index, but
+    // cannot justify rewriting the displayed key. Definition bodies retain
+    // their existing deferred editing semantics through Context::operand.
+    for entry in &doc.syntax.labels {
+        let before = doc
+            .syntax
+            .commands
+            .partition_point(|command| command.span.end <= entry.span.start);
+        let command = before
+            .checked_sub(1)
+            .and_then(|index| doc.syntax.commands.get(index));
+        let proven = command.is_some_and(|command| {
+            let argument = if command.name == "label" {
+                command.argument.clone()
+            } else if command.name == "hyperdef" {
+                syntax::separate_label_argument(source, command)
+            } else {
+                None
+            };
+            argument.is_some_and(|argument| {
+                argument.span.start <= entry.span.start && entry.span.end <= argument.span.end
+            }) && signatures.command_unchanged(&command.name)
+                && !declaration_operands
+                    .as_ref()
+                    .is_some_and(|operands| context.operand_with(doc, command.span.start, operands))
+        });
+        if !proven {
+            if result.len() + uncertain.len() >= 20_000 {
+                return None;
+            }
+            uncertain.push((false, entry.name.clone()));
         }
     }
     Some((result, uncertain))
@@ -232,11 +271,12 @@ fn candidate_names(workspace: &Workspace) -> BTreeSet<&str> {
 }
 fn has_calls(doc: &Document, names: &BTreeSet<&str>) -> bool {
     doc.kind == DocumentKind::Latex
-        && doc.syntax.commands.iter().any(|command| {
-            matches!(command.name.as_str(), "csuse" | "csname")
-                || direct_reference(&command.name)
-                || names.contains(command.name.as_str())
-        })
+        && (!doc.syntax.labels.is_empty()
+            || doc.syntax.commands.iter().any(|command| {
+                matches!(command.name.as_str(), "csuse" | "csname")
+                    || direct_reference(&command.name)
+                    || names.contains(command.name.as_str())
+            }))
 }
 
 impl Index {

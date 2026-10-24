@@ -113,7 +113,7 @@ fn selected_sections_keep_their_identities_and_reject_unproved_edits() {
         assert_eq!(features::definitions(&ws, &main, at).len(), 1, "{header}");
         assert_eq!(
             features::rename(&ws, &main, at, "updated")
-                .unwrap()
+                .unwrap_or_else(|error| panic!("{header}: {error}"))
                 .unwrap()
                 .changes
                 .unwrap()[&main]

@@ -17,6 +17,92 @@ struct Server {
 }
 
 #[test]
+fn label_declaration_data_rejects_edits_and_refreshes_unsaved_provider_arities() {
+    use latex_lsp::text::Text;
+
+    for versioned in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+        let provider = uri.join("commands.sty").unwrap();
+        std::fs::write(
+            provider.to_file_path().unwrap(),
+            r"\newcommand\discard[1]{}",
+        )
+        .unwrap();
+        let source = "% 😀\r\n\\documentclass{article}\\input{commands.sty}\\def\\ifblank#1#2#3{#2}\\begin{document}\\discard{\\label{ghost}}\\label{safe}\\ref{safe}\\end{document}";
+        std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+        let text = Text::new(source.into());
+        let ghost = source.find("ghost").unwrap();
+        let safe = source.rfind("safe").unwrap();
+        let mut server = Server::start();
+        server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(directory.path()).unwrap(),"initializationOptions":{"distribution":{"enabled":false}},"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":versioned}}}}));
+        server.notify("initialized", json!({}));
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"languageId":"latex","version":5,"text":source}}),
+        );
+        let query = json!({"textDocument":{"uri":uri},"position":text.position(ghost + 1),"newName":"fresh"});
+        let blocked = |server: &mut Server| {
+            for method in ["textDocument/prepareRename", "textDocument/rename"] {
+                server.send(json!({"jsonrpc":"2.0","id":20,"method":method,"params":query}));
+                let result = server.until(|message| message["id"] == 20);
+                assert!(
+                    result["error"]["code"] == -32602 || result.get("result") == Some(&Value::Null),
+                    "{result}"
+                );
+            }
+        };
+        blocked(&mut server);
+        let edit = server.request(2, "textDocument/rename", json!({"textDocument":{"uri":uri},"position":text.position(safe + 1),"newName":"fresh"}));
+        let edits = if versioned {
+            assert_eq!(edit["documentChanges"].as_array().unwrap().len(), 1);
+            assert_eq!(
+                edit["documentChanges"][0]["textDocument"],
+                json!({"uri":uri,"version":5})
+            );
+            &edit["documentChanges"][0]["edits"]
+        } else {
+            &edit["changes"][uri.as_str()]
+        };
+        assert_eq!(edits.as_array().unwrap().len(), 2);
+        assert!(edits
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|edit| edit["newText"] == "fresh"));
+        server.notify("textDocument/didOpen", json!({"textDocument":{"uri":provider,"languageId":"latex","version":12,"text":"\\newcommand\\discard{}"}}));
+        let restored = server.request(3, "textDocument/rename", query.clone());
+        let edits = if versioned {
+            assert_eq!(
+                restored["documentChanges"][0]["textDocument"],
+                json!({"uri":uri,"version":5})
+            );
+            &restored["documentChanges"][0]["edits"]
+        } else {
+            &restored["changes"][uri.as_str()]
+        };
+        assert_eq!(
+            edits,
+            &json!([{"range":text.range(ghost, ghost + 5),"newText":"fresh"}])
+        );
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":provider,"version":13},"contentChanges":[{"text":"\\newcommand\\discard[1]{}"}]}));
+        blocked(&mut server);
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":provider,"version":14},"contentChanges":[{"text":"\\newcommand\\discard{}"}]}));
+        assert!(!server
+            .request(4, "textDocument/rename", query.clone())
+            .is_null());
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":provider}}),
+        );
+        blocked(&mut server);
+        server.request(5, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
 fn standard_footnotes_negotiate_completion_and_refresh_cross_file_overrides() {
     use latex_lsp::text::Text;
 
