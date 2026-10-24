@@ -738,7 +738,7 @@ impl<'a> Graphs<'a> {
 
 struct Symbol<'a> {
     declaration: Identity,
-    prerequisite: Option<Identity>,
+    prerequisites: BTreeSet<Identity>,
     occurrences: BTreeMap<Url, BTreeSet<(usize, usize)>>,
     name: String,
     query: Range<usize>,
@@ -991,7 +991,7 @@ fn symbol<'a>(ws: &'a Workspace, uri: &Url, offset: usize) -> Option<Result<Symb
         }
         Ok(Symbol {
             declaration,
-            prerequisite: None,
+            prerequisites: BTreeSet::new(),
             occurrences,
             name,
             query: span,
@@ -1067,7 +1067,7 @@ fn validate_edit(symbol: &Symbol<'_>) -> Result<()> {
     let source = is_source(symbol);
     if source {
         // A final source identity alone cannot certify the raw prerequisite.
-        if symbol.prerequisite.is_none()
+        if symbol.prerequisites.is_empty()
             && symbol
                 .occurrences
                 .keys()
@@ -1138,13 +1138,155 @@ fn validate_edit(symbol: &Symbol<'_>) -> Result<()> {
     Ok(())
 }
 
-// Couple only a uniquely proved backend prerequisite that has no independent
-// book identity in any consumer. Raw-entry queries keep their ordinary identity.
+// A source edit can move raw IDS owners only when every consumer shadows
+// those headers with this exact physical source declaration.
+fn source_prerequisites(target: &Symbol<'_>) -> Result<BTreeSet<Identity>> {
+    let mut has_ids_owner = false;
+    for uri in target.graphs.databases.keys() {
+        let doc = &target.graphs.ws.documents[uri];
+        for alias in &doc.syntax.bibliography_aliases {
+            target
+                .graphs
+                .work
+                .set(target.graphs.work.get() + alias.name.len() + 64);
+            if target.graphs.work.get() > 32 * 1024 * 1024 {
+                return Err(());
+            }
+            has_ids_owner |=
+                crate::bib_source_aliases::owner(doc, alias) == Some(target.name.as_str());
+        }
+    }
+    if !has_ids_owner
+        && !target
+            .occurrences
+            .keys()
+            .any(|uri| target.graphs.ws.documents[uri].kind == DocumentKind::Bibtex)
+    {
+        return Ok(BTreeSet::new());
+    }
+    let mut prerequisites = BTreeSet::new();
+    for project in target.graphs.projects.values() {
+        for view in project
+            .graph
+            .sections
+            .iter()
+            .filter(|view| consumes(view, &target.declaration, &target.name, true))
+        {
+            let found = target
+                .graphs
+                .database_binding(&target.name, &view.resources)?
+                .ok_or(())?;
+            target
+                .graphs
+                .work
+                .set(target.graphs.work.get() + found.uri.as_str().len() + 96);
+            if target.graphs.work.get() > 32 * 1024 * 1024
+                || prerequisites.len() >= 64 && !prerequisites.contains(&found)
+            {
+                return Err(());
+            }
+            prerequisites.insert(found);
+        }
+    }
+    if prerequisites.is_empty() {
+        return Err(());
+    }
+    let mut aliases = BTreeSet::new();
+    for prerequisite in &prerequisites {
+        let database = target.graphs.databases.get(&prerequisite.uri).ok_or(())?;
+        if database.declarations.get(&target.name).map(Vec::as_slice)
+            != Some(std::slice::from_ref(prerequisite))
+        {
+            return Err(());
+        }
+        let consumers = target.graphs.consumers(&prerequisite.uri);
+        if consumers.is_empty() {
+            return Err(());
+        }
+        for root in consumers {
+            let project = target.graphs.projects.get(&root).ok_or(())?;
+            if !project.resources.contains(&prerequisite.uri) {
+                return Err(());
+            }
+            for view in project
+                .graph
+                .sections
+                .iter()
+                .filter(|view| view.contains(&prerequisite.uri))
+            {
+                target.graphs.work.set(target.graphs.work.get() + 96);
+                if target.graphs.work.get() > 32 * 1024 * 1024
+                    || target.graphs.bind(&target.name, std::iter::once(view))?
+                        != Some(target.declaration.clone())
+                    || target
+                        .graphs
+                        .database_binding(&target.name, &view.resources)?
+                        != Some(prerequisite.clone())
+                {
+                    return Err(());
+                }
+            }
+        }
+        if prerequisites.len() > 1 {
+            let mut owned = false;
+            let doc = &target.graphs.ws.documents[&prerequisite.uri];
+            for alias in &doc.syntax.bibliography_aliases {
+                target
+                    .graphs
+                    .work
+                    .set(target.graphs.work.get() + alias.name.len() + 96);
+                if target.graphs.work.get() > 32 * 1024 * 1024 {
+                    return Err(());
+                }
+                if crate::bib_source_aliases::owner(doc, alias) == Some(target.name.as_str()) {
+                    aliases.insert(alias.name.as_str());
+                    owned = true;
+                }
+            }
+            // Multiple non-IDS prerequisites need their own relation proof.
+            if !owned {
+                return Err(());
+            }
+        }
+    }
+    if prerequisites.len() > 1 {
+        for (uri, database) in &target.graphs.databases {
+            let doc = &target.graphs.ws.documents[uri];
+            for alias in &doc.syntax.bibliography_aliases {
+                target
+                    .graphs
+                    .work
+                    .set(target.graphs.work.get() + alias.name.len() + 64);
+                if target.graphs.work.get() > 32 * 1024 * 1024 {
+                    return Err(());
+                }
+                if aliases.contains(alias.name.as_str()) {
+                    let owner = crate::bib_source_aliases::owner(doc, alias).ok_or(())?;
+                    let entries = database.declarations.get(owner).ok_or(())?;
+                    if owner != target.name
+                        || entries.len() != 1
+                        || !prerequisites.contains(&entries[0])
+                    {
+                        return Err(());
+                    }
+                }
+            }
+        }
+    }
+    Ok(prerequisites)
+}
+
+// Couple only proved backend prerequisites with no independent book consumers.
 fn edit_symbol<'a>(mut target: Symbol<'a>, shared: &BTreeSet<Identity>) -> Result<Symbol<'a>> {
     // An alias-only edit preserves its globally certified primary spelling.
     // Raw owner edits certify each actual resource allocation independently.
     let alias_key = is_alias(&target);
     let source_key = is_source(&target);
+    let prerequisites = if source_key {
+        source_prerequisites(&target)?
+    } else {
+        BTreeSet::new()
+    };
     for project in target
         .graphs
         .projects
@@ -1179,9 +1321,8 @@ fn edit_symbol<'a>(mut target: Symbol<'a>, shared: &BTreeSet<Identity>) -> Resul
                 .then_some(())
                 .ok_or(())
         };
-        if source_key {
-            // Source prerequisites still need the original complete union
-            // proof. Their cross-library coupling is a separate operation.
+        if source_key && prerequisites.len() <= 1 {
+            // Preserve the original union proof for single prerequisites.
             certify(&project.resources)?;
         } else {
             // Equal IDS in disjoint sections are not duplicate declarations.
@@ -1244,92 +1385,7 @@ fn edit_symbol<'a>(mut target: Symbol<'a>, shared: &BTreeSet<Identity>) -> Resul
             }
         }
     }
-    let mut has_ids_owner = false;
-    if is_source(&target) {
-        // Biber keeps IDS attached to the raw primary entry even if no
-        // relation names that primary. Move this prerequisite with its set.
-        for uri in target.graphs.databases.keys() {
-            let doc = &target.graphs.ws.documents[uri];
-            for alias in &doc.syntax.bibliography_aliases {
-                target
-                    .graphs
-                    .work
-                    .set(target.graphs.work.get() + alias.name.len() + 64);
-                if target.graphs.work.get() > 32 * 1024 * 1024 {
-                    return Err(());
-                }
-                has_ids_owner |=
-                    crate::bib_source_aliases::owner(doc, alias) == Some(target.name.as_str());
-            }
-        }
-    }
-    if is_source(&target)
-        && (has_ids_owner
-            || target
-                .occurrences
-                .keys()
-                .any(|uri| target.graphs.ws.documents[uri].kind == DocumentKind::Bibtex))
-    {
-        let mut prerequisite = None;
-        for project in target.graphs.projects.values() {
-            for view in project
-                .graph
-                .sections
-                .iter()
-                .filter(|view| consumes(view, &target.declaration, &target.name, true))
-            {
-                let found = target
-                    .graphs
-                    .database_binding(&target.name, &view.resources)?
-                    .ok_or(())?;
-                if prerequisite
-                    .as_ref()
-                    .is_some_and(|previous| *previous != found)
-                {
-                    return Err(());
-                }
-                prerequisite = Some(found);
-            }
-        }
-        let prerequisite = prerequisite.ok_or(())?;
-        let database = target.graphs.databases.get(&prerequisite.uri).ok_or(())?;
-        if database.declarations.get(&target.name).map(Vec::as_slice)
-            != Some(std::slice::from_ref(&prerequisite))
-        {
-            return Err(());
-        }
-        // The source graph already certifies every affected physical occurrence.
-        // Reuse its numeric views instead of rebuilding the same execution graph
-        // for the raw header. Every raw consumer must belong to that closure and
-        // shadow this prerequisite with exactly this source declaration.
-        let consumers = target.graphs.consumers(&prerequisite.uri);
-        if consumers.is_empty() {
-            return Err(());
-        }
-        for root in consumers {
-            let project = target.graphs.projects.get(&root).ok_or(())?;
-            if !project.resources.contains(&prerequisite.uri) {
-                return Err(());
-            }
-            for view in project
-                .graph
-                .sections
-                .iter()
-                .filter(|view| view.contains(&prerequisite.uri))
-            {
-                target.graphs.work.set(target.graphs.work.get() + 96);
-                if target.graphs.work.get() > 32 * 1024 * 1024
-                    || target.graphs.bind(&target.name, std::iter::once(view))?
-                        != Some(target.declaration.clone())
-                    || target
-                        .graphs
-                        .database_binding(&target.name, &view.resources)?
-                        != Some(prerequisite.clone())
-                {
-                    return Err(());
-                }
-            }
-        }
+    if !prerequisites.is_empty() {
         for (uri, spans) in &target.occurrences {
             if target.graphs.ws.documents[uri].kind != DocumentKind::Bibtex {
                 continue;
@@ -1356,12 +1412,18 @@ fn edit_symbol<'a>(mut target: Symbol<'a>, shared: &BTreeSet<Identity>) -> Resul
                 return Err(());
             }
         }
-        target
-            .occurrences
-            .entry(prerequisite.uri.clone())
-            .or_default()
-            .insert((prerequisite.start, prerequisite.end));
-        target.prerequisite = Some(prerequisite);
+        for prerequisite in &prerequisites {
+            target.graphs.stored += prerequisite.uri.as_str().len() * 2 + 192;
+            if target.graphs.stored > 32 * 1024 * 1024 {
+                return Err(());
+            }
+            target
+                .occurrences
+                .entry(prerequisite.uri.clone())
+                .or_default()
+                .insert((prerequisite.start, prerequisite.end));
+        }
+        target.prerequisites = prerequisites;
     }
     validate_edit(&target)?;
     Ok(target)
@@ -1448,8 +1510,8 @@ fn edit_symbols<'a>(target: Symbol<'a>) -> Result<Vec<Symbol<'a>>> {
                 })
         })
     {
-        // Coupling a source shadow with multiple raw prerequisites still
-        // needs a separate proof. Unrelated source sets keep their identities.
+        // Multiple independently queried raw symbols cannot move a source
+        // shadow as well. Source edits prove their complete prerequisites above.
         return Err(());
     }
     let mut edited = Vec::new();
@@ -1519,19 +1581,28 @@ fn rename_edits(
     symbol.graphs.name = Some(name.into());
     symbol.graphs.bindings.borrow_mut().clear();
     symbol.graphs.database_bindings.borrow_mut().clear();
-    let raw = symbol.prerequisite.as_ref().or_else(|| {
-        (!source_key
-            && !alias_key
-            && ws.documents[&symbol.declaration.uri].kind == DocumentKind::Bibtex)
-            .then_some(&symbol.declaration)
-    });
-    let owns_ids = raw.is_some_and(|raw| {
-        let doc = &ws.documents[&raw.uri];
-        doc.syntax
-            .bibliography_aliases
-            .iter()
-            .any(|alias| crate::bib_source_aliases::owner(doc, alias) == Some(symbol.name.as_str()))
-    });
+    let raws: Vec<_> = if source_key {
+        symbol.prerequisites.iter().collect()
+    } else if !alias_key && ws.documents[&symbol.declaration.uri].kind == DocumentKind::Bibtex {
+        vec![&symbol.declaration]
+    } else {
+        Vec::new()
+    };
+    let coupled_source = source_key && raws.len() > 1;
+    let mut owns_ids = false;
+    for raw in &raws {
+        for alias in &ws.documents[&raw.uri].syntax.bibliography_aliases {
+            symbol
+                .graphs
+                .work
+                .set(symbol.graphs.work.get() + alias.name.len() + 64);
+            if symbol.graphs.work.get() > 32 * 1024 * 1024 {
+                return Err(edit_error());
+            }
+            owns_ids |= crate::bib_source_aliases::owner(&ws.documents[&raw.uri], alias)
+                == Some(symbol.name.as_str());
+        }
+    }
     symbol.graphs.relation_bindings.borrow_mut().clear();
     let relation_owners: BTreeSet<_> = symbol
         .graphs
@@ -1575,7 +1646,7 @@ fn rename_edits(
                 if alias.name == name {
                     return Err(jsonrpc::Error::invalid_params("The new bibliography key conflicts with a global IDS alias in this project"));
                 }
-                if raw.is_some()
+                if !raws.is_empty()
                     && crate::bib_source_aliases::owner(&ws.documents[resource], alias)
                         == Some(name)
                 {
@@ -1584,7 +1655,11 @@ fn rename_edits(
             }
         }
         if check_cache {
-            let raw = raw.ok_or_else(edit_error)?;
+            let [raw] = raws.as_slice() else {
+                // A one-file simulation cannot certify an atomic multi-owner
+                // move against global cached data. Require a fresh spelling.
+                return Err(edit_error());
+            };
             let work = bib_section_keys::validate_primary_rename(
                 ws,
                 root,
@@ -1608,7 +1683,9 @@ fn rename_edits(
         symbol.lexical.validate(&project.scope, true, name)?;
         crate::resource_context::validate_rename(ws, &project.scope, name)?;
         for view in project.graph.sections.iter().filter(|view| {
-            alias_key || consumes(view, &symbol.declaration, &symbol.name, source_key)
+            alias_key
+                || coupled_source
+                || consumes(view, &symbol.declaration, &symbol.name, source_key)
         }) {
             if view
                 .namespace
@@ -1635,6 +1712,7 @@ fn rename_edits(
                     .get(&(source.clone(), span.start, span.end))
                     .ok_or_else(edit_error)?;
                 if alias_key
+                    || coupled_source
                     || views
                         .iter()
                         .any(|view| consumes(view, &symbol.declaration, &symbol.name, source_key))
@@ -1650,7 +1728,9 @@ fn rename_edits(
             .sections
             .iter()
             .filter(|view| {
-                alias_key || consumes(view, &symbol.declaration, &symbol.name, source_key)
+                alias_key
+                    || coupled_source
+                    || consumes(view, &symbol.declaration, &symbol.name, source_key)
             })
             .any(|view| {
                 view.iter()

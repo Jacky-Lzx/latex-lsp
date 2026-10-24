@@ -326,3 +326,10 @@ cargo test --locked --test protocol source_textual_predicates_
 cargo test --locked --test biblatex_source_shared_owners -- --include-ignored
 cargo test --locked --test protocol source_shared_raw_owners_
 ```
+
+同一物理源码集合声明在多个分区执行时，支持同时移动各分区的真实 IDS 所属主键。每个原始条目的全部消费者都必须采用这同一集合身份，所有关联 IDS 的所属条目都须纳入编辑；先引用 IDS 不会虚构早期主键请求。只读引用仍保留源码身份，改名额外包含必需的数据库头部。初版最多 64 个先决条目，要求每个都拥有认证 IDS；独立书籍消费者、不同物理集合、早期主键请求、通配遮蔽、跨库缓存新名称及全项目名称捕获继续保护。单个先决条目沿用原有认证。
+
+```sh
+cargo test --locked --test biblatex_source_prerequisites -- --include-ignored
+cargo test --locked --test protocol source_prerequisite_edits_
+```

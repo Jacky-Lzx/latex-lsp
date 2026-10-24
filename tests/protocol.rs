@@ -34176,3 +34176,131 @@ fn source_shared_raw_owners_keep_exact_edits_versions_and_unsaved_closure() {
         server.wait_exit(0);
     }
 }
+
+#[test]
+fn source_prerequisite_edits_keep_every_header_version_and_complete_consumers() {
+    use latex_lsp::text::Text;
+    for document_changes in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+        let provider = main.join("sets.tex").unwrap();
+        let default = main.join("default.bib").unwrap();
+        let selected = main.join("section.bib").unwrap();
+        let other = main.join("other.tex").unwrap();
+        let source="% 😀\r\n\\documentclass{article}\\usepackage{biblatex}\\addbibresource{default.bib}\\addsectionbib[label=chosen]{section.bib}\\begin{document}\\input{sets}\\cite{parent,old}\\newrefsection[chosen]\\input{sets}\\cite{parent,old}\\end{document}";
+        let sets = "% 😀\r\n\\defbibentryset{parent}{member}";
+        let library = "% 😀\r\n@book{parent,title={Parent},ids={old}} @book{member,title={Member}}";
+        for (name, text) in [
+            ("main.tex", source),
+            ("sets.tex", sets),
+            ("default.bib", library),
+            ("section.bib", library),
+        ] {
+            std::fs::write(dir.path().join(name), text).unwrap();
+        }
+        let ranges = |text: &str| {
+            text.match_indices("parent")
+                .map(|(at, _)| Text::new(text.into()).range(at, at + 6))
+                .collect::<Vec<_>>()
+        };
+        let calls = ranges(source);
+        let declarations = ranges(library);
+        let declaration = ranges(sets)[0];
+        let mut server = Server::start();
+        server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":document_changes}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+        server.notify("initialized", json!({}));
+        for (uri, text, language, version) in [
+            (&main, source, "latex", 5),
+            (&provider, sets, "latex", 6),
+            (&default, library, "bibtex", 7),
+            (&selected, library, "bibtex", 8),
+        ] {
+            server.notify("textDocument/didOpen",json!({"textDocument":{"uri":uri,"languageId":language,"version":version,"text":text}}));
+        }
+        let params =
+            json!({"textDocument":{"uri":provider},"position":declaration.start,"newName":"fresh"});
+        let refs=server.request(2,"textDocument/references",json!({"textDocument":{"uri":provider},"position":declaration.start,"context":{"includeDeclaration":true}}));
+        assert_eq!(refs.as_array().unwrap().len(), 3);
+        let edit = server.request(3, "textDocument/rename", params.clone());
+        for (uri, version, spans) in [
+            (&main, 5, calls),
+            (&provider, 6, vec![declaration]),
+            (&default, 7, declarations.clone()),
+            (&selected, 8, declarations),
+        ] {
+            let expected = spans
+                .iter()
+                .map(|range| json!({"range":range,"newText":"fresh"}))
+                .collect::<Vec<_>>();
+            if document_changes {
+                let docs = edit["documentChanges"].as_array().unwrap();
+                assert_eq!(docs.len(), 4);
+                let doc = docs
+                    .iter()
+                    .find(|doc| doc["textDocument"]["uri"] == uri.as_str())
+                    .unwrap();
+                assert_eq!(doc["textDocument"]["version"], version);
+                assert_eq!(doc["edits"], json!(expected));
+            } else {
+                assert_eq!(edit["changes"].as_object().unwrap().len(), 4);
+                assert_eq!(edit["changes"][uri.as_str()], json!(expected));
+            }
+        }
+        server.notify("textDocument/didOpen",json!({"textDocument":{"uri":other,"languageId":"latex","version":9,"text":r"\documentclass{article}\usepackage{biblatex}\addbibresource{default.bib}\begin{document}\cite{old}\end{document}"}}));
+        server.send(
+            json!({"jsonrpc":"2.0","id":4,"method":"textDocument/rename","params":params.clone()}),
+        );
+        assert_eq!(
+            server.until(|message| message["id"] == 4)["error"]["code"],
+            -32602
+        );
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":other}}),
+        );
+        assert_eq!(
+            server.request(5, "textDocument/rename", params.clone()),
+            edit
+        );
+        server.notify("textDocument/didChange",json!({"textDocument":{"uri":default,"version":10},"contentChanges":[{"text":library.replace(",ids={old}","")}]}));
+        server.send(
+            json!({"jsonrpc":"2.0","id":6,"method":"textDocument/rename","params":params.clone()}),
+        );
+        assert_eq!(
+            server.until(|message| message["id"] == 6)["error"]["code"],
+            -32602
+        );
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":default}}),
+        );
+        let mut expected = edit;
+        if document_changes {
+            for doc in expected["documentChanges"].as_array_mut().unwrap() {
+                if doc["textDocument"]["uri"] == default.as_str() {
+                    doc["textDocument"]["version"] = Value::Null;
+                }
+            }
+        }
+        assert_eq!(
+            server.request(7, "textDocument/rename", params.clone()),
+            expected
+        );
+        let fresh = source.replace(
+            r"\end{document}",
+            r"\newrefsection\cite{fresh}\end{document}",
+        );
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":11},"contentChanges":[{"text":fresh}]}),
+        );
+        server.send(json!({"jsonrpc":"2.0","id":8,"method":"textDocument/rename","params":params}));
+        assert_eq!(
+            server.until(|message| message["id"] == 8)["error"]["code"],
+            -32602
+        );
+        server.request(1000, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
