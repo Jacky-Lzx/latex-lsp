@@ -190,6 +190,116 @@ fn named_and_forwarded_package_loaders_cannot_hide_database_execution() {
     }
 }
 
+const CATEGORY_LIBRARY: &str = "@book{trigger,title={Trigger},execute={\\addtocategory{chosen}{member}}}\n@book{member,title={Member}}";
+
+fn category_setup(library: &str) -> (tempfile::TempDir, Workspace, Url, Url) {
+    let (dir, mut ws, main, bib) = setup(
+        r"\cite{trigger,member}\printbibliography[category=chosen]",
+        library,
+    );
+    let source = ws.documents[&main]
+        .text
+        .source
+        .replace(
+            r"\usepackage{biblatex}",
+            r"\usepackage[defernumbers=true]{biblatex}",
+        )
+        .replace(
+            r"\begin{document}",
+            r"\DeclareBibliographyCategory{chosen}\begin{document}",
+        );
+    std::fs::write(dir.path().join("main.tex"), &source).unwrap();
+    ws.open(main.clone(), source, 6);
+    (dir, ws, main, bib)
+}
+
+#[test]
+fn categories_cannot_be_partially_renamed_across_generated_execution() {
+    for library in [
+        CATEGORY_LIBRARY.into(),
+        CATEGORY_LIBRARY.replace("execute=", "ExEcUtE="),
+        "@book{trigger,execute=code} @book{member}".into(),
+        "@book{trigger,execute={\\addtocategory} # {chosen}} @book{member}".into(),
+        "@book{trigger} @book{member} @preamble{\"\\addtocategory{chosen}{member}\"}".into(),
+    ] {
+        let (_dir, ws, main, _bib) = category_setup(&library);
+        for prefix in [r"\DeclareBibliographyCategory{ch", "category=ch"] {
+            let at = point(&ws, &main, prefix);
+            assert!(
+                features::prepare_rename(&ws, &main, at).is_err(),
+                "{library}"
+            );
+            assert!(
+                features::rename(&ws, &main, at, "fresh").is_err(),
+                "{library}"
+            );
+            assert_eq!(features::definitions(&ws, &main, at).len(), 1);
+            assert!(features::hover(&ws, &main, at).is_some());
+        }
+        let at = point(&ws, &main, r"\ref{sa");
+        assert!(features::rename(&ws, &main, at, "freshlabel")
+            .unwrap()
+            .is_some());
+    }
+}
+
+#[test]
+fn category_execution_guards_refresh_unsaved_data_and_keep_literal_examples_editable() {
+    let plain = "@book{trigger,title={chosen execute={example}}} @book{member}";
+    let (_dir, mut ws, main, bib) = category_setup(plain);
+    let at = point(&ws, &main, "category=ch");
+    let edit = features::rename(&ws, &main, at, "fresh")
+        .unwrap()
+        .unwrap()
+        .changes
+        .unwrap();
+    assert_eq!(edit.len(), 1);
+    assert_eq!(edit[&main].len(), 2);
+    ws.open(bib.clone(), CATEGORY_LIBRARY.into(), 8);
+    assert!(features::prepare_rename(&ws, &main, at).is_err());
+    assert!(features::rename(&ws, &main, at, "fresh").is_err());
+    ws.open(bib, plain.into(), 9);
+    assert!(features::prepare_rename(&ws, &main, at).unwrap().is_some());
+    assert!(features::rename(&ws, &main, at, "fresh").unwrap().is_some());
+}
+
+#[test]
+fn category_execution_guards_include_shared_unsaved_roots_without_blocking_unrelated_papers() {
+    let plain = "@book{trigger,title={Trigger}} @book{member,title={Member}}";
+    let (dir, mut ws, main, _bib) = category_setup(plain);
+    std::fs::write(dir.path().join("other.bib"), CATEGORY_LIBRARY).unwrap();
+    std::fs::write(
+        dir.path().join("categories.tex"),
+        r"\DeclareBibliographyCategory{chosen}",
+    )
+    .unwrap();
+    let source = ws.documents[&main].text.source.replace(
+        r"\DeclareBibliographyCategory{chosen}",
+        r"\input{categories}",
+    );
+    ws.open(main.clone(), source, 7);
+    let other = main.join("unsaved.tex").unwrap();
+    let source = r"\documentclass{article}\usepackage{biblatex}\addbibresource{other.bib}\begin{document}\cite{trigger}\end{document}";
+    ws.open(other.clone(), source.into(), 8);
+    let at = point(&ws, &main, "category=ch");
+    assert!(features::rename(&ws, &main, at, "fresh").unwrap().is_some());
+    ws.open(
+        other,
+        source.replace(r"\begin{document}", r"\input{categories}\begin{document}"),
+        9,
+    );
+    assert!(features::prepare_rename(&ws, &main, at).is_err());
+    assert!(features::rename(&ws, &main, at, "fresh").is_err());
+    let shared = main.join("categories.tex").unwrap();
+    assert!(features::rename(
+        &ws,
+        &shared,
+        point(&ws, &shared, r"\DeclareBibliographyCategory{ch"),
+        "fresh"
+    )
+    .is_err());
+}
+
 fn compile_clean(dir: &std::path::Path) -> String {
     for extension in ["aux", "bcf", "bbl", "run.xml"] {
         let path = dir.join(format!("main.{extension}"));
@@ -296,5 +406,42 @@ fn native_entry_execution_generates_sets_and_incomplete_renames_change_the_bbl()
             compile_clean(dir.path()).replace("fresh", "collection"),
             before
         );
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex, biblatex and biber"]
+fn native_generated_category_operands_prevent_incomplete_rename_compile_errors() {
+    for library in [
+        CATEGORY_LIBRARY,
+        "@book{trigger,title={Trigger}} @book{member,title={Member}} @preamble{\"\\addtocategory{chosen}{member}\"}",
+    ] {
+        let (dir, ws, main, _bib) = category_setup(library);
+        let before = compile_clean(dir.path());
+        let before_aux = std::fs::read_to_string(dir.path().join("main.aux")).unwrap();
+        assert!(before_aux.contains(r"\abx@aux@category{chosen}{member}"), "{before_aux}");
+        let at = point(&ws, &main, "category=ch");
+        assert!(features::rename(&ws, &main, at, "fresh").is_err());
+        assert_eq!(compile_clean(dir.path()), before);
+        let partial = ws.documents[&main].text.source.replace("chosen", "fresh");
+        std::fs::write(dir.path().join("main.tex"), partial).unwrap();
+        for extension in ["aux", "bcf", "bbl", "run.xml"] {
+            let path = dir.path().join(format!("main.{extension}"));
+            if path.exists() { std::fs::remove_file(path).unwrap(); }
+        }
+        for (program, args, expected) in [
+            ("pdflatex", vec!["-no-shell-escape", "-interaction=nonstopmode", "-halt-on-error", "main.tex"], true),
+            ("biber", vec!["main"], true),
+            ("pdflatex", vec!["-no-shell-escape", "-interaction=nonstopmode", "-halt-on-error", "main.tex"], false),
+        ] {
+            let output = std::process::Command::new(program).args(args).current_dir(dir.path()).output().unwrap();
+            let log = String::from_utf8_lossy(&output.stdout);
+            assert_eq!(output.status.success(), expected, "{program}: {log}");
+            if !expected { assert!(log.contains("Category 'chosen' not declared"), "{log}"); }
+        }
+        std::fs::write(dir.path().join("data.bib"), library.replace("chosen", "fresh")).unwrap();
+        assert_eq!(compile_clean(dir.path()).replace("fresh", "chosen"), before);
+        let after_aux = std::fs::read_to_string(dir.path().join("main.aux")).unwrap();
+        assert!(after_aux.contains(r"\abx@aux@category{fresh}{member}"), "{after_aux}");
     }
 }

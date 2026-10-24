@@ -588,6 +588,18 @@ impl Index {
                 break;
             }
         }
+        // Generated BBL code can reference the category from an execute field
+        // or preamble. Check after expanding every shared consumer so an open,
+        // unsaved root cannot silently lose its unindexed category operands.
+        if scope
+            .iter()
+            .filter_map(|uri| ws.documents.get(uri))
+            .any(crate::bib_section_keys::database_execution)
+        {
+            return Err(Error::invalid_params(
+                "Category rename requires bibliography execution to be fully indexed",
+            ));
+        }
         if self.dynamic.iter().any(|uri| scope.contains(uri))
             || self
                 .ambiguous

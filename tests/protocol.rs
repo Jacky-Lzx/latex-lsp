@@ -35770,3 +35770,118 @@ fn database_execution_revokes_key_proofs_and_restores_versioned_edits_over_stdio
         }
     }
 }
+
+#[test]
+fn generated_category_code_blocks_partial_edits_across_unsaved_consumers_over_stdio() {
+    use latex_lsp::text::Text;
+    for document_changes in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+        let shared = main.join("categories.tex").unwrap();
+        let bib = main.join("data.bib").unwrap();
+        let other = main.join("unsaved.tex").unwrap();
+        let source = "% 😀\r\n\\documentclass{article}\\usepackage{biblatex}\\addbibresource{data.bib}\\input{categories}\\begin{document}\\cite{trigger,member}\\printbibliography[category=chosen]\\end{document}";
+        let declaration = "% 😀\r\n\\DeclareBibliographyCategory{chosen}";
+        let plain = "@book{trigger,title={Trigger}} @book{member,title={Member}}";
+        let code = "@book{trigger,title={Trigger},execute={\\addtocategory{chosen}{member}}} @book{member,title={Member}}";
+        for (name, text) in [
+            ("main.tex", source),
+            ("categories.tex", declaration),
+            ("data.bib", plain),
+            ("other.bib", code),
+        ] {
+            std::fs::write(dir.path().join(name), text).unwrap();
+        }
+        let mut server = Server::start();
+        server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":document_changes}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+        server.notify("initialized", json!({}));
+        for (uri, text, language, version) in [
+            (&main, source, "latex", 5),
+            (&shared, declaration, "latex", 3),
+            (&bib, plain, "bibtex", 5),
+        ] {
+            server.notify("textDocument/didOpen", json!({"textDocument":{"uri":uri,"languageId":language,"version":version,"text":text}}));
+        }
+        let range = Text::new(declaration.into()).range(
+            declaration.find("chosen").unwrap(),
+            declaration.find("chosen").unwrap() + 6,
+        );
+        let selected = Text::new(source.into()).range(
+            source.find("chosen").unwrap(),
+            source.find("chosen").unwrap() + 6,
+        );
+        let params = json!({"textDocument":{"uri":main},"position":selected.start});
+        let rename =
+            json!({"textDocument":{"uri":main},"position":selected.start,"newName":"fresh"});
+        let assert_edit = |edit: Value| {
+            let main_edits = json!([{"range":selected,"newText":"fresh"}]);
+            let shared_edits = json!([{"range":range,"newText":"fresh"}]);
+            if document_changes {
+                assert_eq!(
+                    edit["documentChanges"],
+                    json!([
+                        {"textDocument":{"uri":shared,"version":3},"edits":shared_edits},
+                        {"textDocument":{"uri":main,"version":5},"edits":main_edits}
+                    ])
+                );
+            } else {
+                assert_eq!(
+                    edit["changes"],
+                    json!({shared.as_str():shared_edits,main.as_str():main_edits})
+                );
+            }
+        };
+        assert_edit(server.request(2, "textDocument/rename", rename.clone()));
+        let target = json!([{"uri":shared,"range":range}]);
+        let mut id = 10;
+        for changed in [
+            code.to_string(),
+            format!("{plain} @preamble{{\"\\addtocategory{{chosen}}{{member}}\"}}"),
+        ] {
+            server.notify("textDocument/didChange", json!({"textDocument":{"uri":bib,"version":id},"contentChanges":[{"text":changed}]}));
+            assert_eq!(
+                server.request(id, "textDocument/definition", params.clone()),
+                target
+            );
+            id += 1;
+            for method in ["textDocument/prepareRename", "textDocument/rename"] {
+                server.send(json!({"jsonrpc":"2.0","id":id,"method":method,"params":rename}));
+                let response = server.until(|message| message["id"] == id);
+                assert_eq!(response["error"]["code"], -32602, "{response}");
+                id += 1;
+            }
+        }
+        server.notify("textDocument/didClose", json!({"textDocument":{"uri":bib}}));
+        assert_edit(server.request(id, "textDocument/rename", rename.clone()));
+        id += 1;
+        let unrelated = r"\documentclass{article}\usepackage{biblatex}\addbibresource{other.bib}\begin{document}\cite{trigger}\end{document}";
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":other,"languageId":"latex","version":8,"text":unrelated}}),
+        );
+        assert_edit(server.request(id, "textDocument/rename", rename.clone()));
+        id += 1;
+        let consumer =
+            unrelated.replace(r"\begin{document}", r"\input{categories}\begin{document}");
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":other,"version":9},"contentChanges":[{"text":consumer}]}),
+        );
+        for (uri, position) in [(&main, selected.start), (&shared, range.start)] {
+            for method in ["textDocument/prepareRename", "textDocument/rename"] {
+                server.send(json!({"jsonrpc":"2.0","id":id,"method":method,"params":{"textDocument":{"uri":uri},"position":position,"newName":"fresh"}}));
+                let response = server.until(|message| message["id"] == id);
+                assert_eq!(response["error"]["code"], -32602, "{response}");
+                id += 1;
+            }
+        }
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":other}}),
+        );
+        assert_edit(server.request(id, "textDocument/rename", rename));
+        server.request(1000, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
