@@ -1370,6 +1370,24 @@ pub(crate) fn section_projects<'a>(
     for root in roots {
         let mut scope = ws.project_documents(&root);
         scope.insert(root.clone());
+        // Rootless snippets retain the ordinary database symbol model.
+        // With real roots, an unlinked database may still be consumed by an
+        // uncertain section selection and must keep its provenance guard.
+        if root == *uri
+            && ws.index_truncated.is_empty()
+            && ws
+                .documents
+                .get(&root)
+                .is_some_and(|doc| doc.kind == DocumentKind::Bibtex)
+            && !ws.documents.keys().any(|uri| ws.is_root(uri))
+            && !scope.iter().any(|uri| {
+                ws.documents
+                    .get(uri)
+                    .is_some_and(|doc| doc.kind == DocumentKind::Latex)
+            })
+        {
+            continue;
+        }
         let docs = crate::source_inputs::bounded_latex_sources(ws, &scope)?;
         if !signature_budget(&docs) {
             return None;
