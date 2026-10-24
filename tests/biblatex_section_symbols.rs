@@ -206,17 +206,28 @@ fn native_biber_resolves_relation_and_ids_targets_in_each_reference_section() {
     ] {
         let source = format!("@book{{parent,ids={{parentalias}},title={{{title}}},author={{Parent, Pat}},year={{2001}}}}\n@xdata{{data,ids={{dataalias}},publisher={{{title} publisher}}}}\n@book{{member,ids={{memberalias}},title={{{title} member}},author={{Member, May}},year={{2002}}}}\n@inbook{{child,crossref={{parentalias}},title={{Child}},pages={{1--2}}}}\n@book{{childdata,xdata={{dataalias}},title={{Data child}},author={{Child, Chris}},year={{2003}}}}\n@book{{childxref,xref={{parentalias}},title={{Xref child}},author={{Child, Chris}},year={{2003}}}}\n@book{{childrelated,related={{parentalias}},title={{Related child}},author={{Child, Chris}},year={{2003}}}}\n@set{{childset,entryset={{memberalias}}}}");
         let bib = main.join(name).unwrap();
-        std::fs::write(bib.to_file_path().unwrap(), &source).unwrap();
-        ws.open(bib.clone(), source, 8);
-        for (marker, key) in [
-            ("crossref={", "parentalias"),
-            ("xref={", "parentalias"),
-            ("xdata={", "dataalias"),
-            ("related={", "parentalias"),
-            ("entryset={", "memberalias"),
-        ] {
-            check(&ws, &bib, marker, Some((&bib, key)));
+        let pairs = [
+            ("crossref", "parentalias"),
+            ("xref", "parentalias"),
+            ("xdata", "dataalias"),
+            ("related", "parentalias"),
+            ("entryset", "memberalias"),
+        ];
+        let mut incomplete = source.clone();
+        for (field, key) in pairs {
+            incomplete = incomplete.replace(
+                &format!("{field}={{{key}}}"),
+                &format!("{field}={{{}BAD}}", &key[..2]),
+            );
         }
+        ws.open(bib.clone(), incomplete, 8);
+        for (stage, (field, key)) in pairs.into_iter().enumerate() {
+            let (_, updated) = completed(&ws, &bib, &format!("{field}={{{}", &key[..2]), key);
+            ws.open(bib.clone(), updated, 9 + stage as i32);
+            check(&ws, &bib, &format!("{field}={{"), Some((&bib, key)));
+        }
+        assert_eq!(ws.documents[&bib].text.source, source);
+        std::fs::write(bib.to_file_path().unwrap(), &ws.documents[&bib].text.source).unwrap();
     }
     let run = |program: &str, args: &[&str]| {
         let output = std::process::Command::new(program)
@@ -426,4 +437,164 @@ fn literal_source_key_examples_preserve_confirmed_database_navigation() {
         assert_eq!(definitions.len(), 1, "{literal}: {definitions:?}");
         assert_eq!(definitions[0].uri, bib);
     }
+}
+
+fn completed(ws: &Workspace, uri: &Url, marker: &str, key: &str) -> (CompletionItem, String) {
+    let doc = &ws.documents[uri];
+    let offset = doc.text.source.find(marker).unwrap() + marker.len();
+    let item = features::completion(ws, uri, doc.text.position(offset))
+        .into_iter()
+        .find(|item| item.label == key)
+        .unwrap_or_else(|| panic!("missing {key} at {marker}"));
+    let Some(CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+        panic!("{item:?}")
+    };
+    let mut edits = vec![edit.clone()];
+    edits.extend(item.additional_text_edits.iter().flatten().cloned());
+    edits.sort_by_key(|edit| edit.range.start);
+    let mut source = doc.text.source.clone();
+    for edit in edits.into_iter().rev() {
+        source.replace_range(
+            doc.text.offset(edit.range.start).unwrap()..doc.text.offset(edit.range.end).unwrap(),
+            &edit.new_text,
+        );
+    }
+    (item, source)
+}
+
+#[test]
+fn selected_relation_completion_rejects_default_only_keys_and_uses_selected_metadata() {
+    let (_dir, mut ws, main) = setup("", r"\newrefsection[chosen]\cite{childselected}", "");
+    let default = main.join("default.bib").unwrap();
+    ws.open(
+        default,
+        "@book{defaultonly}\n@book{parent,title={Default parent}}".into(),
+        8,
+    );
+    let bib = main.join("section.bib").unwrap();
+    ws.open(
+        bib.clone(),
+        "@book{parent,title={Selected parent}}\n@book{childselected,crossref={parBAD},xref={def}}"
+            .into(),
+        9,
+    );
+    let (item, updated) = completed(&ws, &bib, "crossref={par", "parent");
+    assert!(item.detail.unwrap().contains("Selected parent"));
+    assert!(
+        updated.contains("crossref={parent},xref={def}"),
+        "{updated}"
+    );
+    let doc = &ws.documents[&bib];
+    let at = doc
+        .text
+        .position(doc.text.source.find("xref={def").unwrap() + "xref={def".len());
+    assert!(features::completion(&ws, &bib, at)
+        .iter()
+        .all(|item| item.label != "defaultonly"));
+}
+
+#[test]
+fn relation_completion_preserves_lists_and_full_utf16_suffixes_in_all_five_fields() {
+    let (_dir, mut ws, main) = setup("", r"\newrefsection[chosen]\cite{childselected}", "");
+    let bib = main.join("section.bib").unwrap();
+    for field in ["crossref", "xref", "xdata", "related", "entryset"] {
+        let tail = if matches!(field, "xdata" | "related" | "entryset") {
+            ",second"
+        } else {
+            ""
+        };
+        let source = format!("% 😀\r\n@book{{parent😀,title={{Selected}}}}\r\n@book{{second}}\r\n@book{{childselected,{field}={{ parBAD{tail} }}}}");
+        ws.open(bib.clone(), source.clone(), 8);
+        let (_, updated) = completed(&ws, &bib, &format!("{field}={{ par"), "parent😀");
+        assert_eq!(updated, source.replace("parBAD", "parent😀"));
+    }
+}
+
+#[test]
+fn relation_completion_supports_unfinished_entries_and_values_without_union_fallback() {
+    let (_dir, mut ws, main) = setup("", r"\newrefsection[chosen]\cite{childselected}", "");
+    let bib = main.join("section.bib").unwrap();
+    for value in ["{par", "\"par", "{"] {
+        let source = format!(
+            "@book{{parent,title={{Selected parent}}}}\n@book{{childselected,crossref={value}"
+        );
+        ws.open(bib.clone(), source.clone(), 8);
+        let (_, updated) = completed(&ws, &bib, &format!("crossref={value}"), "parent");
+        assert_eq!(
+            updated,
+            format!(
+                "@book{{parent,title={{Selected parent}}}}\n@book{{childselected,crossref={}parent",
+                &value[..1]
+            )
+        );
+    }
+}
+
+#[test]
+fn global_relation_completion_requires_one_identity_across_views_but_keeps_shared_keys() {
+    let (_dir, ws, main) = setup(
+        r"\addglobalbib{shared.bib}",
+        r"\newrefsection[chosen]\cite{shared}",
+        "@book{stable}\n@book{shared,crossref={}}\n@book{other,xref={}}",
+    );
+    let shared = main.join("shared.bib").unwrap();
+    let doc = &ws.documents[&shared];
+    let at = doc
+        .text
+        .position(doc.text.source.find("crossref={").unwrap() + "crossref={".len());
+    let items = features::completion(&ws, &shared, at);
+    assert!(items.iter().any(|item| item.label == "stable"), "{items:?}");
+    assert!(
+        !items.iter().any(|item| item.label == "parent"),
+        "{items:?}"
+    );
+}
+
+#[test]
+fn selected_quote_key_completion_converts_the_complete_multiline_value_to_braces() {
+    let (_dir, mut ws, main) = setup("", r"\newrefsection[chosen]\cite{childselected}", "");
+    let bib = main.join("section.bib").unwrap();
+    let source = "@book{par\"😀,title={Selected parent}}\r\n@book{second}\r\n@book{childselected,related=\"second,\r\n parBAD \"}";
+    ws.open(bib.clone(), source.into(), 8);
+    let (_, updated) = completed(&ws, &bib, "related=\"second,\r\n par", "par\"😀");
+    assert_eq!(updated, "@book{par\"😀,title={Selected parent}}\r\n@book{second}\r\n@book{childselected,related={second,\r\n par\"😀 }}");
+}
+
+#[test]
+fn unknown_and_truncated_relation_contexts_never_offer_union_completions() {
+    let (_dir, mut ws, main) = setup("", r"\newrefsection[chosen]\cite{childselected}", "");
+    let bib = main.join("section.bib").unwrap();
+    let source = "@book{parent,title={Selected parent}}\n@book{childselected,crossref={par}}";
+    ws.open(bib.clone(), source.into(), 8);
+    ws.index_truncated.insert("test limit".into());
+    let position = ws.documents[&bib]
+        .text
+        .position(source.rfind("par").unwrap() + 3);
+    assert!(features::completion(&ws, &bib, position).is_empty());
+    ws.index_truncated.clear();
+    assert!(features::completion(&ws, &bib, position)
+        .iter()
+        .any(|item| item.label == "parent"));
+    let original = ws.documents[&main].text.source.clone();
+    ws.open(
+        main,
+        original.replace(
+            r"\newrefsection[chosen]",
+            r"\ifunknown\newrefsection[chosen]\fi",
+        ),
+        9,
+    );
+    assert!(features::completion(&ws, &bib, position).is_empty());
+}
+
+#[test]
+fn duplicated_relation_fields_do_not_offer_effective_parent_completions() {
+    let (_dir, mut ws, main) = setup("", r"\newrefsection[chosen]\cite{childselected}", "");
+    let bib = main.join("section.bib").unwrap();
+    let source = "@book{parent}\n@book{childselected,crossref={par},CROSSREF={parent}}";
+    ws.open(bib.clone(), source.into(), 8);
+    let at = ws.documents[&bib]
+        .text
+        .position(source.find("crossref={par").unwrap() + "crossref={par".len());
+    assert!(features::completion(&ws, &bib, at).is_empty());
 }

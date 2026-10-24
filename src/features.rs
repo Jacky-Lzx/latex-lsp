@@ -1184,7 +1184,7 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
         return vec![];
     }
     if doc.kind == DocumentKind::Bibtex {
-        return bibliography_completion(workspace, doc, offset, &scope);
+        return bibliography_completion(workspace, uri, doc, offset, &scope);
     }
     if let Some(items) = crate::saved_text::completion(workspace, uri, offset, &scope) {
         return items;
@@ -1629,6 +1629,7 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
 
 fn bibliography_completion(
     workspace: &Workspace,
+    uri: &Url,
     doc: &Document,
     offset: usize,
     scope: &BTreeSet<Url>,
@@ -1639,6 +1640,19 @@ fn bibliography_completion(
     if let Some(items) = crate::bib_strings::completion(workspace, doc, offset, scope) {
         return items;
     }
+    if let Some(items) = crate::bib_section_symbols::completion(workspace, uri, offset) {
+        return items;
+    }
+    bibliography_relation_completions(workspace, doc, offset, scope, None)
+}
+
+pub(crate) fn bibliography_relation_completions(
+    workspace: &Workspace,
+    doc: &Document,
+    offset: usize,
+    scope: &BTreeSet<Url>,
+    allowed: Option<&BTreeSet<String>>,
+) -> Vec<CompletionItem> {
     let Some(field) = doc
         .syntax
         .citation_fields
@@ -1666,6 +1680,7 @@ fn bibliography_completion(
         .flat_map(|(uri, doc)| entries(doc, TargetKind::Citation).map(move |entry| (uri, entry)))
         .filter(|(_, entry)| {
             syntax::is_static_citation_key(&entry.name)
+                && allowed.is_none_or(|allowed| allowed.contains(&entry.name))
                 && entry.name.starts_with(key)
                 && seen.insert(entry.name.clone())
         })

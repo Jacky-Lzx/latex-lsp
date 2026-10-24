@@ -29824,6 +29824,21 @@ fn section_bibliography_relations_follow_unsaved_metadata_and_shared_consumers_o
             .contains("Selected parent"),
         "{hover}"
     );
+    let items = server.request(20, "textDocument/completion", params.clone());
+    let item = items
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["label"] == "parent")
+        .unwrap();
+    assert!(
+        item["detail"].as_str().unwrap().contains("Selected parent"),
+        "{item}"
+    );
+    assert_eq!(
+        item["textEdit"],
+        json!({"newText":"parent","range":{"start":{"line":1,"character":24},"end":{"line":1,"character":30}}})
+    );
     server.notify("textDocument/didOpen", json!({"textDocument":{"uri":parents,"languageId":"bibtex","version":7,"text":"@book{parent,title={Unsaved parent}}"}}));
     let hover = server.request(4, "textDocument/hover", params.clone());
     assert!(
@@ -29854,6 +29869,15 @@ fn section_bibliography_relations_follow_unsaved_metadata_and_shared_consumers_o
     assert!(server
         .request(7, "textDocument/hover", params.clone())
         .is_null());
+    let items = server.request(21, "textDocument/completion", params.clone());
+    assert!(
+        items
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item["label"] != "parent"),
+        "{items}"
+    );
     // The declaration has a lexical identity even when a shared relation differs.
     let own = server.request(
         8,
@@ -29866,9 +29890,21 @@ fn section_bibliography_relations_follow_unsaved_metadata_and_shared_consumers_o
         "textDocument/didClose",
         json!({"textDocument":{"uri":unsaved}}),
     );
-    let definitions = server.request(9, "textDocument/definition", params);
+    let definitions = server.request(9, "textDocument/definition", params.clone());
     assert_eq!(definitions.as_array().unwrap().len(), 1, "{definitions}");
     assert_eq!(definitions[0]["uri"], parents.as_str());
+    let items = server.request(22, "textDocument/completion", params);
+    assert!(
+        items
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["label"] == "parent"
+                && item["detail"]
+                    .as_str()
+                    .is_some_and(|detail| detail.contains("Selected parent"))),
+        "{items}"
+    );
     server.request(1000, "shutdown", Value::Null);
     server.notify("exit", Value::Null);
     server.wait_exit(0);

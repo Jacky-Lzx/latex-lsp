@@ -236,3 +236,104 @@ pub(crate) fn hover(ws: &Workspace, uri: &Url, offset: usize) -> Option<Option<H
 pub(crate) fn references(ws: &Workspace, uri: &Url, offset: usize) -> Option<Vec<Location>> {
     target(ws, uri, offset).map(|_| Vec::new())
 }
+
+pub(crate) fn completion(
+    ws: &Workspace,
+    uri: &Url,
+    offset: usize,
+) -> Option<Vec<tower_lsp::lsp_types::CompletionItem>> {
+    let doc = ws
+        .documents
+        .get(uri)
+        .filter(|doc| doc.kind == DocumentKind::Bibtex)?;
+    let field =
+        doc.syntax.citation_fields.iter().find(|field| {
+            field.argument.span.start <= offset && offset <= field.argument.span.end
+        })?;
+    if !ws
+        .documents
+        .values()
+        .any(|doc| doc.kind == DocumentKind::Latex && doc.text.source.contains("refsection"))
+    {
+        return None;
+    }
+    let projects = match bib_section_keys::section_projects(ws, uri) {
+        Some((false, _)) => return None,
+        Some((true, projects)) => projects,
+        None => return Some(Vec::new()),
+    };
+    Some(
+        (|| {
+            if !ws.index_truncated.is_empty() || doc.text.source.len() > 16 * 1024 * 1024 {
+                return None;
+            }
+            let body = doc
+                .syntax
+                .bibliography_completion
+                .types
+                .iter()
+                .filter_map(|owner| owner.entry_span.as_ref())
+                .find(|body| {
+                    body.start < field.argument.span.start && field.argument.span.end <= body.end
+                })?;
+            let mut count = 0usize;
+            let mut examined = 0usize;
+            for candidate in doc
+                .syntax
+                .bibliography_completion
+                .entries
+                .iter()
+                .flat_map(|entry| &entry.fields)
+            {
+                examined += 1;
+                if examined > 100_000 {
+                    return None;
+                }
+                if body.start < candidate.span.start
+                    && candidate.range.end <= body.end
+                    && candidate.name == field.name
+                {
+                    count += 1;
+                }
+            }
+            if count != 1 {
+                return None;
+            }
+            let resources = resources(ws, uri, projects)?;
+            let mut allowed = BTreeSet::new();
+            let mut blocked = BTreeSet::new();
+            let mut bytes = 0usize;
+            examined = 0;
+            for resource in &resources.all {
+                let doc = ws.documents.get(resource)?;
+                bytes += doc.text.source.len();
+                examined += doc.syntax.citations.len() + doc.syntax.bibliography_aliases.len();
+                if bytes > 16 * 1024 * 1024 || examined > 100_000 {
+                    return None;
+                }
+                for entry in doc
+                    .syntax
+                    .citations
+                    .iter()
+                    .chain(&doc.syntax.bibliography_aliases)
+                {
+                    if !crate::syntax::is_static_citation_key(&entry.name) {
+                        continue;
+                    }
+                    if !resources.common.contains(resource) || !allowed.insert(entry.name.clone()) {
+                        blocked.insert(entry.name.clone());
+                    }
+                }
+            }
+            allowed.retain(|name| !blocked.contains(name));
+            Some(crate::features::bibliography_relation_completions(
+                ws,
+                doc,
+                offset,
+                &resources.common,
+                Some(&allowed),
+            ))
+        })()
+        .unwrap_or_default(),
+    )
+}
