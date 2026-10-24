@@ -35353,7 +35353,30 @@ fn weak_context_assignment_hints_follow_explicit_environments_and_unsaved_inputs
         labels(&server.request(5, "textDocument/inlayHint", params(&main))),
         vec![json!("→ A3"), json!("→ B8"), json!("→ A3")]
     );
-    let unproved = source
+    // A child clears the local switch inside its caller's environment. The
+    // environment boundary restores the enclosing switch on return.
+    let cleared = format!(r"\endrefcontext{child_source}");
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":child,"languageId":"latex","version":7,"text":cleared}}),
+    );
+    assert_eq!(
+        labels(&server.request(50, "textDocument/inlayHint", params(&main))),
+        vec![json!("→ A3"), json!("→ A3"), json!("→ A3")]
+    );
+    assert_eq!(
+        labels(&server.request(51, "textDocument/inlayHint", params(&child))),
+        vec![json!("→ A3")]
+    );
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":child}}),
+    );
+    assert_eq!(
+        labels(&server.request(52, "textDocument/inlayHint", params(&main))),
+        vec![json!("→ A3"), json!("→ B8"), json!("→ A3")]
+    );
+    let grouped = source
         .replace(
             r"\begin{refcontext}[labelprefix=A]",
             r"{\refcontext[labelprefix=A]",
@@ -35361,11 +35384,24 @@ fn weak_context_assignment_hints_follow_explicit_environments_and_unsaved_inputs
         .replace(r"\end{refcontext}", "}");
     server.notify(
         "textDocument/didChange",
-        json!({"textDocument":{"uri":main,"version":4},"contentChanges":[{"text":unproved}]}),
+        json!({"textDocument":{"uri":main,"version":4},"contentChanges":[{"text":grouped}]}),
     );
     assert_eq!(
-        server.request(6, "textDocument/inlayHint", params(&main)),
-        json!([])
+        labels(&server.request(6, "textDocument/inlayHint", params(&main))),
+        vec![json!("→ A3"), json!("→ B8"), json!("→ A3")]
+    );
+    server.notify("textDocument/didOpen",json!({"textDocument":{"uri":child,"languageId":"latex","version":10,"text":"\\endinput\r\n}{"}}));
+    assert_eq!(
+        labels(&server.request(60, "textDocument/inlayHint", params(&main))),
+        vec![json!("→ A3"), json!("→ B8"), json!("→ A3")]
+    );
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":child}}),
+    );
+    assert_eq!(
+        labels(&server.request(61, "textDocument/inlayHint", params(&main))),
+        vec![json!("→ A3"), json!("→ B8"), json!("→ A3")]
     );
     server.notify(
         "textDocument/didClose",

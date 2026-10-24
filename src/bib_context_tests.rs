@@ -595,8 +595,15 @@ fn native_strong_assignment_hints_match_actual_labels_and_keep_the_complete_bbl(
 }
 
 fn native_assignment_cases(cases: &[(&str, Vec<&str>)]) {
+    native_assignment_files(cases, &[]);
+}
+fn native_assignment_files(cases: &[(&str, Vec<&str>)], files: &[(&str, &str)]) {
     for (body, expected) in cases {
         let (dir, mut ws, uri) = setup(body, "", "");
+        for (name, content) in files {
+            std::fs::write(dir.path().join(name), content).unwrap();
+        }
+        ws.refresh_project(&uri);
         let source = ws.documents[&uri].text.source.clone();
         let compile = |source: &str| {
             for extension in ["aux", "bcf", "bbl", "run.xml"] {
@@ -768,9 +775,6 @@ fn weak_assignments_preserve_missing_metadata_and_unproved_scope_guards() {
     let bbl = compiled(list(A, "A", &["a"]) + &list(B, "B", &["a"]));
     let aux = number("a", A, 3) + &number("a", B, 8) + &default("a", B);
     for body in [
-        r"\assignrefcontextentries*[labelprefix=A]{a}{\refcontext[labelprefix=B]\cite{a}}\cite{a}",
-        r"\assignrefcontextentries*[labelprefix=A]{a}\begin{quote}\refcontext[labelprefix=A]\cite{a}\end{quote}\cite{a}",
-        r"\assignrefcontextentries*[labelprefix=A]{a}\newrefcontext[labelprefix=A]\cite{a}\endrefcontext",
         r"\assignrefcontextentries*[labelprefix=A]{a}\end{refcontext}\cite{a}",
         r"\assignrefcontextentries*[labelprefix=A]{a}\begin{refcontext}[labelprefix=A]\cite{a}",
         r"\assignrefcontextentries*[labelprefix=A]{a}\begin{refcontext}[labelprefix=A]\begin{refcontext}[labelprefix=B]\cite{a}\end{refcontext}\end{refcontext}",
@@ -836,4 +840,239 @@ fn native_weak_assignment_hints_match_actual_labels_and_keep_the_complete_bbl() 
     );
     borrowed.push((&section, vec!["B1", "A1", "A1"]));
     native_assignment_cases(&borrowed);
+}
+
+#[test]
+fn weak_assignment_toggles_restore_at_native_group_and_environment_boundaries() {
+    let bbl = compiled(list(A, "A", &["a"]) + &list(B, "B", &["a"]));
+    let aux = number("a", A, 3) + &number("a", B, 8) + &default("a", B);
+    for (body, expected) in [
+        (
+            r"{\refcontext[labelprefix=B]\cite{a}}\cite{a}",
+            vec!["→ B8", "→ A3"],
+        ),
+        (
+            r"\begin{quote}\refcontext[labelprefix=A]\cite{a}\end{quote}\cite{a}",
+            vec!["→ B8", "→ A3"],
+        ),
+        (
+            r"\begingroup\refcontext[labelprefix=A]\cite{a}\endgroup\cite{a}",
+            vec!["→ B8", "→ A3"],
+        ),
+        (
+            r"\bgroup\refcontext[labelprefix=A]\cite{a}\egroup\cite{a}",
+            vec!["→ B8", "→ A3"],
+        ),
+        (
+            r"\refcontext[labelprefix=A] Text {\endrefcontext\cite{a}}\cite{a}\endrefcontext\cite{a}",
+            vec!["→ A3", "→ B8", "→ A3"],
+        ),
+        (
+            r"\begin{refcontext}[labelprefix=A] Text {\endrefcontext\cite{a}}\cite{a}\end{refcontext}\cite{a}",
+            vec!["→ A3", "→ B8", "→ A3"],
+        ),
+        (
+            r"\newrefcontext[labelprefix=A]\cite{a}\newrefcontext[labelprefix=B]\cite{a}\endrefcontext\cite{a}",
+            vec!["→ B8", "→ B8", "→ A3"],
+        ),
+        (
+            r"$x$\refcontext[labelprefix=A]$x$\cite{a}\endrefcontext$$x$$\cite{a}",
+            vec!["→ B8", "→ A3"],
+        ),
+        (
+            r"\(x\)\refcontext[labelprefix=A]\[x\]\cite{a}\endrefcontext\cite{a}",
+            vec!["→ B8", "→ A3"],
+        ),
+        (
+            r"\newcommand\take[1]{}\take{$}\refcontext[labelprefix=A]\cite{a}\endrefcontext\cite{a}",
+            vec!["→ B8", "→ A3"],
+        ),
+        (
+            r"{\refcontext[labelprefix=A]\assignrefcontextentries[labelprefix=B]{a}\cite{a}}\cite{a}",
+            vec!["→ B8", "→ B8"],
+        ),
+        (
+            r"\verb|$\refcontext[labelprefix=A]{| Text \refcontext[labelprefix=A]\cite{a}\endrefcontext\cite{a}",
+            vec!["→ B8", "→ A3"],
+        ),
+        (
+            r"\begin{verbatim}
+$\refcontext[labelprefix=A]{
+\end{verbatim}
+\refcontext[labelprefix=A]\cite{a}\endrefcontext\cite{a}",
+            vec!["→ B8", "→ A3"],
+        ),
+        (
+            r"\newcommand\price{\$}\price\refcontext[labelprefix=A]\cite{a}\endrefcontext\cite{a}",
+            vec!["→ B8", "→ A3"],
+        ),
+    ] {
+        let (_dir, ws, uri) = setup(
+            &format!(r"\assignrefcontextentries*[labelprefix=A]{{a}}{body}"),
+            &bbl,
+            &aux,
+        );
+        assert_eq!(hints(&ws, &uri), expected, "{body}");
+    }
+}
+
+#[test]
+fn weak_assignment_scope_proofs_reject_hidden_controls_and_unbalanced_execution() {
+    let bbl = compiled(list(A, "A", &["a"]) + &list(B, "B", &["a"]));
+    let aux = number("a", A, 3) + &number("a", B, 8) + &default("a", B);
+    for body in [
+        r"\def\formula{\(}\formula\refcontext[labelprefix=A]\cite{a}\)\cite{a}",
+        r"\def\formula{$}\formula\refcontext[labelprefix=A]\cite{a}\formula\cite{a}",
+        r"\newcommand\open{\begingroup}\open\refcontext[labelprefix=A]\cite{a}\endgroup",
+        r"\csuse{begingroup}\refcontext[labelprefix=A]\cite{a}\endgroup",
+        r"\csname begingroup\endcsname\refcontext[labelprefix=A]\cite{a}\endgroup",
+        r"\def\begingroup{}\begingroup\refcontext[labelprefix=A]\cite{a}",
+        r"\begingroup\refcontext[labelprefix=A]\cite{a}\egroup",
+        r"{\refcontext[labelprefix=A]\cite{a}\endgroup",
+        r"$\refcontext[labelprefix=A]\cite{a}$\cite{a}",
+        r"\(\refcontext[labelprefix=A]\cite{a}\)\cite{a}",
+        r"\newcommand\take[1]{#1}\take{\refcontext[labelprefix=A]\cite{a}}",
+        r"\refcontext[labelprefix=A]\refcontext[labelprefix=B]\cite{a}",
+        r"\begin{quote}\refcontext[labelprefix=A]\cite{a}\end{center}",
+    ] {
+        let (_dir, ws, uri) = setup(
+            &format!(r"\assignrefcontextentries*[labelprefix=A]{{a}}{body}"),
+            &bbl,
+            &aux,
+        );
+        assert!(hints(&ws, &uri).is_empty(), "{body}");
+    }
+}
+
+#[test]
+fn weak_assignment_scopes_cross_inputs_without_treating_filenames_as_groups() {
+    let bbl = compiled(list(A, "A", &["a"]) + &list(B, "B", &["a"]));
+    let aux = number("a", A, 3) + &number("a", B, 8) + &default("a", B);
+    let (dir, mut ws, uri) = setup(
+        r"\assignrefcontextentries*[labelprefix=A]{a}{\input{chapter}\cite{a}}\cite{a}",
+        &bbl,
+        &aux,
+    );
+    let child = uri.join("chapter.tex").unwrap();
+    std::fs::write(
+        dir.path().join("chapter.tex"),
+        r"\refcontext[labelprefix=A]\cite{a}",
+    )
+    .unwrap();
+    ws.refresh_project(&uri);
+    assert_eq!(hints(&ws, &uri), ["→ B8", "→ A3"]);
+    assert_eq!(hints(&ws, &child), ["→ B8"]);
+    let source = ws.documents[&uri]
+        .text
+        .source
+        .replace(r"{\input{chapter}\cite{a}}", r"\input{chapter}\cite{a}}");
+    ws.open(
+        child.clone(),
+        r"{\refcontext[labelprefix=A]\cite{a}".into(),
+        8,
+    );
+    ws.open(uri.clone(), source, 9);
+    assert_eq!(hints(&ws, &uri), ["→ B8", "→ A3"]);
+    assert_eq!(hints(&ws, &child), ["→ B8"]);
+}
+
+#[test]
+#[ignore = "requires native pdfLaTeX, Biber, and biblatex"]
+fn native_direct_context_scopes_match_actual_labels_and_keep_the_complete_bbl() {
+    let cases = [
+        (
+            r"\assignrefcontextentries*[labelprefix=A]{a}{\refcontext[labelprefix=B]\cite{a}}\cite{a}\begin{refcontext}[labelprefix=A]\nocite{a}\printbibliography\end{refcontext}\begin{refcontext}[labelprefix=B]\nocite{a}\printbibliography\end{refcontext}",
+            vec!["B1", "A1"],
+        ),
+        (
+            r"\assignrefcontextentries*[labelprefix=A]{a}\begin{quote}\refcontext[labelprefix=A]\cite{a}\end{quote}\cite{a}\begin{refcontext}[labelprefix=A]\nocite{a}\printbibliography\end{refcontext}\begin{refcontext}[labelprefix=B]\nocite{a}\printbibliography\end{refcontext}",
+            vec!["B1", "A1"],
+        ),
+        (
+            r"\assignrefcontextentries*[labelprefix=A]{a}\refcontext[labelprefix=A] Text {\endrefcontext\cite{a}}\cite{a}\endrefcontext\cite{a}\begin{refcontext}[labelprefix=A]\nocite{a}\printbibliography\end{refcontext}\begin{refcontext}[labelprefix=B]\nocite{a}\printbibliography\end{refcontext}",
+            vec!["A1", "B1", "A1"],
+        ),
+        (
+            r"\assignrefcontextentries*[labelprefix=A]{a}\begin{refcontext}[labelprefix=A] Text {\endrefcontext\cite{a}}\cite{a}\end{refcontext}\cite{a}\begin{refcontext}[labelprefix=A]\nocite{a}\printbibliography\end{refcontext}\begin{refcontext}[labelprefix=B]\nocite{a}\printbibliography\end{refcontext}",
+            vec!["A1", "B1", "A1"],
+        ),
+        (
+            r"\assignrefcontextentries*[labelprefix=A]{a}\begingroup\refcontext[labelprefix=A]\cite{a}\endgroup\cite{a}\begin{refcontext}[labelprefix=A]\nocite{a}\printbibliography\end{refcontext}\begin{refcontext}[labelprefix=B]\nocite{a}\printbibliography\end{refcontext}",
+            vec!["B1", "A1"],
+        ),
+        (
+            r"\assignrefcontextentries*[labelprefix=A]{a}\bgroup\refcontext[labelprefix=A]\cite{a}\egroup\cite{a}\begin{refcontext}[labelprefix=A]\nocite{a}\printbibliography\end{refcontext}\begin{refcontext}[labelprefix=B]\nocite{a}\printbibliography\end{refcontext}",
+            vec!["B1", "A1"],
+        ),
+        (
+            r"\assignrefcontextentries*[labelprefix=A]{a}\newrefcontext[labelprefix=A]\cite{a}\newrefcontext[labelprefix=B]\cite{a}\endrefcontext\cite{a}\begin{refcontext}[labelprefix=A]\nocite{a}\printbibliography\end{refcontext}\begin{refcontext}[labelprefix=B]\nocite{a}\printbibliography\end{refcontext}",
+            vec!["B1", "B1", "A1"],
+        ),
+        (
+            r"\assignrefcontextentries*[labelprefix=A]{a}$x$\refcontext[labelprefix=A]$x$\cite{a}\endrefcontext$$x$$\cite{a}\begin{refcontext}[labelprefix=A]\nocite{a}\printbibliography\end{refcontext}\begin{refcontext}[labelprefix=B]\nocite{a}\printbibliography\end{refcontext}",
+            vec!["B1", "A1"],
+        ),
+    ];
+    native_assignment_cases(&cases);
+    native_assignment_files(
+        &[(
+            r"\assignrefcontextentries*[labelprefix=A]{a}{\input{chapter}\cite{a}}\cite{a}\begin{refcontext}[labelprefix=A]\nocite{a}\printbibliography\end{refcontext}\begin{refcontext}[labelprefix=B]\nocite{a}\printbibliography\end{refcontext}",
+            vec!["B1", "A1"],
+        )],
+        &[("chapter.tex", r"\refcontext[labelprefix=A] Text")],
+    );
+    native_assignment_files(
+        &[(
+            r"\assignrefcontextentries*[labelprefix=A]{a}{\input{chapter}\cite{a}}\cite{a}\begin{refcontext}[labelprefix=A]\nocite{a}\printbibliography\end{refcontext}\begin{refcontext}[labelprefix=B]\nocite{a}\printbibliography\end{refcontext}",
+            vec!["B1", "A1"],
+        )],
+        &[("chapter.tex", "\\refcontext[labelprefix=A]\\endinput\r\n}{")],
+    );
+}
+
+#[test]
+fn weak_context_scopes_stop_after_the_last_executing_endinput_line() {
+    let bbl = compiled(list(A, "A", &["a"]) + &list(B, "B", &["a"]));
+    let aux = number("a", A, 3) + &number("a", B, 8) + &default("a", B);
+    for newline in ["\n", "\r\n"] {
+        let (dir, mut ws, uri) = setup(
+            r"\assignrefcontextentries*[labelprefix=A]{a}{\input{chapter}\cite{a}}\cite{a}",
+            &bbl,
+            &aux,
+        );
+        let child = uri.join("chapter.tex").unwrap();
+        // The ignored close/open pair would restore the caller's toggle while
+        // leaving the lexical stack balanced. It must never execute.
+        let source = format!(r"\refcontext[labelprefix=A]\endinput{newline}}}{{");
+        std::fs::write(dir.path().join("chapter.tex"), &source).unwrap();
+        ws.refresh_project(&uri);
+        assert_eq!(hints(&ws, &uri), ["→ B8", "→ A3"]);
+        let same_line = format!(
+            r"\refcontext[labelprefix=A]\endinput Text {{\endrefcontext\cite{{a}}}}{newline}}}{{"
+        );
+        ws.open(child.clone(), same_line, 8);
+        assert_eq!(hints(&ws, &uri), ["→ B8", "→ A3"]);
+        assert_eq!(hints(&ws, &child), ["→ A3"]);
+    }
+}
+
+#[test]
+fn weak_context_scope_termination_wrappers_keep_the_trace_guarded() {
+    let bbl = compiled(list(A, "A", &["a"]) + &list(B, "B", &["a"]));
+    let aux = number("a", A, 3) + &number("a", B, 8) + &default("a", B);
+    for source in [
+        r"\def\finish{\endinput}\finish",
+        r"\csuse{endinput}",
+        r"\csname endinput\endcsname",
+        r"\def\endinput{}\endinput",
+    ] {
+        let (dir, mut ws, uri) = setup(
+            r"\assignrefcontextentries*[labelprefix=A]{a}{\input{chapter}\cite{a}}\cite{a}",
+            &bbl,
+            &aux,
+        );
+        std::fs::write(dir.path().join("chapter.tex"), format!("{source}\n}}{{")).unwrap();
+        ws.refresh_project(&uri);
+        assert!(hints(&ws, &uri).is_empty(), "{source}");
+    }
 }

@@ -516,9 +516,30 @@ impl Analysis<'_, '_> {
             .values()
             .map(|(_, _, body)| body)
             .collect();
+        let mut scanner = if self
+            .trace
+            .as_ref()
+            .is_some_and(|trace| trace.scope.is_some())
+        {
+            Some(crate::bib_context_scope::Scan::new(
+                doc,
+                self.signatures,
+                &mut self.work,
+            )?)
+        } else {
+            None
+        };
         for (index, lexical) in doc.syntax.commands.iter().enumerate() {
             if self.ended {
                 break;
+            }
+            if let Some(scanner) = scanner.as_mut() {
+                scanner.advance(
+                    lexical.span.start,
+                    self.trace.as_mut()?.scope.as_mut()?,
+                    &mut self.work,
+                )?;
+                scanner.skip_command(lexical.span.end);
             }
             self.commands += 1;
             if self.commands > 100_000 {
@@ -729,17 +750,8 @@ impl Analysis<'_, '_> {
                 });
                 continue;
             }
-            if let Some(trace) = self.trace.as_mut().filter(|trace| trace.weak_contexts) {
-                // Bare context commands set a local toggle: arbitrary TeX
-                // groups can restore it without an endrefcontext command.
-                // Initially certify only balanced native context environments.
-                if matches!(name, "refcontext" | "newrefcontext" | "endrefcontext") {
-                    return None;
-                }
-                if environment
-                    .as_ref()
-                    .is_some_and(|env| env.value == "refcontext")
-                {
+            if let Some(scope) = self.trace.as_mut().and_then(|trace| trace.scope.as_mut()) {
+                if crate::bib_context_scope::control(name) {
                     if lexical.name != name
                         || !positions.contains(&lexical.span.start)
                         || context.operand(doc, lexical.span.start)
@@ -748,11 +760,15 @@ impl Analysis<'_, '_> {
                             &doc.syntax,
                             lexical.span.start,
                         )
-                        || (name == "begin") == trace.explicit_context
                     {
                         return None;
                     }
-                    trace.explicit_context = name == "begin";
+                    scope.command(
+                        name,
+                        environment
+                            .as_ref()
+                            .map(|environment| environment.value.as_str()),
+                    )?;
                 }
             }
             if self.trace.is_some() {
@@ -900,7 +916,7 @@ impl Analysis<'_, '_> {
                                 self.work += key.uri.as_str().len()
                                     + key.name.len()
                                     + 96
-                                    + if self.trace.as_ref()?.explicit_context {
+                                    + if self.trace.as_ref()?.explicit_context() {
                                         32
                                     } else {
                                         0
@@ -910,7 +926,7 @@ impl Analysis<'_, '_> {
                                     return None;
                                 }
                                 let wildcard = key.name == "*";
-                                if trace.explicit_context {
+                                if trace.explicit_context() {
                                     trace.explicit_requests.insert(trace.events.len());
                                 }
                                 trace.events.push(SourceEvent::Request(
@@ -1099,6 +1115,15 @@ impl Analysis<'_, '_> {
                         self.walk(&dependency)?;
                     }
                 }
+            }
+        }
+        if !self.ended {
+            if let Some(scanner) = scanner.as_mut() {
+                scanner.advance(
+                    source.len(),
+                    self.trace.as_mut()?.scope.as_mut()?,
+                    &mut self.work,
+                )?;
             }
         }
         self.stack.remove(uri);
@@ -2137,11 +2162,15 @@ pub(crate) struct SourceTrace {
     pub probes: Vec<(u32, usize)>,
     pub assignments: Option<Vec<crate::bib_context_assignments::Assignment>>,
     pub explicit_requests: BTreeSet<usize>,
-    weak_contexts: bool,
-    explicit_context: bool,
+    scope: Option<crate::bib_context_scope::Scope>,
     declarations: SourceDeclarations,
     current: u32,
     next: u32,
+}
+impl SourceTrace {
+    fn explicit_context(&self) -> bool {
+        self.scope.as_ref().is_some_and(|scope| scope.active)
+    }
 }
 
 pub(crate) fn has_source_sets(
@@ -2452,7 +2481,7 @@ fn source_trace_query(
         probes: Vec::new(),
         assignments: hint_assignments.then(Vec::new),
         explicit_requests: BTreeSet::new(),
-        weak_contexts: hint_assignments
+        scope: (hint_assignments
             && docs.iter().any(|(_, doc)| {
                 doc.syntax.commands.iter().any(|command| {
                     command.name == "assignrefcontextentries"
@@ -2463,8 +2492,8 @@ fn source_trace_query(
                             .get(syntax::skip_space(&doc.text.source, command.span.end))
                             == Some(&b'*')
                 })
-            }),
-        explicit_context: false,
+            }))
+        .then(Default::default),
         declarations,
         current: 0,
         next: 0,
@@ -2513,7 +2542,7 @@ fn source_trace_query(
         return None;
     }
     let mut trace = analysis.trace?;
-    if trace.explicit_context {
+    if trace.scope.as_ref().is_some_and(|scope| !scope.complete()) {
         return None;
     }
     let assigned = trace
