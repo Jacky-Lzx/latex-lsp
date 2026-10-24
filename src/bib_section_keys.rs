@@ -1,7 +1,7 @@
 //! Citation resource provenance for statically ordered reference sections.
 //!
-//! This deliberately does not certify references or renames. Those operations
-//! also need the identity of every declaration and bibliography relation.
+//! Citation references and renames still need the identity of every database
+//! declaration and bibliography relation. Resource labels have a separate graph.
 use crate::{
     bib_section_files::Registry,
     named_references::Context,
@@ -195,11 +195,25 @@ fn citation_candidate(
         })
 }
 
+#[derive(Clone)]
+pub(crate) struct ResourceChoice {
+    pub uri: Url,
+    pub span: Range<usize>,
+    pub name: String,
+}
+
+pub(crate) struct LabelGraph {
+    pub bindings: BTreeMap<String, crate::bib_section_files::LabelBinding>,
+    pub names: BTreeSet<String>,
+    pub choices: Vec<ResourceChoice>,
+}
+
 struct LabelProof {
-    command: usize,
+    command: Option<usize>,
     seen: bool,
     aliases: BTreeMap<String, String>,
     environments: Vec<String>,
+    choices: Option<Vec<ResourceChoice>>,
 }
 
 struct Analysis<'a, 'b> {
@@ -434,7 +448,7 @@ impl Analysis<'_, '_> {
                 && self
                     .labels
                     .as_ref()
-                    .is_some_and(|labels| labels.command == lexical.span.start)
+                    .is_some_and(|labels| labels.command == Some(lexical.span.start))
             {
                 if !relevant {
                     return None;
@@ -517,13 +531,13 @@ impl Analysis<'_, '_> {
                     }
                 } else if environment.value == "refsection" {
                     if name == "begin" {
-                        self.select(doc, environment.outer_span.end)?;
+                        self.select(uri, doc, environment.outer_span.end)?;
                     } else if self.labels.is_none() {
                         self.active = self.registry.resources(self.root, None)?;
                     }
                 }
             } else if matches!(name, "newrefsection" | "refsection") {
-                self.select(doc, span.end)?;
+                self.select(uri, doc, span.end)?;
             } else if name == "endrefsection" {
                 if self.labels.is_none() {
                     self.active = self.registry.resources(self.root, None)?;
@@ -560,7 +574,7 @@ impl Analysis<'_, '_> {
         self.stack.remove(uri);
         Some(())
     }
-    fn select(&mut self, doc: &Document, end: usize) -> Option<()> {
+    fn select(&mut self, uri: &Url, doc: &Document, end: usize) -> Option<()> {
         if !self.document {
             return None;
         }
@@ -578,7 +592,11 @@ impl Analysis<'_, '_> {
             };
             let argument = if let Some((argument, _)) = parsed {
                 argument
-            } else if self.labels.is_some() {
+            } else if self
+                .labels
+                .as_ref()
+                .is_some_and(|labels| labels.choices.is_none())
+            {
                 syntax::Argument {
                     value: source[at + 1..].into(),
                     span: at + 1..source.len(),
@@ -595,12 +613,29 @@ impl Analysis<'_, '_> {
             };
             let mut items = Vec::new();
             for span in segments {
-                let value = source[span].trim();
+                let span = syntax::trimmed_span(source, span);
+                let value = &source[span.clone()];
                 if value.is_empty() {
                     continue;
                 }
                 if !crate::bib_section_files::editable_item(value) {
                     return None;
+                }
+                if let Some(choices) = self
+                    .labels
+                    .as_mut()
+                    .and_then(|labels| labels.choices.as_mut())
+                {
+                    self.work +=
+                        value.len() + uri.as_str().len() + std::mem::size_of::<ResourceChoice>();
+                    if self.work > 32 * 1024 * 1024 || choices.len() >= 100_000 {
+                        return None;
+                    }
+                    choices.push(ResourceChoice {
+                        uri: uri.clone(),
+                        span,
+                        name: value.into(),
+                    });
                 }
                 items.push(value.to_owned());
             }
@@ -619,7 +654,7 @@ impl Analysis<'_, '_> {
     }
 }
 
-fn signature_budget(docs: &[(Url, &Document)]) -> bool {
+pub(crate) fn signature_budget(docs: &[(Url, &Document)]) -> bool {
     docs.iter()
         .map(|(_, doc)| doc.syntax.commands.len())
         .sum::<usize>()
@@ -1125,6 +1160,27 @@ pub(crate) fn label_bindings(
     uri: &Url,
     command: usize,
 ) -> Option<BTreeMap<String, crate::bib_section_files::LabelBinding>> {
+    Some(analyze_labels(ws, root, docs, signatures, uri, Some(command), false)?.bindings)
+}
+
+pub(crate) fn label_graph(
+    ws: &Workspace,
+    root: &Url,
+    docs: &[(Url, &Document)],
+    signatures: &CommandSignatures<'_>,
+) -> Option<LabelGraph> {
+    analyze_labels(ws, root, docs, signatures, root, None, true)
+}
+
+fn analyze_labels(
+    ws: &Workspace,
+    root: &Url,
+    docs: &[(Url, &Document)],
+    signatures: &CommandSignatures<'_>,
+    uri: &Url,
+    command: Option<usize>,
+    complete: bool,
+) -> Option<LabelGraph> {
     if !valid_sources(docs, signatures) {
         return None;
     }
@@ -1141,6 +1197,7 @@ pub(crate) fn label_bindings(
             seen: false,
             aliases: BTreeMap::new(),
             environments: Vec::new(),
+            choices: complete.then(Vec::new),
         }),
         resource_sets: BTreeSet::new(),
         collect_keys: false,
@@ -1156,10 +1213,19 @@ pub(crate) fn label_bindings(
         ended: false,
     };
     analysis.walk(root)?;
-    if !analysis.labels.as_ref()?.seen
+    let labels = analysis.labels?;
+    if command.is_some() && !labels.seen
         || docs.iter().any(|(uri, _)| !analysis.visited.contains(uri))
     {
         return None;
     }
-    analysis.registry.label_bindings()
+    Some(LabelGraph {
+        bindings: analysis.registry.label_bindings()?,
+        names: if complete {
+            analysis.registry.label_names()
+        } else {
+            BTreeSet::new()
+        },
+        choices: labels.choices.unwrap_or_default(),
+    })
 }

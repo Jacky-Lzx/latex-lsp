@@ -1,4 +1,4 @@
-//! Read-only names of statically registered biblatex resources.
+//! Project-consistent names of statically registered biblatex resources.
 use crate::{
     bib_section_files::{self, LabelBinding},
     named_references::Context,
@@ -6,7 +6,11 @@ use crate::{
     syntax::{self, Argument, Command},
     workspace::{Document, DocumentKind, Workspace},
 };
-use std::{collections::BTreeSet, ops::Range};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ops::Range,
+};
+use tower_lsp::jsonrpc::{Error, Result};
 use tower_lsp::lsp_types::*;
 
 struct Query {
@@ -230,4 +234,240 @@ pub(crate) fn completion(ws: &Workspace, uri: &Url, offset: usize) -> Option<Vec
         target.query.item.start..offset,
     ));
     Some(items)
+}
+
+fn unconfirmed() -> Error {
+    Error::invalid_params(
+        "The complete resource label identity cannot be confirmed in every consuming project",
+    )
+}
+
+struct Graphs<'a> {
+    ws: &'a Workspace,
+    regions: BTreeMap<Url, BTreeSet<Url>>,
+    projects: BTreeMap<Url, crate::bib_section_keys::LabelGraph>,
+    bytes: usize,
+    stored: usize,
+}
+impl<'a> Graphs<'a> {
+    fn new(ws: &'a Workspace) -> Result<Self> {
+        let mut regions = ws.saved_projects();
+        // Unsaved roots are consumers as soon as their buffers are opened.
+        for root in ws.documents.keys().filter(|uri| ws.is_root(uri)) {
+            regions
+                .entry(root.clone())
+                .or_insert_with(|| ws.project_documents(root));
+        }
+        if regions.values().map(BTreeSet::len).sum::<usize>() > 100_000 {
+            return Err(unconfirmed());
+        }
+        Ok(Self {
+            ws,
+            regions,
+            projects: BTreeMap::new(),
+            bytes: 0,
+            stored: 0,
+        })
+    }
+
+    fn consumers(&self, uri: &Url) -> Vec<Url> {
+        self.ws.source_roots_in(uri, &self.regions)
+    }
+
+    fn ensure(&mut self, root: &Url) -> Result<()> {
+        if self.projects.contains_key(root) {
+            return Ok(());
+        }
+        if self.projects.len() >= 64 {
+            return Err(unconfirmed());
+        }
+        let mut scope = self
+            .regions
+            .get(root)
+            .cloned()
+            .unwrap_or_else(|| self.ws.project_documents(root));
+        scope.insert(root.clone());
+        let docs =
+            crate::source_inputs::bounded_latex_sources(self.ws, &scope).ok_or_else(unconfirmed)?;
+        self.bytes += docs
+            .iter()
+            .map(|(_, doc)| doc.text.source.len())
+            .sum::<usize>();
+        if self.bytes > 16 * 1024 * 1024 || !crate::bib_section_keys::signature_budget(&docs) {
+            return Err(unconfirmed());
+        }
+        let signatures = CommandSignatures::new(
+            docs.iter()
+                .map(|(_, doc)| (doc.text.source.as_str(), &doc.syntax)),
+        );
+        let graph = crate::bib_section_keys::label_graph(self.ws, root, &docs, &signatures)
+            .ok_or_else(unconfirmed)?;
+        self.stored += graph
+            .choices
+            .iter()
+            .map(|choice| {
+                choice.uri.as_str().len() + choice.name.len() + std::mem::size_of_val(choice)
+            })
+            .sum::<usize>();
+        self.stored += graph
+            .bindings
+            .iter()
+            .map(|(name, binding)| {
+                name.len()
+                    + binding.uri.as_str().len()
+                    + binding.filename.len()
+                    + std::mem::size_of_val(binding)
+            })
+            .sum::<usize>();
+        self.stored += graph
+            .names
+            .iter()
+            .map(|name| name.len() + std::mem::size_of::<String>())
+            .sum::<usize>();
+        if self.stored > 32 * 1024 * 1024 {
+            return Err(unconfirmed());
+        }
+        self.projects.insert(root.clone(), graph);
+        Ok(())
+    }
+}
+
+struct Symbol {
+    name: String,
+    span: Range<usize>,
+    declaration: Location,
+    occurrences: BTreeMap<Url, BTreeSet<(usize, usize)>>,
+    projects: BTreeMap<Url, crate::bib_section_keys::LabelGraph>,
+}
+
+fn symbol(ws: &Workspace, uri: &Url, offset: usize) -> Option<Result<Symbol>> {
+    let target = target(ws, uri, offset)?;
+    let name = ws.documents[uri].text.source[target.query.item.clone()].to_string();
+    let binding = target.bindings.get(&name)?;
+    Some((|| {
+        let mut graphs = Graphs::new(ws)?;
+        let mut pending: BTreeSet<_> = graphs.consumers(&binding.uri).into_iter().collect();
+        let mut checked = BTreeSet::new();
+        let mut sources = BTreeSet::from([binding.uri.clone()]);
+        let mut occurrences = BTreeMap::<Url, BTreeSet<(usize, usize)>>::new();
+        occurrences
+            .entry(binding.uri.clone())
+            .or_default()
+            .insert((binding.span.start, binding.span.end));
+        while let Some(root) = pending.pop_first() {
+            if !checked.insert(root.clone()) {
+                continue;
+            }
+            graphs.ensure(&root)?;
+            let graph = &graphs.projects[&root];
+            if graph.bindings.get(&name) != Some(binding) {
+                return Err(unconfirmed());
+            }
+            let choices: Vec<_> = graph
+                .choices
+                .iter()
+                .filter(|choice| choice.name == name)
+                .cloned()
+                .collect();
+            for choice in choices {
+                occurrences
+                    .entry(choice.uri.clone())
+                    .or_default()
+                    .insert((choice.span.start, choice.span.end));
+                // A shared use can have consumers which never load the
+                // declaration. They must agree before this source is edited.
+                if sources.insert(choice.uri.clone()) {
+                    pending.extend(graphs.consumers(&choice.uri));
+                }
+            }
+        }
+        if !occurrences
+            .get(uri)
+            .is_some_and(|items| items.contains(&(target.query.item.start, target.query.item.end)))
+        {
+            return Err(unconfirmed());
+        }
+        let declaration = Location::new(
+            binding.uri.clone(),
+            ws.documents[&binding.uri]
+                .text
+                .range(binding.span.start, binding.span.end),
+        );
+        Ok(Symbol {
+            name,
+            span: target.query.item,
+            declaration,
+            occurrences,
+            projects: graphs.projects,
+        })
+    })())
+}
+
+pub(crate) fn references(
+    ws: &Workspace,
+    uri: &Url,
+    offset: usize,
+    include: bool,
+) -> Option<Vec<Location>> {
+    Some(
+        symbol(ws, uri, offset)?
+            .map(|symbol| {
+                symbol
+                    .occurrences
+                    .iter()
+                    .flat_map(|(uri, spans)| {
+                        spans.iter().map(|&(start, end)| {
+                            Location::new(uri.clone(), ws.documents[uri].text.range(start, end))
+                        })
+                    })
+                    .filter(|location| include || *location != symbol.declaration)
+                    .collect()
+            })
+            .unwrap_or_default(),
+    )
+}
+
+pub(crate) fn prepare(
+    ws: &Workspace,
+    uri: &Url,
+    offset: usize,
+) -> Option<Result<Option<PrepareRenameResponse>>> {
+    Some(symbol(ws, uri, offset)?.map(|symbol| {
+        Some(PrepareRenameResponse::RangeWithPlaceholder {
+            range: ws.documents[uri]
+                .text
+                .range(symbol.span.start, symbol.span.end),
+            placeholder: symbol.name,
+        })
+    }))
+}
+
+pub(crate) fn rename(
+    ws: &Workspace,
+    uri: &Url,
+    offset: usize,
+    name: &str,
+) -> Option<Result<Option<WorkspaceEdit>>> {
+    Some(symbol(ws, uri, offset)?.and_then(|symbol| {
+        if !syntax::is_static_key(name) || name.contains(['[', ']']) {
+            return Err(Error::invalid_params("Invalid bibliography resource label name"));
+        }
+        if name != symbol.name {
+            for project in symbol.projects.values() {
+                if project.names.contains(name) {
+                    return Err(Error::invalid_params("The target bibliography resource label already exists"));
+                }
+                if project.choices.iter().any(|choice| choice.name == name) {
+                    return Err(Error::invalid_params("Renaming this resource label would capture a literal bibliography filename selection"));
+                }
+            }
+        }
+        let changes = symbol.occurrences.into_iter().map(|(uri, spans)| {
+            let edits = spans.into_iter().map(|(start, end)| TextEdit {
+                range: ws.documents[&uri].text.range(start, end), new_text: name.into(),
+            }).collect();
+            (uri, edits)
+        }).collect();
+        Ok(Some(crate::features::workspace_edit(ws, changes)))
+    }))
 }

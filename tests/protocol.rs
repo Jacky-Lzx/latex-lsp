@@ -29661,10 +29661,124 @@ fn section_resource_labels_refresh_navigation_hover_and_completion_from_unsaved_
         server.request(12, "textDocument/definition", params),
         expected
     );
-    // Symbol editing remains unavailable until every use and filename capture
-    // can be checked together; read-only support must not enable partial edits.
-    assert!(server.request(13, "textDocument/rename", json!({"textDocument":{"uri":chapter},"position":{"line":1,"character":17},"newName":"other"})).is_null());
+    let renamed = server.request(13, "textDocument/rename", json!({"textDocument":{"uri":chapter},"position":{"line":1,"character":17},"newName":"other"}));
+    assert_eq!(
+        renamed["changes"][provider.as_str()]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        renamed["changes"][chapter.as_str()]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
     server.request(1000, "shutdown", Value::Null);
     server.notify("exit", Value::Null);
     server.wait_exit(0);
+}
+
+#[test]
+fn section_resource_label_edits_validate_all_consumers_and_filename_capture_over_stdio() {
+    for versioned in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+        let provider = main.join("resources.tex").unwrap();
+        let chapter = main.join("chapter.tex").unwrap();
+        let source = r"\documentclass{article}\usepackage{biblatex}\input{resources}\begin{document}\input{chapter}\end{document}";
+        let registration = r"\addsectionbib[label={chosen}]{section.bib}";
+        let body = "😀\r\n\\newrefsection[chosen]\\cite{paper}";
+        for (name, contents) in [
+            ("main.tex", source),
+            ("resources.tex", registration),
+            ("chapter.tex", body),
+            ("section.bib", "@book{paper,title={Selected}}"),
+            ("ignored.bib", "@book{wrong,title={Literal filename}}"),
+        ] {
+            std::fs::write(dir.path().join(name), contents).unwrap();
+        }
+        let mut server = Server::start();
+        server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":versioned}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+        server.notify("initialized", json!({}));
+        for (uri, contents, version) in [
+            (&main, source, 5),
+            (&provider, registration, 3),
+            (&chapter, body, 7),
+        ] {
+            server.notify("textDocument/didOpen", json!({"textDocument":{"uri":uri,"languageId":"latex","version":version,"text":contents}}));
+        }
+        let params = json!({"textDocument":{"uri":chapter},"position":{"line":1,"character":17}});
+        let prepare = server.request(2, "textDocument/prepareRename", params.clone());
+        assert_eq!(
+            prepare,
+            json!({"range":{"start":{"line":1,"character":15},"end":{"line":1,"character":21}},"placeholder":"chosen"})
+        );
+        let references = server.request(3, "textDocument/references", json!({"textDocument":{"uri":chapter},"position":{"line":1,"character":17},"context":{"includeDeclaration":true}}));
+        assert_eq!(references.as_array().unwrap().len(), 2);
+        let edit = server.request(4, "textDocument/rename", json!({"textDocument":{"uri":chapter},"position":{"line":1,"character":17},"newName":"selected"}));
+        let expected = [(&provider, 3, 0, 22, 28), (&chapter, 7, 1, 15, 21)];
+        if versioned {
+            let documents = edit["documentChanges"].as_array().unwrap();
+            assert_eq!(documents.len(), 2, "{edit}");
+            for (uri, version, line, start, end) in expected {
+                let document = documents
+                    .iter()
+                    .find(|doc| doc["textDocument"]["uri"] == uri.as_str())
+                    .unwrap();
+                assert_eq!(document["textDocument"]["version"], version);
+                assert_eq!(
+                    document["edits"],
+                    json!([{"range":{"start":{"line":line,"character":start},"end":{"line":line,"character":end}},"newText":"selected"}])
+                );
+            }
+        } else {
+            assert_eq!(edit["changes"].as_object().unwrap().len(), 2);
+            for (uri, _, line, start, end) in expected {
+                assert_eq!(
+                    edit["changes"][uri.as_str()],
+                    json!([{"range":{"start":{"line":line,"character":start},"end":{"line":line,"character":end}},"newText":"selected"}])
+                );
+            }
+        }
+        let updated_registration = registration.replace("chosen", "selected");
+        let updated_body = format!(
+            "{}\\newrefsection[ignored]",
+            body.replace("chosen", "selected")
+        );
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":provider,"version":4},"contentChanges":[{"text":updated_registration}]}));
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":chapter,"version":8},"contentChanges":[{"text":updated_body}]}));
+        server.send(json!({"jsonrpc":"2.0","id":5,"method":"textDocument/rename","params":{"textDocument":{"uri":chapter},"position":{"line":1,"character":17},"newName":"ignored"}}));
+        let rejected = server.until(|message| message["id"] == 5);
+        assert_eq!(rejected["error"]["code"], -32602, "{rejected}");
+        assert!(
+            rejected["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("capture"),
+            "{rejected}"
+        );
+        let target = server.request(6, "textDocument/definition", params.clone());
+        assert_eq!(target[0]["uri"], provider.as_str());
+        assert_eq!(target[0]["range"]["end"]["character"], 30);
+        let unsaved = main.join("unsaved-root.tex").unwrap();
+        server.notify("textDocument/didOpen", json!({"textDocument":{"uri":unsaved,"languageId":"latex","version":2,"text":source.replace(r"\input{resources}", r"\addsectionbib[label=selected]{ignored.bib}")}}));
+        server.send(json!({"jsonrpc":"2.0","id":7,"method":"textDocument/rename","params":{"textDocument":{"uri":provider},"position":{"line":0,"character":24},"newName":"safe"}}));
+        let rejected = server.until(|message| message["id"] == 7);
+        assert_eq!(rejected["error"]["code"], -32602, "{rejected}");
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":unsaved}}),
+        );
+        let recovered = server.request(8, "textDocument/rename", json!({"textDocument":{"uri":provider},"position":{"line":0,"character":24},"newName":"safe"}));
+        assert!(!recovered.is_null());
+        let references = server.request(9, "textDocument/references", json!({"textDocument":{"uri":provider},"position":{"line":0,"character":24},"context":{"includeDeclaration":false}}));
+        assert_eq!(references.as_array().unwrap().len(), 1);
+        assert_eq!(references[0]["uri"], chapter.as_str());
+        server.request(1000, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
 }

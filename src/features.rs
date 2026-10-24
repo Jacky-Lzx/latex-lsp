@@ -560,6 +560,9 @@ pub fn prepare_rename(
         .get(uri)
         .and_then(|doc| doc.text.offset(position))
     {
+        if let Some(result) = crate::bib_section_labels::prepare(workspace, uri, offset) {
+            return result;
+        }
         if let Some(result) = crate::bib_categories::prepare(workspace, uri, offset) {
             return result;
         }
@@ -606,6 +609,9 @@ fn rename_impl(
         .get(uri)
         .and_then(|doc| doc.text.offset(position))
     {
+        if let Some(result) = crate::bib_section_labels::rename(workspace, uri, offset, new_name) {
+            return result;
+        }
         if let Some(result) = crate::bib_categories::rename(workspace, uri, offset, new_name) {
             return result;
         }
@@ -1761,6 +1767,13 @@ pub fn references(
     if let Some(offset) = doc.text.offset(position) {
         if let Some(result) =
             crate::bib_categories::references(workspace, uri, offset, include_declaration)
+        {
+            return result;
+        }
+    }
+    if let Some(offset) = doc.text.offset(position) {
+        if let Some(result) =
+            crate::bib_section_labels::references(workspace, uri, offset, include_declaration)
         {
             return result;
         }

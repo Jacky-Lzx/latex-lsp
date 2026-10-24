@@ -254,6 +254,10 @@ impl Registry {
         result
     }
 
+    pub(crate) fn label_names(&self) -> BTreeSet<String> {
+        self.labels.keys().cloned().collect()
+    }
+
     pub(crate) fn label_bindings(&self) -> Option<BTreeMap<String, LabelBinding>> {
         (!self.uncertain).then(|| {
             self.declarations
