@@ -214,6 +214,123 @@ pub(crate) fn closed_resources(
     Some(work)
 }
 
+/// Each database is parsed once per Biber run. Later files replace equal
+/// primary spellings in GLOBALDS, which cached IDS requests then import.
+pub(crate) fn cached_owners(
+    ws: &Workspace,
+    sections: &[std::sync::Arc<BTreeSet<Url>>],
+    uses: &BTreeMap<usize, BTreeSet<&str>>,
+    aliases: &BTreeSet<&str>,
+    processed: &BTreeSet<usize>,
+) -> Option<usize> {
+    let mut loaded = BTreeSet::new();
+    let mut removed = BTreeSet::new();
+    let mut ambiguous = BTreeSet::new();
+    let mut owners = BTreeMap::new();
+    let mut keys = BTreeMap::<&Url, BTreeMap<&str, usize>>::new();
+    let mut work = 0usize;
+    for (section, resources) in sections.iter().enumerate() {
+        if !processed.contains(&section) {
+            continue;
+        }
+        let mut parsed = BTreeSet::new();
+        for uri in resources.iter() {
+            work += uri.as_str().len() + 64;
+            if work > 32 * 1024 * 1024 {
+                return None;
+            }
+            if loaded.insert(uri) {
+                for entry in &ws.documents.get(uri)?.syntax.citations {
+                    work += entry.name.len() + 192;
+                    if work > 32 * 1024 * 1024 || owners.len() >= 100_000 {
+                        return None;
+                    }
+                    owners.insert(entry.name.as_str(), uri);
+                    parsed.insert(entry.name.as_str());
+                    *keys
+                        .entry(uri)
+                        .or_default()
+                        .entry(entry.name.as_str())
+                        .or_default() += 1;
+                    // Real entries remove equal aliases even when uncited.
+                    // A later re-registration is not yet a certified recovery.
+                    if aliases.contains(entry.name.as_str()) {
+                        removed.insert(entry.name.as_str());
+                    }
+                }
+            }
+        }
+        // Parsing a new file alongside an equal real key has an uncertain
+        // provider order. Keep that uncertainty in later cached requests.
+        for primary in parsed {
+            let mut matches = 0usize;
+            for resource in resources.iter() {
+                work += primary.len() + 64;
+                if work > 32 * 1024 * 1024 {
+                    return None;
+                }
+                matches += keys
+                    .get(resource)
+                    .and_then(|keys| keys.get(primary))
+                    .copied()
+                    .unwrap_or(0);
+            }
+            if matches != 1 {
+                ambiguous.insert(primary);
+            }
+        }
+        let mut relations = BTreeSet::new();
+        for uri in resources.iter() {
+            for reference in &ws.documents.get(uri)?.syntax.citation_references {
+                work += reference.name.len() + 64;
+                if work > 32 * 1024 * 1024 {
+                    return None;
+                }
+                relations.insert(reference.name.as_str());
+            }
+        }
+        for uri in resources.iter() {
+            let doc = ws.documents.get(uri)?;
+            for alias in &doc.syntax.bibliography_aliases {
+                work += alias.name.len() + 64;
+                if work > 32 * 1024 * 1024 {
+                    return None;
+                }
+                if !uses
+                    .get(&section)
+                    .is_some_and(|names| names.contains(alias.name.as_str()))
+                    && !relations.contains(alias.name.as_str())
+                {
+                    continue;
+                }
+                let primary = owner(doc, alias)?;
+                if removed.contains(alias.name.as_str())
+                    || ambiguous.contains(primary)
+                    || owners.get(primary) != Some(&uri)
+                {
+                    return None;
+                }
+                let mut matches = 0usize;
+                for resource in resources.iter() {
+                    work += primary.len() + 64;
+                    if work > 32 * 1024 * 1024 {
+                        return None;
+                    }
+                    matches += keys
+                        .get(resource)
+                        .and_then(|keys| keys.get(primary))
+                        .copied()
+                        .unwrap_or(0);
+                }
+                if matches != 1 {
+                    return None;
+                }
+            }
+        }
+    }
+    Some(work)
+}
+
 /// Static primary spelling for a certified alias declaration.
 pub(crate) fn owner<'a>(
     doc: &'a crate::workspace::Document,

@@ -32686,3 +32686,115 @@ fn global_biber_alias_loading_blocks_partial_edits_capture_and_false_missing_dia
     );
     assert_eq!(server.request(10,"textDocument/references",json!({"textDocument":{"uri":selected},"position":alias.start,"context":{"includeDeclaration":true}})),json!([]));
 }
+#[test]
+fn cached_alias_owner_proofs_follow_numeric_load_order_unsaved_files_and_close() {
+    use latex_lsp::text::Text;
+    let dir = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let default = main.join("default.bib").unwrap();
+    let selected = main.join("section.bib").unwrap();
+    let source="% 😀\r\n\\documentclass{article}\\usepackage{biblatex}\\addbibresource{default.bib}\\addsectionbib[label=chosen]{section.bib}\\begin{document}\\cite{old}\\newrefsection[chosen]\\cite{other}\\newrefsection\\cite{old}\\end{document}";
+    let first = "% 😀\r\n@book{parent,title={Default parent},ids={old}}";
+    let second = "% 😀\r\n@book{parent,title={Selected parent},ids={other}} @book{member}";
+    for (name, text) in [
+        ("main.tex", source),
+        ("default.bib", first),
+        ("section.bib", second),
+    ] {
+        std::fs::write(dir.path().join(name), text).unwrap();
+    }
+    let range = |text: &str, prefix: &str, name: &str| {
+        let start = text.find(prefix).unwrap() + prefix.len();
+        assert_eq!(&text[start..start + name.len()], name);
+        Text::new(text.into()).range(start, start + name.len())
+    };
+    let late = range(source, r"\newrefsection\cite{", "old");
+    let alias = range(first, "ids={", "old");
+    let primary = range(first, "@book{", "parent");
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    for (uri, text, language, version) in [
+        (&main, source, "latex", 5),
+        (&default, first, "bibtex", 7),
+        (&selected, second, "bibtex", 8),
+    ] {
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"text":text,"languageId":language,"version":version}}),
+        );
+    }
+    let query = json!({"textDocument":{"uri":main},"position":late.start});
+    assert_eq!(
+        server.request(2, "textDocument/definition", query.clone()),
+        json!([])
+    );
+    assert_eq!(server.request(3, "textDocument/hover", query), Value::Null);
+    assert_eq!(
+        server.request(
+            4,
+            "textDocument/completion",
+            json!({"textDocument":{"uri":main},"position":late.end})
+        ),
+        json!([])
+    );
+    let rename =
+        json!({"textDocument":{"uri":default},"position":primary.start,"newName":"newparent"});
+    for (id, method) in [
+        (5, "textDocument/prepareRename"),
+        (6, "textDocument/rename"),
+    ] {
+        server.send(json!({"jsonrpc":"2.0","id":id,"method":method,"params":rename}));
+        assert_eq!(
+            server.until(|message| message["id"] == id)["error"]["code"],
+            -32602
+        );
+    }
+    let returned = source.replace(r"\newrefsection\cite{old}", r"\endrefsection\cite{old}");
+    let late_zero = range(&returned, r"\endrefsection\cite{", "old");
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":6},"contentChanges":[{"text":returned}]}),
+    );
+    assert_eq!(
+        server.request(
+            7,
+            "textDocument/definition",
+            json!({"textDocument":{"uri":main},"position":late_zero.start})
+        ),
+        json!([{"uri":default,"range":alias}])
+    );
+    let expected = json!({"documentChanges":[{"textDocument":{"uri":default,"version":7},"edits":[{"range":primary,"newText":"newparent"}]}]});
+    assert_eq!(
+        server.request(8, "textDocument/rename", rename.clone()),
+        expected
+    );
+    let restored_source = source.replace(r"\cite{other}", r"\cite{member}");
+    let restored_late = range(&restored_source, r"\newrefsection\cite{", "old");
+    server.notify("textDocument/didChange",json!({"textDocument":{"uri":selected,"version":9},"contentChanges":[{"text":"@book{member}"}]}));
+    server.notify("textDocument/didChange",json!({"textDocument":{"uri":main,"version":7},"contentChanges":[{"text":restored_source}]}));
+    assert_eq!(
+        server.request(
+            9,
+            "textDocument/definition",
+            json!({"textDocument":{"uri":main},"position":restored_late.start})
+        ),
+        json!([{"uri":default,"range":alias}])
+    );
+    assert_eq!(server.request(10, "textDocument/rename", rename), expected);
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":selected}}),
+    );
+    assert_eq!(
+        server.request(
+            11,
+            "textDocument/definition",
+            json!({"textDocument":{"uri":main},"position":restored_late.start})
+        ),
+        json!([])
+    );
+    server.request(1000, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

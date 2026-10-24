@@ -91,6 +91,7 @@ struct Query {
     span: Range<usize>,
     command: usize,
     call: Command,
+    completion: bool,
 }
 fn query(
     doc: &Document,
@@ -130,6 +131,7 @@ fn query(
                 span,
                 command: lexical.span.start,
                 call: command,
+                completion: matches!(purpose, Purpose::Completion),
             });
         }
     }
@@ -226,6 +228,10 @@ struct Analysis<'a, 'b> {
     // Label lookup proves execution without resolving unfinished selections.
     labels: Option<LabelProof>,
     resource_sets: BTreeSet<Arc<BTreeSet<Url>>>,
+    alias_sections: Vec<Arc<BTreeSet<Url>>>,
+    alias_current: usize,
+    alias_uses: BTreeMap<usize, BTreeSet<&'a str>>,
+    alias_processed: BTreeSet<usize>,
     collect_keys: bool,
     all_keys: Option<GraphKeys>,
     trace: Option<SourceTrace>,
@@ -340,6 +346,46 @@ impl Analysis<'_, '_> {
         }
         self.work +=
             crate::bib_source_aliases::closed_resources(self.ws, &self.resource_sets, &uses)?;
+        let mut consumed = BTreeMap::<usize, BTreeSet<&str>>::new();
+        for (section, names) in &self.alias_uses {
+            consumed
+                .entry(*section)
+                .or_default()
+                .extend(names.iter().copied());
+        }
+        if let Some(trace) = &self.trace {
+            for event in &trace.events {
+                match event {
+                    SourceEvent::Set(section, set) => {
+                        consumed
+                            .entry(*section as usize)
+                            .or_default()
+                            .extend(set.members.iter().map(|member| member.name.as_str()));
+                    }
+                    SourceEvent::Request(section, key, _) => {
+                        consumed
+                            .entry(*section as usize)
+                            .or_default()
+                            .insert(key.name.as_str());
+                    }
+                }
+            }
+        }
+        self.work += consumed
+            .values()
+            .flatten()
+            .map(|name| name.len() + 64)
+            .sum::<usize>();
+        if self.work > 32 * 1024 * 1024 {
+            return None;
+        }
+        self.work += crate::bib_source_aliases::cached_owners(
+            self.ws,
+            &self.alias_sections,
+            &consumed,
+            &aliases,
+            &self.alias_processed,
+        )?;
         (self.work <= 32 * 1024 * 1024).then_some(())
     }
     // Share one retained resource set across all keys in that section.
@@ -360,6 +406,11 @@ impl Analysis<'_, '_> {
         Some(resources)
     }
     fn walk(&mut self, uri: &Url) -> Option<()> {
+        if self.labels.is_none() && self.alias_sections.is_empty() {
+            let resources = self.intern_resources()?;
+            self.alias_sections.push(resources);
+            self.work += 64;
+        }
         self.visits += 1;
         if self.visits > 1024 || self.stack.len() >= 32 || !self.stack.insert(uri.clone()) {
             return None;
@@ -681,7 +732,8 @@ impl Analysis<'_, '_> {
                     return None;
                 }
             }
-            if (self.collect_keys && uri == self.origin || self.all_keys.is_some())
+            if self.labels.is_none()
+                && syntax::warns_on_undefined_citation(name)
                 && self.document
                 && positions.contains(&lexical.span.start)
                 && !context.operand(doc, lexical.span.start)
@@ -693,6 +745,18 @@ impl Analysis<'_, '_> {
                 for (citation, key) in crate::reference_calls::keys(source, &command, true) {
                     if !citation {
                         continue;
+                    }
+                    self.alias_processed.insert(self.alias_current);
+                    if self
+                        .alias_uses
+                        .entry(self.alias_current)
+                        .or_default()
+                        .insert(&source[key.clone()])
+                    {
+                        self.work += key.len() + 64;
+                        if self.work > 32 * 1024 * 1024 {
+                            return None;
+                        }
                     }
                     let key = (key.start, key.end);
                     if let Some(all_keys) = &mut self.all_keys {
@@ -731,6 +795,26 @@ impl Analysis<'_, '_> {
                     || !positions.contains(&lexical.span.start)
                 {
                     return None;
+                }
+                if self.query.as_ref().is_some_and(|query| query.completion) {
+                    if syntax::warns_on_undefined_citation(name) {
+                        self.alias_processed.insert(self.alias_current);
+                    }
+                    for resource in &self.active {
+                        for alias in &self.ws.documents.get(resource)?.syntax.bibliography_aliases {
+                            if self
+                                .alias_uses
+                                .entry(self.alias_current)
+                                .or_default()
+                                .insert(alias.name.as_str())
+                            {
+                                self.work += alias.name.len() + 64;
+                                if self.work > 32 * 1024 * 1024 {
+                                    return None;
+                                }
+                            }
+                        }
+                    }
                 }
                 if self.trace.is_none() {
                     if self
@@ -774,6 +858,7 @@ impl Analysis<'_, '_> {
                         self.select(uri, doc, environment.outer_span.end)?;
                     } else if self.labels.is_none() {
                         self.active = self.registry.resources(self.root, None)?;
+                        self.alias_current = 0;
                         if let Some(trace) = self.trace.as_mut() {
                             trace.current = 0;
                         }
@@ -784,6 +869,7 @@ impl Analysis<'_, '_> {
             } else if name == "endrefsection" {
                 if self.labels.is_none() {
                     self.active = self.registry.resources(self.root, None)?;
+                    self.alias_current = 0;
                     if let Some(trace) = self.trace.as_mut() {
                         trace.current = 0;
                     }
@@ -900,6 +986,12 @@ impl Analysis<'_, '_> {
         self.active = self.registry.resources(self.root, selected.as_deref())?;
         {
             let resources = self.intern_resources()?;
+            self.work += 64;
+            if self.work > 32 * 1024 * 1024 || self.alias_sections.len() >= 100_000 {
+                return None;
+            }
+            self.alias_current = self.alias_sections.len();
+            self.alias_sections.push(resources.clone());
             if let Some(trace) = self.trace.as_mut() {
                 self.work += 64;
                 if self.work > 32 * 1024 * 1024 || trace.next >= 100_000 {
@@ -1059,6 +1151,10 @@ pub(crate) fn coexistence(ws: &Workspace, root: &Url, scope: &BTreeSet<Url>) -> 
             query: None,
             labels: None,
             resource_sets: BTreeSet::from([Arc::new(active.clone())]),
+            alias_sections: Vec::new(),
+            alias_current: 0,
+            alias_uses: BTreeMap::new(),
+            alias_processed: BTreeSet::new(),
             collect_keys: false,
             all_keys: None,
             trace: None,
@@ -1334,6 +1430,10 @@ fn target(ws: &Workspace, uri: &Url, offset: usize, purpose: Purpose) -> Option<
                 query: Some(query.clone()),
                 labels: None,
                 resource_sets: BTreeSet::from([Arc::new(active.clone())]),
+                alias_sections: Vec::new(),
+                alias_current: 0,
+                alias_uses: BTreeMap::new(),
+                alias_processed: BTreeSet::new(),
                 collect_keys: false,
                 all_keys: None,
                 trace: None,
@@ -1522,6 +1622,10 @@ pub(crate) fn occurrence_resources(ws: &Workspace, uri: &Url) -> Option<Resource
                     query: None,
                     labels: None,
                     resource_sets: BTreeSet::from([Arc::new(active.clone())]),
+                    alias_sections: Vec::new(),
+                    alias_current: 0,
+                    alias_uses: BTreeMap::new(),
+                    alias_processed: BTreeSet::new(),
                     collect_keys: true,
                     all_keys: None,
                     trace: None,
@@ -1627,6 +1731,10 @@ fn analyze_labels(
             choices: complete.then(Vec::new),
         }),
         resource_sets: BTreeSet::new(),
+        alias_sections: Vec::new(),
+        alias_current: 0,
+        alias_uses: BTreeMap::new(),
+        alias_processed: BTreeSet::new(),
         collect_keys: false,
         all_keys: None,
         trace: None,
@@ -1691,6 +1799,10 @@ pub(crate) fn key_graph(
         query: None,
         labels: None,
         resource_sets: BTreeSet::from([Arc::new(active.clone())]),
+        alias_sections: Vec::new(),
+        alias_current: 0,
+        alias_uses: BTreeMap::new(),
+        alias_processed: BTreeSet::new(),
         collect_keys: false,
         all_keys: Some(BTreeMap::new()),
         trace: None,
@@ -2027,6 +2139,10 @@ fn source_trace_query(
         query,
         labels: None,
         resource_sets: BTreeSet::from([resources]),
+        alias_sections: Vec::new(),
+        alias_current: 0,
+        alias_uses: BTreeMap::new(),
+        alias_processed: BTreeSet::new(),
         collect_keys: false,
         all_keys: None,
         trace: Some(trace),

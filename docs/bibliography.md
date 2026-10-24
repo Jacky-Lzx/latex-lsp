@@ -239,3 +239,11 @@ cargo test --locked --test protocol global_biber_alias_loading_
 ```
 
 原生测试既核验缓存导入，也验证新别名捕获以及新主键删除旧别名映射的反例；需安装 pdfLaTeX、biblatex 和 Biber。
+
+
+数字分区首次加载及 IDS 条目缓存回归：
+
+```sh
+cargo test --locked --test biblatex_alias_owner_cache -- --include-ignored
+cargo test --locked --test protocol cached_alias_owner_proofs_
+```
