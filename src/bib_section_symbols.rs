@@ -77,10 +77,7 @@ fn target<'a>(ws: &'a Workspace, uri: &'a Url, offset: usize) -> Option<Option<T
         .documents
         .get(uri)
         .filter(|doc| doc.kind == DocumentKind::Bibtex)?;
-    if !ws.documents.values().any(|doc| {
-        doc.kind == DocumentKind::Latex
-            && (doc.text.source.contains("refsection") || doc.text.source.contains("bibitem"))
-    }) {
+    if !bib_section_keys::needs_namespace_proof(ws) {
         return None;
     }
     let declarations = || {
@@ -249,10 +246,7 @@ pub(crate) fn completion(
         doc.syntax.citation_fields.iter().find(|field| {
             field.argument.span.start <= offset && offset <= field.argument.span.end
         })?;
-    if !ws.documents.values().any(|doc| {
-        doc.kind == DocumentKind::Latex
-            && (doc.text.source.contains("refsection") || doc.text.source.contains("bibitem"))
-    }) {
+    if !bib_section_keys::needs_namespace_proof(ws) {
         return None;
     }
     let projects = match bib_section_keys::section_projects(ws, uri) {

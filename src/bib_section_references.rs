@@ -785,13 +785,14 @@ fn query_span(
 }
 fn symbol<'a>(ws: &'a Workspace, uri: &Url, offset: usize) -> Option<Result<Symbol<'a>>> {
     let doc = ws.documents.get(uri)?;
-    if !ws.documents.values().any(|doc| {
-        doc.kind == DocumentKind::Latex
-            && ((doc.text.source.contains("refsection") || doc.text.source.contains("bibitem"))
-                || doc.syntax.commands.iter().any(|command| {
+    if !bib_section_keys::needs_namespace_proof(ws)
+        && !ws.documents.values().any(|doc| {
+            doc.kind == DocumentKind::Latex
+                && doc.syntax.commands.iter().any(|command| {
                     matches!(command.name.as_str(), "defbibentryset" | "csuse" | "csname")
-                }))
-    }) {
+                })
+        })
+    {
         return None;
     }
     // Loose snippets retain the established symbol/editing model.

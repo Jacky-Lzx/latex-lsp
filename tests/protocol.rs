@@ -35618,3 +35618,155 @@ fn named_context_assignment_hints_follow_executed_aliases_unsaved_inputs_and_sha
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+fn database_execution_revokes_key_proofs_and_restores_versioned_edits_over_stdio() {
+    use latex_lsp::text::Text;
+    for mode in 0..3 {
+        let sections = mode == 1;
+        for document_changes in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+            let bib = main.join("data.bib").unwrap();
+            let body = if sections {
+                r"\newrefsection\cite{trigger}\cite{collection}"
+            } else {
+                r"\cite{trigger}\cite{collection}"
+            };
+            let source = format!("% 😀\r\n\\documentclass{{article}}\\usepackage{{biblatex}}\\addbibresource{{data.bib}}\\begin{{document}}{body}\\label{{safe}}\\ref{{safe}}\\end{{document}}");
+            let source = if mode == 2 {
+                source.replace(
+                    r"\usepackage{biblatex}\addbibresource{data.bib}",
+                    r"\csname usepackage\endcsname[backend=biber]{biblatex}\bibliography{data}",
+                )
+            } else {
+                source
+            };
+            let library = "@book{trigger,title={Trigger}}\r\n@book{collection,title={Collection}}\r\n@book{member,title={Member}}";
+            std::fs::write(dir.path().join("main.tex"), &source).unwrap();
+            std::fs::write(dir.path().join("data.bib"), library).unwrap();
+            let mut server = Server::start();
+            server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":document_changes}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+            server.notify("initialized", json!({}));
+            for (uri, text, language) in
+                [(&main, source.as_str(), "latex"), (&bib, library, "bibtex")]
+            {
+                server.notify("textDocument/didOpen", json!({"textDocument":{"uri":uri,"languageId":language,"version":5,"text":text}}));
+            }
+            let at =
+                Text::new(source.clone()).position(source.find(r"\cite{collection}").unwrap() + 8);
+            let params = json!({"textDocument":{"uri":main},"position":at});
+            assert_eq!(
+                server
+                    .request(2, "textDocument/definition", params.clone())
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                1
+            );
+            let edit = server.request(
+                3,
+                "textDocument/rename",
+                json!({"textDocument":{"uri":main},"position":at,"newName":"fresh"}),
+            );
+            if document_changes {
+                let changes = edit["documentChanges"].as_array().unwrap();
+                assert_eq!(changes.len(), 2);
+                assert!(changes
+                    .iter()
+                    .all(|change| change["textDocument"]["version"] == 5));
+            } else {
+                assert_eq!(edit["changes"].as_object().unwrap().len(), 2);
+            }
+            let mut id = 10;
+            for (version, changed) in [
+                (
+                    6,
+                    library.replace(
+                        "title={Trigger}",
+                        r"title={Trigger},ExEcUtE={\defbibentryset{collection}{member}}",
+                    ),
+                ),
+                (
+                    7,
+                    format!(
+                        "{library}\r\n@preamble{{\"\\defbibentryset{{collection}}{{member}}\"}}"
+                    ),
+                ),
+            ] {
+                server.notify("textDocument/didChange", json!({"textDocument":{"uri":bib,"version":version},"contentChanges":[{"text":changed}]}));
+                assert_eq!(
+                    server.request(id, "textDocument/definition", params.clone()),
+                    json!([])
+                );
+                id += 1;
+                assert_eq!(
+                    server.request(id, "textDocument/hover", params.clone()),
+                    Value::Null
+                );
+                id += 1;
+                assert_eq!(server.request(id, "textDocument/references", json!({"textDocument":{"uri":main},"position":at,"context":{"includeDeclaration":true}})), json!([]));
+                id += 1;
+                let completed = server.request(id, "textDocument/completion", params.clone());
+                id += 1;
+                assert_eq!(completed, json!([]));
+                let raw = Text::new(changed.clone())
+                    .position(changed.find("@book{collection").unwrap() + 8);
+                for (uri, position) in [(&main, at), (&bib, raw)] {
+                    for method in ["textDocument/prepareRename", "textDocument/rename"] {
+                        server.send(json!({"jsonrpc":"2.0","id":id,"method":method,"params":{"textDocument":{"uri":uri},"position":position,"newName":"fresh"}}));
+                        let response = server.until(|message| message["id"] == id);
+                        assert_eq!(
+                            response["error"]["code"], -32602,
+                            "{sections} {document_changes}: {response}"
+                        );
+                        id += 1;
+                    }
+                }
+                let label =
+                    Text::new(source.clone()).position(source.find(r"\ref{safe}").unwrap() + 6);
+                assert_eq!(
+                    server
+                        .request(
+                            id,
+                            "textDocument/definition",
+                            json!({"textDocument":{"uri":main},"position":label})
+                        )
+                        .as_array()
+                        .unwrap()
+                        .len(),
+                    1
+                );
+                id += 1;
+            }
+            server.notify("textDocument/didClose", json!({"textDocument":{"uri":bib}}));
+            assert_eq!(
+                server
+                    .request(id, "textDocument/definition", params.clone())
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                1
+            );
+            id += 1;
+            let recovered = server.request(
+                id,
+                "textDocument/rename",
+                json!({"textDocument":{"uri":main},"position":at,"newName":"fresh"}),
+            );
+            assert!(
+                recovered
+                    .get(if document_changes {
+                        "documentChanges"
+                    } else {
+                        "changes"
+                    })
+                    .is_some(),
+                "{recovered}"
+            );
+            server.request(1000, "shutdown", Value::Null);
+            server.notify("exit", Value::Null);
+            server.wait_exit(0);
+        }
+    }
+}

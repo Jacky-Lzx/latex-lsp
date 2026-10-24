@@ -1396,6 +1396,46 @@ impl Coexistence {
     }
 }
 
+fn modern_databases(docs: &[(Url, &Document)], signatures: &CommandSignatures<'_>) -> bool {
+    docs.iter().any(|(_, doc)| {
+        let context = Context::new(doc, signatures);
+        doc.syntax
+            .commands
+            .iter()
+            .enumerate()
+            .any(|(index, command)| {
+                if context.literal(command.span.start) {
+                    return false;
+                }
+                let (name, span) = signatures
+                    .named_invocation(
+                        &doc.text.source,
+                        &doc.syntax,
+                        index,
+                        &BTreeSet::new(),
+                        &context.declarations,
+                    )
+                    .unwrap_or((&command.name, command.span.clone()));
+                ["addbibresource", "addglobalbib", "addsectionbib"]
+                    .iter()
+                    .any(|builtin| signatures.invokes_builtin(name, builtin))
+                    || ["usepackage", "RequirePackage", "RequirePackageWithOptions"]
+                        .iter()
+                        .find(|builtin| signatures.invokes_builtin(name, builtin))
+                        .and_then(|builtin| {
+                            syntax::file_name_argument_start(&doc.text.source, builtin, span.end)
+                        })
+                        .and_then(|at| syntax::group(&doc.text.source, at, b'{', b'}'))
+                        .is_some_and(|(argument, _)| {
+                            argument
+                                .value
+                                .split(',')
+                                .any(|name| syntax::loader_name(name) == "biblatex")
+                        })
+            })
+    })
+}
+
 pub(crate) fn coexistence(ws: &Workspace, root: &Url, scope: &BTreeSet<Url>) -> Coexistence {
     let Some(docs) = crate::source_inputs::bounded_latex_sources(ws, scope) else {
         return Coexistence::Unknown;
@@ -1411,30 +1451,7 @@ pub(crate) fn coexistence(ws: &Workspace, root: &Url, scope: &BTreeSet<Url>) -> 
         &docs.iter().map(|(_, doc)| *doc).collect::<Vec<_>>(),
         &signatures,
     );
-    let modern = docs.iter().any(|(_, doc)| {
-        let context = Context::new(doc, &signatures);
-        doc.syntax
-            .commands
-            .iter()
-            .enumerate()
-            .any(|(index, command)| {
-                if context.literal(command.span.start) {
-                    return false;
-                }
-                let (name, _) = signatures
-                    .named_invocation(
-                        &doc.text.source,
-                        &doc.syntax,
-                        index,
-                        &BTreeSet::new(),
-                        &context.declarations,
-                    )
-                    .unwrap_or((&command.name, command.span.clone()));
-                ["addbibresource", "addglobalbib", "addsectionbib"]
-                    .iter()
-                    .any(|builtin| signatures.invokes_builtin(name, builtin))
-            })
-    }) || selected;
+    let modern = modern_databases(&docs, &signatures) || selected;
     if !modern {
         return Coexistence::Union;
     }
@@ -1584,6 +1601,13 @@ pub(crate) fn section_projects<'a>(
             &docs.iter().map(|(_, doc)| *doc).collect::<Vec<_>>(),
             &signatures,
         );
+        // BBL execution can inject source sets even without a TeX declaration
+        // or explicit resource section. Own those keys before generic fallback.
+        selected |= modern_databases(&docs, &signatures)
+            && scope
+                .iter()
+                .filter_map(|uri| ws.documents.get(uri))
+                .any(database_execution);
         projects.push(Project {
             root,
             docs,
@@ -1709,11 +1733,7 @@ fn target(ws: &Workspace, uri: &Url, offset: usize, purpose: Purpose) -> Option<
         .documents
         .get(uri)
         .filter(|doc| doc.kind == DocumentKind::Latex)?;
-    if !ws.documents.values().any(|doc| {
-        doc.kind == DocumentKind::Latex
-            && (doc.text.source.contains("refsection") || doc.text.source.contains("bibitem"))
-    }) || !ws.index_truncated.is_empty()
-    {
+    if !needs_namespace_proof(ws) || !ws.index_truncated.is_empty() {
         return None;
     }
     let Some((selected, projects)) = section_projects(ws, uri) else {
@@ -1910,12 +1930,7 @@ pub(crate) type ResourceMap = BTreeMap<(usize, usize), Arc<BTreeSet<Url>>>;
 /// missing spans are unproved and must not fall back to a bibliography union.
 pub(crate) fn occurrence_resources(ws: &Workspace, uri: &Url) -> Option<ResourceMap> {
     let doc = ws.documents.get(uri)?;
-    if doc.kind != DocumentKind::Latex
-        || !ws.documents.values().any(|doc| {
-            doc.kind == DocumentKind::Latex
-                && (doc.text.source.contains("refsection") || doc.text.source.contains("bibitem"))
-        })
-    {
+    if doc.kind != DocumentKind::Latex || !needs_namespace_proof(ws) {
         return None;
     }
     let Some((selected, projects)) = section_projects(ws, uri) else {
@@ -2696,9 +2711,35 @@ pub(crate) fn source_set_key(
     None
 }
 
-// A bibliography preamble executes TeX from generated BBL input and can
-// introduce section-specific sets before the first source citation. Until its
-// effects are proved, no database-only graph can certify that namespace.
+// Bibliography preambles and entry execute fields run TeX from BBL input.
+// Both can introduce sets absent from the TeX source's execution trace.
+pub(crate) fn database_execution(doc: &Document) -> bool {
+    doc.kind == DocumentKind::Bibtex
+        && (doc
+            .syntax
+            .bibliography_completion
+            .types
+            .iter()
+            .any(|entry| doc.text.source[entry.span.clone()].eq_ignore_ascii_case("preamble"))
+            || doc
+                .syntax
+                .bibliography_completion
+                .entries
+                .iter()
+                .any(|entry| entry.fields.iter().any(|field| field.name == "execute")))
+}
+
+// Cheap workspace gate only; section_projects proves actual project membership
+// and biblatex use, leaving unrelated papers and classic BibTeX independent.
+pub(crate) fn needs_namespace_proof(ws: &Workspace) -> bool {
+    ws.documents.values().any(|doc| {
+        database_execution(doc)
+            || doc.kind == DocumentKind::Latex
+                && (doc.text.source.contains("refsection") || doc.text.source.contains("bibitem"))
+    })
+}
+
+// Until generated execution is proved, no source graph certifies its effects.
 fn static_databases(ws: &Workspace, root: &Url) -> bool {
     let mut bytes = 0usize;
     let mut entries = 0usize;
@@ -2711,15 +2752,7 @@ fn static_databases(ws: &Workspace, root: &Url) -> bool {
         }
         bytes += doc.text.source.len();
         entries += doc.syntax.bibliography_completion.types.len();
-        if bytes > 16 * 1024 * 1024
-            || entries > 100_000
-            || doc
-                .syntax
-                .bibliography_completion
-                .types
-                .iter()
-                .any(|entry| doc.text.source[entry.span.clone()].eq_ignore_ascii_case("preamble"))
-        {
+        if bytes > 16 * 1024 * 1024 || entries > 100_000 || database_execution(doc) {
             return false;
         }
     }
