@@ -708,8 +708,18 @@ impl Workspace {
             .collect()
     }
 
+    /// Every source root supplies symbol meanings, including new buffers
+    /// whose filesystem path has not been created yet.
+    pub(crate) fn symbol_regions(&self) -> BTreeMap<Url, BTreeSet<Url>> {
+        self.documents
+            .keys()
+            .filter(|uri| self.is_root(uri))
+            .map(|root| (root.clone(), self.project_documents(root)))
+            .collect()
+    }
+
     pub(crate) fn symbol_projects(&self, uri: &Url) -> SymbolProjects {
-        let regions = self.saved_projects();
+        let regions = self.symbol_regions();
         let selected = self
             .is_root(uri)
             .then(|| uri.clone())

@@ -21,6 +21,7 @@ pub(crate) struct Index {
 impl Index {
     pub(crate) fn new(workspace: &Workspace) -> Self {
         let mut interpretations: BTreeMap<Url, Vec<Calls>> = BTreeMap::new();
+        let mut direct_ambiguous = Vec::new();
         for (scope, consumers) in project_contexts(workspace) {
             let signatures = CommandSignatures::new(
                 workspace
@@ -37,6 +38,25 @@ impl Index {
                 else {
                     continue;
                 };
+                // Legacy direct references are collected lexically. A
+                // changed primitive can read the same spelling as plain data.
+                if !signatures.environment_primitives_unchanged() {
+                    let context = crate::named_references::Context::new(doc, &signatures);
+                    for command in &doc.syntax.commands {
+                        if matches!(command.name.as_str(), "begin" | "end")
+                            && !signatures.command_unchanged(&command.name)
+                            && !context.literal(command.span.start)
+                        {
+                            if let Some(argument) = syntax::environment_name_argument(
+                                &doc.text.source,
+                                command.span.end,
+                            ) {
+                                direct_ambiguous
+                                    .push((uri.clone(), BTreeSet::from([argument.value])));
+                            }
+                        }
+                    }
+                }
                 let calls = signatures
                     .environment_calls(&doc.text.source, &doc.syntax)
                     .into_iter()
@@ -45,7 +65,10 @@ impl Index {
                 interpretations.entry(uri).or_default().push(calls);
             }
         }
-        let mut index = Self::default();
+        let mut index = Self {
+            ambiguous: direct_ambiguous,
+            ..Self::default()
+        };
         for (uri, interpretations) in interpretations {
             let starts: BTreeSet<_> = interpretations
                 .iter()
@@ -158,7 +181,7 @@ pub(crate) fn may_contain_name(doc: &Document, offset: usize) -> bool {
 pub(crate) fn project_contexts(workspace: &Workspace) -> BTreeMap<BTreeSet<Url>, BTreeSet<Url>> {
     let mut contexts: BTreeMap<BTreeSet<Url>, BTreeSet<Url>> = BTreeMap::new();
     let mut covered = BTreeSet::new();
-    for scope in workspace.saved_projects().into_values() {
+    for scope in workspace.symbol_regions().into_values() {
         covered.extend(scope.iter().cloned());
         contexts.entry(scope.clone()).or_default().extend(scope);
     }

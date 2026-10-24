@@ -34929,3 +34929,189 @@ fn context_category_assignment_lists_keep_exact_edits_shared_meanings_and_close_
         server.wait_exit(0);
     }
 }
+
+#[test]
+fn new_root_symbol_edits_certify_shared_meanings_declarations_versions_and_close_restore() {
+    use latex_lsp::text::Text;
+    for document_changes in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+        let common = main.join("common.tex").unwrap();
+        let shared = main.join("shared.tex").unwrap();
+        let other = main.join("new.tex").unwrap();
+        let source = r"\documentclass{article}\usepackage{etoolbox}\begin{document}\input{common}\input{shared}\end{document}";
+        let declarations = "% 😀\r\n\\newenvironment{chosen}{}{}";
+        let calls = "% 😀\r\n😀 \\csuse{begin}{chosen}Text\\csuse{end}{chosen}";
+        for (name, content) in [
+            ("main.tex", source),
+            ("common.tex", declarations),
+            ("shared.tex", calls),
+        ] {
+            std::fs::write(dir.path().join(name), content).unwrap();
+        }
+        let spans = |source: &str| {
+            source
+                .match_indices("chosen")
+                .map(|(at, _)| Text::new(source.into()).range(at, at + 6))
+                .collect::<Vec<_>>()
+        };
+        let header = spans(declarations)[0];
+        let uses = spans(calls);
+        let mut server = Server::start();
+        server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":document_changes}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+        server.notify("initialized", json!({}));
+        for (uri, content, version) in [
+            (&main, source, 5),
+            (&common, declarations, 7),
+            (&shared, calls, 8),
+        ] {
+            server.notify("textDocument/didOpen",json!({"textDocument":{"uri":uri,"languageId":"latex","version":version,"text":content}}));
+        }
+        let rename =
+            json!({"textDocument":{"uri":common},"position":header.start,"newName":"fresh"});
+        let edit = server.request(2, "textDocument/rename", rename.clone());
+        let check = |edit: &Value, calls: &str, version: i32| {
+            for (uri, version, ranges) in
+                [(&common, 7, vec![header]), (&shared, version, spans(calls))]
+            {
+                let expected = ranges
+                    .iter()
+                    .map(|range| json!({"range":range,"newText":"fresh"}))
+                    .collect::<Vec<_>>();
+                if document_changes {
+                    let docs = edit["documentChanges"].as_array().unwrap();
+                    assert_eq!(docs.len(), 2);
+                    let doc = docs
+                        .iter()
+                        .find(|doc| doc["textDocument"]["uri"] == uri.as_str())
+                        .unwrap();
+                    assert_eq!(doc["textDocument"]["version"], version);
+                    assert_eq!(doc["edits"], json!(expected));
+                } else {
+                    assert_eq!(edit["changes"].as_object().unwrap().len(), 2);
+                    assert_eq!(edit["changes"][uri.as_str()], json!(expected));
+                }
+            }
+        };
+        check(&edit, calls, 8);
+        assert_eq!(
+            server.request(
+                3,
+                "textDocument/definition",
+                json!({"textDocument":{"uri":shared},"position":uses[0].start})
+            ),
+            json!([{"uri":common,"range":header}])
+        );
+        let unsafe_source = source.replace(
+            r"\input{shared}",
+            r"{\renewcommand\csuse[2]{#2}\input{shared}}",
+        );
+        server.notify("textDocument/didOpen",json!({"textDocument":{"uri":other,"languageId":"latex","version":9,"text":unsafe_source}}));
+        server.send(
+            json!({"jsonrpc":"2.0","id":4,"method":"textDocument/rename","params":rename.clone()}),
+        );
+        assert_eq!(
+            server.until(|message| message["id"] == 4)["error"]["code"],
+            -32602
+        );
+        server.send(json!({"jsonrpc":"2.0","id":5,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":common},"position":header.start}}));
+        assert_eq!(
+            server.until(|message| message["id"] == 5)["error"]["code"],
+            -32602
+        );
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":other,"version":10},"contentChanges":[{"text":source}]}),
+        );
+        assert_eq!(
+            server.request(6, "textDocument/rename", rename.clone()),
+            edit
+        );
+        for (id, text) in [
+            (
+                7,
+                source.replace(r"\input{common}", r"\newenvironment{chosen}{}{}"),
+            ),
+            (8, source.replace(r"\input{common}", "")),
+            (
+                9,
+                source.replace(
+                    r"\input{shared}",
+                    r"\newenvironment{fresh}{}{}\input{shared}",
+                ),
+            ),
+        ] {
+            server.notify("textDocument/didChange",json!({"textDocument":{"uri":other,"version":id+10},"contentChanges":[{"text":text}]}));
+            server.send(json!({"jsonrpc":"2.0","id":id,"method":"textDocument/rename","params":rename.clone()}));
+            assert_eq!(
+                server.until(|message| message["id"] == id)["error"]["code"],
+                -32602
+            );
+        }
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":other}}),
+        );
+        assert_eq!(
+            server.request(10, "textDocument/rename", rename.clone()),
+            edit
+        );
+        let direct = "% 😀\r\n😀 \\begin{chosen}Text\\end{chosen}";
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":shared,"version":9},"contentChanges":[{"text":direct}]}),
+        );
+        server.notify("textDocument/didOpen",json!({"textDocument":{"uri":other,"languageId":"latex","version":25,"text":source.replace(r"\input{shared}",r"{\renewcommand\begin[1]{}\renewcommand\end[1]{}\input{shared}}")}}));
+        server.send(
+            json!({"jsonrpc":"2.0","id":11,"method":"textDocument/rename","params":rename.clone()}),
+        );
+        assert_eq!(
+            server.until(|message| message["id"] == 11)["error"]["code"],
+            -32602
+        );
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":other}}),
+        );
+        let direct_edit = server.request(12, "textDocument/rename", rename);
+        check(&direct_edit, direct, 9);
+        for (uri, content) in [(&common, declarations), (&shared, direct)] {
+            let edits = if document_changes {
+                direct_edit["documentChanges"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|doc| doc["textDocument"]["uri"] == uri.as_str())
+                    .unwrap()["edits"]
+                    .clone()
+            } else {
+                direct_edit["changes"][uri.as_str()].clone()
+            };
+            let mut edits: Vec<tower_lsp::lsp_types::TextEdit> =
+                serde_json::from_value(edits).unwrap();
+            edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
+            let text = Text::new(content.into());
+            let mut changed = content.to_string();
+            for edit in edits {
+                changed.replace_range(
+                    text.offset(edit.range.start).unwrap()..text.offset(edit.range.end).unwrap(),
+                    &edit.new_text,
+                );
+            }
+            server.notify("textDocument/didChange",json!({"textDocument":{"uri":uri,"version":30},"contentChanges":[{"text":changed}]}));
+        }
+        let mut target = header;
+        target.end.character -= 1;
+        assert_eq!(
+            server.request(
+                13,
+                "textDocument/definition",
+                json!({"textDocument":{"uri":shared},"position":spans(direct)[0].start})
+            ),
+            json!([{"uri":common,"range":target}])
+        );
+        server.request(14, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}

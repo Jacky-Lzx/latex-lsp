@@ -25,13 +25,6 @@ const COMMANDS: &[&str] = &[
 fn valid(name: &str) -> bool {
     syntax::is_static_key(name) && !name.contains(['[', ']'])
 }
-fn unsaved_projects(ws: &Workspace) -> BTreeMap<Url, BTreeSet<Url>> {
-    ws.documents
-        .keys()
-        .filter(|uri| ws.is_root(uri) && !ws.is_saved_root(uri))
-        .map(|root| (root.clone(), ws.project_documents(root)))
-        .collect()
-}
 #[derive(Clone, PartialEq, Eq)]
 struct Entry {
     name: String,
@@ -389,12 +382,7 @@ impl Index {
                 ..Self::default()
             };
         }
-        let mut contexts = crate::environment_calls::project_contexts(ws);
-        // A new root has no filesystem identity yet, but its shared inputs
-        // still execute with that root's command meanings.
-        for scope in unsaved_projects(ws).into_values() {
-            contexts.entry(scope.clone()).or_default().extend(scope);
-        }
+        let contexts = crate::environment_calls::project_contexts(ws);
         let mut connected = ws.symbol_scope(origin);
         loop {
             let before = connected.len();
@@ -571,11 +559,7 @@ impl Index {
                 "Category rename requires a complete project index",
             ));
         }
-        let crate::workspace::SymbolProjects {
-            mut scope,
-            mut regions,
-        } = ws.symbol_projects(uri);
-        regions.extend(unsaved_projects(ws));
+        let crate::workspace::SymbolProjects { mut scope, regions } = ws.symbol_projects(uri);
         let own = self.definitions(ws, &scope, entry);
         if own.len() != 1 {
             return Err(Error::invalid_params(
