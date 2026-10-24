@@ -34444,3 +34444,136 @@ fn local_context_citation_hints_follow_default_artifacts_updates_and_unsaved_gua
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+fn source_predicate_completions_follow_final_identity_exact_edits_and_unsaved_consumers() {
+    use latex_lsp::text::Text;
+    let dir = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let child = main.join("query.tex").unwrap();
+    let sets = main.join("sets.tex").unwrap();
+    let bib = main.join("data.bib").unwrap();
+    let source="% 😀\r\n\\documentclass{article}\\usepackage{biblatex}\\DeclareBibliographyCategory{group}\\addbibresource{data.bib}\\begin{document}\\input{query}\\input{sets}\\end{document}";
+    let query = "% 😀\r\n😀 \\csname ifentrycategory\\endcsname{parSuffix}{group}{Yes}{No}";
+    let declaration = "% 😀\r\n\\defbibentryset{parent}{member}";
+    let library =
+        "@book{parent,title={Raw parent}} @book{member,title={Member}} @book{other,title={Other}}";
+    for (name, text) in [
+        ("main.tex", source),
+        ("query.tex", query),
+        ("sets.tex", declaration),
+        ("data.bib", library),
+    ] {
+        std::fs::write(dir.path().join(name), text).unwrap();
+    }
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    for (uri, text, language, version) in [
+        (&main, source, "latex", 5),
+        (&child, query, "latex", 8),
+        (&sets, declaration, "latex", 6),
+    ] {
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"languageId":language,"version":version,"text":text}}),
+        );
+    }
+    let at = query.find("parSuffix").unwrap();
+    let text = Text::new(query.into());
+    let params = json!({"textDocument":{"uri":child},"position":text.position(at+2)});
+    let parent = |value: &Value| {
+        value
+            .as_array()
+            .or_else(|| value["items"].as_array())
+            .unwrap()
+            .iter()
+            .find(|item| item["label"] == "parent")
+            .cloned()
+    };
+    let initial = server.request(2, "textDocument/completion", params.clone());
+    let item = parent(&initial).unwrap();
+    assert!(item["detail"]
+        .as_str()
+        .unwrap()
+        .contains("Dynamic bibliography set: member"));
+    assert_eq!(
+        item["textEdit"],
+        json!({"range":text.range(at,at+"parSuffix".len()),"newText":"parent"})
+    );
+    assert_eq!(item["additionalTextEdits"], Value::Null);
+    let completed = query.replace("parSuffix", "parent");
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":child,"version":9},"contentChanges":[{"text":completed}]}),
+    );
+    let start = declaration.find("parent").unwrap();
+    let target = json!([{"uri":sets,"range":Text::new(declaration.into()).range(start,start+6)}]);
+    assert_eq!(
+        server.request(3, "textDocument/definition", params.clone()),
+        target
+    );
+    let other = main.join("other.tex").unwrap();
+    server.notify("textDocument/didOpen",json!({"textDocument":{"uri":other,"languageId":"latex","version":12,"text":source.replace(r"\input{sets}",r"\defbibentryset{parent}{member}")}}));
+    assert!(parent(&server.request(4, "textDocument/completion", params.clone())).is_none());
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":other}}),
+    );
+    assert!(
+        parent(&server.request(5, "textDocument/completion", params.clone())).unwrap()["detail"]
+            .as_str()
+            .unwrap()
+            .contains("Dynamic bibliography set: member")
+    );
+    server.notify("textDocument/didChange",json!({"textDocument":{"uri":main,"version":6},"contentChanges":[{"text":source.replace(r"\input{query}",r"\cite{parent}\input{query}")}]}));
+    let early = parent(&server.request(6, "textDocument/completion", params.clone())).unwrap();
+    assert!(early["detail"].as_str().unwrap().contains("Raw parent"));
+    assert!(early["detail"].as_str().unwrap().contains("data.bib"));
+    assert!(!early["detail"]
+        .as_str()
+        .unwrap()
+        .contains("Dynamic bibliography set"));
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":main}}),
+    );
+    assert!(
+        parent(&server.request(7, "textDocument/completion", params.clone())).unwrap()["detail"]
+            .as_str()
+            .unwrap()
+            .contains("Dynamic bibliography set: member")
+    );
+    server.notify("textDocument/didChange",json!({"textDocument":{"uri":sets,"version":7},"contentChanges":[{"text":declaration.replace("{member}","{other}")}]}));
+    assert!(
+        parent(&server.request(8, "textDocument/completion", params.clone())).unwrap()["detail"]
+            .as_str()
+            .unwrap()
+            .contains("Dynamic bibliography set: other")
+    );
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":sets}}),
+    );
+    assert!(
+        parent(&server.request(9, "textDocument/completion", params.clone())).unwrap()["detail"]
+            .as_str()
+            .unwrap()
+            .contains("Dynamic bibliography set: member")
+    );
+    server.notify("textDocument/didOpen",json!({"textDocument":{"uri":bib,"languageId":"bibtex","version":7,"text":library.replace("title={Raw parent}","ids={alias},title={Raw parent}")}}));
+    assert!(parent(&server.request(10, "textDocument/completion", params.clone())).is_none());
+    server.notify("textDocument/didClose", json!({"textDocument":{"uri":bib}}));
+    assert!(parent(&server.request(11, "textDocument/completion", params.clone())).is_some());
+    server.notify("textDocument/didChange",json!({"textDocument":{"uri":child,"version":10},"contentChanges":[{"text":completed.replace("{Yes}",r"{\cite{other}}") }]}));
+    assert!(parent(&server.request(12, "textDocument/completion", params.clone())).is_none());
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":child}}),
+    );
+    let restored = parent(&server.request(13, "textDocument/completion", params)).unwrap();
+    assert_eq!(restored["textEdit"], item["textEdit"]);
+    server.request(14, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

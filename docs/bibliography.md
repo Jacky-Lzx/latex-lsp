@@ -313,7 +313,7 @@ cargo test --locked --test protocol handwritten_items_keep_biblatex_
 
 源码集合中的纯文本谓词查询支持 `ifentryinbib`／`ifentrycategory`（含静态命名调用）：按每个数字分区最终真实请求和声明解析身份，保留导航、完整引用和改名，但不预读数据库或发送 Biber 请求。集合声明自身可使集合加载，因此不要求存在显式引用。查询缺失键不产生引用警告；真正缺失的引用与集合成员仍检查。
 
-共享查询的所有执行上下文必须绑定同一身份；重定义、可执行／动态分支、IDS 交叉语义和内部命令执行上下文继续保护。谓词键补全仍待实现最终命名空间候选认证，普通引用和集合成员补全保持可用。
+共享查询的所有执行上下文必须绑定同一身份；重定义、可执行／动态分支、IDS 交叉语义和内部命令执行上下文继续保护。谓词键补全按最终分区命名空间认证候选，普通引用和集合成员仍按实际请求位置计算。
 
 ```sh
 cargo test --locked --test biblatex_source_textual_queries -- --include-ignored
@@ -335,3 +335,12 @@ cargo test --locked --test protocol source_prerequisite_edits_
 ```
 
 本地数字引用上下文的编译标签支持纯字面 `labelprefix`／`sorting` 和全局 deferred 编号。按 AUX 为键记录的默认上下文联结 BBL 真实前缀；同一键跨打印上下文仍遵循 biblatex 实际默认选择。共享物理引用的所有执行必须得到相同完整标签；显式上下文分配、命名声明、重定义、动态选项和自定义格式继续保护。详见[辅助引用与编号提示](auxiliary-references.md)。
+
+源码集合项目中的 `ifentryinbib`／`ifentrycategory` 键补全支持直接及静态命名调用：候选采用分区最终的首次真实请求或集合声明，查询本身不会成为提前加载请求。尚未发生真实请求时，可以补全后续声明的集合；确有早期 `cite` 时仍显示原书籍的元数据。普通 `cite` 的候选继续使用光标处请求语义。
+
+支持空键、完整后缀替换、既有注释及 UTF-16／CRLF 编辑。需要完整、纯文本的分支和静态分类名；未完成分支、可执行代码、重定义、动态键、内部文献执行上下文和 IDS 相交继续保护。共享物理查询的所有根及数字分区必须取得相同物理候选身份，无法确认的单个候选排除；预算不足不返回未经认证的候选。
+
+```sh
+cargo test --locked --test biblatex_source_predicate_completion -- --include-ignored
+cargo test --locked --test protocol source_predicate_completions_
+```

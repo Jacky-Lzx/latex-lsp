@@ -59,6 +59,7 @@ fn context(ws: &Workspace, uri: &Url, offset: usize) -> Option<Option<Context>> 
                 completion.span.clone(),
                 completion.removals.clone(),
                 completion.member,
+                completion.nonloading,
             );
             if context
                 .as_ref()
@@ -69,7 +70,7 @@ fn context(ws: &Workspace, uri: &Url, offset: usize) -> Option<Option<Context>> 
             context = Some(identity);
             catalog.trace_completion(&completion).ok()?;
         }
-        let (span, removals, member) = context?;
+        let (span, removals, member, _) = context?;
         let candidates = catalog
             .candidates(ws, uri, if member { "member" } else { "cite" })
             .ok()?;

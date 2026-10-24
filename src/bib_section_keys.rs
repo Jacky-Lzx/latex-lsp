@@ -94,6 +94,7 @@ fn textual_bibliography_test(
     name: &str,
     end: usize,
     signatures: &CommandSignatures<'_>,
+    pending: Option<&Range<usize>>,
 ) -> bool {
     if !matches!(name, "ifentryinbib" | "ifentrycategory") || !signatures.command_unchanged(name) {
         return false;
@@ -109,6 +110,12 @@ fn textual_bibliography_test(
             }
             match field.role {
                 crate::citations::Role::Keys => {
+                    if pending.is_some_and(|span| {
+                        field.argument.span.start <= span.start
+                            && span.end <= field.argument.span.end
+                    }) {
+                        return true;
+                    }
                     let key = syntax::single_citation_argument(source, field.argument.clone());
                     key.value != "*" && syntax::is_static_citation_key(&key.value)
                 }
@@ -543,10 +550,17 @@ impl Analysis<'_, '_> {
             {
                 continue;
             }
+            let pending = self
+                .query
+                .as_ref()
+                .filter(|query| {
+                    query.completion && uri == self.origin && query.command == lexical.span.start
+                })
+                .map(|query| &query.span);
             let textual_test = |name: &str, end| {
                 positions.contains(&lexical.span.start)
                     && !context.operand(doc, lexical.span.start)
-                    && textual_bibliography_test(source, name, end, self.signatures)
+                    && textual_bibliography_test(source, name, end, self.signatures, pending)
             };
             if unsafe_control(&lexical.name) && !textual_test(&lexical.name, lexical.span.end) {
                 return None;
@@ -718,13 +732,28 @@ impl Analysis<'_, '_> {
                         || context.operand(doc, lexical.span.start)
                         || !self.signatures.command_unchanged(name)
                         || (!syntax::warns_on_undefined_citation(name)
-                            && !textual_bibliography_test(source, name, span.end, self.signatures))
+                            && !textual_bibliography_test(
+                                source,
+                                name,
+                                span.end,
+                                self.signatures,
+                                pending,
+                            ))
                     {
                         return None;
                     }
                     let command =
                         crate::reference_calls::resolved_command(source, name, span.clone());
-                    if !syntax::warns_on_undefined_citation(name) {
+                    if !syntax::warns_on_undefined_citation(name) && pending.is_some() {
+                        // A prospective predicate never requests a key. Its
+                        // probe is resolved against the final section state.
+                        self.work += 64;
+                        if self.work > 32 * 1024 * 1024 {
+                            return None;
+                        }
+                        let trace = self.trace.as_mut()?;
+                        trace.probes.push((trace.current, trace.events.len()));
+                    } else if !syntax::warns_on_undefined_citation(name) {
                         let argument = syntax::single_citation_argument(
                             source,
                             command.argument.as_ref()?.clone(),
@@ -2205,6 +2234,7 @@ pub(crate) struct SourceCompletion {
     pub span: std::ops::Range<usize>,
     pub removals: Vec<std::ops::Range<usize>>,
     pub member: bool,
+    pub nonloading: bool,
 }
 pub(crate) fn source_completion_candidate(
     doc: &Document,
@@ -2224,8 +2254,10 @@ pub(crate) fn source_completion_trace(
     let doc = ws.documents.get(origin)?;
     let query = query(doc, signatures, offset, Purpose::Completion)?;
     let (span, removals) = completion_span(doc, &query.call, offset)?;
-    // Request-position candidate probes cannot certify final-state predicates.
-    if !syntax::warns_on_undefined_citation(&query.call.name) && query.call.name != "defbibentryset"
+    let nonloading = matches!(query.call.name.as_str(), "ifentryinbib" | "ifentrycategory");
+    if !syntax::warns_on_undefined_citation(&query.call.name)
+        && query.call.name != "defbibentryset"
+        && !nonloading
     {
         return None;
     }
@@ -2239,6 +2271,7 @@ pub(crate) fn source_completion_trace(
         span,
         removals,
         member,
+        nonloading,
     })
 }
 fn source_trace_query(
@@ -2280,6 +2313,9 @@ fn source_trace_query(
         current: 0,
         next: 0,
     };
+    let nonloading_completion = query.as_ref().is_some_and(|query| {
+        query.completion && matches!(query.call.name.as_str(), "ifentryinbib" | "ifentrycategory")
+    });
     let mut analysis = Analysis {
         ws,
         root,
@@ -2321,10 +2357,11 @@ fn source_trace_query(
         return None;
     }
     let mut trace = analysis.trace?;
-    if trace
-        .events
-        .iter()
-        .any(|event| matches!(event, SourceEvent::Query(..)))
+    if nonloading_completion
+        || trace
+            .events
+            .iter()
+            .any(|event| matches!(event, SourceEvent::Query(..)))
     {
         // Alias loading has its own cache semantics. Keep the intersection
         // opaque until nonloading consumers have a complete owner proof.

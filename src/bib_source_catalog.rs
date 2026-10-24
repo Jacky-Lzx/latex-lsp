@@ -353,10 +353,15 @@ impl Catalog {
             let Some(final_state) = states.get(&section) else {
                 continue;
             };
+            let state = if completion.nonloading {
+                final_state
+            } else {
+                &before
+            };
             for name in final_state.declared.keys() {
-                let set = match before.first.get(name) {
+                let set = match state.first.get(name) {
                     Some(first) => first.as_ref(),
-                    None => before.declared.get(name),
+                    None => state.declared.get(name),
                 };
                 let Some(set) = set else {
                     if final_state.wildcard && self.blocked.insert(name.clone()) {

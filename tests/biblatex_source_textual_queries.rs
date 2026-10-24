@@ -129,7 +129,7 @@ fn early_missing_requests_remain_missing_after_later_source_declarations() {
     assert_eq!(warnings(&ws, &main), ["collected", "collected"]);
 }
 #[test]
-fn named_queries_and_comments_keep_exact_key_edits_and_ordinary_completion() {
+fn named_queries_and_comments_keep_exact_key_edits_and_final_completion() {
     for predicate in [
         r"\csuse{ifentryinbib}{parent}{Literal parent}{No parent}",
         r"\csname ifentrycategory\endcsname{parent}{group}{存在}{缺失}",
@@ -171,7 +171,7 @@ fn named_queries_and_comments_keep_exact_key_edits_and_ordinary_completion() {
             .any(|item| item.label == "parent"));
         assert!(features::completion(&ws, &main, query.range.start)
             .iter()
-            .all(|item| item.label != "parent"));
+            .any(|item| item.label == "parent"));
     }
 }
 #[test]
