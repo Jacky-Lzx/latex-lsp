@@ -326,6 +326,8 @@ cargo test --locked --test protocol source_textual_predicates_
 
 普通正文直接调用、包装之外的代码、复制包装、未执行或局部的转发声明、进入正文后才声明的包装、动态名称、命名接口或包装的重定义、不完整参数和可执行代码体继续保护。`parentext`／`brackettext` 转发的底层 `mkbibparens`／`mkbibbrackets` 被重定义时，同样撤下原生参数执行及初始化认证，保留另一种独立包装。数据库 `execute`／`@preamble`、共享消费者身份和新名称捕获沿用完整认证。
 
+包装还依赖原生括号输出命令。项目重定义对应的 `bibopenparen`／`bibcloseparen`、`bibopenbracket`／`bibclosebracket`，或 `bibleftparen`、`bibrightparen`、`bibleftbracket`、`bibrightbracket` 时，会撤下相关包装及其转发调用的原生文本执行和初始化认证。这些输出命令可能把正文中的第一个命令当作参数消费，留下同名显示文字；导航、补全和改名会保护这些文字。嵌套包装会交替使用两种括号，因此更改一种输出也可能影响另一种包装的认证。移除重定义后恢复原有交互。
+
 ```sh
 cargo test --locked --test biblatex_source_entrydata -- --include-ignored
 cargo test --locked --test protocol initialized_entrydata_

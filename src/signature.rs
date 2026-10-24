@@ -256,10 +256,34 @@ fn push_delimiter(snippet: &mut String, delimiter: &str) {
     }
 }
 
-// These native biblatex commands forward without capturing the target's meaning.
-const BIBLATEX_TEXT_FORWARDS: &[(&str, &str)] = &[
-    ("parentext", "mkbibparens"),
-    ("brackettext", "mkbibbrackets"),
+// Native wrappers execute text only with their original punctuation readers.
+// Both delimiter types participate because nested wrappers alternate them.
+// Keep dependencies before their forwarders so invalidation propagates.
+const BIBLATEX_TEXT_DEPENDENCIES: &[(&str, &[&str])] = &[
+    (
+        "mkbibparens",
+        &[
+            "bibopenparen",
+            "bibcloseparen",
+            "bibleftparen",
+            "bibrightparen",
+            "bibleftbracket",
+            "bibrightbracket",
+        ],
+    ),
+    (
+        "mkbibbrackets",
+        &[
+            "bibopenbracket",
+            "bibclosebracket",
+            "bibleftparen",
+            "bibrightparen",
+            "bibleftbracket",
+            "bibrightbracket",
+        ],
+    ),
+    ("parentext", &["mkbibparens"]),
+    ("brackettext", &["mkbibbrackets"]),
 ];
 
 fn builtin(name: &str) -> Option<Signature> {
@@ -2682,8 +2706,10 @@ impl<'a> CommandSignatures<'a> {
         // An overridden target can discard, defer or reinterpret the text.
         // Keep an explicit definition of the forwarder, but never apply its
         // native executable-text shape to an unproved replacement target.
-        for &(forwarder, target) in BIBLATEX_TEXT_FORWARDS {
-            if local.contains_key(target) && !local.contains_key(forwarder) {
+        for &(forwarder, targets) in BIBLATEX_TEXT_DEPENDENCIES {
+            if targets.iter().any(|target| local.contains_key(*target))
+                && !local.contains_key(forwarder)
+            {
                 local.insert(Cow::Borrowed(forwarder), None);
                 tex_operands.insert(Cow::Borrowed(forwarder), None);
             }
@@ -4872,7 +4898,7 @@ fn lookup<'a>(
             // theorems or newif; their builtin argument lists no longer apply.
             None
         } else {
-            if BIBLATEX_TEXT_FORWARDS
+            if BIBLATEX_TEXT_DEPENDENCIES
                 .iter()
                 .any(|(forwarder, _)| *forwarder == name)
             {

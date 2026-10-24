@@ -820,3 +820,131 @@ fn unrelated_forward_shapes_preserve_existing_named_sections_and_direct_queries(
         }
     }
 }
+
+fn changed_punctuation_cases(star: &str) -> Vec<(&'static str, &'static str, String)> {
+    let query = format!(r"\entrydata{star}{{collection}}{{Text}}");
+    vec![
+        ("", "bibleftparen", format!(r"\mkbibparens{{{query}}}")),
+        ("", "bibleftbracket", format!(r"\mkbibbrackets{{{query}}}")),
+        (
+            "",
+            "bibleftparen",
+            format!(r"\csuse{{parentext}}{{{query}}}"),
+        ),
+        (
+            r"\def\wrap{\parentext}",
+            "bibleftparen",
+            format!(r"\wrap{{{query}}}"),
+        ),
+        (
+            "",
+            "bibleftbracket",
+            format!(r"\mkbibparens{{Text \mkbibparens{{{query}}}}}"),
+        ),
+        (
+            "",
+            "bibleftparen",
+            format!(r"\mkbibbrackets{{Text \mkbibbrackets{{{query}}}}}"),
+        ),
+    ]
+}
+
+#[test]
+fn changed_punctuation_never_turns_displayed_entry_keys_into_source_references() {
+    for star in ["", "*"] {
+        for (preamble, target, call) in changed_punctuation_cases(star) {
+            let replacement = format!(r"\renewcommand\{target}[1]{{}}");
+            let body = format!(
+                r"{{{replacement}{call}}}\defbibentryset{{collection}}{{member}}\cite{{collection}}"
+            );
+            let (_dir, mut ws, main, _bib) = setup_with_preamble(preamble, &body);
+            let prefix = format!(r"\entrydata{star}{{");
+            let query = location(&ws, &main, &prefix, "collection");
+            let declaration = location(&ws, &main, r"\defbibentryset{", "collection");
+            assert!(
+                features::definitions(&ws, &main, query.range.start).is_empty(),
+                "{target}: {call}"
+            );
+            assert!(features::hover(&ws, &main, query.range.start).is_none());
+            assert!(features::references(&ws, &main, query.range.start, true).is_empty());
+            assert!(!matches!(
+                features::prepare_rename(&ws, &main, query.range.start),
+                Ok(Some(_))
+            ));
+            for at in [query.range.start, declaration.range.start] {
+                assert!(
+                    !matches!(features::rename(&ws, &main, at, "fresh"), Ok(Some(_))),
+                    "{target}: {call}"
+                );
+            }
+            assert!(features::completion(&ws, &main, query.range.end)
+                .iter()
+                .all(|item| item.label != "collection"));
+            let restored = ws.documents[&main].text.source.replace(&replacement, "");
+            ws.open(main.clone(), restored, 6);
+            let query = location(&ws, &main, &prefix, "collection");
+            assert_eq!(
+                features::definitions(&ws, &main, query.range.start),
+                vec![location(&ws, &main, r"\defbibentryset{", "collection")]
+            );
+        }
+    }
+}
+
+#[test]
+fn changed_punctuation_withdraws_native_text_execution_and_preserves_literal_labels() {
+    for (preamble, target, call) in changed_punctuation_cases("") {
+        let call = call.replace(r"\entrydata{collection}{Text}", r"\ref{safe}");
+        let body = format!(r"\label{{safe}}{{\renewcommand\{target}[1]{{}}{call}}}");
+        let (_dir, ws, main, _bib) = setup_with_preamble(preamble, &body);
+        let query = location(&ws, &main, r"\ref{", "safe");
+        assert!(
+            features::definitions(&ws, &main, query.range.start).is_empty(),
+            "{target}: {call}"
+        );
+        let doc = &ws.documents[&main];
+        let at = doc.text.position(doc.text.source.find(r"\ref").unwrap());
+        assert!(
+            signature::help(&ws, &main, at).is_none(),
+            "{target}: {call}"
+        );
+        let declaration = location(&ws, &main, r"\label{", "safe");
+        if let Ok(Some(edit)) = features::rename(&ws, &main, declaration.range.start, "fresh") {
+            for edit in &edit.changes.unwrap()[&main] {
+                assert_ne!(edit.range, query.range, "{target}: {call}");
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex, biblatex and biber"]
+fn native_changed_punctuation_leaves_entry_keys_as_display_text_without_partial_edits() {
+    for star in ["", "*"] {
+        for (preamble, target, call) in changed_punctuation_cases(star) {
+            let body = format!(
+                r"{{\renewcommand\{target}[1]{{}}{call}}}\defbibentryset{{collection}}{{member}}\cite{{collection}}\printbibliography"
+            );
+            let (dir, ws, main, _bib) = setup_with_preamble(preamble, &body);
+            let before = compile_clean(dir.path());
+            assert!(before.contains(r"\entry{collection}{set}"));
+            let query = location(&ws, &main, &format!(r"\entrydata{star}{{"), "collection");
+            assert!(features::definitions(&ws, &main, query.range.start).is_empty());
+            let declaration = location(&ws, &main, r"\defbibentryset{", "collection");
+            assert!(!matches!(
+                features::rename(&ws, &main, declaration.range.start, "fresh"),
+                Ok(Some(_))
+            ));
+            let observed = ws.documents[&main].text.source.replace("{Text}",
+                r"{\iffieldundef{entrytype}{\typeout{LSP-ENTRYDATA:missing}}{\typeout{LSP-ENTRYDATA:\thefield{entrytype}}}Text}");
+            std::fs::write(dir.path().join("main.tex"), observed).unwrap();
+            assert_eq!(compile_clean(dir.path()), before, "{target}: {call}");
+            let log = std::fs::read_to_string(dir.path().join("main.log")).unwrap();
+            let observed: Vec<_> = log
+                .lines()
+                .filter(|line| line.starts_with("LSP-ENTRYDATA:"))
+                .collect();
+            assert_eq!(observed, ["LSP-ENTRYDATA:missing"], "{target}: {call}");
+        }
+    }
+}

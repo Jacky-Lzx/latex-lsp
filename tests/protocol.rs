@@ -36054,6 +36054,49 @@ fn initialized_entrydata_keeps_final_sets_exact_versions_and_unsaved_guards() {
             target
         );
 
+        for (index, punctuation) in [
+            "bibleftparen",
+            "bibleftbracket",
+            "bibopenparen",
+            "bibopenbracket",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let changed = format!(r"{provider_source}\renewcommand\{punctuation}[1]{{}}");
+            server.notify("textDocument/didOpen", json!({"textDocument":{"uri":provider,"languageId":"latex","version":30+index,"text":changed}}));
+            assert_eq!(
+                server.request(110, "textDocument/definition", params.clone()),
+                json!([])
+            );
+            assert_eq!(
+                server.request(111, "textDocument/references", refs.clone()),
+                json!([])
+            );
+            for (id, uri, position) in [(112, &main, declaration.start), (113, &child, query.start)]
+            {
+                server.send(json!({"jsonrpc":"2.0","id":id,"method":"textDocument/rename","params":{"textDocument":{"uri":uri},"position":position,"newName":"fresh"}}));
+                let response = server.until(|message| message["id"] == id);
+                assert!(
+                    response["error"]["code"] == -32602
+                        || response.get("result") == Some(&Value::Null),
+                    "{punctuation}: {response}"
+                );
+            }
+            server.notify(
+                "textDocument/didClose",
+                json!({"textDocument":{"uri":provider}}),
+            );
+            assert_eq!(
+                server.request(114, "textDocument/definition", params.clone()),
+                target
+            );
+            assert_eq!(
+                server.request(115, "textDocument/references", refs.clone()),
+                values
+            );
+        }
+
         if forwarded {
             for (index, declaration) in [
                 r"\def\dormant{\def\wrapbrackets{\mkbibbrackets}}",
