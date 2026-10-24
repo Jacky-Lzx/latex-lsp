@@ -292,3 +292,12 @@ cargo test --locked --test protocol source_named_ids_reads_
 ```
 
 原生覆盖默认／所选分区的早晚请求、同时存在所属主键与别名名称的两个集合、另一个别名及独立集合成员。协议验证精确引用、拒绝相交改名、未保存静态／字符串／拼接关系撤销认证和关闭恢复。原生反例确认关系宏展开也会在无警告时抑制集合。
+
+共享 IDS 所属主键的耦合改名回归：
+
+```sh
+cargo test --locked --test biblatex_shared_alias_owner_rename -- --include-ignored
+cargo test --locked --test protocol coupled_raw_ids_owners_
+```
+
+测试核验两个分区的完整 BBL 在改名归一化后一致、三个库经多个别名关联时的完整编辑、独立项目隔离及未保存消费者。协议精确验证两种工作区编辑格式、六处编辑、三个文件的版本与关闭恢复；普通引用结果仍只包含各自声明身份。

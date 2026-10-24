@@ -134,7 +134,7 @@ fn empty_resource_sections_cannot_hide_citations_to_cached_global_aliases() {
     assert!(missing(&ws, &main).is_empty());
 }
 #[test]
-fn repeated_global_ids_owners_and_new_alias_capture_across_other_sections_are_protected() {
+fn shared_ids_owners_move_together_and_new_alias_capture_is_protected() {
     let (_dir, ws, _main, default, bib) = setup(
         r"\cite{old}\newrefsection[chosen]\cite{old}\newrefsection\cite{capture}",
         CLOSED,
@@ -149,8 +149,17 @@ fn repeated_global_ids_owners_and_new_alias_capture_across_other_sections_are_pr
         .is_some());
     assert!(features::rename(&ws, &bib, alias.range.start, "capture").is_err());
     let owner = key(&ws, &default, "@book{", "parent");
-    assert!(features::prepare_rename(&ws, &default, owner.range.start).is_err());
-    assert!(features::rename(&ws, &default, owner.range.start, "newowner").is_err());
+    assert!(features::prepare_rename(&ws, &default, owner.range.start)
+        .unwrap()
+        .is_some());
+    let changes = features::rename(&ws, &default, owner.range.start, "newowner")
+        .unwrap()
+        .unwrap()
+        .changes
+        .unwrap();
+    assert_eq!(changes.len(), 2);
+    assert_eq!(changes[&default].len(), 1);
+    assert_eq!(changes[&bib].len(), 1);
 }
 #[test]
 fn unsaved_alias_namespace_changes_revoke_complete_edits_and_restoration_recovers() {

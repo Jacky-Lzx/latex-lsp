@@ -1126,7 +1126,7 @@ fn validate_edit(symbol: &Symbol<'_>) -> Result<()> {
 
 // Couple only a uniquely proved backend prerequisite that has no independent
 // book identity in any consumer. Raw-entry queries keep their ordinary identity.
-fn edit_symbol(mut target: Symbol<'_>) -> Result<Symbol<'_>> {
+fn edit_symbol<'a>(mut target: Symbol<'a>, shared: &BTreeSet<Identity>) -> Result<Symbol<'a>> {
     // An alias-only edit preserves its globally certified primary spelling.
     // Owner edits still require the complete disjoint-resource proof.
     let alias_key = is_alias(&target);
@@ -1189,10 +1189,22 @@ fn edit_symbol(mut target: Symbol<'_>) -> Result<Symbol<'_>> {
                         .graphs
                         .work
                         .set(target.graphs.work.get() + alias.name.len() + 64);
-                    if target.graphs.work.get() > 32 * 1024 * 1024
-                        || aliases.contains(alias.name.as_str())
-                    {
+                    if target.graphs.work.get() > 32 * 1024 * 1024 {
                         return Err(());
+                    }
+                    if aliases.contains(alias.name.as_str()) {
+                        let owner = crate::bib_source_aliases::owner(
+                            &target.graphs.ws.documents[uri],
+                            alias,
+                        )
+                        .ok_or(())?;
+                        let entries = target.graphs.databases[uri]
+                            .declarations
+                            .get(owner)
+                            .ok_or(())?;
+                        if entries.len() != 1 || !shared.contains(&entries[0]) {
+                            return Err(());
+                        }
                     }
                 }
             }
@@ -1321,6 +1333,106 @@ fn edit_symbol(mut target: Symbol<'_>) -> Result<Symbol<'_>> {
     Ok(target)
 }
 
+// A shared IDS mapping must keep one primary spelling throughout a run.
+// Expand through every alias of each raw owner before validating any edit.
+fn edit_symbols<'a>(target: Symbol<'a>) -> Result<Vec<Symbol<'a>>> {
+    let ws = target.graphs.ws;
+    let mut seen = BTreeSet::from([target.declaration.clone()]);
+    let (mut work, mut stored, mut bytes) = (
+        target.graphs.work.get(),
+        target.graphs.stored,
+        target.graphs.bytes,
+    );
+    if work > 32 * 1024 * 1024 || stored > 32 * 1024 * 1024 || bytes > 16 * 1024 * 1024 {
+        return Err(());
+    }
+    let mut pending = vec![target];
+    let mut symbols = Vec::new();
+    while let Some(target) = pending.pop() {
+        if !is_source(&target) && !is_alias(&target) {
+            let doc = &ws.documents[&target.declaration.uri];
+            let aliases: BTreeSet<_> = doc
+                .syntax
+                .bibliography_aliases
+                .iter()
+                .filter(|alias| {
+                    crate::bib_source_aliases::owner(doc, alias) == Some(target.name.as_str())
+                })
+                .map(|alias| alias.name.as_str())
+                .collect();
+            for (uri, database) in &target.graphs.databases {
+                for alias in &ws.documents[uri].syntax.bibliography_aliases {
+                    work += alias.name.len() + 64;
+                    if work > 32 * 1024 * 1024 {
+                        return Err(());
+                    }
+                    if !aliases.contains(alias.name.as_str()) {
+                        continue;
+                    }
+                    let owner =
+                        crate::bib_source_aliases::owner(&ws.documents[uri], alias).ok_or(())?;
+                    if owner != target.name {
+                        return Err(());
+                    }
+                    let entries = database.declarations.get(owner).ok_or(())?;
+                    if entries.len() != 1 {
+                        return Err(());
+                    }
+                    let identity = &entries[0];
+                    if seen.insert(identity.clone()) {
+                        if seen.len() > 64 {
+                            return Err(());
+                        }
+                        let sibling = symbol(ws, uri, identity.start).ok_or(())??;
+                        // Charge the retained graph before enqueueing another
+                        // owner, rather than after all siblings are allocated.
+                        work += sibling.graphs.work.get();
+                        stored += sibling.graphs.stored;
+                        bytes += sibling.graphs.bytes;
+                        if work > 32 * 1024 * 1024
+                            || stored > 32 * 1024 * 1024
+                            || bytes > 16 * 1024 * 1024
+                        {
+                            return Err(());
+                        }
+                        pending.push(sibling);
+                    }
+                }
+            }
+        }
+        symbols.push(target);
+    }
+    if symbols.len() > 1
+        && symbols.iter().any(|target| {
+            target
+                .graphs
+                .projects
+                .values()
+                .any(|project| project.graph.sources.is_some())
+        })
+    {
+        return Err(());
+    }
+    let mut edited = Vec::new();
+    for target in symbols {
+        let before = target.graphs.work.get();
+        let target = edit_symbol(target, &seen)?;
+        work += target.graphs.work.get() - before;
+        if work > 32 * 1024 * 1024 {
+            return Err(());
+        }
+        edited.push(target);
+    }
+    let charged: usize = edited.iter().map(|target| target.graphs.work.get()).sum();
+    if let Some(first) = edited.first() {
+        first
+            .graphs
+            .work
+            .set(first.graphs.work.get() + work - charged);
+    }
+    Ok(edited)
+}
+
 pub(crate) fn prepare(
     ws: &Workspace,
     uri: &Url,
@@ -1329,16 +1441,204 @@ pub(crate) fn prepare(
     Some(
         symbol(ws, uri, offset)?
             .and_then(|symbol| {
-                let symbol = edit_symbol(symbol)?;
+                let range = ws.documents[uri]
+                    .text
+                    .range(symbol.query.start, symbol.query.end);
+                let placeholder = symbol.name.clone();
+                edit_symbols(symbol)?;
                 Ok(Some(PrepareRenameResponse::RangeWithPlaceholder {
-                    range: ws.documents[uri]
-                        .text
-                        .range(symbol.query.start, symbol.query.end),
-                    placeholder: symbol.name,
+                    range,
+                    placeholder,
                 }))
             })
             .map_err(|_| edit_error()),
     )
+}
+
+fn rename_edits(
+    ws: &Workspace,
+    mut symbol: Symbol<'_>,
+    name: &str,
+) -> jsonrpc::Result<(BTreeMap<Url, Vec<TextEdit>>, usize)> {
+    if !syntax::is_static_citation_key(name) || name == "*" {
+        return Err(jsonrpc::Error::invalid_params("Invalid bibliography key: use a nonempty literal key without separators or TeX expansion"));
+    }
+    if name == symbol.name {
+        return Ok((BTreeMap::new(), symbol.graphs.work.get()));
+    }
+    let source_key = is_source(&symbol);
+    let alias_key = is_alias(&symbol);
+    if !source_key
+        && symbol.graphs.databases[&symbol.declaration.uri]
+            .declarations
+            .contains_key(name)
+    {
+        return Err(jsonrpc::Error::invalid_params(
+            "The bibliography key or IDS alias already exists in the declaration database",
+        ));
+    }
+    symbol.graphs.name = Some(name.into());
+    symbol.graphs.bindings.borrow_mut().clear();
+    symbol.graphs.database_bindings.borrow_mut().clear();
+    let raw = symbol.prerequisite.as_ref().or_else(|| {
+        (!source_key
+            && !alias_key
+            && ws.documents[&symbol.declaration.uri].kind == DocumentKind::Bibtex)
+            .then_some(&symbol.declaration)
+    });
+    let owns_ids = raw.is_some_and(|raw| {
+        let doc = &ws.documents[&raw.uri];
+        doc.syntax
+            .bibliography_aliases
+            .iter()
+            .any(|alias| crate::bib_source_aliases::owner(doc, alias) == Some(symbol.name.as_str()))
+    });
+    symbol.graphs.relation_bindings.borrow_mut().clear();
+    let relation_owners: BTreeSet<_> = symbol
+        .graphs
+        .databases
+        .iter()
+        .filter(|(_, database)| {
+            database
+                .references
+                .iter()
+                .any(|reference| reference.name == name)
+        })
+        .map(|(uri, _)| uri)
+        .collect();
+    for (root, project) in &symbol.graphs.projects {
+        let mut check_cache = false;
+        // A new real key can delete an earlier IDS mapping from Biber's
+        // global cache, breaking later citations in other sections.
+        for resource in &project.resources {
+            if owns_ids {
+                for entry in &ws.documents[resource].syntax.citations {
+                    symbol
+                        .graphs
+                        .work
+                        .set(symbol.graphs.work.get() + entry.name.len() + 64);
+                    if symbol.graphs.work.get() > 32 * 1024 * 1024 {
+                        return Err(edit_error());
+                    }
+                    if entry.name == name {
+                        check_cache = true;
+                    }
+                }
+            }
+            for alias in &ws.documents[resource].syntax.bibliography_aliases {
+                symbol
+                    .graphs
+                    .work
+                    .set(symbol.graphs.work.get() + alias.name.len() + 64);
+                if symbol.graphs.work.get() > 32 * 1024 * 1024 {
+                    return Err(edit_error());
+                }
+                if alias.name == name {
+                    return Err(jsonrpc::Error::invalid_params("The new bibliography key conflicts with a global IDS alias in this project"));
+                }
+                if raw.is_some()
+                    && crate::bib_source_aliases::owner(&ws.documents[resource], alias)
+                        == Some(name)
+                {
+                    check_cache = true;
+                }
+            }
+        }
+        if check_cache {
+            let raw = raw.ok_or_else(edit_error)?;
+            let work = bib_section_keys::validate_primary_rename(
+                ws,
+                root,
+                &project.scope,
+                crate::bib_source_aliases::PrimaryRename {
+                    uri: &raw.uri,
+                    from: &symbol.name,
+                    to: name,
+                },
+            )
+            .ok_or_else(|| {
+                jsonrpc::Error::invalid_params(
+                    "The new primary spelling has an unproved global IDS cache owner",
+                )
+            })?;
+            symbol.graphs.work.set(symbol.graphs.work.get() + work);
+            if symbol.graphs.work.get() > 32 * 1024 * 1024 {
+                return Err(edit_error());
+            }
+        }
+        symbol.lexical.validate(&project.scope, true, name)?;
+        crate::resource_context::validate_rename(ws, &project.scope, name)?;
+        for view in project.graph.sections.iter().filter(|view| {
+            alias_key || consumes(view, &symbol.declaration, &symbol.name, source_key)
+        }) {
+            if view
+                .namespace
+                .as_ref()
+                .is_some_and(|state| state.declared.contains_key(name))
+                || symbol
+                    .graphs
+                    .database_binding(name, &view.resources)
+                    .map_err(|_| edit_error())?
+                    .is_some()
+            {
+                return Err(jsonrpc::Error::invalid_params("The bibliography key or IDS alias already exists in a section consuming this declaration"));
+            }
+        }
+        for source in project.scope.iter().filter(|uri| {
+            ws.documents
+                .get(*uri)
+                .is_some_and(|doc| doc.kind == DocumentKind::Latex)
+        }) {
+            for span in symbol.lexical.references(source, true, name) {
+                let views = project
+                    .graph
+                    .occurrences
+                    .get(&(source.clone(), span.start, span.end))
+                    .ok_or_else(edit_error)?;
+                if alias_key
+                    || views
+                        .iter()
+                        .any(|view| consumes(view, &symbol.declaration, &symbol.name, source_key))
+                {
+                    return Err(jsonrpc::Error::invalid_params(
+                        "Renaming this bibliography key would capture an existing citation",
+                    ));
+                }
+            }
+        }
+        if project
+            .graph
+            .sections
+            .iter()
+            .filter(|view| {
+                alias_key || consumes(view, &symbol.declaration, &symbol.name, source_key)
+            })
+            .any(|view| {
+                view.iter()
+                    .any(|resource| relation_owners.contains(resource))
+            })
+        {
+            return Err(jsonrpc::Error::invalid_params(
+                "Renaming this bibliography key would capture an existing bibliography relation",
+            ));
+        }
+    }
+    let mut changes = BTreeMap::new();
+    for (uri, spans) in symbol.occurrences {
+        let doc = &ws.documents[&uri];
+        let mut edits: Vec<_> = spans
+            .into_iter()
+            .map(|(start, end)| TextEdit {
+                range: doc.text.range(start, end),
+                new_text: name.into(),
+            })
+            .collect();
+        if name.contains('"') {
+            crate::features::brace_quoted_citation_edits(doc, &mut edits);
+        }
+        changes.insert(uri, edits);
+    }
+    Ok((changes, symbol.graphs.work.get()))
 }
 
 pub(crate) fn rename(
@@ -1347,92 +1647,50 @@ pub(crate) fn rename(
     offset: usize,
     name: &str,
 ) -> Option<jsonrpc::Result<Option<WorkspaceEdit>>> {
-    Some(symbol(ws, uri, offset)?.map_err(|_| edit_error()).and_then(|symbol| {
-        let mut symbol = edit_symbol(symbol).map_err(|_| edit_error())?;
-        if !syntax::is_static_citation_key(name) || name == "*" {
-            return Err(jsonrpc::Error::invalid_params("Invalid bibliography key: use a nonempty literal key without separators or TeX expansion"));
-        }
-        if name == symbol.name { return Ok(Some(WorkspaceEdit::default())); }
-        let source_key = is_source(&symbol);
-        let alias_key = is_alias(&symbol);
-        if !source_key && symbol.graphs.databases[&symbol.declaration.uri].declarations.contains_key(name) {
-            return Err(jsonrpc::Error::invalid_params("The bibliography key or IDS alias already exists in the declaration database"));
-        }
-        symbol.graphs.name = Some(name.into());
-        symbol.graphs.bindings.borrow_mut().clear();
-        symbol.graphs.database_bindings.borrow_mut().clear();
-        let raw = symbol.prerequisite.as_ref().or_else(|| {
-            (!source_key && !alias_key && ws.documents[&symbol.declaration.uri].kind == DocumentKind::Bibtex)
-                .then_some(&symbol.declaration)
-        });
-        let owns_ids = raw.is_some_and(|raw| {
-            let doc = &ws.documents[&raw.uri];
-            doc.syntax.bibliography_aliases.iter().any(|alias| crate::bib_source_aliases::owner(doc, alias) == Some(symbol.name.as_str()))
-        });
-        symbol.graphs.relation_bindings.borrow_mut().clear();
-        let relation_owners: BTreeSet<_> = symbol.graphs.databases.iter().filter(|(_, database)| database.references.iter().any(|reference| reference.name == name)).map(|(uri, _)| uri).collect();
-        for (root, project) in &symbol.graphs.projects {
-            let mut check_cache = false;
-            // A new real key can delete an earlier IDS mapping from Biber's
-            // global cache, breaking later citations in other sections.
-            for resource in &project.resources {
-                if owns_ids {
-                    for entry in &ws.documents[resource].syntax.citations {
-                        symbol.graphs.work.set(symbol.graphs.work.get() + entry.name.len() + 64);
-                        if symbol.graphs.work.get() > 32 * 1024 * 1024 { return Err(edit_error()); }
-                        if entry.name == name {
-                            check_cache = true;
+    Some(
+        symbol(ws, uri, offset)?
+            .map_err(|_| edit_error())
+            .and_then(|symbol| {
+                let symbols = edit_symbols(symbol).map_err(|_| edit_error())?;
+                if symbols[0].name == name {
+                    return Ok(Some(WorkspaceEdit::default()));
+                }
+                if symbols.len() > 1 && symbols[0].name != name {
+                    // Reusing an existing primary can replace the cached IDS provider.
+                    // A fresh spelling leaves the certified loading order unchanged.
+                    for symbol in &symbols {
+                        for database in symbol.graphs.databases.values() {
+                            if database.declarations.contains_key(name) {
+                                return Err(edit_error());
+                            }
                         }
                     }
                 }
-                for alias in &ws.documents[resource].syntax.bibliography_aliases {
-                    symbol.graphs.work.set(symbol.graphs.work.get() + alias.name.len() + 64);
-                    if symbol.graphs.work.get() > 32 * 1024 * 1024 { return Err(edit_error()); }
-                    if alias.name == name {
-                        return Err(jsonrpc::Error::invalid_params("The new bibliography key conflicts with a global IDS alias in this project"));
+                let mut changes = BTreeMap::<Url, Vec<TextEdit>>::new();
+                let mut work = 0usize;
+                for symbol in symbols {
+                    let (edits, used) = rename_edits(ws, symbol, name)?;
+                    work += used;
+                    if work > 32 * 1024 * 1024 {
+                        return Err(edit_error());
                     }
-                    if raw.is_some() && crate::bib_source_aliases::owner(&ws.documents[resource], alias) == Some(name) {
-                        check_cache = true;
-                    }
-                }
-            }
-            if check_cache {
-                let raw = raw.ok_or_else(edit_error)?;
-                let work = bib_section_keys::validate_primary_rename(ws, root, &project.scope,
-                    crate::bib_source_aliases::PrimaryRename { uri: &raw.uri, from: &symbol.name, to: name }
-                ).ok_or_else(|| jsonrpc::Error::invalid_params("The new primary spelling has an unproved global IDS cache owner"))?;
-                symbol.graphs.work.set(symbol.graphs.work.get() + work);
-                if symbol.graphs.work.get() > 32 * 1024 * 1024 { return Err(edit_error()); }
-            }
-            symbol.lexical.validate(&project.scope, true, name)?;
-            crate::resource_context::validate_rename(ws, &project.scope, name)?;
-            for view in project.graph.sections.iter().filter(|view| alias_key || consumes(view, &symbol.declaration, &symbol.name, source_key)) {
-                if view.namespace.as_ref().is_some_and(|state| state.declared.contains_key(name))
-                    || symbol.graphs.database_binding(name, &view.resources).map_err(|_| edit_error())?.is_some() {
-                    return Err(jsonrpc::Error::invalid_params("The bibliography key or IDS alias already exists in a section consuming this declaration"));
-                }
-            }
-            for source in project.scope.iter().filter(|uri| ws.documents.get(*uri).is_some_and(|doc| doc.kind == DocumentKind::Latex)) {
-                for span in symbol.lexical.references(source, true, name) {
-                    let views = project.graph.occurrences.get(&(source.clone(), span.start, span.end)).ok_or_else(edit_error)?;
-                    if alias_key || views.iter().any(|view| consumes(view, &symbol.declaration, &symbol.name, source_key)) {
-                        return Err(jsonrpc::Error::invalid_params("Renaming this bibliography key would capture an existing citation"));
+                    for (uri, edits) in edits {
+                        changes.entry(uri).or_default().extend(edits);
                     }
                 }
-            }
-            if project.graph.sections.iter().filter(|view| alias_key || consumes(view, &symbol.declaration, &symbol.name, source_key)).any(|view| view.iter().any(|resource| relation_owners.contains(resource))) {
-                return Err(jsonrpc::Error::invalid_params("Renaming this bibliography key would capture an existing bibliography relation"));
-            }
-        }
-        let mut changes = BTreeMap::new();
-        for (uri, spans) in symbol.occurrences {
-            let doc = &ws.documents[&uri];
-            let mut edits: Vec<_> = spans.into_iter().map(|(start,end)| TextEdit {range: doc.text.range(start,end),new_text:name.into()}).collect();
-            if name.contains('"') { crate::features::brace_quoted_citation_edits(doc, &mut edits); }
-            changes.insert(uri, edits);
-        }
-        Ok(Some(crate::features::workspace_edit(ws, changes)))
-    }))
+                for edits in changes.values_mut() {
+                    edits.sort_by_key(|edit| (edit.range.start, edit.range.end));
+                    edits.dedup();
+                    if edits
+                        .windows(2)
+                        .any(|pair| pair[0].range.end > pair[1].range.start)
+                    {
+                        return Err(edit_error());
+                    }
+                }
+                Ok(Some(crate::features::workspace_edit(ws, changes)))
+            }),
+    )
 }
 
 /// Validate a relation's complete owner and literal field before read-only
