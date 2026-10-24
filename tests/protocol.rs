@@ -36110,3 +36110,212 @@ fn initialized_entrydata_keeps_final_sets_exact_versions_and_unsaved_guards() {
         server.wait_exit(0);
     }
 }
+
+#[test]
+fn automatic_category_hints_certify_preloaded_members_unsaved_sources_and_shared_roots() {
+    use latex_lsp::text::Text;
+    let dir = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let provider = main.join("assign.tex").unwrap();
+    let child = main.join("child.tex").unwrap();
+    let other = main.join("other.tex").unwrap();
+    let source="% 😀\r\n\\documentclass{article}\\usepackage[style=numeric,sorting=none,defernumbers=true]{biblatex}\\addbibresource{data.bib}\\DeclareBibliographyCategory{x}\\DeclareBibliographyCategory{y}\\input{members}\\begin{document}\\cite{a}\\input{assign}\\cite{a}\\input{child}\\label{target}\\ref{target}\\end{document}";
+    let assignment = "% 😀\r\n\\assignrefcontextcats[labelprefix=A]{x} Text";
+    let child_source = "% 😀\r\n😀 \\cite{a}";
+    for (name, content) in [
+        ("main.tex", source),
+        ("assign.tex", assignment),
+        ("child.tex", child_source),
+        ("data.bib", "@book{a,title={Alpha}} @book{z,title={Zulu}}"),
+        ("members.tex", r"\addtocategory{x}{a}"),
+    ] {
+        std::fs::write(dir.path().join(name), content).unwrap();
+    }
+    let a = "none/global/7FC56270E7A70FA81A5935B72EACBE29/global/global/global";
+    let b = "none/global/9D5ED678FE57BCCA610140957AFAB571/global/global/global";
+    let prologue = r"% $ biblatex auxiliary file $
+% $ biblatex bbl format version 3.3 $
+\begingroup\makeatletter\@ifundefined{ver@biblatex.sty}{\@latex@error{Missing 'biblatex' package}{The bibliography requires the 'biblatex' package.}\aftergroup\endinput}{}\endgroup
+";
+    let list = |context, prefix| {
+        format!(
+            r"\datalist[entry]{{{context}}}\entry{{a}}{{book}}{{}}{{}}\field{{labelprefix}}{{{prefix}}}\field{{title}}{{Alpha}}\endentry\enddatalist"
+        )
+    };
+    let bbl = format!(
+        r"{prologue}\refsection{{0}}{}{}\endrefsection\endinput",
+        list(a, "A"),
+        list(b, "B")
+    );
+    let numbers = format!(
+        r"\abx@aux@number{{99}}{{a}}{{0}}{{{a}}}{{3}}\abx@aux@number{{100}}{{a}}{{0}}{{{b}}}{{8}}\abx@aux@defaultrefcontext{{0}}{{a}}{{{b}}}\newlabel{{target}}{{{{4}}{{9}}}}"
+    );
+    std::fs::create_dir(dir.path().join("build output")).unwrap();
+    let member_aux = dir.path().join("build output/members.aux");
+    std::fs::write(&member_aux, r"\abx@aux@category{x}{a}").unwrap();
+    let numbers = numbers + r"\@input{members.aux}";
+
+    let aux = dir.path().join("build output/custom.aux");
+    std::fs::write(&aux, &numbers).unwrap();
+    std::fs::write(dir.path().join("build output/custom.bbl"), &bbl).unwrap();
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{},"initializationOptions":{"distribution":{"enabled":false},"build":{"outputDirectory":"build output","jobName":"custom"}}}));
+    server.notify("initialized", json!({}));
+    for (uri, text, version) in [
+        (&main, source, 3),
+        (&provider, assignment, 7),
+        (&child, child_source, 5),
+    ] {
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"languageId":"latex","version":version,"text":text}}),
+        );
+    }
+    let params = |uri: &Url| json!({"textDocument":{"uri":uri},"range":{"start":{"line":0,"character":0},"end":{"line":3,"character":0}}});
+    let labels = |value: Value| {
+        value
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|hint| hint["label"].clone())
+            .collect::<Vec<_>>()
+    };
+    let initial = server.request(2, "textDocument/inlayHint", params(&main));
+    assert_eq!(
+        labels(initial.clone()),
+        vec![json!("→ B8"), json!("→ A3"), json!("→ 4, p. 9")]
+    );
+    for (hint, (at, _)) in initial
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(source.match_indices(r"\cite{a}"))
+    {
+        assert_eq!(
+            hint["position"],
+            serde_json::to_value(Text::new(source.into()).position(at + 7)).unwrap()
+        );
+    }
+    let hints = server.request(3, "textDocument/inlayHint", params(&child));
+    assert_eq!(labels(hints.clone()), vec![json!("→ A3")]);
+    assert_eq!(hints[0]["position"], json!({"line":1,"character":10}));
+    server.notify("textDocument/didChange",json!({"textDocument":{"uri":provider,"version":8},"contentChanges":[{"text":assignment.replace("labelprefix=A","labelprefix=B")}] }));
+    assert_eq!(
+        labels(server.request(4, "textDocument/inlayHint", params(&main))),
+        vec![json!("→ B8"), json!("→ B8"), json!("→ 4, p. 9")]
+    );
+    assert_eq!(
+        labels(server.request(5, "textDocument/inlayHint", params(&child))),
+        vec![json!("→ B8")]
+    );
+    server.notify("textDocument/didChange",json!({"textDocument":{"uri":provider,"version":9},"contentChanges":[{"text":assignment.replace("cats[","cats*[")}] }));
+    assert_eq!(
+        labels(server.request(6, "textDocument/inlayHint", params(&main))),
+        vec![json!("→ B8"), json!("→ A3"), json!("→ 4, p. 9")]
+    );
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":provider}}),
+    );
+    assert_eq!(
+        labels(server.request(7, "textDocument/inlayHint", params(&child))),
+        vec![json!("→ A3")]
+    );
+    let other_source = source.replace(
+        r"\input{assign}",
+        r"\assignrefcontextcats[labelprefix=B]{x} Text",
+    );
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":other,"languageId":"latex","version":10,"text":other_source}}),
+    );
+    assert_eq!(
+        server.request(8, "textDocument/inlayHint", params(&child)),
+        json!([])
+    );
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":other}}),
+    );
+    assert_eq!(
+        labels(server.request(9, "textDocument/inlayHint", params(&child))),
+        vec![json!("→ A3")]
+    );
+    let missing = numbers.replace(&format!(r"\abx@aux@number{{99}}{{a}}{{0}}{{{a}}}{{3}}"), "");
+    std::fs::write(&aux, missing).unwrap();
+    assert_eq!(
+        labels(server.request(10, "textDocument/inlayHint", params(&main))),
+        vec![json!("→ B8"), json!("→ 4, p. 9")]
+    );
+    assert_eq!(
+        server.request(11, "textDocument/inlayHint", params(&child)),
+        json!([])
+    );
+    std::fs::write(&aux, &numbers).unwrap();
+    assert_eq!(
+        labels(server.request(12, "textDocument/inlayHint", params(&child))),
+        vec![json!("→ A3")]
+    );
+
+    let members = main.join("members.tex").unwrap();
+    server.notify("textDocument/didOpen",json!({"textDocument":{"uri":members,"languageId":"latex","version":11,"text":r"\addtocategory{x}{z}"}}));
+    assert_eq!(
+        server.request(20, "textDocument/inlayHint", params(&child)),
+        json!([])
+    );
+    std::fs::write(&member_aux, r"\abx@aux@category{x}{z}").unwrap();
+    assert_eq!(
+        labels(server.request(21, "textDocument/inlayHint", params(&child))),
+        vec![json!("→ B8")]
+    );
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":members}}),
+    );
+    assert_eq!(
+        server.request(22, "textDocument/inlayHint", params(&child)),
+        json!([])
+    );
+    std::fs::write(&member_aux, r"\abx@aux@category{x}{a}").unwrap();
+    assert_eq!(
+        labels(server.request(23, "textDocument/inlayHint", params(&child))),
+        vec![json!("→ A3")]
+    );
+    server.notify("textDocument/didOpen",json!({"textDocument":{"uri":members,"languageId":"latex","version":12,"text":r"\addtocategory{x}{a}\newcommand\later{\addtocategory{y}{a}}"}}));
+    assert_eq!(
+        server.request(24, "textDocument/inlayHint", params(&child)),
+        json!([])
+    );
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":members}}),
+    );
+    assert_eq!(
+        labels(server.request(25, "textDocument/inlayHint", params(&child))),
+        vec![json!("→ A3")]
+    );
+    let bib = main.join("data.bib").unwrap();
+    server.notify("textDocument/didOpen",json!({"textDocument":{"uri":bib,"languageId":"bibtex","version":13,"text":r"@book{a,title={Alpha},execute={\unknown}}"}}));
+    assert_eq!(
+        server.request(26, "textDocument/inlayHint", params(&child)),
+        json!([])
+    );
+    server.notify("textDocument/didClose", json!({"textDocument":{"uri":bib}}));
+    assert_eq!(
+        labels(server.request(27, "textDocument/inlayHint", params(&child))),
+        vec![json!("→ A3")]
+    );
+    std::fs::write(&member_aux, r"\abx@aux@category{x}{\unknown}").unwrap();
+    assert_eq!(
+        server.request(28, "textDocument/inlayHint", params(&child)),
+        json!([])
+    );
+    std::fs::write(&member_aux, r"\abx@aux@category{x}{a}").unwrap();
+    assert_eq!(
+        labels(server.request(29, "textDocument/inlayHint", params(&child))),
+        vec![json!("→ A3")]
+    );
+    server.request(1000, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

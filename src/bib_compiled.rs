@@ -98,7 +98,7 @@ fn mode(docs: &[(Url, &Document)], signatures: &CommandSignatures<'_>) -> Mode {
         let assignment_bodies = signatures.builtin_alias_body_positions(
             source,
             &doc.syntax,
-            &["assignrefcontextentries"],
+            crate::bib_context_assignments::COMMANDS,
         );
         for (index, command) in doc.syntax.commands.iter().enumerate() {
             let (name, span) = signatures
@@ -126,11 +126,13 @@ fn mode(docs: &[(Url, &Document)], signatures: &CommandSignatures<'_>) -> Mode {
                 && !(context
                     .declarations
                     .contains(&(command.span.start, command.span.end))
-                    && signatures.forwarded_builtin(&command.name)
-                        == Some("assignrefcontextentries"))
+                    && signatures
+                        .forwarded_builtin(&command.name)
+                        .and_then(crate::bib_context_assignments::target)
+                        .is_some())
             {
                 let safe = !definition
-                    && (canonical == "assignrefcontextentries"
+                    && (crate::bib_context_assignments::target(canonical).is_some()
                         || command.name == canonical && name == canonical)
                     && positions.contains(&command.span.start)
                     && !context.operand(doc, command.span.start)
@@ -145,8 +147,9 @@ fn mode(docs: &[(Url, &Document)], signatures: &CommandSignatures<'_>) -> Mode {
                             .any(|entry| entry.name == "refcontext")
                     })
                     && (crate::bib_context::static_context(source, canonical, span.end)
-                        || canonical == "assignrefcontextentries"
-                            && crate::bib_context_assignments::parse(source, span.end).is_some());
+                        || crate::bib_context_assignments::target(canonical).is_some()
+                            && crate::bib_context_assignments::parse(source, span.end, canonical)
+                                .is_some());
                 uncertain |= !safe;
                 contexts |= safe;
             }
@@ -318,6 +321,26 @@ pub(crate) fn numbers(
         if !has_assignments && labels.values().all(Option::is_none) {
             return Some(Vec::new());
         }
+        let has_categories = trace.assignments.as_ref().is_some_and(|assignments| {
+            assignments.iter().any(|assignment| {
+                assignment.target == crate::bib_context_assignments::Target::Categories
+            })
+        });
+        let category_members = if has_categories {
+            match crate::bib_context_categories::certify(
+                ws,
+                &project.root,
+                &project.docs,
+                &project.signatures,
+                &trace.category_members,
+                &mut work,
+            ) {
+                Some(members) => members,
+                None => return Some(Vec::new()),
+            }
+        } else {
+            BTreeMap::new()
+        };
         let global_sorting = has_assignments
             .then(|| {
                 crate::bib_context_assignments::global_sorting(&project.docs, &project.signatures)
@@ -343,9 +366,11 @@ pub(crate) fn numbers(
         }
         let mut assignments = trace.assignments.unwrap_or_default().into_iter().peekable();
         let mut active_assignments = BTreeMap::<
-            (u32, bool, String),
+            (u32, crate::bib_context_assignments::Target, bool, String),
             std::sync::Arc<crate::bib_context_assignments::Selection>,
         >::new();
+        let mut category_order = BTreeMap::new();
+        let mut next_category = 0usize;
         let mut occurrences = BTreeMap::new();
         for (index, event) in trace.events.into_iter().enumerate() {
             while assignments
@@ -359,8 +384,12 @@ pub(crate) fn numbers(
                     if work > 32 * 1024 * 1024 || active_assignments.len() >= 100_000 {
                         return Some(Vec::new());
                     }
+                    if assignment.target == crate::bib_context_assignments::Target::Categories {
+                        next_category += 1;
+                        category_order.insert(key.clone(), next_category);
+                    }
                     active_assignments.insert(
-                        (assignment.section, assignment.weak, key),
+                        (assignment.section, assignment.target, assignment.weak, key),
                         selection.clone(),
                     );
                 }
@@ -372,20 +401,57 @@ pub(crate) fn numbers(
             if key.uri != *uri || !printing.contains(&span) {
                 continue;
             }
+            use crate::bib_context_assignments::Target;
+            let weak = !trace.explicit_requests.contains(&index);
+            let category = category_members
+                .get(&key.name)
+                .into_iter()
+                .flatten()
+                .filter_map(|name| {
+                    let selection = active_assignments
+                        .get(&(section, Target::Categories, false, name.clone()))
+                        .or_else(|| {
+                            weak.then(|| {
+                                active_assignments.get(&(
+                                    section,
+                                    Target::Categories,
+                                    true,
+                                    name.clone(),
+                                ))
+                            })
+                            .flatten()
+                        })?;
+                    Some((category_order.get(name)?, selection))
+                })
+                .max_by_key(|(order, _)| *order)
+                .map(|(_, selection)| selection);
+            work += category_members.get(&key.name).map_or(0, |members| {
+                members.iter().map(|name| name.len() + 64).sum::<usize>()
+            });
+            if work > 32 * 1024 * 1024 {
+                return Some(Vec::new());
+            }
             let selected = active_assignments
-                .get(&(section, false, "*".to_string()))
-                .or_else(|| active_assignments.get(&(section, false, key.name.clone())))
+                .get(&(section, Target::Entries, false, "*".to_string()))
                 .or_else(|| {
-                    (!trace.explicit_requests.contains(&index))
-                        .then(|| {
-                            active_assignments
-                                .get(&(section, true, "*".to_string()))
-                                .or_else(|| {
-                                    active_assignments.get(&(section, true, key.name.clone()))
-                                })
-                        })
-                        .flatten()
-                });
+                    active_assignments.get(&(section, Target::Entries, false, key.name.clone()))
+                })
+                .or_else(|| {
+                    weak.then(|| {
+                        active_assignments
+                            .get(&(section, Target::Entries, true, "*".to_string()))
+                            .or_else(|| {
+                                active_assignments.get(&(
+                                    section,
+                                    Target::Entries,
+                                    true,
+                                    key.name.clone(),
+                                ))
+                            })
+                    })
+                    .flatten()
+                })
+                .or(category);
             let number = if let Some(selection) = selected {
                 assigned_labels.as_ref().and_then(|compiled| {
                     compiled.label(section, &key.name, selection, global_sorting.as_deref())

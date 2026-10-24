@@ -583,7 +583,8 @@ impl Analysis<'_, '_> {
                 .filter_map(|entry| {
                     let builtin = self.signatures.forwarded_builtin(&entry.name)?;
                     if !(self.labels.is_some() && (STATE.contains(&builtin) || loader(builtin))
-                        || hint_assignments && builtin == "assignrefcontextentries")
+                        || hint_assignments
+                            && crate::bib_context_assignments::target(builtin).is_some())
                     {
                         return None;
                     }
@@ -755,7 +756,7 @@ impl Analysis<'_, '_> {
                 if let Some(builtin) = self
                     .signatures
                     .forwarded_builtin(name)
-                    .filter(|builtin| *builtin == "assignrefcontextentries")
+                    .filter(|builtin| crate::bib_context_assignments::target(builtin).is_some())
                 {
                     let mut current = name;
                     let mut confirmed = false;
@@ -863,7 +864,56 @@ impl Analysis<'_, '_> {
                 }
                 self.labels.as_mut().unwrap().seen = true;
             }
-            if name == "assignrefcontextentries"
+            if hint_assignments && matches!(name, "DeclareBibliographyCategory" | "addtocategory") {
+                self.work += source.len() + doc.syntax.commands.len();
+                if self.work > 32 * 1024 * 1024
+                    || !positions.contains(&lexical.span.start)
+                    || context.operand(doc, lexical.span.start)
+                    || !self.signatures.command_unchanged(name)
+                    || self.signatures.resource_is_tokenized(
+                        source,
+                        &doc.syntax,
+                        lexical.span.start,
+                    )
+                {
+                    return None;
+                }
+                if name == "DeclareBibliographyCategory" {
+                    if self.document {
+                        return None;
+                    }
+                    let (argument, _) =
+                        syntax::group(source, syntax::skip_space(source, span.end), b'{', b'}')?;
+                    let name = crate::bib_context_categories::name(source, argument)?;
+                    let categories = &mut self.trace.as_mut()?.category_members;
+                    if categories.len() >= 100_000
+                        || categories.insert(name, BTreeSet::new()).is_some()
+                    {
+                        return None;
+                    }
+                } else {
+                    let (category, span) =
+                        crate::bib_context_categories::membership(source, span.end)?;
+                    let items = if source[span.clone()].trim().is_empty() {
+                        Vec::new()
+                    } else {
+                        source_key_items(uri, source, span, None)?
+                    };
+                    let members = self.trace.as_mut()?.category_members.get_mut(&category)?;
+                    for key in items.into_iter().flatten() {
+                        self.work += key.name.len() + category.len() + 96;
+                        if self.work > 32 * 1024 * 1024
+                            || key.name == "*"
+                            || members.len() >= 100_000
+                        {
+                            return None;
+                        }
+                        members.insert(key.name);
+                    }
+                }
+                continue;
+            }
+            if crate::bib_context_assignments::target(name).is_some()
                 && self
                     .trace
                     .as_ref()
@@ -881,10 +931,11 @@ impl Analysis<'_, '_> {
                     return None;
                 }
                 let crate::bib_context_assignments::Parsed {
+                    target,
                     selection,
                     keys,
                     weak,
-                } = crate::bib_context_assignments::parse(source, span.end)?;
+                } = crate::bib_context_assignments::parse(source, span.end, name)?;
                 self.work += keys.iter().map(|key| key.len() + 64).sum::<usize>()
                     + selection.prefix.len()
                     + selection.sorting.as_ref().map_or(0, String::len)
@@ -895,6 +946,7 @@ impl Analysis<'_, '_> {
                     return None;
                 }
                 assignments.push(crate::bib_context_assignments::Assignment {
+                    target,
                     before: trace.events.len(),
                     section: trace.current,
                     selection,
@@ -2324,6 +2376,7 @@ pub(crate) struct SourceTrace {
     pub probes: Vec<(u32, usize)>,
     pub assignments: Option<Vec<crate::bib_context_assignments::Assignment>>,
     pub explicit_requests: BTreeSet<usize>,
+    pub category_members: BTreeMap<String, BTreeSet<String>>,
     scope: Option<crate::bib_context_scope::Scope>,
     hint_aliases: BTreeMap<String, String>,
     declarations: SourceDeclarations,
@@ -2647,12 +2700,16 @@ fn source_trace_query(
         probes: Vec::new(),
         assignments: hint_assignments.then(Vec::new),
         explicit_requests: BTreeSet::new(),
+        category_members: BTreeMap::new(),
         hint_aliases: BTreeMap::new(),
         scope: (hint_assignments
             && docs.iter().any(|(_, doc)| {
                 crate::bib_context_assignments::has_weak(doc, signatures)
                     || doc.syntax.definitions.iter().any(|entry| {
-                        signatures.forwarded_builtin(&entry.name) == Some("assignrefcontextentries")
+                        signatures
+                            .forwarded_builtin(&entry.name)
+                            .and_then(crate::bib_context_assignments::target)
+                            .is_some()
                     })
             }))
         .then(Default::default),

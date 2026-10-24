@@ -1,6 +1,20 @@
-//! Hint-only certification of literal entry-context assignments.
+//! Hint-only certification of literal entry and category context assignments.
 use crate::syntax;
 use std::collections::{BTreeMap, BTreeSet};
+
+pub(crate) const COMMANDS: &[&str] = &["assignrefcontextentries", "assignrefcontextcats"];
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Target {
+    Entries,
+    Categories,
+}
+pub(crate) fn target(name: &str) -> Option<Target> {
+    match name {
+        "assignrefcontextentries" => Some(Target::Entries),
+        "assignrefcontextcats" => Some(Target::Categories),
+        _ => None,
+    }
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct Selection {
@@ -10,6 +24,7 @@ pub(crate) struct Selection {
 }
 #[derive(Clone, Debug)]
 pub(crate) struct Assignment {
+    pub target: Target,
     pub before: usize,
     pub section: u32,
     pub selection: Selection,
@@ -18,6 +33,7 @@ pub(crate) struct Assignment {
 }
 
 pub(crate) struct Parsed {
+    pub target: Target,
     pub selection: Selection,
     pub keys: Vec<String>,
     pub weak: bool,
@@ -45,12 +61,13 @@ pub(crate) fn has_weak(
                     &context.declarations,
                 )
                 .unwrap_or((&command.name, command.span.clone()));
-            signatures.forwarded_builtin(name).unwrap_or(name) == "assignrefcontextentries"
+            target(signatures.forwarded_builtin(name).unwrap_or(name)).is_some()
                 && source.as_bytes().get(syntax::skip_space(source, span.end)) == Some(&b'*')
         })
 }
 
-pub(crate) fn parse(source: &str, end: usize) -> Option<Parsed> {
+pub(crate) fn parse(source: &str, end: usize, name: &str) -> Option<Parsed> {
+    let target = target(name)?;
     let mut at = syntax::skip_space(source, end);
     let weak = source.as_bytes().get(at) == Some(&b'*');
     if weak {
@@ -120,12 +137,17 @@ pub(crate) fn parse(source: &str, end: usize) -> Option<Parsed> {
         .map(str::trim)
         .filter(|key| !key.is_empty())
     {
-        if !syntax::is_static_citation_key(key) || keys.len() >= 100_000 {
+        if !(match target {
+            Target::Entries => syntax::is_static_citation_key(key),
+            Target::Categories => syntax::is_static_reference_key(key),
+        }) || keys.len() >= 100_000
+        {
             return None;
         }
         keys.push(key.to_string());
     }
     Some(Parsed {
+        target,
         selection,
         keys,
         weak,

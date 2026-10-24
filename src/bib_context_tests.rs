@@ -487,7 +487,6 @@ fn unproved_assignment_execution_and_context_forms_keep_numeric_hints_guarded() 
         r"\def\assign{\assignrefcontextentries}\assign[labelprefix=A]{a}",
         r"\newcommand\future{\assignrefcontextentries[labelprefix=A]{a}}",
         r"\newcommand\run[1]{#1}\run{\assignrefcontextentries[labelprefix=A]{a}}",
-        r"\assignrefcontextcats[labelprefix=A]{chosen}",
         r"\assignrefcontextkeyws[labelprefix=A]{chosen}",
     ] {
         let (_dir, ws, uri) = setup(&format!("{assignment} Text \\cite{{a}}"), &bbl, &aux);
@@ -1331,4 +1330,346 @@ fn assignment_aliases_from_preamble_inputs_follow_unsaved_meanings_and_close_res
     assert_eq!(hints(&ws, &uri), ["→ B8"]);
     ws.close(&child);
     assert_eq!(hints(&ws, &uri), ["→ A3"]);
+}
+
+fn category_setup(body: &str, extra_aux: &str) -> (tempfile::TempDir, Workspace, Url) {
+    let bbl = compiled(list(A, "A", &["a", "z"]) + &list(B, "B", &["a", "z"]));
+    let aux = number("a", A, 3)
+        + &number("a", B, 8)
+        + &default("a", B)
+        + &number("z", A, 4)
+        + &number("z", B, 9)
+        + &default("z", B)
+        + r"\abx@aux@category{x}{a}\abx@aux@category{y}{a}"
+        + extra_aux;
+    let (dir, mut ws, uri) = setup(body, &bbl, &aux);
+    let source = ws.documents[&uri].text.source.replace(r"\begin{document}",
+        r"\DeclareBibliographyCategory{x}\DeclareBibliographyCategory{y}\DeclareBibliographyCategory{late}\DeclareBibliographyCategory{*}\addtocategory{x}{a}\addtocategory{y}{a}\begin{document}");
+    std::fs::write(dir.path().join("main.tex"), &source).unwrap();
+    ws.open(uri.clone(), source, 5);
+    (dir, ws, uri)
+}
+
+#[test]
+fn automatic_categories_follow_matching_order_strength_and_entry_precedence() {
+    for (body, expected) in [
+        (
+            r"\assignrefcontextcats[labelprefix=A]{x}\cite{a,z}",
+            vec!["→ A3", "→ B9"],
+        ),
+        (
+            r"\cite{a}\assignrefcontextcats[labelprefix=A]{x}\cite{a}",
+            vec!["→ B8", "→ A3"],
+        ),
+        (
+            r"\assignrefcontextcats[labelprefix=A]{x}\assignrefcontextcats[labelprefix=B]{y}\cite{a}",
+            vec!["→ B8"],
+        ),
+        (
+            r"\assignrefcontextcats[labelprefix=A]{x}\assignrefcontextcats[labelprefix=B]{y}\assignrefcontextcats[labelprefix=A]{x}\cite{a}",
+            vec!["→ A3"],
+        ),
+        (
+            r"\assignrefcontextcats[labelprefix=A]{x}\assignrefcontextcats*[labelprefix=B]{y}\cite{a}\begin{refcontext}[labelprefix=A]\cite{a}\end{refcontext}",
+            vec!["→ B8", "→ A3"],
+        ),
+        (
+            r"\assignrefcontextcats[labelprefix=A]{x}\assignrefcontextcats*[labelprefix=B]{x}\cite{a}",
+            vec!["→ A3"],
+        ),
+        (
+            r"\assignrefcontextcats[labelprefix=A]{x}\assignrefcontextentries*[labelprefix=B]{a}\cite{a}\assignrefcontextentries[labelprefix=A]{a}\cite{a}",
+            vec!["→ B8", "→ A3"],
+        ),
+        (
+            r"{\assignrefcontextcats[labelprefix=A]{x}}\cite{a}",
+            vec!["→ A3"],
+        ),
+        (
+            r"\assignrefcontextcats[labelprefix=A]{*}\cite{a}",
+            vec!["→ B8"],
+        ),
+        (
+            r"\assignrefcontextcats[labelprefix=A]{absent}\cite{a}",
+            vec!["→ B8"],
+        ),
+        (
+            r"\assignrefcontextcats*[labelprefix=A]{x}\cite{a}\begin{refcontext}[labelprefix=A]\cite{a}\end{refcontext}\cite{a}",
+            vec!["→ A3", "→ B8", "→ A3"],
+        ),
+    ] {
+        let (_dir, ws, uri) = category_setup(body, "");
+        assert_eq!(hints(&ws, &uri), expected, "{body}");
+    }
+}
+
+#[test]
+fn automatic_categories_require_current_members_to_match_the_preloaded_aux() {
+    let body = r"\assignrefcontextcats[labelprefix=A]{late}\cite{a}\addtocategory{late}{a}\cite{a}";
+    let (_dir, ws, uri) = category_setup(body, r"\abx@aux@category{late}{a}");
+    assert_eq!(hints(&ws, &uri), ["→ A3", "→ A3"]);
+    let (_dir, ws, uri) = category_setup(body, "");
+    assert!(hints(&ws, &uri).is_empty());
+    let (_dir, mut ws, uri) =
+        category_setup(r"\assignrefcontextcats[labelprefix=A]{x}\cite{a}", "");
+    assert_eq!(hints(&ws, &uri), ["→ A3"]);
+    let source = ws.documents[&uri].text.source.clone();
+    ws.open(
+        uri.clone(),
+        source.replace(r"\addtocategory{x}{a}", r"\addtocategory{x}{z}"),
+        6,
+    );
+    assert!(hints(&ws, &uri).is_empty());
+    ws.open(uri.clone(), source, 7);
+    assert_eq!(hints(&ws, &uri), ["→ A3"]);
+}
+
+#[test]
+fn automatic_categories_keep_named_calls_and_executed_forwarding_edges() {
+    for (preamble, call) in [
+        ("", r"\csuse{assignrefcontextcats}"),
+        ("", r"\csname assignrefcontextcats\endcsname"),
+        (r"\def\assign{\assignrefcontextcats}", r"\assign"),
+        (
+            r"\newcommand\assign{\innerassign}\def\innerassign{\assignrefcontextcats}",
+            r"\assign",
+        ),
+    ] {
+        let (_dir, mut ws, uri) =
+            category_setup(&format!(r"{call}*[labelprefix=A]{{x}}\cite{{a}}"), "");
+        let source = ws.documents[&uri].text.source.replace(
+            r"\begin{document}",
+            &format!(r"{preamble}\begin{{document}}"),
+        );
+        ws.open(uri.clone(), source, 6);
+        assert_eq!(hints(&ws, &uri), ["→ A3"], "{preamble} {call}");
+    }
+}
+
+#[test]
+fn automatic_categories_guard_hidden_members_even_when_old_aux_would_match() {
+    for extra in [
+        r"\newcommand\later{\addtocategory{late}{a}}\later",
+        r"\newcommand\later{\addtocategory{late}{a}}",
+        r"\AtBeginDocument{\addtocategory{late}{a}}",
+        r"\let\save\addtocategory\save{late}{a}",
+        r"\def\addtocategory#1#2{}",
+        r"\newcommand\run[1]{#1}\run{\addtocategory{late}{a}}",
+        r"\def\DeclareBibliographyCategory#1{}",
+    ] {
+        let (_dir, mut ws, uri) =
+            category_setup(r"\assignrefcontextcats[labelprefix=A]{late}\cite{a}", "");
+        let source = ws.documents[&uri]
+            .text
+            .source
+            .replace(r"\begin{document}", &format!(r"{extra}\begin{{document}}"));
+        ws.open(uri.clone(), source, 6);
+        assert!(hints(&ws, &uri).is_empty(), "{extra}");
+    }
+    let (_dir, ws, uri) = category_setup(
+        r"\detokenize{\addtocategory{late}{a}}\assignrefcontextcats[labelprefix=A]{x}\cite{a}",
+        "",
+    );
+    assert_eq!(hints(&ws, &uri), ["→ A3"]);
+}
+
+#[test]
+fn automatic_categories_do_not_borrow_missing_or_mismatched_compiled_records() {
+    for extra in [
+        r"\abx@aux@category{x}{z}",
+        r"\abx@aux@category{x}{\unknown}",
+        r"\abx@aux@category{x}",
+    ] {
+        let (_dir, ws, uri) =
+            category_setup(r"\assignrefcontextcats[labelprefix=A]{x}\cite{a}", extra);
+        assert!(hints(&ws, &uri).is_empty(), "{extra}");
+    }
+    let (dir, ws, uri) = category_setup(r"\assignrefcontextcats[labelprefix=A]{x}\cite{a}", "");
+    std::fs::write(
+        dir.path().join("main.bbl"),
+        compiled(list(A, "Wrong", &["a"]) + &list(B, "B", &["a"])),
+    )
+    .unwrap();
+    assert!(hints(&ws, &uri).is_empty());
+    std::fs::remove_file(dir.path().join("main.aux")).unwrap();
+    assert!(hints(&ws, &uri).is_empty());
+}
+
+#[test]
+fn automatic_categories_use_global_members_and_global_order_with_section_local_assignments() {
+    let bbl = format!(
+        r"{PROLOGUE}\refsection{{0}}{}\endrefsection\refsection{{1}}{}\endrefsection\endinput",
+        list(A, "A", &["a"]) + &list(B, "B", &["a"]),
+        list(A, "A", &["a"]) + &list(B, "B", &["a"])
+    );
+    let aux = number("a", A, 3)
+        + &number("a", B, 8)
+        + &default("a", B)
+        + &(number("a", A, 4) + &number("a", B, 9) + &default("a", B)).replace("{0}", "{1}")
+        + r"\abx@aux@category{x}{a}\abx@aux@category{y}{a}";
+    let body = r"\assignrefcontextcats[labelprefix=A]{x}\assignrefcontextcats[labelprefix=B]{y}\cite{a}\begin{refsection}\assignrefcontextcats[labelprefix=A]{x}\cite{a}\end{refsection}\cite{a}";
+    let (dir, mut ws, uri) = category_setup(body, "");
+    std::fs::write(dir.path().join("main.bbl"), bbl).unwrap();
+    std::fs::write(dir.path().join("main.aux"), aux).unwrap();
+    ws.refresh_project(&uri);
+    assert_eq!(hints(&ws, &uri), ["→ B8", "→ A4", "→ A3"]);
+}
+
+#[test]
+fn automatic_categories_refresh_shared_inputs_without_mutating_parent_versions() {
+    let (dir, mut ws, uri) = category_setup(r"\input{assignment}\input{chapter}", "");
+    std::fs::write(
+        dir.path().join("assignment.tex"),
+        r"\assignrefcontextcats[labelprefix=A]{x}",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("chapter.tex"), "% query\r\n😀 \\cite{a}").unwrap();
+    ws.refresh_project(&uri);
+    let assignment = uri.join("assignment.tex").unwrap();
+    let child = uri.join("chapter.tex").unwrap();
+    assert_eq!(hints(&ws, &child), ["→ A3"]);
+    ws.open(
+        assignment.clone(),
+        r"\assignrefcontextcats[labelprefix=B]{x}".into(),
+        8,
+    );
+    assert_eq!(hints(&ws, &child), ["→ B8"]);
+    assert_eq!(ws.documents[&uri].version, Some(5));
+    let other = uri.join("other.tex").unwrap();
+    let source = ws.documents[&uri].text.source.clone();
+    std::fs::write(
+        dir.path().join("other.aux"),
+        std::fs::read(dir.path().join("main.aux")).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("other.bbl"),
+        std::fs::read(dir.path().join("main.bbl")).unwrap(),
+    )
+    .unwrap();
+    ws.open(
+        other.clone(),
+        source.replace(
+            r"\input{assignment}",
+            r"\assignrefcontextcats[labelprefix=A]{x}",
+        ),
+        9,
+    );
+    assert!(hints(&ws, &child).is_empty());
+    ws.documents.remove(&other);
+    assert_eq!(hints(&ws, &child), ["→ B8"]);
+}
+
+#[test]
+#[ignore = "requires native pdfLaTeX, Biber, and biblatex"]
+fn native_automatic_category_hints_match_actual_labels_and_complete_bbl() {
+    let cases = [
+        (
+            r"\assignrefcontextcats[labelprefix=A]{x}\cite{a}\begin{refcontext}[labelprefix=A]\nocite{a}\printbibliography\end{refcontext}\begin{refcontext}[labelprefix=B]\nocite{a}\printbibliography\end{refcontext}",
+            vec!["A1"],
+        ),
+        (
+            r"\cite{a}\assignrefcontextcats[labelprefix=A]{x}\cite{a}\begin{refcontext}[labelprefix=A]\nocite{a}\printbibliography\end{refcontext}\begin{refcontext}[labelprefix=B]\nocite{a}\printbibliography\end{refcontext}",
+            vec!["B1", "A1"],
+        ),
+        (
+            r"\assignrefcontextcats[labelprefix=A]{x}\assignrefcontextcats[labelprefix=B]{y}\cite{a}\begin{refcontext}[labelprefix=A]\nocite{a}\printbibliography\end{refcontext}\begin{refcontext}[labelprefix=B]\nocite{a}\printbibliography\end{refcontext}",
+            vec!["B1"],
+        ),
+        (
+            r"\assignrefcontextcats[labelprefix=A]{x}\assignrefcontextcats[labelprefix=B]{y}\assignrefcontextcats[labelprefix=A]{x}\cite{a}\begin{refcontext}[labelprefix=A]\nocite{a}\printbibliography\end{refcontext}\begin{refcontext}[labelprefix=B]\nocite{a}\printbibliography\end{refcontext}",
+            vec!["A1"],
+        ),
+        (
+            r"\assignrefcontextcats[labelprefix=A]{x}\assignrefcontextcats*[labelprefix=B]{y}\cite{a}\begin{refcontext}[labelprefix=A]\cite{a}\end{refcontext}\begin{refcontext}[labelprefix=A]\nocite{a}\printbibliography\end{refcontext}\begin{refcontext}[labelprefix=B]\nocite{a}\printbibliography\end{refcontext}",
+            vec!["B1", "A1"],
+        ),
+        (
+            r"\assignrefcontextcats[labelprefix=A]{x}\assignrefcontextcats*[labelprefix=B]{x}\cite{a}\begin{refcontext}[labelprefix=A]\nocite{a}\printbibliography\end{refcontext}\begin{refcontext}[labelprefix=B]\nocite{a}\printbibliography\end{refcontext}",
+            vec!["A1"],
+        ),
+        (
+            r"\assignrefcontextcats[labelprefix=A]{x}\assignrefcontextentries*[labelprefix=B]{a}\cite{a}\assignrefcontextentries[labelprefix=A]{a}\cite{a}\begin{refcontext}[labelprefix=A]\nocite{a}\printbibliography\end{refcontext}\begin{refcontext}[labelprefix=B]\nocite{a}\printbibliography\end{refcontext}",
+            vec!["B1", "A1"],
+        ),
+        (
+            r"\assignrefcontextcats[labelprefix=A]{late}\cite{a}\addtocategory{late}{a}\cite{a}\begin{refcontext}[labelprefix=A]\nocite{a}\printbibliography\end{refcontext}\begin{refcontext}[labelprefix=B]\nocite{a}\printbibliography\end{refcontext}",
+            vec!["A1", "A1"],
+        ),
+        (
+            r"{\assignrefcontextcats[labelprefix=A]{x}}\cite{a}\begin{refcontext}[labelprefix=A]\nocite{a}\printbibliography\end{refcontext}\begin{refcontext}[labelprefix=B]\nocite{a}\printbibliography\end{refcontext}",
+            vec!["A1"],
+        ),
+        (
+            r"\assignrefcontextcats[labelprefix=A]{*}\cite{a}\begin{refcontext}[labelprefix=A]\nocite{a}\printbibliography\end{refcontext}\begin{refcontext}[labelprefix=B]\nocite{a}\printbibliography\end{refcontext}",
+            vec!["B1"],
+        ),
+        (
+            r"\assignrefcontextcats*[labelprefix=A]{x}\cite{a}\begin{refcontext}[labelprefix=A]\cite{a}\end{refcontext}\cite{a}\begin{refcontext}[labelprefix=A]\nocite{a}\printbibliography\end{refcontext}\begin{refcontext}[labelprefix=B]\nocite{a}\printbibliography\end{refcontext}",
+            vec!["A1", "B1", "A1"],
+        ),
+        (
+            r"\assignrefcontextcats[labelprefix=A]{x}\cite{a}\begin{refcontext}[labelprefix=A]\nocite{a}\printbibliography\end{refcontext}\begin{refcontext}[labelprefix=B]\nocite{a}\printbibliography\end{refcontext}\newrefsection\assignrefcontextcats[labelprefix=A]{x}\cite{a}\begin{refcontext}[labelprefix=A]\nocite{a}\printbibliography\end{refcontext}\begin{refcontext}[labelprefix=B]\nocite{a}\printbibliography\end{refcontext}",
+            vec!["A1", "A1"],
+        ),
+        (
+            r"\assignrefcontextcats[labelprefix=A]{x}\assignrefcontextcats[labelprefix=B]{y}\cite{a}\begin{refsection}\assignrefcontextcats[labelprefix=A]{x}\begin{refcontext}[labelprefix=A]\nocite{a}\printbibliography\end{refcontext}\begin{refcontext}[labelprefix=B]\nocite{a}\printbibliography\end{refcontext}\end{refsection}\cite{a}\begin{refcontext}[labelprefix=A]\nocite{a}\printbibliography\end{refcontext}\begin{refcontext}[labelprefix=B]\nocite{a}\printbibliography\end{refcontext}",
+            vec!["B1", "A1"],
+        ),
+    ];
+    native_assignment_preamble(
+        &cases,
+        &[],
+        r"\DeclareBibliographyCategory{x}\DeclareBibliographyCategory{y}\DeclareBibliographyCategory{late}\DeclareBibliographyCategory{*}\addtocategory{x}{a}\addtocategory{y}{a}",
+    );
+    native_assignment_preamble(
+        &[
+            (
+                r"\csuse{assignrefcontextcats}[labelprefix=A]{x}\cite{a}\begin{refcontext}[labelprefix=A]\nocite{a}\printbibliography\end{refcontext}\begin{refcontext}[labelprefix=B]\nocite{a}\printbibliography\end{refcontext}",
+                vec!["A1"],
+            ),
+            (
+                r"\csname assignrefcontextcats\endcsname*[labelprefix=A]{x}\cite{a}\begin{refcontext}[labelprefix=A]\cite{a}\end{refcontext}\begin{refcontext}[labelprefix=A]\nocite{a}\printbibliography\end{refcontext}\begin{refcontext}[labelprefix=B]\nocite{a}\printbibliography\end{refcontext}",
+                vec!["A1", "B1"],
+            ),
+            (
+                r"\assign[labelprefix=A]{x}\cite{a}\begin{refcontext}[labelprefix=A]\nocite{a}\printbibliography\end{refcontext}\begin{refcontext}[labelprefix=B]\nocite{a}\printbibliography\end{refcontext}",
+                vec!["A1"],
+            ),
+        ],
+        &[],
+        r"\DeclareBibliographyCategory{x}\DeclareBibliographyCategory{y}\DeclareBibliographyCategory{late}\DeclareBibliographyCategory{*}\addtocategory{x}{a}\addtocategory{y}{a}\def\assign{\innerassign}\def\innerassign{\assignrefcontextcats}",
+    );
+}
+
+#[test]
+fn category_aux_errors_do_not_disable_independent_entry_context_labels() {
+    let (_dir, ws, uri) = category_setup(
+        r"\assignrefcontextentries[labelprefix=A]{a}\cite{a}",
+        r"\abx@aux@category{x}{\unknown}",
+    );
+    assert_eq!(hints(&ws, &uri), ["→ A3"]);
+}
+
+#[test]
+fn automatic_categories_keep_literal_stars_and_every_physical_execution() {
+    let (_dir, ws, uri) = category_setup(
+        r"\addtocategory{*}{a}\assignrefcontextcats[labelprefix=A]{*}\cite{a,z}",
+        r"\abx@aux@category{*}{a}",
+    );
+    assert_eq!(hints(&ws, &uri), ["→ A3", "→ B9"]);
+    let (dir, mut ws, uri) = category_setup(
+        r"\input{chapter}\assignrefcontextcats[labelprefix=A]{x}\input{chapter}",
+        "",
+    );
+    std::fs::write(dir.path().join("chapter.tex"), r"\cite{a}").unwrap();
+    ws.refresh_project(&uri);
+    let child = uri.join("chapter.tex").unwrap();
+    assert!(hints(&ws, &child).is_empty());
+    let source = ws.documents[&uri].text.source.replace(
+        r"\input{chapter}\assignrefcontextcats[labelprefix=A]{x}",
+        r"\assignrefcontextcats[labelprefix=A]{x}\input{chapter}",
+    );
+    ws.open(uri.clone(), source, 6);
+    assert_eq!(hints(&ws, &child), ["→ A3"]);
 }

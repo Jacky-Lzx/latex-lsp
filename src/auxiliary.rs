@@ -27,6 +27,8 @@ struct Parsed {
     inputs: Vec<String>,
     numbers: BTreeMap<(u32, String, String), Option<String>>,
     contexts: BTreeMap<(u32, String), Option<String>>,
+    categories: BTreeSet<(String, String)>,
+    categories_unknown: bool,
     bytes: usize,
     numeric_unknown: bool,
 }
@@ -86,6 +88,28 @@ fn parse(source: &str) -> Parsed {
                 if let Some(word) = syntax::control_word(source, at) {
                     let name = &source[word.clone()];
                     at = word.end;
+                    if name == r"\abx@aux@category" {
+                        if let Some((fields, end)) = record_fields(source, at, 2) {
+                            at = end;
+                            if syntax::is_static_reference_key(&fields[0])
+                                && syntax::is_static_citation_key(&fields[1])
+                                && fields[1] != "*"
+                                && (result.categories.len() < 4096
+                                    || result
+                                        .categories
+                                        .contains(&(fields[0].clone(), fields[1].clone())))
+                            {
+                                result
+                                    .categories
+                                    .insert((fields[0].clone(), fields[1].clone()));
+                            } else {
+                                result.categories_unknown = true;
+                            }
+                        } else {
+                            result.categories_unknown = true;
+                        }
+                        continue;
+                    }
                     if matches!(name, r"\abx@aux@number" | r"\abx@aux@defaultrefcontext") {
                         let count = if name == r"\abx@aux@number" { 5 } else { 3 };
                         if let Some((fields, end)) = record_fields(source, at, count) {
@@ -264,6 +288,7 @@ pub(crate) type NumericContexts = BTreeMap<(u32, String), Option<(String, String
 pub(crate) struct NumericRecords {
     pub numbers: BTreeMap<(u32, String, String), Option<String>>,
     pub defaults: BTreeMap<(u32, String), Option<String>>,
+    pub categories: Option<BTreeSet<(String, String)>>,
 }
 pub(crate) fn numeric_citation_records(
     ws: &Workspace,
@@ -277,6 +302,8 @@ pub(crate) fn numeric_citation_records(
         .unwrap_or_else(|| path.with_extension("aux"));
     let mut numbers = BTreeMap::new();
     let mut contexts = BTreeMap::new();
+    let mut categories = BTreeSet::new();
+    let mut categories_unknown = false;
     let mut pending = vec![path];
     let mut seen = BTreeSet::new();
     let mut work = 0usize;
@@ -301,6 +328,14 @@ pub(crate) fn numeric_citation_records(
         for (key, value) in &data.contexts {
             retain(&mut contexts, key.clone(), value.clone(), 8192);
         }
+        categories_unknown |= data.categories_unknown;
+        for member in &data.categories {
+            if categories.len() >= 8192 && !categories.contains(member) {
+                categories_unknown = true;
+                break;
+            }
+            categories.insert(member.clone());
+        }
         if let Some(parent) = path.parent() {
             pending.extend(data.inputs.iter().map(|input| parent.join(input)));
         }
@@ -309,6 +344,7 @@ pub(crate) fn numeric_citation_records(
         NumericRecords {
             numbers,
             defaults: contexts,
+            categories: (!categories_unknown).then_some(categories),
         },
         work,
     ))
