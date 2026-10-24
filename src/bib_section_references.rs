@@ -741,3 +741,28 @@ pub(crate) fn rename(
         Ok(Some(crate::features::workspace_edit(ws, changes)))
     }))
 }
+
+/// Validate a relation's complete owner and literal field before read-only
+/// source-aware resolution. Reuse the graph scanner's strict field rules.
+pub(crate) fn certified_relation(
+    uri: &Url,
+    doc: &Document,
+    offset: usize,
+) -> Option<Option<(String, Range<usize>)>> {
+    let candidate = doc
+        .syntax
+        .citation_references
+        .iter()
+        .find(|entry| entry.span.start <= offset && offset <= entry.span.end)?;
+    Some((|| {
+        if doc.kind != DocumentKind::Bibtex || doc.text.source.len() > 16 * 1024 * 1024 {
+            return None;
+        }
+        let database = Database::new(uri, doc).ok()?;
+        let reference = database
+            .references
+            .into_iter()
+            .find(|reference| reference.span == candidate.span)?;
+        Some((reference.name, reference.span))
+    })())
+}

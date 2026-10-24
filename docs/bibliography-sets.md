@@ -37,3 +37,10 @@ cargo test --locked --test biblatex_source_sections
 cargo test --locked --test biblatex_source_sections -- --include-ignored
 cargo test --locked --test protocol source_set_navigation_
 ```
+
+数据库关系字段的源码集合导航另有回归，覆盖五类字段、数字分区冲突、首次请求锁定、UTF-16／CRLF、重复字段及未保存消费者。原生测试比较集合与书籍两种父条目及实际继承字段：
+
+```sh
+cargo test --locked --test biblatex_source_relations -- --include-ignored
+cargo test --locked --test protocol source_set_relation_
+```

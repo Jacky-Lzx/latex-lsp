@@ -92,6 +92,12 @@ struct State {
     wildcard: bool,
     early: bool,
 }
+#[derive(Clone, Copy, PartialEq)]
+enum QueryKind {
+    Declaration,
+    Source,
+    Relation,
+}
 struct Answer {
     span: Range<usize>,
     identity: Identity,
@@ -104,7 +110,7 @@ fn resolve(
     uri: &Url,
     query: &Range<usize>,
     name: &str,
-    declaration: bool,
+    kind: QueryKind,
 ) -> Result<(Identity, BTreeMap<Identity, Arc<SourceSet>>)> {
     let mut states = BTreeMap::<u32, State>::new();
     let mut declarations = BTreeMap::<(u32, &str), &SourceSet>::new();
@@ -117,7 +123,16 @@ fn resolve(
             _ => None,
         })
         .collect();
-    let mut views = BTreeSet::new();
+    let mut views = if kind == QueryKind::Relation {
+        trace
+            .resources
+            .iter()
+            .filter(|(_, resources)| resources.contains(uri))
+            .map(|(section, _)| *section)
+            .collect()
+    } else {
+        BTreeSet::new()
+    };
     let mut own = None;
     let mut bindings = BTreeMap::<usize, Option<Identity>>::new();
     let mut binding = |section: u32| -> Result<Option<Identity>> {
@@ -147,10 +162,10 @@ fn resolve(
                     return Err(());
                 }
                 let identity = Identity::source(&set.key);
-                if declaration && set.key.uri == *uri && set.key.span == *query {
+                if kind == QueryKind::Declaration && set.key.uri == *uri && set.key.span == *query {
                     own = Some(identity.clone());
                 }
-                if !declaration
+                if kind == QueryKind::Source
                     && set
                         .members
                         .iter()
@@ -186,7 +201,7 @@ fn resolve(
             }
         }
     }
-    if declaration {
+    if kind == QueryKind::Declaration {
         return Ok((own.ok_or(())?, sets));
     }
     let mut answer = None;
@@ -214,10 +229,20 @@ fn resolve(
 }
 
 fn target(ws: &Workspace, uri: &Url, offset: usize) -> Option<Option<Answer>> {
-    let doc = ws
-        .documents
-        .get(uri)
-        .filter(|doc| doc.kind == DocumentKind::Latex)?;
+    let doc = ws.documents.get(uri)?;
+    if !matches!(doc.kind, DocumentKind::Latex | DocumentKind::Bibtex) {
+        return None;
+    }
+    // Database declarations remain lexical and need no execution analysis.
+    if doc.kind == DocumentKind::Bibtex
+        && !doc
+            .syntax
+            .citation_references
+            .iter()
+            .any(|entry| entry.span.start <= offset && offset <= entry.span.end)
+    {
+        return None;
+    }
     if !ws.documents.values().any(|doc| {
         doc.kind == DocumentKind::Latex
             && doc.syntax.commands.iter().any(|command| {
@@ -234,25 +259,45 @@ fn target(ws: &Workspace, uri: &Url, offset: usize) -> Option<Option<Answer>> {
     {
         return None;
     }
-    let declaration = projects
-        .iter()
-        .find_map(|project| bib_section_keys::source_set_key(doc, &project.signatures, offset));
-    let mut contexts = BTreeMap::<BTreeSet<Url>, BTreeSet<Url>>::new();
-    for project in &projects {
-        let scope = ws.project_documents(&project.root);
-        contexts.entry(scope.clone()).or_default().extend(scope);
-    }
-    let lexical = Index::for_section_keys(ws, uri, contexts);
-    let (name, span) = if let Some(declaration) = &declaration {
-        declaration.clone()
+    let (name, span, kind) = if doc.kind == DocumentKind::Bibtex {
+        let candidate = doc
+            .syntax
+            .citation_references
+            .iter()
+            .find(|entry| entry.span.start <= offset && offset <= entry.span.end)?;
+        (
+            candidate.name.clone(),
+            candidate.span.clone(),
+            QueryKind::Relation,
+        )
     } else {
-        let (citation, span) = lexical.target(uri, offset)?;
-        if !citation {
-            return None;
+        let declaration = projects
+            .iter()
+            .find_map(|project| bib_section_keys::source_set_key(doc, &project.signatures, offset));
+        if let Some((name, span)) = declaration {
+            (name, span, QueryKind::Declaration)
+        } else {
+            let mut contexts = BTreeMap::<BTreeSet<Url>, BTreeSet<Url>>::new();
+            for project in &projects {
+                let scope = ws.project_documents(&project.root);
+                contexts.entry(scope.clone()).or_default().extend(scope);
+            }
+            let lexical = Index::for_section_keys(ws, uri, contexts);
+            let (citation, span) = lexical.target(uri, offset)?;
+            if !citation {
+                return None;
+            }
+            (
+                doc.text.source[span.clone()].to_string(),
+                span,
+                QueryKind::Source,
+            )
         }
-        (doc.text.source[span.clone()].to_string(), span)
     };
     Some((|| {
+        if kind == QueryKind::Relation {
+            crate::bib_section_references::certified_relation(uri, doc, offset)??;
+        }
         let mut databases = Databases::default();
         let mut work = 0usize;
         let mut answer: Option<Answer> = None;
@@ -280,8 +325,7 @@ fn target(ws: &Workspace, uri: &Url, offset: usize) -> Option<Option<Answer>> {
                     databases.prepare(ws, resource, &name).ok()?;
                 }
             }
-            let (identity, sets) =
-                resolve(&trace, &databases, uri, &span, &name, declaration.is_some()).ok()?;
+            let (identity, sets) = resolve(&trace, &databases, uri, &span, &name, kind).ok()?;
             if let Some(previous) = answer.as_mut() {
                 if previous.identity != identity {
                     return None;

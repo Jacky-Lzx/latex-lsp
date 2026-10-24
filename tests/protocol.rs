@@ -30436,3 +30436,120 @@ fn bibliography_preamble_updates_revoke_section_key_proofs_over_stdio() {
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+#[test]
+fn source_set_relation_targets_follow_unsaved_execution_and_consumers_over_stdio() {
+    use latex_lsp::text::Text;
+    let dir = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let bib = main.join("section.bib").unwrap();
+    let other = main.join("unsaved.tex").unwrap();
+    let source = r"\documentclass{article}\usepackage{biblatex}\addsectionbib[label=chosen]{section.bib}\begin{document}\newrefsection[chosen]\defbibentryset{parent}{member}\cite{child,parent}\end{document}";
+    let library="% 😀\r\n@book{parent,title={Selected parent}}\r\n@book{member,title={Selected member}}\r\n@inbook{child,crossref={parent}}";
+    for (name, text) in [("main.tex", source), ("section.bib", library)] {
+        std::fs::write(dir.path().join(name), text).unwrap();
+    }
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    for (uri, text, lang) in [(&main, source, "latex"), (&bib, library, "bibtex")] {
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"languageId":lang,"version":5,"text":text}}),
+        );
+    }
+    let text = Text::new(library.into());
+    let at = library.rfind("parent").unwrap();
+    let query = text.range(at, at + 6);
+    let at = library.find("parent").unwrap();
+    let bookrange = text.range(at, at + 6);
+    let at = source.find("{parent}").unwrap() + 1;
+    let setrange = Text::new(source.into()).range(at, at + 6);
+    let target = json!([{"uri":main,"range":setrange}]);
+    let book = json!([{"uri":bib,"range":bookrange}]);
+    let params = json!({"textDocument":{"uri":bib},"position":query.start});
+    assert_eq!(
+        server.request(2, "textDocument/definition", params.clone()),
+        target
+    );
+    let hover = server.request(3, "textDocument/hover", params.clone());
+    assert!(hover["contents"]["value"]
+        .as_str()
+        .unwrap()
+        .contains("Dynamic bibliography set: member"));
+    assert_eq!(hover["range"], json!(query));
+    assert_eq!(
+        server.request(
+            4,
+            "textDocument/definition",
+            json!({"textDocument":{"uri":bib},"position":bookrange.start})
+        ),
+        book
+    );
+    let early = source.replace(r"\defbibentryset", r"\cite{parent}\defbibentryset");
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":6},"contentChanges":[{"text":early}]}),
+    );
+    assert_eq!(
+        server.request(5, "textDocument/definition", params.clone()),
+        book
+    );
+    let ambiguous = source.replace(
+        r"\end{document}",
+        r"\newrefsection[chosen]\cite{child,parent}\end{document}",
+    );
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":7},"contentChanges":[{"text":ambiguous}]}),
+    );
+    assert_eq!(
+        server.request(6, "textDocument/definition", params.clone()),
+        json!([])
+    );
+    assert_eq!(
+        server.request(7, "textDocument/hover", params.clone()),
+        Value::Null
+    );
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":main}}),
+    );
+    assert_eq!(
+        server.request(8, "textDocument/definition", params.clone()),
+        target
+    );
+    server.notify("textDocument/didOpen",json!({"textDocument":{"uri":other,"languageId":"latex","version":8,"text":r"\documentclass{article}\usepackage{biblatex}\addbibresource{section.bib}\begin{document}\cite{child,parent}\end{document}"}}));
+    assert_eq!(
+        server.request(9, "textDocument/definition", params.clone()),
+        json!([])
+    );
+    assert_eq!(
+        server.request(10, "textDocument/hover", params.clone()),
+        Value::Null
+    );
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":other}}),
+    );
+    assert_eq!(
+        server.request(11, "textDocument/definition", params.clone()),
+        target
+    );
+    let invalid = library.replace("crossref={parent}", "crossref={parent},CROSSREF={member}");
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":bib,"version":9},"contentChanges":[{"text":invalid}]}),
+    );
+    assert_eq!(
+        server.request(12, "textDocument/definition", params.clone()),
+        json!([])
+    );
+    server.notify("textDocument/didClose", json!({"textDocument":{"uri":bib}}));
+    assert_eq!(
+        server.request(13, "textDocument/definition", params),
+        target
+    );
+    server.request(1000, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
