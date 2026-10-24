@@ -618,7 +618,12 @@ impl Analysis<'_, '_> {
                 if value.is_empty() {
                     continue;
                 }
-                if !crate::bib_section_files::editable_item(value) {
+                let supported = if self.labels.is_some() {
+                    crate::bib_section_files::literal_item(value)
+                } else {
+                    self.registry.is_label(value) || crate::bib_section_files::editable_item(value)
+                };
+                if !supported {
                     return None;
                 }
                 if let Some(choices) = self

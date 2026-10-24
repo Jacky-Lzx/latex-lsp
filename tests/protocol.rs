@@ -29718,7 +29718,7 @@ fn section_resource_label_edits_validate_all_consumers_and_filename_capture_over
         );
         let references = server.request(3, "textDocument/references", json!({"textDocument":{"uri":chapter},"position":{"line":1,"character":17},"context":{"includeDeclaration":true}}));
         assert_eq!(references.as_array().unwrap().len(), 2);
-        let edit = server.request(4, "textDocument/rename", json!({"textDocument":{"uri":chapter},"position":{"line":1,"character":17},"newName":"selected"}));
+        let edit = server.request(4, "textDocument/rename", json!({"textDocument":{"uri":chapter},"position":{"line":1,"character":17},"newName":"selected.bib.alias"}));
         let expected = [(&provider, 3, 0, 22, 28), (&chapter, 7, 1, 15, 21)];
         if versioned {
             let documents = edit["documentChanges"].as_array().unwrap();
@@ -29731,7 +29731,7 @@ fn section_resource_label_edits_validate_all_consumers_and_filename_capture_over
                 assert_eq!(document["textDocument"]["version"], version);
                 assert_eq!(
                     document["edits"],
-                    json!([{"range":{"start":{"line":line,"character":start},"end":{"line":line,"character":end}},"newText":"selected"}])
+                    json!([{"range":{"start":{"line":line,"character":start},"end":{"line":line,"character":end}},"newText":"selected.bib.alias"}])
                 );
             }
         } else {
@@ -29739,14 +29739,14 @@ fn section_resource_label_edits_validate_all_consumers_and_filename_capture_over
             for (uri, _, line, start, end) in expected {
                 assert_eq!(
                     edit["changes"][uri.as_str()],
-                    json!([{"range":{"start":{"line":line,"character":start},"end":{"line":line,"character":end}},"newText":"selected"}])
+                    json!([{"range":{"start":{"line":line,"character":start},"end":{"line":line,"character":end}},"newText":"selected.bib.alias"}])
                 );
             }
         }
-        let updated_registration = registration.replace("chosen", "selected");
+        let updated_registration = registration.replace("chosen", "selected.bib.alias");
         let updated_body = format!(
             "{}\\newrefsection[ignored]",
-            body.replace("chosen", "selected")
+            body.replace("chosen", "selected.bib.alias")
         );
         server.notify("textDocument/didChange", json!({"textDocument":{"uri":provider,"version":4},"contentChanges":[{"text":updated_registration}]}));
         server.notify("textDocument/didChange", json!({"textDocument":{"uri":chapter,"version":8},"contentChanges":[{"text":updated_body}]}));
@@ -29762,9 +29762,9 @@ fn section_resource_label_edits_validate_all_consumers_and_filename_capture_over
         );
         let target = server.request(6, "textDocument/definition", params.clone());
         assert_eq!(target[0]["uri"], provider.as_str());
-        assert_eq!(target[0]["range"]["end"]["character"], 30);
+        assert_eq!(target[0]["range"]["end"]["character"], 40);
         let unsaved = main.join("unsaved-root.tex").unwrap();
-        server.notify("textDocument/didOpen", json!({"textDocument":{"uri":unsaved,"languageId":"latex","version":2,"text":source.replace(r"\input{resources}", r"\addsectionbib[label=selected]{ignored.bib}")}}));
+        server.notify("textDocument/didOpen", json!({"textDocument":{"uri":unsaved,"languageId":"latex","version":2,"text":source.replace(r"\input{resources}", r"\addsectionbib[label=selected.bib.alias]{ignored.bib}")}}));
         server.send(json!({"jsonrpc":"2.0","id":7,"method":"textDocument/rename","params":{"textDocument":{"uri":provider},"position":{"line":0,"character":24},"newName":"safe"}}));
         let rejected = server.until(|message| message["id"] == 7);
         assert_eq!(rejected["error"]["code"], -32602, "{rejected}");

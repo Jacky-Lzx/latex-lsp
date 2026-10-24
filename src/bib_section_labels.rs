@@ -204,7 +204,10 @@ pub(crate) fn completion(ws: &Workspace, uri: &Url, offset: usize) -> Option<Vec
         .bindings
         .iter()
         .filter(|(name, _)| {
-            name.starts_with(prefix) && syntax::is_static_key(name) && !name.contains(['[', ']'])
+            name.starts_with(prefix)
+                && syntax::is_static_key(name)
+                && bib_section_files::literal_item(name)
+                && !name.contains(['[', ']'])
         })
         .map(|(name, binding)| CompletionItem {
             label: name.clone(),
@@ -449,7 +452,7 @@ pub(crate) fn rename(
     name: &str,
 ) -> Option<Result<Option<WorkspaceEdit>>> {
     Some(symbol(ws, uri, offset)?.and_then(|symbol| {
-        if !syntax::is_static_key(name) || name.contains(['[', ']']) {
+        if !syntax::is_static_key(name) || !bib_section_files::literal_item(name) || name.contains(['[', ']']) {
             return Err(Error::invalid_params("Invalid bibliography resource label name"));
         }
         if name != symbol.name {

@@ -25,10 +25,11 @@ pub(crate) struct Selection {
     pub calls: BTreeMap<Url, Vec<SourceCall>>,
     pub labels: BTreeSet<String>,
 }
+pub(crate) fn literal_item(value: &str) -> bool {
+    crate::bib_resources::literal_path(value) && !value.contains([',', ']'])
+}
 pub(crate) fn editable_item(value: &str) -> bool {
-    crate::bib_resources::literal_path(value)
-        && !value.contains([',', ']'])
-        && !value.find(".bib").is_some_and(|at| at + 4 != value.len())
+    literal_item(value) && !value.find(".bib").is_some_and(|at| at + 4 != value.len())
 }
 
 #[derive(Clone)]
@@ -254,6 +255,10 @@ impl Registry {
         result
     }
 
+    pub(crate) fn is_label(&self, name: &str) -> bool {
+        self.labels.contains_key(name)
+    }
+
     pub(crate) fn label_names(&self) -> BTreeSet<String> {
         self.labels.keys().cloned().collect()
     }
@@ -392,7 +397,7 @@ pub(crate) fn calls(
                     item
                 };
                 let trimmed = &source[item.clone()];
-                if !trimmed.is_empty() && !editable_item(trimmed) {
+                if !trimmed.is_empty() && !editable_item(trimmed) && !registry.is_label(trimmed) {
                     continue;
                 }
                 if let Some(binding) = registry.labels.get(trimmed) {

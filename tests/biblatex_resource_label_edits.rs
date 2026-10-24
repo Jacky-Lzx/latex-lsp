@@ -327,7 +327,7 @@ fn real_label_renames_preserve_resources_and_reject_a_capture_that_breaks_citati
             std::fs::read_to_string(root.join("main.log")).unwrap(),
         )
     }
-    let (dir, ws, main, source, at) = setup(
+    let (dir, mut ws, main, source, at) = setup(
         r"\newrefsection[ch¦osen]\cite{paper,always}\printbibliography\newrefsection[ignored]\cite{wrong,always}\printbibliography",
     );
     let (original, bbl, log) = compile(dir.path(), &source);
@@ -343,10 +343,19 @@ fn real_label_renames_preserve_resources_and_reject_a_capture_that_breaks_citati
     let (captured, _, log) = compile(dir.path(), &naive);
     assert_ne!(original, captured);
     assert!(log.contains("undefined"), "{log}");
-    let edit = features::rename(&ws, &main, at, "selected")
+    let edit = features::rename(&ws, &main, at, "selected.bib.alias")
         .unwrap()
         .unwrap();
     let accepted = apply(&source, edits(edit).remove(&main).unwrap());
+    ws.open(main.clone(), accepted.clone(), 6);
+    let label_at =
+        Text::new(accepted.clone()).position(accepted.find("[selected.bib.alias]").unwrap() + 4);
+    assert_eq!(features::references(&ws, &main, label_at, true).len(), 2);
+    let cite_at = Text::new(accepted.clone()).position(accepted.find("{paper,").unwrap() + 2);
+    assert_eq!(
+        features::definitions(&ws, &main, cite_at)[0].uri,
+        main.join("section.bib").unwrap()
+    );
     let (renamed, bbl, log) = compile(dir.path(), &accepted);
     assert_eq!(original, renamed);
     assert!(!log.contains("undefined"), "{log}");

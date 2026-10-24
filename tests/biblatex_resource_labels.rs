@@ -496,3 +496,121 @@ fn local_formatting_forwarders_do_not_invalidate_resource_label_provenance() {
         .iter()
         .any(|item| item.label == "chosen"));
 }
+
+#[test]
+fn registered_labels_with_nonterminal_bib_suffixes_keep_dependencies_and_citation_targets() {
+    let (_dir, mut ws, main, source, _) = setup(r"\newrefsection[chosen]\cite{ch¦osen}");
+    let source = source
+        .replace("label=chosen", "label=chosen.bib.alias")
+        .replace("[chosen]", "[chosen.bib.alias]");
+    ws.open(main.clone(), source.clone(), 6);
+    assert!(ws
+        .dependencies(&main)
+        .contains(&main.join("section.bib").unwrap()));
+    let at = Text::new(source.clone()).position(source.rfind("chosen}").unwrap() + 2);
+    let definitions = features::definitions(&ws, &main, at);
+    assert_eq!(definitions.len(), 1);
+    assert_eq!(definitions[0].uri, main.join("section.bib").unwrap());
+    let at = Text::new(source.clone()).position(source.rfind("chosen.bib.alias]").unwrap() + 10);
+    label_target(&ws, &main, at, "chosen.bib.alias", "section.bib");
+}
+
+#[test]
+fn extension_like_label_completions_replace_the_entire_item_before_resolving_it() {
+    for header in ["chosen.bib.al¦ias", "chosen.bib.al¦BAD"] {
+        let (_dir, mut ws, main, source, _) =
+            setup(&format!(r"\newrefsection[everywhere,{header},spare.bib]"));
+        let source = source.replace("label=chosen", "label=chosen.bib.alias");
+        ws.open(main.clone(), source.clone(), 6);
+        let start = source.rfind("chosen.bib.al").unwrap();
+        let at = Text::new(source.clone()).position(start + "chosen.bib.al".len());
+        let items = features::completion(&ws, &main, at);
+        let item = items
+            .iter()
+            .find(|item| item.label == "chosen.bib.alias")
+            .unwrap();
+        let end = source[start..].find(',').unwrap() + start;
+        assert_eq!(
+            apply(&source, item),
+            format!("{}chosen.bib.alias{}", &source[..start], &source[end..])
+        );
+    }
+}
+
+#[test]
+fn renaming_to_an_extension_like_label_preserves_subsequent_symbol_interactions() {
+    let (_dir, mut ws, main, source, at) = setup(r"\newrefsection[ch¦osen]");
+    let edit = features::rename(&ws, &main, at, "selected.bib.alias")
+        .unwrap()
+        .unwrap();
+    let mut edits = edit.changes.unwrap().remove(&main).unwrap();
+    assert_eq!(edits.len(), 2);
+    edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
+    let updated = Text::new(source)
+        .changed(
+            edits
+                .into_iter()
+                .map(|edit| TextDocumentContentChangeEvent {
+                    range: Some(edit.range),
+                    range_length: None,
+                    text: edit.new_text,
+                })
+                .collect(),
+        )
+        .unwrap()
+        .source;
+    ws.open(main.clone(), updated.clone(), 6);
+    let at = Text::new(updated).position(
+        ws.documents[&main]
+            .text
+            .source
+            .rfind("selected.bib.alias]")
+            .unwrap()
+            + 3,
+    );
+    assert_eq!(features::references(&ws, &main, at, true).len(), 2);
+    label_target(&ws, &main, at, "selected.bib.alias", "section.bib");
+    assert!(features::prepare_rename(&ws, &main, at).unwrap().is_some());
+}
+
+#[test]
+fn extension_like_labels_are_symbols_during_file_moves_and_literal_choices_remain_guarded() {
+    let (_dir, mut ws, main, source, _) = setup(r"\newrefsection[ch¦osen]");
+    let source = source
+        .replace("label=chosen", "label=chosen.bib.alias")
+        .replace("[chosen]", "[chosen.bib.alias]");
+    ws.open(main.clone(), source.clone(), 6);
+    let edit = latex_lsp::file_operations::will_rename(
+        &ws,
+        &[FileRename {
+            old_uri: main.join("section.bib").unwrap().to_string(),
+            new_uri: main.join("moved.bib").unwrap().to_string(),
+        }],
+    )
+    .unwrap()
+    .unwrap();
+    let changes = edit.changes.unwrap();
+    let edits = &changes[&main];
+    assert_eq!(edits.len(), 1);
+    let fake_item = CompletionItem {
+        text_edit: Some(CompletionTextEdit::Edit(edits[0].clone())),
+        ..Default::default()
+    };
+    assert_eq!(
+        apply(&source, &fake_item),
+        source.replace("{section.bib}", "{moved.bib}")
+    );
+    let source = source.replace("label=chosen.bib.alias", "label=other");
+    ws.open(main.clone(), source.clone(), 7);
+    let at = Text::new(source.clone()).position(source.rfind("chosen.bib.alias]").unwrap() + 3);
+    assert!(features::definitions(&ws, &main, at).is_empty());
+    let edit = latex_lsp::file_operations::will_rename(
+        &ws,
+        &[FileRename {
+            old_uri: main.join("chosen.bib").unwrap().to_string(),
+            new_uri: main.join("moved.bib").unwrap().to_string(),
+        }],
+    )
+    .unwrap();
+    assert!(edit.is_none());
+}
