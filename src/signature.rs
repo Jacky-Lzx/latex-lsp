@@ -257,6 +257,18 @@ fn push_delimiter(snippet: &mut String, delimiter: &str) {
 }
 
 fn builtin(name: &str) -> Option<Signature> {
+    if name == "assignrefcontextcats" {
+        return Some(Signature {
+            name: name.into(),
+            parameters: vec![
+                Parameter { obey_spaces: false, kind: Kind::RequiredBracket, label: "[options]".into() },
+                Parameter { obey_spaces: false, kind: Kind::RequiredGroup, label: "{categories}".into() },
+            ],
+            documentation: "Assign bibliography categories to a reference context. The options bracket is required, including when empty; the starred form applies weak assignments. Category names are independent of entry keys. Requires biblatex.".into(),
+            starred: true,
+            nested_brackets: false,
+        });
+    }
     if let Some(style) = crate::citations::style(name) {
         return Some(Signature {
             name: name.into(),
@@ -4511,7 +4523,8 @@ fn builtin_argument_data(signature: &Signature, parameter: usize) -> bool {
         | "refsection"
         | "newrefcontext"
         | "refcontext"
-        | "assignrefcontextentries" => true,
+        | "assignrefcontextentries"
+        | "assignrefcontextcats" => true,
         "begin" => {
             parameter == 1
                 && signature

@@ -34747,3 +34747,185 @@ fn native_context_entry_keys_keep_complete_versioned_edits_and_unsaved_meanings(
         server.wait_exit(0);
     }
 }
+
+#[test]
+fn context_category_assignment_lists_keep_exact_edits_shared_meanings_and_close_restore() {
+    use latex_lsp::text::Text;
+    for document_changes in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+        let common = main.join("common.tex").unwrap();
+        let child = main.join("calls.tex").unwrap();
+        let macros = main.join("macros.tex").unwrap();
+        let bib = main.join("data.bib").unwrap();
+        let other = main.join("other.tex").unwrap();
+        let source = r"\documentclass{article}\usepackage{biblatex}\addbibresource{data.bib}\input{macros}\input{common}\begin{document}\input{calls}\end{document}";
+        let declarations="% 😀\r\n\\DeclareBibliographyCategory{picked}\\DeclareBibliographyCategory{other}\\addtocategory{picked}{picked}";
+        let calls="% 😀\r\n😀 \\assignrefcontextcats[labelprefix=picked]{other,picked} Text \\csuse{assignrefcontextcats}*[]{picked} Text \\printbibliography[category=picked,title={picked}]\\verb|\\assignrefcontextcats[]{picked}|";
+        let library = "@book{picked,title={picked}}";
+        for (name, content) in [
+            ("main.tex", source),
+            ("common.tex", declarations),
+            ("calls.tex", calls),
+            ("macros.tex", ""),
+            ("data.bib", library),
+        ] {
+            std::fs::write(dir.path().join(name), content).unwrap();
+        }
+        let range_after = |text: &str, marker: &str| {
+            let start = text.find(marker).unwrap() + marker.len();
+            Text::new(text.into()).range(start, start + 6)
+        };
+        let headers = [
+            range_after(declarations, r"\DeclareBibliographyCategory{"),
+            range_after(declarations, r"\addtocategory{"),
+        ];
+        let uses = [
+            range_after(calls, "{other,"),
+            range_after(calls, "*[]{"),
+            range_after(calls, "category="),
+        ];
+        let mut server = Server::start();
+        server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":document_changes}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+        server.notify("initialized", json!({}));
+        for (uri, content, language, version) in [
+            (&main, source, "latex", 5),
+            (&common, declarations, "latex", 6),
+            (&child, calls, "latex", 8),
+            (&bib, library, "bibtex", 7),
+        ] {
+            server.notify("textDocument/didOpen",json!({"textDocument":{"uri":uri,"languageId":language,"version":version,"text":content}}));
+        }
+        let query = json!({"textDocument":{"uri":child},"position":uses[0].start});
+        assert_eq!(
+            server.request(2, "textDocument/definition", query.clone()),
+            json!([{"uri":common,"range":headers[0]}])
+        );
+        let refs=server.request(3,"textDocument/references",json!({"textDocument":{"uri":child},"position":uses[0].start,"context":{"includeDeclaration":true}}));
+        let mut expected = headers
+            .iter()
+            .map(|range| json!({"uri":common,"range":range}))
+            .chain(uses.iter().map(|range| json!({"uri":child,"range":range})))
+            .collect::<Vec<_>>();
+        let mut actual = refs.as_array().unwrap().clone();
+        expected.sort_by_key(Value::to_string);
+        actual.sort_by_key(Value::to_string);
+        assert_eq!(actual, expected);
+        let at = Text::new(calls.into()).offset(uses[1].start).unwrap() + 2;
+        let params =
+            json!({"textDocument":{"uri":child},"position":Text::new(calls.into()).position(at)});
+        let completion = server.request(4, "textDocument/completion", params.clone());
+        let item = completion
+            .as_array()
+            .or_else(|| completion["items"].as_array())
+            .unwrap()
+            .iter()
+            .find(|item| item["label"] == "picked")
+            .unwrap();
+        assert_eq!(
+            item["textEdit"],
+            json!({"range":uses[1],"newText":"picked"})
+        );
+        let help = server.request(5, "textDocument/signatureHelp", params);
+        assert_eq!(help["activeParameter"], 1);
+        assert_eq!(
+            help["signatures"][0]["label"],
+            r"\csuse{assignrefcontextcats}[options]{categories}"
+        );
+        let rename =
+            json!({"textDocument":{"uri":common},"position":headers[0].start,"newName":"fresh"});
+        let edit = server.request(6, "textDocument/rename", rename.clone());
+        for (uri, version, ranges) in [(&common, 6, headers.to_vec()), (&child, 8, uses.to_vec())] {
+            let expected = ranges
+                .iter()
+                .map(|range| json!({"range":range,"newText":"fresh"}))
+                .collect::<Vec<_>>();
+            if document_changes {
+                let docs = edit["documentChanges"].as_array().unwrap();
+                assert_eq!(docs.len(), 2);
+                let doc = docs
+                    .iter()
+                    .find(|doc| doc["textDocument"]["uri"] == uri.as_str())
+                    .unwrap();
+                assert_eq!(doc["textDocument"]["version"], version);
+                assert_eq!(doc["edits"], json!(expected));
+            } else {
+                assert_eq!(edit["changes"].as_object().unwrap().len(), 2);
+                assert_eq!(edit["changes"][uri.as_str()], json!(expected));
+            }
+        }
+        server.notify("textDocument/didOpen",json!({"textDocument":{"uri":other,"languageId":"latex","version":9,"text":source.replace(r"\input{common}",r"\renewcommand\assignrefcontextcats[2][]{}\input{common}")}}));
+        server.send(
+            json!({"jsonrpc":"2.0","id":7,"method":"textDocument/rename","params":rename.clone()}),
+        );
+        let response = server.until(|message| message["id"] == 7);
+        assert_eq!(response["error"]["code"], -32602, "{response}");
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":other}}),
+        );
+        assert_eq!(
+            server.request(8, "textDocument/rename", rename.clone()),
+            edit
+        );
+        server.notify("textDocument/didOpen",json!({"textDocument":{"uri":macros,"languageId":"latex","version":10,"text":r"\renewcommand\assignrefcontextcats[2][]{}"}}));
+        assert_eq!(
+            server.request(9, "textDocument/definition", query.clone()),
+            json!([])
+        );
+        server.notify("textDocument/didChange",json!({"textDocument":{"uri":macros,"version":11},"contentChanges":[{"text":r"\let\saved\assignrefcontextcats\renewcommand\assignrefcontextcats[2][]{}\saved*[]{picked}"}]}));
+        server.send(
+            json!({"jsonrpc":"2.0","id":10,"method":"textDocument/rename","params":rename.clone()}),
+        );
+        assert_eq!(
+            server.until(|message| message["id"] == 10)["error"]["code"],
+            -32602
+        );
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":macros}}),
+        );
+        assert_eq!(server.request(11, "textDocument/rename", rename), edit);
+        for (uri, content) in [(&common, declarations), (&child, calls)] {
+            let edits = if document_changes {
+                edit["documentChanges"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|doc| doc["textDocument"]["uri"] == uri.as_str())
+                    .unwrap()["edits"]
+                    .clone()
+            } else {
+                edit["changes"][uri.as_str()].clone()
+            };
+            let mut edits: Vec<tower_lsp::lsp_types::TextEdit> =
+                serde_json::from_value(edits).unwrap();
+            edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
+            let text = Text::new(content.into());
+            let mut changed = content.to_string();
+            for edit in edits {
+                changed.replace_range(
+                    text.offset(edit.range.start).unwrap()..text.offset(edit.range.end).unwrap(),
+                    &edit.new_text,
+                );
+            }
+            if uri == &common {
+                assert!(changed.contains(r"\addtocategory{fresh}{picked}"));
+            } else {
+                assert!(changed.contains("[labelprefix=picked]{other,fresh}"));
+                assert!(changed.contains("title={picked}"));
+                assert!(changed.contains(r"\verb|\assignrefcontextcats[]{picked}|"));
+            }
+            server.notify("textDocument/didChange",json!({"textDocument":{"uri":uri,"version":12},"contentChanges":[{"text":changed}]}));
+        }
+        let mut target = headers[0];
+        target.end.character -= 1;
+        assert_eq!(
+            server.request(12, "textDocument/definition", query),
+            json!([{"uri":common,"range":target}])
+        );
+        server.request(13, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}

@@ -16,6 +16,7 @@ use tower_lsp::{
 const COMMANDS: &[&str] = &[
     "DeclareBibliographyCategory",
     "addtocategory",
+    "assignrefcontextcats",
     "printbibliography",
     "ifentrycategory",
     "ifcategory",
@@ -23,6 +24,13 @@ const COMMANDS: &[&str] = &[
 ];
 fn valid(name: &str) -> bool {
     syntax::is_static_key(name) && !name.contains(['[', ']'])
+}
+fn unsaved_projects(ws: &Workspace) -> BTreeMap<Url, BTreeSet<Url>> {
+    ws.documents
+        .keys()
+        .filter(|uri| ws.is_root(uri) && !ws.is_saved_root(uri))
+        .map(|root| (root.clone(), ws.project_documents(root)))
+        .collect()
 }
 #[derive(Clone, PartialEq, Eq)]
 struct Entry {
@@ -185,6 +193,48 @@ fn filter(source: &str, field: Field) -> (Vec<Field>, bool) {
     (result, !field.complete || term || depth != 0)
 }
 fn fields(source: &str, name: &str, end: usize) -> (Vec<Field>, bool) {
+    if name == "assignrefcontextcats" {
+        let mut at = syntax::skip_space(source, end);
+        if source.as_bytes().get(at) == Some(&b'*') {
+            at += 1;
+        }
+        // Both native forms require [options], including an empty bracket.
+        let Some((options, after)) = group(source, at, b'[') else {
+            return (vec![], true);
+        };
+        if !options.complete {
+            return (vec![], true);
+        }
+        let Some((list, _)) = group(source, after, b'{') else {
+            return (vec![], true);
+        };
+        // Bound CSV allocation before building the project-consistent index.
+        if source[list.span.clone()]
+            .bytes()
+            .filter(|byte| *byte == b',')
+            .take(20_001)
+            .count()
+            > 20_000
+        {
+            return (vec![], true);
+        }
+        let fields = syntax::key_list_segments(source, list.span)
+            .into_iter()
+            .map(|span| {
+                let at = syntax::skip_space(&source[..span.end], span.start);
+                let names = syntax::key_list_spans(source, span.clone());
+                Field {
+                    span: if names.len() == 1 {
+                        names[0].clone()
+                    } else {
+                        syntax::trimmed_span(source, at..span.end)
+                    },
+                    complete: list.complete,
+                }
+            })
+            .collect();
+        return (fields, !list.complete);
+    }
     if name == "printbibliography" {
         return group(source, end, b'[')
             .map_or((vec![], false), |(field, _)| options(source, field));
@@ -291,7 +341,9 @@ fn calls(
                     }
                 }
                 let name_value = &source[field.span.clone()];
-                if !valid(name_value) {
+                if !valid(name_value)
+                    && !(name == "assignrefcontextcats" && field.complete && name_value.is_empty())
+                {
                     // Empty and partial names still provide completion context.
                     result.dynamic = true;
                 }
@@ -337,7 +389,12 @@ impl Index {
                 ..Self::default()
             };
         }
-        let contexts = crate::environment_calls::project_contexts(ws);
+        let mut contexts = crate::environment_calls::project_contexts(ws);
+        // A new root has no filesystem identity yet, but its shared inputs
+        // still execute with that root's command meanings.
+        for scope in unsaved_projects(ws).into_values() {
+            contexts.entry(scope.clone()).or_default().extend(scope);
+        }
         let mut connected = ws.symbol_scope(origin);
         loop {
             let before = connected.len();
@@ -514,7 +571,11 @@ impl Index {
                 "Category rename requires a complete project index",
             ));
         }
-        let crate::workspace::SymbolProjects { mut scope, regions } = ws.symbol_projects(uri);
+        let crate::workspace::SymbolProjects {
+            mut scope,
+            mut regions,
+        } = ws.symbol_projects(uri);
+        regions.extend(unsaved_projects(ws));
         let own = self.definitions(ws, &scope, entry);
         if own.len() != 1 {
             return Err(Error::invalid_params(
@@ -606,6 +667,10 @@ fn applicable(ws: &Workspace, uri: &Url, offset: usize) -> bool {
             } else {
                 command.span.end
             };
+            end = syntax::skip_space(&doc.text.source, end);
+            if doc.text.source.as_bytes().get(end) == Some(&b'*') {
+                end += 1;
+            }
             for _ in 0..2 {
                 if let Some((field, after)) = group(&doc.text.source, end, b'{')
                     .or_else(|| group(&doc.text.source, end, b'['))
