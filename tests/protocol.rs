@@ -31028,9 +31028,23 @@ fn source_set_complete_reference_graphs_preserve_numeric_identity_and_unsaved_co
         server.request(11, "textDocument/references", member_params),
         expected_members
     );
-    server.send(json!({"jsonrpc":"2.0","id":12,"method":"textDocument/rename","params":{"textDocument":{"uri":sets},"position":declaration.range.start,"newName":"renamed"}}));
-    let response = server.until(|message| message["id"] == 12);
-    assert_eq!(response["error"]["code"], -32602, "{response}");
+    let locations: Vec<Location> = serde_json::from_value(expected.clone()).unwrap();
+    let mut coupled = std::collections::BTreeMap::<String, Vec<Value>>::new();
+    for location in locations.into_iter().chain(std::iter::once(parent.clone())) {
+        coupled
+            .entry(location.uri.to_string())
+            .or_default()
+            .push(json!({"range":location.range,"newText":"renamed"}));
+    }
+    for edits in coupled.values_mut() {
+        edits.sort_by_key(|edit| {
+            (
+                edit["range"]["start"]["line"].as_u64().unwrap(),
+                edit["range"]["start"]["character"].as_u64().unwrap(),
+            )
+        });
+    }
+    assert_eq!(server.request(12,"textDocument/rename",json!({"textDocument":{"uri":sets},"position":declaration.range.start,"newName":"renamed"})), json!({"changes":coupled}));
     let unused = declaration_source.replace("{parent}", "{unused}");
     server.notify(
         "textDocument/didChange",
@@ -31054,8 +31068,7 @@ fn source_set_complete_reference_graphs_preserve_numeric_identity_and_unsaved_co
 }
 
 #[test]
-fn source_set_renames_keep_numeric_identity_versions_and_reject_capture_or_raw_dependencies_over_stdio(
-) {
+fn source_set_renames_keep_numeric_identity_versions_and_certify_raw_dependencies_over_stdio() {
     use latex_lsp::text::Text;
     use tower_lsp::lsp_types::{Location, TextEdit};
     fn item(uri: &Url, text: &str, marker: &str, name: &str) -> Location {
@@ -31200,15 +31213,35 @@ fn source_set_renames_keep_numeric_identity_versions_and_reject_capture_or_raw_d
             versioned,
             &expected,
         );
-        server.notify("textDocument/didChange",json!({"textDocument":{"uri":bib,"version":9},"contentChanges":[{"text":format!("{library} @book{{child,crossref={{parent}}}}") }]}));
-        for (id, method, params) in [
-            (7, "textDocument/prepareRename", params),
-            (8, "textDocument/rename", rename.clone()),
-        ] {
-            server.send(json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}));
-            let response = server.until(|message| message["id"] == id);
-            assert_eq!(response["error"]["code"], -32602, "{response}");
-        }
+        let changed_library = format!("{library} @book{{child,crossref={{parent}}}}");
+        server.notify("textDocument/didChange",json!({"textDocument":{"uri":bib,"version":9},"contentChanges":[{"text":changed_library}]}));
+        let updated = Text::new(changed_library.clone());
+        let header = changed_library.find("@book{parent").unwrap() + "@book{".len();
+        let relation = changed_library.rfind("crossref={parent").unwrap() + "crossref={".len();
+        let mut coupled = expected.clone();
+        coupled.push((
+            bib.clone(),
+            9,
+            vec![
+                TextEdit {
+                    range: updated.range(header, header + 6),
+                    new_text: "newset".into(),
+                },
+                TextEdit {
+                    range: updated.range(relation, relation + 6),
+                    new_text: "newset".into(),
+                },
+            ],
+        ));
+        assert_eq!(
+            server.request(7, "textDocument/prepareRename", params),
+            json!({"range":query.range,"placeholder":"parent"})
+        );
+        verify(
+            &server.request(8, "textDocument/rename", rename.clone()),
+            versioned,
+            &coupled,
+        );
         server.notify("textDocument/didClose", json!({"textDocument":{"uri":bib}}));
         verify(
             &server.request(9, "textDocument/rename", rename),
@@ -31540,6 +31573,123 @@ fn source_set_missing_citations_and_repairs_refresh_unsaved_consumers_over_push_
     );
     assert!(missing(&report).is_empty());
     server.request(11, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+fn source_set_coupled_parent_renames_track_raw_consumers_versions_and_relation_types_over_stdio() {
+    use latex_lsp::text::Text;
+    let dir = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let sets = main.join("sets.tex").unwrap();
+    let bib = main.join("section.bib").unwrap();
+    let other = main.join("unsaved.tex").unwrap();
+    let source = r"\documentclass{article}\usepackage{biblatex}\addbibresource{default.bib}\addsectionbib[label=chosen]{section.bib}\begin{document}\cite{parent}\newrefsection[chosen]\input{sets}\cite{parent,child}\end{document}";
+    let declaration = "% 😀\r\n\\defbibentryset{parent}{member}";
+    let library = "@book{parent,title={Raw}} @book{member} @book{child,crossref={parent}}";
+    for (name, value) in [
+        ("main.tex", source),
+        ("sets.tex", declaration),
+        ("section.bib", library),
+        ("default.bib", "@book{parent,title={Default}}"),
+    ] {
+        std::fs::write(dir.path().join(name), value).unwrap();
+    }
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    for (uri, text, language, version) in [
+        (&main, source, "latex", 5),
+        (&sets, declaration, "latex", 3),
+        (&bib, library, "bibtex", 8),
+    ] {
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"text":text,"languageId":language,"version":version}}),
+        );
+    }
+    let rejected = |server: &mut Server, id: u64, params: Value| {
+        server
+            .send(json!({"jsonrpc":"2.0","id":id,"method":"textDocument/rename","params":params}));
+        server.until(|message| message["id"] == id)["error"].clone()
+    };
+    let at = declaration.find("parent").unwrap();
+    let range = Text::new(declaration.into()).range(at, at + 6);
+    let params = json!({"textDocument":{"uri":sets},"position":range.start,"newName":"newset"});
+    assert_eq!(
+        server.request(
+            2,
+            "textDocument/prepareRename",
+            json!({"textDocument":{"uri":sets},"position":range.start})
+        ),
+        json!({"range":range,"placeholder":"parent"})
+    );
+    let edit = server.request(3, "textDocument/rename", params.clone());
+    let changes = edit["documentChanges"].as_array().unwrap();
+    assert_eq!(changes.len(), 3);
+    let mut count = 0;
+    for change in changes {
+        let uri = &change["textDocument"]["uri"];
+        assert_eq!(
+            change["textDocument"]["version"],
+            if uri == main.as_str() {
+                5
+            } else if uri == sets.as_str() {
+                3
+            } else {
+                assert_eq!(uri, bib.as_str());
+                8
+            }
+        );
+        count += change["edits"].as_array().unwrap().len();
+    }
+    assert_eq!(count, 4);
+    let selected = source.rfind("parent,child").unwrap();
+    let cite_range = Text::new(source.into()).range(selected, selected + 6);
+    let bib_key = library.find("parent").unwrap();
+    let bib_relation = library.rfind("parent").unwrap();
+    let bib_text = Text::new(library.into());
+    let actual = changes
+        .iter()
+        .find(|c| c["textDocument"]["uri"] == bib.as_str())
+        .unwrap();
+    let mut bib_edits = actual["edits"].as_array().unwrap().clone();
+    bib_edits.sort_by_key(|e| e["range"]["start"]["character"].as_u64().unwrap());
+    assert_eq!(bib_edits,json!([{"range":bib_text.range(bib_key,bib_key+6),"newText":"newset"},{"range":bib_text.range(bib_relation,bib_relation+6),"newText":"newset"}]).as_array().unwrap().clone());
+    assert_eq!(
+        changes
+            .iter()
+            .find(|c| c["textDocument"]["uri"] == main.as_str())
+            .unwrap()["edits"],
+        json!([{"range":cite_range,"newText":"newset"}])
+    );
+    assert_eq!(
+        changes
+            .iter()
+            .find(|c| c["textDocument"]["uri"] == sets.as_str())
+            .unwrap()["edits"],
+        json!([{"range":range,"newText":"newset"}])
+    );
+    server.notify("textDocument/didOpen",json!({"textDocument":{"uri":other,"languageId":"latex","version":9,"text":r"\documentclass{article}\usepackage{biblatex}\addbibresource{section.bib}\begin{document}\cite{parent}\end{document}"}}));
+    assert_eq!(rejected(&mut server, 4, params.clone())["code"], -32602);
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":other}}),
+    );
+    assert_eq!(
+        server.request(5, "textDocument/rename", params.clone()),
+        edit
+    );
+    server.notify("textDocument/didChange",json!({"textDocument":{"uri":bib,"version":10},"contentChanges":[{"text":library.replace("crossref","related")}]}));
+    assert_eq!(rejected(&mut server, 6, params.clone())["code"], -32602);
+    server.notify("textDocument/didClose", json!({"textDocument":{"uri":bib}}));
+    let restored = server.request(7, "textDocument/rename", params);
+    let items = restored["documentChanges"].as_array().unwrap();
+    assert!(items.iter().any(
+        |c| c["textDocument"]["uri"] == bib.as_str() && c["textDocument"]["version"].is_null()
+    ));
+    server.request(8, "shutdown", Value::Null);
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }

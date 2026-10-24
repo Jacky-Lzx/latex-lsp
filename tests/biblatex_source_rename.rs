@@ -250,7 +250,7 @@ fn independent_source_and_member_renames_preserve_other_sections_and_exact_range
     }
 }
 #[test]
-fn source_renames_reject_raw_database_relation_dependencies_and_hidden_parent_edits() {
+fn source_parent_edits_require_certified_backend_prerequisites_and_keep_raw_queries_guarded() {
     for field in ["crossref", "xref", "xdata", "related", "entryset"] {
         let (_dir, mut ws, main) =
             clean(r"\newrefsection[chosen]\defbibentryset{parent}{member}\cite{parent}");
@@ -262,15 +262,25 @@ fn source_renames_reject_raw_database_relation_dependencies_and_hidden_parent_ed
         );
         let source = key(&ws, &main, r"\defbibentryset{", "parent");
         let book = key(&ws, &bib, "@book{", "parent");
-        for query in [source, book] {
-            assert!(
-                features::prepare_rename(&ws, &query.uri, query.range.start).is_err(),
-                "{field}"
-            );
-            assert!(
-                features::rename(&ws, &query.uri, query.range.start, "new").is_err(),
-                "{field}"
-            );
+        for (query, allowed) in [
+            (source, matches!(field, "crossref" | "xref")),
+            (book, false),
+        ] {
+            let prepare = features::prepare_rename(&ws, &query.uri, query.range.start);
+            let rename = features::rename(&ws, &query.uri, query.range.start, "new");
+            if allowed {
+                assert!(prepare.unwrap().is_some(), "{field}");
+                assert_eq!(
+                    edits(rename.unwrap().unwrap())
+                        .values()
+                        .map(Vec::len)
+                        .sum::<usize>(),
+                    4
+                );
+            } else {
+                assert!(prepare.is_err(), "{field}");
+                assert!(rename.is_err(), "{field}");
+            }
         }
     }
 }
@@ -629,4 +639,255 @@ fn native_unused_source_renames_materialize_an_additional_set_and_remain_protect
     assert!(!before.contains_key("unused") && !before.contains_key("member"));
     assert!(after["unused"].starts_with("{set}"));
     assert!(after["member"].contains(r"\inset{unused}"));
+}
+
+#[test]
+fn coupled_source_rename_includes_the_hidden_raw_parent_for_crossref_and_xref() {
+    for field in ["crossref", "xref"] {
+        let (_dir, mut ws, main) = clean(
+            r"\cite{parent}\newrefsection[chosen]\defbibentryset{parent}{member}\cite{parent,child}",
+        );
+        let bib = main.join("section.bib").unwrap();
+        ws.open(bib.clone(),format!("@book{{parent,title={{Raw parent}}}} @book{{member}} @book{{child,{field}={{parent}}}}"),8);
+        let source = key(&ws, &main, r"\defbibentryset{", "parent");
+        let edit = features::rename(&ws, &main, source.range.start, "newset")
+            .unwrap()
+            .unwrap();
+        let changes = edits(edit);
+        assert_eq!(
+            changes.values().map(Vec::len).sum::<usize>(),
+            4,
+            "{changes:?}"
+        );
+        let raw = key(&ws, &bib, "@book{", "parent");
+        assert!(changes[&bib]
+            .iter()
+            .any(|edit| edit.range == raw.range && edit.new_text == "newset"));
+        assert_eq!(changes[&main].len(), 2);
+        assert_eq!(changes[&bib].len(), 2);
+        assert!(features::prepare_rename(&ws, &main, source.range.start)
+            .unwrap()
+            .is_some());
+        // A query on the independently declared raw database entry stays guarded.
+        assert!(features::rename(&ws, &bib, raw.range.start, "newset").is_err());
+    }
+}
+#[test]
+fn any_independent_raw_consumer_prevents_automatic_coupling_and_close_restores_it() {
+    let (_dir, mut ws, main) =
+        clean(r"\newrefsection[chosen]\defbibentryset{parent}{member}\cite{parent,child}");
+    let bib = main.join("section.bib").unwrap();
+    ws.open(
+        bib,
+        "@book{parent} @book{member} @book{child,crossref={parent}}".into(),
+        8,
+    );
+    let source = key(&ws, &main, r"\defbibentryset{", "parent");
+    assert!(features::rename(&ws, &main, source.range.start, "newset")
+        .unwrap()
+        .is_some());
+    let other = main.join("unsaved.tex").unwrap();
+    ws.open(other.clone(),r"\documentclass{article}\usepackage{biblatex}\addbibresource{section.bib}\begin{document}\cite{parent}\end{document}".into(),9);
+    assert!(features::rename(&ws, &main, source.range.start, "newset").is_err());
+    ws.documents.remove(&other);
+    assert!(features::rename(&ws, &main, source.range.start, "newset")
+        .unwrap()
+        .is_some());
+    let text = ws.documents[&main].text.source.replace(
+        r"\end{document}",
+        r"\newrefsection[chosen]\cite{parent}\end{document}",
+    );
+    ws.open(main.clone(), text, 6);
+    assert!(features::rename(&ws, &main, source.range.start, "newset").is_err());
+}
+#[test]
+fn unsupported_source_relation_transformations_are_never_auto_coupled() {
+    for field in ["xdata", "related", "entryset"] {
+        let (_dir, mut ws, main) =
+            clean(r"\newrefsection[chosen]\defbibentryset{parent}{member}\cite{parent,child}");
+        ws.open(
+            main.join("section.bib").unwrap(),
+            format!("@book{{parent}} @book{{member}} @book{{child,{field}={{parent}}}}"),
+            8,
+        );
+        let source = key(&ws, &main, r"\defbibentryset{", "parent");
+        assert!(features::prepare_rename(&ws, &main, source.range.start).is_err());
+        assert!(features::rename(&ws, &main, source.range.start, "newset").is_err());
+    }
+}
+#[test]
+fn coupled_parent_renames_check_new_names_and_literal_quoted_relation_edits() {
+    let (_dir, mut ws, main) =
+        clean(r"\newrefsection[chosen]\defbibentryset{parent}{member}\cite{parent,child}");
+    let bib = main.join("section.bib").unwrap();
+    ws.open(
+        bib.clone(),
+        "@book{parent} @book{member} @book{child,crossref=\"parent\"}".into(),
+        8,
+    );
+    let source = key(&ws, &main, r"\defbibentryset{", "parent");
+    let edit = features::rename(&ws, &main, source.range.start, "O\"Connor")
+        .unwrap()
+        .unwrap();
+    apply(&mut ws, edit);
+    let text = &ws.documents[&bib].text.source;
+    assert!(
+        text.contains("@book{O\"Connor}") && text.contains("crossref={O\"Connor}"),
+        "{text}"
+    );
+    let source = key(&ws, &main, r"\defbibentryset{", "O\"Connor");
+    assert!(features::rename(&ws, &main, source.range.start, "member").is_err());
+}
+#[test]
+#[ignore = "requires pdflatex, biblatex and biber"]
+fn native_coupled_source_parent_edits_preserve_biber_relations_and_other_numeric_sections() {
+    for field in ["crossref", "xref"] {
+        let (dir, mut ws, main) = clean(
+            r"\cite{parent}\newrefsection[chosen]\cite{child}\defbibentryset{parent}{member}\cite{parent}\printbibliography",
+        );
+        let bib = main.join("section.bib").unwrap();
+        let text=format!("@book{{parent,title={{Raw parent}},publisher={{Inherited publisher}}}} @book{{member,title={{Member}}}} @book{{child,{field}={{parent}},title={{Child}}}}");
+        std::fs::write(dir.path().join("section.bib"), &text).unwrap();
+        ws.open(bib, text, 8);
+        let original = compile(dir.path());
+        let source = key(&ws, &main, r"\defbibentryset{", "parent");
+        let edit = features::rename(&ws, &main, source.range.start, "newset")
+            .unwrap()
+            .unwrap();
+        apply(&mut ws, edit);
+        let edited = tempfile::tempdir().unwrap();
+        for name in ["main.tex", "default.bib", "section.bib"] {
+            std::fs::write(
+                edited.path().join(name),
+                &ws.documents[&main.join(name).unwrap()].text.source,
+            )
+            .unwrap();
+        }
+        let after = compile(edited.path());
+        assert_eq!(section(&after, 0), section(&original, 0));
+        assert_eq!(
+            entries(section(&after, 1)),
+            entries(&section(&original, 1).replace("{parent}", "{newset}"))
+        );
+    }
+}
+
+#[test]
+fn coupled_edits_keep_versions_repeatable_queries_and_disjoint_name_spaces() {
+    let (_dir, mut ws, main) = clean(
+        r"\cite{newset}\newrefsection[chosen]\defbibentryset{parent}{member}\cite{parent,child}",
+    );
+    ws.open(
+        main.join("default.bib").unwrap(),
+        "@book{newset,title={Default independent}}".into(),
+        6,
+    );
+    let bib = main.join("section.bib").unwrap();
+    ws.open(
+        bib.clone(),
+        "@book{parent} @book{member} @book{child,crossref={parent}}".into(),
+        8,
+    );
+    ws.versioned_edits = true;
+    let source = key(&ws, &main, r"\defbibentryset{", "parent");
+    assert_eq!(
+        features::prepare_rename(&ws, &main, source.range.start).unwrap(),
+        Some(PrepareRenameResponse::RangeWithPlaceholder {
+            range: source.range,
+            placeholder: "parent".into()
+        })
+    );
+    let edit = features::rename(&ws, &main, source.range.start, "newset")
+        .unwrap()
+        .unwrap();
+    let Some(DocumentChanges::Edits(changes)) = &edit.document_changes else {
+        panic!("{edit:?}")
+    };
+    assert_eq!(changes.len(), 2);
+    for change in changes {
+        assert_eq!(
+            change.text_document.version,
+            Some(if change.text_document.uri == main {
+                5
+            } else {
+                8
+            })
+        );
+    }
+    apply(&mut ws, edit);
+    let source = key(&ws, &main, r"\defbibentryset{", "newset");
+    let next = features::rename(&ws, &main, source.range.start, "finalset")
+        .unwrap()
+        .unwrap();
+    apply(&mut ws, next);
+    assert!(ws.documents[&bib].text.source.contains("@book{finalset}"));
+    assert!(ws.documents[&main]
+        .text
+        .source
+        .contains(r"\cite{newset}\newrefsection"));
+}
+#[test]
+fn coupled_prerequisites_do_not_capture_unresolved_tex_or_database_references() {
+    for tail in [r"\cite{newset}", r"\newrefsection[chosen]\cite{parent}"] {
+        let (_dir, mut ws, main) = clean(&format!(
+            r"\newrefsection[chosen]\defbibentryset{{parent}}{{member}}\cite{{parent,child}}{tail}"
+        ));
+        ws.open(
+            main.join("section.bib").unwrap(),
+            "@book{parent} @book{member} @book{child,crossref={parent}}".into(),
+            8,
+        );
+        let source = key(&ws, &main, r"\defbibentryset{", "parent");
+        assert!(features::rename(&ws, &main, source.range.start, "newset").is_err());
+    }
+    let (_dir, mut ws, main) =
+        clean(r"\newrefsection[chosen]\defbibentryset{parent}{member}\cite{parent,child}");
+    ws.open(
+        main.join("section.bib").unwrap(),
+        "@book{parent} @book{member} @book{child,crossref={parent}} @book{other,xref={newset}}"
+            .into(),
+        8,
+    );
+    let source = key(&ws, &main, r"\defbibentryset{", "parent");
+    assert!(features::rename(&ws, &main, source.range.start, "newset").is_err());
+}
+
+#[test]
+fn a_shared_raw_prerequisite_keeps_large_numeric_source_edits_complete_within_budget() {
+    let (dir, mut ws, main) = clean("");
+    let sets = main.join("sets.tex").unwrap();
+    let chapter = main.join("chapter.tex").unwrap();
+    let declaration = r"\defbibentryset{parent}{member}";
+    let body = r"\cite{parent}";
+    std::fs::write(dir.path().join("sets.tex"), declaration).unwrap();
+    std::fs::write(dir.path().join("chapter.tex"), body).unwrap();
+    let mut text = ws.documents[&main]
+        .text
+        .source
+        .replace(r"\end{document}", "");
+    for _ in 0..350 {
+        text.push_str(r"\newrefsection[chosen]\input{sets}\input{chapter}");
+    }
+    text.push_str(r"\end{document}");
+    ws.open(main.clone(), text, 6);
+    ws.open(sets.clone(), declaration.into(), 3);
+    ws.open(chapter.clone(), body.into(), 4);
+    let mut library = String::from("@book{parent} @book{member}");
+    for index in 0..1500 {
+        library.push_str(&format!(" @book{{child{index},crossref={{parent}}}}"));
+    }
+    ws.open(main.join("section.bib").unwrap(), library, 8);
+    let source = key(&ws, &sets, r"\defbibentryset{", "parent");
+    assert_eq!(
+        features::references(&ws, &sets, source.range.start, true).len(),
+        1502,
+        "complete source graph before coupling"
+    );
+    let edit = features::rename(&ws, &sets, source.range.start, "newset")
+        .unwrap()
+        .unwrap();
+    let changes = edits(edit);
+    assert_eq!(changes.values().map(Vec::len).sum::<usize>(), 1503);
+    assert_eq!(changes[&sets].len(), 1);
+    assert_eq!(changes[&chapter].len(), 1);
 }

@@ -92,8 +92,30 @@ fn source_and_database_keys_have_complete_separate_graphs() {
     for query in &expected {
         check(&ws, query, &book, &expected);
     }
-    // Editing is enabled independently only once rename capture checks support source namespaces.
-    assert!(features::rename(&ws, &main, source.range.start, "changed").is_err());
+    // Editing also certifies and includes the backend's hidden raw prerequisite.
+    let edit = features::rename(&ws, &main, source.range.start, "changed")
+        .unwrap()
+        .unwrap();
+    let actual: Vec<_> = edit
+        .changes
+        .unwrap()
+        .into_iter()
+        .flat_map(|(uri, edits)| {
+            edits.into_iter().map(move |edit| {
+                assert_eq!(edit.new_text, "changed");
+                Location::new(uri.clone(), edit.range)
+            })
+        })
+        .collect();
+    assert_eq!(
+        sorted(actual),
+        sorted(vec![
+            source,
+            cite[1].clone(),
+            key(&ws, &selected, "crossref={", "parent"),
+            key(&ws, &selected, "@book{", "parent")
+        ])
+    );
 }
 #[test]
 fn identical_resources_keep_distinct_numeric_reference_graphs() {

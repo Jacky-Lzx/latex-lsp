@@ -28,6 +28,7 @@ struct Identity {
 #[derive(Clone)]
 struct Occurrence {
     name: String,
+    field: String,
     span: Range<usize>,
 }
 struct Database {
@@ -136,12 +137,13 @@ impl Database {
                         return Err(());
                     }
                     if field.name != "ids" && !key.is_empty() {
-                        stored += key.len() + 64;
+                        stored += key.len() + field.name.len() + 64;
                         if stored > 32 * 1024 * 1024 || references.len() >= 100_000 {
                             return Err(());
                         }
                         references.push(Occurrence {
                             name: key.into(),
+                            field: field.name.clone(),
                             span,
                         });
                     }
@@ -509,7 +511,7 @@ impl<'a> Graphs<'a> {
             self.stored += database
                 .references
                 .iter()
-                .map(|reference| reference.name.len() + 64)
+                .map(|reference| reference.name.len() + reference.field.len() + 64)
                 .sum::<usize>();
             if self.stored > 32 * 1024 * 1024 {
                 return Err(());
@@ -703,6 +705,7 @@ impl<'a> Graphs<'a> {
 
 struct Symbol<'a> {
     declaration: Identity,
+    prerequisite: Option<Identity>,
     occurrences: BTreeMap<Url, BTreeSet<(usize, usize)>>,
     name: String,
     query: Range<usize>,
@@ -949,6 +952,7 @@ fn symbol<'a>(ws: &'a Workspace, uri: &Url, offset: usize) -> Option<Result<Symb
         }
         Ok(Symbol {
             declaration,
+            prerequisite: None,
             occurrences,
             name,
             query: span,
@@ -1016,12 +1020,12 @@ fn consumes(view: &View, declaration: &Identity, name: &str, source: bool) -> bo
 fn validate_edit(symbol: &Symbol<'_>) -> Result<()> {
     let source = is_source(symbol);
     if source {
-        // A final source identity does not certify Biber's prerequisite raw
-        // database parent. Refuse coupled edits until both roles can be proved.
-        if symbol
-            .occurrences
-            .keys()
-            .any(|uri| symbol.graphs.ws.documents[uri].kind == DocumentKind::Bibtex)
+        // A final source identity alone cannot certify the raw prerequisite.
+        if symbol.prerequisite.is_none()
+            && symbol
+                .occurrences
+                .keys()
+                .any(|uri| symbol.graphs.ws.documents[uri].kind == DocumentKind::Bibtex)
         {
             return Err(());
         }
@@ -1082,6 +1086,112 @@ fn validate_edit(symbol: &Symbol<'_>) -> Result<()> {
     Ok(())
 }
 
+// Couple only a uniquely proved backend prerequisite that has no independent
+// book identity in any consumer. Raw-entry queries keep their ordinary identity.
+fn edit_symbol(mut target: Symbol<'_>) -> Result<Symbol<'_>> {
+    if is_source(&target)
+        && target
+            .occurrences
+            .keys()
+            .any(|uri| target.graphs.ws.documents[uri].kind == DocumentKind::Bibtex)
+    {
+        let mut prerequisite = None;
+        for project in target.graphs.projects.values() {
+            for view in project
+                .graph
+                .sections
+                .iter()
+                .filter(|view| consumes(view, &target.declaration, &target.name, true))
+            {
+                let found = target
+                    .graphs
+                    .database_binding(&target.name, &view.resources)?
+                    .ok_or(())?;
+                if prerequisite
+                    .as_ref()
+                    .is_some_and(|previous| *previous != found)
+                {
+                    return Err(());
+                }
+                prerequisite = Some(found);
+            }
+        }
+        let prerequisite = prerequisite.ok_or(())?;
+        let database = target.graphs.databases.get(&prerequisite.uri).ok_or(())?;
+        if database.declarations.get(&target.name).map(Vec::as_slice)
+            != Some(std::slice::from_ref(&prerequisite))
+        {
+            return Err(());
+        }
+        // The source graph already certifies every affected physical occurrence.
+        // Reuse its numeric views instead of rebuilding the same execution graph
+        // for the raw header. Every raw consumer must belong to that closure and
+        // shadow this prerequisite with exactly this source declaration.
+        let consumers = target.graphs.consumers(&prerequisite.uri);
+        if consumers.is_empty() {
+            return Err(());
+        }
+        for root in consumers {
+            let project = target.graphs.projects.get(&root).ok_or(())?;
+            if !project.resources.contains(&prerequisite.uri) {
+                return Err(());
+            }
+            for view in project
+                .graph
+                .sections
+                .iter()
+                .filter(|view| view.contains(&prerequisite.uri))
+            {
+                target.graphs.work.set(target.graphs.work.get() + 96);
+                if target.graphs.work.get() > 32 * 1024 * 1024
+                    || target.graphs.bind(&target.name, std::iter::once(view))?
+                        != Some(target.declaration.clone())
+                    || target
+                        .graphs
+                        .database_binding(&target.name, &view.resources)?
+                        != Some(prerequisite.clone())
+                {
+                    return Err(());
+                }
+            }
+        }
+        for (uri, spans) in &target.occurrences {
+            if target.graphs.ws.documents[uri].kind != DocumentKind::Bibtex {
+                continue;
+            }
+            let database = target.graphs.databases.get(uri).ok_or(())?;
+            let mut checked = 0usize;
+            for reference in &database.references {
+                target.graphs.work.set(
+                    target.graphs.work.get() + reference.name.len() + reference.field.len() + 64,
+                );
+                if target.graphs.work.get() > 32 * 1024 * 1024 {
+                    return Err(());
+                }
+                if spans.contains(&(reference.span.start, reference.span.end)) {
+                    if reference.name != target.name
+                        || !matches!(reference.field.as_str(), "crossref" | "xref")
+                    {
+                        return Err(());
+                    }
+                    checked += 1;
+                }
+            }
+            if checked != spans.len() {
+                return Err(());
+            }
+        }
+        target
+            .occurrences
+            .entry(prerequisite.uri.clone())
+            .or_default()
+            .insert((prerequisite.start, prerequisite.end));
+        target.prerequisite = Some(prerequisite);
+    }
+    validate_edit(&target)?;
+    Ok(target)
+}
+
 pub(crate) fn prepare(
     ws: &Workspace,
     uri: &Url,
@@ -1090,7 +1200,7 @@ pub(crate) fn prepare(
     Some(
         symbol(ws, uri, offset)?
             .and_then(|symbol| {
-                validate_edit(&symbol)?;
+                let symbol = edit_symbol(symbol)?;
                 Ok(Some(PrepareRenameResponse::RangeWithPlaceholder {
                     range: ws.documents[uri]
                         .text
@@ -1108,8 +1218,8 @@ pub(crate) fn rename(
     offset: usize,
     name: &str,
 ) -> Option<jsonrpc::Result<Option<WorkspaceEdit>>> {
-    Some(symbol(ws, uri, offset)?.map_err(|_| edit_error()).and_then(|mut symbol| {
-        validate_edit(&symbol).map_err(|_| edit_error())?;
+    Some(symbol(ws, uri, offset)?.map_err(|_| edit_error()).and_then(|symbol| {
+        let mut symbol = edit_symbol(symbol).map_err(|_| edit_error())?;
         if !syntax::is_static_citation_key(name) || name == "*" {
             return Err(jsonrpc::Error::invalid_params("Invalid bibliography key: use a nonempty literal key without separators or TeX expansion"));
         }

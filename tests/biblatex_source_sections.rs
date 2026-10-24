@@ -645,7 +645,7 @@ fn preamble_injected_keys_do_not_receive_false_missing_diagnostics_or_database_c
 }
 
 #[test]
-fn source_declaration_queries_return_only_certified_complete_graphs_and_refuse_unproved_edits() {
+fn source_declaration_queries_keep_certified_references_and_safe_coupled_edits() {
     for declare in [
         r"\defbibentryset",
         r"\csuse{defbibentryset}",
@@ -686,19 +686,42 @@ fn source_declaration_queries_return_only_certified_complete_graphs_and_refuse_u
             sorted(expected.clone()),
             "{declare}"
         );
+        let mut complete_edits = expected.clone();
         expected.retain(|item| item.uri != main || item.range.start != point);
         assert_eq!(
             sorted(features::references(&ws, &main, point, false)),
             sorted(expected),
             "{declare}"
         );
-        assert!(
-            features::prepare_rename(&ws, &main, point).is_err(),
-            "{declare}"
-        );
-        assert!(
-            features::rename(&ws, &main, point, "renamed").is_err(),
-            "{declare}"
-        );
+        if declare == r"\bibitem" {
+            assert!(features::prepare_rename(&ws, &main, point).is_err());
+            assert!(features::rename(&ws, &main, point, "renamed").is_err());
+        } else {
+            let declaration = key(&ws, &main, &format!("{declare}{{"), "parent");
+            assert_eq!(
+                features::prepare_rename(&ws, &main, point).unwrap(),
+                Some(PrepareRenameResponse::RangeWithPlaceholder {
+                    range: declaration.range,
+                    placeholder: "parent".into()
+                })
+            );
+            let bib = main.join("section.bib").unwrap();
+            complete_edits.push(key(&ws, &bib, "@book{", "parent"));
+            let edit = features::rename(&ws, &main, point, "renamed")
+                .unwrap()
+                .unwrap();
+            let actual: Vec<_> = edit
+                .changes
+                .unwrap()
+                .into_iter()
+                .flat_map(|(uri, edits)| {
+                    edits.into_iter().map(move |edit| {
+                        assert_eq!(edit.new_text, "renamed");
+                        Location::new(uri.clone(), edit.range)
+                    })
+                })
+                .collect();
+            assert_eq!(sorted(actual), sorted(complete_edits), "{declare}");
+        }
     }
 }
