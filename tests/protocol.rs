@@ -30053,13 +30053,14 @@ fn section_key_renames_preserve_versions_and_reject_capture_or_shared_conflicts_
         let selected = main.join("section.bib").unwrap();
         let default = main.join("default.bib").unwrap();
         let chapter = main.join("chapter.tex").unwrap();
-        let source = r"\documentclass{article}\usepackage{biblatex}\addbibresource{default.bib}\addsectionbib[label=chosen]{section.bib}\begin{document}\cite{parent,legacy}\newrefsection[chosen]\input{chapter}\end{document}";
+        let source = r"\documentclass{article}\usepackage{biblatex}\addbibresource{default.bib}\addsectionbib[label=chosen]{section.bib}\begin{document}\cite{parent,defaultlegacy}\newrefsection[chosen]\input{chapter}\end{document}";
         let library =
             "% 😀\r\n@book{parent,ids={legacy}}\r\n@book{child,crossref={parent},xref={legacy}}";
+        let default_library = library.replace("legacy", "defaultlegacy");
         let calls = "% 😀\r\n\\cite{parent,legacy}";
         for (name, text) in [
             ("main.tex", source),
-            ("default.bib", library),
+            ("default.bib", default_library.as_str()),
             ("section.bib", library),
             ("chapter.tex", calls),
         ] {
@@ -32560,4 +32561,128 @@ fn intersecting_ids_owner_candidates_refresh_types_metadata_and_nested_member_gu
         .unwrap()
         .iter()
         .any(|item| item["label"] == "old"));
+}
+
+#[test]
+fn global_biber_alias_loading_blocks_partial_edits_capture_and_false_missing_diagnostics() {
+    use latex_lsp::text::Text;
+    let dir = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let default = main.join("default.bib").unwrap();
+    let selected = main.join("section.bib").unwrap();
+    let source="% 😀\r\n\\documentclass{article}\\usepackage{biblatex}\\addbibresource{default.bib}\\addsectionbib[label=chosen]{section.bib}\\begin{document}\\cite{old}\\newrefsection[chosen]\\cite{old,child}\\newrefsection\\cite{capture}\\end{document}";
+    let first = "% 😀\r\n@book{parent,title={Default parent},ids={old}}";
+    let closed =
+        "% 😀\r\n@book{parent,title={Selected parent},ids={old}} @book{child,crossref={old}}";
+    let imported = "% 😀\r\n@book{child,crossref={old}}";
+    for (name, text) in [
+        ("main.tex", source),
+        ("default.bib", first),
+        ("section.bib", closed),
+    ] {
+        std::fs::write(dir.path().join(name), text).unwrap();
+    }
+    let span = |text: &str, prefix: &str, name: &str| {
+        let start = text.find(prefix).unwrap() + prefix.len();
+        assert_eq!(&text[start..start + name.len()], name);
+        Text::new(text.into()).range(start, start + name.len())
+    };
+    let alias = span(closed, "ids={", "old");
+    let default_alias = span(first, "ids={", "old");
+    let owner = span(first, "@book{", "parent");
+    let call = span(source, r"\newrefsection[chosen]\cite{", "old");
+    let relation = span(closed, "crossref={", "old");
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    for (uri, text, language, version) in [
+        (&main, source, "latex", 5),
+        (&selected, closed, "bibtex", 8),
+    ] {
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"text":text,"languageId":language,"version":version}}),
+        );
+    }
+    let params =
+        json!({"textDocument":{"uri":selected},"position":alias.start,"newName":"freshalias"});
+    let refs=server.request(2,"textDocument/references",json!({"textDocument":{"uri":selected},"position":alias.start,"context":{"includeDeclaration":true}}));
+    assert_eq!(refs.as_array().unwrap().len(), 3);
+    server.send(json!({"jsonrpc":"2.0","id":3,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":default},"position":owner.start}}));
+    assert_eq!(
+        server.until(|message| message["id"] == 3)["error"]["code"],
+        -32602
+    );
+    server.send(json!({"jsonrpc":"2.0","id":4,"method":"textDocument/rename","params":{"textDocument":{"uri":selected},"position":alias.start,"newName":"capture"}}));
+    assert_eq!(
+        server.until(|message| message["id"] == 4)["error"]["code"],
+        -32602
+    );
+    let edit = server.request(5, "textDocument/rename", params.clone());
+    let docs = edit["documentChanges"].as_array().unwrap();
+    assert_eq!(docs.len(), 2);
+    for (uri, version, edits) in [
+        (&main, 5, json!([{"range":call,"newText":"freshalias"}])),
+        (
+            &selected,
+            8,
+            json!([{"range":alias,"newText":"freshalias"},{"range":relation,"newText":"freshalias"}]),
+        ),
+    ] {
+        let doc = docs
+            .iter()
+            .find(|doc| doc["textDocument"]["uri"] == uri.as_str())
+            .unwrap();
+        assert_eq!(doc["textDocument"]["version"], version);
+        assert_eq!(doc["edits"], edits);
+    }
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":selected,"version":9},"contentChanges":[{"text":imported}]}),
+    );
+    let default_refs = json!({"textDocument":{"uri":default},"position":default_alias.start,"context":{"includeDeclaration":true}});
+    assert_eq!(
+        server.request(6, "textDocument/references", default_refs.clone()),
+        json!([])
+    );
+    server.send(json!({"jsonrpc":"2.0","id":7,"method":"textDocument/rename","params":{"textDocument":{"uri":default},"position":default_alias.start,"newName":"freshalias"}}));
+    assert_eq!(
+        server.until(|message| message["id"] == 7)["error"]["code"],
+        -32602
+    );
+    let report = server.request(
+        8,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":main}}),
+    );
+    assert!(
+        !report["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["code"] == "undefined-citation"),
+        "{report}"
+    );
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":selected}}),
+    );
+    let restored = server.request(9, "textDocument/rename", params);
+    let docs = restored["documentChanges"].as_array().unwrap();
+    assert_eq!(docs.len(), 2);
+    let bib = docs
+        .iter()
+        .find(|doc| doc["textDocument"]["uri"] == selected.as_str())
+        .unwrap();
+    assert_eq!(bib["textDocument"]["version"], Value::Null);
+    assert_eq!(
+        bib["edits"],
+        json!([{"range":alias,"newText":"freshalias"},{"range":relation,"newText":"freshalias"}])
+    );
+    let empty = r"\documentclass{article}\usepackage{biblatex}\addsectionbib[label=chosen]{section.bib}\begin{document}\newrefsection[chosen]\cite{old}\newrefsection\cite{old}\end{document}";
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":6},"contentChanges":[{"text":empty}]}),
+    );
+    assert_eq!(server.request(10,"textDocument/references",json!({"textDocument":{"uri":selected},"position":alias.start,"context":{"includeDeclaration":true}})),json!([]));
 }

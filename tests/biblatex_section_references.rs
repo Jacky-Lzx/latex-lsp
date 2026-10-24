@@ -445,6 +445,8 @@ fn native_biber_accepts_complete_selected_key_and_alias_reference_edits() {
         run("pdflatex", &args);
         let log = std::fs::read_to_string(dir.path().join("main.log")).unwrap();
         assert!(!log.contains("undefined"), "{log}");
+        let blg = std::fs::read_to_string(dir.path().join("main.blg")).unwrap();
+        assert!(!blg.contains("WARN") && !blg.contains("ERROR"), "{blg}");
         std::fs::read_to_string(dir.path().join("main.bbl")).unwrap()
     };
     compile();
@@ -452,8 +454,10 @@ fn native_biber_accepts_complete_selected_key_and_alias_reference_edits() {
     let default = main.join("default.bib").unwrap();
     let default_source = ws.documents[&default].text.source.clone();
     for (prefix, key, renamed, count) in [
-        ("@book{", "parent", "selectedparent", 5),
+        // Rename the alias before its owner: equal IDS spellings share
+        // Biber's global cache even in otherwise independent sections.
         ("ids={", "legacy", "selectedlegacy", 3),
+        ("@book{", "parent", "selectedparent", 5),
     ] {
         let declaration = locations(&ws, &selected, prefix, key).remove(0);
         let refs = features::references(&ws, &selected, declaration.range.start, true);
@@ -480,6 +484,7 @@ fn native_biber_accepts_complete_selected_key_and_alias_reference_edits() {
             std::fs::write(uri.to_file_path().unwrap(), &source).unwrap();
             ws.open(uri, source, 9);
         }
+        compile();
     }
     assert_eq!(ws.documents[&default].text.source, default_source);
     let bbl = compile();

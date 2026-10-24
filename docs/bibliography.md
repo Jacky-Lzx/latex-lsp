@@ -229,3 +229,13 @@ cargo test --locked --test biblatex_source_alias_owner_edits --test biblatex_sou
 cargo test --locked --test protocol intersecting_ids_source_owner_
 cargo test --locked --test protocol intersecting_ids_owner_candidates_
 ```
+
+Biber 跨数字分区的全局 IDS 缓存回归：
+
+```sh
+cargo test --locked --test biblatex_alias_loading
+cargo test --locked --test biblatex_alias_loading -- --include-ignored
+cargo test --locked --test protocol global_biber_alias_loading_
+```
+
+原生测试既核验缓存导入，也验证新别名捕获以及新主键删除旧别名映射的反例；需安装 pdfLaTeX、biblatex 和 Biber。

@@ -241,6 +241,107 @@ struct Analysis<'a, 'b> {
     ended: bool,
 }
 impl Analysis<'_, '_> {
+    fn alias_resources_closed(&mut self) -> Option<()> {
+        let mut resources = BTreeSet::new();
+        for view in &self.resource_sets {
+            for uri in view.iter() {
+                self.work += uri.as_str().len() + 64;
+                if self.work > 32 * 1024 * 1024 {
+                    return None;
+                }
+                resources.insert(uri);
+            }
+        }
+        let mut aliases = BTreeSet::new();
+        for uri in resources {
+            for alias in &self.ws.documents.get(uri)?.syntax.bibliography_aliases {
+                self.work += alias.name.len() + 64;
+                if self.work > 32 * 1024 * 1024 {
+                    return None;
+                }
+                aliases.insert(alias.name.as_str());
+            }
+        }
+        if aliases.is_empty() {
+            return Some(());
+        }
+        fn record<'a>(
+            uses: &mut BTreeMap<Arc<BTreeSet<Url>>, BTreeSet<&'a str>>,
+            aliases: &BTreeSet<&str>,
+            resources: &Arc<BTreeSet<Url>>,
+            name: &'a str,
+        ) {
+            if aliases.contains(name) {
+                uses.entry(resources.clone()).or_default().insert(name);
+            }
+        }
+        let mut uses = BTreeMap::new();
+        if let Some(keys) = &self.all_keys {
+            for ((uri, start, end), views) in keys {
+                for view in views {
+                    record(
+                        &mut uses,
+                        &aliases,
+                        view,
+                        &self.ws.documents.get(uri)?.text.source[*start..*end],
+                    );
+                }
+            }
+        }
+        for ((start, end), view) in &self.keys {
+            if let Some(view) = view {
+                record(
+                    &mut uses,
+                    &aliases,
+                    view,
+                    &self.ws.documents.get(self.origin)?.text.source[*start..*end],
+                );
+            }
+        }
+        if let (Some(resources), Some(query)) = (&self.answer, &self.query) {
+            record(
+                &mut uses,
+                &aliases,
+                self.resource_sets.get(resources)?,
+                &self.ws.documents.get(self.origin)?.text.source[query.span.clone()],
+            );
+        }
+        if let Some(trace) = &self.trace {
+            for event in &trace.events {
+                match event {
+                    SourceEvent::Set(section, set) => {
+                        for member in &set.members {
+                            record(
+                                &mut uses,
+                                &aliases,
+                                trace.resources.get(section)?,
+                                &member.name,
+                            );
+                        }
+                    }
+                    SourceEvent::Request(section, key, _) => {
+                        record(
+                            &mut uses,
+                            &aliases,
+                            trace.resources.get(section)?,
+                            &key.name,
+                        );
+                    }
+                }
+            }
+        }
+        self.work += uses
+            .values()
+            .flatten()
+            .map(|name| name.len() + 64)
+            .sum::<usize>();
+        if self.work > 32 * 1024 * 1024 {
+            return None;
+        }
+        self.work +=
+            crate::bib_source_aliases::closed_resources(self.ws, &self.resource_sets, &uses)?;
+        (self.work <= 32 * 1024 * 1024).then_some(())
+    }
     // Share one retained resource set across all keys in that section.
     fn intern_resources(&mut self) -> Option<Arc<BTreeSet<Url>>> {
         if let Some(resources) = self.resource_sets.get(&self.active) {
@@ -797,7 +898,7 @@ impl Analysis<'_, '_> {
             return Some(());
         }
         self.active = self.registry.resources(self.root, selected.as_deref())?;
-        if self.query.is_none() || self.trace.is_some() {
+        {
             let resources = self.intern_resources()?;
             if let Some(trace) = self.trace.as_mut() {
                 self.work += 64;
@@ -973,6 +1074,7 @@ pub(crate) fn coexistence(ws: &Workspace, root: &Url, scope: &BTreeSet<Url>) -> 
             ended: false,
         };
         analysis.walk(root)?;
+        analysis.alias_resources_closed()?;
         if docs.iter().any(|(uri, _)| !analysis.visited.contains(uri)) {
             return None;
         }
@@ -1231,7 +1333,7 @@ fn target(ws: &Workspace, uri: &Url, offset: usize, purpose: Purpose) -> Option<
                 origin: uri,
                 query: Some(query.clone()),
                 labels: None,
-                resource_sets: BTreeSet::new(),
+                resource_sets: BTreeSet::from([Arc::new(active.clone())]),
                 collect_keys: false,
                 all_keys: None,
                 trace: None,
@@ -1247,6 +1349,7 @@ fn target(ws: &Workspace, uri: &Url, offset: usize, purpose: Purpose) -> Option<
                 ended: false,
             };
             analysis.walk(root)?;
+            analysis.alias_resources_closed()?;
             // A potential input that was never reached must not contribute a
             // resource registration from the project's discovery graph.
             if docs.iter().any(|(uri, _)| !analysis.visited.contains(uri)) {
@@ -1434,6 +1537,7 @@ pub(crate) fn occurrence_resources(ws: &Workspace, uri: &Url) -> Option<Resource
                     ended: false,
                 };
                 analysis.walk(root)?;
+                analysis.alias_resources_closed()?;
                 if docs.iter().any(|(uri, _)| !analysis.visited.contains(uri))
                     || analysis.resource_sets.iter().any(|resources| {
                         resources.iter().any(|uri| {
@@ -1602,6 +1706,7 @@ pub(crate) fn key_graph(
         ended: false,
     };
     analysis.walk(root)?;
+    analysis.alias_resources_closed()?;
     if docs.iter().any(|(uri, _)| !analysis.visited.contains(uri))
         || analysis.resource_sets.iter().any(|resources| {
             resources.iter().any(|uri| {
@@ -1937,6 +2042,7 @@ fn source_trace_query(
         ended: false,
     };
     analysis.walk(root)?;
+    analysis.alias_resources_closed()?;
     if docs.iter().any(|(uri, _)| !analysis.visited.contains(uri))
         || analysis.resource_sets.iter().any(|view| {
             view.iter().any(|uri| {

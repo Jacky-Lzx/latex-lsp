@@ -9,7 +9,7 @@ fn setup(body: &str) -> (tempfile::TempDir, Workspace, Url) {
         ("main.tex", source.as_str()),
         (
             "default.bib",
-            "@book{parent,ids={legacy}}\n@book{child,crossref={parent},xref={legacy}}",
+            "@book{parent,ids={defaultlegacy}}\n@book{child,crossref={parent},xref={defaultlegacy}}",
         ),
         (
             "section.bib",
@@ -79,7 +79,7 @@ fn selected_primary_and_ids_renames_edit_only_their_complete_declaration_identit
         ("legacy", "ids={", "selectedalias"),
     ] {
         let (_dir, mut ws, main) =
-            setup(r"\cite{parent,legacy}\newrefsection[chosen]\cite{parent,legacy}");
+            setup(r"\cite{parent,defaultlegacy}\newrefsection[chosen]\cite{parent,legacy}");
         let bib = main.join("section.bib").unwrap();
         let default = main.join("default.bib").unwrap();
         let original = ws.documents[&default].text.source.clone();
@@ -335,6 +335,8 @@ fn native_biber_accepts_selected_primary_and_ids_workspace_renames() {
         run("pdflatex", &args);
         let log = std::fs::read_to_string(dir.path().join("main.log")).unwrap();
         assert!(!log.contains("undefined"), "{log}");
+        let blg = std::fs::read_to_string(dir.path().join("main.blg")).unwrap();
+        assert!(!blg.contains("WARN") && !blg.contains("ERROR"), "{blg}");
         std::fs::read_to_string(dir.path().join("main.bbl")).unwrap()
     };
     compile();
@@ -342,8 +344,10 @@ fn native_biber_accepts_selected_primary_and_ids_workspace_renames() {
     let default = main.join("default.bib").unwrap();
     let default_source = ws.documents[&default].text.source.clone();
     for (prefix, key, renamed, count) in [
-        ("@book{", "parent", "selectedparent", 5),
+        // Rename the alias before its owner: equal IDS spellings share
+        // Biber's global cache even in otherwise independent sections.
         ("ids={", "legacy", "selectedlegacy", 3),
+        ("@book{", "parent", "selectedparent", 5),
     ] {
         let position = at(&ws, &selected, &format!("{prefix}{}", &key[..2]));
         let refs = features::references(&ws, &selected, position, true);
@@ -358,6 +362,7 @@ fn native_biber_accepts_selected_primary_and_ids_workspace_renames() {
         for uri in [main.clone(), selected.clone()] {
             std::fs::write(uri.to_file_path().unwrap(), &ws.documents[&uri].text.source).unwrap();
         }
+        compile();
     }
     assert_eq!(ws.documents[&default].text.source, default_source);
     let bbl = compile();

@@ -139,6 +139,81 @@ pub(crate) fn certify(
     Some(work)
 }
 
+/// Resource-only identities cannot model Biber's global alias cache. Require
+/// each consumed alias to have a local declaration. Other allocations can
+/// keep independent aliases until one is imported through the global cache.
+pub(crate) fn closed_resources(
+    ws: &Workspace,
+    views: &BTreeSet<std::sync::Arc<BTreeSet<Url>>>,
+    uses: &BTreeMap<std::sync::Arc<BTreeSet<Url>>, BTreeSet<&str>>,
+) -> Option<usize> {
+    let mut resources = BTreeSet::new();
+    let mut work = 0usize;
+    for view in views {
+        work += view
+            .iter()
+            .map(|uri| uri.as_str().len() + 64)
+            .sum::<usize>();
+        if work > 32 * 1024 * 1024 {
+            return None;
+        }
+        resources.extend(view.iter());
+    }
+    let mut aliases = BTreeMap::new();
+    for uri in resources {
+        let doc = ws.documents.get(uri)?;
+        for alias in &doc.syntax.bibliography_aliases {
+            let primary = owner(doc, alias)?;
+            work += alias.name.len() + primary.len() + 96;
+            if work > 32 * 1024 * 1024 || aliases.len() >= 100_000 {
+                return None;
+            }
+            if aliases
+                .insert(alias.name.as_str(), primary)
+                .is_some_and(|previous| previous != primary)
+            {
+                return None;
+            }
+        }
+    }
+    if aliases.is_empty() {
+        return Some(work);
+    }
+    for view in views {
+        let mut visible = BTreeSet::new();
+        for uri in view.iter() {
+            let doc = ws.documents.get(uri)?;
+            for alias in &doc.syntax.bibliography_aliases {
+                work += alias.name.len() + 64;
+                if work > 32 * 1024 * 1024 {
+                    return None;
+                }
+                visible.insert(alias.name.as_str());
+            }
+        }
+        if uses
+            .get(view)
+            .is_some_and(|names| names.iter().any(|name| !visible.contains(name)))
+        {
+            return None;
+        }
+        for uri in view.iter() {
+            for reference in &ws.documents.get(uri)?.syntax.citation_references {
+                work += reference.name.len() + 64;
+                if work > 32 * 1024 * 1024 {
+                    return None;
+                }
+                if aliases.contains_key(reference.name.as_str())
+                    && !visible.contains(reference.name.as_str())
+                {
+                    return None;
+                }
+            }
+        }
+    }
+    Some(work)
+}
+
 /// Static primary spelling for a certified alias declaration.
 pub(crate) fn owner<'a>(
     doc: &'a crate::workspace::Document,

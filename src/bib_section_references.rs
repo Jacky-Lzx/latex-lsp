@@ -1100,6 +1100,40 @@ fn validate_edit(symbol: &Symbol<'_>) -> Result<()> {
 // Couple only a uniquely proved backend prerequisite that has no independent
 // book identity in any consumer. Raw-entry queries keep their ordinary identity.
 fn edit_symbol(mut target: Symbol<'_>) -> Result<Symbol<'_>> {
+    // Changing a raw IDS owner would make equal global alias spellings in
+    // another resource point to a different primary, even across sections.
+    if !is_source(&target) {
+        let doc = &target.graphs.ws.documents[&target.declaration.uri];
+        let aliases: BTreeSet<_> = doc
+            .syntax
+            .bibliography_aliases
+            .iter()
+            .filter(|alias| {
+                crate::bib_source_aliases::owner(doc, alias) == Some(target.name.as_str())
+            })
+            .map(|alias| alias.name.as_str())
+            .collect();
+        if !aliases.is_empty() {
+            for (uri, _) in target
+                .graphs
+                .databases
+                .iter()
+                .filter(|(uri, _)| **uri != target.declaration.uri)
+            {
+                for alias in &target.graphs.ws.documents[uri].syntax.bibliography_aliases {
+                    target
+                        .graphs
+                        .work
+                        .set(target.graphs.work.get() + alias.name.len() + 64);
+                    if target.graphs.work.get() > 32 * 1024 * 1024
+                        || aliases.contains(alias.name.as_str())
+                    {
+                        return Err(());
+                    }
+                }
+            }
+        }
+    }
     let mut has_ids_owner = false;
     if is_source(&target) {
         // Biber keeps IDS attached to the raw primary entry even if no
@@ -1256,6 +1290,7 @@ pub(crate) fn rename(
         }
         if name == symbol.name { return Ok(Some(WorkspaceEdit::default())); }
         let source_key = is_source(&symbol);
+        let alias_key = ws.documents[&symbol.declaration.uri].syntax.bibliography_aliases.iter().any(|alias| alias.span == (symbol.declaration.start..symbol.declaration.end));
         if !source_key && symbol.graphs.databases[&symbol.declaration.uri].declarations.contains_key(name) {
             return Err(jsonrpc::Error::invalid_params("The bibliography key or IDS alias already exists in the declaration database"));
         }
@@ -1265,9 +1300,20 @@ pub(crate) fn rename(
         symbol.graphs.relation_bindings.borrow_mut().clear();
         let relation_owners: BTreeSet<_> = symbol.graphs.databases.iter().filter(|(_, database)| database.references.iter().any(|reference| reference.name == name)).map(|(uri, _)| uri).collect();
         for project in symbol.graphs.projects.values() {
+            // A new real key can delete an earlier IDS mapping from Biber's
+            // global cache, breaking later citations in other sections.
+            for resource in &project.resources {
+                for alias in &ws.documents[resource].syntax.bibliography_aliases {
+                    symbol.graphs.work.set(symbol.graphs.work.get() + alias.name.len() + 64);
+                    if symbol.graphs.work.get() > 32 * 1024 * 1024 { return Err(edit_error()); }
+                    if alias.name == name {
+                        return Err(jsonrpc::Error::invalid_params("The new bibliography key conflicts with a global IDS alias in this project"));
+                    }
+                }
+            }
             symbol.lexical.validate(&project.scope, true, name)?;
             crate::resource_context::validate_rename(ws, &project.scope, name)?;
-            for view in project.graph.sections.iter().filter(|view| consumes(view, &symbol.declaration, &symbol.name, source_key)) {
+            for view in project.graph.sections.iter().filter(|view| alias_key || consumes(view, &symbol.declaration, &symbol.name, source_key)) {
                 if view.namespace.as_ref().is_some_and(|state| state.declared.contains_key(name))
                     || symbol.graphs.database_binding(name, &view.resources).map_err(|_| edit_error())?.is_some() {
                     return Err(jsonrpc::Error::invalid_params("The bibliography key or IDS alias already exists in a section consuming this declaration"));
@@ -1276,12 +1322,12 @@ pub(crate) fn rename(
             for source in project.scope.iter().filter(|uri| ws.documents.get(*uri).is_some_and(|doc| doc.kind == DocumentKind::Latex)) {
                 for span in symbol.lexical.references(source, true, name) {
                     let views = project.graph.occurrences.get(&(source.clone(), span.start, span.end)).ok_or_else(edit_error)?;
-                    if views.iter().any(|view| consumes(view, &symbol.declaration, &symbol.name, source_key)) {
+                    if alias_key || views.iter().any(|view| consumes(view, &symbol.declaration, &symbol.name, source_key)) {
                         return Err(jsonrpc::Error::invalid_params("Renaming this bibliography key would capture an existing citation"));
                     }
                 }
             }
-            if project.graph.sections.iter().filter(|view| consumes(view, &symbol.declaration, &symbol.name, source_key)).any(|view| view.iter().any(|resource| relation_owners.contains(resource))) {
+            if project.graph.sections.iter().filter(|view| alias_key || consumes(view, &symbol.declaration, &symbol.name, source_key)).any(|view| view.iter().any(|resource| relation_owners.contains(resource))) {
                 return Err(jsonrpc::Error::invalid_params("Renaming this bibliography key would capture an existing bibliography relation"));
             }
         }

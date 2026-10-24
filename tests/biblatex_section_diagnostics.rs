@@ -59,12 +59,9 @@ fn fixes(ws: &Workspace, uri: &Url, diagnostic: &Diagnostic) -> Vec<String> {
 #[test]
 fn missing_keys_are_checked_against_each_active_default_selected_and_global_library() {
     let (_dir, ws, main) = setup(
-        r"\cite{defaultonly,defaultalias,always,sectiononly,sectionalias}\newrefsection[chosen]\cite{sectiononly,sectionalias,always,defaultonly,defaultalias}\newrefsection[]\cite{defaultonly,always}\nocite{*}",
+        r"\cite{defaultonly,defaultalias,always,sectiononly}\newrefsection[chosen]\cite{sectiononly,sectionalias,always,defaultonly}\newrefsection[]\cite{defaultonly,always}\nocite{*}",
     );
-    assert_eq!(
-        names(&ws, &main),
-        ["sectiononly", "sectionalias", "defaultonly", "defaultalias"]
-    );
+    assert_eq!(names(&ws, &main), ["sectiononly", "defaultonly"]);
 }
 #[test]
 fn structured_named_and_nocite_warnings_keep_exact_utf16_ranges_and_exclude_queries() {
@@ -339,4 +336,10 @@ fn real_compiler_citation_repairs_use_each_sections_resources_and_clear_the_warn
     }
     let bbl = std::fs::read_to_string(dir.path().join("main.bbl")).unwrap();
     assert!(bbl.contains("Default") && bbl.contains("Selected"), "{bbl}");
+}
+
+#[test]
+fn imported_ids_require_a_global_loading_proof_before_reporting_missing_keys() {
+    let (_dir, ws, main) = setup(r"\cite{defaultalias}\newrefsection[chosen]\cite{defaultalias}");
+    assert!(names(&ws, &main).is_empty());
 }

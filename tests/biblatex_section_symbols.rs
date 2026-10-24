@@ -59,16 +59,27 @@ fn check(ws: &Workspace, origin: &Url, marker: &str, target: Option<(&Url, &str)
 
 #[test]
 fn declarations_and_crossrefs_keep_default_and_selected_database_identities() {
-    let (_dir, ws, main) = setup(
+    let (_dir, mut ws, main) = setup(
         "",
         r"\cite{childdefault}\newrefsection[chosen]\cite{childselected}",
         "",
     );
+    let default = main.join("default.bib").unwrap();
+    let source = ws.documents[&default]
+        .text
+        .source
+        .replace("ids={old}", "ids={defaultold}");
+    ws.open(default.clone(), source, 7);
     for name in ["default.bib", "section.bib"] {
         let bib = main.join(name).unwrap();
         check(&ws, &bib, "@book{", Some((&bib, "parent")));
         check(&ws, &bib, "crossref={", Some((&bib, "parent")));
-        check(&ws, &bib, "ids={", Some((&bib, "old")));
+        check(
+            &ws,
+            &bib,
+            "ids={",
+            Some((&bib, if bib == default { "defaultold" } else { "old" })),
+        );
         let changes = features::rename(&ws, &bib, Position::new(0, 8), "renamed")
             .unwrap()
             .unwrap()
