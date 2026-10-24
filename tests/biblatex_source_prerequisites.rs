@@ -376,15 +376,8 @@ const NON_IDS_CASES: &[(bool, bool, bool, bool)] = &[
     (false, true, false, false),
     (true, false, true, false),
     (false, false, true, false),
+    (true, false, true, true),
 ];
-
-#[test]
-fn non_ids_prerequisites_do_not_bypass_unproved_cached_alias_owners() {
-    let (_dir, ws, _main, _default, _selected, provider) =
-        setup_non_ids_prerequisites(true, false, true, true);
-    let declaration = key(&ws, &provider, r"\defbibentryset{", "parent");
-    assert!(features::rename(&ws, &provider, declaration.range.start, "fresh").is_err());
-}
 
 #[test]
 fn mixed_and_non_ids_source_prerequisites_move_every_header_and_relation_atomically() {
@@ -489,5 +482,119 @@ fn native_non_ids_source_prerequisite_edits_preserve_inheritance_sets_and_comple
             before,
             "{default_ids} {selected_ids} {relations} {repeat}"
         );
+    }
+}
+
+#[test]
+fn cached_source_returns_require_the_same_final_physical_set_in_every_consumer() {
+    for variant in ["early-primary", "no-source", "wildcard", "different-source"] {
+        let (dir, mut ws, main, _default, selected, provider) =
+            setup_non_ids_prerequisites(true, false, true, true);
+        let original = ws.documents[&main].text.source.clone();
+        let replacement = match variant {
+            "early-primary" => r"\newrefsection\cite{parent}\input{sets}",
+            "no-source" => r"\newrefsection",
+            "wildcard" => r"\newrefsection\input{sets}\nocite{*}",
+            _ => r"\newrefsection\input{sets}",
+        };
+        let source = if variant == "different-source" {
+            std::fs::write(
+                dir.path().join("sets-other.tex"),
+                r"\defbibentryset{parent}{othermember}",
+            )
+            .unwrap();
+            let library = format!(
+                "{} @book{{othermember,title={{Other member}}}}",
+                ws.documents[&selected].text.source
+            );
+            std::fs::write(selected.to_file_path().unwrap(), &library).unwrap();
+            ws.open(selected.clone(), library, 8);
+            original.replace(
+                r"\newrefsection[chosen]\input{sets}",
+                r"\newrefsection[chosen]\input{sets-other}",
+            )
+        } else {
+            original.replace(r"\newrefsection\input{sets}", replacement)
+        };
+        ws.open(main.clone(), source, 9);
+        let declaration = key(&ws, &provider, r"\defbibentryset{", "parent");
+        if variant == "different-source" {
+            let other_provider = main.join("sets-other.tex").unwrap();
+            let other_declaration = key(&ws, &other_provider, r"\defbibentryset{", "parent");
+            let selected_query = key(
+                &ws,
+                &main,
+                r"\newrefsection[chosen]\input{sets-other}\cite{",
+                "parent",
+            );
+            assert_eq!(
+                features::definitions(&ws, &main, selected_query.range.start),
+                vec![other_declaration]
+            );
+            let returned_query = key(&ws, &main, r"\newrefsection\input{sets}\cite{", "parent");
+            assert_eq!(
+                features::definitions(&ws, &main, returned_query.range.start),
+                vec![declaration.clone()]
+            );
+        }
+        assert!(
+            features::rename(&ws, &provider, declaration.range.start, "fresh").is_err(),
+            "{variant}"
+        );
+    }
+}
+
+#[test]
+fn cached_source_return_edits_keep_alias_names_and_restore_navigation_after_application() {
+    for early_alias in [false, true] {
+        let (_dir, mut ws, main, _default, _selected, provider) =
+            setup_non_ids_prerequisites(true, false, true, true);
+        if early_alias {
+            let source = ws.documents[&main].text.source.replace(
+                r"\newrefsection\input{sets}",
+                r"\newrefsection\cite{old}\input{sets}",
+            );
+            ws.open(main.clone(), source, 8);
+        }
+        let declaration = key(&ws, &provider, r"\defbibentryset{", "parent");
+        let edits = features::rename(&ws, &provider, declaration.range.start, "fresh")
+            .unwrap()
+            .unwrap()
+            .changes
+            .unwrap();
+        assert_eq!(edits.len(), 4);
+        assert_eq!(edits.values().map(Vec::len).sum::<usize>(), 8);
+        for (uri, mut edits) in edits {
+            edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
+            let source = ws.documents[&uri]
+                .text
+                .changed(
+                    edits
+                        .into_iter()
+                        .map(|edit| TextDocumentContentChangeEvent {
+                            range: Some(edit.range),
+                            range_length: None,
+                            text: edit.new_text,
+                        })
+                        .collect(),
+                )
+                .unwrap()
+                .source;
+            ws.open(uri, source, 10);
+        }
+        let moved = key(&ws, &provider, r"\defbibentryset{", "fresh");
+        let query = key(&ws, &main, r"\cite{", "fresh");
+        assert_eq!(
+            features::definitions(&ws, &main, query.range.start),
+            vec![moved]
+        );
+        assert_eq!(
+            features::references(&ws, &provider, declaration.range.start, true).len(),
+            6
+        );
+        assert!(ws.documents[&main]
+            .text
+            .source
+            .contains(r"\cite{fresh,old,child}"));
     }
 }

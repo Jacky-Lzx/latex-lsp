@@ -445,6 +445,18 @@ impl Analysis<'_, '_> {
         if self.work > 32 * 1024 * 1024 {
             return None;
         }
+        // Ordinary database graphs and raw rename simulations retain the
+        // original cache proof. Only an executed source trace can replace a
+        // cached parent with its final per-section dynamic set.
+        let source_overrides = if let Some(trace) = self.trace.as_ref().filter(|_| rename.is_none())
+        {
+            Some(crate::bib_source_aliases::source_overrides(
+                trace,
+                &mut self.work,
+            )?)
+        } else {
+            None
+        };
         self.work += crate::bib_source_aliases::cached_owners(
             self.ws,
             &self.alias_sections,
@@ -452,6 +464,7 @@ impl Analysis<'_, '_> {
             &aliases,
             &self.alias_processed,
             rename,
+            source_overrides.as_ref(),
         )?;
         (self.work <= 32 * 1024 * 1024).then_some(())
     }

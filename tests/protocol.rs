@@ -34180,8 +34180,14 @@ fn source_shared_raw_owners_keep_exact_edits_versions_and_unsaved_closure() {
 #[test]
 fn source_prerequisite_edits_keep_every_header_version_and_complete_consumers() {
     use latex_lsp::text::Text;
-    for (non_ids, document_changes) in [(false, false), (false, true), (true, false), (true, true)]
-    {
+    for (non_ids, cache_return, document_changes) in [
+        (false, false, false),
+        (false, false, true),
+        (true, false, false),
+        (true, false, true),
+        (true, true, false),
+        (true, true, true),
+    ] {
         let dir = tempfile::tempdir().unwrap();
         let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
         let provider = main.join("sets.tex").unwrap();
@@ -34198,6 +34204,14 @@ fn source_prerequisite_edits_keep_every_header_version_and_complete_consumers() 
                 )
         } else {
             source.to_string()
+        };
+        let source = if cache_return {
+            source.replace(
+                r"\end{document}",
+                r"\newrefsection\input{sets}\cite{parent,old,child}\end{document}",
+            )
+        } else {
+            source
         };
         let source = source.as_str();
         let sets = "% 😀\r\n\\defbibentryset{parent}{member}";
@@ -34243,7 +34257,18 @@ fn source_prerequisite_edits_keep_every_header_version_and_complete_consumers() 
         let params =
             json!({"textDocument":{"uri":provider},"position":declaration.start,"newName":"fresh"});
         let refs=server.request(2,"textDocument/references",json!({"textDocument":{"uri":provider},"position":declaration.start,"context":{"includeDeclaration":true}}));
-        assert_eq!(refs.as_array().unwrap().len(), if non_ids { 5 } else { 3 });
+        assert_eq!(
+            refs.as_array().unwrap().len(),
+            if non_ids {
+                if cache_return {
+                    6
+                } else {
+                    5
+                }
+            } else {
+                3
+            }
+        );
         let edit = server.request(3, "textDocument/rename", params.clone());
         for (uri, version, spans) in [
             (&main, 5, calls),

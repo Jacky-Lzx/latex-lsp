@@ -309,6 +309,88 @@ fn primary_spelling<'a>(uri: &Url, name: &'a str, rename: Option<PrimaryRename<'
         .map_or(name, |rename| rename.to)
 }
 
+pub(crate) type SourceOverrides<'a> = BTreeMap<usize, BTreeSet<&'a str>>;
+
+/// Biber materializes a final dynamic set over an imported cached parent.
+/// An earlier explicit request for that primary instead keeps the raw book;
+/// an IDS request alone does not count as an explicit primary request.
+pub(crate) fn source_overrides<'a>(
+    trace: &'a crate::bib_section_keys::SourceTrace,
+    work: &mut usize,
+) -> Option<SourceOverrides<'a>> {
+    use crate::bib_section_keys::{SourceEvent, SourceKey};
+    #[derive(Default)]
+    struct State<'a> {
+        declared: BTreeMap<&'a str, &'a SourceKey>,
+        early: BTreeSet<&'a str>,
+        wildcard: bool,
+    }
+    let mut names = BTreeSet::new();
+    for event in &trace.events {
+        if let SourceEvent::Set(_, set) = event {
+            *work += set.key.name.len() + 64;
+            if *work > 32 * 1024 * 1024 {
+                return None;
+            }
+            names.insert(set.key.name.as_str());
+        }
+    }
+    if names.is_empty() {
+        return Some(BTreeMap::new());
+    }
+    let mut states = BTreeMap::<u32, State<'_>>::new();
+    for event in &trace.events {
+        *work += 64;
+        if *work > 32 * 1024 * 1024 {
+            return None;
+        }
+        match event {
+            SourceEvent::Set(section, set) => {
+                *work += set.key.name.len() + set.key.uri.as_str().len() + 256;
+                if *work > 32 * 1024 * 1024 {
+                    return None;
+                }
+                if states
+                    .entry(*section)
+                    .or_default()
+                    .declared
+                    .insert(&set.key.name, &set.key)
+                    .is_some_and(|previous| previous != &set.key)
+                {
+                    return None;
+                }
+            }
+            SourceEvent::Request(section, key, wildcard) => {
+                if *wildcard || names.contains(key.name.as_str()) {
+                    *work += key.name.len() + 256;
+                    if *work > 32 * 1024 * 1024 {
+                        return None;
+                    }
+                    let state = states.entry(*section).or_default();
+                    if *wildcard {
+                        state.wildcard = true;
+                    } else if !state.declared.contains_key(key.name.as_str()) {
+                        state.early.insert(&key.name);
+                    }
+                }
+            }
+            SourceEvent::Query(..) => {}
+        }
+    }
+    let mut overrides = SourceOverrides::new();
+    for (section, state) in states {
+        if state.wildcard {
+            continue;
+        }
+        for name in state.declared.keys() {
+            if !state.early.contains(name) {
+                overrides.entry(section as usize).or_default().insert(name);
+            }
+        }
+    }
+    Some(overrides)
+}
+
 /// Each database is parsed once per Biber run. Later files replace equal
 /// primary spellings in GLOBALDS, which cached IDS requests then import.
 pub(crate) fn cached_owners(
@@ -318,6 +400,7 @@ pub(crate) fn cached_owners(
     aliases: &BTreeSet<&str>,
     processed: &BTreeSet<usize>,
     rename: Option<PrimaryRename<'_>>,
+    source_overrides: Option<&SourceOverrides<'_>>,
 ) -> Option<usize> {
     let mut loaded = BTreeSet::new();
     let mut removed = BTreeSet::new();
@@ -397,9 +480,15 @@ pub(crate) fn cached_owners(
                     continue;
                 }
                 let primary = primary_spelling(uri, owner(doc, alias)?, rename);
+                let source_override = source_overrides.is_some_and(|sections| {
+                    sections
+                        .get(&section)
+                        .is_some_and(|names| names.contains(primary))
+                });
                 if removed.contains(alias.name.as_str())
                     || ambiguous.contains(primary)
                     || owners.get(primary) != Some(&uri)
+                        && !(source_override && owners.contains_key(primary))
                 {
                     return None;
                 }
