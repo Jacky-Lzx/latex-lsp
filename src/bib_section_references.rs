@@ -181,6 +181,7 @@ struct Graph {
     sections: Vec<Arc<View>>,
     occurrences: BTreeMap<OccurrenceKey, Vec<Arc<View>>>,
     sources: Option<BTreeSet<Identity>>,
+    nonloading: BTreeSet<OccurrenceKey>,
     members: BTreeMap<OccurrenceKey, Identity>,
     work: usize,
 }
@@ -214,6 +215,7 @@ impl Graph {
             sections: views.into_values().collect(),
             occurrences,
             sources: None,
+            nonloading: BTreeSet::new(),
             members: BTreeMap::new(),
             work: 0,
         })
@@ -232,6 +234,7 @@ impl Graph {
         let mut sources = BTreeSet::new();
         let mut members = BTreeMap::new();
         let mut visits = BTreeMap::<OccurrenceKey, BTreeSet<u32>>::new();
+        let mut nonloading = BTreeSet::new();
         for event in &trace.events {
             match event {
                 SourceEvent::Set(section, set) => {
@@ -267,6 +270,11 @@ impl Graph {
                             .or_default()
                             .insert(*section);
                     }
+                }
+                SourceEvent::Query(section, key) => {
+                    let occurrence = (key.uri.clone(), key.span.start, key.span.end);
+                    nonloading.insert(occurrence.clone());
+                    visits.entry(occurrence).or_default().insert(*section);
                 }
                 SourceEvent::Request(section, key, wildcard) => {
                     let state = namespaces.entry(*section).or_default();
@@ -314,6 +322,7 @@ impl Graph {
             sections: views.into_values().collect(),
             occurrences,
             sources: Some(sources),
+            nonloading,
             members,
             work: trace.work,
         })
@@ -437,6 +446,11 @@ impl<'a> Graphs<'a> {
             .occurrences
             .iter()
             .map(|((uri, _, _), visits)| uri.as_str().len() + 128 + visits.len() * 32)
+            .sum::<usize>();
+        self.stored += graph
+            .nonloading
+            .iter()
+            .map(|(uri, _, _)| uri.as_str().len() + 96)
             .sum::<usize>();
         self.stored += graph
             .members
@@ -1753,7 +1767,12 @@ pub(crate) fn source_statuses(ws: &Workspace, uri: &Url) -> Option<SourceStatuse
             let mut names = BTreeMap::<&str, BTreeSet<(usize, usize)>>::new();
             for project in graphs.projects.values() {
                 for (source, start, end) in project.graph.occurrences.keys() {
-                    if source == uri {
+                    if source == uri
+                        && !project
+                            .graph
+                            .nonloading
+                            .contains(&(source.clone(), *start, *end))
+                    {
                         names
                             .entry(&doc.text.source[*start..*end])
                             .or_default()

@@ -178,6 +178,11 @@ fn resolve(
                 }
                 sets.insert(identity, set.clone());
             }
+            SourceEvent::Query(section, key) => {
+                if key.uri == *uri && key.span == *query && key.name == name {
+                    views.insert(*section);
+                }
+            }
             SourceEvent::Request(section, key, wildcard) => {
                 let state = states.entry(*section).or_default();
                 if *wildcard {

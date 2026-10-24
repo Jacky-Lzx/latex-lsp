@@ -384,7 +384,7 @@ impl Analysis<'_, '_> {
                             );
                         }
                     }
-                    SourceEvent::Request(section, key, _) => {
+                    SourceEvent::Request(section, key, _) | SourceEvent::Query(section, key) => {
                         record(
                             &mut uses,
                             &aliases,
@@ -421,7 +421,7 @@ impl Analysis<'_, '_> {
                             .or_default()
                             .extend(set.members.iter().map(|member| member.name.as_str()));
                     }
-                    SourceEvent::Request(section, key, _) => {
+                    SourceEvent::Request(section, key, _) | SourceEvent::Query(section, key) => {
                         consumed
                             .entry(*section as usize)
                             .or_default()
@@ -717,76 +717,102 @@ impl Analysis<'_, '_> {
                         || !positions.contains(&lexical.span.start)
                         || context.operand(doc, lexical.span.start)
                         || !self.signatures.command_unchanged(name)
-                        || !syntax::warns_on_undefined_citation(name)
+                        || (!syntax::warns_on_undefined_citation(name)
+                            && !textual_bibliography_test(source, name, span.end, self.signatures))
                     {
                         return None;
                     }
                     let command =
                         crate::reference_calls::resolved_command(source, name, span.clone());
-                    let pending = self
-                        .query
-                        .as_ref()
-                        .filter(|query| uri == self.origin && query.command == lexical.span.start)
-                        .map(|query| &query.span);
-                    let fields = if let Some(style) = crate::citations::style(name) {
-                        let arguments = crate::citations::arguments(source, span.end, style);
-                        if arguments.fields.iter().any(|field| {
-                            !field.complete
-                                && !pending.is_some_and(|span| {
-                                    field.argument.span.start <= span.start
-                                        && span.end <= field.argument.span.end
-                                })
-                        }) {
+                    if !syntax::warns_on_undefined_citation(name) {
+                        let argument = syntax::single_citation_argument(
+                            source,
+                            command.argument.as_ref()?.clone(),
+                        );
+                        let key = SourceKey {
+                            uri: uri.clone(),
+                            span: argument.span,
+                            name: argument.value,
+                        };
+                        // Queries are physical uses, never backend requests:
+                        // resolve them against the section's final namespace.
+                        self.work += key.uri.as_str().len() + key.name.len() + 192;
+                        let trace = self.trace.as_mut()?;
+                        if self.work > 32 * 1024 * 1024 || trace.events.len() >= 100_000 {
                             return None;
                         }
-                        arguments
-                            .fields
-                            .into_iter()
-                            .filter(|field| field.role == crate::citations::Role::Keys)
-                            .map(|field| field.argument.span)
-                            .collect::<Vec<_>>()
-                    } else if let Some(argument) = command.argument.as_ref() {
-                        vec![argument.span.clone()]
+                        trace.events.push(SourceEvent::Query(trace.current, key));
                     } else {
-                        let pending = pending?;
-                        let start = syntax::citation_argument_start(source, name, span.end)?;
-                        if source.as_bytes().get(start) != Some(&b'{') || pending.start < start + 1
-                        {
-                            return None;
-                        }
-                        std::iter::once(start + 1..source.len()).collect::<Vec<_>>()
-                    };
-                    if fields.is_empty() {
-                        return None;
-                    }
-                    for field in fields {
-                        let pending = pending
-                            .filter(|span| field.start <= span.start && span.end <= field.end);
-                        let keys = source_key_items(uri, source, field, pending)?;
-                        if keys.iter().flatten().any(|key| key.name == "*")
-                            && (name != "nocite" || keys.len() != 1)
-                        {
-                            return None;
-                        }
-                        for key in keys {
-                            let Some(key) = key else {
-                                self.work += 64;
-                                if self.work > 32 * 1024 * 1024 {
-                                    return None;
-                                }
-                                let trace = self.trace.as_mut()?;
-                                trace.probes.push((trace.current, trace.events.len()));
-                                continue;
-                            };
-                            self.work += key.uri.as_str().len() + key.name.len() + 96;
-                            let trace = self.trace.as_mut()?;
-                            if self.work > 32 * 1024 * 1024 || trace.events.len() >= 100_000 {
+                        let pending = self
+                            .query
+                            .as_ref()
+                            .filter(|query| {
+                                uri == self.origin && query.command == lexical.span.start
+                            })
+                            .map(|query| &query.span);
+                        let fields = if let Some(style) = crate::citations::style(name) {
+                            let arguments = crate::citations::arguments(source, span.end, style);
+                            if arguments.fields.iter().any(|field| {
+                                !field.complete
+                                    && !pending.is_some_and(|span| {
+                                        field.argument.span.start <= span.start
+                                            && span.end <= field.argument.span.end
+                                    })
+                            }) {
                                 return None;
                             }
-                            let wildcard = key.name == "*";
-                            trace
-                                .events
-                                .push(SourceEvent::Request(trace.current, key, wildcard));
+                            arguments
+                                .fields
+                                .into_iter()
+                                .filter(|field| field.role == crate::citations::Role::Keys)
+                                .map(|field| field.argument.span)
+                                .collect::<Vec<_>>()
+                        } else if let Some(argument) = command.argument.as_ref() {
+                            vec![argument.span.clone()]
+                        } else {
+                            let pending = pending?;
+                            let start = syntax::citation_argument_start(source, name, span.end)?;
+                            if source.as_bytes().get(start) != Some(&b'{')
+                                || pending.start < start + 1
+                            {
+                                return None;
+                            }
+                            std::iter::once(start + 1..source.len()).collect::<Vec<_>>()
+                        };
+                        if fields.is_empty() {
+                            return None;
+                        }
+                        for field in fields {
+                            let pending = pending
+                                .filter(|span| field.start <= span.start && span.end <= field.end);
+                            let keys = source_key_items(uri, source, field, pending)?;
+                            if keys.iter().flatten().any(|key| key.name == "*")
+                                && (name != "nocite" || keys.len() != 1)
+                            {
+                                return None;
+                            }
+                            for key in keys {
+                                let Some(key) = key else {
+                                    self.work += 64;
+                                    if self.work > 32 * 1024 * 1024 {
+                                        return None;
+                                    }
+                                    let trace = self.trace.as_mut()?;
+                                    trace.probes.push((trace.current, trace.events.len()));
+                                    continue;
+                                };
+                                self.work += key.uri.as_str().len() + key.name.len() + 96;
+                                let trace = self.trace.as_mut()?;
+                                if self.work > 32 * 1024 * 1024 || trace.events.len() >= 100_000 {
+                                    return None;
+                                }
+                                let wildcard = key.name == "*";
+                                trace.events.push(SourceEvent::Request(
+                                    trace.current,
+                                    key,
+                                    wildcard,
+                                ));
+                            }
                         }
                     }
                 } else if self
@@ -1970,6 +1996,7 @@ type SourceDeclarations = BTreeMap<(Url, usize), Arc<SourceSet>>;
 pub(crate) enum SourceEvent {
     Set(u32, Arc<SourceSet>),
     Request(u32, SourceKey, bool),
+    Query(u32, SourceKey),
 }
 pub(crate) struct SourceTrace {
     pub work: usize,
@@ -2197,6 +2224,11 @@ pub(crate) fn source_completion_trace(
     let doc = ws.documents.get(origin)?;
     let query = query(doc, signatures, offset, Purpose::Completion)?;
     let (span, removals) = completion_span(doc, &query.call, offset)?;
+    // Request-position candidate probes cannot certify final-state predicates.
+    if !syntax::warns_on_undefined_citation(&query.call.name) && query.call.name != "defbibentryset"
+    {
+        return None;
+    }
     let member = query.call.name == "defbibentryset";
     let trace = source_trace_query(ws, root, docs, signatures, origin, Some(query), None)?;
     if trace.probes.is_empty() {
@@ -2289,6 +2321,32 @@ fn source_trace_query(
         return None;
     }
     let mut trace = analysis.trace?;
+    if trace
+        .events
+        .iter()
+        .any(|event| matches!(event, SourceEvent::Query(..)))
+    {
+        // Alias loading has its own cache semantics. Keep the intersection
+        // opaque until nonloading consumers have a complete owner proof.
+        for resources in &analysis.resource_sets {
+            for uri in resources.iter() {
+                for entry in &ws
+                    .documents
+                    .get(uri)?
+                    .syntax
+                    .bibliography_completion
+                    .entries
+                {
+                    for field in &entry.fields {
+                        analysis.work += 64;
+                        if analysis.work > 32 * 1024 * 1024 || field.name == "ids" {
+                            return None;
+                        }
+                    }
+                }
+            }
+        }
+    }
     trace.work = analysis.work;
     Some(trace)
 }

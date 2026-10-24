@@ -33933,3 +33933,137 @@ fn nondeferred_compiled_citation_hints_follow_bbl_artifacts_modes_and_updates() 
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+fn source_textual_predicates_follow_final_identity_versions_and_shared_consumers() {
+    use latex_lsp::text::Text;
+    for document_changes in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+        let child = main.join("query.tex").unwrap();
+        let bib = main.join("data.bib").unwrap();
+        let other = main.join("other.tex").unwrap();
+        let source = r"\documentclass{article}\usepackage{biblatex}\DeclareBibliographyCategory{group}\addbibresource{data.bib}\begin{document}\input{query}\defbibentryset{parent}{member}\cite{parent}\end{document}";
+        let calls="% 😀\r\n\\ifentryinbib{parent}{Literal parent}{No parent}\\csname ifentrycategory\\endcsname{parent}{group}{Yes}{No}\\ifentryinbib{absent}{}{}";
+        let library = "@book{parent,title={Raw parent}} @book{member,title={Member}}";
+        for (name, text) in [
+            ("main.tex", source),
+            ("query.tex", calls),
+            ("data.bib", library),
+        ] {
+            std::fs::write(dir.path().join(name), text).unwrap();
+        }
+        let span = |text: &str, prefix: &str, key: &str| {
+            let at = text.find(prefix).unwrap() + prefix.len();
+            Text::new(text.into()).range(at, at + key.len())
+        };
+        let declaration = span(source, r"\defbibentryset{", "parent");
+        let query = span(calls, r"\ifentryinbib{", "parent");
+        let mut server = Server::start();
+        server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":document_changes}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+        server.notify("initialized", json!({}));
+        for (uri, text, version) in [(&main, source, 3), (&child, calls, 8)] {
+            server.notify("textDocument/didOpen",json!({"textDocument":{"uri":uri,"languageId":"latex","version":version,"text":text}}));
+        }
+        let params = json!({"textDocument":{"uri":child},"position":query.start});
+        let target = json!([{"uri":main,"range":declaration}]);
+        assert_eq!(
+            server.request(2, "textDocument/definition", params.clone()),
+            target
+        );
+        let refs = json!({"textDocument":{"uri":child},"position":query.start,"context":{"includeDeclaration":true}});
+        let values = server.request(3, "textDocument/references", refs.clone());
+        assert_eq!(values.as_array().unwrap().len(), 4, "{values}");
+        let edit = server.request(
+            4,
+            "textDocument/rename",
+            json!({"textDocument":{"uri":child},"position":query.start,"newName":"fresh"}),
+        );
+        let mut actual = std::collections::BTreeMap::new();
+        if document_changes {
+            for change in edit["documentChanges"].as_array().unwrap() {
+                let uri = change["textDocument"]["uri"].as_str().unwrap();
+                assert_eq!(
+                    change["textDocument"]["version"],
+                    if uri == main.as_str() { 3 } else { 8 }
+                );
+                actual.insert(uri.to_string(), change["edits"].as_array().unwrap().clone());
+            }
+        } else {
+            for (uri, edits) in edit["changes"].as_object().unwrap() {
+                actual.insert(uri.clone(), edits.as_array().unwrap().clone());
+            }
+        }
+        assert_eq!(actual.len(), 2);
+        for (uri, mut expected) in [
+            (
+                main.clone(),
+                vec![
+                    json!({"range":declaration,"newText":"fresh"}),
+                    json!({"range":span(source,r"\cite{","parent"),"newText":"fresh"}),
+                ],
+            ),
+            (
+                child.clone(),
+                vec![
+                    json!({"range":query,"newText":"fresh"}),
+                    json!({"range":span(calls,r"\csname ifentrycategory\endcsname{","parent"),"newText":"fresh"}),
+                ],
+            ),
+        ] {
+            let mut edits = actual.remove(uri.as_str()).unwrap();
+            let order = |edit: &Value| edit["range"].to_string();
+            expected.sort_by_key(order);
+            edits.sort_by_key(order);
+            assert_eq!(edits, expected);
+        }
+        // Another consuming root sees a book, so the shared physical query is ambiguous.
+        server.notify("textDocument/didOpen",json!({"textDocument":{"uri":other,"languageId":"latex","version":10,"text":r"\documentclass{article}\usepackage{biblatex}\DeclareBibliographyCategory{group}\addbibresource{data.bib}\begin{document}\cite{parent}\input{query}\end{document}"}}));
+        assert_eq!(
+            server.request(5, "textDocument/definition", params.clone()),
+            json!([])
+        );
+        assert_eq!(
+            server.request(6, "textDocument/references", refs.clone()),
+            json!([])
+        );
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":other}}),
+        );
+        assert_eq!(
+            server.request(7, "textDocument/definition", params.clone()),
+            target
+        );
+        let early = source.replace(r"\input{query}", r"\cite{parent}\input{query}");
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":4},"contentChanges":[{"text":early}]}),
+        );
+        assert_eq!(
+            server.request(8, "textDocument/definition", params.clone()),
+            json!([{"uri":bib,"range":span(library,"@book{","parent")}])
+        );
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":main}}),
+        );
+        assert_eq!(
+            server.request(9, "textDocument/definition", params.clone()),
+            target
+        );
+        server.notify("textDocument/didChange",json!({"textDocument":{"uri":child,"version":9},"contentChanges":[{"text":calls.replace("Literal parent",r"\newrefsection")}]}));
+        assert_eq!(
+            server.request(10, "textDocument/references", refs.clone()),
+            json!([])
+        );
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":child}}),
+        );
+        assert_eq!(server.request(11, "textDocument/references", refs), values);
+        server.request(1000, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}

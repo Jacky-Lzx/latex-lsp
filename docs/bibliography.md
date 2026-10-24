@@ -310,3 +310,12 @@ cargo test --locked --test protocol handwritten_items_keep_biblatex_
 ```
 
 覆盖普通项目、数字分区、静态命名条目、完整数据库改名、候选及缺失诊断、未保存输入与关闭恢复。原生对照核验改名前后完整 BBL 一致，手写条目的 `bibcite` 保持不动；协议精确验证两种编辑格式、版本、UTF-16 位置及传统辅助记录不会误用于后台引用提示。
+
+源码集合中的纯文本谓词查询支持 `ifentryinbib`／`ifentrycategory`（含静态命名调用）：按每个数字分区最终真实请求和声明解析身份，保留导航、完整引用和改名，但不预读数据库或发送 Biber 请求。集合声明自身可使集合加载，因此不要求存在显式引用。查询缺失键不产生引用警告；真正缺失的引用与集合成员仍检查。
+
+共享查询的所有执行上下文必须绑定同一身份；重定义、可执行／动态分支、IDS 交叉语义和内部命令执行上下文继续保护。谓词键补全仍待实现最终命名空间候选认证，普通引用和集合成员补全保持可用。
+
+```sh
+cargo test --locked --test biblatex_source_textual_queries -- --include-ignored
+cargo test --locked --test protocol source_textual_predicates_
+```

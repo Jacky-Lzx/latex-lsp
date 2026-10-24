@@ -97,6 +97,7 @@ impl Catalog {
                         return Err(());
                     }
                 }
+                SourceEvent::Query(..) => {}
                 SourceEvent::Request(section, key, wildcard) => {
                     let state = states.entry(*section).or_default();
                     if *wildcard {
@@ -274,6 +275,7 @@ impl Catalog {
                         return Err(());
                     }
                 }
+                SourceEvent::Query(..) => {}
                 SourceEvent::Request(section, key, wildcard) => {
                     let state = states.entry(*section).or_default();
                     if *wildcard {
