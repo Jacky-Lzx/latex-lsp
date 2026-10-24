@@ -12,6 +12,7 @@ mod bib_resources;
 mod bib_section_files;
 mod bib_section_keys;
 mod bib_section_labels;
+mod bib_section_references;
 mod bib_section_symbols;
 mod bib_sections;
 mod bib_strings;

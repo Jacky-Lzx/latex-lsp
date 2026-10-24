@@ -227,6 +227,7 @@ struct Analysis<'a, 'b> {
     labels: Option<LabelProof>,
     resource_sets: BTreeSet<Arc<BTreeSet<Url>>>,
     collect_keys: bool,
+    all_keys: Option<GraphKeys>,
     keys: BTreeMap<(usize, usize), Option<Arc<BTreeSet<Url>>>>,
     active: BTreeSet<Url>,
     answer: Option<BTreeSet<Url>>,
@@ -455,8 +456,7 @@ impl Analysis<'_, '_> {
                 }
                 self.labels.as_mut().unwrap().seen = true;
             }
-            if self.collect_keys
-                && uri == self.origin
+            if (self.collect_keys && uri == self.origin || self.all_keys.is_some())
                 && self.document
                 && positions.contains(&lexical.span.start)
                 && !context.operand(doc, lexical.span.start)
@@ -470,18 +470,29 @@ impl Analysis<'_, '_> {
                         continue;
                     }
                     let key = (key.start, key.end);
-                    if let Some(previous) = self.keys.get_mut(&key) {
-                        if previous
-                            .as_ref()
-                            .is_some_and(|previous| !Arc::ptr_eq(previous, &resources))
-                        {
-                            *previous = None;
+                    if let Some(all_keys) = &mut self.all_keys {
+                        let visits = all_keys.entry((uri.clone(), key.0, key.1)).or_default();
+                        if visits.insert(resources.clone()) {
+                            self.work += uri.as_str().len() + 128;
+                            if self.work > 32 * 1024 * 1024 || all_keys.len() > 100_000 {
+                                return None;
+                            }
                         }
-                    } else {
-                        if self.keys.len() >= 100_000 {
-                            return None;
+                    }
+                    if self.collect_keys && uri == self.origin {
+                        if let Some(previous) = self.keys.get_mut(&key) {
+                            if previous
+                                .as_ref()
+                                .is_some_and(|previous| !Arc::ptr_eq(previous, &resources))
+                            {
+                                *previous = None;
+                            }
+                        } else {
+                            if self.keys.len() >= 100_000 {
+                                return None;
+                            }
+                            self.keys.insert(key, Some(resources.clone()));
                         }
-                        self.keys.insert(key, Some(resources.clone()));
                     }
                 }
             }
@@ -805,6 +816,7 @@ pub(crate) fn coexistence(ws: &Workspace, root: &Url, scope: &BTreeSet<Url>) -> 
             labels: None,
             resource_sets: BTreeSet::from([Arc::new(active.clone())]),
             collect_keys: false,
+            all_keys: None,
             keys: BTreeMap::new(),
             active,
             answer: None,
@@ -961,6 +973,7 @@ fn target(ws: &Workspace, uri: &Url, offset: usize, purpose: Purpose) -> Option<
                 labels: None,
                 resource_sets: BTreeSet::new(),
                 collect_keys: false,
+                all_keys: None,
                 keys: BTreeMap::new(),
                 active,
                 answer: None,
@@ -1140,6 +1153,7 @@ pub(crate) fn occurrence_resources(ws: &Workspace, uri: &Url) -> Option<Resource
                     labels: None,
                     resource_sets: BTreeSet::from([Arc::new(active.clone())]),
                     collect_keys: true,
+                    all_keys: None,
                     keys: BTreeMap::new(),
                     active,
                     answer: None,
@@ -1242,6 +1256,7 @@ fn analyze_labels(
         }),
         resource_sets: BTreeSet::new(),
         collect_keys: false,
+        all_keys: None,
         keys: BTreeMap::new(),
         active: BTreeSet::new(),
         answer: None,
@@ -1268,5 +1283,67 @@ fn analyze_labels(
             BTreeSet::new()
         },
         choices: labels.choices.unwrap_or_default(),
+    })
+}
+
+pub(crate) type GraphKeys = BTreeMap<(Url, usize, usize), BTreeSet<Arc<BTreeSet<Url>>>>;
+pub(crate) struct KeyGraph {
+    pub sections: BTreeSet<Arc<BTreeSet<Url>>>,
+    pub occurrences: GraphKeys,
+}
+
+/// Collect every source occurrence once per root, preserving all resource
+/// views of a repeatedly loaded source for later declaration-identity checks.
+pub(crate) fn key_graph(
+    ws: &Workspace,
+    root: &Url,
+    docs: &[(Url, &Document)],
+    signatures: &CommandSignatures<'_>,
+) -> Option<KeyGraph> {
+    if !ws.index_truncated.is_empty()
+        || !valid_sources(docs, signatures)
+        || !database_only(docs, signatures)
+    {
+        return None;
+    }
+    let registry = Registry::new(root, docs, signatures);
+    let active = registry.resources(root, None)?;
+    let mut analysis = Analysis {
+        ws,
+        root,
+        signatures,
+        registry,
+        origin: root,
+        query: None,
+        labels: None,
+        resource_sets: BTreeSet::from([Arc::new(active.clone())]),
+        collect_keys: false,
+        all_keys: Some(BTreeMap::new()),
+        keys: BTreeMap::new(),
+        active,
+        answer: None,
+        visited: BTreeSet::new(),
+        stack: BTreeSet::new(),
+        visits: 0,
+        commands: 0,
+        work: 0,
+        document: false,
+        ended: false,
+    };
+    analysis.walk(root)?;
+    if docs.iter().any(|(uri, _)| !analysis.visited.contains(uri))
+        || analysis.resource_sets.iter().any(|resources| {
+            resources.iter().any(|uri| {
+                !ws.documents
+                    .get(uri)
+                    .is_some_and(|doc| doc.kind == DocumentKind::Bibtex)
+            })
+        })
+    {
+        return None;
+    }
+    Some(KeyGraph {
+        sections: analysis.resource_sets,
+        occurrences: analysis.all_keys?,
     })
 }

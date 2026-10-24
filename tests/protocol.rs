@@ -29909,3 +29909,124 @@ fn section_bibliography_relations_follow_unsaved_metadata_and_shared_consumers_o
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+fn section_key_references_and_highlights_refresh_all_shared_consumers_over_stdio() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let default = main.join("default.bib").unwrap();
+    let selected = main.join("section.bib").unwrap();
+    let chapter = main.join("chapter.tex").unwrap();
+    let source = r"\documentclass{article}\usepackage{biblatex}\addbibresource{default.bib}\addsectionbib[label=chosen]{section.bib}\begin{document}\cite{parent,legacy}\newrefsection[chosen]\input{chapter}\end{document}";
+    let library =
+        "% 😀\r\n@book{parent,ids={legacy}}\r\n@book{child,crossref={parent},related={legacy}}";
+    let chapter_source = "% 😀\r\n\\cite{parent,legacy}";
+    for (name, text) in [
+        ("main.tex", source),
+        ("default.bib", library),
+        ("section.bib", library),
+        ("chapter.tex", chapter_source),
+    ] {
+        std::fs::write(dir.path().join(name), text).unwrap();
+    }
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    for (uri, language, text, version) in [
+        (&main, "latex", source, 5),
+        (&selected, "bibtex", library, 7),
+        (&chapter, "latex", chapter_source, 9),
+    ] {
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"languageId":language,"version":version,"text":text}}),
+        );
+    }
+    let key_range = |text: &str, prefix: &str, key: &str| {
+        let at = text.find(prefix).unwrap() + prefix.len();
+        latex_lsp::text::Text::new(text.into()).range(at, at + key.len())
+    };
+    let declaration = key_range(library, "@book{", "parent");
+    let relation = key_range(library, "crossref={", "parent");
+    let selected_call = key_range(chapter_source, r"\cite{", "parent");
+    let default_call = key_range(source, r"\cite{", "parent");
+    let target = json!({"textDocument":{"uri":selected},"position":declaration.start});
+    let mut params = target.clone();
+    params["context"] = json!({"includeDeclaration":true});
+    let selected_refs = json!([{"uri":chapter,"range":selected_call},{"uri":selected,"range":declaration},{"uri":selected,"range":relation}]);
+    assert_eq!(
+        server.request(2, "textDocument/references", params.clone()),
+        selected_refs
+    );
+    let mut default_params = params.clone();
+    default_params["textDocument"]["uri"] = json!(default);
+    assert_eq!(
+        server.request(3, "textDocument/references", default_params),
+        json!([{"uri":default,"range":declaration},{"uri":default,"range":relation},{"uri":main,"range":default_call}])
+    );
+    let highlights = server.request(4, "textDocument/documentHighlight", target.clone());
+    assert_eq!(
+        highlights,
+        json!([{"range":declaration,"kind":3},{"range":relation,"kind":2}])
+    );
+    params["context"]["includeDeclaration"] = json!(false);
+    assert_eq!(
+        server.request(5, "textDocument/references", params.clone()),
+        json!([{"uri":chapter,"range":selected_call},{"uri":selected,"range":relation}])
+    );
+    params["context"]["includeDeclaration"] = json!(true);
+    let other = main.join("unsaved.tex").unwrap();
+    server.notify("textDocument/didOpen",json!({"textDocument":{"uri":other,"languageId":"latex","version":11,"text":r"\documentclass{article}\usepackage{biblatex}\addbibresource{default.bib}\begin{document}\input{chapter}\end{document}"}}));
+    assert_eq!(
+        server.request(6, "textDocument/references", params.clone()),
+        json!([])
+    );
+    assert_eq!(
+        server.request(7, "textDocument/documentHighlight", target.clone()),
+        json!([])
+    );
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":other}}),
+    );
+    assert_eq!(
+        server.request(8, "textDocument/references", params.clone()),
+        selected_refs
+    );
+    server.notify("textDocument/didChange",json!({"textDocument":{"uri":selected,"version":8},"contentChanges":[{"text":format!("{library}\r\n@book{{parent}}") }]}));
+    assert_eq!(
+        server.request(9, "textDocument/references", params.clone()),
+        json!([])
+    );
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":selected}}),
+    );
+    assert_eq!(
+        server.request(10, "textDocument/references", params),
+        selected_refs
+    );
+    let alias = key_range(library, "ids={", "legacy");
+    let alias_relation = key_range(library, "related={", "legacy");
+    let alias_call = key_range(chapter_source, r"\cite{parent,", "legacy");
+    assert_eq!(server.request(11,"textDocument/references",json!({"textDocument":{"uri":selected},"position":alias.start,"context":{"includeDeclaration":true}})),json!([{"uri":chapter,"range":alias_call},{"uri":selected,"range":alias},{"uri":selected,"range":alias_relation}]));
+    assert_eq!(
+        server.request(
+            12,
+            "textDocument/documentHighlight",
+            json!({"textDocument":{"uri":chapter},"position":selected_call.start})
+        ),
+        json!([{"range":selected_call,"kind":2}])
+    );
+    let inactive = main.join("inactive.bib").unwrap();
+    server.notify("textDocument/didOpen", json!({"textDocument":{"uri":inactive,"languageId":"bibtex","version":12,"text":"@book{orphan}\n@book{child,crossref={orphan}}"}}));
+    server.notify(
+        "workspace/didChangeConfiguration",
+        json!({"settings":{"distribution":{"enabled":false},"build":{"rootFile":"main.tex"}}}),
+    );
+    assert_eq!(server.request(13,"textDocument/references",json!({"textDocument":{"uri":inactive},"position":{"line":0,"character":8},"context":{"includeDeclaration":true}})),json!([]));
+    assert_eq!(server.request(14,"textDocument/references",json!({"textDocument":{"uri":selected},"position":declaration.start,"context":{"includeDeclaration":true}})),selected_refs);
+    server.request(1000, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

@@ -1804,6 +1804,11 @@ pub fn references(
         return crate::extra_symbols::references(workspace, uri, entry, include_declaration);
     }
     if let Some(offset) = doc.text.offset(position) {
+        if let Some(result) =
+            crate::bib_section_references::references(workspace, uri, offset, include_declaration)
+        {
+            return result;
+        }
         if let Some(result) = crate::bib_section_symbols::references(workspace, uri, offset) {
             return result;
         }

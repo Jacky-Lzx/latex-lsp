@@ -241,6 +241,26 @@ fn has_calls(doc: &Document, names: &BTreeSet<&str>) -> bool {
 
 impl Index {
     pub(crate) fn new(workspace: &Workspace, origin: &Url) -> Self {
+        Self::build(workspace, origin, None)
+    }
+
+    /// Lexical evidence only: callers must independently prove every key's
+    /// resource identity before returning references or edits.
+    pub(crate) fn for_section_keys(
+        workspace: &Workspace,
+        origin: &Url,
+        contexts: BTreeMap<BTreeSet<Url>, BTreeSet<Url>>,
+    ) -> Self {
+        Self::build(workspace, origin, Some(contexts))
+    }
+
+    fn build(
+        workspace: &Workspace,
+        origin: &Url,
+        contexts: Option<BTreeMap<BTreeSet<Url>, BTreeSet<Url>>>,
+    ) -> Self {
+        let section_keys = contexts.is_some();
+
         if !workspace.index_truncated.is_empty() {
             return Self {
                 incomplete: true,
@@ -255,7 +275,8 @@ impl Index {
         {
             return Self::default();
         }
-        let contexts = crate::environment_calls::project_contexts(workspace);
+        let contexts =
+            contexts.unwrap_or_else(|| crate::environment_calls::project_contexts(workspace));
         let mut connected = workspace.symbol_scope(origin);
         loop {
             let before = connected.len();
@@ -316,7 +337,7 @@ impl Index {
                 };
             };
             let selected_resources = crate::bib_sections::selects_resources(&docs, &signatures);
-            if selected_resources {
+            if selected_resources && !section_keys {
                 section_resources.extend(consumers.iter().cloned());
             }
             for uri in consumers {
@@ -333,7 +354,7 @@ impl Index {
                         ..Default::default()
                     };
                 };
-                if selected_resources {
+                if selected_resources && !section_keys {
                     for key in calls.values_mut().filter(|key| key.citation) {
                         key.operand = true;
                     }

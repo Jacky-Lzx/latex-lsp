@@ -56,7 +56,18 @@ fn selected_sections_do_not_bind_keys_to_the_default_database_or_offer_partial_e
             !definitions.is_empty(),
             "{header}"
         );
-        assert!(editing::highlights(&ws, &main, at).is_empty(), "{header}");
+        let highlights = editing::highlights(&ws, &main, at);
+        assert_eq!(
+            highlights.len(),
+            usize::from(!definitions.is_empty()),
+            "{header}"
+        );
+        assert!(
+            highlights
+                .iter()
+                .all(|highlight| highlight.kind == Some(DocumentHighlightKind::READ)),
+            "{header}"
+        );
         let candidate = features::completion(&ws, &main, at)
             .into_iter()
             .find(|item| item.label == "collision");
@@ -73,10 +84,15 @@ fn selected_sections_do_not_bind_keys_to_the_default_database_or_offer_partial_e
             "{header}"
         );
         let references = features::references(&ws, &bib, Position::new(0, 8), true);
-        assert!(
-            references.iter().any(|location| location.uri == bib),
-            "{header}"
-        );
+        let expected = if definitions.is_empty() {
+            vec![]
+        } else {
+            vec![Location::new(
+                bib.clone(),
+                Range::new(Position::new(0, 6), Position::new(0, 15)),
+            )]
+        };
+        assert_eq!(references, expected, "{header}");
         assert!(
             references.iter().all(|location| location.uri != main),
             "{header}"

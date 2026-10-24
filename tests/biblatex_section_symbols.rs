@@ -359,7 +359,7 @@ fn truncated_indexes_suppress_relation_fallback_and_restore_after_reindexing() {
 }
 
 #[test]
-fn section_database_references_do_not_fall_back_to_a_partial_project_union() {
+fn section_database_references_keep_exact_declarations_and_relations_without_a_project_union() {
     let (_dir, ws, main) = setup(
         "",
         r"\cite{childdefault}\newrefsection[chosen]\cite{childselected}",
@@ -368,13 +368,24 @@ fn section_database_references_do_not_fall_back_to_a_partial_project_union() {
     for name in ["default.bib", "section.bib"] {
         let bib = main.join(name).unwrap();
         let doc = &ws.documents[&bib];
-        for marker in ["@book{", "crossref={"] {
-            let at = doc
-                .text
-                .position(doc.text.source.find(marker).unwrap() + marker.len());
-            for include in [false, true] {
-                assert!(features::references(&ws, &bib, at, include).is_empty());
-            }
+        let declaration = Location::new(
+            bib.clone(),
+            doc.text.range(
+                doc.text.source.find("parent").unwrap(),
+                doc.text.source.find("parent").unwrap() + 6,
+            ),
+        );
+        let start = doc.text.source.find("crossref={").unwrap() + "crossref={".len();
+        let relation = Location::new(bib.clone(), doc.text.range(start, start + 6));
+        for at in [declaration.range.start, relation.range.start] {
+            assert_eq!(
+                features::references(&ws, &bib, at, true),
+                vec![declaration.clone(), relation.clone()]
+            );
+            assert_eq!(
+                features::references(&ws, &bib, at, false),
+                vec![relation.clone()]
+            );
         }
     }
 }
