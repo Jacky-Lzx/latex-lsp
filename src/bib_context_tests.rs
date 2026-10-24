@@ -933,6 +933,10 @@ fn weak_assignment_scope_proofs_reject_hidden_controls_and_unbalanced_execution(
         r"$\refcontext[labelprefix=A]\cite{a}$\cite{a}",
         r"\(\refcontext[labelprefix=A]\cite{a}\)\cite{a}",
         r"\newcommand\take[1]{#1}\take{\refcontext[labelprefix=A]\cite{a}}",
+        r"\mkbibparens{\begingroup\refcontext[labelprefix=A]\cite{a}\endgroup}\cite{a}",
+        r"\mkbibbrackets{\begingroup\refcontext[labelprefix=A]\cite{a}\endgroup}\cite{a}",
+        r"\parentext{\begingroup\refcontext[labelprefix=A]\cite{a}\endgroup}\cite{a}",
+        r"\brackettext{\begingroup\refcontext[labelprefix=A]\cite{a}\endgroup}\cite{a}",
         r"\refcontext[labelprefix=A]\refcontext[labelprefix=B]\cite{a}",
         r"\begin{quote}\refcontext[labelprefix=A]\cite{a}\end{center}",
     ] {

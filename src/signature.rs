@@ -256,6 +256,12 @@ fn push_delimiter(snippet: &mut String, delimiter: &str) {
     }
 }
 
+// These native biblatex commands forward without capturing the target's meaning.
+const BIBLATEX_TEXT_FORWARDS: &[(&str, &str)] = &[
+    ("parentext", "mkbibparens"),
+    ("brackettext", "mkbibbrackets"),
+];
+
 fn builtin(name: &str) -> Option<Signature> {
     if name == "assignrefcontextcats" {
         return Some(Signature {
@@ -646,9 +652,8 @@ fn builtin(name: &str) -> Option<Signature> {
         "part" | "chapter" | "section" | "subsection" | "subsubsection" | "paragraph"
         | "subparagraph" | "caption" => (&[("short title", true), ("title", false)], true),
         "footnote" => (&[("number", true), ("text", false)], false),
-        "textbf" | "textit" | "texttt" | "emph" | "title" | "author" | "date" => {
-            (&[("text", false)], false)
-        }
+        "textbf" | "textit" | "texttt" | "emph" | "title" | "author" | "date" | "mkbibparens"
+        | "mkbibbrackets" | "parentext" | "brackettext" => (&[("text", false)], false),
         "typeout" | "message" => (&[("text", false)], false),
         "extractcolorspec" => (&[("color", false), ("specification command", false)], false),
         "extractcolorspecs" => (
@@ -2667,6 +2672,15 @@ impl<'a> CommandSignatures<'a> {
                     tex,
                     alias.filter(|_| !expanded),
                 );
+            }
+        }
+        // An overridden target can discard, defer or reinterpret the text.
+        // Keep an explicit definition of the forwarder, but never apply its
+        // native executable-text shape to an unproved replacement target.
+        for &(forwarder, target) in BIBLATEX_TEXT_FORWARDS {
+            if local.contains_key(target) && !local.contains_key(forwarder) {
+                local.insert(Cow::Borrowed(forwarder), None);
+                tex_operands.insert(Cow::Borrowed(forwarder), None);
             }
         }
         local.extend(resolve_aliases(&local, &aliases, operand_builtin));
@@ -4852,6 +4866,24 @@ fn lookup<'a>(
             // theorems or newif; their builtin argument lists no longer apply.
             None
         } else {
+            if BIBLATEX_TEXT_FORWARDS
+                .iter()
+                .any(|(forwarder, _)| *forwarder == name)
+            {
+                let local = OnceCell::new();
+                let signatures = aliases.unwrap_or(&local).get_or_init(|| {
+                    CommandSignatures::new(
+                        workspace
+                            .documents
+                            .iter()
+                            .filter(|(uri, _)| scope.contains(*uri))
+                            .map(|(_, doc)| (doc.text.source.as_str(), &doc.syntax)),
+                    )
+                });
+                if !signatures.command_unchanged(name) {
+                    return None;
+                }
+            }
             builtin(name).or_else(|| {
                 let (package, command) = crate::packages::command(workspace, scope, name)?;
                 Some(Signature {

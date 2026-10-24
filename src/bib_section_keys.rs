@@ -86,7 +86,7 @@ fn unsafe_control(name: &str) -> bool {
         )
 }
 
-// Only these native biblatex predicates are known to avoid Biber requests.
+// These native predicates and initialized passive entrydata calls avoid Biber requests.
 // Plain text branches cannot change section/resource state, regardless of the
 // predicate result. Commands, parameter tokens and TeX-active syntax stay opaque.
 fn textual_bibliography_test(
@@ -95,17 +95,27 @@ fn textual_bibliography_test(
     end: usize,
     signatures: &CommandSignatures<'_>,
     pending: Option<&Range<usize>>,
+    initialized_end: Option<usize>,
 ) -> bool {
-    if !matches!(name, "ifentryinbib" | "ifentrycategory") || !signatures.command_unchanged(name) {
+    if !matches!(name, "ifentryinbib" | "ifentrycategory" | "entrydata")
+        || !signatures.command_unchanged(name)
+        || name == "entrydata" && initialized_end.is_none()
+    {
         return false;
     }
     let style = crate::citations::style(name).unwrap();
     let arguments = crate::citations::arguments(source, end, style);
-    let expected = if name == "ifentrycategory" { 4 } else { 3 };
+    let expected = match name {
+        "ifentrycategory" => 4,
+        "entrydata" => 2,
+        _ => 3,
+    };
     arguments.waiting.is_none()
         && arguments.fields.len() == expected
         && arguments.fields.iter().all(|field| {
-            if !field.complete {
+            if !field.complete
+                || name == "entrydata" && field.argument.outer_span.end > initialized_end.unwrap()
+            {
                 return false;
             }
             match field.role {
@@ -147,6 +157,57 @@ fn textual_bibliography_test(
                 _ => false,
             }
         })
+}
+
+// These native text wrappers initialize biblatex's internal commands before
+// executing their grouped text. Build their union once per visit; queries do
+// not rescan or copy nested group contents. Ordinary document entrydata stays
+// unproved, as do captured/redefined wrappers and parameters consumed as data.
+fn initialized_entrydata_spans(
+    doc: &Document,
+    signatures: &CommandSignatures<'_>,
+    positions: &BTreeSet<usize>,
+    work: &mut usize,
+) -> Option<Vec<Range<usize>>> {
+    let mut spans = Vec::new();
+    for command in &doc.syntax.commands {
+        if !matches!(
+            command.name.as_str(),
+            "mkbibparens" | "mkbibbrackets" | "parentext" | "brackettext"
+        ) {
+            continue;
+        }
+        *work += 64;
+        if *work > 32 * 1024 * 1024 {
+            return None;
+        }
+        if !positions.contains(&command.span.start) || !signatures.command_unchanged(&command.name)
+        {
+            continue;
+        }
+        let Some(argument) = &command.argument else {
+            continue;
+        };
+        let start = syntax::skip_space(&doc.text.source, command.span.end);
+        if argument.outer_span.start == start
+            && doc.text.source.as_bytes().get(start) == Some(&b'{')
+        {
+            spans.push(argument.span.clone());
+        }
+    }
+    spans.sort_unstable_by_key(|span| span.start);
+    let mut merged: Vec<Range<usize>> = Vec::new();
+    for span in spans {
+        if let Some(previous) = merged
+            .last_mut()
+            .filter(|previous| span.start <= previous.end)
+        {
+            previous.end = previous.end.max(span.end);
+        } else {
+            merged.push(span);
+        }
+    }
+    Some(merged)
 }
 
 #[derive(Clone)]
@@ -506,6 +567,11 @@ impl Analysis<'_, '_> {
         let positions = self
             .signatures
             .source_command_positions(source, &doc.syntax);
+        let initialized = if self.trace.is_some() {
+            initialized_entrydata_spans(doc, self.signatures, &positions, &mut self.work)?
+        } else {
+            Vec::new()
+        };
         let hint_assignments = self
             .trace
             .as_ref()
@@ -630,7 +696,19 @@ impl Analysis<'_, '_> {
             let textual_test = |name: &str, end| {
                 positions.contains(&lexical.span.start)
                     && !context.operand(doc, lexical.span.start)
-                    && textual_bibliography_test(source, name, end, self.signatures, pending)
+                    && textual_bibliography_test(
+                        source,
+                        name,
+                        end,
+                        self.signatures,
+                        pending,
+                        initialized
+                            .partition_point(|span| span.start <= lexical.span.start)
+                            .checked_sub(1)
+                            .and_then(|index| initialized.get(index))
+                            .filter(|span| span.contains(&lexical.span.start))
+                            .map(|span| span.end),
+                    )
             };
             if unsafe_control(&lexical.name) && !textual_test(&lexical.name, lexical.span.end) {
                 return None;
@@ -890,13 +968,7 @@ impl Analysis<'_, '_> {
                         || context.operand(doc, lexical.span.start)
                         || !self.signatures.command_unchanged(name)
                         || (!syntax::warns_on_undefined_citation(name)
-                            && !textual_bibliography_test(
-                                source,
-                                name,
-                                span.end,
-                                self.signatures,
-                                pending,
-                            ))
+                            && !textual_test(name, span.end))
                     {
                         return None;
                     }
@@ -2499,7 +2571,10 @@ pub(crate) fn source_completion_trace(
     let doc = ws.documents.get(origin)?;
     let query = query(doc, signatures, offset, Purpose::Completion)?;
     let (span, removals) = completion_span(doc, &query.call, offset)?;
-    let nonloading = matches!(query.call.name.as_str(), "ifentryinbib" | "ifentrycategory");
+    let nonloading = matches!(
+        query.call.name.as_str(),
+        "ifentryinbib" | "ifentrycategory" | "entrydata"
+    );
     if !syntax::warns_on_undefined_citation(&query.call.name)
         && query.call.name != "defbibentryset"
         && !nonloading
@@ -2586,7 +2661,11 @@ fn source_trace_query(
         next: 0,
     };
     let nonloading_completion = query.as_ref().is_some_and(|query| {
-        query.completion && matches!(query.call.name.as_str(), "ifentryinbib" | "ifentrycategory")
+        query.completion
+            && matches!(
+                query.call.name.as_str(),
+                "ifentryinbib" | "ifentrycategory" | "entrydata"
+            )
     });
     let mut analysis = Analysis {
         ws,

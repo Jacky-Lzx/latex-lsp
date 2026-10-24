@@ -313,12 +313,23 @@ cargo test --locked --test protocol handwritten_items_keep_biblatex_
 
 源码集合中的纯文本谓词查询支持 `ifentryinbib`／`ifentrycategory`（含静态命名调用）：按每个数字分区最终真实请求和声明解析身份，保留导航、完整引用和改名，但不预读数据库或发送 Biber 请求。集合声明自身可使集合加载，因此不要求存在显式引用。查询缺失键不产生引用警告；真正缺失的引用与集合成员仍检查。
 
-共享查询的所有执行上下文必须绑定同一身份；重定义、可执行／动态分支、IDS 交叉语义和内部命令执行上下文继续保护。谓词键补全按最终分区命名空间认证候选，普通引用和集合成员仍按实际请求位置计算。
+共享查询的所有执行上下文必须绑定同一身份；重定义、可执行／动态分支、IDS 交叉语义和未经认证的内部命令执行上下文继续保护。谓词键补全按最终分区命名空间认证候选，普通引用和集合成员仍按实际请求位置计算。
 
 ```sh
 cargo test --locked --test biblatex_source_textual_queries -- --include-ignored
 cargo test --locked --test protocol source_textual_predicates_
 ```
+
+直接且未重定义的 `mkbibparens`、`mkbibbrackets`、`parentext` 和 `brackettext` 会初始化 biblatex 内部命令。在这些包装的完整分组参数内，纯文本代码体的 `entrydata`／`entrydata*` 支持源码集合的导航、悬停、补全、引用及完整改名，包括静态命名的 `entrydata` 调用。键按最终分区身份认证，查询不提前加载数据库书籍；早期真实引用仍保留书籍身份。包装自身也提供 `{text}` 签名，内部普通标签引用可以交互。
+
+普通正文直接调用、包装之外的代码、复制／命名包装、用户重定义、不完整参数和可执行代码体继续保护。`parentext`／`brackettext` 转发的底层 `mkbibparens`／`mkbibbrackets` 被重定义时，同样撤下原生参数执行及初始化认证，保留另一种独立包装。数据库 `execute`／`@preamble`、共享消费者身份和新名称捕获沿用完整认证；未保存更新及关闭后重新计算。
+
+```sh
+cargo test --locked --test biblatex_source_entrydata -- --include-ignored
+cargo test --locked --test protocol initialized_entrydata_
+```
+
+原生测试实际应用 LSP 返回的改名和补全编辑，比较四种包装的普通／星号调用在集合声明前查询时的完整 BBL，确认不会额外加载原数据库书籍。协议核验两种编辑格式、UTF-16／CRLF、主文件及共享查询的范围和版本、未保存重定义与执行代码、共享新根冲突和关闭恢复。
 
 项目包含独立源码集合时，分属不同数字分区且共享 IDS 的真实数据库所属主键可以耦合改名：按实际资源分配检查冲突，完整收集经别名相连的所有所属条目及其引用。集合成员、通配加载和跨库关系继续参与检查；源码集合遮蔽所属主键、相交的别名、不同所属主键、未认证消费者或新名称捕获仍拒绝编辑。同一物理源码集合的多个跨库先决条目认证见下文。
 

@@ -35885,3 +35885,228 @@ fn generated_category_code_blocks_partial_edits_across_unsaved_consumers_over_st
         server.wait_exit(0);
     }
 }
+
+#[test]
+fn initialized_entrydata_keeps_final_sets_exact_versions_and_unsaved_guards() {
+    use latex_lsp::text::Text;
+    for document_changes in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+        let child = main.join("query.tex").unwrap();
+        let bib = main.join("data.bib").unwrap();
+        let provider = main.join("macros.tex").unwrap();
+        let other = main.join("other.tex").unwrap();
+        let source = "% 😀\r\n\\documentclass{article}\\usepackage{biblatex}\\addbibresource{data.bib}\\input{macros}\\begin{document}\\parentext{\\entrydata{collection}{Text}}\\input{query}\\defbibentryset{collection}{member}\\cite{collection}\\end{document}";
+        let calls = "% queries\r\n😀 \\mkbibbrackets{\\entrydata*{collection}{Text}}\\parentext{\\csuse{entrydata}{collection}{Text}}\\brackettext{\\csname entrydata\\endcsname*{collection}{Text}}";
+        let library = "@book{collection,title={Raw collection}} @book{member,title={Member}}";
+        for (name, text) in [
+            ("main.tex", source),
+            ("query.tex", calls),
+            ("data.bib", library),
+            ("macros.tex", ""),
+        ] {
+            std::fs::write(dir.path().join(name), text).unwrap();
+        }
+        let span = |text: &str, prefix: &str| {
+            let at = text.find(prefix).unwrap() + prefix.len();
+            Text::new(text.into()).range(at, at + "collection".len())
+        };
+        let declaration = span(source, r"\defbibentryset{");
+        let query = span(calls, r"\entrydata*{");
+        let mut server = Server::start();
+        server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":document_changes}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+        server.notify("initialized", json!({}));
+        for (uri, text, version) in [(&main, source, 3), (&child, calls, 8)] {
+            server.notify("textDocument/didOpen",json!({"textDocument":{"uri":uri,"languageId":"latex","version":version,"text":text}}));
+        }
+        let params = json!({"textDocument":{"uri":child},"position":query.start});
+        let target = json!([{"uri":main,"range":declaration}]);
+        assert_eq!(
+            server.request(2, "textDocument/definition", params.clone()),
+            target
+        );
+        assert!(!server
+            .request(3, "textDocument/hover", params.clone())
+            .is_null());
+        let prepared = server.request(4, "textDocument/prepareRename", params.clone());
+        assert_eq!(prepared["range"], json!(query));
+        let refs = json!({"textDocument":{"uri":child},"position":query.start,"context":{"includeDeclaration":true}});
+        let values = server.request(5, "textDocument/references", refs.clone());
+        let mut expected_locations = Vec::new();
+        let mut expected_edits = std::collections::BTreeMap::new();
+        for (uri, text, prefixes) in [
+            (
+                &main,
+                source,
+                vec![r"\entrydata{", r"\defbibentryset{", r"\cite{"],
+            ),
+            (
+                &child,
+                calls,
+                vec![
+                    r"\entrydata*{",
+                    r"\csuse{entrydata}{",
+                    r"\csname entrydata\endcsname*{",
+                ],
+            ),
+        ] {
+            let edits = prefixes
+                .into_iter()
+                .map(|prefix| {
+                    let range = span(text, prefix);
+                    expected_locations.push(json!({"uri":uri,"range":range}));
+                    json!({"range":range,"newText":"fresh"})
+                })
+                .collect::<Vec<_>>();
+            expected_edits.insert(uri.as_str().to_owned(), edits);
+        }
+        let mut locations = values.as_array().unwrap().clone();
+        locations.sort_by_key(Value::to_string);
+        expected_locations.sort_by_key(Value::to_string);
+        assert_eq!(locations, expected_locations);
+        let completion = server.request(
+            6,
+            "textDocument/completion",
+            json!({"textDocument":{"uri":child},"position":query.end}),
+        );
+        let item = completion
+            .as_array()
+            .or_else(|| completion["items"].as_array())
+            .unwrap()
+            .iter()
+            .find(|item| item["label"] == "collection")
+            .unwrap();
+        assert_eq!(
+            item["textEdit"],
+            json!({"range":query,"newText":"collection"})
+        );
+        assert!(item["detail"]
+            .as_str()
+            .unwrap()
+            .contains("Dynamic bibliography set"));
+        let edit = server.request(
+            7,
+            "textDocument/rename",
+            json!({"textDocument":{"uri":child},"position":query.start,"newName":"fresh"}),
+        );
+        let mut actual = std::collections::BTreeMap::new();
+        if document_changes {
+            for change in edit["documentChanges"].as_array().unwrap() {
+                let uri = change["textDocument"]["uri"].as_str().unwrap();
+                assert_eq!(
+                    change["textDocument"]["version"],
+                    if uri == main.as_str() { 3 } else { 8 }
+                );
+                actual.insert(uri.to_owned(), change["edits"].as_array().unwrap().clone());
+            }
+        } else {
+            for (uri, edits) in edit["changes"].as_object().unwrap() {
+                actual.insert(uri.to_owned(), edits.as_array().unwrap().clone());
+            }
+        }
+        for edits in actual.values_mut().chain(expected_edits.values_mut()) {
+            edits.sort_by_key(Value::to_string);
+        }
+        assert_eq!(actual, expected_edits);
+        server.notify("textDocument/didOpen",json!({"textDocument":{"uri":provider,"languageId":"latex","version":10,"text":r"\renewcommand\mkbibbrackets[1]{}"}}));
+        assert_eq!(
+            server.request(8, "textDocument/definition", params.clone()),
+            json!([])
+        );
+        assert_eq!(
+            server.request(9, "textDocument/references", refs.clone()),
+            json!([])
+        );
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":provider}}),
+        );
+        assert_eq!(
+            server.request(10, "textDocument/definition", params.clone()),
+            target
+        );
+        server.notify("textDocument/didOpen",json!({"textDocument":{"uri":provider,"languageId":"latex","version":11,"text":r"\renewcommand\mkbibparens[1]{}"}}));
+        assert_eq!(
+            server.request(11, "textDocument/definition", params.clone()),
+            json!([])
+        );
+        assert_eq!(
+            server.request(12, "textDocument/references", refs.clone()),
+            json!([])
+        );
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":provider}}),
+        );
+        assert_eq!(
+            server.request(13, "textDocument/definition", params.clone()),
+            target
+        );
+
+        for (version, extra) in [
+            (12, " @book{trigger,execute={\\unknown}}"),
+            (13, " @preamble{\"\\unknown\"}"),
+        ] {
+            server.notify("textDocument/didOpen",json!({"textDocument":{"uri":bib,"languageId":"bibtex","version":version,"text":format!("{library}{extra}")}}));
+            assert_eq!(
+                server.request(
+                    version as u64 + 10,
+                    "textDocument/definition",
+                    params.clone()
+                ),
+                json!([])
+            );
+            assert_eq!(
+                server.request(version as u64 + 20, "textDocument/references", refs.clone()),
+                json!([])
+            );
+            server.notify("textDocument/didClose", json!({"textDocument":{"uri":bib}}));
+            assert_eq!(
+                server.request(
+                    version as u64 + 30,
+                    "textDocument/definition",
+                    params.clone()
+                ),
+                target
+            );
+        }
+        server.notify("textDocument/didOpen",json!({"textDocument":{"uri":other,"languageId":"latex","version":15,"text":r"\documentclass{article}\usepackage{biblatex}\addbibresource{data.bib}\begin{document}\input{query}\cite{collection}\end{document}"}}));
+        assert_eq!(
+            server.request(50, "textDocument/definition", params.clone()),
+            json!([])
+        );
+        assert_eq!(
+            server.request(51, "textDocument/references", refs.clone()),
+            json!([])
+        );
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":other}}),
+        );
+        assert_eq!(
+            server.request(52, "textDocument/definition", params.clone()),
+            target
+        );
+        let early = source.replace(r"\input{query}", r"\cite{collection}\input{query}");
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":4},"contentChanges":[{"text":early}]}),
+        );
+        assert_eq!(
+            server.request(53, "textDocument/definition", params.clone()),
+            json!([{"uri":bib,"range":span(library,"@book{")}])
+        );
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":main}}),
+        );
+        assert_eq!(
+            server.request(54, "textDocument/definition", params),
+            target
+        );
+        assert_eq!(server.request(55, "textDocument/references", refs), values);
+        server.request(1000, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
