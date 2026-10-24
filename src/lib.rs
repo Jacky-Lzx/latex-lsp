@@ -6,6 +6,9 @@ mod bib_bbl;
 mod bib_categories;
 mod bib_compiled;
 mod bib_completion;
+mod bib_context;
+#[cfg(test)]
+mod bib_context_tests;
 mod bib_diagnostics;
 mod bib_field_diagnostics;
 mod bib_formatting;

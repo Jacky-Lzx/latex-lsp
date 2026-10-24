@@ -333,3 +333,5 @@ cargo test --locked --test protocol source_shared_raw_owners_
 cargo test --locked --test biblatex_source_prerequisites -- --include-ignored
 cargo test --locked --test protocol source_prerequisite_edits_
 ```
+
+本地数字引用上下文的编译标签支持纯字面 `labelprefix`／`sorting` 和全局 deferred 编号。按 AUX 为键记录的默认上下文联结 BBL 真实前缀；同一键跨打印上下文仍遵循 biblatex 实际默认选择。共享物理引用的所有执行必须得到相同完整标签；显式上下文分配、命名声明、重定义、动态选项和自定义格式继续保护。详见[辅助引用与编号提示](auxiliary-references.md)。

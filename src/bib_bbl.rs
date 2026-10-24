@@ -1,4 +1,4 @@
-//! Nondeferred labels follow the actually loaded, certified BBL entry list.
+//! Certified loaded BBL lists supply ranks and literal label prefixes.
 use crate::{syntax, workspace::Workspace};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -7,6 +7,8 @@ use std::{
 use tower_lsp::lsp_types::Url;
 
 type Labels = BTreeMap<(u32, String), Option<String>>;
+type Records = BTreeMap<(u32, String, String), (u32, Option<String>)>;
+pub(crate) type Prefixes = BTreeMap<(u32, String, String), String>;
 
 fn fields(source: &str, at: &mut usize, count: usize) -> Option<Vec<syntax::Argument>> {
     let mut result = Vec::new();
@@ -28,11 +30,11 @@ fn decimal(value: &str) -> Option<u32> {
         .then(|| value.parse().ok())
         .flatten()
 }
-fn context(value: &str) -> bool {
+fn context(value: &str, prefixed: bool) -> bool {
     let components: Vec<_> = value.split('/').collect();
     value.len() <= 256
         && components.len() == 6
-        && components[2].is_empty()
+        && (prefixed || components[2].is_empty())
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || b"/_.-:".contains(&byte))
@@ -40,7 +42,7 @@ fn context(value: &str) -> bool {
 fn compact(value: &str) -> String {
     value.chars().filter(|ch| !ch.is_whitespace()).collect()
 }
-fn parse(source: &str) -> Option<Labels> {
+fn records(source: &str, prefixed: bool) -> Option<Records> {
     let mut lines = source.lines();
     if lines.next()? != "% $ biblatex auxiliary file $"
         || lines.next()? != "% $ biblatex bbl format version 3.3 $"
@@ -74,6 +76,9 @@ fn parse(source: &str) -> Option<Labels> {
     let mut entry = None;
     let mut counter = 0u32;
     let mut labels = BTreeMap::new();
+    let mut list_context = None::<String>;
+    let mut contexts = BTreeSet::new();
+    let mut lists = 0usize;
     loop {
         match command(source, &mut at)? {
             r"\refsection" => {
@@ -87,17 +92,26 @@ fn parse(source: &str) -> Option<Labels> {
                 }
                 section = Some(value);
                 listed = false;
+                contexts.clear();
             }
             r"\datalist" => {
-                if section.is_none() || listed || in_list {
+                if section.is_none() || !prefixed && listed || in_list {
                     return None;
                 }
                 let (kind, end) = syntax::bracket_argument(source, syntax::skip_space(source, at))?;
                 at = end;
                 let args = fields(source, &mut at, 1)?;
-                if kind.value != "entry" || !context(&args[0].value) {
+                if kind.value != "entry"
+                    || !context(&args[0].value, prefixed)
+                    || !contexts.insert(args[0].value.clone())
+                {
                     return None;
                 }
+                lists += 1;
+                if lists > 4096 {
+                    return None;
+                }
+                list_context = Some(args[0].value.clone());
                 listed = true;
                 in_list = true;
                 counter = 0;
@@ -117,18 +131,26 @@ fn parse(source: &str) -> Option<Labels> {
                 {
                     return None;
                 }
-                entry = Some(key.clone());
+                entry = Some((key.clone(), None::<String>));
                 counter = counter.checked_add(1)?;
             }
             r"\field" => {
                 entry.as_ref()?;
                 let args = fields(source, &mut at, 2)?;
+                if args[0].value.eq_ignore_ascii_case("labelprefix") {
+                    if !prefixed
+                        || !crate::bib_context::flat_prefix(&args[1].value)
+                        || entry.as_mut()?.1.replace(args[1].value.clone()).is_some()
+                    {
+                        return None;
+                    }
+                    continue;
+                }
                 if matches!(
                     args[0].value.to_ascii_lowercase().as_str(),
                     "shorthand"
                         | "labelnumber"
                         | "localnumber"
-                        | "labelprefix"
                         | "options"
                         | "entrykey"
                         | "entrytype"
@@ -149,9 +171,13 @@ fn parse(source: &str) -> Option<Labels> {
                 fields(source, &mut at, count)?;
             }
             r"\endentry" => {
-                let key = entry.take()?;
+                let (key, prefix) = entry.take()?;
+                let context = list_context.as_ref()?;
+                if prefixed && context.split('/').nth(2) != Some("") && prefix.is_none() {
+                    return None;
+                }
                 if labels
-                    .insert((section?, key), Some(counter.to_string()))
+                    .insert((section?, context.clone(), key), (counter, prefix))
                     .is_some()
                 {
                     return None;
@@ -162,6 +188,7 @@ fn parse(source: &str) -> Option<Labels> {
                     return None;
                 }
                 in_list = false;
+                list_context = None;
             }
             r"\endrefsection" => {
                 if !listed || in_list || entry.is_some() {
@@ -187,7 +214,7 @@ fn parse(source: &str) -> Option<Labels> {
     }
 }
 
-pub(crate) fn numeric_labels(ws: &Workspace, root: &Url) -> Option<(Labels, usize)> {
+fn read(ws: &Workspace, root: &Url) -> Option<String> {
     let root_path = root.to_file_path().ok()?;
     let path = ws
         .build_config(root)
@@ -206,7 +233,30 @@ pub(crate) fn numeric_labels(ws: &Workspace, root: &Url) -> Option<(Labels, usiz
     if source.len() > 2 * 1024 * 1024 {
         return None;
     }
+    Some(source)
+}
+fn parse(source: &str) -> Option<Labels> {
+    Some(
+        records(source, false)?
+            .into_iter()
+            .map(|((section, _, key), (number, _))| ((section, key), Some(number.to_string())))
+            .collect(),
+    )
+}
+pub(crate) fn numeric_labels(ws: &Workspace, root: &Url) -> Option<(Labels, usize)> {
+    let source = read(ws, root)?;
     Some((parse(&source)?, source.len()))
+}
+pub(crate) fn prefixes(ws: &Workspace, root: &Url) -> Option<(Prefixes, usize)> {
+    let source = read(ws, root)?;
+    let entries = records(&source, true)?;
+    Some((
+        entries
+            .into_iter()
+            .map(|(key, (_, prefix))| (key, prefix.unwrap_or_default()))
+            .collect(),
+        source.len(),
+    ))
 }
 
 #[cfg(test)]

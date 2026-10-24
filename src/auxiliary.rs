@@ -259,11 +259,12 @@ fn retain<K: Ord, V: Eq>(
 }
 
 type NumericLabels = BTreeMap<(u32, String), Option<String>>;
+pub(crate) type NumericContexts = BTreeMap<(u32, String), Option<(String, String)>>;
 
-pub(crate) fn numeric_citation_labels(
+pub(crate) fn numeric_citation_contexts(
     ws: &Workspace,
     root: &Url,
-) -> Option<(NumericLabels, usize)> {
+) -> Option<(NumericContexts, usize)> {
     let path = root.to_file_path().ok()?;
     let path = ws
         .build_config(root)
@@ -302,15 +303,33 @@ pub(crate) fn numeric_citation_labels(
     }
     let mut result = BTreeMap::new();
     for ((section, key, context), number) in numbers {
-        let components: Vec<_> = context.split('/').collect();
-        if components.len() == 6
-            && components[2].is_empty()
-            && contexts.get(&(section, key.clone())) == Some(&Some(context))
-        {
-            retain(&mut result, (section, key), number, 8192);
+        if contexts.get(&(section, key.clone())) == Some(&Some(context.clone())) {
+            retain(
+                &mut result,
+                (section, key),
+                number.map(|number| (context, number)),
+                8192,
+            );
         }
     }
     Some((result, work))
+}
+pub(crate) fn numeric_citation_labels(
+    ws: &Workspace,
+    root: &Url,
+) -> Option<(NumericLabels, usize)> {
+    let (contexts, work) = numeric_citation_contexts(ws, root)?;
+    let labels = contexts
+        .into_iter()
+        .filter_map(|(key, value)| match value {
+            Some((context, number)) if context.split('/').nth(2) == Some("") => {
+                Some((key, Some(number)))
+            }
+            None => Some((key, None)),
+            _ => None,
+        })
+        .collect();
+    Some((labels, work))
 }
 // A flat bibcite label is usable without executing TeX. Structured natbib
 // records are deliberately excluded: identical records serve both numeric and

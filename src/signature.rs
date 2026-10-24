@@ -4043,6 +4043,7 @@ fn argument_free(name: &str) -> bool {
             | "newblock"
             | "newrefsegment"
             | "endrefsection"
+            | "endrefcontext"
             | "endrefsegment"
             | "centering"
             | "raggedright"
@@ -4205,6 +4206,25 @@ fn operand_builtin(name: &str) -> Option<Signature> {
                 kind: Kind::RequiredGroup,
                 label: "{tokens}".into(),
             }]
+        } else if matches!(name, "refcontext" | "newrefcontext") {
+            // Native contexts optionally read options and a braced context
+            // name; absent arguments leave the following control executable.
+            vec![
+                Parameter {
+                    obey_spaces: false,
+                    kind: Kind::Optional,
+                    label: "[options]".into(),
+                },
+                Parameter {
+                    obey_spaces: false,
+                    kind: Kind::Delimited {
+                        open: "{".into(),
+                        close: "}".into(),
+                        optional: true,
+                    },
+                    label: "{context}".into(),
+                },
+            ]
         } else if name == "newtheorem" {
             // Both numbered forms end after the title and possible reset
             // counter; the starred form has no optional counter operands.
@@ -4485,7 +4505,7 @@ fn operand_delimited_end(source: &str, at: usize, open: &str, close: &str) -> Op
 
 fn builtin_argument_data(signature: &Signature, parameter: usize) -> bool {
     match signature.name.as_str() {
-        "newrefsection" | "refsection" => true,
+        "newrefsection" | "refsection" | "newrefcontext" | "refcontext" => true,
         "begin" => {
             parameter == 1
                 && signature

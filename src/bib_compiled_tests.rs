@@ -91,10 +91,8 @@ fn conflicting_and_unexpanded_auxiliary_records_do_not_retain_older_numbers() {
     }
 }
 #[test]
-fn local_refcontexts_and_citation_data_mutators_cannot_use_default_numbers() {
+fn unproved_refcontext_assignments_and_citation_data_mutators_cannot_use_default_numbers() {
     for body in [
-        r"\begin{refcontext}[labelprefix=A]\cite{a}\end{refcontext}\cite{a}",
-        r"\newrefcontext[sorting=none]\cite{a}",
         r"\localrefcontext[sorting=none]\cite{a}",
         r"\assignrefcontextkeys[labelprefix=A]{a}\cite{a}",
         r"\AtEveryCitekey{\clearfield{labelnumber}}\cite{a}",

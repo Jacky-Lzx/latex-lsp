@@ -89,6 +89,7 @@ fn mode(docs: &[(Url, &Document)], signatures: &CommandSignatures<'_>) -> Mode {
     let mut numeric = false;
     let mut uncertain = false;
     let mut packages = 0usize;
+    let mut contexts = false;
     for (_, doc) in docs {
         let source = &doc.text.source;
         let context = Context::new(doc, signatures);
@@ -105,33 +106,56 @@ fn mode(docs: &[(Url, &Document)], signatures: &CommandSignatures<'_>) -> Mode {
                 )
                 .unwrap_or((&command.name, command.span.clone()));
             let canonical = signatures.forwarded_builtin(name).unwrap_or(name);
+            let refcontext = canonical.contains("refcontext")
+                || matches!(canonical, "begin" | "end")
+                    && syntax::environment_name_argument(source, span.end)
+                        .is_some_and(|argument| argument.value == "refcontext");
+            let definition = definitions
+                .iter()
+                .any(|span| span.contains(&command.span.start));
+            if refcontext && (!context.literal(command.span.start) || definition) {
+                let safe = !definition
+                    && command.name == canonical
+                    && name == canonical
+                    && positions.contains(&command.span.start)
+                    && !context.operand(doc, command.span.start)
+                    && signatures.command_unchanged(canonical)
+                    && signatures.command_unchanged("refcontext")
+                    && signatures.command_unchanged("endrefcontext")
+                    && signatures.environment_primitives_unchanged()
+                    && !docs.iter().any(|(_, doc)| {
+                        doc.syntax
+                            .environments
+                            .iter()
+                            .any(|entry| entry.name == "refcontext")
+                    })
+                    && crate::bib_context::static_context(source, canonical, span.end);
+                uncertain |= !safe;
+                contexts |= safe;
+            }
             if !uncertain
-                && (canonical.contains("refcontext")
-                    || matches!(
-                        canonical,
-                        "ExecuteBibliographyOptions"
-                            | "DeclareFieldFormat"
-                            | "DeclareFieldAlias"
-                            | "DeclareCiteCommand"
-                            | "DeclareMultiCiteCommand"
-                            | "DeclareAutoCiteCommand"
-                            | "renewbibmacro"
-                            | "DeclareSourcemap"
-                            | "DeclareStyleSourcemap"
-                            | "PassOptionsToPackage"
-                            | "PassOptionsToClass"
-                            | "AtEveryCitekey"
-                            | "AtEveryBibitem"
-                            | "AtDataInput"
-                            | "AtEveryEntrykey"
-                            | "AtBeginBibliography"
-                            | "clearfield"
-                            | "restorefield"
-                            | "DeclareFieldInputHandler"
-                    )
-                    || matches!(canonical, "begin" | "end")
-                        && syntax::environment_name_argument(source, span.end)
-                            .is_some_and(|argument| argument.value == "refcontext"))
+                && (matches!(
+                    canonical,
+                    "ExecuteBibliographyOptions"
+                        | "DeclareFieldFormat"
+                        | "DeclareFieldAlias"
+                        | "DeclareCiteCommand"
+                        | "DeclareMultiCiteCommand"
+                        | "DeclareAutoCiteCommand"
+                        | "renewbibmacro"
+                        | "DeclareSourcemap"
+                        | "DeclareStyleSourcemap"
+                        | "PassOptionsToPackage"
+                        | "PassOptionsToClass"
+                        | "AtEveryCitekey"
+                        | "AtEveryBibitem"
+                        | "AtDataInput"
+                        | "AtEveryEntrykey"
+                        | "AtBeginBibliography"
+                        | "clearfield"
+                        | "restorefield"
+                        | "DeclareFieldInputHandler"
+                ))
                 && (!context.literal(command.span.start)
                     || definitions
                         .iter()
@@ -180,7 +204,7 @@ fn mode(docs: &[(Url, &Document)], signatures: &CommandSignatures<'_>) -> Mode {
     }
     if !backend {
         Mode::Classic
-    } else if uncertain || packages != 1 || !numeric {
+    } else if uncertain || packages != 1 || !numeric || contexts && !deferred {
         Mode::Unknown
     } else {
         Mode::Numeric(deferred)
@@ -231,7 +255,7 @@ pub(crate) fn numbers(
     let mut work = 0usize;
     for (project, mode) in projects.into_iter().zip(modes) {
         let compiled = if mode == Mode::Numeric(true) {
-            crate::auxiliary::numeric_citation_labels(ws, &project.root)
+            crate::bib_context::numeric_labels(ws, &project.root)
         } else {
             crate::bib_bbl::numeric_labels(ws, &project.root)
         };
