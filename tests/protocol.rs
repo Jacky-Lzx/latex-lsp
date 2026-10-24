@@ -30713,3 +30713,154 @@ fn source_set_relation_completion_tracks_unsaved_identities_metadata_edits_and_l
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+#[test]
+fn xdata_relation_completions_follow_unsaved_provider_types_and_alias_owners_over_stdio() {
+    use latex_lsp::text::Text;
+    let dir = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let bib = main.join("refs.bib").unwrap();
+    let provider = main.join("provider.bib").unwrap();
+    let source = r"\documentclass{article}\usepackage{biblatex}\addbibresource{refs.bib}\addbibresource{provider.bib}\begin{document}\cite{child}\end{document}";
+    let library = "% 😀\r\n@book{child,xdata={}}";
+    let data = "@book{ordinary,ids={bookalias}}\n@XDATA{data,title={Data preview},ids={dataalias}}";
+    for (name, text) in [
+        ("main.tex", source),
+        ("refs.bib", library),
+        ("provider.bib", data),
+    ] {
+        std::fs::write(dir.path().join(name), text).unwrap();
+    }
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    for (uri, text, language, version) in [
+        (&main, source, "latex", 5),
+        (&bib, library, "bibtex", 3),
+        (&provider, data, "bibtex", 6),
+    ] {
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"languageId":language,"version":version,"text":text}}),
+        );
+    }
+    let at = library.find("xdata={").unwrap() + "xdata={".len();
+    let params =
+        json!({"textDocument":{"uri":bib},"position":Text::new(library.into()).position(at)});
+    let initial = server.request(2, "textDocument/completion", params.clone());
+    let mut labels: Vec<_> = initial
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["label"].as_str().unwrap())
+        .collect();
+    labels.sort();
+    assert_eq!(labels, vec!["data", "dataalias"], "{initial}");
+    let original_book = data.replace("@XDATA", "@book");
+    server.notify("textDocument/didChange",json!({"textDocument":{"uri":provider,"version":7},"contentChanges":[{"text":original_book}]}));
+    assert_eq!(
+        server.request(3, "textDocument/completion", params.clone()),
+        json!([])
+    );
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":provider}}),
+    );
+    assert_eq!(
+        server.request(4, "textDocument/completion", params.clone()),
+        initial
+    );
+    let alias = initial
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["label"] == "dataalias")
+        .unwrap();
+    assert!(alias["detail"].as_str().unwrap().contains("alias for data"));
+    assert_eq!(
+        alias["textEdit"],
+        json!({"range":Text::new(library.into()).range(at,at),"newText":"dataalias"})
+    );
+    let duplicate = format!("{library}\n@book{{data,title={{Competing book}}}}");
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":bib,"version":4},"contentChanges":[{"text":duplicate}]}),
+    );
+    assert_eq!(
+        server.request(5, "textDocument/completion", params.clone()),
+        json!([])
+    );
+    server.notify("textDocument/didClose", json!({"textDocument":{"uri":bib}}));
+    assert_eq!(
+        server.request(6, "textDocument/completion", params),
+        initial
+    );
+    server.request(1000, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+fn xdata_relation_completions_track_named_set_overrides_without_resource_selection_over_stdio() {
+    use latex_lsp::text::Text;
+    let dir = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let bib = main.join("refs.bib").unwrap();
+    let source = r"\documentclass{article}\usepackage{biblatex}\addbibresource{refs.bib}\begin{document}\csuse{defbibentryset}{shadowed}{member}\cite{shadowed,child}\end{document}";
+    let library="% 😀\r\n@book{member} @xdata{shadowed,title={Hidden data}} @xdata{data,title={Available data}} @book{child,xdata={}}";
+    for (name, text) in [("main.tex", source), ("refs.bib", library)] {
+        std::fs::write(dir.path().join(name), text).unwrap();
+    }
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    for (uri, text, language, version) in
+        [(&main, source, "latex", 5), (&bib, library, "bibtex", 3)]
+    {
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"languageId":language,"version":version,"text":text}}),
+        );
+    }
+    let params = json!({"textDocument":{"uri":bib},"position":Text::new(library.into()).position(library.find("xdata={}").unwrap()+"xdata={".len())});
+    let initial = server.request(2, "textDocument/completion", params.clone());
+    let initial_items = initial.as_array().unwrap();
+    assert_eq!(initial_items.len(), 1, "{initial}");
+    assert_eq!(initial_items[0]["label"], "data");
+    let plain = source.replace(r"\csuse{defbibentryset}{shadowed}{member}", "");
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":6},"contentChanges":[{"text":plain}]}),
+    );
+    let restored = server.request(3, "textDocument/completion", params.clone());
+    let mut names: Vec<_> = restored
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["label"].as_str().unwrap())
+        .collect();
+    names.sort();
+    assert_eq!(names, vec!["data", "shadowed"]);
+    let deferred = source.replace(
+        r"\csuse{defbibentryset}{shadowed}{member}",
+        r"\newcommand\later{\csuse{defbibentryset}{shadowed}{member}}",
+    );
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":7},"contentChanges":[{"text":deferred}]}),
+    );
+    assert_eq!(
+        server.request(4, "textDocument/completion", params.clone()),
+        json!([])
+    );
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":main}}),
+    );
+    assert_eq!(
+        server.request(5, "textDocument/completion", params),
+        initial
+    );
+    server.request(1000, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

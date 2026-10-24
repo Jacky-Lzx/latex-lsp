@@ -1683,16 +1683,37 @@ pub(crate) fn bibliography_relation_completions(
     scope: &BTreeSet<Url>,
     allowed: Option<&BTreeSet<String>>,
 ) -> Vec<CompletionItem> {
+    let xdata = doc.syntax.citation_fields.iter().any(|field| {
+        field.name == "xdata"
+            && field.argument.span.start <= offset
+            && offset <= field.argument.span.end
+    });
+    let typed = xdata.then(|| crate::bib_completion::xdata_candidates(workspace, scope));
+    let typed = &typed;
     let candidates = workspace
         .documents
         .iter()
         .filter(|(uri, _)| scope.contains(*uri))
         .flat_map(|(uri, doc)| {
             entries(doc, TargetKind::Citation)
+                .filter(move |entry| {
+                    typed.as_ref().is_none_or(|names| {
+                        names.contains(entry.name.as_str())
+                            && allowed.is_none_or(|allowed| {
+                                crate::bib_completion::xdata_owner(doc, &entry.span)
+                                    .is_some_and(|owner| allowed.contains(owner))
+                            })
+                    })
+                })
                 .map(move |entry| (uri, entry.name.as_str(), entry.detail.as_str()))
         })
         .filter(|(_, name, _)| allowed.is_none_or(|allowed| allowed.contains(*name)));
-    bibliography_relation_edits(doc, offset, candidates, usize::MAX)
+    let limit = if xdata {
+        workspace.config.indexing.completion_limit.saturating_add(1)
+    } else {
+        usize::MAX
+    };
+    bibliography_relation_edits(doc, offset, candidates, limit)
 }
 
 pub(crate) fn bibliography_relation_edits<'a>(

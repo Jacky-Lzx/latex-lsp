@@ -719,7 +719,11 @@ fn bibliography_completion_replaces_only_the_selected_key_and_supports_incomplet
         insert(
             &mut workspace,
             "parents.bib",
-            "@book{parent, title={Parent}}",
+            if needle.starts_with("xdata=") {
+                "@xdata{parent, title={Parent}}"
+            } else {
+                "@book{parent, title={Parent}}"
+            },
         );
         let uri = insert(&mut workspace, "children.bib", source);
         let completions = features::completion(&workspace, &uri, position(source, needle));

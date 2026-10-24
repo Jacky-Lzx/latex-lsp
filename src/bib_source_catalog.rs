@@ -207,7 +207,11 @@ impl Catalog {
                     continue;
                 }
                 self.charge(entry.name.len() + entry.detail.len() + uri.as_str().len() + 128)?;
-                if !common.contains(&uri) || base.contains_key(&entry.name) {
+                if !common.contains(&uri)
+                    || base.contains_key(&entry.name)
+                    || (field == "xdata"
+                        && !crate::bib_completion::is_xdata_entry(doc, &entry.span))
+                {
                     base.insert(entry.name.clone(), None);
                 } else {
                     base.insert(
@@ -290,8 +294,12 @@ pub(crate) fn completion(ws: &Workspace, uri: &Url, offset: usize) -> Option<Vec
     }) {
         return None;
     }
-    let (selected, projects) = bib_section_keys::section_projects(ws, uri)?;
-    if !selected
+    let (selected, projects) = match bib_section_keys::section_projects(ws, uri) {
+        Some(projects) => projects,
+        None if field.name == "xdata" => return Some(Vec::new()),
+        None => return None,
+    };
+    if (!selected && field.name != "xdata")
         || !projects
             .iter()
             .any(|project| bib_section_keys::has_source_sets(&project.docs, &project.signatures))

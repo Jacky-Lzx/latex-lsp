@@ -230,8 +230,9 @@ fn relation_edits_preserve_utf16_suffixes_lists_and_only_valid_source_parent_typ
             r"\newrefsection[chosen]\defbibentryset{parent}{member}\cite{parent}",
         );
         let bib = main.join("section.bib").unwrap();
+        let member_type = if field == "xdata" { "xdata" } else { "book" };
         let source = format!(
-            "% 😀\r\n@book{{parent}} @book{{member}}\r\n@book{{child,{field}={{{marked}}}}}"
+            "% 😀\r\n@book{{parent}} @{member_type}{{member}}\r\n@book{{child,{field}={{{marked}}}}}"
         );
         ws.open(bib.clone(), source.clone(), 7);
         let marker = if name == "parent" { "paBAD" } else { "meBAD" };

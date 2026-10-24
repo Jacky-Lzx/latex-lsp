@@ -725,3 +725,67 @@ pub(crate) fn hover(doc: &Document, offset: usize) -> Option<Hover> {
         range: Some(doc.text.range(span.start, span.end)),
     })
 }
+
+/// Resolve the entry owning a primary key or IDS alias without rescanning the
+/// database for each completion. Entry headers are ordered by source position.
+pub(crate) fn xdata_owner<'a>(doc: &'a Document, key: &std::ops::Range<usize>) -> Option<&'a str> {
+    let owners = &doc.syntax.bibliography_completion.types;
+    let index = owners
+        .partition_point(|owner| owner.span.start < key.start)
+        .checked_sub(1)?;
+    let owner = owners.get(index)?;
+    let body = owner.entry_span.as_ref()?;
+    if body.start >= key.start
+        || key.end > body.end
+        || !doc.text.source[owner.span.clone()].eq_ignore_ascii_case("xdata")
+    {
+        return None;
+    }
+    Some(&doc.text.source[owner.key.as_ref()?.clone()])
+}
+pub(crate) fn is_xdata_entry(doc: &Document, key: &std::ops::Range<usize>) -> bool {
+    xdata_owner(doc, key).is_some()
+}
+/// Type filtering must retain competing declarations and an alias's primary
+/// owner. Borrow names and bound the complete classification pass.
+pub(crate) fn xdata_candidates<'a>(
+    workspace: &'a Workspace,
+    scope: &BTreeSet<Url>,
+) -> BTreeSet<&'a str> {
+    let mut names = std::collections::BTreeMap::<&str, Option<&str>>::new();
+    let mut bytes = 0usize;
+    let mut count = 0usize;
+    if !workspace.index_truncated.is_empty() {
+        return BTreeSet::new();
+    }
+    for uri in scope {
+        let Some(doc) = workspace.documents.get(uri) else {
+            return BTreeSet::new();
+        };
+        bytes += doc.text.source.len();
+        count += doc.syntax.citations.len() + doc.syntax.bibliography_aliases.len();
+        if bytes > 16 * 1024 * 1024 || count > 100_000 {
+            return BTreeSet::new();
+        }
+        for entry in doc
+            .syntax
+            .citations
+            .iter()
+            .chain(&doc.syntax.bibliography_aliases)
+        {
+            names
+                .entry(entry.name.as_str())
+                .and_modify(|owner| *owner = None)
+                .or_insert_with(|| xdata_owner(doc, &entry.span));
+        }
+    }
+    names
+        .iter()
+        .filter_map(|(name, owner)| {
+            names
+                .get((*owner)?)
+                .is_some_and(Option::is_some)
+                .then_some(*name)
+        })
+        .collect()
+}

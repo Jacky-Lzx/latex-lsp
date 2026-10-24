@@ -520,7 +520,8 @@ fn relation_completion_preserves_lists_and_full_utf16_suffixes_in_all_five_field
         } else {
             ""
         };
-        let source = format!("% 😀\r\n@book{{parent😀,title={{Selected}}}}\r\n@book{{second}}\r\n@book{{childselected,{field}={{ parBAD{tail} }}}}");
+        let parent_type = if field == "xdata" { "xdata" } else { "book" };
+        let source = format!("% 😀\r\n@{parent_type}{{parent😀,title={{Selected}}}}\r\n@book{{second}}\r\n@book{{childselected,{field}={{ parBAD{tail} }}}}");
         ws.open(bib.clone(), source.clone(), 8);
         let (_, updated) = completed(&ws, &bib, &format!("{field}={{ par"), "parent😀");
         assert_eq!(updated, source.replace("parBAD", "parent😀"));
