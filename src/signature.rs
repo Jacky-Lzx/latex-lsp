@@ -261,7 +261,9 @@ fn builtin(name: &str) -> Option<Signature> {
         return Some(Signature {
             name: name.into(),
             parameters: citation_parameters(style, 1),
-            documentation: if style.category_membership() {
+            documentation: if style.context_entries() {
+                "Assign bibliography entry keys to a reference context. The options bracket is required, including when empty; the starred form applies weak assignments. This does not cite the entries. Requires biblatex."
+            } else if style.category_membership() {
                 "Assign bibliography keys to a declared category. This does not cite the entries. Requires biblatex."
             } else if style.set_definition() {
                 "Define a dynamic bibliography set with a citation key and a list of member keys. Requires biblatex with Biber."
@@ -4505,7 +4507,11 @@ fn operand_delimited_end(source: &str, at: usize, open: &str, close: &str) -> Op
 
 fn builtin_argument_data(signature: &Signature, parameter: usize) -> bool {
     match signature.name.as_str() {
-        "newrefsection" | "refsection" | "newrefcontext" | "refcontext" => true,
+        "newrefsection"
+        | "refsection"
+        | "newrefcontext"
+        | "refcontext"
+        | "assignrefcontextentries" => true,
         "begin" => {
             parameter == 1
                 && signature
@@ -5218,6 +5224,20 @@ fn active_parameter(
 }
 
 fn citation_parameters(style: crate::citations::Style, groups: usize) -> Vec<Parameter> {
+    if style.context_entries() {
+        return vec![
+            Parameter {
+                obey_spaces: false,
+                kind: Kind::RequiredBracket,
+                label: "[options]".into(),
+            },
+            Parameter {
+                obey_spaces: false,
+                kind: Kind::CitationKeys(style),
+                label: "{keys}".into(),
+            },
+        ];
+    }
     if style.single_key() {
         let labels: &[&str] = if matches!(style, crate::citations::Style::EntryCategoryQuery) {
             &["{key}", "{category}", "{true}", "{false}"]
@@ -5332,6 +5352,13 @@ fn citation_parameter(
     role: crate::citations::Role,
 ) -> usize {
     use crate::citations::Role;
+    if style.context_entries() {
+        return match role {
+            Role::Note(0) => 0,
+            Role::Keys => 1,
+            _ => unreachable!(),
+        };
+    }
     if style.single_key() {
         return match role {
             Role::Keys => 0,

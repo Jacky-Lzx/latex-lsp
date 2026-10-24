@@ -344,3 +344,7 @@ cargo test --locked --test protocol source_prerequisite_edits_
 cargo test --locked --test biblatex_source_predicate_completion -- --include-ignored
 cargo test --locked --test protocol source_predicate_completions_
 ```
+
+`\assignrefcontextentries[options]{keys}` 及其星号形式支持条目键列表的跳转、预览、补全、引用、高亮和完整改名，也识别静态 `csuse`／`csname` 调用及可认证的纯转发命令。方括号是必需参数，即使选项为空也需写作 `[]{keys}`；签名提示区分选项与键列表。改名只修改真实条目键，不改 `labelprefix` 等选项、普通文字和逐字内容。
+
+此命令分配上下文而不加载或引用条目，因此缺失键及通配 `*` 不触发缺失引用诊断，也不产生引用编号提示。普通资源的数字分区复用非加载型键身份认证；源码集合中的上下文分配、捕获的命令副本和不明确的操作数调用继续拒绝部分改名。分配命令的实际数字显示标签、分类／关键词分配将在分别认证执行顺序和原生语义后开放。

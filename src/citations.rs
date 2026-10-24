@@ -13,6 +13,7 @@ pub(crate) enum Style {
     EntryData,
     EntryQuery,
     EntryCategoryQuery,
+    ContextEntries,
 }
 
 impl Style {
@@ -31,8 +32,11 @@ impl Style {
     pub fn accepts_star(self) -> bool {
         matches!(
             self,
-            Self::Multi | Self::Volume | Self::MultiVolume | Self::EntryData
+            Self::Multi | Self::Volume | Self::MultiVolume | Self::EntryData | Self::ContextEntries
         )
+    }
+    pub fn context_entries(self) -> bool {
+        matches!(self, Self::ContextEntries)
     }
     pub fn category_membership(self) -> bool {
         matches!(self, Self::Category)
@@ -55,6 +59,7 @@ impl Style {
 pub(crate) fn style(name: &str) -> Option<Style> {
     match name {
         "addtocategory" => Some(Style::Category),
+        "assignrefcontextentries" => Some(Style::ContextEntries),
         "defbibentryset" => Some(Style::Set),
         "entrydata" => Some(Style::EntryData),
         "ifentryexists" | "ifentryinbib" => Some(Style::EntryQuery),
@@ -225,6 +230,20 @@ pub(crate) fn arguments(source: &str, end: usize, style: Style) -> Arguments {
         }
         at = space(source, at + 1);
         result.end = at;
+    }
+    if style.context_entries() {
+        // Native assignments require a bracket argument, even when empty.
+        // A second bracket is not another citation note.
+        for (open, role) in [(b'[', Role::Note(0)), (b'{', Role::Keys)] {
+            if source.as_bytes().get(at) != Some(&open) {
+                wait_for(source, end, at, &mut result, 1, role);
+                break;
+            }
+            if !push(source, &mut result, &mut at, open, 1, role) {
+                return result;
+            }
+        }
+        return result;
     }
     if style.single_key() {
         for role in std::iter::once(Role::Keys)

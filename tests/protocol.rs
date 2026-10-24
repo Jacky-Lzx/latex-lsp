@@ -34577,3 +34577,173 @@ fn source_predicate_completions_follow_final_identity_exact_edits_and_unsaved_co
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+fn native_context_entry_keys_keep_complete_versioned_edits_and_unsaved_meanings() {
+    use latex_lsp::text::Text;
+    for document_changes in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+        let child = main.join("calls.tex").unwrap();
+        let macros = main.join("macros.tex").unwrap();
+        let bib = main.join("data.bib").unwrap();
+        let source = "% 😀\r\n\\documentclass{article}\\usepackage{biblatex}\\addbibresource{data.bib}\\input{macros}\\begin{document}\\input{calls}\\label{target}\\ref{target}\\end{document}";
+        let calls = "% 😀\r\n😀 \\assignrefcontextentries[labelprefix=alpha]{alpha,beta} Text \\csuse{assignrefcontextentries}*[]{alpha,missing} Text \\csname assignrefcontextentries\\endcsname[]{alpha} Text \\cite{alpha}\\verb|\\assignrefcontextentries[]{alpha}|";
+        let library = "% 😀\r\n@book{alpha,title={alpha}} @book{beta,title={Beta}}";
+        for (name, content) in [
+            ("main.tex", source),
+            ("calls.tex", calls),
+            ("macros.tex", ""),
+            ("data.bib", library),
+            (
+                "main.aux",
+                r"\bibcite{alpha}{8}\bibcite{missing}{7}\newlabel{target}{{4}{9}}",
+            ),
+        ] {
+            std::fs::write(dir.path().join(name), content).unwrap();
+        }
+        let text = Text::new(calls.into());
+        let spans = ["[labelprefix=alpha]{", "*[]{", "endcsname[]{", r"\cite{"].map(|marker| {
+            let at = calls.find(marker).unwrap() + marker.len();
+            text.range(at, at + 5)
+        });
+        let header = library.find("alpha").unwrap();
+        let declaration = Text::new(library.into()).range(header, header + 5);
+        let mut server = Server::start();
+        server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":document_changes}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+        server.notify("initialized", json!({}));
+        for (uri, content, language, version) in [
+            (&main, source, "latex", 5),
+            (&child, calls, "latex", 8),
+            (&bib, library, "bibtex", 7),
+        ] {
+            server.notify("textDocument/didOpen",json!({"textDocument":{"uri":uri,"languageId":language,"version":version,"text":content}}));
+        }
+        let params = json!({"textDocument":{"uri":child},"position":spans[0].start});
+        assert_eq!(
+            server.request(2, "textDocument/definition", params.clone()),
+            json!([{"uri":bib,"range":declaration}])
+        );
+        let references = server.request(3,"textDocument/references",json!({"textDocument":{"uri":child},"position":spans[0].start,"context":{"includeDeclaration":true}}));
+        let mut expected = spans
+            .iter()
+            .map(|range| json!({"uri":child,"range":range}))
+            .collect::<Vec<_>>();
+        expected.push(json!({"uri":bib,"range":declaration}));
+        let mut actual = references.as_array().unwrap().clone();
+        expected.sort_by_key(Value::to_string);
+        actual.sort_by_key(Value::to_string);
+        assert_eq!(actual, expected);
+        let rename =
+            json!({"textDocument":{"uri":child},"position":spans[0].start,"newName":"fresh"});
+        let edit = server.request(4, "textDocument/rename", rename.clone());
+        for (uri, version, ranges) in [(&child, 8, spans.to_vec()), (&bib, 7, vec![declaration])] {
+            let expected = ranges
+                .iter()
+                .map(|range| json!({"range":range,"newText":"fresh"}))
+                .collect::<Vec<_>>();
+            if document_changes {
+                let docs = edit["documentChanges"].as_array().unwrap();
+                assert_eq!(docs.len(), 2);
+                let doc = docs
+                    .iter()
+                    .find(|doc| doc["textDocument"]["uri"] == uri.as_str())
+                    .unwrap();
+                assert_eq!(doc["textDocument"]["version"], version);
+                assert_eq!(doc["edits"], json!(expected));
+            } else {
+                assert_eq!(edit["changes"].as_object().unwrap().len(), 2);
+                assert_eq!(edit["changes"][uri.as_str()], json!(expected));
+            }
+        }
+        let hints = |uri: &Url| json!({"textDocument":{"uri":uri},"range":{"start":{"line":0,"character":0},"end":{"line":100,"character":0}}});
+        assert_eq!(
+            server.request(5, "textDocument/inlayHint", hints(&child)),
+            json!([])
+        );
+        let label_hints = server.request(6, "textDocument/inlayHint", hints(&main));
+        assert_eq!(label_hints.as_array().unwrap().len(), 1);
+        assert_eq!(label_hints[0]["label"], "→ 4, p. 9");
+        let diagnostics = server.until(|message| {
+            message["method"] == "textDocument/publishDiagnostics"
+                && message["params"]["uri"] == child.as_str()
+                && message["params"]["version"] == 8
+        });
+        assert!(diagnostics["params"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|diag| diag["code"] != "undefined-citation"));
+        server.notify("textDocument/didOpen",json!({"textDocument":{"uri":macros,"languageId":"latex","version":10,"text":r"\renewcommand\assignrefcontextentries[2][]{}"}}));
+        assert_eq!(
+            server.request(7, "textDocument/definition", params.clone()),
+            json!([])
+        );
+        server.notify("textDocument/didChange",json!({"textDocument":{"uri":macros,"version":11},"contentChanges":[{"text":r"\let\saved\assignrefcontextentries\renewcommand\assignrefcontextentries[2][]{}\saved[]{alpha}"}]}));
+        server.send(json!({"jsonrpc":"2.0","id":8,"method":"textDocument/rename","params":{"textDocument":{"uri":bib},"position":declaration.start,"newName":"fresh"}}));
+        assert_eq!(
+            server.until(|message| message["id"] == 8)["error"]["code"],
+            -32602
+        );
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":macros}}),
+        );
+        assert_eq!(
+            server.request(9, "textDocument/rename", rename.clone()),
+            edit
+        );
+        server.notify("textDocument/didChange",json!({"textDocument":{"uri":main,"version":6},"contentChanges":[{"text":source.replace(r"\begin{document}",r"\begin{document}\defbibentryset{collection}{beta}")}]}));
+        server.send(
+            json!({"jsonrpc":"2.0","id":10,"method":"textDocument/rename","params":rename.clone()}),
+        );
+        assert_eq!(
+            server.until(|message| message["id"] == 10)["error"]["code"],
+            -32602
+        );
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":main}}),
+        );
+        assert_eq!(server.request(11, "textDocument/rename", rename), edit);
+        // Accept exactly the returned physical edits, preserving option and literal text.
+        for (uri, content) in [(&child, calls), (&bib, library)] {
+            let changes = if document_changes {
+                edit["documentChanges"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|doc| doc["textDocument"]["uri"] == uri.as_str())
+                    .unwrap()["edits"]
+                    .clone()
+            } else {
+                edit["changes"][uri.as_str()].clone()
+            };
+            let text = Text::new(content.into());
+            let mut changed = content.to_string();
+            let mut edits: Vec<tower_lsp::lsp_types::TextEdit> =
+                serde_json::from_value(changes).unwrap();
+            edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
+            for edit in edits {
+                changed.replace_range(
+                    text.offset(edit.range.start).unwrap()..text.offset(edit.range.end).unwrap(),
+                    &edit.new_text,
+                );
+            }
+            if uri == &child {
+                assert!(changed.contains("[labelprefix=alpha]{fresh,beta}"));
+                assert!(changed.contains(r"\verb|\assignrefcontextentries[]{alpha}|"));
+            } else {
+                assert!(changed.contains("@book{fresh,title={alpha}}"));
+            }
+            server.notify("textDocument/didChange",json!({"textDocument":{"uri":uri,"version":12},"contentChanges":[{"text":changed}]}));
+        }
+        assert_eq!(
+            server.request(12, "textDocument/definition", params),
+            json!([{"uri":bib,"range":declaration}])
+        );
+        server.request(13, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}

@@ -2005,6 +2005,7 @@ pub(crate) fn warns_on_undefined_citation(name: &str) -> bool {
         && !matches!(
             name,
             "defcitealias"
+                | "assignrefcontextentries"
                 | "addtocategory"
                 | "defbibentryset"
                 | "entrydata"
