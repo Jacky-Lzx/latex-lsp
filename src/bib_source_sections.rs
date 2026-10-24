@@ -329,10 +329,6 @@ fn target(ws: &Workspace, uri: &Url, offset: usize) -> Option<Option<Answer>> {
                     .entry(Arc::as_ptr(resources) as usize)
                     .or_insert(resources);
             }
-            let resources = views
-                .values()
-                .flat_map(|view| view.iter().cloned())
-                .collect();
             let names = trace
                 .events
                 .iter()
@@ -355,7 +351,12 @@ fn target(ws: &Workspace, uri: &Url, offset: usize) -> Option<Option<Answer>> {
             if work > 32 * 1024 * 1024 {
                 return None;
             }
-            work += crate::bib_source_aliases::certify(ws, &resources, &names, &members)?;
+            for view in views.values() {
+                work += crate::bib_source_aliases::certify(ws, view, &names, &members)?;
+                if work > 32 * 1024 * 1024 {
+                    return None;
+                }
+            }
             if work > 32 * 1024 * 1024 {
                 return None;
             }

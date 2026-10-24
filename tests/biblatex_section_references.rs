@@ -363,7 +363,6 @@ fn incomplete_or_ambiguous_database_and_execution_never_return_partial_graphs() 
     }
     for body in [
         r"\ifunknown\newrefsection[chosen]\fi\cite{parent}",
-        r"\newrefsection[chosen]\defbibentryset{parent}{childselected}\cite{parent}",
         r"\newrefsection[chosen]\newcommand\later{\cite{parent}}\cite{parent}",
         r"\newrefsection[chosen]\newcommand\pass[1]{#1}\pass{\cite{parent}}",
     ] {
@@ -374,6 +373,13 @@ fn incomplete_or_ambiguous_database_and_execution_never_return_partial_graphs() 
             "{body}"
         );
     }
+    let (_dir, ws, main) =
+        setup(r"\newrefsection[chosen]\defbibentryset{parent}{childselected}\cite{parent}");
+    let bib = main.join("section.bib").unwrap();
+    let position = at(&ws, &bib, "@book{par");
+    assert_eq!(features::references(&ws, &bib, position, true).len(), 1);
+    assert!(features::prepare_rename(&ws, &bib, position).is_err());
+
     let (_dir, mut ws, main) = setup(r"\newrefsection[chosen]\cite{parent}");
     let bib = main.join("section.bib").unwrap();
     let position = at(&ws, &bib, "@book{par");

@@ -278,7 +278,10 @@ fn unproved_namespaces_and_requests_stay_protected() {
     );
     let bib = main.join("section.bib").unwrap();
     ws.open(bib, r"@book{parent,ids={legacy}} @book{member}".into(), 8);
-    assert!(features::definitions(&ws, &main, calls(&ws, &main)[0]).is_empty());
+    assert_eq!(
+        features::definitions(&ws, &main, calls(&ws, &main)[0]),
+        vec![key(&ws, &main, r"\defbibentryset{", "parent")]
+    );
 }
 
 #[test]

@@ -247,3 +247,12 @@ cargo test --locked --test protocol global_biber_alias_loading_
 cargo test --locked --test biblatex_alias_owner_cache -- --include-ignored
 cargo test --locked --test protocol cached_alias_owner_proofs_
 ```
+
+同名 IDS 的数字分区只读身份回归：
+
+```sh
+cargo test --locked --test biblatex_numeric_alias_owners -- --include-ignored
+cargo test --locked --test protocol numeric_ids_source_owners_
+```
+
+原生测试对照默认库书籍和选中库源码集合，并核验接受候选后的 BBL；所属主键及别名编辑在本阶段继续保护。

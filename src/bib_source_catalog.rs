@@ -28,6 +28,7 @@ pub(crate) struct Catalog {
     all: BTreeSet<Url>,
     common: Option<BTreeSet<Url>>,
     loaded: BTreeSet<Url>,
+    alias_resources: BTreeSet<Arc<BTreeSet<Url>>>,
     overrides: BTreeSet<String>,
     source_names: BTreeSet<String>,
     source_members: BTreeSet<String>,
@@ -121,6 +122,15 @@ impl Catalog {
                     .sum::<usize>();
                 if self.work > LIMIT {
                     return Err(());
+                }
+                if self.alias_resources.insert(resources.clone()) {
+                    self.charge(
+                        resources
+                            .iter()
+                            .map(|uri| uri.as_str().len() + 64)
+                            .sum::<usize>()
+                            + 64,
+                    )?;
                 }
                 for uri in resources.iter() {
                     if self.loaded.insert(uri.clone()) {
@@ -295,6 +305,15 @@ impl Catalog {
                 if self.work > LIMIT {
                     return Err(());
                 }
+                if self.alias_resources.insert(resources.clone()) {
+                    self.charge(
+                        resources
+                            .iter()
+                            .map(|uri| uri.as_str().len() + 64)
+                            .sum::<usize>()
+                            + 64,
+                    )?;
+                }
                 for uri in resources.iter() {
                     if self.loaded.insert(uri.clone()) {
                         self.charge(uri.as_str().len() + 96)?;
@@ -371,9 +390,14 @@ impl Catalog {
         let loaded = std::mem::take(&mut self.loaded);
         let source_names = self.source_names.iter().map(String::as_str).collect();
         let source_members = self.source_members.iter().map(String::as_str).collect();
-        self.work +=
-            crate::bib_source_aliases::certify(ws, &loaded, &source_names, &source_members)
-                .ok_or(())?;
+        for resources in &self.alias_resources {
+            self.work +=
+                crate::bib_source_aliases::certify(ws, resources, &source_names, &source_members)
+                    .ok_or(())?;
+            if self.work > LIMIT {
+                return Err(());
+            }
+        }
         if self.work > LIMIT {
             return Err(());
         }

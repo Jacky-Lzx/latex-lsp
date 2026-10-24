@@ -426,12 +426,40 @@ fn source_key_declarations_protect_database_targets_without_disabling_resource_l
         let position = doc
             .text
             .position(doc.text.source.rfind(r"\cite{parent}").unwrap() + 8);
-        assert!(features::definitions(&ws, &main, position).is_empty());
-        assert!(features::hover(&ws, &main, position).is_none());
-        assert!(features::completion(&ws, &main, position).is_empty());
+        let static_set = declaration.starts_with(r"\defbibentryset")
+            || declaration.starts_with(r"\csuse{")
+            || declaration.starts_with(r"\csname ");
+        if static_set {
+            let start = doc.text.source.find("{parent}").unwrap() + 1;
+            assert_eq!(
+                features::definitions(&ws, &main, position),
+                vec![Location::new(
+                    main.clone(),
+                    doc.text.range(start, start + 6)
+                )]
+            );
+            assert!(features::hover(&ws, &main, position).is_some());
+            assert!(features::completion(&ws, &main, position)
+                .iter()
+                .any(|item| item.label == "parent"));
+            assert!(features::rename(&ws, &main, position, "newset").is_err());
+        } else {
+            assert!(features::definitions(&ws, &main, position).is_empty());
+            assert!(features::hover(&ws, &main, position).is_none());
+            assert!(features::completion(&ws, &main, position).is_empty());
+        }
         for name in ["default.bib", "section.bib"] {
             let bib = main.join(name).unwrap();
-            check(&ws, &bib, "crossref={", None);
+            if static_set {
+                check(
+                    &ws,
+                    &bib,
+                    "crossref={",
+                    Some((if name == "default.bib" { &bib } else { &main }, "parent")),
+                );
+            } else {
+                check(&ws, &bib, "crossref={", None);
+            }
             check(&ws, &bib, "@book{", Some((&bib, "parent")));
         }
         let selection = doc

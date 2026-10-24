@@ -477,11 +477,26 @@ impl<'a> Graphs<'a> {
             if self.work.get() > 32 * 1024 * 1024 {
                 return Err(());
             }
-            self.work.set(
-                self.work.get()
-                    + crate::bib_source_aliases::certify(self.ws, &resources, &names, &members)
+            allocations.clear();
+            for view in graph
+                .sections
+                .iter()
+                .filter(|view| allocations.insert(Arc::as_ptr(&view.resources) as usize))
+            {
+                self.work.set(
+                    self.work.get()
+                        + crate::bib_source_aliases::certify(
+                            self.ws,
+                            &view.resources,
+                            &names,
+                            &members,
+                        )
                         .ok_or(())?,
-            );
+                );
+                if self.work.get() > 32 * 1024 * 1024 {
+                    return Err(());
+                }
+            }
             if self.work.get() > 32 * 1024 * 1024 {
                 return Err(());
             }
@@ -1100,6 +1115,42 @@ fn validate_edit(symbol: &Symbol<'_>) -> Result<()> {
 // Couple only a uniquely proved backend prerequisite that has no independent
 // book identity in any consumer. Raw-entry queries keep their ordinary identity.
 fn edit_symbol(mut target: Symbol<'_>) -> Result<Symbol<'_>> {
+    // Biber's alias map is shared across numeric sections. Per-view identity
+    // proves reads, but edits retain the complete disjoint-resource proof.
+    for project in target
+        .graphs
+        .projects
+        .values()
+        .filter(|project| project.graph.sources.is_some())
+    {
+        let names = project
+            .graph
+            .sections
+            .iter()
+            .filter_map(|view| view.namespace.as_ref())
+            .flat_map(|state| state.declared.keys().map(String::as_str))
+            .collect();
+        let members = project
+            .graph
+            .members
+            .keys()
+            .map(|(uri, start, end)| &target.graphs.ws.documents[uri].text.source[*start..*end])
+            .collect();
+        target.graphs.work.set(
+            target.graphs.work.get()
+                + crate::bib_source_aliases::certify(
+                    target.graphs.ws,
+                    &project.resources,
+                    &names,
+                    &members,
+                )
+                .ok_or(())?,
+        );
+        if target.graphs.work.get() > 32 * 1024 * 1024 {
+            return Err(());
+        }
+    }
+
     // Changing a raw IDS owner would make equal global alias spellings in
     // another resource point to a different primary, even across sections.
     if !is_source(&target) {
