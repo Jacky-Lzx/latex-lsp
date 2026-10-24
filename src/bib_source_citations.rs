@@ -15,21 +15,21 @@ fn context(ws: &Workspace, uri: &Url, offset: usize) -> Option<Option<Context>> 
         .documents
         .get(uri)
         .filter(|doc| doc.kind == DocumentKind::Latex)?;
-    if !ws
-        .documents
-        .values()
-        .any(|doc| doc.kind == DocumentKind::Latex && doc.text.source.contains("refsection"))
-    {
+    if !ws.documents.values().any(|doc| {
+        doc.kind == DocumentKind::Latex
+            && doc.syntax.commands.iter().any(|command| {
+                matches!(command.name.as_str(), "defbibentryset" | "csuse" | "csname")
+            })
+    }) {
         return None;
     }
-    if !ws
-        .documents
-        .values()
-        .any(|doc| doc.kind == DocumentKind::Latex && doc.text.source.contains("defbibentryset"))
-    {
-        return None;
-    }
-    let (selected, projects) = bib_section_keys::section_projects(ws, uri)?;
+    let (selected, projects) = match bib_section_keys::source_projects(ws, uri) {
+        Some(projects) => projects,
+        None if bib_section_keys::unproved_citation_completion(ws, uri, offset) => {
+            return Some(None)
+        }
+        None => return None,
+    };
     if !selected
         || !projects
             .iter()

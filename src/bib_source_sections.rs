@@ -256,7 +256,11 @@ fn target(ws: &Workspace, uri: &Url, offset: usize) -> Option<Option<Answer>> {
     }) {
         return None;
     }
-    let (selected, projects) = bib_section_keys::section_projects(ws, uri)?;
+    let (selected, projects) = match bib_section_keys::source_projects(ws, uri) {
+        Some(projects) => projects,
+        None if bib_section_keys::unproved_citation_query(ws, uri, offset) => return Some(None),
+        None => return None,
+    };
     if !selected
         || !projects
             .iter()

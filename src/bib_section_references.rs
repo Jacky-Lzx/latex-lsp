@@ -742,15 +742,21 @@ fn query_span(
 }
 fn symbol<'a>(ws: &'a Workspace, uri: &Url, offset: usize) -> Option<Result<Symbol<'a>>> {
     let doc = ws.documents.get(uri)?;
-    if !ws
-        .documents
-        .values()
-        .any(|doc| doc.kind == DocumentKind::Latex && doc.text.source.contains("refsection"))
-    {
+    if !ws.documents.values().any(|doc| {
+        doc.kind == DocumentKind::Latex
+            && (doc.text.source.contains("refsection")
+                || doc.syntax.commands.iter().any(|command| {
+                    matches!(command.name.as_str(), "defbibentryset" | "csuse" | "csname")
+                }))
+    }) {
         return None;
     }
-    // Ordinary projects retain the established symbol/editing model.
-    let (selected, projects) = bib_section_keys::section_projects(ws, uri)?;
+    // Loose snippets retain the established symbol/editing model.
+    let (selected, projects) = match bib_section_keys::source_projects(ws, uri) {
+        Some(projects) => projects,
+        None if bib_section_keys::unproved_citation_query(ws, uri, offset) => return Some(Err(())),
+        None => return None,
+    };
     if !selected {
         return None;
     }
@@ -1065,8 +1071,14 @@ fn validate_edit(symbol: &Symbol<'_>) -> Result<()> {
                 .iter()
                 .filter(|view| consumes(view, &symbol.declaration, &symbol.name, false))
             {
-                if symbol.graphs.bind(&symbol.name, std::iter::once(view))?
-                    != Some(symbol.declaration.clone())
+                // Moving a raw key can remove the first request that suppressed
+                // a same-name source declaration, materializing an extra set.
+                if view
+                    .namespace
+                    .as_ref()
+                    .is_some_and(|state| state.declared.contains_key(&symbol.name))
+                    || symbol.graphs.bind(&symbol.name, std::iter::once(view))?
+                        != Some(symbol.declaration.clone())
                 {
                     return Err(());
                 }
@@ -1286,17 +1298,19 @@ pub(crate) type SourceStatuses = BTreeMap<(usize, usize), bool>;
 pub(crate) fn source_statuses(ws: &Workspace, uri: &Url) -> Option<SourceStatuses> {
     let doc = ws.documents.get(uri)?;
     if doc.kind != DocumentKind::Latex
-        || !ws
-            .documents
-            .values()
-            .any(|doc| doc.kind == DocumentKind::Latex && doc.text.source.contains("refsection"))
         || !ws.documents.values().any(|doc| {
-            doc.kind == DocumentKind::Latex && doc.text.source.contains("defbibentryset")
+            doc.kind == DocumentKind::Latex
+                && doc.syntax.commands.iter().any(|command| {
+                    matches!(command.name.as_str(), "defbibentryset" | "csuse" | "csname")
+                })
         })
     {
         return None;
     }
-    let (selected, projects) = bib_section_keys::section_projects(ws, uri)?;
+    let (selected, projects) = match bib_section_keys::source_projects(ws, uri) {
+        Some(projects) => projects,
+        None => return Some(BTreeMap::new()),
+    };
     if !selected
         || !projects
             .iter()

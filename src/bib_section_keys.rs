@@ -1011,6 +1011,10 @@ fn incomplete(
     };
     supported.then_some(None)
 }
+pub(crate) fn unproved_citation_completion(ws: &Workspace, uri: &Url, offset: usize) -> bool {
+    incomplete(ws, uri, offset, Purpose::Completion).is_some()
+}
+
 pub(crate) struct Project<'a> {
     pub root: Url,
     pub docs: Vec<(Url, &'a Document)>,
@@ -1066,6 +1070,115 @@ pub(crate) fn section_projects<'a>(
         });
     }
     Some((selected, projects))
+}
+
+/// A normal project also needs execution identities when it declares source
+/// sets, even if it never selects a separate bibliography resource section.
+/// Loose snippets keep their existing project-wide editing behavior.
+pub(crate) fn source_projects<'a>(
+    ws: &'a Workspace,
+    uri: &Url,
+) -> Option<(bool, Vec<Project<'a>>)> {
+    // This document necessarily belongs to its own context. Reject a locally
+    // exhausted budget before constructing its consumer scopes and signatures.
+    if ws.documents.get(uri).is_some_and(|doc| {
+        doc.text.source.len() > 16 * 1024 * 1024
+            || doc.syntax.commands.len() > 100_000
+            || doc.syntax.definitions.len() + doc.syntax.environments.len() > 4096
+    }) {
+        return None;
+    }
+    let (selected, projects) = section_projects(ws, uri)?;
+    let sources = !selected
+        && projects.iter().any(|project| {
+            ws.is_root(&project.root)
+                && project.docs.iter().any(|(_, doc)| {
+                    let context = Context::new(doc, &project.signatures);
+                    doc.syntax
+                        .commands
+                        .iter()
+                        .enumerate()
+                        .any(|(index, command)| {
+                            if context.literal(command.span.start) {
+                                return false;
+                            }
+                            let (name, span) = project
+                                .signatures
+                                .named_invocation(
+                                    &doc.text.source,
+                                    &doc.syntax,
+                                    index,
+                                    &BTreeSet::new(),
+                                    &context.declarations,
+                                )
+                                .unwrap_or((&command.name, command.span.clone()));
+                            name == "begin"
+                                && syntax::environment_name_argument(&doc.text.source, span.end)
+                                    .is_some_and(|environment| environment.value == "document")
+                        })
+                })
+                && has_source_sets(&project.docs, &project.signatures)
+        });
+    Some((selected || sources, projects))
+}
+
+/// Own potential key queries when signature or project budgets prevented
+/// building a complete context. This cannot certify their declaration identity;
+/// other symbol namespaces remain independent.
+pub(crate) fn unproved_citation_query(ws: &Workspace, uri: &Url, offset: usize) -> bool {
+    let Some(doc) = ws.documents.get(uri) else {
+        return false;
+    };
+    if doc
+        .syntax
+        .citations
+        .iter()
+        .chain(&doc.syntax.citation_references)
+        .chain(&doc.syntax.bibliography_aliases)
+        .any(|entry| entry.span.start <= offset && offset <= entry.span.end)
+    {
+        return true;
+    }
+    let signatures = CommandSignatures::new(std::iter::empty());
+    let empty = BTreeSet::new();
+    let literal = doc
+        .syntax
+        .commands
+        .iter()
+        .enumerate()
+        .any(|(index, command)| {
+            let (name, span) = signatures
+                .named_invocation(
+                    &doc.text.source,
+                    &doc.syntax,
+                    index,
+                    &empty,
+                    &BTreeSet::new(),
+                )
+                .unwrap_or((&command.name, command.span.clone()));
+            if name == "defbibentryset" {
+                return crate::citations::arguments(
+                    &doc.text.source,
+                    span.end,
+                    crate::citations::Style::Set,
+                )
+                .fields
+                .iter()
+                .any(|field| {
+                    syntax::citation_list_spans(&doc.text.source, field.argument.span.clone())
+                        .into_iter()
+                        .any(|span| span.start <= offset && offset <= span.end)
+                });
+            }
+            if !syntax::is_citation(name) {
+                return false;
+            }
+            let command = crate::reference_calls::resolved_command(&doc.text.source, name, span);
+            crate::reference_calls::keys(&doc.text.source, &command, false)
+                .into_iter()
+                .any(|(citation, span)| citation && span.start <= offset && offset <= span.end)
+        });
+    literal || incomplete(ws, uri, offset, Purpose::Key).is_some()
 }
 
 /// None leaves ordinary projects to the existing symbol model; Some(None)
@@ -1557,7 +1670,11 @@ pub(crate) fn has_source_sets(
                         &context.declarations,
                     )
                     .unwrap_or((&command.name, command.span.clone()));
-                name == "defbibentryset" || signatures.invokes_builtin(name, "defbibentryset")
+                name == "defbibentryset"
+                    || signatures.invokes_builtin(name, "defbibentryset")
+                    // An unresolved named invocation can construct a source
+                    // declaration. Own that namespace until execution is proved.
+                    || matches!(name, "csuse" | "csname")
             })
     })
 }

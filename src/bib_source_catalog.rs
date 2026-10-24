@@ -463,10 +463,9 @@ pub(crate) fn completion(ws: &Workspace, uri: &Url, offset: usize) -> Option<Vec
     }) {
         return None;
     }
-    let (selected, projects) = match bib_section_keys::section_projects(ws, uri) {
+    let (selected, projects) = match bib_section_keys::source_projects(ws, uri) {
         Some(projects) => projects,
-        None if field.name == "xdata" => return Some(Vec::new()),
-        None => return None,
+        None => return Some(Vec::new()),
     };
     if (!selected && field.name != "xdata")
         || !projects
