@@ -737,7 +737,6 @@ impl Analysis<'_, '_> {
                 }
             }
             if self.labels.is_none()
-                && syntax::warns_on_undefined_citation(name)
                 && self.document
                 && positions.contains(&lexical.span.start)
                 && !context.operand(doc, lexical.span.start)
@@ -746,11 +745,13 @@ impl Analysis<'_, '_> {
             {
                 let command = crate::reference_calls::resolved_command(source, name, span.clone());
                 let resources = self.intern_resources()?;
-                for (citation, key) in crate::reference_calls::keys(source, &command, true) {
+                for (citation, key) in crate::reference_calls::keys(source, &command, false) {
                     if !citation {
                         continue;
                     }
-                    self.alias_processed.insert(self.alias_current);
+                    if syntax::warns_on_undefined_citation(name) {
+                        self.alias_processed.insert(self.alias_current);
+                    }
                     if self
                         .alias_uses
                         .entry(self.alias_current)

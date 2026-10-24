@@ -274,3 +274,12 @@ cargo test --locked --test protocol primary_cache_capture_renames_
 ```
 
 原生测试核验两种强制错误改名都会在没有 Biber 警告时改变后续条目数据，也核验接受的安全同名改名保持 BBL；协议覆盖版本化编辑、未保存数据库、关闭恢复和耦合源码主键。
+
+非加载型文献键的分区交互回归：
+
+```sh
+cargo test --locked --test biblatex_nonloading_section_keys -- --include-ignored
+cargo test --locked --test protocol numeric_nonloading_keys_
+```
+
+覆盖普通与静态命名调用的完整引用及版本化编辑、未定义名称捕获、被覆盖的缓存所属关系和条件查询保护。原生验证非加载调用不会预读资源，并比较应用改名后的完整 BBL。

@@ -33172,3 +33172,106 @@ fn primary_cache_capture_renames_follow_unsaved_libraries_and_coupled_versions()
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+fn numeric_nonloading_keys_keep_complete_versions_without_preloading_resources() {
+    use latex_lsp::text::Text;
+    let dir = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let default = main.join("default.bib").unwrap();
+    let selected = main.join("section.bib").unwrap();
+    let source="% 😀\r\n\\documentclass{article}\\usepackage{biblatex}\\addbibresource{default.bib}\\addsectionbib[label=chosen]{section.bib}\\begin{document}\\cite{parent}\\newrefsection[chosen]\\cite{parent}\\csuse{entrydata}{parent}{}\\defcitealias{parent}{Name}\\end{document}";
+    let library = "% 😀\r\n@book{parent,title={Parent},ids={other}} @book{member}";
+    let default_library = library.replace("ids={other}", "ids={old}");
+    for (name, text) in [
+        ("main.tex", source),
+        ("default.bib", default_library.as_str()),
+        ("section.bib", library),
+    ] {
+        std::fs::write(dir.path().join(name), text).unwrap();
+    }
+    let ranges = |text: &str, needle: &str| {
+        text.match_indices(needle)
+            .map(|(at, _)| Text::new(text.into()).range(at, at + needle.len()))
+            .collect::<Vec<_>>()
+    };
+    let calls = ranges(source, "parent");
+    let declaration = ranges(library, "parent")[0];
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    for (uri, text, language, version) in [
+        (&main, source, "latex", 5),
+        (&default, default_library.as_str(), "bibtex", 7),
+        (&selected, library, "bibtex", 8),
+    ] {
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"languageId":language,"version":version,"text":text}}),
+        );
+    }
+    assert_eq!(
+        server.request(
+            2,
+            "textDocument/definition",
+            json!({"textDocument":{"uri":main},"position":calls[2].start})
+        ),
+        json!([{"uri":selected,"range":declaration}])
+    );
+    let refs=server.request(3,"textDocument/references",json!({"textDocument":{"uri":selected},"position":declaration.start,"context":{"includeDeclaration":true}}));
+    assert_eq!(refs.as_array().unwrap().len(), 4);
+    for range in &calls[1..] {
+        assert!(refs
+            .as_array()
+            .unwrap()
+            .contains(&json!({"uri":main,"range":range})));
+    }
+    let params =
+        json!({"textDocument":{"uri":selected},"position":declaration.start,"newName":"fresh"});
+    let edit = server.request(4, "textDocument/rename", params.clone());
+    let docs = edit["documentChanges"].as_array().unwrap();
+    assert_eq!(docs.len(), 2);
+    for (uri, version, expected) in [
+        (
+            &selected,
+            8,
+            vec![json!({"range":declaration,"newText":"fresh"})],
+        ),
+        (
+            &main,
+            5,
+            calls[1..]
+                .iter()
+                .map(|range| json!({"range":range,"newText":"fresh"}))
+                .collect(),
+        ),
+    ] {
+        let doc = docs
+            .iter()
+            .find(|doc| doc["textDocument"]["uri"] == uri.as_str())
+            .unwrap();
+        assert_eq!(doc["textDocument"]["version"], version);
+        assert_eq!(doc["edits"], json!(expected));
+    }
+    let uncertain = source.replace(
+        r"\defcitealias{parent}{Name}",
+        r"\ifentryexists{parent}{}{}",
+    );
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":6},"contentChanges":[{"text":uncertain}]}),
+    );
+    server.send(json!({"jsonrpc":"2.0","id":5,"method":"textDocument/rename","params":params}));
+    assert_eq!(
+        server.until(|message| message["id"] == 5)["error"]["code"],
+        -32602
+    );
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":main,"version":7},"contentChanges":[{"text":source}]}),
+    );
+    assert_eq!(server.request(6,"textDocument/references",json!({"textDocument":{"uri":selected},"position":declaration.start,"context":{"includeDeclaration":true}})),refs);
+    server.request(1000, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
