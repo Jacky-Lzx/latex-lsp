@@ -30195,3 +30195,244 @@ fn section_key_renames_preserve_versions_and_reject_capture_or_shared_conflicts_
         server.wait_exit(0);
     }
 }
+#[test]
+fn source_set_navigation_tracks_numeric_sections_and_unsaved_input_order_over_stdio() {
+    use latex_lsp::text::Text;
+    let dir = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let sets = main.join("sets.tex").unwrap();
+    let bib = main.join("section.bib").unwrap();
+    let source = r"\documentclass{article}\usepackage{biblatex}\addsectionbib[label=chosen]{section.bib}\begin{document}\newrefsection[chosen]\input{sets}\cite{parent}\newrefsection[chosen]\cite{parent}\end{document}";
+    let declaration = "% 😀\r\n\\csuse{defbibentryset}{parent}{member}";
+    let library = "@book{parent,title={Selected parent}}\n@book{member,title={Selected member}}";
+    for (name, text) in [
+        ("main.tex", source),
+        ("sets.tex", declaration),
+        ("section.bib", library),
+    ] {
+        std::fs::write(dir.path().join(name), text).unwrap();
+    }
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    for (uri, text) in [(&main, source), (&sets, declaration)] {
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"languageId":"latex","version":5,"text":text}}),
+        );
+    }
+    let text = Text::new(source.into());
+    let points: Vec<_> = source
+        .match_indices(r"\cite{parent}")
+        .map(|(at, _)| text.position(at + 8))
+        .collect();
+    let settext = Text::new(declaration.into());
+    let at = declaration.find("{parent}").unwrap() + 1;
+    let setrange = settext.range(at, at + 6);
+    let bookrange = Text::new(library.into()).range(6, 12);
+    for (id, point, target, range) in [
+        (2, points[0], &sets, setrange),
+        (3, points[1], &bib, bookrange),
+    ] {
+        let params = json!({"textDocument":{"uri":main},"position":point});
+        assert_eq!(
+            server.request(id, "textDocument/definition", params.clone()),
+            json!([{"uri":target,"range":range}])
+        );
+        let hover = server.request(id + 10, "textDocument/hover", params);
+        assert!(
+            hover["contents"]["value"]
+                .as_str()
+                .unwrap()
+                .contains(if id == 2 {
+                    "Dynamic bibliography set: member"
+                } else {
+                    "Selected parent"
+                }),
+            "{hover}"
+        );
+    }
+    assert_eq!(
+        server.request(
+            4,
+            "textDocument/definition",
+            json!({"textDocument":{"uri":sets},"position":setrange.start})
+        ),
+        json!([{"uri":sets,"range":setrange}])
+    );
+    let declaration_params = json!({"textDocument":{"uri":sets},"position":setrange.start});
+    assert_eq!(server.request(40,"textDocument/references",json!({"textDocument":{"uri":sets},"position":setrange.start,"context":{"includeDeclaration":true}})),json!([]));
+    for (id, method, mut params) in [
+        (41, "textDocument/prepareRename", declaration_params.clone()),
+        (42, "textDocument/rename", declaration_params),
+    ] {
+        if method == "textDocument/rename" {
+            params["newName"] = json!("renamed");
+        }
+        server.send(json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}));
+        let response = server.until(|message| message["id"] == id);
+        assert_eq!(response["error"]["code"], -32602, "{response}");
+    }
+    let params = json!({"textDocument":{"uri":main},"position":points[0]});
+    server.notify("textDocument/didChange",json!({"textDocument":{"uri":sets,"version":6},"contentChanges":[{"text":format!("\\cite{{parent}}{declaration}")}]}));
+    assert_eq!(
+        server.request(5, "textDocument/definition", params.clone()),
+        json!([{"uri":bib,"range":bookrange}])
+    );
+    let hover = server.request(6, "textDocument/hover", params.clone());
+    assert!(hover["contents"]["value"]
+        .as_str()
+        .unwrap()
+        .contains("Selected parent"));
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":sets}}),
+    );
+    assert_eq!(
+        server.request(7, "textDocument/definition", params.clone()),
+        json!([{"uri":sets,"range":setrange}])
+    );
+    let mut rename = params;
+    rename["newName"] = json!("renamed");
+    server.send(json!({"jsonrpc":"2.0","id":8,"method":"textDocument/rename","params":rename}));
+    let response = server.until(|message| message["id"] == 8);
+    assert_eq!(response["error"]["code"], -32602, "{response}");
+    server.request(1000, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+fn source_set_navigation_requires_shared_unsaved_consumers_to_agree_over_stdio() {
+    use latex_lsp::text::Text;
+    let dir = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let chapter = main.join("chapter.tex").unwrap();
+    let other = main.join("unsaved.tex").unwrap();
+    let source = r"\documentclass{article}\usepackage{biblatex}\addsectionbib[label=chosen]{section.bib}\begin{document}\newrefsection[chosen]\defbibentryset{parent}{member}\input{chapter}\end{document}";
+    let calls = "% 😀\r\n\\csname cite\\endcsname{parent}";
+    for (name, text) in [
+        ("main.tex", source),
+        ("chapter.tex", calls),
+        ("section.bib", "@book{parent} @book{member}"),
+    ] {
+        std::fs::write(dir.path().join(name), text).unwrap();
+    }
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":chapter,"languageId":"latex","version":5,"text":calls}}),
+    );
+    let point = Text::new(calls.into()).position(calls.find("{parent}").unwrap() + 2);
+    let params = json!({"textDocument":{"uri":chapter},"position":point});
+    let at = source.find("{parent}").unwrap() + 1;
+    let target = json!([{"uri":main,"range":Text::new(source.into()).range(at,at+6)}]);
+    assert_eq!(
+        server.request(2, "textDocument/definition", params.clone()),
+        target
+    );
+    server.notify("textDocument/didOpen",json!({"textDocument":{"uri":other,"languageId":"latex","version":7,"text":r"\documentclass{article}\usepackage{biblatex}\addbibresource{section.bib}\begin{document}\input{chapter}\end{document}"}}));
+    assert_eq!(
+        server.request(3, "textDocument/definition", params.clone()),
+        json!([])
+    );
+    assert_eq!(
+        server.request(4, "textDocument/hover", params.clone()),
+        Value::Null
+    );
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":other}}),
+    );
+    assert_eq!(
+        server.request(5, "textDocument/definition", params.clone()),
+        target
+    );
+    assert!(!server.request(6, "textDocument/hover", params).is_null());
+    server.request(1000, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+fn bibliography_preamble_updates_revoke_section_key_proofs_over_stdio() {
+    use latex_lsp::text::Text;
+    let dir = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let bib = main.join("section.bib").unwrap();
+    let source = r"\documentclass{article}\usepackage{biblatex}\addbibresource{section.bib}\addsectionbib[label=chosen]{section.bib}\begin{document}\cite{parent}\newrefsection[chosen]\cite{parent}\label{safe}\ref{safe}\end{document}";
+    let library = "@book{parent,title={Original parent}}\n@book{member}";
+    for (name, text) in [("main.tex", source), ("section.bib", library)] {
+        std::fs::write(dir.path().join(name), text).unwrap();
+    }
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    for (uri, text, language) in [(&main, source, "latex"), (&bib, library, "bibtex")] {
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"languageId":language,"version":5,"text":text}}),
+        );
+    }
+    let range = Text::new(library.into()).range(6, 12);
+    let sourcepoint = Text::new(source.into()).position(source.find(r"\cite{parent}").unwrap() + 8);
+    let params = json!({"textDocument":{"uri":main},"position":sourcepoint});
+    let refs = json!({"textDocument":{"uri":bib},"position":range.start,"context":{"includeDeclaration":true}});
+    let target = json!([{"uri":bib,"range":range}]);
+    assert_eq!(
+        server.request(2, "textDocument/definition", params.clone()),
+        target
+    );
+    assert_eq!(
+        server
+            .request(3, "textDocument/references", refs.clone())
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+    let changed = format!("{library}\n@preamble{{\"\\defbibentryset{{parent}}{{member}}\"}}");
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":bib,"version":6},"contentChanges":[{"text":changed}]}),
+    );
+    assert_eq!(
+        server.request(4, "textDocument/definition", params.clone()),
+        json!([])
+    );
+    assert_eq!(
+        server.request(5, "textDocument/hover", params.clone()),
+        Value::Null
+    );
+    assert_eq!(
+        server.request(6, "textDocument/references", refs.clone()),
+        json!([])
+    );
+    server.send(json!({"jsonrpc":"2.0","id":7,"method":"textDocument/rename","params":{"textDocument":{"uri":bib},"position":range.start,"newName":"updated"}}));
+    let response = server.until(|message| message["id"] == 7);
+    assert_eq!(response["error"]["code"], -32602, "{response}");
+    let labelparams = json!({"textDocument":{"uri":main},"position":Text::new(source.into()).position(source.find(r"\ref{safe}").unwrap()+6)});
+    assert_eq!(
+        server
+            .request(8, "textDocument/definition", labelparams)
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    server.notify("textDocument/didClose", json!({"textDocument":{"uri":bib}}));
+    assert_eq!(server.request(9, "textDocument/definition", params), target);
+    assert_eq!(
+        server
+            .request(10, "textDocument/references", refs)
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+    server.request(1000, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}

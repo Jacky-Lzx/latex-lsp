@@ -16,7 +16,9 @@
 
 只有两个参数均完整、集合名静态时建立声明。宏生成的名称、星号和可选参数形式不生成推测声明。注释及逐字内容中的示例不参与索引。成员中的动态名称不展开，额外分组和后续正文不作为成员引用。
 
-集合与数据库条目、手写文献及 `ids` 别名共用文献键命名空间。同名定义或新名称冲突会拒绝歧义重命名；项目隔离、共享来源检查和版本化编辑沿用文献编辑规则。索引不执行宏展开，也不按 biblatex 的 `refsection` 执行顺序选择多个同名声明。
+集合与数据库条目、手写文献及 `ids` 别名共用文献键命名空间。同名定义或新名称冲突会拒绝歧义重命名；项目隔离、共享来源检查和版本化编辑沿用文献编辑规则。普通项目保持上述符号编辑规则。含资源选择的 `refsection` 项目按数字分区和实际输入顺序认证静态集合的定义跳转与悬停，详见[分区文献身份](bibliography.md)。同一资源列表的不同数字分区不合并，先显式引用再定义集合时仍可能使用数据库条目。分组不会使集合定义恢复到分组前的状态。
+
+分区集合的补全、完整引用与改名尚待完整执行图认证；动态或延迟定义、冲突声明、嵌套集合、含 IDS 或可执行 `@preamble` 的资源和手写文献仍保留保护。索引不执行任意宏展开。
 
 未保存编辑立即更新声明和成员索引。关闭缓冲区后，已加载的项目来源恢复磁盘内容。Biber 对静态 `@set` 和成员字段的原生警告另见[集合诊断](bibliography-diagnostics.md#biber-文献集合)。
 
@@ -27,3 +29,11 @@ cargo test --locked --test biblatex_sets -- --include-ignored
 ```
 
 真实 Biber 测试通过普通模式 `.bcf` 验证索引中的动态集合，比较独立重命名集合键、成员键后的完整 `.bbl`，包括含双引号的新集合键及 Unicode 成员键。该测试只需 Biber；它不运行 LaTeX 或替代 biblatex 宏展开的验证。
+
+分区集合只读身份回归覆盖普通／静态命名调用、成员、前言与分组、数字分区、首次引用顺序、通配加载、未保存输入及共享消费者、Unicode／CRLF 和分析预算。原生回归需要 pdfLaTeX、biblatex 和 Biber，核对十种执行顺序下 BBL 的实际条目类型与导航目标：
+
+```sh
+cargo test --locked --test biblatex_source_sections
+cargo test --locked --test biblatex_source_sections -- --include-ignored
+cargo test --locked --test protocol source_set_navigation_
+```

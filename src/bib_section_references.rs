@@ -403,7 +403,7 @@ fn symbol<'a>(ws: &'a Workspace, uri: &Url, offset: usize) -> Option<Result<Symb
         return None;
     }
     // Ordinary projects retain the established symbol/editing model.
-    let (selected, _) = bib_section_keys::section_projects(ws, uri)?;
+    let (selected, projects) = bib_section_keys::section_projects(ws, uri)?;
     if !selected {
         return None;
     }
@@ -412,7 +412,34 @@ fn symbol<'a>(ws: &'a Workspace, uri: &Url, offset: usize) -> Option<Result<Symb
         Err(()) => return Some(Err(())),
     };
     let lexical = graphs.lexical(uri);
-    let (name, span, declaration) = query_span(doc, offset, &lexical, uri)?;
+    // Source declarations are not citation operands in the lexical index.
+    // Own their queries too, so a failed source-namespace proof cannot fall
+    // back to the generic same-name union of database and source entries.
+    let source_declaration = (doc.kind == DocumentKind::Latex
+        && lexical.target(uri, offset).is_none())
+    .then(|| {
+        doc.syntax
+            .citations
+            .iter()
+            .find(|entry| entry.span.start <= offset && offset <= entry.span.end)
+            .map(|entry| (entry.name.clone(), entry.span.clone()))
+            .or_else(|| {
+                projects.iter().find_map(|project| {
+                    bib_section_keys::source_set_key(doc, &project.signatures, offset)
+                })
+            })
+    })
+    .flatten();
+    let (name, span, declaration) = if let Some((name, span)) = source_declaration {
+        let identity = Identity {
+            uri: uri.clone(),
+            start: span.start,
+            end: span.end,
+        };
+        (name, span, Some(identity))
+    } else {
+        query_span(doc, offset, &lexical, uri)?
+    };
     graphs.name = Some(name.clone());
     Some((|| {
         let mut initial = BTreeSet::new();

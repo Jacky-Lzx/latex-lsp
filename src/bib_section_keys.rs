@@ -228,6 +228,7 @@ struct Analysis<'a, 'b> {
     resource_sets: BTreeSet<Arc<BTreeSet<Url>>>,
     collect_keys: bool,
     all_keys: Option<GraphKeys>,
+    trace: Option<SourceTrace>,
     keys: BTreeMap<(usize, usize), Option<Arc<BTreeSet<Url>>>>,
     active: BTreeSet<Url>,
     answer: Option<BTreeSet<Url>>,
@@ -456,6 +457,84 @@ impl Analysis<'_, '_> {
                 }
                 self.labels.as_mut().unwrap().seen = true;
             }
+            if self.trace.is_some() {
+                let declaration = self
+                    .trace
+                    .as_ref()?
+                    .declarations
+                    .get(&(uri.clone(), lexical.span.start))
+                    .cloned();
+                if let Some(declaration) = declaration {
+                    // The declaration is shared, but processing its member list
+                    // on every execution still consumes the analysis budget.
+                    self.work += declaration.key.uri.as_str().len()
+                        + declaration.key.name.len()
+                        + 96
+                        + declaration
+                            .members
+                            .iter()
+                            .map(|member| member.uri.as_str().len() + member.name.len() + 96)
+                            .sum::<usize>();
+                    let trace = self.trace.as_mut()?;
+                    if self.work > 32 * 1024 * 1024 || trace.events.len() >= 100_000 {
+                        return None;
+                    }
+                    trace
+                        .events
+                        .push(SourceEvent::Set(trace.current, declaration));
+                } else if syntax::is_citation(name) {
+                    if !self.document
+                        || !positions.contains(&lexical.span.start)
+                        || context.operand(doc, lexical.span.start)
+                        || !self.signatures.command_unchanged(name)
+                        || !syntax::warns_on_undefined_citation(name)
+                    {
+                        return None;
+                    }
+                    let command =
+                        crate::reference_calls::resolved_command(source, name, span.clone());
+                    let fields = if let Some(style) = crate::citations::style(name) {
+                        let arguments = crate::citations::arguments(source, span.end, style);
+                        if arguments.fields.iter().any(|field| !field.complete) {
+                            return None;
+                        }
+                        arguments
+                            .keys()
+                            .map(|argument| argument.span.clone())
+                            .collect::<Vec<_>>()
+                    } else {
+                        vec![command.argument.as_ref()?.span.clone()]
+                    };
+                    if fields.is_empty() {
+                        return None;
+                    }
+                    for field in fields {
+                        let keys = source_key_list(uri, source, field)?;
+                        if keys.iter().any(|key| key.name == "*")
+                            && (name != "nocite" || keys.len() != 1)
+                        {
+                            return None;
+                        }
+                        for key in keys {
+                            self.work += key.uri.as_str().len() + key.name.len() + 96;
+                            let trace = self.trace.as_mut()?;
+                            if self.work > 32 * 1024 * 1024 || trace.events.len() >= 100_000 {
+                                return None;
+                            }
+                            let wildcard = key.name == "*";
+                            trace
+                                .events
+                                .push(SourceEvent::Request(trace.current, key, wildcard));
+                        }
+                    }
+                } else if self
+                    .signatures
+                    .forwarded_builtin(name)
+                    .is_some_and(syntax::is_citation)
+                {
+                    return None;
+                }
+            }
             if (self.collect_keys && uri == self.origin || self.all_keys.is_some())
                 && self.document
                 && positions.contains(&lexical.span.start)
@@ -545,6 +624,9 @@ impl Analysis<'_, '_> {
                         self.select(uri, doc, environment.outer_span.end)?;
                     } else if self.labels.is_none() {
                         self.active = self.registry.resources(self.root, None)?;
+                        if let Some(trace) = self.trace.as_mut() {
+                            trace.current = 0;
+                        }
                     }
                 }
             } else if matches!(name, "newrefsection" | "refsection") {
@@ -552,6 +634,9 @@ impl Analysis<'_, '_> {
             } else if name == "endrefsection" {
                 if self.labels.is_none() {
                     self.active = self.registry.resources(self.root, None)?;
+                    if let Some(trace) = self.trace.as_mut() {
+                        trace.current = 0;
+                    }
                 }
             } else if loader(name) {
                 if self.labels.is_some()
@@ -664,7 +749,16 @@ impl Analysis<'_, '_> {
         }
         self.active = self.registry.resources(self.root, selected.as_deref())?;
         if self.query.is_none() {
-            self.intern_resources()?;
+            let resources = self.intern_resources()?;
+            if let Some(trace) = self.trace.as_mut() {
+                self.work += 64;
+                if self.work > 32 * 1024 * 1024 || trace.next >= 100_000 {
+                    return None;
+                }
+                trace.next += 1;
+                trace.current = trace.next;
+                trace.resources.insert(trace.current, resources);
+            }
         }
         Some(())
     }
@@ -797,7 +891,7 @@ pub(crate) fn coexistence(ws: &Workspace, root: &Url, scope: &BTreeSet<Url>) -> 
     if !modern {
         return Coexistence::Union;
     }
-    if selected && !database_only(&docs, &signatures) {
+    if selected && (!database_only(&docs, &signatures) || !static_databases(ws, root)) {
         return Coexistence::Unknown;
     }
     let sections = (|| {
@@ -817,6 +911,7 @@ pub(crate) fn coexistence(ws: &Workspace, root: &Url, scope: &BTreeSet<Url>) -> 
             resource_sets: BTreeSet::from([Arc::new(active.clone())]),
             collect_keys: false,
             all_keys: None,
+            trace: None,
             keys: BTreeMap::new(),
             active,
             answer: None,
@@ -958,7 +1053,10 @@ fn target(ws: &Workspace, uri: &Url, offset: usize, purpose: Purpose) -> Option<
         } in &projects
         {
             let query = query(doc, signatures, offset, purpose)?;
-            if !valid_sources(docs, signatures) || !database_only(docs, signatures) {
+            if !valid_sources(docs, signatures)
+                || !database_only(docs, signatures)
+                || !static_databases(ws, root)
+            {
                 return None;
             }
             let registry = Registry::new(root, docs, signatures);
@@ -974,6 +1072,7 @@ fn target(ws: &Workspace, uri: &Url, offset: usize, purpose: Purpose) -> Option<
                 resource_sets: BTreeSet::new(),
                 collect_keys: false,
                 all_keys: None,
+                trace: None,
                 keys: BTreeMap::new(),
                 active,
                 answer: None,
@@ -1138,7 +1237,10 @@ pub(crate) fn occurrence_resources(ws: &Workspace, uri: &Url) -> Option<Resource
                 signatures,
             } in &projects
             {
-                if !valid_sources(docs, signatures) || !database_only(docs, signatures) {
+                if !valid_sources(docs, signatures)
+                    || !database_only(docs, signatures)
+                    || !static_databases(ws, root)
+                {
                     return None;
                 }
                 let registry = Registry::new(root, docs, signatures);
@@ -1154,6 +1256,7 @@ pub(crate) fn occurrence_resources(ws: &Workspace, uri: &Url) -> Option<Resource
                     resource_sets: BTreeSet::from([Arc::new(active.clone())]),
                     collect_keys: true,
                     all_keys: None,
+                    trace: None,
                     keys: BTreeMap::new(),
                     active,
                     answer: None,
@@ -1257,6 +1360,7 @@ fn analyze_labels(
         resource_sets: BTreeSet::new(),
         collect_keys: false,
         all_keys: None,
+        trace: None,
         keys: BTreeMap::new(),
         active: BTreeSet::new(),
         answer: None,
@@ -1303,6 +1407,7 @@ pub(crate) fn key_graph(
     if !ws.index_truncated.is_empty()
         || !valid_sources(docs, signatures)
         || !database_only(docs, signatures)
+        || !static_databases(ws, root)
     {
         return None;
     }
@@ -1319,6 +1424,7 @@ pub(crate) fn key_graph(
         resource_sets: BTreeSet::from([Arc::new(active.clone())]),
         collect_keys: false,
         all_keys: Some(BTreeMap::new()),
+        trace: None,
         keys: BTreeMap::new(),
         active,
         answer: None,
@@ -1346,4 +1452,322 @@ pub(crate) fn key_graph(
         sections: analysis.resource_sets,
         occurrences: analysis.all_keys?,
     })
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SourceKey {
+    pub uri: Url,
+    pub span: std::ops::Range<usize>,
+    pub name: String,
+}
+#[derive(Clone, Debug)]
+pub(crate) struct SourceSet {
+    pub key: SourceKey,
+    pub members: Vec<SourceKey>,
+}
+type SourceDeclarations = BTreeMap<(Url, usize), Arc<SourceSet>>;
+
+#[derive(Clone, Debug)]
+pub(crate) enum SourceEvent {
+    Set(u32, Arc<SourceSet>),
+    Request(u32, SourceKey, bool),
+}
+pub(crate) struct SourceTrace {
+    pub work: usize,
+    pub resources: BTreeMap<u32, Arc<BTreeSet<Url>>>,
+    pub events: Vec<SourceEvent>,
+    declarations: SourceDeclarations,
+    current: u32,
+    next: u32,
+}
+
+pub(crate) fn has_source_sets(
+    docs: &[(Url, &Document)],
+    signatures: &CommandSignatures<'_>,
+) -> bool {
+    docs.iter().any(|(_, doc)| {
+        let context = Context::new(doc, signatures);
+        doc.syntax
+            .commands
+            .iter()
+            .enumerate()
+            .any(|(index, command)| {
+                if context.literal(command.span.start) {
+                    return false;
+                }
+                let (name, _) = signatures
+                    .named_invocation(
+                        &doc.text.source,
+                        &doc.syntax,
+                        index,
+                        &BTreeSet::new(),
+                        &context.declarations,
+                    )
+                    .unwrap_or((&command.name, command.span.clone()));
+                name == "defbibentryset" || signatures.invokes_builtin(name, "defbibentryset")
+            })
+    })
+}
+
+fn source_key_list(
+    uri: &Url,
+    source: &str,
+    span: std::ops::Range<usize>,
+) -> Option<Vec<SourceKey>> {
+    if source[span.clone()]
+        .bytes()
+        .filter(|byte| *byte == b',')
+        .take(100_001)
+        .count()
+        > 100_000
+    {
+        return None;
+    }
+    let mut result = Vec::new();
+    let mut stored = 0usize;
+    for segment in syntax::key_list_segments(source, span) {
+        let mut names = syntax::citation_list_spans(source, segment).into_iter();
+        let span = names.next()?;
+        if names.next().is_some() {
+            return None;
+        }
+        stored += uri.as_str().len() + span.len() + 96;
+        if stored > 32 * 1024 * 1024 || result.len() >= 100_000 {
+            return None;
+        }
+        result.push(SourceKey {
+            uri: uri.clone(),
+            name: source[span.clone()].into(),
+            span,
+        });
+    }
+    (!result.is_empty()).then_some(result)
+}
+
+fn source_declarations(
+    docs: &[(Url, &Document)],
+    signatures: &CommandSignatures<'_>,
+) -> Option<(SourceDeclarations, usize)> {
+    if !signatures.command_unchanged("defbibentryset") {
+        return None;
+    }
+    let mut result = BTreeMap::new();
+    let mut work = 0usize;
+    for (uri, doc) in docs {
+        let source = &doc.text.source;
+        let context = Context::new(doc, signatures);
+        let positions = signatures.source_command_positions(source, &doc.syntax);
+        let mut declared = BTreeSet::new();
+        for (index, command) in doc.syntax.commands.iter().enumerate() {
+            if context.literal(command.span.start) {
+                continue;
+            }
+            let (name, span) = signatures
+                .named_invocation(
+                    source,
+                    &doc.syntax,
+                    index,
+                    &BTreeSet::new(),
+                    &context.declarations,
+                )
+                .unwrap_or((&command.name, command.span.clone()));
+            if name != "defbibentryset" {
+                if signatures.invokes_builtin(name, "defbibentryset") {
+                    return None;
+                }
+                continue;
+            }
+            if !positions.contains(&command.span.start) || context.operand(doc, command.span.start)
+            {
+                return None;
+            }
+            let arguments =
+                crate::citations::arguments(source, span.end, crate::citations::Style::Set);
+            if arguments.fields.len() != 2 || arguments.fields.iter().any(|field| !field.complete) {
+                return None;
+            }
+            let key =
+                syntax::single_citation_argument(source, arguments.fields[0].argument.clone());
+            if !syntax::is_static_citation_key(&key.value) || key.value == "*" {
+                return None;
+            }
+            let members = source_key_list(uri, source, arguments.fields[1].argument.span.clone())?;
+            if members.iter().any(|member| member.name == "*") {
+                return None;
+            }
+            work += 2 * uri.as_str().len()
+                + key.value.len()
+                + 192
+                + members
+                    .iter()
+                    .map(|member| member.uri.as_str().len() + member.name.len() + 96)
+                    .sum::<usize>();
+            if work > 32 * 1024 * 1024 || result.len() >= 100_000 {
+                return None;
+            }
+            declared.insert((key.span.start, key.span.end));
+            result.insert(
+                (uri.clone(), command.span.start),
+                Arc::new(SourceSet {
+                    key: SourceKey {
+                        uri: uri.clone(),
+                        span: key.span,
+                        name: key.value,
+                    },
+                    members,
+                }),
+            );
+        }
+        // Any other source bibliography declaration has an unproved namespace.
+        if doc
+            .syntax
+            .citations
+            .iter()
+            .any(|entry| !declared.contains(&(entry.span.start, entry.span.end)))
+        {
+            return None;
+        }
+    }
+    Some((result, work))
+}
+
+pub(crate) fn source_trace(
+    ws: &Workspace,
+    root: &Url,
+    docs: &[(Url, &Document)],
+    signatures: &CommandSignatures<'_>,
+) -> Option<SourceTrace> {
+    if !ws.index_truncated.is_empty()
+        || !valid_sources(docs, signatures)
+        || !static_databases(ws, root)
+    {
+        return None;
+    }
+    let (declarations, mut work) = source_declarations(docs, signatures)?;
+    let registry = Registry::new(root, docs, signatures);
+    let active = registry.resources(root, None)?;
+    work += active
+        .iter()
+        .map(|uri| uri.as_str().len() + 96)
+        .sum::<usize>();
+    if work > 32 * 1024 * 1024 {
+        return None;
+    }
+    let resources = Arc::new(active.clone());
+    let trace = SourceTrace {
+        work: 0,
+        resources: BTreeMap::from([(0, resources.clone())]),
+        events: Vec::new(),
+        declarations,
+        current: 0,
+        next: 0,
+    };
+    let mut analysis = Analysis {
+        ws,
+        root,
+        signatures,
+        registry,
+        origin: root,
+        query: None,
+        labels: None,
+        resource_sets: BTreeSet::from([resources]),
+        collect_keys: false,
+        all_keys: None,
+        trace: Some(trace),
+        keys: BTreeMap::new(),
+        active,
+        answer: None,
+        visited: BTreeSet::new(),
+        stack: BTreeSet::new(),
+        visits: 0,
+        commands: 0,
+        work,
+        document: false,
+        ended: false,
+    };
+    analysis.walk(root)?;
+    if docs.iter().any(|(uri, _)| !analysis.visited.contains(uri))
+        || analysis.resource_sets.iter().any(|view| {
+            view.iter().any(|uri| {
+                !ws.documents
+                    .get(uri)
+                    .is_some_and(|doc| doc.kind == DocumentKind::Bibtex)
+            })
+        })
+    {
+        return None;
+    }
+    let mut trace = analysis.trace?;
+    trace.work = analysis.work;
+    Some(trace)
+}
+
+// Recognize a potential declaration for read-only lookup. source_trace still
+// proves its execution and every consuming project before returning a target.
+pub(crate) fn source_set_key(
+    doc: &Document,
+    signatures: &CommandSignatures<'_>,
+    offset: usize,
+) -> Option<(String, std::ops::Range<usize>)> {
+    let context = Context::new(doc, signatures);
+    for (index, command) in doc.syntax.commands.iter().enumerate() {
+        if context.literal(command.span.start) {
+            continue;
+        }
+        let (name, span) = signatures
+            .named_invocation(
+                &doc.text.source,
+                &doc.syntax,
+                index,
+                &BTreeSet::new(),
+                &context.declarations,
+            )
+            .unwrap_or((&command.name, command.span.clone()));
+        if name != "defbibentryset" {
+            continue;
+        }
+        let arguments =
+            crate::citations::arguments(&doc.text.source, span.end, crate::citations::Style::Set);
+        let key = syntax::single_citation_argument(
+            &doc.text.source,
+            arguments.fields.first()?.argument.clone(),
+        );
+        if syntax::is_static_citation_key(&key.value)
+            && key.span.start <= offset
+            && offset <= key.span.end
+        {
+            return Some((key.value, key.span));
+        }
+    }
+    None
+}
+
+// A bibliography preamble executes TeX from generated BBL input and can
+// introduce section-specific sets before the first source citation. Until its
+// effects are proved, no database-only graph can certify that namespace.
+fn static_databases(ws: &Workspace, root: &Url) -> bool {
+    let mut bytes = 0usize;
+    let mut entries = 0usize;
+    for uri in ws.project_documents(root) {
+        let Some(doc) = ws.documents.get(&uri) else {
+            return false;
+        };
+        if doc.kind != DocumentKind::Bibtex {
+            continue;
+        }
+        bytes += doc.text.source.len();
+        entries += doc.syntax.bibliography_completion.types.len();
+        if bytes > 16 * 1024 * 1024
+            || entries > 100_000
+            || doc
+                .syntax
+                .bibliography_completion
+                .types
+                .iter()
+                .any(|entry| doc.text.source[entry.span.clone()].eq_ignore_ascii_case("preamble"))
+        {
+            return false;
+        }
+    }
+    true
 }
