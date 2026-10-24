@@ -1138,7 +1138,7 @@ fn validate_edit(symbol: &Symbol<'_>) -> Result<()> {
     Ok(())
 }
 
-// A source edit can move raw IDS owners only when every consumer shadows
+// A source edit can move raw prerequisites only when every consumer shadows
 // those headers with this exact physical source declaration.
 fn source_prerequisites(target: &Symbol<'_>) -> Result<BTreeSet<Identity>> {
     let mut has_ids_owner = false;
@@ -1228,7 +1228,6 @@ fn source_prerequisites(target: &Symbol<'_>) -> Result<BTreeSet<Identity>> {
             }
         }
         if prerequisites.len() > 1 {
-            let mut owned = false;
             let doc = &target.graphs.ws.documents[&prerequisite.uri];
             for alias in &doc.syntax.bibliography_aliases {
                 target
@@ -1240,13 +1239,11 @@ fn source_prerequisites(target: &Symbol<'_>) -> Result<BTreeSet<Identity>> {
                 }
                 if crate::bib_source_aliases::owner(doc, alias) == Some(target.name.as_str()) {
                     aliases.insert(alias.name.as_str());
-                    owned = true;
                 }
             }
-            // Multiple non-IDS prerequisites need their own relation proof.
-            if !owned {
-                return Err(());
-            }
+            // A raw parent need not own IDS. Every consumer above must bind
+            // to this source, and edit_symbol separately certifies all raw
+            // crossref/xref occurrences before coupling the header edits.
         }
     }
     if prerequisites.len() > 1 {

@@ -330,3 +330,164 @@ fn source_prerequisite_limit_accepts_a_complete_boundary_and_refuses_partial_edi
         }
     }
 }
+
+fn setup_non_ids_prerequisites(
+    default_ids: bool,
+    selected_ids: bool,
+    relations: bool,
+    repeat: bool,
+) -> (tempfile::TempDir, Workspace, Url, Url, Url, Url) {
+    let keys = |ids| {
+        format!(
+            "parent{}{}",
+            if ids { ",old" } else { "" },
+            if relations { ",child" } else { "" }
+        )
+    };
+    let first = format!(
+        r"\input{{sets}}\cite{{{}}}\printbibliography",
+        keys(default_ids)
+    );
+    let second = format!(
+        r"\newrefsection[chosen]\input{{sets}}\cite{{{}}}\printbibliography",
+        keys(selected_ids)
+    );
+    let body = format!(
+        "{first}{second}{}",
+        if repeat {
+            format!(r"\newrefsection{first}")
+        } else {
+            String::new()
+        }
+    );
+    let (dir, mut ws, main, default, selected, provider) = setup_shared(&body);
+    for (uri, title, year, ids) in [
+        (&default, "Default data", 2001, default_ids),
+        (&selected, "Selected data", 2002, selected_ids),
+    ] {
+        let library = format!("@book{{parent,title={{{title}}},year={{{year}}}{}}} @book{{member,title={{Member}}}}{}", if ids { ",ids={old}" } else { "" }, if relations { " @book{child,title={Child},crossref={parent}}" } else { "" });
+        std::fs::write(uri.to_file_path().unwrap(), &library).unwrap();
+        ws.open(uri.clone(), library, 7);
+    }
+    (dir, ws, main, default, selected, provider)
+}
+const NON_IDS_CASES: &[(bool, bool, bool, bool)] = &[
+    (true, false, false, false),
+    (false, true, false, false),
+    (true, false, true, false),
+    (false, false, true, false),
+];
+
+#[test]
+fn non_ids_prerequisites_do_not_bypass_unproved_cached_alias_owners() {
+    let (_dir, ws, _main, _default, _selected, provider) =
+        setup_non_ids_prerequisites(true, false, true, true);
+    let declaration = key(&ws, &provider, r"\defbibentryset{", "parent");
+    assert!(features::rename(&ws, &provider, declaration.range.start, "fresh").is_err());
+}
+
+#[test]
+fn mixed_and_non_ids_source_prerequisites_move_every_header_and_relation_atomically() {
+    for &(default_ids, selected_ids, relations, repeat) in NON_IDS_CASES {
+        let (_dir, ws, main, default, selected, provider) =
+            setup_non_ids_prerequisites(default_ids, selected_ids, relations, repeat);
+        let declaration = key(&ws, &provider, r"\defbibentryset{", "parent");
+        let edits = features::rename(&ws, &provider, declaration.range.start, "fresh")
+            .unwrap_or_else(|error| {
+                panic!("{default_ids} {selected_ids} {relations} {repeat}: {error}")
+            })
+            .unwrap()
+            .changes
+            .unwrap();
+        assert_eq!(edits.len(), 4);
+        assert_eq!(edits[&main].len(), if repeat { 3 } else { 2 });
+        assert_eq!(edits[&provider].len(), 1);
+        for uri in [&default, &selected] {
+            assert_eq!(edits[uri].len(), if relations { 2 } else { 1 });
+            let doc = &ws.documents[uri];
+            for edit in &edits[uri] {
+                let start = doc.text.offset(edit.range.start).unwrap();
+                let end = doc.text.offset(edit.range.end).unwrap();
+                assert_eq!(&doc.text.source[start..end], "parent");
+                assert_eq!(edit.new_text, "fresh");
+            }
+        }
+    }
+}
+
+#[test]
+fn non_ids_source_prerequisites_keep_independent_consumers_and_missing_headers_protected() {
+    let (_dir, mut ws, main, _default, selected, provider) =
+        setup_non_ids_prerequisites(true, false, true, false);
+    let declaration = key(&ws, &provider, r"\defbibentryset{", "parent");
+    let other = main.join("other.tex").unwrap();
+    ws.open(other.clone(), r"\documentclass{article}\usepackage{biblatex}\addbibresource{default.bib}\begin{document}\cite{parent}\end{document}".into(), 8);
+    assert!(features::rename(&ws, &provider, declaration.range.start, "fresh").is_err());
+    ws.documents.remove(&other);
+    assert!(
+        features::rename(&ws, &provider, declaration.range.start, "fresh")
+            .unwrap()
+            .is_some()
+    );
+    let library = ws.documents[&selected].text.source.clone();
+    ws.open(
+        selected.clone(),
+        library.replace("@book{parent,", "@book{different,"),
+        9,
+    );
+    assert!(features::rename(&ws, &provider, declaration.range.start, "fresh").is_err());
+    ws.open(selected.clone(), format!("{library} @book{{fresh}}"), 10);
+    assert!(features::rename(&ws, &provider, declaration.range.start, "fresh").is_err());
+    ws.open(selected, library, 11);
+    assert!(
+        features::rename(&ws, &provider, declaration.range.start, "fresh")
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
+#[ignore = "requires pdflatex and biber with biblatex"]
+fn native_non_ids_source_prerequisite_edits_preserve_inheritance_sets_and_complete_bbl() {
+    for &(default_ids, selected_ids, relations, repeat) in NON_IDS_CASES {
+        let (dir, ws, _main, _default, _selected, provider) =
+            setup_non_ids_prerequisites(default_ids, selected_ids, relations, repeat);
+        let before = compile(dir.path());
+        assert_eq!(
+            before.matches(r"\entry{parent}{set}").count(),
+            if repeat { 3 } else { 2 }
+        );
+        let declaration = key(&ws, &provider, r"\defbibentryset{", "parent");
+        let edits = features::rename(&ws, &provider, declaration.range.start, "fresh")
+            .unwrap()
+            .unwrap()
+            .changes
+            .unwrap();
+        for (uri, mut edits) in edits {
+            edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
+            let source = ws.documents[&uri]
+                .text
+                .changed(
+                    edits
+                        .into_iter()
+                        .map(|edit| TextDocumentContentChangeEvent {
+                            range: Some(edit.range),
+                            range_length: None,
+                            text: edit.new_text,
+                        })
+                        .collect(),
+                )
+                .unwrap()
+                .source;
+            std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+        }
+        for ext in ["aux", "bcf", "bbl", "run.xml"] {
+            let _ = std::fs::remove_file(dir.path().join(format!("main.{ext}")));
+        }
+        assert_eq!(
+            compile(dir.path()).replace("fresh", "parent"),
+            before,
+            "{default_ids} {selected_ids} {relations} {repeat}"
+        );
+    }
+}

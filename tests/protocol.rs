@@ -34180,7 +34180,8 @@ fn source_shared_raw_owners_keep_exact_edits_versions_and_unsaved_closure() {
 #[test]
 fn source_prerequisite_edits_keep_every_header_version_and_complete_consumers() {
     use latex_lsp::text::Text;
-    for document_changes in [false, true] {
+    for (non_ids, document_changes) in [(false, false), (false, true), (true, false), (true, true)]
+    {
         let dir = tempfile::tempdir().unwrap();
         let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
         let provider = main.join("sets.tex").unwrap();
@@ -34188,13 +34189,35 @@ fn source_prerequisite_edits_keep_every_header_version_and_complete_consumers() 
         let selected = main.join("section.bib").unwrap();
         let other = main.join("other.tex").unwrap();
         let source="% 😀\r\n\\documentclass{article}\\usepackage{biblatex}\\addbibresource{default.bib}\\addsectionbib[label=chosen]{section.bib}\\begin{document}\\input{sets}\\cite{parent,old}\\newrefsection[chosen]\\input{sets}\\cite{parent,old}\\end{document}";
+        let source = if non_ids {
+            source
+                .replacen(r"\cite{parent,old}", r"\cite{parent,old,child}", 1)
+                .replace(
+                    r"\cite{parent,old}\end{document}",
+                    r"\cite{parent,child}\end{document}",
+                )
+        } else {
+            source.to_string()
+        };
+        let source = source.as_str();
         let sets = "% 😀\r\n\\defbibentryset{parent}{member}";
         let library = "% 😀\r\n@book{parent,title={Parent},ids={old}} @book{member,title={Member}}";
+        let library = if non_ids {
+            format!("{library} @book{{child,title={{Child}},crossref={{parent}}}}")
+        } else {
+            library.to_string()
+        };
+        let library = library.as_str();
+        let selected_library = if non_ids {
+            library.replace(",ids={old}", "")
+        } else {
+            library.to_string()
+        };
         for (name, text) in [
             ("main.tex", source),
             ("sets.tex", sets),
             ("default.bib", library),
-            ("section.bib", library),
+            ("section.bib", selected_library.as_str()),
         ] {
             std::fs::write(dir.path().join(name), text).unwrap();
         }
@@ -34213,20 +34236,20 @@ fn source_prerequisite_edits_keep_every_header_version_and_complete_consumers() 
             (&main, source, "latex", 5),
             (&provider, sets, "latex", 6),
             (&default, library, "bibtex", 7),
-            (&selected, library, "bibtex", 8),
+            (&selected, selected_library.as_str(), "bibtex", 8),
         ] {
             server.notify("textDocument/didOpen",json!({"textDocument":{"uri":uri,"languageId":language,"version":version,"text":text}}));
         }
         let params =
             json!({"textDocument":{"uri":provider},"position":declaration.start,"newName":"fresh"});
         let refs=server.request(2,"textDocument/references",json!({"textDocument":{"uri":provider},"position":declaration.start,"context":{"includeDeclaration":true}}));
-        assert_eq!(refs.as_array().unwrap().len(), 3);
+        assert_eq!(refs.as_array().unwrap().len(), if non_ids { 5 } else { 3 });
         let edit = server.request(3, "textDocument/rename", params.clone());
         for (uri, version, spans) in [
             (&main, 5, calls),
             (&provider, 6, vec![declaration]),
             (&default, 7, declarations.clone()),
-            (&selected, 8, declarations),
+            (&selected, 8, ranges(&selected_library)),
         ] {
             let expected = spans
                 .iter()
@@ -34262,7 +34285,12 @@ fn source_prerequisite_edits_keep_every_header_version_and_complete_consumers() 
             server.request(5, "textDocument/rename", params.clone()),
             edit
         );
-        server.notify("textDocument/didChange",json!({"textDocument":{"uri":default,"version":10},"contentChanges":[{"text":library.replace(",ids={old}","")}]}));
+        let invalid = if non_ids {
+            library.replace("@book{parent,", "@book{different,")
+        } else {
+            library.replace(",ids={old}", "")
+        };
+        server.notify("textDocument/didChange",json!({"textDocument":{"uri":default,"version":10},"contentChanges":[{"text":invalid}]}));
         server.send(
             json!({"jsonrpc":"2.0","id":6,"method":"textDocument/rename","params":params.clone()}),
         );
