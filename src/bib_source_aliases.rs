@@ -1,4 +1,4 @@
-//! Conservative certification of IDS namespaces independent of dynamic sets.
+//! Static IDS certification for source bibliography namespaces.
 use crate::{
     syntax,
     workspace::{DocumentKind, Workspace},
@@ -13,6 +13,27 @@ pub(crate) fn independent(
     ws: &Workspace,
     resources: &BTreeSet<Url>,
     sources: &BTreeSet<&str>,
+) -> Option<usize> {
+    certify(ws, resources, sources, None)
+}
+
+/// A unique primary owner may become a source set without changing the IDS
+/// declaration. Its alias must not indirectly introduce a nested set member.
+/// Editing and candidates still require the independent namespace proof.
+pub(crate) fn readonly(
+    ws: &Workspace,
+    resources: &BTreeSet<Url>,
+    sources: &BTreeSet<&str>,
+    members: &BTreeSet<&str>,
+) -> Option<usize> {
+    certify(ws, resources, sources, Some(members))
+}
+
+fn certify(
+    ws: &Workspace,
+    resources: &BTreeSet<Url>,
+    sources: &BTreeSet<&str>,
+    members: Option<&BTreeSet<&str>>,
 ) -> Option<usize> {
     let mut work = 0usize;
     let mut bytes = 0usize;
@@ -94,7 +115,10 @@ pub(crate) fn independent(
                 || !field.value_valid
                 || doc.text.source[owner.span.clone()].eq_ignore_ascii_case("set")
                 || !syntax::is_static_citation_key(primary)
-                || sources.contains(primary)
+                || members.is_none() && sources.contains(primary)
+                || members.is_some()
+                    && sources.contains(primary)
+                    && doc.text.source[owner.span.clone()].eq_ignore_ascii_case("xdata")
                 || names.get(primary) != Some(&1)
             {
                 return None;
@@ -115,6 +139,8 @@ pub(crate) fn independent(
                     || name.is_empty()
                     || !syntax::is_static_citation_key(name)
                     || sources.contains(name)
+                    || members
+                        .is_some_and(|members| sources.contains(primary) && members.contains(name))
                     || names.get(name) != Some(&1)
                     || !aliases.insert((span.start, span.end))
                 {
@@ -134,6 +160,19 @@ pub(crate) fn independent(
         }
     }
     Some(work)
+}
+
+/// Static primary spelling for a certified alias declaration.
+pub(crate) fn owner<'a>(
+    doc: &'a crate::workspace::Document,
+    entry: &syntax::Entry,
+) -> Option<&'a str> {
+    let types = &doc.syntax.bibliography_completion.types;
+    let index = types
+        .partition_point(|owner| owner.span.start < entry.span.start)
+        .checked_sub(1)?;
+    let primary = types.get(index)?.key.as_ref()?;
+    (*primary != entry.span).then(|| &doc.text.source[primary.clone()])
 }
 
 /// Keep the alias identity while previewing its uniquely certified owner.

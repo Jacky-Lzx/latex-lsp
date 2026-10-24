@@ -119,9 +119,8 @@ fn disjoint_aliases_are_candidates_with_their_owner_metadata_and_types() {
     assert_eq!(missing(&ws, &main), ["oldd"]);
 }
 #[test]
-fn intersecting_aliases_and_owners_stay_protected_with_uncertain_ids_values() {
+fn intersecting_alias_names_and_uncertain_ids_values_stay_protected() {
     for (set, bib) in [
-        ("parent", "@book{parent,ids={old}} @book{member}"),
         ("old", "@book{parent,ids={old}} @book{member}"),
         ("collected", "@book{parent,ids=alias} @book{member}"),
         (
@@ -153,7 +152,7 @@ fn intersecting_aliases_and_owners_stay_protected_with_uncertain_ids_values() {
     }
 }
 #[test]
-fn unsaved_alias_owner_changes_refresh_the_whole_source_consumer_proof() {
+fn unsaved_alias_owner_changes_keep_readonly_navigation_and_revoke_editing() {
     let (_dir, mut ws, main, bib) = setup(
         r"\defbibentryset{collected}{member}\cite{collected,absent}",
         "@book{parent,ids={old}} @book{member}",
@@ -168,7 +167,11 @@ fn unsaved_alias_owner_changes_refresh_the_whole_source_consumer_proof() {
         "@book{collected,ids={old}} @book{member}".into(),
         8,
     );
-    assert!(features::definitions(&ws, &main, query.range.start).is_empty());
+    assert_eq!(
+        features::definitions(&ws, &main, query.range.start),
+        vec![key(&ws, &main, r"\defbibentryset{", "collected")]
+    );
+    assert!(features::prepare_rename(&ws, &main, query.range.start).is_err());
     assert!(missing(&ws, &main).is_empty());
     ws.open(bib, "@book{parent,ids={old}} @book{member}".into(), 9);
     assert_eq!(

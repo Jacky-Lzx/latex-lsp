@@ -341,7 +341,21 @@ fn target(ws: &Workspace, uri: &Url, offset: usize) -> Option<Option<Answer>> {
                     _ => None,
                 })
                 .collect();
-            work += crate::bib_source_aliases::independent(ws, &resources, &names)?;
+            let members: BTreeSet<_> = trace
+                .events
+                .iter()
+                .filter_map(|event| match event {
+                    SourceEvent::Set(_, set) => Some(&set.members),
+                    _ => None,
+                })
+                .flatten()
+                .map(|key| key.name.as_str())
+                .collect();
+            work += members.len() * 32;
+            if work > 32 * 1024 * 1024 {
+                return None;
+            }
+            work += crate::bib_source_aliases::readonly(ws, &resources, &names, &members)?;
             if work > 32 * 1024 * 1024 {
                 return None;
             }
@@ -390,14 +404,19 @@ pub(crate) fn hover(ws: &Workspace, uri: &Url, offset: usize) -> Option<Option<H
             }
             format!("Dynamic bibliography set: {names}")
         } else {
-            crate::bib_source_aliases::detail(
-                doc,
-                doc.syntax
-                    .citations
-                    .iter()
-                    .chain(&doc.syntax.bibliography_aliases)
-                    .find(|entry| entry.span == (answer.identity.start..answer.identity.end))?,
-            )
+            let entry = doc
+                .syntax
+                .citations
+                .iter()
+                .chain(&doc.syntax.bibliography_aliases)
+                .find(|entry| entry.span == (answer.identity.start..answer.identity.end))?;
+            if let Some(primary) = crate::bib_source_aliases::owner(doc, entry)
+                .filter(|primary| answer.sets.values().any(|set| set.key.name == *primary))
+            {
+                format!("Bibliography alias of {primary}")
+            } else {
+                crate::bib_source_aliases::detail(doc, entry)
+            }
         };
         Some(Hover {
             contents: HoverContents::Markup(MarkupContent {

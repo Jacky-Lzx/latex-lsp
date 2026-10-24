@@ -32150,3 +32150,72 @@ fn large_source_projects_keep_navigation_and_unsaved_dependency_updates_responsi
         expected
     );
 }
+
+#[test]
+fn source_overridden_ids_owners_keep_readonly_navigation_and_refresh_unsaved_conflicts() {
+    use latex_lsp::text::Text;
+    for selected in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+        let bib = main.join("refs.bib").unwrap();
+        let resource = if selected {
+            r"\addsectionbib[label=chosen]{refs.bib}"
+        } else {
+            r"\addbibresource{refs.bib}"
+        };
+        let section = if selected {
+            r"\newrefsection[chosen]"
+        } else {
+            ""
+        };
+        let source = format!("% 😀\r\n\\documentclass{{article}}\\usepackage{{biblatex}}{resource}\\begin{{document}}{section}\\cite{{old}}\\defbibentryset{{parent}}{{member}}\\cite{{parent,old}}\\end{{document}}");
+        let database =
+            "% 😀\r\n@book{parent,title={Raw parent},ids={old}} @book{member,title={Member}}";
+        std::fs::write(dir.path().join("main.tex"), &source).unwrap();
+        std::fs::write(dir.path().join("refs.bib"), database).unwrap();
+        let text = Text::new(source.clone());
+        let at = source.rfind(r"\cite{parent,old}").unwrap() + r"\cite{".len();
+        let parent_query = text.range(at, at + "parent".len());
+        let alias_query = text.range(at + "parent,".len(), at + "parent,old".len());
+        let start = source.find(r"\defbibentryset{").unwrap() + r"\defbibentryset{".len();
+        let declaration = text.range(start, start + "parent".len());
+        let start = database.find("ids={").unwrap() + "ids={".len();
+        let alias = Text::new(database.into()).range(start, start + "old".len());
+        let mut server = Server::start();
+        server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{},"initializationOptions":{"distribution":{"enabled":false}}}));
+        server.notify("initialized", json!({}));
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":main,"languageId":"latex","version":5,"text":source}}),
+        );
+        let parent_request = json!({"textDocument":{"uri":main},"position":parent_query.start});
+        let alias_request = json!({"textDocument":{"uri":main},"position":alias_query.start});
+        let expected = json!([{"uri":main,"range":declaration}]);
+        assert_eq!(
+            server.request(2, "textDocument/definition", parent_request.clone()),
+            expected
+        );
+        assert_eq!(
+            server.request(3, "textDocument/definition", alias_request.clone()),
+            json!([{"uri":bib,"range":alias}])
+        );
+        let hover = server.request(4, "textDocument/hover", alias_request);
+        let detail = hover["contents"]["value"].as_str().unwrap();
+        assert!(detail.contains("Bibliography alias of parent"), "{hover}");
+        assert!(!detail.contains("Raw parent"), "{hover}");
+        assert_eq!(hover["range"], json!(alias_query));
+        server.send(json!({"jsonrpc":"2.0","id":5,"method":"textDocument/rename","params":{"textDocument":{"uri":main},"position":parent_query.start,"newName":"newset"}}));
+        let rejected = server.until(|message| message["id"] == 5);
+        assert_eq!(rejected["error"]["code"], -32602, "{rejected}");
+        server.notify("textDocument/didOpen",json!({"textDocument":{"uri":bib,"languageId":"bibtex","version":8,"text":database.replace("ids={old}","ids={parent}")}}));
+        assert_eq!(
+            server.request(6, "textDocument/definition", parent_request.clone()),
+            json!([])
+        );
+        server.notify("textDocument/didClose", json!({"textDocument":{"uri":bib}}));
+        assert_eq!(
+            server.request(7, "textDocument/definition", parent_request),
+            expected
+        );
+    }
+}
