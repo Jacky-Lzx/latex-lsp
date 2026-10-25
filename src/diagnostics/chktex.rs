@@ -1,18 +1,16 @@
 //! Check the editor snapshot over stdin; never follow input files or write source.
+use crate::rpc::{Error, Result};
 use crate::{
     config::ChktexConfig,
     server::tasks::{Cancellation, Task, Tasks},
     text::Text,
 };
+use lsp_types::*;
 use std::{
     io::{Read, Write},
     path::PathBuf,
     process::{Command, Stdio},
     time::{Duration, Instant},
-};
-use tower_lsp::{
-    jsonrpc::{Error, Result},
-    lsp_types::*,
 };
 
 pub(crate) fn start(

@@ -11,6 +11,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::rpc::{Error, Result};
+use crate::server::client::Client;
 use crate::{
     compilation::{
         build_log,
@@ -19,13 +21,9 @@ use crate::{
     config::BuildConfig,
     project::workspace::Workspace,
 };
+use lsp_types::*;
 use serde_json::{json, Value};
 use tokio::sync::{Notify, RwLock};
-use tower_lsp::{
-    jsonrpc::{Error, Result},
-    lsp_types::*,
-    Client,
-};
 
 const MAX_OUTPUT: usize = 4 * 1024 * 1024;
 
@@ -2170,12 +2168,8 @@ mod tests {
         workspace.config.build.executable = "unavailable-custom-compiler".into();
         workspace.config.build.rebuild_arguments = Some(vec![]);
         let workspace = Arc::new(RwLock::new(workspace));
-        let mut manager = None;
-        let (_service, _socket) = tower_lsp::LspService::new(|client| {
-            manager = Some(BuildManager::new(client.clone(), workspace));
-            crate::Backend::new(client)
-        });
-        let manager = manager.unwrap();
+        let (client, _outgoing) = Client::new();
+        let manager = BuildManager::new(client, workspace);
         manager
             .state
             .lock()
@@ -2204,12 +2198,8 @@ mod tests {
         let mut workspace = Workspace::default();
         workspace.open(uri.clone(), source.into(), 1);
         let workspace = Arc::new(RwLock::new(workspace));
-        let mut manager = None;
-        let (_service, _socket) = tower_lsp::LspService::new(|client| {
-            manager = Some(BuildManager::new(client.clone(), workspace));
-            crate::Backend::new(client)
-        });
-        let manager = manager.unwrap();
+        let (client, _outgoing) = Client::new();
+        let manager = BuildManager::new(client, workspace);
         manager.state.lock().unwrap().insert(
             uri.clone(),
             Record {
@@ -2268,12 +2258,8 @@ mod tests {
         workspace.config.build.executable = "unavailable-custom-compiler".into();
         workspace.config.build.rebuild_arguments = Some(vec![]);
         let workspace = Arc::new(RwLock::new(workspace));
-        let mut manager = None;
-        let (_service, _socket) = tower_lsp::LspService::new(|client| {
-            manager = Some(BuildManager::new(client.clone(), workspace));
-            crate::Backend::new(client)
-        });
-        let manager = manager.unwrap();
+        let (client, _outgoing) = Client::new();
+        let manager = BuildManager::new(client, workspace);
         manager
             .state
             .lock()

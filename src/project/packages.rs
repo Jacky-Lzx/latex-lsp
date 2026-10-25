@@ -1,8 +1,8 @@
 //! Curated, extensible package metadata; distribution sources stay read-only.
 use crate::{parser::syntax, project::workspace::Workspace};
+use lsp_types::Url;
 use serde::Deserialize;
 use std::{collections::BTreeSet, sync::OnceLock};
-use tower_lsp::lsp_types::Url;
 
 #[derive(Deserialize)]
 pub(crate) struct Package {

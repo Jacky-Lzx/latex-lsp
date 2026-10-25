@@ -17,6 +17,7 @@ use crate::{
     bibliography::bib_strings, compilation::recorder::BibliographyPaths, parser::syntax,
     project::workspace::Workspace, text::Text,
 };
+use lsp_types::*;
 use std::{
     collections::{BTreeMap, BTreeSet},
     hash::{DefaultHasher, Hash, Hasher},
@@ -24,7 +25,6 @@ use std::{
     path::{Path, PathBuf},
     sync::{Arc, OnceLock},
 };
-use tower_lsp::lsp_types::*;
 
 pub(crate) const CODE: &str = "undefined-bibliography-string";
 const TYPE_CODE: &str = "undefined-bibliography-entry-type";

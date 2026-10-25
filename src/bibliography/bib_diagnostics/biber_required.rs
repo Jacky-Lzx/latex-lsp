@@ -2,8 +2,8 @@
 //! where any one field suffices. No missing value can be inferred from the log.
 use super::{biber_keys, Context};
 use crate::{bibliography::bib_strings, compilation::recorder::BibliographyPaths, parser::syntax};
+use lsp_types::*;
 use std::path::Path;
-use tower_lsp::lsp_types::*;
 
 enum Fields<'a> {
     Single(&'a str),

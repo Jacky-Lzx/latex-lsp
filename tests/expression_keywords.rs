@@ -1,6 +1,6 @@
 use latex_lsp::{build_log, editing, features, text::Text, workspace::Workspace};
+use lsp_types::*;
 use std::collections::BTreeMap;
-use tower_lsp::lsp_types::*;
 
 fn setup(root: &std::path::Path, source: &str) -> (Workspace, Url, Url) {
     std::fs::write(root.join("main.tex"), source).unwrap();

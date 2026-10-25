@@ -7,8 +7,8 @@ use crate::{
         workspace::{resolve_file_path, DocumentKind, Workspace},
     },
 };
+use lsp_types::Url;
 use std::collections::{BTreeMap, BTreeSet};
-use tower_lsp::lsp_types::Url;
 
 type Setting = Option<Vec<String>>;
 

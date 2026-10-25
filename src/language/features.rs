@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::ops::Range as Span;
 
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 
 use crate::{
     parser::syntax::{self, Command, Entry},
@@ -470,7 +470,7 @@ fn rename_target<'a>(
     workspace: &'a Workspace,
     uri: &Url,
     position: Position,
-) -> tower_lsp::jsonrpc::Result<Option<(Target<'a>, BTreeSet<Url>)>> {
+) -> crate::rpc::Result<Option<(Target<'a>, BTreeSet<Url>)>> {
     let Some(doc) = workspace.documents.get(uri) else {
         return Ok(None);
     };
@@ -514,7 +514,7 @@ fn rename_target<'a>(
         return Ok(None);
     }
     if definitions.len() != 1 {
-        return Err(tower_lsp::jsonrpc::Error::invalid_params(
+        return Err(crate::rpc::Error::invalid_params(
             "Rename is ambiguous: the name has multiple definitions in this project",
         ));
     }
@@ -533,7 +533,7 @@ fn rename_target<'a>(
             .filter(|project| !project.is_disjoint(&used))
         {
             if !project.contains(&definitions[0]) {
-                return Err(tower_lsp::jsonrpc::Error::invalid_params("Rename is ambiguous: a shared occurrence belongs to a project with a different or missing definition"));
+                return Err(crate::rpc::Error::invalid_params("Rename is ambiguous: a shared occurrence belongs to a project with a different or missing definition"));
             }
             scope.extend(project.iter().cloned());
         }
@@ -542,7 +542,7 @@ fn rename_target<'a>(
         }
     }
     if declarations(&scope).len() != 1 {
-        return Err(tower_lsp::jsonrpc::Error::invalid_params(
+        return Err(crate::rpc::Error::invalid_params(
             "Rename is ambiguous: projects sharing this definition contain multiple definitions",
         ));
     }
@@ -573,7 +573,7 @@ pub fn prepare_rename(
     workspace: &Workspace,
     uri: &Url,
     position: Position,
-) -> tower_lsp::jsonrpc::Result<Option<PrepareRenameResponse>> {
+) -> crate::rpc::Result<Option<PrepareRenameResponse>> {
     if let Some(offset) = workspace
         .documents
         .get(uri)
@@ -616,7 +616,7 @@ pub fn rename(
     uri: &Url,
     position: Position,
     new_name: &str,
-) -> tower_lsp::jsonrpc::Result<Option<WorkspaceEdit>> {
+) -> crate::rpc::Result<Option<WorkspaceEdit>> {
     let edit = rename_impl(workspace, uri, position, new_name)?;
     if let Some(edit) = &edit {
         crate::project::resource_context::validate_workspace_edit(workspace, edit)?;
@@ -629,7 +629,7 @@ fn rename_impl(
     uri: &Url,
     position: Position,
     new_name: &str,
-) -> tower_lsp::jsonrpc::Result<Option<WorkspaceEdit>> {
+) -> crate::rpc::Result<Option<WorkspaceEdit>> {
     if let Some(offset) = workspace
         .documents
         .get(uri)
@@ -676,7 +676,7 @@ fn rename_impl(
             static_target_name(target.kind, new_name)
         };
     if !valid {
-        return Err(tower_lsp::jsonrpc::Error::invalid_params(
+        return Err(crate::rpc::Error::invalid_params(
             if target.kind.saved_kind().is_some() {
                 "Invalid saved-text name: use a nonempty literal name without TeX expansion or comments"
             } else if target.kind == TargetKind::Color {
@@ -736,7 +736,7 @@ fn rename_impl(
         _ => false,
     };
     if conflicts || builtin {
-        return Err(tower_lsp::jsonrpc::Error::invalid_params(format!(
+        return Err(crate::rpc::Error::invalid_params(format!(
             "The name `{new_name}` is already defined"
         )));
     }
@@ -792,7 +792,7 @@ fn rename_impl(
                 .bytes()
                 .all(|byte| byte.is_ascii_alphabetic() || byte == b'@')
         {
-            return Err(tower_lsp::jsonrpc::Error::invalid_params(
+            return Err(crate::rpc::Error::invalid_params(
                 "Names used in direct TeX commands must contain only command letters or @",
             ));
         }
@@ -822,7 +822,7 @@ fn rename_impl(
                 .iter()
                 .any(|span| start < span.end && span.start < end)
         }) {
-            return Err(tower_lsp::jsonrpc::Error::invalid_params(
+            return Err(crate::rpc::Error::invalid_params(
                 "String-test arguments have different meanings across project or load contexts",
             ));
         }

@@ -15,12 +15,12 @@ use crate::{
     project::workspace::{Document, DocumentKind, Workspace},
     symbols::named_references::Context,
 };
+use lsp_types::{Hover, HoverContents, Location, MarkupContent, MarkupKind, Url};
 use std::{
     collections::{BTreeMap, BTreeSet},
     ops::Range,
     sync::Arc,
 };
-use tower_lsp::lsp_types::{Hover, HoverContents, Location, MarkupContent, MarkupKind, Url};
 
 #[derive(Clone, Copy)]
 enum Purpose {
@@ -2052,7 +2052,7 @@ pub(crate) fn completion(
     ws: &Workspace,
     uri: &Url,
     offset: usize,
-) -> Option<Vec<tower_lsp::lsp_types::CompletionItem>> {
+) -> Option<Vec<lsp_types::CompletionItem>> {
     if let Some(items) = crate::bibliography::bib_source_citations::completion(ws, uri, offset) {
         return Some(items);
     }
@@ -2075,7 +2075,7 @@ pub(crate) fn completion(
     if !removals.is_empty() {
         let removals: Vec<_> = removals
             .into_iter()
-            .map(|span| tower_lsp::lsp_types::TextEdit {
+            .map(|span| lsp_types::TextEdit {
                 range: doc.text.range(span.start, span.end),
                 new_text: String::new(),
             })

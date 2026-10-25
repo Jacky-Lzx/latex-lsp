@@ -4,8 +4,8 @@ use crate::{
     parser::syntax,
     project::workspace::{DocumentKind, Workspace},
 };
+use lsp_types::*;
 use std::collections::{BTreeMap, BTreeSet};
-use tower_lsp::lsp_types::*;
 
 type Definition = (Url, Position, Position);
 

@@ -1,5 +1,5 @@
 use latex_lsp::{build, colors, workspace::Document};
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 
 fn document(source: &str) -> Document {
     Document::new(

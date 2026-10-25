@@ -1,6 +1,6 @@
 use super::*;
 use crate::project::workspace::Workspace;
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 const PROLOGUE: &str = r"% $ biblatex auxiliary file $
 % $ biblatex bbl format version 3.3 $
 \begingroup

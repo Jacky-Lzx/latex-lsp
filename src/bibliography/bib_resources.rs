@@ -10,8 +10,8 @@ pub(crate) fn changes_when_tokenized(value: &str) -> bool {
 /// character translation after an enclosing macro has collected the filename.
 pub(crate) fn insertion_preserves_filename(
     workspace: &crate::project::workspace::Workspace,
-    uri: &tower_lsp::lsp_types::Url,
-    roots: &[tower_lsp::lsp_types::Url],
+    uri: &lsp_types::Url,
+    roots: &[lsp_types::Url],
     at: Option<usize>,
     value: &str,
 ) -> bool {

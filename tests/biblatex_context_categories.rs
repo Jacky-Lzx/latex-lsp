@@ -1,5 +1,5 @@
 use latex_lsp::{editing, features, signature, text::Text, workspace::Workspace};
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 
 fn setup(body: &str) -> (Workspace, Url) {
     let uri = Url::parse("untitled:context-categories.tex").unwrap();

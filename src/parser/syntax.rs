@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use crate::text::Text;
-use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, TextEdit};
+use lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, TextEdit};
 
 #[derive(Clone, Debug)]
 pub struct Argument {
@@ -757,7 +757,7 @@ pub(crate) fn label_name_text(source: &str, command: &Command, name: &str) -> St
 pub(crate) fn label_replacement_text(
     text: &Text,
     commands: &[Command],
-    range: tower_lsp::lsp_types::Range,
+    range: lsp_types::Range,
     name: &str,
 ) -> String {
     if !name.contains(['[', ']']) {
@@ -1778,7 +1778,7 @@ pub(crate) fn name_completion_ranges(
     text: &Text,
     span: Range<usize>,
     cursor: usize,
-) -> Option<(tower_lsp::lsp_types::Range, Vec<TextEdit>)> {
+) -> Option<(lsp_types::Range, Vec<TextEdit>)> {
     let line_start = text.source[..cursor].rfind('\n').map_or(0, |at| at + 1);
     let line_end = text.source[cursor..]
         .find(['\r', '\n'])

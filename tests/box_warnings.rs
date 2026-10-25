@@ -1,5 +1,5 @@
 use latex_lsp::{build_log, text::Text};
-use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString, Url};
+use lsp_types::{DiagnosticSeverity, NumberOrString, Url};
 
 fn wrap(message: &str, width: usize, newline: &str) -> String {
     message

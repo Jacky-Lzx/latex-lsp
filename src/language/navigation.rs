@@ -5,11 +5,11 @@ use crate::{
         resolve_file_path, resolve_path, root_directive, Document, DocumentKind, Workspace,
     },
 };
+use lsp_types::*;
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::PathBuf,
 };
-use tower_lsp::lsp_types::*;
 
 pub fn workspace_symbols(workspace: &Workspace, query: &str) -> Vec<SymbolInformation> {
     let query = query.trim().to_lowercase();

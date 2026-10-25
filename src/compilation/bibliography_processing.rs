@@ -6,6 +6,7 @@ use crate::{
     },
     config::{BibliographyBackend, BibliographyToolConfig, BuildConfig},
 };
+use lsp_types::{Diagnostic, DiagnosticSeverity, Url};
 use std::{
     collections::BTreeMap,
     io::Read,
@@ -13,7 +14,6 @@ use std::{
     process::Command,
     sync::atomic::{AtomicBool, Ordering},
 };
-use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Url};
 
 const STAGED_JOB: &str = "latex-lsp-bibliography";
 

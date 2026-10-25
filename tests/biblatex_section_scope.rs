@@ -1,5 +1,5 @@
 use latex_lsp::{editing, features, text::Text, workspace::Workspace};
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 
 fn setup(header: &str) -> (tempfile::TempDir, Workspace, Url, Url, String) {
     let dir = tempfile::tempdir().unwrap();

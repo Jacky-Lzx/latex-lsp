@@ -1,6 +1,6 @@
 use latex_lsp::{build, build_log, text::Text};
+use lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Url};
 use std::path::Path;
-use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Url};
 
 const HELP: &str = "\nSee the LaTeX manual or LaTeX Companion for explanation.\nType  H <return>  for immediate help.\n ...                                              \n                                                  \n";
 const SOURCE: &str = r"😀 \usepackage[draft]{local}\relax";

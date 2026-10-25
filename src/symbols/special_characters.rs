@@ -5,9 +5,7 @@ use crate::{
     project::workspace::Document,
     text::Text,
 };
-use tower_lsp::lsp_types::{
-    Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range, TextEdit,
-};
+use lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range, TextEdit};
 
 pub(crate) const EXTRA_ALIGNMENT_TAB: &str = r"Extra alignment tab has been changed to \cr.";
 

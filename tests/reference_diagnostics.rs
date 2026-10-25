@@ -1,5 +1,5 @@
 use latex_lsp::{editing, text::Text, workspace::Workspace};
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 
 #[test]
 fn static_references_update_without_building_and_remain_project_scoped() {

@@ -1,6 +1,6 @@
 use latex_lsp::{build, build_log, config::BuildConfig, text::Text};
+use lsp_types::{DiagnosticSeverity, NumberOrString, Url};
 use std::sync::atomic::AtomicBool;
-use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString, Url};
 
 #[test]
 fn unresolved_numbered_sources_do_not_borrow_precise_error_context_from_the_root() {

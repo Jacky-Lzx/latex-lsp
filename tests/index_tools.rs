@@ -1,7 +1,7 @@
 use latex_lsp::build_log;
+use lsp_types::*;
 use serde_json::json;
 use std::collections::BTreeMap;
-use tower_lsp::lsp_types::*;
 
 fn analysis(message: &str, severity: DiagnosticSeverity) -> serde_json::Value {
     build_log::compilation_analysis(

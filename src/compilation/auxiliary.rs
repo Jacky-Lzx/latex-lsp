@@ -3,6 +3,7 @@ use crate::{
     parser::syntax,
     project::workspace::{Document, DocumentKind, Workspace},
 };
+use lsp_types::*;
 use std::{
     collections::{BTreeMap, BTreeSet},
     io::Read,
@@ -10,7 +11,6 @@ use std::{
     sync::{Arc, Mutex, OnceLock},
     time::SystemTime,
 };
-use tower_lsp::lsp_types::*;
 #[derive(Clone, Debug)]
 pub(crate) struct Reference {
     pub key: String,

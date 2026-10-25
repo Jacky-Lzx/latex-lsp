@@ -3,8 +3,8 @@ use crate::{
     parser::syntax,
     project::workspace::{Document, DocumentKind, Workspace},
 };
+use lsp_types::*;
 use std::{collections::BTreeSet, ops::Range};
-use tower_lsp::lsp_types::*;
 
 fn score(name: &str, metadata: &str, query: &str) -> Option<u8> {
     if name.starts_with(query) {

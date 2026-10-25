@@ -1,14 +1,12 @@
 //! Format only proven whitespace outside bibliography values and comments.
+use crate::rpc::{Error, Result};
 use crate::{
     formatting,
     parser::syntax::{self, Syntax},
     text::Text,
 };
+use lsp_types::{FormattingOptions, Range};
 use std::{collections::BTreeSet, ops::Range as Span};
-use tower_lsp::{
-    jsonrpc::{Error, Result},
-    lsp_types::{FormattingOptions, Range},
-};
 
 pub(crate) fn start(
     tasks: &crate::server::tasks::Tasks,
@@ -344,7 +342,7 @@ mod tests {
             calls.get() > 5
         })
         .unwrap_err();
-        assert_eq!(error.code, tower_lsp::jsonrpc::ErrorCode::RequestCancelled);
+        assert_eq!(error.code, crate::rpc::ErrorCode::RequestCancelled);
     }
 
     #[test]

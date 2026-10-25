@@ -3,7 +3,7 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-use tower_lsp::lsp_types::Url;
+use lsp_types::Url;
 
 use crate::{parser::syntax::Syntax, text::Text};
 
@@ -252,7 +252,7 @@ pub struct Workspace {
     pub distribution: crate::project::distribution::Distribution,
     pub index_truncated: BTreeSet<String>,
     pub inlay_refresh: bool,
-    pub lint_diagnostics: BTreeMap<Url, Vec<tower_lsp::lsp_types::Diagnostic>>,
+    pub lint_diagnostics: BTreeMap<Url, Vec<lsp_types::Diagnostic>>,
     pub documents: BTreeMap<Url, Document>,
     pub roots: BTreeSet<PathBuf>,
     pub snippets: bool,
@@ -260,14 +260,14 @@ pub struct Workspace {
     pub watch_files: bool,
     pub hierarchical_symbols: bool,
     pub versioned_edits: bool,
-    pub folding_capabilities: tower_lsp::lsp_types::FoldingRangeClientCapabilities,
+    pub folding_capabilities: lsp_types::FoldingRangeClientCapabilities,
     pub build_progress: bool,
     pub code_action_literals: bool,
     pub code_action_resolve_edits: bool,
     pub apply_edits: bool,
     pub diagnostic_delivery: crate::diagnostics::diagnostic::Delivery,
     pub config: crate::config::Config,
-    pub build_diagnostics: BTreeMap<Url, BTreeMap<Url, Vec<tower_lsp::lsp_types::Diagnostic>>>,
+    pub build_diagnostics: BTreeMap<Url, BTreeMap<Url, Vec<lsp_types::Diagnostic>>>,
     /// Sources confirmed read for each root's latest published build diagnostics.
     pub build_diagnostic_sources: BTreeMap<Url, BTreeSet<Url>>,
     pub recorded_inputs: BTreeMap<Url, BTreeSet<Url>>,
@@ -392,7 +392,7 @@ impl Workspace {
             .unwrap_or(config)
     }
 
-    pub fn diagnostics(&self, uri: &Url) -> Vec<tower_lsp::lsp_types::Diagnostic> {
+    pub fn diagnostics(&self, uri: &Url) -> Vec<lsp_types::Diagnostic> {
         self.diagnostic_snapshots([uri.clone()])
             .pop()
             .map(|(_, diagnostics, _)| diagnostics)
@@ -402,7 +402,7 @@ impl Workspace {
     pub fn diagnostic_snapshots(
         &self,
         uris: impl IntoIterator<Item = Url>,
-    ) -> Vec<(Url, Vec<tower_lsp::lsp_types::Diagnostic>, Option<i32>)> {
+    ) -> Vec<(Url, Vec<lsp_types::Diagnostic>, Option<i32>)> {
         let uris: BTreeSet<_> = uris.into_iter().collect();
         let mut duplicates = crate::diagnostics::project_diagnostics::duplicates(self, &uris);
         let environments = crate::diagnostics::environment_diagnostics::Index::new(self, &uris);
@@ -421,11 +421,11 @@ impl Workspace {
                 diagnostics.extend(crate::symbols::extra_symbols::diagnostics(self, &uri));
                 let root = self.root_document(&uri).ok();
                 for message in crate::config::project_config::load(self, &uri, root.as_ref()).1 {
-                    diagnostics.push(tower_lsp::lsp_types::Diagnostic {
+                    diagnostics.push(lsp_types::Diagnostic {
                         range: Default::default(),
-                        severity: Some(tower_lsp::lsp_types::DiagnosticSeverity::WARNING),
+                        severity: Some(lsp_types::DiagnosticSeverity::WARNING),
                         source: Some("latex-lsp".into()),
-                        code: Some(tower_lsp::lsp_types::NumberOrString::String(
+                        code: Some(lsp_types::NumberOrString::String(
                             "project-configuration".into(),
                         )),
                         message,
@@ -443,7 +443,7 @@ impl Workspace {
             .collect()
     }
 
-    fn local_and_build_diagnostics(&self, uri: &Url) -> Vec<tower_lsp::lsp_types::Diagnostic> {
+    fn local_and_build_diagnostics(&self, uri: &Url) -> Vec<lsp_types::Diagnostic> {
         let labels = crate::symbols::label_declarations::Index::new(self, uri);
         let mut diagnostics = self
             .documents

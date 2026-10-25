@@ -1,6 +1,6 @@
 use latex_lsp::{file_operations, navigation, workspace::Workspace};
+use lsp_types::*;
 use std::path::Path;
-use tower_lsp::lsp_types::*;
 
 const FILES: [(&str, &str); 9] = [
     ("input", "tex"),

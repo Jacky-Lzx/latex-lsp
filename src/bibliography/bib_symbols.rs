@@ -1,6 +1,6 @@
 //! Bibliography outlines share construct and field boundaries with the parser.
 use crate::{parser::syntax, project::workspace::Document};
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 
 #[allow(deprecated)]
 pub(crate) fn symbols(doc: &Document) -> Vec<DocumentSymbol> {

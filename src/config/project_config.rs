@@ -1,5 +1,6 @@
 //! Layer bounded JSON project settings over the editor's defaults.
 use crate::{config::Config, project::workspace::Workspace};
+use lsp_types::Url;
 use serde_json::Value;
 use std::{
     collections::BTreeMap,
@@ -7,7 +8,6 @@ use std::{
     sync::{Mutex, OnceLock},
     time::SystemTime,
 };
-use tower_lsp::lsp_types::Url;
 
 #[derive(Clone)]
 struct Cached {

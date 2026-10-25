@@ -3,11 +3,11 @@ use crate::{
     compilation::build_log,
     project::workspace::{DocumentKind, Workspace},
 };
-use std::collections::{BTreeMap, BTreeSet};
-use tower_lsp::lsp_types::{
+use lsp_types::{
     Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity, Location, NumberOrString,
     Position, Range, Url,
 };
+use std::collections::{BTreeMap, BTreeSet};
 
 type Locations = BTreeSet<(Url, Position, Position)>;
 

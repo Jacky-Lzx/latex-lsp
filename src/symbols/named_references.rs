@@ -1,15 +1,16 @@
 //! Label/citation keys whose meanings agree in every consuming project.
+use crate::rpc as jsonrpc;
 use crate::{
     language::signature::CommandSignatures,
     parser::syntax,
     project::workspace::{Document, DocumentKind, Workspace},
     symbols::reference_calls,
 };
+use lsp_types::Url;
 use std::{
     collections::{BTreeMap, BTreeSet},
     ops::Range,
 };
-use tower_lsp::{jsonrpc, lsp_types::Url};
 
 #[derive(Clone, PartialEq)]
 struct Key {

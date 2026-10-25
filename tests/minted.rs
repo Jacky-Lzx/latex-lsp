@@ -3,7 +3,7 @@ use latex_lsp::{
     text::Text,
     workspace::{Document, Workspace},
 };
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 
 fn uri() -> Url {
     Url::parse("file:///minted-tests/main.tex").unwrap()

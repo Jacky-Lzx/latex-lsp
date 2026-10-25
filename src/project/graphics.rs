@@ -3,13 +3,13 @@ use crate::{
     parser::syntax,
     project::workspace::{normalize_path, resolve_path, Workspace},
 };
+use lsp_types::Url;
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet},
     ops::Range,
     path::{Path, PathBuf},
 };
-use tower_lsp::lsp_types::Url;
 
 pub fn is_image(path: &std::path::Path) -> bool {
     path.extension()
@@ -178,7 +178,7 @@ pub(crate) fn images_in(workspace: &Workspace, uri: &Url, root: &Url) -> BTreeSe
 fn collect_images(
     workspace: &Workspace,
     uri: &Url,
-    links: Vec<tower_lsp::lsp_types::DocumentLink>,
+    links: Vec<lsp_types::DocumentLink>,
     roots: &[Url],
 ) -> BTreeSet<Url> {
     let Some(doc) = workspace.documents.get(uri) else {

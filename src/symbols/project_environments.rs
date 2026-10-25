@@ -4,8 +4,8 @@ use crate::{
     parser::syntax::{self, QuickFix},
     project::workspace::{resolve_file_path, DocumentKind, Workspace},
 };
+use lsp_types::{DiagnosticRelatedInformation, Location, Url};
 use std::collections::{BTreeMap, BTreeSet};
-use tower_lsp::lsp_types::{DiagnosticRelatedInformation, Location, Url};
 
 const MAX_VISITS: usize = 4096;
 const MAX_EVENTS: usize = 65536;
@@ -250,7 +250,7 @@ impl<'a> Walk<'a> {
                             span,
                             format!("Unclosed environment `{missing_name}` before \\end{{{name}}}"),
                             format!("Close environment `{missing_name}` before `{name}`"),
-                            tower_lsp::lsp_types::TextEdit {
+                            lsp_types::TextEdit {
                                 range: doc.text.range(event.call.span.start, event.call.span.start),
                                 new_text: replacement.clone(),
                             },
@@ -273,7 +273,7 @@ impl<'a> Walk<'a> {
                     event.call.argument.span.clone(),
                     format!("Unexpected \\end{{{name}}}"),
                     format!("Remove unexpected \\end{{{name}}}"),
-                    tower_lsp::lsp_types::TextEdit {
+                    lsp_types::TextEdit {
                         range: doc.text.range(event.call.span.start, event.call.span.end),
                         new_text: String::new(),
                     },
@@ -317,7 +317,7 @@ impl<'a> Walk<'a> {
                     span,
                     format!("Unclosed environment `{name}`"),
                     format!("Close environment `{name}`"),
-                    tower_lsp::lsp_types::TextEdit {
+                    lsp_types::TextEdit {
                         range: doc.text.range(end, end),
                         new_text: replacement.clone(),
                     },

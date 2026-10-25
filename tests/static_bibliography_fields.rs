@@ -1,5 +1,5 @@
 use latex_lsp::{config::Config, text::Text, workspace::Workspace};
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 
 const CODE: &str = "repeated-bibliography-field";
 fn diagnostics(ws: &Workspace, uri: &Url) -> Vec<Diagnostic> {

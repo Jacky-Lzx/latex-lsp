@@ -3,8 +3,8 @@ use crate::{
     parser::syntax::{self, Entry},
     project::workspace::{Document, Workspace},
 };
+use lsp_types::*;
 use std::{collections::BTreeSet, ops::Range};
-use tower_lsp::lsp_types::*;
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Index {

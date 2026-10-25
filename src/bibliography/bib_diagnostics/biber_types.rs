@@ -2,8 +2,8 @@
 //! may change it, so highlight the raw type only when its full fold matches.
 use super::{biber_keys, Context};
 use crate::{bibliography::bib_strings, compilation::recorder::BibliographyPaths, parser::syntax};
+use lsp_types::*;
 use std::path::Path;
-use tower_lsp::lsp_types::*;
 
 pub(crate) struct Record<'a> {
     key: &'a str,

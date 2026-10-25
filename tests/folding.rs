@@ -1,5 +1,5 @@
 use latex_lsp::{navigation, workspace::Document};
-use tower_lsp::lsp_types::{
+use lsp_types::{
     FoldingRange, FoldingRangeCapability, FoldingRangeClientCapabilities, FoldingRangeKind, Url,
 };
 
@@ -218,7 +218,7 @@ fn comment_columns_exclude_crlf_and_section_folds_exclude_the_next_heading() {
     for range in folds {
         assert!(doc
             .text
-            .offset(tower_lsp::lsp_types::Position::new(
+            .offset(lsp_types::Position::new(
                 range.end_line,
                 range.end_character.unwrap()
             ))

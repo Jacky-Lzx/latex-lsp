@@ -1,7 +1,7 @@
 //! Completion and expression operands for named booleans and etoolbox toggles.
 use crate::{parser::syntax, project::workspace::Workspace};
+use lsp_types::*;
 use std::collections::{BTreeMap, BTreeSet};
-use tower_lsp::lsp_types::*;
 
 #[derive(Clone, Copy, PartialEq)]
 enum ArgumentKind {

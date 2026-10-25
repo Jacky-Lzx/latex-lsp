@@ -1,6 +1,6 @@
 use latex_lsp::{build, config::BuildConfig, features, text::Text, workspace::Workspace};
+use lsp_types::*;
 use std::sync::atomic::AtomicBool;
-use tower_lsp::lsp_types::*;
 
 fn setup(source: &str) -> (Workspace, Url) {
     let uri = Url::parse("file:///saved-counter-completion/main.tex").unwrap();

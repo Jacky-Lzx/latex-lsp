@@ -1,7 +1,8 @@
 //! Static semantic highlighting, with non-overlapping, single-line UTF-16 tokens.
+use crate::rpc as jsonrpc;
 use crate::{parser::syntax, project::workspace::Document};
+use lsp_types::*;
 use std::{collections::BTreeSet, ops::Range as Span};
-use tower_lsp::{jsonrpc, lsp_types::*};
 
 static CACHED_TOKENS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 #[derive(Debug)]

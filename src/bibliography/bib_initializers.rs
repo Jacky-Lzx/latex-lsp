@@ -5,8 +5,8 @@ use crate::{
     project::workspace::Document,
     symbols::named_references::Context,
 };
+use lsp_types::Url;
 use std::{collections::BTreeSet, ops::Range};
-use tower_lsp::lsp_types::Url;
 
 pub(crate) fn native_initializer(name: &str) -> bool {
     matches!(

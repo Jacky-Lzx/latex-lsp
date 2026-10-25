@@ -1,6 +1,6 @@
 use latex_lsp::{build, build_log, config::BuildConfig, text::Text};
+use lsp_types::{DiagnosticSeverity, Url};
 use std::sync::atomic::AtomicBool;
-use tower_lsp::lsp_types::{DiagnosticSeverity, Url};
 
 #[test]
 fn specific_causes_replace_fatal_summaries_across_sources_and_message_orderings() {
@@ -264,9 +264,7 @@ fn missing_file_causes_survive_numbered_and_traditional_emergency_stops() {
             assert_eq!(original.range.end.character, 17);
             assert_eq!(
                 original.code,
-                Some(tower_lsp::lsp_types::NumberOrString::String(
-                    "missing-input".into()
-                ))
+                Some(lsp_types::NumberOrString::String("missing-input".into()))
             );
             assert_eq!(original.severity, Some(DiagnosticSeverity::ERROR));
             assert!(entries
@@ -394,9 +392,7 @@ fn real_missing_input_and_package_causes_survive_emergency_stops_in_the_correct_
             if package {
                 assert_eq!(
                     cause.code,
-                    Some(tower_lsp::lsp_types::NumberOrString::String(
-                        "missing-package".into()
-                    ))
+                    Some(lsp_types::NumberOrString::String("missing-package".into()))
                 );
                 let stop = errors
                     .iter()

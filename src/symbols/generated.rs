@@ -1,13 +1,11 @@
 //! Generated commands and dependencies of environments, counters and conditionals.
+use crate::rpc::{Error, Result};
 use crate::{
     parser::syntax::{self, Argument, Command},
     project::workspace::{Document, Workspace},
 };
+use lsp_types::Url;
 use std::{collections::BTreeSet, ops::Range};
-use tower_lsp::{
-    jsonrpc::{Error, Result},
-    lsp_types::Url,
-};
 
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum Kind {

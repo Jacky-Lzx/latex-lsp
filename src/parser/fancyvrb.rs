@@ -1,7 +1,7 @@
 //! FancyVerb's literal filenames and conservative formatting settings.
 use crate::{parser::syntax, text::Text};
+use lsp_types::TextEdit;
 use std::ops::Range;
-use tower_lsp::lsp_types::TextEdit;
 
 pub(crate) fn is_input(name: &str) -> bool {
     matches!(name, "VerbatimInput" | "LVerbatimInput" | "BVerbatimInput")

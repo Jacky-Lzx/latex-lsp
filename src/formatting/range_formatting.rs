@@ -1,9 +1,7 @@
 //! Restrict a contextual formatter's result to complete changes inside a range.
+use crate::rpc::{Error, Result};
 use crate::{formatting, text::Text};
-use tower_lsp::{
-    jsonrpc::{Error, Result},
-    lsp_types::{Range, TextEdit},
-};
+use lsp_types::{Range, TextEdit};
 
 pub(crate) fn normalize(text: &Text, range: Range) -> Result<Range> {
     let start = text.clamped_offset(range.start);
@@ -117,7 +115,7 @@ pub(crate) fn edits(text: &Text, formatted: String, range: Range) -> Vec<TextEdi
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tower_lsp::lsp_types::{Position, TextDocumentContentChangeEvent};
+    use lsp_types::{Position, TextDocumentContentChangeEvent};
 
     fn apply(source: &str, formatted: &str, start: usize, end: usize) -> String {
         let text = Text::new(source.into());

@@ -3,7 +3,7 @@ use latex_lsp::{
     text::Text,
     workspace::{Document, Workspace},
 };
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 fn changed(source: &str, mut edits: Vec<TextEdit>) -> String {
     edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
     Text::new(source.into())

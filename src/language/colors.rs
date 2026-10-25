@@ -2,8 +2,8 @@ use crate::{
     parser::syntax::{self, Argument, Command},
     project::workspace::{Document, DocumentKind},
 };
+use lsp_types::*;
 use std::ops::Range as Span;
-use tower_lsp::lsp_types::*;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Model {

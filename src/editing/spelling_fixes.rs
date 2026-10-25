@@ -1,7 +1,7 @@
 //! Suggest bounded spelling corrections from the diagnostic's own project.
 use crate::{compilation::build_log, parser::syntax::QuickFix, project::workspace::Workspace};
+use lsp_types::{Diagnostic, NumberOrString, Range, TextEdit, Url};
 use std::collections::{BTreeMap, BTreeSet};
-use tower_lsp::lsp_types::{Diagnostic, NumberOrString, Range, TextEdit, Url};
 
 pub(crate) const MAX_COMPARISONS: usize = 16_384;
 

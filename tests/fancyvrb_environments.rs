@@ -3,8 +3,8 @@ use latex_lsp::{
     text::Text,
     workspace::{Document, Workspace},
 };
+use lsp_types::*;
 use std::{path::Path, sync::atomic::AtomicBool};
-use tower_lsp::lsp_types::*;
 
 const ENVIRONMENTS: [&str; 10] = [
     "Verbatim",

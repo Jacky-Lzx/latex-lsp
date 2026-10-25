@@ -3,11 +3,11 @@ use crate::{
     parser::syntax,
     project::workspace::{Document, Workspace},
 };
+use lsp_types::*;
 use std::{
     collections::{BTreeMap, BTreeSet},
     ops::Range,
 };
-use tower_lsp::lsp_types::*;
 
 /// Whether each argument contains a literal name, rather than a command token.
 fn arguments(name: &str) -> &'static [bool] {

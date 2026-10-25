@@ -1,6 +1,6 @@
 use latex_lsp::{build, editing, features, signature, workspace::Workspace};
+use lsp_types::*;
 use std::{collections::BTreeMap, path::Path, sync::atomic::AtomicBool};
-use tower_lsp::lsp_types::*;
 
 fn uri(root: &Path, name: &str) -> Url {
     Url::from_file_path(root.join(name)).unwrap()

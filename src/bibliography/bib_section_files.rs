@@ -5,8 +5,8 @@ use crate::{
     project::workspace::{resolve_file_path, Document, DocumentKind, Workspace},
     symbols::named_references::Context,
 };
+use lsp_types::Url;
 use std::collections::{BTreeMap, BTreeSet};
-use tower_lsp::lsp_types::Url;
 
 // These internal readers let the common path machinery retain the native
 // distinction between registered exact names and inferred .bib filenames.

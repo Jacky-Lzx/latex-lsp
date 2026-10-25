@@ -2,8 +2,8 @@
 //! Only unique raw literal references can supply a narrower source range.
 use super::Context;
 use crate::parser::syntax;
+use lsp_types::*;
 use std::path::Path;
-use tower_lsp::lsp_types::*;
 
 pub(crate) struct Record<'a> {
     key: &'a str,

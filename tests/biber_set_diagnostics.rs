@@ -2,8 +2,8 @@
 mod biber;
 
 use latex_lsp::{build_log, editing, text::Text, workspace::Workspace};
+use lsp_types::*;
 use std::{collections::BTreeMap, path::Path};
-use tower_lsp::lsp_types::*;
 
 const CODE: &str = "invalid-bibliography-set";
 fn uri(root: &Path, name: &str) -> Url {

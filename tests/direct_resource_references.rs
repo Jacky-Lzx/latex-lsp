@@ -2,8 +2,8 @@ use latex_lsp::{
     features, file_operations, navigation,
     workspace::{Document, Workspace},
 };
+use lsp_types::*;
 use std::{collections::BTreeSet, path::Path};
-use tower_lsp::lsp_types::*;
 
 const COMMANDS: [&str; 5] = [
     "bibliography",
@@ -298,7 +298,7 @@ fn shared_resource_paths_require_the_same_file_meaning_in_every_project() {
         .unwrap_err();
         assert_eq!(
             error.code,
-            tower_lsp::jsonrpc::ErrorCode::InvalidParams,
+            latex_lsp::rpc::ErrorCode::InvalidParams,
             "{name}"
         );
     }

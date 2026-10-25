@@ -2,8 +2,8 @@ use latex_lsp::{
     build_log, editing, features, file_operations, navigation, signature, text::Text,
     workspace::Workspace,
 };
+use lsp_types::*;
 use std::path::Path;
-use tower_lsp::lsp_types::*;
 
 const INPUTS: [&str; 3] = ["VerbatimInput", "LVerbatimInput", "BVerbatimInput"];
 

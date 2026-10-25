@@ -1,5 +1,6 @@
 //! Explicit, bounded cleanup of one configured build's known artifacts.
 use crate::{config::BuildConfig, project::workspace::Workspace};
+use lsp_types::Url;
 use serde_json::{json, Value};
 use std::{
     collections::{hash_map::DefaultHasher, BTreeSet},
@@ -7,7 +8,6 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
 };
-use tower_lsp::lsp_types::Url;
 
 const AUXILIARY: &[&str] = &[
     "aux",

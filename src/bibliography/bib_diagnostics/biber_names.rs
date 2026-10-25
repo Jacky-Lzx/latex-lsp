@@ -2,8 +2,8 @@
 //! Names may be decoded or supplied by custom model fields; mark only the key.
 use super::Context;
 use crate::parser::syntax;
+use lsp_types::*;
 use std::path::{Path, PathBuf};
-use tower_lsp::lsp_types::*;
 
 #[derive(Clone, Copy)]
 enum Reason {

@@ -1,7 +1,7 @@
 //! Static key/value metadata for common LaTeX option contexts.
 use crate::{parser::syntax, project::workspace::Workspace};
+use lsp_types::*;
 use std::{collections::BTreeSet, ops::Range as Span};
-use tower_lsp::lsp_types::*;
 
 type OptionSpec = (&'static str, &'static str);
 const GRAPHICS: &[OptionSpec] = &[

@@ -4,12 +4,12 @@ use crate::{
     project::workspace::{DocumentKind, Workspace},
     symbols::named_references::Index,
 };
+use lsp_types::*;
 use std::{
     collections::{BTreeMap, BTreeSet},
     ops::Range,
     sync::Arc,
 };
-use tower_lsp::lsp_types::*;
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct Identity {
     uri: Url,

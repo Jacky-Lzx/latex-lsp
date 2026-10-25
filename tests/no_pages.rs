@@ -1,12 +1,12 @@
 #![cfg(unix)]
 
 use latex_lsp::{build, build_log, config::BuildConfig};
+use lsp_types::DiagnosticSeverity;
 use std::{
     fs::FileTimes,
     sync::atomic::AtomicBool,
     time::{Duration, SystemTime},
 };
-use tower_lsp::lsp_types::DiagnosticSeverity;
 
 fn run(log: &str, channel: &str) -> (tempfile::TempDir, build::Outcome) {
     let directory = tempfile::tempdir().unwrap();

@@ -1,6 +1,6 @@
 use latex_lsp::{build, editing, features, file_operations, navigation, workspace::Workspace};
+use lsp_types::*;
 use std::path::Path;
-use tower_lsp::lsp_types::*;
 
 const SOURCE: &str = "\\documentclass{article}\n\\begin{document}\n\\input chapter.tex\n\\input\"my file\"\n{\\input chapter }\n% \\input ignored\n\\verb|\\input ignored|\n\\input % comment before filename\n  chapter\n\\end{document}\n";
 

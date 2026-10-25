@@ -1,11 +1,11 @@
 use crate::{parser::syntax, project::workspace::Workspace};
+use lsp_types::*;
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet},
     ops::Range,
     path::Path,
 };
-use tower_lsp::lsp_types::*;
 
 pub fn complete(
     workspace: &Workspace,

@@ -13,7 +13,7 @@ use crate::{
     parser::syntax,
     project::workspace::{Document, Workspace},
 };
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 
 pub fn code_actions(
     workspace: &Workspace,

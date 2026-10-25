@@ -25,7 +25,7 @@ impl Kind {
 
 pub(crate) fn boolean_test(
     doc: &crate::project::workspace::Document,
-    range: tower_lsp::lsp_types::Range,
+    range: lsp_types::Range,
 ) -> bool {
     doc.syntax.commands.iter().any(|command| {
         (matches!(command.name.as_str(), "ifbool" | "notbool")

@@ -5,8 +5,8 @@ use crate::{
     parser::syntax::Entry,
     project::workspace::{Document, DocumentKind, Workspace},
 };
+use lsp_types::{Hover, HoverContents, Location, MarkupContent, MarkupKind, Url};
 use std::{collections::BTreeSet, ops::Range};
-use tower_lsp::lsp_types::{Hover, HoverContents, Location, MarkupContent, MarkupKind, Url};
 
 struct Target<'a> {
     span: Range<usize>,
@@ -237,7 +237,7 @@ pub(crate) fn completion(
     ws: &Workspace,
     uri: &Url,
     offset: usize,
-) -> Option<Vec<tower_lsp::lsp_types::CompletionItem>> {
+) -> Option<Vec<lsp_types::CompletionItem>> {
     let doc = ws
         .documents
         .get(uri)

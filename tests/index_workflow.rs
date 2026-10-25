@@ -115,7 +115,7 @@ fn configured_pipeline_processes_real_inputs_and_final_log_supersedes_initial_wa
         .all(|item| !item.message.contains("First pass only")));
     assert_eq!(
         result.analysis.unwrap()["processedIndexTools"][0]["outputUri"],
-        tower_lsp::lsp_types::Url::from_file_path(fixture.artifact("ind"))
+        lsp_types::Url::from_file_path(fixture.artifact("ind"))
             .unwrap()
             .as_str()
     );
@@ -473,7 +473,7 @@ exit 2
         std::fs::read_to_string(fixture.artifact("ind")).unwrap(),
         "old index"
     );
-    let input = tower_lsp::lsp_types::Url::from_file_path(fixture.artifact("idx")).unwrap();
+    let input = lsp_types::Url::from_file_path(fixture.artifact("idx")).unwrap();
     assert_eq!(result.diagnostics[&input][0].range.start.line, 0);
     assert_eq!(
         result.diagnostics[&input][0].source.as_deref(),
@@ -510,7 +510,7 @@ fn real_makeindex_style_errors_fail_at_zero_exit_and_conflicts_remain_located_wa
             result.message,
             result.output
         );
-        let uri = tower_lsp::lsp_types::Url::from_file_path(if style_error {
+        let uri = lsp_types::Url::from_file_path(if style_error {
             style
         } else {
             fixture.artifact("idx")
@@ -520,9 +520,9 @@ fn real_makeindex_style_errors_fail_at_zero_exit_and_conflicts_remain_located_wa
         assert_eq!(
             diagnostics[0].severity,
             Some(if style_error {
-                tower_lsp::lsp_types::DiagnosticSeverity::ERROR
+                lsp_types::DiagnosticSeverity::ERROR
             } else {
-                tower_lsp::lsp_types::DiagnosticSeverity::WARNING
+                lsp_types::DiagnosticSeverity::WARNING
             })
         );
         if style_error {

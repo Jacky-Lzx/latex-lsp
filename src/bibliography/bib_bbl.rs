@@ -1,10 +1,10 @@
 //! Certified loaded BBL lists supply ranks and literal label prefixes.
 use crate::{parser::syntax, project::workspace::Workspace};
+use lsp_types::Url;
 use std::{
     collections::{BTreeMap, BTreeSet},
     io::Read,
 };
-use tower_lsp::lsp_types::Url;
 
 type Labels = BTreeMap<(u32, String), Option<String>>;
 type Records = BTreeMap<(u32, String, String), (u32, Option<String>)>;

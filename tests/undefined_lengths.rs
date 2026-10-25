@@ -1,5 +1,5 @@
 use latex_lsp::{build_log, editing, text::Text, workspace::Workspace};
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 
 fn log(call: &str, numbered: bool) -> String {
     let header = if numbered { "./main.tex:2:" } else { "!" };

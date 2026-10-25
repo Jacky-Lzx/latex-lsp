@@ -1,8 +1,8 @@
 //! A fatal inheritance error can use only the history immediately before it.
 use super::Context;
 use crate::parser::syntax;
+use lsp_types::*;
 use std::path::{Path, PathBuf};
-use tower_lsp::lsp_types::*;
 
 pub(crate) struct Record<'a> {
     key: &'a str,

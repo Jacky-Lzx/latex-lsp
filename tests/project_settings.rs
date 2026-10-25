@@ -2,7 +2,7 @@ use latex_lsp::{
     config::{Engine, Formatter},
     workspace::Workspace,
 };
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 
 #[test]
 fn folder_settings_inherit_and_root_overrides_do_not_leak() {

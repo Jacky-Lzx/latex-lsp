@@ -1,5 +1,5 @@
 use latex_lsp::{features, text::Text, workspace::Workspace};
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 
 struct Project {
     _dir: tempfile::TempDir,
@@ -42,7 +42,7 @@ impl Project {
     fn open_other(&mut self, source: String) {
         self.ws.open(self.other.clone(), source, 7);
     }
-    fn rename(&self) -> tower_lsp::jsonrpc::Result<Option<WorkspaceEdit>> {
+    fn rename(&self) -> latex_lsp::rpc::Result<Option<WorkspaceEdit>> {
         features::rename(&self.ws, &self.common, self.position(), "fresh")
     }
 }

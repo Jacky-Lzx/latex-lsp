@@ -2,8 +2,8 @@ use latex_lsp::{
     editing,
     workspace::{Document, Workspace},
 };
+use lsp_types::*;
 use std::path::Path;
-use tower_lsp::lsp_types::*;
 
 fn selector(form: &str) -> &str {
     match form {

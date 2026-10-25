@@ -1,5 +1,5 @@
 use latex_lsp::{features, workspace::Workspace};
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 #[test]
 fn context_entry_assignments_participate_in_complete_key_renames() {
     let dir = tempfile::tempdir().unwrap();

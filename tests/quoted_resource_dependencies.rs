@@ -2,8 +2,8 @@ use latex_lsp::{
     features,
     workspace::{DocumentKind, Workspace},
 };
+use lsp_types::*;
 use std::{collections::BTreeSet, path::Path};
-use tower_lsp::lsp_types::*;
 
 const COMMANDS: [&str; 5] = [
     "bibliography",

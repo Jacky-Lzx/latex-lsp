@@ -7,6 +7,7 @@ use crate::{
         workspace::{normalize_path, resolve_file_path_with, Workspace},
     },
 };
+use lsp_types::Url;
 use std::{
     cell::RefCell,
     collections::{hash_map::DefaultHasher, BTreeMap, BTreeSet},
@@ -15,7 +16,6 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
-use tower_lsp::lsp_types::Url;
 
 const MAX_PATHS: usize = 4096;
 const MAX_ROOTS: usize = 128;

@@ -2,8 +2,8 @@ use latex_lsp::{
     editing,
     workspace::{Document, Workspace},
 };
+use lsp_types::*;
 use std::collections::BTreeMap;
-use tower_lsp::lsp_types::*;
 
 fn setup(source: &str, definitions: &str) -> (Workspace, Url, Url) {
     let uri = Url::parse("file:///counter-fixes/main.tex").unwrap();

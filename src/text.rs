@@ -1,4 +1,4 @@
-use tower_lsp::lsp_types::{Position, Range, TextDocumentContentChangeEvent};
+use lsp_types::{Position, Range, TextDocumentContentChangeEvent};
 
 /// Byte offsets internally, UTF-16 code units at the protocol boundary.
 #[derive(Clone, Debug)]

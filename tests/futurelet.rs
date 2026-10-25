@@ -1,6 +1,6 @@
 use latex_lsp::{build, features, signature, text::Text, workspace::Workspace};
+use lsp_types::*;
 use std::{collections::BTreeMap, path::Path};
-use tower_lsp::lsp_types::*;
 
 fn project(root: &Path, files: &[(&str, &str)]) -> Workspace {
     for (name, source) in files {

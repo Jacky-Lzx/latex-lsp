@@ -3,8 +3,8 @@ use crate::{
     parser::syntax::{self, Argument},
     text::Text,
 };
+use lsp_types::TextEdit;
 use std::ops::Range;
-use tower_lsp::lsp_types::TextEdit;
 
 pub(crate) fn is_inline(name: &str) -> bool {
     matches!(name, "mintinline" | "mint")

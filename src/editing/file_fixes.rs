@@ -5,7 +5,7 @@ use crate::{
     parser::syntax,
     project::workspace::{self, Workspace},
 };
-use tower_lsp::lsp_types::{Diagnostic, NumberOrString, TextEdit, Url};
+use lsp_types::{Diagnostic, NumberOrString, TextEdit, Url};
 
 pub(crate) fn fixes(
     workspace: &Workspace,

@@ -1,17 +1,15 @@
 //! Require complete, executable identities before editing PDF destination keys.
+use crate::rpc::{Error, Result};
 use crate::{
     language::signature::{literal_copy_target, source_alias, CommandSignatures},
     parser::syntax,
     project::workspace::{Document, DocumentKind, Workspace},
     symbols::{anchors, named_references::Context},
 };
+use lsp_types::Url;
 use std::{
     cell::OnceCell,
     collections::{BTreeMap, BTreeSet},
-};
-use tower_lsp::{
-    jsonrpc::{Error, Result},
-    lsp_types::Url,
 };
 
 const COMMANDS: &[&str] = &[

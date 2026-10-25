@@ -3,7 +3,7 @@ use latex_lsp::{
     text::Text,
     workspace::{Document, Workspace},
 };
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 
 fn workspace(source: &str) -> (Workspace, Url) {
     let uri = Url::parse("file:///strings/refs.bib").unwrap();

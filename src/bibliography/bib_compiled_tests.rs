@@ -1,5 +1,5 @@
 use crate::{compilation::auxiliary, project::workspace::Workspace};
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 
 const CONTEXT: &str = "none/global//global/global/global";
 fn record(section: u32, key: &str, number: u32) -> String {

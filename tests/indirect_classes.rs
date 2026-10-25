@@ -2,7 +2,7 @@ use latex_lsp::{
     build_log, editing, features, file_operations, navigation,
     workspace::{Document, Workspace},
 };
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 
 fn call(form: &str, loader: &str) -> String {
     match form {

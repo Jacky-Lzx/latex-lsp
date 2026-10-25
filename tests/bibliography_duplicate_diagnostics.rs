@@ -1,6 +1,6 @@
 use latex_lsp::{build_log, text::Text};
+use lsp_types::*;
 use std::{collections::BTreeMap, path::Path};
-use tower_lsp::lsp_types::*;
 
 const CODE: &str = "repeated-bibliography-entry";
 

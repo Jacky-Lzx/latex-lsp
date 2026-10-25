@@ -1,6 +1,6 @@
 use latex_lsp::{build, build_log, config::BuildConfig};
+use lsp_types::{DiagnosticSeverity, Url};
 use std::sync::atomic::AtomicBool;
-use tower_lsp::lsp_types::{DiagnosticSeverity, Url};
 
 #[test]
 fn source_and_generated_files_keep_numbered_and_traditional_error_locations_and_file_stack_boundaries(

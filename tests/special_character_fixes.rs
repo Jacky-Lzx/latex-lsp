@@ -3,8 +3,8 @@ use latex_lsp::{
     text::Text,
     workspace::{Document, Workspace},
 };
+use lsp_types::*;
 use serde_json::json;
-use tower_lsp::lsp_types::*;
 
 const AMP: &str = "Misplaced alignment tab character &.";
 const HASH: &str = "You can't use `macro parameter character #' in horizontal mode.";

@@ -3,7 +3,7 @@ use latex_lsp::{
     text::Text,
     workspace::{Document, Workspace},
 };
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 
 #[test]
 fn missing_input_diagnostics_select_literal_paths_in_braces_quotes_and_bare_forms() {

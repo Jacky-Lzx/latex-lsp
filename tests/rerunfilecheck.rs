@@ -1,5 +1,5 @@
 use latex_lsp::{build_log, editing, workspace::Workspace};
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 
 const CONFIRMED: &[&str] = &[
     "Package rerunfilecheck Warning: File `main.brf' has changed.\n\n(rerunfilecheck)                Rerun to get bibliographical\n references right.",

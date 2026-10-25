@@ -2,8 +2,8 @@ use latex_lsp::{
     features,
     workspace::{Document, Workspace},
 };
+use lsp_types::*;
 use std::path::Path;
-use tower_lsp::lsp_types::*;
 
 fn project(root: &Path, bibliography: &str) -> (Workspace, Url, Url) {
     std::fs::write(root.join("main.tex"), r"\documentclass{article}\begin{document}中文😀 \cite{alpha}\bibliography{refs}\end{document}").unwrap();

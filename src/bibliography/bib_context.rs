@@ -1,7 +1,7 @@
 //! Ordinary citations use their compiled default context unless explicitly assigned.
 use crate::{parser::syntax, project::workspace::Workspace};
+use lsp_types::Url;
 use std::collections::{BTreeMap, BTreeSet};
-use tower_lsp::lsp_types::Url;
 
 pub(crate) fn flat_prefix(value: &str) -> bool {
     value.chars().count() <= 256

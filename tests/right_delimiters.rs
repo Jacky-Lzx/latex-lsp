@@ -1,5 +1,5 @@
 use latex_lsp::{build_log, editing, text::Text, workspace::Workspace};
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 
 const ERROR: &str = r"Extra \right.";
 const CODE: &str = "unmatched-right-delimiter";

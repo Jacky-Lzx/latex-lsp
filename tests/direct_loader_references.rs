@@ -1,6 +1,6 @@
 use latex_lsp::{features, file_operations, navigation, workspace::Workspace};
+use lsp_types::*;
 use std::path::Path;
-use tower_lsp::lsp_types::*;
 
 const COMMANDS: [(&str, &str); 8] = [
     ("usepackage", "sty"),

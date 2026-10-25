@@ -6,8 +6,8 @@ use crate::{
     project::workspace::{Document, DocumentKind, Workspace},
     symbols::named_references::Context,
 };
+use lsp_types::{Position, Range, Url};
 use std::collections::{BTreeMap, BTreeSet};
-use tower_lsp::lsp_types::{Position, Range, Url};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {

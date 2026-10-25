@@ -1,4 +1,5 @@
 //! Project-consistent names of statically registered biblatex resources.
+use crate::rpc::{Error, Result};
 use crate::{
     bibliography::bib_section_files::{self, LabelBinding},
     language::signature::CommandSignatures,
@@ -6,12 +7,11 @@ use crate::{
     project::workspace::{Document, DocumentKind, Workspace},
     symbols::named_references::Context,
 };
+use lsp_types::*;
 use std::{
     collections::{BTreeMap, BTreeSet},
     ops::Range,
 };
-use tower_lsp::jsonrpc::{Error, Result};
-use tower_lsp::lsp_types::*;
 
 struct Query {
     command: usize,

@@ -3,8 +3,8 @@ use latex_lsp::{
     text::Text,
     workspace::{Document, Workspace},
 };
+use lsp_types::*;
 use std::{collections::BTreeMap, path::Path};
-use tower_lsp::lsp_types::*;
 
 fn project(root: &Path, bibliography: &str) -> (Workspace, Url, Url) {
     let main = Url::from_file_path(root.join("main.tex")).unwrap();

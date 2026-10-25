@@ -1,7 +1,7 @@
 //! Duplicate assignments can be checked without evaluating bibliography values.
 use crate::project::workspace::{DocumentKind, Workspace};
+use lsp_types::*;
 use std::collections::{BTreeMap, BTreeSet};
-use tower_lsp::lsp_types::*;
 
 const CODE: &str = "repeated-bibliography-field";
 

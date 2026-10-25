@@ -5,8 +5,8 @@ use latex_lsp::{
     text::Text,
     workspace::{Document, Workspace},
 };
+use lsp_types::*;
 use std::collections::BTreeMap;
-use tower_lsp::lsp_types::*;
 
 const MESSAGE: &str = "Package xcolor Error: Undefined color model `rbg'.";
 const HELP: &str = "See the xcolor package documentation for explanation.\nType  H <return>  for immediate help.\n ...\n\n";

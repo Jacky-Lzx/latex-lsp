@@ -1,5 +1,5 @@
 use latex_lsp::{features, signature, text::Text, workspace::Workspace};
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 
 fn open(workspace: &mut Workspace, source: &str) -> Url {
     let uri = Url::parse("file:///entry-type-tests/local.bbx").unwrap();

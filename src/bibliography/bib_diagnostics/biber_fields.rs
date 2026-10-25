@@ -3,12 +3,12 @@
 use super::{biber_keys, Context, Parsed};
 use crate::{bibliography::bib_strings, compilation::recorder::BibliographyPaths, parser::syntax};
 use biber_keys::key_name;
+use lsp_types::*;
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
     sync::Arc,
 };
-use tower_lsp::lsp_types::*;
 
 #[derive(Clone, Copy)]
 pub(crate) enum Kind {

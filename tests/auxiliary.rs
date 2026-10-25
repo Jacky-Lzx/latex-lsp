@@ -1,5 +1,5 @@
 use latex_lsp::{features, text::Text, workspace::Workspace};
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 #[test]
 fn external_labels_complete_navigate_and_hover_without_polluting_source_symbols() {
     let dir = tempfile::tempdir().unwrap();

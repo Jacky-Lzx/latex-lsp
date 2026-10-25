@@ -1,15 +1,13 @@
 //! Independent namespaces for glossary entries and index terms/streams.
+use crate::rpc::{Error, Result};
 use crate::{
     parser::syntax,
     project::workspace::{Document, DocumentKind, Workspace},
 };
+use lsp_types::*;
 use std::{
     collections::{BTreeMap, BTreeSet},
     ops::Range as Span,
-};
-use tower_lsp::{
-    jsonrpc::{Error, Result},
-    lsp_types::*,
 };
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Kind {

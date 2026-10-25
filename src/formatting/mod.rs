@@ -12,10 +12,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use tower_lsp::{
-    jsonrpc::{Error, Result},
-    lsp_types::{FormattingOptions, TextEdit},
-};
+use crate::rpc::{Error, Result};
+use lsp_types::{FormattingOptions, TextEdit};
 
 use crate::{
     config::{Formatter, FormattingConfig},
@@ -44,7 +42,7 @@ pub(crate) fn validate_options(options: &FormattingOptions) -> Result<()> {
 
 pub(crate) fn failure(message: impl Into<String>) -> Error {
     Error {
-        code: tower_lsp::jsonrpc::ErrorCode::ServerError(-32803),
+        code: crate::rpc::ErrorCode::ServerError(-32803),
         message: message.into().into(),
         data: None,
     }
@@ -255,8 +253,8 @@ pub(crate) fn replacement(
 mod tests {
     use super::*;
     use crate::config::Config;
+    use lsp_types::TextDocumentContentChangeEvent;
     use serde_json::json;
-    use tower_lsp::lsp_types::TextDocumentContentChangeEvent;
 
     #[test]
     fn configuration_defaults_to_tex_fmt_and_validates_overrides() {

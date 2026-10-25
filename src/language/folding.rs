@@ -4,8 +4,8 @@ use crate::{
     parser::syntax,
     project::workspace::{Document, DocumentKind},
 };
+use lsp_types::*;
 use std::ops::Range;
-use tower_lsp::lsp_types::*;
 
 fn fold(doc: &Document, span: Range<usize>, kind: FoldingRangeKind) -> Option<FoldingRange> {
     let start = doc.text.position(span.start);

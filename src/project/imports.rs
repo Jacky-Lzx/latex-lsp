@@ -4,11 +4,11 @@ use crate::{
     parser::syntax,
     project::workspace::{DocumentKind, Workspace},
 };
+use lsp_types::*;
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::PathBuf,
 };
-use tower_lsp::lsp_types::*;
 
 pub(crate) fn command(name: &str) -> bool {
     matches!(

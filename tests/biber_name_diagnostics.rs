@@ -1,6 +1,6 @@
 use latex_lsp::{build_log, editing, text::Text, workspace::Workspace};
+use lsp_types::*;
 use std::{collections::BTreeMap, path::Path};
-use tower_lsp::lsp_types::*;
 
 const CODE: &str = "malformed-bibliography-name";
 fn uri(root: &Path, file: &str) -> Url {

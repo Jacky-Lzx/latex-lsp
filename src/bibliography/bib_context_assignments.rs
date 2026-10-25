@@ -252,10 +252,7 @@ impl Compiled {
 // when the assignment does not specify its own. Other context defaults are
 // native global templates; named/template options are rejected by parse().
 pub(crate) fn global_sorting(
-    docs: &[(
-        tower_lsp::lsp_types::Url,
-        &crate::project::workspace::Document,
-    )],
+    docs: &[(lsp_types::Url, &crate::project::workspace::Document)],
     signatures: &crate::language::signature::CommandSignatures<'_>,
 ) -> Option<String> {
     let mut sorting = None;

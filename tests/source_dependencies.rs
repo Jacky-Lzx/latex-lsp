@@ -2,8 +2,8 @@ use latex_lsp::{
     features,
     workspace::{Document, Workspace},
 };
+use lsp_types::*;
 use std::{collections::BTreeSet, path::Path};
-use tower_lsp::lsp_types::*;
 
 const LOADERS: [&str; 4] = ["input", "include", "subfile", "InputIfFileExists"];
 fn uri(root: &Path, name: &str) -> Url {

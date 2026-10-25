@@ -1,6 +1,6 @@
 use latex_lsp::{build, build_log, config::BuildConfig, editing, text::Text, workspace::Workspace};
+use lsp_types::*;
 use std::sync::atomic::AtomicBool;
-use tower_lsp::lsp_types::*;
 
 fn undefined(diagnostics: &[Diagnostic]) -> &Diagnostic {
     diagnostics

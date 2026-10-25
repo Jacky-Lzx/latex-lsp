@@ -1,10 +1,10 @@
 //! Bounded external work cancelled with its request or server connection.
+use crate::rpc::{Error, Result};
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc,
 };
 use tokio::sync::{Notify, Semaphore};
-use tower_lsp::jsonrpc::{Error, Result};
 
 #[derive(Clone)]
 pub(crate) struct Tasks {

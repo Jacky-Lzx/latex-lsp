@@ -5,8 +5,8 @@ use latex_lsp::{
     text::Text,
     workspace::{Document, Workspace},
 };
+use lsp_types::*;
 use std::{collections::BTreeSet, sync::atomic::AtomicBool};
-use tower_lsp::lsp_types::*;
 
 fn setup(source: &str) -> (Workspace, Url) {
     let uri = Url::parse("file:///saved-name-commands/main.tex").unwrap();

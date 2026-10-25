@@ -1,5 +1,5 @@
 use latex_lsp::build_log;
-use tower_lsp::lsp_types::{NumberOrString, Url};
+use lsp_types::{NumberOrString, Url};
 
 #[test]
 fn continued_source_names_outgrow_existing_and_unavailable_prefix_files() {

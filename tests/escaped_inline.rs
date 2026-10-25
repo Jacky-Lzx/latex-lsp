@@ -3,7 +3,7 @@ use latex_lsp::{
     text::Text,
     workspace::{Document, Workspace},
 };
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 
 fn apply(source: &str, edit: WorkspaceEdit) -> String {
     let Some(DocumentChanges::Edits(documents)) = edit.document_changes else {

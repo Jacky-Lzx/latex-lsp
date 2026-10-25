@@ -2,8 +2,8 @@ use latex_lsp::{
     features, file_operations, navigation,
     workspace::{Document, Workspace},
 };
+use lsp_types::*;
 use std::path::Path;
-use tower_lsp::lsp_types::*;
 
 fn uri(root: &Path, name: &str) -> Url {
     Url::from_file_path(root.join(name)).unwrap()

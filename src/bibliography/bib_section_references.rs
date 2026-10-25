@@ -1,4 +1,5 @@
 //! Complete, bounded occurrence graphs for bibliography keys in reference sections.
+use crate::rpc as jsonrpc;
 use crate::{
     bibliography::bib_section_keys::{self, KeyGraph},
     language::signature::CommandSignatures,
@@ -6,15 +7,12 @@ use crate::{
     project::workspace::{Document, DocumentKind, Workspace},
     symbols::named_references::Index,
 };
+use lsp_types::{Location, PrepareRenameResponse, TextEdit, Url, WorkspaceEdit};
 use std::{
     cell::{Cell, RefCell},
     collections::{BTreeMap, BTreeSet},
     ops::Range,
     sync::Arc,
-};
-use tower_lsp::{
-    jsonrpc,
-    lsp_types::{Location, PrepareRenameResponse, TextEdit, Url, WorkspaceEdit},
 };
 
 type Result<T> = std::result::Result<T, ()>;

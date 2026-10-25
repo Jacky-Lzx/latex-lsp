@@ -4,8 +4,8 @@ use crate::{
     parser::syntax,
     project::workspace::{Document, DocumentKind, Workspace},
 };
+use lsp_types::*;
 use std::collections::{BTreeMap, BTreeSet};
-use tower_lsp::lsp_types::*;
 
 pub(crate) fn allows(context: &CodeActionContext, kind: &CodeActionKind) -> bool {
     context.only.as_ref().is_none_or(|only| {

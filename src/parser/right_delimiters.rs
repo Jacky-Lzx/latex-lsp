@@ -5,8 +5,8 @@ use crate::{
     project::workspace::Document,
     text::Text,
 };
+use lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, TextEdit};
 use std::ops::Range as Span;
-use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, TextEdit};
 
 pub(crate) const ERROR: &str = r"Extra \right.";
 pub(crate) const CODE: &str = "unmatched-right-delimiter";

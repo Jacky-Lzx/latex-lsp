@@ -1,10 +1,11 @@
 //! Pull reports and capability-aware delivery share the workspace's diagnostics.
+use crate::server::client::Client;
+use lsp_types::*;
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
     time::Duration,
 };
-use tower_lsp::{lsp_types::*, Client};
 
 pub(crate) type Snapshot = (Url, Vec<Diagnostic>, Option<i32>);
 pub(crate) const IDENTIFIER: &str = "latex-lsp";

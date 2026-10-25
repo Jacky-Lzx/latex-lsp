@@ -4,7 +4,7 @@ use latex_lsp::{
     text::Text,
     workspace::{Document, Workspace},
 };
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 
 #[test]
 fn meaning_reads_one_control_without_executing_its_interface() {

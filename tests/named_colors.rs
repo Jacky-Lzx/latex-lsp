@@ -3,8 +3,8 @@ use latex_lsp::{
     text::Text,
     workspace::{Document, Workspace},
 };
+use lsp_types::*;
 use std::collections::BTreeMap;
-use tower_lsp::lsp_types::*;
 
 fn insert(workspace: &mut Workspace, name: &str, source: &str, version: Option<i32>) -> Url {
     let uri = Url::parse(&format!("file:///named-colors/{name}")).unwrap();

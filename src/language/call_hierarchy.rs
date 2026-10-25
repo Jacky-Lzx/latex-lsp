@@ -1,18 +1,16 @@
 //! Static, project-scoped call hierarchy for uniquely declared user macros.
+use crate::rpc::{Error, ErrorCode, Result};
 use crate::{
     language::signature::CommandSignatures,
     parser::syntax,
     project::workspace::{Document, DocumentKind, Workspace},
 };
+use lsp_types::*;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
     hash::{Hash, Hasher},
     ops::Range as Span,
-};
-use tower_lsp::{
-    jsonrpc::{Error, ErrorCode, Result},
-    lsp_types::*,
 };
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]

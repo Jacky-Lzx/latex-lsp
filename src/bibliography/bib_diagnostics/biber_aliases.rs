@@ -1,8 +1,8 @@
 //! Native IDS conflicts distinguish the accepted owner from the skipped alias.
 use super::{biber_keys::key_name, Context, Parsed};
 use crate::parser::syntax;
+use lsp_types::*;
 use std::{collections::BTreeMap, path::Path, sync::Arc};
-use tower_lsp::lsp_types::*;
 
 const MAX_RELATED: usize = 16;
 

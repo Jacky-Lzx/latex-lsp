@@ -4,8 +4,8 @@ use latex_lsp::{
     synctex,
     workspace::Workspace,
 };
+use lsp_types::Url;
 use std::sync::atomic::AtomicBool;
-use tower_lsp::lsp_types::Url;
 
 #[test]
 fn project_rc_selection_matches_latexmk_and_is_refreshed_from_disk() {

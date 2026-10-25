@@ -2,7 +2,7 @@ use latex_lsp::{
     config::DistributionConfig, distribution::Distribution, features, navigation, signature,
     text::Text, workspace::Workspace,
 };
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 
 fn fixture() -> (tempfile::TempDir, Distribution) {
     let dir = tempfile::tempdir().unwrap();

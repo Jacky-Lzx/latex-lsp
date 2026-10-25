@@ -1,5 +1,6 @@
 //! Read TeX filename databases without importing distribution code into projects.
 use crate::{config::DistributionConfig, parser::syntax};
+use lsp_types::Url;
 use std::{
     collections::BTreeMap,
     io::Read,
@@ -7,7 +8,6 @@ use std::{
     process::{Command, Stdio},
     time::{Duration, Instant},
 };
-use tower_lsp::lsp_types::Url;
 
 #[derive(Clone, Debug, Default)]
 pub struct Distribution {

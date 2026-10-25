@@ -1,5 +1,5 @@
 use latex_lsp::{features, navigation, text::Text, workspace::Workspace};
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 
 const PHASES: [&str; 4] = ["inside", "inner", "afterinner", "afterouter"];
 

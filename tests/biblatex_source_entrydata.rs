@@ -1,5 +1,5 @@
 use latex_lsp::{features, signature, text::Text, workspace::Workspace};
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 
 fn setup(body: &str) -> (tempfile::TempDir, Workspace, Url, Url) {
     setup_with_preamble("", body)

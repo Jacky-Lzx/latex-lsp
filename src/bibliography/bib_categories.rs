@@ -1,16 +1,14 @@
 //! Project-consistent biblatex category names, independent of bibliography keys.
+use crate::rpc::{Error, Result};
 use crate::{
     language::signature::CommandSignatures,
     parser::syntax,
     project::workspace::{Document, DocumentKind, Workspace},
 };
+use lsp_types::*;
 use std::{
     collections::{BTreeMap, BTreeSet},
     ops::Range as Span,
-};
-use tower_lsp::{
-    jsonrpc::{Error, Result},
-    lsp_types::*,
 };
 
 const COMMANDS: &[&str] = &[

@@ -1,11 +1,9 @@
 //! Resolve edits from a current canonical action; never accept edits from data.
+use crate::rpc::{Error, ErrorCode, Result};
 use crate::{editing, project::workspace::Workspace};
+use lsp_types::*;
 use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};
-use tower_lsp::{
-    jsonrpc::{Error, ErrorCode, Result},
-    lsp_types::*,
-};
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]

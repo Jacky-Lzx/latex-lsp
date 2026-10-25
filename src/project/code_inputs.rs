@@ -4,11 +4,11 @@ use crate::{
     project::workspace::{resolve_file_path, Workspace},
     text::Text,
 };
+use lsp_types::{TextEdit, Url};
 use std::{
     collections::{BTreeMap, BTreeSet},
     ops::Range,
 };
-use tower_lsp::lsp_types::{TextEdit, Url};
 
 const COMMANDS: [&str; 6] = [
     "lstinputlisting",

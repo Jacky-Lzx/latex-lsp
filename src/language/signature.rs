@@ -6,12 +6,12 @@ use crate::{
         workspace::{Document, DocumentKind, Workspace},
     },
 };
+use lsp_types::*;
 use std::{
     borrow::Cow,
     cell::OnceCell,
     collections::{BTreeMap, BTreeSet},
 };
-use tower_lsp::lsp_types::*;
 
 #[derive(Clone, PartialEq)]
 enum Kind {

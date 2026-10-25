@@ -1,7 +1,7 @@
 //! Literal bibliography links share the field scanner used for citation keys.
 use crate::{parser::syntax, project::workspace::Document};
+use lsp_types::{DocumentLink, Url};
 use std::ops::Range;
-use tower_lsp::lsp_types::{DocumentLink, Url};
 
 #[derive(Clone, Debug)]
 pub(crate) struct Link {

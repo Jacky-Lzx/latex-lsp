@@ -1,6 +1,6 @@
 use latex_lsp::{build_log, editing, text::Text, workspace::Workspace};
+use lsp_types::*;
 use std::{collections::BTreeMap, path::Path};
-use tower_lsp::lsp_types::*;
 
 const CODE: &str = "undefined-bibliography-entry-type";
 

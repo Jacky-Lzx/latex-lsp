@@ -3,7 +3,7 @@ use latex_lsp::{
     text::Text,
     workspace::{DocumentKind, Workspace},
 };
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 
 #[test]
 fn supporting_sources_are_discovered_and_explicit_inputs_keep_project_scope_and_versioned_moves() {

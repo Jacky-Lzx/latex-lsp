@@ -1,3 +1,4 @@
+use crate::rpc::{Error, Result};
 use crate::{
     language::{features, navigation},
     parser::syntax,
@@ -8,13 +9,10 @@ use crate::{
         },
     },
 };
+use lsp_types::*;
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
-};
-use tower_lsp::{
-    jsonrpc::{Error, Result},
-    lsp_types::*,
 };
 
 pub struct Renames(Vec<(PathBuf, PathBuf)>);

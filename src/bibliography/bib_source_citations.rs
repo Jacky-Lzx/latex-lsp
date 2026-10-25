@@ -3,7 +3,7 @@ use crate::{
     bibliography::{bib_section_keys, bib_source_catalog::Catalog},
     project::workspace::{DocumentKind, Workspace},
 };
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 struct Context {
     span: std::ops::Range<usize>,
     removals: Vec<std::ops::Range<usize>>,

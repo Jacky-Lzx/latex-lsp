@@ -1,6 +1,6 @@
 use latex_lsp::{build, build_log, config::BuildConfig, editing, text::Text, workspace::Workspace};
+use lsp_types::*;
 use std::sync::atomic::AtomicBool;
-use tower_lsp::lsp_types::*;
 
 const PNG: &[u8] = &[
     137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0,

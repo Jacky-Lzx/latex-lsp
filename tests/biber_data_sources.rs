@@ -1,6 +1,6 @@
 use latex_lsp::{build_log, recorder, text::Text};
+use lsp_types::*;
 use std::path::Path;
-use tower_lsp::lsp_types::*;
 
 fn uri(path: &Path) -> Url {
     Url::from_file_path(path).unwrap()

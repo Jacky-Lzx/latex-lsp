@@ -1,5 +1,5 @@
 use latex_lsp::{build_log, text::Text};
-use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString, Url};
+use lsp_types::{DiagnosticSeverity, NumberOrString, Url};
 
 const GAP: &str = "[latex-lsp: middle of compiler output omitted]";
 
@@ -58,8 +58,8 @@ fn numbered_sources_after_a_truncation_still_confirm_their_own_locations() {
 #[test]
 fn real_bounded_compiler_streams_and_logs_do_not_borrow_root_fixes_after_omission() {
     use latex_lsp::{build, config::BuildConfig, editing, workspace::Workspace};
+    use lsp_types::{CodeActionContext, CodeActionKind};
     use std::{io::Write, os::unix::fs::PermissionsExt};
-    use tower_lsp::lsp_types::{CodeActionContext, CodeActionKind};
     for channel in ["stdout", "log"] {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();

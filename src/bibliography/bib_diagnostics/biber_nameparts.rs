@@ -1,8 +1,8 @@
 //! Extended-name warnings identify the model field, not a raw name token.
 use super::Context;
 use crate::{bibliography::bib_strings, parser::syntax};
+use lsp_types::*;
 use std::path::Path;
-use tower_lsp::lsp_types::*;
 
 pub(crate) struct Record<'a> {
     key: &'a str,

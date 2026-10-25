@@ -4,11 +4,11 @@ use crate::{
     parser::syntax,
     project::workspace::{DocumentKind, Workspace},
 };
+use lsp_types::*;
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
 };
-use tower_lsp::lsp_types::*;
 type Identity = (Url, usize, usize);
 type Result<T> = std::result::Result<T, ()>;
 const LIMIT: usize = 32 * 1024 * 1024;

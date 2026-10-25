@@ -1,5 +1,6 @@
 //! Recover file/line diagnostics from TeX's file-line errors and traditional logs.
 use crate::text::Text;
+use lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range, Url};
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet},
@@ -7,7 +8,6 @@ use std::{
     path::{Path, PathBuf},
     rc::Rc,
 };
-use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range, Url};
 
 const AUXILIARY_EXTENSIONS: &[&str] = &[
     "aux", "bbl", "toc", "lof", "lot", "out", "nav", "snm", "vrb",
@@ -10663,9 +10663,7 @@ mod indirect_file_error_tests {
                     .unwrap();
                 assert_eq!(
                     diagnostic.code
-                        == Some(tower_lsp::lsp_types::NumberOrString::String(
-                            "missing-input".into()
-                        )),
+                        == Some(lsp_types::NumberOrString::String("missing-input".into())),
                     case == "loaded",
                     "{case}/{call}: {diagnostic:?}"
                 );

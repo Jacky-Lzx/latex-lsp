@@ -1,5 +1,5 @@
 use latex_lsp::{features, workspace::Workspace};
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 
 const LIBRARY: &str = "@book{trigger,title={Trigger},execute={\\defbibentryset{collection}{member}}}\n@book{collection,title={Raw data}}\n@book{member,title={Member}}";
 

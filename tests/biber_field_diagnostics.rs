@@ -1,6 +1,6 @@
 use latex_lsp::{build_log, editing, text::Text, workspace::Workspace};
+use lsp_types::*;
 use std::{collections::BTreeMap, path::Path};
-use tower_lsp::lsp_types::*;
 
 const NAME: &str = "invalid-bibliography-field";
 const VALUE: &str = "invalid-bibliography-field-value";

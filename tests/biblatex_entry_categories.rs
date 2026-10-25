@@ -1,5 +1,5 @@
 use latex_lsp::{editing, features, semantic, signature, text::Text, workspace::Workspace};
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 
 fn setup(source: &str, bibliography: &str) -> (Workspace, Url, Url) {
     let mut ws = Workspace::default();

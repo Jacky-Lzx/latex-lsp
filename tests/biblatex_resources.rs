@@ -1,5 +1,5 @@
 use latex_lsp::{features, navigation, text::Text, workspace::Workspace};
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 
 #[test]
 fn global_resources_join_project_dependencies_and_citation_key_renames() {

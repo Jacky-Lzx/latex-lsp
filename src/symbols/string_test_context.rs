@@ -5,12 +5,12 @@ use crate::{
     project::workspace::{resolve_file_path, DocumentKind, Workspace},
     symbols::string_tests::{arguments, data_count},
 };
+use lsp_types::Url;
 use std::{
     collections::{BTreeMap, BTreeSet},
     ops::Range,
     sync::Arc,
 };
-use tower_lsp::lsp_types::Url;
 
 const ONE: u8 = 1;
 const TWO: u8 = 2;

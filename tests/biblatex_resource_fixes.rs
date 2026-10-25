@@ -1,5 +1,5 @@
 use latex_lsp::{build_log, editing, text::Text, workspace::Workspace};
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 
 fn uri(path: &std::path::Path) -> Url {
     Url::from_file_path(path).unwrap()

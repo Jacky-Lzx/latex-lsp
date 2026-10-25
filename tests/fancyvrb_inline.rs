@@ -3,8 +3,8 @@ use latex_lsp::{
     text::Text,
     workspace::{Document, Workspace},
 };
+use lsp_types::*;
 use std::sync::atomic::AtomicBool;
-use tower_lsp::lsp_types::*;
 
 fn apply(source: &str, edit: WorkspaceEdit, uri: &Url) -> String {
     let Some(DocumentChanges::Edits(documents)) = edit.document_changes else {

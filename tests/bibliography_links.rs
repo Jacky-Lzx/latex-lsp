@@ -2,7 +2,7 @@ use latex_lsp::{
     navigation,
     workspace::{Document, Workspace},
 };
-use tower_lsp::lsp_types::{DocumentLink, Position, Url};
+use lsp_types::{DocumentLink, Position, Url};
 
 fn links(source: &str) -> (Document, Vec<DocumentLink>) {
     let uri = Url::parse("file:///bibliography-links/refs.bib").unwrap();

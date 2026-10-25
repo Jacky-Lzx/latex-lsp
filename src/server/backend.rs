@@ -15,12 +15,14 @@ use crate::{
 };
 
 use crate::project::workspace::{self, document_uri, Workspace};
+use crate::rpc::Result;
+use crate::server::client::Client;
+use lsp_types::*;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
 use tokio::sync::{Mutex, RwLock};
-use tower_lsp::{jsonrpc::Result, lsp_types::*, Client, LanguageServer};
 
 fn file_operation_options() -> FileOperationRegistrationOptions {
     FileOperationRegistrationOptions {
@@ -37,7 +39,7 @@ fn file_operation_options() -> FileOperationRegistrationOptions {
 
 fn validate_diagnostic_identifier(identifier: Option<&str>) -> Result<()> {
     if identifier.is_some_and(|identifier| identifier != diagnostic::IDENTIFIER) {
-        Err(tower_lsp::jsonrpc::Error::invalid_params(
+        Err(crate::rpc::Error::invalid_params(
             "Unknown diagnostic provider",
         ))
     } else {
@@ -116,7 +118,7 @@ impl Backend {
         tokio::task::spawn_blocking(move || query(&workspace))
             .await
             .map_err(|error| {
-                tower_lsp::jsonrpc::Error::invalid_params(format!("Analysis task failed: {error}"))
+                crate::rpc::Error::invalid_params(format!("Analysis task failed: {error}"))
             })
     }
 
@@ -129,7 +131,7 @@ impl Backend {
                     cancel.cancelled()
                 });
             if cancel.cancelled() {
-                return Err(tower_lsp::jsonrpc::Error::request_cancelled());
+                return Err(crate::rpc::Error::request_cancelled());
             }
             Ok(distribution)
         }) {
@@ -198,8 +200,8 @@ impl Backend {
                 doc.version == version && doc.text.source == text.source && doc.kind == kind
             })
         {
-            return Err(tower_lsp::jsonrpc::Error {
-                code: tower_lsp::jsonrpc::ErrorCode::ServerError(-32801),
+            return Err(crate::rpc::Error {
+                code: crate::rpc::ErrorCode::ServerError(-32801),
                 message: "Document or formatting configuration changed; request formatting again"
                     .into(),
                 data: None,
@@ -372,9 +374,8 @@ impl Backend {
     }
 }
 
-#[tower_lsp::async_trait]
-impl LanguageServer for Backend {
-    async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
+impl Backend {
+    pub(crate) async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
         let mut workspace = self.workspace.write().await;
         let pull_diagnostics = params
             .capabilities
@@ -397,8 +398,8 @@ impl LanguageServer for Backend {
             .and_then(|window| window.work_done_progress)
             .unwrap_or(false);
         if let Some(options) = params.initialization_options {
-            workspace.config = config::Config::parse(options)
-                .map_err(tower_lsp::jsonrpc::Error::invalid_params)?;
+            workspace.config =
+                config::Config::parse(options).map_err(crate::rpc::Error::invalid_params)?;
         }
         workspace.inlay_refresh = params
             .capabilities
@@ -499,7 +500,7 @@ impl LanguageServer for Backend {
         let mut task = self.external_tasks.start(move |cancel| {
             for root in scan_roots {
                 if cancel.cancelled() {
-                    return Err(tower_lsp::jsonrpc::Error::request_cancelled());
+                    return Err(crate::rpc::Error::request_cancelled());
                 }
                 indexed.add_root_in_background(root, &|| cancel.cancelled());
             }
@@ -638,7 +639,7 @@ impl LanguageServer for Backend {
         })
     }
 
-    async fn initialized(&self, _: InitializedParams) {
+    pub(crate) async fn initialized(&self, _: InitializedParams) {
         // Distribution discovery and watcher registration do not alter source
         // text. Let document notifications and interactive requests proceed
         // while waiting for the external tool or the client's registration ACK.
@@ -683,13 +684,13 @@ impl LanguageServer for Backend {
             .await;
     }
 
-    async fn shutdown(&self) -> Result<()> {
+    pub(crate) async fn shutdown(&self) -> Result<()> {
         self.cleanup().await;
         self.shutdown_requested.store(true, Ordering::Relaxed);
         Ok(())
     }
 
-    async fn did_open(&self, params: DidOpenTextDocumentParams) {
+    pub(crate) async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let item = params.text_document;
         self.workspace.write().await.open_with_language(
             item.uri,
@@ -700,7 +701,7 @@ impl LanguageServer for Backend {
         self.publish_open().await;
     }
 
-    async fn did_change(&self, params: DidChangeTextDocumentParams) {
+    pub(crate) async fn did_change(&self, params: DidChangeTextDocumentParams) {
         let uri = document_uri(params.text_document.uri);
         let mut workspace = self.workspace.write().await;
         let Some(doc) = workspace.documents.get(&uri) else {
@@ -730,7 +731,7 @@ impl LanguageServer for Backend {
         self.publish_open().await;
     }
 
-    async fn did_save(&self, params: DidSaveTextDocumentParams) {
+    pub(crate) async fn did_save(&self, params: DidSaveTextDocumentParams) {
         let uri = document_uri(params.text_document.uri);
         self.publish_open().await;
         let on_save = self.workspace.read().await.settings(&uri).build.on_save;
@@ -744,7 +745,7 @@ impl LanguageServer for Backend {
         self.lint(&uri).await;
     }
 
-    async fn did_close(&self, params: DidCloseTextDocumentParams) {
+    pub(crate) async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = document_uri(params.text_document.uri);
         let mut workspace = self.workspace.write().await;
         workspace.close(&uri);
@@ -761,7 +762,7 @@ impl LanguageServer for Backend {
         self.publish_open().await;
     }
 
-    async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
+    pub(crate) async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
         self.refresh_file_events(
             file_operations::FileChanges::new(
                 params.changes.iter().map(|change| change.uri.as_str()),
@@ -771,7 +772,7 @@ impl LanguageServer for Backend {
         .await;
     }
 
-    async fn did_change_configuration(&self, params: DidChangeConfigurationParams) {
+    pub(crate) async fn did_change_configuration(&self, params: DidChangeConfigurationParams) {
         match config::Config::parse(params.settings) {
             Ok(config) => {
                 let indexing_changed =
@@ -800,7 +801,7 @@ impl LanguageServer for Backend {
         }
     }
 
-    async fn execute_command(
+    pub(crate) async fn execute_command(
         &self,
         params: ExecuteCommandParams,
     ) -> Result<Option<serde_json::Value>> {
@@ -830,7 +831,7 @@ impl LanguageServer for Backend {
             .and_then(|value| Url::parse(value).ok())
             .map(document_uri)
             .ok_or_else(|| {
-                tower_lsp::jsonrpc::Error::invalid_params(
+                crate::rpc::Error::invalid_params(
                     "Expected a document URI as the first command argument",
                 )
             })?;
@@ -839,13 +840,11 @@ impl LanguageServer for Backend {
                 let mut request: refactor::Request = serde_json::from_value(
                     argument.cloned().unwrap_or_default(),
                 )
-                .map_err(|_| {
-                    tower_lsp::jsonrpc::Error::invalid_params("Invalid code action request")
-                })?;
+                .map_err(|_| crate::rpc::Error::invalid_params("Invalid code action request"))?;
                 request.uri = document_uri(request.uri);
                 let edit =
                     refactor::resolve(&*self.workspace.read().await, request).ok_or_else(|| {
-                        tower_lsp::jsonrpc::Error::invalid_params(
+                        crate::rpc::Error::invalid_params(
                             "Code action is outdated; request code actions again",
                         )
                     })?;
@@ -853,14 +852,14 @@ impl LanguageServer for Backend {
                 Ok(Some(serde_json::to_value(response).unwrap()))
             }
             "latex.applyQuickFix" => {
-                let mut request: editing::FixRequest =
-                    serde_json::from_value(argument.cloned().unwrap_or_default()).map_err(
-                        |_| tower_lsp::jsonrpc::Error::invalid_params("Invalid quick fix request"),
-                    )?;
+                let mut request: editing::FixRequest = serde_json::from_value(
+                    argument.cloned().unwrap_or_default(),
+                )
+                .map_err(|_| crate::rpc::Error::invalid_params("Invalid quick fix request"))?;
                 request.uri = document_uri(request.uri);
                 let edit = editing::resolve_fix(&*self.workspace.read().await, request)
                     .ok_or_else(|| {
-                        tower_lsp::jsonrpc::Error::invalid_params(
+                        crate::rpc::Error::invalid_params(
                             "Quick fix is outdated; request code actions again",
                         )
                     })?;
@@ -872,7 +871,7 @@ impl LanguageServer for Backend {
                 let dry_run = match argument.and_then(|value| value.get("dryRun")) {
                     None => false,
                     Some(value) => value.as_bool().ok_or_else(|| {
-                        tower_lsp::jsonrpc::Error::invalid_params("dryRun must be a boolean")
+                        crate::rpc::Error::invalid_params("dryRun must be a boolean")
                     })?,
                 };
                 self.builds
@@ -884,7 +883,7 @@ impl LanguageServer for Backend {
                 if let Some(value) = argument.and_then(|value| value.get("rebuildGuard")) {
                     let mut guard: editing::RebuildGuard = serde_json::from_value(value.clone())
                         .map_err(|_| {
-                            tower_lsp::jsonrpc::Error::invalid_params(
+                            crate::rpc::Error::invalid_params(
                                 "Invalid rebuild action; request code actions again",
                             )
                         })?;
@@ -902,7 +901,7 @@ impl LanguageServer for Backend {
                         || (status["status"] == "success" && status["stale"] != true)
                 };
                 if !available(&project.root) {
-                    return Err(tower_lsp::jsonrpc::Error::invalid_params(
+                    return Err(crate::rpc::Error::invalid_params(
                         "Finish a successful build before querying SyncTeX",
                     ));
                 }
@@ -913,7 +912,7 @@ impl LanguageServer for Backend {
                 let result = task.wait().await?;
                 let current = synctex::prepare(&*self.workspace.read().await, &uri)?;
                 if current != project || !available(&current.root) {
-                    return Err(tower_lsp::jsonrpc::Error::invalid_params(
+                    return Err(crate::rpc::Error::invalid_params(
                         "Build artifacts changed during the SyncTeX query; retry after compiling",
                     ));
                 }
@@ -925,7 +924,7 @@ impl LanguageServer for Backend {
                     .read()
                     .await
                     .root_document(&uri)
-                    .map_err(tower_lsp::jsonrpc::Error::invalid_params)?;
+                    .map_err(crate::rpc::Error::invalid_params)?;
                 if params.command == "latex.cancelBuild" {
                     Ok(Some(
                         serde_json::json!({"cancelled":self.builds.cancel(Some(&root))}),
@@ -934,18 +933,21 @@ impl LanguageServer for Backend {
                     Ok(Some(self.builds.status(&root)))
                 }
             }
-            _ => Err(tower_lsp::jsonrpc::Error::invalid_params(format!(
+            _ => Err(crate::rpc::Error::invalid_params(format!(
                 "Unknown command: {}",
                 params.command
             ))),
         }
     }
 
-    async fn will_rename_files(&self, params: RenameFilesParams) -> Result<Option<WorkspaceEdit>> {
+    pub(crate) async fn will_rename_files(
+        &self,
+        params: RenameFilesParams,
+    ) -> Result<Option<WorkspaceEdit>> {
         file_operations::will_rename(&*self.workspace.read().await, &params.files)
     }
 
-    async fn did_create_files(&self, params: CreateFilesParams) {
+    pub(crate) async fn did_create_files(&self, params: CreateFilesParams) {
         self.refresh_file_events(
             file_operations::FileChanges::new(params.files.iter().map(|file| file.uri.as_str())),
             false,
@@ -953,7 +955,7 @@ impl LanguageServer for Backend {
         .await;
     }
 
-    async fn did_delete_files(&self, params: DeleteFilesParams) {
+    pub(crate) async fn did_delete_files(&self, params: DeleteFilesParams) {
         self.refresh_file_events(
             file_operations::FileChanges::new(params.files.iter().map(|file| file.uri.as_str())),
             false,
@@ -961,7 +963,7 @@ impl LanguageServer for Backend {
         .await;
     }
 
-    async fn did_rename_files(&self, params: RenameFilesParams) {
+    pub(crate) async fn did_rename_files(&self, params: RenameFilesParams) {
         match file_operations::Renames::new(&params.files) {
             Ok(renames) => self.builds.files_renamed(&renames).await,
             Err(error) => {
@@ -986,7 +988,10 @@ impl LanguageServer for Backend {
         }
     }
 
-    async fn did_change_workspace_folders(&self, params: DidChangeWorkspaceFoldersParams) {
+    pub(crate) async fn did_change_workspace_folders(
+        &self,
+        params: DidChangeWorkspaceFoldersParams,
+    ) {
         let mut workspace = self.workspace.write().await;
         for folder in params.event.removed {
             if let Ok(root) = folder.uri.to_file_path() {
@@ -1010,7 +1015,7 @@ impl LanguageServer for Backend {
         self.publish_open().await;
     }
 
-    async fn diagnostic(
+    pub(crate) async fn diagnostic(
         &self,
         params: DocumentDiagnosticParams,
     ) -> Result<DocumentDiagnosticReportResult> {
@@ -1041,7 +1046,7 @@ impl LanguageServer for Backend {
         Ok(report.into())
     }
 
-    async fn workspace_diagnostic(
+    pub(crate) async fn workspace_diagnostic(
         &self,
         params: WorkspaceDiagnosticParams,
     ) -> Result<WorkspaceDiagnosticReportResult> {
@@ -1100,12 +1105,15 @@ impl LanguageServer for Backend {
         Ok(WorkspaceDiagnosticReport { items }.into())
     }
 
-    async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
+    pub(crate) async fn formatting(
+        &self,
+        params: DocumentFormattingParams,
+    ) -> Result<Option<Vec<TextEdit>>> {
         self.format_document(params.text_document.uri, params.options, None)
             .await
     }
 
-    async fn range_formatting(
+    pub(crate) async fn range_formatting(
         &self,
         params: DocumentRangeFormattingParams,
     ) -> Result<Option<Vec<TextEdit>>> {
@@ -1113,7 +1121,7 @@ impl LanguageServer for Backend {
             .await
     }
 
-    async fn on_type_formatting(
+    pub(crate) async fn on_type_formatting(
         &self,
         params: DocumentOnTypeFormattingParams,
     ) -> Result<Option<Vec<TextEdit>>> {
@@ -1138,7 +1146,7 @@ impl LanguageServer for Backend {
         .map(Some)
     }
 
-    async fn prepare_call_hierarchy(
+    pub(crate) async fn prepare_call_hierarchy(
         &self,
         params: CallHierarchyPrepareParams,
     ) -> Result<Option<Vec<CallHierarchyItem>>> {
@@ -1150,23 +1158,26 @@ impl LanguageServer for Backend {
         )
     }
 
-    async fn incoming_calls(
+    pub(crate) async fn incoming_calls(
         &self,
         params: CallHierarchyIncomingCallsParams,
     ) -> Result<Option<Vec<CallHierarchyIncomingCall>>> {
         call_hierarchy::incoming(&*self.workspace.read().await, &params.item).map(Some)
     }
 
-    async fn outgoing_calls(
+    pub(crate) async fn outgoing_calls(
         &self,
         params: CallHierarchyOutgoingCallsParams,
     ) -> Result<Option<Vec<CallHierarchyOutgoingCall>>> {
         call_hierarchy::outgoing(&*self.workspace.read().await, &params.item).map(Some)
     }
 
-    async fn inlay_hint(&self, params: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
+    pub(crate) async fn inlay_hint(
+        &self,
+        params: InlayHintParams,
+    ) -> Result<Option<Vec<InlayHint>>> {
         if params.range.start > params.range.end {
-            return Err(tower_lsp::jsonrpc::Error::invalid_params(
+            return Err(crate::rpc::Error::invalid_params(
                 "Invalid inlay hint range",
             ));
         }
@@ -1177,7 +1188,10 @@ impl LanguageServer for Backend {
         )))
     }
 
-    async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
+    pub(crate) async fn completion(
+        &self,
+        params: CompletionParams,
+    ) -> Result<Option<CompletionResponse>> {
         let position = params.text_document_position;
         let workspace = self.workspace.read().await;
         let mut items = features::completion(
@@ -1198,11 +1212,11 @@ impl LanguageServer for Backend {
         }))
     }
 
-    async fn completion_resolve(&self, item: CompletionItem) -> Result<CompletionItem> {
+    pub(crate) async fn completion_resolve(&self, item: CompletionItem) -> Result<CompletionItem> {
         completion_resolve::resolve(&*self.workspace.read().await, item)
     }
 
-    async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
+    pub(crate) async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
         let position = params.text_document_position_params;
         Ok(features::hover(
             &*self.workspace.read().await,
@@ -1211,7 +1225,10 @@ impl LanguageServer for Backend {
         ))
     }
 
-    async fn signature_help(&self, params: SignatureHelpParams) -> Result<Option<SignatureHelp>> {
+    pub(crate) async fn signature_help(
+        &self,
+        params: SignatureHelpParams,
+    ) -> Result<Option<SignatureHelp>> {
         let params = params.text_document_position_params;
         Ok(signature::help(
             &*self.workspace.read().await,
@@ -1220,7 +1237,7 @@ impl LanguageServer for Backend {
         ))
     }
 
-    async fn goto_definition(
+    pub(crate) async fn goto_definition(
         &self,
         params: GotoDefinitionParams,
     ) -> Result<Option<GotoDefinitionResponse>> {
@@ -1233,7 +1250,10 @@ impl LanguageServer for Backend {
         Ok(Some(GotoDefinitionResponse::Array(locations)))
     }
 
-    async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
+    pub(crate) async fn references(
+        &self,
+        params: ReferenceParams,
+    ) -> Result<Option<Vec<Location>>> {
         let position = params.text_document_position;
         Ok(Some(features::references(
             &*self.workspace.read().await,
@@ -1243,7 +1263,7 @@ impl LanguageServer for Backend {
         )))
     }
 
-    async fn prepare_rename(
+    pub(crate) async fn prepare_rename(
         &self,
         params: TextDocumentPositionParams,
     ) -> Result<Option<PrepareRenameResponse>> {
@@ -1254,7 +1274,7 @@ impl LanguageServer for Backend {
         )
     }
 
-    async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
+    pub(crate) async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
         let position = params.text_document_position;
         features::rename(
             &*self.workspace.read().await,
@@ -1264,7 +1284,7 @@ impl LanguageServer for Backend {
         )
     }
 
-    async fn document_highlight(
+    pub(crate) async fn document_highlight(
         &self,
         params: DocumentHighlightParams,
     ) -> Result<Option<Vec<DocumentHighlight>>> {
@@ -1280,7 +1300,7 @@ impl LanguageServer for Backend {
         .map(Some)
     }
 
-    async fn linked_editing_range(
+    pub(crate) async fn linked_editing_range(
         &self,
         params: LinkedEditingRangeParams,
     ) -> Result<Option<LinkedEditingRanges>> {
@@ -1291,7 +1311,7 @@ impl LanguageServer for Backend {
                 return Ok(None);
             };
             if doc.text.offset(params.position).is_none() {
-                return Err(tower_lsp::jsonrpc::Error::invalid_params(
+                return Err(crate::rpc::Error::invalid_params(
                     "Invalid linked editing position",
                 ));
             }
@@ -1304,7 +1324,7 @@ impl LanguageServer for Backend {
         .await?
     }
 
-    async fn selection_range(
+    pub(crate) async fn selection_range(
         &self,
         params: SelectionRangeParams,
     ) -> Result<Option<Vec<SelectionRange>>> {
@@ -1317,10 +1337,13 @@ impl LanguageServer for Backend {
         };
         editing::selection_ranges(doc, &params.positions)
             .map(Some)
-            .ok_or_else(|| tower_lsp::jsonrpc::Error::invalid_params("Invalid selection position"))
+            .ok_or_else(|| crate::rpc::Error::invalid_params("Invalid selection position"))
     }
 
-    async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
+    pub(crate) async fn code_action(
+        &self,
+        params: CodeActionParams,
+    ) -> Result<Option<CodeActionResponse>> {
         self.read_query(move |workspace| {
             code_action_resolve::actions(
                 workspace,
@@ -1333,18 +1356,18 @@ impl LanguageServer for Backend {
         .map(Some)
     }
 
-    async fn code_action_resolve(&self, action: CodeAction) -> Result<CodeAction> {
+    pub(crate) async fn code_action_resolve(&self, action: CodeAction) -> Result<CodeAction> {
         code_action_resolve::resolve(&*self.workspace.read().await, action)
     }
 
-    async fn code_lens(&self, params: CodeLensParams) -> Result<Option<Vec<CodeLens>>> {
+    pub(crate) async fn code_lens(&self, params: CodeLensParams) -> Result<Option<Vec<CodeLens>>> {
         Ok(Some(code_lens::lenses(
             &*self.workspace.read().await,
             &document_uri(params.text_document.uri),
         )))
     }
 
-    async fn document_symbol(
+    pub(crate) async fn document_symbol(
         &self,
         params: DocumentSymbolParams,
     ) -> Result<Option<DocumentSymbolResponse>> {
@@ -1359,7 +1382,7 @@ impl LanguageServer for Backend {
         }))
     }
 
-    async fn symbol(
+    pub(crate) async fn symbol(
         &self,
         params: WorkspaceSymbolParams,
     ) -> Result<Option<Vec<SymbolInformation>>> {
@@ -1369,7 +1392,10 @@ impl LanguageServer for Backend {
         )))
     }
 
-    async fn folding_range(&self, params: FoldingRangeParams) -> Result<Option<Vec<FoldingRange>>> {
+    pub(crate) async fn folding_range(
+        &self,
+        params: FoldingRangeParams,
+    ) -> Result<Option<Vec<FoldingRange>>> {
         let workspace = self.workspace.read().await;
         Ok(workspace
             .documents
@@ -1377,7 +1403,10 @@ impl LanguageServer for Backend {
             .map(|doc| navigation::folding_ranges_for_client(doc, &workspace.folding_capabilities)))
     }
 
-    async fn document_color(&self, params: DocumentColorParams) -> Result<Vec<ColorInformation>> {
+    pub(crate) async fn document_color(
+        &self,
+        params: DocumentColorParams,
+    ) -> Result<Vec<ColorInformation>> {
         self.read_query(move |workspace| {
             workspace
                 .documents
@@ -1388,7 +1417,7 @@ impl LanguageServer for Backend {
         .await
     }
 
-    async fn color_presentation(
+    pub(crate) async fn color_presentation(
         &self,
         params: ColorPresentationParams,
     ) -> Result<Vec<ColorPresentation>> {
@@ -1403,14 +1432,14 @@ impl LanguageServer for Backend {
             || doc.text.offset(params.range.start).is_none()
             || doc.text.offset(params.range.end).is_none()
         {
-            return Err(tower_lsp::jsonrpc::Error::invalid_params(
+            return Err(crate::rpc::Error::invalid_params(
                 "Invalid color presentation range",
             ));
         }
         Ok(colors::presentations(doc, params.range, params.color))
     }
 
-    async fn semantic_tokens_full(
+    pub(crate) async fn semantic_tokens_full(
         &self,
         params: SemanticTokensParams,
     ) -> Result<Option<SemanticTokensResult>> {
@@ -1425,7 +1454,7 @@ impl LanguageServer for Backend {
         )))
     }
 
-    async fn semantic_tokens_full_delta(
+    pub(crate) async fn semantic_tokens_full_delta(
         &self,
         params: SemanticTokensDeltaParams,
     ) -> Result<Option<SemanticTokensFullDeltaResult>> {
@@ -1442,7 +1471,7 @@ impl LanguageServer for Backend {
         )))
     }
 
-    async fn semantic_tokens_range(
+    pub(crate) async fn semantic_tokens_range(
         &self,
         params: SemanticTokensRangeParams,
     ) -> Result<Option<SemanticTokensRangeResult>> {
@@ -1456,7 +1485,10 @@ impl LanguageServer for Backend {
             .transpose()
     }
 
-    async fn document_link(&self, params: DocumentLinkParams) -> Result<Option<Vec<DocumentLink>>> {
+    pub(crate) async fn document_link(
+        &self,
+        params: DocumentLinkParams,
+    ) -> Result<Option<Vec<DocumentLink>>> {
         Ok(Some(navigation::document_links(
             &*self.workspace.read().await,
             &document_uri(params.text_document.uri),
@@ -1469,12 +1501,11 @@ mod read_query_tests {
     use super::*;
     use std::time::Duration;
     use tokio::sync::oneshot;
-    use tower_lsp::LspService;
 
     #[tokio::test]
     async fn slow_analysis_allows_reads_but_keeps_writes_and_later_reads_in_order() {
-        let (service, _socket) = LspService::new(Backend::new);
-        let service = Arc::new(Backend::new(service.inner().client.clone()));
+        let (client, _outgoing) = Client::new();
+        let service = Arc::new(Backend::new(client));
         let mut queue = dispatch::RequestQueue::default();
         let (started, start) = oneshot::channel();
         let (finish, finished) = oneshot::channel();
@@ -1529,8 +1560,8 @@ mod read_query_tests {
 
     #[tokio::test]
     async fn cancelling_analysis_keeps_its_read_guard_until_the_worker_finishes() {
-        let (service, _socket) = LspService::new(Backend::new);
-        let backend = Arc::new(Backend::new(service.inner().client.clone()));
+        let (client, _outgoing) = Client::new();
+        let backend = Arc::new(Backend::new(client));
         let mut queue = dispatch::RequestQueue::default();
         let (started, start) = oneshot::channel();
         let (finish, finished) = oneshot::channel();

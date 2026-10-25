@@ -5,8 +5,8 @@ use crate::{
     project::workspace::Document,
     text::Text,
 };
+use lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, TextEdit};
 use std::ops::Range as Span;
-use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, TextEdit};
 
 pub(crate) const ERROR: &str = "Missing delimiter (. inserted).";
 pub(crate) const CODE: &str = "missing-delimiter-operand";

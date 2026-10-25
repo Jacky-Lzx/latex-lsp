@@ -1,12 +1,12 @@
 //! Shared lifecycle for explicit build-tool stages.
 use crate::compilation::file_checks::InputSnapshot;
+use lsp_types::Url;
 use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
-use tower_lsp::lsp_types::Url;
 pub(crate) struct Failure {
     pub status: &'static str,
     pub exit_code: Option<i32>,

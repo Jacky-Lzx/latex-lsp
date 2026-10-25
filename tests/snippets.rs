@@ -2,7 +2,7 @@ use latex_lsp::{
     features,
     workspace::{Document, Workspace},
 };
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 
 #[test]
 #[ignore = "requires Neovim 0.10+ with vim.snippet"]

@@ -4,8 +4,8 @@ use crate::{
     parser::syntax::{self, Command, Syntax},
     project::workspace::{DocumentKind, Workspace},
 };
+use lsp_types::Url;
 use std::collections::{BTreeMap, BTreeSet};
-use tower_lsp::lsp_types::Url;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Reader {
@@ -36,7 +36,7 @@ pub(crate) fn validate_rename(
     ws: &Workspace,
     scope: &BTreeSet<Url>,
     name: &str,
-) -> tower_lsp::jsonrpc::Result<()> {
+) -> crate::rpc::Result<()> {
     if scope
         .iter()
         .filter_map(|uri| ws.documents.get(uri))
@@ -50,16 +50,16 @@ pub(crate) fn validate_rename(
                 })
         })
     {
-        return Err(tower_lsp::jsonrpc::Error::invalid_params("A resource argument has an unconfirmed reader meaning; a complete symbol rename cannot be confirmed"));
+        return Err(crate::rpc::Error::invalid_params("A resource argument has an unconfirmed reader meaning; a complete symbol rename cannot be confirmed"));
     }
     Ok(())
 }
 
 pub(crate) fn validate_workspace_edit(
     ws: &Workspace,
-    edit: &tower_lsp::lsp_types::WorkspaceEdit,
-) -> tower_lsp::jsonrpc::Result<()> {
-    use tower_lsp::lsp_types::{DocumentChangeOperation, DocumentChanges, OneOf, TextEdit};
+    edit: &lsp_types::WorkspaceEdit,
+) -> crate::rpc::Result<()> {
+    use lsp_types::{DocumentChangeOperation, DocumentChanges, OneOf, TextEdit};
     if !ws.documents.values().any(|doc| {
         doc.syntax
             .contextual_resource_readers

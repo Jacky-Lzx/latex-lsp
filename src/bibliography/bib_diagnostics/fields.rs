@@ -7,8 +7,8 @@ use crate::{
     compilation::recorder::BibliographyPaths,
     parser::syntax,
 };
+use lsp_types::*;
 use std::{collections::BTreeMap, path::Path, sync::Arc};
-use tower_lsp::lsp_types::*;
 
 const CODE: &str = "repeated-bibliography-field";
 type Key = (String, u32, String, String);

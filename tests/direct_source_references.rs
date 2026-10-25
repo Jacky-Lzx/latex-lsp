@@ -2,8 +2,8 @@ use latex_lsp::{
     features, file_operations, navigation,
     workspace::{Document, Workspace},
 };
+use lsp_types::*;
 use std::{collections::BTreeSet, path::Path};
-use tower_lsp::lsp_types::*;
 
 const COMMANDS: [&str; 6] = [
     "input",
@@ -247,5 +247,5 @@ fn shared_source_edits_require_file_meaning_to_agree_across_build_roots() {
     let error =
         file_operations::will_rename(&workspace, &[rename(root, "chapter.tex", "renamed.tex")])
             .unwrap_err();
-    assert_eq!(error.code, tower_lsp::jsonrpc::ErrorCode::InvalidParams);
+    assert_eq!(error.code, latex_lsp::rpc::ErrorCode::InvalidParams);
 }

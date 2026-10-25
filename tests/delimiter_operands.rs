@@ -1,5 +1,5 @@
 use latex_lsp::{build_log, editing, text::Text, workspace::Workspace};
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 
 const ERROR: &str = "Missing delimiter (. inserted).";
 const CODE: &str = "missing-delimiter-operand";

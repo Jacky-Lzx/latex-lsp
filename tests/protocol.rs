@@ -6,8 +6,8 @@ use std::{
     time::Duration,
 };
 
+use lsp_types::Url;
 use serde_json::{json, Value};
-use tower_lsp::lsp_types::Url;
 
 struct Server {
     child: Child,
@@ -1298,7 +1298,7 @@ fn standard_footnotes_negotiate_completion_and_refresh_cross_file_overrides() {
             edit["documentChanges"][0]["textDocument"],
             json!({"uri":uri,"version":5})
         );
-        let edits: Vec<tower_lsp::lsp_types::TextEdit> =
+        let edits: Vec<lsp_types::TextEdit> =
             serde_json::from_value(edit["documentChanges"][0]["edits"].clone()).unwrap();
         let mut ranges = edits.iter().map(|edit| edit.range).collect::<Vec<_>>();
         ranges.sort_by_key(|range| range.start);
@@ -1566,7 +1566,7 @@ fn formatting_params(uri: &Url) -> Value {
 #[cfg(unix)]
 fn formatting_uses_buffer_text_default_tex_fmt_and_configurable_latexindent() {
     use latex_lsp::text::Text;
-    use tower_lsp::lsp_types::{TextDocumentContentChangeEvent, TextEdit};
+    use lsp_types::{TextDocumentContentChangeEvent, TextEdit};
     let (mut server, directory, uri) = formatting_server(
         "printf '%s\\n' \"$@\" > arguments\ncat > input\nsed 's/hello/formatted/' input",
         10,
@@ -1783,7 +1783,7 @@ fn formatting_with_real_latexindent_preserves_verbatim_and_is_idempotent() {
 
 fn real_formatter_roundtrip(formatter: &str) {
     use latex_lsp::text::Text;
-    use tower_lsp::lsp_types::{TextDocumentContentChangeEvent, TextEdit};
+    use lsp_types::{TextDocumentContentChangeEvent, TextEdit};
     let directory = tempfile::tempdir().unwrap();
     let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
     let source = "% 😀\r\n\\begin{itemize}\r\n\\item hello\r\n\\end{itemize}\r\n\\begin{verbatim}\r\n   raw   data\r\n\\end{verbatim}\r\n";
@@ -1992,7 +1992,7 @@ fn minted_inline_code_stays_opaque_after_incremental_changes_over_stdio() {
 #[cfg(unix)]
 fn minted_missing_files_publish_and_pull_versioned_repairs_and_clear_after_rebuilding() {
     use latex_lsp::text::Text;
-    use tower_lsp::lsp_types::TextEdit;
+    use lsp_types::TextEdit;
     for pull in [false, true] {
         let script = r#"cp "${2%/*}/fixture.log" "$1/main.log"
 printf '%%PDF-1.4\n' > "$1/main.pdf"
@@ -2067,7 +2067,7 @@ printf 'PWD %s\nINPUT %s\n' "$PWD" "$2" > "$1/main.fls"
             serde_json::from_value(actions[0]["edit"]["documentChanges"][0]["edits"][0].clone())
                 .unwrap();
         let updated = Text::new(source.into())
-            .changed(vec![tower_lsp::lsp_types::TextDocumentContentChangeEvent {
+            .changed(vec![lsp_types::TextDocumentContentChangeEvent {
                 range: Some(edit.range),
                 range_length: None,
                 text: edit.new_text,
@@ -2184,7 +2184,7 @@ fn minted_environment_boundaries_refresh_diagnostics_and_linked_names_over_stdio
     assert_eq!(items.len(), 1, "{diagnostics}");
     assert_eq!(items[0]["message"], "Unclosed environment `minted`");
     let broken = text
-        .changed(vec![tower_lsp::lsp_types::TextDocumentContentChangeEvent {
+        .changed(vec![lsp_types::TextDocumentContentChangeEvent {
             range: Some(range),
             range_length: None,
             text: "other".into(),
@@ -2360,7 +2360,7 @@ fn listings_environment_header_boundaries_refresh_after_incremental_changes_over
     let header = "[title={\\detokenize{\\end{lstlisting}}}] ignored \\end{lstlisting}";
     server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":8},"contentChanges":[{"range":range,"text":header}]}));
     let updated = text
-        .changed(vec![tower_lsp::lsp_types::TextDocumentContentChangeEvent {
+        .changed(vec![lsp_types::TextDocumentContentChangeEvent {
             range: Some(range),
             range_length: None,
             text: header.into(),
@@ -2435,7 +2435,7 @@ fn listings_environment_header_boundaries_refresh_after_incremental_changes_over
     server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":9},"contentChanges":[{"range":range,"text":"other"}]}));
     let broken = updated
         .clone()
-        .changed(vec![tower_lsp::lsp_types::TextDocumentContentChangeEvent {
+        .changed(vec![lsp_types::TextDocumentContentChangeEvent {
             range: Some(range),
             range_length: None,
             text: "other".into(),
@@ -4526,10 +4526,7 @@ fn bibliography_alias_symbols_negotiate_hierarchy_refresh_search_and_restore_dis
                     .iter()
                     .find(|item| item["name"] == "IDS")
                     .unwrap();
-                assert_eq!(
-                    field["kind"],
-                    json!(tower_lsp::lsp_types::SymbolKind::PROPERTY)
-                );
+                assert_eq!(field["kind"], json!(lsp_types::SymbolKind::PROPERTY));
                 field["children"].as_array().cloned().unwrap_or_default()
             } else {
                 symbols
@@ -4555,7 +4552,7 @@ fn bibliography_alias_symbols_negotiate_hierarchy_refresh_search_and_restore_dis
                     .iter()
                     .find(|item| item["name"] == "legacy😀")
                     .unwrap();
-                assert_eq!(alias["kind"], json!(tower_lsp::lsp_types::SymbolKind::KEY));
+                assert_eq!(alias["kind"], json!(lsp_types::SymbolKind::KEY));
                 if hierarchy {
                     assert_eq!(alias["range"], json!(expected));
                     assert_eq!(alias["selectionRange"], json!(expected));
@@ -6068,8 +6065,7 @@ fn bibliography_ids_aliases_refresh_navigation_and_independent_renames_over_stdi
                 main_source
             };
             let text = latex_lsp::text::Text::new(source.into());
-            let range: tower_lsp::lsp_types::Range =
-                serde_json::from_value(edit["range"].clone()).unwrap();
+            let range: lsp_types::Range = serde_json::from_value(edit["range"].clone()).unwrap();
             assert_eq!(
                 &source[text.offset(range.start).unwrap()..text.offset(range.end).unwrap()],
                 "legacy😀"
@@ -7220,12 +7216,14 @@ fn string_predicates_keep_literal_tokens_and_versioned_branch_renames_over_stdio
         assert!(edits.iter().all(|edit| edit["newText"] == "release"));
         if uri == &main {
             let literal_end = source.find("}{X}").unwrap();
-            assert!(edits.iter().all(
-                |edit| serde_json::from_value::<tower_lsp::lsp_types::Range>(edit["range"].clone())
-                    .unwrap()
-                    .start
-                    > text.position(literal_end)
-            ));
+            assert!(edits
+                .iter()
+                .all(
+                    |edit| serde_json::from_value::<lsp_types::Range>(edit["range"].clone())
+                        .unwrap()
+                        .start
+                        > text.position(literal_end)
+                ));
         }
     }
     let changed = source.replace(r"\ifbool{draft}", r"\label{phantom}\input{ghost}");
@@ -8676,20 +8674,18 @@ fn duplicate_compiler_destinations_link_declarations_and_clear_after_resolving_t
         } else {
             (child_repaired, 3)
         };
-        let mut edits: Vec<tower_lsp::lsp_types::TextEdit> =
+        let mut edits: Vec<lsp_types::TextEdit> =
             serde_json::from_value(change["edits"].clone()).unwrap();
         edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
         let changed = latex_lsp::text::Text::new(source.into())
             .changed(
                 edits
                     .into_iter()
-                    .map(
-                        |edit| tower_lsp::lsp_types::TextDocumentContentChangeEvent {
-                            range: Some(edit.range),
-                            range_length: None,
-                            text: edit.new_text,
-                        },
-                    )
+                    .map(|edit| lsp_types::TextDocumentContentChangeEvent {
+                        range: Some(edit.range),
+                        range_length: None,
+                        text: edit.new_text,
+                    })
                     .collect(),
             )
             .unwrap()
@@ -8784,8 +8780,7 @@ fn compiler_destination_diagnostics_follow_recorded_children_and_offer_preservin
         assert_eq!(change["textDocument"]["uri"], child.as_str());
         assert!(change["textDocument"]["version"].is_null());
         edits.push(
-            serde_json::from_value::<tower_lsp::lsp_types::TextEdit>(change["edits"][0].clone())
-                .unwrap(),
+            serde_json::from_value::<lsp_types::TextEdit>(change["edits"][0].clone()).unwrap(),
         );
     }
     edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
@@ -8793,13 +8788,11 @@ fn compiler_destination_diagnostics_follow_recorded_children_and_offer_preservin
         .changed(
             edits
                 .into_iter()
-                .map(
-                    |edit| tower_lsp::lsp_types::TextDocumentContentChangeEvent {
-                        range: Some(edit.range),
-                        range_length: None,
-                        text: edit.new_text,
-                    },
-                )
+                .map(|edit| lsp_types::TextDocumentContentChangeEvent {
+                    range: Some(edit.range),
+                    range_length: None,
+                    text: edit.new_text,
+                })
                 .collect(),
         )
         .unwrap()
@@ -9050,8 +9043,7 @@ fn real_command_spelling_fixes_preserve_arguments_and_compile_after_repair() {
         let change = &action["edit"]["documentChanges"][0];
         assert_eq!(change["textDocument"]["version"], 1);
         edits.push(
-            serde_json::from_value::<tower_lsp::lsp_types::TextEdit>(change["edits"][0].clone())
-                .unwrap(),
+            serde_json::from_value::<lsp_types::TextEdit>(change["edits"][0].clone()).unwrap(),
         );
     }
     edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
@@ -9059,13 +9051,11 @@ fn real_command_spelling_fixes_preserve_arguments_and_compile_after_repair() {
         .changed(
             edits
                 .into_iter()
-                .map(
-                    |edit| tower_lsp::lsp_types::TextDocumentContentChangeEvent {
-                        range: Some(edit.range),
-                        range_length: None,
-                        text: edit.new_text,
-                    },
-                )
+                .map(|edit| lsp_types::TextDocumentContentChangeEvent {
+                    range: Some(edit.range),
+                    range_length: None,
+                    text: edit.new_text,
+                })
                 .collect(),
         )
         .unwrap()
@@ -13647,7 +13637,7 @@ fn source_filename_renames_validate_tex_whitespace_and_keep_versioned_navigation
         assert_eq!(documents.len(), 1, "{result}");
         assert_eq!(documents[0]["textDocument"]["uri"], main.as_str());
         assert_eq!(documents[0]["textDocument"]["version"], version);
-        let edits: Vec<tower_lsp::lsp_types::TextEdit> =
+        let edits: Vec<lsp_types::TextEdit> =
             serde_json::from_value(documents[0]["edits"].clone()).unwrap();
         assert_eq!(edits.len(), 1);
         assert_eq!(edits[0].new_text, expected);
@@ -13655,13 +13645,11 @@ fn source_filename_renames_validate_tex_whitespace_and_keep_versioned_navigation
             .changed(
                 edits
                     .into_iter()
-                    .map(
-                        |edit| tower_lsp::lsp_types::TextDocumentContentChangeEvent {
-                            range: Some(edit.range),
-                            range_length: None,
-                            text: edit.new_text,
-                        },
-                    )
+                    .map(|edit| lsp_types::TextDocumentContentChangeEvent {
+                        range: Some(edit.range),
+                        range_length: None,
+                        text: edit.new_text,
+                    })
                     .collect(),
             )
             .unwrap()
@@ -13734,7 +13722,7 @@ fn file_url_rename_requests_preserve_destinations_in_versioned_edits() {
         assert_eq!(edit["newText"], expected);
     }
     let mut updated = source.clone();
-    let mut edits: Vec<tower_lsp::lsp_types::TextEdit> =
+    let mut edits: Vec<lsp_types::TextEdit> =
         serde_json::from_value(documents[0]["edits"].clone()).unwrap();
     edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
     for edit in edits {
@@ -16093,23 +16081,19 @@ fn real_compiler_reference_quick_fixes_remove_label_and_citation_typos_after_reb
         assert_eq!(actions.as_array().unwrap().len(), 1, "{actions}");
         let edit = &actions[0]["edit"]["documentChanges"][0];
         assert_eq!(edit["textDocument"]["version"], 1);
-        edits.push(
-            serde_json::from_value::<tower_lsp::lsp_types::TextEdit>(edit["edits"][0].clone())
-                .unwrap(),
-        );
+        edits
+            .push(serde_json::from_value::<lsp_types::TextEdit>(edit["edits"][0].clone()).unwrap());
     }
     edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
     let repaired = latex_lsp::text::Text::new(source.into())
         .changed(
             edits
                 .into_iter()
-                .map(
-                    |edit| tower_lsp::lsp_types::TextDocumentContentChangeEvent {
-                        range: Some(edit.range),
-                        range_length: None,
-                        text: edit.new_text,
-                    },
-                )
+                .map(|edit| lsp_types::TextDocumentContentChangeEvent {
+                    range: Some(edit.range),
+                    range_length: None,
+                    text: edit.new_text,
+                })
                 .collect(),
         )
         .unwrap()
@@ -16224,6 +16208,72 @@ fn pull_diagnostics_refresh_without_blocking_and_keep_result_ids_scoped_to_docum
     assert_eq!(error["error"]["code"], -32602);
     server.request(1007, "shutdown", Value::Null);
     assert_no_pushed_diagnostics(&server);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+fn late_diagnostic_refresh_acknowledgements_do_not_crash_the_server() {
+    let directory = tempfile::tempdir().unwrap();
+    let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+    let mut server = Server::start();
+    server.request(1000, "initialize", json!({
+        "rootUri": Url::from_directory_path(directory.path()).unwrap(),
+        "initializationOptions": {"distribution":{"enabled":false}},
+        "capabilities": {"textDocument":{"diagnostic":{}},"workspace":{"diagnostic":{"refreshSupport":true}}}
+    }));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{
+            "uri":uri,"languageId":"latex","version":1,"text":"\\ref{missing}"
+        }}),
+    );
+    let refresh = server.until(|message| message["method"] == "workspace/diagnostic/refresh");
+    // Exceed the server's five-second refresh deadline before acknowledging it.
+    std::thread::sleep(Duration::from_millis(5200));
+    server.send(json!({"jsonrpc":"2.0","id":refresh["id"],"result":null}));
+    let diagnostics = server.request(
+        1001,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":uri}}),
+    );
+    assert!(!diagnostics["items"].as_array().unwrap().is_empty());
+    server.request(1002, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+fn late_progress_creation_acknowledgements_do_not_crash_or_revive_finished_builds() {
+    let (mut server, _directory, uri) = fake_build_server_capabilities(
+        "printf '%%PDF-1.4\\n' > \"$1/main.pdf\"\n",
+        false,
+        json!({"window":{"workDoneProgress":true}}),
+    );
+    server.request(
+        1000,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[uri]}),
+    );
+    let create = server.until(|message| message["method"] == "window/workDoneProgress/create");
+    // Compilation must finish after the one-second deadline without an ACK.
+    let finished = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(finished["params"]["status"], "success");
+    server.send(json!({"jsonrpc":"2.0","id":create["id"],"result":null}));
+    let status = server.request(
+        1001,
+        "workspace/executeCommand",
+        json!({"command":"latex.buildStatus","arguments":[uri]}),
+    );
+    assert_eq!(status["status"], "success");
+    server.request(1002, "shutdown", Value::Null);
+    assert!(server
+        .pending
+        .borrow()
+        .iter()
+        .all(|message| message["method"] != "$/progress"));
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
@@ -19942,19 +19992,17 @@ fn compiler_input_roles_survive_open_edits_close_and_versioned_cross_file_rename
         for edit in edits {
             let uri: Url = serde_json::from_value(edit["textDocument"]["uri"].clone()).unwrap();
             let path = uri.to_file_path().unwrap();
-            let changes: Vec<tower_lsp::lsp_types::TextEdit> =
+            let changes: Vec<lsp_types::TextEdit> =
                 serde_json::from_value(edit["edits"].clone()).unwrap();
             let text = latex_lsp::text::Text::new(std::fs::read_to_string(&path).unwrap())
                 .changed(
                     changes
                         .into_iter()
-                        .map(
-                            |edit| tower_lsp::lsp_types::TextDocumentContentChangeEvent {
-                                range: Some(edit.range),
-                                range_length: None,
-                                text: edit.new_text,
-                            },
-                        )
+                        .map(|edit| lsp_types::TextDocumentContentChangeEvent {
+                            range: Some(edit.range),
+                            range_length: None,
+                            text: edit.new_text,
+                        })
                         .collect(),
                 )
                 .unwrap()
@@ -20146,12 +20194,12 @@ fn environment_linked_editing_tracks_incremental_changes_and_validates_positions
     server.notify("textDocument/didChange", json!({"textDocument":{"uri":alias,"version":8},"contentChanges":[{"range":ranges[1],"text":"center"},{"range":ranges[0],"text":"center"}]}));
     let changed = text
         .changed(vec![
-            tower_lsp::lsp_types::TextDocumentContentChangeEvent {
+            lsp_types::TextDocumentContentChangeEvent {
                 range: Some(ranges[1]),
                 range_length: None,
                 text: "center".into(),
             },
-            tower_lsp::lsp_types::TextDocumentContentChangeEvent {
+            lsp_types::TextDocumentContentChangeEvent {
                 range: Some(ranges[0]),
                 range_length: None,
                 text: "center".into(),
@@ -20182,7 +20230,7 @@ fn environment_linked_editing_tracks_incremental_changes_and_validates_positions
 #[test]
 fn environment_linked_editing_survives_empty_names_during_incremental_replacement() {
     use latex_lsp::text::Text;
-    use tower_lsp::lsp_types::TextDocumentContentChangeEvent;
+    use lsp_types::TextDocumentContentChangeEvent;
 
     let mut server = Server::start();
     let uri = "file:///linked-editing-empty/main.tex";
@@ -20313,7 +20361,7 @@ fn environment_linked_editing_tracks_project_aliases_macro_data_and_input_change
 #[ignore = "requires pdflatex and xelatex"]
 fn linked_environment_alias_edits_compile_over_stdio_with_native_engines() {
     use latex_lsp::text::Text;
-    use tower_lsp::lsp_types::{LinkedEditingRanges, TextDocumentContentChangeEvent};
+    use lsp_types::{LinkedEditingRanges, TextDocumentContentChangeEvent};
     for engine in ["pdflatex", "xelatex"] {
         for (begin, end) in [
             (r"\start", r"\finish"),
@@ -20384,7 +20432,7 @@ fn linked_environment_alias_edits_compile_over_stdio_with_native_engines() {
 #[test]
 fn color_picker_edits_track_incremental_changes_and_validate_context_over_stdio() {
     use latex_lsp::text::Text;
-    use tower_lsp::lsp_types::{ColorPresentation, TextDocumentContentChangeEvent};
+    use lsp_types::{ColorPresentation, TextDocumentContentChangeEvent};
     let mut server = Server::start();
     let uri = Url::parse("file:///color-protocol/main.tex").unwrap();
     let alias = "file:///color-protocol/%6dain.tex";
@@ -21379,7 +21427,7 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
 #[test]
 fn cmyk_color_picker_preserves_separations_and_independent_frame_colors_over_stdio() {
     use latex_lsp::text::Text;
-    use tower_lsp::lsp_types::{ColorPresentation, TextDocumentContentChangeEvent};
+    use lsp_types::{ColorPresentation, TextDocumentContentChangeEvent};
     let mut server = Server::start();
     let uri = Url::parse("file:///cmyk-protocol/main.tex").unwrap();
     let initialized = server.request(1, "initialize", json!({"processId":null,"capabilities":{}}));
@@ -22322,8 +22370,7 @@ fn volume_citation_build_warnings_publish_exact_ranges_and_versioned_fixes_over_
     assert_eq!(diagnostics.len(), 2);
     let text = latex_lsp::text::Text::new(source.into());
     for (index, diagnostic) in diagnostics.into_iter().enumerate() {
-        let range: tower_lsp::lsp_types::Range =
-            serde_json::from_value(diagnostic["range"].clone()).unwrap();
+        let range: lsp_types::Range = serde_json::from_value(diagnostic["range"].clone()).unwrap();
         let start = text.offset(range.start).unwrap();
         assert_eq!(&source[start - 9..start], "[alphaa]{");
         let actions = server.request(3+index as u64,"textDocument/codeAction",json!({"textDocument":{"uri":main},"range":range,"context":{"diagnostics":[diagnostic],"only":["quickfix"]}}));
@@ -22447,8 +22494,7 @@ fn biblatex_single_build_warnings_publish_exact_ranges_analysis_and_versioned_fi
     assert_eq!(diagnostics.len(), 2);
     let text = latex_lsp::text::Text::new(source.into());
     for (index, diagnostic) in diagnostics.into_iter().enumerate() {
-        let range: tower_lsp::lsp_types::Range =
-            serde_json::from_value(diagnostic["range"].clone()).unwrap();
+        let range: lsp_types::Range = serde_json::from_value(diagnostic["range"].clone()).unwrap();
         let start = text.offset(range.start).unwrap();
         assert_eq!(&source[start - 9..start], "[alphaa]{");
         let actions = server.request(3+index as u64,"textDocument/codeAction",json!({"textDocument":{"uri":main},"range":range,"context":{"diagnostics":[diagnostic],"only":["quickfix"]}}));
@@ -22800,8 +22846,7 @@ fn biblatex_data_citations_publish_versioned_fixes_analysis_and_key_renames_over
     assert_eq!(diagnostics.len(), 3);
     let text = latex_lsp::text::Text::new(source.into());
     for (index, diagnostic) in diagnostics.into_iter().enumerate() {
-        let range: tower_lsp::lsp_types::Range =
-            serde_json::from_value(diagnostic["range"].clone()).unwrap();
+        let range: lsp_types::Range = serde_json::from_value(diagnostic["range"].clone()).unwrap();
         let start = text.offset(range.start).unwrap();
         assert_eq!(&source[start - 2..start], "\n{");
         assert_eq!(&source[start..text.offset(range.end).unwrap()], "alphaa");
@@ -22834,8 +22879,7 @@ fn biblatex_data_citations_publish_versioned_fixes_analysis_and_key_renames_over
     assert_eq!(change["textDocument"]["version"], 3);
     assert_eq!(change["edits"].as_array().unwrap().len(), 3);
     for edit in change["edits"].as_array().unwrap() {
-        let range: tower_lsp::lsp_types::Range =
-            serde_json::from_value(edit["range"].clone()).unwrap();
+        let range: lsp_types::Range = serde_json::from_value(edit["range"].clone()).unwrap();
         let text = latex_lsp::text::Text::new(corrected.clone());
         let start = text.offset(range.start).unwrap();
         assert_eq!(&corrected[start - 2..start], "\n{");
@@ -22849,9 +22893,7 @@ fn biblatex_data_citations_publish_versioned_fixes_analysis_and_key_renames_over
 #[test]
 fn biblatex_entrydata_supports_single_key_edits_roles_and_incremental_updates_over_stdio() {
     use latex_lsp::text::Text;
-    use tower_lsp::lsp_types::{
-        CompletionItem, CompletionTextEdit, TextDocumentContentChangeEvent, TextEdit,
-    };
+    use lsp_types::{CompletionItem, CompletionTextEdit, TextDocumentContentChangeEvent, TextEdit};
 
     for versioned in [false, true] {
         let mut server = Server::start();
@@ -23021,7 +23063,7 @@ fn biblatex_entrydata_supports_single_key_edits_roles_and_incremental_updates_ov
 #[test]
 fn biblatex_entry_queries_keep_branch_roles_and_refresh_single_key_references_over_stdio() {
     use latex_lsp::text::Text;
-    use tower_lsp::lsp_types::{TextDocumentContentChangeEvent, TextEdit};
+    use lsp_types::{TextDocumentContentChangeEvent, TextEdit};
 
     for name in ["ifentryexists", "ifentryinbib", "ifentrycategory"] {
         let category = if name == "ifentrycategory" {
@@ -23201,7 +23243,7 @@ fn biblatex_entry_queries_keep_branch_roles_and_refresh_single_key_references_ov
 #[test]
 fn biblatex_data_selectors_complete_typed_names_hover_and_refresh_user_overrides_over_stdio() {
     use latex_lsp::text::Text;
-    use tower_lsp::lsp_types::{
+    use lsp_types::{
         CompletionItem, CompletionItemKind, CompletionTextEdit, TextDocumentContentChangeEvent,
     };
 
@@ -23275,7 +23317,7 @@ fn biblatex_data_selectors_complete_typed_names_hover_and_refresh_user_overrides
             let item = items.into_iter().find(|item| item.label == *field).unwrap();
             assert_ne!(
                 item.insert_text_format,
-                Some(tower_lsp::lsp_types::InsertTextFormat::SNIPPET)
+                Some(lsp_types::InsertTextFormat::SNIPPET)
             );
             let Some(CompletionTextEdit::Edit(edit)) = item.text_edit else {
                 panic!()
@@ -23568,20 +23610,18 @@ fn bibliography_categories_support_key_editing_and_versioned_renames_over_stdio(
             if is_main { 2 } else { 1 }
         );
         if is_main {
-            let mut edits: Vec<tower_lsp::lsp_types::TextEdit> =
+            let mut edits: Vec<lsp_types::TextEdit> =
                 serde_json::from_value(change["edits"].clone()).unwrap();
             edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
             let updated = text
                 .changed(
                     edits
                         .into_iter()
-                        .map(
-                            |edit| tower_lsp::lsp_types::TextDocumentContentChangeEvent {
-                                range: Some(edit.range),
-                                range_length: None,
-                                text: edit.new_text,
-                            },
-                        )
+                        .map(|edit| lsp_types::TextDocumentContentChangeEvent {
+                            range: Some(edit.range),
+                            range_length: None,
+                            text: edit.new_text,
+                        })
                         .collect(),
                 )
                 .unwrap();
@@ -23668,7 +23708,7 @@ fn missing_biblatex_resources_publish_versioned_fixes_and_recheck_alias_provider
                 .iter()
                 .find(|d| d["code"] == "missing-bibliography-database")
                 .unwrap();
-            let range: tower_lsp::lsp_types::Range =
+            let range: lsp_types::Range =
                 serde_json::from_value(diagnostic["range"].clone()).unwrap();
             let text = latex_lsp::text::Text::new(source.clone());
             let start = text.offset(range.start).unwrap();
@@ -24095,23 +24135,20 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
             let document = &edit["documentChanges"][0];
             assert_eq!(document["textDocument"]["uri"], json!(child));
             assert_eq!(document["textDocument"]["version"], 4);
-            let mut edits = serde_json::from_value::<Vec<tower_lsp::lsp_types::TextEdit>>(
-                document["edits"].clone(),
-            )
-            .unwrap();
+            let mut edits =
+                serde_json::from_value::<Vec<lsp_types::TextEdit>>(document["edits"].clone())
+                    .unwrap();
             assert_eq!(edits.len(), if missing || operand { 1 } else { 2 });
             edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
             let fixed = latex_lsp::text::Text::new(source.into())
                 .changed(
                     edits
                         .into_iter()
-                        .map(
-                            |edit| tower_lsp::lsp_types::TextDocumentContentChangeEvent {
-                                range: Some(edit.range),
-                                range_length: None,
-                                text: edit.new_text,
-                            },
-                        )
+                        .map(|edit| lsp_types::TextDocumentContentChangeEvent {
+                            range: Some(edit.range),
+                            range_length: None,
+                            text: edit.new_text,
+                        })
                         .collect(),
                 )
                 .unwrap()
@@ -24304,7 +24341,7 @@ printf '%%PDF-1.4\n' > "$1/main.pdf"
             let document = &edit["documentChanges"][0];
             assert_eq!(document["textDocument"]["uri"], json!(main));
             assert_eq!(document["textDocument"]["version"], 9);
-            let change: tower_lsp::lsp_types::TextEdit =
+            let change: lsp_types::TextEdit =
                 serde_json::from_value(document["edits"][0].clone()).unwrap();
             assert_eq!(json!(change.range), item["range"]);
             assert_eq!(
@@ -24826,7 +24863,7 @@ printf '%s\n' "Package rerunfilecheck Warning: File \`main.idx' has changed." "(
 #[test]
 fn quoted_citation_keys_complete_and_rename_across_files_with_incremental_updates_over_stdio() {
     use latex_lsp::text::Text;
-    use tower_lsp::lsp_types::{
+    use lsp_types::{
         DocumentChanges, OneOf, TextDocumentContentChangeEvent, TextEdit, WorkspaceEdit,
     };
     for (versioned, multiline) in [(false, false), (true, false), (false, true), (true, true)] {
@@ -25003,13 +25040,8 @@ fn quoted_citation_keys_complete_and_rename_across_files_with_incremental_update
 #[test]
 fn citation_and_bibliography_selection_ranges_refresh_incremental_utf16_edits_over_stdio() {
     use latex_lsp::text::Text;
-    use tower_lsp::lsp_types::{Range, SelectionRange};
-    fn check(
-        selection: &Value,
-        source: &str,
-        position: tower_lsp::lsp_types::Position,
-        expected: &[&str],
-    ) {
+    use lsp_types::{Range, SelectionRange};
+    fn check(selection: &Value, source: &str, position: lsp_types::Position, expected: &[&str]) {
         let text = Text::new(source.into());
         let selection: SelectionRange = serde_json::from_value(selection.clone()).unwrap();
         let mut current = &selection;
@@ -25196,7 +25228,7 @@ fn citation_and_bibliography_selection_ranges_refresh_incremental_utf16_edits_ov
 #[test]
 fn bibtex_expression_selection_ranges_refresh_literals_concatenations_and_preambles_over_stdio() {
     use latex_lsp::text::Text;
-    use tower_lsp::lsp_types::SelectionRange;
+    use lsp_types::SelectionRange;
     fn selected(
         server: &mut Server,
         id: u64,
@@ -25920,7 +25952,7 @@ fn glossary_expl3_and_structural_actions_work_over_stdio() {
 #[cfg(unix)]
 fn range_formatting_uses_context_preserves_outside_and_validates_utf16_ranges() {
     use latex_lsp::text::Text;
-    use tower_lsp::lsp_types::{TextDocumentContentChangeEvent, TextEdit};
+    use lsp_types::{TextDocumentContentChangeEvent, TextEdit};
     let (mut server, directory, uri) = formatting_server("cat > input; sed 's/^/  /' input", 10);
     let source = "% outside\r\n😀 selected\r\nuntouched\r\n";
     open_formatting_document(&mut server, &uri, source);
@@ -26026,7 +26058,7 @@ fn range_formatting_rejects_stale_results_and_honors_cancellation() {
 #[ignore = "requires tex-fmt on PATH"]
 fn range_formatting_with_real_tex_fmt_preserves_context_verbatim_and_is_idempotent() {
     use latex_lsp::text::Text;
-    use tower_lsp::lsp_types::{TextDocumentContentChangeEvent, TextEdit};
+    use lsp_types::{TextDocumentContentChangeEvent, TextEdit};
     let directory = tempfile::tempdir().unwrap();
     let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
     let source = "\\begin{itemize}\r\n\\item 😀 selected\r\n\\item outside\r\n\\end{itemize}\r\n\\begin{verbatim}\r\n   raw   data\r\n\\end{verbatim}\r\n";
@@ -26079,7 +26111,7 @@ fn range_formatting_with_real_tex_fmt_preserves_context_verbatim_and_is_idempote
 #[test]
 fn bibliography_formatting_uses_native_fields_preserves_values_and_is_idempotent() {
     use latex_lsp::text::Text;
-    use tower_lsp::lsp_types::{TextDocumentContentChangeEvent, TextEdit};
+    use lsp_types::{TextDocumentContentChangeEvent, TextEdit};
     let dir = tempfile::tempdir().unwrap();
     let uri = Url::from_file_path(dir.path().join("refs.bib")).unwrap();
     std::fs::write(dir.path().join("refs.bib"), "disk content").unwrap();
@@ -26159,7 +26191,7 @@ fn bibliography_formatting_uses_native_fields_preserves_values_and_is_idempotent
 #[test]
 fn bibliography_formatting_ranges_work_for_adjacent_entries_and_untitled_buffers() {
     use latex_lsp::text::Text;
-    use tower_lsp::lsp_types::{TextDocumentContentChangeEvent, TextEdit};
+    use lsp_types::{TextDocumentContentChangeEvent, TextEdit};
     let first = "@book{one,title={😀}}";
     let second = "@book{two,title={Outside}}";
     let source = format!("{first}{second}");
@@ -26288,7 +26320,7 @@ fn static_bibliography_field_diagnostics_refresh_push_and_pull_without_building(
 #[cfg(unix)]
 fn range_formatting_clamps_oversized_columns_for_latex_and_bibliography() {
     use latex_lsp::text::Text;
-    use tower_lsp::lsp_types::{TextDocumentContentChangeEvent, TextEdit};
+    use lsp_types::{TextDocumentContentChangeEvent, TextEdit};
     for language in ["latex", "bibtex"] {
         let (mut server, directory, uri) = formatting_server("sed 's/^/  /'", 10);
         let (source, expected) = if language == "latex" {
@@ -27491,7 +27523,7 @@ fn call_hierarchy_over_stdio_links_macro_and_file_callers_and_rejects_stale_item
     let outgoing = server.request(4, "callHierarchy/outgoingCalls", json!({"item":caller}));
     assert_eq!(outgoing.as_array().unwrap().len(), 1);
     assert_eq!(outgoing[0]["to"]["name"], "\\leaf");
-    let ranges: Vec<tower_lsp::lsp_types::Range> =
+    let ranges: Vec<lsp_types::Range> =
         serde_json::from_value(outgoing[0]["fromRanges"].clone()).unwrap();
     assert_eq!(ranges.len(), 2);
     let text = Text::new(definitions.into());
@@ -28009,7 +28041,7 @@ fn call_hierarchy_static_named_calls_link_cross_file_targets_and_follow_primitiv
         .clone();
     let outgoing = server.request(4, "callHierarchy/outgoingCalls", json!({"item":caller}));
     assert_eq!(outgoing[0]["to"], leaf);
-    let ranges: Vec<tower_lsp::lsp_types::Range> =
+    let ranges: Vec<lsp_types::Range> =
         serde_json::from_value(outgoing[0]["fromRanges"].clone()).unwrap();
     let text = Text::new(definitions.into());
     let calls: Vec<_> = ranges
@@ -28516,7 +28548,7 @@ fn code_action_resolution_negotiates_edits_and_preserves_the_original_action() {
 
 #[test]
 fn code_action_resolution_supports_syntax_quickfixes_and_source_fix_all() {
-    use tower_lsp::lsp_types::{CodeAction, DocumentChanges, OneOf};
+    use lsp_types::{CodeAction, DocumentChanges, OneOf};
     let uri = Url::parse("untitled:resolved-fixes.tex").unwrap();
     let source = "\\begin{itemize}\n\\item Hello\n";
     let mut server = Server::start();
@@ -29890,10 +29922,9 @@ fn input_hook_type_completion_and_hover_follow_unsaved_project_meanings() {
         .unwrap();
     assert_eq!(item["textEdit"]["newText"], "book");
     assert_eq!(item["kind"], 7);
-    let edit: tower_lsp::lsp_types::TextEdit =
-        serde_json::from_value(item["textEdit"].clone()).unwrap();
+    let edit: lsp_types::TextEdit = serde_json::from_value(item["textEdit"].clone()).unwrap();
     let updated = text
-        .changed(vec![tower_lsp::lsp_types::TextDocumentContentChangeEvent {
+        .changed(vec![lsp_types::TextDocumentContentChangeEvent {
             range: Some(edit.range),
             range_length: None,
             text: edit.new_text,
@@ -29975,20 +30006,18 @@ fn bibliography_sections_preserve_raw_resource_headers_and_incremental_reference
             edit["documentChanges"][0]["textDocument"]["version"],
             version
         );
-        let mut edits: Vec<tower_lsp::lsp_types::TextEdit> =
+        let mut edits: Vec<lsp_types::TextEdit> =
             serde_json::from_value(edit["documentChanges"][0]["edits"].clone()).unwrap();
         edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
         let updated = text
             .changed(
                 edits
                     .into_iter()
-                    .map(
-                        |edit| tower_lsp::lsp_types::TextDocumentContentChangeEvent {
-                            range: Some(edit.range),
-                            range_length: None,
-                            text: edit.new_text,
-                        },
-                    )
+                    .map(|edit| lsp_types::TextDocumentContentChangeEvent {
+                        range: Some(edit.range),
+                        range_length: None,
+                        text: edit.new_text,
+                    })
                     .collect(),
             )
             .unwrap();
@@ -30135,10 +30164,9 @@ fn registered_section_files_complete_link_and_move_without_exposing_unused_entri
         .iter()
         .find(|item| item["label"] == "section.bib")
         .unwrap();
-    let edit: tower_lsp::lsp_types::TextEdit =
-        serde_json::from_value(item["textEdit"].clone()).unwrap();
+    let edit: lsp_types::TextEdit = serde_json::from_value(item["textEdit"].clone()).unwrap();
     let updated = Text::new(source.into())
-        .changed(vec![tower_lsp::lsp_types::TextDocumentContentChangeEvent {
+        .changed(vec![lsp_types::TextDocumentContentChangeEvent {
             range: Some(edit.range),
             range_length: None,
             text: edit.new_text,
@@ -30196,7 +30224,7 @@ fn registered_section_files_complete_link_and_move_without_exposing_unused_entri
 #[test]
 fn selected_section_file_items_complete_link_and_move_over_stdio() {
     use latex_lsp::text::Text;
-    use tower_lsp::lsp_types::{TextDocumentContentChangeEvent, TextEdit};
+    use lsp_types::{TextDocumentContentChangeEvent, TextEdit};
     for document_changes in [false, true] {
         let directory = tempfile::tempdir().unwrap();
         let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
@@ -31714,30 +31742,29 @@ fn section_key_renames_preserve_versions_and_reject_capture_or_shared_conflicts_
         let mut rename = params.clone();
         rename["newName"] = json!("updated");
         let edit = server.request(3, "textDocument/rename", rename.clone());
-        let changes: std::collections::BTreeMap<Url, Vec<tower_lsp::lsp_types::TextEdit>> =
-            if versioned {
-                assert!(edit["changes"].is_null());
-                let changes = edit["documentChanges"].as_array().unwrap();
-                assert_eq!(changes.len(), 2);
-                changes
-                    .iter()
-                    .map(|change| {
-                        let uri: Url =
-                            serde_json::from_value(change["textDocument"]["uri"].clone()).unwrap();
-                        assert_eq!(
-                            change["textDocument"]["version"],
-                            if uri == selected { 7 } else { 9 }
-                        );
-                        (
-                            uri,
-                            serde_json::from_value(change["edits"].clone()).unwrap(),
-                        )
-                    })
-                    .collect()
-            } else {
-                assert!(edit["documentChanges"].is_null());
-                serde_json::from_value(edit["changes"].clone()).unwrap()
-            };
+        let changes: std::collections::BTreeMap<Url, Vec<lsp_types::TextEdit>> = if versioned {
+            assert!(edit["changes"].is_null());
+            let changes = edit["documentChanges"].as_array().unwrap();
+            assert_eq!(changes.len(), 2);
+            changes
+                .iter()
+                .map(|change| {
+                    let uri: Url =
+                        serde_json::from_value(change["textDocument"]["uri"].clone()).unwrap();
+                    assert_eq!(
+                        change["textDocument"]["version"],
+                        if uri == selected { 7 } else { 9 }
+                    );
+                    (
+                        uri,
+                        serde_json::from_value(change["edits"].clone()).unwrap(),
+                    )
+                })
+                .collect()
+        } else {
+            assert!(edit["documentChanges"].is_null());
+            serde_json::from_value(edit["changes"].clone()).unwrap()
+        };
         assert_eq!(changes.len(), 2);
         assert!(!changes.contains_key(&main));
         assert!(!changes.contains_key(&default));
@@ -31750,13 +31777,11 @@ fn section_key_renames_preserve_versions_and_reject_capture_or_shared_conflicts_
                 .changed(
                     edits
                         .into_iter()
-                        .map(
-                            |edit| tower_lsp::lsp_types::TextDocumentContentChangeEvent {
-                                range: Some(edit.range),
-                                range_length: None,
-                                text: edit.new_text,
-                            },
-                        )
+                        .map(|edit| lsp_types::TextDocumentContentChangeEvent {
+                            range: Some(edit.range),
+                            range_length: None,
+                            text: edit.new_text,
+                        })
                         .collect(),
                 )
                 .unwrap()
@@ -32506,7 +32531,7 @@ fn xdata_relation_completions_track_named_set_overrides_without_resource_selecti
 fn source_set_complete_reference_graphs_preserve_numeric_identity_and_unsaved_consumers_over_stdio()
 {
     use latex_lsp::text::Text;
-    use tower_lsp::lsp_types::Location;
+    use lsp_types::Location;
     fn location(uri: &Url, text: &str, marker: &str, name: &str) -> Location {
         let start = text.find(marker).unwrap() + marker.len();
         Location::new(
@@ -32696,7 +32721,7 @@ fn source_set_complete_reference_graphs_preserve_numeric_identity_and_unsaved_co
 #[test]
 fn source_set_renames_keep_numeric_identity_versions_and_certify_raw_dependencies_over_stdio() {
     use latex_lsp::text::Text;
-    use tower_lsp::lsp_types::{Location, TextEdit};
+    use lsp_types::{Location, TextEdit};
     fn item(uri: &Url, text: &str, marker: &str, name: &str) -> Location {
         let at = text.find(marker).unwrap() + marker.len();
         Location::new(
@@ -35016,7 +35041,7 @@ fn source_named_ids_reads_refresh_unsaved_relations_and_preserve_edit_protection
 #[test]
 fn coupled_raw_ids_owners_keep_exact_edits_versions_and_unsaved_closure() {
     use latex_lsp::text::Text;
-    use tower_lsp::lsp_types::Range;
+    use lsp_types::Range;
     for document_changes in [false, true] {
         let dir = tempfile::tempdir().unwrap();
         let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
@@ -35694,7 +35719,7 @@ fn source_textual_predicates_follow_final_identity_versions_and_shared_consumers
 #[test]
 fn source_shared_raw_owners_keep_exact_edits_versions_and_unsaved_closure() {
     use latex_lsp::text::Text;
-    use tower_lsp::lsp_types::Range;
+    use lsp_types::Range;
     for document_changes in [false, true] {
         let dir = tempfile::tempdir().unwrap();
         let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
@@ -36397,8 +36422,7 @@ fn native_context_entry_keys_keep_complete_versioned_edits_and_unsaved_meanings(
             };
             let text = Text::new(content.into());
             let mut changed = content.to_string();
-            let mut edits: Vec<tower_lsp::lsp_types::TextEdit> =
-                serde_json::from_value(changes).unwrap();
+            let mut edits: Vec<lsp_types::TextEdit> = serde_json::from_value(changes).unwrap();
             edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
             for edit in edits {
                 changed.replace_range(
@@ -36574,8 +36598,7 @@ fn context_category_assignment_lists_keep_exact_edits_shared_meanings_and_close_
             } else {
                 edit["changes"][uri.as_str()].clone()
             };
-            let mut edits: Vec<tower_lsp::lsp_types::TextEdit> =
-                serde_json::from_value(edits).unwrap();
+            let mut edits: Vec<lsp_types::TextEdit> = serde_json::from_value(edits).unwrap();
             edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
             let text = Text::new(content.into());
             let mut changed = content.to_string();
@@ -36763,8 +36786,7 @@ fn new_root_symbol_edits_certify_shared_meanings_declarations_versions_and_close
             } else {
                 direct_edit["changes"][uri.as_str()].clone()
             };
-            let mut edits: Vec<tower_lsp::lsp_types::TextEdit> =
-                serde_json::from_value(edits).unwrap();
+            let mut edits: Vec<lsp_types::TextEdit> = serde_json::from_value(edits).unwrap();
             edits.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
             let text = Text::new(content.into());
             let mut changed = content.to_string();

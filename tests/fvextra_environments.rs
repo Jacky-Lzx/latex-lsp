@@ -3,7 +3,7 @@ use latex_lsp::{
     text::Text,
     workspace::{Document, Workspace},
 };
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 
 const ENVIRONMENTS: [&str; 2] = ["VerbatimWrite", "VerbatimBuffer"];
 

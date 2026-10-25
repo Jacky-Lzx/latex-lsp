@@ -1,4 +1,5 @@
 //! FancyVerb's saved text keys have their own namespaces and exact spelling.
+use crate::rpc as jsonrpc;
 use crate::{
     parser::{
         fancyvrb,
@@ -6,11 +7,11 @@ use crate::{
     },
     project::workspace::{Document, Workspace},
 };
+use lsp_types::*;
 use std::{
     collections::{BTreeMap, BTreeSet},
     ops::Range as Span,
 };
-use tower_lsp::{jsonrpc, lsp_types::*};
 
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum Kind {

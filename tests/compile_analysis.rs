@@ -1,7 +1,7 @@
 use latex_lsp::build_log::{compilation_analysis, parse};
+use lsp_types::*;
 use serde_json::json;
 use std::collections::BTreeMap;
-use tower_lsp::lsp_types::*;
 
 fn warning(message: impl Into<String>) -> Diagnostic {
     Diagnostic {

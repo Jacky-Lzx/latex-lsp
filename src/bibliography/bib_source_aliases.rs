@@ -3,8 +3,8 @@ use crate::{
     parser::syntax,
     project::workspace::{DocumentKind, Workspace},
 };
+use lsp_types::Url;
 use std::collections::{BTreeMap, BTreeSet};
-use tower_lsp::lsp_types::Url;
 
 /// Certify unique static IDS, their source owners and indirect member uses.
 /// Alias names cannot themselves shadow source sets. Complete edits and

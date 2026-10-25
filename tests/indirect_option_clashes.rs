@@ -1,5 +1,5 @@
 use latex_lsp::{build_log, text::Text};
-use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Url};
+use lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Url};
 
 fn call(form: &str, loader: &str) -> String {
     match form {

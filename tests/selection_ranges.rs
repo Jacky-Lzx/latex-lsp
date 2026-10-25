@@ -1,5 +1,5 @@
 use latex_lsp::{editing, workspace::Document};
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 
 fn doc(name: &str, source: &str) -> Document {
     Document::new(

@@ -5,7 +5,7 @@ use latex_lsp::{
     text::Text,
     workspace::{Document, Workspace},
 };
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 
 fn setup(source: &str) -> (Workspace, Url) {
     let uri = Url::parse("file:///standard-math/main.tex").unwrap();

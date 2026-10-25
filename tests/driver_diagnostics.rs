@@ -1,6 +1,6 @@
 use latex_lsp::{build, build_log, config::BuildConfig};
+use lsp_types::{DiagnosticSeverity, Url};
 use std::{process::Command, sync::atomic::AtomicBool};
-use tower_lsp::lsp_types::{DiagnosticSeverity, Url};
 
 #[test]
 fn pdf_driver_errors_use_the_root_without_borrowing_tex_source_context() {

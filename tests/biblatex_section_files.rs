@@ -3,7 +3,7 @@ use latex_lsp::{
     text::Text,
     workspace::{DocumentKind, Workspace},
 };
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 fn setup(source: &str, files: &[(&str, &str)]) -> (tempfile::TempDir, Workspace, Url) {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("main.tex"), source).unwrap();

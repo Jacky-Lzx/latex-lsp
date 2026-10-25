@@ -5,8 +5,8 @@ use crate::{
     parser::syntax,
     project::workspace::{DocumentKind, Workspace},
 };
+use lsp_types::*;
 use std::{collections::BTreeSet, ops::Range as Span};
-use tower_lsp::lsp_types::*;
 
 #[derive(Clone, Copy)]
 enum Kind {

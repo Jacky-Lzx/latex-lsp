@@ -5,11 +5,11 @@ use crate::{
     compilation::{recorder, recorder::BibliographyPaths},
     parser::syntax,
 };
+use lsp_types::*;
 use std::{
     collections::BTreeSet,
     path::{Path, PathBuf},
 };
-use tower_lsp::lsp_types::*;
 
 const MAX_RELATED: usize = 16;
 

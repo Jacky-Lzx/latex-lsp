@@ -3,11 +3,11 @@ use crate::{
     parser::syntax::{self, Command},
     project::workspace::{Document, Workspace},
 };
+use lsp_types::*;
 use std::{
     collections::{BTreeMap, BTreeSet},
     ops::Range,
 };
-use tower_lsp::lsp_types::*;
 
 pub(crate) const BUILTINS: &[&str] = &[
     "page",
@@ -128,11 +128,7 @@ fn replacement_span(
     )
 }
 
-pub(crate) fn replacement_edit(
-    doc: &Document,
-    range: tower_lsp::lsp_types::Range,
-    name: &str,
-) -> TextEdit {
+pub(crate) fn replacement_edit(doc: &Document, range: lsp_types::Range, name: &str) -> TextEdit {
     if doc.syntax.name_counter_references.iter().any(|entry| {
         doc.text.range(entry.span.start, entry.span.end) == range
             && doc
@@ -292,10 +288,7 @@ fn invocation_arguments(
 }
 
 /// A spelling repair must not create a self alias or reset relationship.
-pub(crate) fn replacement_conflicts(
-    doc: &Document,
-    range: tower_lsp::lsp_types::Range,
-) -> BTreeSet<&str> {
+pub(crate) fn replacement_conflicts(doc: &Document, range: lsp_types::Range) -> BTreeSet<&str> {
     let source = &doc.text.source;
     let mut result = BTreeSet::new();
     for command in &doc.syntax.commands {

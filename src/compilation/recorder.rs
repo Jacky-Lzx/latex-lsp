@@ -1,10 +1,10 @@
 //! TeX's recorder names the files actually read, including expanded inputs.
+use lsp_types::Url;
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
     sync::OnceLock,
 };
-use tower_lsp::lsp_types::Url;
 
 /// Files read as data, configuration or verbatim code by package-specific loaders.
 /// Their contents are dependencies, not implicitly LaTeX source documents.

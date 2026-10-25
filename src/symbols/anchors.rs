@@ -4,13 +4,13 @@ use crate::{
     parser::syntax::{self, Argument, Command, Entry},
     project::workspace::{Document, Workspace},
 };
+use lsp_types::{
+    Diagnostic, DiagnosticRelatedInformation, Location, NumberOrString, Range as LspRange,
+    TextEdit, Url,
+};
 use std::{
     collections::{BTreeMap, BTreeSet},
     ops::Range,
-};
-use tower_lsp::lsp_types::{
-    Diagnostic, DiagnosticRelatedInformation, Location, NumberOrString, Range as LspRange,
-    TextEdit, Url,
 };
 
 /// Destination warnings are emitted at shipout without a source line. Only map
@@ -263,7 +263,7 @@ pub(crate) fn rename_edits(
     doc: &Document,
     range: LspRange,
     new_name: &str,
-) -> tower_lsp::jsonrpc::Result<Vec<TextEdit>> {
+) -> crate::rpc::Result<Vec<TextEdit>> {
     for command in &doc.syntax.commands {
         if let Some(bookmark) = bookmark(&doc.text.source, command) {
             if doc
@@ -273,7 +273,7 @@ pub(crate) fn rename_edits(
             {
                 continue;
             }
-            let (base, level) = new_name.rsplit_once('.').filter(|(base, level)| syntax::is_static_reference_key(base) && literal_level(level)).ok_or_else(|| tower_lsp::jsonrpc::Error::invalid_params("A PDF bookmark destination must end with a supported literal numeric level (at least -3), for example `name.0`"))?;
+            let (base, level) = new_name.rsplit_once('.').filter(|(base, level)| syntax::is_static_reference_key(base) && literal_level(level)).ok_or_else(|| crate::rpc::Error::invalid_params("A PDF bookmark destination must end with a supported literal numeric level (at least -3), for example `name.0`"))?;
             let mut edits = Vec::new();
             if bookmark.key.value != base {
                 edits.push(TextEdit {

@@ -1,5 +1,5 @@
 use latex_lsp::{features, signature, workspace::Workspace};
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 
 fn setup(source: &str) -> (Workspace, Url) {
     let uri = Url::parse("untitled:hook-conditions.tex").unwrap();

@@ -1,8 +1,8 @@
 //! Missing Biber relations retain their native owner, field and refsection.
 use super::Context;
 use crate::parser::syntax;
+use lsp_types::*;
 use std::path::Path;
-use tower_lsp::lsp_types::*;
 
 pub(crate) struct Record<'a> {
     key: &'a str,

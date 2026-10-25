@@ -1,6 +1,6 @@
 //! makeindex processing diagnostics refer to generated inputs or real styles.
+use lsp_types::*;
 use std::{collections::BTreeMap, io::Read, path::Path};
-use tower_lsp::lsp_types::*;
 
 #[derive(Default)]
 pub(crate) struct Report {

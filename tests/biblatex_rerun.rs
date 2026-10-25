@@ -12,9 +12,9 @@ fn biblatex_backend_requests_report_the_tool_and_required_latex_pass() {
     assert_eq!(analysis["requiredBibliographyTools"], json!(["bibtex"]));
 }
 
-fn analyze(message: &str, severity: tower_lsp::lsp_types::DiagnosticSeverity) -> serde_json::Value {
+fn analyze(message: &str, severity: lsp_types::DiagnosticSeverity) -> serde_json::Value {
+    use lsp_types::{Diagnostic, Url};
     use std::collections::BTreeMap;
-    use tower_lsp::lsp_types::{Diagnostic, Url};
     compilation_analysis(
         &BTreeMap::from([(
             Url::parse("file:///biblatex-rerun/main.tex").unwrap(),
@@ -30,7 +30,7 @@ fn analyze(message: &str, severity: tower_lsp::lsp_types::DiagnosticSeverity) ->
 
 #[test]
 fn confirmed_latex_requests_do_not_claim_a_bibliography_tool_is_required() {
-    use tower_lsp::lsp_types::DiagnosticSeverity;
+    use lsp_types::DiagnosticSeverity;
     for message in [
         "Package biblatex Warning: Please rerun LaTeX.",
         "Package biblatex Warning: Please rerun LaTeX.\r\n(biblatex) Page breaks have changed.",
@@ -45,7 +45,7 @@ fn confirmed_latex_requests_do_not_claim_a_bibliography_tool_is_required() {
 
 #[test]
 fn backend_requests_require_the_complete_known_biblatex_message() {
-    use tower_lsp::lsp_types::DiagnosticSeverity;
+    use lsp_types::DiagnosticSeverity;
     for (message, expected) in [
         ("Package biblatex Warning: Please (re)run Biber on the file: main and rerun LaTeX afterwards.", "biber"),
         ("Package biblatex Warning: Please (re)run Biber on the file:\r\n(biblatex) 论文 draft.v2\r\n(biblatex) and rerun LaTeX afterwards.", "biber"),
@@ -98,8 +98,8 @@ fn backend_requests_require_the_complete_known_biblatex_message() {
 
 #[test]
 fn required_tools_are_deduplicated_sorted_and_cleared_between_analyses() {
+    use lsp_types::{Diagnostic, DiagnosticSeverity, Url};
     use std::collections::BTreeMap;
-    use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Url};
     let make = |tool| {
         Diagnostic { message: format!("Package biblatex Warning: Please (re)run {tool} on the {} main and rerun LaTeX afterwards.", if tool == "Biber" { "file:" } else { "file(s):" }), severity: Some(DiagnosticSeverity::WARNING), ..Default::default() }
     };
@@ -130,7 +130,7 @@ fn continuation_sentences_are_kept_without_crossing_log_boundaries() {
     let directory = tempfile::tempdir().unwrap();
     let main = directory.path().join("main.tex");
     std::fs::write(&main, "\\documentclass{article}\n").unwrap();
-    let uri = tower_lsp::lsp_types::Url::from_file_path(&main).unwrap();
+    let uri = lsp_types::Url::from_file_path(&main).unwrap();
     for (body, suffix) in [
         ("Please rerun LaTeX.", "Page breaks have changed."),
         (

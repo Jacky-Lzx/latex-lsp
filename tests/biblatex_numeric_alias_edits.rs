@@ -1,5 +1,5 @@
 use latex_lsp::{features, workspace::Workspace};
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 fn setup(body: &str) -> (tempfile::TempDir, Workspace, Url, Url, Url) {
     let dir = tempfile::tempdir().unwrap();
     let source=format!("% 😀\r\n\\documentclass{{article}}\\usepackage{{biblatex}}\\addbibresource{{default.bib}}\\addsectionbib[label=chosen]{{section.bib}}\\begin{{document}}{body}\\end{{document}}");

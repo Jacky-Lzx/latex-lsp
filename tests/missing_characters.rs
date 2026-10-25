@@ -1,5 +1,5 @@
 use latex_lsp::{build_log, text::Text};
-use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString, Url};
+use lsp_types::{DiagnosticSeverity, NumberOrString, Url};
 
 #[test]
 fn numbered_missing_character_errors_preserve_severity_and_utf16_character_ranges() {
@@ -31,7 +31,7 @@ fn numbered_missing_character_errors_preserve_severity_and_utf16_character_range
     }
 }
 
-fn parse(source: &str, log: &str) -> Vec<tower_lsp::lsp_types::Diagnostic> {
+fn parse(source: &str, log: &str) -> Vec<lsp_types::Diagnostic> {
     let directory = tempfile::tempdir().unwrap();
     let main = directory.path().join("main.tex");
     std::fs::write(&main, source).unwrap();

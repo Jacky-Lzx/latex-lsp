@@ -1,5 +1,5 @@
 use latex_lsp::{features, signature, text::Text, workspace::Workspace};
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 
 const SIMPLE: &[&str] = &[
     "AtBeginRefsection",

@@ -1,6 +1,6 @@
 //! Bounded, connection-local semantic token snapshots for LSP delta requests.
+use lsp_types::*;
 use std::collections::BTreeMap;
-use tower_lsp::lsp_types::*;
 
 // A token has five u32 fields. Bound both token storage and per-file overhead.
 const MAX_TOKENS: usize = 65_536;

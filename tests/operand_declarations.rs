@@ -4,7 +4,7 @@ use latex_lsp::{
     text::Text,
     workspace::{Document, Workspace},
 };
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 
 fn count(parsed: &Syntax, kind: &str) -> usize {
     match kind {

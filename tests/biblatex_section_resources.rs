@@ -1,7 +1,7 @@
 use latex_lsp::{
     features, file_operations, navigation, signature, text::Text, workspace::Workspace,
 };
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 
 fn setup(source: &str, filename: &str) -> (tempfile::TempDir, Workspace, Url, Url) {
     let dir = tempfile::tempdir().unwrap();

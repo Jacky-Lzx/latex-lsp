@@ -1,6 +1,6 @@
 use latex_lsp::{build_log, editing, text::Text, workspace::Workspace};
+use lsp_types::*;
 use std::{collections::BTreeMap, path::Path};
-use tower_lsp::lsp_types::*;
 
 const CODE: &str = "missing-bibliography-relation";
 const FIELDS: [&str; 4] = ["crossref", "xref", "related", "entryset"];

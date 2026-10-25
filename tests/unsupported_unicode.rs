@@ -1,7 +1,7 @@
 use latex_lsp::{build_log, text::Text};
+use lsp_types::*;
 use serde_json::json;
 use std::collections::BTreeMap;
-use tower_lsp::lsp_types::*;
 
 fn message(character: char) -> String {
     format!("LaTeX Error: Unicode character {character} (U+{:04X})               not set up for use with LaTeX.", character as u32)

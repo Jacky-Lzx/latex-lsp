@@ -1,6 +1,6 @@
 use latex_lsp::{build, build_log, editing, navigation, text::Text, workspace::Workspace};
+use lsp_types::*;
 use std::path::Path;
-use tower_lsp::lsp_types::*;
 
 const PDF_FRAME: &str = "\\FV@Error ... {FancyVerb Error:\n\\space \\space #1\n}\n";
 const XE_FRAME: &str = "\\FV@Error ...ncyVerb Error:^^J\\space \\space #1^^J}\n";

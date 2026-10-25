@@ -1,5 +1,5 @@
 use latex_lsp::{features, workspace::Workspace};
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 fn setup(numeric: bool, body: &str, preamble: &str) -> (tempfile::TempDir, Workspace, Url, Url) {
     let dir = tempfile::tempdir().unwrap();
     let source=format!("% 😀\r\n\\documentclass{{article}}\\usepackage{{biblatex}}\\addbibresource{{data.bib}}{preamble}\\begin{{document}}{}{body}\\end{{document}}",if numeric{r"\newrefsection"}else{""});

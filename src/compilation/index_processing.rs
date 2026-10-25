@@ -3,13 +3,13 @@ use crate::{
     compilation::build_tools::{Failure, Watched},
     config::{BuildConfig, IndexToolConfig},
 };
+use lsp_types::Url;
 use std::{
     collections::BTreeSet,
     path::{Path, PathBuf},
     process::Command,
     sync::atomic::{AtomicBool, Ordering},
 };
-use tower_lsp::lsp_types::Url;
 
 struct Stage {
     config: IndexToolConfig,
@@ -57,7 +57,7 @@ fn artifact(
 pub(crate) fn handles_warning(
     root: &Path,
     build: &BuildConfig,
-    diagnostic: &tower_lsp::lsp_types::Diagnostic,
+    diagnostic: &lsp_types::Diagnostic,
 ) -> bool {
     let Some(request) = crate::compilation::build_log::required_index_input(diagnostic) else {
         return false;

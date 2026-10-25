@@ -3,7 +3,7 @@ use latex_lsp::{
     text::Text,
     workspace::{Document, Workspace},
 };
-use tower_lsp::lsp_types::{CompletionTextEdit, Position, TextDocumentContentChangeEvent, Url};
+use lsp_types::{CompletionTextEdit, Position, TextDocumentContentChangeEvent, Url};
 
 fn uri(name: &str) -> Url {
     Url::parse(&format!("file:///latex-lsp-tests/{name}")).unwrap()

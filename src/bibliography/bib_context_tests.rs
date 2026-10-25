@@ -1,5 +1,5 @@
 use crate::{compilation::auxiliary, project::workspace::Workspace};
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 const A: &str = "none/global/7FC56270E7A70FA81A5935B72EACBE29/global/global/global";
 const B: &str = "none/global/9D5ED678FE57BCCA610140957AFAB571/global/global/global";
 const GLOBAL: &str = "none/global//global/global/global";

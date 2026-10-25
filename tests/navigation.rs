@@ -3,7 +3,7 @@ use latex_lsp::{
     text::Text,
     workspace::{Document, Workspace},
 };
-use tower_lsp::lsp_types::{FoldingRangeKind, Position, Url};
+use lsp_types::{FoldingRangeKind, Position, Url};
 
 fn insert(workspace: &mut Workspace, uri: &Url, source: &str) {
     workspace

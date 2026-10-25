@@ -4,7 +4,7 @@ use latex_lsp::{
     editing,
     workspace::Workspace,
 };
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 
 const RERUN: &str =
     "LaTeX Warning: Label(s) may have changed. Rerun to get cross-references right.";

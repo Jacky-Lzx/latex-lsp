@@ -1,5 +1,5 @@
 use latex_lsp::{build, build_log, editing, text::Text, workspace::Workspace};
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 
 #[test]
 fn missing_loader_diagnostics_follow_static_names_and_the_consumed_lookahead_token() {

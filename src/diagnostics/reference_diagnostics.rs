@@ -3,11 +3,11 @@ use crate::{
     parser::syntax,
     project::workspace::{DocumentKind, Workspace},
 };
+use lsp_types::*;
 use std::{
     collections::{BTreeMap, BTreeSet},
     ops::Range,
 };
-use tower_lsp::lsp_types::*;
 
 fn occurrences(
     ws: &Workspace,
@@ -285,7 +285,7 @@ fn diagnostics_for(
 pub(crate) fn fixes(
     ws: &Workspace,
     uri: &Url,
-    range: tower_lsp::lsp_types::Range,
+    range: lsp_types::Range,
     requested: &[Diagnostic],
 ) -> Vec<syntax::QuickFix> {
     let Some(doc) = ws.documents.get(uri) else {

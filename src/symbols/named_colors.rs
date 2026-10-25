@@ -1,13 +1,14 @@
 //! Literal xcolor names form a namespace separate from macros and reference keys.
+use crate::rpc as jsonrpc;
 use crate::{
     parser::syntax::{self, Argument, Command, Entry, Syntax},
     project::workspace::Workspace,
 };
+use lsp_types::*;
 use std::{
     collections::{BTreeMap, BTreeSet},
     ops::Range as Span,
 };
-use tower_lsp::{jsonrpc, lsp_types::*};
 
 pub(crate) const BUILTINS: &[&str] = &[
     "black",

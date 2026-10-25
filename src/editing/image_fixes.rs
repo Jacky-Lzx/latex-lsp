@@ -5,8 +5,8 @@ use crate::{
     parser::syntax,
     project::{graphics, workspace::Workspace},
 };
+use lsp_types::{Diagnostic, TextEdit, Url};
 use std::{collections::BTreeSet, path::Path};
-use tower_lsp::lsp_types::{Diagnostic, TextEdit, Url};
 
 pub(crate) fn fixes(
     workspace: &Workspace,

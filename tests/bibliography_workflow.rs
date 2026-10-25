@@ -3,12 +3,12 @@ use latex_lsp::{
     build,
     config::{BibliographyBackend, BibliographyToolConfig, BuildConfig, Config, IndexToolConfig},
 };
+use lsp_types::{DiagnosticSeverity, Url};
 use std::{
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, Ordering},
     time::Duration,
 };
-use tower_lsp::lsp_types::{DiagnosticSeverity, Url};
 
 const COMPILER: &str = r#"set -eu
 output="$1"; job="$2"; source="$3"

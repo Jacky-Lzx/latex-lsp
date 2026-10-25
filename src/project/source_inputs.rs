@@ -4,8 +4,8 @@ use crate::{
     parser::syntax,
     project::workspace::{resolve_file_path, DocumentKind, Workspace},
 };
+use lsp_types::Url;
 use std::collections::{BTreeMap, BTreeSet};
-use tower_lsp::lsp_types::Url;
 
 const MAX_ROUNDS: usize = 32;
 const MAX_SOURCES: usize = 1024;

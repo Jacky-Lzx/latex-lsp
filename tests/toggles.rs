@@ -1,6 +1,6 @@
 use latex_lsp::{build, features, text::Text, workspace::Workspace};
+use lsp_types::*;
 use std::{collections::BTreeMap, path::Path, sync::atomic::AtomicBool};
-use tower_lsp::lsp_types::*;
 
 fn setup(root: &Path, files: &[(&str, &str)]) -> Workspace {
     for (name, source) in files {

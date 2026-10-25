@@ -1,6 +1,6 @@
 use latex_lsp::{build_log, editing, workspace::Workspace};
+use lsp_types::*;
 use std::collections::BTreeMap;
-use tower_lsp::lsp_types::*;
 
 const REQUESTS: &[&str] = &[
     "LaTeX Warning: Label(s) may have changed. Rerun to get cross-references right.",

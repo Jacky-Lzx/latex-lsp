@@ -5,8 +5,8 @@ use crate::{
     project::workspace::{Document, Workspace},
     symbols::named_references::Context,
 };
+use lsp_types::Url;
 use std::collections::{BTreeMap, BTreeSet};
-use tower_lsp::lsp_types::Url;
 
 pub(crate) fn name(source: &str, argument: syntax::Argument) -> Option<String> {
     let value = syntax::single_key_argument(source, argument).value;

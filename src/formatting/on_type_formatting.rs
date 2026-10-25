@@ -1,11 +1,12 @@
 //! Bounded local indentation; never launches a formatter or changes TeX tokens.
+use crate::rpc::Result;
 use crate::{
     language::signature::CommandSignatures,
     parser::syntax,
     project::workspace::{Document, DocumentKind, Workspace},
 };
+use lsp_types::*;
 use std::collections::BTreeSet;
-use tower_lsp::{jsonrpc::Result, lsp_types::*};
 
 const MAX_LINE_BYTES: usize = 64 * 1024;
 const MAX_INDENT: usize = 4096;
@@ -147,9 +148,10 @@ pub(crate) fn edits(
     let Some(doc) = workspace.documents.get(uri) else {
         return Ok(vec![]);
     };
-    let cursor = doc.text.clamped_offset(position).ok_or_else(|| {
-        tower_lsp::jsonrpc::Error::invalid_params("Invalid on-type formatting position")
-    })?;
+    let cursor = doc
+        .text
+        .clamped_offset(position)
+        .ok_or_else(|| crate::rpc::Error::invalid_params("Invalid on-type formatting position"))?;
     if !matches!(ch, "\n" | "}") || position.line == 0 {
         return Ok(vec![]);
     }

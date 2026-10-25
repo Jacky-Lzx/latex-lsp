@@ -1,13 +1,11 @@
 //! Resolve only documentation, retaining the completion's original edits.
+use crate::rpc::{Error, ErrorCode, Result};
 use crate::{language::command_docs, parser::syntax, project::workspace::Workspace};
+use lsp_types::*;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeSet,
     hash::{Hash, Hasher},
-};
-use tower_lsp::{
-    jsonrpc::{Error, ErrorCode, Result},
-    lsp_types::*,
 };
 
 #[derive(Deserialize, Serialize)]

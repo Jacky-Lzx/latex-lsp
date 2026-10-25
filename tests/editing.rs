@@ -3,7 +3,7 @@ use latex_lsp::{
     text::Text,
     workspace::{Document, Workspace},
 };
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 
 fn setup(source: &str, versioned: bool) -> (Workspace, Url) {
     let uri = Url::parse("file:///editing/main.tex").unwrap();

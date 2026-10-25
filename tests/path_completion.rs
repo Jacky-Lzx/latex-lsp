@@ -3,7 +3,7 @@ use latex_lsp::{
     text::Text,
     workspace::{Document, Workspace},
 };
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 
 fn apply_completion(workspace: &mut Workspace, uri: &Url, marked: &str, label: &str) -> String {
     let offset = marked.find('|').unwrap();

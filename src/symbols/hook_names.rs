@@ -4,11 +4,11 @@ use crate::{
     parser::syntax,
     project::workspace::{Document, DocumentKind, Workspace},
 };
+use lsp_types::*;
 use std::{
     collections::{BTreeMap, BTreeSet},
     ops::Range as Span,
 };
-use tower_lsp::lsp_types::*;
 
 const COMMANDS: &[&str] = &[
     "NewHook",

@@ -3,8 +3,8 @@ use crate::{
     parser::syntax,
     project::workspace::{Document, Workspace},
 };
+use lsp_types::Url;
 use std::collections::{BTreeMap, BTreeSet};
-use tower_lsp::lsp_types::Url;
 
 const MAX_LINES: usize = 32;
 const MAX_BYTES: usize = 8192;
@@ -269,10 +269,10 @@ mod tests {
                 let at = source.rfind(needle).unwrap() + needle.len() - 2;
                 let hover =
                     crate::language::features::hover(&ws, &uri, doc.text.position(at)).unwrap();
-                let tower_lsp::lsp_types::HoverContents::Markup(value) = hover.contents else {
+                let lsp_types::HoverContents::Markup(value) = hover.contents else {
                     panic!()
                 };
-                assert_eq!(value.kind, tower_lsp::lsp_types::MarkupKind::PlainText);
+                assert_eq!(value.kind, lsp_types::MarkupKind::PlainText);
                 assert!(value.value.contains("中文😀 **plain**"), "{}", value.value);
                 assert!(!value.value.contains("Macro notes"));
             }

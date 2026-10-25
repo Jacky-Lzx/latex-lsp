@@ -1,7 +1,7 @@
 //! Resolved build actions using the same root selection as explicit commands.
 use crate::project::workspace::{self, DocumentKind, Workspace};
+use lsp_types::{CodeLens, Command, Position, Range, Url};
 use std::collections::BTreeMap;
-use tower_lsp::lsp_types::{CodeLens, Command, Position, Range, Url};
 
 pub fn lenses(workspace: &Workspace, uri: &Url) -> Vec<CodeLens> {
     let Some(doc) = workspace.documents.get(uri) else {

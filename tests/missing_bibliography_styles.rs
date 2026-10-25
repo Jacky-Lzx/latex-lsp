@@ -1,6 +1,6 @@
 use latex_lsp::{build, build_log, editing, text::Text, workspace::Workspace};
+use lsp_types::*;
 use std::path::Path;
-use tower_lsp::lsp_types::*;
 
 const STYLE: &str = r#"ENTRY { title } {} {}
 FUNCTION {book} { "\bibitem{" write$ cite$ write$ "}" write$ newline$ title write$ newline$ }

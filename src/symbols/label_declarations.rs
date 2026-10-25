@@ -4,8 +4,8 @@ use crate::{
     parser::syntax::{self, Entry},
     project::workspace::{Document, DocumentKind, Workspace},
 };
+use lsp_types::Url;
 use std::collections::{BTreeMap, BTreeSet};
-use tower_lsp::lsp_types::Url;
 
 #[derive(Default)]
 pub(crate) struct Index {

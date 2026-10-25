@@ -3,8 +3,8 @@ use crate::{
     language::signature::CommandSignatures, parser::syntax, project::workspace::Document,
     symbols::named_references::Context,
 };
+use lsp_types::Url;
 use std::collections::{BTreeMap, BTreeSet};
-use tower_lsp::lsp_types::Url;
 
 pub(crate) fn needed(docs: &[&Document], signatures: &CommandSignatures<'_>) -> bool {
     if !docs.iter().any(|doc| doc.text.source.contains("bibitem")) {

@@ -1,8 +1,8 @@
 //! Native crossref errors and nested-reference warnings have two records but
 //! no file or line number. Each kind consumes only its own continuation.
 use super::{Context, Parsed};
+use lsp_types::*;
 use std::path::Path;
-use tower_lsp::lsp_types::*;
 
 const MAX_ENTRIES: usize = 16_384;
 

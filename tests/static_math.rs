@@ -1,5 +1,5 @@
 use latex_lsp::{config::Config, text::Text, workspace::Workspace};
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 
 fn enabled() -> Config {
     Config::parse(

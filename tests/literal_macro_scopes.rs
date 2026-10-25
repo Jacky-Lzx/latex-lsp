@@ -1,7 +1,7 @@
 #![cfg(unix)]
 use latex_lsp::{build, config::BuildConfig};
+use lsp_types::*;
 use std::os::unix::fs::PermissionsExt;
-use tower_lsp::lsp_types::*;
 
 fn build_fixture(
     root: &std::path::Path,

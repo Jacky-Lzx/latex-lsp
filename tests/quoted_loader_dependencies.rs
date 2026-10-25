@@ -1,6 +1,6 @@
 use latex_lsp::{features, workspace::Workspace};
+use lsp_types::*;
 use std::{collections::BTreeSet, path::Path};
-use tower_lsp::lsp_types::*;
 
 const LOADERS: [(&str, &str); 6] = [
     ("usepackage", "sty"),

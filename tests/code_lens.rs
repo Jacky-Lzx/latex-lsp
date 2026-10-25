@@ -2,7 +2,7 @@ use latex_lsp::{
     code_lens,
     workspace::{Document, Workspace},
 };
-use tower_lsp::lsp_types::{Position, Range, Url};
+use lsp_types::{Position, Range, Url};
 
 fn uri(root: &std::path::Path, name: &str) -> Url {
     Url::from_file_path(root.join(name)).unwrap()

@@ -1,4 +1,5 @@
 use latex_lsp::{build, config::BuildConfig, workspace::Workspace};
+use lsp_types::{DiagnosticSeverity, Url};
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -6,12 +7,11 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use tower_lsp::lsp_types::{DiagnosticSeverity, Url};
 
 #[test]
 fn invalid_reported_lines_never_borrow_names_or_ranges_from_clamped_source_lines() {
     use latex_lsp::{build_log, text::Text};
-    use tower_lsp::lsp_types::{Position, Range};
+    use lsp_types::{Position, Range};
     let directory = tempfile::tempdir().unwrap();
     let main = directory.path().join("main.tex");
     let child = directory.path().join("child.tex");
@@ -98,7 +98,7 @@ fn valid_and_zero_line_warnings_both_survive_parsing_and_publication() {
 #[test]
 fn unresolved_numbered_sources_do_not_borrow_warning_ranges_or_codes_from_the_root() {
     use latex_lsp::{build_log, text::Text};
-    use tower_lsp::lsp_types::{NumberOrString, Position, Range};
+    use lsp_types::{NumberOrString, Position, Range};
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     let main = root.join("main.tex");
@@ -220,7 +220,7 @@ fn real_pdfbookmark_levels_match_actual_targets_across_engines_and_duplicate_war
                     .values()
                     .flatten()
                     .any(|warning| warning.code
-                        == Some(tower_lsp::lsp_types::NumberOrString::String(
+                        == Some(lsp_types::NumberOrString::String(
                             "undefined-pdf-destination".into()
                         ))),
                 "{engine}: {:?}",
@@ -249,7 +249,7 @@ fn real_pdfbookmark_levels_match_actual_targets_across_engines_and_duplicate_war
                 .flatten()
                 .filter(|warning| {
                     warning.code
-                        == Some(tower_lsp::lsp_types::NumberOrString::String(
+                        == Some(lsp_types::NumberOrString::String(
                             "duplicate-pdf-destination".into(),
                         ))
                 })
@@ -352,7 +352,7 @@ fn real_duplicate_destinations_include_automatic_collisions_and_long_compound_de
             .flatten()
             .filter(|diagnostic| {
                 diagnostic.code
-                    == Some(tower_lsp::lsp_types::NumberOrString::String(
+                    == Some(lsp_types::NumberOrString::String(
                         "duplicate-pdf-destination".into(),
                     ))
             })
@@ -458,7 +458,7 @@ fn real_long_destination_warnings_recover_names_and_wrapped_explanatory_words() 
             .flatten()
             .filter(|diagnostic| {
                 diagnostic.code
-                    == Some(tower_lsp::lsp_types::NumberOrString::String(
+                    == Some(lsp_types::NumberOrString::String(
                         "undefined-pdf-destination".into(),
                     ))
             })
@@ -526,7 +526,7 @@ fn real_destination_warnings_locate_links_and_clear_after_repair() {
             .flatten()
             .filter(|diagnostic| {
                 diagnostic.code
-                    == Some(tower_lsp::lsp_types::NumberOrString::String(
+                    == Some(lsp_types::NumberOrString::String(
                         "undefined-pdf-destination".into(),
                     ))
             })
@@ -745,7 +745,7 @@ fn real_bibtex_errors_follow_database_and_style_aliases_to_the_correct_file_and_
 #[ignore = "requires latexmk, BibTeX, pdflatex and xelatex"]
 fn real_bibtex_warnings_keep_literal_entry_keys_despite_namesake_files() {
     use latex_lsp::config::Engine;
-    use tower_lsp::lsp_types::{Position, Range};
+    use lsp_types::{Position, Range};
     for engine in [Engine::PdfLatex, Engine::XeLatex] {
         for key in ["'entry'", "'entry.bib'", "entry.bib"] {
             let directory = tempfile::tempdir().unwrap();
@@ -788,7 +788,7 @@ fn real_bibtex_warnings_keep_literal_entry_keys_despite_namesake_files() {
 #[ignore = "requires latexmk, BibTeX, pdflatex and xelatex"]
 fn real_bibtex_style_warning_text_keeps_the_actual_entry_location() {
     use latex_lsp::config::Engine;
-    use tower_lsp::lsp_types::{Position, Range};
+    use lsp_types::{Position, Range};
     for engine in [Engine::PdfLatex, Engine::XeLatex] {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();
@@ -853,10 +853,7 @@ fn real_missing_include_warnings_reconstruct_tex_wrapped_long_chapter_names() {
     let warning = diagnostics
         .iter()
         .find(|diagnostic| {
-            diagnostic.code
-                == Some(tower_lsp::lsp_types::NumberOrString::String(
-                    "missing-include".into(),
-                ))
+            diagnostic.code == Some(lsp_types::NumberOrString::String("missing-include".into()))
         })
         .unwrap_or_else(|| panic!("{diagnostics:?}\n{}", outcome.output));
     assert_eq!(
@@ -894,10 +891,7 @@ fn real_overfull_paragraph_diagnostics_cover_the_complete_reported_source_range(
     let overfull = diagnostics
         .iter()
         .filter(|diagnostic| {
-            diagnostic.code
-                == Some(tower_lsp::lsp_types::NumberOrString::String(
-                    "overfull-box".into(),
-                ))
+            diagnostic.code == Some(lsp_types::NumberOrString::String("overfull-box".into()))
         })
         .collect::<Vec<_>>();
     assert!(!overfull.is_empty(), "{diagnostics:?}");
@@ -906,14 +900,8 @@ fn real_overfull_paragraph_diagnostics_cover_the_complete_reported_source_range(
             diagnostic.message.contains("at lines 2--4"),
             "{diagnostic:?}"
         );
-        assert_eq!(
-            diagnostic.range.start,
-            tower_lsp::lsp_types::Position::new(1, 2)
-        );
-        assert_eq!(
-            diagnostic.range.end,
-            tower_lsp::lsp_types::Position::new(3, 4)
-        );
+        assert_eq!(diagnostic.range.start, lsp_types::Position::new(1, 2));
+        assert_eq!(diagnostic.range.end, lsp_types::Position::new(3, 4));
     }
 }
 
@@ -942,15 +930,13 @@ fn missing_included_chapters_warn_even_when_tex_successfully_generates_a_pdf() {
     assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
     assert_eq!(
         diagnostics[0].code,
-        Some(tower_lsp::lsp_types::NumberOrString::String(
-            "missing-include".into()
-        ))
+        Some(lsp_types::NumberOrString::String("missing-include".into()))
     );
     assert_eq!(
         diagnostics[0].range,
-        tower_lsp::lsp_types::Range::new(
-            tower_lsp::lsp_types::Position::new(0, 9),
-            tower_lsp::lsp_types::Position::new(0, 24)
+        lsp_types::Range::new(
+            lsp_types::Position::new(0, 9),
+            lsp_types::Position::new(0, 24)
         )
     );
     assert!(diagnostics[0].message.contains("missing chapter.tex"));
@@ -962,9 +948,7 @@ fn missing_included_chapters_warn_even_when_tex_successfully_generates_a_pdf() {
         .values()
         .flatten()
         .any(|diagnostic| diagnostic.code
-            == Some(tower_lsp::lsp_types::NumberOrString::String(
-                "missing-include".into()
-            ))));
+            == Some(lsp_types::NumberOrString::String("missing-include".into()))));
 }
 
 #[test]

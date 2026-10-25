@@ -10,13 +10,11 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
+use crate::rpc::{Error, Result};
+use lsp_types::*;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::{Notify, Semaphore};
-use tower_lsp::{
-    jsonrpc::{Error, Result},
-    lsp_types::*,
-};
 
 use crate::{compilation::file_checks::InputSnapshot, project::workspace::Workspace};
 

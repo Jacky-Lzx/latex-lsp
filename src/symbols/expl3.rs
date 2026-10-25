@@ -4,8 +4,8 @@ use crate::{
     project::workspace::{Document, DocumentKind, Workspace},
     symbols::extra_symbols::{Kind, Occurrence},
 };
+use lsp_types::*;
 use std::collections::{BTreeMap, BTreeSet};
-use tower_lsp::lsp_types::*;
 
 pub(crate) fn valid(name: &str, variable: bool) -> bool {
     if name.len() > 256

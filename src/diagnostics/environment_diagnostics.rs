@@ -5,8 +5,8 @@ use crate::{
     project::workspace::{Document, DocumentKind, Workspace},
     symbols::environment_calls::project_contexts,
 };
+use lsp_types::{Diagnostic, Url};
 use std::collections::{BTreeMap, BTreeSet};
-use tower_lsp::lsp_types::{Diagnostic, Url};
 
 type Interpretations = Vec<(bool, Vec<QuickFix>)>;
 

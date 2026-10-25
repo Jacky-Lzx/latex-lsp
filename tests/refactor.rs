@@ -3,7 +3,7 @@ use latex_lsp::{
     text::Text,
     workspace::{Document, Workspace},
 };
-use tower_lsp::lsp_types::*;
+use lsp_types::*;
 fn setup(marked: &str, only: CodeActionKind) -> (Workspace, Url, Range, CodeActionContext) {
     let start = marked.find('¦').unwrap();
     let marked = marked.replacen('¦', "", 1);

@@ -1,6 +1,6 @@
 use latex_lsp::{build, features, text::Text, workspace::Workspace};
+use lsp_types::*;
 use std::{path::Path, sync::atomic::AtomicBool};
-use tower_lsp::lsp_types::*;
 
 fn setup(root: &Path, source: &str) -> (Workspace, Url) {
     let path = root.join("main.tex");
