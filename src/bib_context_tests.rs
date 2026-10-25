@@ -598,8 +598,19 @@ fn native_assignment_files(cases: &[(&str, Vec<&str>)], files: &[(&str, &str)]) 
     native_assignment_preamble(cases, files, "");
 }
 fn native_assignment_preamble(cases: &[(&str, Vec<&str>)], files: &[(&str, &str)], preamble: &str) {
+    native_assignment_engine(cases, files, preamble, "pdflatex");
+}
+fn native_assignment_engine(
+    cases: &[(&str, Vec<&str>)],
+    files: &[(&str, &str)],
+    preamble: &str,
+    engine: &str,
+) {
     for (body, expected) in cases {
         let (dir, mut ws, uri) = assignment_preamble(preamble, body, "", "");
+        ws.config.build.engine = crate::config::Engine::from_program(engine);
+        let cache = dir.path().join("tex-cache");
+        std::fs::create_dir(&cache).unwrap();
         for (name, content) in files {
             std::fs::write(dir.path().join(name), content).unwrap();
         }
@@ -613,7 +624,7 @@ fn native_assignment_preamble(cases: &[(&str, Vec<&str>)], files: &[(&str, &str)
                 }
             }
             std::fs::write(dir.path().join("main.tex"), source).unwrap();
-            for program in ["pdflatex", "biber", "pdflatex", "pdflatex", "pdflatex"] {
+            for program in [engine, "biber", engine, engine, engine] {
                 let args = if program == "biber" {
                     vec!["main"]
                 } else {
@@ -626,6 +637,8 @@ fn native_assignment_preamble(cases: &[(&str, Vec<&str>)], files: &[(&str, &str)
                 };
                 let output = std::process::Command::new(program)
                     .args(args)
+                    .env("TEXMFVAR", &cache)
+                    .env("TEXMFCACHE", &cache)
                     .current_dir(dir.path())
                     .output()
                     .unwrap();

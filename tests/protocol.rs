@@ -37613,6 +37613,144 @@ fn automatic_keyword_hints_follow_bbl_members_unsaved_assignments_and_shared_roo
 }
 
 #[test]
+fn unicode_keyword_hints_refresh_literal_identity_and_compiled_members_over_stdio() {
+    use latex_lsp::text::Text;
+    let dir = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+    let provider = main.join("assign.tex").unwrap();
+    let child = main.join("child.tex").unwrap();
+    let other = main.join("other.tex").unwrap();
+    let source = "% !TeX program = xelatex\r\n\\documentclass{article}\\usepackage[style=numeric,sorting=none,defernumbers=true]{biblatex}\\addbibresource{data.bib}\\begin{document}😀 \\cite{a}\\input{assign}\\input{child}\\label{safe}\\ref{safe}\\end{document}";
+    let assignment = "% café 😀\r\n\\assignrefcontextkeyws[labelprefix=A]{主题}";
+    let child_source = "% café\r\n😀 主题 \\cite{a,z}";
+    for (name, content) in [
+        ("main.tex", source),
+        ("assign.tex", assignment),
+        ("child.tex", child_source),
+        ("data.bib", "@book{a,title={Alpha}} @book{z,title={Zulu}}"),
+    ] {
+        std::fs::write(dir.path().join(name), content).unwrap();
+    }
+    let a = "none/global/7FC56270E7A70FA81A5935B72EACBE29/global/global/global";
+    let b = "none/global/9D5ED678FE57BCCA610140957AFAB571/global/global/global";
+    let prologue = r"% $ biblatex auxiliary file $
+% $ biblatex bbl format version 3.3 $
+\begingroup\makeatletter\@ifundefined{ver@biblatex.sty}{\@latex@error{Missing 'biblatex' package}{The bibliography requires the 'biblatex' package.}\aftergroup\endinput}{}\endgroup
+";
+    let list = |context, prefix| {
+        format!(
+            r"\datalist[entry]{{{context}}}\entry{{a}}{{book}}{{}}{{}}\field{{labelprefix}}{{{prefix}}}\field{{title}}{{Alpha}}\keyw{{主题,café}}\endentry\entry{{z}}{{book}}{{}}{{}}\field{{labelprefix}}{{{prefix}}}\field{{title}}{{Zulu}}\endentry\enddatalist"
+        )
+    };
+    let bbl = format!(
+        r"{prologue}\refsection{{0}}{}{}\endrefsection\endinput",
+        list(a, "A"),
+        list(b, "B")
+    );
+    let numbers = format!(
+        r"\abx@aux@number{{99}}{{a}}{{0}}{{{a}}}{{3}}\abx@aux@number{{100}}{{a}}{{0}}{{{b}}}{{8}}\abx@aux@number{{101}}{{z}}{{0}}{{{a}}}{{4}}\abx@aux@number{{102}}{{z}}{{0}}{{{b}}}{{9}}\abx@aux@defaultrefcontext{{0}}{{a}}{{{b}}}\abx@aux@defaultrefcontext{{0}}{{z}}{{{b}}}\newlabel{{safe}}{{{{4}}{{9}}}}"
+    );
+    std::fs::create_dir(dir.path().join("build output")).unwrap();
+    let bbl_path = dir.path().join("build output/custom.bbl");
+    std::fs::write(&bbl_path, &bbl).unwrap();
+    std::fs::write(dir.path().join("build output/custom.aux"), &numbers).unwrap();
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{},"initializationOptions":{"distribution":{"enabled":false},"build":{"outputDirectory":"build output","jobName":"custom"}}}));
+    server.notify("initialized", json!({}));
+    for (uri, text, version) in [
+        (&main, source, 5),
+        (&provider, assignment, 12),
+        (&child, child_source, 8),
+    ] {
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"languageId":"latex","version":version,"text":text}}),
+        );
+    }
+    let params = |uri: &Url| json!({"textDocument":{"uri":uri},"range":{"start":{"line":0,"character":0},"end":{"line":3,"character":0}}});
+    let labels = |value: &Value| {
+        value
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|hint| hint["label"].clone())
+            .collect::<Vec<_>>()
+    };
+    let check = |server: &mut Server, expected: &[&str]| {
+        let response = server.request(10, "textDocument/inlayHint", params(&child));
+        assert_eq!(
+            labels(&response),
+            expected
+                .iter()
+                .map(|value| json!(value))
+                .collect::<Vec<_>>()
+        );
+        let text = Text::new(child_source.into());
+        let at = child_source.find(r"\cite{").unwrap() + 6;
+        for hint in response.as_array().unwrap() {
+            let end = at + if hint["label"] == "→ B9" { 3 } else { 1 };
+            assert_eq!(hint["position"], json!(text.position(end)));
+        }
+    };
+    check(&mut server, &["→ A3", "→ B9"]);
+    assert_eq!(
+        labels(&server.request(11, "textDocument/inlayHint", params(&main))),
+        vec![json!("→ B8"), json!("→ 4, p. 9")]
+    );
+    for (version, keyword, expected) in [
+        (13, "cafe\u{301}", "→ B8"),
+        (14, "café", "→ A3"),
+        (15, "Café", "→ B8"),
+        (16, "café ", "→ B8"),
+        (17, "主% café\r\n题", "→ A3"),
+    ] {
+        server.notify("textDocument/didChange",json!({"textDocument":{"uri":provider,"version":version},"contentChanges":[{"text":assignment.replace("主题",keyword)}]}));
+        check(&mut server, &[expected, "→ B9"]);
+    }
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":provider}}),
+    );
+    check(&mut server, &["→ A3", "→ B9"]);
+    std::fs::write(&bbl_path, bbl.replacen("主题,café", "other", 1)).unwrap();
+    check(&mut server, &["→ A3", "→ B9"]);
+    std::fs::write(&bbl_path, bbl.replace("主题,café", "other")).unwrap();
+    check(&mut server, &["→ B8", "→ B9"]);
+    std::fs::write(&bbl_path, bbl.replace("主题,café", "主\u{a0}题")).unwrap();
+    check(&mut server, &[]);
+    std::fs::write(&bbl_path, &bbl).unwrap();
+    check(&mut server, &["→ A3", "→ B9"]);
+    server.notify("textDocument/didOpen",json!({"textDocument":{"uri":provider,"languageId":"latex","version":20,"text":assignment.replace("主题","主\u{200b}题")}}));
+    check(&mut server, &[]);
+    assert_eq!(
+        labels(&server.request(12, "textDocument/inlayHint", params(&main))),
+        vec![json!("→ 4, p. 9")]
+    );
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":provider}}),
+    );
+    check(&mut server, &["→ A3", "→ B9"]);
+    let other_source = source.replace(
+        r"\input{assign}",
+        r"\assignrefcontextkeyws[labelprefix=B]{主题}",
+    );
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":other,"languageId":"latex","version":7,"text":other_source}}),
+    );
+    check(&mut server, &["→ B9"]);
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":other}}),
+    );
+    check(&mut server, &["→ A3", "→ B9"]);
+    server.request(1000, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
 fn note_initializers_keep_exact_edits_and_refresh_unsaved_modes_and_dependencies_over_stdio() {
     use latex_lsp::text::Text;
     for wrapper in ["mkbibfootnote", "mkbibfootnotetext"] {

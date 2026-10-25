@@ -2,6 +2,8 @@
 //!
 //! Keep trailing spaces: native control-sequence names and keyword membership
 //! distinguish `topic` from `topic `. No expansion or nested groups are proved.
+//! Unicode letters, numbers and basic combining accents keep their exact
+//! spelling. In particular, a source NFD name need not match Biber's NFC name.
 pub(crate) fn list(source: &str) -> Option<Vec<String>> {
     if source.len() > 2 * 1024 * 1024 {
         return None;
@@ -22,16 +24,19 @@ pub(crate) fn list(source: &str) -> Option<Vec<String>> {
         let (line, commented) = line
             .split_once('%')
             .map_or((line, false), |(line, _)| (line, true));
-        for byte in line.bytes() {
-            match byte {
-                b' ' | b'\t' => {
+        for ch in line.chars() {
+            match ch {
+                ' ' | '\t' => {
                     if state == 1 {
                         tokens.push(' ');
                         state = 2;
                     }
                 }
-                byte if byte.is_ascii_graphic() && !b"\\{}#~^".contains(&byte) => {
-                    tokens.push(char::from(byte));
+                ch if ch.is_ascii_graphic() && !"\\{}#~^".contains(ch)
+                    || !ch.is_ascii()
+                        && (ch.is_alphanumeric() || ('\u{300}'..='\u{36f}').contains(&ch)) =>
+                {
+                    tokens.push(ch);
                     state = 1;
                 }
                 _ => return None,

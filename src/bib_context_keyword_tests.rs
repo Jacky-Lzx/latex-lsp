@@ -100,6 +100,122 @@ fn automatic_keywords_keep_native_spaces_comments_and_literal_stars() {
 }
 
 #[test]
+fn automatic_unicode_keywords_keep_literal_identity_without_normalizing_assignments() {
+    for engine in ["pdflatex", "xelatex", "lualatex"] {
+        for (member, assignment, expected) in [
+            ("café", "café", "→ A3"),
+            ("βeta", "βeta", "→ A3"),
+            ("主题", "主题", "→ A3"),
+            ("主题２", "主题２", "→ A3"),
+            ("café", "cafe\u{301}", "→ B8"),
+            ("cafe\u{301}", "cafe\u{301}", "→ A3"),
+            ("cafe\u{301}", "café", "→ B8"),
+            ("café", "Café", "→ B8"),
+            ("café", " café", "→ A3"),
+            ("café", "café ", "→ B8"),
+            ("主题", "主% café\r\n题", "→ A3"),
+            ("主题 文献", "主题\t\t文献", "→ A3"),
+            ("主题 文献", "主题\n文献", "→ A3"),
+        ] {
+            let (dir, mut ws, uri) = keyword_setup(&format!(
+                r"\assignrefcontextkeyws[labelprefix=A]{{{assignment}}}\cite{{a,z}}"
+            ));
+            ws.config.build.engine = crate::config::Engine::from_program(engine);
+            let path = dir.path().join("main.bbl");
+            let bbl = std::fs::read_to_string(&path)
+                .unwrap()
+                .replace("topic,second,quantum gravity", member);
+            std::fs::write(path, bbl).unwrap();
+            assert_eq!(
+                hints(&ws, &uri),
+                [expected, "→ B9"],
+                "{engine} {member:?} {assignment:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn unicode_keyword_members_are_loaded_even_for_ascii_assignments_and_entry_overrides() {
+    let (dir, mut ws, uri) = keyword_setup(
+        r"\assignrefcontextkeyws[labelprefix=A]{topic}\cite{a,z}\assignrefcontextentries[labelprefix=B]{a}\cite{a}",
+    );
+    let path = dir.path().join("main.bbl");
+    let bbl = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("topic,second,quantum gravity", "主题,topic,café");
+    std::fs::write(&path, &bbl).unwrap();
+    assert_eq!(hints(&ws, &uri), ["→ A3", "→ B9", "→ B8"]);
+    // Membership is the union of all loaded contexts, including Unicode names.
+    let source = ws.documents[&uri].text.source.replace("{topic}", "{主题}");
+    ws.open(uri.clone(), source, 9);
+    std::fs::write(&path, bbl.replacen("主题,topic,café", "other", 1)).unwrap();
+    assert_eq!(hints(&ws, &uri), ["→ A3", "→ B9", "→ B8"]);
+    std::fs::write(&path, bbl.replace("主题,topic,café", "other")).unwrap();
+    assert_eq!(hints(&ws, &uri), ["→ B8", "→ B9", "→ B8"]);
+}
+
+#[test]
+fn unicode_keyword_whitespace_controls_and_expansion_remain_guarded() {
+    for invalid in [
+        "主\u{a0}题",
+        "主\u{2003}题",
+        "主\u{85}题",
+        "主\u{200b}题",
+        "主\u{feff}题",
+        "主\0题",
+        "主\u{1b}题",
+        "主题😀",
+        "主{题}",
+        r"主\topic",
+        "主#1",
+        "主~题",
+        "主^^题",
+    ] {
+        let (dir, ws, uri) = keyword_setup(&format!(
+            r"\assignrefcontextkeyws[labelprefix=A]{{{invalid}}}\cite{{a}}"
+        ));
+        assert!(hints(&ws, &uri).is_empty(), "source {invalid:?}");
+        let source = ws.documents[&uri].text.source.replace(invalid, "topic");
+        let mut ws = ws;
+        ws.open(uri.clone(), source, 8);
+        let path = dir.path().join("main.bbl");
+        let bbl = std::fs::read_to_string(&path)
+            .unwrap()
+            .replace("topic,second,quantum gravity", invalid);
+        std::fs::write(path, bbl).unwrap();
+        assert!(hints(&ws, &uri).is_empty(), "compiled {invalid:?}");
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex, xelatex, lualatex and biber with biblatex"]
+fn native_unicode_keyword_hints_match_literal_names_and_complete_bbl_in_three_engines() {
+    for engine in ["pdflatex", "xelatex", "lualatex"] {
+        for (keyword, first) in [
+            ("café", "A1"),
+            ("βeta", "A1"),
+            ("主题", "A1"),
+            ("主题２", "A1"),
+            ("cafe\u{301}", "B1"),
+        ] {
+            let body = format!(
+                r"\assignrefcontextkeyws[labelprefix=A]{{{keyword}}}\cite{{a,z}}\begin{{refcontext}}[labelprefix=A]\nocite{{a,z}}\printbibliography\end{{refcontext}}\begin{{refcontext}}[labelprefix=B]\nocite{{a,z}}\printbibliography\end{{refcontext}}"
+            );
+            let library = format!(
+                "@book{{a,title={{Alpha}},keywords={{{keyword}}}}} @book{{z,title={{Zulu}}}}"
+            );
+            native_assignment_engine(
+                &[(body.as_str(), vec![first, "B2"])],
+                &[("data.bib", library.as_str())],
+                "",
+                engine,
+            );
+        }
+    }
+}
+
+#[test]
 fn automatic_keywords_use_union_of_loaded_contexts_but_keep_sections_separate() {
     let (dir, mut ws, uri) = keyword_setup(
         r"\assignrefcontextkeyws[labelprefix=A]{topic}\cite{a}\begin{refsection}\assignrefcontextkeyws[labelprefix=A]{topic}\cite{a}\end{refsection}",
