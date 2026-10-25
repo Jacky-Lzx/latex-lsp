@@ -38,17 +38,18 @@ const names={"initialize":"初始化","open":"打开缓冲区","edit.prose":"正
 "completion.labels":"标签补全","completion.citations":"文献补全","completion.commands":"命令补全","hover":"悬停","definition":"定义跳转","references":"查找引用",
 "rename":"跨文件重命名","signature":"参数提示","symbols":"文档大纲","folding":"折叠","semantic.full":"完整语义令牌","semantic.delta.cached":"缓存语义 delta",
 "diagnostic":"重新计算诊断","diagnostic.cached":"缓存诊断","burst8.to_completion":"连续 8 次编辑 → 补全",
-"workspace.symbols.exact":"工作区符号 · 精确搜索","workspace.symbols.all":"工作区符号 · 全部搜索","workspace.symbols.missing":"工作区符号 · 无匹配","signature.hook":"钩子参数提示"};
-const selected=["completion.labels","completion.citations","hover","definition","references","rename","signature","signature.hook","workspace.symbols.exact","workspace.symbols.all","workspace.symbols.missing","diagnostic","burst8.to_completion"];
+"workspace.symbols.exact":"工作区符号 · 精确搜索","workspace.symbols.all":"工作区符号 · 全部搜索","workspace.symbols.missing":"工作区符号 · 无匹配","signature.hook":"钩子参数提示","rename.hook":"自定义 hook 名称改名"};
+const selected=["completion.labels","completion.citations","hover","definition","references","rename","rename.hook","signature","signature.hook","workspace.symbols.exact","workspace.symbols.all","workspace.symbols.missing","diagnostic","burst8.to_completion"];
 const scale=document.getElementById('scale'), stat=document.getElementById('stat'), all=document.getElementById('all');
 for(const key of Object.keys(data.after.scenarios)){const option=document.createElement('option');option.value=key;option.textContent=key;scale.append(option)}
 scale.value=Object.hasOwn(data.after.scenarios,'large')?'large':scale.options[0].value;
 const p=data.after.parameters;
 document.getElementById('method').textContent=`${p.runs} 个独立进程 × ${p.iterations} 个测量周期；每个进程先预热 ${p.warmup} 个周期。每周期 11 次编辑，顺序查询各项功能。初始化、打开单独统计。${p.hooks?' 包含内核钩子及其参数提示校验。':''}${p.hook_wrappers?' 每节含嵌套包装调用，测量参数数据传递保护。':''}${p.hook_environments?' 每节含环境包装，由结束正文把开始参数传入 hook。':''}`;
 if(p.hook_interfaces)document.getElementById('method').textContent+=' 每节还直接调用环境生成的 hook 转发控制序列。';
+if(p.hook_renames)document.getElementById('method').textContent+=' 逐项核验自定义 hook 的完整跨文件名称编辑。';
 if(data.paired){
  const report=data.paired,host=document.getElementById('paired'),note=document.createElement('p');
- const query=report.kind==='paired_definition'?'定义跳转':'改名';
+ const query=report.kind==='paired_definition'?'定义跳转':report.kind==='paired_hook_rename'?'hook 名称改名':'改名';
  const binding=report.environment.cpu===null?'未绑定 CPU':`启动前绑定 CPU ${report.environment.cpu}，打开后核验所有线程`;
  const precision=report.environment.cpu_tick_ms===null?'未采集 CPU':`CPU 为所有样本的均值，单样本精度 ${report.environment.cpu_tick_ms} ms`;
  note.textContent=`固定快照的配对${query}探测：${report.parameters.runs} 组新进程，每组预热 ${report.parameters.warmup} 对，测量 ${report.parameters.iterations} 对；两版交替请求，${binding}。下表墙钟为 p50；${precision}。它不包含连续编辑；下方完整会话保留了运行时波动。`;
@@ -101,8 +102,8 @@ def main():
             scenario.pop("samples_ms", None)
     paired = json.loads(args.paired.read_text()) if args.paired else None
     if paired:
-        if paired.get("kind") not in {"paired_rename", "paired_definition"}:
-            parser.error("paired input must be a paired rename or definition report")
+        if paired.get("kind") not in {"paired_rename", "paired_definition", "paired_hook_rename"}:
+            parser.error("paired input must be a paired rename, hook rename, or definition report")
         for label, report in [("before", before), ("after", after)]:
             if paired["servers"][label]["sha256"] != report["environment"]["server_sha256"]:
                 parser.error(f"paired {label} binary differs")

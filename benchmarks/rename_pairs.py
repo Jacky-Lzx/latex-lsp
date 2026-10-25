@@ -36,16 +36,25 @@ def replay(before, after, scale, args, cpu):
             source = chapter.read_text()
             params = {"textDocument": {"uri": chapter.as_uri()},
                       "position": editing.position(source, source.rindex("sec:0:0") + 4)}
-            if args.query == "rename":
+            if args.query == "hook-rename":
+                source = main.read_text()
+                params = {"textDocument": {"uri": main.as_uri()},
+                          "position": editing.position(source, source.index("{benchmark}") + 2),
+                          "newName": "benchmark.renamed"}
+            elif args.query == "rename":
                 params["newName"] = "sec:renamed"
-            declaration = source.index(r"\label{sec:0:0}") + len(r"\label{")
+            declaration_source = chapter.read_text()
+            declaration = declaration_source.index(r"\label{sec:0:0}") + len(r"\label{")
             expected_definition = [{"uri": chapter.as_uri(), "range": {
-                "start": editing.position(source, declaration),
-                "end": editing.position(source, declaration + len("sec:0:0")),
+                "start": editing.position(declaration_source, declaration),
+                "end": editing.position(declaration_source, declaration + len("sec:0:0")),
             }}]
             chapters, sections = editing.SCALES[scale]
             expected_files = {(root / f"chapter{i}.tex").as_uri() for i in range(chapters)}
             expected_edits = chapters * (sections + 1) + 1
+            expected_hook_edits = editing.hook_name_edits({
+                path.as_uri(): path.read_text() for path in root.glob("*.tex")
+            }) if args.query == "hook-rename" else None
             servers = {}
             creation_order = [("before", before), ("after", after)]
             if run % 2:
@@ -86,11 +95,14 @@ def replay(before, after, scale, args, cpu):
                     server = servers[label]
                     start_cpu = cpu_seconds(server.process)
                     start = time.perf_counter_ns()
-                    result = server.request(f"textDocument/{args.query}", params)
+                    method = "rename" if args.query == "hook-rename" else args.query
+                    result = server.request(f"textDocument/{method}", params)
                     elapsed = (time.perf_counter_ns() - start) / 1e6
                     end_cpu = cpu_seconds(server.process)
                     if args.query == "definition":
                         assert result == expected_definition, result
+                    elif args.query == "hook-rename":
+                        assert result == {"changes": expected_hook_edits}, result
                     else:
                         changes = result["changes"]
                         assert set(changes) == expected_files, changes
@@ -122,7 +134,7 @@ def main():
     parser.add_argument("--runs", type=int, default=3)
     parser.add_argument("--timeout", type=float, default=120)
     parser.add_argument("--cpu", type=int, help="pin both servers to this allowed CPU (Linux default: first allowed CPU)")
-    parser.add_argument("--query", choices=["rename", "definition"], default="rename")
+    parser.add_argument("--query", choices=["rename", "definition", "hook-rename"], default="rename")
     parser.add_argument("--hooks", action="store_true")
     parser.add_argument("--hook-wrappers", action="store_true")
     parser.add_argument("--hook-environments", action="store_true")
@@ -135,10 +147,10 @@ def main():
     if args.cpu is not None and args.cpu not in affinity:
         parser.error("cpu must belong to the current allowed CPU set")
     cpu = args.cpu if args.cpu is not None else min(affinity, default=None)
-    args.hooks = args.hooks or args.hook_wrappers or args.hook_environments or args.hook_interfaces
+    args.hooks = args.hooks or args.hook_wrappers or args.hook_environments or args.hook_interfaces or args.query == "hook-rename"
     before, after = args.before.resolve(strict=True), args.after.resolve(strict=True)
     report = {
-        "schema": 1, "kind": f"paired_{args.query}",
+        "schema": 1, "kind": "paired_" + args.query.replace("-", "_"),
         "workload_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "fixture_script_sha256": hashlib.sha256(Path(editing.__file__).read_bytes()).hexdigest(),
         "environment": {"platform": platform.platform(), "python": platform.python_version(),

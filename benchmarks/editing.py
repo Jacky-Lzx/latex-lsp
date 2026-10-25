@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import platform
 import queue
+import re
 import statistics
 import subprocess
 import sys
@@ -170,7 +171,18 @@ def fixture(root, scale, hooks=False, hook_wrappers=False, hook_environments=Fal
             "sha256": digest.hexdigest()}
 
 
-def session(binary, scale, iterations, warmup, timeout, record, hooks=False, hook_wrappers=False, hook_environments=False, hook_interfaces=False):
+def hook_name_edits(sources, new_name="benchmark.renamed"):
+    """Exact hook edits for this fixture, excluding its unrelated missing keys."""
+    return {
+        uri: [{"range": {"start": position(source, match.start() + 1),
+                         "end": position(source, match.start() + 1 + len("benchmark"))},
+               "newText": new_name}
+              for match in re.finditer(r"\{benchmark\}", source)]
+        for uri, source in sources.items() if "{benchmark}" in source
+    }
+
+
+def session(binary, scale, iterations, warmup, timeout, record, hooks=False, hook_wrappers=False, hook_environments=False, hook_interfaces=False, hook_renames=False):
     with tempfile.TemporaryDirectory(prefix="latex-lsp-benchmark-") as directory:
         root = Path(directory)
         metadata = fixture(root, scale, hooks, hook_wrappers, hook_environments, hook_interfaces)
@@ -293,6 +305,14 @@ def session(binary, scale, iterations, warmup, timeout, record, hooks=False, hoo
                         r"\UseHookWithArguments{hook}{argument count}{argument 1}"
                     ), signature
                     assert signature["activeParameter"] == 2, signature
+                if hook_renames:
+                    hook_source = sources[main_uri]
+                    result = query("rename.hook", "textDocument/rename", {
+                        "textDocument": {"uri": main_uri},
+                        "position": position(hook_source, hook_source.index("{benchmark}") + 2),
+                        "newName": "benchmark.renamed",
+                    })
+                    assert result == {"changes": hook_name_edits(sources)}, result
                 assert query("symbols", "textDocument/documentSymbol", document)
                 symbols = query("workspace.symbols.exact", "workspace/symbol", {"query": "sec:0:0"})
                 assert symbols and symbols[0]["name"] == "sec:0:0", symbols
@@ -366,8 +386,9 @@ def main():
     parser.add_argument("--hook-wrappers", action="store_true", help="include nested hook wrappers and one call per section (implies --hooks)")
     parser.add_argument("--hook-environments", action="store_true", help="include xparse environment variants passing their arguments to a hook in end code (implies --hooks)")
     parser.add_argument("--hook-interfaces", action="store_true", help="directly call an environment-generated control forwarding a hook once per section (implies --hooks)")
+    parser.add_argument("--hook-renames", action="store_true", help="measure and verify every custom hook name edit (implies --hooks)")
     args = parser.parse_args()
-    args.hooks = args.hooks or args.hook_wrappers or args.hook_environments or args.hook_interfaces
+    args.hooks = args.hooks or args.hook_wrappers or args.hook_environments or args.hook_interfaces or args.hook_renames
     if args.iterations < 1 or args.runs < 1 or args.warmup < 0 or args.timeout <= 0:
         parser.error("iterations/runs/timeout must be positive; warmup must be nonnegative")
     binary = args.server.resolve(strict=True)
@@ -380,7 +401,7 @@ def main():
     }, "parameters": {"iterations": args.iterations, "warmup": args.warmup, "runs": args.runs,
                       "hooks": args.hooks, "hook_wrappers": args.hook_wrappers,
                       "hook_environments": args.hook_environments,
-                      "hook_interfaces": args.hook_interfaces},
+                      "hook_interfaces": args.hook_interfaces, "hook_renames": args.hook_renames},
         "scenarios": {}}
     if baseline and (baseline["parameters"] != output["parameters"]
                      or baseline["workload_sha256"] != output["workload_sha256"]):
@@ -390,7 +411,7 @@ def main():
         for run in range(args.runs):
             print(f"{scale}: run {run + 1}/{args.runs}", file=sys.stderr, flush=True)
             metadata = session(binary, scale, args.iterations, args.warmup, args.timeout,
-                               lambda name, ms: samples.setdefault(name, []).append(ms), args.hooks, args.hook_wrappers, args.hook_environments, args.hook_interfaces)
+                               lambda name, ms: samples.setdefault(name, []).append(ms), args.hooks, args.hook_wrappers, args.hook_environments, args.hook_interfaces, args.hook_renames)
         metrics = {name: summary(values) for name, values in samples.items()}
         output["scenarios"][scale] = {"fixture": metadata, "metrics": metrics, "samples_ms": samples}
         if baseline and baseline["scenarios"][scale]["fixture"] != metadata:

@@ -206,7 +206,7 @@ fn validate_calls(
     names: &[&str],
 ) -> Result<()> {
     let source = &doc.text.source;
-    let context = crate::symbols::named_references::Context::new(doc, signatures);
+    let context = crate::symbols::named_references::LiteralContext::new(doc);
     if doc
         .syntax
         .definitions
@@ -369,8 +369,9 @@ fn validate_calls(
                     return Err(error());
                 }
                 if names.contains(&entry.name.as_str())
+                    // Matching the exact indexed field also reuses its
+                    // non-operand proof in every consumer interpretation.
                     && (known != Some(builtin)
-                        || context.operand(doc, command.span.start)
                         || index
                             .entries
                             .get(uri)

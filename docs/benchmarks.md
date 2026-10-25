@@ -53,6 +53,8 @@ python3 benchmarks/editing.py --hook-wrappers --hook-environments \
   --output target/benchmarks/hook-environments.json
 ```
 
+`--hook-renames` 包含 hook 负载，并增加 `rename.hook`。它从主文件的显式声明请求改名，逐项比较所有源码中完整的名称编辑范围和替换文本，覆盖注册、使用、包装正文和章节转发调用，排除普通缺失引用。配对探测使用 `--query hook-rename`，同样检查完整编辑集合。
+
 `--hook-interfaces` 包含 hook 负载，在主文件定义零参数环境转发器 `benchinterface`，每节直接调用其生成的开始控制序列，把紧随的名称与字面数据交给 `UseHook`。它覆盖环境生成接口的安全分析成本，可与上述两种包装负载组合；输出记录 `hook_interfaces`。
 
 ```sh
@@ -305,3 +307,39 @@ python3 benchmarks/report.py \
 ```
 
 冻结 Rust 后的完整回归为 320 个目标、3370 项通过、0 失败、495 项默认跳过，其中完整串行协议 407 项通过、29 项默认跳过。新增回归验证未保存提供文件从无图片定义到新增别名、删除和恢复时，图片导航与文件改名同步刷新；既有跨文件、命名、recorder-only、共享消费者及不完整来源回归通过。12 项显式原生测试、全目标严格 Clippy、文档、格式和差异检查通过。dev 产物在验证后清理，保留 release 基线和全部原始测量。
+
+## 2026-10-26 第八轮：自定义 hook 名称改名
+
+功能基线为 `78b9374`，支持完整的自定义 hook 名称编辑，独立检查共享消费者、动态调用、来源及读取器身份。新增 `--hook-renames` 和配对 `--query hook-rename`；主文件查询显式声明，逐项比较全部名称编辑的文件、UTF-16 范围和替换文本。组合负载同时启用命令包装、环境包装和环境生成接口，三档分别检查 36／164／580 项名称编辑。
+
+测量发现完整改名检查重复构造了 `named_references::Context`，再次分析操作数、expl3 数据和正文。名称索引已经在相同项目的每个消费者解释中排除操作数；校验仍要求精确匹配完整索引条目。因此校验改用较小的 `LiteralContext`，保留字面区域、动态调用、接口身份、相关修改、来源与冲突检查，复用已有条目的操作数排除结果。没有新增缓存或跨请求状态。
+
+正式配对使用三组新进程，每组预热 5 对、测量 40 对；启动前同核绑定，打开项目后核验所有线程的 CPU 亲和性。两版交替请求，所有编辑均做完整校验。CPU 为每版 120 次请求的均值，单样本计时粒度为 10 ms。
+
+| 组合项目 | hook 改名 p50：原版 → 优化版 | p50 加速 | CPU 均值：原版 → 优化版 |
+| --- | ---: | ---: | ---: |
+| small | 2.906 → 2.516 ms | 1.15× | 2.750 → 2.417 ms |
+| medium | 13.577 → 10.952 ms | 1.24× | 13.000 → 9.917 ms |
+| large | 52.221 → 41.304 ms | 1.26× | 49.333 → 38.750 ms |
+| large，交换二进制参数后按原版 → 优化版换算 | 51.940 → 41.003 ms | 1.27× | 49.667 → 38.833 ms |
+
+两组大型配对的 CPU 均值下降约 21%–22%。完整编辑会话使用三组新进程，每组预热 3 个周期、测量 20 个周期；hook 名称改名的 small／medium／large p50 分别从 2.953／13.105／55.001 降为 2.552／10.844／43.607 ms。大型普通标签改名为 59.625 → 59.854 ms，hook 参数提示为 23.811 → 25.906 ms；不据此宣称所有功能加速。会话同时核验未保存主文档、中文／emoji 增量编辑、诊断修复及其他功能结果。
+
+两版的 11 组真实 release 编辑审核结果一致：5 组完整编辑逐项等于手工标记的正确编辑，并保留事件、捕获数据与 AUX；6 组动态或不完整场景均拒绝编辑。新增捕获 hook token 的回归：朴素名称替换会改变数据文本，执行次数和 AUX 却保持相同，索引条目排除检查继续拒绝这种编辑。
+
+原始报告共 250657 bytes（约 245 KiB），9276 个墙钟样本的数量、p50、p95、最大值及配对 CPU 均值已复算：
+
+- [组合会话：原版](../benchmarks/results/2026-10-26/round8-hook-renames-before.json)
+- [组合会话：优化版](../benchmarks/results/2026-10-26/round8-hook-renames-after.json)
+- [同核配对：三档](../benchmarks/results/2026-10-26/round8-hook-rename-pairs.json)
+- [同核配对：交换二进制参数](../benchmarks/results/2026-10-26/round8-hook-rename-pairs-reversed.json)
+
+```sh
+python3 benchmarks/rename_pairs.py \
+  --before target/benchmarks/latex-lsp-round8-guard \
+  --after target/benchmarks/latex-lsp-round8-index-proof \
+  --query hook-rename --hook-wrappers --hook-environments --hook-interfaces \
+  --iterations 40 --warmup 5 --runs 3 --output target/benchmarks/round8-hook-rename-pairs.json
+```
+
+新指标、三种配对查询、报告交互和两版 release 原生审核通过。最终冻结源码的整仓验证为 321 个目标、3377 项通过、0 失败、497 项默认跳过，完整串行协议为 408 项通过、29 项默认跳过。64 项 hook 专项（含原生）、严格全目标 Clippy、文档、格式及差异检查通过。478 份 Rust 源码与冻结时的校验值一致，两版测量二进制的 SHA 与报告一致。HTML 交互脚本检查通过；两次 headless 预览均因浏览器异常退出失败，不计视觉验证通过。

@@ -181,6 +181,14 @@ fn native_opaque_names_and_generic_targets_expose_partial_edits_with_equal_aux()
             1,
             2,
         ),
+        (
+            "",
+            r"\NewHookWithArguments{capture}{1}\AddToHookWithArguments{capture}{\typeout{DATA:\detokenize{#1}}}",
+            r"\UseHook{custom}\UseHook{capture}{\UseHook{custom}}",
+            "fresh",
+            1,
+            1,
+        ),
     ] {
         let source = format!(
             r"\documentclass{{article}}\usepackage{{etoolbox}}{prefix}\NewHook{{custom}}\AddToHook{{custom}}{{\typeout{{EVENT:run}}}}{extra}\begin{{document}}{body} Text\label{{safe}}\ref{{safe}}\end{{document}}"
@@ -227,12 +235,17 @@ fn native_opaque_names_and_generic_targets_expose_partial_edits_with_equal_aux()
                     .filter(|line| line.starts_with("EVENT:"))
                     .count(),
                 std::fs::read_to_string(aux).unwrap(),
+                log.lines()
+                    .filter(|line| line.starts_with("DATA:"))
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>(),
             )
         };
         let before = compile(&source);
         let after = compile(&partial);
         assert_eq!((before.0, after.0), (before_count, after_count), "{source}");
         assert_eq!(before.1, after.1, "{source}");
+        assert_ne!((before.0, before.2), (after.0, after.2), "{source}");
     }
 }
 
@@ -308,6 +321,7 @@ fn dynamic_ambiguous_or_unindexed_calls_never_produce_partial_hook_edits() {
         r"\csdef{@freshhook}{Text}",
         r"\csuse{@customhook}",
         r"\csappto{@freshhook}{Text}",
+        r"\NewHookWithArguments{capture}{1}\AddToHookWithArguments{capture}{\typeout{\detokenize{#1}}}\UseHook{capture}{\UseHook{custom}}",
     ] {
         let source = format!(r"\NewHook{{custom}}\UseHook{{custom}}{tail}");
         let (workspace, uri) = setup(&source);
