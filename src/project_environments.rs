@@ -452,7 +452,7 @@ fn source(
             .operations
             .push((call.command.span.start, Operation::Input(target, false)));
     }
-    let operands = signatures.argument_tokens(&doc.text.source, &doc.syntax);
+    let operands = signatures.source_argument_tokens(&doc.text.source, &doc.syntax);
     let bodies = definition_body_spans(&doc.text.source, &doc.syntax);
     let indirect: Vec<_> = [&inputs.loaders, &inputs.checks, &inputs.selectors]
         .into_iter()

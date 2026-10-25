@@ -286,6 +286,56 @@ const BIBLATEX_TEXT_DEPENDENCIES: &[(&str, &[&str])] = &[
     ("brackettext", &["mkbibbrackets"]),
 ];
 
+// Static LaTeX kernel hook grammars. Code is stored for later execution;
+// selectors and ordering rules remain data in every analysis mode.
+fn kernel_hook_parameters(name: &str) -> Option<&'static [(&'static str, bool)]> {
+    Some(match name {
+        "AddToHook" | "AddToHookWithArguments" => {
+            &[("hook", false), ("label", true), ("code", false)]
+        }
+        "AddToHookNext" | "AddToHookNextWithArguments" => &[("hook", false), ("code", false)],
+        "AtBeginDocument" | "AtEndDocument" => &[("label", true), ("code", false)],
+        "RemoveFromHook" => &[("hook", false), ("label", true)],
+        "NewHook"
+        | "NewReversedHook"
+        | "UseHook"
+        | "UseOneTimeHook"
+        | "ClearHookNext"
+        | "ActivateGenericHook"
+        | "DisableGenericHook"
+        | "ShowHook"
+        | "LogHook" => &[("hook", false)],
+        "NewHookWithArguments" | "NewReversedHookWithArguments" => {
+            &[("hook", false), ("argument count", false)]
+        }
+        "NewMirroredHookPair" => &[("before hook", false), ("after hook", false)],
+        "NewMirroredHookPairWithArguments" => &[
+            ("before hook", false),
+            ("after hook", false),
+            ("argument count", false),
+        ],
+        "DeclareHookRule" => &[
+            ("hook", false),
+            ("first label", false),
+            ("relation", false),
+            ("second label", false),
+        ],
+        "DeclareDefaultHookRule" => &[
+            ("first label", false),
+            ("relation", false),
+            ("second label", false),
+        ],
+        "ClearHookRule" => &[
+            ("hook", false),
+            ("first label", false),
+            ("second label", false),
+        ],
+        "SetDefaultHookLabel" | "PushDefaultHookLabel" => &[("label", false)],
+        "PopDefaultHookLabel" | "DebugHooksOn" | "DebugHooksOff" => &[],
+        _ => return None,
+    })
+}
+
 fn builtin(name: &str) -> Option<Signature> {
     if matches!(name, "assignrefcontextcats" | "assignrefcontextkeyws") {
         let keywords = name == "assignrefcontextkeyws";
@@ -993,7 +1043,7 @@ fn builtin(name: &str) -> Option<Signature> {
             syntax::citation_accepts_star(name),
         ),
         "nocite" => (&[("keys", false)], false),
-        _ => return None,
+        _ => (kernel_hook_parameters(name)?, false),
     };
     let parameters = arguments
         .iter()
@@ -1093,7 +1143,8 @@ fn builtin(name: &str) -> Option<Signature> {
         parameters,
         documentation,
         starred,
-        nested_brackets: !(matches!(name, "lstinputlisting" | "lstinline")
+        nested_brackets: !(kernel_hook_parameters(name).is_some()
+            || matches!(name, "lstinputlisting" | "lstinline")
             || crate::bib_resources::references_file(name)
             || crate::minted::is_inline(name)
             || name == "inputminted"
@@ -3001,6 +3052,94 @@ impl<'a> CommandSignatures<'a> {
         !self.local.contains_key(name)
     }
 
+    /// Locate registered code for conservative mutation guards. This does not
+    /// determine whether, when, or how often a hook executes its code.
+    pub(crate) fn stored_hook_code(
+        &self,
+        source: &str,
+        parsed: &syntax::Syntax,
+    ) -> Option<Vec<(usize, std::ops::Range<usize>)>> {
+        let stores_code = |name: &str| {
+            kernel_hook_parameters(name)
+                .is_some_and(|parameters| parameters.iter().any(|(label, _)| *label == "code"))
+        };
+        if !parsed.commands.iter().any(|command| {
+            stores_code(&command.name)
+                || matches!(command.name.as_str(), "csuse" | "endcsname")
+                || self
+                    .forwarded_builtin(&command.name)
+                    .is_some_and(stores_code)
+        }) {
+            return Some(Vec::new());
+        }
+        let operands = self.argument_tokens(source, parsed);
+        let declarations = parsed
+            .definitions
+            .iter()
+            .map(|entry| (entry.span.start, entry.span.end))
+            .collect();
+        let mut result = Vec::new();
+        let mut work = 0;
+        for (index, command) in parsed.commands.iter().enumerate() {
+            if operands.contains(&command.span.start) {
+                continue;
+            }
+            let Some((name, _, mut at, _)) =
+                self.invocation(source, parsed, index, &operands, &declarations)
+            else {
+                continue;
+            };
+            let name = self.forwarded_builtin(name).unwrap_or(name);
+            let Some(parameters) =
+                kernel_hook_parameters(name).filter(|_| self.command_unchanged(name))
+            else {
+                continue;
+            };
+            if !parameters.iter().any(|(label, _)| *label == "code") {
+                continue;
+            }
+            for (label, optional) in parameters {
+                let before = at;
+                at = syntax::skip_space(source, at);
+                work += at - before + 64;
+                if work > 32 * 1024 * 1024 {
+                    return None;
+                }
+                if *optional {
+                    if source.as_bytes().get(at) == Some(&b'[') {
+                        let Some((_, end)) = syntax::bracket_argument(source, at) else {
+                            break;
+                        };
+                        work += end - at;
+                        at = end;
+                    }
+                    continue;
+                }
+                let (span, end) = if source.as_bytes().get(at) == Some(&b'{') {
+                    let Some((argument, end)) = syntax::group(source, at, b'{', b'}') else {
+                        break;
+                    };
+                    (argument.span, end)
+                } else {
+                    let Some(token) = syntax::required_token(source, at) else {
+                        break;
+                    };
+                    (at..at + token.len(), at + token.len())
+                };
+                work += end - at;
+                if work > 32 * 1024 * 1024 {
+                    return None;
+                }
+                at = end;
+                if *label == "code" {
+                    result.push((command.span.start, span));
+                    break;
+                }
+            }
+        }
+        Some(result)
+    }
+
     /// Literal filenames following static named calls and pure source aliases.
     /// Ordinary input/include commands retain their existing lexical handling.
     pub(crate) fn indirect_source_invocations(
@@ -3329,7 +3468,7 @@ impl<'a> CommandSignatures<'a> {
         source: &str,
         parsed: &syntax::Syntax,
     ) -> BTreeSet<usize> {
-        let operands = self.argument_tokens(source, parsed);
+        let operands = self.source_argument_tokens(source, parsed);
         let mut bodies = definition_body_spans(source, parsed);
         bodies.sort_unstable_by_key(|span| span.start);
         let mut merged: Vec<std::ops::Range<usize>> = Vec::new();
@@ -3387,6 +3526,7 @@ impl<'a> CommandSignatures<'a> {
         parsed: &syntax::Syntax,
     ) -> Vec<EnvironmentBoundary> {
         let operands = self.argument_tokens(source, parsed);
+        let stored = self.source_argument_tokens(source, parsed);
         let bodies = definition_body_spans(source, parsed);
         let declarations = parsed
             .definitions
@@ -3411,7 +3551,9 @@ impl<'a> CommandSignatures<'a> {
                     begin: self.invokes_builtin(name, "begin"),
                     direct: matches!(command.name.as_str(), "begin" | "end"),
                     operand: operands.contains(&start) || operands.contains(&command.span.start),
-                    deferred: bodies.iter().any(|span| span.contains(&start)),
+                    deferred: bodies.iter().any(|span| span.contains(&start))
+                        || stored.contains(&command.span.start)
+                            && !operands.contains(&command.span.start),
                     argument,
                 })
             })
@@ -3426,7 +3568,7 @@ impl<'a> CommandSignatures<'a> {
         source: &str,
         parsed: &syntax::Syntax,
     ) -> BTreeSet<usize> {
-        let operands = self.argument_tokens(source, parsed);
+        let operands = self.source_argument_tokens(source, parsed);
         let declarations = parsed
             .definitions
             .iter()
@@ -3459,6 +3601,16 @@ impl<'a> CommandSignatures<'a> {
             }
         }
         result
+    }
+
+    /// Token arguments excluded from immediate execution, including stored
+    /// hook code which remains available to structural navigation and edits.
+    pub(crate) fn source_argument_tokens(
+        &self,
+        source: &str,
+        parsed: &syntax::Syntax,
+    ) -> BTreeSet<usize> {
+        self.argument_tokens_with_literal(source, parsed, None, false, false, ParameterRead::Source)
     }
 
     pub(crate) fn argument_tokens(&self, source: &str, parsed: &syntax::Syntax) -> BTreeSet<usize> {
@@ -3505,7 +3657,7 @@ impl<'a> CommandSignatures<'a> {
         parsed: &syntax::Syntax,
         readers: &BTreeMap<String, usize>,
     ) -> BTreeSet<usize> {
-        let operands = self.editing_argument_tokens(source, parsed);
+        let operands = self.editing_tokens(source, parsed, ParameterRead::Source);
         // A caller may transform a replacement body or default value before
         // executing it. Prefix maxima preserve nested declaration data.
         let mut deferred = definition_data_spans(source, parsed);
@@ -3690,14 +3842,7 @@ impl<'a> CommandSignatures<'a> {
         source: &str,
         parsed: &syntax::Syntax,
     ) -> BTreeSet<usize> {
-        self.argument_tokens_with_literal(
-            source,
-            parsed,
-            None,
-            false,
-            true,
-            ParameterRead::Ordinary,
-        )
+        self.argument_tokens_with_literal(source, parsed, None, false, true, ParameterRead::Source)
     }
 
     /// A stable copy can establish argument tokenization without certifying
@@ -3894,7 +4039,7 @@ impl<'a> CommandSignatures<'a> {
             Some(at),
             false,
             true,
-            ParameterRead::Ordinary,
+            ParameterRead::Source,
         )
         .contains(&at)
             || self.possible_literal_argument(source, parsed, at)
@@ -4388,7 +4533,9 @@ impl<'a> CommandSignatures<'a> {
                 // a user macro can instead discard or detokenize its argument.
                 // Message readers expand text without executing the resulting
                 // nonexpandable tokens, including declarations and callbacks.
+                let hook = kernel_hook_parameters(signature.name.as_str()).is_some();
                 let opaque = all_parameters
+                    || hook && matches!(parameters, ParameterRead::Source)
                     || common.is_some()
                     || local.contains_key(signature.name.as_str())
                     || matches!(
@@ -4410,9 +4557,10 @@ impl<'a> CommandSignatures<'a> {
                     literal,
                     &mut result,
                 );
-                if opaque
+                if (opaque || hook)
                     && read.unfinished
-                    && (matches!(parameters, ParameterRead::DeclarationData)
+                    && (hook
+                        || matches!(parameters, ParameterRead::DeclarationData)
                         || common.is_some()
                         || matches!(signature.name.as_str(), "typeout" | "message"))
                 {
@@ -4439,6 +4587,8 @@ enum ParameterRead {
     Ordinary,
     All,
     DeclarationData,
+    // Stored hook code is structurally editable, but not immediate source.
+    Source,
 }
 
 fn insert_command_signature<'a>(
@@ -4958,6 +5108,11 @@ fn operand_delimited_end(source: &str, at: usize, open: &str, close: &str) -> Op
 
 fn builtin_argument_data(signature: &Signature, parameter: usize) -> bool {
     match signature.name.as_str() {
+        "AddToHook" | "AddToHookWithArguments" => parameter < 2,
+        "AddToHookNext" | "AddToHookNextWithArguments" | "AtBeginDocument" | "AtEndDocument" => {
+            parameter == 0
+        }
+        name if kernel_hook_parameters(name).is_some() => true,
         "newrefsection"
         | "refsection"
         | "newrefcontext"

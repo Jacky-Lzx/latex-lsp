@@ -518,6 +518,9 @@ fn automatic_keywords_keep_named_invocations_and_executed_preamble_forwards() {
     for body in [
         r"\newcommand\later{\assignrefcontextkeyws[labelprefix=A]{topic}}\later\cite{a}",
         r"\AtBeginDocument{\assignrefcontextkeyws[labelprefix=A]{topic}}\cite{a}",
+        r"\AddToHook{unused}[mine]{\assignrefcontextkeyws[labelprefix=A]{topic}}\cite{a}",
+        r"\AddToHookNextWithArguments{unused}{\assignrefcontextkeyws[labelprefix=A]{topic}}\cite{a}",
+        r"\def\forward{\AddToHook}\forward{unused}{\assignrefcontextkeyws[labelprefix=A]{topic}}\cite{a}",
         r"\assignrefcontextkeyws[labelprefix=A]{\dynamic}\cite{a}",
         r"\assignrefcontextkeyws{topic}\cite{a}",
         "\\assignrefcontextkeyws[labelprefix=A]{topic\n\nsecond}\\cite{a}",

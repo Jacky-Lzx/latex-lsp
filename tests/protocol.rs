@@ -17,6 +17,203 @@ struct Server {
 }
 
 #[test]
+fn hook_string_mutation_guards_refresh_unsaved_providers_without_partial_macro_edits() {
+    use latex_lsp::text::Text;
+    for versioned in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+        let provider = uri.join("commands.sty").unwrap();
+        let source = "% 😀\r\n\\documentclass{article}\\newcommand\\unicodeword{😀}\\usepackage{etoolbox}\\def\\identity#1{#1}\\newcommand\\word{Text}\\input{commands.sty}\\begin{document}\\ifblank{\\word}{\\word}{\\word}\\label{safe}\\ref{safe}\\end{document}";
+        let mutation = r"\AtBeginDocument{\let\ifblank\identity}";
+        std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+        std::fs::write(provider.to_file_path().unwrap(), mutation).unwrap();
+        let mut server = Server::start();
+        server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(directory.path()).unwrap(),"initializationOptions":{"distribution":{"enabled":false}},"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":versioned}}}}));
+        server.notify("initialized", json!({}));
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"languageId":"latex","version":5,"text":source}}),
+        );
+        let expected = |edits: Vec<Value>, version| {
+            if versioned {
+                json!({"documentChanges":[{"textDocument":{"uri":uri,"version":version},"edits":edits}]})
+            } else {
+                json!({"changes":{uri.as_str():edits}})
+            }
+        };
+        let blocked = |server: &mut Server, source: &str| {
+            let text = Text::new(source.into());
+            server.send(json!({"jsonrpc":"2.0","id":20,"method":"textDocument/rename","params":{"textDocument":{"uri":uri},"position":text.position(source.rfind("word").unwrap() + 1),"newName":"term"}}));
+            let response = server.until(|message| message["id"] == 20);
+            assert!(
+                response["error"]["code"] == -32602 || response.get("result") == Some(&Value::Null),
+                "{response}"
+            );
+        };
+        let safe = |server: &mut Server, source: &str, version| {
+            let text = Text::new(source.into());
+            let edits = source
+                .match_indices("safe")
+                .map(|(at, _)| json!({"range":text.range(at, at + 4),"newText":"fresh"}))
+                .collect::<Vec<_>>();
+            assert_eq!(edits.len(), 2);
+            assert_eq!(server.request(2, "textDocument/rename", json!({"textDocument":{"uri":uri},"position":text.position(source.rfind("safe").unwrap() + 1),"newName":"fresh"})), expected(edits, version));
+        };
+        blocked(&mut server, source);
+        safe(&mut server, source, 5);
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":provider,"languageId":"latex","version":12,"text":""}}),
+        );
+        let text = Text::new(source.into());
+        let edits = source
+            .match_indices(r"\word")
+            .enumerate()
+            .filter(|(index, _)| *index != 1)
+            .map(|(_, (at, _))| json!({"range":text.range(at, at + 5),"newText":"\\term"}))
+            .collect::<Vec<_>>();
+        assert_eq!(edits.len(), 3);
+        assert_eq!(server.request(3, "textDocument/rename", json!({"textDocument":{"uri":uri},"position":text.position(source.rfind("word").unwrap() + 1),"newName":"term"})), expected(edits, 5));
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":provider,"version":13},"contentChanges":[{"text":mutation}]}));
+        blocked(&mut server, source);
+        safe(&mut server, source, 5);
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":provider}}),
+        );
+        blocked(&mut server, source);
+        let changed = source.replace("{Text}", "{Value}");
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":uri,"version":7},"contentChanges":[{"text":changed}]}),
+        );
+        blocked(&mut server, &changed);
+        safe(&mut server, &changed, 7);
+        server.request(4, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
+fn kernel_hooks_keep_exact_structural_edits_and_refresh_unsaved_parameter_meanings() {
+    use latex_lsp::text::Text;
+    for versioned in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+        let provider = uri.join("commands.sty").unwrap();
+        let source = "% 😀\r\n\\documentclass{article}\\newcommand\\unicodeword{😀}\\input{commands.sty}\\AddToHook{begindocument}{Code \\ref{same}}\\begin{document}\\label{same}\\ref{same}\\end{document}";
+        std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+        std::fs::write(provider.to_file_path().unwrap(), "").unwrap();
+        let text = Text::new(source.into());
+        let code_at = text.position(source.find("Code").unwrap() + 1);
+        let ref_at = text.position(source.find(r"\ref{same}").unwrap() + 6);
+        let real = source.find(r"\label{same}").unwrap() + 7;
+        let mut server = Server::start();
+        server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(directory.path()).unwrap(),"initializationOptions":{"distribution":{"enabled":false}},"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":versioned}},"textDocument":{"completion":{"completionItem":{"snippetSupport":true}}}}}));
+        server.notify("initialized", json!({}));
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"languageId":"latex","version":5,"text":source}}),
+        );
+        let code_params = json!({"textDocument":{"uri":uri},"position":code_at});
+        let ref_params = json!({"textDocument":{"uri":uri},"position":ref_at});
+        let initial_help = server.request(2, "textDocument/signatureHelp", code_params.clone());
+        assert_eq!(
+            initial_help["signatures"][0]["label"],
+            r"\AddToHook{hook}[label]{code}"
+        );
+        assert_eq!(initial_help["activeParameter"], 2);
+        let location = json!({"uri":uri,"range":text.range(real, real + 4)});
+        assert_eq!(
+            server.request(3, "textDocument/definition", ref_params.clone()),
+            json!([location])
+        );
+        let renamed = |server: &mut Server, source: &str, version| {
+            let text = Text::new(source.into());
+            let at = text.position(source.rfind("same").unwrap() + 1);
+            let response = server.request(
+                4,
+                "textDocument/rename",
+                json!({"textDocument":{"uri":uri},"position":at,"newName":"fresh"}),
+            );
+            let edits = source
+                .match_indices("same")
+                .map(|(start, _)| json!({"range":text.range(start, start + 4),"newText":"fresh"}))
+                .collect::<Vec<_>>();
+            assert_eq!(edits.len(), 3);
+            let expected = if versioned {
+                json!({"documentChanges":[{"textDocument":{"uri":uri,"version":version},"edits":edits}]})
+            } else {
+                json!({"changes":{uri.as_str():edits}})
+            };
+            assert_eq!(response, expected);
+        };
+        renamed(&mut server, source, 5);
+        server.notify("textDocument/didOpen", json!({"textDocument":{"uri":provider,"languageId":"latex","version":12,"text":"\\renewcommand\\AddToHook[2]{}"}}));
+        let hook_at = text.position(source.find("begindocument").unwrap() + 1);
+        let help = server.request(
+            5,
+            "textDocument/signatureHelp",
+            json!({"textDocument":{"uri":uri},"position":hook_at}),
+        );
+        assert_eq!(help["signatures"][0]["label"], r"\AddToHook{#1}{#2}");
+        assert_eq!(
+            server.request(6, "textDocument/definition", ref_params.clone()),
+            json!([])
+        );
+        let outer = text.position(source.rfind("same").unwrap() + 1);
+        for method in ["textDocument/prepareRename", "textDocument/rename"] {
+            server.send(json!({"jsonrpc":"2.0","id":20,"method":method,"params":{"textDocument":{"uri":uri},"position":outer,"newName":"fresh"}}));
+            let response = server.until(|message| message["id"] == 20);
+            assert!(
+                response["error"]["code"] == -32602 || response.get("result") == Some(&Value::Null),
+                "{response}"
+            );
+        }
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":provider}}),
+        );
+        assert_eq!(
+            server.request(7, "textDocument/definition", ref_params),
+            json!([location])
+        );
+        assert_eq!(
+            server.request(8, "textDocument/signatureHelp", code_params),
+            initial_help
+        );
+        renamed(&mut server, source, 5);
+        let changed = source.replace("Code", "Updated code");
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":uri,"version":7},"contentChanges":[{"text":changed}]}),
+        );
+        renamed(&mut server, &changed, 7);
+        let completion_uri = Url::parse("untitled:kernel-hook-completion.tex").unwrap();
+        server.notify("textDocument/didOpen", json!({"textDocument":{"uri":completion_uri,"languageId":"latex","version":1,"text":"\\AddToHo"}}));
+        let items = server.request(
+            9,
+            "textDocument/completion",
+            json!({"textDocument":{"uri":completion_uri},"position":{"line":0,"character":8}}),
+        );
+        let item = items
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["label"] == "AddToHook")
+            .unwrap();
+        assert_eq!(
+            item["textEdit"],
+            json!({"range":{"start":{"line":0,"character":1},"end":{"line":0,"character":8}},"newText":"AddToHook{${1:hook}}{${2:code}}"})
+        );
+        server.request(10, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
 fn literal_label_readers_refresh_exact_ranges_and_safe_edits_over_stdio() {
     use latex_lsp::text::Text;
     for versioned in [false, true] {

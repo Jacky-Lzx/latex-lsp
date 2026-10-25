@@ -138,12 +138,16 @@ enum Binding {
 #[derive(Clone, Default)]
 struct Context {
     assigned: BTreeMap<String, Binding>,
+    hook_assigned: BTreeSet<String>,
     selection: Selection,
     uncertain: bool,
 }
 
 impl Context {
     fn binding(&self, name: &str) -> Binding {
+        if self.hook_assigned.contains(name) {
+            return Binding::Unknown;
+        }
         self.assigned
             .get(name)
             .cloned()
@@ -191,6 +195,14 @@ struct Source {
     operands: BTreeSet<usize>,
     lexical_probes: Vec<Command>,
     declarations: BTreeMap<usize, Vec<Assignment>>,
+    hook_mutations: HookMutations,
+}
+
+#[derive(Default)]
+struct HookMutations {
+    assigned: BTreeMap<usize, BTreeSet<String>>,
+    uncertain: BTreeSet<usize>,
+    incomplete: bool,
 }
 
 impl Source {
@@ -258,12 +270,64 @@ impl Source {
                     });
             }
         }
+        let mut hook_mutations = HookMutations::default();
+        if let Some(codes) = signatures.stored_hook_code(&text.source, &syntax) {
+            let mut work = 0;
+            for (at, code) in codes {
+                work += code.len();
+                if work > 32 * 1024 * 1024 {
+                    hook_mutations.incomplete = true;
+                    break;
+                }
+                for (_, assignments) in declarations.range(code.clone()) {
+                    hook_mutations
+                        .assigned
+                        .entry(at)
+                        .or_default()
+                        .extend(assignments.iter().map(|assignment| assignment.name.clone()));
+                }
+                for (_, target) in syntax.command_undefinitions.range(code.clone()) {
+                    if let Some(target) = target {
+                        hook_mutations
+                            .assigned
+                            .entry(at)
+                            .or_default()
+                            .insert(target.name.clone());
+                    } else {
+                        hook_mutations.uncertain.insert(at);
+                    }
+                }
+                let start = syntax
+                    .commands
+                    .partition_point(|command| command.span.start < code.start);
+                if syntax.commands[start..]
+                    .iter()
+                    .take_while(|command| command.span.start < code.end)
+                    .any(|command| {
+                        syntax::loader_extension(&command.name).is_some()
+                            || matches!(
+                                command.name.as_str(),
+                                "input"
+                                    | "include"
+                                    | "subfile"
+                                    | "InputIfFileExists"
+                                    | "includeonly"
+                            )
+                    })
+                {
+                    hook_mutations.uncertain.insert(at);
+                }
+            }
+        } else {
+            hook_mutations.incomplete = true;
+        }
         Self {
             syntax,
             active,
             operands,
             lexical_probes,
             declarations,
+            hook_mutations,
         }
     }
 }
@@ -330,6 +394,7 @@ impl Analysis {
             *self = checkpoint.clone();
             self.visits = visits;
             self.visited.insert(uri.clone());
+            self.incomplete |= source.hook_mutations.incomplete;
             *state = initial.clone();
             let mut data_end = 0;
             let mut meanings = BTreeMap::new();
@@ -412,6 +477,19 @@ impl Analysis {
                 }
                 if !source.active.contains(&at) {
                     continue;
+                }
+                // Registration can execute immediately for a one-time hook,
+                // or later through implicit lifecycle or explicit use calls.
+                // Revoke the affected meanings rather than applying stored
+                // assignments or assuming the hook remains unused.
+                state.uncertain |= source.hook_mutations.uncertain.contains(&at);
+                if let Some(names) = source.hook_mutations.assigned.get(&at) {
+                    // A restoration can precede a future hook execution, so
+                    // explicit later assignments cannot remove this guard.
+                    state.hook_assigned.extend(names.iter().cloned());
+                    state
+                        .assigned
+                        .extend(names.iter().map(|name| (name.clone(), Binding::Unknown)));
                 }
                 if let Some(target) = source.syntax.command_undefinitions.get(&at) {
                     if let Some(target) = target {

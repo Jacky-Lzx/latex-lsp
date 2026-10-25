@@ -124,3 +124,5 @@ etoolbox 的 `csuse` / `csmeaning`、`ifcsdef` / `ifcsundef` / `ifcsvoid`、宏�
 `\expandafter\letcs\csname alias\endcsname{source}` 同时识别字面别名目标和展开后的来源名称，支持名称补全、参数提示、跨文件与共享项目重命名，以及环境、计数器、开关等派生命令作为来源的情况。只有相邻的显式 `expandafter` 和完整静态 `csname` 才沿用此规则；动态目标不推断来源参数的位置。
 
 术语、缩略语和索引项见[术语与索引符号](glossary-index-symbols.md)；expl3 的完整名称、变量和函数签名见 [expl3 编辑](expl3.md)。
+
+标准内核钩子的补全、参数提示、延迟代码中的结构引用与执行边界见[内核钩子](kernel-hooks.md)。

@@ -201,7 +201,7 @@ pub(crate) fn edits(
             .map(|doc| (doc.text.source.as_str(), &doc.syntax)),
     );
     let context = Context {
-        operands: signatures.argument_tokens(&doc.text.source, &doc.syntax),
+        operands: signatures.source_argument_tokens(&doc.text.source, &doc.syntax),
         declarations: doc
             .syntax
             .definitions
@@ -459,6 +459,13 @@ mod tests {
     #[test]
     fn user_macro_arguments_do_not_create_environment_or_group_indentation() {
         for (declaration, call) in [
+            ("", r"\AddToHook{unused}[mine]{\begin{itemize}}"),
+            ("", r"\AddToHookNext{unused}{\begin{itemize}}"),
+            ("", r"\AtEndDocument{\begingroup}"),
+            (
+                r"\def\forward{\AddToHook}",
+                r"\forward{unused}{\begin{itemize}}",
+            ),
             ("\\newcommand{\\take}[1]{}", "\\take{\\begin{itemize}}"),
             ("\\newcommand{\\take}[1]{}", "\\take\\begin{itemize}"),
             ("\\def\\take#1STOP{}", "\\take\\begin{itemize}STOP"),

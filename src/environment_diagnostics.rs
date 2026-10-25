@@ -39,7 +39,7 @@ impl Index {
                 };
                 let calls = signatures.environment_invocations(&doc.text.source, &doc.syntax);
                 let bodies = definition_body_spans(&doc.text.source, &doc.syntax);
-                let needs_project_matching = calls.iter().any(|call| !call.direct)
+                let needs_project_matching = calls.iter().any(|call| !call.direct || call.deferred)
                     || doc.syntax.environment_fixes.iter().any(|fix| {
                         doc.text
                             .offset(fix.diagnostic.range.start)
