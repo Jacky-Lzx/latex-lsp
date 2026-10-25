@@ -1,6 +1,6 @@
 #![cfg(unix)]
 use latex_lsp::{
-    build,
+    compilation::build,
     config::{BibliographyBackend, BibliographyToolConfig, BuildConfig, Config, IndexToolConfig},
 };
 use lsp_types::{DiagnosticSeverity, Url};

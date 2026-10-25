@@ -1,7 +1,7 @@
 #[path = "support/biber.rs"]
 mod biber;
 
-use latex_lsp::{build_log, editing, text::Text, workspace::Workspace};
+use latex_lsp::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 use lsp_types::*;
 use std::{collections::BTreeMap, path::Path};
 

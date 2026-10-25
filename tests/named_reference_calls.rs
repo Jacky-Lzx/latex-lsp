@@ -1,4 +1,4 @@
-use latex_lsp::{editing, features, text::Text, workspace::Workspace};
+use latex_lsp::{editing, language::features, project::workspace::Workspace, text::Text};
 use lsp_types::*;
 
 fn setup(source: &str) -> (Workspace, Url) {

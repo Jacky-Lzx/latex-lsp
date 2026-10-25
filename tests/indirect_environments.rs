@@ -1,4 +1,4 @@
-use latex_lsp::{features, workspace::Workspace};
+use latex_lsp::{language::features, project::workspace::Workspace};
 use lsp_types::*;
 use std::{collections::BTreeMap, path::Path};
 

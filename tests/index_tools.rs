@@ -1,4 +1,4 @@
-use latex_lsp::build_log;
+use latex_lsp::compilation::build_log;
 use lsp_types::*;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -178,7 +178,7 @@ fn wrapped_index_requests_inside_filenames_do_not_change_the_actual_tool_or_sour
 #[test]
 #[ignore = "requires pdfLaTeX, XeLaTeX, LuaLaTeX, makeindex, makeidx and rerunfilecheck"]
 fn real_index_tool_requests_follow_processing_and_later_index_changes_in_three_engines() {
-    use latex_lsp::{build, config::BuildConfig};
+    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::os::unix::fs::PermissionsExt;
     let cache = tempfile::tempdir().unwrap();
     for engine in ["pdflatex", "xelatex", "lualatex"] {

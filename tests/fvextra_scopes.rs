@@ -1,4 +1,8 @@
-use latex_lsp::{features, navigation, text::Text, workspace::Workspace};
+use latex_lsp::{
+    language::{features, navigation},
+    project::workspace::Workspace,
+    text::Text,
+};
 use lsp_types::*;
 
 const PHASES: [&str; 4] = ["inside", "inner", "afterinner", "afterouter"];
@@ -182,7 +186,7 @@ fn malformed_environment_ends_recover_settings_without_discarding_outer_scopes()
 #[test]
 #[ignore = "requires pdflatex, xelatex, fvextra, listings, and verbatim"]
 fn real_environment_settings_match_labels_and_inputs_before_and_after_rename() {
-    use latex_lsp::{build, config::BuildConfig};
+    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::sync::atomic::AtomicBool;
     for engine in ["pdflatex", "xelatex"] {
         for (initial, outer, inner, expected) in cases() {

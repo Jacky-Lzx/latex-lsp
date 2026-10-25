@@ -1,7 +1,7 @@
 use latex_lsp::{
-    features, signature,
+    language::{features, signature},
+    project::workspace::{Document, Workspace},
     text::Text,
-    workspace::{Document, Workspace},
 };
 use lsp_types::*;
 

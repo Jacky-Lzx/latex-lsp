@@ -1,7 +1,9 @@
 use latex_lsp::{
-    build, editing, features, file_operations, navigation, semantic, signature,
+    compilation::build,
+    editing::{self, file_operations},
+    language::{features, navigation, semantic, signature},
+    project::workspace::{Document, Workspace},
     text::Text,
-    workspace::{Document, Workspace},
 };
 use lsp_types::*;
 use std::{path::Path, sync::atomic::AtomicBool};

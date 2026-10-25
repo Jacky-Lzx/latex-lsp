@@ -1,7 +1,9 @@
 use latex_lsp::{
-    build_log, editing, features, semantic,
+    compilation::build_log,
+    editing,
+    language::{features, semantic},
+    project::workspace::{Document, Workspace},
     text::Text,
-    workspace::{Document, Workspace},
 };
 use lsp_types::*;
 
@@ -231,7 +233,7 @@ fn real_bibitem_note_boundaries_keep_prose_and_actual_auxiliary_keys_intact() {
         ..Default::default()
     };
     let compile = || {
-        let result = latex_lsp::build::run(&main, &config, &Default::default());
+        let result = latex_lsp::compilation::build::run(&main, &config, &Default::default());
         assert_eq!(result.status, "success", "{}", result.output);
         result
     };
@@ -394,7 +396,7 @@ fn real_commented_bibitem_rename_updates_aliases_and_keeps_same_named_labels_ind
         ..Default::default()
     };
     let compile = || {
-        let result = latex_lsp::build::run(&main, &config, &Default::default());
+        let result = latex_lsp::compilation::build::run(&main, &config, &Default::default());
         assert_eq!(result.status, "success", "{}", result.output);
         result
     };

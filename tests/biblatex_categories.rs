@@ -1,7 +1,7 @@
 use latex_lsp::{
-    features,
+    language::features,
+    project::workspace::{Document, Workspace},
     text::Text,
-    workspace::{Document, Workspace},
 };
 use lsp_types::*;
 
@@ -50,7 +50,7 @@ fn category_memberships_reference_keys_without_renaming_category_names() {
         latex_lsp::editing::highlights(&workspace, &main, at).len(),
         2
     );
-    let tokens = latex_lsp::semantic::tokens(&workspace.documents[&main], None).unwrap();
+    let tokens = latex_lsp::language::semantic::tokens(&workspace.documents[&main], None).unwrap();
     let (mut line, mut character) = (0, 0);
     let mut keys = Vec::new();
     for token in tokens.data {
@@ -110,7 +110,7 @@ fn category_membership_completion_and_signatures_distinguish_category_from_keys(
         let at = workspace.documents[&main]
             .text
             .position(marked.find('¦').unwrap());
-        let signature = latex_lsp::signature::help(&workspace, &main, at).unwrap();
+        let signature = latex_lsp::language::signature::help(&workspace, &main, at).unwrap();
         assert_eq!(
             signature.signatures[0].label,
             "\\addtocategory{category}{keys}"
@@ -151,7 +151,7 @@ fn category_key_completion_preserves_other_keys_comments_and_unclosed_lists() {
             marked.replace("al¦pha", "alpha").replace("al¦", "alpha")
         );
         assert_eq!(
-            latex_lsp::signature::help(&workspace, &main, at)
+            latex_lsp::language::signature::help(&workspace, &main, at)
                 .unwrap()
                 .active_parameter,
             Some(1)
@@ -246,7 +246,7 @@ fn category_commands_offer_snippets_and_respect_custom_signatures() {
             .text
             .position(source.rfind("alpha").unwrap() + 1);
         assert_eq!(
-            latex_lsp::signature::help(&workspace, &main, at)
+            latex_lsp::language::signature::help(&workspace, &main, at)
                 .unwrap()
                 .signatures[0]
                 .label,
@@ -269,7 +269,7 @@ fn category_assignments_do_not_claim_citation_warnings_or_spelling_fixes() {
             "@book{alpha,title={Alpha}}",
         )
         .unwrap();
-        let diagnostics = latex_lsp::build_log::parse(
+        let diagnostics = latex_lsp::compilation::build_log::parse(
             &main,
             "Package biblatex Warning: Citation 'alphaa' on page 1 undefined on input line 2.\n",
         );

@@ -1,4 +1,4 @@
-use latex_lsp::{navigation, workspace::Document};
+use latex_lsp::{language::navigation, project::workspace::Document};
 use lsp_types::{
     FoldingRange, FoldingRangeCapability, FoldingRangeClientCapabilities, FoldingRangeKind, Url,
 };

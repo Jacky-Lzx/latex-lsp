@@ -1,6 +1,6 @@
 use latex_lsp::{
-    features,
-    workspace::{Document, Workspace},
+    language::features,
+    project::workspace::{Document, Workspace},
 };
 use lsp_types::{CompletionItem, Url};
 

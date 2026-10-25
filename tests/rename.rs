@@ -1,7 +1,7 @@
 use latex_lsp::{
-    features,
+    language::features,
+    project::workspace::{Document, Workspace},
     text::Text,
-    workspace::{Document, Workspace},
 };
 use lsp_types::*;
 
@@ -95,7 +95,7 @@ fn real_command_copy_renames_preserve_copied_optional_arguments_after_source_red
                 executable: "pdflatex".into(),
                 ..Default::default()
             };
-            let before = latex_lsp::build::run(&main, &config, &Default::default());
+            let before = latex_lsp::compilation::build::run(&main, &config, &Default::default());
             assert_eq!(before.status, "success", "{copy}: {}", before.output);
             let mut workspace = Workspace::default();
             workspace.add_root(root.into());
@@ -121,7 +121,7 @@ fn real_command_copy_renames_preserve_copied_optional_arguments_after_source_red
             assert!(std::fs::read_to_string(root.join("content.tex"))
                 .unwrap()
                 .ends_with("% \\alias\n\\verb|\\alias|\n"));
-            let after = latex_lsp::build::run(&main, &config, &Default::default());
+            let after = latex_lsp::compilation::build::run(&main, &config, &Default::default());
             assert_eq!(after.status, "success", "{copy}: {}", after.output);
             for outcome in [before, after] {
                 let observed: Vec<_> = outcome
@@ -161,7 +161,7 @@ fn real_expandable_command_renames_preserve_edef_results_and_optional_defaults()
         executable: "pdflatex".into(),
         ..Default::default()
     };
-    let before = latex_lsp::build::run(&main, &config, &Default::default());
+    let before = latex_lsp::compilation::build::run(&main, &config, &Default::default());
     assert_eq!(before.status, "success", "{}", before.output);
     let mut workspace = Workspace::default();
     workspace.add_root(root.into());
@@ -187,7 +187,7 @@ fn real_expandable_command_renames_preserve_edef_results_and_optional_defaults()
     );
     let changed = std::fs::read_to_string(root.join("content.tex")).unwrap();
     assert!(changed.ends_with("% \\formatpair\n\\verb|\\formatpair|\n"));
-    let after = latex_lsp::build::run(&main, &config, &Default::default());
+    let after = latex_lsp::compilation::build::run(&main, &config, &Default::default());
     assert_eq!(after.status, "success", "{}", after.output);
     let expected = "EXPANDABLE-AUDIT:blue:Default/red:Explicit/blue:Dynamic";
     assert!(
@@ -231,7 +231,7 @@ fn real_paired_delimiter_renames_preserve_all_sizing_forms_and_formula_dimension
         executable: "pdflatex".into(),
         ..Default::default()
     };
-    let before = latex_lsp::build::run(&main, &config, &AtomicBool::new(false));
+    let before = latex_lsp::compilation::build::run(&main, &config, &AtomicBool::new(false));
     assert_eq!(before.status, "success", "{}", before.output);
     for name in ["absval", "innerprod", "scalednorm"] {
         let mut workspace = Workspace::default();
@@ -252,7 +252,7 @@ fn real_paired_delimiter_renames_preserve_all_sizing_forms_and_formula_dimension
             std::fs::write(uri.to_file_path().unwrap(), changed).unwrap();
         }
     }
-    let after = latex_lsp::build::run(&main, &config, &AtomicBool::new(false));
+    let after = latex_lsp::compilation::build::run(&main, &config, &AtomicBool::new(false));
     assert_eq!(after.status, "success", "{}", after.output);
     assert_eq!(after.pages, Some(1));
     let dimensions = |output: &str| {
@@ -361,7 +361,7 @@ fn real_pdfbookmark_renames_keep_bookmarks_and_pdf_links_on_the_same_literal_des
         executable: "pdflatex".into(),
         ..Default::default()
     };
-    let initial = latex_lsp::build::run(&main, &config, &Default::default());
+    let initial = latex_lsp::compilation::build::run(&main, &config, &Default::default());
     assert_eq!(initial.status, "success", "{}", initial.output);
     let mut old_name = "base.0";
     for (from_definition, name) in [
@@ -396,7 +396,7 @@ fn real_pdfbookmark_renames_keep_bookmarks_and_pdf_links_on_the_same_literal_des
         assert_eq!(std::fs::read_to_string(&child).unwrap(), format!("\\hyperlink{{{name}}}{{Direct}}\\hyperref{{}}{{}}{{{name}}}{{Compound}}\\ref{{base.0}}\n"));
         let mut final_build = None;
         for _ in 0..2 {
-            let outcome = latex_lsp::build::run(&main, &config, &Default::default());
+            let outcome = latex_lsp::compilation::build::run(&main, &config, &Default::default());
             assert_eq!(outcome.status, "success", "{}", outcome.output);
             final_build = Some(outcome);
         }
@@ -650,10 +650,10 @@ fn real_hyperref_renames_wrap_delimiters_and_preserve_grouped_links_across_repea
             "{source}"
         );
         for _ in 0..2 {
-            let result = latex_lsp::build::run(&main, &config, &Default::default());
+            let result = latex_lsp::compilation::build::run(&main, &config, &Default::default());
             assert_eq!(result.status, "success", "{}", result.output);
         }
-        let result = latex_lsp::build::run(&main, &config, &Default::default());
+        let result = latex_lsp::compilation::build::run(&main, &config, &Default::default());
         assert!(
             !result
                 .diagnostics
@@ -789,10 +789,10 @@ fn real_hyperdef_label_renames_keep_the_pdf_destination_and_resolve_custom_links
             format!("\\hyperdef[{{{name}}}]{{section}}{{anchor}}{{Target}}")
         );
         for _ in 0..2 {
-            let result = latex_lsp::build::run(&main, &config, &Default::default());
+            let result = latex_lsp::compilation::build::run(&main, &config, &Default::default());
             assert_eq!(result.status, "success", "{}", result.output);
         }
-        let result = latex_lsp::build::run(&main, &config, &Default::default());
+        let result = latex_lsp::compilation::build::run(&main, &config, &Default::default());
         assert!(
             !result
                 .diagnostics
@@ -1031,7 +1031,8 @@ fn real_pdf_destination_renames_update_direct_and_compound_links_without_renamin
             assert!(source.contains("% keep link separator\n"), "{source}");
             let mut last = None;
             for _ in 0..2 {
-                let result = latex_lsp::build::run(&main, &config, &Default::default());
+                let result =
+                    latex_lsp::compilation::build::run(&main, &config, &Default::default());
                 assert_eq!(result.status, "success", "{}", result.output);
                 last = Some(result);
             }
@@ -1174,7 +1175,7 @@ fn refcount_queries_navigate_complete_and_rename_only_the_label_argument() {
 #[test]
 #[ignore = "requires pdflatex and refcount"]
 fn real_label_rename_preserves_independent_spaced_keys_and_reference_values() {
-    use latex_lsp::{build, config::BuildConfig};
+    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::sync::atomic::AtomicBool;
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
@@ -1320,7 +1321,11 @@ fn renamed_custom_environments_still_compile() {
         executable: "pdflatex".into(),
         ..Default::default()
     };
-    let outcome = latex_lsp::build::run(&path, &config, &std::sync::atomic::AtomicBool::new(false));
+    let outcome = latex_lsp::compilation::build::run(
+        &path,
+        &config,
+        &std::sync::atomic::AtomicBool::new(false),
+    );
     assert_eq!(
         outcome.status, "success",
         "{}\n{}",
@@ -1889,7 +1894,7 @@ fn both_projects_compile_after_renaming_a_shared_macro() {
         other
     );
     for name in ["a", "b"] {
-        let outcome = latex_lsp::build::run(
+        let outcome = latex_lsp::compilation::build::run(
             &root.join(format!("{name}.tex")),
             &Default::default(),
             &Default::default(),

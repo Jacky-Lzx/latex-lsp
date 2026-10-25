@@ -1,4 +1,8 @@
-use latex_lsp::{features, navigation, text::Text, workspace::Workspace};
+use latex_lsp::{
+    language::{features, navigation},
+    project::workspace::Workspace,
+    text::Text,
+};
 use lsp_types::*;
 
 #[test]
@@ -100,7 +104,7 @@ fn local_resources_and_indirect_forms_keep_data_roles_and_participate_in_key_and
             );
             assert_eq!(
                 workspace.documents[&bib].kind,
-                latex_lsp::workspace::DocumentKind::Bibtex
+                latex_lsp::project::workspace::DocumentKind::Bibtex
             );
             let links = navigation::document_links(&workspace, &main);
             assert_eq!(links.len(), 1, "{style}/{name}: {links:?}");
@@ -129,7 +133,7 @@ fn local_resources_and_indirect_forms_keep_data_roles_and_participate_in_key_and
                 text.position(source.rfind("\\leaked").unwrap() + 2)
             )
             .is_empty());
-            let edit = latex_lsp::file_operations::will_rename(
+            let edit = latex_lsp::editing::file_operations::will_rename(
                 &workspace,
                 &[FileRename {
                     old_uri: bib.to_string(),
@@ -203,7 +207,7 @@ fn resource_completion_keeps_full_names_suffixes_options_and_other_text() {
                 panic!()
             };
             assert_eq!(apply(&source, std::slice::from_ref(edit)), source);
-            let edits = latex_lsp::file_operations::will_rename(
+            let edits = latex_lsp::editing::file_operations::will_rename(
                 &workspace,
                 &[FileRename {
                     old_uri: bib.to_string(),
@@ -294,7 +298,7 @@ fn snippets_and_signatures_use_one_optional_options_group_and_the_full_filename(
         }
         let source = format!("\\{name}[label=refs]{{refs.bib}}");
         let (_directory, workspace, main, _bib) = fixture(&source, "refs.bib");
-        let help = latex_lsp::signature::help(
+        let help = latex_lsp::language::signature::help(
             &workspace,
             &main,
             Text::new(source.clone()).position(source.find("refs.bib").unwrap() + 2),
@@ -372,7 +376,7 @@ fn real_global_resource_file_and_key_renames_compile_in_alternative_reference_se
         .dependencies(&main)
         .contains(&uri(root, "unused.bib")));
     let renamed = uri(root, "renamed.bib");
-    let edits = latex_lsp::file_operations::will_rename(
+    let edits = latex_lsp::editing::file_operations::will_rename(
         &workspace,
         &[FileRename {
             old_uri: bib.to_string(),

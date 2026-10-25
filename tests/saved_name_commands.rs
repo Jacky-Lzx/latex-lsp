@@ -1,9 +1,9 @@
 use latex_lsp::{
-    build,
+    compilation::build,
     config::BuildConfig,
-    features,
+    language::features,
+    project::workspace::{Document, Workspace},
     text::Text,
-    workspace::{Document, Workspace},
 };
 use lsp_types::*;
 use std::{collections::BTreeSet, sync::atomic::AtomicBool};
@@ -252,7 +252,7 @@ fn name_data_does_not_create_latex_declarations_labels_or_dependencies() {
     assert!(workspace.dependencies(&uri).is_empty());
     assert!(doc.syntax.environments.is_empty());
     assert_eq!(doc.syntax.commands.len(), 1);
-    let symbols = latex_lsp::navigation::workspace_symbols(&workspace, "");
+    let symbols = latex_lsp::language::navigation::workspace_symbols(&workspace, "");
     assert!(symbols.is_empty());
 }
 

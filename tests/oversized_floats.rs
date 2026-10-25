@@ -1,4 +1,4 @@
-use latex_lsp::build_log::{compilation_analysis, parse};
+use latex_lsp::compilation::build_log::{compilation_analysis, parse};
 use lsp_types::*;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -249,7 +249,8 @@ fn real_oversized_figures_and_tables_clear_after_resizing_child_content() {
                     "Normal.\n\\begin{figure}\\rule{1cm}{10pt}\\end{figure}\n",
                 );
                 std::fs::write(&child, source).unwrap();
-                let outcome = latex_lsp::build::run(&main, &config, &Default::default());
+                let outcome =
+                    latex_lsp::compilation::build::run(&main, &config, &Default::default());
                 assert_eq!(
                     outcome.status, "success",
                     "{engine}/{width}/{numbered}: {}",
@@ -299,7 +300,8 @@ fn real_oversized_figures_and_tables_clear_after_resizing_child_content() {
                     source.replace("1000pt", "10pt").replace("1100pt", "20pt"),
                 )
                 .unwrap();
-                let repaired = latex_lsp::build::run(&main, &config, &Default::default());
+                let repaired =
+                    latex_lsp::compilation::build::run(&main, &config, &Default::default());
                 assert_eq!(
                     repaired.status, "success",
                     "{engine}/{width}/{numbered}: {}",

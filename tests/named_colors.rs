@@ -1,7 +1,9 @@
 use latex_lsp::{
-    build, editing, features, semantic, signature,
+    compilation::build,
+    editing,
+    language::{features, semantic, signature},
+    project::workspace::{Document, Workspace},
     text::Text,
-    workspace::{Document, Workspace},
 };
 use lsp_types::*;
 use std::collections::BTreeMap;

@@ -1,6 +1,7 @@
 use latex_lsp::{
-    features, file_operations, navigation,
-    workspace::{Document, Workspace},
+    editing::file_operations,
+    language::{features, navigation},
+    project::workspace::{Document, Workspace},
 };
 use lsp_types::*;
 use std::{collections::BTreeSet, path::Path};

@@ -1,6 +1,6 @@
 use latex_lsp::{
-    code_lens,
-    workspace::{Document, Workspace},
+    language::code_lens,
+    project::workspace::{Document, Workspace},
 };
 use lsp_types::{Position, Range, Url};
 

@@ -1,4 +1,4 @@
-use latex_lsp::{build_log, text::Text};
+use latex_lsp::{compilation::build_log, text::Text};
 use lsp_types::*;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -270,7 +270,8 @@ fn real_unicode_input_errors_preserve_child_ranges_and_clear_after_explicit_mapp
                 let body = "\\begin{document}\n\\input{child}\n\\end{document}\n";
                 std::fs::write(&main, format!("{header}{body}")).unwrap();
                 std::fs::write(&child, source).unwrap();
-                let result = latex_lsp::build::run(&main, &config, &Default::default());
+                let result =
+                    latex_lsp::compilation::build::run(&main, &config, &Default::default());
                 let analysis = result.analysis.as_ref().unwrap();
                 if engine != "pdflatex" {
                     assert_eq!(
@@ -326,7 +327,8 @@ fn real_unicode_input_errors_preserve_child_ranges_and_clear_after_explicit_mapp
                 }
                 let mappings="\\DeclareUnicodeCharacter{4E2D}{Z}\n\\DeclareUnicodeCharacter{1F600}{G}\n\\DeclareUnicodeCharacter{1F469}{W}\n\\DeclareUnicodeCharacter{200D}{}\n\\DeclareUnicodeCharacter{1F4BB}{C}\n";
                 std::fs::write(&main, format!("{header}{mappings}{body}")).unwrap();
-                let repaired = latex_lsp::build::run(&main, &config, &Default::default());
+                let repaired =
+                    latex_lsp::compilation::build::run(&main, &config, &Default::default());
                 assert_eq!(
                     repaired.status, "success",
                     "{engine}/{width}/{numbered}: {}",

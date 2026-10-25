@@ -1,5 +1,8 @@
 use latex_lsp::{
-    features, file_operations, graphics, navigation, text::Text, workspace::Workspace,
+    editing::file_operations,
+    language::{features, navigation},
+    project::{graphics, workspace::Workspace},
+    text::Text,
 };
 use lsp_types::*;
 use std::{collections::BTreeMap, path::Path};
@@ -295,8 +298,11 @@ fn real_path_scope_and_batched_directory_and_root_moves_preserve_images() {
             };
             let main = uri(root, main_name);
             assert_eq!(targets(&workspace, &main), [uri(root, &path)], "{setting}");
-            let outcome =
-                latex_lsp::build::run(&root.join(main_name), &config, &Default::default());
+            let outcome = latex_lsp::compilation::build::run(
+                &root.join(main_name),
+                &config,
+                &Default::default(),
+            );
             assert_eq!(outcome.status, "success", "{setting}: {}", outcome.output);
             let inputs = outcome.inputs.unwrap();
             assert!(inputs.contains(&uri(root, &path)), "{setting}: {inputs:?}");

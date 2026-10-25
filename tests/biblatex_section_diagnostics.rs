@@ -1,4 +1,4 @@
-use latex_lsp::{editing, text::Text, workspace::Workspace};
+use latex_lsp::{editing, project::workspace::Workspace, text::Text};
 use lsp_types::*;
 
 fn setup(body: &str) -> (tempfile::TempDir, Workspace, Url) {
@@ -247,7 +247,11 @@ fn real_compiler_citation_repairs_use_each_sections_resources_and_clear_the_warn
         ),
         ..Default::default()
     };
-    let first = latex_lsp::build::run(&dir.path().join("main.tex"), &config, &Default::default());
+    let first = latex_lsp::compilation::build::run(
+        &dir.path().join("main.tex"),
+        &config,
+        &Default::default(),
+    );
     assert_eq!(first.status, "success", "{}", first.output);
     let warnings: Vec<_> = first.diagnostics[&main]
         .iter()
@@ -303,7 +307,11 @@ fn real_compiler_citation_repairs_use_each_sections_resources_and_clear_the_warn
     ws.open(main.clone(), updated.source, 6);
     ws.build_diagnostics.clear();
     assert!(citations(&ws, &main).is_empty());
-    let result = latex_lsp::build::run(&dir.path().join("main.tex"), &config, &Default::default());
+    let result = latex_lsp::compilation::build::run(
+        &dir.path().join("main.tex"),
+        &config,
+        &Default::default(),
+    );
     assert_eq!(result.status, "success", "{}", result.output);
     let output = std::process::Command::new("biber")
         .arg("main")
@@ -319,8 +327,11 @@ fn real_compiler_citation_repairs_use_each_sections_resources_and_clear_the_warn
     let biber = std::fs::read_to_string(dir.path().join("main.blg")).unwrap();
     assert!(!biber.contains("WARN"), "{biber}");
     for pass in 0..2 {
-        let result =
-            latex_lsp::build::run(&dir.path().join("main.tex"), &config, &Default::default());
+        let result = latex_lsp::compilation::build::run(
+            &dir.path().join("main.tex"),
+            &config,
+            &Default::default(),
+        );
         assert_eq!(result.status, "success", "{}", result.output);
         if pass == 1 {
             assert!(

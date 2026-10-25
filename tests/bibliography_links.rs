@@ -1,6 +1,6 @@
 use latex_lsp::{
-    navigation,
-    workspace::{Document, Workspace},
+    language::navigation,
+    project::workspace::{Document, Workspace},
 };
 use lsp_types::{DocumentLink, Position, Url};
 

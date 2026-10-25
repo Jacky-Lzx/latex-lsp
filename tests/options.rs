@@ -1,4 +1,4 @@
-use latex_lsp::{features, text::Text, workspace::Workspace};
+use latex_lsp::{language::features, project::workspace::Workspace, text::Text};
 use lsp_types::*;
 fn complete(marked: &str) -> Vec<CompletionItem> {
     let uri = Url::parse("file:///project/main.tex").unwrap();

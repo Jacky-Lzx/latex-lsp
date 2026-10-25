@@ -1,4 +1,7 @@
-use latex_lsp::{build, build_log, config::BuildConfig};
+use latex_lsp::{
+    compilation::{build, build_log},
+    config::BuildConfig,
+};
 use lsp_types::{DiagnosticSeverity, Url};
 use std::sync::atomic::AtomicBool;
 
@@ -205,5 +208,5 @@ fn real_generated_bibliography_warnings_keep_their_path_without_indexing_artifac
         outcome.diagnostics
     );
     assert!(!outcome.inputs.unwrap().contains(&uri));
-    assert!(!latex_lsp::workspace::is_source(&path));
+    assert!(!latex_lsp::project::workspace::is_source(&path));
 }

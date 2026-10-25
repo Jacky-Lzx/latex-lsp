@@ -1,4 +1,4 @@
-use latex_lsp::{file_operations, navigation, workspace::Workspace};
+use latex_lsp::{editing::file_operations, language::navigation, project::workspace::Workspace};
 use lsp_types::*;
 use std::path::Path;
 

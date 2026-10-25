@@ -1,9 +1,9 @@
 use latex_lsp::{
-    build, build_log,
+    compilation::{build, build_log},
     config::BuildConfig,
     editing,
+    project::workspace::{Document, Workspace},
     text::Text,
-    workspace::{Document, Workspace},
 };
 use lsp_types::*;
 use std::collections::BTreeMap;
@@ -187,7 +187,7 @@ fn model_errors_select_only_the_misspelled_model_and_restore_literal_color_previ
                 assert!(repair(&workspace, &uri, &error, "rpb").is_none());
                 let doc = Document::new(&uri, updated, Some(8));
                 if !call.starts_with("\\providecolor") && !call.starts_with("\\xdefinecolor") {
-                    let colors = latex_lsp::colors::document_colors(&doc);
+                    let colors = latex_lsp::language::colors::document_colors(&doc);
                     assert!(
                         colors.iter().any(|c| c.color.red == 0.2
                             && c.color.green == 0.4

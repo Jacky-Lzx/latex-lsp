@@ -1,7 +1,8 @@
 use latex_lsp::{
-    build, build_log, editing,
+    compilation::{build, build_log},
+    editing,
+    project::workspace::{Document, Workspace},
     text::Text,
-    workspace::{Document, Workspace},
 };
 use lsp_types::*;
 

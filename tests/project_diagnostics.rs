@@ -1,4 +1,4 @@
-use latex_lsp::workspace::{Document, Workspace};
+use latex_lsp::project::workspace::{Document, Workspace};
 use lsp_types::*;
 use std::path::Path;
 
@@ -282,7 +282,7 @@ fn duplicate_label_diagnostics_agree_with_real_compilation_and_clear_after_repai
     let child = uri(root, "chapter.tex");
     assert_eq!(cross_file(&workspace, &main).len(), 1);
     assert_eq!(cross_file(&workspace, &child).len(), 1);
-    let first = latex_lsp::build::run(
+    let first = latex_lsp::compilation::build::run(
         &root.join("main.tex"),
         &Default::default(),
         &Default::default(),
@@ -301,7 +301,7 @@ fn duplicate_label_diagnostics_agree_with_real_compilation_and_clear_after_repai
     workspace.reload(&child);
     assert!(cross_file(&workspace, &main).is_empty());
     assert!(cross_file(&workspace, &child).is_empty());
-    let repaired = latex_lsp::build::run(
+    let repaired = latex_lsp::compilation::build::run(
         &root.join("main.tex"),
         &Default::default(),
         &Default::default(),

@@ -1,4 +1,4 @@
-use latex_lsp::{build_log, editing, text::Text, workspace::Workspace};
+use latex_lsp::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 use lsp_types::*;
 
 const ERROR: &str = "Missing delimiter (. inserted).";
@@ -365,7 +365,7 @@ fn legacy_operand_fixes_reject_tampered_replacements_metadata_and_stale_sources(
 #[cfg(unix)]
 #[test]
 fn loaded_operand_parameters_and_primitive_redefinitions_are_rechecked() {
-    use latex_lsp::{build, config::BuildConfig};
+    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::os::unix::fs::PermissionsExt;
     for definition in [
         r"\def\consume{}",
@@ -419,7 +419,7 @@ fn loaded_operand_parameters_and_primitive_redefinitions_are_rechecked() {
 #[test]
 #[ignore = "requires pdfLaTeX, XeLaTeX and LuaLaTeX"]
 fn real_delimiter_operand_repairs_generate_pdf_and_clear_all_errors() {
-    use latex_lsp::{build, config::BuildConfig};
+    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::os::unix::fs::PermissionsExt;
     let cache = tempfile::tempdir().unwrap();
     for engine in ["pdflatex", "xelatex", "lualatex"] {

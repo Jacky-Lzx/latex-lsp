@@ -1,4 +1,4 @@
-use latex_lsp::{editing, workspace::Document};
+use latex_lsp::{editing, project::workspace::Document};
 use lsp_types::*;
 
 fn doc(name: &str, source: &str) -> Document {
@@ -538,7 +538,7 @@ fn punctuation_groups_cannot_cross_bibtex_literal_or_comment_boundaries() {
 
 #[test]
 fn bibtex_expression_selections_do_not_create_references_in_literals_or_malformed_values() {
-    use latex_lsp::{features, workspace::Workspace};
+    use latex_lsp::{language::features, project::workspace::Workspace};
     let source = "@string{Journal={Defined}}\r\n@misc{entry,title=Journal # {Journal} # \"Journal\",year=2026}\r\n@misc{invalid,title=Journal other}\r\n@comment{title=Journal}\r\n@preamble{\"Journal\" # Journal}\r\n";
     let document = doc("refs.bib", source);
     let uri = Url::parse("file:///selection-ranges/refs.bib").unwrap();

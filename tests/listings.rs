@@ -1,4 +1,9 @@
-use latex_lsp::{features, file_operations, navigation, text::Text, workspace::Workspace};
+use latex_lsp::{
+    editing::file_operations,
+    language::{features, navigation},
+    project::workspace::Workspace,
+    text::Text,
+};
 use lsp_types::*;
 use std::path::Path;
 
@@ -269,9 +274,12 @@ fn command_completion_and_signature_follow_one_optional_argument_without_a_star(
         let offset = marked.find('¦').unwrap();
         let source = marked.replace('¦', "");
         workspace.open(main.clone(), source.clone(), 1);
-        let help =
-            latex_lsp::signature::help(&workspace, &main, Text::new(source).position(offset))
-                .unwrap();
+        let help = latex_lsp::language::signature::help(
+            &workspace,
+            &main,
+            Text::new(source).position(offset),
+        )
+        .unwrap();
         assert_eq!(help.signatures[0].label, r"\lstinputlisting[options]{file}");
         assert_eq!(help.active_parameter, Some(active));
     }
@@ -282,10 +290,12 @@ fn command_completion_and_signature_follow_one_optional_argument_without_a_star(
         let offset = marked.find('¦').unwrap();
         let source = marked.replace('¦', "");
         workspace.open(main.clone(), source.clone(), 1);
-        assert!(
-            latex_lsp::signature::help(&workspace, &main, Text::new(source).position(offset))
-                .is_none()
-        );
+        assert!(latex_lsp::language::signature::help(
+            &workspace,
+            &main,
+            Text::new(source).position(offset)
+        )
+        .is_none());
     }
     workspace.open(main.clone(), r"\lstinputlis".into(), 1);
     assert!(

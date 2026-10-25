@@ -1,6 +1,6 @@
 use latex_lsp::{
     editing,
-    workspace::{Document, Workspace},
+    project::workspace::{Document, Workspace},
 };
 use lsp_types::*;
 use std::collections::BTreeMap;
@@ -252,7 +252,7 @@ fn legacy_closing_fixes_recheck_the_stack_and_document_version() {
 #[test]
 #[ignore = "requires pdflatex"]
 fn closing_name_fixes_repair_a_real_compiler_error() {
-    use latex_lsp::{build, config::BuildConfig};
+    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::sync::atomic::AtomicBool;
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
@@ -496,7 +496,7 @@ fn legacy_environment_fixes_revalidate_version_replacement_candidate_and_pair() 
 #[test]
 #[ignore = "requires pdflatex and amsmath"]
 fn paired_environment_spelling_fixes_turn_a_real_failed_build_into_a_successful_one() {
-    use latex_lsp::{build, config::BuildConfig};
+    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::sync::atomic::AtomicBool;
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();

@@ -1,8 +1,8 @@
 use latex_lsp::{
-    build_log,
+    compilation::build_log,
     config::{BibliographyBackend, BibliographyToolConfig, IndexToolConfig},
     editing,
-    workspace::Workspace,
+    project::workspace::Workspace,
 };
 use lsp_types::*;
 

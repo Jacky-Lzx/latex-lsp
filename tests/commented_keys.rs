@@ -1,7 +1,9 @@
 use latex_lsp::{
-    build_log, editing, features, semantic,
+    compilation::build_log,
+    editing,
+    language::{features, semantic},
+    project::workspace::{Document, Workspace},
     text::Text,
-    workspace::{Document, Workspace},
 };
 use lsp_types::*;
 
@@ -279,7 +281,7 @@ fn real_commented_citations_complete_and_rename_without_changing_comments_or_aux
         ..Default::default()
     };
     let compile = || {
-        let result = latex_lsp::build::run(&main, &config, &Default::default());
+        let result = latex_lsp::compilation::build::run(&main, &config, &Default::default());
         assert_eq!(result.status, "success", "{}", result.output);
         result
     };

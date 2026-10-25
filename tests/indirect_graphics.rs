@@ -1,5 +1,8 @@
 use latex_lsp::{
-    features, file_operations, graphics, navigation, text::Text, workspace::Workspace,
+    editing::file_operations,
+    language::{features, navigation},
+    project::{graphics, workspace::Workspace},
+    text::Text,
 };
 use lsp_types::*;
 use std::{collections::BTreeMap, path::Path};
@@ -241,8 +244,11 @@ fn real_image_aliases_keep_recorder_inputs_after_image_and_root_moves() {
                 targets(&workspace, &uri(root, main_name)).as_slice(),
                 std::slice::from_ref(&image)
             );
-            let outcome =
-                latex_lsp::build::run(&root.join(main_name), &config, &Default::default());
+            let outcome = latex_lsp::compilation::build::run(
+                &root.join(main_name),
+                &config,
+                &Default::default(),
+            );
             assert_eq!(outcome.status, "success", "{call}: {}", outcome.output);
             let inputs = outcome.inputs.unwrap();
             assert!(inputs.contains(&image), "{call}: {inputs:?}");
@@ -283,7 +289,11 @@ fn real_missing_alias_images_have_precise_diagnostics_and_repairable_names() {
             executable: "pdflatex".into(),
             ..Default::default()
         };
-        let outcome = latex_lsp::build::run(&root.join("main.tex"), &config, &Default::default());
+        let outcome = latex_lsp::compilation::build::run(
+            &root.join("main.tex"),
+            &config,
+            &Default::default(),
+        );
         assert_eq!(outcome.status, "error", "{call}: {}", outcome.output);
         let main = uri(root, "main.tex");
         let diagnostic = outcome.diagnostics[&main]
@@ -328,7 +338,11 @@ fn real_missing_alias_images_have_precise_diagnostics_and_repairable_names() {
             }])
             .unwrap();
         std::fs::write(root.join("main.tex"), &repaired.source).unwrap();
-        let outcome = latex_lsp::build::run(&root.join("main.tex"), &config, &Default::default());
+        let outcome = latex_lsp::compilation::build::run(
+            &root.join("main.tex"),
+            &config,
+            &Default::default(),
+        );
         assert_eq!(outcome.status, "success", "{call}: {}", outcome.output);
         assert!(outcome
             .inputs
@@ -561,8 +575,11 @@ fn real_dynamic_source_images_keep_navigation_and_build_inputs_after_moves() {
                     "plot.png"
                 },
             );
-            let outcome =
-                latex_lsp::build::run(&root.join("main.tex"), &config, &Default::default());
+            let outcome = latex_lsp::compilation::build::run(
+                &root.join("main.tex"),
+                &config,
+                &Default::default(),
+            );
             assert_eq!(outcome.status, "success", "{call}: {}", outcome.output);
             let inputs = outcome.inputs.unwrap();
             assert!(inputs.contains(&generated));

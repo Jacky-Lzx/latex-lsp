@@ -1,4 +1,8 @@
-use latex_lsp::{features, signature, text::Text, workspace::Workspace};
+use latex_lsp::{
+    language::{features, signature},
+    project::workspace::Workspace,
+    text::Text,
+};
 use lsp_types::*;
 
 fn project(source: &str) -> (tempfile::TempDir, Workspace, Url) {
@@ -320,7 +324,7 @@ fn direct_register_interface_completion_keeps_existing_grouped_and_bare_operands
 #[test]
 #[ignore = "requires pdflatex, xelatex, lualatex and etoolbox"]
 fn real_register_renames_preserve_type_checks_and_local_and_global_glue_assignments() {
-    use latex_lsp::{build, config::BuildConfig};
+    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::os::unix::fs::PermissionsExt;
 
     let source = concat!(

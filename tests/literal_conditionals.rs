@@ -1,4 +1,6 @@
-use latex_lsp::{build, features, text::Text, workspace::Workspace};
+use latex_lsp::{
+    compilation::build, language::features, project::workspace::Workspace, text::Text,
+};
 use lsp_types::*;
 use std::{path::Path, sync::atomic::AtomicBool};
 

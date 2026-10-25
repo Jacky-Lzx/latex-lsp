@@ -1,9 +1,10 @@
 use latex_lsp::{
-    build,
+    compilation::build,
     config::BuildConfig,
-    editing, features, navigation, signature,
+    editing,
+    language::{features, navigation, signature},
+    project::workspace::{Document, Workspace},
     text::Text,
-    workspace::{Document, Workspace},
 };
 use lsp_types::*;
 use std::sync::atomic::AtomicBool;

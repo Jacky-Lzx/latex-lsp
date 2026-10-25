@@ -1,4 +1,4 @@
-use latex_lsp::workspace::Workspace;
+use latex_lsp::project::workspace::Workspace;
 use lsp_types::*;
 
 fn setup(extra: &str, body: &str) -> (tempfile::TempDir, Workspace, Url) {

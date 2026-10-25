@@ -1,4 +1,9 @@
-use latex_lsp::{editing, features, semantic, signature, text::Text, workspace::Workspace};
+use latex_lsp::{
+    editing,
+    language::{features, semantic, signature},
+    project::workspace::Workspace,
+    text::Text,
+};
 use lsp_types::*;
 
 fn setup(source: &str, bibliography: &str) -> (Workspace, Url, Url) {
@@ -257,7 +262,7 @@ fn category_queries_do_not_create_missing_citation_warnings_or_claim_nested_ones
     let path = dir.path().join("main.tex");
     let uri = Url::from_file_path(&path).unwrap();
     std::fs::write(&path, source).unwrap();
-    let diagnostics = latex_lsp::build_log::parse(
+    let diagnostics = latex_lsp::compilation::build_log::parse(
         &path,
         "Package biblatex Warning: Citation 'missing' on page 1 undefined on input line 1.\n",
     );

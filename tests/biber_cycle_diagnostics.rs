@@ -1,4 +1,4 @@
-use latex_lsp::{build_log, editing, text::Text, workspace::Workspace};
+use latex_lsp::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 use lsp_types::*;
 use std::{collections::BTreeMap, path::Path};
 
@@ -386,7 +386,7 @@ fn real_biber_crossref_and_xdata_cycles_move_and_clear_after_repair() {
             let target=raw_key(data["key"].as_str().unwrap());
             let parent=raw_key(data["parent"].as_str().unwrap());
             let text=Text::new(current.clone());
-            let syntax=latex_lsp::syntax::Syntax::bibtex(&text);
+            let syntax=latex_lsp::parser::syntax::Syntax::bibtex(&text);
             let expected=if xdata {
                 let entry=syntax.citations.iter().find(|entry|entry.name==target).unwrap();
                 text.range(entry.span.start,entry.span.end)
@@ -419,7 +419,7 @@ fn real_biber_macro_mapped_and_alias_crossref_cycles_use_original_child_keys() {
         let item=&items[0];let data=item.data.as_ref().unwrap();
         let key=raw_key(data["key"].as_str().unwrap());
         let text=Text::new(source.into());
-        let syntax=latex_lsp::syntax::Syntax::bibtex(&text);
+        let syntax=latex_lsp::parser::syntax::Syntax::bibtex(&text);
         let entry=syntax.citations.iter().find(|entry|entry.name==key).unwrap();
         assert_eq!(item.range,text.range(entry.span.start,entry.span.end));
         assert_eq!(data["unresolvedField"],true);

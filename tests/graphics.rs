@@ -1,7 +1,11 @@
 use latex_lsp::{
-    features, file_operations, graphics, navigation,
+    editing::file_operations,
+    language::{features, navigation},
+    project::{
+        graphics,
+        workspace::{Document, Workspace},
+    },
     text::Text,
-    workspace::{Document, Workspace},
 };
 use lsp_types::*;
 use std::{collections::BTreeMap, path::Path};
@@ -191,7 +195,7 @@ fn graphics_directory_and_root_moves_still_compile() {
         "\\documentclass{article}\\begin{document}Image\\end{document}",
     )
     .unwrap();
-    let image_build = latex_lsp::build::run(
+    let image_build = latex_lsp::compilation::build::run(
         &image.path().join("image.tex"),
         &Default::default(),
         &Default::default(),
@@ -230,7 +234,7 @@ fn graphics_directory_and_root_moves_still_compile() {
         navigation::document_links(&workspace, &uri(root, "sections/child.tex"))[0].target,
         Some(uri(root, "new.images/plot.pdf"))
     );
-    let outcome = latex_lsp::build::run(
+    let outcome = latex_lsp::compilation::build::run(
         &main.to_file_path().unwrap(),
         &Default::default(),
         &Default::default(),
@@ -337,7 +341,7 @@ fn shared_graphics_paths_still_compile_after_both_roots_and_image_directories_mo
         "\\documentclass{article}\\begin{document}Image\\end{document}",
     )
     .unwrap();
-    let image_build = latex_lsp::build::run(
+    let image_build = latex_lsp::compilation::build::run(
         &image.path().join("image.tex"),
         &Default::default(),
         &Default::default(),
@@ -375,7 +379,7 @@ fn shared_graphics_paths_still_compile_after_both_roots_and_image_directories_mo
         assert!(navigation::document_links(&workspace, &main)
             .iter()
             .any(|link| link.target == Some(uri(root, &format!("{name}/pictures/plot.pdf")))));
-        let outcome = latex_lsp::build::run(
+        let outcome = latex_lsp::compilation::build::run(
             &main.to_file_path().unwrap(),
             &Default::default(),
             &Default::default(),

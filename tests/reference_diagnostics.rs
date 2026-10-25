@@ -1,4 +1,4 @@
-use latex_lsp::{editing, text::Text, workspace::Workspace};
+use latex_lsp::{editing, project::workspace::Workspace, text::Text};
 use lsp_types::*;
 
 #[test]

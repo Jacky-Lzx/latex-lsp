@@ -1,4 +1,4 @@
-use latex_lsp::{features, workspace::Workspace};
+use latex_lsp::{language::features, project::workspace::Workspace};
 use lsp_types::*;
 #[test]
 fn context_entry_assignments_participate_in_complete_key_renames() {
@@ -149,7 +149,7 @@ fn assignment_lists_complete_full_keys_and_signature_help_requires_exact_native_
         }
         let doc = &ws.documents[&main];
         let at = doc.text.source.find(&body).unwrap() + marked.find('¦').unwrap();
-        let help = latex_lsp::signature::help(&ws, &main, doc.text.position(at))
+        let help = latex_lsp::language::signature::help(&ws, &main, doc.text.position(at))
             .unwrap_or_else(|| panic!("{marked}"));
         assert_eq!(
             help.signatures[0].label,

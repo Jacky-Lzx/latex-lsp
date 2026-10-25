@@ -1,7 +1,7 @@
 use latex_lsp::{
-    features,
+    language::features,
+    project::workspace::{Document, Workspace},
     text::Text,
-    workspace::{Document, Workspace},
 };
 use lsp_types::*;
 
@@ -132,7 +132,7 @@ fn all_commands_and_stars_share_key_navigation_highlights_and_safe_renames() {
                 }
             }
             assert_eq!(
-                latex_lsp::semantic::tokens(doc, None)
+                latex_lsp::language::semantic::tokens(doc, None)
                     .unwrap()
                     .data
                     .iter()
@@ -212,7 +212,7 @@ fn command_snippets_preserve_existing_arguments_and_user_signatures_win() {
             .text
             .position(source.find("custom").unwrap() + 2);
         assert_eq!(
-            latex_lsp::signature::help(&workspace, &main, position)
+            latex_lsp::language::signature::help(&workspace, &main, position)
                 .unwrap()
                 .signatures[0]
                 .label,
@@ -237,7 +237,7 @@ fn signature_help_distinguishes_notes_and_keys_for_regular_and_starred_commands(
                 let position = workspace.documents[&main]
                     .text
                     .position(marked.find('¦').unwrap());
-                let help = latex_lsp::signature::help(&workspace, &main, position)
+                let help = latex_lsp::language::signature::help(&workspace, &main, position)
                     .unwrap_or_else(|| panic!("{marked}"));
                 assert_eq!(help.active_parameter, Some(active), "{marked}");
                 assert!(
@@ -322,7 +322,7 @@ fn missing_key_warnings_and_spelling_fixes_preserve_notes_and_prose() {
             )
             .unwrap();
             let uri = Url::from_file_path(&main).unwrap();
-            let diagnostics = latex_lsp::build_log::parse(&main, "Package biblatex Warning: Citation 'alphaa' on page 1 undefined on input line 2.\n");
+            let diagnostics = latex_lsp::compilation::build_log::parse(&main, "Package biblatex Warning: Citation 'alphaa' on page 1 undefined on input line 2.\n");
             let items = &diagnostics[&uri];
             assert_eq!(items.len(), 1, "{source}: {items:?}");
             let text = Text::new(source.clone());
@@ -412,7 +412,7 @@ fn real_biblatex_single_citations_resolve_after_bibliography_key_rename() {
     tex();
     let log = fs::read_to_string(directory.path().join("main.log")).unwrap();
     let uri = Url::from_file_path(&main).unwrap();
-    let diagnostics = latex_lsp::build_log::parse(&main, &log);
+    let diagnostics = latex_lsp::compilation::build_log::parse(&main, &log);
     let citations = diagnostics[&uri]
         .iter()
         .filter(|diagnostic| diagnostic.message.contains("Citation '"))

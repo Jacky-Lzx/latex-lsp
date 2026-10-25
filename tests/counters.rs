@@ -1,4 +1,8 @@
-use latex_lsp::{features, signature, text::Text, workspace::Workspace};
+use latex_lsp::{
+    language::{features, signature},
+    project::workspace::Workspace,
+    text::Text,
+};
 use lsp_types::*;
 
 fn setup(marked: &str) -> (tempfile::TempDir, Workspace, Url, Position) {
@@ -110,7 +114,7 @@ fn counter_completion_does_not_replace_declarations_values_formats_or_computed_n
 #[test]
 #[ignore = "requires pdflatex and amsmath"]
 fn selected_environment_and_counter_names_compile_after_replacing_old_argument_whitespace() {
-    use latex_lsp::{build, config::BuildConfig};
+    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::sync::atomic::AtomicBool;
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();

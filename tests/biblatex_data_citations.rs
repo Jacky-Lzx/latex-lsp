@@ -1,7 +1,7 @@
 use latex_lsp::{
-    features,
+    language::features,
+    project::workspace::{Document, Workspace},
     text::Text,
-    workspace::{Document, Workspace},
 };
 use lsp_types::*;
 
@@ -59,7 +59,8 @@ fn data_citations_index_only_keys_and_preserve_formats_fields_and_notes() {
             latex_lsp::editing::highlights(&workspace, &main, at).len(),
             1
         );
-        let semantic = latex_lsp::semantic::tokens(&workspace.documents[&main], None).unwrap();
+        let semantic =
+            latex_lsp::language::semantic::tokens(&workspace.documents[&main], None).unwrap();
         let mut line = 0;
         let mut character = 0;
         let mut keys = Vec::new();
@@ -126,7 +127,7 @@ fn data_citation_completion_and_signatures_follow_each_argument_role() {
             let at = workspace.documents[&main]
                 .text
                 .position(marked.find('¦').unwrap());
-            let help = latex_lsp::signature::help(&workspace, &main, at)
+            let help = latex_lsp::language::signature::help(&workspace, &main, at)
                 .unwrap_or_else(|| panic!("{marked}"));
             assert_eq!(help.active_parameter, Some(expected), "{marked}");
             assert_eq!(
@@ -192,7 +193,7 @@ fn data_citation_completion_and_signatures_follow_each_argument_role() {
             .text
             .position(source.find("custom").unwrap() + 2);
         assert_eq!(
-            latex_lsp::signature::help(&workspace, &main, at)
+            latex_lsp::language::signature::help(&workspace, &main, at)
                 .unwrap()
                 .signatures[0]
                 .label,
@@ -272,7 +273,7 @@ fn multiline_data_citation_warnings_and_spelling_fixes_target_keys_before_the_se
         let uri = Url::from_file_path(&main).unwrap();
         for line in [5, 6] {
             let log=format!("Package biblatex Warning: Citation 'alphaa' on page 1 undefined on input line {line}.\n");
-            let diagnostics = latex_lsp::build_log::parse(&main, &log);
+            let diagnostics = latex_lsp::compilation::build_log::parse(&main, &log);
             let items = &diagnostics[&uri];
             let text = Text::new(source.clone());
             let start = source.find("{alphaa}").unwrap() + 1;
@@ -416,7 +417,7 @@ fn real_data_citation_warnings_and_key_renames_compile_with_formats_and_key_list
     let log = fs::read_to_string(root.join("main.log")).unwrap();
     let uri = Url::from_file_path(&main).unwrap();
     let bib_uri = Url::from_file_path(&bib).unwrap();
-    let diagnostics = latex_lsp::build_log::parse(&main, &log);
+    let diagnostics = latex_lsp::compilation::build_log::parse(&main, &log);
     let citations = diagnostics[&uri]
         .iter()
         .filter(|d| d.message.contains("Citation '"))

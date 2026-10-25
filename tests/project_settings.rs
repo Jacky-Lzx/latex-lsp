@@ -1,6 +1,6 @@
 use latex_lsp::{
     config::{Engine, Formatter},
-    workspace::Workspace,
+    project::workspace::Workspace,
 };
 use lsp_types::*;
 

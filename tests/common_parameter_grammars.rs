@@ -1,4 +1,4 @@
-use latex_lsp::{features, workspace::Workspace};
+use latex_lsp::{language::features, project::workspace::Workspace};
 use lsp_types::*;
 
 fn setup(preamble: &str, body: &str) -> (Workspace, Url) {
@@ -139,7 +139,7 @@ fn repeated_parameter_grammars_preserve_independent_reference_navigation_and_edi
             .unwrap();
         assert_eq!(changes[&uri].len(), 2, "{preamble}: {call}");
         assert!(
-            latex_lsp::signature::help(
+            latex_lsp::language::signature::help(
                 &workspace,
                 &uri,
                 text.position(text.source.rfind(call).unwrap() + call.len() - 1)

@@ -1,4 +1,4 @@
-use latex_lsp::{build_log, editing, workspace::Workspace};
+use latex_lsp::{compilation::build_log, editing, project::workspace::Workspace};
 use lsp_types::*;
 use std::collections::BTreeMap;
 
@@ -242,7 +242,7 @@ fn incomplete_last_page_requests_preserve_following_source_boundaries() {
 #[test]
 #[ignore = "requires pdfLaTeX, XeLaTeX and LuaLaTeX"]
 fn real_last_page_requests_follow_shrinking_and_growing_documents_until_stable() {
-    use latex_lsp::{build, config::BuildConfig};
+    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::os::unix::fs::PermissionsExt;
 
     let cache = tempfile::tempdir().unwrap();
@@ -352,7 +352,7 @@ fn real_last_page_requests_follow_shrinking_and_growing_documents_until_stable()
 #[test]
 #[ignore = "requires pdfLaTeX, XeLaTeX, LuaLaTeX, natbib and longtable"]
 fn real_standard_requests_follow_cross_file_renames_and_table_changes_until_stable() {
-    use latex_lsp::{build, config::BuildConfig, features};
+    use latex_lsp::{compilation::build, config::BuildConfig, language::features};
     use std::os::unix::fs::PermissionsExt;
 
     let cache = tempfile::tempdir().unwrap();

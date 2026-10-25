@@ -1,7 +1,7 @@
 use latex_lsp::{
-    features, navigation,
+    language::{features, navigation},
+    project::workspace::{Document, Workspace},
     text::Text,
-    workspace::{Document, Workspace},
 };
 use lsp_types::{FoldingRangeKind, Position, Url};
 
@@ -228,7 +228,7 @@ fn real_hyperref_document_links_match_the_external_uri_annotations_in_the_pdf() 
         executable: "pdflatex".into(),
         ..Default::default()
     };
-    let result = latex_lsp::build::run(&main, &config, &Default::default());
+    let result = latex_lsp::compilation::build::run(&main, &config, &Default::default());
     assert_eq!(result.status, "success", "{}", result.output);
     let data = std::fs::read(config.artifact_path(&main, "pdf").unwrap()).unwrap();
     let pdf = String::from_utf8_lossy(&data);

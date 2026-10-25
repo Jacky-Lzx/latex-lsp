@@ -1,4 +1,4 @@
-use latex_lsp::build_log::{compilation_analysis, parse};
+use latex_lsp::compilation::build_log::{compilation_analysis, parse};
 use serde_json::json;
 
 #[test]

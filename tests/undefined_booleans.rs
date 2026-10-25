@@ -1,4 +1,4 @@
-use latex_lsp::{build_log, editing, text::Text, workspace::Workspace};
+use latex_lsp::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 use lsp_types::*;
 
 const HELP: &str = "\nSee the etoolbox package documentation for explanation.\nType  H <return>  for immediate help.\n ...\n\n";
@@ -359,7 +359,7 @@ fn builtin_boolean_repairs_are_available_only_for_readonly_unshadowed_conditions
 #[test]
 #[ignore = "requires pdflatex, xelatex, lualatex, ifthen and etoolbox"]
 fn real_boolean_repairs_preserve_scopes_branches_builtins_and_toggle_independence_in_all_engines() {
-    use latex_lsp::{build, config::BuildConfig};
+    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::os::unix::fs::PermissionsExt;
 
     let source = concat!(

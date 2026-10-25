@@ -1,4 +1,9 @@
-use latex_lsp::{features, file_operations, navigation, text::Text, workspace::Workspace};
+use latex_lsp::{
+    editing::file_operations,
+    language::{features, navigation},
+    project::workspace::Workspace,
+    text::Text,
+};
 use lsp_types::*;
 use std::path::Path;
 
@@ -437,9 +442,12 @@ fn signatures_follow_the_single_group_and_optional_star() {
         let offset = marked.find('¦').unwrap();
         let source = marked.replace('¦', "");
         workspace.open(main.clone(), source.clone(), 1);
-        let help =
-            latex_lsp::signature::help(&workspace, &main, Text::new(source).position(offset))
-                .unwrap();
+        let help = latex_lsp::language::signature::help(
+            &workspace,
+            &main,
+            Text::new(source).position(offset),
+        )
+        .unwrap();
         assert_eq!(help.active_parameter, Some(0), "{marked}");
         assert_eq!(help.signatures[0].label, r"\verbatiminput{file}");
     }
@@ -452,12 +460,18 @@ fn signatures_follow_the_single_group_and_optional_star() {
         let source = marked.replace('¦', "");
         workspace.open(main.clone(), source.clone(), 1);
         assert!(
-            latex_lsp::signature::help(&workspace, &main, Text::new(source).position(offset))
-                .is_none(),
+            latex_lsp::language::signature::help(
+                &workspace,
+                &main,
+                Text::new(source).position(offset)
+            )
+            .is_none(),
             "{marked}"
         );
     }
-    assert!(latex_lsp::catalog::COMMANDS.iter().any(
-        |(name, snippet, _)| *name == "verbatiminput" && *snippet == "verbatiminput{${1:file}}"
-    ));
+    assert!(latex_lsp::project::catalog::COMMANDS
+        .iter()
+        .any(
+            |(name, snippet, _)| *name == "verbatiminput" && *snippet == "verbatiminput{${1:file}}"
+        ));
 }

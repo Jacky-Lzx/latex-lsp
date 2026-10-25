@@ -1,6 +1,8 @@
 use latex_lsp::{
-    build_log, editing, features, file_operations, navigation,
-    workspace::{Document, Workspace},
+    compilation::build_log,
+    editing::{self, file_operations},
+    language::{features, navigation},
+    project::workspace::{Document, Workspace},
 };
 use lsp_types::*;
 

@@ -1,6 +1,6 @@
 use latex_lsp::{
     editing,
-    workspace::{Document, Workspace},
+    project::workspace::{Document, Workspace},
 };
 use lsp_types::*;
 use std::collections::BTreeMap;
@@ -568,7 +568,7 @@ fn legacy_counter_fixes_revalidate_versions_candidates_and_source_arguments() {
 #[test]
 #[ignore = "requires pdflatex"]
 fn counter_spelling_fixes_turn_a_real_failed_build_into_a_successful_one() {
-    use latex_lsp::{build, config::BuildConfig};
+    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::sync::atomic::AtomicBool;
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();

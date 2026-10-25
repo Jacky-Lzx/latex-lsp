@@ -1,4 +1,4 @@
-use latex_lsp::{editing, workspace::Workspace};
+use latex_lsp::{editing, project::workspace::Workspace};
 use lsp_types::Url;
 
 #[test]

@@ -1,4 +1,4 @@
-use latex_lsp::{build_log, editing, text::Text, workspace::Workspace};
+use latex_lsp::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 use lsp_types::*;
 
 const ERROR: &str = r"Extra \right.";
@@ -529,7 +529,7 @@ fn math_symbols_do_not_consume_following_right_calls_but_local_redefinitions_can
 #[cfg(unix)]
 #[test]
 fn loaded_macro_parameters_are_used_and_rechecked_before_right_delimiter_edits() {
-    use latex_lsp::{build, config::BuildConfig};
+    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::os::unix::fs::PermissionsExt;
     for definition in [
         r"\def\consume{}",
@@ -586,7 +586,7 @@ fn loaded_macro_parameters_are_used_and_rechecked_before_right_delimiter_edits()
 #[cfg(unix)]
 #[test]
 fn missing_right_repairs_recheck_loaded_parameter_and_primitive_definitions() {
-    use latex_lsp::{build, config::BuildConfig};
+    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::os::unix::fs::PermissionsExt;
     for definition in [
         r"\def\consume{}",
@@ -640,7 +640,7 @@ fn missing_right_repairs_recheck_loaded_parameter_and_primitive_definitions() {
 #[test]
 #[ignore = "requires pdfLaTeX, XeLaTeX and LuaLaTeX"]
 fn real_missing_right_repairs_compile_in_all_engines_and_recover_nested_groups() {
-    use latex_lsp::{build, config::BuildConfig};
+    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::os::unix::fs::PermissionsExt;
     let cache = tempfile::tempdir().unwrap();
     for engine in ["pdflatex", "xelatex", "lualatex"] {
@@ -742,7 +742,7 @@ fn real_missing_right_repairs_compile_in_all_engines_and_recover_nested_groups()
 #[test]
 #[ignore = "requires pdfLaTeX, XeLaTeX and LuaLaTeX"]
 fn real_right_delimiter_fixes_preserve_symbols_and_compile_in_all_engines() {
-    use latex_lsp::{build, config::BuildConfig};
+    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::os::unix::fs::PermissionsExt;
     let cache = tempfile::tempdir().unwrap();
     for engine in ["pdflatex", "xelatex", "lualatex"] {

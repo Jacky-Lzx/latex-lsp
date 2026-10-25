@@ -1,4 +1,4 @@
-use latex_lsp::{features, workspace::Workspace};
+use latex_lsp::{language::features, project::workspace::Workspace};
 use lsp_types::*;
 fn setup(body: &str, selected_text: &str) -> (tempfile::TempDir, Workspace, Url, Url, Url) {
     let dir = tempfile::tempdir().unwrap();

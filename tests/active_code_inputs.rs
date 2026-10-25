@@ -1,4 +1,4 @@
-use latex_lsp::{features, workspace::Workspace};
+use latex_lsp::{language::features, project::workspace::Workspace};
 use lsp_types::*;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -171,7 +171,7 @@ fn recorder_macro_providers_decide_whether_a_following_code_command_is_displayed
             std::fs::write(root.join("provider.tex"), &text).unwrap();
             workspace.documents.insert(
                 provider.clone(),
-                latex_lsp::workspace::Document::new(&provider, text, Some(5)),
+                latex_lsp::project::workspace::Document::new(&provider, text, Some(5)),
             );
             workspace
                 .recorded_inputs

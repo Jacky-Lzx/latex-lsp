@@ -1,4 +1,4 @@
-use latex_lsp::{build_log, text::Text};
+use latex_lsp::{compilation::build_log, text::Text};
 use lsp_types::{DiagnosticSeverity, NumberOrString, Url};
 
 fn wrap(message: &str, width: usize, newline: &str) -> String {

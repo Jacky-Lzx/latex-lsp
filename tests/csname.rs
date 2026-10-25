@@ -1,4 +1,9 @@
-use latex_lsp::{build, editing, features, signature, workspace::Workspace};
+use latex_lsp::{
+    compilation::build,
+    editing,
+    language::{features, signature},
+    project::workspace::Workspace,
+};
 use lsp_types::*;
 use std::{collections::BTreeMap, path::Path, sync::atomic::AtomicBool};
 

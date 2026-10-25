@@ -1,7 +1,9 @@
 use latex_lsp::{
-    build_log, editing, features, semantic,
+    compilation::build_log,
+    editing,
+    language::{features, semantic},
+    project::workspace::{Document, Workspace},
     text::Text,
-    workspace::{Document, Workspace},
 };
 use lsp_types::*;
 
@@ -440,7 +442,7 @@ fn real_commented_labels_complete_and_rename_while_spaced_labels_remain_distinct
         ..Default::default()
     };
     let compile = || {
-        let outcome = latex_lsp::build::run(&main, &config, &Default::default());
+        let outcome = latex_lsp::compilation::build::run(&main, &config, &Default::default());
         assert_eq!(outcome.status, "success", "{}", outcome.output);
         outcome
     };

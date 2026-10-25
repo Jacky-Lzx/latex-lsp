@@ -1,7 +1,7 @@
 use latex_lsp::{
-    features,
+    language::features,
+    project::workspace::{Document, Workspace},
     text::Text,
-    workspace::{Document, Workspace},
 };
 use lsp_types::*;
 
@@ -134,7 +134,7 @@ fn every_multicite_variant_indexes_only_keys_and_renames_from_each_group() {
                     2
                 );
             }
-            let tokens = latex_lsp::semantic::tokens(doc, None).unwrap();
+            let tokens = latex_lsp::language::semantic::tokens(doc, None).unwrap();
             assert_eq!(
                 tokens
                     .data
@@ -264,7 +264,7 @@ fn multicite_signatures_follow_global_notes_and_repeated_local_groups() {
         let position = workspace.documents[&main]
             .text
             .position(marked.find('¦').unwrap());
-        let help = latex_lsp::signature::help(&workspace, &main, position)
+        let help = latex_lsp::language::signature::help(&workspace, &main, position)
             .unwrap_or_else(|| panic!("{marked}"));
         assert_eq!(help.active_parameter, Some(active), "{marked}");
         assert!(help.signatures[0]
@@ -281,7 +281,7 @@ fn multicite_signatures_follow_global_notes_and_repeated_local_groups() {
             .text
             .position(marked.find('¦').unwrap());
         assert!(
-            latex_lsp::signature::help(&workspace, &main, position).is_none(),
+            latex_lsp::language::signature::help(&workspace, &main, position).is_none(),
             "{marked}"
         );
     }
@@ -299,7 +299,7 @@ fn multicite_signatures_follow_global_notes_and_repeated_local_groups() {
             .unwrap()
             + 2,
     );
-    let help = latex_lsp::signature::help(&workspace, &main, position).unwrap();
+    let help = latex_lsp::language::signature::help(&workspace, &main, position).unwrap();
     assert_eq!(help.signatures[0].label, r"\parencites{#1}");
 }
 
@@ -337,7 +337,7 @@ fn multicite_warnings_locate_repeated_keys_on_a_shared_engine_line() {
     let main = directory.path().join("main.tex");
     let source = "😀 \\parencites(note){typo,known}\n[typo]{typo}\n";
     std::fs::write(&main, source).unwrap();
-    let diagnostics = latex_lsp::build_log::parse(
+    let diagnostics = latex_lsp::compilation::build_log::parse(
         &main,
         "Package biblatex Warning: Citation 'typo' on page 1 undefined on input line 2.\n",
     );
@@ -365,7 +365,7 @@ fn comment_endlines_do_not_create_paragraphs_and_warning_lookahead_includes_the_
         workspace.documents[&uri].syntax.citation_references.len(),
         2
     );
-    let diagnostics = latex_lsp::build_log::parse(
+    let diagnostics = latex_lsp::compilation::build_log::parse(
         &main,
         "LaTeX Warning: Citation 'beta' on page 1 undefined on input line 4.\n",
     );
@@ -408,7 +408,7 @@ fn real_biblatex_multicites_resolve_again_after_a_cross_file_key_rename() {
     };
     tex();
     let log = fs::read_to_string(directory.path().join("main.log")).unwrap();
-    let diagnostics = latex_lsp::build_log::parse(&main, &log);
+    let diagnostics = latex_lsp::compilation::build_log::parse(&main, &log);
     let main_uri = Url::from_file_path(&main).unwrap();
     let text = Text::new(source.into());
     let citations = diagnostics[&main_uri]
@@ -457,7 +457,7 @@ fn multicite_citation_fixes_replace_only_the_confirmed_missing_key() {
     let source = "\\addbibresource{refs.bib}\\parencites(overall)[alphaa]{known}[alphaa]{alphaa}\n\\printbibliography\n";
     std::fs::write(&main, source).unwrap();
     let uri = Url::from_file_path(&main).unwrap();
-    let diagnostics = latex_lsp::build_log::parse(
+    let diagnostics = latex_lsp::compilation::build_log::parse(
         &main,
         "LaTeX Warning: Citation 'alphaa' on page 1 undefined on input line 2.\n",
     );

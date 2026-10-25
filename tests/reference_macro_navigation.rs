@@ -1,4 +1,7 @@
-use latex_lsp::{build, config::BuildConfig, editing, features, text::Text, workspace::Workspace};
+use latex_lsp::{
+    compilation::build, config::BuildConfig, editing, language::features,
+    project::workspace::Workspace, text::Text,
+};
 use lsp_types::*;
 use std::sync::atomic::AtomicBool;
 fn setup(source: &str) -> (Workspace, Url) {

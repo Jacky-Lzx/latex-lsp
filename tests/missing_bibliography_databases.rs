@@ -1,4 +1,4 @@
-use latex_lsp::{build_log, editing, text::Text, workspace::Workspace};
+use latex_lsp::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 use lsp_types::*;
 use std::path::Path;
 
@@ -309,8 +309,13 @@ fn default_latexmk_preserves_prebuilt_bibliographies_and_reports_missing_databas
                 engine: latex_lsp::config::Engine::from_program(engine),
                 ..Default::default()
             };
-            let run =
-                || latex_lsp::build::run(&root.join("main.tex"), &config, &Default::default());
+            let run = || {
+                latex_lsp::compilation::build::run(
+                    &root.join("main.tex"),
+                    &config,
+                    &Default::default(),
+                )
+            };
             let outcome = run();
             assert_eq!(outcome.status, "success", "{}", outcome.output);
             assert!(outcome.pdf.as_ref().is_some_and(|pdf| pdf.is_file()));

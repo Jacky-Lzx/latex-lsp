@@ -1,6 +1,6 @@
 #![cfg(unix)]
 use latex_lsp::{
-    build,
+    compilation::build,
     config::{BuildConfig, Config, IndexToolConfig},
 };
 use std::{

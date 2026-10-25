@@ -1,7 +1,9 @@
 use latex_lsp::{
-    build, features, file_operations, navigation,
+    compilation::build,
+    editing::file_operations,
+    language::{features, navigation},
+    project::workspace::{Document, Workspace},
     text::Text,
-    workspace::{Document, Workspace},
 };
 use lsp_types::*;
 use std::path::Path;
@@ -110,7 +112,7 @@ fn bibtex_style_syntax_is_not_misreported_as_latex_and_bibtex_errors_keep_style_
     assert!(workspace.diagnostics(&style).is_empty());
     workspace.open(style.clone(), "\\sec".into(), 1);
     assert!(features::completion(&workspace, &style, Position::new(0, 4)).is_empty());
-    let diagnostics = latex_lsp::build_log::parse_bibliography(
+    let diagnostics = latex_lsp::compilation::build_log::parse_bibliography(
         &root.join("main.tex"),
         "unknownFunction is an unknown function---line 2 of file local.bst\n",
     );

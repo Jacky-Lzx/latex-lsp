@@ -1,4 +1,7 @@
-use latex_lsp::{build, build_log, text::Text};
+use latex_lsp::{
+    compilation::{build, build_log},
+    text::Text,
+};
 use lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Url};
 use std::path::Path;
 

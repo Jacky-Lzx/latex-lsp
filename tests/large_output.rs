@@ -1,6 +1,6 @@
 #![cfg(unix)]
 
-use latex_lsp::{build, config::BuildConfig};
+use latex_lsp::{compilation::build, config::BuildConfig};
 use lsp_types::{DiagnosticSeverity, Url};
 use std::{io::Write, os::unix::fs::PermissionsExt, sync::atomic::AtomicBool};
 

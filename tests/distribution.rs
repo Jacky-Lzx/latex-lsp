@@ -1,6 +1,8 @@
 use latex_lsp::{
-    config::DistributionConfig, distribution::Distribution, features, navigation, signature,
-    text::Text, workspace::Workspace,
+    config::DistributionConfig,
+    language::{features, navigation, signature},
+    project::{distribution::Distribution, workspace::Workspace},
+    text::Text,
 };
 use lsp_types::*;
 

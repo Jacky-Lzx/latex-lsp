@@ -1,4 +1,4 @@
-use latex_lsp::{features, text::Text, workspace::Workspace};
+use latex_lsp::{language::features, project::workspace::Workspace, text::Text};
 use lsp_types::*;
 
 fn setup(source: &str) -> (Workspace, Url) {
@@ -231,7 +231,7 @@ fn patch_signatures_keep_native_prefix_command_and_code_boundaries() {
             let marked = format!("% 😀\r\n\\def\\forward{{\\{name}}}{call}{tail}");
             let (workspace, uri) = setup(&marked.replace('¦', ""));
             let text = &workspace.documents[&uri].text;
-            let help = latex_lsp::signature::help(
+            let help = latex_lsp::language::signature::help(
                 &workspace,
                 &uri,
                 text.position(marked.find('¦').unwrap()),

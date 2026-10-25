@@ -1,4 +1,4 @@
-use latex_lsp::{build_log, text::Text};
+use latex_lsp::{compilation::build_log, text::Text};
 use lsp_types::{DiagnosticSeverity, NumberOrString, Url};
 
 const HELP: &str = "\nSee the LaTeX manual or LaTeX Companion for explanation.\nType  H <return>  for immediate help.\n ...                                              \n                                                  \n";
@@ -244,7 +244,7 @@ fn environment_diagnostics_ignore_comments_verbatim_dynamic_names_and_end_argume
 #[cfg(unix)]
 #[ignore = "requires pdflatex, xelatex and lualatex"]
 fn real_engines_pinpoint_environment_names_and_keep_macro_expansion_errors_on_the_call_line() {
-    use latex_lsp::{build, config::BuildConfig};
+    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::{os::unix::fs::PermissionsExt, sync::atomic::AtomicBool};
     for engine in ["pdflatex", "xelatex", "lualatex"] {
         for numbered in [false, true] {

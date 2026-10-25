@@ -1,4 +1,6 @@
-use latex_lsp::{features, file_operations, text::Text, workspace::Workspace};
+use latex_lsp::{
+    editing::file_operations, language::features, project::workspace::Workspace, text::Text,
+};
 use lsp_types::*;
 
 fn setup(body: &str) -> (tempfile::TempDir, Workspace, Url, String) {
@@ -42,7 +44,7 @@ fn tokenized_resource_names_never_link_comment_parameter_or_translated_source_sp
                 let (dir, ws, main, source) = setup(&body);
                 let false_uri = Url::from_file_path(dir.path().join(false_name)).unwrap();
                 assert!(!ws.project_files(&main).contains(&false_uri), "{source}");
-                let links = latex_lsp::navigation::document_links(&ws, &main);
+                let links = latex_lsp::language::navigation::document_links(&ws, &main);
                 assert!(
                     links
                         .iter()
@@ -229,7 +231,7 @@ fn real_precollected_spelling_is_not_the_native_resource_name() {
             r"\usepackage{{biblatex}}\def\future{{\addbibresource{{{argument}}}}}\future\begin{{document}}Text.\end{{document}}"
         );
         let (dir, ws, main, _) = setup(&body);
-        let links = latex_lsp::navigation::document_links(&ws, &main);
+        let links = latex_lsp::language::navigation::document_links(&ws, &main);
         assert!(
             links.iter().all(|link| link
                 .target

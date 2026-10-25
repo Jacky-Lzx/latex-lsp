@@ -1,6 +1,9 @@
 use latex_lsp::{
-    build_log, editing, features, file_operations, navigation, signature, text::Text,
-    workspace::Workspace,
+    compilation::build_log,
+    editing::{self, file_operations},
+    language::{features, navigation, signature},
+    project::workspace::Workspace,
+    text::Text,
 };
 use lsp_types::*;
 use std::path::Path;
@@ -368,8 +371,11 @@ fn real_variant_missing_fixes_compile_wrapped_paths_with_both_engines() {
                     executable: engine.into(),
                     ..Default::default()
                 };
-                let first =
-                    latex_lsp::build::run(&root.join("main.tex"), &config, &Default::default());
+                let first = latex_lsp::compilation::build::run(
+                    &root.join("main.tex"),
+                    &config,
+                    &Default::default(),
+                );
                 assert_eq!(
                     first.status, "error",
                     "{engine}/{command}/{wrong}: {}",
@@ -410,8 +416,11 @@ fn real_variant_missing_fixes_compile_wrapped_paths_with_both_engines() {
                 };
                 let updated = apply(&source, edits(fix.edit.as_ref().unwrap(), &main));
                 std::fs::write(root.join("main.tex"), updated).unwrap();
-                let fixed =
-                    latex_lsp::build::run(&root.join("main.tex"), &config, &Default::default());
+                let fixed = latex_lsp::compilation::build::run(
+                    &root.join("main.tex"),
+                    &config,
+                    &Default::default(),
+                );
                 assert_eq!(
                     fixed.status, "success",
                     "{engine}/{command}/{right}: {}",
@@ -455,7 +464,7 @@ fn real_mixed_execution_keeps_labels_and_excludes_other_displayed_sources() {
                     r"\documentclass{{article}}\usepackage{{fancyvrb,verbatim,listings}}\renewcommand{{\familydefault}}{{\ttdefault}}\begin{{document}}\{display}{{commands.tex}}\{display}{{display.tex}}\{execute}[commandchars={commandchars}]{{commands.tex}}\ref{{executedlabel}}\end{{document}}"
                 );
                 std::fs::write(root.join("main.tex"), &source).unwrap();
-                let outcome = latex_lsp::build::run(
+                let outcome = latex_lsp::compilation::build::run(
                     &root.join("main.tex"),
                     &latex_lsp::config::BuildConfig {
                         executable: engine.into(),

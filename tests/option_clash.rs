@@ -1,4 +1,7 @@
-use latex_lsp::{build, build_log, text::Text};
+use latex_lsp::{
+    compilation::{build, build_log},
+    text::Text,
+};
 use lsp_types::{DiagnosticSeverity, NumberOrString, Url};
 
 const HELP: &str = "\nSee the LaTeX manual or LaTeX Companion for explanation.\nType  H <return>  for immediate help.\n ...                                              \n                                                  \n";

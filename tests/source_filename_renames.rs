@@ -1,4 +1,6 @@
-use latex_lsp::{file_operations, navigation, text::Text, workspace::Workspace};
+use latex_lsp::{
+    editing::file_operations, language::navigation, project::workspace::Workspace, text::Text,
+};
 use lsp_types::*;
 use std::{collections::BTreeMap, path::Path};
 
@@ -246,8 +248,11 @@ fn real_source_file_renames_preserve_exact_inputs_across_engines_and_input_forms
                     executable: compiler.to_string_lossy().into(),
                     ..Default::default()
                 };
-                let before =
-                    latex_lsp::build::run(&root.join("main.tex"), &config, &Default::default());
+                let before = latex_lsp::compilation::build::run(
+                    &root.join("main.tex"),
+                    &config,
+                    &Default::default(),
+                );
                 assert_eq!(
                     before.status, "success",
                     "{engine}/{call}: {}",
@@ -278,8 +283,11 @@ fn real_source_file_renames_preserve_exact_inputs_across_engines_and_input_forms
                 )
                 .unwrap();
                 file_operations::did_rename(&mut workspace, &files).unwrap();
-                let after =
-                    latex_lsp::build::run(&root.join("main.tex"), &config, &Default::default());
+                let after = latex_lsp::compilation::build::run(
+                    &root.join("main.tex"),
+                    &config,
+                    &Default::default(),
+                );
                 assert_eq!(
                     after.status, "success",
                     "{engine}/{call}/{new}: {}",

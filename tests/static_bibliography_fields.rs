@@ -1,4 +1,4 @@
-use latex_lsp::{config::Config, text::Text, workspace::Workspace};
+use latex_lsp::{config::Config, project::workspace::Workspace, text::Text};
 use lsp_types::*;
 
 const CODE: &str = "repeated-bibliography-field";

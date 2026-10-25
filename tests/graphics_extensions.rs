@@ -1,5 +1,8 @@
 use latex_lsp::{
-    features, file_operations, graphics, navigation, text::Text, workspace::Workspace,
+    editing::file_operations,
+    language::{features, navigation},
+    project::{graphics, workspace::Workspace},
+    text::Text,
 };
 use lsp_types::*;
 use std::{collections::BTreeMap, path::Path};
@@ -280,7 +283,7 @@ fn real_declared_extensions_keep_the_selected_images_after_batched_moves() {
         r"\documentclass{article}\begin{document}Figure\end{document}",
     )
     .unwrap();
-    let outcome = latex_lsp::build::run(
+    let outcome = latex_lsp::compilation::build::run(
         &drawing.path().join("drawing.tex"),
         &config,
         &Default::default(),
@@ -327,8 +330,11 @@ fn real_declared_extensions_keep_the_selected_images_after_batched_moves() {
             targets(&workspace, &uri(root, "child.tex")).as_slice(),
             std::slice::from_ref(&selected)
         );
-        let outcome =
-            latex_lsp::build::run(&main.to_file_path().unwrap(), &config, &Default::default());
+        let outcome = latex_lsp::compilation::build::run(
+            &main.to_file_path().unwrap(),
+            &config,
+            &Default::default(),
+        );
         assert_eq!(outcome.status, "success", "{}", outcome.output);
         let inputs = outcome.inputs.unwrap();
         assert!(inputs.contains(&selected));
@@ -567,7 +573,7 @@ fn real_global_settings_match_tex_and_preserve_images_after_renaming() {
         r"\documentclass{article}\begin{document}Figure\end{document}",
     )
     .unwrap();
-    let graphic = latex_lsp::build::run(
+    let graphic = latex_lsp::compilation::build::run(
         &drawing.path().join("drawing.tex"),
         &config,
         &Default::default(),
@@ -655,8 +661,11 @@ fn real_global_settings_match_tex_and_preserve_images_after_renaming() {
                 std::slice::from_ref(&selected),
                 "{setting}"
             );
-            let outcome =
-                latex_lsp::build::run(&root.join("main.tex"), &config, &Default::default());
+            let outcome = latex_lsp::compilation::build::run(
+                &root.join("main.tex"),
+                &config,
+                &Default::default(),
+            );
             assert_eq!(outcome.status, "success", "{setting}: {}", outcome.output);
             let inputs = outcome.inputs.unwrap();
             assert!(inputs.contains(&selected), "{setting}: {inputs:?}");

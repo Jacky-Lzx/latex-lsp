@@ -1,4 +1,4 @@
-use latex_lsp::{features, text::Text, workspace::Workspace};
+use latex_lsp::{language::features, project::workspace::Workspace, text::Text};
 use lsp_types::*;
 
 fn setup(files: &[(&str, &str)]) -> (tempfile::TempDir, Workspace, Url) {
@@ -337,7 +337,7 @@ fn selection_removes_only_one_tex_suffix_and_preserves_distinct_chapter_names() 
 #[test]
 #[ignore = "requires pdflatex, xelatex, lualatex and etoolbox"]
 fn real_selected_chapters_preserve_boolean_states_and_renames_in_three_engines() {
-    use latex_lsp::{build, config::BuildConfig};
+    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::os::unix::fs::PermissionsExt;
 
     for engine in ["pdflatex", "xelatex", "lualatex"] {

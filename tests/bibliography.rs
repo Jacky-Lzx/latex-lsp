@@ -1,7 +1,8 @@
 use latex_lsp::{
-    editing, features,
+    editing,
+    language::features,
+    project::workspace::{Document, Workspace},
     text::Text,
-    workspace::{Document, Workspace},
 };
 use lsp_types::*;
 
@@ -127,7 +128,7 @@ fn citation_note_boundaries_keep_prose_out_of_key_edits() {
             assert!(features::rename(&workspace, &main, at, "renamed")
                 .unwrap()
                 .is_none());
-            assert!(latex_lsp::signature::help(&workspace, &main, at).is_none());
+            assert!(latex_lsp::language::signature::help(&workspace, &main, at).is_none());
             assert!(!features::completion(&workspace, &main, at)
                 .iter()
                 .any(|item| item.label == "parent"));
@@ -166,7 +167,7 @@ fn excess_citation_notes_do_not_steal_another_calls_warning() {
     let source = "😀 \\citep[see][p.~2][surplus]{paretn} \\citep[see [nested]]{paretn} \\citep[see [literal][p.~2]{paretn}\n";
     std::fs::write(&main, source).unwrap();
     let log = "(./main.tex\nPackage natbib Warning: Citation `paretn' on page 1 undefined on input line 1.\n)\n";
-    let diagnostics = latex_lsp::build_log::parse(&main, log);
+    let diagnostics = latex_lsp::compilation::build_log::parse(&main, log);
     let items = &diagnostics[&uri];
     assert_eq!(items.len(), 1, "{items:?}");
     let start = source.rfind("{paretn}").unwrap() + 1;
@@ -201,7 +202,7 @@ fn real_natbib_note_boundaries_preserve_prose_when_valid_keys_are_renamed() {
             ..Default::default()
         };
         let compile = || {
-            let outcome = latex_lsp::build::run(&main, &config, &Default::default());
+            let outcome = latex_lsp::compilation::build::run(&main, &config, &Default::default());
             assert_eq!(outcome.status, "success", "{}", outcome.output);
             outcome
         };
@@ -313,7 +314,7 @@ fn full_citation_warnings_select_keys_including_stars_and_preserve_notes() {
         "😀 \\fullcite[see paretn][p.~2]{paretn} \\footfullcite{paretn} \\fullcite*{paretn}\n";
     std::fs::write(&main, source).unwrap();
     let log = "(./main.tex\nPackage biblatex Warning: Citation 'paretn' on page 1 undefined on input line 1.\n)\n";
-    let diagnostics = latex_lsp::build_log::parse(&main, log);
+    let diagnostics = latex_lsp::compilation::build_log::parse(&main, log);
     let items = &diagnostics[&uri];
     assert_eq!(items.len(), 3, "{items:?}");
     let text = Text::new(source.into());
@@ -403,7 +404,7 @@ fn natbib_alias_setters_do_not_receive_another_calls_missing_citation_diagnostic
     let source = "😀 \\defcitealias{paretn}{Display paretn}\\Citealp{paretn}\\citetalias{paretn}\n";
     std::fs::write(&main, source).unwrap();
     let log = "(./main.tex\nPackage natbib Warning: Citation `paretn' on page 1 undefined on input line 1.\n)\n";
-    let diagnostics = latex_lsp::build_log::parse(&main, log);
+    let diagnostics = latex_lsp::compilation::build_log::parse(&main, log);
     let items = &diagnostics[&uri];
     assert_eq!(items.len(), 2, "{items:?}");
     let text = Text::new(source.into());
@@ -443,7 +444,7 @@ fn real_natbib_citation_fixes_and_alias_renames_preserve_text_and_compile_cleanl
         ..Default::default()
     };
     let compile = || {
-        let outcome = latex_lsp::build::run(&main, &config, &Default::default());
+        let outcome = latex_lsp::compilation::build::run(&main, &config, &Default::default());
         assert_eq!(outcome.status, "success", "{}", outcome.output);
         outcome
     };
@@ -639,7 +640,7 @@ fn real_multiline_citation_completion_and_bibitem_rename_compile_cleanly() {
         ..Default::default()
     };
     let compile = || {
-        let result = latex_lsp::build::run(&main, &config, &Default::default());
+        let result = latex_lsp::compilation::build::run(&main, &config, &Default::default());
         assert_eq!(result.status, "success", "{}", result.output);
         assert!(result.pdf.as_ref().is_some_and(|path| path.is_file()));
         result
@@ -783,7 +784,7 @@ fn real_bibtex_crossrefs_still_compile_after_parent_entry_rename() {
     .changes
     .unwrap();
     std::fs::write(&bib, apply(source, edits[&bib_uri].clone())).unwrap();
-    let outcome = latex_lsp::build::run(
+    let outcome = latex_lsp::compilation::build::run(
         &main,
         &latex_lsp::config::BuildConfig::default(),
         &std::sync::atomic::AtomicBool::new(false),

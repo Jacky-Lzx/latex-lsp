@@ -1,4 +1,4 @@
-use latex_lsp::build_log;
+use latex_lsp::compilation::build_log;
 use lsp_types::{NumberOrString, Url};
 
 #[test]

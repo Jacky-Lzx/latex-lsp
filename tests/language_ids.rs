@@ -1,7 +1,8 @@
 use latex_lsp::{
-    features, file_operations,
+    editing::file_operations,
+    language::features,
+    project::workspace::{DocumentKind, Workspace},
     text::Text,
-    workspace::{DocumentKind, Workspace},
 };
 use lsp_types::*;
 
@@ -37,7 +38,7 @@ fn supporting_sources_are_discovered_and_explicit_inputs_keep_project_scope_and_
             workspace.documents[&uri(&unused_name)].kind,
             DocumentKind::Latex
         );
-        let symbols = latex_lsp::navigation::workspace_symbols(&workspace, "unusedstyle");
+        let symbols = latex_lsp::language::navigation::workspace_symbols(&workspace, "unusedstyle");
         assert_eq!(symbols.len(), 1);
         assert_eq!(symbols[0].location.uri, uri(&unused_name));
         let main = uri("a.tex");
@@ -56,7 +57,7 @@ fn supporting_sources_are_discovered_and_explicit_inputs_keep_project_scope_and_
         };
         assert_eq!(edit.new_text, "shared{${1:arg1}}");
         assert_eq!(
-            latex_lsp::signature::help(&workspace, &main, text.position(source.len()))
+            latex_lsp::language::signature::help(&workspace, &main, text.position(source.len()))
                 .unwrap()
                 .signatures[0]
                 .label,

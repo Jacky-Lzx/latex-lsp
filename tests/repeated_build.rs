@@ -1,4 +1,4 @@
-use latex_lsp::{build, config::BuildConfig};
+use latex_lsp::{compilation::build, config::BuildConfig};
 use lsp_types::{DiagnosticSeverity, Url};
 use std::{path::Path, sync::atomic::AtomicBool};
 

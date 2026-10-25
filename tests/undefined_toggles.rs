@@ -1,4 +1,4 @@
-use latex_lsp::{build_log, editing, text::Text, workspace::Workspace};
+use latex_lsp::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 use lsp_types::*;
 
 const HELP: &str = "\nSee the etoolbox package documentation for explanation.\nType  H <return>  for immediate help.\n ...\n\n";
@@ -312,7 +312,7 @@ fn toggle_fixes_recheck_versions_operands_candidate_types_and_macro_sources() {
 #[test]
 #[ignore = "requires pdflatex, xelatex, lualatex and etoolbox"]
 fn real_toggle_repairs_preserve_scopes_branches_and_boolean_independence_in_all_engines() {
-    use latex_lsp::{build, config::BuildConfig};
+    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::os::unix::fs::PermissionsExt;
 
     let source = concat!(

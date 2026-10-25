@@ -1,4 +1,4 @@
-use latex_lsp::{build_log, text::Text};
+use latex_lsp::{compilation::build_log, text::Text};
 use lsp_types::{DiagnosticSeverity, NumberOrString, Url};
 
 const GAP: &str = "[latex-lsp: middle of compiler output omitted]";
@@ -57,7 +57,9 @@ fn numbered_sources_after_a_truncation_still_confirm_their_own_locations() {
 #[cfg(unix)]
 #[test]
 fn real_bounded_compiler_streams_and_logs_do_not_borrow_root_fixes_after_omission() {
-    use latex_lsp::{build, config::BuildConfig, editing, workspace::Workspace};
+    use latex_lsp::{
+        compilation::build, config::BuildConfig, editing, project::workspace::Workspace,
+    };
     use lsp_types::{CodeActionContext, CodeActionKind};
     use std::{io::Write, os::unix::fs::PermissionsExt};
     for channel in ["stdout", "log"] {

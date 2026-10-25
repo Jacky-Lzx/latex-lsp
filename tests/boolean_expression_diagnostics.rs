@@ -1,4 +1,4 @@
-use latex_lsp::{build_log, editing, text::Text, workspace::Workspace};
+use latex_lsp::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 use lsp_types::*;
 
 const ERROR: &str = "Package etoolbox Error: Invalid boolean expression.";
@@ -494,7 +494,7 @@ fn expression_fixes_revalidate_tests_candidates_versions_and_readonly_builtins()
 #[test]
 #[ignore = "requires pdflatex, xelatex, lualatex and etoolbox"]
 fn real_expression_repairs_preserve_logic_loops_literals_and_wrapped_names_in_all_engines() {
-    use latex_lsp::{build, config::BuildConfig};
+    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::os::unix::fs::PermissionsExt;
 
     let long_name = format!("{}draft", "audit".repeat(16));
@@ -715,7 +715,7 @@ fn copied_string_tests_keep_boolean_expression_errors_on_the_executable_sibling(
         )
         .unwrap();
         std::fs::set_permissions(&compiler, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let outcome = latex_lsp::build::run(
+        let outcome = latex_lsp::compilation::build::run(
             &main,
             &latex_lsp::config::BuildConfig {
                 executable: compiler.to_string_lossy().into(),

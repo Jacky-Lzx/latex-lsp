@@ -1,4 +1,4 @@
-use latex_lsp::{semantic, workspace::Document};
+use latex_lsp::{language::semantic, project::workspace::Document};
 use lsp_types::*;
 
 fn document(name: &str, source: &str) -> Document {

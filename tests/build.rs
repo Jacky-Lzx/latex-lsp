@@ -1,4 +1,4 @@
-use latex_lsp::{build, config::BuildConfig, workspace::Workspace};
+use latex_lsp::{compilation::build, config::BuildConfig, project::workspace::Workspace};
 use lsp_types::{DiagnosticSeverity, Url};
 use std::{
     sync::{
@@ -10,7 +10,7 @@ use std::{
 
 #[test]
 fn invalid_reported_lines_never_borrow_names_or_ranges_from_clamped_source_lines() {
-    use latex_lsp::{build_log, text::Text};
+    use latex_lsp::{compilation::build_log, text::Text};
     use lsp_types::{Position, Range};
     let directory = tempfile::tempdir().unwrap();
     let main = directory.path().join("main.tex");
@@ -70,9 +70,10 @@ fn valid_and_zero_line_warnings_both_survive_parsing_and_publication() {
             .concat();
         let mut workspace = Workspace::default();
         workspace.open(uri.clone(), source.into(), 1);
-        workspace
-            .build_diagnostics
-            .insert(uri.clone(), latex_lsp::build_log::parse(&main, &log));
+        workspace.build_diagnostics.insert(
+            uri.clone(),
+            latex_lsp::compilation::build_log::parse(&main, &log),
+        );
         let diagnostics = workspace.diagnostics(&uri);
         assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
         assert_eq!(
@@ -97,7 +98,7 @@ fn valid_and_zero_line_warnings_both_survive_parsing_and_publication() {
 
 #[test]
 fn unresolved_numbered_sources_do_not_borrow_warning_ranges_or_codes_from_the_root() {
-    use latex_lsp::{build_log, text::Text};
+    use latex_lsp::{compilation::build_log, text::Text};
     use lsp_types::{NumberOrString, Position, Range};
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
@@ -165,7 +166,7 @@ fn trusted_and_unresolved_numbered_warnings_do_not_suppress_each_other() {
             let log = names
                 .map(|name| format!("./{name}:1: {message}\n"))
                 .concat();
-            let diagnostics = latex_lsp::build_log::parse(&main, &log);
+            let diagnostics = latex_lsp::compilation::build_log::parse(&main, &log);
             let items = &diagnostics[&Url::from_file_path(&main).unwrap()];
             assert_eq!(items.len(), 2, "{log}");
             assert_eq!(items.iter().filter(|item| item.code.is_some()).count(), 1);
@@ -255,7 +256,7 @@ fn real_pdfbookmark_levels_match_actual_targets_across_engines_and_duplicate_war
                 })
                 .collect();
             assert_eq!(warnings.len(), 2, "{engine}: {:?}", outcome.diagnostics);
-            let doc = latex_lsp::workspace::Document::new(
+            let doc = latex_lsp::project::workspace::Document::new(
                 &Url::from_file_path(&main).unwrap(),
                 duplicated,
                 None,
@@ -341,7 +342,7 @@ fn real_duplicate_destinations_include_automatic_collisions_and_long_compound_de
         };
         let outcome = build::run(&main, &config, &Default::default());
         assert_eq!(outcome.status, "success", "{engine}: {}", outcome.output);
-        let doc = latex_lsp::workspace::Document::new(
+        let doc = latex_lsp::project::workspace::Document::new(
             &Url::from_file_path(&main).unwrap(),
             source.clone(),
             None,
@@ -450,8 +451,11 @@ fn real_long_destination_warnings_recover_names_and_wrapped_explanatory_words() 
         };
         let outcome = build::run(&main, &config, &Default::default());
         assert_eq!(outcome.status, "success", "{engine}: {}", outcome.output);
-        let doc =
-            latex_lsp::workspace::Document::new(&Url::from_file_path(&main).unwrap(), source, None);
+        let doc = latex_lsp::project::workspace::Document::new(
+            &Url::from_file_path(&main).unwrap(),
+            source,
+            None,
+        );
         let warnings: Vec<_> = outcome
             .diagnostics
             .values()
@@ -515,7 +519,7 @@ fn real_destination_warnings_locate_links_and_clear_after_repair() {
         };
         let outcome = build::run(&main, &config, &Default::default());
         assert_eq!(outcome.status, "success", "{engine}: {}", outcome.output);
-        let document = latex_lsp::workspace::Document::new(
+        let document = latex_lsp::project::workspace::Document::new(
             &Url::from_file_path(&main).unwrap(),
             source.into(),
             None,
@@ -628,7 +632,11 @@ fn custom_job_names_locate_pdf_logs_recorder_inputs_and_synctex_for_all_tex_engi
         workspace.config.build = config;
         workspace.add_root(root.into());
         assert!(
-            latex_lsp::synctex::prepare(&workspace, &Url::from_file_path(&main).unwrap()).is_ok(),
+            latex_lsp::compilation::synctex::prepare(
+                &workspace,
+                &Url::from_file_path(&main).unwrap()
+            )
+            .is_ok(),
             "{executable}"
         );
         assert!(!root.join("build/latex-lsp/main.pdf").exists());
@@ -1089,7 +1097,7 @@ fn auxiliary_directory_preparation_does_not_guess_redefined_indirect_includes() 
 
 #[test]
 fn engine_directives_use_the_root_comment_and_respect_explicit_configuration() {
-    use latex_lsp::{config::Engine, workspace::Document};
+    use latex_lsp::{config::Engine, project::workspace::Document};
     let directory = tempfile::tempdir().unwrap();
     let main = directory.path().join("main.tex");
     let uri = Url::from_file_path(&main).unwrap();
@@ -1355,7 +1363,7 @@ fn root_magic_comments_inside_verbatim_are_ignored() {
     workspace.add_root(directory.path().into());
     let uri = Url::from_file_path(&main).unwrap();
     assert_eq!(workspace.root_document(&uri).unwrap(), uri);
-    assert!(latex_lsp::navigation::document_links(&workspace, &uri).is_empty());
+    assert!(latex_lsp::language::navigation::document_links(&workspace, &uri).is_empty());
 }
 
 #[test]
@@ -1623,8 +1631,8 @@ fn real_hyperref_urls_with_percent_escapes_compile_without_syntax_errors() {
     let source = "\\documentclass{article}\n\\usepackage{hyperref}\n\\begin{document}\n\\url{https://example.com/a%20b?x=some_value}\n\\href{https://example.com/a%20b#section}{\\textbf{Link}}\n\\end{document}\n";
     std::fs::write(&main, source).unwrap();
     let uri = Url::from_file_path(&main).unwrap();
-    let document = latex_lsp::workspace::Document::new(&uri, source.into(), Some(1));
-    assert!(latex_lsp::features::diagnostics(&document).is_empty());
+    let document = latex_lsp::project::workspace::Document::new(&uri, source.into(), Some(1));
+    assert!(latex_lsp::language::features::diagnostics(&document).is_empty());
     let config = BuildConfig {
         executable: "pdflatex".into(),
         ..Default::default()
@@ -1942,13 +1950,13 @@ fn real_hyperref_warnings_select_bracketed_labels_and_clear_after_repair() {
                 "\\hyperref{https://example.com/a%20b?x=some_value#section}{sec:itnro}{sec:itnro}{URL}\n",
             );
             std::fs::write(&chapter, source).unwrap();
-            let document = latex_lsp::workspace::Document::new(
+            let document = latex_lsp::project::workspace::Document::new(
                 &Url::from_file_path(&chapter).unwrap(),
                 source.into(),
                 None,
             );
             assert!(
-                latex_lsp::features::diagnostics(&document).is_empty(),
+                latex_lsp::language::features::diagnostics(&document).is_empty(),
                 "{:?}",
                 document.syntax.diagnostics
             );
@@ -2444,11 +2452,14 @@ fn real_fancyverb_internal_customizations_keep_executed_labels_as_source() {
                 .recorded_inputs
                 .insert(main_uri.clone(), outcome.inputs.unwrap());
             assert!(workspace.project_documents(&main_uri).contains(&code));
-            assert!(latex_lsp::navigation::document_links(&workspace, &main_uri).is_empty());
+            assert!(
+                latex_lsp::language::navigation::document_links(&workspace, &main_uri).is_empty()
+            );
             workspace.open(main_uri.clone(), source.clone(), 7);
             let position = latex_lsp::text::Text::new(source.clone())
                 .position(source.rfind("executedlabel").unwrap());
-            let definitions = latex_lsp::features::definitions(&workspace, &main_uri, position);
+            let definitions =
+                latex_lsp::language::features::definitions(&workspace, &main_uri, position);
             assert_eq!(definitions.len(), 1, "{engine}: {definitions:?}");
             assert_eq!(definitions[0].uri, code);
         }

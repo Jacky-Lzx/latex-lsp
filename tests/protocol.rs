@@ -5057,7 +5057,7 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main
                     .unwrap();
                 let text = latex_lsp::text::Text::new(current.clone());
                 let range = if stage == 2 || reason == "missing-entryset" {
-                    let syntax = latex_lsp::syntax::Syntax::bibtex(&text);
+                    let syntax = latex_lsp::parser::syntax::Syntax::bibtex(&text);
                     let entry = syntax
                         .citations
                         .iter()
@@ -5221,7 +5221,7 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main
                 assert_eq!(item["severity"], 1);
                 assert_eq!(item["message"], format!("Biber: {message}"));
                 let text = latex_lsp::text::Text::new(current.clone());
-                let syntax = latex_lsp::syntax::Syntax::bibtex(&text);
+                let syntax = latex_lsp::parser::syntax::Syntax::bibtex(&text);
                 let entry = syntax
                     .citations
                     .iter()
@@ -10979,7 +10979,8 @@ fn real_latexmk_refreshes_preexisting_pdf_then_reuses_it_after_identical_saves()
     let main = Url::from_file_path(&main_path).unwrap();
     let source = "\\documentclass{article}\n\\begin{document}\nHello, world.\n\\end{document}\n";
     std::fs::write(&main_path, source).unwrap();
-    let initial = latex_lsp::build::run(&main_path, &Default::default(), &Default::default());
+    let initial =
+        latex_lsp::compilation::build::run(&main_path, &Default::default(), &Default::default());
     assert_eq!(initial.status, "success", "{}", initial.output);
     let existing_pdf = initial.pdf.unwrap();
     let modified = std::fs::metadata(existing_pdf).unwrap().modified().unwrap();
@@ -12670,7 +12671,7 @@ fn real_synctex_round_trip_handles_spaces_and_rejects_unsaved_or_stale_sources()
     )
     .unwrap();
     let image_build =
-        latex_lsp::build::run(&image_source, &Default::default(), &Default::default());
+        latex_lsp::compilation::build::run(&image_source, &Default::default(), &Default::default());
     assert_eq!(image_build.status, "success", "{}", image_build.output);
     let directory = tempfile::tempdir().unwrap();
     let folder = directory.path().join("project with spaces");
@@ -28692,8 +28693,8 @@ fn code_action_resolution_supports_syntax_quickfixes_and_source_fix_all() {
                 &edit.new_text,
             );
         }
-        let doc = latex_lsp::workspace::Document::new(&uri, corrected, Some(2));
-        assert!(latex_lsp::features::diagnostics(&doc).is_empty());
+        let doc = latex_lsp::project::workspace::Document::new(&uri, corrected, Some(2));
+        assert!(latex_lsp::language::features::diagnostics(&doc).is_empty());
     }
     server.request(id, "shutdown", Value::Null);
     server.notify("exit", Value::Null);

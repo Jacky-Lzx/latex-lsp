@@ -1,4 +1,4 @@
-use latex_lsp::{build_log, editing, workspace::Workspace};
+use latex_lsp::{compilation::build_log, editing, project::workspace::Workspace};
 use lsp_types::*;
 
 const CONFIRMED: &[&str] = &[
@@ -403,7 +403,7 @@ fn real_file_changes_request_rebuild_until_the_next_unchanged_pass() {
 #[test]
 #[ignore = "requires pdfLaTeX, XeLaTeX, LuaLaTeX and hyperref"]
 fn real_backreferences_request_rebuild_after_citation_pages_change_and_clear_when_stable() {
-    use latex_lsp::{build, config::BuildConfig};
+    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::os::unix::fs::PermissionsExt;
 
     let cache = tempfile::tempdir().unwrap();

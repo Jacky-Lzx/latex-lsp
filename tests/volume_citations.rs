@@ -1,7 +1,7 @@
 use latex_lsp::{
-    features,
+    language::features,
+    project::workspace::{Document, Workspace},
     text::Text,
-    workspace::{Document, Workspace},
 };
 use lsp_types::*;
 
@@ -155,7 +155,7 @@ fn all_volume_commands_and_stars_index_only_key_lists_and_preserve_notes_and_tra
                 }
             }
             assert_eq!(
-                latex_lsp::semantic::tokens(doc, None)
+                latex_lsp::language::semantic::tokens(doc, None)
                     .unwrap()
                     .data
                     .iter()
@@ -363,7 +363,7 @@ fn volume_signatures_track_each_argument_and_wait_for_missing_required_fields() 
         let position = workspace.documents[&main]
             .text
             .position(marked.find('¦').unwrap());
-        let help = latex_lsp::signature::help(&workspace, &main, position)
+        let help = latex_lsp::language::signature::help(&workspace, &main, position)
             .unwrap_or_else(|| panic!("{marked}"));
         assert_eq!(help.active_parameter, Some(active), "{marked}: {help:?}");
         assert!(
@@ -383,7 +383,7 @@ fn volume_signatures_track_each_argument_and_wait_for_missing_required_fields() 
             .text
             .position(marked.find('¦').unwrap());
         assert!(
-            latex_lsp::signature::help(&workspace, &main, position).is_none(),
+            latex_lsp::language::signature::help(&workspace, &main, position).is_none(),
             "{marked}"
         );
     }
@@ -425,7 +425,7 @@ fn volume_command_snippets_supply_volume_and_keys_and_preserve_existing_calls_an
         .text
         .position(source.find("custom").unwrap() + 2);
     assert_eq!(
-        latex_lsp::signature::help(&workspace, &main, position)
+        latex_lsp::language::signature::help(&workspace, &main, position)
             .unwrap()
             .signatures[0]
             .label,
@@ -443,7 +443,7 @@ fn volume_citation_warnings_and_spelling_fixes_target_keys_across_the_lookahead_
         let bib = directory.path().join("refs.bib");
         std::fs::write(&bib, "@book{alpha,title={Alpha}}").unwrap();
         let line = if repeated { 4 } else { 3 };
-        let diagnostics = latex_lsp::build_log::parse(
+        let diagnostics = latex_lsp::compilation::build_log::parse(
             &main,
             &format!(
                 "LaTeX Warning: Citation 'alphaa' on page 1 undefined on input line {line}.\n"
@@ -557,7 +557,7 @@ fn volume_signature_aliases_keep_their_reader_and_independent_volume_macro_navig
     let position = workspace.documents[&main]
         .text
         .position(source.rfind("alpha").unwrap() + 2);
-    let help = latex_lsp::signature::help(&workspace, &main, position).unwrap();
+    let help = latex_lsp::language::signature::help(&workspace, &main, position).unwrap();
     assert_eq!(
         help.signatures[0].label,
         r"\alias[prenote]{volume}[pages]{keys}"
@@ -617,7 +617,7 @@ fn real_volume_citations_all_variants_resolve_after_a_bibliography_key_rename() 
     tex();
     let log = fs::read_to_string(directory.path().join("main.log")).unwrap();
     let uri = Url::from_file_path(&main).unwrap();
-    let diagnostics = latex_lsp::build_log::parse(&main, &log);
+    let diagnostics = latex_lsp::compilation::build_log::parse(&main, &log);
     let citations = diagnostics[&uri]
         .iter()
         .filter(|diagnostic| diagnostic.message.contains("Citation '"))

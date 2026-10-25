@@ -1,7 +1,7 @@
 use latex_lsp::{
-    features, navigation, semantic, signature,
+    language::{features, navigation, semantic, signature},
+    project::workspace::{Document, Workspace},
     text::Text,
-    workspace::{Document, Workspace},
 };
 use lsp_types::*;
 
@@ -533,7 +533,7 @@ fn real_inline_forms_preserve_native_labels_inputs_and_header_commands_after_ren
             assert!(updated.contains(literal));
             assert!(updated.contains("\\ref{renamedlabel}"));
             std::fs::write(root.join("main.tex"), &updated).unwrap();
-            let outcome = latex_lsp::build::run(
+            let outcome = latex_lsp::compilation::build::run(
                 &root.join("main.tex"),
                 &latex_lsp::config::BuildConfig {
                     executable: engine.into(),

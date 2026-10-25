@@ -1,7 +1,8 @@
 use latex_lsp::{
-    build_log, editing,
+    compilation::build_log,
+    editing,
+    project::workspace::{Document, Workspace},
     text::Text,
-    workspace::{Document, Workspace},
 };
 use lsp_types::*;
 use serde_json::json;
@@ -392,7 +393,7 @@ fn real_special_character_fixes_repair_child_sources_without_changing_valid_tex(
                 "\\verb|Verbatim & #|\n",
             );
             std::fs::write(&child, source).unwrap();
-            let outcome = latex_lsp::build::run(&main, &config, &Default::default());
+            let outcome = latex_lsp::compilation::build::run(&main, &config, &Default::default());
             assert_eq!(
                 outcome.status, "error",
                 "{engine}/{width}: {}",
@@ -441,7 +442,7 @@ fn real_special_character_fixes_repair_child_sources_without_changing_valid_tex(
             }
             assert!(fixed.ends_with("Escaped \\& and \\#.\nEscaped \\_ and \\textasciicircum{}. $x_1^2$\n\\begin{tabular}{ll}A & B\\end{tabular}\n% Comment & #\n\\verb|Verbatim & #|\n"));
             std::fs::write(&child, fixed).unwrap();
-            let repaired = latex_lsp::build::run(&main, &config, &Default::default());
+            let repaired = latex_lsp::compilation::build::run(&main, &config, &Default::default());
             assert_eq!(
                 repaired.status, "success",
                 "{engine}/{width}: {}",
@@ -595,7 +596,8 @@ fn real_extra_alignment_tabs_repair_tables_arrays_and_raw_alignments() {
                         "\\begin{tabular}{ll}Legal & Escaped \\&\\\\\\end{tabular}\n",
                     );
                     std::fs::write(&child, source).unwrap();
-                    let outcome = latex_lsp::build::run(&main, &config, &Default::default());
+                    let outcome =
+                        latex_lsp::compilation::build::run(&main, &config, &Default::default());
                     assert_eq!(
                         outcome.status, "error",
                         "{engine}/{width}/{verbose}/{numbered}: {}",
@@ -650,7 +652,8 @@ fn real_extra_alignment_tabs_repair_tables_arrays_and_raw_alignments() {
                     assert!(fixed
                         .ends_with("\\begin{tabular}{ll}Legal & Escaped \\&\\\\\\end{tabular}\n"));
                     std::fs::write(&child, fixed).unwrap();
-                    let repaired = latex_lsp::build::run(&main, &config, &Default::default());
+                    let repaired =
+                        latex_lsp::compilation::build::run(&main, &config, &Default::default());
                     assert_eq!(
                         repaired.status, "success",
                         "{engine}/{width}/{verbose}/{numbered}: {}",
@@ -666,7 +669,8 @@ fn real_extra_alignment_tabs_repair_tables_arrays_and_raw_alignments() {
                         r"\def\bad#1#2{&}\begin{tabular}{ll}A & B\bad x& C\\\end{tabular}",
                     )
                     .unwrap();
-                    let macro_error = latex_lsp::build::run(&main, &config, &Default::default());
+                    let macro_error =
+                        latex_lsp::compilation::build::run(&main, &config, &Default::default());
                     assert_eq!(macro_error.status, "error");
                     assert!(
                         macro_error
@@ -941,7 +945,8 @@ fn real_extra_closing_brace_deletions_repair_text_math_and_explicit_groups() {
                     );
                     let source = format!("{{Valid}} {}First extra}} then Second extra}} tail.\n$a extra}} b$\n\\begingroup text extra}}\\endgroup\n$\\left(a extra}} b\\right)$\n{legal}","long prefix ".repeat(20));
                     std::fs::write(&child, &source).unwrap();
-                    let outcome = latex_lsp::build::run(&main, &config, &Default::default());
+                    let outcome =
+                        latex_lsp::compilation::build::run(&main, &config, &Default::default());
                     assert_eq!(
                         outcome.status, "error",
                         "{engine}/{width}/{numbered}/{verbose}: {}",
@@ -1002,7 +1007,8 @@ fn real_extra_closing_brace_deletions_repair_text_math_and_explicit_groups() {
                     }
                     assert!(fixed.ends_with(legal));
                     std::fs::write(&child, &fixed).unwrap();
-                    let repaired = latex_lsp::build::run(&main, &config, &Default::default());
+                    let repaired =
+                        latex_lsp::compilation::build::run(&main, &config, &Default::default());
                     assert_eq!(
                         repaired.status, "success",
                         "{engine}/{width}/{numbered}/{verbose}: {}",
@@ -1014,7 +1020,8 @@ fn real_extra_closing_brace_deletions_repair_text_math_and_explicit_groups() {
                         .flatten()
                         .all(|item| item.severity != Some(DiagnosticSeverity::ERROR)));
                     std::fs::write(&child, r"\def\bad{\egroup}\bad").unwrap();
-                    let macro_error = latex_lsp::build::run(&main, &config, &Default::default());
+                    let macro_error =
+                        latex_lsp::compilation::build::run(&main, &config, &Default::default());
                     assert_eq!(macro_error.status, "error");
                     assert!(
                         macro_error.diagnostics.values().flatten().all(
@@ -1225,7 +1232,8 @@ fn real_double_script_empty_bases_repair_inline_display_and_grouped_scripts() {
                     );
                     let source=format!("{}$x_1_2$ and $y^1^2$ and $z_{{ab}}_{{cd}}$ and $w^{{ab}}^{{cd}}$ and $a_1_2_3$\n\\[d_1_2\\]\n$q_1% preserve comment\n _2$\n{legal}","long prefix ".repeat(20));
                     std::fs::write(&child, &source).unwrap();
-                    let outcome = latex_lsp::build::run(&main, &config, &Default::default());
+                    let outcome =
+                        latex_lsp::compilation::build::run(&main, &config, &Default::default());
                     assert_eq!(
                         outcome.status, "error",
                         "{engine}/{width}/{numbered}/{verbose}: {}",
@@ -1277,7 +1285,8 @@ fn real_double_script_empty_bases_repair_inline_display_and_grouped_scripts() {
                     assert!(fixed.contains("$q_1% preserve comment\n {}_2$"));
                     assert!(fixed.ends_with(legal));
                     std::fs::write(&child, fixed).unwrap();
-                    let repaired = latex_lsp::build::run(&main, &config, &Default::default());
+                    let repaired =
+                        latex_lsp::compilation::build::run(&main, &config, &Default::default());
                     assert_eq!(
                         repaired.status, "success",
                         "{engine}/{width}/{numbered}/{verbose}: {}",
@@ -1294,7 +1303,7 @@ fn real_double_script_empty_bases_repair_inline_display_and_grouped_scripts() {
                     ] {
                         std::fs::write(&child, source).unwrap();
                         let macro_error =
-                            latex_lsp::build::run(&main, &config, &Default::default());
+                            latex_lsp::compilation::build::run(&main, &config, &Default::default());
                         assert_eq!(macro_error.status, "error");
                         assert!(macro_error.diagnostics.values().flatten().all(|item|!matches!(item.code.as_ref(),Some(NumberOrString::String(code)) if matches!(code.as_str(),"double-subscript"|"double-superscript"))),"{engine}/{width}/{numbered}/{verbose}: {:?}",macro_error.diagnostics);
                     }

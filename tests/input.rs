@@ -1,4 +1,9 @@
-use latex_lsp::{build, editing, features, file_operations, navigation, workspace::Workspace};
+use latex_lsp::{
+    compilation::build,
+    editing::{self, file_operations},
+    language::{features, navigation},
+    project::workspace::Workspace,
+};
 use lsp_types::*;
 use std::path::Path;
 
@@ -202,7 +207,7 @@ fn bare_input_renames_add_braces_for_spaces_and_preserve_existing_quotes() {
 fn bare_input_selection_ranges_respect_utf16_and_eof_and_macro_paths_remain_unresolved() {
     for source in ["😀 \\input 中文", "\\input\"中文 file\"", "{\\input 中文 }"] {
         let uri = Url::parse("file:///input/main.tex").unwrap();
-        let doc = latex_lsp::workspace::Document::new(&uri, source.into(), Some(1));
+        let doc = latex_lsp::project::workspace::Document::new(&uri, source.into(), Some(1));
         let offset = source.find("中文").unwrap();
         let selections = editing::selection_ranges(&doc, &[doc.text.position(offset)]).unwrap();
         let mut current = &selections[0];
@@ -224,7 +229,7 @@ fn bare_input_selection_ranges_respect_utf16_and_eof_and_macro_paths_remain_unre
         "{\\input chapter}",
     ] {
         let text = latex_lsp::text::Text::new(source.into());
-        let syntax = latex_lsp::syntax::Syntax::latex(&text);
+        let syntax = latex_lsp::parser::syntax::Syntax::latex(&text);
         assert!(
             syntax
                 .commands

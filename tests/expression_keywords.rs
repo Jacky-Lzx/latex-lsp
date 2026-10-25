@@ -1,4 +1,6 @@
-use latex_lsp::{build_log, editing, features, text::Text, workspace::Workspace};
+use latex_lsp::{
+    compilation::build_log, editing, language::features, project::workspace::Workspace, text::Text,
+};
 use lsp_types::*;
 use std::collections::BTreeMap;
 
@@ -269,7 +271,7 @@ fn comment_spelling_in_macro_tests_and_malformed_keywords_stays_unlocated() {
 #[test]
 #[ignore = "requires pdflatex, xelatex, lualatex and etoolbox"]
 fn real_commented_keywords_preserve_cross_file_renames_and_compile_repairs_in_three_engines() {
-    use latex_lsp::{build, config::BuildConfig};
+    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::os::unix::fs::PermissionsExt;
 
     let original = concat!(

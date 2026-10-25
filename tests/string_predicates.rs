@@ -1,4 +1,9 @@
-use latex_lsp::{features, signature, syntax::Syntax, text::Text, workspace::Workspace};
+use latex_lsp::{
+    language::{features, signature},
+    parser::syntax::Syntax,
+    project::workspace::Workspace,
+    text::Text,
+};
 use lsp_types::*;
 
 fn workspace(source: &str) -> (tempfile::TempDir, Workspace, Url) {
@@ -327,7 +332,7 @@ fn string_literal_files_stay_out_of_project_dependencies_and_rename_results() {
 #[test]
 #[ignore = "requires pdflatex, xelatex, lualatex and etoolbox"]
 fn real_string_tests_keep_branches_tokens_and_cross_file_rename_results_in_three_engines() {
-    use latex_lsp::{build, config::BuildConfig};
+    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::os::unix::fs::PermissionsExt;
 
     let original = concat!(

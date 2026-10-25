@@ -1,7 +1,8 @@
 use latex_lsp::{
-    build, features,
+    compilation::build,
+    language::features,
+    project::workspace::{Document, Workspace},
     text::Text,
-    workspace::{Document, Workspace},
 };
 use lsp_types::*;
 use std::sync::atomic::AtomicBool;

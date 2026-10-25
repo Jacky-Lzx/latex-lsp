@@ -1,4 +1,7 @@
-use latex_lsp::{features, signature, workspace::Workspace};
+use latex_lsp::{
+    language::{features, signature},
+    project::workspace::Workspace,
+};
 use lsp_types::*;
 
 fn setup(source: &str) -> (Workspace, Url) {

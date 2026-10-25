@@ -1,5 +1,8 @@
 use latex_lsp::{
-    features, file_operations, graphics, navigation, text::Text, workspace::Workspace,
+    editing::file_operations,
+    language::{features, navigation},
+    project::{graphics, workspace::Workspace},
+    text::Text,
 };
 use lsp_types::*;
 use std::{collections::BTreeMap, path::Path};
@@ -486,7 +489,8 @@ fn real_quoted_images_compile_after_moves_and_missing_filename_repairs() {
                     targets(&workspace, &main).as_slice(),
                     std::slice::from_ref(&image)
                 );
-                let outcome = latex_lsp::build::run(&path, &config, &Default::default());
+                let outcome =
+                    latex_lsp::compilation::build::run(&path, &config, &Default::default());
                 assert_eq!(
                     outcome.status, "success",
                     "{engine}/{argument}: {}",
@@ -517,7 +521,7 @@ fn real_quoted_images_compile_after_moves_and_missing_filename_repairs() {
                 .replace(r#""assets/chart image.png""#, missing);
             assert!(source.contains(missing), "{source}");
             std::fs::write(&path, &source).unwrap();
-            let outcome = latex_lsp::build::run(&path, &config, &Default::default());
+            let outcome = latex_lsp::compilation::build::run(&path, &config, &Default::default());
             assert_eq!(outcome.status, "error", "{engine}: {}", outcome.output);
             let diagnostic = outcome.diagnostics[&main]
                 .iter()
@@ -568,7 +572,7 @@ fn real_quoted_images_compile_after_moves_and_missing_filename_repairs() {
                 )
                 .unwrap();
             std::fs::write(&path, repaired.source).unwrap();
-            let outcome = latex_lsp::build::run(&path, &config, &Default::default());
+            let outcome = latex_lsp::compilation::build::run(&path, &config, &Default::default());
             assert_eq!(outcome.status, "success", "{engine}: {}", outcome.output);
             assert!(outcome
                 .inputs
@@ -627,8 +631,11 @@ fn real_quoted_search_directories_keep_images_and_repairs_after_directory_and_ro
                 assert!(
                     changes(&workspace, &[rename(root, "figure files", "new figures")]).is_empty()
                 );
-                let outcome =
-                    latex_lsp::build::run(&root.join("main.tex"), &config, &Default::default());
+                let outcome = latex_lsp::compilation::build::run(
+                    &root.join("main.tex"),
+                    &config,
+                    &Default::default(),
+                );
                 assert_eq!(
                     outcome.status, "error",
                     "{engine}/{entry}: {}",
@@ -652,7 +659,7 @@ fn real_quoted_search_directories_keep_images_and_repairs_after_directory_and_ro
                     targets(&workspace, &main).as_slice(),
                     std::slice::from_ref(&image)
                 );
-                let outcome = latex_lsp::build::run(
+                let outcome = latex_lsp::compilation::build::run(
                     &main.to_file_path().unwrap(),
                     &config,
                     &Default::default(),
@@ -698,7 +705,7 @@ fn real_quoted_search_directories_keep_images_and_repairs_after_directory_and_ro
                 .unwrap()
                 .replace(r#""plot image""#, r#""plto image""#);
             std::fs::write(&path, &source).unwrap();
-            let outcome = latex_lsp::build::run(&path, &config, &Default::default());
+            let outcome = latex_lsp::compilation::build::run(&path, &config, &Default::default());
             assert_eq!(outcome.status, "error", "{engine}: {}", outcome.output);
             let diagnostic = outcome.diagnostics[&main]
                 .iter()
@@ -745,7 +752,7 @@ fn real_quoted_search_directories_keep_images_and_repairs_after_directory_and_ro
                 }])
                 .unwrap();
             std::fs::write(&path, repaired.source).unwrap();
-            let outcome = latex_lsp::build::run(&path, &config, &Default::default());
+            let outcome = latex_lsp::compilation::build::run(&path, &config, &Default::default());
             assert_eq!(outcome.status, "success", "{engine}: {}", outcome.output);
             assert!(outcome
                 .inputs

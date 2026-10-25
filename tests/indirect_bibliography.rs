@@ -1,6 +1,7 @@
 use latex_lsp::{
-    features, file_operations, navigation,
-    workspace::{Document, DocumentKind, Workspace},
+    editing::file_operations,
+    language::{features, navigation},
+    project::workspace::{Document, DocumentKind, Workspace},
 };
 use lsp_types::*;
 use std::path::Path;

@@ -1,9 +1,10 @@
 use latex_lsp::{
-    build,
+    compilation::build,
     config::BuildConfig,
-    editing, features, signature,
+    editing,
+    language::{features, signature},
+    project::workspace::{Document, Workspace},
     text::Text,
-    workspace::{Document, Workspace},
 };
 use lsp_types::*;
 

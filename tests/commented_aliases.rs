@@ -1,7 +1,7 @@
 use latex_lsp::{
-    features, semantic,
+    language::{features, semantic},
+    project::workspace::{Document, Workspace},
     text::Text,
-    workspace::{Document, Workspace},
 };
 use lsp_types::*;
 
@@ -251,7 +251,7 @@ fn real_alias_completion_and_three_file_citation_rename_keep_the_alias_working()
         ..Default::default()
     };
     let compile = || {
-        let result = latex_lsp::build::run(&main, &config, &Default::default());
+        let result = latex_lsp::compilation::build::run(&main, &config, &Default::default());
         assert_eq!(result.status, "success", "{}", result.output);
         result
     };

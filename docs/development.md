@@ -49,9 +49,9 @@ macOS 上运行测试时，可使用 `TMPDIR=/private/tmp cargo test --locked`�
 | [`diagnostics/`](../src/diagnostics/mod.rs) | 源码诊断、ChkTeX 和按客户端能力投递的诊断报告 |
 | [`compilation/`](../src/compilation/mod.rs) | 后台编译、文献与索引工具、日志、产物、来源快照及 SyncTeX |
 
-[`lib.rs`](../src/lib.rs) 只声明子系统和公开导出；[`main.rs`](../src/main.rs) 负责 stdio 服务启动和传输生命周期；[`text.rs`](../src/text.rs) 保留通用文本位置与编辑工具。LSP 协议处理集中在 [`server/backend.rs`](../src/server/backend.rs)，具体功能由所属子系统实现。
+[`lib.rs`](../src/lib.rs) 只声明子系统；[`main.rs`](../src/main.rs) 负责 stdio 服务启动和传输生命周期；[`text.rs`](../src/text.rs) 保留通用文本位置与编辑工具。LSP 协议处理集中在 [`server/backend.rs`](../src/server/backend.rs)，具体功能由所属子系统实现。
 
-内部引用使用实际所属路径，例如 `crate::project::workspace::Workspace` 和 `crate::bibliography::citations`。新增模块应在所属目录注册，内部模块默认使用 `pub(crate)` 或更窄的可见性。根模块保留 `latex_lsp::workspace`、`latex_lsp::features`、`latex_lsp::build` 和 `latex_lsp::Backend` 等原有公开路径，供现有调用方与集成测试继续使用。
+引用使用实际所属路径，例如 `crate::project::workspace::Workspace` 和 `crate::bibliography::citations`。新增模块应在所属目录注册，内部模块默认使用 `pub(crate)` 或更窄的可见性。外部调用方与集成测试使用 `latex_lsp::project::workspace`、`latex_lsp::language::features`、`latex_lsp::compilation::build` 和 `latex_lsp::server::Backend` 等所属子系统路径，根模块不再重导出这些模块或条目。
 
 模块内单元测试与实现一起迁移；`tests/` 中的集成测试入口及共享夹具保持原有布局，现有 `cargo test --test <名称>` 命令继续有效。文献日志解析的子模块保留在 `bibliography/bib_diagnostics/`，其缓存与来源校验仍由父模块统一管理。
 

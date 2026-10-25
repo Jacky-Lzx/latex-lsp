@@ -1,4 +1,4 @@
-use latex_lsp::{build_log, editing, text::Text, workspace::Workspace};
+use latex_lsp::{compilation::build_log, editing, project::workspace::Workspace, text::Text};
 use lsp_types::*;
 
 fn log(call: &str, numbered: bool) -> String {
@@ -282,7 +282,7 @@ fn versioned_and_legacy_length_fixes_revalidate_candidates_versions_and_operands
 #[test]
 #[ignore = "requires pdflatex, xelatex, lualatex and etoolbox"]
 fn real_length_errors_offer_repairs_and_compile_with_original_expressions_in_all_engines() {
-    use latex_lsp::{build, config::BuildConfig};
+    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::os::unix::fs::PermissionsExt;
 
     let source = concat!(

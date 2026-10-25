@@ -1,4 +1,4 @@
-use latex_lsp::{features, workspace::Workspace};
+use latex_lsp::{language::features, project::workspace::Workspace};
 use lsp_types::*;
 
 const LIBRARY: &str = "@book{trigger,title={Trigger},execute={\\defbibentryset{collection}{member}}}\n@book{collection,title={Raw data}}\n@book{member,title={Member}}";
@@ -118,7 +118,7 @@ fn literal_examples_classic_bibtex_and_loose_databases_keep_their_symbol_model()
     let mut loose = Workspace::default();
     loose.documents.insert(
         bib.clone(),
-        latex_lsp::workspace::Document::new(&bib, LIBRARY.into(), Some(2)),
+        latex_lsp::project::workspace::Document::new(&bib, LIBRARY.into(), Some(2)),
     );
     assert!(
         features::rename(&loose, &bib, point(&loose, &bib, "@book{col"), "fresh")

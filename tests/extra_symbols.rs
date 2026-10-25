@@ -1,4 +1,4 @@
-use latex_lsp::{features, text::Text, workspace::Workspace};
+use latex_lsp::{language::features, project::workspace::Workspace, text::Text};
 use lsp_types::*;
 fn edits(source: &str, changes: &[TextEdit]) -> String {
     let mut changes = changes.to_vec();

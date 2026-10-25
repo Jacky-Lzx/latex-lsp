@@ -1,6 +1,6 @@
 use latex_lsp::{
-    code_lens, features,
-    workspace::{Document, Workspace},
+    language::{code_lens, features},
+    project::workspace::{Document, Workspace},
 };
 use lsp_types::Url;
 use std::path::Path;

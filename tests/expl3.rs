@@ -1,7 +1,7 @@
 use latex_lsp::{
-    features, semantic, signature,
+    language::{features, semantic, signature},
+    project::workspace::{Document, Workspace},
     text::Text,
-    workspace::{Document, Workspace},
 };
 use lsp_types::*;
 fn changed(source: &str, mut edits: Vec<TextEdit>) -> String {

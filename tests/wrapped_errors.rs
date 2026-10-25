@@ -1,4 +1,8 @@
-use latex_lsp::{build, build_log, config::BuildConfig, text::Text};
+use latex_lsp::{
+    compilation::{build, build_log},
+    config::BuildConfig,
+    text::Text,
+};
 use lsp_types::{DiagnosticSeverity, Url};
 use std::sync::atomic::AtomicBool;
 

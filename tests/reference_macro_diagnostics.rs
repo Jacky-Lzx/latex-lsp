@@ -1,4 +1,10 @@
-use latex_lsp::{build, build_log, config::BuildConfig, editing, text::Text, workspace::Workspace};
+use latex_lsp::{
+    compilation::{build, build_log},
+    config::BuildConfig,
+    editing,
+    project::workspace::Workspace,
+    text::Text,
+};
 use lsp_types::*;
 use std::sync::atomic::AtomicBool;
 

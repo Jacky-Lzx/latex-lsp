@@ -1,4 +1,4 @@
-use latex_lsp::build_log::{compilation_analysis, parse};
+use latex_lsp::compilation::build_log::{compilation_analysis, parse};
 use lsp_types::*;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -225,7 +225,7 @@ fn real_box_summaries_distinguish_four_categories_and_clear_after_layout_repair(
                 executable: compiler.to_string_lossy().into(),
                 ..Default::default()
             };
-            let outcome = latex_lsp::build::run(&main, &config, &Default::default());
+            let outcome = latex_lsp::compilation::build::run(&main, &config, &Default::default());
             assert_eq!(
                 outcome.status, "success",
                 "{engine}/{width}: {}",
@@ -247,7 +247,7 @@ fn real_box_summaries_distinguish_four_categories_and_clear_after_layout_repair(
             assert_eq!(analysis["truncated"], false);
             let fixed = "\\documentclass{article}\n\\begin{document}\nHello.\n\\end{document}\n";
             std::fs::write(&main, fixed).unwrap();
-            let outcome = latex_lsp::build::run(&main, &config, &Default::default());
+            let outcome = latex_lsp::compilation::build::run(&main, &config, &Default::default());
             assert_eq!(
                 outcome.status, "success",
                 "{engine}/{width}: {}",

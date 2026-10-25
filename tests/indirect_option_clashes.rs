@@ -1,4 +1,4 @@
-use latex_lsp::{build_log, text::Text};
+use latex_lsp::{compilation::build_log, text::Text};
 use lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Url};
 
 fn call(form: &str, loader: &str) -> String {

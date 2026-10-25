@@ -1,7 +1,11 @@
 use latex_lsp::{
-    features, file_operations, graphics, navigation,
+    editing::file_operations,
+    language::{features, navigation},
+    project::{
+        graphics,
+        workspace::{Document, Workspace},
+    },
     text::Text,
-    workspace::{Document, Workspace},
 };
 use lsp_types::*;
 use std::{collections::BTreeMap, path::Path};
@@ -234,14 +238,15 @@ fn root_graphics_images_remain_selected_after_image_and_main_file_renames() {
         executable: "pdflatex".into(),
         ..Default::default()
     };
-    let image = latex_lsp::build::run(
+    let image = latex_lsp::compilation::build::run(
         &drawing.path().join("drawing.tex"),
         &config,
         &Default::default(),
     );
     assert_eq!(image.status, "success", "{}", image.output);
     std::fs::copy(image.pdf.unwrap(), root.join("assets/plot.pdf")).unwrap();
-    let before = latex_lsp::build::run(&root.join("main.tex"), &config, &Default::default());
+    let before =
+        latex_lsp::compilation::build::run(&root.join("main.tex"), &config, &Default::default());
     assert_eq!(before.status, "success", "{}", before.output);
     let inputs = before.inputs.unwrap();
     assert!(inputs.contains(&uri(root, "assets/plot.pdf")));
@@ -269,7 +274,11 @@ fn root_graphics_images_remain_selected_after_image_and_main_file_renames() {
         navigation::document_links(&workspace, &child)[0].target,
         Some(uri(root, "assets/figure.pdf"))
     );
-    let after = latex_lsp::build::run(&root.join("book/main.tex"), &config, &Default::default());
+    let after = latex_lsp::compilation::build::run(
+        &root.join("book/main.tex"),
+        &config,
+        &Default::default(),
+    );
     assert_eq!(after.status, "success", "{}", after.output);
     assert!(after
         .inputs
@@ -371,7 +380,7 @@ fn renamed_images_do_not_silently_compile_using_a_different_existing_picture() {
         executable: "pdflatex".into(),
         ..Default::default()
     };
-    let image = latex_lsp::build::run(
+    let image = latex_lsp::compilation::build::run(
         &drawing.path().join("drawing.tex"),
         &config,
         &Default::default(),
@@ -380,7 +389,8 @@ fn renamed_images_do_not_silently_compile_using_a_different_existing_picture() {
     let pdf = image.pdf.unwrap();
     std::fs::copy(&pdf, root.join("assets/plot.pdf")).unwrap();
     std::fs::copy(&pdf, root.join("figure.pdf")).unwrap();
-    let before = latex_lsp::build::run(&root.join("main.tex"), &config, &Default::default());
+    let before =
+        latex_lsp::compilation::build::run(&root.join("main.tex"), &config, &Default::default());
     assert_eq!(before.status, "success", "{}", before.output);
     let files = [rename(root, "assets/plot.pdf", "assets/figure.pdf")];
     let changed = edits(&workspace, &files);
@@ -394,7 +404,8 @@ fn renamed_images_do_not_silently_compile_using_a_different_existing_picture() {
         navigation::document_links(&workspace, &child)[0].target,
         Some(uri(root, "assets/figure.pdf"))
     );
-    let after = latex_lsp::build::run(&root.join("main.tex"), &config, &Default::default());
+    let after =
+        latex_lsp::compilation::build::run(&root.join("main.tex"), &config, &Default::default());
     assert_eq!(after.status, "success", "{}", after.output);
     let inputs = after.inputs.unwrap();
     assert!(inputs.contains(&uri(root, "assets/figure.pdf")));

@@ -1,8 +1,7 @@
 use latex_lsp::{
-    build,
+    compilation::{build, synctex},
     config::{BuildConfig, Config},
-    synctex,
-    workspace::Workspace,
+    project::workspace::Workspace,
 };
 use lsp_types::Url;
 use std::sync::atomic::AtomicBool;

@@ -1,4 +1,8 @@
-use latex_lsp::{features, signature, text::Text, workspace::Workspace};
+use latex_lsp::{
+    language::{features, signature},
+    project::workspace::Workspace,
+    text::Text,
+};
 use lsp_types::*;
 
 fn fixture(marked: &str) -> (Workspace, Url, Position) {
@@ -123,7 +127,7 @@ fn saved_name_hints_follow_ordinary_tokens_and_the_first_unbraced_option_end() {
 #[test]
 #[ignore = "requires pdflatex, xelatex, and fvextra"]
 fn real_completed_inline_templates_preserve_saved_text_and_literal_commands() {
-    use latex_lsp::{build, config::BuildConfig};
+    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::sync::atomic::AtomicBool;
     let mut calls = Vec::new();
     for name in [

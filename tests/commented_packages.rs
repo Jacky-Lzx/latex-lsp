@@ -1,4 +1,9 @@
-use latex_lsp::{features, file_operations, navigation, text::Text, workspace::Workspace};
+use latex_lsp::{
+    editing::file_operations,
+    language::{features, navigation},
+    project::workspace::Workspace,
+    text::Text,
+};
 use lsp_types::*;
 use std::path::Path;
 
@@ -159,7 +164,7 @@ fn package_list_completion_preserves_comments_and_obeys_actual_optional_argument
                     Text::new(source.clone()).position(marked.find('¦').unwrap()),
                 );
                 if arguments.contains("loc¦") {
-                    let hint = latex_lsp::signature::help(
+                    let hint = latex_lsp::language::signature::help(
                         &workspace,
                         &main,
                         Text::new(source.clone()).position(marked.find('¦').unwrap()),
@@ -269,7 +274,7 @@ fn package_errors_and_repairs_do_not_guess_from_partly_dynamic_commented_lists()
             std::fs::write(root.join("local.sty"), "Local.\n").unwrap();
             let log = format!("(./main.tex\n! LaTeX Error: File `locla.sty' not found.\n! Emergency stop.\n<read *>\nl.{} \\relax\n", source.lines().count());
             let main_uri = uri(root, "main.tex");
-            let parsed = latex_lsp::build_log::parse(&main, &log);
+            let parsed = latex_lsp::compilation::build_log::parse(&main, &log);
             let mut diagnostic = parsed[&main_uri]
                 .iter()
                 .find(|diagnostic| diagnostic.message.contains("not found"))

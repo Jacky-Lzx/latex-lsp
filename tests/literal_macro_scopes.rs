@@ -1,5 +1,5 @@
 #![cfg(unix)]
-use latex_lsp::{build, config::BuildConfig};
+use latex_lsp::{compilation::build, config::BuildConfig};
 use lsp_types::*;
 use std::os::unix::fs::PermissionsExt;
 
@@ -126,7 +126,7 @@ fn copying_a_source_is_not_an_invocation_and_completed_copies_keep_tab_repairs()
                 Some(NumberOrString::String("extra-alignment-tab".into())),
                 "{copy}/{call}: {item:?}"
             );
-            let mut workspace = latex_lsp::workspace::Workspace {
+            let mut workspace = latex_lsp::project::workspace::Workspace {
                 code_action_literals: true,
                 ..Default::default()
             };
@@ -201,7 +201,7 @@ fn completed_or_argument_free_redeclarations_still_offer_literal_tab_repairs() {
             "{definition}: {:?}",
             outcome.diagnostics
         );
-        let mut workspace = latex_lsp::workspace::Workspace {
+        let mut workspace = latex_lsp::project::workspace::Workspace {
             code_action_literals: true,
             ..Default::default()
         };
@@ -230,7 +230,7 @@ fn cross_file_aliases_use_complete_project_arguments_for_diagnostics_and_repairs
         let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
         let item = outcome.diagnostics[&uri][0].clone();
         assert_eq!(item.code.is_some(), precise, "{arguments}: {item:?}");
-        let mut workspace = latex_lsp::workspace::Workspace {
+        let mut workspace = latex_lsp::project::workspace::Workspace {
             code_action_literals: true,
             ..Default::default()
         };
@@ -291,7 +291,7 @@ fn completed_cross_file_macros_do_not_blame_their_second_bare_or_delimited_argum
 }
 
 fn selected_actions(
-    workspace: &latex_lsp::workspace::Workspace,
+    workspace: &latex_lsp::project::workspace::Workspace,
     uri: &Url,
     diagnostic: &Diagnostic,
 ) -> CodeActionResponse {
@@ -309,7 +309,7 @@ fn selected_actions(
 
 #[test]
 fn literal_fixes_record_loaded_scopes_and_recheck_macro_arities_before_legacy_execution() {
-    use latex_lsp::{editing, workspace::Workspace};
+    use latex_lsp::{editing, project::workspace::Workspace};
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     let source = "\\input{macros}\n\\begin{tabular}{ll}A & B\\bad x& C\\\\\\end{tabular}\n";
@@ -564,7 +564,7 @@ fn real_copied_commands_exclude_arguments_and_repair_following_literal_tabs() {
                         })
                         .clone();
                     let main_uri = Url::from_file_path(&main).unwrap();
-                    let mut workspace = latex_lsp::workspace::Workspace {
+                    let mut workspace = latex_lsp::project::workspace::Workspace {
                         code_action_literals: true,
                         versioned_edits: true,
                         ..Default::default()
@@ -699,7 +699,7 @@ fn real_paused_environment_parameters_and_completed_redeclarations_keep_distinct
                         item.data.as_ref().unwrap()["macroPausedSources"],
                         serde_json::json!([main_uri])
                     );
-                    let mut workspace = latex_lsp::workspace::Workspace {
+                    let mut workspace = latex_lsp::project::workspace::Workspace {
                         code_action_literals: true,
                         versioned_edits: true,
                         ..Default::default()
@@ -805,7 +805,7 @@ fn real_cross_file_macro_arguments_are_excluded_and_literal_tabs_can_be_repaired
                     scope,
                     [uri.clone(), Url::from_file_path(&macros).unwrap()].into()
                 );
-                let mut workspace = latex_lsp::workspace::Workspace {
+                let mut workspace = latex_lsp::project::workspace::Workspace {
                     code_action_literals: true,
                     versioned_edits: true,
                     ..Default::default()

@@ -1,4 +1,4 @@
-use latex_lsp::{build_log, recorder};
+use latex_lsp::compilation::{build_log, recorder};
 use lsp_types::*;
 use std::path::Path;
 

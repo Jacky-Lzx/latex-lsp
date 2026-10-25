@@ -1,7 +1,9 @@
 use latex_lsp::{
-    build_log, editing, features, signature,
+    compilation::build_log,
+    editing,
+    language::{features, signature},
+    project::workspace::{Document, Workspace},
     text::Text,
-    workspace::{Document, Workspace},
 };
 use lsp_types::*;
 
@@ -230,7 +232,7 @@ fn literal_and_generated_subfigure_warning_names_keep_distinct_source_ranges() {
 #[test]
 #[ignore = "requires pdflatex, subcaption and hyperref"]
 fn real_subfigure_warning_repairs_and_label_renames_keep_both_auxiliary_labels() {
-    use latex_lsp::{build, config::BuildConfig};
+    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::sync::atomic::AtomicBool;
 
     let directory = tempfile::tempdir().unwrap();

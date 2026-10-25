@@ -1,7 +1,7 @@
 use latex_lsp::{
     editing,
+    project::workspace::{Document, Workspace},
     text::Text,
-    workspace::{Document, Workspace},
 };
 use lsp_types::*;
 use std::path::Path;

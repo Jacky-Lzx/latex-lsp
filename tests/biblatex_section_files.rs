@@ -1,7 +1,8 @@
 use latex_lsp::{
-    features, file_operations, navigation,
+    editing::file_operations,
+    language::{features, navigation},
+    project::workspace::{DocumentKind, Workspace},
     text::Text,
-    workspace::{DocumentKind, Workspace},
 };
 use lsp_types::*;
 fn setup(source: &str, files: &[(&str, &str)]) -> (tempfile::TempDir, Workspace, Url) {

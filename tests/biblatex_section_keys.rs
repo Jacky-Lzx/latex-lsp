@@ -1,4 +1,4 @@
-use latex_lsp::{features, text::Text, workspace::Workspace};
+use latex_lsp::{language::features, project::workspace::Workspace, text::Text};
 use lsp_types::*;
 
 fn setup(extra: &str, body: &str) -> (tempfile::TempDir, Workspace, Url, String) {

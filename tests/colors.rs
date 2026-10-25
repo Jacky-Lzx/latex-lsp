@@ -1,4 +1,4 @@
-use latex_lsp::{build, colors, workspace::Document};
+use latex_lsp::{compilation::build, language::colors, project::workspace::Document};
 use lsp_types::*;
 
 fn document(source: &str) -> Document {

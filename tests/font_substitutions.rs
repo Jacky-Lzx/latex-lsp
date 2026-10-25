@@ -1,4 +1,4 @@
-use latex_lsp::build_log::{compilation_analysis, parse};
+use latex_lsp::compilation::build_log::{compilation_analysis, parse};
 use lsp_types::*;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -303,7 +303,7 @@ fn real_font_substitutions_preserve_names_sizes_and_clear_after_font_selection_i
             let family = format!("missingfamily{}", "x".repeat(65));
             let source = format!("\\documentclass{{article}}\n\\DeclareFontFamily{{OT1}}{{lsplimited}}{{}}\n\\DeclareFontShape{{OT1}}{{lsplimited}}{{m}}{{n}}{{<10> cmr10}}{{}}\n\\begin{{document}}\n{{\\fontencoding{{OT1}}\\fontfamily{{missingfont}}\\selectfont Missing family.}}\n{{\\fontencoding{{OT1}}\\fontfamily{{cmr}}\\fontseries{{bx}}\\fontshape{{sc}}\\selectfont Missing shape.}}\n{{\\fontencoding{{OT1}}\\fontfamily{{lsplimited}}\\fontsize{{14.7}}{{18}}\\selectfont Limited size.}}\n{{\\fontencoding{{OT1}}\\fontfamily{{{family}}}\\selectfont Long family.}}\n\\end{{document}}\n");
             std::fs::write(&main, &source).unwrap();
-            let outcome = latex_lsp::build::run(&main, &config, &Default::default());
+            let outcome = latex_lsp::compilation::build::run(&main, &config, &Default::default());
             assert_eq!(
                 outcome.status, "success",
                 "{engine}/{width}: {}",
@@ -335,7 +335,7 @@ fn real_font_substitutions_preserve_names_sizes_and_clear_after_font_selection_i
                 .replace(r"\fontshape{sc}", r"\fontshape{n}")
                 .replace(r"\fontsize{14.7}{18}", r"\fontsize{10}{18}");
             std::fs::write(&main, fixed).unwrap();
-            let outcome = latex_lsp::build::run(&main, &config, &Default::default());
+            let outcome = latex_lsp::compilation::build::run(&main, &config, &Default::default());
             assert_eq!(
                 outcome.status, "success",
                 "{engine}/{width}: {}",

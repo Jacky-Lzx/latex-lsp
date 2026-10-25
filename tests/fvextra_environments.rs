@@ -1,7 +1,8 @@
 use latex_lsp::{
-    editing, features, file_operations, navigation, semantic, signature,
+    editing::{self, file_operations},
+    language::{features, navigation, semantic, signature},
+    project::workspace::{Document, Workspace},
     text::Text,
-    workspace::{Document, Workspace},
 };
 use lsp_types::*;
 
@@ -202,7 +203,7 @@ fn environment_completion_and_option_hints_share_header_boundaries() {
 #[test]
 #[ignore = "requires pdflatex, xelatex, and fvextra"]
 fn real_writes_and_buffers_preserve_body_after_label_rename() {
-    use latex_lsp::{build, config::BuildConfig};
+    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::sync::atomic::AtomicBool;
     for engine in ["pdflatex", "xelatex"] {
         for environment in ENVIRONMENTS {

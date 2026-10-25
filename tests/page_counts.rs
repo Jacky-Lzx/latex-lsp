@@ -1,4 +1,4 @@
-use latex_lsp::build_log::page_count;
+use latex_lsp::compilation::build_log::page_count;
 
 #[test]
 fn filenames_cannot_supply_page_counts_at_log_wrap_boundaries() {
@@ -100,7 +100,7 @@ fn an_incomplete_final_summary_never_reuses_an_earlier_pass_count() {
 #[test]
 #[ignore = "requires pdflatex, xelatex and lualatex"]
 fn real_engine_page_counts_ignore_wrapped_filename_examples() {
-    use latex_lsp::{build, config::BuildConfig};
+    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::os::unix::fs::PermissionsExt;
 
     let directory = tempfile::tempdir().unwrap();

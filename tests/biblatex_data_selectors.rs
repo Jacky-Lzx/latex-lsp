@@ -1,7 +1,7 @@
 use latex_lsp::{
-    features,
+    language::features,
+    project::workspace::{Document, Workspace},
     text::Text,
-    workspace::{Document, Workspace},
 };
 use lsp_types::*;
 
@@ -275,7 +275,7 @@ fn raw_field_accessors_and_undefined_tests_complete_only_their_first_name_argume
         assert!(features::prepare_rename(&workspace, &main, at)
             .unwrap()
             .is_none());
-        let help = latex_lsp::signature::help(&workspace, &main, at).unwrap();
+        let help = latex_lsp::language::signature::help(&workspace, &main, at).unwrap();
         assert_eq!(help.active_parameter, Some(0));
         assert_eq!(
             help.signatures[0].label,
@@ -294,7 +294,7 @@ fn raw_field_accessors_and_undefined_tests_complete_only_their_first_name_argume
                     .any(|item| item.kind == Some(CompletionItemKind::FIELD)));
                 assert!(features::hover(&workspace, &main, at).is_none());
                 assert_eq!(
-                    latex_lsp::signature::help(&workspace, &main, at)
+                    latex_lsp::language::signature::help(&workspace, &main, at)
                         .unwrap()
                         .active_parameter,
                     Some(parameter)
@@ -331,7 +331,7 @@ fn generated_counter_theorem_and_conditional_commands_disable_conflicting_builti
         );
         assert!(features::hover(&workspace, &main, at).is_none(), "{source}");
         assert!(
-            latex_lsp::signature::help(&workspace, &main, at).is_none(),
+            latex_lsp::language::signature::help(&workspace, &main, at).is_none(),
             "{source}"
         );
         let source = format!("{declaration}\\{name}");

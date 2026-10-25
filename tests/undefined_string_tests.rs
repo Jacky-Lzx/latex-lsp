@@ -1,4 +1,4 @@
-use latex_lsp::{features, text::Text, workspace::Workspace};
+use latex_lsp::{language::features, project::workspace::Workspace, text::Text};
 use lsp_types::*;
 
 fn setup(files: &[(&str, &str)]) -> (tempfile::TempDir, Workspace, Url) {
@@ -134,7 +134,7 @@ fn named_undefinitions_without_a_copy_or_redefinition_still_refresh_string_seman
 
 #[test]
 fn removal_targets_remain_macro_references_and_offer_control_operand_signatures() {
-    use latex_lsp::signature;
+    use latex_lsp::language::signature;
     for removal in [
         r"\undef\saved",
         r"\gundef{\saved}",
@@ -251,7 +251,7 @@ fn dynamic_and_shared_removal_targets_guard_affected_operands_only() {
 #[test]
 #[ignore = "requires pdflatex, xelatex, lualatex and etoolbox"]
 fn real_removals_and_redefinitions_preserve_rename_results_in_three_engines() {
-    use latex_lsp::{build, config::BuildConfig};
+    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::os::unix::fs::PermissionsExt;
     for engine in ["pdflatex", "xelatex", "lualatex"] {
         for predicate in ["ifblank", "notblank", "ifstrempty", "ifstrequal"] {
@@ -359,7 +359,7 @@ fn real_removals_and_redefinitions_preserve_rename_results_in_three_engines() {
 #[test]
 #[ignore = "requires pdflatex, xelatex, lualatex and etoolbox"]
 fn real_undefined_copies_report_the_control_and_leave_following_groups_executable() {
-    use latex_lsp::{build, config::BuildConfig};
+    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::os::unix::fs::PermissionsExt;
     for engine in ["pdflatex", "xelatex", "lualatex"] {
         for removal in [r"\undef\saved", r"\csundef{saved}"] {

@@ -1,7 +1,7 @@
 use latex_lsp::{
-    features, signature,
+    language::{features, signature},
+    project::workspace::{Document, Workspace},
     text::Text,
-    workspace::{Document, Workspace},
 };
 use lsp_types::*;
 
@@ -181,7 +181,7 @@ fn hyperref_warnings_select_the_delimited_key_without_borrowing_a_protected_key(
     let uri = Url::from_file_path(&main).unwrap();
     let source = "😀 \\hyperref[sec:[balanced]]{Body} \\hyperref[{sec:[balanced]}]{Protected}\n";
     std::fs::write(&main, source).unwrap();
-    let diagnostics = latex_lsp::build_log::parse(&main, "(./main.tex\nLaTeX Warning: Hyper reference `sec:[balanced' on page 1 undefined on input line 1.\n)\n");
+    let diagnostics = latex_lsp::compilation::build_log::parse(&main, "(./main.tex\nLaTeX Warning: Hyper reference `sec:[balanced' on page 1 undefined on input line 1.\n)\n");
     let items = &diagnostics[&uri];
     assert_eq!(items.len(), 1, "{items:?}");
     let start = source.find("sec:[balanced").unwrap();

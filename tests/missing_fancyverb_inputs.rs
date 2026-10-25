@@ -1,4 +1,10 @@
-use latex_lsp::{build, build_log, editing, navigation, text::Text, workspace::Workspace};
+use latex_lsp::{
+    compilation::{build, build_log},
+    editing,
+    language::navigation,
+    project::workspace::Workspace,
+    text::Text,
+};
 use lsp_types::*;
 use std::path::Path;
 

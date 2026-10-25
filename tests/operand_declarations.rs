@@ -1,8 +1,8 @@
 use latex_lsp::{
-    features,
-    syntax::Syntax,
+    language::features,
+    parser::syntax::Syntax,
+    project::workspace::{Document, Workspace},
     text::Text,
-    workspace::{Document, Workspace},
 };
 use lsp_types::*;
 
@@ -252,7 +252,7 @@ fn copied_named_interfaces_do_not_supply_parameter_help_or_name_completion() {
             .text
             .position(source.find("ordinary").unwrap() + 3);
         assert!(
-            latex_lsp::signature::help(&workspace, &uri, cursor).is_none(),
+            latex_lsp::language::signature::help(&workspace, &uri, cursor).is_none(),
             "{source}"
         );
         assert!(
@@ -355,7 +355,7 @@ fn real_copied_declaration_sources_preserve_ordinary_calls_and_symbol_renames() 
             ),
             ..Default::default()
         };
-        let before = latex_lsp::build::run(&main, &config, &Default::default());
+        let before = latex_lsp::compilation::build::run(&main, &config, &Default::default());
         assert_eq!(before.status, "success", "{engine}: {}", before.output);
         for (old, new, file, documents) in [
             ("ordinary", "renamedordinary", "definitions.tex", 2),
@@ -398,7 +398,7 @@ fn real_copied_declaration_sources_preserve_ordinary_calls_and_symbol_renames() 
             changed.split_once('%').unwrap().1,
             content.split_once('%').unwrap().1
         );
-        let after = latex_lsp::build::run(&main, &config, &Default::default());
+        let after = latex_lsp::compilation::build::run(&main, &config, &Default::default());
         assert_eq!(after.status, "success", "{engine}: {}", after.output);
         for outcome in [before, after] {
             let observed: Vec<_> = outcome

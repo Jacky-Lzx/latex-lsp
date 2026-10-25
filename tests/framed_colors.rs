@@ -1,7 +1,8 @@
 use latex_lsp::{
-    build, colors, features, signature,
+    compilation::build,
+    language::{colors, features, signature},
+    project::workspace::{Document, Workspace},
     text::Text,
-    workspace::{Document, Workspace},
 };
 use lsp_types::*;
 

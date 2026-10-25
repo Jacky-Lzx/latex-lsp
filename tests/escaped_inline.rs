@@ -1,7 +1,7 @@
 use latex_lsp::{
-    features, navigation, semantic, signature,
+    language::{features, navigation, semantic, signature},
+    project::workspace::{Document, Workspace},
     text::Text,
-    workspace::{Document, Workspace},
 };
 use lsp_types::*;
 
@@ -287,7 +287,7 @@ fn escaped_command_completion_hover_and_option_hints_preserve_code() {
 #[test]
 #[ignore = "requires pdflatex, xelatex, and fvextra"]
 fn real_escaped_code_never_executes_commands_even_when_escapes_are_invalid() {
-    use latex_lsp::{build, config::BuildConfig};
+    use latex_lsp::{compilation::build, config::BuildConfig};
     use std::sync::atomic::AtomicBool;
     for engine in ["pdflatex", "xelatex"] {
         for declaration in ["", r"\let\code\EscVerb", r"\newcommand{\code}{\EscVerb}"] {

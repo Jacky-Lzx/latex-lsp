@@ -1,4 +1,9 @@
-use latex_lsp::{build, features, signature, text::Text, workspace::Workspace};
+use latex_lsp::{
+    compilation::build,
+    language::{features, signature},
+    project::workspace::Workspace,
+    text::Text,
+};
 use lsp_types::*;
 use std::{collections::BTreeMap, path::Path};
 
@@ -139,7 +144,7 @@ fn futurelet_rejects_braced_dynamic_and_unexpanded_csname_targets() {
         r"\expandafter\futurelet\csname look\dynamic\endcsname\inspect A",
         "% \\futurelet\\lookahead\\inspect A\n\\verb|\\futurelet\\lookahead\\inspect A|",
     ] {
-        let parsed = latex_lsp::syntax::Syntax::latex(&Text::new(source.into()));
+        let parsed = latex_lsp::parser::syntax::Syntax::latex(&Text::new(source.into()));
         assert!(
             parsed
                 .definitions

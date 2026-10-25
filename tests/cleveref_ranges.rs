@@ -1,7 +1,9 @@
 use latex_lsp::{
-    build_log, editing, features, semantic, signature,
+    compilation::build_log,
+    editing,
+    language::{features, semantic, signature},
+    project::workspace::{Document, Workspace},
     text::Text,
-    workspace::{Document, Workspace},
 };
 use lsp_types::*;
 

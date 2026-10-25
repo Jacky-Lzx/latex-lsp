@@ -1,4 +1,6 @@
-use latex_lsp::{build, features, text::Text, workspace::Workspace};
+use latex_lsp::{
+    compilation::build, language::features, project::workspace::Workspace, text::Text,
+};
 use lsp_types::*;
 use std::{collections::BTreeMap, path::Path, sync::atomic::AtomicBool};
 
@@ -454,7 +456,7 @@ fn boolean_operations_provide_signatures_without_confusing_expressions_with_name
         let source = marked.replace('¦', "");
         let workspace = setup(directory.path(), &[("main.tex", &source)]);
         let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
-        let help = latex_lsp::signature::help(
+        let help = latex_lsp::language::signature::help(
             &workspace,
             &uri,
             Text::new(source).position(marked.find('¦').unwrap()),

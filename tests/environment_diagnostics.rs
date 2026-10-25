@@ -1,6 +1,6 @@
 use latex_lsp::{
     editing,
-    workspace::{Document, Workspace},
+    project::workspace::{Document, Workspace},
 };
 use lsp_types::*;
 use std::{collections::BTreeMap, path::Path};

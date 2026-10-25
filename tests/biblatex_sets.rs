@@ -2,9 +2,10 @@
 mod biber;
 
 use latex_lsp::{
-    editing, features, semantic, signature,
+    editing,
+    language::{features, semantic, signature},
+    project::workspace::{Document, Workspace},
     text::Text,
-    workspace::{Document, Workspace},
 };
 use lsp_types::*;
 

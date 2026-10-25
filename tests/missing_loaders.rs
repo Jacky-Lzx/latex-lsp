@@ -1,4 +1,9 @@
-use latex_lsp::{build, build_log, editing, text::Text, workspace::Workspace};
+use latex_lsp::{
+    compilation::{build, build_log},
+    editing,
+    project::workspace::Workspace,
+    text::Text,
+};
 use lsp_types::*;
 
 #[test]
@@ -428,7 +433,7 @@ fn package_names_discard_tex_spaces_while_class_names_preserve_internal_spaces()
     let mut workspace = Workspace::default();
     workspace.add_root(root.into());
     let uri = Url::from_file_path(root.join("main.tex")).unwrap();
-    let links = latex_lsp::navigation::document_links(&workspace, &uri);
+    let links = latex_lsp::language::navigation::document_links(&workspace, &uri);
     assert_eq!(links.len(), 2, "{links:?}");
     assert_eq!(
         links[0].target,
@@ -442,18 +447,18 @@ fn package_names_discard_tex_spaces_while_class_names_preserve_internal_spaces()
         old_uri: Url::from_file_path(root.join(old)).unwrap().to_string(),
         new_uri: Url::from_file_path(root.join(new)).unwrap().to_string(),
     };
-    assert!(latex_lsp::file_operations::will_rename(
+    assert!(latex_lsp::editing::file_operations::will_rename(
         &workspace,
         &[rename("mylocal.cls", "decoy.cls")]
     )
     .unwrap()
     .is_none());
-    assert!(latex_lsp::file_operations::will_rename(
+    assert!(latex_lsp::editing::file_operations::will_rename(
         &workspace,
         &[rename("mylocal.sty", "new package.sty")]
     )
     .is_err());
-    let class_edit = latex_lsp::file_operations::will_rename(
+    let class_edit = latex_lsp::editing::file_operations::will_rename(
         &workspace,
         &[rename("my local.cls", "new class.cls")],
     )
@@ -463,7 +468,7 @@ fn package_names_discard_tex_spaces_while_class_names_preserve_internal_spaces()
     .unwrap();
     assert_eq!(class_edit[&uri].len(), 1);
     assert_eq!(class_edit[&uri][0].new_text, "new class");
-    let edit = latex_lsp::file_operations::will_rename(
+    let edit = latex_lsp::editing::file_operations::will_rename(
         &workspace,
         &[rename("mylocal.sty", "renamed.sty")],
     )
