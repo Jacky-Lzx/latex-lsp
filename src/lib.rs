@@ -1,3 +1,4 @@
+mod anchor_edits;
 mod anchors;
 mod auxiliary;
 mod bib_accessors;

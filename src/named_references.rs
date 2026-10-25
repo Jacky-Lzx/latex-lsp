@@ -91,7 +91,12 @@ impl Context {
     pub(crate) fn operand(&self, doc: &Document, at: usize) -> bool {
         self.operand_with(doc, at, &self.operands)
     }
-    fn operand_with(&self, doc: &Document, at: usize, operands: &BTreeSet<usize>) -> bool {
+    pub(crate) fn operand_with(
+        &self,
+        doc: &Document,
+        at: usize,
+        operands: &BTreeSet<usize>,
+    ) -> bool {
         operands.contains(&at)
             || doc.syntax.control_operands.contains(&at)
             || contains(&self.opaque, at)

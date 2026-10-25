@@ -536,6 +536,9 @@ fn rename_target<'a>(
     if target.kind == TargetKind::Color {
         crate::named_colors::validate(workspace, &scope)?;
     }
+    if target.kind == TargetKind::Anchor {
+        crate::anchor_edits::validate(workspace, &scope, target.name)?;
+    }
     if let Some(kind) = target.kind.saved_kind() {
         crate::saved_text::validate(workspace, &scope, kind)?;
     }

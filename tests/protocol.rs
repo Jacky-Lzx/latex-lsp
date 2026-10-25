@@ -17,6 +17,125 @@ struct Server {
 }
 
 #[test]
+fn pdf_destination_edits_require_complete_executable_uses_over_stdio() {
+    use latex_lsp::text::Text;
+
+    for versioned in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+        let shared = uri.join("shared.tex").unwrap();
+        let provider = uri.join("commands.sty").unwrap();
+        let other = uri.join("unsaved.tex").unwrap();
+        let source = "% 😀\r\n\\documentclass{article}\\newcommand\\unicodeword{😀}\\input{commands.sty}\\newcommand\\word{Text}\\begin{document}\\input{shared}\\typeout{\\unexpanded{\\hypertarget{ghost}{\\word}}}\\message{\\unexpanded{\\hypertarget{otherghost}{Text}}}\\hyperlink{here}{Link}\\hypertarget{safe}{Target}\\hyperlink{safe}{Link}\\word\\end{document}";
+        let shared_source = "% 😀\r\n\\newcommand\\unicodeword{😀}\\hypertarget{here}{Target}";
+        for (file, contents) in [(&uri, source), (&shared, shared_source), (&provider, "")] {
+            std::fs::write(file.to_file_path().unwrap(), contents).unwrap();
+        }
+        let text = Text::new(source.into());
+        let shared_text = Text::new(shared_source.into());
+        let mut server = Server::start();
+        server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(directory.path()).unwrap(),"initializationOptions":{"distribution":{"enabled":false}},"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":versioned}}}}));
+        server.notify("initialized", json!({}));
+        for (file, contents, version) in [(&uri, source, 5), (&shared, shared_source, 7)] {
+            server.notify("textDocument/didOpen", json!({"textDocument":{"uri":file,"languageId":"latex","version":version,"text":contents}}));
+        }
+        let blocked = |server: &mut Server, key: &str| {
+            for method in ["textDocument/prepareRename", "textDocument/rename"] {
+                server.send(json!({"jsonrpc":"2.0","id":20,"method":method,"params":{"textDocument":{"uri":uri},"position":text.position(source.find(key).unwrap() + 1),"newName":"fresh"}}));
+                let response = server.until(|message| message["id"] == 20);
+                assert!(
+                    response["error"]["code"] == -32602
+                        || response.get("result") == Some(&Value::Null),
+                    "{key}: {response}"
+                );
+            }
+        };
+        let exact = |server: &mut Server, key: &str, expected: Vec<(&Url, i32, Vec<Value>)>| {
+            let params = json!({"textDocument":{"uri":uri},"position":text.position(source.rfind(key).unwrap() + 1),"newName":"fresh"});
+            assert!(!server
+                .request(21, "textDocument/prepareRename", params.clone())
+                .is_null());
+            let response = server.request(22, "textDocument/rename", params);
+            if versioned {
+                let mut actual = response["documentChanges"].as_array().unwrap().clone();
+                let mut expected: Vec<_> = expected.into_iter().map(|(file, version, edits)| json!({"textDocument":{"uri":file,"version":version},"edits":edits})).collect();
+                actual.sort_by_key(|value| value["textDocument"]["uri"].to_string());
+                expected.sort_by_key(|value| value["textDocument"]["uri"].to_string());
+                assert_eq!(actual, expected);
+                assert!(response.get("changes").is_none());
+            } else {
+                let mut changes = serde_json::Map::new();
+                for (file, _, edits) in expected {
+                    changes.insert(file.to_string(), json!(edits));
+                }
+                assert_eq!(response, json!({"changes":changes}));
+            }
+        };
+        let spans = |text: &Text, key: &str| -> Vec<Value> {
+            text.source.match_indices(key).map(|(start, _)| json!({"range":text.range(start, start + key.len()),"newText":"fresh"})).collect()
+        };
+        let here = || {
+            vec![
+                (&uri, 5, spans(&text, "here")),
+                (&shared, 7, spans(&shared_text, "here")),
+            ]
+        };
+        blocked(&mut server, "ghost");
+        blocked(&mut server, "otherghost");
+        exact(&mut server, "here", here());
+        exact(&mut server, "safe", vec![(&uri, 5, spans(&text, "safe"))]);
+        // A new independent root does not affect the destination's consumers.
+        server.notify("textDocument/didOpen", json!({"textDocument":{"uri":other,"languageId":"latex","version":9,"text":"\\documentclass{article}\\def\\jump{\\hyperlink}\\begin{document}\\jump{here}{Link}\\end{document}"}}));
+        exact(&mut server, "here", here());
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":other,"version":10},"contentChanges":[{"text":"\\documentclass{article}\\def\\jump{\\hyperlink}\\begin{document}\\input{shared}\\jump{here}{Link}\\end{document}"}]}));
+        blocked(&mut server, "here");
+        exact(&mut server, "safe", vec![(&uri, 5, spans(&text, "safe"))]);
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":other}}),
+        );
+        exact(&mut server, "here", here());
+        server.notify("textDocument/didOpen", json!({"textDocument":{"uri":provider,"languageId":"latex","version":12,"text":"\\renewcommand\\hyperlink[2]{#2}"}}));
+        blocked(&mut server, "here");
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":provider,"version":13},"contentChanges":[{"text":""}]}),
+        );
+        exact(&mut server, "here", here());
+        exact(
+            &mut server,
+            "word",
+            vec![(
+                &uri,
+                5,
+                source.match_indices(r"\word")
+                    .map(|(start, _)| json!({"range":text.range(start, start + 5),"newText":"\\fresh"}))
+                    .collect(),
+            )],
+        );
+        for (index, call) in [
+            r"\def\jump{\hyperlink}\jump{here}{Link}",
+            r"\let\jump\hyperlink\jump{here}{Link}",
+            r"\csuse{hyperlink}{here}{Link}",
+            r"\csname hyperlink\endcsname{here}{Link}",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let changed = format!("{source}{call}");
+            server.notify(
+                "textDocument/didChange",
+                json!({"textDocument":{"uri":uri,"version":6 + index},"contentChanges":[{"text":changed}]}),
+            );
+            blocked(&mut server, "here");
+        }
+        server.request(99, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
 fn inert_label_declarations_refresh_navigation_and_diagnostics_over_stdio() {
     use latex_lsp::text::Text;
 
