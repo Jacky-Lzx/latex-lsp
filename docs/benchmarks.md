@@ -21,6 +21,14 @@ python3 benchmarks/editing.py --output target/benchmarks/latest.json
 
 重命名只测量生成工作区编辑的时间，不应用重命名。每个响应都会进行内容校验，包括预期补全候选、精确的定义位置、跨章节引用和重命名的完整文件集合及条目数量、主文档参数变化，以及错误出现／消失和诊断缓存命中。CI 运行 small 的短会话校验协议和脚本，不设置受机器负载影响的耗时门槛。
 
+`--hook-labels` 为每节增加显式 `contribution` 代码标签，并加入另一个 hook 的干扰标签和带完整后缀的补全字段。每周期额外核验全部代码块的精确定义位置、注册与使用的全部引用、悬停及按 hook 过滤的完整后缀补全；三档分别有 17／129／513 个定义，18／133／521 项引用。可与其他 hook 选项组合。配对脚本的 `--query hook-definition` 自动启用此负载，交替测量同一代码标签查询，并逐项比较定义响应；`--query definition --hook-labels` 用于观察同一项目内普通查询的索引成本。
+
+```sh
+python3 benchmarks/editing.py --hook-labels --output target/benchmarks/hook-labels.json
+python3 benchmarks/rename_pairs.py --before target/benchmarks/before --after target/benchmarks/after \
+  --query hook-definition --output target/benchmarks/hook-label-pairs.json
+```
+
 ## 指标含义
 
 - `initialize`：初始化请求到响应，单独报告，不混入预热后的功能样本；`open` 包含打开两个缓冲区到有序屏障响应。
@@ -343,3 +351,61 @@ python3 benchmarks/rename_pairs.py \
 ```
 
 新指标、三种配对查询、报告交互和两版 release 原生审核通过。最终冻结源码的整仓验证为 321 个目标、3377 项通过、0 失败、497 项默认跳过，完整串行协议为 408 项通过、29 项默认跳过。64 项 hook 专项（含原生）、严格全目标 Clippy、文档、格式及差异检查通过。478 份 Rust 源码与冻结时的校验值一致，两版测量二进制的 SHA 与报告一致。HTML 交互脚本检查通过；两次 headless 预览均因浏览器异常退出失败，不计视觉验证通过。
+
+## 2026-10-26 第九轮显式代码标签与字段候选筛选
+
+功能基线为 `513ab8a`，新增以 `(hook, code label)` 为身份的定义、引用、悬停和补全。负载同时启用 `--hook-labels --hook-wrappers --hook-environments --hook-interfaces --hook-renames`，保留两类改名的全部编辑校验。三档有 17／129／513 个代码块定义及 18／133／521 项引用；代码标签响应逐项核验精确范围，补全核验 hook 隔离及整个后缀的替换。
+
+源码审阅发现，hook 名称与代码标签索引会先为光标文档构造完整操作数上下文，再判断光标是否位于相关字段。优化先解析候选字段；光标未命中时提前返回，有候选的文档才构造上下文，并按候选所属调用检查操作数。字面区域、声明位置、共享消费者一致性、来源预算和改名的完整调用保护均保留，没有新增缓存。已有数据实参、未保存提供文件和共享消费者回归用于检查筛选顺序的改变。
+
+正式配对在 CPU 0 启动两个常驻 release 进程，打开后核验所有服务器线程的亲和性；请求顺序及每组进程启动顺序均交替。每档 3 组进程，每组预热 5 对、测量 30 对，再交换 `--before`／`--after` 完整复测。下表统一按功能基线 → 优化版列出，反向报告本身保留实际参数顺序。
+
+| 查询／项目 | 首组 p50 · ms | 交换后 p50 · ms | 两组倍率 |
+| --- | ---: | ---: | ---: |
+| 普通定义 · small | 4.562 → 3.919 | 4.572 → 3.925 | 1.16×／1.16× |
+| 普通定义 · medium | 18.854 → 17.327 | 18.679 → 17.090 | 1.09×／1.09× |
+| 普通定义 · large | 69.861 → 66.269 | 70.783 → 67.401 | 1.05×／1.05× |
+| 代码标签定义 · small | 2.796 → 2.432 | 2.686 → 2.364 | 1.15×／1.14× |
+| 代码标签定义 · medium | 11.294 → 10.609 | 11.508 → 10.570 | 1.06×／1.09× |
+| 代码标签定义 · large | 42.971 → 41.159 | 43.257 → 41.398 | 1.04×／1.04× |
+
+large 普通定义的服务器 CPU 均值分别为 70.222 → 66.667、70.444 → 66.889 ms，均下降约 5.1%；代码标签定义为 41.222 → 39.778、42.778 → 39.889 ms，下降约 3.5%／6.8%。CPU 单样本精度为 10 ms，只比较每档 90 个样本的均值，不据单个样本作结论。
+
+完整连续会话为每档 3 个新进程，各预热 3 个周期、测量 20 个周期。large 的结果如下：
+
+| 操作 | 优化前 p50 · ms | 优化后 p50 · ms |
+| --- | ---: | ---: |
+| 代码标签定义 | 43.941 | 41.660 |
+| 代码标签引用 | 45.412 | 42.848 |
+| 代码标签悬停 | 44.771 | 39.019 |
+| 代码标签补全 | 46.763 | 40.795 |
+| 普通定义 | 72.854 | 73.899 |
+| 普通改名 | 63.614 | 61.826 |
+| hook 名称改名 | 55.230 | 54.016 |
+| hook 参数提示 | 25.365 | 25.243 |
+| 连续 8 次编辑到补全 | 81.895 | 75.165 |
+
+配对查询确认小幅稳定收益；连续会话仍有波动，普通定义在本次完整回放中略慢，不能据此声称所有功能加速。测试使用合成论文，关闭发行版发现并使用 pull 诊断，不包含 PDF 编译或外部格式化。
+
+六份正式原始报告合计 350040 bytes（约 342 KiB），11916 个墙钟样本的统计量、CPU 均值、fixture、脚本与二进制 SHA 均已复算：
+
+- [完整会话优化前](../benchmarks/results/2026-10-26/round9-code-labels-before.json)、[优化后](../benchmarks/results/2026-10-26/round9-code-labels-after.json)
+- [普通定义配对](../benchmarks/results/2026-10-26/round9-field-candidates-definition-pairs.json)、[交换顺序](../benchmarks/results/2026-10-26/round9-field-candidates-definition-pairs-reversed.json)
+- [代码标签定义配对](../benchmarks/results/2026-10-26/round9-field-candidates-code-label-pairs.json)、[交换顺序](../benchmarks/results/2026-10-26/round9-field-candidates-code-label-pairs-reversed.json)
+
+```sh
+python3 benchmarks/editing.py --server target/benchmarks/latex-lsp-round9-labels \
+  --hook-labels --hook-wrappers --hook-environments --hook-interfaces --hook-renames \
+  --runs 3 --iterations 20 --warmup 3 --output target/benchmarks/round9-before.json
+python3 benchmarks/rename_pairs.py \
+  --before target/benchmarks/latex-lsp-round9-labels \
+  --after target/benchmarks/latex-lsp-round9-field-candidates \
+  --query hook-definition --hook-labels --hook-wrappers --hook-environments --hook-interfaces \
+  --runs 3 --iterations 30 --warmup 5 --output target/benchmarks/round9-pairs.json
+```
+
+功能版与优化版均通过实际 release 的四种导航及原生编辑审核：直接、静态命名、纯转发和边界注释的精确定义／引用／悬停保持一致；独立普通标签的实际编辑应用后保持代码事件顺序与完整 AUX。严格全目标 Clippy 已通过，优化版最终冻结全量回归进行中。
+
+交互报告的 JS VM 校验通过，包含三档切换、p50／p95、全部指标及配对表。`html_preview` 仍返回 `Headless Chrome could not render the page: the browser exited unexpectedly.`；未将该预览记为视觉验证通过。
+
+优化版最终冻结验证通过：322 个目标、3385 项通过、0 失败、499 项默认跳过，其中完整串行 stdio 为 409 项通过、29 项默认跳过。73 项含原生 hook 专项、严格全目标 Clippy、文档、格式及差异检查通过；481 份 Rust 源码集合和校验值均一致。普通／hook 会话 smoke 及四种配对查询模式通过；六份正式 JSON 与两版 release SHA 再次校验一致。

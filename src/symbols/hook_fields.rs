@@ -6,11 +6,17 @@ use crate::{
 use lsp_types::Url;
 use std::collections::BTreeMap;
 
+/// A parsed field whose enclosing invocation still needs operand validation.
+pub(super) struct Candidate<E> {
+    pub entry: E,
+    pub invocation: usize,
+}
+
 pub(super) fn index<E: Clone + Eq>(
     ws: &Workspace,
     origin: &Url,
     roots: &[&str],
-    read: impl Fn(&Document, &CommandSignatures<'_>) -> BTreeMap<usize, E>,
+    read: impl Fn(&Document, &CommandSignatures<'_>) -> BTreeMap<usize, Candidate<E>>,
     selected: impl Fn(&E) -> bool,
 ) -> BTreeMap<Url, BTreeMap<usize, E>> {
     if !ws.index_truncated.is_empty()
@@ -79,7 +85,23 @@ pub(super) fn index<E: Clone + Eq>(
             else {
                 continue;
             };
-            let calls = read(doc, &signatures);
+            let candidates = read(doc, &signatures);
+            if uri == origin && !candidates.values().any(|call| selected(&call.entry)) {
+                return BTreeMap::new();
+            }
+            // Ordinary queries need no operand table when their cursor does
+            // not select a hook field. Candidates that survive this check
+            // still undergo the same invocation-role validation as before.
+            let calls = if candidates.is_empty() {
+                BTreeMap::new()
+            } else {
+                let context = super::named_references::Context::new(doc, &signatures);
+                candidates
+                    .into_iter()
+                    .filter(|(_, call)| !context.operand(doc, call.invocation))
+                    .map(|(at, call)| (at, call.entry))
+                    .collect()
+            };
             if uri == origin && !calls.values().any(&selected) {
                 return BTreeMap::new();
             }

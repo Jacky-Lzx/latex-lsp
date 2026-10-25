@@ -31,7 +31,7 @@ def replay(before, after, scale, args, cpu):
         with tempfile.TemporaryDirectory(prefix="latex-lsp-rename-pairs-") as directory, ExitStack() as stack:
             root = Path(directory)
             launchers = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="latex-lsp-rename-launch-")))
-            metadata = editing.fixture(root, scale, args.hooks, args.hook_wrappers, args.hook_environments, args.hook_interfaces)
+            metadata = editing.fixture(root, scale, args.hooks, args.hook_wrappers, args.hook_environments, args.hook_interfaces, args.hook_labels)
             main, chapter = root / "main.tex", root / "chapter0.tex"
             source = chapter.read_text()
             params = {"textDocument": {"uri": chapter.as_uri()},
@@ -41,6 +41,8 @@ def replay(before, after, scale, args, cpu):
                 params = {"textDocument": {"uri": main.as_uri()},
                           "position": editing.position(source, source.index("{benchmark}") + 2),
                           "newName": "benchmark.renamed"}
+            elif args.query == "hook-definition":
+                params["position"] = editing.position(source, source.rindex("[contribution]") + 4)
             elif args.query == "rename":
                 params["newName"] = "sec:renamed"
             declaration_source = chapter.read_text()
@@ -49,6 +51,10 @@ def replay(before, after, scale, args, cpu):
                 "start": editing.position(declaration_source, declaration),
                 "end": editing.position(declaration_source, declaration + len("sec:0:0")),
             }}]
+            if args.query == "hook-definition":
+                expected_definition = editing.hook_label_locations({
+                    path.as_uri(): path.read_text() for path in root.glob("*.tex")
+                })
             chapters, sections = editing.SCALES[scale]
             expected_files = {(root / f"chapter{i}.tex").as_uri() for i in range(chapters)}
             expected_edits = chapters * (sections + 1) + 1
@@ -95,11 +101,11 @@ def replay(before, after, scale, args, cpu):
                     server = servers[label]
                     start_cpu = cpu_seconds(server.process)
                     start = time.perf_counter_ns()
-                    method = "rename" if args.query == "hook-rename" else args.query
+                    method = {"hook-rename": "rename", "hook-definition": "definition"}.get(args.query, args.query)
                     result = server.request(f"textDocument/{method}", params)
                     elapsed = (time.perf_counter_ns() - start) / 1e6
                     end_cpu = cpu_seconds(server.process)
-                    if args.query == "definition":
+                    if args.query in {"definition", "hook-definition"}:
                         assert result == expected_definition, result
                     elif args.query == "hook-rename":
                         assert result == {"changes": expected_hook_edits}, result
@@ -134,20 +140,22 @@ def main():
     parser.add_argument("--runs", type=int, default=3)
     parser.add_argument("--timeout", type=float, default=120)
     parser.add_argument("--cpu", type=int, help="pin both servers to this allowed CPU (Linux default: first allowed CPU)")
-    parser.add_argument("--query", choices=["rename", "definition", "hook-rename"], default="rename")
+    parser.add_argument("--query", choices=["rename", "definition", "hook-rename", "hook-definition"], default="rename")
     parser.add_argument("--hooks", action="store_true")
     parser.add_argument("--hook-wrappers", action="store_true")
     parser.add_argument("--hook-environments", action="store_true")
     parser.add_argument("--hook-interfaces", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--hook-labels", action="store_true")
     args = parser.parse_args()
+    args.hook_labels = args.hook_labels or args.query == "hook-definition"
     if args.iterations < 1 or args.runs < 1 or args.warmup < 0 or args.timeout <= 0:
         parser.error("iterations/runs/timeout must be positive; warmup must be nonnegative")
     affinity = os.sched_getaffinity(0) if hasattr(os, "sched_getaffinity") else set()
     if args.cpu is not None and args.cpu not in affinity:
         parser.error("cpu must belong to the current allowed CPU set")
     cpu = args.cpu if args.cpu is not None else min(affinity, default=None)
-    args.hooks = args.hooks or args.hook_wrappers or args.hook_environments or args.hook_interfaces or args.query == "hook-rename"
+    args.hooks = args.hooks or args.hook_wrappers or args.hook_environments or args.hook_interfaces or args.query == "hook-rename" or args.hook_labels
     before, after = args.before.resolve(strict=True), args.after.resolve(strict=True)
     report = {
         "schema": 1, "kind": "paired_" + args.query.replace("-", "_"),
@@ -161,7 +169,8 @@ def main():
         "parameters": {"iterations": args.iterations, "warmup": args.warmup, "runs": args.runs,
                        "hooks": args.hooks, "hook_wrappers": args.hook_wrappers,
                        "hook_environments": args.hook_environments,
-                       "hook_interfaces": args.hook_interfaces, "query": args.query},
+                       "hook_interfaces": args.hook_interfaces, "hook_labels": args.hook_labels,
+                       "query": args.query},
         "scenarios": {},
     }
     for scale in args.scales:

@@ -11,6 +11,7 @@ use std::{
 };
 
 mod edits;
+use super::hook_fields::Candidate;
 pub(crate) use edits::{prepare, rename};
 
 const COMMANDS: &[&str] = &[
@@ -125,9 +126,9 @@ fn name_field(source: &str, after: usize, command: &str) -> Option<(Entry, usize
     ))
 }
 
-fn calls(doc: &Document, signatures: &CommandSignatures<'_>) -> BTreeMap<usize, Entry> {
+fn calls(doc: &Document, signatures: &CommandSignatures<'_>) -> BTreeMap<usize, Candidate<Entry>> {
     let source = &doc.text.source;
-    let context = crate::symbols::named_references::Context::new(doc, signatures);
+    let context = crate::symbols::named_references::LiteralContext::new(doc);
     let declarations: BTreeSet<_> = doc
         .syntax
         .definitions
@@ -138,10 +139,7 @@ fn calls(doc: &Document, signatures: &CommandSignatures<'_>) -> BTreeMap<usize, 
     let empty = BTreeSet::new();
     let mut result = BTreeMap::new();
     for (index, command) in doc.syntax.commands.iter().enumerate() {
-        if declarations.contains(&command.span.start)
-            || context.operand(doc, command.span.start)
-            || context.literal(command.span.start)
-        {
+        if declarations.contains(&command.span.start) || context.literal(command.span.start) {
             continue;
         }
         let (name, invocation) = signatures
@@ -170,7 +168,13 @@ fn calls(doc: &Document, signatures: &CommandSignatures<'_>) -> BTreeMap<usize, 
             after = end;
             let complete = entry.complete;
             if valid(&entry.name) || entry.name.is_empty() {
-                result.insert(entry.span.start, entry);
+                result.insert(
+                    entry.span.start,
+                    Candidate {
+                        entry,
+                        invocation: command.span.start,
+                    },
+                );
             }
             if !complete {
                 break;

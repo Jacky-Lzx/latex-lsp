@@ -1,4 +1,5 @@
 //! Explicit code labels, keyed by hook name rather than reference-key identity.
+use super::hook_fields::Candidate;
 use crate::{
     language::signature::CommandSignatures,
     parser::syntax,
@@ -91,9 +92,9 @@ impl Entry {
     }
 }
 
-fn calls(doc: &Document, signatures: &CommandSignatures<'_>) -> BTreeMap<usize, Entry> {
+fn calls(doc: &Document, signatures: &CommandSignatures<'_>) -> BTreeMap<usize, Candidate<Entry>> {
     let source = &doc.text.source;
-    let context = super::named_references::Context::new(doc, signatures);
+    let context = super::named_references::LiteralContext::new(doc);
     let declarations: BTreeSet<_> = doc
         .syntax
         .definitions
@@ -104,10 +105,7 @@ fn calls(doc: &Document, signatures: &CommandSignatures<'_>) -> BTreeMap<usize, 
     let empty = BTreeSet::new();
     let mut result = BTreeMap::new();
     for (index, command) in doc.syntax.commands.iter().enumerate() {
-        if declarations.contains(&command.span.start)
-            || context.operand(doc, command.span.start)
-            || context.literal(command.span.start)
-        {
+        if declarations.contains(&command.span.start) || context.literal(command.span.start) {
             continue;
         }
         let (name, invocation) = signatures
@@ -156,13 +154,16 @@ fn calls(doc: &Document, signatures: &CommandSignatures<'_>) -> BTreeMap<usize, 
             if label_name(name) || name.is_empty() {
                 result.insert(
                     span.start,
-                    Entry {
-                        hook: hook.into(),
-                        name: name.into(),
-                        span,
-                        declaration,
-                        complete,
-                        grouped,
+                    Candidate {
+                        entry: Entry {
+                            hook: hook.into(),
+                            name: name.into(),
+                            span,
+                            declaration,
+                            complete,
+                            grouped,
+                        },
+                        invocation: command.span.start,
                     },
                 );
             }
