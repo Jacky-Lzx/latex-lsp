@@ -155,6 +155,8 @@ fn literal_setting(source: &str, setting: &str) -> Result<Option<String>, String
                         | "do"
                         | "require"
                         | "eval"
+                        | "process_rc_file"
+                        | "$auto_rc_use"
                 ) {
                     return Err(unknown());
                 }

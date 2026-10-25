@@ -181,13 +181,9 @@ fn unsupported_or_oversized_rc_settings_are_reported_without_running_perl() {
     ] {
         std::fs::write(&rc, source).unwrap();
         assert_eq!(BuildConfig::default().output_path(&main), None);
-        let outcome = build::run(&main, &BuildConfig::default(), &AtomicBool::new(false));
-        assert_eq!(outcome.status, "error");
-        assert!(
-            outcome.message.contains(".latexmkrc"),
-            "{}",
-            outcome.message
-        );
+        assert!(BuildConfig::default()
+            .expanded_rebuild_arguments(&main)
+            .is_err());
         assert!(!directory.path().join("build").exists());
         assert!(!directory.path().join("executed").exists());
     }
@@ -426,4 +422,92 @@ fn real_latexmk_separate_auxiliary_output_and_final_directories() {
             root.join("final/main.pdf")
         );
     }
+}
+
+#[test]
+#[ignore = "requires latexmk and XeLaTeX"]
+fn real_dynamic_rc_and_included_files_resolve_once_per_build_and_invalidate_cached_paths() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = root.join("main.tex");
+    let uri = Url::from_file_path(&main).unwrap();
+    std::fs::write(
+        &main,
+        "\\documentclass{article}\\usepackage{fontspec}\\begin{document}Hello\\end{document}",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join(".latexmkrc"),
+        "do './extra.rc';\n$clean_ext =~ s/foo/bar/;\n",
+    )
+    .unwrap();
+    let extra = root.join("extra.rc");
+    for folder in ["first", "second"] {
+        std::fs::write(&extra, format!("$out_dir = '{folder}' . '/tex'; $aux_dir = '{folder}' . '/aux'; $out2_dir = '{folder}' . '/final'; $pdf_mode = 2 + 3;\n")).unwrap();
+        let outcome = build::run(&main, &BuildConfig::default(), &AtomicBool::new(false));
+        assert_eq!(
+            outcome.status, "success",
+            "{}\n{}",
+            outcome.message, outcome.output
+        );
+        assert_eq!(outcome.pdf, Some(root.join(folder).join("final/main.pdf")));
+        assert_eq!(outcome.log, Some(root.join(folder).join("aux/main.log")));
+        let config = Workspace::default().build_config(&uri);
+        assert!(config.resolution.native);
+        assert!(config
+            .resolution
+            .sources
+            .iter()
+            .any(|path| path.ends_with("extra.rc")));
+        assert_eq!(config.effective_engine(), Some(Engine::XeLatex));
+        assert_eq!(
+            config.artifact_path(&main, "pdf").unwrap(),
+            root.join(folder).join("final/main.pdf")
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires latexmk"]
+fn native_rc_errors_and_timeouts_preserve_existing_logs_and_pre_cancel_does_not_run_perl() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = root.join("main.tex");
+    std::fs::write(
+        &main,
+        "\\documentclass{article}\\begin{document}Hello\\end{document}",
+    )
+    .unwrap();
+    std::fs::create_dir(root.join("old")).unwrap();
+    std::fs::write(root.join("old/main.log"), "previous log").unwrap();
+    let rc = root.join(".latexmkrc");
+    std::fs::write(
+        &rc,
+        "do './never.rc'; open(my $f, '>', 'executed'); die 'invalid config';",
+    )
+    .unwrap();
+    let outcome = build::run(&main, &BuildConfig::default(), &AtomicBool::new(true));
+    assert_eq!(outcome.status, "cancelled");
+    assert!(!root.join("executed").exists());
+    let outcome = build::run(&main, &BuildConfig::default(), &AtomicBool::new(false));
+    assert_eq!(outcome.status, "error");
+    assert!(
+        outcome.message.contains("invalid config"),
+        "{}",
+        outcome.message
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join("old/main.log")).unwrap(),
+        "previous log"
+    );
+    std::fs::write(&rc, "do './never.rc'; sleep 20;").unwrap();
+    let config = BuildConfig {
+        timeout_seconds: 1,
+        ..Default::default()
+    };
+    let start = std::time::Instant::now();
+    let outcome = build::run(&main, &config, &AtomicBool::new(false));
+    assert_eq!(outcome.status, "error");
+    assert!(outcome.message.contains("timed out"), "{}", outcome.message);
+    assert!(start.elapsed() < std::time::Duration::from_secs(4));
 }

@@ -351,7 +351,40 @@ impl BuildManager {
             ));
         }
         workspace.refresh_project(&root);
-        let config = workspace.build_config(&root);
+        let mut config = workspace.build_config(&root);
+        if config.resolution.native || !config.resolution.issues.is_empty() {
+            let path = root
+                .to_file_path()
+                .map_err(|_| Error::invalid_params("Compilation requires a local file"))?;
+            drop(workspace);
+            config = tokio::task::spawn_blocking(move || {
+                config
+                    .unresolved()
+                    .resolve_for_build(&path, &AtomicBool::new(false))
+            })
+            .await
+            .map_err(|error| Error::invalid_params(error.to_string()))?
+            .map_err(Error::invalid_params)?;
+            workspace = self.workspace.write().await;
+            if workspace.root_document(&uri).ok().as_ref() != Some(&root) {
+                return Err(Error::invalid_params(
+                    "Root changed during latexmk configuration resolution; build again",
+                ));
+            }
+            // Cache lookup now supplies the native paths. Explicit editor settings
+            // must still match the configuration which requested the probe.
+            let current = workspace.build_config(&root);
+            if serde_json::to_value(current.unresolved()).unwrap()
+                != serde_json::to_value(config.unresolved()).unwrap()
+            {
+                return Err(Error::invalid_params(
+                    "Build settings changed during latexmk configuration resolution; build again",
+                ));
+            }
+        }
+        config
+            .validate_resolution()
+            .map_err(Error::invalid_params)?;
         let static_code_inputs = crate::project::code_inputs::inputs(&workspace, &root);
         let mut project = workspace.project_files(&root);
         // Known opened paths remain build dependencies even when their current
@@ -1468,10 +1501,10 @@ fn run_with_mode(
     // PDF. latexmk may skip a source saved with identical contents even though
     // its timestamp is newer. Force one pass to establish a verified PDF and
     // recorder instead of rejecting that legitimate incremental build.
-    let config = config.resolved(root);
-    if let Err(message) = config.validate_resolution() {
-        return Outcome::error(message);
-    }
+    let config = match config.resolve_for_build(root, cancel) {
+        Ok(config) => config,
+        Err(message) => return Outcome::error(message),
+    };
     let config = &config;
     let refresh = !rebuild
         && config.arguments.is_none()

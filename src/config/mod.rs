@@ -8,6 +8,7 @@ use std::{
 };
 
 mod latexmk;
+mod latexmk_native;
 
 const DEFAULT_OUTPUT_DIRECTORY: &str = "build/latex-lsp";
 
@@ -190,6 +191,11 @@ impl Default for FormattingConfig {
 pub struct BuildResolution {
     pub sources: Vec<PathBuf>,
     pub issues: Vec<String>,
+    pub native: bool,
+    #[serde(skip)]
+    pub inferred: Vec<String>,
+    #[serde(skip)]
+    pub dependencies: Vec<PathBuf>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -482,6 +488,12 @@ impl BuildConfig {
     /// Resolve once per build so compiler arguments, notifications and artifact
     /// lookup share the same settings if the rc file changes while the tool runs.
     pub(crate) fn resolved(&self, root: &Path) -> Self {
+        if self.resolution.native {
+            return self.clone();
+        }
+        if let Some(config) = latexmk_native::cached(root, self) {
+            return config;
+        }
         let mut config = self.clone();
         if config.output_directory.is_some()
             && config.engine.is_some()
@@ -490,29 +502,50 @@ impl BuildConfig {
         {
             return config;
         }
-        let path = self
-            .latexmkrc_paths(root)
-            .into_iter()
-            .find(|path| crate::diagnostics::diagnostic_inputs::is_file(path));
-        let settings = path
-            .as_ref()
-            .map(|path| latexmk::read(path))
-            .unwrap_or_default();
-        if let Some(path) = &path {
-            if !config.resolution.sources.contains(path) {
+        let mut settings = latexmk::Settings::default();
+        let mut selected = None;
+        let paths = if self.arguments.is_none()
+            && Path::new(&self.executable).file_stem() == Some(OsStr::new("latexmk"))
+        {
+            latexmk_native::candidates(root)
+        } else {
+            vec![]
+        };
+        for path in paths {
+            if !crate::diagnostics::diagnostic_inputs::is_file(&path) {
+                continue;
+            }
+            let next = latexmk::read(&path);
+            macro_rules! overlay {
+                ($field:ident) => {
+                    if !matches!(next.$field, Ok(None)) {
+                        settings.$field = next.$field;
+                    }
+                };
+            }
+            overlay!(engine);
+            overlay!(output_directory);
+            overlay!(auxiliary_directory);
+            overlay!(final_output_directory);
+            if !config.resolution.sources.contains(&path) {
                 config.resolution.sources.push(path.clone());
             }
+            selected = Some(path);
         }
         let describe = |setting: &str, error: String| {
             format!(
-                "{}: {setting}: {error}; configure build.engine/outputDirectory explicitly",
-                path.as_ref()
+                "{}: {setting}: {error}; configure the corresponding build setting explicitly",
+                selected
+                    .as_ref()
                     .map_or_else(|| "latexmkrc".into(), |path| path.display().to_string())
             )
         };
         if config.engine.is_none() {
             match settings.engine {
-                Ok(engine) => config.engine = engine,
+                Ok(engine) => {
+                    config.engine = engine;
+                    config.resolution.inferred.push("engine".into());
+                }
                 Err(error) => config.resolution.issues.push(describe("$pdf_mode", error)),
             }
         }
@@ -520,7 +553,8 @@ impl BuildConfig {
             match settings.output_directory {
                 Ok(directory) => {
                     config.output_directory =
-                        Some(directory.unwrap_or_else(|| DEFAULT_OUTPUT_DIRECTORY.into()))
+                        Some(directory.unwrap_or_else(|| DEFAULT_OUTPUT_DIRECTORY.into()));
+                    config.resolution.inferred.push("outputDirectory".into());
                 }
                 Err(error) => config.resolution.issues.push(describe("$out_dir", error)),
             }
@@ -542,7 +576,15 @@ impl BuildConfig {
                     Ok(value) => {
                         *target = value
                             .filter(|value| !value.is_empty())
-                            .or_else(|| config.output_directory.clone())
+                            .or_else(|| config.output_directory.clone());
+                        config.resolution.inferred.push(
+                            if setting == "$aux_dir" {
+                                "auxiliaryDirectory"
+                            } else {
+                                "finalOutputDirectory"
+                            }
+                            .into(),
+                        );
                     }
                     Err(error) => config.resolution.issues.push(describe(setting, error)),
                 }
@@ -551,6 +593,36 @@ impl BuildConfig {
         config.resolution.issues.sort();
         config.resolution.issues.dedup();
         config
+    }
+
+    pub(crate) fn unresolved(&self) -> Self {
+        let mut config = self.clone();
+        for field in &self.resolution.inferred {
+            match field.as_str() {
+                "engine" => config.engine = None,
+                "outputDirectory" => config.output_directory = None,
+                "auxiliaryDirectory" => config.auxiliary_directory = None,
+                "finalOutputDirectory" => config.final_output_directory = None,
+                _ => {}
+            }
+        }
+        config.resolution = BuildResolution::default();
+        config
+    }
+
+    pub(crate) fn resolve_for_build(
+        &self,
+        root: &Path,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<Self, String> {
+        if self.resolution.native {
+            return Ok(self.clone());
+        }
+        let config = self.resolved(root);
+        if config.resolution.issues.is_empty() && !config.resolution.native {
+            return Ok(config);
+        }
+        latexmk_native::resolve(root, &config, cancel)
     }
 
     pub(crate) fn validate_resolution(&self) -> Result<(), String> {
@@ -567,10 +639,11 @@ impl BuildConfig {
         {
             return Vec::new();
         }
-        root.parent()
-            .into_iter()
-            .flat_map(|parent| [parent.join(".latexmkrc"), parent.join("latexmkrc")])
-            .collect()
+        let mut paths = latexmk_native::candidates(root);
+        paths.extend(self.resolution.dependencies.clone());
+        paths.sort();
+        paths.dedup();
+        paths
     }
 
     pub fn output_path(&self, root: &Path) -> Option<PathBuf> {

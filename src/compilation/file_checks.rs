@@ -463,14 +463,10 @@ impl Snapshot {
         let mut configuration = BTreeMap::new();
         for path in config.latexmkrc_paths(&root_path) {
             let binding = file(&path);
-            let selected = binding.is_some();
             let contents = InputSnapshot::file(&path);
             configuration.insert(path, (binding, contents));
-            // latexmk reads only the first existing project rc file. Watch
-            // earlier missing candidates, but not an unused later rc file.
-            if selected {
-                break;
-            }
+            // Candidates already select the first existing file in each layer;
+            // native resolution adds included configuration dependencies.
         }
         for path in crate::compilation::index_processing::dependencies(&root_path, &config)
             .into_iter()

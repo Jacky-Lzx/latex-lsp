@@ -38809,3 +38809,100 @@ fn provider_note_string_mutations_never_return_partial_macro_edits_over_stdio() 
         server.wait_exit(0);
     }
 }
+
+#[test]
+#[ignore = "requires latexmk and XeLaTeX"]
+fn dynamic_latexmk_layers_report_effective_paths_without_running_perl_during_status_polling() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let home = root.join("home");
+    let xdg = root.join("config");
+    let sys = root.join("system.rc");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(xdg.join("latexmk")).unwrap();
+    std::fs::write(&sys, "$out_dir = 'system'; $pdf_mode = 1;").unwrap();
+    std::fs::write(home.join(".latexmkrc"), "$out_dir = 'ignored';").unwrap();
+    std::fs::write(
+        xdg.join("latexmk/latexmkrc"),
+        "$out_dir = 'user'; $aux_dir = 'aux'; $pdf_mode = 4;",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join(".latexmkrc"),
+        "do './extra.rc';\nopen(my $f, '>>', 'rc-runs'); print $f 'x'; close($f);\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("extra.rc"),
+        "$out2_dir = 'final' . '/pdf'; $pdf_mode = 2 + 3;",
+    )
+    .unwrap();
+    let main = root.join("main.tex");
+    std::fs::write(
+        &main,
+        "\\documentclass{article}\\usepackage{fontspec}\\begin{document}Hello\\end{document}",
+    )
+    .unwrap();
+    let uri = Url::from_file_path(&main).unwrap();
+    let mut server = Server::start_with_env(&[
+        ("HOME", home.to_str().unwrap()),
+        ("XDG_CONFIG_HOME", xdg.to_str().unwrap()),
+        ("LATEXMKRCSYS", sys.to_str().unwrap()),
+    ]);
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(root).unwrap(),"capabilities":{},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    server.request(
+        2,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[uri]}),
+    );
+    let started = server.until(|message| message["method"] == "latex/buildStarted");
+    assert_eq!(started["params"]["engine"], "xelatex", "{started}");
+    assert_eq!(started["params"]["configuration"]["native"], true);
+    let finished = server.until_with_timeout(Duration::from_secs(30), |message| {
+        message["method"] == "latex/buildFinished"
+    });
+    assert_eq!(finished["params"]["status"], "success", "{finished}");
+    assert_eq!(
+        finished["params"]["pdfUri"],
+        Url::from_file_path(root.join("final/pdf/main.pdf"))
+            .unwrap()
+            .as_str()
+    );
+    assert_eq!(
+        finished["params"]["logUri"],
+        Url::from_file_path(root.join("aux/main.log"))
+            .unwrap()
+            .as_str()
+    );
+    assert_eq!(finished["params"]["stale"], false, "{finished}");
+    let sources = finished["params"]["configuration"]["sources"]
+        .as_array()
+        .unwrap();
+    for name in [
+        "system.rc",
+        "config/latexmk/latexmkrc",
+        ".latexmkrc",
+        "extra.rc",
+    ] {
+        assert!(
+            sources
+                .iter()
+                .any(|path| path.as_str().unwrap().ends_with(name)),
+            "{sources:?}"
+        );
+    }
+    let before = std::fs::read(root.join("rc-runs")).unwrap();
+    for id in 3..8 {
+        let status = server.request(
+            id,
+            "workspace/executeCommand",
+            json!({"command":"latex.buildStatus","arguments":[uri]}),
+        );
+        assert_eq!(status["status"], "success");
+    }
+    assert_eq!(std::fs::read(root.join("rc-runs")).unwrap(), before);
+    server.request(8, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
