@@ -5374,6 +5374,9 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main
                     server.until(|item| {
                         item["method"] == "textDocument/publishDiagnostics"
                             && item["params"]["uri"] == target.as_str()
+                            // The conflict count can stay unchanged across edits;
+                            // only the matching document version has current ranges.
+                            && (target != &refs || item["params"]["version"] == 7 + stage)
                             && item["params"]["diagnostics"]
                                 .as_array()
                                 .is_some_and(|items| matches(items))
