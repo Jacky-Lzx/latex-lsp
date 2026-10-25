@@ -71,6 +71,7 @@ mod formatting;
 mod generated;
 pub mod graphics;
 mod graphics_settings;
+mod hook_names;
 mod image_fixes;
 mod imports;
 mod index_diagnostics;

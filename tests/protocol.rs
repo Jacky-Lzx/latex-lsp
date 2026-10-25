@@ -17,6 +17,112 @@ struct Server {
 }
 
 #[test]
+fn hook_names_keep_exact_ranges_and_refresh_unsaved_forwarders_over_stdio() {
+    use latex_lsp::text::Text;
+    for versioned in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+        let provider = main.join("hooks.tex").unwrap();
+        let source = "% hooks\r\n\\documentclass{article}\\input{hooks}\\begin{document}😀 \\invoke{custom}\\label{safe}\\ref{safe}\\end{document}";
+        let definitions = "% provider\r\n\\NewHook{ custom }\\def\\invoke{\\UseHook}\\AddToHook{custom}[custom]{Code}";
+        std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+        std::fs::write(provider.to_file_path().unwrap(), definitions).unwrap();
+        let mut server = Server::start();
+        server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(directory.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":versioned}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+        server.notify("initialized", json!({}));
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":main,"languageId":"latex","version":5,"text":source}}),
+        );
+        let text = Text::new(source.into());
+        let provided = Text::new(definitions.into());
+        let at = source.find("custom").unwrap();
+        let position = text.position(at + 3);
+        let declaration = definitions.find("custom").unwrap();
+        let registration = definitions.find("{custom}").unwrap() + 1;
+        let expected = json!([{"uri":provider,"range":provided.range(declaration,declaration+6)}]);
+        let query = |server: &mut Server| {
+            server.request(
+                2,
+                "textDocument/definition",
+                json!({"textDocument":{"uri":main},"position":position}),
+            )
+        };
+        assert_eq!(query(&mut server), expected);
+        let all = json!([
+            {"uri":provider,"range":provided.range(declaration,declaration+6)},
+            {"uri":provider,"range":provided.range(registration,registration+6)},
+            {"uri":main,"range":text.range(at,at+6)}
+        ]);
+        assert_eq!(server.request(3,"textDocument/references",json!({"textDocument":{"uri":main},"position":position,"context":{"includeDeclaration":true}})),all);
+        let hover = server.request(
+            4,
+            "textDocument/hover",
+            json!({"textDocument":{"uri":main},"position":position}),
+        );
+        assert_eq!(hover["range"], json!(text.range(at, at + 6)));
+        assert_eq!(hover["contents"]["kind"], "plaintext");
+        assert!(hover["contents"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("LaTeX kernel hook"));
+        let highlighted = server.request(
+            5,
+            "textDocument/documentHighlight",
+            json!({"textDocument":{"uri":main},"position":position}),
+        );
+        assert_eq!(highlighted, json!([{"range":text.range(at,at+6),"kind":2}]));
+        let discarded = definitions.replace(r"\def\invoke{\UseHook}", r"\def\invoke#1{}");
+        server.notify("textDocument/didOpen",json!({"textDocument":{"uri":provider,"languageId":"latex","version":12,"text":discarded}}));
+        assert_eq!(query(&mut server), json!([]));
+        server.notify("textDocument/didChange",json!({"textDocument":{"uri":provider,"version":13},"contentChanges":[{"text":definitions}]}));
+        assert_eq!(query(&mut server), expected);
+        server.notify("textDocument/didChange",json!({"textDocument":{"uri":provider,"version":14},"contentChanges":[{"text":discarded}]}));
+        assert_eq!(query(&mut server), json!([]));
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":provider}}),
+        );
+        assert_eq!(query(&mut server), expected);
+        let changed = source.replace("{custom}", "{cusTOM}");
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":7},"contentChanges":[{"text":changed}]}),
+        );
+        let completion = server.request(
+            6,
+            "textDocument/completion",
+            json!({"textDocument":{"uri":main},"position":position}),
+        );
+        let items = completion
+            .as_array()
+            .expect("complete hook candidates are an array");
+        assert_eq!(items.len(), 1);
+        let item = &items[0];
+        assert_eq!(item["label"], "custom");
+        assert_eq!(item["kind"], 23);
+        assert_eq!(
+            item["textEdit"],
+            json!({"range":text.range(at,at+6),"newText":"custom"})
+        );
+        let changed_text = Text::new(changed.clone());
+        let edits: Vec<_> = changed
+            .match_indices("safe")
+            .map(|(at, _)| json!({"range":changed_text.range(at,at+4),"newText":"fresh"}))
+            .collect();
+        let expected_edit = if versioned {
+            json!({"documentChanges":[{"textDocument":{"uri":main,"version":7},"edits":edits}]})
+        } else {
+            json!({"changes":{main.as_str():edits}})
+        };
+        assert_eq!(server.request(7,"textDocument/rename",json!({"textDocument":{"uri":main},"position":changed_text.position(changed.rfind("safe").unwrap()+1),"newName":"fresh"})),expected_edit);
+        server.request(1000, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
 fn macro_patch_guards_refresh_provider_aliases_and_exact_edits_over_stdio() {
     use latex_lsp::text::Text;
     for versioned in [false, true] {

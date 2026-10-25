@@ -1231,6 +1231,9 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
         return vec![];
     }
     if !name_command {
+        if let Some(items) = crate::hook_names::completion(workspace, uri, offset) {
+            return items;
+        }
         if let Some(items) = crate::expl3::completion(workspace, uri, offset) {
             return items;
         }
@@ -1799,6 +1802,10 @@ pub fn definitions(workspace: &Workspace, uri: &Url, position: Position) -> Vec<
         return vec![];
     };
 
+    if let Some(result) = crate::hook_names::definitions(workspace, uri, offset) {
+        return result;
+    }
+
     if let Some(result) = crate::bib_categories::definitions(workspace, uri, offset) {
         return result;
     }
@@ -1875,6 +1882,11 @@ pub fn references(
         return vec![];
     };
     if let Some(offset) = doc.text.offset(position) {
+        if let Some(result) =
+            crate::hook_names::references(workspace, uri, offset, include_declaration)
+        {
+            return result;
+        }
         if let Some(result) =
             crate::bib_categories::references(workspace, uri, offset, include_declaration)
         {
@@ -2258,6 +2270,9 @@ fn all_references(
 pub fn hover(workspace: &Workspace, uri: &Url, position: Position) -> Option<Hover> {
     let doc = workspace.documents.get(uri)?;
     let offset = doc.text.offset(position)?;
+    if let Some(result) = crate::hook_names::hover(workspace, uri, offset) {
+        return Some(result);
+    }
     if let Some(result) = crate::bib_categories::hover(workspace, uri, offset) {
         return Some(result);
     }
