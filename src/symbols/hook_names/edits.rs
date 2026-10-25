@@ -2,7 +2,7 @@
 use super::*;
 use crate::{
     language::signature,
-    project::source_inputs,
+    project::{source_inputs, workspace::DocumentKind},
     rpc::{Error, Result},
 };
 

@@ -7,6 +7,8 @@ pub(crate) mod environment_calls;
 pub(crate) mod expl3;
 pub(crate) mod extra_symbols;
 pub(crate) mod generated;
+pub(crate) mod hook_fields;
+pub(crate) mod hook_labels;
 pub(crate) mod hook_names;
 pub(crate) mod label_declarations;
 pub(crate) mod lengths;

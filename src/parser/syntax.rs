@@ -711,7 +711,7 @@ pub(crate) fn environment_name_argument(source: &str, end: usize) -> Option<Argu
 }
 
 /// Literal runs separated by TeX comments, preserving each comment's newline.
-fn name_literal_pieces(source: &str, span: Range<usize>) -> Vec<Range<usize>> {
+pub(crate) fn name_literal_pieces(source: &str, span: Range<usize>) -> Vec<Range<usize>> {
     let bytes = source.as_bytes();
     let mut pieces = Vec::new();
     let mut start = span.start;

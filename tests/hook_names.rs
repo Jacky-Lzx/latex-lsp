@@ -100,6 +100,13 @@ fn static_named_mirrored_forwarders_keep_both_bare_name_fields() {
             }]
         );
         assert_eq!(features::references(&workspace, &uri, at, true).len(), 2);
+        assert_eq!(
+            features::definitions(&workspace, &uri, text.position(first + slot)),
+            [Location {
+                uri: uri.clone(),
+                range: text.range(first + slot, first + slot + 1)
+            }]
+        );
     }
 }
 
@@ -149,7 +156,10 @@ fn hook_names_do_not_merge_with_labels_macros_or_code_labels() {
         [all[6].clone()]
     );
     for index in [2, 5] {
-        assert!(features::definitions(&workspace, &uri, all[index].range.start).is_empty());
+        assert_eq!(
+            features::definitions(&workspace, &uri, all[index].range.start),
+            [all[2].clone()]
+        );
     }
 }
 

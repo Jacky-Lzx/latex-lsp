@@ -2,7 +2,7 @@
 use crate::{
     language::signature::CommandSignatures,
     parser::syntax,
-    project::workspace::{Document, DocumentKind, Workspace},
+    project::workspace::{Document, Workspace},
 };
 use lsp_types::*;
 use std::{
@@ -53,17 +53,18 @@ struct Entry {
     declaration: bool,
     complete: bool,
     grouped: bool,
+    end_cursor: bool,
 }
 
 impl Entry {
     fn contains(&self, offset: usize, complete: bool) -> bool {
         (!complete || self.complete && valid(&self.name))
             && self.span.start <= offset
-            && offset <= self.span.end
+            && (offset < self.span.end || self.end_cursor && offset == self.span.end)
     }
 }
 
-fn field(source: &str, after: usize) -> Option<(Span<usize>, usize, bool)> {
+pub(super) fn field(source: &str, after: usize) -> Option<(Span<usize>, usize, bool)> {
     let at = syntax::skip_space(source, after);
     if source.as_bytes().get(at) == Some(&b'{') {
         return Some(syntax::group(source, at, b'{', b'}').map_or_else(
@@ -115,6 +116,10 @@ fn name_field(source: &str, after: usize, command: &str) -> Option<(Entry, usize
             declaration: command.starts_with("New"),
             complete,
             grouped,
+            end_cursor: grouped
+                || source[end..].is_empty()
+                || source[end..]
+                    .starts_with(['\\', '{', '}', '[', ']', ' ', '\t', '\r', '\n', '%']),
         },
         end,
     ))
@@ -182,109 +187,23 @@ struct Index {
 
 impl Index {
     fn new(ws: &Workspace, origin: &Url, offset: usize, complete: bool) -> Self {
-        if !ws.index_truncated.is_empty()
-            || !ws.documents.values().any(|doc| {
-                doc.kind == DocumentKind::Latex
-                    && COMMANDS.iter().any(|name| doc.text.source.contains(name))
-            })
-        {
-            return Self::default();
+        Self {
+            entries: super::hook_fields::index(ws, origin, COMMANDS, calls, |entry| {
+                entry.contains(offset, complete)
+            }),
         }
-        let contexts = crate::symbols::environment_calls::project_contexts(ws);
-        let mut connected = ws.symbol_scope(origin);
-        loop {
-            let before = connected.len();
-            for scope in contexts.keys() {
-                if !scope.is_disjoint(&connected) {
-                    connected.extend(scope.iter().cloned());
-                }
-            }
-            if before == connected.len() {
-                break;
-            }
-        }
-        let mut interpretations = BTreeMap::<Url, Vec<BTreeMap<usize, Entry>>>::new();
-        let (mut bytes, mut commands, mut definitions, mut entries) =
-            (0usize, 0usize, 0usize, 0usize);
-        for (scope, consumers) in contexts {
-            if scope.is_disjoint(&connected) {
-                continue;
-            }
-            let docs: Vec<_> = scope
-                .iter()
-                .filter_map(|uri| ws.documents.get(uri))
-                .filter(|doc| doc.kind == DocumentKind::Latex)
-                .collect();
-            bytes =
-                bytes.saturating_add(docs.iter().map(|doc| doc.text.source.len()).sum::<usize>());
-            commands = commands.saturating_add(
-                docs.iter()
-                    .map(|doc| doc.syntax.commands.len())
-                    .sum::<usize>(),
-            );
-            definitions = definitions.saturating_add(
-                docs.iter()
-                    .map(|doc| doc.syntax.definitions.len() + doc.syntax.environments.len())
-                    .sum::<usize>(),
-            );
-            if bytes > 32 * 1024 * 1024 || commands > 100_000 || definitions > 8192 {
-                return Self::default();
-            }
-            let signatures = CommandSignatures::new(
-                docs.iter()
-                    .map(|doc| (doc.text.source.as_str(), &doc.syntax)),
-            );
-            // All callers need an entry at this cursor. Inspect its document
-            // first so an ordinary label or command query does not index hook
-            // names in every other source. A shared source must still match in
-            // each consumer interpretation before any result can be returned.
-            for uri in consumers
-                .iter()
-                .filter(|uri| *uri == origin)
-                .chain(consumers.iter().filter(|uri| *uri != origin))
-            {
-                let Some(doc) = ws
-                    .documents
-                    .get(uri)
-                    .filter(|doc| doc.kind == DocumentKind::Latex)
-                else {
-                    continue;
-                };
-                let calls = calls(doc, &signatures);
-                if uri == origin && !calls.values().any(|entry| entry.contains(offset, complete)) {
-                    return Self::default();
-                }
-                entries = entries.saturating_add(calls.len());
-                if entries > 100_000 {
-                    return Self::default();
-                }
-                interpretations.entry(uri.clone()).or_default().push(calls);
-            }
-        }
-        let mut result = Self::default();
-        for (uri, interpretations) in interpretations {
-            let Some(first) = interpretations.first() else {
-                continue;
-            };
-            let entries = first
-                .iter()
-                .filter(|(at, entry)| {
-                    interpretations
-                        .iter()
-                        .all(|other| other.get(at) == Some(entry))
-                })
-                .map(|(at, entry)| (*at, entry.clone()))
-                .collect();
-            result.entries.insert(uri, entries);
-        }
-        result
     }
 
     fn target(&self, uri: &Url, offset: usize, complete: bool) -> Option<&Entry> {
-        self.entries
-            .get(uri)?
+        let entries = self.entries.get(uri)?;
+        entries
             .values()
-            .find(|entry| entry.contains(offset, complete))
+            .find(|entry| entry.span.contains(&offset) && entry.contains(offset, complete))
+            .or_else(|| {
+                entries
+                    .values()
+                    .find(|entry| entry.contains(offset, complete))
+            })
     }
 
     fn entries<'a>(

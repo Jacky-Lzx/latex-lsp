@@ -1292,6 +1292,9 @@ fn completion_in_query(
         if let Some(items) = crate::symbols::hook_names::completion(workspace, uri, offset) {
             return items;
         }
+        if let Some(items) = crate::symbols::hook_labels::completion(workspace, uri, offset) {
+            return items;
+        }
         if let Some(items) = crate::symbols::expl3::completion(workspace, uri, offset) {
             return items;
         }
@@ -1935,6 +1938,9 @@ fn definitions_query(workspace: &Workspace, uri: &Url, position: Position) -> Ve
     if let Some(result) = crate::symbols::hook_names::definitions(workspace, uri, offset) {
         return result;
     }
+    if let Some(result) = crate::symbols::hook_labels::definitions(workspace, uri, offset) {
+        return result;
+    }
 
     if let Some(result) = crate::bibliography::bib_categories::definitions(workspace, uri, offset) {
         return result;
@@ -2034,6 +2040,11 @@ fn references_query(
     if let Some(offset) = doc.text.offset(position) {
         if let Some(result) =
             crate::symbols::hook_names::references(workspace, uri, offset, include_declaration)
+        {
+            return result;
+        }
+        if let Some(result) =
+            crate::symbols::hook_labels::references(workspace, uri, offset, include_declaration)
         {
             return result;
         }
@@ -2450,6 +2461,9 @@ fn hover_query(workspace: &Workspace, uri: &Url, position: Position) -> Option<H
     let doc = workspace.documents.get(uri)?;
     let offset = doc.text.offset(position)?;
     if let Some(result) = crate::symbols::hook_names::hover(workspace, uri, offset) {
+        return Some(result);
+    }
+    if let Some(result) = crate::symbols::hook_labels::hover(workspace, uri, offset) {
         return Some(result);
     }
     if let Some(result) = crate::bibliography::bib_categories::hover(workspace, uri, offset) {

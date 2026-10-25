@@ -1,0 +1,318 @@
+//! Explicit code labels, keyed by hook name rather than reference-key identity.
+use crate::{
+    language::signature::CommandSignatures,
+    parser::syntax,
+    project::workspace::{Document, Workspace},
+};
+use lsp_types::*;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ops::Range as Span,
+};
+
+const COMMANDS: &[&str] = &[
+    "AddToHook",
+    "AddToHookWithArguments",
+    "RemoveFromHook",
+    "DeclareHookRule",
+    "ClearHookRule",
+];
+
+fn literal(value: &str) -> bool {
+    syntax::is_static_key(value) && value != "." && !value.starts_with("./")
+}
+
+fn label_name(value: &str) -> bool {
+    literal(value) && !matches!(value, "*" | "top-level")
+}
+
+fn trimmed(source: &str, mut span: Span<usize>) -> Span<usize> {
+    let raw = &source[span.clone()];
+    span.start += raw.len() - raw.trim_start_matches([' ', '\t', '\r', '\n']).len();
+    span.end = span.start
+        + source[span.clone()]
+            .trim_end_matches([' ', '\t', '\r', '\n'])
+            .len();
+    span
+}
+
+fn normalized(source: &str, span: Span<usize>) -> Span<usize> {
+    let mut pieces = syntax::name_literal_pieces(source, span.clone())
+        .into_iter()
+        .map(|piece| trimmed(source, piece))
+        .filter(|piece| !piece.is_empty());
+    match (pieces.next(), pieces.next()) {
+        (Some(piece), None) => piece,
+        _ => trimmed(source, span),
+    }
+}
+
+fn optional(source: &str, after: usize) -> Option<(Span<usize>, usize, bool)> {
+    let at = syntax::skip_space(source, after);
+    if source.as_bytes().get(at) != Some(&b'[') {
+        return None;
+    }
+    Some(syntax::optional_note_end(source, at).map_or_else(
+        || {
+            let end = source[at + 1..]
+                .find(['\r', '\n'])
+                .map_or(source.len(), |len| at + 1 + len);
+            (at + 1..end, source.len(), false)
+        },
+        |end| {
+            let argument = syntax::single_key_argument(
+                source,
+                syntax::Argument {
+                    value: source[at + 1..end - 1].into(),
+                    span: at + 1..end - 1,
+                    outer_span: at..end,
+                },
+            );
+            (argument.span, end, true)
+        },
+    ))
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct Entry {
+    hook: String,
+    name: String,
+    span: Span<usize>,
+    declaration: bool,
+    complete: bool,
+    grouped: bool,
+}
+
+impl Entry {
+    fn contains(&self, at: usize, complete: bool) -> bool {
+        (!complete || self.complete && label_name(&self.name))
+            && self.span.start <= at
+            && at <= self.span.end
+    }
+}
+
+fn calls(doc: &Document, signatures: &CommandSignatures<'_>) -> BTreeMap<usize, Entry> {
+    let source = &doc.text.source;
+    let context = super::named_references::Context::new(doc, signatures);
+    let declarations: BTreeSet<_> = doc
+        .syntax
+        .definitions
+        .iter()
+        .chain(&doc.syntax.environments)
+        .flat_map(|entry| [entry.span.start, entry.span.start.saturating_sub(1)])
+        .collect();
+    let empty = BTreeSet::new();
+    let mut result = BTreeMap::new();
+    for (index, command) in doc.syntax.commands.iter().enumerate() {
+        if declarations.contains(&command.span.start)
+            || context.operand(doc, command.span.start)
+            || context.literal(command.span.start)
+        {
+            continue;
+        }
+        let (name, invocation) = signatures
+            .named_invocation(source, &doc.syntax, index, &empty, &context.declarations)
+            .unwrap_or((&command.name, command.span.clone()));
+        let name = if COMMANDS.contains(&name) && signatures.command_unchanged(name) {
+            name
+        } else if let Some(name) = signatures
+            .forwarded_builtin(name)
+            .filter(|name| COMMANDS.contains(name))
+        {
+            name
+        } else {
+            continue;
+        };
+        let Some((hook, mut after, true)) = super::hook_names::field(source, invocation.end) else {
+            continue;
+        };
+        let hook = &source[normalized(source, hook)];
+        if !literal(hook) {
+            continue;
+        }
+        let declaration = name.starts_with("AddToHook");
+        let optional_label = declaration || name == "RemoveFromHook";
+        let count = if optional_label { 1 } else { 2 };
+        for slot in 0..count {
+            if slot == 1 && name == "DeclareHookRule" {
+                let Some((_, end, true)) = super::hook_names::field(source, after) else {
+                    break;
+                };
+                after = end;
+            }
+            let grouped = optional_label
+                || source.as_bytes().get(syntax::skip_space(source, after)) == Some(&b'{');
+            let field = if optional_label {
+                optional(source, after)
+            } else {
+                super::hook_names::field(source, after)
+            };
+            let Some((span, end, complete)) = field else {
+                break;
+            };
+            after = end;
+            let span = normalized(source, span);
+            let name = &source[span.clone()];
+            if label_name(name) || name.is_empty() {
+                result.insert(
+                    span.start,
+                    Entry {
+                        hook: hook.into(),
+                        name: name.into(),
+                        span,
+                        declaration,
+                        complete,
+                        grouped,
+                    },
+                );
+            }
+            if !complete {
+                break;
+            }
+        }
+    }
+    result
+}
+
+#[derive(Default)]
+struct Index {
+    entries: BTreeMap<Url, BTreeMap<usize, Entry>>,
+}
+
+impl Index {
+    fn new(ws: &Workspace, uri: &Url, offset: usize, complete: bool) -> Self {
+        Self {
+            entries: super::hook_fields::index(ws, uri, COMMANDS, calls, |entry| {
+                entry.contains(offset, complete)
+            }),
+        }
+    }
+    fn target(&self, uri: &Url, offset: usize, complete: bool) -> Option<&Entry> {
+        let entries = self.entries.get(uri)?;
+        entries
+            .values()
+            .find(|entry| entry.span.contains(&offset) && entry.contains(offset, complete))
+            .or_else(|| {
+                entries
+                    .values()
+                    .find(|entry| entry.contains(offset, complete))
+            })
+    }
+    fn entries<'a>(
+        &'a self,
+        scope: &'a BTreeSet<Url>,
+        target: &'a Entry,
+    ) -> impl Iterator<Item = (&'a Url, &'a Entry)> {
+        self.entries
+            .iter()
+            .filter(|(uri, _)| scope.contains(*uri))
+            .flat_map(|(uri, entries)| entries.values().map(move |entry| (uri, entry)))
+            .filter(move |(_, entry)| {
+                entry.complete && label_name(&entry.name) && entry.hook == target.hook
+            })
+    }
+    fn location(ws: &Workspace, uri: &Url, entry: &Entry) -> Location {
+        Location {
+            uri: uri.clone(),
+            range: ws.documents[uri]
+                .text
+                .range(entry.span.start, entry.span.end),
+        }
+    }
+    fn definitions(&self, ws: &Workspace, uri: &Url, target: &Entry) -> Vec<Location> {
+        self.entries(&ws.symbol_scope(uri), target)
+            .filter(|(_, entry)| entry.declaration && entry.name == target.name)
+            .map(|(uri, entry)| Self::location(ws, uri, entry))
+            .collect()
+    }
+}
+
+pub(crate) fn definitions(ws: &Workspace, uri: &Url, offset: usize) -> Option<Vec<Location>> {
+    let index = Index::new(ws, uri, offset, true);
+    let target = index.target(uri, offset, true)?;
+    Some(index.definitions(ws, uri, target))
+}
+
+pub(crate) fn references(
+    ws: &Workspace,
+    uri: &Url,
+    offset: usize,
+    include: bool,
+) -> Option<Vec<Location>> {
+    let index = Index::new(ws, uri, offset, true);
+    let target = index.target(uri, offset, true)?;
+    let mut scope = ws.symbol_scope(uri);
+    let definitions: BTreeSet<_> = index
+        .definitions(ws, uri, target)
+        .into_iter()
+        .map(|location| location.uri)
+        .collect();
+    for project in ws
+        .symbol_regions()
+        .into_values()
+        .filter(|project| !project.is_disjoint(&definitions))
+    {
+        scope.extend(project);
+    }
+    Some(
+        index
+            .entries(&scope, target)
+            .filter(|(_, entry)| entry.name == target.name && (include || !entry.declaration))
+            .map(|(uri, entry)| Index::location(ws, uri, entry))
+            .collect(),
+    )
+}
+
+pub(crate) fn hover(ws: &Workspace, uri: &Url, offset: usize) -> Option<Hover> {
+    let index = Index::new(ws, uri, offset, true);
+    let target = index.target(uri, offset, true)?;
+    Some(Hover {
+        contents: HoverContents::Markup(MarkupContent {
+            kind: MarkupKind::PlainText,
+            value: format!(
+                "{} (LaTeX hook code label)\n\nHook: {}",
+                target.name, target.hook
+            ),
+        }),
+        range: Some(Index::location(ws, uri, target).range),
+    })
+}
+
+pub(crate) fn completion(ws: &Workspace, uri: &Url, offset: usize) -> Option<Vec<CompletionItem>> {
+    let index = Index::new(ws, uri, offset, false);
+    let target = index.target(uri, offset, false)?;
+    let doc = ws.documents.get(uri)?;
+    let prefix = &doc.text.source[target.span.start..offset];
+    let scope = ws.symbol_scope(uri);
+    let names: BTreeSet<_> = index
+        .entries(&scope, target)
+        .filter(|(other_uri, entry)| {
+            entry.declaration
+                && entry.name.starts_with(prefix)
+                && (*other_uri != uri || entry.span != target.span)
+        })
+        .map(|(_, entry)| entry.name.clone())
+        .collect();
+    Some(
+        names
+            .into_iter()
+            .take(256)
+            .take(ws.completion_budget())
+            .map(|name| CompletionItem {
+                label: name.clone(),
+                kind: Some(CompletionItemKind::REFERENCE),
+                detail: Some(format!("Code label in hook {}", target.hook)),
+                filter_text: Some(name.clone()),
+                text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                    range: doc.text.range(target.span.start, target.span.end),
+                    new_text: if target.grouped || name.len() == 1 {
+                        name
+                    } else {
+                        format!("{{{name}}}")
+                    },
+                })),
+                ..CompletionItem::default()
+            })
+            .collect(),
+    )
+}
