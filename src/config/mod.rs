@@ -185,9 +185,18 @@ impl Default for FormattingConfig {
     }
 }
 
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildResolution {
+    pub sources: Vec<PathBuf>,
+    pub issues: Vec<String>,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct BuildConfig {
+    #[serde(skip)]
+    pub resolution: BuildResolution,
     pub bibliography_tool: Option<BibliographyToolConfig>,
     pub index_tools: Vec<IndexToolConfig>,
     pub executable: String,
@@ -204,6 +213,7 @@ pub struct BuildConfig {
 impl Default for BuildConfig {
     fn default() -> Self {
         Self {
+            resolution: BuildResolution::default(),
             bibliography_tool: None,
             index_tools: vec![],
             executable: "latexmk".into(),
@@ -466,26 +476,55 @@ impl BuildConfig {
     /// lookup share the same settings if the rc file changes while the tool runs.
     pub(crate) fn resolved(&self, root: &Path) -> Self {
         let mut config = self.clone();
-        let settings = if config.output_directory.is_none() || config.engine.is_none() {
-            self.latexmkrc_paths(root)
-                .into_iter()
-                .find(|path| crate::diagnostics::diagnostic_inputs::is_file(path))
-                .and_then(|path| latexmk::read(&path))
-                .unwrap_or_default()
-        } else {
-            latexmk::Settings::default()
+        if config.output_directory.is_some() && config.engine.is_some() {
+            return config;
+        }
+        let path = self
+            .latexmkrc_paths(root)
+            .into_iter()
+            .find(|path| crate::diagnostics::diagnostic_inputs::is_file(path));
+        let settings = path
+            .as_ref()
+            .map(|path| latexmk::read(path))
+            .unwrap_or_default();
+        if let Some(path) = &path {
+            if !config.resolution.sources.contains(path) {
+                config.resolution.sources.push(path.clone());
+            }
+        }
+        let describe = |setting: &str, error: String| {
+            format!(
+                "{}: {setting}: {error}; configure build.engine/outputDirectory explicitly",
+                path.as_ref()
+                    .map_or_else(|| "latexmkrc".into(), |path| path.display().to_string())
+            )
         };
         if config.engine.is_none() {
-            config.engine = settings.engine;
+            match settings.engine {
+                Ok(engine) => config.engine = engine,
+                Err(error) => config.resolution.issues.push(describe("$pdf_mode", error)),
+            }
         }
         if config.output_directory.is_none() {
-            config.output_directory = Some(
-                settings
-                    .output_directory
-                    .unwrap_or_else(|| DEFAULT_OUTPUT_DIRECTORY.into()),
-            );
+            match settings.output_directory {
+                Ok(directory) => {
+                    config.output_directory =
+                        Some(directory.unwrap_or_else(|| DEFAULT_OUTPUT_DIRECTORY.into()))
+                }
+                Err(error) => config.resolution.issues.push(describe("$out_dir", error)),
+            }
         }
+        config.resolution.issues.sort();
+        config.resolution.issues.dedup();
         config
+    }
+
+    pub(crate) fn validate_resolution(&self) -> Result<(), String> {
+        if self.resolution.issues.is_empty() {
+            Ok(())
+        } else {
+            Err(self.resolution.issues.join("\n"))
+        }
     }
 
     pub(crate) fn latexmkrc_paths(&self, root: &Path) -> Vec<PathBuf> {
@@ -528,6 +567,7 @@ impl BuildConfig {
 
     pub fn expanded_rebuild_arguments(&self, root: &Path) -> Result<Vec<String>, String> {
         let config = self.resolved(root);
+        config.validate_resolution()?;
         config
             .expand_arguments(root, config.rebuild_arguments()?)
             .ok_or_else(|| "Invalid root filename".into())
@@ -568,7 +608,7 @@ impl BuildConfig {
     }
 
     pub fn effective_engine(&self) -> Option<Engine> {
-        if self.arguments.is_some() {
+        if self.arguments.is_some() || !self.resolution.issues.is_empty() {
             return None;
         }
         let executable = std::path::Path::new(&self.executable)

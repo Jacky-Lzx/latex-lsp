@@ -170,7 +170,7 @@ fn rc_is_read_beside_the_main_document_only_for_default_latexmk_arguments() {
 }
 
 #[test]
-fn unsupported_or_oversized_rc_settings_fall_back_without_running_perl() {
+fn unsupported_or_oversized_rc_settings_are_reported_without_running_perl() {
     let directory = tempfile::tempdir().unwrap();
     let main = directory.path().join("main.tex");
     let rc = directory.path().join(".latexmkrc");
@@ -180,10 +180,15 @@ fn unsupported_or_oversized_rc_settings_fall_back_without_running_perl() {
         format!("{}\n$out_dir = 'build';", "# padding\n".repeat(7000)),
     ] {
         std::fs::write(&rc, source).unwrap();
-        assert_eq!(
-            BuildConfig::default().output_path(&main).unwrap(),
-            directory.path().join("build/latex-lsp")
+        assert_eq!(BuildConfig::default().output_path(&main), None);
+        let outcome = build::run(&main, &BuildConfig::default(), &AtomicBool::new(false));
+        assert_eq!(outcome.status, "error");
+        assert!(
+            outcome.message.contains(".latexmkrc"),
+            "{}",
+            outcome.message
         );
+        assert!(!directory.path().join("build").exists());
         assert!(!directory.path().join("executed").exists());
     }
 }
@@ -308,5 +313,26 @@ fn real_latexmk_uses_project_xelatex_mode_for_build_and_rebuild() {
         let log = std::fs::read_to_string(root.join("build/main.log")).unwrap();
         assert!(log.starts_with("This is XeTeX"), "{log}");
         assert!(outcome.diagnostics.values().flatten().all(|diagnostic| diagnostic.severity != Some(lsp_types::DiagnosticSeverity::ERROR)), "{:?}", outcome.diagnostics);
+    }
+}
+
+#[test]
+fn unsupported_perl_does_not_silently_override_rc_settings() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    let uri = Url::from_file_path(&main).unwrap();
+    for source in [
+        "$out_dir = 'build'; $pdf_mode = 5; $clean_ext =~ s/foo/bar/;",
+        "$pdf_mode = 5; do './extra.rc';",
+    ] {
+        std::fs::write(directory.path().join(".latexmkrc"), source).unwrap();
+        let config = Workspace::default().build_config(&uri);
+        assert!(!config.resolution.issues.is_empty());
+        assert_eq!(config.effective_engine(), None);
+        assert!(config.expanded_rebuild_arguments(&main).is_err());
+        assert_eq!(
+            config.resolution.sources,
+            vec![directory.path().join(".latexmkrc")]
+        );
     }
 }

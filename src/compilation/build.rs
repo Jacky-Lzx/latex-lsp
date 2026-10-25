@@ -164,6 +164,9 @@ impl BuildManager {
             .map_err(Error::invalid_params)?;
         workspace.refresh_project(&root);
         let config = workspace.build_config(&root);
+        config
+            .validate_resolution()
+            .map_err(Error::invalid_params)?;
         let root_path = root
             .to_file_path()
             .map_err(|_| Error::invalid_params("Cleanup requires a local file"))?;
@@ -559,6 +562,7 @@ impl BuildManager {
         tokio::spawn(async move {
             let _guard = guard;
             let executable = config.executable.clone();
+            let configuration = config.resolution.clone();
             let engine = if rebuild && config.rebuild_arguments.is_some() {
                 None
             } else {
@@ -574,6 +578,7 @@ impl BuildManager {
                     "executable": executable,
                     "engine": engine,
                     "jobName": job_name,
+                    "configuration": configuration,
                     "rebuild": rebuild,
                 })))
                 .await;
@@ -965,6 +970,7 @@ impl BuildManager {
                 "dependenciesCount":project.len(),
                 "executable":executable, "engine":engine,
                 "jobName":job_name,
+                "configuration":configuration,
                 "rebuild":rebuild,
                 "output":outcome.output,
             });
@@ -1432,6 +1438,9 @@ fn run_with_mode(
     // its timestamp is newer. Force one pass to establish a verified PDF and
     // recorder instead of rejecting that legitimate incremental build.
     let config = config.resolved(root);
+    if let Err(message) = config.validate_resolution() {
+        return Outcome::error(message);
+    }
     let config = &config;
     let refresh = !rebuild
         && config.arguments.is_none()

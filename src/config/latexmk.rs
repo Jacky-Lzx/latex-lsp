@@ -5,29 +5,50 @@ use super::Engine;
 
 const MAX_RC_SIZE: u64 = 64 * 1024;
 
-#[derive(Default)]
 pub(super) struct Settings {
-    pub output_directory: Option<String>,
-    pub engine: Option<Engine>,
+    pub output_directory: Result<Option<String>, String>,
+    pub engine: Result<Option<Engine>, String>,
 }
 
-pub(super) fn read(path: &Path) -> Option<Settings> {
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            output_directory: Ok(None),
+            engine: Ok(None),
+        }
+    }
+}
+
+pub(super) fn read(path: &Path) -> Settings {
     crate::diagnostics::diagnostic_inputs::observe(path);
-    let file = File::open(path).ok()?;
-    if !file.metadata().ok()?.is_file() {
-        return None;
+    let read = || -> Result<String, String> {
+        let file = File::open(path).map_err(|error| error.to_string())?;
+        if !file
+            .metadata()
+            .map_err(|error| error.to_string())?
+            .is_file()
+        {
+            return Err("not a regular file".into());
+        }
+        let mut source = String::new();
+        file.take(MAX_RC_SIZE + 1)
+            .read_to_string(&mut source)
+            .map_err(|error| error.to_string())?;
+        if source.len() as u64 > MAX_RC_SIZE {
+            return Err("configuration exceeds 64 KiB".into());
+        }
+        Ok(source)
+    };
+    match read() {
+        Ok(source) => Settings {
+            output_directory: output_setting(&source),
+            engine: engine_setting(&source),
+        },
+        Err(error) => Settings {
+            output_directory: Err(error.clone()),
+            engine: Err(error),
+        },
     }
-    let mut source = String::new();
-    file.take(MAX_RC_SIZE + 1)
-        .read_to_string(&mut source)
-        .ok()?;
-    if source.len() as u64 > MAX_RC_SIZE {
-        return None;
-    }
-    Some(Settings {
-        output_directory: literal_output_directory(&source),
-        engine: literal_engine(&source),
-    })
 }
 
 #[derive(Debug, PartialEq)]
@@ -37,27 +58,46 @@ enum Token {
     Symbol(char),
 }
 
+#[cfg(test)]
 fn literal_output_directory(source: &str) -> Option<String> {
-    literal_setting(source, "$out_dir")
-        .map(|value| if value.is_empty() { ".".into() } else { value })
-        .filter(|value| !value.contains(['\0', '\n', '\r']))
+    output_setting(source).ok().flatten()
 }
 
+#[cfg(test)]
 fn literal_engine(source: &str) -> Option<Engine> {
-    match literal_setting(source, "$pdf_mode")?.as_str() {
-        "1" => Some(Engine::PdfLatex),
-        "4" => Some(Engine::LuaLatex),
-        "5" => Some(Engine::XeLatex),
-        _ => None,
-    }
+    engine_setting(source).ok().flatten()
 }
 
-fn literal_setting(source: &str, setting: &str) -> Option<String> {
+fn output_setting(source: &str) -> Result<Option<String>, String> {
+    literal_setting(source, "$out_dir")?
+        .map(|value| {
+            if value.contains(['\0', '\n', '\r']) {
+                return Err("invalid directory characters".into());
+            }
+            Ok(if value.is_empty() { ".".into() } else { value })
+        })
+        .transpose()
+}
+
+fn engine_setting(source: &str) -> Result<Option<Engine>, String> {
+    literal_setting(source, "$pdf_mode")?
+        .map(|value| match value.as_str() {
+            "1" => Ok(Engine::PdfLatex),
+            "4" => Ok(Engine::LuaLatex),
+            "5" => Ok(Engine::XeLatex),
+            _ => Err(format!("unsupported $pdf_mode {value:?}")),
+        })
+        .transpose()
+}
+
+fn literal_setting(source: &str, setting: &str) -> Result<Option<String>, String> {
+    let unknown =
+        || format!("cannot statically determine {setting}; dynamic or unsupported Perl syntax");
     let mut chars = source.chars().peekable();
     let mut statement = Vec::new();
     let mut mentions_output = false;
     let mut depth = 0usize;
-    let mut output = None;
+    let mut output = Ok(None);
     while let Some(ch) = chars.next() {
         let token = match ch {
             ch if ch.is_whitespace() => continue,
@@ -69,12 +109,12 @@ fn literal_setting(source: &str, setting: &str) -> Option<String> {
                 }
                 continue;
             }
-            '\'' | '"' | '`' => Token::String(quoted(&mut chars, ch)?),
+            '\'' | '"' | '`' => Token::String(quoted(&mut chars, ch).ok_or_else(unknown)?),
             // Perl's quote-like operators, regexes, heredocs and POD can
             // contain apparent assignments. Do not guess their contents.
-            '/' | '\\' => return None,
-            '<' if chars.peek() == Some(&'<') => return None,
-            '=' if chars.peek().is_some_and(|ch| ch.is_ascii_alphabetic()) => return None,
+            '/' | '\\' => return Err(unknown()),
+            '<' if chars.peek() == Some(&'<') => return Err(unknown()),
+            '=' if chars.peek().is_some_and(|ch| ch.is_ascii_alphabetic()) => return Err(unknown()),
             ch if ch.is_ascii_alphanumeric() || matches!(ch, '$' | '_') => {
                 let mut word = String::from(ch);
                 while chars
@@ -88,16 +128,26 @@ fn literal_setting(source: &str, setting: &str) -> Option<String> {
                 }
                 if matches!(
                     word.as_str(),
-                    "q" | "qq" | "qw" | "qx" | "qr" | "m" | "s" | "tr" | "y"
+                    "q" | "qq"
+                        | "qw"
+                        | "qx"
+                        | "qr"
+                        | "m"
+                        | "s"
+                        | "tr"
+                        | "y"
+                        | "do"
+                        | "require"
+                        | "eval"
                 ) {
-                    return None;
+                    return Err(unknown());
                 }
                 if word == setting {
                     mentions_output = true;
                     if depth != 0 {
                         // Conditional assignments and subroutines are not
                         // unconditional project settings.
-                        output = None;
+                        output = Err(unknown());
                     }
                 }
                 Token::Word(word)
@@ -107,7 +157,7 @@ fn literal_setting(source: &str, setting: &str) -> Option<String> {
                 Token::Symbol(ch)
             }
             '}' | ')' | ']' => {
-                depth = depth.checked_sub(1)?;
+                depth = depth.checked_sub(1).ok_or_else(unknown)?;
                 Token::Symbol(ch)
             }
             ';' if depth == 0 => {
@@ -116,14 +166,14 @@ fn literal_setting(source: &str, setting: &str) -> Option<String> {
                         [Token::Word(name), Token::Symbol('='), Token::String(Some(value))]
                             if name == setting =>
                         {
-                            Some(value.clone())
+                            Ok(Some(value.clone()))
                         }
                         [Token::Word(name), Token::Symbol('='), Token::Word(value)]
                             if name == setting
                                 && setting == "$pdf_mode"
                                 && value.chars().all(|ch| ch.is_ascii_digit()) =>
                         {
-                            Some(value.clone())
+                            Ok(Some(value.clone()))
                         }
                         [Token::Word(target), Token::Symbol('='), Token::Word(source)]
                             if target.starts_with('$')
@@ -134,7 +184,7 @@ fn literal_setting(source: &str, setting: &str) -> Option<String> {
                             // the output value does not change that value.
                             output
                         }
-                        _ => None,
+                        _ => Err(unknown()),
                     };
                 }
                 statement.clear();
@@ -150,14 +200,14 @@ fn literal_setting(source: &str, setting: &str) -> Option<String> {
         }
         if ch == '}' && depth == 0 {
             if mentions_output {
-                output = None;
+                output = Err(unknown());
             }
             statement.clear();
             mentions_output = false;
         }
     }
     if depth != 0 || mentions_output {
-        return None;
+        return Err(unknown());
     }
     output
 }
