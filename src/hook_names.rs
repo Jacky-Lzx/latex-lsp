@@ -31,6 +31,10 @@ const COMMANDS: &[&str] = &[
     "LogHook",
     "DeclareHookRule",
     "ClearHookRule",
+    "IfHookEmptyTF",
+    "IfHookEmptyT",
+    "IfHookEmptyF",
+    "IfHookExistsTF",
 ];
 
 fn valid(name: &str) -> bool {
@@ -119,9 +123,9 @@ fn calls(doc: &Document, signatures: &CommandSignatures<'_>) -> BTreeMap<usize, 
                 break;
             };
             after = end;
-            // Registration normalizes names; UseHook goes straight to the
-            // internal control sequence and retains its literal whitespace.
-            if name != "UseHook" {
+            // Registration normalizes names; UseHook and the conditions use
+            // the internal control sequence with literal whitespace.
+            if name != "UseHook" && !crate::signature::HOOK_CONDITIONS.contains(&name) {
                 let raw = &source[span.clone()];
                 span.start += raw.len() - raw.trim_start_matches([' ', '\t', '\r', '\n']).len();
                 span.end = span.start

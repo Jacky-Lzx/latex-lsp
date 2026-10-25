@@ -17,6 +17,158 @@ struct Server {
 }
 
 #[test]
+fn hook_condition_guards_refresh_aliases_and_exact_edits_over_stdio() {
+    use latex_lsp::text::Text;
+    for versioned in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+        let provider = main.join("conditions.tex").unwrap();
+        let source = "% conditions\r\n\\documentclass{article}\\usepackage{etoolbox}\\input{conditions}\\begin{document}😀 \\newcommand\\word{Text}\\def\\identity#1{#1}\\NewHook{custom}\\choose{custom}{\\let\\ifblank\\identity}{}\\ifblank{\\word}{\\word}{\\word}\\label{safe}\\ref{safe}\\end{document}";
+        let alias = r"\def\choose{\IfHookEmptyTF}";
+        let discarded = r"\def\choose#1#2#3{}";
+        std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+        std::fs::write(provider.to_file_path().unwrap(), alias).unwrap();
+        let mut server = Server::start();
+        server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(directory.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":versioned}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+        server.notify("initialized", json!({}));
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":main,"languageId":"latex","version":5,"text":source}}),
+        );
+        let expected = |edits: Vec<Value>, version| {
+            if versioned {
+                json!({"documentChanges":[{"textDocument":{"uri":main,"version":version},"edits":edits}]})
+            } else {
+                json!({"changes":{main.as_str():edits}})
+            }
+        };
+        let blocked = |server: &mut Server, source: &str| {
+            let text = Text::new(source.into());
+            server.send(json!({"jsonrpc":"2.0","id":20,"method":"textDocument/rename","params":{"textDocument":{"uri":main},"position":text.position(source.rfind("word").unwrap()+1),"newName":"term"}}));
+            let response = server.until(|message| message["id"] == 20);
+            assert!(
+                response["error"]["code"] == -32602 || response.get("result") == Some(&Value::Null),
+                "{response}"
+            );
+        };
+        let safe = |server: &mut Server, source: &str, version| {
+            let text = Text::new(source.into());
+            let edits = source
+                .match_indices("safe")
+                .map(|(at, _)| json!({"range":text.range(at,at+4),"newText":"fresh"}))
+                .collect::<Vec<_>>();
+            assert_eq!(edits.len(), 2);
+            assert_eq!(server.request(2,"textDocument/rename",json!({"textDocument":{"uri":main},"position":text.position(source.rfind("safe").unwrap()+1),"newName":"fresh"})),expected(edits,version));
+        };
+        let macro_edits = |server: &mut Server, source: &str, version, native: bool| {
+            let text = Text::new(source.into());
+            let edits = source
+                .match_indices(r"\word")
+                .enumerate()
+                .filter(|(index, _)| !native || *index != 1)
+                .map(|(_, (at, _))| json!({"range":text.range(at,at+5),"newText":"\\term"}))
+                .collect::<Vec<_>>();
+            assert_eq!(edits.len(), if native { 3 } else { 4 });
+            assert_eq!(server.request(3,"textDocument/rename",json!({"textDocument":{"uri":main},"position":text.position(source.rfind("word").unwrap()+1),"newName":"term"})),expected(edits,version));
+        };
+        let navigation = |server: &mut Server, native: bool| {
+            let text = Text::new(source.into());
+            let at = source.rfind("custom").unwrap();
+            let declaration = source.find("custom").unwrap();
+            let expected = if native {
+                json!([{"uri":main,"range":text.range(declaration,declaration+6)}])
+            } else {
+                json!([])
+            };
+            assert_eq!(
+                server.request(
+                    8,
+                    "textDocument/definition",
+                    json!({"textDocument":{"uri":main},"position":text.position(at+3)})
+                ),
+                expected
+            );
+        };
+        blocked(&mut server, source);
+        navigation(&mut server, true);
+        safe(&mut server, source, 5);
+        let text = Text::new(source.into());
+        let code = text.position(source.find(r"\let\ifblank").unwrap() + 2);
+        let help = server.request(
+            4,
+            "textDocument/signatureHelp",
+            json!({"textDocument":{"uri":main},"position":code}),
+        );
+        assert_eq!(
+            help["signatures"][0]["label"],
+            r"\choose{hook}{true code}{false code}"
+        );
+        assert_eq!(help["activeParameter"], 1);
+        server.notify("textDocument/didOpen",json!({"textDocument":{"uri":provider,"languageId":"latex","version":12,"text":discarded}}));
+        // Cross-file discarded branches may retain conservative token edits;
+        // verify all four exact ranges rather than allowing a partial rename.
+        macro_edits(&mut server, source, 5, false);
+        navigation(&mut server, false);
+        safe(&mut server, source, 5);
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":provider,"version":13},"contentChanges":[{"text":alias}]}),
+        );
+        blocked(&mut server, source);
+        navigation(&mut server, true);
+        server.notify("textDocument/didChange",json!({"textDocument":{"uri":provider,"version":14},"contentChanges":[{"text":discarded}]}));
+        macro_edits(&mut server, source, 5, false);
+        navigation(&mut server, false);
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":provider}}),
+        );
+        blocked(&mut server, source);
+        navigation(&mut server, true);
+        let partial = source.replacen(r"\choose{custom}", r"\choose{cusTOM}", 1);
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":6},"contentChanges":[{"text":partial}]}),
+        );
+        let at = partial.find("cusTOM").unwrap();
+        let text = Text::new(partial.clone());
+        let completion = server.request(
+            9,
+            "textDocument/completion",
+            json!({"textDocument":{"uri":main},"position":text.position(at+3)}),
+        );
+        let items = completion
+            .as_array()
+            .expect("complete hook candidates are an array");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["label"], "custom");
+        assert_eq!(
+            items[0]["textEdit"],
+            json!({"range":text.range(at,at+6),"newText":"custom"})
+        );
+        blocked(&mut server, &partial);
+        safe(&mut server, &partial, 6);
+        let changed = source.replace(r"\choose{custom}{\let\ifblank\identity}{}", "");
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":7},"contentChanges":[{"text":changed}]}),
+        );
+        macro_edits(&mut server, &changed, 7, true);
+        safe(&mut server, &changed, 7);
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":9},"contentChanges":[{"text":source}]}),
+        );
+        blocked(&mut server, source);
+        navigation(&mut server, true);
+        safe(&mut server, source, 9);
+        server.request(1000, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
 fn hook_names_keep_exact_ranges_and_refresh_unsaved_forwarders_over_stdio() {
     use latex_lsp::text::Text;
     for versioned in [false, true] {

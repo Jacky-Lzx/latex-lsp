@@ -11,6 +11,9 @@
 | `AtBeginDocument`、`AtEndDocument` | `[label]{code}` |
 | `RemoveFromHook` | `{hook}[label]` |
 | `NewHook`、`NewReversedHook`、`UseHook`、`UseOneTimeHook` | `{hook}` |
+| `IfHookEmptyTF`、`IfHookExistsTF` | `{hook}{true code}{false code}` |
+| `IfHookEmptyT` | `{hook}{true code}` |
+| `IfHookEmptyF` | `{hook}{false code}` |
 | `NewHookWithArguments`、`NewReversedHookWithArguments` | `{hook}{argument count}` |
 | `NewMirroredHookPair` | `{before hook}{after hook}` |
 | `NewMirroredHookPairWithArguments` | `{before hook}{after hook}{argument count}` |
@@ -27,20 +30,23 @@
 
 已登记代码可能重新定义字符串判断命令时，撤销相关命令后续的已知含义，避免在钩子执行后仍把真实宏调用当作字面数据而漏改。此保护不假定钩子一直未使用；显式恢复后仍可能再次触发，因此恢复命令不会清除尚未确定的钩子影响。无法确认的文件加载和超限分析同样保守处理，独立标签保持可编辑。
 
+条件接口的完整分支保留结构引用与标签改名，但不认证实际选中的分支，也不用于证明代码即时执行。任一分支中的潜在赋值、宏补丁回调及其静态命名／转发／复制调用，都纳入字符串含义保护，避免只改写部分实际宏调用。未选择分支中的恢复不会抵消另一分支的潜在修改；无关修改及未调用定义中的条件不影响原有字符串判断。
+
 ## 钩子名称
 
-字面钩子名称支持定义跳转、引用查找、悬浮、高亮及名称补全。定义由 `NewHook`、`NewReversedHook` 和对应带参数／镜像声明提供；注册、使用、移除、排序和查看接口的名称按独立命名空间关联，不与同名标签、宏或代码标签混合。补全替换名称的完整后缀，支持空名称、未闭合分组和 UTF-16／CRLF 坐标；候选来自当前项目的完整字面声明。
+字面钩子名称支持定义跳转、引用查找、悬浮、高亮及名称补全。定义由 `NewHook`、`NewReversedHook` 和对应带参数／镜像声明提供；注册、使用、条件、移除、排序和查看接口的名称按独立命名空间关联，不与同名标签、宏或代码标签混合。补全替换名称的完整后缀，支持空名称、未闭合分组和 UTF-16／CRLF 坐标；候选来自当前项目的完整字面声明。
 
 直接调用、静态 `csuse`／`csname` 和唯一纯转发别名使用同一索引。跨文件未保存定义即时生效；共享源码只在所有消费者对调用含义达成一致时提供交互。完整延迟正文保留源码导航，已确认的数据实参和被替换的内核接口不制造钩子引用。这是源码结构导航，不证明钩子已经声明或触发。
 
-名称匹配保留内核差别：声明／注册接口规范化名称首尾的普通 TeX 空白，`UseHook` 保留原始名称。`NewHook{ custom }` 可被 `UseHook{custom}` 命中，而 `UseHook{ custom }` 不与其关联。普通名称中的点保持字面含义。含内部空白、依赖默认标签的 `.`／`./...` 名称、动态展开和跨注释拼接的名称暂不推断；没有源码声明的内置或自动生成钩子也没有虚构的定义位置。名称与代码标签的改名继续待独立认证。
+名称匹配保留内核差别：声明／注册接口规范化名称首尾的普通 TeX 空白，`UseHook` 和四个条件接口保留原始名称。`NewHook{ custom }` 可被 `UseHook{custom}` 命中，而 `UseHook{ custom }` 不与其关联。普通名称中的点保持字面含义。含内部空白、依赖默认标签的 `.`／`./...` 名称、动态展开和跨注释拼接的名称暂不推断；没有源码声明的内置或自动生成钩子也没有虚构的定义位置。名称与代码标签的改名继续待独立认证。
 
-目前不模拟钩子触发、删除、排序或一次性执行。`UseHookWithArguments`／`UseOneTimeHookWithArguments` 的可变参数数量，以及钩子条件接口继续待实现。
+目前不模拟钩子触发、删除、排序或一次性执行。`UseHookWithArguments`／`UseOneTimeHookWithArguments` 的可变参数数量继续待实现。
 
-验证名称交互及原生行为：
+验证名称、条件交互及原生行为：
 
 ```sh
-cargo test --locked --test hook_names
-cargo test --locked --test hook_names -- --ignored
+cargo test --locked --test hook_names --test hook_conditions
+cargo test --locked --test hook_names --test hook_conditions -- --ignored
 cargo test --locked --test protocol hook_names_keep_exact_ranges
+cargo test --locked --test protocol hook_condition_guards
 ```

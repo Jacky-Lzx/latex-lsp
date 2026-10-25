@@ -358,6 +358,7 @@ pub(crate) fn possible_stored_code_aliases<'a>(
         "mkbibfootnotetext",
     ]
     .into_iter()
+    .chain(HOOK_CONDITIONS.iter().copied())
     .chain(crate::macro_mutations::COMMANDS.iter().copied())
     .map(|name| (name.to_owned(), name))
     .collect();
@@ -382,10 +383,22 @@ pub(crate) fn possible_stored_code_aliases<'a>(
     Some(result)
 }
 
-// Static LaTeX kernel hook grammars. Code is stored for later execution;
-// selectors and ordering rules remain data in every analysis mode.
+// Kernel hook grammars. Registered code and unknown branches stay opaque to
+// immediate-execution proofs; selectors and ordering rules remain data.
+pub(crate) const HOOK_CONDITIONS: &[&str] = &[
+    "IfHookEmptyTF",
+    "IfHookEmptyT",
+    "IfHookEmptyF",
+    "IfHookExistsTF",
+];
+
 fn kernel_hook_parameters(name: &str) -> Option<&'static [(&'static str, bool)]> {
     Some(match name {
+        "IfHookEmptyTF" | "IfHookExistsTF" => {
+            &[("hook", false), ("true code", false), ("false code", false)]
+        }
+        "IfHookEmptyT" => &[("hook", false), ("true code", false)],
+        "IfHookEmptyF" => &[("hook", false), ("false code", false)],
         "AddToHook" | "AddToHookWithArguments" => {
             &[("hook", false), ("label", true), ("code", false)]
         }
@@ -3216,14 +3229,17 @@ impl<'a> CommandSignatures<'a> {
         Some(result)
     }
 
-    /// Locate stored code for conservative mutation guards. This does not
-    /// determine whether, when, or how often a hook or note executes its code.
+    /// Locate stored or conditional code for conservative mutation guards.
+    /// This does not determine whether, when, or how often code executes.
     pub(crate) fn stored_code(
         &self,
         source: &str,
         parsed: &syntax::Syntax,
         possible: &StoredCodeAliases,
     ) -> Option<Vec<(usize, std::ops::Range<usize>)>> {
+        let code_parameter = |label: &str| {
+            crate::macro_mutations::code(label) || matches!(label, "true code" | "false code")
+        };
         let parameters = |name: &str| {
             if matches!(name, "mkbibfootnote" | "mkbibfootnotetext") {
                 Some(&[("code", false)][..])
@@ -3232,11 +3248,8 @@ impl<'a> CommandSignatures<'a> {
             }
         };
         let stores_code = |name: &str| {
-            parameters(name).is_some_and(|parameters| {
-                parameters
-                    .iter()
-                    .any(|(label, _)| crate::macro_mutations::code(label))
-            })
+            parameters(name)
+                .is_some_and(|parameters| parameters.iter().any(|(label, _)| code_parameter(label)))
         };
         if !parsed.commands.iter().any(|command| {
             stores_code(&command.name)
@@ -3276,10 +3289,7 @@ impl<'a> CommandSignatures<'a> {
                     continue;
                 };
                 let mut at = after;
-                if !parameters
-                    .iter()
-                    .any(|(label, _)| crate::macro_mutations::code(label))
-                {
+                if !parameters.iter().any(|(label, _)| code_parameter(label)) {
                     continue;
                 }
                 for (label, optional) in parameters {
@@ -3315,7 +3325,7 @@ impl<'a> CommandSignatures<'a> {
                         return None;
                     }
                     at = end;
-                    if crate::macro_mutations::code(label) {
+                    if code_parameter(label) {
                         result.push((command.span.start, span));
                     }
                 }
@@ -5326,6 +5336,7 @@ fn operand_delimited_end(source: &str, at: usize, open: &str, close: &str) -> Op
 
 fn builtin_argument_data(signature: &Signature, parameter: usize) -> bool {
     match signature.name.as_str() {
+        name if HOOK_CONDITIONS.contains(&name) => parameter == 0,
         name if crate::macro_mutations::COMMANDS.contains(&name) => !crate::macro_mutations::code(
             signature.parameters[parameter]
                 .label
