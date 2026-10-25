@@ -10939,7 +10939,8 @@ fn slow_synctex_queries_do_not_block_edits_and_discard_results_after_source_chan
 #[cfg(unix)]
 fn fake_synctex_server(script: &str) -> (Server, tempfile::TempDir, Url) {
     use std::os::unix::fs::PermissionsExt;
-    let directory = tempfile::tempdir().unwrap();
+    // Keep editor URLs and indexed filesystem paths identical on macOS too.
+    let directory = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
     let executable = directory.path().join("synctex");
     std::fs::write(&executable, format!("#!/bin/sh\n{script}")).unwrap();
     std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -10978,6 +10979,76 @@ fn wait_for_file(path: &std::path::Path) {
         );
         std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+#[test]
+#[cfg(unix)]
+fn synctex_accepts_identical_saves_after_adopting_existing_artifacts_in_a_noop_build() {
+    let (mut server, directory, main) = fake_synctex_server(
+        "if [ \"$1\" = edit ]; then\nprintf 'SyncTeX result begin\\nInput:%s/main.tex\\nLine:2\\nSyncTeX result end\\n' \"$PWD\"\nelse\nprintf 'SyncTeX result begin\\nPage:1\\nx:10\\ny:20\\nSyncTeX result end\\n'\nfi\n",
+    );
+    let compiler = directory.path().join("compiler.sh");
+    std::fs::write(&compiler, "exit 0\n").unwrap();
+    server.notify(
+        "workspace/didChangeConfiguration",
+        json!({"settings":{"build":{"executable":"/bin/sh","arguments":[compiler,"%o","%f"]}}}),
+    );
+    let source = main.to_file_path().unwrap();
+    let output = directory.path().join("build/latex-lsp");
+    let pdf = std::fs::read(output.join("main.pdf")).unwrap();
+    let recorded = std::fs::metadata(output.join("main.synctex"))
+        .unwrap()
+        .modified()
+        .unwrap();
+    let forward = json!({"command":"latex.forwardSearch","arguments":[{"uri":main,"position":{"line":1,"character":0}}]});
+    let inverse =
+        json!({"command":"latex.inverseSearch","arguments":[{"uri":main,"page":1,"x":10,"y":20}]});
+    for id in [2, 5] {
+        server.request(
+            id,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[main]}),
+        );
+        let noop = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(noop["params"]["status"], "success", "{noop}");
+        assert_eq!(noop["params"]["stale"], false, "{noop}");
+        // Include a second identical save after the successful no-op: query
+        // validity follows contents, rather than the last build request time.
+        std::fs::write(&source, std::fs::read(&source).unwrap()).unwrap();
+        std::fs::File::open(&source)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(recorded + Duration::from_secs(id)))
+            .unwrap();
+        let hit = server.request(id + 1, "workspace/executeCommand", forward.clone());
+        assert_eq!(hit["locations"][0]["page"], 1, "{hit}");
+        let location = server.request(id + 2, "workspace/executeCommand", inverse.clone());
+        assert_eq!(location["locations"][0]["uri"], main.as_str(), "{location}");
+    }
+    assert_eq!(std::fs::read(output.join("main.pdf")).unwrap(), pdf);
+    // An equal-length source edit with an old mtime must still be rejected.
+    let changed = std::fs::read_to_string(&source)
+        .unwrap()
+        .replace("Title", "Other");
+    std::fs::write(&source, changed).unwrap();
+    std::fs::File::open(&source)
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(recorded))
+        .unwrap();
+    for (id, params) in [(8, forward), (9, inverse)] {
+        server.send(
+            json!({"jsonrpc":"2.0","id":id,"method":"workspace/executeCommand","params":params}),
+        );
+        let rejected = server.until(|message| message["id"] == id);
+        assert!(
+            rejected["error"]["message"]
+                .as_str()
+                .is_some_and(|text| text.contains("Input contents changed")),
+            "{rejected}"
+        );
+    }
+    server.request(10, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
 }
 
 #[test]
@@ -12441,6 +12512,30 @@ fn real_synctex_round_trip_handles_spaces_and_rejects_unsaved_or_stale_sources()
         finished["params"]["dependenciesCount"].as_u64().unwrap() >= 3,
         "{finished}"
     );
+    let recorded_time = std::fs::metadata(folder.join("build/latex-lsp/main.synctex.gz"))
+        .unwrap()
+        .modified()
+        .unwrap();
+    // An editor save can update only the mtime. Real latexmk then keeps both
+    // artifacts, and their verified source contents still map correctly.
+    std::fs::write(chapter.to_file_path().unwrap(), source).unwrap();
+    std::fs::File::open(chapter.to_file_path().unwrap())
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(recorded_time + Duration::from_secs(1)))
+        .unwrap();
+    server.request(
+        30,
+        "workspace/executeCommand",
+        json!({"command":"latex.build","arguments":[main]}),
+    );
+    let noop = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(noop["params"]["status"], "success", "{noop}");
+    assert!(
+        noop["params"]["output"]
+            .as_str()
+            .is_some_and(|output| output.contains("Nothing to do")),
+        "{noop}"
+    );
     let forward = server.request(4, "workspace/executeCommand", json!({"command":"latex.forwardSearch","arguments":[{"uri":chapter,"position":{"line":0,"character":6}}]}));
     assert_eq!(forward["rootUri"], main.as_str());
     assert_eq!(forward["pdfUri"], finished["params"]["pdfUri"]);
@@ -12503,14 +12598,18 @@ fn real_synctex_round_trip_handles_spaces_and_rejects_unsaved_or_stale_sources()
         json!({"textDocument":{"uri":chapter}}),
     );
     let original_time = std::fs::metadata(&image).unwrap().modified().unwrap();
-    let recorded_time = std::fs::metadata(folder.join("build/latex-lsp/main.synctex.gz"))
-        .unwrap()
-        .modified()
-        .unwrap();
     std::fs::File::open(&image)
         .unwrap()
         .set_times(std::fs::FileTimes::new().set_modified(recorded_time + Duration::from_secs(1)))
         .unwrap();
+    let image_touched = server.request(
+        31,
+        "workspace/executeCommand",
+        json!({"command":"latex.inverseSearch","arguments":[{"uri":main,"page":1,"x":0,"y":0}]}),
+    );
+    assert!(image_touched["locations"].is_array(), "{image_touched}");
+    let original_image = std::fs::read(&image).unwrap();
+    std::fs::write(&image, b"Changed image contents").unwrap();
     server.send(json!({"jsonrpc":"2.0","id":10,"method":"workspace/executeCommand","params":{"command":"latex.inverseSearch","arguments":[{"uri":main,"page":1,"x":0,"y":0}]}}));
     let image_stale = server.until(|message| message["id"] == 10);
     assert!(
@@ -12520,6 +12619,7 @@ fn real_synctex_round_trip_handles_spaces_and_rejects_unsaved_or_stale_sources()
             .contains("changed"),
         "{image_stale}"
     );
+    std::fs::write(&image, original_image).unwrap();
     std::fs::File::open(&image)
         .unwrap()
         .set_times(std::fs::FileTimes::new().set_modified(original_time))

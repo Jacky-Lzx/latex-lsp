@@ -174,27 +174,21 @@ pub fn prepare(workspace: &Workspace, uri: &Url) -> Result<Project> {
     let pdf = config
         .artifact_path(&path, "pdf")
         .ok_or_else(|| Error::invalid_params("Invalid root filename"))?;
-    if workspace
+    let checks = workspace
         .pdf_checks
         .get(&root)
-        .is_some_and(|checks| checks.matches_pdf(&pdf) && checks.changed_path().is_some())
-    {
+        .filter(|checks| checks.matches_pdf(&pdf));
+    if checks.is_some_and(|checks| checks.changed_path().is_some()) {
         return Err(Error::invalid_params(
             "File conditions changed; compile again before querying SyncTeX",
         ));
     }
-    if workspace
-        .pdf_checks
-        .get(&root)
-        .is_some_and(|checks| checks.matches_pdf(&pdf) && checks.changed_input().is_some())
-    {
+    if checks.is_some_and(|checks| checks.changed_input().is_some()) {
         return Err(Error::invalid_params(
             "Input contents changed; compile again before querying SyncTeX",
         ));
     }
-    if workspace.pdf_checks.get(&root).is_some_and(|checks| {
-        checks.matches_pdf(&pdf) && (checks.pdf_changed() || checks.synctex_changed())
-    }) {
+    if checks.is_some_and(|checks| checks.pdf_changed() || checks.synctex_changed()) {
         return Err(Error::invalid_params(
             "Build artifacts changed; compile again before querying SyncTeX",
         ));
@@ -237,6 +231,10 @@ pub fn prepare(workspace: &Workspace, uri: &Url) -> Result<Project> {
         if metadata
             .modified()
             .map_or(true, |modified| modified > recorded)
+            // Saving identical text can advance its mtime while latexmk
+            // correctly reuses the PDF. Trust only inputs captured for these
+            // unchanged artifacts; unknown inputs still require a fresh build.
+            && checks.is_none_or(|checks| checks.input_changed(&input))
         {
             return Err(Error::invalid_params(
                 "Project inputs changed; compile again before querying SyncTeX",
