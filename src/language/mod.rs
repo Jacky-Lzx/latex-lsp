@@ -7,6 +7,7 @@ pub(crate) mod command_docs;
 pub(crate) mod completion_resolve;
 pub mod features;
 pub(crate) mod folding;
+pub(crate) mod hook_arguments;
 pub mod navigation;
 pub mod path_completion;
 pub mod semantic;

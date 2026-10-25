@@ -36,7 +36,7 @@ fn argument(source: &str, after: usize) -> Option<(Range<usize>, usize)> {
         return Some(
             syntax::group(source, at, b'{', b'}')
                 .map_or((at + 1..source.len(), source.len()), |(argument, end)| {
-                    (argument.span, end)
+                    (syntax::single_key_argument(source, argument).span, end)
                 }),
         );
     }
@@ -77,10 +77,14 @@ fn calls(
     possible: &signature::StoredCodeAliases,
 ) -> Vec<Call> {
     let context = crate::symbols::named_references::Context::new(doc, signatures);
+    let roots: Vec<_> = USES.iter().chain(DECLARATIONS).copied().collect();
+    let alias_bodies =
+        signatures.builtin_alias_body_positions(&doc.text.source, &doc.syntax, &roots);
     let empty = BTreeSet::new();
     let mut result = Vec::new();
     for (index, command) in doc.syntax.commands.iter().enumerate() {
         if context.literal(command.span.start)
+            || alias_bodies.contains(&command.span.start)
             || doc.syntax.control_operands.contains(&command.span.start)
             || context
                 .declarations

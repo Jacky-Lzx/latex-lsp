@@ -18,6 +18,8 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("NewReversedHook", "NewReversedHook{${1:hook}}", "Create a LaTeX hook with reversed code order."),
     ("UseHook", "UseHook{${1:hook}}", "Execute the code stored in a LaTeX hook."),
     ("UseOneTimeHook", "UseOneTimeHook{${1:hook}}", "Execute a LaTeX hook once and make later additions run immediately."),
+    ("UseHookWithArguments", "UseHookWithArguments{${1:hook}}{${2:argument count}}", "Execute a LaTeX hook with arguments. An existing hook uses its declared argument count."),
+    ("UseOneTimeHookWithArguments", "UseOneTimeHookWithArguments{${1:hook}}{${2:argument count}}", "Execute a LaTeX hook with arguments once and make later additions run immediately."),
     ("ClearHookNext", "ClearHookNext{${1:hook}}", "Discard the code scheduled for the next use of a LaTeX hook."),
     ("ActivateGenericHook", "ActivateGenericHook{${1:hook}}", "Activate a generic LaTeX hook."),
     ("DisableGenericHook", "DisableGenericHook{${1:hook}}", "Disable a generic LaTeX hook."),

@@ -96,6 +96,10 @@ fn grouped_hook_data_and_consumed_reference_commands_cannot_change_displayed_key
 fn separate_hooks_and_ordinary_redefinitions_do_not_block_unrelated_macro_edits() {
     for (preamble, call) in [
         ("", r"\NewHook{other}\UseHook{other}\word"),
+        (
+            "",
+            r"\def\declare{\NewHook}\declare{other}\UseHook{other}\word",
+        ),
         (r"\def\UseHook#1{Text}", r"\UseHook{custom}\word"),
         (
             r"\def\usecustom{\UseHook}\def\UseHook#1{Text}",

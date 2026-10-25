@@ -24,6 +24,8 @@ const COMMANDS: &[&str] = &[
     "RemoveFromHook",
     "UseHook",
     "UseOneTimeHook",
+    "UseHookWithArguments",
+    "UseOneTimeHookWithArguments",
     "ClearHookNext",
     "ActivateGenericHook",
     "DisableGenericHook",
@@ -125,7 +127,9 @@ fn calls(doc: &Document, signatures: &CommandSignatures<'_>) -> BTreeMap<usize, 
             after = end;
             // Registration normalizes names; UseHook and the conditions use
             // the internal control sequence with literal whitespace.
-            if name != "UseHook" && !crate::language::signature::HOOK_CONDITIONS.contains(&name) {
+            if !matches!(name, "UseHook" | "UseHookWithArguments")
+                && !crate::language::signature::HOOK_CONDITIONS.contains(&name)
+            {
                 let raw = &source[span.clone()];
                 span.start += raw.len() - raw.trim_start_matches([' ', '\t', '\r', '\n']).len();
                 span.end = span.start

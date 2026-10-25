@@ -83,6 +83,69 @@ fn hook_argument_data_guards_track_unsaved_arities_and_exact_utf16_edits() {
 }
 
 #[test]
+fn variadic_hook_help_names_and_reference_boundaries_refresh_over_stdio() {
+    use latex_lsp::text::Text;
+    let directory = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+    let provider = main.join("hooks.tex").unwrap();
+    let source = "% variadic\r\n\\documentclass{article}\\input{hooks}\r\n😀 \\label{paper}\\UseHookWithArguments{custom}{1}{\\ref{paper}}\\ref{paper}";
+    std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+    std::fs::write(provider.to_file_path().unwrap(), r"\NewHook{custom}").unwrap();
+    let mut server = Server::start();
+    server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(directory.path()).unwrap(),"capabilities":{},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":main,"languageId":"latex","version":5,"text":source}}),
+    );
+    let text = Text::new(source.into());
+    let declaration = source.find("paper").unwrap();
+    let target = json!([{"uri":main,"range":text.range(declaration, declaration+5)}]);
+    for (version, definitions, count) in [
+        (12, r"\NewHook{custom}", 0),
+        (13, r"\NewHookWithArguments{custom}{1}", 1),
+        (14, r"\NewHook{custom}", 0),
+    ] {
+        if version == 12 {
+            server.notify("textDocument/didOpen", json!({"textDocument":{"uri":provider,"languageId":"latex","version":version,"text":definitions}}));
+        } else {
+            server.notify("textDocument/didChange", json!({"textDocument":{"uri":provider,"version":version},"contentChanges":[{"text":definitions}]}));
+        }
+        let help = server.request(2,"textDocument/signatureHelp",json!({"textDocument":{"uri":main},"position":text.position(source.find("{1}").unwrap()+1)}));
+        assert_eq!(
+            help["signatures"][0]["label"],
+            if count == 0 {
+                r"\UseHookWithArguments{hook}{argument count}"
+            } else {
+                r"\UseHookWithArguments{hook}{argument count}{argument 1}"
+            }
+        );
+        assert_eq!(help["activeParameter"], 1);
+        assert_eq!(server.request(3,"textDocument/definition",json!({"textDocument":{"uri":main},"position":text.position(source.find(r"\ref{paper}").unwrap()+7)})), if count == 0 {target.clone()} else {json!([])});
+        assert_eq!(server.request(4,"textDocument/definition",json!({"textDocument":{"uri":main},"position":text.position(source.rfind("paper").unwrap()+1)})), target);
+        let provider_text = Text::new(definitions.into());
+        let name = definitions.find("custom").unwrap();
+        assert_eq!(server.request(5,"textDocument/definition",json!({"textDocument":{"uri":main},"position":text.position(source.find("custom").unwrap()+2)})), json!([{"uri":provider,"range":provider_text.range(name,name+6)}]));
+        let completion = server.request(6,"textDocument/completion",json!({"textDocument":{"uri":main},"position":text.position(source.find("custom").unwrap()+3)}));
+        assert_eq!(completion.as_array().unwrap().len(), 1);
+        assert_eq!(completion[0]["label"], "custom");
+        let name = source.find("custom").unwrap();
+        assert_eq!(
+            completion[0]["textEdit"],
+            json!({"range":text.range(name,name+6),"newText":"custom"})
+        );
+    }
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":provider}}),
+    );
+    assert_eq!(server.request(7,"textDocument/definition",json!({"textDocument":{"uri":main},"position":text.position(source.find(r"\ref{paper}").unwrap()+7)})), target);
+    server.request(8, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
 fn declaration_navigation_tracks_unsaved_cross_file_sources() {
     use latex_lsp::text::Text;
     let directory = tempfile::tempdir().unwrap();

@@ -427,6 +427,9 @@ fn kernel_hook_parameters(name: &str) -> Option<&'static [(&'static str, bool)]>
         | "DisableGenericHook"
         | "ShowHook"
         | "LogHook" => &[("hook", false)],
+        "UseHookWithArguments" | "UseOneTimeHookWithArguments" => {
+            &[("hook", false), ("argument count", false)]
+        }
         "NewHookWithArguments" | "NewReversedHookWithArguments" => {
             &[("hook", false), ("argument count", false)]
         }
@@ -2402,6 +2405,7 @@ pub(crate) struct CommandSignatures<'a> {
     unverified_names: BTreeSet<Cow<'a, str>>,
     detokenize_boundary_known: bool,
     identity_parameters: BTreeSet<String>,
+    hook_arities: super::hook_arguments::Arities,
 }
 
 /// Incremental lexical context for catcode-changing inline commands. Keep the
@@ -2567,6 +2571,7 @@ impl InlineTokenization {
                     .collect(),
                 detokenize_boundary_known: signatures.detokenize_boundary_known,
                 identity_parameters: signatures.identity_parameters,
+                hook_arities: super::hook_arguments::Arities::default(),
             });
             self.declarations = declarations;
             self.scanned = 0;
@@ -3013,6 +3018,7 @@ impl<'a> CommandSignatures<'a> {
             unverified_names,
             detokenize_boundary_known,
             identity_parameters,
+            hook_arities: super::hook_arguments::Arities::default(),
         };
         // Deferred or forwarded providers can install an unseen definition.
         // Proven displayed file commands cannot execute such a provider.
@@ -3032,6 +3038,7 @@ impl<'a> CommandSignatures<'a> {
         {
             signatures.detokenize_boundary_known = false;
         }
+        signatures.hook_arities = super::hook_arguments::Arities::collect(&documents, &signatures);
         signatures
     }
 
@@ -3142,6 +3149,27 @@ impl<'a> CommandSignatures<'a> {
     /// parsed user grammar. Captured copies and ambiguous bindings stay unknown.
     pub(crate) fn has_custom_signature(&self, name: &str, builtin: &str) -> bool {
         self.local.contains_key(builtin) && self.local.get(name).is_some_and(Option::is_some)
+    }
+
+    fn hook_signature(
+        &self,
+        name: &str,
+        source: &str,
+        after: usize,
+        upper: bool,
+    ) -> Option<Signature> {
+        let canonical = super::hook_arguments::USES
+            .iter()
+            .copied()
+            .find(|builtin| self.invokes_builtin(name, builtin))?;
+        let count = self.hook_arities.count(source, after, canonical, upper)?;
+        let mut signature = builtin(canonical)?;
+        signature.parameters.extend((1..=count).map(|n| Parameter {
+            obey_spaces: false,
+            kind: Kind::Required,
+            label: format!("{{argument {n}}}"),
+        }));
+        Some(signature)
     }
 
     pub(crate) fn literal_integer_value(&self, source: &str, after: usize) -> Option<(i32, usize)> {
@@ -3991,6 +4019,7 @@ impl<'a> CommandSignatures<'a> {
             unverified_names: self.unverified_names.clone(),
             detokenize_boundary_known: self.detokenize_boundary_known,
             identity_parameters: self.identity_parameters.clone(),
+            hook_arities: self.hook_arities.clone(),
         };
         shapes.inline_copy_operands(parsed);
         shapes.argument_tokens_with_literal(source, parsed, None, false, false, parameters)
@@ -4761,6 +4790,7 @@ impl<'a> CommandSignatures<'a> {
                 .as_ref()
                 .filter(|_| environment.is_none())
                 .and_then(|argument| builtin_environment(&argument.value))
+                .or_else(|| self.hook_signature(name, source, end, true))
                 .or_else(|| {
                     (!local.contains_key(name))
                         .then(|| operand_builtin(name))
@@ -6469,6 +6499,7 @@ fn help_query(workspace: &Workspace, uri: &Url, position: Position) -> Option<Si
         return None;
     }
     let scope = workspace.symbol_scope(uri);
+    let hook_signatures = OnceCell::new();
     for (index, command) in doc
         .syntax
         .commands
@@ -6565,6 +6596,24 @@ fn help_query(workspace: &Workspace, uri: &Url, position: Position) -> Option<Si
             signature(workspace, name, &scope)
         };
         if let Some(mut signature) = signature {
+            if signature
+                .parameters
+                .first()
+                .is_some_and(|parameter| parameter.label == "{hook}")
+            {
+                let signatures = hook_signatures.get_or_init(|| {
+                    CommandSignatures::new(
+                        workspace
+                            .documents
+                            .iter()
+                            .filter(|(uri, _)| scope.contains(*uri))
+                            .map(|(_, doc)| (doc.text.source.as_str(), &doc.syntax)),
+                    )
+                });
+                if let Some(hook) = signatures.hook_signature(name, &doc.text.source, end, false) {
+                    signature.parameters = hook.parameters;
+                }
+            }
             if literal.is_some() {
                 signature.name = format!("csname {name}\\endcsname");
             } else if named.is_some() {

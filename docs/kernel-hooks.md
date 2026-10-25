@@ -11,6 +11,7 @@
 | `AtBeginDocument`、`AtEndDocument` | `[label]{code}` |
 | `RemoveFromHook` | `{hook}[label]` |
 | `NewHook`、`NewReversedHook`、`UseHook`、`UseOneTimeHook` | `{hook}` |
+| `UseHookWithArguments`、`UseOneTimeHookWithArguments` | `{hook}{argument count}`，后接 hook 的数据参数 |
 | `IfHookEmptyTF`、`IfHookExistsTF` | `{hook}{true code}{false code}` |
 | `IfHookEmptyT` | `{hook}{true code}` |
 | `IfHookEmptyF` | `{hook}{false code}` |
@@ -42,13 +43,17 @@
 
 名称匹配保留内核差别：声明／注册接口规范化名称首尾的普通 TeX 空白，`UseHook` 和四个条件接口保留原始名称。`NewHook{ custom }` 可被 `UseHook{custom}` 命中，而 `UseHook{ custom }` 不与其关联。普通名称中的点保持字面含义。含内部空白、依赖默认标签的 `.`／`./...` 名称、动态展开和跨注释拼接的名称暂不推断；没有源码声明的内置或自动生成钩子也没有虚构的定义位置。名称与代码标签的改名继续待独立认证。
 
-目前不模拟钩子触发、删除、排序或一次性执行。`UseHookWithArguments`／`UseOneTimeHookWithArguments` 的可变参数数量继续待实现。
+使用接口根据项目内唯一、可确认的字面声明提供 `{argument 1}` 等参数提示，并将数据参数排除出引用导航。已声明的 hook 使用声明数量，覆盖调用处数量；未声明的字面 hook 使用 `WithArguments` 接口给出的 0–9 数量。直接、静态命名和纯转发调用均适用，未保存的提供文件变化刷新提示与导航边界。已声明零参数 hook 后的独立引用保留正常跳转。
+
+这仍是静态源码分析，不模拟钩子触发、删除、排序或一次性执行。检测到一次性调用时不提供精确的附加参数提示，数据边界采用声明与调用数量的保守上界；动态名称、动态声明和歧义来源不认证精确数量。改名检查另行使用更宽的安全边界，因此部分原生可执行引用仍可能被拒绝改名；不能把参数提示当作执行证明。
 
 验证名称、条件交互及原生行为：
 
 ```sh
-cargo test --locked --test hook_names --test hook_conditions
-cargo test --locked --test hook_names --test hook_conditions -- --ignored
+cargo test --locked --test hook_names --test hook_conditions --test hook_arguments --test hook_variadic
+cargo test --locked --test hook_names --test hook_conditions --test hook_arguments --test hook_variadic -- --ignored
 cargo test --locked --test protocol hook_names_keep_exact_ranges
 cargo test --locked --test protocol hook_condition_guards
+cargo test --locked --test protocol hook_argument_data_guards
+cargo test --locked --test protocol variadic_hook_help
 ```
