@@ -17,6 +17,102 @@ struct Server {
 }
 
 #[test]
+fn repeated_parameter_grammars_follow_unsaved_providers_without_certifying_bodies() {
+    use latex_lsp::text::Text;
+    for versioned in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+        let shared = uri.join("shared.tex").unwrap();
+        let provider = uri.join("commands.sty").unwrap();
+        let other = uri.join("unsaved.tex").unwrap();
+        let source = "% 😀\r\n\\documentclass{article}\\newcommand\\unicodeword{😀}\\newcommand\\one[1]{#1}\\input{commands.sty}\\begin{document}\\input{shared}\\one{Text}\\ref{same}\\end{document}";
+        let declaration = "% 😀\r\n\\newcommand\\unicodeword{😀}\\label{same}";
+        for (file, content) in [
+            (&uri, source),
+            (&shared, declaration),
+            (&provider, r"\renewcommand\one[1]{#1}"),
+        ] {
+            std::fs::write(file.to_file_path().unwrap(), content).unwrap();
+        }
+        let text = Text::new(source.into());
+        let shared_text = Text::new(declaration.into());
+        let at = text.position(source.rfind("same").unwrap() + 1);
+        let shared_start = declaration.find("same").unwrap();
+        let location =
+            json!({"uri":shared,"range":shared_text.range(shared_start, shared_start + 4)});
+        let params = json!({"textDocument":{"uri":uri},"position":at,"newName":"fresh"});
+        let mut server = Server::start();
+        server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(directory.path()).unwrap(),"initializationOptions":{"distribution":{"enabled":false}},"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":versioned}}}}));
+        server.notify("initialized", json!({}));
+        for (file, content, version) in [(&uri, source, 5), (&shared, declaration, 7)] {
+            server.notify("textDocument/didOpen", json!({"textDocument":{"uri":file,"languageId":"latex","version":version,"text":content}}));
+        }
+        let allowed = |server: &mut Server| {
+            assert_eq!(
+                server.request(2, "textDocument/definition", params.clone()),
+                json!([location])
+            );
+            assert!(!server
+                .request(3, "textDocument/prepareRename", params.clone())
+                .is_null());
+            let response = server.request(4, "textDocument/rename", params.clone());
+            let mut expected = vec![];
+            let mut changes = serde_json::Map::new();
+            for (file, text, version) in [(&uri, &text, 5), (&shared, &shared_text, 7)] {
+                let start = text.source.find("same").unwrap();
+                let edit = json!({"range":text.range(start, start + 4),"newText":"fresh"});
+                expected
+                    .push(json!({"textDocument":{"uri":file,"version":version},"edits":[edit]}));
+                changes.insert(file.to_string(), json!([edit]));
+            }
+            if versioned {
+                let mut actual = response["documentChanges"].as_array().unwrap().clone();
+                actual.sort_by_key(|value| value["textDocument"]["uri"].to_string());
+                expected.sort_by_key(|value| value["textDocument"]["uri"].to_string());
+                assert_eq!(actual, expected);
+            } else {
+                assert_eq!(response, json!({"changes":changes}));
+            }
+        };
+        let blocked = |server: &mut Server| {
+            for method in ["textDocument/prepareRename", "textDocument/rename"] {
+                server.send(json!({"jsonrpc":"2.0","id":20,"method":method,"params":params}));
+                let response = server.until(|message| message["id"] == 20);
+                assert!(
+                    response["error"]["code"] == -32602
+                        || response.get("result") == Some(&Value::Null),
+                    "{response}"
+                );
+            }
+        };
+        allowed(&mut server);
+        server.notify("textDocument/didOpen", json!({"textDocument":{"uri":provider,"languageId":"latex","version":12,"text":"\\renewcommand\\one[2]{#1}"}}));
+        assert_eq!(
+            server.request(5, "textDocument/definition", params.clone()),
+            json!([])
+        );
+        blocked(&mut server);
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":provider,"version":13},"contentChanges":[{"text":"\\renewcommand\\one[1]{}"}]}));
+        allowed(&mut server);
+        server.notify("textDocument/didOpen", json!({"textDocument":{"uri":other,"languageId":"latex","version":9,"text":"\\documentclass{article}\\newcommand\\one[2]{}\\begin{document}\\input{shared}\\one{Text}\\ref{same}\\end{document}"}}));
+        blocked(&mut server);
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":other}}),
+        );
+        allowed(&mut server);
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":provider}}),
+        );
+        allowed(&mut server);
+        server.request(99, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
 fn pdf_destination_edits_require_complete_executable_uses_over_stdio() {
     use latex_lsp::text::Text;
 

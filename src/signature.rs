@@ -2190,6 +2190,7 @@ pub(crate) struct CommandSignatures<'a> {
     local: BTreeMap<Cow<'a, str>, Option<Signature>>,
     tex_operands: BTreeMap<Cow<'a, str>, Option<TexOperands>>,
     literal_operands: BTreeMap<Cow<'a, str>, Vec<LiteralOperands>>,
+    unverified_names: BTreeSet<Cow<'a, str>>,
     detokenize_boundary_known: bool,
     identity_parameters: BTreeSet<String>,
 }
@@ -2350,6 +2351,11 @@ impl InlineTokenization {
                     .into_iter()
                     .map(|(name, value)| (Cow::Owned(name.into_owned()), value))
                     .collect(),
+                unverified_names: signatures
+                    .unverified_names
+                    .into_iter()
+                    .map(|name| Cow::Owned(name.into_owned()))
+                    .collect(),
                 detokenize_boundary_known: signatures.detokenize_boundary_known,
                 identity_parameters: signatures.identity_parameters,
             });
@@ -2398,6 +2404,27 @@ enum LiteralOperands {
     Alias(String),
     Copy(String),
     Unknown,
+}
+
+impl LiteralOperands {
+    /// Labels, default values and documentation do not change how parameters
+    /// are collected. Copies can capture an older grammar and remain unknown.
+    fn same_grammar(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Signature(a), Self::Signature(b)) => {
+                a.starred == b.starred
+                    && a.nested_brackets == b.nested_brackets
+                    && a.parameters.len() == b.parameters.len()
+                    && a.parameters
+                        .iter()
+                        .zip(&b.parameters)
+                        .all(|(a, b)| a.obey_spaces == b.obey_spaces && a.kind == b.kind)
+            }
+            (Self::Tex(a), Self::Tex(b)) => a == b,
+            (Self::Alias(a), Self::Alias(b)) => a == b,
+            _ => false,
+        }
+    }
 }
 
 fn insert_literal_operands<'a>(
@@ -2568,14 +2595,16 @@ impl<'a> CommandSignatures<'a> {
                         }
             })
         });
-        let mut local: BTreeMap<_, _> = ambiguous
-            .into_iter()
-            .map(|name| (Cow::Borrowed(name), None))
-            .collect();
+        let mut unverified_names: BTreeSet<_> = ambiguous.into_iter().map(Cow::Borrowed).collect();
         for name in environments {
-            local.insert(Cow::Borrowed(name), None);
-            local.insert(Cow::Owned(format!("end{name}")), None);
+            unverified_names.insert(Cow::Borrowed(name));
+            unverified_names.insert(Cow::Owned(format!("end{name}")));
         }
+        let mut local: BTreeMap<_, _> = unverified_names
+            .iter()
+            .cloned()
+            .map(|name| (name, None))
+            .collect();
         let mut tex_operands: BTreeMap<_, _> =
             local.keys().map(|name| (name.clone(), None)).collect();
         let mut aliases = BTreeMap::new();
@@ -2772,6 +2801,7 @@ impl<'a> CommandSignatures<'a> {
             local,
             tex_operands,
             literal_operands,
+            unverified_names,
             detokenize_boundary_known,
             identity_parameters,
         };
@@ -3534,6 +3564,7 @@ impl<'a> CommandSignatures<'a> {
             local: self.local.clone(),
             tex_operands: self.tex_operands.clone(),
             literal_operands: self.literal_operands.clone(),
+            unverified_names: self.unverified_names.clone(),
             detokenize_boundary_known: self.detokenize_boundary_known,
             identity_parameters: self.identity_parameters.clone(),
         };
@@ -3621,8 +3652,8 @@ impl<'a> CommandSignatures<'a> {
         false
     }
 
-    /// Positions confirmed by a known parameter grammar, excluding the
-    /// conservative operand assumed after an unresolved or ambiguous macro.
+    /// Positions confirmed by a known parameter grammar, including repeated
+    /// definitions with the same grammar. This does not prove their meaning.
     pub(crate) fn known_argument_tokens(
         &self,
         source: &str,
@@ -4059,6 +4090,39 @@ impl<'a> CommandSignatures<'a> {
         false
     }
 
+    /// Preserve a boundary shared by every source declaration, without
+    /// restoring a unique command meaning, identity body or help signature.
+    /// Pure forwarders remain late-bound; captured copies do not participate.
+    fn common_parameter_grammars(&self) -> BTreeMap<Cow<'a, str>, Option<LiteralOperands>> {
+        let mut shapes: BTreeMap<_, _> = self
+            .local
+            .keys()
+            .cloned()
+            .map(|name| (name, None))
+            .collect();
+        let mut aliases = BTreeMap::new();
+        for (name, candidates) in &self.literal_operands {
+            if self.unverified_names.contains(name) {
+                continue;
+            }
+            let Some(first) = candidates
+                .first()
+                .filter(|first| candidates.iter().all(|other| first.same_grammar(other)))
+            else {
+                continue;
+            };
+            if let LiteralOperands::Alias(target) = first {
+                aliases.insert(name.clone(), target.clone());
+            } else {
+                shapes.insert(name.clone(), Some(first.clone()));
+            }
+        }
+        shapes.extend(resolve_aliases(&shapes, &aliases, |name| {
+            operand_builtin(name).map(LiteralOperands::Signature)
+        }));
+        shapes
+    }
+
     fn argument_tokens_with_literal(
         &self,
         source: &str,
@@ -4071,6 +4135,17 @@ impl<'a> CommandSignatures<'a> {
         let all_parameters = matches!(parameters, ParameterRead::All);
         let unknown_single = !matches!(parameters, ParameterRead::DeclarationData);
         let local = &self.local;
+        let common_grammars = OnceCell::new();
+        let deferred_bodies = OnceCell::new();
+        let recovery_end = |at| {
+            deferred_bodies
+                .get_or_init(|| definition_body_spans(source, parsed))
+                .iter()
+                .filter(|span| span.contains(&at))
+                .map(|span| span.end)
+                .min()
+                .unwrap_or(source.len())
+        };
         let mut result = BTreeSet::new();
         let declarations: BTreeSet<_> = parsed
             .definitions
@@ -4226,18 +4301,45 @@ impl<'a> CommandSignatures<'a> {
             {
                 continue;
             }
-            if let Some(end) = self
-                .tex_operands
+            let common = local
                 .get(name)
-                .and_then(Option::as_ref)
-                .and_then(|operands| operands.end(source, end, control_spaces))
+                .filter(|signature| signature.is_none())
+                .and_then(|_| {
+                    common_grammars
+                        .get_or_init(|| self.common_parameter_grammars())
+                        .get(name)
+                        .and_then(Option::as_ref)
+                });
+            if let Some(operands) =
+                self.tex_operands
+                    .get(name)
+                    .and_then(Option::as_ref)
+                    .or(match common {
+                        Some(LiteralOperands::Tex(operands)) => Some(operands),
+                        _ => None,
+                    })
             {
                 // Delimited TeX arguments are read without executing any of
                 // their tokens, including controls inside balanced groups.
-                mark_operand_tokens(parsed, command.span.end, end, literal, &mut result);
-                continue;
+                if let Some(end) = operands.end(source, end, control_spaces) {
+                    mark_operand_tokens(parsed, command.span.end, end, literal, &mut result);
+                    continue;
+                }
+                if common.is_some() {
+                    mark_operand_tokens(
+                        parsed,
+                        end,
+                        recovery_end(command.span.start),
+                        literal,
+                        &mut result,
+                    );
+                    continue;
+                }
             }
-            let signature = local.get(name).and_then(Option::as_ref);
+            let signature = local.get(name).and_then(Option::as_ref).or(match common {
+                Some(LiteralOperands::Signature(signature)) => Some(signature),
+                _ => None,
+            });
             let builtin = begin
                 .as_ref()
                 .filter(|_| environment.is_none())
@@ -4256,6 +4358,7 @@ impl<'a> CommandSignatures<'a> {
                 // Message readers expand text without executing the resulting
                 // nonexpandable tokens, including declarations and callbacks.
                 let opaque = all_parameters
+                    || common.is_some()
                     || local.contains_key(signature.name.as_str())
                     || matches!(
                         signature.name.as_str(),
@@ -4279,9 +4382,16 @@ impl<'a> CommandSignatures<'a> {
                 if opaque
                     && read.unfinished
                     && (matches!(parameters, ParameterRead::DeclarationData)
+                        || common.is_some()
                         || matches!(signature.name.as_str(), "typeout" | "message"))
                 {
-                    mark_operand_tokens(parsed, read.end, source.len(), literal, &mut result);
+                    mark_operand_tokens(
+                        parsed,
+                        read.end,
+                        recovery_end(command.span.start),
+                        literal,
+                        &mut result,
+                    );
                 }
             } else if !known_only
                 && (literal.is_none() || !self.literal_operands.contains_key(name))
@@ -6017,6 +6127,22 @@ pub fn help(workspace: &Workspace, uri: &Url, position: Position) -> Option<Sign
 mod tex_operand_tests {
     use super::*;
     use crate::text::Text;
+
+    #[test]
+    fn common_grammars_cannot_certify_unverified_external_declarations() {
+        let source = r"\newcommand\one[1]{#1}\renewcommand\one[1]{#1}\def\bridge{\one}\bridge{Text}\ref{same}";
+        let parsed = syntax::Syntax::latex(&Text::new(source.into()));
+        let at = source.rfind(r"\ref").unwrap();
+        let ordinary = CommandSignatures::new([(source, &parsed)]);
+        assert!(!ordinary.argument_tokens(source, &parsed).contains(&at));
+        for name in ["one", "bridge"] {
+            let paused = CommandSignatures::with_ambiguous_names([(source, &parsed)], [name]);
+            assert!(
+                paused.argument_tokens(source, &parsed).contains(&at),
+                "{name}"
+            );
+        }
+    }
 
     #[test]
     fn copied_literal_candidates_capture_builtin_and_previous_source_shapes() {
