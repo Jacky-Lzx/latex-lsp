@@ -575,6 +575,6 @@ fn linked_editing_ranges_with_context(
                 .iter()
                 .map(|(start, end)| doc.text.range(*start, *end))
                 .collect(),
-            word_pattern: Some(r"[^\s{}\\%]+".into()),
+            word_pattern: Some(r"[^\s{}\\%]*".into()),
         })
 }

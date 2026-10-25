@@ -63,6 +63,129 @@ fn nested_and_repeated_names_link_only_their_own_balanced_pair() {
 }
 
 #[test]
+fn empty_environment_names_keep_zero_width_linked_insertion_points() {
+    for (begin, end) in [
+        (r"\begin", r"\end"),
+        (r"\csuse{begin}", r"\csname end\endcsname"),
+        (r"\start", r"\finish"),
+    ] {
+        let source = format!(
+            "\\def\\start{{\\begin}}\\def\\finish{{\\end}}😀 {begin}{{}}\r\nBody\r\n{end}{{}}"
+        );
+        let doc = document(&source, "tex");
+        let offsets: Vec<_> = source.match_indices("{}").map(|(at, _)| at + 1).collect();
+        let expected: Vec<_> = offsets.iter().map(|at| doc.text.range(*at, *at)).collect();
+        for at in offsets {
+            let linked = editing::linked_editing_ranges(&doc, doc.text.position(at)).unwrap();
+            assert_eq!(linked.ranges, expected, "{source}");
+            assert_eq!(linked.word_pattern.as_deref(), Some(r"[^\s{}\\%]*"));
+        }
+    }
+}
+
+#[test]
+fn nested_and_repeated_empty_names_keep_separate_pairs() {
+    let source = r"\begin{}A\begin{}B\end{}C\end{}\begin{}D\end{}";
+    let doc = document(source, "tex");
+    let names: Vec<_> = source.match_indices("{}").map(|(at, _)| at + 1).collect();
+    for (begin, end) in [(0, 3), (1, 2), (4, 5)] {
+        let expected = vec![
+            doc.text.range(names[begin], names[begin]),
+            doc.text.range(names[end], names[end]),
+        ];
+        for at in [names[begin], names[end]] {
+            assert_eq!(
+                editing::linked_editing_ranges(&doc, doc.text.position(at))
+                    .unwrap()
+                    .ranges,
+                expected
+            );
+        }
+    }
+}
+
+#[test]
+fn empty_names_do_not_link_mismatched_dynamic_or_data_boundaries() {
+    for marked in [
+        r"\begin{¦}Body\end{quote}",
+        r"\begin{quote}Body\end{¦}",
+        r"\begin{¦}Body\end{\chosen}",
+        r"\begin{¦}Body\end{ }",
+        r"\begin{¦}Body\end{% comment
+}",
+        r"\begin{¦}Body\end",
+        r"\begin{¦}\begin{inner}Body\end{}\end{inner}",
+        r"\newcommand{\ignore}[1]{}\ignore{\begin{¦}Fake\end{}}",
+        r"\def\saved{\begin{¦}Fake\end{}}",
+        r"\renewcommand{\begin}[1]{#1}\begin{¦}Fake\end{}",
+        r"% \begin{¦}Fake\end{}",
+        r"\verb|\begin{¦}Fake\end{}|",
+        "\\begin{verbatim}\n\\begin{¦}Fake\\end{}\n\\end{verbatim}",
+        r"\begin{¦}\input{missing}\end{}",
+    ] {
+        let at = marked.find('¦').unwrap();
+        let source = marked.replace('¦', "");
+        let doc = document(&source, "tex");
+        assert!(
+            editing::linked_editing_ranges(&doc, doc.text.position(at)).is_none(),
+            "{marked}"
+        );
+    }
+}
+
+#[test]
+fn empty_project_pairs_still_require_agreeing_inputs_and_consumers() {
+    for (child, expected) in [
+        ("Body", true),
+        (r"\end{}\begin{}", false),
+        (r"\begin{inner}", false),
+        (r"\iftrue Body\fi", false),
+    ] {
+        let source =
+            r"\documentclass{article}\begin{document}\begin{}\input{child}\end{}\end{document}";
+        let (temp, workspace) = project(&[("main.tex", source), ("child.tex", child)]);
+        let uri = Url::from_file_path(temp.path().join("main.tex")).unwrap();
+        let doc = &workspace.documents[&uri];
+        for (at, _) in source.match_indices("{}") {
+            assert_eq!(
+                editing::linked_editing_ranges_in_workspace(
+                    &workspace,
+                    &uri,
+                    doc.text.position(at + 1)
+                )
+                .is_some(),
+                expected,
+                "{child}"
+            );
+        }
+    }
+    for agree in [false, true] {
+        let first = r"\documentclass{article}\def\start{\begin}\def\finish{\end}\input{shared}\input{shared}";
+        let second = if agree {
+            first
+        } else {
+            r"\documentclass{article}\newcommand{\start}[1]{#1}\newcommand{\finish}[1]{#1}\input{shared}"
+        };
+        let source = r"\start{}Body\finish{}";
+        let (temp, workspace) =
+            project(&[("a.tex", first), ("b.tex", second), ("shared.tex", source)]);
+        let uri = Url::from_file_path(temp.path().join("shared.tex")).unwrap();
+        let doc = &workspace.documents[&uri];
+        for (at, _) in source.match_indices("{}") {
+            assert_eq!(
+                editing::linked_editing_ranges_in_workspace(
+                    &workspace,
+                    &uri,
+                    doc.text.position(at + 1)
+                )
+                .is_some(),
+                agree
+            );
+        }
+    }
+}
+
+#[test]
 fn raw_environment_delimiters_link_without_pairing_fake_commands_in_the_body() {
     for name in [
         "verbatim",

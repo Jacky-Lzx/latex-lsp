@@ -20059,6 +20059,73 @@ fn environment_linked_editing_tracks_incremental_changes_and_validates_positions
 }
 
 #[test]
+fn environment_linked_editing_survives_empty_names_during_incremental_replacement() {
+    use latex_lsp::text::Text;
+    use tower_lsp::lsp_types::TextDocumentContentChangeEvent;
+
+    let mut server = Server::start();
+    let uri = "file:///linked-editing-empty/main.tex";
+    server.request(1, "initialize", json!({"processId":null,"capabilities":{}}));
+    server.notify("initialized", json!({}));
+    let mut text =
+        Text::new("😀 \\begin{quote}\r\n\\begin{quote}Inner\\end{quote}\r\n\\end{quote}".into());
+    let mut version = 1;
+    server.notify("textDocument/didOpen", json!({"textDocument":{"uri":uri,"languageId":"latex","version":version,"text":text.source}}));
+    let mut name = "quote";
+    let mut id = 2;
+    for replacement in ["", "a", "al", "align", "", "quote"] {
+        let begin = text.source.rfind("\\begin{").unwrap() + "\\begin{".len();
+        let end = text.source.find("\\end{").unwrap() + "\\end{".len();
+        // Mirror the client's two sequential edits. The intermediate mismatch
+        // must not acquire an unrelated pair, including the outer quote pair.
+        for at in [end, begin] {
+            let change = TextDocumentContentChangeEvent {
+                range: Some(text.range(at, at + name.len())),
+                range_length: None,
+                text: replacement.into(),
+            };
+            version += 1;
+            server.notify(
+                "textDocument/didChange",
+                json!({"textDocument":{"uri":uri,"version":version},"contentChanges":[change]}),
+            );
+            text = text.changed(vec![change]).unwrap();
+            if at == end {
+                let pending = server.request(
+                    id,
+                    "textDocument/linkedEditingRange",
+                    json!({"textDocument":{"uri":uri},"position":text.position(begin)}),
+                );
+                id += 1;
+                assert!(pending.is_null(), "{pending}");
+            }
+        }
+        name = replacement;
+        let begin = text.source.rfind("\\begin{").unwrap() + "\\begin{".len();
+        let end = text.source.find("\\end{").unwrap() + "\\end{".len();
+        let expected = [
+            text.range(begin, begin + name.len()),
+            text.range(end, end + name.len()),
+        ];
+        for at in [begin, end] {
+            let result = server.request(
+                id,
+                "textDocument/linkedEditingRange",
+                json!({"textDocument":{"uri":uri},"position":text.position(at)}),
+            );
+            id += 1;
+            assert_eq!(result["ranges"], json!(expected), "{result}");
+            assert_eq!(result["wordPattern"], r"[^\s{}\\%]*");
+        }
+        assert!(text.source.starts_with("😀 \\begin{quote}\r\n"));
+        assert!(text.source.ends_with("\r\n\\end{quote}"));
+    }
+    server.request(id, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
 fn environment_linked_editing_tracks_project_aliases_macro_data_and_input_changes() {
     use latex_lsp::text::Text;
     let directory = tempfile::tempdir().unwrap();

@@ -53,7 +53,12 @@ struct Walk<'a> {
 }
 
 impl<'a> Walk<'a> {
-    fn new(workspace: &'a Workspace, root: &'a Url, scope: &BTreeSet<Url>) -> Self {
+    fn new(
+        workspace: &'a Workspace,
+        root: &'a Url,
+        scope: &BTreeSet<Url>,
+        linked_editing: bool,
+    ) -> Self {
         let inputs = crate::source_inputs::Index::new(workspace, root);
         let signatures = CommandSignatures::new(
             workspace
@@ -76,7 +81,7 @@ impl<'a> Walk<'a> {
                 .map(|uri| {
                     (
                         uri.clone(),
-                        source(workspace, root, uri, &signatures, &inputs),
+                        source(workspace, root, uri, &signatures, &inputs, linked_editing),
                     )
                 })
                 .collect(),
@@ -364,10 +369,27 @@ fn source(
     uri: &Url,
     signatures: &CommandSignatures<'_>,
     inputs: &crate::source_inputs::Index,
+    linked_editing: bool,
 ) -> Source {
     let doc = &workspace.documents[uri];
     let mut result = Source::default();
-    let boundaries = signatures.environment_boundaries(&doc.text.source, &doc.syntax);
+    let mut boundaries = signatures.environment_boundaries(&doc.text.source, &doc.syntax);
+    if linked_editing {
+        // A change-word operation briefly leaves both linked names empty.
+        // Preserve their zero-width insertion points without making empty
+        // names declarations, references or diagnostic environment calls.
+        for boundary in &mut boundaries {
+            if boundary.argument.is_none() {
+                let at = syntax::skip_space(&doc.text.source, boundary.span.end);
+                if let Some((argument, end)) = syntax::group(&doc.text.source, at, b'{', b'}')
+                    .filter(|(argument, _)| argument.span.is_empty())
+                {
+                    boundary.argument = Some(argument);
+                    boundary.span.end = end;
+                }
+            }
+        }
+    }
     result.operations.extend(
         boundaries
             .iter()
@@ -589,7 +611,7 @@ type NamePair = [(usize, usize); 2];
 
 /// Without project context, no pair may cross a source-loading boundary.
 pub(crate) fn local_linked_pairs(workspace: &Workspace, uri: &Url) -> Vec<NamePair> {
-    let mut walk = Walk::new(workspace, uri, &BTreeSet::from([uri.clone()]));
+    let mut walk = Walk::new(workspace, uri, &BTreeSet::from([uri.clone()]), true);
     for source in walk.sources.values_mut() {
         for (_, operation) in &mut source.operations {
             if matches!(operation, Operation::Input(..)) {
@@ -614,7 +636,7 @@ pub(crate) fn linked_pairs(workspace: &Workspace, uri: &Url) -> Vec<NamePair> {
     }
     let mut agreed: Option<Vec<NamePair>> = None;
     for (root, scope) in projects {
-        let mut walk = Walk::new(workspace, &root, &scope);
+        let mut walk = Walk::new(workspace, &root, &scope, true);
         walk.visit(&root, 0);
         let pairs = walk.linked_pairs(uri);
         if let Some(agreed) = &mut agreed {
@@ -635,7 +657,7 @@ pub(crate) fn fixes(
         if scope.is_disjoint(requested) {
             continue;
         }
-        let mut walk = Walk::new(workspace, &root, &scope);
+        let mut walk = Walk::new(workspace, &root, &scope, false);
         walk.visit(&root, 0);
         let mut found = walk.pair();
         for uri in scope.intersection(requested) {
