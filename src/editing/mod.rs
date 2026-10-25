@@ -5,6 +5,7 @@ pub(crate) mod code_action_resolve;
 pub(crate) mod file_fixes;
 pub mod file_operations;
 pub(crate) mod hook_argument_edits;
+mod hook_parameter_flow;
 pub(crate) mod image_fixes;
 pub(crate) mod refactor;
 pub(crate) mod spelling_fixes;

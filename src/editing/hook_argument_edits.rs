@@ -220,21 +220,27 @@ pub(crate) fn validate(
             }
             parsed.insert(uri, invocations);
         }
-        for uri in consumers.intersection(scope) {
+        let mut templates = BTreeMap::new();
+        for uri in &project {
+            if let Some(doc) = workspace.documents.get(uri) {
+                if let Some(source) =
+                    super::hook_parameter_flow::template(doc, &mut work).ok_or_else(error)?
+                {
+                    templates.insert(uri.clone(), source);
+                }
+            }
+        }
+        let mut native = super::hook_parameter_flow::Native::new();
+        for uri in &project {
             let Some(doc) = workspace.documents.get(uri) else {
                 continue;
             };
             let Some(invocations) = parsed.get(&uri) else {
                 continue;
             };
-            let locations: Vec<_> = occurrences
-                .iter()
-                .filter(|location| location.uri == *uri)
-                .filter_map(|location| doc.text.offset(location.range.start))
-                .collect();
-            if locations.is_empty() {
-                continue;
-            }
+            let read_source = templates
+                .get(uri)
+                .map_or(doc.text.source.as_str(), String::as_str);
             for call in invocations.iter().filter(|call| USES.contains(&call.name)) {
                 let Some((name, mut after)) = argument(&doc.text.source, call.after) else {
                     continue;
@@ -261,7 +267,7 @@ pub(crate) fn validate(
                 }
                 let start = after;
                 for _ in 0..n {
-                    let Some((_, end)) = argument(&doc.text.source, after) else {
+                    let Some((_, end)) = argument(read_source, after) else {
                         // Unknown tokenization cannot justify editing later
                         // source as if it were outside the data operands.
                         after = doc.text.source.len();
@@ -272,21 +278,41 @@ pub(crate) fn validate(
                 if after == start {
                     continue;
                 }
-                for &at in &locations {
-                    // A hook may consume only the command token of a label or
-                    // reference, leaving that token's apparent arguments as text.
-                    let command = doc
-                        .syntax
-                        .commands
-                        .partition_point(|command| command.span.start <= at)
-                        .checked_sub(1)
-                        .map(|index| &doc.syntax.commands[index]);
-                    if (start..after).contains(&at)
-                        || command
-                            .is_some_and(|command| (start..after).contains(&command.span.start))
-                    {
-                        return Err(error());
-                    }
+                native
+                    .entry(uri.clone())
+                    .or_default()
+                    .push((start..after, n));
+            }
+        }
+        let data = super::hook_parameter_flow::extend(
+            workspace,
+            &project,
+            &signatures,
+            native,
+            &templates,
+            &mut work,
+        )
+        .ok_or_else(error)?;
+        for uri in consumers.intersection(scope) {
+            let Some(doc) = workspace.documents.get(uri) else {
+                continue;
+            };
+            for at in occurrences
+                .iter()
+                .filter(|location| location.uri == *uri)
+                .filter_map(|location| doc.text.offset(location.range.start))
+            {
+                let command = doc
+                    .syntax
+                    .commands
+                    .partition_point(|command| command.span.start <= at)
+                    .checked_sub(1)
+                    .map(|index| &doc.syntax.commands[index]);
+                if data.get(uri).into_iter().flatten().any(|span| {
+                    span.contains(&at)
+                        || command.is_some_and(|command| span.contains(&command.span.start))
+                }) {
+                    return Err(error());
                 }
             }
         }

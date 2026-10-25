@@ -31,6 +31,8 @@
 
 `UseHook`／`UseOneTimeHook` 也会读取声明的参数，并非只有带 `WithArguments` 的接口才读取。参数可能被钩子作为字面文本使用：若宏或引用的改名会涉及这些数据 token，服务器拒绝整个改名，避免改变捕获的控制序列名称或显示的引用键。保护涵盖静态命名、纯转发及复制调用、跨文件未保存声明和共享源码的不同消费者。动态数量、声明歧义及一次性调用使用保守参数上界；这项保护不证明参数中的命令会执行。独立标签仍可改名，分析工作量有上限。
 
+参数保护也沿包装宏传递：例如 `\newcommand\invoke[1]{\UseHook{custom}{#1}}` 的实际参数可能成为字面数据。分析覆盖传统／xparse 参数、可选默认值、嵌套包装和可能保留旧正文的复制；没有进入数据的独立形参继续参与完整改名。裸 `#1` 可以替换为空，因此还会检查 hook 是否继续读取包装调用后的 token；TeX 固定前缀和分隔符属于调用语法，不计作实际数据。无法确认参数语法或工作量超限时保守拒绝改名。
+
 已登记代码可能重新定义字符串判断命令时，撤销相关命令后续的已知含义，避免在钩子执行后仍把真实宏调用当作字面数据而漏改。此保护不假定钩子一直未使用；显式恢复后仍可能再次触发，因此恢复命令不会清除尚未确定的钩子影响。无法确认的文件加载和超限分析同样保守处理，独立标签保持可编辑。
 
 条件接口的完整分支保留结构引用与标签改名，但不认证实际选中的分支，也不用于证明代码即时执行。任一分支中的潜在赋值、宏补丁回调及其静态命名／转发／复制调用，都纳入字符串含义保护，避免只改写部分实际宏调用。未选择分支中的恢复不会抵消另一分支的潜在修改；无关修改及未调用定义中的条件不影响原有字符串判断。
@@ -55,5 +57,6 @@ cargo test --locked --test hook_names --test hook_conditions --test hook_argumen
 cargo test --locked --test protocol hook_names_keep_exact_ranges
 cargo test --locked --test protocol hook_condition_guards
 cargo test --locked --test protocol hook_argument_data_guards
+cargo test --locked --test protocol hook_wrapper_data_guards
 cargo test --locked --test protocol variadic_hook_help
 ```

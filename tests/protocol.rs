@@ -83,6 +83,83 @@ fn hook_argument_data_guards_track_unsaved_arities_and_exact_utf16_edits() {
 }
 
 #[test]
+fn hook_wrapper_data_guards_track_unsaved_bodies_and_exact_utf16_edits() {
+    use latex_lsp::text::Text;
+    for versioned in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+        let provider = main.join("hooks.tex").unwrap();
+        let source = "% hook arguments\r\n\\documentclass{article}\\input{hooks}\r\n\\begin{document}😀 \\newcommand\\word{Text}\\invoke{\\word}\\word\\label{safe}\\ref{safe}\\end{document}";
+        let declaration =
+            r"\NewHookWithArguments{custom}{1}\newcommand\invoke[1]{\UseHook{custom}{#1}}";
+        std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+        std::fs::write(provider.to_file_path().unwrap(), declaration).unwrap();
+        let mut server = Server::start();
+        server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(directory.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":versioned}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+        server.notify("initialized", json!({}));
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":main,"languageId":"latex","version":5,"text":source}}),
+        );
+        let text = Text::new(source.into());
+        let expected = |needle: &str, replacement: &str| {
+            let edits: Vec<_> = source.match_indices(needle).map(|(at, _)| json!({"range":text.range(at, at+needle.len()),"newText":replacement})).collect();
+            if versioned {
+                json!({"documentChanges":[{"textDocument":{"uri":main,"version":5},"edits":edits}]})
+            } else {
+                json!({"changes":{main.as_str():edits}})
+            }
+        };
+        for (version, definitions, blocked) in [
+            (12, declaration, true),
+            (
+                13,
+                r"\NewHookWithArguments{custom}{1}\newcommand\invoke[1]{\UseHook{custom}{Literal}#1}",
+                false,
+            ),
+            (14, declaration, true),
+            (
+                15,
+                r"\NewHook{custom}\newcommand\invoke[1]{\UseHook{custom}{#1}}",
+                false,
+            ),
+            (16, declaration, true),
+        ] {
+            if version == 12 {
+                server.notify("textDocument/didOpen", json!({"textDocument":{"uri":provider,"languageId":"latex","version":version,"text":definitions}}));
+            } else {
+                server.notify("textDocument/didChange", json!({"textDocument":{"uri":provider,"version":version},"contentChanges":[{"text":definitions}]}));
+            }
+            let params = json!({"textDocument":{"uri":main},"position":text.position(source.rfind("word").unwrap()+1),"newName":"fresh"});
+            if blocked {
+                for method in ["textDocument/rename", "textDocument/prepareRename"] {
+                    server.send(json!({"jsonrpc":"2.0","id":2,"method":method,"params":params}));
+                    let response = server.until(|message| message["id"] == 2);
+                    assert_eq!(response["error"]["code"], -32602, "{response}");
+                }
+            } else {
+                assert_eq!(
+                    server.request(2, "textDocument/rename", params),
+                    expected(r"\word", r"\fresh")
+                );
+            }
+            assert_eq!(server.request(3, "textDocument/rename", json!({"textDocument":{"uri":main},"position":text.position(source.rfind("safe").unwrap()+1),"newName":"fresh"})), expected("safe", "fresh"));
+        }
+        server.notify("textDocument/didOpen", json!({"textDocument":{"uri":provider,"languageId":"latex","version":17,"text":r"\NewHook{custom}\newcommand\invoke[1]{#1}"}}));
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":provider}}),
+        );
+        server.send(json!({"jsonrpc":"2.0","id":4,"method":"textDocument/rename","params":{"textDocument":{"uri":main},"position":text.position(source.rfind("word").unwrap()+1),"newName":"fresh"}}));
+        let response = server.until(|message| message["id"] == 4);
+        assert_eq!(response["error"]["code"], -32602, "{response}");
+        server.request(5, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
 fn variadic_hook_help_names_and_reference_boundaries_refresh_over_stdio() {
     use latex_lsp::text::Text;
     let directory = tempfile::tempdir().unwrap();

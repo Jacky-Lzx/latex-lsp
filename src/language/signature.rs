@@ -1834,6 +1834,12 @@ impl std::fmt::Debug for CommandShape {
     }
 }
 
+pub(crate) struct ParameterSpans {
+    pub spans: Vec<std::ops::Range<usize>>,
+    pub simple: bool,
+    pub end: usize,
+}
+
 impl CommandShape {
     /// An undefined control consumes no operands; retaining its former alias
     /// grammar would hide the following executable token or file load.
@@ -1868,6 +1874,67 @@ impl CommandShape {
             signature = None;
         }
         (signature.is_some() || tex.is_some()).then_some(Self { signature, tex })
+    }
+
+    pub(crate) fn parameter_spans(
+        &self,
+        source: &str,
+        parsed: &syntax::Syntax,
+        invocation: std::ops::Range<usize>,
+        control_spaces: bool,
+    ) -> Option<ParameterSpans> {
+        let tex = self.tex.as_ref();
+        let mut spans = Vec::new();
+        let mut before = invocation.end;
+        if let Some(tex) = tex {
+            if tex.delimiters.len() > 9 {
+                return None;
+            }
+            for count in 1..=tex.delimiters.len() {
+                let mut prefix = tex.clone();
+                prefix.delimiters.truncate(count);
+                let end = prefix.end(source, invocation.end, control_spaces)?;
+                spans.push(before..end);
+                before = end;
+            }
+            // A fixed TeX prefix is consumed even with zero parameters.
+            before = tex.end(source, invocation.end, control_spaces)?;
+        } else {
+            let signature = self.signature.as_ref()?;
+            if signature.parameters.len() > 9 {
+                return None;
+            }
+            for count in 1..=signature.parameters.len() {
+                let mut prefix = signature.clone();
+                prefix.parameters.truncate(count);
+                let read = argument_tokens(
+                    (source, parsed),
+                    invocation.end,
+                    control_spaces,
+                    &prefix,
+                    false,
+                    Some(usize::MAX),
+                    &mut BTreeSet::new(),
+                );
+                if read.unfinished {
+                    return None;
+                }
+                spans.push(before..read.end);
+                before = read.end;
+            }
+        }
+        let simple = self.tex.is_none()
+            && self.signature.as_ref().is_some_and(|signature| {
+                signature
+                    .parameters
+                    .iter()
+                    .all(|parameter| !matches!(parameter.kind, Kind::Delimited { .. }))
+            });
+        Some(ParameterSpans {
+            spans,
+            simple,
+            end: before,
+        })
     }
 
     fn argument_tokens(
@@ -2082,6 +2149,73 @@ pub(crate) fn command_definition_body(
         return None;
     }
     syntax::group(source, syntax::skip_space(source, at), b'{', b'}').map(|(body, _)| body)
+}
+
+/// Defaults are also possible inputs when a data-bearing optional parameter
+/// is omitted at a call. Preserve their original source locations.
+pub(crate) fn command_parameter_defaults(
+    source: &str,
+    parsed: &syntax::Syntax,
+    entry: &Entry,
+) -> Option<Vec<(usize, std::ops::Range<usize>)>> {
+    let declaration = entry.detail.strip_prefix("Defined with \\")?;
+    if TexOperands::declares(entry) {
+        return Some(Vec::new());
+    }
+    source_definition(source, parsed, entry, false)?;
+    let at = definition_arguments_start(source, parsed, entry, false)?;
+    if syntax::declares_traditional_command(declaration) {
+        let Some((_, end)) = syntax::bracket_argument(source, at) else {
+            return Some(Vec::new());
+        };
+        return Some(
+            syntax::bracket_argument(source, syntax::skip_space(source, end))
+                .map(|(default, _)| (0, default.span))
+                .into_iter()
+                .collect(),
+        );
+    }
+    if !syntax::declares_document_command(declaration) {
+        return Some(Vec::new());
+    }
+    let (specification, _) = syntax::group(source, at, b'{', b'}')?;
+    let spec = &source[specification.span.clone()];
+    let mut at = 0;
+    let mut number = 0;
+    let mut defaults = Vec::new();
+    while at < spec.len() {
+        at = syntax::skip_space(spec, at);
+        let Some(&kind) = spec.as_bytes().get(at) else {
+            break;
+        };
+        at += 1;
+        if matches!(kind, b'+' | b'!') {
+            continue;
+        }
+        match kind {
+            b'm' | b'o' | b's' => {}
+            b't' => {
+                at = delimiter_spec(spec, at)?.1;
+            }
+            b'd' | b'D' | b'r' | b'R' => {
+                at = delimiter_spec(spec, at)?.1;
+                at = delimiter_spec(spec, at)?.1;
+            }
+            b'O' => {}
+            _ => return None,
+        }
+        if matches!(kind, b'O' | b'D' | b'R') {
+            let (default, end) = syntax::group(spec, syntax::skip_space(spec, at), b'{', b'}')?;
+            defaults.push((
+                number,
+                specification.span.start + default.span.start
+                    ..specification.span.start + default.span.end,
+            ));
+            at = end;
+        }
+        number += 1;
+    }
+    Some(defaults)
 }
 
 fn definition_spans(
@@ -3149,6 +3283,26 @@ impl<'a> CommandSignatures<'a> {
     /// parsed user grammar. Captured copies and ambiguous bindings stay unknown.
     pub(crate) fn has_custom_signature(&self, name: &str, builtin: &str) -> bool {
         self.local.contains_key(builtin) && self.local.get(name).is_some_and(Option::is_some)
+    }
+
+    /// Bound individual user parameters with the existing operand grammar.
+    pub(crate) fn parameter_spans(
+        &self,
+        source: &str,
+        parsed: &syntax::Syntax,
+        name: &str,
+        invocation: std::ops::Range<usize>,
+        control_spaces: bool,
+    ) -> Option<ParameterSpans> {
+        let shape = parsed
+            .contextual_command_shapes
+            .get(&invocation.start)
+            .map(|shape| shape.as_ref().clone())
+            .unwrap_or_else(|| CommandShape {
+                signature: self.local.get(name).cloned().flatten(),
+                tex: self.tex_operands.get(name).cloned().flatten(),
+            });
+        shape.parameter_spans(source, parsed, invocation, control_spaces)
     }
 
     fn hook_signature(

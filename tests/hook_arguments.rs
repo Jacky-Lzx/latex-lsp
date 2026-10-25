@@ -193,6 +193,16 @@ fn native_hook_argument_edits_preserve_captured_text_and_executed_macro_counts()
         r"\def\usecustom{\UseHook}\usecustom{custom}\word",
         r"\let\usecustom\UseHook\usecustom{custom}\word",
         r"\let\usecustom\UseHook\def\UseHook#1{Text}\usecustom{custom}\word",
+        r"\newcommand\invoke[1]{\UseHook{custom}#1}\invoke{\word}",
+        r"\newcommand\invoke[1]{\UseHook{custom}{#1}}\invoke{\word}",
+        r"\NewDocumentCommand\invoke{O{\word}}{\UseHook{custom}{#1}}\invoke",
+        r"\newcommand\invoke[1][\word]{\UseHook{custom}{#1}}\invoke",
+        r"\def\inner#1{\UseHook{custom}#1}\def\outer#1{\inner{#1}}\outer{\word}",
+        r"\newcommand\invoke[1]{\UseHook{custom}#1}\invoke{}\word",
+        r"\newcommand\invoke{\UseHook{custom}}\invoke\word",
+        r"\def\invoke#1!{\UseHook{custom}#1}\invoke\word!",
+        r"\def\invoke!{\UseHook{custom}}\invoke!\word",
+        r"\def\invoke#1{\UseHook{custom}#1}\let\forward\invoke\def\invoke#1{Text}\forward{\word}",
     ] {
         let directory = tempfile::tempdir().unwrap();
         let source = source(call).replace(r"\word{Text}", r"\word{\typeout{EXECUTED}Text}");
@@ -244,7 +254,7 @@ fn native_hook_argument_edits_preserve_captured_text_and_executed_macro_counts()
         );
         let at = text.position(source.rfind("safe").unwrap() + 1);
         let mut edits = features::rename(&workspace, &uri, at, "fresh")
-            .unwrap()
+            .unwrap_or_else(|error| panic!("{call}: {error:?}"))
             .unwrap()
             .changes
             .unwrap()[&uri]
@@ -268,4 +278,216 @@ fn native_hook_argument_edits_preserve_captured_text_and_executed_macro_counts()
             original
         );
     }
+}
+
+#[test]
+fn parameterized_wrappers_cannot_rename_hook_data_as_executable_macros() {
+    for call in [
+        r"\newcommand\invoke[1]{\UseHook{custom}#1}\invoke{\word}",
+        r"\newcommand\invoke[1]{\UseHook{custom}{#1}}\invoke{\word}",
+        r"\def\invoke#1{\UseHookWithArguments{custom}{0}#1}\invoke\word",
+        r"\NewDocumentCommand\invoke{m}{\UseHook{custom}#1}\invoke{\word}",
+        r"\newcommand\invoke[1][\word]{\UseHook{custom}{#1}}\invoke",
+        r"\NewDocumentCommand\invoke{O{\word}}{\UseHook{custom}{#1}}\invoke",
+        r"\def\invoke#1{\csuse{UseHook}{custom}#1}\invoke{\word}",
+        r"\def\inner#1{\UseHook{custom}#1}\def\outer#1{\inner{#1}}\outer{\word}",
+        r"\def\invoke#1{\UseHook{custom}#1}\def\forward{\invoke}\forward{\word}",
+        r"\def\invoke#1{\UseHook{custom}#1}\let\forward\invoke\def\invoke#1{Text}\forward{\word}",
+    ] {
+        let source = source(call);
+        let (workspace, uri) = setup(&source);
+        let text = &workspace.documents[&uri].text;
+        let at = text.position(source.rfind("word").unwrap() + 1);
+        assert!(
+            features::rename(&workspace, &uri, at, "fresh").is_err(),
+            "{source}"
+        );
+        assert!(
+            features::prepare_rename(&workspace, &uri, at).is_err(),
+            "{source}"
+        );
+        let safe = text.position(source.rfind("safe").unwrap() + 1);
+        assert_eq!(
+            features::rename(&workspace, &uri, safe, "fresh")
+                .unwrap()
+                .unwrap()
+                .changes
+                .unwrap()[&uri]
+                .len(),
+            2,
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn independent_wrapper_parameters_keep_complete_executable_macro_edits() {
+    for call in [
+        r"\newcommand\invoke[1]{\UseHook{custom}{Literal}#1}\invoke{\word}",
+        r"\newcommand\invoke[2]{\UseHook{custom}{Literal}#2}\invoke{Ignored}{\word}",
+    ] {
+        let source = source(call);
+        let (workspace, uri) = setup(&source);
+        let at = workspace.documents[&uri]
+            .text
+            .position(source.rfind("word").unwrap() + 1);
+        assert_eq!(
+            features::rename(&workspace, &uri, at, "fresh")
+                .unwrap()
+                .unwrap()
+                .changes
+                .unwrap()[&uri]
+                .len(),
+            3,
+            "{source}"
+        );
+    }
+    let source = source(
+        r"\newcommand\other{Text}\newcommand\invoke[2]{\UseHook{custom}{#1}#2}\invoke{\word}{\other}\other",
+    );
+    let (workspace, uri) = setup(&source);
+    let text = &workspace.documents[&uri].text;
+    assert!(features::rename(
+        &workspace,
+        &uri,
+        text.position(source.rfind("word").unwrap() + 1),
+        "fresh"
+    )
+    .is_err());
+    assert_eq!(
+        features::rename(
+            &workspace,
+            &uri,
+            text.position(source.rfind("other").unwrap() + 1),
+            "fresh"
+        )
+        .unwrap()
+        .unwrap()
+        .changes
+        .unwrap()[&uri]
+            .len(),
+        3
+    );
+}
+
+#[test]
+fn empty_bare_parameters_cannot_expose_later_hook_data_to_renames() {
+    for call in [
+        r"\newcommand\invoke[1]{\UseHook{custom}#1}\invoke{}\word",
+        r"\newcommand\invoke[2]{\UseHook{custom}#1#2}\invoke{}{\word}",
+        r"\newcommand\invoke[1]{\UseHook{custom}#1\word}\invoke{}",
+        r"\newcommand\invoke{\UseHook{custom}}\invoke\word",
+        r"\newcommand\invoke[1][]{\UseHook{custom}#1}\invoke[]\word",
+        r"\NewDocumentCommand\invoke{O{}}{\UseHook{custom}#1}\invoke[]\word",
+        r"\def\inner#1{\UseHook{custom}#1}\def\outer#1{\inner{#1}}\outer{}\word",
+        r"\def\invoke#1!{\UseHook{custom}#1}\invoke!\word",
+        r"\def\invoke!{\UseHook{custom}}\invoke!\word",
+        r"\NewDocumentCommand\invoke{D<>{}}{\UseHook{custom}#1}\invoke<>\word",
+    ] {
+        let source = source(call);
+        let (workspace, uri) = setup(&source);
+        let text = &workspace.documents[&uri].text;
+        assert!(
+            features::rename(
+                &workspace,
+                &uri,
+                text.position(source.rfind("word").unwrap() + 1),
+                "fresh"
+            )
+            .is_err(),
+            "{source}"
+        );
+    }
+    let source = source(r"\newcommand\invoke[1]{\UseHook{custom}#1}\invoke{Text}\word");
+    let (workspace, uri) = setup(&source);
+    let text = &workspace.documents[&uri].text;
+    assert_eq!(
+        features::rename(
+            &workspace,
+            &uri,
+            text.position(source.rfind("word").unwrap() + 1),
+            "fresh"
+        )
+        .unwrap()
+        .unwrap()
+        .changes
+        .unwrap()[&uri]
+            .len(),
+        3
+    );
+}
+
+#[test]
+fn unsaved_wrapper_bodies_defaults_and_shared_consumers_refresh_data_flow() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+    let provider = main.join("hooks.tex").unwrap();
+    let shared = main.join("shared.tex").unwrap();
+    let other = main.join("other.tex").unwrap();
+    let root =
+        r"\documentclass{article}\NewHookWithArguments{custom}{1}\input{hooks}\input{shared}";
+    let reader = r"\newcommand\invoke[1]{\UseHook{custom}{#1}}";
+    let independent = r"\newcommand\invoke[1]{\UseHook{custom}{Literal}#1}";
+    let body = r"\newcommand\word{Text}\invoke{\word}\word\label{safe}\ref{safe}";
+    for (uri, source) in [(&main, root), (&provider, reader), (&shared, body)] {
+        std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+    }
+    let mut workspace = Workspace::default();
+    workspace.config.distribution.enabled = false;
+    workspace.open(main.clone(), root.into(), 5);
+    workspace.open(shared.clone(), body.into(), 7);
+    let at = workspace.documents[&shared]
+        .text
+        .position(body.rfind("word").unwrap() + 1);
+    for (version, definitions, blocked) in [
+        (12, reader, true),
+        (13, independent, false),
+        (14, reader, true),
+    ] {
+        workspace.open(provider.clone(), definitions.into(), version);
+        let edit = features::rename(&workspace, &shared, at, "fresh");
+        if blocked {
+            assert!(edit.is_err());
+        } else {
+            assert_eq!(edit.unwrap().unwrap().changes.unwrap()[&shared].len(), 3);
+        }
+    }
+    workspace.open(provider.clone(), independent.into(), 15);
+    workspace.open(
+        other.clone(),
+        format!(
+            r"\documentclass{{article}}\NewHookWithArguments{{custom}}{{1}}{reader}\input{{shared}}"
+        ),
+        9,
+    );
+    assert!(features::rename(&workspace, &shared, at, "fresh").is_err());
+    assert_eq!(workspace.documents[&main].version, Some(5));
+    assert_eq!(workspace.documents[&shared].version, Some(7));
+
+    // A default is source data even when the call has no explicit argument.
+    workspace.open(other, String::new(), 10);
+    workspace.open(
+        provider.clone(),
+        r"\newcommand\invoke[1][\word]{\UseHook{custom}{#1}}".into(),
+        16,
+    );
+    workspace.open(
+        shared.clone(),
+        r"\newcommand\word{Text}\invoke\word".into(),
+        8,
+    );
+    let source = &workspace.documents[&shared].text;
+    let at = source.position(source.source.rfind("word").unwrap() + 1);
+    assert!(features::rename(&workspace, &shared, at, "fresh").is_err());
+    workspace.open(
+        provider,
+        r"\newcommand\invoke[1][\word]{\UseHook{custom}{Literal}#1}".into(),
+        17,
+    );
+    let changes = features::rename(&workspace, &shared, at, "fresh")
+        .unwrap()
+        .unwrap()
+        .changes
+        .unwrap();
+    assert_eq!(changes.values().map(Vec::len).sum::<usize>(), 3);
 }
