@@ -37,6 +37,8 @@
 
 先消耗自身参数、再只转发 `UseHook` 或环境接口的包装不等同于零参数别名。例如 `\def\invoke#1{\UseHook}` 会先消耗 `#1`，hook 名称在其后读取；当前尚不认证这类额外语法的完整边界，遇到相关调用时拒绝改名。动态环境名称及不完整参数同样使用保守边界，不据此证明环境或 hook 实际执行。
 
+环境声明还生成可直接调用的开始／结束控制序列。`\newenvironment{invoke}[1]{\UseHook}{}` 的 `\invoke{Ignored}{custom}\word` 也会先消费自己的参数；安全图覆盖这些控制序列、静态命名、嵌套转发及命令／环境复制。零参数开始或结束控制序列按可能的接口读取保护数据，带额外参数的转发保持拒绝，未保存与共享消费者的含义变化即时生效。这些安全边不用于认证只读交互或即时执行身份。
+
 已登记代码可能重新定义字符串判断命令时，撤销相关命令后续的已知含义，避免在钩子执行后仍把真实宏调用当作字面数据而漏改。此保护不假定钩子一直未使用；显式恢复后仍可能再次触发，因此恢复命令不会清除尚未确定的钩子影响。无法确认的文件加载和超限分析同样保守处理，独立标签保持可编辑。
 
 条件接口的完整分支保留结构引用与标签改名，但不认证实际选中的分支，也不用于证明代码即时执行。任一分支中的潜在赋值、宏补丁回调及其静态命名／转发／复制调用，都纳入字符串含义保护，避免只改写部分实际宏调用。未选择分支中的恢复不会抵消另一分支的潜在修改；无关修改及未调用定义中的条件不影响原有字符串判断。
@@ -65,5 +67,6 @@ cargo test --locked --test protocol hook_wrapper_data_guards
 cargo test --locked --test hook_environments
 cargo test --locked --test hook_environments -- --ignored
 cargo test --locked --test protocol hook_environment_data_guards
+cargo test --locked --test protocol generated_environment_interface_guards
 cargo test --locked --test protocol variadic_hook_help
 ```

@@ -328,6 +328,35 @@ const BIBLATEX_TEXT_DEPENDENCIES: &[(&str, &[&str])] = &[
 
 pub(crate) type StoredCodeAliases = BTreeMap<String, BTreeSet<&'static str>>;
 
+/// Environment declarations also define directly callable start/end controls.
+/// These edges only describe possible forwarding, including captured copies;
+/// the boolean marks a start control's additional, unconfirmed operand grammar.
+fn environment_forwarders(
+    source: &str,
+    parsed: &syntax::Syntax,
+    entry: &Entry,
+) -> Vec<(String, String, bool)> {
+    if let Some((target, _)) = literal_copy_target(source, parsed, entry, true) {
+        return vec![
+            (entry.name.clone(), target.clone(), false),
+            (format!("end{}", entry.name), format!("end{target}"), false),
+        ];
+    }
+    let Some((begin, end)) = environment_bodies(source, parsed, entry) else {
+        return Vec::new();
+    };
+    let mut result = Vec::new();
+    if let Some(target) = body_alias(source, &begin) {
+        let consuming = CommandShape::environment_definition(source, parsed, entry)
+            .is_none_or(|shape| !shape.takes_no_arguments());
+        result.push((entry.name.clone(), target, consuming));
+    }
+    if let Some(target) = body_alias(source, &end) {
+        result.push((format!("end{}", entry.name), target, false));
+    }
+    result
+}
+
 /// Possible forwarding/copy edges only revoke string meanings. They never
 /// certify a public signature or assume a declaration has already executed.
 pub(crate) fn possible_stored_code_aliases<'a>(
@@ -360,7 +389,10 @@ pub(crate) fn possible_builtin_aliases<'a>(
     let mut users = BTreeMap::<String, Vec<String>>::new();
     let mut work = 0usize;
     for (source, parsed) in documents {
-        work += source.len() + parsed.definitions.len() * 64;
+        work += source.len()
+            + (parsed.definitions.len()
+                + usize::from(argument_consuming) * parsed.environments.len())
+                * 64;
         if work > 32 * 1024 * 1024 {
             return None;
         }
@@ -377,6 +409,13 @@ pub(crate) fn possible_builtin_aliases<'a>(
                 .or_else(|| literal_copy_target(source, parsed, entry, false).map(|(name, _)| name))
             {
                 users.entry(target).or_default().push(entry.name.clone());
+            }
+        }
+        if argument_consuming {
+            for entry in &parsed.environments {
+                for (name, target, _) in environment_forwarders(source, parsed, entry) {
+                    users.entry(target).or_default().push(name);
+                }
             }
         }
     }
@@ -415,7 +454,9 @@ pub(crate) fn argument_consuming_forwarders<'a>(
     let mut aliases = Vec::new();
     let mut uncertain = BTreeSet::new();
     for (source, parsed) in documents {
-        work = work.saturating_add(source.len() + parsed.definitions.len() * 64);
+        work = work.saturating_add(
+            source.len() + (parsed.definitions.len() + parsed.environments.len()) * 64,
+        );
         if work > 32 * 1024 * 1024 {
             return None;
         }
@@ -431,6 +472,14 @@ pub(crate) fn argument_consuming_forwarders<'a>(
                 aliases.push((entry.name.clone(), target));
             } else if let Some((target, _)) = literal_copy_target(source, parsed, entry, false) {
                 aliases.push((entry.name.clone(), target));
+            }
+        }
+        for entry in &parsed.environments {
+            for (name, target, consuming) in environment_forwarders(source, parsed, entry) {
+                if consuming {
+                    uncertain.insert(name.clone());
+                }
+                aliases.push((name, target));
             }
         }
     }
