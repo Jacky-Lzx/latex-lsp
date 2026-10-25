@@ -1,9 +1,17 @@
-//! Read literal project output settings without executing a Perl rc file.
+//! Read literal project build settings without executing a Perl rc file.
 use std::{fs::File, io::Read, path::Path};
+
+use super::Engine;
 
 const MAX_RC_SIZE: u64 = 64 * 1024;
 
-pub(super) fn output_directory(path: &Path) -> Option<String> {
+#[derive(Default)]
+pub(super) struct Settings {
+    pub output_directory: Option<String>,
+    pub engine: Option<Engine>,
+}
+
+pub(super) fn read(path: &Path) -> Option<Settings> {
     crate::diagnostics::diagnostic_inputs::observe(path);
     let file = File::open(path).ok()?;
     if !file.metadata().ok()?.is_file() {
@@ -16,7 +24,10 @@ pub(super) fn output_directory(path: &Path) -> Option<String> {
     if source.len() as u64 > MAX_RC_SIZE {
         return None;
     }
-    literal_output_directory(&source)
+    Some(Settings {
+        output_directory: literal_output_directory(&source),
+        engine: literal_engine(&source),
+    })
 }
 
 #[derive(Debug, PartialEq)]
@@ -27,6 +38,21 @@ enum Token {
 }
 
 fn literal_output_directory(source: &str) -> Option<String> {
+    literal_setting(source, "$out_dir")
+        .map(|value| if value.is_empty() { ".".into() } else { value })
+        .filter(|value| !value.contains(['\0', '\n', '\r']))
+}
+
+fn literal_engine(source: &str) -> Option<Engine> {
+    match literal_setting(source, "$pdf_mode")?.as_str() {
+        "1" => Some(Engine::PdfLatex),
+        "4" => Some(Engine::LuaLatex),
+        "5" => Some(Engine::XeLatex),
+        _ => None,
+    }
+}
+
+fn literal_setting(source: &str, setting: &str) -> Option<String> {
     let mut chars = source.chars().peekable();
     let mut statement = Vec::new();
     let mut mentions_output = false;
@@ -49,7 +75,7 @@ fn literal_output_directory(source: &str) -> Option<String> {
             '/' | '\\' => return None,
             '<' if chars.peek() == Some(&'<') => return None,
             '=' if chars.peek().is_some_and(|ch| ch.is_ascii_alphabetic()) => return None,
-            ch if ch.is_ascii_alphabetic() || matches!(ch, '$' | '_') => {
+            ch if ch.is_ascii_alphanumeric() || matches!(ch, '$' | '_') => {
                 let mut word = String::from(ch);
                 while chars
                     .peek()
@@ -66,7 +92,7 @@ fn literal_output_directory(source: &str) -> Option<String> {
                 ) {
                     return None;
                 }
-                if word == "$out_dir" {
+                if word == setting {
                     mentions_output = true;
                     if depth != 0 {
                         // Conditional assignments and subroutines are not
@@ -88,18 +114,21 @@ fn literal_output_directory(source: &str) -> Option<String> {
                 if mentions_output {
                     output = match statement.as_slice() {
                         [Token::Word(name), Token::Symbol('='), Token::String(Some(value))]
-                            if name == "$out_dir" =>
+                            if name == setting =>
                         {
-                            Some(if value.is_empty() {
-                                ".".into()
-                            } else {
-                                value.clone()
-                            })
+                            Some(value.clone())
+                        }
+                        [Token::Word(name), Token::Symbol('='), Token::Word(value)]
+                            if name == setting
+                                && setting == "$pdf_mode"
+                                && value.chars().all(|ch| ch.is_ascii_digit()) =>
+                        {
+                            Some(value.clone())
                         }
                         [Token::Word(target), Token::Symbol('='), Token::Word(source)]
                             if target.starts_with('$')
-                                && target != "$out_dir"
-                                && source == "$out_dir" =>
+                                && target != setting
+                                && source == setting =>
                         {
                             // A common rc sets $aux_dir = $out_dir. Reading
                             // the output value does not change that value.
@@ -130,7 +159,7 @@ fn literal_output_directory(source: &str) -> Option<String> {
     if depth != 0 || mentions_output {
         return None;
     }
-    output.filter(|value| !value.contains(['\0', '\n', '\r']))
+    output
 }
 
 /// Return a decoded literal, or None for a Perl string with interpolation.
@@ -169,6 +198,41 @@ fn quoted(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_pdf_modes_without_guessing_dynamic_or_conditional_assignments() {
+        for (source, expected) in [
+            ("$pdf_mode = 1;", Some(Engine::PdfLatex)),
+            ("$pdf_mode = 4;", Some(Engine::LuaLatex)),
+            ("$pdf_mode = 5;", Some(Engine::XeLatex)),
+            ("$pdf_mode = '5';", Some(Engine::XeLatex)),
+            ("$pdf_mode = 1; $pdf_mode = 5;", Some(Engine::XeLatex)),
+            ("$pdf_mode = 5; $other = $pdf_mode;", Some(Engine::XeLatex)),
+            (
+                "$ENV{'TEXINPUTS'} = '.:./styles//:' . $ENV{'TEXINPUTS'};\n\
+                 # $pdf_mode = 1;\n$pdf_mode = 5;\n\
+                 $postscript_mode = $dvi_mode = 0;\n$out_dir = \"build\";\n\
+                 $xdvipdfmx = 'xdvipdfmx -E -o %D %O %S';\n\
+                 @default_files = ('main.tex');",
+                Some(Engine::XeLatex),
+            ),
+            ("# $pdf_mode = 5;", None),
+            ("$text = '$pdf_mode = 5;';", None),
+            ("$pdf_mode = 5", None),
+            ("$pdf_mode = 0;", None),
+            ("$pdf_mode = 2;", None),
+            ("$pdf_mode = 3;", None),
+            ("$pdf_mode = 50;", None),
+            ("$pdf_mode = 1 + 4;", None),
+            ("$pdf_mode = $ENV{'MODE'};", None),
+            ("$pdf_mode = 5 if $flag;", None),
+            ("$pdf_mode = 5; if ($flag) { $pdf_mode = 1; }", None),
+            ("$pdf_mode = 5; $pdf_mode += 1;", None),
+            ("$pdf_mode = 5; $pdf_mode = unknown();", None),
+        ] {
+            assert_eq!(literal_engine(source), expected, "{source}");
+        }
+    }
 
     #[test]
     fn reads_literal_assignments_comments_and_last_unconditional_value() {

@@ -1,10 +1,94 @@
 use latex_lsp::{
     compilation::{build, synctex},
-    config::{BuildConfig, Config},
+    config::{BuildConfig, Config, Engine},
     project::workspace::Workspace,
 };
 use lsp_types::Url;
 use std::sync::atomic::AtomicBool;
+
+#[test]
+fn project_pdf_mode_selects_build_and_rebuild_engines_and_refreshes_from_disk() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = root.join("main.tex");
+    let uri = Url::from_file_path(&main).unwrap();
+    let workspace = Workspace::default();
+    std::fs::write(root.join("latexmkrc"), "$pdf_mode = 4;").unwrap();
+    assert_eq!(
+        workspace.build_config(&uri).effective_engine(),
+        Some(Engine::LuaLatex)
+    );
+    for (mode, engine, flag) in [
+        (5, Engine::XeLatex, "-xelatex"),
+        (4, Engine::LuaLatex, "-lualatex"),
+        (1, Engine::PdfLatex, "-pdf"),
+    ] {
+        std::fs::write(root.join(".latexmkrc"), format!("$pdf_mode = {mode};")).unwrap();
+        let config = workspace.build_config(&uri);
+        assert_eq!(config.effective_engine(), Some(engine));
+        for arguments in [
+            config.expanded_arguments(&main).unwrap(),
+            config.expanded_rebuild_arguments(&main).unwrap(),
+        ] {
+            let modes: Vec<_> = arguments
+                .iter()
+                .filter(|arg| matches!(arg.as_str(), "-pdf" | "-xelatex" | "-lualatex"))
+                .collect();
+            assert_eq!(modes, vec![flag]);
+        }
+    }
+    // Do not borrow an engine from the visible rc when the hidden one exists.
+    std::fs::write(root.join(".latexmkrc"), "$out_dir = 'build';").unwrap();
+    assert_eq!(
+        workspace.build_config(&uri).effective_engine(),
+        Some(Engine::PdfLatex)
+    );
+    std::fs::remove_file(root.join(".latexmkrc")).unwrap();
+    assert_eq!(
+        workspace.build_config(&uri).effective_engine(),
+        Some(Engine::LuaLatex)
+    );
+}
+
+#[test]
+fn rc_engine_respects_explicit_settings_root_directives_and_custom_commands() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = root.join("main.tex");
+    let uri = Url::from_file_path(&main).unwrap();
+    std::fs::write(root.join(".latexmkrc"), "$pdf_mode = 5;").unwrap();
+    let mut workspace = Workspace::default();
+    workspace.config.build.output_directory = Some("custom".into());
+    assert_eq!(
+        workspace.build_config(&uri).effective_engine(),
+        Some(Engine::XeLatex)
+    );
+    workspace.open(
+        uri.clone(),
+        "% !TeX program = lualatex\n\\documentclass{article}".into(),
+        1,
+    );
+    assert_eq!(
+        workspace.build_config(&uri).effective_engine(),
+        Some(Engine::LuaLatex)
+    );
+    workspace.config.build.engine = Some(Engine::PdfLatex);
+    assert_eq!(
+        workspace.build_config(&uri).effective_engine(),
+        Some(Engine::PdfLatex)
+    );
+    workspace.config.build.engine = None;
+    workspace.config.build.executable = "pdflatex".into();
+    assert_eq!(
+        workspace.build_config(&uri).effective_engine(),
+        Some(Engine::PdfLatex)
+    );
+    workspace.config.build.executable = "latexmk".into();
+    workspace.config.build.arguments = Some(vec!["-norc".into(), "%f".into()]);
+    let config = workspace.build_config(&uri);
+    assert_eq!(config.engine, None);
+    assert_eq!(config.arguments(), vec!["-norc", "%f"]);
+}
 
 #[test]
 fn project_rc_selection_matches_latexmk_and_is_refreshed_from_disk() {
@@ -191,4 +275,38 @@ fn real_latexmk_uses_project_rc_output_and_preserves_explicit_overrides() {
         }
     }
     assert!(!root.join("build/latex-lsp").exists());
+}
+
+#[test]
+#[ignore = "requires latexmk, XeLaTeX and fontspec"]
+fn real_latexmk_uses_project_xelatex_mode_for_build_and_rebuild() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = root.join("main.tex");
+    std::fs::write(
+        &main,
+        "\\documentclass{article}\n\\usepackage{fontspec}\n\\begin{document}Hello\\end{document}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join(".latexmkrc"),
+        "$pdf_mode = 5; $out_dir = 'build';",
+    )
+    .unwrap();
+    for rebuild in [false, true] {
+        let outcome = if rebuild {
+            build::rebuild(&main, &BuildConfig::default(), &AtomicBool::new(false))
+        } else {
+            build::run(&main, &BuildConfig::default(), &AtomicBool::new(false))
+        };
+        assert_eq!(
+            outcome.status, "success",
+            "{}\n{}",
+            outcome.message, outcome.output
+        );
+        assert_eq!(outcome.pdf, Some(root.join("build/main.pdf")));
+        let log = std::fs::read_to_string(root.join("build/main.log")).unwrap();
+        assert!(log.starts_with("This is XeTeX"), "{log}");
+        assert!(outcome.diagnostics.values().flatten().all(|diagnostic| diagnostic.severity != Some(lsp_types::DiagnosticSeverity::ERROR)), "{:?}", outcome.diagnostics);
+    }
 }

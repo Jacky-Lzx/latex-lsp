@@ -462,16 +462,26 @@ impl Config {
 }
 
 impl BuildConfig {
-    /// Resolve once per build so compiler arguments and artifact lookup share
-    /// the same directory even if the rc file changes while the tool runs.
+    /// Resolve once per build so compiler arguments, notifications and artifact
+    /// lookup share the same settings if the rc file changes while the tool runs.
     pub(crate) fn resolved(&self, root: &Path) -> Self {
         let mut config = self.clone();
+        let settings = if config.output_directory.is_none() || config.engine.is_none() {
+            self.latexmkrc_paths(root)
+                .into_iter()
+                .find(|path| crate::diagnostics::diagnostic_inputs::is_file(path))
+                .and_then(|path| latexmk::read(&path))
+                .unwrap_or_default()
+        } else {
+            latexmk::Settings::default()
+        };
+        if config.engine.is_none() {
+            config.engine = settings.engine;
+        }
         if config.output_directory.is_none() {
             config.output_directory = Some(
-                self.latexmkrc_paths(root)
-                    .into_iter()
-                    .find(|path| crate::diagnostics::diagnostic_inputs::is_file(path))
-                    .and_then(|path| latexmk::output_directory(&path))
+                settings
+                    .output_directory
                     .unwrap_or_else(|| DEFAULT_OUTPUT_DIRECTORY.into()),
             );
         }
