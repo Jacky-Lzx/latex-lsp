@@ -79,6 +79,7 @@ mod label_declarations;
 mod label_diagnostics;
 mod lengths;
 mod listings;
+mod macro_mutations;
 mod math_diagnostics;
 mod minted;
 mod named_colors;

@@ -358,6 +358,7 @@ pub(crate) fn possible_stored_code_aliases<'a>(
         "mkbibfootnotetext",
     ]
     .into_iter()
+    .chain(crate::macro_mutations::COMMANDS.iter().copied())
     .map(|name| (name.to_owned(), name))
     .collect();
     let mut visits = 0;
@@ -794,8 +795,9 @@ fn builtin(name: &str) -> Option<Signature> {
             (&[("command", false)], false)
         }
         "cslet" | "letcs" | "csletcs" => (&[("alias", false), ("command", false)], false),
-        "csappto" | "cseappto" | "csgappto" | "csxappto" | "cspreto" | "csepreto" | "csgpreto"
-        | "csxpreto" => (&[("command", false), ("code", false)], false),
+        name if crate::macro_mutations::COMMANDS.contains(&name) => {
+            (crate::macro_mutations::parameters(name)?, false)
+        }
         "ifcsdef" | "ifcsundef" | "ifcsvoid" | "ifcsmacro" | "ifcsparam" | "ifcsprotected"
         | "ifcsltxprotect" | "ifcscounter" | "ifcslength" | "ifcsdimen" | "ifdefcounter"
         | "ifdeflength" | "ifdefdimen" => (
@@ -1169,7 +1171,10 @@ fn builtin(name: &str) -> Option<Signature> {
                 } else {
                     Kind::Optional
                 }
-            } else if syntax::declares_command_copy(name)
+            } else if crate::macro_mutations::COMMANDS.contains(&name)
+                && !name.starts_with("cs")
+                && index == usize::from(name == "patchcmd")
+                || syntax::declares_command_copy(name)
                 || name == "cslet" && index == 1
                 || (matches!(
                     name,
@@ -1302,6 +1307,7 @@ fn builtin(name: &str) -> Option<Signature> {
                     | "item"
                     | "printbibliography"
                     | "ExecuteBibliographyOptions"
+                    | "patchcmd"
                     | "newrefsection"
                     | "refsection"
             )),
@@ -3151,6 +3157,65 @@ impl<'a> CommandSignatures<'a> {
         !self.local.contains_key(name)
     }
 
+    /// Possible patch/copy aliases only revoke string-reader meanings. A
+    /// missing or expanded target can modify any tracked reader.
+    pub(crate) fn macro_mutations(
+        &self,
+        source: &str,
+        parsed: &syntax::Syntax,
+        possible: &StoredCodeAliases,
+    ) -> Option<BTreeMap<usize, BTreeSet<Option<String>>>> {
+        if !parsed.commands.iter().any(|command| {
+            crate::macro_mutations::COMMANDS.contains(&command.name.as_str())
+                || possible.get(&command.name).is_some_and(|targets| {
+                    targets
+                        .iter()
+                        .any(|name| crate::macro_mutations::COMMANDS.contains(name))
+                })
+                || matches!(command.name.as_str(), "csuse" | "endcsname")
+        }) {
+            return Some(BTreeMap::new());
+        }
+        let operands = self.known_argument_tokens(source, parsed);
+        let declarations = parsed
+            .definitions
+            .iter()
+            .map(|entry| (entry.span.start, entry.span.end))
+            .collect();
+        let mut result = BTreeMap::<_, BTreeSet<_>>::new();
+        let mut work = 0usize;
+        for (index, command) in parsed.commands.iter().enumerate() {
+            work += 64;
+            if work > 32 * 1024 * 1024 {
+                return None;
+            }
+            if operands.contains(&command.span.start) {
+                continue;
+            }
+            let Some((name, _, after, _)) =
+                self.invocation(source, parsed, index, &operands, &declarations)
+            else {
+                continue;
+            };
+            let candidates = possible.get(name).into_iter().flatten().copied().chain(
+                crate::macro_mutations::COMMANDS
+                    .contains(&name)
+                    .then_some(name),
+            );
+            for candidate in
+                candidates.filter(|name| crate::macro_mutations::COMMANDS.contains(name))
+            {
+                let target = crate::macro_mutations::target(source, after, candidate, &mut work);
+                work += target.as_ref().map_or(64, |name| name.len() + 64);
+                if work > 32 * 1024 * 1024 {
+                    return None;
+                }
+                result.entry(command.span.start).or_default().insert(target);
+            }
+        }
+        Some(result)
+    }
+
     /// Locate stored code for conservative mutation guards. This does not
     /// determine whether, when, or how often a hook or note executes its code.
     pub(crate) fn stored_code(
@@ -3163,12 +3228,15 @@ impl<'a> CommandSignatures<'a> {
             if matches!(name, "mkbibfootnote" | "mkbibfootnotetext") {
                 Some(&[("code", false)][..])
             } else {
-                kernel_hook_parameters(name)
+                kernel_hook_parameters(name).or_else(|| crate::macro_mutations::parameters(name))
             }
         };
         let stores_code = |name: &str| {
-            parameters(name)
-                .is_some_and(|parameters| parameters.iter().any(|(label, _)| *label == "code"))
+            parameters(name).is_some_and(|parameters| {
+                parameters
+                    .iter()
+                    .any(|(label, _)| crate::macro_mutations::code(label))
+            })
         };
         if !parsed.commands.iter().any(|command| {
             stores_code(&command.name)
@@ -3208,7 +3276,10 @@ impl<'a> CommandSignatures<'a> {
                     continue;
                 };
                 let mut at = after;
-                if !parameters.iter().any(|(label, _)| *label == "code") {
+                if !parameters
+                    .iter()
+                    .any(|(label, _)| crate::macro_mutations::code(label))
+                {
                     continue;
                 }
                 for (label, optional) in parameters {
@@ -3244,9 +3315,8 @@ impl<'a> CommandSignatures<'a> {
                         return None;
                     }
                     at = end;
-                    if *label == "code" {
+                    if crate::macro_mutations::code(label) {
                         result.push((command.span.start, span));
-                        break;
                     }
                 }
             }
@@ -4668,6 +4738,7 @@ impl<'a> CommandSignatures<'a> {
                     signature.name.as_str(),
                     "mkbibfootnote" | "mkbibfootnotetext"
                 );
+                let patch = crate::macro_mutations::COMMANDS.contains(&signature.name.as_str());
                 let opaque = all_parameters
                     || hook
                         && matches!(
@@ -4675,6 +4746,11 @@ impl<'a> CommandSignatures<'a> {
                             ParameterRead::Source | ParameterRead::InitializedNotes
                         )
                     || note && matches!(parameters, ParameterRead::Source)
+                    || patch
+                        && matches!(
+                            parameters,
+                            ParameterRead::Source | ParameterRead::InitializedNotes
+                        )
                     || common.is_some()
                     || local.contains_key(signature.name.as_str())
                     || matches!(
@@ -4696,10 +4772,11 @@ impl<'a> CommandSignatures<'a> {
                     literal,
                     &mut result,
                 );
-                if (opaque || hook || note)
+                if (opaque || hook || note || patch)
                     && read.unfinished
                     && (hook
                         || note
+                        || patch
                         || matches!(parameters, ParameterRead::DeclarationData)
                         || common.is_some()
                         || matches!(signature.name.as_str(), "typeout" | "message"))
@@ -5249,6 +5326,11 @@ fn operand_delimited_end(source: &str, at: usize, open: &str, close: &str) -> Op
 
 fn builtin_argument_data(signature: &Signature, parameter: usize) -> bool {
     match signature.name.as_str() {
+        name if crate::macro_mutations::COMMANDS.contains(&name) => !crate::macro_mutations::code(
+            signature.parameters[parameter]
+                .label
+                .trim_matches(['{', '}', '[', ']']),
+        ),
         "AddToHook" | "AddToHookWithArguments" => parameter < 2,
         "AddToHookNext" | "AddToHookNextWithArguments" | "AtBeginDocument" | "AtEndDocument" => {
             parameter == 0

@@ -195,6 +195,7 @@ struct Source {
     operands: BTreeSet<usize>,
     lexical_probes: Vec<Command>,
     declarations: BTreeMap<usize, Vec<Assignment>>,
+    mutations: BTreeMap<usize, BTreeSet<Option<String>>>,
     hook_mutations: HookMutations,
 }
 
@@ -267,11 +268,23 @@ impl Source {
                             .map(|(name, _)| name),
                         copy: matches!(name, "let" | "cslet" | "letcs" | "csletcs")
                             || syntax::declares_command_copy(name),
-                        shape: CommandShape::definition(&text.source, &syntax, entry).map(Arc::new),
+                        // A pure forward expands its current leaf; capturing
+                        // the wrapper's zero operands would erase that leaf's
+                        // real grammar in later parameter help and analysis.
+                        shape: crate::signature::source_alias(&text.source, &syntax, entry)
+                            .is_none()
+                            .then(|| CommandShape::definition(&text.source, &syntax, entry))
+                            .flatten()
+                            .map(Arc::new),
                     });
             }
         }
-        let mut hook_mutations = HookMutations::default();
+        let mutations = signatures.macro_mutations(&text.source, &syntax, possible_stores);
+        let mut hook_mutations = HookMutations {
+            incomplete: mutations.is_none(),
+            ..Default::default()
+        };
+        let mutations = mutations.unwrap_or_default();
         if let Some(codes) = signatures.stored_code(&text.source, &syntax, possible_stores) {
             let mut work = 0;
             for (at, code) in codes {
@@ -296,6 +309,19 @@ impl Source {
                             .insert(target.name.clone());
                     } else {
                         hook_mutations.uncertain.insert(at);
+                    }
+                }
+                for (_, targets) in mutations.range(code.clone()) {
+                    for target in targets {
+                        if let Some(target) = target {
+                            hook_mutations
+                                .assigned
+                                .entry(at)
+                                .or_default()
+                                .insert(target.clone());
+                        } else {
+                            hook_mutations.uncertain.insert(at);
+                        }
                     }
                 }
                 let start = syntax
@@ -328,6 +354,7 @@ impl Source {
             operands,
             lexical_probes,
             declarations,
+            mutations,
             hook_mutations,
         }
     }
@@ -494,6 +521,15 @@ impl Analysis {
                 }
                 if !source.active.contains(&at) {
                     continue;
+                }
+                if let Some(targets) = source.mutations.get(&at) {
+                    for target in targets {
+                        if let Some(target) = target {
+                            state.assigned.insert(target.clone(), Binding::Unknown);
+                        } else {
+                            state.uncertain = true;
+                        }
+                    }
                 }
                 // Registration can execute immediately for a one-time hook,
                 // or later through implicit lifecycle or explicit use calls.
@@ -713,6 +749,17 @@ pub(crate) fn refresh(workspace: &mut Workspace) {
             .filter(|doc| doc.kind == DocumentKind::Latex)
             .any(|doc| {
                 !doc.syntax.command_undefinitions.is_empty()
+                    || doc.syntax.commands.iter().any(|command| {
+                        crate::macro_mutations::COMMANDS.contains(&command.name.as_str())
+                    })
+                    || doc
+                        .syntax
+                        .commands
+                        .iter()
+                        .any(|command| matches!(command.name.as_str(), "csuse" | "csname"))
+                        && crate::macro_mutations::COMMANDS
+                            .iter()
+                            .any(|name| doc.text.source.contains(name))
                     || doc
                         .syntax
                         .definitions

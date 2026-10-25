@@ -46,6 +46,13 @@ fn snippets_expand_in_a_real_editor_without_consuming_tex_backslashes() {
         ("csundef", "csundef{command}"),
         ("csgundef", "csgundef{command}"),
         ("csappto", "csappto{command}{code}"),
+        ("pretocmd", r"pretocmd{\command}{code}{success}{failure}"),
+        ("apptocmd", r"apptocmd{\command}{code}{success}{failure}"),
+        (
+            "patchcmd",
+            r"patchcmd{\command}{search}{replacement}{success}{failure}",
+        ),
+        ("appto", r"appto{\command}{code}"),
         ("cseappto", "cseappto{command}{code}"),
         ("csgappto", "csgappto{command}{code}"),
         ("csxappto", "csxappto{command}{code}"),

@@ -33,6 +33,16 @@
 
 [保存与显式恢复](string-test-copies.md)说明命令副本捕获的含义、跨文件参数边界，以及恢复前后的重命名规则。
 
+## 宏补丁与延迟代码
+
+`pretocmd`、`apptocmd`、`patchcmd`、`appto`／`preto` 的展开／全局形式和对应的 `cs...` 接口可能修改现有字符串读者，而不新增源码声明。服务器按调用顺序撤销目标的原生字符串认证，不预测补丁是否成功或替换后的宏正文。静态命名调用及可能的纯转发／复制别名同样参与保护，包括来自未保存提供文件的别名；这些可能关系只用于拒绝不完整编辑。动态目标或未认证的补丁前缀会使相关字符串含义保持未知。
+
+例如 `\pretocmd{\ifblank}{#1}{}{}` 会使原本的字符串参数实际执行。此时只改声明和两个分支中的宏名称会漏改一个真实调用；服务器拒绝这种部分编辑，无关标签仍可完整改名。移除补丁，或明确恢复一个已确认的原生副本后，可恢复对应交互。
+
+补丁的替换代码、成功／失败回调及钩子或脚注中的潜在修改也纳入持续保护。代码可能在恢复操作以后再次执行，不能仅因看到一次恢复就重新确认原生含义。代码参数在立即执行分析中保留边界，结构编辑仍能识别其中的宏和静态引用。尚未调用的普通宏正文不在声明位置执行。
+
+上述补丁／追加接口提供参数提示；`patchcmd[prefix]{command}{search}{replacement}{success}{failure}` 的前缀可选，命令操作数可直接写为控制序列。命令补全片段保留 TeX 反斜线和已有参数，不将搜索文字当成执行代码。
+
 ## 共享文件与支持边界
 
 同一源码在多个主文档中，或在一个主文档中被多次加载时，可能同时存在字符串数据与可执行参数两种解释。这种参数不提供单一导航或准备重命名结果；从声明发起的重命名若会修改它，也会被拒绝。同文件中语义一致的其他符号仍可重命名。
@@ -46,6 +56,8 @@
 ```sh
 cargo test --locked --test string_test_projects
 cargo test --locked --test protocol imported_string_predicates
+cargo test --locked --test patched_string_tests -- --include-ignored
+cargo test --locked --test protocol macro_patch_guards_
 ```
 
 三引擎回归需要 pdfLaTeX、XeLaTeX、LuaLaTeX 和 etoolbox，核对导入重定义前后的字符串原文、实际 boolean 状态、重命名结果及 PDF 页数：

@@ -17,6 +17,109 @@ struct Server {
 }
 
 #[test]
+fn macro_patch_guards_refresh_provider_aliases_and_exact_edits_over_stdio() {
+    use latex_lsp::text::Text;
+    for versioned in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+        let provider = main.join("patches.tex").unwrap();
+        let source="% patch\r\n\\documentclass{article}\\usepackage{etoolbox}\\input{patches}\\begin{document}😀 \\newcommand\\word{Text}\\patcher{\\ifblank}{#1}{}{}\\ifblank{\\word}{\\word}{\\word}\\label{safe}\\ref{safe}\\end{document}";
+        let alias = r"\def\patcher{\pretocmd}";
+        let discarded = r"\def\patcher#1#2#3#4{}";
+        std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+        std::fs::write(provider.to_file_path().unwrap(), alias).unwrap();
+        let mut server = Server::start();
+        server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(directory.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":versioned}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+        server.notify("initialized", json!({}));
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":main,"languageId":"latex","version":5,"text":source}}),
+        );
+        let expected = |edits: Vec<Value>, version| {
+            if versioned {
+                json!({"documentChanges":[{"textDocument":{"uri":main,"version":version},"edits":edits}]})
+            } else {
+                json!({"changes":{main.as_str():edits}})
+            }
+        };
+        let blocked = |server: &mut Server, source: &str| {
+            let text = Text::new(source.into());
+            server.send(json!({"jsonrpc":"2.0","id":20,"method":"textDocument/rename","params":{"textDocument":{"uri":main},"position":text.position(source.rfind("word").unwrap()+1),"newName":"term"}}));
+            let response = server.until(|message| message["id"] == 20);
+            assert!(
+                response["error"]["code"] == -32602 || response.get("result") == Some(&Value::Null),
+                "{response}"
+            );
+        };
+        let safe = |server: &mut Server, source: &str, version| {
+            let text = Text::new(source.into());
+            let edits = source
+                .match_indices("safe")
+                .map(|(at, _)| json!({"range":text.range(at,at+4),"newText":"fresh"}))
+                .collect::<Vec<_>>();
+            assert_eq!(edits.len(), 2);
+            assert_eq!(server.request(2,"textDocument/rename",json!({"textDocument":{"uri":main},"position":text.position(source.rfind("safe").unwrap()+1),"newName":"fresh"})),expected(edits,version));
+        };
+        let normal = |server: &mut Server, source: &str, version| {
+            let text = Text::new(source.into());
+            let edits = source
+                .match_indices(r"\word")
+                .enumerate()
+                .filter(|(index, _)| *index != 1)
+                .map(|(_, (at, _))| json!({"range":text.range(at,at+5),"newText":"\\term"}))
+                .collect::<Vec<_>>();
+            assert_eq!(edits.len(), 3);
+            assert_eq!(server.request(3,"textDocument/rename",json!({"textDocument":{"uri":main},"position":text.position(source.rfind("word").unwrap()+1),"newName":"term"})),expected(edits,version));
+        };
+        blocked(&mut server, source);
+        safe(&mut server, source, 5);
+        let text = Text::new(source.into());
+        let code = text.position(source.find("#1").unwrap() + 1);
+        let help = server.request(
+            4,
+            "textDocument/signatureHelp",
+            json!({"textDocument":{"uri":main},"position":code}),
+        );
+        assert_eq!(
+            help["signatures"][0]["label"],
+            r"\patcher{command}{code}{success}{failure}"
+        );
+        assert_eq!(help["activeParameter"], 1);
+        server.notify("textDocument/didOpen",json!({"textDocument":{"uri":provider,"languageId":"latex","version":12,"text":discarded}}));
+        normal(&mut server, source, 5);
+        safe(&mut server, source, 5);
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":provider,"version":13},"contentChanges":[{"text":alias}]}),
+        );
+        blocked(&mut server, source);
+        server.notify("textDocument/didChange",json!({"textDocument":{"uri":provider,"version":14},"contentChanges":[{"text":discarded}]}));
+        normal(&mut server, source, 5);
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":provider}}),
+        );
+        blocked(&mut server, source);
+        let changed = source.replace(r"\patcher{\ifblank}{#1}{}{}", "");
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":7},"contentChanges":[{"text":changed}]}),
+        );
+        normal(&mut server, &changed, 7);
+        safe(&mut server, &changed, 7);
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":9},"contentChanges":[{"text":source}]}),
+        );
+        blocked(&mut server, source);
+        safe(&mut server, source, 9);
+        server.request(1000, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
 fn hook_string_mutation_guards_refresh_unsaved_providers_without_partial_macro_edits() {
     use latex_lsp::text::Text;
     for versioned in [false, true] {
