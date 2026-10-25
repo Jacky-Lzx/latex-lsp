@@ -259,9 +259,13 @@ fn read(ws: &Workspace, root: &Url) -> Option<String> {
     let path = ws
         .build_config(root)
         .artifact_path(&root_path, "bbl")
-        .filter(|path| path.is_file())
+        .filter(|path| crate::diagnostics::diagnostic_inputs::is_file(path))
         .unwrap_or_else(|| root_path.with_extension("bbl"));
-    if std::fs::metadata(&path).ok()?.len() > 2 * 1024 * 1024 {
+    if crate::diagnostics::diagnostic_inputs::metadata(&path)
+        .ok()?
+        .len()
+        > 2 * 1024 * 1024
+    {
         return None;
     }
     let mut source = String::new();

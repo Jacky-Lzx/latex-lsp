@@ -21,7 +21,7 @@ pub(crate) fn invalidate() {
 }
 
 fn read(path: &Path) -> Option<Result<Value, String>> {
-    let metadata = std::fs::metadata(path).ok()?;
+    let metadata = crate::diagnostics::diagnostic_inputs::metadata(path).ok()?;
     let stamp = (metadata.modified().ok(), metadata.len());
     let mut cache = CACHE.get_or_init(Default::default).lock().unwrap();
     if let Some(entry) = cache.get(path).filter(|entry| entry.stamp == stamp) {

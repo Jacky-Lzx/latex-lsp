@@ -4,6 +4,7 @@ use std::{fs::File, io::Read, path::Path};
 const MAX_RC_SIZE: u64 = 64 * 1024;
 
 pub(super) fn output_directory(path: &Path) -> Option<String> {
+    crate::diagnostics::diagnostic_inputs::observe(path);
     let file = File::open(path).ok()?;
     if !file.metadata().ok()?.is_file() {
         return None;

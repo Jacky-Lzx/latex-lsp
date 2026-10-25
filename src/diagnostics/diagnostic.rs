@@ -60,6 +60,10 @@ impl Delivery {
         self.push.lock().unwrap().revision += 1;
     }
 
+    pub(crate) fn revision(&self) -> u64 {
+        self.push.lock().unwrap().revision
+    }
+
     /// A single worker coalesces edits and never holds a workspace lock while
     /// analysing a snapshot or waiting for the client to receive diagnostics.
     pub(crate) fn schedule(
@@ -200,6 +204,12 @@ struct Cached {
     result_id: String,
     sequence: u64,
     bytes: usize,
+    inputs: Option<Inputs>,
+}
+
+pub(crate) struct Inputs {
+    pub revision: u64,
+    pub files: Arc<crate::diagnostics::diagnostic_inputs::Files>,
 }
 
 /// Result IDs are scoped to the URI, version and complete diagnostic payload.
@@ -218,29 +228,56 @@ impl Cache {
         }
     }
 
-    pub(crate) fn report(
+    pub(crate) fn lookup(
+        &mut self,
+        uri: &Url,
+        previous: Option<&str>,
+        revision: u64,
+    ) -> Option<DocumentDiagnosticReportKind> {
+        let snapshot = self.snapshots.get_mut(uri)?;
+        let inputs = snapshot.inputs.as_ref()?;
+        if inputs.revision != revision || !inputs.files.current() {
+            return None;
+        }
+        self.sequence += 1;
+        snapshot.sequence = self.sequence;
+        Some(if previous == Some(snapshot.result_id.as_str()) {
+            DocumentDiagnosticReportKind::Unchanged(UnchangedDocumentDiagnosticReport {
+                result_id: snapshot.result_id.clone(),
+            })
+        } else {
+            DocumentDiagnosticReportKind::Full(FullDocumentDiagnosticReport {
+                result_id: Some(snapshot.result_id.clone()),
+                items: snapshot.items.clone(),
+            })
+        })
+    }
+
+    #[cfg(test)]
+    fn report(
+        &mut self,
+        snapshot: Snapshot,
+        previous: Option<&str>,
+    ) -> DocumentDiagnosticReportKind {
+        self.computed(snapshot, previous, None)
+    }
+
+    pub(crate) fn computed(
         &mut self,
         (uri, items, version): Snapshot,
         previous: Option<&str>,
+        inputs: Option<Inputs>,
     ) -> DocumentDiagnosticReportKind {
         self.sequence += 1;
-        if let Some(snapshot) = self.snapshots.get_mut(&uri) {
-            if snapshot.version == version && snapshot.items == items {
-                snapshot.sequence = self.sequence;
-                return if previous == Some(snapshot.result_id.as_str()) {
-                    DocumentDiagnosticReportKind::Unchanged(UnchangedDocumentDiagnosticReport {
-                        result_id: snapshot.result_id.clone(),
-                    })
-                } else {
-                    DocumentDiagnosticReportKind::Full(FullDocumentDiagnosticReport {
-                        result_id: Some(snapshot.result_id.clone()),
-                        items,
-                    })
-                };
-            }
-        }
+        let matching = self
+            .snapshots
+            .get(&uri)
+            .filter(|snapshot| snapshot.version == version && snapshot.items == items)
+            .map(|snapshot| snapshot.result_id.clone());
         self.remove(&uri);
-        let bytes = uri.as_str().len() + serde_json::to_vec(&items).unwrap().len();
+        let bytes = uri.as_str().len()
+            + serde_json::to_vec(&items).unwrap().len()
+            + inputs.as_ref().map_or(0, |inputs| inputs.files.bytes);
         if bytes > MAX_BYTES {
             return FullDocumentDiagnosticReport {
                 result_id: None,
@@ -259,7 +296,7 @@ impl Cache {
             };
             self.remove(&oldest);
         }
-        let result_id = format!("diagnostic-{}", self.sequence);
+        let result_id = matching.unwrap_or_else(|| format!("diagnostic-{}", self.sequence));
         self.bytes += bytes;
         self.snapshots.insert(
             uri,
@@ -269,13 +306,18 @@ impl Cache {
                 result_id: result_id.clone(),
                 sequence: self.sequence,
                 bytes,
+                inputs,
             },
         );
-        FullDocumentDiagnosticReport {
-            result_id: Some(result_id),
-            items,
+        if previous == Some(result_id.as_str()) {
+            UnchangedDocumentDiagnosticReport { result_id }.into()
+        } else {
+            FullDocumentDiagnosticReport {
+                result_id: Some(result_id),
+                items,
+            }
+            .into()
         }
-        .into()
     }
 }
 
@@ -296,6 +338,45 @@ mod tests {
             DocumentDiagnosticReportKind::Full(report) => report.result_id.unwrap(),
             _ => panic!("expected full report"),
         }
+    }
+
+    #[test]
+    fn computed_reports_reuse_analysis_only_while_revision_and_file_inputs_match() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("external.aux");
+        let (_, files) = crate::diagnostics::diagnostic_inputs::Files::capture(|| {
+            assert!(!crate::diagnostics::diagnostic_inputs::is_file(&path));
+        });
+        let mut cache = Cache::default();
+        let snapshot = snapshot(1, "missing", Some(3));
+        let id =
+            full_id(cache.computed(snapshot.clone(), None, Some(Inputs { revision: 7, files })));
+        assert!(matches!(
+            cache.lookup(&snapshot.0, Some(&id), 7),
+            Some(DocumentDiagnosticReportKind::Unchanged(_))
+        ));
+        assert_eq!(
+            full_id(cache.lookup(&snapshot.0, Some("unknown"), 7).unwrap()),
+            id
+        );
+        assert!(cache.lookup(&snapshot.0, Some(&id), 8).is_none());
+        std::fs::write(&path, "new auxiliary data").unwrap();
+        assert!(cache.lookup(&snapshot.0, Some(&id), 7).is_none());
+        let (_, files) = crate::diagnostics::diagnostic_inputs::Files::capture(|| {
+            assert!(crate::diagnostics::diagnostic_inputs::is_file(&path));
+        });
+        // A new dependency observation need not change an identical payload's ID.
+        assert!(matches!(
+            cache.computed(
+                snapshot.clone(),
+                Some(&id),
+                Some(Inputs { revision: 8, files })
+            ),
+            DocumentDiagnosticReportKind::Unchanged(_)
+        ));
+        assert!(cache.lookup(&snapshot.0, Some(&id), 8).is_some());
+        std::fs::remove_file(path).unwrap();
+        assert!(cache.lookup(&snapshot.0, Some(&id), 8).is_none());
     }
 
     #[test]

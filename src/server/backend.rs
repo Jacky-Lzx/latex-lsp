@@ -2,7 +2,7 @@
 use crate::{
     compilation::{auxiliary, build, recorder, synctex},
     config::{self, project_config},
-    diagnostics::{chktex, diagnostic},
+    diagnostics::{chktex, diagnostic, diagnostic_inputs},
     editing::{self, code_action_resolve, file_operations, refactor},
     formatting::{self, bib_formatting, on_type_formatting, range_formatting},
     language::{
@@ -55,7 +55,7 @@ pub struct Backend {
     external_tasks: tasks::Tasks,
     shutdown_requested: AtomicBool,
     semantic_cache: Mutex<semantic_cache::Cache>,
-    diagnostic_cache: Mutex<diagnostic::Cache>,
+    diagnostic_cache: Arc<Mutex<diagnostic::Cache>>,
 }
 
 impl Backend {
@@ -69,7 +69,7 @@ impl Backend {
             workspace,
             shutdown_requested: AtomicBool::new(false),
             semantic_cache: Mutex::new(semantic_cache::Cache::default()),
-            diagnostic_cache: Mutex::new(diagnostic::Cache::default()),
+            diagnostic_cache: Arc::new(Mutex::new(diagnostic::Cache::default())),
         }
     }
 
@@ -313,6 +313,60 @@ impl Backend {
         self.publish_affected(Default::default()).await;
     }
 
+    async fn diagnostic_reports(
+        &self,
+        workspace: tokio::sync::OwnedRwLockReadGuard<Workspace>,
+        uris: std::collections::BTreeSet<Url>,
+        previous: std::collections::BTreeMap<Url, String>,
+    ) -> Result<Vec<(Url, Option<i32>, DocumentDiagnosticReportKind)>> {
+        dispatch::release();
+        let mut cache = self.diagnostic_cache.clone().lock_owned().await;
+        tokio::task::spawn_blocking(move || {
+            let revision = workspace.diagnostic_delivery.revision();
+            let mut reports = std::collections::BTreeMap::new();
+            let missing: Vec<_> = uris
+                .into_iter()
+                .filter(|uri| {
+                    if let Some(report) =
+                        cache.lookup(uri, previous.get(uri).map(String::as_str), revision)
+                    {
+                        reports.insert(uri.clone(), report);
+                        false
+                    } else {
+                        true
+                    }
+                })
+                .collect();
+            if !missing.is_empty() {
+                let (snapshots, files) =
+                    diagnostic_inputs::Files::capture(|| workspace.diagnostic_snapshots(missing));
+                for snapshot in snapshots {
+                    let uri = snapshot.0.clone();
+                    let report = cache.computed(
+                        snapshot,
+                        previous.get(&uri).map(String::as_str),
+                        Some(diagnostic::Inputs {
+                            revision,
+                            files: files.clone(),
+                        }),
+                    );
+                    reports.insert(uri, report);
+                }
+            }
+            reports
+                .into_iter()
+                .map(|(uri, report)| {
+                    let version = workspace.documents.get(&uri).and_then(|doc| doc.version);
+                    (uri, version, report)
+                })
+                .collect()
+        })
+        .await
+        .map_err(|error| {
+            crate::rpc::Error::invalid_params(format!("Analysis task failed: {error}"))
+        })
+    }
+
     async fn publish_affected(&self, affected: std::collections::BTreeSet<Url>) {
         let workspace = self.workspace.read().await;
         let delivery = workspace.diagnostic_delivery.clone();
@@ -364,8 +418,8 @@ impl Backend {
                 cache.remove(uri);
             }
         }
-        // Pull requests recalculate the payload before consulting the cache.
-        // Keep result IDs when a delayed watcher changes neither it nor the version.
+        // Revalidate cached analysis after a watcher event, preserving result
+        // IDs when a delayed notification changes neither payload nor version.
         self.publish_affected(affected).await;
     }
 }
@@ -1021,14 +1075,17 @@ impl Backend {
     ) -> Result<DocumentDiagnosticReportResult> {
         validate_diagnostic_identifier(params.identifier.as_deref())?;
         let uri = document_uri(params.text_document.uri);
-        let snapshot = self
-            .read_query(move |workspace| workspace.diagnostic_snapshots([uri]).pop().unwrap())
-            .await?;
-        let report = self
-            .diagnostic_cache
-            .lock()
-            .await
-            .report(snapshot, params.previous_result_id.as_deref());
+        let workspace = self.workspace.clone().read_owned().await;
+        let previous = params
+            .previous_result_id
+            .map(|previous| (uri.clone(), previous))
+            .into_iter()
+            .collect();
+        let (_, _, report) = self
+            .diagnostic_reports(workspace, [uri].into_iter().collect(), previous)
+            .await?
+            .pop()
+            .unwrap();
         let report = match report {
             DocumentDiagnosticReportKind::Full(full_document_diagnostic_report) => {
                 DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport {
@@ -1056,31 +1113,26 @@ impl Backend {
             .into_iter()
             .map(|previous| (document_uri(previous.uri), previous.value))
             .collect();
-        let previous_uris: Vec<_> = previous.keys().cloned().collect();
-        let snapshots = self
-            .read_query(move |workspace| {
-                let uris = workspace
-                    .documents
-                    .keys()
-                    .cloned()
-                    .chain(
-                        workspace
-                            .build_diagnostics
-                            .values()
-                            .flat_map(|project| project.keys().cloned()),
-                    )
-                    // Clear previously reported files which were removed.
-                    .chain(previous_uris);
-                workspace.diagnostic_snapshots(uris)
-            })
-            .await?;
-        let mut cache = self.diagnostic_cache.lock().await;
-        let items = snapshots
+        let workspace = self.workspace.clone().read_owned().await;
+        let uris = workspace
+            .documents
+            .keys()
+            .cloned()
+            .chain(
+                workspace
+                    .build_diagnostics
+                    .values()
+                    .flat_map(|project| project.keys().cloned()),
+            )
+            // Clear previously reported files which were removed.
+            .chain(previous.keys().cloned())
+            .collect();
+        let reports = self.diagnostic_reports(workspace, uris, previous).await?;
+        let items = reports
             .into_iter()
-            .map(|snapshot| {
-                let uri = snapshot.0.clone();
-                let version = snapshot.2.map(i64::from);
-                match cache.report(snapshot, previous.get(&uri).map(String::as_str)) {
+            .map(|(uri, version, report)| {
+                let version = version.map(i64::from);
+                match report {
                     DocumentDiagnosticReportKind::Full(full_document_diagnostic_report) => {
                         WorkspaceDocumentDiagnosticReport::Full(
                             WorkspaceFullDocumentDiagnosticReport {

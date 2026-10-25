@@ -36,7 +36,7 @@ type Stamp = (Option<SystemTime>, u64);
 type Cache = BTreeMap<PathBuf, (Stamp, Arc<Parsed>)>;
 static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
 fn read(path: &Path) -> Option<Arc<Parsed>> {
-    let meta = std::fs::metadata(path).ok()?;
+    let meta = crate::diagnostics::diagnostic_inputs::metadata(path).ok()?;
     if meta.len() > 2 * 1024 * 1024 {
         return None;
     }
@@ -298,7 +298,7 @@ pub(crate) fn numeric_citation_records(
     let path = ws
         .build_config(root)
         .artifact_path(&path, "aux")
-        .filter(|path| path.is_file())
+        .filter(|path| crate::diagnostics::diagnostic_inputs::is_file(path))
         .unwrap_or_else(|| path.with_extension("aux"));
     let mut numbers = BTreeMap::new();
     let mut contexts = BTreeMap::new();
@@ -407,7 +407,7 @@ fn citation_labels(ws: &Workspace, uri: &Url) -> BTreeMap<String, Option<String>
     let path = ws
         .build_config(&root)
         .artifact_path(&path, "aux")
-        .filter(|path| path.is_file())
+        .filter(|path| crate::diagnostics::diagnostic_inputs::is_file(path))
         .unwrap_or_else(|| path.with_extension("aux"));
     let mut result = BTreeMap::new();
     let mut pending = vec![path];
@@ -483,7 +483,7 @@ fn collect(
             };
             let child = parent.join(input);
             let tex = child.with_extension("tex");
-            let child_source = if tex.is_file() {
+            let child_source = if crate::diagnostics::diagnostic_inputs::is_file(&tex) {
                 Url::from_file_path(tex).ok()
             } else {
                 source.clone()
@@ -501,7 +501,7 @@ pub(crate) fn labels(ws: &Workspace, uri: &Url) -> BTreeMap<String, Reference> {
     let config = ws.build_config(&root);
     let auxiliary = config
         .artifact_path(&path, "aux")
-        .filter(|path| path.is_file())
+        .filter(|path| crate::diagnostics::diagnostic_inputs::is_file(path))
         .unwrap_or_else(|| path.with_extension("aux"));
     collect(auxiliary, "", false, None, &mut result);
     let scope = ws.symbol_scope(uri);
@@ -538,8 +538,7 @@ pub(crate) fn labels(ws: &Workspace, uri: &Url) -> BTreeMap<String, Reference> {
             };
             let base = parent.join(arg.value);
             let tex = base.with_extension("tex");
-            let source = tex
-                .is_file()
+            let source = crate::diagnostics::diagnostic_inputs::is_file(&tex)
                 .then(|| Url::from_file_path(tex).ok())
                 .flatten();
             let aux = if base.extension().is_some_and(|extension| extension == "aux") {
@@ -572,7 +571,11 @@ pub(crate) fn definition(ws: &Workspace, uri: &Url, name: &str) -> Option<Locati
     }
     let source = info.source?;
     let path = source.to_file_path().ok()?;
-    if std::fs::metadata(&path).ok()?.len() > 2 * 1024 * 1024 {
+    if crate::diagnostics::diagnostic_inputs::metadata(&path)
+        .ok()?
+        .len()
+        > 2 * 1024 * 1024
+    {
         return None;
     }
     let doc = Document::new(&source, std::fs::read_to_string(path).ok()?, None);
@@ -682,9 +685,9 @@ pub(crate) fn document_links(ws: &Workspace, uri: &Url, root: &Url) -> Vec<Docum
             let base = parent.join(arg.value);
             let tex = base.with_extension("tex");
             let aux = PathBuf::from(format!("{}.aux", base.display()));
-            let target = if tex.is_file() {
+            let target = if crate::diagnostics::diagnostic_inputs::is_file(&tex) {
                 tex
-            } else if aux.is_file() {
+            } else if crate::diagnostics::diagnostic_inputs::is_file(&aux) {
                 aux
             } else {
                 return None;

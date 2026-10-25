@@ -470,7 +470,7 @@ impl BuildConfig {
             config.output_directory = Some(
                 self.latexmkrc_paths(root)
                     .into_iter()
-                    .find(|path| path.is_file())
+                    .find(|path| crate::diagnostics::diagnostic_inputs::is_file(path))
                     .and_then(|path| latexmk::output_directory(&path))
                     .unwrap_or_else(|| DEFAULT_OUTPUT_DIRECTORY.into()),
             );

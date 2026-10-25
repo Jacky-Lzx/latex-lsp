@@ -2,6 +2,7 @@
 
 pub(crate) mod chktex;
 pub mod diagnostic;
+pub(crate) mod diagnostic_inputs;
 pub(crate) mod environment_diagnostics;
 pub(crate) mod index_diagnostics;
 pub(crate) mod label_diagnostics;

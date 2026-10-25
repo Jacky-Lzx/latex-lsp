@@ -62,6 +62,60 @@ fn background_push_diagnostics_follow_the_latest_edit_and_clear_closed_buffers()
 }
 
 #[test]
+fn cached_pull_diagnostics_observe_auxiliary_and_configuration_changes_without_watcher_events() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let uri = Url::from_file_path(root.join("main.tex")).unwrap();
+    let source = r"\documentclass{article}\externaldocument[ext:]{external}\ref{ext:x}";
+    std::fs::write(root.join("main.tex"), source).unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(root).unwrap(),"capabilities":{"textDocument":{"diagnostic":{}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"latex","version":1,"text":source}}),
+    );
+    let mut previous = Value::Null;
+    for step in 0..6 {
+        match step {
+            2 => std::fs::write(root.join("external.aux"), r"\newlabel{x}{{1}{2}}").unwrap(),
+            3 => std::fs::remove_file(root.join("external.aux")).unwrap(),
+            4 => std::fs::write(
+                root.join(".latex-lsp.json"),
+                r#"{"diagnostics":{"undefinedReferences":false}}"#,
+            )
+            .unwrap(),
+            5 => std::fs::remove_file(root.join(".latex-lsp.json")).unwrap(),
+            _ => {}
+        }
+        let mut params = json!({"textDocument":{"uri":uri}});
+        if !previous.is_null() {
+            params["previousResultId"] = previous;
+        }
+        let report = server.request(2 + step, "textDocument/diagnostic", params);
+        if step == 1 {
+            assert_eq!(report["kind"], "unchanged", "{report}");
+        } else {
+            assert_eq!(report["kind"], "full", "step {step}: {report}");
+            let undefined = report["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["code"] == "undefined-reference");
+            assert_eq!(
+                undefined,
+                matches!(step, 0 | 3 | 5),
+                "step {step}: {report}"
+            );
+        }
+        previous = report["resultId"].clone();
+    }
+    server.request(8, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
 fn hook_condition_guards_refresh_aliases_and_exact_edits_over_stdio() {
     use latex_lsp::text::Text;
     for versioned in [false, true] {

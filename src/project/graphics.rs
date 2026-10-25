@@ -332,8 +332,7 @@ fn declarations_with(workspace: &Workspace, uri: &Url, origin: &Url) -> Vec<Dire
         );
         for (span, value) in entries {
             let path = parent.join(value);
-            let path = path
-                .canonicalize()
+            let path = crate::diagnostics::diagnostic_inputs::canonicalize(&path)
                 .unwrap_or_else(|_| normalize_path(&path));
             directories.push(Directory {
                 path,
@@ -404,7 +403,7 @@ pub(crate) fn resolve_in(
     directories: &[PathBuf],
 ) -> Option<Url> {
     resolve_with(root, name, extensions, directories, |path| {
-        let path = path.canonicalize().ok()?;
+        let path = crate::diagnostics::diagnostic_inputs::canonicalize(path).ok()?;
         path.is_file().then_some(path)
     })
 }

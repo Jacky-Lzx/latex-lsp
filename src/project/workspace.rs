@@ -898,13 +898,11 @@ impl Workspace {
         if let Some(root_file) = &folder_config.build.root_file {
             // Build notifications expose resolved roots. Recognize those URIs
             // before applying a relative setting again in a different folder.
-            let requested = path
-                .canonicalize()
+            let requested = crate::diagnostics::diagnostic_inputs::canonicalize(&path)
                 .unwrap_or_else(|_| normalize_path(&path));
             for folder in &self.roots {
                 let configured = folder.join(root_file);
-                let identity = configured
-                    .canonicalize()
+                let identity = crate::diagnostics::diagnostic_inputs::canonicalize(&configured)
                     .unwrap_or_else(|_| normalize_path(&configured));
                 if identity == requested {
                     return file_uri(&configured);
@@ -931,7 +929,10 @@ impl Workspace {
             } else {
                 root.to_file_path()
                     .ok()
-                    .and_then(|path| std::fs::read_to_string(path).ok())
+                    .and_then(|path| {
+                        crate::diagnostics::diagnostic_inputs::observe(&path);
+                        std::fs::read_to_string(path).ok()
+                    })
                     .map(|text| Document::new(&root, text, None))
             };
             let doc = self
@@ -1384,8 +1385,7 @@ impl Workspace {
 }
 
 fn file_uri(path: &Path) -> Result<Url, String> {
-    let path = path
-        .canonicalize()
+    let path = crate::diagnostics::diagnostic_inputs::canonicalize(path)
         .map_err(|error| format!("Cannot read root document {}: {error}", path.display()))?;
     if !path.is_file()
         || !matches!(
@@ -1428,7 +1428,7 @@ pub(crate) fn resolve_file_path_with(
 }
 
 fn existing_file(path: &Path) -> Option<PathBuf> {
-    let canonical = path.canonicalize().ok()?;
+    let canonical = crate::diagnostics::diagnostic_inputs::canonicalize(path).ok()?;
     canonical.is_file().then_some(canonical)
 }
 
