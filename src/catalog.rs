@@ -1043,6 +1043,9 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("footnote", "footnote{${1:text}}", "Insert a footnote."),
     ("footnotemark", "footnotemark", "Insert a footnote mark without its text; optionally select a footnote number."),
     ("footnotetext", "footnotetext{${1:text}}", "Insert footnote text without a mark; optionally select a footnote number."),
+    ("mkbibfootnote", "mkbibfootnote{${1:text}}", "Insert a biblatex note with initialized bibliography commands; notetype selects footnotes or endnotes."),
+    ("mkbibfootnotetext", "mkbibfootnotetext{${1:text}}", "Insert biblatex note text without its mark; notetype selects footnotes or endnotes."),
+    ("ExecuteBibliographyOptions", "ExecuteBibliographyOptions{${1:options}}", "Set biblatex options; optionally restrict them to an entry type list."),
     (
         "href",
         "href{${1:url}}{${2:text}}",

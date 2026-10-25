@@ -948,3 +948,545 @@ fn native_changed_punctuation_leaves_entry_keys_as_display_text_without_partial_
         }
     }
 }
+
+fn note_setup(
+    options: &str,
+    preamble: &str,
+    body: &str,
+) -> (tempfile::TempDir, Workspace, Url, Url) {
+    let (dir, mut ws, main, bib) = setup_with_preamble(preamble, body);
+    let source = ws.documents[&main].text.source.replace(
+        r"\usepackage{biblatex}",
+        &format!(r"\usepackage[{options}]{{biblatex}}"),
+    );
+    std::fs::write(main.to_file_path().unwrap(), &source).unwrap();
+    ws.open(main.clone(), source, 5);
+    (dir, ws, main, bib)
+}
+
+#[test]
+fn note_initializers_resolve_final_sets_in_direct_named_and_executed_forward_calls() {
+    for wrapper in ["mkbibfootnote", "mkbibfootnotetext"] {
+        for (options, declaration, call) in [
+            ("", String::new(), wrapper.to_string()),
+            (
+                "notetype=footonly",
+                String::new(),
+                format!("csuse{{{wrapper}}}"),
+            ),
+            (
+                "notetype={foot+end}",
+                String::new(),
+                format!("csname {wrapper}\\endcsname"),
+            ),
+            ("", format!(r"\def\note{{\{wrapper}}}"), "note".into()),
+            (
+                "",
+                format!(r"\def\outer{{\note}}\newcommand\note{{\{wrapper}}}"),
+                "csuse{outer}".into(),
+            ),
+        ] {
+            for star in ["", "*"] {
+                let body = format!(
+                    r"\{call}{{\entrydata{star}{{collection}}{{Text}}}}\defbibentryset{{collection}}{{member}}\cite{{collection}}"
+                );
+                let (_dir, ws, main, _bib) = note_setup(options, &declaration, &body);
+                let query = location(&ws, &main, &format!(r"\entrydata{star}{{"), "collection");
+                assert_eq!(
+                    features::definitions(&ws, &main, query.range.start),
+                    vec![location(&ws, &main, r"\defbibentryset{", "collection")],
+                    "{options}: {declaration}: {call}{star}"
+                );
+                assert!(features::hover(&ws, &main, query.range.start).is_some());
+                assert_eq!(
+                    features::references(&ws, &main, query.range.start, true).len(),
+                    3
+                );
+                let edits = features::rename(&ws, &main, query.range.start, "fresh")
+                    .unwrap()
+                    .unwrap()
+                    .changes
+                    .unwrap();
+                assert_eq!(edits.len(), 1);
+                assert_eq!(edits[&main].len(), 3);
+                assert_eq!(
+                    apply(&ws.documents[&main].text.source, &edits[&main]),
+                    ws.documents[&main]
+                        .text
+                        .source
+                        .replace("collection", "fresh")
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn note_initializers_complete_final_identity_without_loading_the_original_book() {
+    for wrapper in ["mkbibfootnote", "mkbibfootnotetext"] {
+        for star in ["", "*"] {
+            let body = format!(
+                r"\{wrapper}{{\entrydata{star}{{coBAD}}{{Text}}}}\defbibentryset{{collection}}{{member}}\cite{{collection}}"
+            );
+            let (_dir, ws, main, _bib) = setup(&body);
+            let doc = &ws.documents[&main];
+            let at = doc
+                .text
+                .position(doc.text.source.find("coBAD").unwrap() + 2);
+            let item = features::completion(&ws, &main, at)
+                .into_iter()
+                .find(|item| item.label == "collection")
+                .expect("final set completion");
+            assert!(item.detail.unwrap().contains("Dynamic bibliography set"));
+            let Some(CompletionTextEdit::Edit(edit)) = item.text_edit else {
+                panic!()
+            };
+            assert!(apply(&doc.text.source, &[edit])
+                .contains(&format!(r"\entrydata{star}{{collection}}{{Text}}")));
+        }
+    }
+}
+
+#[test]
+fn note_wrappers_offer_native_text_signatures_and_preserve_label_edits() {
+    for wrapper in ["mkbibfootnote", "mkbibfootnotetext"] {
+        for call in [wrapper.to_string(), format!("csuse{{{wrapper}}}")] {
+            let (_dir, ws, main, _bib) = setup(&format!(r"\label{{safe}}\{call}{{\ref{{safe}}}}"));
+            let query = location(&ws, &main, r"\ref{", "safe");
+            assert_eq!(
+                features::definitions(&ws, &main, query.range.start).len(),
+                1
+            );
+            let edits = features::rename(&ws, &main, query.range.start, "fresh")
+                .unwrap()
+                .unwrap()
+                .changes
+                .unwrap();
+            assert_eq!(edits[&main].len(), 2);
+            let doc = &ws.documents[&main];
+            let at = doc.text.position(doc.text.source.find(r"\ref").unwrap());
+            assert_eq!(
+                signature::help(&ws, &main, at).unwrap().signatures[0].label,
+                format!(r"\{call}{{text}}")
+            );
+        }
+    }
+}
+
+fn check_note_guard(ws: &Workspace, main: &Url, prefix: &str) {
+    let query = location(ws, main, prefix, "collection");
+    assert!(features::definitions(ws, main, query.range.start).is_empty());
+    assert!(features::hover(ws, main, query.range.start).is_none());
+    assert!(features::references(ws, main, query.range.start, true).is_empty());
+    assert!(!matches!(
+        features::rename(ws, main, query.range.start, "fresh"),
+        Ok(Some(_))
+    ));
+    let declaration = location(ws, main, r"\defbibentryset{", "collection");
+    assert!(!matches!(
+        features::rename(ws, main, declaration.range.start, "fresh"),
+        Ok(Some(_))
+    ));
+    let safe = location(ws, main, r"\label{", "safe");
+    assert_eq!(
+        features::rename(ws, main, safe.range.start, "safer")
+            .unwrap()
+            .unwrap()
+            .changes
+            .unwrap()[main]
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn note_initializers_require_unchanged_immediate_dependency_chains() {
+    for wrapper in ["mkbibfootnote", "mkbibfootnotetext"] {
+        let primitive = if wrapper == "mkbibfootnote" {
+            "footnote"
+        } else {
+            "footnotetext"
+        };
+        for target in [
+            primitive,
+            "protecting",
+            "blxmkbibnote",
+            "bibfootnotewrapper",
+            "bibsentence",
+            "@makefntext",
+            "@footnotetext",
+            "@mpfootnotetext",
+            "blx@mkbibfootnote",
+            "blx@blxinit",
+            "unspace",
+            "mkbibparens",
+        ] {
+            let preamble = format!(r"\makeatletter\def\{target}#1{{}}\makeatother");
+            let body = format!(
+                r"\label{{safe}}\ref{{safe}}\csuse{{{wrapper}}}{{\entrydata{{collection}}{{Text}}}}\defbibentryset{{collection}}{{member}}\cite{{collection}}"
+            );
+            let (_dir, ws, main, _bib) = setup_with_preamble(&preamble, &body);
+            check_note_guard(&ws, &main, r"\entrydata{");
+        }
+    }
+}
+
+#[test]
+fn note_initializers_do_not_infer_execution_across_endnote_modes_or_dynamic_options() {
+    for wrapper in ["mkbibfootnote", "mkbibfootnotetext"] {
+        for (options, preamble) in [
+            ("notetype=endonly", ""),
+            ("notetype={endonly}", ""),
+            ("note type=endonly", ""),
+            ("{notetype}=endonly", ""),
+            ("notetype=\\mode", r"\def\mode{footonly}"),
+            ("", r"\ExecuteBibliographyOptions{notetype=endonly}"),
+            ("", r"\ExecuteBibliographyOptions{note type=endonly}"),
+            ("", r"\PassOptionsToPackage{notetype=endonly}{biblatex}"),
+            (
+                "",
+                r"\AtBeginDocument{\ExecuteBibliographyOptions{notetype=endonly}}",
+            ),
+            ("", r"\makeatletter\blx@notetype=2\makeatother"),
+            ("", r"\csname blx@notetype\endcsname=2"),
+            (
+                "",
+                r"\newcommand\opts{notetype=endonly}\ExecuteBibliographyOptions{\opts}",
+            ),
+        ] {
+            let body = format!(
+                r"\label{{safe}}\ref{{safe}}\{wrapper}{{\entrydata{{collection}}{{Text}}}}\defbibentryset{{collection}}{{member}}\cite{{collection}}"
+            );
+            let (_dir, ws, main, _bib) = note_setup(options, preamble, &body);
+            check_note_guard(&ws, &main, r"\entrydata{");
+        }
+    }
+}
+
+#[test]
+fn note_initializers_refresh_unsaved_dependencies_and_keep_parent_versions() {
+    for wrapper in ["mkbibfootnote", "mkbibfootnotetext"] {
+        let body = format!(
+            r"\label{{safe}}\ref{{safe}}\{wrapper}{{\entrydata{{collection}}{{Text}}}}\defbibentryset{{collection}}{{member}}\cite{{collection}}"
+        );
+        let (dir, mut ws, main, _bib) = setup_with_preamble(r"\input{notes}", &body);
+        let notes = main.join("notes.tex").unwrap();
+        std::fs::write(dir.path().join("notes.tex"), "").unwrap();
+        ws.open(main.clone(), ws.documents[&main].text.source.clone(), 5);
+        let query = location(&ws, &main, r"\entrydata{", "collection");
+        assert_eq!(
+            features::definitions(&ws, &main, query.range.start).len(),
+            1
+        );
+        for replacement in [
+            r"\renewcommand\bibfootnotewrapper[1]{}",
+            r"\ExecuteBibliographyOptions{notetype=endonly}",
+        ] {
+            ws.open(notes.clone(), replacement.into(), 12);
+            check_note_guard(&ws, &main, r"\entrydata{");
+            assert_eq!(ws.documents[&main].version, Some(5));
+            ws.open(notes.clone(), String::new(), 13);
+            assert_eq!(
+                features::definitions(&ws, &main, query.range.start).len(),
+                1
+            );
+        }
+        ws.open(notes.clone(), r"\renewcommand\protecting[1]{}".into(), 14);
+        check_note_guard(&ws, &main, r"\entrydata{");
+        ws.documents.remove(&notes);
+        ws.refresh_project(&main);
+        assert_eq!(
+            features::definitions(&ws, &main, query.range.start).len(),
+            1
+        );
+    }
+}
+
+#[test]
+fn stored_note_mutations_cannot_certify_incomplete_macro_renames_after_restoration() {
+    for wrapper in ["mkbibfootnote", "mkbibfootnotetext"] {
+        let preamble = r"\def\identity#1{#1}\let\savedblank\ifblank\newcommand\word{Text}";
+        let body = format!(
+            r"\label{{safe}}\ref{{safe}}\{wrapper}{{\global\let\ifblank\identity}}\let\ifblank\savedblank\ifblank{{\word}}{{\word}}{{\word}}"
+        );
+        let (_dir, ws, main, _bib) = note_setup("notetype=endonly", preamble, &body);
+        let at = location(&ws, &main, r"\newcommand\", "word");
+        let result = features::rename(&ws, &main, at.range.start, "term");
+        if let Ok(Some(edit)) = result {
+            assert_eq!(
+                edit.changes.unwrap()[&main].len(),
+                4,
+                "a possible real invocation must never be omitted"
+            );
+        }
+        let safe = location(&ws, &main, r"\label{", "safe");
+        assert_eq!(
+            features::rename(&ws, &main, safe.range.start, "safer")
+                .unwrap()
+                .unwrap()
+                .changes
+                .unwrap()[&main]
+                .len(),
+            2
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex, biblatex and biber"]
+fn native_note_initializer_queries_and_completions_preserve_complete_bbl() {
+    for wrapper in ["mkbibfootnote", "mkbibfootnotetext"] {
+        native_initialized_query_edits("", &[wrapper]);
+        native_initialized_query_edits("", &[&format!("csname {wrapper}\\endcsname")]);
+        native_initialized_query_edits(
+            &format!(r"\newcommand\note{{\{wrapper}}}"),
+            &["csuse{note}"],
+        );
+        native_initialized_query_edits(
+            r"\ExecuteBibliographyOptions{notetype=footonly}",
+            &[wrapper],
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex, biblatex and biber"]
+fn native_note_dependencies_do_not_prove_discarded_or_consumed_entrydata() {
+    for wrapper in ["mkbibfootnote", "mkbibfootnotetext"] {
+        let primitive = if wrapper == "mkbibfootnote" {
+            "footnote"
+        } else {
+            "footnotetext"
+        };
+        for preamble in [
+            format!(r"\renewcommand\{primitive}[1]{{}}"),
+            r"\renewcommand\protecting[1]{}".into(),
+            r"\renewcommand\blxmkbibnote[2]{}".into(),
+            r"\renewcommand\bibfootnotewrapper[1]{}".into(),
+            r"\renewcommand\bibsentence[1]{}".into(),
+            r"\makeatletter\long\def\@makefntext#1{}\makeatother".into(),
+        ] {
+            let body = format!(
+                r"\label{{safe}}\ref{{safe}}\{wrapper}{{\entrydata{{collection}}{{Text}}}}\defbibentryset{{collection}}{{member}}\cite{{collection}}\printbibliography"
+            );
+            let (dir, ws, main, _bib) = setup_with_preamble(&preamble, &body);
+            let before = compile_clean(dir.path());
+            assert!(before.contains(r"\entry{collection}{set}"));
+            let source = &ws.documents[&main].text.source;
+            let probe = source.replace(
+                "{Text}",
+                r"{\typeout{LSP-NOTE:\therefsection:\thefield{entrytype}}Text}",
+            );
+            std::fs::write(dir.path().join("main.tex"), probe).unwrap();
+            assert_eq!(compile_clean(dir.path()), before);
+            let log = std::fs::read_to_string(dir.path().join("main.log")).unwrap();
+            assert!(
+                !log.contains("LSP-NOTE:0:set"),
+                "{wrapper}: {preamble}: {log}"
+            );
+            check_note_guard(&ws, &main, r"\entrydata{");
+            let safe = location(&ws, &main, r"\label{", "safe");
+            let edits = features::rename(&ws, &main, safe.range.start, "safer")
+                .unwrap()
+                .unwrap()
+                .changes
+                .unwrap();
+            let changed = apply(source, &edits[&main]);
+            assert!(changed.contains(r"\entrydata{collection}{Text}"));
+            std::fs::write(dir.path().join("main.tex"), changed).unwrap();
+            assert_eq!(compile_clean(dir.path()), before);
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex, biblatex and biber"]
+fn native_endnotes_read_the_actual_later_refsection_and_keep_source_edits_guarded() {
+    for wrapper in ["mkbibfootnote", "mkbibfootnotetext"] {
+        let preamble = r"\def\endnote#1{\gdef\savednote{#1}}\def\endnotetext#1{\gdef\savednote{#1}}\newcommand\flushsavednote{\savednote}";
+        let body = format!(
+            r"\label{{safe}}\ref{{safe}}\{wrapper}{{\entrydata{{collection}}{{Text}}}}\defbibentryset{{collection}}{{member}}\cite{{collection}}\printbibliography\newrefsection\cite{{collection}}\flushsavednote\printbibliography"
+        );
+        let (dir, ws, main, _bib) = note_setup("notetype=endonly", preamble, &body);
+        let before = compile_clean(dir.path());
+        let source = &ws.documents[&main].text.source;
+        std::fs::write(
+            dir.path().join("main.tex"),
+            source.replace(
+                "{Text}",
+                r"{\typeout{LSP-NOTE:\therefsection:\thefield{entrytype}}Text}",
+            ),
+        )
+        .unwrap();
+        assert_eq!(compile_clean(dir.path()), before);
+        let log = std::fs::read_to_string(dir.path().join("main.log")).unwrap();
+        assert!(log.contains("LSP-NOTE:1:book"), "{log}");
+        assert!(!log.contains("LSP-NOTE:0:set"), "{log}");
+        check_note_guard(&ws, &main, r"\entrydata{");
+        let safe = location(&ws, &main, r"\label{", "safe");
+        let edits = features::rename(&ws, &main, safe.range.start, "safer")
+            .unwrap()
+            .unwrap()
+            .changes
+            .unwrap();
+        std::fs::write(dir.path().join("main.tex"), apply(source, &edits[&main])).unwrap();
+        assert_eq!(compile_clean(dir.path()), before);
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex, biblatex and biber"]
+fn native_stored_note_string_mutations_preserve_real_expansions_and_complete_edits() {
+    for wrapper in ["mkbibfootnote", "mkbibfootnotetext"] {
+        for (delayed, forwarded) in [(false, false), (true, false), (true, true)] {
+            let preamble = r"\def\identity#1{#1}\let\savedblank\ifblank\newcommand\word{\typeout{LSP-WORD}}\def\endnote#1{\gdef\savednote{#1}}\def\endnotetext#1{\gdef\savednote{#1}}\newcommand\flushsavednote{\savednote}";
+            let preamble = format!(
+                "{preamble}{}",
+                if forwarded { r"\input{notes}" } else { "" }
+            );
+            let call = if forwarded { "csuse{note}" } else { wrapper };
+            let trigger = if delayed {
+                r"\let\ifblank\savedblank\flushsavednote"
+            } else {
+                ""
+            };
+            let body = format!(
+                r"\label{{safe}}\ref{{safe}}\{call}{{\global\let\ifblank\identity}}{trigger}\ifblank{{\word}}{{\word}}{{\word}}\let\ifblank\savedblank Text \cite{{collection}}\printbibliography"
+            );
+            let options = if delayed { "notetype=endonly" } else { "" };
+            let (dir, mut ws, main, _bib) = note_setup(options, &preamble, &body);
+            if forwarded {
+                std::fs::write(
+                    dir.path().join("notes.tex"),
+                    format!(r"\def\note{{\{wrapper}}}"),
+                )
+                .unwrap();
+                ws.open(main.clone(), ws.documents[&main].text.source.clone(), 5);
+            }
+            let before = compile_clean(dir.path());
+            let log = std::fs::read_to_string(dir.path().join("main.log")).unwrap();
+            assert_eq!(log.matches("LSP-WORD").count(), 3, "{wrapper}: {delayed}");
+            let at = location(&ws, &main, r"\newcommand\", "word");
+            let source = &ws.documents[&main].text.source;
+            let mut changed = source.clone();
+            if let Ok(Some(edit)) = features::rename(&ws, &main, at.range.start, "term") {
+                let edits = edit.changes.unwrap();
+                assert_eq!(
+                    edits[&main].len(),
+                    4,
+                    "all actual invocations must be edited"
+                );
+                changed = apply(source, &edits[&main]);
+            }
+            std::fs::write(dir.path().join("main.tex"), changed).unwrap();
+            assert_eq!(compile_clean(dir.path()), before);
+            let log = std::fs::read_to_string(dir.path().join("main.log")).unwrap();
+            assert_eq!(log.matches("LSP-WORD").count(), 3);
+            let safe = location(&ws, &main, r"\label{", "safe");
+            let edits = features::rename(&ws, &main, safe.range.start, "safer")
+                .unwrap()
+                .unwrap()
+                .changes
+                .unwrap();
+            assert_eq!(edits[&main].len(), 2);
+            std::fs::write(dir.path().join("main.tex"), apply(source, &edits[&main])).unwrap();
+            assert_eq!(compile_clean(dir.path()), before);
+            let log = std::fs::read_to_string(dir.path().join("main.log")).unwrap();
+            assert_eq!(log.matches("LSP-WORD").count(), 3);
+        }
+    }
+}
+
+#[test]
+fn executed_note_options_have_real_boundaries_and_preserve_immediate_queries() {
+    for wrapper in ["mkbibfootnote", "mkbibfootnotetext"] {
+        let body = format!(
+            r"\{wrapper}{{\entrydata{{collection}}{{Text}}}}\defbibentryset{{collection}}{{member}}\cite{{collection}}"
+        );
+        let (_dir, ws, main, _bib) =
+            setup_with_preamble(r"\ExecuteBibliographyOptions{notetype=footonly}", &body);
+        let query = location(&ws, &main, r"\entrydata{", "collection");
+        assert_eq!(
+            features::definitions(&ws, &main, query.range.start),
+            vec![location(&ws, &main, r"\defbibentryset{", "collection")]
+        );
+        let edits = features::rename(&ws, &main, query.range.start, "fresh")
+            .unwrap()
+            .unwrap()
+            .changes
+            .unwrap();
+        assert_eq!(edits[&main].len(), 3);
+    }
+    let (_dir, ws, main, _bib) =
+        setup_with_preamble(r"\ExecuteBibliographyOptions[book]{maxnames=4}", "Text");
+    let doc = &ws.documents[&main];
+    let at = doc
+        .text
+        .position(doc.text.source.find("maxnames").unwrap() + 2);
+    let help = signature::help(&ws, &main, at).unwrap();
+    assert_eq!(
+        help.signatures[0].label,
+        r"\ExecuteBibliographyOptions[entry types]{options}"
+    );
+    assert_eq!(help.active_parameter, Some(1));
+}
+
+#[test]
+fn provider_note_aliases_preserve_deferred_mutation_guards_after_explicit_restoration() {
+    for wrapper in ["mkbibfootnote", "mkbibfootnotetext"] {
+        for (declaration, call) in [
+            (format!(r"\def\note{{\{wrapper}}}"), "note"),
+            (format!(r"\let\note\{wrapper}"), "csuse{note}"),
+            (
+                format!(r"\def\outer{{\note}}\def\note{{\{wrapper}}}"),
+                "csname outer\\endcsname",
+            ),
+        ] {
+            let preamble = r"\input{notes}\def\identity#1{#1}\let\savedblank\ifblank\newcommand\word{Text}\def\endnote#1{\gdef\savednote{#1}}\def\endnotetext#1{\gdef\savednote{#1}}";
+            let body = format!(
+                r"\label{{safe}}\ref{{safe}}\{call}{{\global\let\ifblank\identity}}\let\ifblank\savedblank\savednote\ifblank{{\word}}{{\word}}{{\word}}\let\ifblank\savedblank"
+            );
+            let (dir, mut ws, main, _bib) = note_setup("notetype=endonly", preamble, &body);
+            std::fs::write(dir.path().join("notes.tex"), &declaration).unwrap();
+            ws.open(main.clone(), ws.documents[&main].text.source.clone(), 5);
+            let source = ws.documents[&main].text.source.clone();
+            let at = location(&ws, &main, r"\newcommand\", "word");
+            let guard = |ws: &Workspace| {
+                if let Ok(Some(edit)) = features::rename(ws, &main, at.range.start, "term") {
+                    assert_eq!(
+                        edit.changes.unwrap()[&main].len(),
+                        4,
+                        "{declaration}: {call}"
+                    );
+                }
+                let safe = location(ws, &main, r"\label{", "safe");
+                assert_eq!(
+                    features::rename(ws, &main, safe.range.start, "safer")
+                        .unwrap()
+                        .unwrap()
+                        .changes
+                        .unwrap()[&main]
+                        .len(),
+                    2
+                );
+            };
+            guard(&ws);
+            ws.open(
+                main.clone(),
+                source.replace(r"\global\let\ifblank\identity", ""),
+                7,
+            );
+            assert_eq!(
+                features::rename(&ws, &main, at.range.start, "term")
+                    .unwrap()
+                    .unwrap()
+                    .changes
+                    .unwrap()[&main]
+                    .len(),
+                3
+            );
+            ws.open(main.clone(), source, 9);
+            guard(&ws);
+        }
+    }
+}

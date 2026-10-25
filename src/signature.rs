@@ -284,7 +284,102 @@ const BIBLATEX_TEXT_DEPENDENCIES: &[(&str, &[&str])] = &[
     ),
     ("parentext", &["mkbibparens"]),
     ("brackettext", &["mkbibbrackets"]),
+    ("bibfootnotewrapper", &["bibsentence"]),
+    (
+        "blxmkbibnote",
+        &[
+            "bibfootnotewrapper",
+            "blx@blxinit",
+            "blx@setsfcodes",
+            "blx@postpunct@agroup",
+        ],
+    ),
+    (
+        "mkbibfootnote",
+        &[
+            "footnote",
+            "@footnotetext",
+            "@mpfootnotetext",
+            "@makefntext",
+            "protecting",
+            "blxmkbibnote",
+            "blx@mkbibfootnote",
+            "mkbibparens",
+            "unspace",
+        ],
+    ),
+    (
+        "mkbibfootnotetext",
+        &[
+            "footnotetext",
+            "@footnotetext",
+            "@mpfootnotetext",
+            "@makefntext",
+            "protecting",
+            "blxmkbibnote",
+            "blx@mkbibfootnote",
+            "mkbibparens",
+            "unspace",
+        ],
+    ),
 ];
+
+pub(crate) type StoredCodeAliases = BTreeMap<String, BTreeSet<&'static str>>;
+
+/// Possible forwarding/copy edges only revoke string meanings. They never
+/// certify a public signature or assume a declaration has already executed.
+pub(crate) fn possible_stored_code_aliases<'a>(
+    documents: impl IntoIterator<Item = (&'a str, &'a syntax::Syntax)>,
+) -> Option<StoredCodeAliases> {
+    let mut users = BTreeMap::<String, Vec<String>>::new();
+    let mut work = 0usize;
+    for (source, parsed) in documents {
+        work += source.len() + parsed.definitions.len() * 64;
+        if work > 32 * 1024 * 1024 {
+            return None;
+        }
+        for entry in &parsed.definitions {
+            if let Some(target) = source_alias(source, parsed, entry)
+                .or_else(|| literal_copy_target(source, parsed, entry, false).map(|(name, _)| name))
+            {
+                users.entry(target).or_default().push(entry.name.clone());
+            }
+        }
+    }
+    let mut result = StoredCodeAliases::new();
+    let mut pending: Vec<_> = [
+        "AddToHook",
+        "AddToHookWithArguments",
+        "AddToHookNext",
+        "AddToHookNextWithArguments",
+        "AtBeginDocument",
+        "AtEndDocument",
+        "mkbibfootnote",
+        "mkbibfootnotetext",
+    ]
+    .into_iter()
+    .map(|name| (name.to_owned(), name))
+    .collect();
+    let mut visits = 0;
+    while let Some((name, target)) = pending.pop() {
+        work += name.len() + 64;
+        visits += 1;
+        if work > 32 * 1024 * 1024 || visits > 100_000 {
+            return None;
+        }
+        if !result.entry(name.clone()).or_default().insert(target) {
+            continue;
+        }
+        pending.extend(
+            users
+                .get(&name)
+                .into_iter()
+                .flatten()
+                .map(|user| (user.clone(), target)),
+        );
+    }
+    Some(result)
+}
 
 // Static LaTeX kernel hook grammars. Code is stored for later execution;
 // selectors and ordering rules remain data in every analysis mode.
@@ -728,12 +823,15 @@ fn builtin(name: &str) -> Option<Signature> {
         "addbibresource" | "addglobalbib" | "addsectionbib" => {
             (&[("options", true), ("file", false)], false)
         }
+        "ExecuteBibliographyOptions" => (&[("entry types", true), ("options", false)], false),
         "part" | "chapter" | "section" | "subsection" | "subsubsection" | "paragraph"
         | "subparagraph" | "caption" => (&[("short title", true), ("title", false)], true),
         "footnote" | "footnotetext" => (&[("number", true), ("text", false)], false),
         "footnotemark" => (&[("number", true)], false),
         "textbf" | "textit" | "texttt" | "emph" | "title" | "author" | "date" | "mkbibparens"
-        | "mkbibbrackets" | "parentext" | "brackettext" => (&[("text", false)], false),
+        | "mkbibbrackets" | "parentext" | "brackettext" | "mkbibfootnote" | "mkbibfootnotetext" => {
+            (&[("text", false)], false)
+        }
         "typeout" | "message" => (&[("text", false)], false),
         "extractcolorspec" => (&[("color", false), ("specification command", false)], false),
         "extractcolorspecs" => (
@@ -1203,6 +1301,7 @@ fn builtin(name: &str) -> Option<Signature> {
                     | "AtDataInput"
                     | "item"
                     | "printbibliography"
+                    | "ExecuteBibliographyOptions"
                     | "newrefsection"
                     | "refsection"
             )),
@@ -3052,19 +3151,28 @@ impl<'a> CommandSignatures<'a> {
         !self.local.contains_key(name)
     }
 
-    /// Locate registered code for conservative mutation guards. This does not
-    /// determine whether, when, or how often a hook executes its code.
-    pub(crate) fn stored_hook_code(
+    /// Locate stored code for conservative mutation guards. This does not
+    /// determine whether, when, or how often a hook or note executes its code.
+    pub(crate) fn stored_code(
         &self,
         source: &str,
         parsed: &syntax::Syntax,
+        possible: &StoredCodeAliases,
     ) -> Option<Vec<(usize, std::ops::Range<usize>)>> {
+        let parameters = |name: &str| {
+            if matches!(name, "mkbibfootnote" | "mkbibfootnotetext") {
+                Some(&[("code", false)][..])
+            } else {
+                kernel_hook_parameters(name)
+            }
+        };
         let stores_code = |name: &str| {
-            kernel_hook_parameters(name)
+            parameters(name)
                 .is_some_and(|parameters| parameters.iter().any(|(label, _)| *label == "code"))
         };
         if !parsed.commands.iter().any(|command| {
             stores_code(&command.name)
+                || possible.contains_key(&command.name)
                 || matches!(command.name.as_str(), "csuse" | "endcsname")
                 || self
                     .forwarded_builtin(&command.name)
@@ -3084,56 +3192,62 @@ impl<'a> CommandSignatures<'a> {
             if operands.contains(&command.span.start) {
                 continue;
             }
-            let Some((name, _, mut at, _)) =
+            let Some((name, _, after, _)) =
                 self.invocation(source, parsed, index, &operands, &declarations)
             else {
                 continue;
             };
-            let name = self.forwarded_builtin(name).unwrap_or(name);
-            let Some(parameters) =
-                kernel_hook_parameters(name).filter(|_| self.command_unchanged(name))
-            else {
-                continue;
-            };
-            if !parameters.iter().any(|(label, _)| *label == "code") {
-                continue;
+            let canonical = self.forwarded_builtin(name).unwrap_or(name);
+            let mut candidates: BTreeSet<_> =
+                possible.get(name).into_iter().flatten().copied().collect();
+            if stores_code(canonical) && self.command_unchanged(canonical) {
+                candidates.insert(canonical);
             }
-            for (label, optional) in parameters {
-                let before = at;
-                at = syntax::skip_space(source, at);
-                work += at - before + 64;
-                if work > 32 * 1024 * 1024 {
-                    return None;
-                }
-                if *optional {
-                    if source.as_bytes().get(at) == Some(&b'[') {
-                        let Some((_, end)) = syntax::bracket_argument(source, at) else {
-                            break;
-                        };
-                        work += end - at;
-                        at = end;
-                    }
+            for candidate in candidates {
+                let Some(parameters) = parameters(candidate) else {
+                    continue;
+                };
+                let mut at = after;
+                if !parameters.iter().any(|(label, _)| *label == "code") {
                     continue;
                 }
-                let (span, end) = if source.as_bytes().get(at) == Some(&b'{') {
-                    let Some((argument, end)) = syntax::group(source, at, b'{', b'}') else {
-                        break;
+                for (label, optional) in parameters {
+                    let before = at;
+                    at = syntax::skip_space(source, at);
+                    work += at - before + 64;
+                    if work > 32 * 1024 * 1024 {
+                        return None;
+                    }
+                    if *optional {
+                        if source.as_bytes().get(at) == Some(&b'[') {
+                            let Some((_, end)) = syntax::bracket_argument(source, at) else {
+                                break;
+                            };
+                            work += end - at;
+                            at = end;
+                        }
+                        continue;
+                    }
+                    let (span, end) = if source.as_bytes().get(at) == Some(&b'{') {
+                        let Some((argument, end)) = syntax::group(source, at, b'{', b'}') else {
+                            break;
+                        };
+                        (argument.span, end)
+                    } else {
+                        let Some(token) = syntax::required_token(source, at) else {
+                            break;
+                        };
+                        (at..at + token.len(), at + token.len())
                     };
-                    (argument.span, end)
-                } else {
-                    let Some(token) = syntax::required_token(source, at) else {
+                    work += end - at;
+                    if work > 32 * 1024 * 1024 {
+                        return None;
+                    }
+                    at = end;
+                    if *label == "code" {
+                        result.push((command.span.start, span));
                         break;
-                    };
-                    (at..at + token.len(), at + token.len())
-                };
-                work += end - at;
-                if work > 32 * 1024 * 1024 {
-                    return None;
-                }
-                at = end;
-                if *label == "code" {
-                    result.push((command.span.start, span));
-                    break;
+                    }
                 }
             }
         }
@@ -3468,7 +3582,23 @@ impl<'a> CommandSignatures<'a> {
         source: &str,
         parsed: &syntax::Syntax,
     ) -> BTreeSet<usize> {
-        let operands = self.source_argument_tokens(source, parsed);
+        self.initialized_source_command_positions(source, parsed, false)
+    }
+
+    /// A bibliography trace can independently prove immediate native notes.
+    /// Other immediate analyses continue to treat their code as deferred.
+    pub(crate) fn initialized_source_command_positions(
+        &self,
+        source: &str,
+        parsed: &syntax::Syntax,
+        immediate_notes: bool,
+    ) -> BTreeSet<usize> {
+        let mode = if immediate_notes {
+            ParameterRead::InitializedNotes
+        } else {
+            ParameterRead::Source
+        };
+        let operands = self.argument_tokens_with_literal(source, parsed, None, false, false, mode);
         let mut bodies = definition_body_spans(source, parsed);
         bodies.sort_unstable_by_key(|span| span.start);
         let mut merged: Vec<std::ops::Range<usize>> = Vec::new();
@@ -4534,8 +4664,17 @@ impl<'a> CommandSignatures<'a> {
                 // Message readers expand text without executing the resulting
                 // nonexpandable tokens, including declarations and callbacks.
                 let hook = kernel_hook_parameters(signature.name.as_str()).is_some();
+                let note = matches!(
+                    signature.name.as_str(),
+                    "mkbibfootnote" | "mkbibfootnotetext"
+                );
                 let opaque = all_parameters
-                    || hook && matches!(parameters, ParameterRead::Source)
+                    || hook
+                        && matches!(
+                            parameters,
+                            ParameterRead::Source | ParameterRead::InitializedNotes
+                        )
+                    || note && matches!(parameters, ParameterRead::Source)
                     || common.is_some()
                     || local.contains_key(signature.name.as_str())
                     || matches!(
@@ -4557,9 +4696,10 @@ impl<'a> CommandSignatures<'a> {
                     literal,
                     &mut result,
                 );
-                if (opaque || hook)
+                if (opaque || hook || note)
                     && read.unfinished
                     && (hook
+                        || note
                         || matches!(parameters, ParameterRead::DeclarationData)
                         || common.is_some()
                         || matches!(signature.name.as_str(), "typeout" | "message"))
@@ -4589,6 +4729,7 @@ enum ParameterRead {
     DeclarationData,
     // Stored hook code is structurally editable, but not immediate source.
     Source,
+    InitializedNotes,
 }
 
 fn insert_command_signature<'a>(

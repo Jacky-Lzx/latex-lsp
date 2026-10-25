@@ -11,8 +11,126 @@ use tower_lsp::lsp_types::Url;
 pub(crate) fn native_initializer(name: &str) -> bool {
     matches!(
         name,
-        "mkbibparens" | "mkbibbrackets" | "parentext" | "brackettext"
+        "mkbibparens"
+            | "mkbibbrackets"
+            | "parentext"
+            | "brackettext"
+            | "mkbibfootnote"
+            | "mkbibfootnotetext"
     )
+}
+
+pub(crate) fn certified_initializer(name: &str, immediate_notes: bool) -> bool {
+    native_initializer(name)
+        && (immediate_notes || !matches!(name, "mkbibfootnote" | "mkbibfootnotetext"))
+}
+
+// Footnotes normally initialize and execute their text immediately. Endnote
+// mode can store the same text until a different refsection is active. Accept
+// only modes that remain immediate throughout the complete source closure;
+// declarations and stored code must not silently change that conclusion.
+pub(crate) fn immediate_notes(
+    docs: &[(Url, &Document)],
+    signatures: &CommandSignatures<'_>,
+    work: &mut usize,
+) -> Option<bool> {
+    if !docs
+        .iter()
+        .any(|(_, doc)| doc.text.source.contains("mkbibfootnote"))
+    {
+        return Some(false);
+    }
+    for (_, doc) in docs {
+        let source = &doc.text.source;
+        *work += source.len() + doc.syntax.commands.len() * 64;
+        if *work > 32 * 1024 * 1024 {
+            return None;
+        }
+        if source.contains("blx@notetype") {
+            return Some(false);
+        }
+        let context = Context::new(doc, signatures);
+        for (index, command) in doc.syntax.commands.iter().enumerate() {
+            let (name, call) = signatures
+                .named_invocation(
+                    source,
+                    &doc.syntax,
+                    index,
+                    &BTreeSet::new(),
+                    &context.declarations,
+                )
+                .unwrap_or((&command.name, command.span.clone()));
+            let name = signatures.forwarded_builtin(name).unwrap_or(name);
+            if name == "blx@notetype" {
+                return Some(false);
+            }
+            let at = syntax::skip_space(source, call.end);
+            let options = if syntax::loader_extension(name).is_some() {
+                if source.as_bytes().get(at) != Some(&b'[') {
+                    continue;
+                }
+                syntax::bracket_argument(source, at).map(|(argument, _)| argument)
+            } else if matches!(
+                name,
+                "ExecuteBibliographyOptions" | "PassOptionsToPackage" | "PassOptionsToClass"
+            ) {
+                syntax::group(source, at, b'{', b'}').map(|(argument, _)| argument)
+            } else {
+                continue;
+            };
+            if let Some(argument) = &options {
+                *work += argument.span.len();
+                if *work > 32 * 1024 * 1024 {
+                    return None;
+                }
+            }
+            if !signatures.command_unchanged(name)
+                || options.is_none_or(|argument| !immediate_note_options(&source[argument.span]))
+            {
+                return Some(false);
+            }
+        }
+    }
+    Some(true)
+}
+
+fn immediate_note_options(source: &str) -> bool {
+    if !source.is_ascii() || source.contains(['\\', '#', '%', '~', '^', '$']) {
+        return false;
+    }
+    for span in syntax::key_list_segments(source, 0..source.len()) {
+        let option = source[span].trim();
+        if option.is_empty() {
+            continue;
+        }
+        let (key, value) = option.split_once('=').unwrap_or((option, "true"));
+        if !key
+            .trim()
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'+'))
+        {
+            return false;
+        }
+        if key.trim() != "notetype" {
+            continue;
+        }
+        let value = value.trim();
+        let value = if value.starts_with('{') {
+            let Some((argument, end)) = syntax::group(value, 0, b'{', b'}') else {
+                return false;
+            };
+            if end != value.len() {
+                return false;
+            }
+            argument.value
+        } else {
+            value.to_string()
+        };
+        if !matches!(value.as_str(), "foot+end" | "footonly") {
+            return false;
+        }
+    }
+    true
 }
 
 pub(crate) fn initialized_call_argument(
@@ -48,13 +166,14 @@ pub(crate) fn initialized_call_argument(
 pub(crate) fn uses_initializer_forwards(
     docs: &[(Url, &Document)],
     signatures: &CommandSignatures<'_>,
+    immediate_notes: bool,
     work: &mut usize,
 ) -> Option<bool> {
     if !docs.iter().any(|(_, doc)| {
         doc.syntax.definitions.iter().any(|entry| {
             signatures
                 .forwarded_builtin(&entry.name)
-                .is_some_and(native_initializer)
+                .is_some_and(|name| certified_initializer(name, immediate_notes))
         })
     }) {
         return Some(false);
@@ -66,8 +185,16 @@ pub(crate) fn uses_initializer_forwards(
             return None;
         }
         let context = Context::new(doc, signatures);
-        let positions = signatures.source_command_positions(source, &doc.syntax);
-        let initialized = initialized_entrydata_spans(doc, signatures, &positions, &context, work)?;
+        let positions =
+            signatures.initialized_source_command_positions(source, &doc.syntax, immediate_notes);
+        let initialized = initialized_entrydata_spans(
+            doc,
+            signatures,
+            &positions,
+            &context,
+            immediate_notes,
+            work,
+        )?;
         let empty = BTreeSet::new();
         let mut queries = Vec::new();
         for (index, command) in doc.syntax.commands.iter().enumerate() {
@@ -98,7 +225,7 @@ pub(crate) fn uses_initializer_forwards(
                 .unwrap_or((&command.name, command.span.clone()));
             if !signatures
                 .forwarded_builtin(name)
-                .is_some_and(native_initializer)
+                .is_some_and(|name| certified_initializer(name, immediate_notes))
                 || !positions.contains(&command.span.start)
                 || context.literal(command.span.start)
                 || context.operand(doc, command.span.start)
@@ -153,6 +280,7 @@ pub(crate) fn initialized_entrydata_spans(
     signatures: &CommandSignatures<'_>,
     positions: &BTreeSet<usize>,
     context: &Context,
+    immediate_notes: bool,
     work: &mut usize,
 ) -> Option<Vec<Range<usize>>> {
     let mut spans = Vec::new();
@@ -160,7 +288,14 @@ pub(crate) fn initialized_entrydata_spans(
     for (index, command) in doc.syntax.commands.iter().enumerate() {
         if !matches!(
             command.name.as_str(),
-            "mkbibparens" | "mkbibbrackets" | "parentext" | "brackettext" | "csuse" | "csname"
+            "mkbibparens"
+                | "mkbibbrackets"
+                | "parentext"
+                | "brackettext"
+                | "mkbibfootnote"
+                | "mkbibfootnotetext"
+                | "csuse"
+                | "csname"
         ) {
             continue;
         }
@@ -181,7 +316,8 @@ pub(crate) fn initialized_entrydata_spans(
             ) else {
                 continue;
             };
-            if !native_initializer(name) || !signatures.command_unchanged(name) {
+            if !certified_initializer(name, immediate_notes) || !signatures.command_unchanged(name)
+            {
                 continue;
             }
             if let Some(span) = initialized_text_argument(source, call.end, work)? {
@@ -189,7 +325,9 @@ pub(crate) fn initialized_entrydata_spans(
             }
             continue;
         }
-        if !signatures.command_unchanged(&command.name) {
+        if !certified_initializer(&command.name, immediate_notes)
+            || !signatures.command_unchanged(&command.name)
+        {
             continue;
         }
         let Some(argument) = &command.argument else {
@@ -234,10 +372,15 @@ mod initializer_tests {
         let context = Context::new(&doc, &signatures);
         // After the two command costs, the scan limit lies inside the emoji.
         let mut work = 32 * 1024 * 1024 - 128 - 2;
-        assert!(
-            initialized_entrydata_spans(&doc, &signatures, &positions, &context, &mut work)
-                .is_none()
-        );
+        assert!(initialized_entrydata_spans(
+            &doc,
+            &signatures,
+            &positions,
+            &context,
+            false,
+            &mut work
+        )
+        .is_none());
         assert!(work <= 32 * 1024 * 1024);
     }
 }

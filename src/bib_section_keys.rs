@@ -4,8 +4,8 @@
 //! declaration and bibliography relation. Resource labels have a separate graph.
 use crate::{
     bib_initializers::{
-        initialized_call_argument, initialized_entrydata_spans, native_initializer,
-        uses_initializer_forwards,
+        certified_initializer, immediate_notes, initialized_call_argument,
+        initialized_entrydata_spans, native_initializer, uses_initializer_forwards,
     },
     bib_section_files::Registry,
     named_references::Context,
@@ -517,11 +517,22 @@ impl Analysis<'_, '_> {
         self.visited.insert(uri.clone());
         let source = &doc.text.source;
         let context = Context::new(doc, self.signatures);
-        let positions = self
-            .signatures
-            .source_command_positions(source, &doc.syntax);
+        let positions = self.signatures.initialized_source_command_positions(
+            source,
+            &doc.syntax,
+            self.trace
+                .as_ref()
+                .is_some_and(|trace| trace.immediate_notes),
+        );
         let initialized = if self.trace.is_some() {
-            initialized_entrydata_spans(doc, self.signatures, &positions, &context, &mut self.work)?
+            initialized_entrydata_spans(
+                doc,
+                self.signatures,
+                &positions,
+                &context,
+                self.trace.as_ref()?.immediate_notes,
+                &mut self.work,
+            )?
         } else {
             Vec::new()
         };
@@ -661,11 +672,14 @@ impl Analysis<'_, '_> {
                 && positions.contains(&lexical.span.start)
                 && !context.operand(doc, lexical.span.start)
             {
-                if let Some(builtin) = self
-                    .signatures
-                    .forwarded_builtin(name)
-                    .filter(|name| native_initializer(name))
-                {
+                if let Some(builtin) = self.signatures.forwarded_builtin(name).filter(|name| {
+                    certified_initializer(
+                        name,
+                        self.trace
+                            .as_ref()
+                            .is_some_and(|trace| trace.immediate_notes),
+                    )
+                }) {
                     // Every late-bound edge must already have executed, even
                     // when its replacement shape was visible in another file.
                     let mut current = name;
@@ -2372,6 +2386,7 @@ pub(crate) struct SourceTrace {
     scope: Option<crate::bib_context_scope::Scope>,
     source_aliases: BTreeMap<String, String>,
     initializer_forwards: bool,
+    immediate_notes: bool,
     declarations: SourceDeclarations,
     current: u32,
     next: u32,
@@ -2686,7 +2701,9 @@ fn source_trace_query(
         return None;
     }
     let resources = Arc::new(active.clone());
-    let initializer_forwards = uses_initializer_forwards(docs, signatures, &mut work)?;
+    let immediate_notes = immediate_notes(docs, signatures, &mut work)?;
+    let initializer_forwards =
+        uses_initializer_forwards(docs, signatures, immediate_notes, &mut work)?;
     let trace = SourceTrace {
         work: 0,
         resources: BTreeMap::from([(0, resources.clone())]),
@@ -2697,6 +2714,7 @@ fn source_trace_query(
         category_members: BTreeMap::new(),
         source_aliases: BTreeMap::new(),
         initializer_forwards,
+        immediate_notes,
         scope: (initializer_forwards
             || hint_assignments
                 && docs.iter().any(|(_, doc)| {

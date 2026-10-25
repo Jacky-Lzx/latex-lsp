@@ -211,6 +211,7 @@ impl Source {
         mut literal: impl FnMut(&crate::syntax::Command, bool) -> u8,
         shapes: &BTreeMap<usize, Arc<CommandShape>>,
         readers: &crate::resource_context::Readers,
+        possible_stores: &crate::signature::StoredCodeAliases,
     ) -> Self {
         let mut uncertain = BTreeSet::new();
         let mut lexical_probes = Vec::new();
@@ -271,7 +272,7 @@ impl Source {
             }
         }
         let mut hook_mutations = HookMutations::default();
-        if let Some(codes) = signatures.stored_hook_code(&text.source, &syntax) {
+        if let Some(codes) = signatures.stored_code(&text.source, &syntax, possible_stores) {
             let mut work = 0;
             for (at, code) in codes {
                 work += code.len();
@@ -334,6 +335,7 @@ impl Source {
 
 #[derive(Clone, Default)]
 struct Analysis {
+    possible_stores: Arc<crate::signature::StoredCodeAliases>,
     meanings: BTreeMap<Url, BTreeMap<usize, u8>>,
     operands: BTreeMap<Url, BTreeMap<usize, bool>>,
     names: BTreeSet<String>,
@@ -354,6 +356,20 @@ impl Analysis {
         state: &mut Context,
         stack: &mut BTreeSet<Url>,
     ) {
+        if stack.is_empty() {
+            let scope = workspace.symbol_scope(root);
+            if let Some(possible) = crate::signature::possible_stored_code_aliases(
+                workspace
+                    .documents
+                    .iter()
+                    .filter(|(uri, doc)| scope.contains(*uri) && doc.kind == DocumentKind::Latex)
+                    .map(|(_, doc)| (doc.text.source.as_str(), &doc.syntax)),
+            ) {
+                self.possible_stores = Arc::new(possible);
+            } else {
+                self.incomplete = true;
+            }
+        }
         if stack.len() >= 16 || self.visits >= MAX_VISITS || !stack.insert(uri.clone()) {
             self.incomplete = true;
             return;
@@ -389,6 +405,7 @@ impl Analysis {
                 },
                 &shapes,
                 &doc.syntax.contextual_resource_readers,
+                &self.possible_stores,
             );
             let visits = self.visits + 1;
             *self = checkpoint.clone();
@@ -730,6 +747,7 @@ pub(crate) fn refresh(workspace: &mut Workspace) {
                         default_meaning,
                         &BTreeMap::new(),
                         &doc.syntax.contextual_resource_readers,
+                        &BTreeMap::new(),
                     ),
                 )
             })

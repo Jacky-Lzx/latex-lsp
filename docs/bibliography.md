@@ -328,6 +328,12 @@ cargo test --locked --test protocol source_textual_predicates_
 
 包装还依赖原生括号输出命令。项目重定义对应的 `bibopenparen`／`bibcloseparen`、`bibopenbracket`／`bibclosebracket`，或 `bibleftparen`、`bibrightparen`、`bibleftbracket`、`bibrightbracket` 时，会撤下相关包装及其转发调用的原生文本执行和初始化认证。这些输出命令可能把正文中的第一个命令当作参数消费，留下同名显示文字；导航、补全和改名会保护这些文字。嵌套包装会交替使用两种括号，因此更改一种输出也可能影响另一种包装的认证。移除重定义后恢复原有交互。
 
+`mkbibfootnote{text}` 和 `mkbibfootnotetext{text}` 提供命令片段、参数提示与正文标签交互。默认 `notetype=foot+end` 及显式 `footonly` 中，原生脚注会即时初始化文献命令；完整参数内的纯文本 `entrydata`／`entrydata*` 支持同样的最终集合查询、补全及完整改名，包括静态命名调用和前言中已执行的纯转发。它们不读取可选脚注编号。
+
+脚注初始化同时依赖脚注原语、`protecting`、`blxmkbibnote`、`bibfootnotewrapper`、`bibsentence` 及原生底层排版命令。相关重定义可能丢弃查询或仅吞掉命令、留下显示文字；不能据此提供文献键编辑。`ExecuteBibliographyOptions[entry types]{options}` 同时提供原生参数提示和命令片段。模式认证检查完整源码闭包中的加载选项、`PassOptionsToPackage`／`PassOptionsToClass` 与 `ExecuteBibliographyOptions`，只接受确定保持即时脚注、键名不含内部空白或分组的字面选项。`endonly`、动态选项、直接修改内部模式计数器或无法确认的依赖继续保护，不模拟尾注实际展开的位置。移除未保存的重定义或模式修改后恢复交互。
+
+脚注代码在其他立即执行分析中保留延迟边界；文献查询跟踪仅在独立认证后启用即时参数。代码中潜在的字符串判断重定义沿用钩子的持续保护，防止尾注后来展开后返回不完整的宏改名。正文内的可执行文献代码仍按原有边界认证，普通文本与静态结构引用继续保留。
+
 ```sh
 cargo test --locked --test biblatex_source_entrydata -- --include-ignored
 cargo test --locked --test protocol initialized_entrydata_

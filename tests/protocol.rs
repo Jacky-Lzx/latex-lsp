@@ -37611,3 +37611,292 @@ fn automatic_keyword_hints_follow_bbl_members_unsaved_assignments_and_shared_roo
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+fn note_initializers_keep_exact_edits_and_refresh_unsaved_modes_and_dependencies_over_stdio() {
+    use latex_lsp::text::Text;
+    for wrapper in ["mkbibfootnote", "mkbibfootnotetext"] {
+        for versioned in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+            let child = main.join("query.tex").unwrap();
+            let provider = main.join("notes.tex").unwrap();
+            let bib = main.join("data.bib").unwrap();
+            let source = format!("% 😀\r\n\\documentclass{{article}}\\usepackage{{biblatex}}\\addbibresource{{data.bib}}\\input{{notes}}\\begin{{document}}😀 \\label{{safe}}\\ref{{safe}}\\{wrapper}{{\\entrydata{{collection}}{{Text}}}}\\input{{query}}\\defbibentryset{{collection}}{{member}}\\cite{{collection}}\\end{{document}}");
+            let queries = format!("% queries\r\n😀 \\csuse{{note}}{{\\entrydata*{{collection}}{{Text}}}}\\csname {wrapper}\\endcsname{{\\csuse{{entrydata}}{{collection}}{{Text}}}}");
+            let declarations = format!(r"\def\note{{\{wrapper}}}");
+            let library = "@book{collection,title={Raw data}} @book{member,title={Member}}";
+            for (uri, text) in [
+                (&main, source.as_str()),
+                (&child, queries.as_str()),
+                (&provider, declarations.as_str()),
+                (&bib, library),
+            ] {
+                std::fs::write(uri.to_file_path().unwrap(), text).unwrap();
+            }
+            let range = |text: &str, prefix: &str| {
+                let at = text.find(prefix).unwrap() + prefix.len();
+                Text::new(text.into()).range(at, at + "collection".len())
+            };
+            let query = range(&queries, r"\entrydata*{");
+            let params = json!({"textDocument":{"uri":child},"position":query.start});
+            let mut server = Server::start();
+            server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":versioned}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+            server.notify("initialized", json!({}));
+            for (uri, text, version) in [(&main, source.as_str(), 5), (&child, queries.as_str(), 8)]
+            {
+                server.notify("textDocument/didOpen",json!({"textDocument":{"uri":uri,"languageId":"latex","version":version,"text":text}}));
+            }
+            let check = |server: &mut Server, main_source: &str, main_version| {
+                assert_eq!(
+                    server.request(10, "textDocument/definition", params.clone()),
+                    json!([{"uri":main,"range":range(main_source,r"\defbibentryset{")}])
+                );
+                assert!(!server
+                    .request(11, "textDocument/hover", params.clone())
+                    .is_null());
+                let prepared = server.request(12, "textDocument/prepareRename", params.clone());
+                assert_eq!(prepared["range"], json!(query));
+                let mut expected = std::collections::BTreeMap::new();
+                let mut locations = Vec::new();
+                for (uri, text, prefixes) in [
+                    (
+                        &main,
+                        main_source,
+                        vec![r"\entrydata{", r"\defbibentryset{", r"\cite{"],
+                    ),
+                    (
+                        &child,
+                        queries.as_str(),
+                        vec![r"\entrydata*{", r"\csuse{entrydata}{"],
+                    ),
+                ] {
+                    let edits = prefixes
+                        .into_iter()
+                        .map(|prefix| {
+                            let span = range(text, prefix);
+                            locations.push(json!({"uri":uri,"range":span}));
+                            json!({"range":span,"newText":"fresh"})
+                        })
+                        .collect::<Vec<_>>();
+                    expected.insert(uri.to_string(), edits);
+                }
+                let refs = server.request(13,"textDocument/references",json!({"textDocument":{"uri":child},"position":query.start,"context":{"includeDeclaration":true}}));
+                let mut actual_locations = refs.as_array().unwrap().clone();
+                locations.sort_by_key(Value::to_string);
+                actual_locations.sort_by_key(Value::to_string);
+                assert_eq!(actual_locations, locations);
+                let edit = server.request(
+                    14,
+                    "textDocument/rename",
+                    json!({"textDocument":{"uri":child},"position":query.start,"newName":"fresh"}),
+                );
+                let mut actual = std::collections::BTreeMap::new();
+                if versioned {
+                    for change in edit["documentChanges"].as_array().unwrap() {
+                        let uri = change["textDocument"]["uri"].as_str().unwrap();
+                        assert_eq!(
+                            change["textDocument"]["version"],
+                            if uri == main.as_str() {
+                                main_version
+                            } else {
+                                8
+                            }
+                        );
+                        actual.insert(uri.to_string(), change["edits"].as_array().unwrap().clone());
+                    }
+                } else {
+                    for (uri, edits) in edit["changes"].as_object().unwrap() {
+                        actual.insert(uri.to_string(), edits.as_array().unwrap().clone());
+                    }
+                }
+                for edits in actual.values_mut().chain(expected.values_mut()) {
+                    edits.sort_by_key(Value::to_string);
+                }
+                assert_eq!(actual, expected);
+            };
+            let blocked = |server: &mut Server, main_source: &str, main_version| {
+                assert_eq!(
+                    server.request(20, "textDocument/definition", params.clone()),
+                    json!([])
+                );
+                for (uri, position) in [
+                    (&child, query.start),
+                    (&main, range(main_source, r"\defbibentryset{").start),
+                ] {
+                    server.send(json!({"jsonrpc":"2.0","id":21,"method":"textDocument/rename","params":{"textDocument":{"uri":uri},"position":position,"newName":"fresh"}}));
+                    let response = server.until(|message| message["id"] == 21);
+                    assert!(
+                        response["error"]["code"] == -32602
+                            || response.get("result") == Some(&Value::Null),
+                        "{response}"
+                    );
+                }
+                let text = Text::new(main_source.into());
+                let edits = main_source
+                    .match_indices("safe")
+                    .map(|(at, _)| json!({"range":text.range(at,at+4),"newText":"safer"}))
+                    .collect::<Vec<_>>();
+                let expected = if versioned {
+                    json!({"documentChanges":[{"textDocument":{"uri":main,"version":main_version},"edits":edits}]})
+                } else {
+                    json!({"changes":{main.as_str():edits}})
+                };
+                assert_eq!(server.request(22,"textDocument/rename",json!({"textDocument":{"uri":main},"position":text.position(main_source.find("safe").unwrap()),"newName":"safer"})),expected);
+            };
+            check(&mut server, &source, 5);
+            server.notify("textDocument/didOpen",json!({"textDocument":{"uri":provider,"languageId":"latex","version":10,"text":format!(r"{declarations}\ExecuteBibliographyOptions{{notetype=footonly}}")}}));
+            check(&mut server, &source, 5);
+            server.notify(
+                "textDocument/didClose",
+                json!({"textDocument":{"uri":provider}}),
+            );
+            for (index, extra) in [
+                r"\renewcommand\bibfootnotewrapper[1]{}",
+                r"\renewcommand\protecting[1]{}",
+                r"\ExecuteBibliographyOptions{notetype=endonly}",
+                r"\AtBeginDocument{\ExecuteBibliographyOptions{notetype=endonly}}",
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                server.notify("textDocument/didOpen",json!({"textDocument":{"uri":provider,"languageId":"latex","version":12+index,"text":format!("{declarations}{extra}")}}));
+                blocked(&mut server, &source, 5);
+                server.notify("textDocument/didChange",json!({"textDocument":{"uri":provider,"version":22+index},"contentChanges":[{"text":declarations}]}));
+                check(&mut server, &source, 5);
+                server.notify("textDocument/didChange",json!({"textDocument":{"uri":provider,"version":32+index},"contentChanges":[{"text":format!("{declarations}{extra}")}]}));
+                blocked(&mut server, &source, 5);
+                server.notify(
+                    "textDocument/didClose",
+                    json!({"textDocument":{"uri":provider}}),
+                );
+                check(&mut server, &source, 5);
+            }
+            let changed = source.replace("{Text}", "{Changed text}");
+            server.notify("textDocument/didChange",json!({"textDocument":{"uri":main,"version":7},"contentChanges":[{"text":changed}]}));
+            check(&mut server, &changed, 7);
+            server.notify("textDocument/didOpen",json!({"textDocument":{"uri":bib,"languageId":"bibtex","version":12,"text":format!("{library} @book{{trigger,execute={{\\unknown}}}}")}}));
+            blocked(&mut server, &changed, 7);
+            server.notify("textDocument/didClose", json!({"textDocument":{"uri":bib}}));
+            check(&mut server, &changed, 7);
+            let completion = server.request(
+                30,
+                "textDocument/completion",
+                json!({"textDocument":{"uri":child},"position":query.end}),
+            );
+            let item = completion
+                .as_array()
+                .or_else(|| completion["items"].as_array())
+                .unwrap()
+                .iter()
+                .find(|item| item["label"] == "collection")
+                .unwrap();
+            assert_eq!(
+                item["textEdit"],
+                json!({"range":query,"newText":"collection"})
+            );
+            assert!(item["detail"]
+                .as_str()
+                .unwrap()
+                .contains("Dynamic bibliography set"));
+            server.request(1000, "shutdown", Value::Null);
+            server.notify("exit", Value::Null);
+            server.wait_exit(0);
+        }
+    }
+}
+
+#[test]
+fn provider_note_string_mutations_never_return_partial_macro_edits_over_stdio() {
+    use latex_lsp::text::Text;
+    for versioned in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let main = Url::from_file_path(dir.path().join("main.tex")).unwrap();
+        let provider = main.join("notes.tex").unwrap();
+        let source="% 😀\r\n\\documentclass{article}\\newcommand\\unicodeword{😀}\\usepackage[notetype=endonly]{biblatex}\\def\\identity#1{#1}\\let\\savedblank\\ifblank\\newcommand\\word{Text}\\def\\endnote#1{\\gdef\\savednote{#1}}\\input{notes}\\begin{document}\\csuse{note}{\\global\\let\\ifblank\\identity}\\let\\ifblank\\savedblank\\savednote\\ifblank{\\word}{\\word}{\\word}\\let\\ifblank\\savedblank\\label{safe}\\ref{safe}\\end{document}";
+        let declarations = r"\def\note{\mkbibfootnote}";
+        std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+        std::fs::write(provider.to_file_path().unwrap(), declarations).unwrap();
+        let mut server = Server::start();
+        server.request(1,"initialize",json!({"processId":null,"rootUri":Url::from_directory_path(dir.path()).unwrap(),"initializationOptions":{"distribution":{"enabled":false}},"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":versioned}}}}));
+        server.notify("initialized", json!({}));
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":main,"languageId":"latex","version":5,"text":source}}),
+        );
+        let expected = |edits: Vec<Value>, version| {
+            if versioned {
+                json!({"documentChanges":[{"textDocument":{"uri":main,"version":version},"edits":edits}]})
+            } else {
+                json!({"changes":{main.as_str():edits}})
+            }
+        };
+        let safe = |server: &mut Server, source: &str, version| {
+            let text = Text::new(source.into());
+            let edits = source
+                .match_indices("safe")
+                .map(|(at, _)| json!({"range":text.range(at,at+4),"newText":"fresh"}))
+                .collect::<Vec<_>>();
+            assert_eq!(edits.len(), 2);
+            assert_eq!(server.request(10,"textDocument/rename",json!({"textDocument":{"uri":main},"position":text.position(source.rfind("safe").unwrap()+1),"newName":"fresh"})),expected(edits,version));
+        };
+        let complete = |server: &mut Server, source: &str, version| {
+            let text = Text::new(source.into());
+            let edits = source
+                .match_indices(r"\word")
+                .enumerate()
+                .filter(|(index, _)| *index != 1)
+                .map(|(_, (at, _))| json!({"range":text.range(at,at+5),"newText":"\\term"}))
+                .collect::<Vec<_>>();
+            assert_eq!(edits.len(), 3);
+            assert_eq!(server.request(11,"textDocument/rename",json!({"textDocument":{"uri":main},"position":text.position(source.rfind("word").unwrap()+1),"newName":"term"})),expected(edits,version));
+        };
+        let guarded = |server: &mut Server, source: &str, version| {
+            let text = Text::new(source.into());
+            server.send(json!({"jsonrpc":"2.0","id":12,"method":"textDocument/rename","params":{"textDocument":{"uri":main},"position":text.position(source.rfind("word").unwrap()+1),"newName":"term"}}));
+            let response = server.until(|message| message["id"] == 12);
+            if response["error"].is_null() && response.get("result") != Some(&Value::Null) {
+                let edits = source
+                    .match_indices(r"\word")
+                    .map(|(at, _)| json!({"range":text.range(at,at+5),"newText":"\\term"}))
+                    .collect::<Vec<_>>();
+                assert_eq!(edits.len(), 4);
+                assert_eq!(response["result"], expected(edits, version));
+            } else {
+                assert!(
+                    response["error"]["code"] == -32602
+                        || response.get("result") == Some(&Value::Null),
+                    "{response}"
+                );
+            }
+        };
+        guarded(&mut server, source, 5);
+        safe(&mut server, source, 5);
+        server.notify("textDocument/didOpen",json!({"textDocument":{"uri":provider,"languageId":"latex","version":12,"text":r"\def\note#1{\gdef\savednote{}}"}}));
+        complete(&mut server, source, 5);
+        safe(&mut server, source, 5);
+        server.notify("textDocument/didChange",json!({"textDocument":{"uri":provider,"version":13},"contentChanges":[{"text":declarations}]}));
+        guarded(&mut server, source, 5);
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":provider}}),
+        );
+        guarded(&mut server, source, 5);
+        let changed = source.replace(r"\global\let\ifblank\identity", "");
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":7},"contentChanges":[{"text":changed}]}),
+        );
+        complete(&mut server, &changed, 7);
+        safe(&mut server, &changed, 7);
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":main,"version":9},"contentChanges":[{"text":source}]}),
+        );
+        guarded(&mut server, source, 9);
+        safe(&mut server, source, 9);
+        server.request(1000, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
