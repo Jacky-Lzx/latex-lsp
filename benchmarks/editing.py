@@ -104,11 +104,17 @@ def position(source, offset):
             "character": len(prefix.rsplit("\n", 1)[-1].encode("utf-16-le")) // 2}
 
 
-def fixture(root, scale):
+def fixture(root, scale, hooks=False):
     chapters, sections = SCALES[scale]
     main = ("\\documentclass{article}\n\\usepackage{amsmath,biblatex}\n"
             "\\addbibresource{references.bib}\n\\newcommand{\\projectterm}[1]{\\textbf{#1}}\n"
             "\\begin{document}\n")
+    if hooks:
+        main = main.replace("\\begin{document}\n", (
+            "\\NewHookWithArguments{benchmark}{1}\n"
+            "\\AddToHookWithArguments{benchmark}{\\typeout{#1}}\n"
+            "\\begin{document}\n\\UseHookWithArguments{benchmark}{0}{Data}\n"
+        ))
     for chapter in range(chapters):
         source = "% !TeX root = main.tex\n"
         for section in range(sections):
@@ -142,10 +148,10 @@ def fixture(root, scale):
             "sha256": digest.hexdigest()}
 
 
-def session(binary, scale, iterations, warmup, timeout, record):
+def session(binary, scale, iterations, warmup, timeout, record, hooks=False):
     with tempfile.TemporaryDirectory(prefix="latex-lsp-benchmark-") as directory:
         root = Path(directory)
-        metadata = fixture(root, scale)
+        metadata = fixture(root, scale, hooks)
         server = Server(binary, root, timeout)
         sources = {p.as_uri(): p.read_text() for p in root.glob("*.tex")}
         versions = {uri: 1 for uri in sources}
@@ -255,6 +261,16 @@ def session(binary, scale, iterations, warmup, timeout, record):
                            for edits in changes.values() for edit in edits), changes
                 signature = query("signature", "textDocument/signatureHelp", at("{value}", 2))
                 assert len(signature["signatures"][0]["parameters"]) == (2 if step % 2 == 0 else 1), signature
+                if hooks:
+                    hook_source = sources[main_uri]
+                    signature = query("signature.hook", "textDocument/signatureHelp", {
+                        "textDocument": {"uri": main_uri},
+                        "position": position(hook_source, hook_source.index("{Data}") + 2),
+                    })
+                    assert signature["signatures"][0]["label"] == (
+                        r"\UseHookWithArguments{hook}{argument count}{argument 1}"
+                    ), signature
+                    assert signature["activeParameter"] == 2, signature
                 assert query("symbols", "textDocument/documentSymbol", document)
                 symbols = query("workspace.symbols.exact", "workspace/symbol", {"query": "sec:0:0"})
                 assert symbols and symbols[0]["name"] == "sec:0:0", symbols
@@ -324,6 +340,7 @@ def main():
     parser.add_argument("--timeout", type=float, default=120)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--baseline", type=Path)
+    parser.add_argument("--hooks", action="store_true", help="include an argument-taking kernel hook in the main document")
     args = parser.parse_args()
     if args.iterations < 1 or args.runs < 1 or args.warmup < 0 or args.timeout <= 0:
         parser.error("iterations/runs/timeout must be positive; warmup must be nonnegative")
@@ -334,7 +351,7 @@ def main():
         "platform": platform.platform(), "cpu_count": os.cpu_count(),
         "python": platform.python_version(), "server": str(binary),
         "server_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
-    }, "parameters": {"iterations": args.iterations, "warmup": args.warmup, "runs": args.runs},
+    }, "parameters": {"iterations": args.iterations, "warmup": args.warmup, "runs": args.runs, "hooks": args.hooks},
         "scenarios": {}}
     if baseline and (baseline["parameters"] != output["parameters"]
                      or baseline["workload_sha256"] != output["workload_sha256"]):
@@ -344,7 +361,7 @@ def main():
         for run in range(args.runs):
             print(f"{scale}: run {run + 1}/{args.runs}", file=sys.stderr, flush=True)
             metadata = session(binary, scale, args.iterations, args.warmup, args.timeout,
-                               lambda name, ms: samples.setdefault(name, []).append(ms))
+                               lambda name, ms: samples.setdefault(name, []).append(ms), args.hooks)
         metrics = {name: summary(values) for name, values in samples.items()}
         output["scenarios"][scale] = {"fixture": metadata, "metrics": metrics, "samples_ms": samples}
         if baseline and baseline["scenarios"][scale]["fixture"] != metadata:

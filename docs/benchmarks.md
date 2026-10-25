@@ -34,6 +34,12 @@ python3 benchmarks/editing.py --output target/benchmarks/latest.json
 
 本测试关闭发行版发现，并使用 pull 诊断，避免机器上的 TeX 安装和 push 诊断防抖影响功能比较。它测量语言功能；PDF 编译、外部格式化器、ChkTeX 和磁盘保存不是本次负载。这里使用可复现的合成多文件论文，不代表所有真实用户项目，尤其不覆盖复杂宏展开、超大单行和大量条件加载。
 
+`--hooks` 在主文档加入一个带参数的内核 hook，并在正文使用它。每周期额外测量 `signature.hook`，核验声明的 1 个参数覆盖调用处写出的 0；其他引用、重命名及编辑校验保持完整。章节没有 hook 调用，用于观察项目级参数分析是否给无关章节增加重复扫描。输出参数记录 `hooks`，前后比较必须使用相同选项。
+
+```sh
+python3 benchmarks/editing.py --hooks --output target/benchmarks/hooks.json
+```
+
 ## 比较优化前后
 
 先保留优化前的二进制，再构建优化后的版本，依次测量，避免构建或其他 benchmark 同时运行：
@@ -69,6 +75,24 @@ python3 benchmarks/editing.py --scales small --iterations 2 --warmup 1 \
 ```
 
 `--timeout` 设置每个请求等待上限，默认 120 秒；服务退出、超时、协议错误和功能校验失败都会让脚本非零退出。
+
+## 2026-10-26 第四轮：hook 项目的重复扫描
+
+补齐静态可变参数 hook 后，分别测量常规项目与 `--hooks` 项目。每档 3 个独立进程，每个进程预热 3 个周期、测量 12 个周期，每项 36 个样本；构建、测试和测量分别运行。
+
+审阅发现，改名保护会先为每份章节构造完整引用上下文，再确认该文件是否包含相关调用；参数扫描也会为普通命令反复探测四个 hook 接口。现在先根据可能的直接／命名／转发／复制名称筛选章节，并直接检查已经解析的叶命令。分析预算、数据边界与歧义保护保持原有规则。
+
+以下为 large 项目的端到端毫秒。复测交换两版运行顺序，单独保存，不与首轮样本混合；两组速度倍率不是置信区间。
+
+| 负载与指标 | 优化前 p50 | 优化后 p50 | 速度倍率 | 优化前 p95 | 优化后 p95 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 带 hook：跨文件重命名 | 24.89 | 21.68 | 1.15× | 41.25 | 39.18 |
+| 带 hook：交换顺序复测重命名 | 26.37 | 20.85 | 1.27× | 41.82 | 37.32 |
+| 带 hook：标签补全 | 30.93 | 28.43 | 1.09× | 48.42 | 52.94 |
+
+主要可重复收益是带 hook 大型项目的重命名。标签补全的 p50 略降，但 p95 首轮变差；常规项目和其他功能没有一致的广泛提升，不据此宣称整体加速。新增 `signature.hook` 同时校验真实数量覆盖，不仅记录耗时。
+
+原始样本：[常规优化前](../benchmarks/results/2026-10-26/round4-before.json)、[常规优化后](../benchmarks/results/2026-10-26/round4-after.json)、[hook 优化前](../benchmarks/results/2026-10-26/round4-hooks-before.json)、[hook 优化后](../benchmarks/results/2026-10-26/round4-hooks-after.json)、[交换顺序复测前版](../benchmarks/results/2026-10-26/round4-hooks-repeat-before.json)、[交换顺序复测后版](../benchmarks/results/2026-10-26/round4-hooks-repeat-after.json)。传给 `benchmarks/report.py` 可以重建独立 HTML 对比页。结果仅适用于本机合成论文负载。
 
 ## 优化内容
 

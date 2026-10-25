@@ -76,6 +76,13 @@ fn calls(
     signatures: &CommandSignatures<'_>,
     possible: &signature::StoredCodeAliases,
 ) -> Vec<Call> {
+    // Most chapters contain no hook interface, even when their main document
+    // declares one. Resolve possible names before building the full context.
+    if !doc.syntax.commands.iter().any(|command| {
+        possible.contains_key(&command.name) || matches!(command.name.as_str(), "csuse" | "csname")
+    }) {
+        return Vec::new();
+    }
     let context = crate::symbols::named_references::Context::new(doc, signatures);
     let roots: Vec<_> = USES.iter().chain(DECLARATIONS).copied().collect();
     let alias_bodies =

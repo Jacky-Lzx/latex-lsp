@@ -3158,10 +3158,17 @@ impl<'a> CommandSignatures<'a> {
         after: usize,
         upper: bool,
     ) -> Option<Signature> {
-        let canonical = super::hook_arguments::USES
-            .iter()
-            .copied()
-            .find(|builtin| self.invokes_builtin(name, builtin))?;
+        // The resolved leaf is already available. Ordinary commands should
+        // not probe each hook interface while scanning every source token.
+        let canonical = match self.local.get(name) {
+            Some(signature) => signature.as_ref()?.name.as_str(),
+            None => name,
+        };
+        if !super::hook_arguments::USES.contains(&canonical)
+            || !self.invokes_builtin(name, canonical)
+        {
+            return None;
+        }
         let count = self.hook_arities.count(source, after, canonical, upper)?;
         let mut signature = builtin(canonical)?;
         signature.parameters.extend((1..=count).map(|n| Parameter {

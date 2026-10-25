@@ -16,3 +16,5 @@ jobs:
       - run: cargo build --locked --release
       - name: Replay an editing session over stdio
         run: python3 benchmarks/editing.py --scales small --iterations 2 --warmup 1 --runs 1 --output target/benchmarks/smoke.json
+      - name: Replay an editing session with kernel hooks
+        run: python3 benchmarks/editing.py --hooks --scales small --iterations 2 --warmup 1 --runs 1 --output target/benchmarks/hooks-smoke.json

@@ -36,13 +36,13 @@ const names={"initialize":"初始化","open":"打开缓冲区","edit.prose":"正
 "completion.labels":"标签补全","completion.citations":"文献补全","completion.commands":"命令补全","hover":"悬停","definition":"定义跳转","references":"查找引用",
 "rename":"跨文件重命名","signature":"参数提示","symbols":"文档大纲","folding":"折叠","semantic.full":"完整语义令牌","semantic.delta.cached":"缓存语义 delta",
 "diagnostic":"重新计算诊断","diagnostic.cached":"缓存诊断","burst8.to_completion":"连续 8 次编辑 → 补全",
-"workspace.symbols.exact":"工作区符号 · 精确搜索","workspace.symbols.all":"工作区符号 · 全部搜索","workspace.symbols.missing":"工作区符号 · 无匹配"};
-const selected=["completion.labels","completion.citations","hover","definition","references","rename","signature","workspace.symbols.exact","workspace.symbols.all","workspace.symbols.missing","diagnostic","burst8.to_completion"];
+"workspace.symbols.exact":"工作区符号 · 精确搜索","workspace.symbols.all":"工作区符号 · 全部搜索","workspace.symbols.missing":"工作区符号 · 无匹配","signature.hook":"钩子参数提示"};
+const selected=["completion.labels","completion.citations","hover","definition","references","rename","signature","signature.hook","workspace.symbols.exact","workspace.symbols.all","workspace.symbols.missing","diagnostic","burst8.to_completion"];
 const scale=document.getElementById('scale'), stat=document.getElementById('stat'), all=document.getElementById('all');
 for(const key of Object.keys(data.after.scenarios)){const option=document.createElement('option');option.value=key;option.textContent=key;scale.append(option)}
 scale.value=Object.hasOwn(data.after.scenarios,'large')?'large':scale.options[0].value;
 const p=data.after.parameters;
-document.getElementById('method').textContent=`${p.runs} 个独立进程 × ${p.iterations} 个测量周期；每个进程先预热 ${p.warmup} 个周期。每周期 11 次编辑，顺序查询各项功能。初始化、打开单独统计。`;
+document.getElementById('method').textContent=`${p.runs} 个独立进程 × ${p.iterations} 个测量周期；每个进程先预热 ${p.warmup} 个周期。每周期 11 次编辑，顺序查询各项功能。初始化、打开单独统计。${p.hooks?' 包含内核钩子及其参数提示校验。':''}`;
 function render(){
  const before=data.before.scenarios[scale.value],after=data.after.scenarios[scale.value],f=after.fixture;
  document.getElementById('fixture').textContent=`${f.files} 个文件 · ${(f.bytes/1024).toFixed(1)} KiB · ${data.after.environment.platform}`;
