@@ -243,7 +243,10 @@ pub fn prepare(workspace: &Workspace, uri: &Url) -> Result<Project> {
             .get(&input)
             .filter(|doc| doc.version.is_some())
         {
-            if std::fs::read_to_string(path).ok().as_deref() != Some(doc.text.source.as_str()) {
+            if std::fs::read_to_string(path)
+                .ok()
+                .is_none_or(|saved| !doc.text.matches_saved(&saved))
+            {
                 return Err(Error::invalid_params(
                     "Save project inputs and compile again before querying SyncTeX",
                 ));

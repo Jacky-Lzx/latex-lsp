@@ -8,6 +8,12 @@ pub struct Text {
 }
 
 impl Text {
+    /// Editors can normalize CRLF or keep `noendofline` while a write appends
+    /// the final newline. Extra blank lines and all other content still matter.
+    pub(crate) fn matches_saved(&self, saved: &str) -> bool {
+        self.source.lines().eq(saved.lines())
+    }
+
     pub fn newline(&self) -> &'static str {
         if self.source.contains("\r\n") {
             "\r\n"
@@ -80,8 +86,19 @@ impl Text {
         let mut next = self.clone();
         for change in changes {
             if let Some(range) = change.range {
-                let start = next.offset(range.start)?;
-                let end = next.offset(range.end)?;
+                // Neovim's incremental line edits can include the virtual
+                // newline after a `noendofline` buffer. That zero-column EOF
+                // boundary denotes the actual end, not a missing source line.
+                let offset = |position: Position| {
+                    next.offset(position).or_else(|| {
+                        (position.character == 0
+                            && position.line as usize == next.lines.len()
+                            && !next.source.ends_with('\n'))
+                        .then_some(next.source.len())
+                    })
+                };
+                let start = offset(range.start)?;
+                let end = offset(range.end)?;
                 if start > end {
                     return None;
                 }
@@ -98,6 +115,45 @@ impl Text {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn incremental_edits_accept_virtual_eof_without_losing_the_rest_of_the_batch() {
+        let text = Text::new("😀tail".into());
+        let updated = text
+            .changed(vec![
+                TextDocumentContentChangeEvent {
+                    range: Some(Range::new(Position::new(0, 6), Position::new(1, 0))),
+                    range_length: Some(1),
+                    text: "\n\\tex\n".into(),
+                },
+                TextDocumentContentChangeEvent {
+                    range: Some(Range::new(Position::new(1, 4), Position::new(1, 4))),
+                    range_length: Some(0),
+                    text: "t".into(),
+                },
+            ])
+            .unwrap();
+        assert_eq!(updated.source, "😀tail\n\\text\n");
+        for end in [Position::new(1, 1), Position::new(2, 0)] {
+            assert!(text
+                .changed(vec![TextDocumentContentChangeEvent {
+                    range: Some(Range::new(Position::new(0, 0), end)),
+                    range_length: None,
+                    text: "bad".into(),
+                }])
+                .is_none());
+        }
+    }
+
+    #[test]
+    fn saved_text_allows_serialization_newlines_but_preserves_content_and_blank_lines() {
+        let text = Text::new("first\nsecond".into());
+        assert!(text.matches_saved("first\r\nsecond\r\n"));
+        assert!(text.matches_saved("first\nsecond\n"));
+        assert!(!text.matches_saved("first\nsecond\n\n"));
+        assert!(!text.matches_saved("first\nchanged\n"));
+        assert!(!text.matches_saved("first \nsecond\n"));
+    }
 
     #[test]
     fn utf16_crlf_and_surrogate_boundaries() {

@@ -48,6 +48,10 @@ impl Delivery {
         self.pull
     }
 
+    pub(crate) fn supports_refresh(&self) -> bool {
+        self.refresh.is_some()
+    }
+
     pub(crate) fn close(&self) {
         self.push.lock().unwrap().closed = true;
         if let Some(refresh) = &self.refresh {

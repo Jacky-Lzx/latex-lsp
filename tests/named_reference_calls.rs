@@ -26,6 +26,25 @@ fn apply(source: &str, mut edits: Vec<TextEdit>) -> String {
 }
 
 #[test]
+fn command_completion_keeps_reference_and_alias_key_contexts() {
+    for (tail, expected) in [
+        (r"\tex", "textbf"),
+        (r"\ref{ta", "target"),
+        (r"\alias{ta", "target"),
+        (r"\csuse{ref}{ta", "target"),
+    ] {
+        let source = format!("\\label{{target}}\\def\\alias{{\\ref}}\n{tail}");
+        let (ws, uri) = setup(&source);
+        let offset = source.len();
+        let items = features::completion(&ws, &uri, Text::new(source).position(offset));
+        assert!(
+            items.iter().any(|item| item.label == expected),
+            "{tail}: {items:?}"
+        );
+    }
+}
+
+#[test]
 fn named_label_and_citation_keys_navigate_highlight_and_rename_with_deferred_bodies() {
     let source = "😀 \\label{label} \\bibitem{paper}\r\n\\newcommand{\\later}{\\csuse{ref}{label}\\csname cite\\endcsname{paper}}\r\n\\ref{label} \\cite{paper} \\csuse{crefrange}{label}{label} \\csuse{cites}{paper}{paper}";
     for key in ["label", "paper"] {

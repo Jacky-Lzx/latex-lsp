@@ -532,6 +532,17 @@ pub(crate) fn completion_context(
         .documents
         .get(uri)
         .filter(|doc| has_calls(doc, &candidates))?;
+    // Typing an ordinary control word cannot be a reference-key prefix. Keep
+    // reference/alias boundaries available for adjacent single-token keys.
+    if doc.syntax.commands.iter().any(|command| {
+        command.span.start < offset
+            && offset <= command.span.end
+            && !direct_reference(&command.name)
+            && !candidates.contains(command.name.as_str())
+            && !matches!(command.name.as_str(), "csuse" | "csname" | "endcsname")
+    }) {
+        return None;
+    }
     if !workspace.index_truncated.is_empty() {
         return None;
     }

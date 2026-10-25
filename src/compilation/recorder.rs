@@ -126,6 +126,53 @@ pub(crate) fn classified_inputs(root: &Path, contents: &str) -> InputFiles {
     result
 }
 
+/// logreq reads and rewrites its own control file. Keep ordinary XML data and
+/// controls without write evidence, but do not treat this build output as a
+/// user input which changed during compilation.
+pub(crate) fn classified_build_inputs(
+    root: &Path,
+    contents: &str,
+    control: Option<&Path>,
+) -> InputFiles {
+    let mut result = classified_inputs(root, contents);
+    let Some(control) = control
+        .filter(|path| {
+            std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_file())
+        })
+        .and_then(|path| path.canonicalize().ok())
+    else {
+        return result;
+    };
+    let mut directory = root
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
+    let written = contents.lines().take(32768).any(|line| {
+        if let Some(path) = line.strip_prefix("PWD ") {
+            let path = Path::new(path.trim_matches('"'));
+            if path.is_absolute() {
+                directory = path.into();
+            }
+        } else if let Some(path) = line.strip_prefix("OUTPUT ") {
+            return directory
+                .join(path.trim_matches('"'))
+                .canonicalize()
+                .ok()
+                .as_ref()
+                == Some(&control);
+        }
+        false
+    });
+    if written {
+        if let Ok(uri) = Url::from_file_path(&control) {
+            result.all.remove(&uri);
+            result.binary.remove(&uri);
+        }
+        result.bindings.retain(|_, target| target != &control);
+    }
+    result
+}
+
 /// Bibliography tools read sources which TeX's recorder usually never sees.
 /// BibTeX's auxiliary filename identifies whether latexmk changed directory.
 pub fn bibliography_inputs(root: &Path, log_path: &Path, contents: &str) -> BTreeSet<Url> {
@@ -499,6 +546,33 @@ impl<'a> BibliographyPaths<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generated_control_filter_requires_the_expected_path_and_write_evidence() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("main.tex");
+        let control = directory.path().join("renamed.run.xml");
+        let ordinary = directory.path().join("user.xml");
+        std::fs::write(&control, "<requests/>").unwrap();
+        std::fs::write(&ordinary, "<data/>").unwrap();
+        let reads = format!(
+            "PWD {}\nINPUT renamed.run.xml\nINPUT user.xml\nOUTPUT user.xml\n",
+            directory.path().display()
+        );
+        let control_uri = Url::from_file_path(&control).unwrap();
+        let ordinary_uri = Url::from_file_path(&ordinary).unwrap();
+        assert!(classified_build_inputs(&root, &reads, Some(&control))
+            .all
+            .contains(&control_uri));
+        let writes = format!("{reads}OUTPUT renamed.run.xml\n");
+        let filtered = classified_build_inputs(&root, &writes, Some(&control));
+        assert!(!filtered.all.contains(&control_uri));
+        assert!(filtered.all.contains(&ordinary_uri));
+        assert!(!filtered.bindings.values().any(|path| path == &control));
+        assert!(classified_build_inputs(&root, &writes, None)
+            .all
+            .contains(&control_uri));
+    }
 
     #[test]
     fn biber_database_roles_select_bibinput_paths_even_for_style_suffixes() {

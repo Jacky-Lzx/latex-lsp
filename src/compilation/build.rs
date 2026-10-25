@@ -422,13 +422,21 @@ impl BuildManager {
                     .to_file_path()
                     .ok()
                     .and_then(|path| std::fs::read_to_string(path).ok());
-                if saved.as_deref() != Some(&doc.text.source) {
+                if !saved
+                    .as_deref()
+                    .is_some_and(|saved| doc.text.matches_saved(saved))
+                {
                     return Err(Error::invalid_params(format!(
                         "Save {} before compiling",
                         uri.path()
                     )));
                 }
                 snapshots.insert(uri.clone(), (doc.version, doc.text.source.clone()));
+                if let Ok(path) = uri.to_file_path() {
+                    // Retain the exact bytes TeX reads separately from the
+                    // editor's newline representation and document version.
+                    file_snapshots.insert(uri.clone(), InputSnapshot::file(&path));
+                }
             } else if let Ok(path) = uri.to_file_path() {
                 file_snapshots.insert(uri.clone(), InputSnapshot::file(&path));
             }
@@ -537,15 +545,10 @@ impl BuildManager {
             record.inputs = project
                 .iter()
                 .map(|uri| {
-                    let snapshot = snapshots.get(uri).map_or_else(
-                        || {
-                            file_snapshots
-                                .get(uri)
-                                .cloned()
-                                .unwrap_or(InputSnapshot::File(None))
-                        },
-                        |(_, text)| InputSnapshot::text(text),
-                    );
+                    let snapshot = file_snapshots
+                        .get(uri)
+                        .cloned()
+                        .unwrap_or(InputSnapshot::File(None));
                     (uri.clone(), snapshot)
                 })
                 .collect();
@@ -946,41 +949,52 @@ impl BuildManager {
                 .filter_map(|input| input.snapshot())
                 .collect();
             checks = Arc::new(checks.with_generated_bibliography(&generated));
-            let stale =
-                generated_changed
-                    || checks.changed_path().is_some()
-                    || project.iter().any(|uri| {
-                        if let Some(before) = generated_inputs.get(uri) {
-                            return before.changed(uri);
-                        }
-                        if let Some((version, text)) = snapshots.get(uri) {
-                            current.documents.get(uri).is_none_or(|doc| {
-                                doc.version != *version || doc.text.source != *text
-                            }) || uri
-                                .to_file_path()
-                                .ok()
-                                .and_then(|path| std::fs::read_to_string(path).ok())
-                                .as_ref()
-                                != Some(text)
-                                || file_snapshots
+            let stale_reason = generated_changed
+                .then(|| "Generated bibliography inputs changed".to_string())
+                .or_else(|| {
+                    checks
+                        .changed_path()
+                        .map(|path| format!("File condition changed: {}", path.display()))
+                })
+                .or_else(|| {
+                    project
+                        .iter()
+                        .find(|uri| {
+                            if let Some(before) = generated_inputs.get(uri) {
+                                return before.changed(uri);
+                            }
+                            if let Some((version, text)) = snapshots.get(uri) {
+                                current.documents.get(uri).is_none_or(|doc| {
+                                    doc.version != *version
+                                        || doc.text.source != *text
+                                        || uri
+                                            .to_file_path()
+                                            .ok()
+                                            .and_then(|path| std::fs::read_to_string(path).ok())
+                                            .is_none_or(|saved| !doc.text.matches_saved(&saved))
+                                }) || file_snapshots
                                     .get(uri)
-                                    .is_some_and(|before| before.changed(uri))
-                        } else if let Some(before) = file_snapshots.get(uri) {
-                            before.changed(uri)
-                        } else {
-                            let Ok(path) = uri.to_file_path() else {
-                                return true;
-                            };
-                            current.documents.get(uri).is_some_and(|doc| {
-                                doc.version.is_some()
-                                    && std::fs::read_to_string(&path).ok().as_ref()
-                                        != Some(&doc.text.source)
-                            }) || std::fs::metadata(path)
-                                .ok()
-                                .and_then(|metadata| metadata.modified().ok())
-                                .is_none_or(|modified| modified > wall_started)
-                        }
-                    });
+                                    .is_none_or(|before| before.changed(uri))
+                            } else if let Some(before) = file_snapshots.get(uri) {
+                                before.changed(uri)
+                            } else {
+                                let Ok(path) = uri.to_file_path() else {
+                                    return true;
+                                };
+                                current.documents.get(uri).is_some_and(|doc| {
+                                    doc.version.is_some()
+                                        && std::fs::read_to_string(&path)
+                                            .ok()
+                                            .is_none_or(|saved| !doc.text.matches_saved(&saved))
+                                }) || std::fs::metadata(path)
+                                    .ok()
+                                    .and_then(|metadata| metadata.modified().ok())
+                                    .is_none_or(|modified| modified > wall_started)
+                            }
+                        })
+                        .map(|uri| format!("Input changed: {uri}"))
+                });
+            let stale = stale_reason.is_some();
             let diagnostic_sources = artifact_inputs
                 .intersection(&outcome.diagnostic_sources)
                 .cloned()
@@ -1029,7 +1043,7 @@ impl BuildManager {
                 "exitCode":outcome.exit_code, "message":if stale { format!("{} (sources changed; diagnostics discarded)",outcome.message) } else { outcome.message },
                 "pdfUri":outcome.pdf.as_ref().and_then(|path| Url::from_file_path(path).ok()),
                 "logUri":outcome.log.as_ref().and_then(|path| Url::from_file_path(path).ok()),
-                "diagnosticsCount":count, "stale":stale, "durationMs":started.elapsed().as_millis() as u64,
+                "diagnosticsCount":count, "stale":stale, "staleReason":stale_reason, "durationMs":started.elapsed().as_millis() as u64,
                 "errorsCount":errors, "warningsCount":warnings,
                 "diagnosticsTruncated":outcome.diagnostics_truncated,
                 "analysis":if stale { None } else { outcome.analysis.as_ref() },
@@ -1981,7 +1995,11 @@ fn run_single(
                     .filter_map(|path| crate::compilation::build_tools::Watched::capture(path).ok())
                     .collect();
             }
-            let inputs = crate::compilation::recorder::classified_inputs(root, &recorder);
+            let inputs = crate::compilation::recorder::classified_build_inputs(
+                root,
+                &recorder,
+                config.artifact_path(root, "run.xml").as_deref(),
+            );
             outcome.inputs = Some(inputs.all);
             outcome.binary_inputs = inputs.binary;
             outcome.bindings = inputs.bindings;

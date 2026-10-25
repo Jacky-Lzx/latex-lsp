@@ -1225,6 +1225,16 @@ fn argument_span(doc: &Document, command: &Command, offset: usize) -> Option<Spa
 }
 
 pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<CompletionItem> {
+    crate::project::source_inputs::with_query_cache(|| {
+        completion_in_query(workspace, uri, position)
+    })
+}
+
+fn completion_in_query(
+    workspace: &Workspace,
+    uri: &Url,
+    position: Position,
+) -> Vec<CompletionItem> {
     let Some(doc) = workspace.documents.get(uri) else {
         return vec![];
     };

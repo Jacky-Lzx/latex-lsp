@@ -5,12 +5,33 @@ use crate::{
     project::workspace::{resolve_file_path, DocumentKind, Workspace},
 };
 use lsp_types::Url;
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet},
+};
 
 const MAX_ROUNDS: usize = 32;
 const MAX_SOURCES: usize = 1024;
 
-#[derive(Default)]
+thread_local! {
+    static QUERY: RefCell<Option<BTreeMap<(usize, Url), Index>>> = const { RefCell::new(None) };
+}
+
+struct Restore(Option<BTreeMap<(usize, Url), Index>>);
+impl Drop for Restore {
+    fn drop(&mut self) {
+        QUERY.with(|query| *query.borrow_mut() = self.0.take());
+    }
+}
+
+/// Reuse source graphs only within one immutable workspace query. In particular,
+/// no cached graph survives an editor update or a subsequent filesystem query.
+pub(crate) fn with_query_cache<T>(work: impl FnOnce() -> T) -> T {
+    let _restore = Restore(QUERY.with(|query| query.replace(Some(BTreeMap::new()))));
+    work()
+}
+
+#[derive(Clone, Default)]
 pub(crate) struct Index {
     pub calls: BTreeMap<Url, Vec<SourceCall>>,
     pub loaders: BTreeMap<Url, Vec<SourceCall>>,
@@ -27,6 +48,22 @@ pub(crate) struct Index {
 
 impl Index {
     pub fn new(workspace: &Workspace, root: &Url) -> Self {
+        let key = (workspace as *const Workspace as usize, root.clone());
+        if let Some(index) = QUERY.with(|query| query.borrow().as_ref()?.get(&key).cloned()) {
+            return index;
+        }
+        let index = Self::build(workspace, root);
+        QUERY.with(|query| {
+            if let Some(query) = query.borrow_mut().as_mut() {
+                if query.len() < 4 {
+                    query.insert(key, index.clone());
+                }
+            }
+        });
+        index
+    }
+
+    fn build(workspace: &Workspace, root: &Url) -> Self {
         let mut index = Self::default();
         let mut scope = index.scope(workspace, root);
         let mut seen = BTreeSet::new();
@@ -632,6 +669,26 @@ fn resource_targets(
 mod selection_filter_tests {
     use super::*;
     use crate::project::workspace::Document;
+
+    #[test]
+    fn query_graphs_do_not_survive_document_or_filesystem_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+        let child = Url::from_file_path(directory.path().join("child.tex")).unwrap();
+        let mut workspace = Workspace::default();
+        workspace.documents.insert(
+            main.clone(),
+            Document::new(&main, r"\input{child}".into(), Some(1)),
+        );
+        assert!(!with_query_cache(|| workspace.project_documents(&main)).contains(&child));
+        std::fs::write(child.to_file_path().unwrap(), "Child").unwrap();
+        assert!(with_query_cache(|| workspace.project_documents(&main)).contains(&child));
+        workspace.documents.insert(
+            main.clone(),
+            Document::new(&main, "No input".into(), Some(2)),
+        );
+        assert!(!with_query_cache(|| workspace.project_documents(&main)).contains(&child));
+    }
 
     fn fixture(source: &str) -> (Workspace, BTreeSet<Url>) {
         let main = Url::parse("file:///tmp/latex-lsp-selection-unit/main.tex").unwrap();

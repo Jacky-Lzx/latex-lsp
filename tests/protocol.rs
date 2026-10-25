@@ -5036,6 +5036,9 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main
                 server.until(|item| {
                     item["method"] == "textDocument/publishDiagnostics"
                         && item["params"]["uri"] == refs.as_str()
+                        // Warning counts can stay unchanged after an edit;
+                        // only the current version has the expected ranges.
+                        && item["params"]["version"] == 7 + stage
                         && item["params"]["diagnostics"]
                             .as_array()
                             .is_some_and(|items| matches(items))
@@ -5188,6 +5191,7 @@ printf 'PWD %s\nINPUT %s\nINPUT %s\n' "$PWD" "$2" "${2%/*}/refs.data" > "$1/main
                     server.until(|item| {
                         item["method"] == "textDocument/publishDiagnostics"
                             && item["params"]["uri"] == target.as_str()
+                            && (target != &refs || item["params"]["version"] == 7 + stage)
                             && item["params"]["diagnostics"]
                                 .as_array()
                                 .is_some_and(|items| matches(items))
@@ -11975,6 +11979,168 @@ fn configuration_updates_enable_build_on_save_and_invalid_updates_preserve_setti
 
 #[test]
 #[cfg(unix)]
+fn generated_logreq_controls_do_not_make_automatic_builds_stale() {
+    let script = r#"printf '<requests/>\n' > "$1/main.run.xml"
+printf '%%PDF-1.4\n' > "$1/main.pdf"
+printf 'PWD %s\nINPUT %s\nINPUT %s/main.run.xml\nOUTPUT %s/main.run.xml\nINPUT %s/user.xml\n' "$PWD" "$2" "$1" "$1" "${2%/*}" > "$1/main.fls"
+"#;
+    let (mut server, directory, uri) =
+        fake_build_server_capabilities(script, true, json!({"textDocument":{"diagnostic":{}}}));
+    std::fs::write(directory.path().join("user.xml"), "<data/>\n").unwrap();
+    for _ in 0..2 {
+        server.notify("textDocument/didSave", json!({"textDocument":{"uri":uri}}));
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(finished["params"]["status"], "success", "{finished}");
+        assert_eq!(finished["params"]["stale"], false, "{finished}");
+        assert_eq!(finished["params"]["dependenciesCount"], 2, "{finished}");
+    }
+    server.request(2, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+fn automatic_builds_accept_editor_newline_representations_and_track_exact_disk_inputs() {
+    let script = "cp \"$2\" \"$1/compiled.tex\"\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\n";
+    let (mut server, directory, uri) =
+        fake_build_server_capabilities(script, true, json!({"textDocument":{"diagnostic":{}}}));
+    for version in 2..5 {
+        let source = format!("\\documentclass{{article}}\n\\section{{Stage {version}}}\n");
+        let editor = if version == 2 {
+            source.trim_end_matches('\n').to_string()
+        } else {
+            source.clone()
+        };
+        let saved = if version == 3 {
+            source.replace('\n', "\r\n")
+        } else {
+            source.clone()
+        };
+        std::fs::write(uri.to_file_path().unwrap(), &saved).unwrap();
+        server.notify(
+            "textDocument/didChange",
+            json!({
+                "textDocument":{"uri":uri,"version":version},"contentChanges":[{"text":editor}]
+            }),
+        );
+        server.notify(
+            "textDocument/didSave",
+            json!({"textDocument":{"uri":uri},"text":editor}),
+        );
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(finished["params"]["status"], "success", "{finished}");
+        assert_eq!(finished["params"]["stale"], false, "{finished}");
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("build/latex-lsp/compiled.tex")).unwrap(),
+            saved
+        );
+    }
+    // A real extra blank line still differs, rather than being normalized away.
+    std::fs::write(
+        uri.to_file_path().unwrap(),
+        "\\documentclass{article}\n\\section{Stage 4}\n\n",
+    )
+    .unwrap();
+    server.send(
+        json!({"jsonrpc":"2.0","id":10,"method":"workspace/executeCommand",
+        "params":{"command":"latex.build","arguments":[uri]}}),
+    );
+    let rejected = server.until(|message| message["id"] == 10);
+    assert_eq!(rejected["error"]["code"], -32602);
+    assert!(rejected["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("Save"));
+    server.request(11, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+fn save_text_resynchronizes_edit_bursts_and_keeps_automatic_builds_enabled() {
+    let script = "cp \"$2\" \"$1/compiled.tex\"\nprintf '%%PDF-1.4\\n' > \"$1/main.pdf\"\n";
+    let (mut server, directory, uri) =
+        fake_build_server_capabilities(script, true, json!({"textDocument":{"diagnostic":{}}}));
+    let mut source = String::new();
+    for version in 2..42 {
+        source = format!("\\documentclass{{article}}\n\\section{{Edit {version}}}\n");
+        server.notify(
+            "textDocument/didChange",
+            json!({
+                "textDocument":{"uri":uri,"version":version},"contentChanges":[{"text":source}]
+            }),
+        );
+        let id = 100 + version;
+        server.send(
+            json!({"jsonrpc":"2.0","id":id,"method":"textDocument/completion",
+            "params":{"textDocument":{"uri":uri},"position":{"line":1,"character":4}}}),
+        );
+        server.notify("$/cancelRequest", json!({"id":id}));
+    }
+    // Saving can repair the final newline without a corresponding incremental
+    // edit. The authoritative save text must repair that snapshot before build.
+    server.notify(
+        "textDocument/didChange",
+        json!({
+            "textDocument":{"uri":uri,"version":42},
+            "contentChanges":[{"text":source.trim_end_matches('\n')}]
+        }),
+    );
+    std::fs::write(uri.to_file_path().unwrap(), &source).unwrap();
+    server.notify(
+        "textDocument/didSave",
+        json!({"textDocument":{"uri":uri},"text":source}),
+    );
+    for _ in 2..42 {
+        let response = server.until(|message| {
+            message["id"]
+                .as_u64()
+                .is_some_and(|id| (102..142).contains(&id))
+        });
+        assert!(
+            response.get("result").is_some() || response["error"]["code"] == -32800,
+            "{response}"
+        );
+    }
+    let first = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(first["params"]["status"], "success", "{first}");
+    assert_eq!(first["params"]["stale"], false, "{first}");
+    let compiled = directory.path().join("build/latex-lsp/compiled.tex");
+    assert_eq!(std::fs::read_to_string(&compiled).unwrap(), source);
+
+    // Later saves remain enabled and must discover dependencies from the saved
+    // text even when the earlier incremental snapshot did not contain them.
+    let latest = "\\documentclass{article}\n\\input{chapter}\n\\section{Newest}\n";
+    std::fs::write(directory.path().join("chapter.tex"), "Chapter\n").unwrap();
+    std::fs::write(uri.to_file_path().unwrap(), latest).unwrap();
+    server.notify(
+        "textDocument/didSave",
+        json!({"textDocument":{"uri":uri},"text":latest}),
+    );
+    let second = server.until(|message| message["method"] == "latex/buildFinished");
+    assert_eq!(second["params"]["status"], "success", "{second}");
+    assert_eq!(second["params"]["stale"], false, "{second}");
+    assert_ne!(second["params"]["buildId"], first["params"]["buildId"]);
+    assert_eq!(std::fs::read_to_string(compiled).unwrap(), latest);
+    let symbols = server.request(
+        200,
+        "textDocument/documentSymbol",
+        json!({"textDocument":{"uri":uri}}),
+    );
+    assert!(symbols
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|symbol| symbol["name"] == "Newest"));
+    server.request(201, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
 fn automatic_build_on_save_does_not_deadlock_and_stale_results_are_discarded() {
     let (mut server, _directory, uri) = fake_build_server("sleep 0.2\nprintf '%s:2: Undefined control sequence.\\n' \"$2\" > \"$1/main.log\"\nexit 1\n", true);
     server.notify("textDocument/didSave", json!({"textDocument":{"uri":uri}}));
@@ -13856,6 +14022,114 @@ fn file_url_rename_requests_preserve_destinations_in_versioned_edits() {
         format!("{new}?download=1#chapter.intro")
     );
     server.request(4, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+fn queued_cancellations_release_capacity_without_overtaking_source_updates() {
+    let mut server = Server::start();
+    let uri = Url::parse("untitled:queued-cancellation.tex").unwrap();
+    server.request(
+        1,
+        "initialize",
+        json!({
+            "capabilities":{"workspace":{"applyEdit":true},"textDocument":{"diagnostic":{}}},
+            "initializationOptions":{"distribution":{"enabled":false}}
+        }),
+    );
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{
+            "uri":uri,"languageId":"latex","version":1,"text":"{broken"
+        }}),
+    );
+    let report = server.request(
+        2,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":uri}}),
+    );
+    let diagnostic = report["items"][0].clone();
+    let actions = server.request(
+        3,
+        "textDocument/codeAction",
+        json!({
+            "textDocument":{"uri":uri},"range":diagnostic["range"],
+            "context":{"diagnostics":[diagnostic]}
+        }),
+    );
+    // Hold the dispatch turn at an editor acknowledgement, without relying on
+    // a slow machine or a large project to make requests queue up.
+    server.send(
+        json!({"jsonrpc":"2.0","id":4,"method":"workspace/executeCommand",
+        "params":{"command":actions[0]["command"],"arguments":actions[0]["arguments"]}}),
+    );
+    let apply = server.until(|message| message["method"] == "workspace/applyEdit");
+    server.notify(
+        "textDocument/didChange",
+        json!({
+            "textDocument":{"uri":uri,"version":2},
+            "contentChanges":[{"text":"\\section{Latest}"}]
+        }),
+    );
+    // More than the 128-request limit, with only the applyEdit request active.
+    // Send the whole burst before receiving any cancellation responses.
+    for id in 10..170 {
+        let method = if id % 2 == 0 {
+            "textDocument/semanticTokens/full"
+        } else {
+            "textDocument/documentColor"
+        };
+        server.send(json!({"jsonrpc":"2.0","id":id,"method":method,
+            "params":{"textDocument":{"uri":uri}}}));
+        server.notify("$/cancelRequest", json!({"id":id}));
+    }
+    let mut received = std::collections::BTreeSet::new();
+    for _ in 10..170 {
+        let response = server.until(|message| {
+            message["id"]
+                .as_u64()
+                .is_some_and(|id| (10..170).contains(&id))
+                && message.get("method").is_none()
+        });
+        assert_eq!(response["error"]["code"], -32800, "{response}");
+        assert!(
+            received.insert(response["id"].as_u64().unwrap()),
+            "{response}"
+        );
+    }
+    // Editors also queue requests which they do not cancel. These remain
+    // valid above the old 128-request limit; the total backlog is still bounded.
+    for id in 250..410 {
+        server.send(
+            json!({"jsonrpc":"2.0","id":id,"method":"textDocument/documentColor",
+            "params":{"textDocument":{"uri":uri}}}),
+        );
+    }
+    // Cancellations have already replied, but their empty turns must still
+    // preserve the update behind applyEdit and ahead of this final query.
+    server.send(
+        json!({"jsonrpc":"2.0","id":200,"method":"textDocument/documentSymbol",
+        "params":{"textDocument":{"uri":uri}}}),
+    );
+    server.send(json!({"jsonrpc":"2.0","id":apply["id"],"result":{"applied":true}}));
+    assert_eq!(
+        server.until(|message| message["id"] == 4)["result"]["applied"],
+        true
+    );
+    let symbols = server.until(|message| message["id"] == 200);
+    assert_eq!(symbols["result"][0]["name"], "Latest", "{symbols}");
+    for id in 250..410 {
+        let colors = server.until(|message| message["id"] == id);
+        assert_eq!(colors["result"], json!([]), "{colors}");
+    }
+    server.request(
+        201,
+        "textDocument/documentColor",
+        json!({"textDocument":{"uri":uri}}),
+    );
+    server.request(202, "shutdown", Value::Null);
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }

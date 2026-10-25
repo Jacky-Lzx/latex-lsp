@@ -2,7 +2,7 @@
 use crate::{
     language::signature::{source_alias, CommandSignatures},
     parser::syntax::{self, Command, Syntax},
-    project::workspace::{DocumentKind, Workspace},
+    project::workspace::{Document, DocumentKind, Workspace},
 };
 use lsp_types::Url;
 use std::collections::{BTreeMap, BTreeSet};
@@ -562,6 +562,65 @@ fn analyze_root(analysis: &mut Analysis, ws: &Workspace, root: &Url, names: &BTr
     }
 }
 
+/// Ordinary filenames have the same spelling under both readers. Comments or
+/// parameter tokens elsewhere in a theme do not require a reader analysis.
+fn sensitive_resource_arguments(doc: &Document, names: &BTreeSet<String>) -> bool {
+    doc.syntax
+        .commands
+        .iter()
+        .enumerate()
+        .any(|(index, command)| {
+            let source = &doc.text.source;
+            let (name, end) = match command.name.as_str() {
+                "csname" => {
+                    let Some(span) = syntax::literal_csname(source, &doc.syntax.commands, index)
+                    else {
+                        return false;
+                    };
+                    (&source[span], doc.syntax.commands[index + 1].span.end)
+                }
+                "csuse" => {
+                    let Some(argument) = command.argument.as_ref() else {
+                        return false;
+                    };
+                    (argument.value.as_str(), argument.outer_span.end)
+                }
+                name => (name, command.span.end),
+            };
+            if !names.contains(name) {
+                return false;
+            }
+            // Forwarding aliases may have a different parameter layout.
+            if !BUILTINS.contains(&name) {
+                return true;
+            }
+            let at = if crate::bibliography::bib_resources::references_file(name) {
+                crate::bibliography::bib_resources::start(source, end)
+            } else {
+                let end = if name == "begin" {
+                    let Some(environment) = syntax::environment_name_argument(source, end)
+                        .filter(|environment| environment.value == "refsection")
+                    else {
+                        return false;
+                    };
+                    environment.outer_span.end
+                } else {
+                    end
+                };
+                Some(syntax::skip_space(source, end))
+            };
+            at.is_some_and(|at| {
+                let argument = match source.as_bytes().get(at) {
+                    Some(b'{') => syntax::verbatim_file_group(source, at),
+                    Some(b'[') => syntax::verbatim_file_bracket(source, at),
+                    _ => return false,
+                };
+                let end = argument.map_or(source.len(), |(_, end)| end);
+                crate::bibliography::bib_resources::changes_when_tokenized(&source[at..end])
+            })
+        })
+}
+
 /// Return changed documents so the workspace can discover newly exposed inputs.
 pub(crate) fn refresh(ws: &mut Workspace) -> BTreeSet<Url> {
     if !ws.documents.values().any(|doc| {
@@ -578,13 +637,8 @@ pub(crate) fn refresh(ws: &mut Workspace) -> BTreeSet<Url> {
     let needed = ws.documents.values().any(|doc| {
         doc.kind == DocumentKind::Latex
             && crate::bibliography::bib_resources::changes_when_tokenized(&doc.text.source)
-            && (doc.syntax.commands.iter().any(|command| {
-                (resource_names.contains(&command.name)
-                    && (command.name != "begin"
-                        || syntax::environment_name_argument(&doc.text.source, command.span.end)
-                            .is_some_and(|environment| environment.value == "refsection")))
-                    || matches!(command.name.as_str(), "csuse" | "csname")
-            }) || !doc.syntax.contextual_resource_readers.is_empty())
+            && (sensitive_resource_arguments(doc, &resource_names)
+                || !doc.syntax.contextual_resource_readers.is_empty())
     });
     if !needed {
         return BTreeSet::new();
@@ -653,4 +707,39 @@ pub(crate) fn refresh(ws: &mut Workspace) -> BTreeSet<Url> {
         changed.insert(uri);
     }
     changed
+}
+
+#[cfg(test)]
+mod resource_argument_tests {
+    use super::*;
+
+    #[test]
+    fn only_sensitive_resource_arguments_require_reader_analysis() {
+        let names = BUILTINS
+            .iter()
+            .map(|name| (*name).to_owned())
+            .chain(["load".into()])
+            .collect();
+        for (source, expected) in [
+            (
+                "% Theme comment\n\\addbibresource{refs.bib}\\csname insert#1\\endcsname",
+                false,
+            ),
+            (r"\csuse{unrelated}{#1}\addbibresource{refs.bib}", false),
+            (r"\addbibresource[location=local]{refs%part.bib}", true),
+            (r"\newrefsection[refs#part.bib]", true),
+            (r"\begin{refsection}[refs^^25part.bib]", true),
+            (r"\csuse{addbibresource}{refs#part.bib}", true),
+            (r"\csname addbibresource\endcsname{refs%part.bib}", true),
+            (r"\load{refs.bib}", true),
+        ] {
+            let uri = Url::parse("untitled:resource-readers.tex").unwrap();
+            let doc = Document::new(&uri, source.into(), Some(1));
+            assert_eq!(
+                sensitive_resource_arguments(&doc, &names),
+                expected,
+                "{source}"
+            );
+        }
+    }
 }

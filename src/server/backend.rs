@@ -104,16 +104,13 @@ impl Backend {
         self.builds.cancel_progress(&params.token);
     }
 
-    /// Keep CPU-heavy reads off the transport task so a completed external
-    /// query can return while annotations are being calculated. Release the
-    /// dispatch turn after acquiring the read guard: other reads can proceed,
-    /// while the guard keeps subsequent document writes in wire order. A queued
-    /// writer also prevents later reads from overtaking that document update.
+    /// Capture inputs in wire order, then analyse the immutable snapshot without
+    /// keeping subsequent editor updates behind a long-running read lock.
     async fn read_query<T: Send + 'static>(
         &self,
         query: impl FnOnce(&Workspace) -> T + Send + 'static,
     ) -> Result<T> {
-        let workspace = self.workspace.clone().read_owned().await;
+        let workspace = self.workspace.read().await.clone();
         dispatch::release();
         tokio::task::spawn_blocking(move || query(&workspace))
             .await
@@ -319,10 +316,25 @@ impl Backend {
         uris: std::collections::BTreeSet<Url>,
         previous: std::collections::BTreeMap<Url, String>,
     ) -> Result<Vec<(Url, Option<i32>, DocumentDiagnosticReportKind)>> {
+        let revision = workspace.diagnostic_delivery.revision();
+        let snapshot = (*workspace).clone();
+        drop(workspace);
+        let workspace = snapshot;
+        let delivery = workspace.diagnostic_delivery.clone();
+        let analysis_delivery = delivery.clone();
         dispatch::release();
         let mut cache = self.diagnostic_cache.clone().lock_owned().await;
-        tokio::task::spawn_blocking(move || {
-            let revision = workspace.diagnostic_delivery.revision();
+        let result = tokio::task::spawn_blocking(move || {
+            let superseded =
+                || analysis_delivery.supports_refresh() && analysis_delivery.revision() != revision;
+            let cancelled = || crate::rpc::Error {
+                code: crate::rpc::ErrorCode::ServerError(-32802),
+                message: "Diagnostic inputs changed".into(),
+                data: Some(serde_json::json!({"retriggerRequest":false})),
+            };
+            if superseded() {
+                return Err(cancelled());
+            }
             let mut reports = std::collections::BTreeMap::new();
             let missing: Vec<_> = uris
                 .into_iter()
@@ -338,8 +350,12 @@ impl Backend {
                 })
                 .collect();
             if !missing.is_empty() {
-                let (snapshots, files) =
-                    diagnostic_inputs::Files::capture(|| workspace.diagnostic_snapshots(missing));
+                let (snapshots, files) = diagnostic_inputs::Files::capture(|| {
+                    workspace.diagnostic_snapshots_cancelled(missing, superseded)
+                });
+                if superseded() {
+                    return Err(cancelled());
+                }
                 for snapshot in snapshots {
                     let uri = snapshot.0.clone();
                     let report = cache.computed(
@@ -353,18 +369,30 @@ impl Backend {
                     reports.insert(uri, report);
                 }
             }
-            reports
+            if superseded() {
+                return Err(cancelled());
+            }
+            Ok(reports
                 .into_iter()
                 .map(|(uri, report)| {
                     let version = workspace.documents.get(&uri).and_then(|doc| doc.version);
                     (uri, version, report)
                 })
-                .collect()
+                .collect())
         })
         .await
         .map_err(|error| {
             crate::rpc::Error::invalid_params(format!("Analysis task failed: {error}"))
-        })
+        })?;
+        if result
+            .as_ref()
+            .is_err_and(|error| i64::from(error.code) == -32802)
+        {
+            // One refresh replaces obsolete queued reports, including a
+            // revision invalidated by background distribution discovery.
+            delivery.publish(&self.client, vec![]).await;
+        }
+        result
     }
 
     async fn publish_affected(&self, affected: std::collections::BTreeSet<Url>) {
@@ -565,7 +593,9 @@ impl Backend {
                     TextDocumentSyncOptions {
                         open_close: Some(true),
                         change: Some(TextDocumentSyncKind::INCREMENTAL),
-                        save: Some(TextDocumentSyncSaveOptions::Supported(true)),
+                        save: Some(TextDocumentSyncSaveOptions::SaveOptions(SaveOptions {
+                            include_text: Some(true),
+                        })),
                         ..Default::default()
                     },
                 )),
@@ -783,6 +813,20 @@ impl Backend {
 
     pub(crate) async fn did_save(&self, params: DidSaveTextDocumentParams) {
         let uri = document_uri(params.text_document.uri);
+        if let Some(source) = params.text {
+            let mut workspace = self.workspace.write().await;
+            if let Some(doc) = workspace
+                .documents
+                .get(&uri)
+                .filter(|doc| doc.text.source != source)
+            {
+                let updated = doc.with_text(&uri, source, doc.version);
+                workspace.diagnostic_delivery.invalidate();
+                workspace.documents.insert(uri.clone(), updated);
+                workspace.clear_build_diagnostics(&uri);
+                workspace.load_dependencies(&uri, 0);
+            }
+        }
         self.publish_open().await;
         let on_save = self.workspace.read().await.settings(&uri).build.on_save;
         if on_save {
@@ -1244,24 +1288,26 @@ impl Backend {
         &self,
         params: CompletionParams,
     ) -> Result<Option<CompletionResponse>> {
-        let position = params.text_document_position;
-        let workspace = self.workspace.read().await;
-        let mut items = features::completion(
-            &workspace,
-            &document_uri(position.text_document.uri),
-            position.position,
-        );
-        let limit = workspace.config.indexing.completion_limit;
-        let incomplete = items.len() >= limit || !workspace.index_truncated.is_empty();
-        items.truncate(limit);
-        Ok(Some(if incomplete {
-            CompletionResponse::List(CompletionList {
-                is_incomplete: true,
-                items,
+        self.read_query(move |workspace| {
+            let position = params.text_document_position;
+            let mut items = features::completion(
+                workspace,
+                &document_uri(position.text_document.uri),
+                position.position,
+            );
+            let limit = workspace.config.indexing.completion_limit;
+            let incomplete = items.len() >= limit || !workspace.index_truncated.is_empty();
+            items.truncate(limit);
+            Some(if incomplete {
+                CompletionResponse::List(CompletionList {
+                    is_incomplete: true,
+                    items,
+                })
+            } else {
+                CompletionResponse::Array(items)
             })
-        } else {
-            CompletionResponse::Array(items)
-        }))
+        })
+        .await
     }
 
     pub(crate) async fn completion_resolve(&self, item: CompletionItem) -> Result<CompletionItem> {
@@ -1555,7 +1601,7 @@ mod read_query_tests {
     use tokio::sync::oneshot;
 
     #[tokio::test]
-    async fn slow_analysis_allows_reads_but_keeps_writes_and_later_reads_in_order() {
+    async fn slow_analysis_keeps_its_snapshot_without_blocking_writes_or_later_reads() {
         let (client, _outgoing) = Client::new();
         let service = Arc::new(Backend::new(client));
         let mut queue = dispatch::RequestQueue::default();
@@ -1602,16 +1648,17 @@ mod read_query_tests {
                 .await
                 .unwrap()
         }));
-        assert!(!writer.is_finished());
-        assert!(!later.is_finished());
+        let result = tokio::time::timeout(Duration::from_secs(1), later).await;
         let _ = finish.send(());
-        assert!(!first.await.unwrap());
+        assert!(result
+            .expect("Latest read waited for obsolete analysis")
+            .unwrap());
         writer.await.unwrap();
-        assert!(later.await.unwrap());
+        assert!(!first.await.unwrap(), "Old analysis observed a later write");
     }
 
     #[tokio::test]
-    async fn cancelling_analysis_keeps_its_read_guard_until_the_worker_finishes() {
+    async fn cancelling_analysis_does_not_leave_a_worker_holding_the_workspace_lock() {
         let (client, _outgoing) = Client::new();
         let backend = Arc::new(Backend::new(client));
         let mut queue = dispatch::RequestQueue::default();
@@ -1635,11 +1682,132 @@ mod read_query_tests {
             backend.workspace.write().await.snippets = true;
         }));
         write_started.await.unwrap();
-        assert!(!writer.is_finished());
+        let result = tokio::time::timeout(Duration::from_secs(1), writer).await;
         let _ = finish.send(());
-        tokio::time::timeout(Duration::from_secs(1), writer)
+        result
+            .expect("Cancelled analysis blocked a document update")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn queued_diagnostics_do_not_block_edits_or_cache_old_text_as_the_new_revision() {
+        let (client, _outgoing) = Client::new();
+        let backend = Arc::new(Backend::new(client));
+        let uri = Url::parse("untitled:diagnostic-snapshot.tex").unwrap();
+        backend
+            .workspace
+            .write()
+            .await
+            .open(uri.clone(), "{}".into(), 1);
+        let cache = backend.diagnostic_cache.clone().lock_owned().await;
+        let mut queue = dispatch::RequestQueue::default();
+        let request_backend = backend.clone();
+        let request_uri = uri.clone();
+        let first = tokio::spawn(queue.ordered(async move {
+            request_backend
+                .diagnostic(
+                    serde_json::from_value(serde_json::json!({
+                        "textDocument":{"uri":request_uri}
+                    }))
+                    .unwrap(),
+                )
+                .await
+                .unwrap()
+        }));
+        let writer_backend = backend.clone();
+        let writer_uri = uri.clone();
+        let writer = queue.ordered(async move {
+            let mut workspace = writer_backend.workspace.write().await;
+            workspace.diagnostic_delivery.invalidate();
+            workspace.open(writer_uri, "{".into(), 2);
+        });
+        let result = tokio::time::timeout(Duration::from_secs(1), writer).await;
+        drop(cache);
+        result.expect("Waiting diagnostics retained the workspace read lock");
+        let old = serde_json::to_value(first.await.unwrap()).unwrap();
+        assert_eq!(old["items"], serde_json::json!([]));
+        let latest = backend
+            .diagnostic(
+                serde_json::from_value(serde_json::json!({
+                    "textDocument":{"uri":uri}
+                }))
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(latest).unwrap()["items"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn obsolete_pull_reports_are_replaced_by_one_refresh_and_a_current_report() {
+        let (client, mut outgoing) = Client::new();
+        let backend = Arc::new(Backend::new(client.clone()));
+        let uri = Url::parse("untitled:coalesced-diagnostics.tex").unwrap();
+        {
+            let mut workspace = backend.workspace.write().await;
+            workspace.diagnostic_delivery = diagnostic::Delivery::new(true, true);
+            workspace.open(uri.clone(), "{}".into(), 1);
+        }
+        let cache = backend.diagnostic_cache.clone().lock_owned().await;
+        let mut queue = dispatch::RequestQueue::default();
+        let first_backend = backend.clone();
+        let first_uri = uri.clone();
+        let first = tokio::spawn(queue.ordered(async move {
+            first_backend
+                .diagnostic(
+                    serde_json::from_value(serde_json::json!({
+                        "textDocument":{"uri":first_uri}
+                    }))
+                    .unwrap(),
+                )
+                .await
+        }));
+        let update_backend = backend.clone();
+        let update_uri = uri.clone();
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            queue.ordered(async move {
+                let mut workspace = update_backend.workspace.write().await;
+                workspace.diagnostic_delivery.invalidate();
+                workspace.open(update_uri, "{".into(), 2);
+            }),
+        )
+        .await
+        .unwrap();
+        drop(cache);
+        let error = first.await.unwrap().unwrap_err();
+        assert_eq!(i64::from(error.code), -32802);
+        assert_eq!(error.data.unwrap()["retriggerRequest"], false);
+        let refresh = tokio::time::timeout(Duration::from_secs(1), outgoing.recv())
             .await
             .unwrap()
             .unwrap();
+        assert_eq!(refresh["method"], "workspace/diagnostic/refresh");
+        client.respond(
+            &serde_json::from_value(refresh["id"].clone()).unwrap(),
+            Ok(serde_json::Value::Null),
+        );
+        let latest = backend
+            .diagnostic(
+                serde_json::from_value(serde_json::json!({
+                    "textDocument":{"uri":uri}
+                }))
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(latest).unwrap()["items"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
     }
 }

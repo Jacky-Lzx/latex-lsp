@@ -419,6 +419,16 @@ impl Workspace {
         uris: impl IntoIterator<Item = Url>,
         cancelled: impl Fn() -> bool,
     ) -> Vec<(Url, Vec<lsp_types::Diagnostic>, Option<i32>)> {
+        crate::project::source_inputs::with_query_cache(|| {
+            self.diagnostic_snapshots_in_query(uris, cancelled)
+        })
+    }
+
+    fn diagnostic_snapshots_in_query(
+        &self,
+        uris: impl IntoIterator<Item = Url>,
+        cancelled: impl Fn() -> bool,
+    ) -> Vec<(Url, Vec<lsp_types::Diagnostic>, Option<i32>)> {
         if cancelled() {
             return vec![];
         }

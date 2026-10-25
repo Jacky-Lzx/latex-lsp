@@ -11,11 +11,18 @@ pub struct RequestQueue {
     tail: Option<oneshot::Receiver<()>>,
 }
 
+pub(crate) struct Turn(oneshot::Sender<()>);
+
+impl Turn {
+    pub(crate) async fn run<F: Future>(self, future: F) -> F::Output {
+        TURN.scope(RefCell::new(Some(self.0)), future).await
+    }
+}
+
 impl RequestQueue {
-    pub fn ordered<F: Future + Send + 'static>(
-        &mut self,
-        future: F,
-    ) -> impl Future<Output = F::Output> + Send {
+    /// Keep this future alive until it yields a turn, even if its request is
+    /// cancelled. Dropping it early would let successors overtake its predecessor.
+    pub(crate) fn turn(&mut self) -> impl Future<Output = Turn> + Send {
         let previous = self.tail.take();
         let (done, next) = oneshot::channel();
         self.tail = Some(next);
@@ -23,9 +30,16 @@ impl RequestQueue {
             if let Some(previous) = previous {
                 let _ = previous.await;
             }
-            // Dropping or cancelling an ordinary request also releases its turn.
-            TURN.scope(RefCell::new(Some(done)), future).await
+            Turn(done)
         }
+    }
+
+    pub fn ordered<F: Future + Send + 'static>(
+        &mut self,
+        future: F,
+    ) -> impl Future<Output = F::Output> + Send {
+        let turn = self.turn();
+        async move { turn.await.run(future).await }
     }
 }
 

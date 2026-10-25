@@ -396,10 +396,13 @@ where
         let exit = exit.clone();
         let slots = slots.clone();
         if let Some(id) = id {
-            let (cancel, cancelled) = oneshot::channel();
+            let (cancel, mut cancelled) = oneshot::channel();
             let accepted = {
                 let mut pending = pending.lock().unwrap();
-                if pending.contains_key(&id) || pending.len() >= 128 {
+                // The handler backlog and worker slots already bound queued
+                // and running work. A valid editing burst is not an invalid
+                // JSON-RPC request just because 128 requests are outstanding.
+                if pending.contains_key(&id) {
                     false
                 } else {
                     pending.insert(id.clone(), Some(cancel));
@@ -416,21 +419,51 @@ where
                 id: id.clone(),
                 pending: pending.clone(),
             };
-            let ordered = queue.ordered(async move {
-                let _permit = slots.acquire_owned().await.unwrap();
-                if method == "shutdown" {
-                    return request(&backend, &phase, &method, params).await;
-                }
-                tokio::select! {
-                    biased;
-                    _ = cancelled => Err(Error::request_cancelled()),
-                    result = request(&backend, &phase, &method, params) => result,
-                }
-            });
+            let turn = queue.turn();
             handlers.spawn(async move {
-                let _incoming = incoming;
-                let result = ordered.await;
+                tokio::pin!(turn);
+                let turn = tokio::select! {
+                    biased;
+                    _ = &mut cancelled, if method != "shutdown" => {
+                        // Cancel before waiting for earlier snapshots or a worker
+                        // slot. Retain an empty turn so later document updates
+                        // cannot overtake the still-running predecessor.
+                        let _ = client.send(response(id, Err(Error::request_cancelled()))).await;
+                        drop(incoming);
+                        drop(turn.await);
+                        return;
+                    }
+                    turn = &mut turn => turn,
+                };
+                let work = async {
+                    // Pull reports already serialize expensive work through
+                    // their analysis cache. Waiting reports must not occupy
+                    // every interactive slot and starve completion or saves.
+                    let _permit = if matches!(
+                        method.as_str(),
+                        "textDocument/diagnostic" | "workspace/diagnostic"
+                    ) {
+                        None
+                    } else {
+                        Some(slots.acquire_owned().await.unwrap())
+                    };
+                    request(&backend, &phase, &method, params).await
+                };
+                let result = turn
+                    .run(async {
+                        if method == "shutdown" {
+                            work.await
+                        } else {
+                            tokio::select! {
+                                biased;
+                                _ = cancelled => Err(Error::request_cancelled()),
+                                result = work => result,
+                            }
+                        }
+                    })
+                    .await;
                 let _ = client.send(response(id, result)).await;
+                drop(incoming);
             });
         } else {
             handlers.spawn(queue.ordered(async move {
