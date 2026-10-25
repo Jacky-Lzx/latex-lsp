@@ -819,6 +819,7 @@ pub(crate) fn completion(
                 names
                     .into_iter()
                     .filter(|(name, _)| name.starts_with(prefix))
+                    .take(workspace.completion_budget())
                     .map(|(name, detail)| CompletionItem {
                         label: name.clone(),
                         kind: Some(CompletionItemKind::COLOR),

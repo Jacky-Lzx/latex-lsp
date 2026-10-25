@@ -569,6 +569,7 @@ fn completion_items(
         names(workspace, scope)
             .into_iter()
             .filter(|(name, _)| name.starts_with(prefix))
+            .take(workspace.completion_budget())
             .map(|(name, detail)| CompletionItem {
                 label: name.clone(),
                 kind: Some(CompletionItemKind::VARIABLE),

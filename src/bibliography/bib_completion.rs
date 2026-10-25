@@ -565,6 +565,7 @@ pub(crate) fn completion(
             candidates
                 .into_iter()
                 .filter(|(name, _, _)| name.to_ascii_lowercase().starts_with(&prefix))
+                .take(workspace.completion_budget())
                 .map(|(name, docs, fields)| CompletionItem {
                     label: name.clone(),
                     kind: Some(CompletionItemKind::CLASS),
@@ -642,6 +643,7 @@ pub(crate) fn completion(
                 let normalized = name.to_ascii_lowercase();
                 normalized.starts_with(&prefix) && !used.contains(normalized.as_str())
             })
+            .take(workspace.completion_budget())
             .map(|(name, docs, custom)| {
                 let snippet = workspace.snippets && !assigned;
                 let normalized = name.to_ascii_lowercase();

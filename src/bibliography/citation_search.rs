@@ -132,6 +132,7 @@ pub(crate) fn items(
                     .filter(|entry| !ambiguous.contains(&entry.name))
                     .map(move |entry| (uri, entry.name.as_str(), entry.detail.as_str()))
             }),
+        ws.completion_budget(),
     )
 }
 pub(crate) fn candidate_items<'a>(
@@ -139,6 +140,7 @@ pub(crate) fn candidate_items<'a>(
     offset: usize,
     span: Range<usize>,
     candidates: impl IntoIterator<Item = (&'a Url, &'a str, &'a str)>,
+    limit: usize,
 ) -> Option<Vec<CompletionItem>> {
     let source = &doc.text.source;
     let query = source[span.start..offset].trim();
@@ -148,7 +150,7 @@ pub(crate) fn candidate_items<'a>(
     let (range, extra) = syntax::name_completion_ranges(&doc.text, span, offset)?;
     let main_start = doc.text.offset(range.start)?;
     let filter_prefix = &source[main_start..offset];
-    let mut ranked = Vec::new();
+    let mut ranked = std::collections::BTreeMap::new();
     let mut seen = BTreeSet::new();
     for (entry_uri, name, detail) in candidates {
         if !syntax::is_static_citation_key(name) || !seen.insert(name.to_string()) {
@@ -157,9 +159,15 @@ pub(crate) fn candidate_items<'a>(
         let Some(rank) = score(name, detail, query) else {
             continue;
         };
-        ranked.push((
-            rank,
-            CompletionItem {
+        ranked.insert((rank, name), (entry_uri, detail));
+        if ranked.len() > limit {
+            ranked.pop_last();
+        }
+    }
+    Some(
+        ranked
+            .into_iter()
+            .map(|((rank, name), (entry_uri, detail))| CompletionItem {
                 label: name.into(),
                 kind: Some(CompletionItemKind::REFERENCE),
                 detail: Some(format!("{} — {}", detail, entry_uri.path())),
@@ -171,11 +179,9 @@ pub(crate) fn candidate_items<'a>(
                 })),
                 additional_text_edits: (!extra.is_empty()).then(|| extra.clone()),
                 ..Default::default()
-            },
-        ));
-    }
-    ranked.sort_by(|(a, ia), (b, ib)| a.cmp(b).then_with(|| ia.label.cmp(&ib.label)));
-    Some(ranked.into_iter().map(|(_, item)| item).collect())
+            })
+            .collect(),
+    )
 }
 
 pub(crate) fn completion(

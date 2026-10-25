@@ -244,6 +244,7 @@ pub(crate) fn completion(
         candidates
             .into_iter()
             .filter(|(name, _)| name.starts_with(prefix))
+            .take(workspace.completion_budget())
             .map(|(name, detail)| CompletionItem {
                 label: name.clone(),
                 detail: Some(detail),

@@ -99,8 +99,8 @@ pub(crate) fn completion(ws: &Workspace, uri: &Url, offset: usize) -> Option<Vec
                 candidates.iter().map(|(name, candidate)| {
                     (&candidate.uri, name.as_str(), candidate.detail.as_str())
                 }),
+                ws.completion_budget(),
             )?;
-            items.truncate(ws.config.indexing.completion_limit.saturating_add(1));
             for item in &mut items {
                 if !removals.is_empty() {
                     item.additional_text_edits

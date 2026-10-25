@@ -209,6 +209,7 @@ pub(crate) fn completion(ws: &Workspace, uri: &Url, offset: usize) -> Option<Vec
                 && bib_section_files::literal_item(name)
                 && !name.contains(['[', ']'])
         })
+        .take(ws.completion_budget())
         .map(|(name, binding)| CompletionItem {
             label: name.clone(),
             kind: Some(CompletionItemKind::REFERENCE),

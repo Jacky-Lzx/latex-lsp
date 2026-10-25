@@ -350,6 +350,7 @@ pub(crate) fn completion(ws: &Workspace, uri: &Url, offset: usize) -> Option<Vec
         names
             .into_iter()
             .take(256)
+            .take(ws.completion_budget())
             .map(|name| CompletionItem {
                 label: name.clone(),
                 kind: Some(CompletionItemKind::EVENT),

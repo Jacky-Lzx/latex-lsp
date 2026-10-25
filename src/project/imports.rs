@@ -270,6 +270,13 @@ pub(crate) fn completion(ws: &Workspace, uri: &Url, offset: usize) -> Option<Vec
             if !folder && !name.ends_with(".tex") {
                 continue;
             }
+            if items.len() >= ws.completion_budget()
+                && items
+                    .last_key_value()
+                    .is_some_and(|(last, _)| last <= &name)
+            {
+                continue;
+            }
             let new_text = if folder {
                 format!("{name}/")
             } else if arg.value.ends_with(".tex") {
@@ -288,6 +295,9 @@ pub(crate) fn completion(ws: &Workspace, uri: &Url, offset: usize) -> Option<Vec
                 additional_text_edits: (!extra.is_empty()).then(|| extra.clone()),
                 ..Default::default()
             });
+            if items.len() > ws.completion_budget() {
+                items.pop_last();
+            }
         }
     }
     Some(items.into_values().collect())

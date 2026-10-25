@@ -1412,10 +1412,12 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
             None
         };
         let mut candidates = Vec::new();
+        let limit = workspace.completion_budget();
+        let mut seen = BTreeSet::new();
         let labels = (kind == Some(TargetKind::Label))
             .then(|| crate::symbols::label_declarations::Index::new(workspace, uri));
         if let Some(kind) = kind {
-            for (entry_uri, entry_doc) in &workspace.documents {
+            'documents: for (entry_uri, entry_doc) in &workspace.documents {
                 if !scope.contains(entry_uri) {
                     continue;
                 }
@@ -1430,22 +1432,30 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
                     {
                         continue;
                     }
-                    candidates.push((
-                        entry.name.clone(),
-                        format!("{} — {}", entry.detail, entry_uri.path()),
-                    ));
+                    if completion_candidate(
+                        &mut candidates,
+                        &mut seen,
+                        limit,
+                        prefix,
+                        &entry.name,
+                        || format!("{} — {}", entry.detail, entry_uri.path()),
+                    ) {
+                        break 'documents;
+                    }
                 }
             }
         } else if matches!(command.name.as_str(), "begin" | "end")
             || syntax::declares_environment_copy(&command.name)
         {
-            candidates.extend(
-                ENVIRONMENTS
-                    .iter()
-                    .map(|&name| (name.into(), "LaTeX environment".into())),
-            );
-            candidates.extend(
-                workspace
+            for name in ENVIRONMENTS {
+                if completion_candidate(&mut candidates, &mut seen, limit, prefix, name, || {
+                    "LaTeX environment".into()
+                }) {
+                    break;
+                }
+            }
+            if candidates.len() < limit {
+                for argument in workspace
                     .documents
                     .iter()
                     .filter(|(uri, _)| scope.contains(*uri))
@@ -1453,25 +1463,38 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
                     .filter(|cmd| cmd.name == "begin" || syntax::declares_environment(&cmd.name))
                     .filter_map(|cmd| cmd.argument.as_ref())
                     .filter(|argument| syntax::is_static_key(&argument.value))
-                    .map(|arg| (arg.value.clone(), "Document environment".into())),
-            );
+                {
+                    if completion_candidate(
+                        &mut candidates,
+                        &mut seen,
+                        limit,
+                        prefix,
+                        &argument.value,
+                        || "Document environment".into(),
+                    ) {
+                        break;
+                    }
+                }
+            }
         } else {
             return vec![];
         }
-        if kind == Some(TargetKind::Label) {
-            candidates.extend(
-                crate::compilation::auxiliary::labels(workspace, uri)
-                    .into_iter()
-                    .filter(|(_, info)| info.external)
-                    .map(|(name, info)| (name, crate::compilation::auxiliary::describe(&info))),
-            );
+        if kind == Some(TargetKind::Label) && candidates.len() < limit {
+            for (name, info) in crate::compilation::auxiliary::labels(workspace, uri)
+                .into_iter()
+                .filter(|(_, info)| info.external)
+            {
+                if completion_candidate(&mut candidates, &mut seen, limit, prefix, &name, || {
+                    crate::compilation::auxiliary::describe(&info)
+                }) {
+                    break;
+                }
+            }
         }
-        let mut seen = BTreeSet::new();
         let environment_docs = (kind.is_none())
             .then(|| crate::language::completion_resolve::Commands::new(workspace, uri, &scope));
         return candidates
             .into_iter()
-            .filter(|(name, _)| name.starts_with(prefix) && seen.insert(name.clone()))
             .map(|(name, detail)| {
                 let mut item = CompletionItem {
                     label: name.clone(),
@@ -1537,6 +1560,7 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
         && !doc.text.source[after_command..].starts_with(['{', '[', '*']);
     let mut seen = BTreeSet::new();
     let mut result = Vec::new();
+    let limit = workspace.completion_budget();
     let signatures = crate::language::signature::CompletionSignatures::new(workspace, &scope);
     let command_docs = crate::language::completion_resolve::Commands::new(workspace, uri, &scope);
     // User definitions take precedence over built-in documentation and snippets.
@@ -1597,6 +1621,9 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
                 command_docs.apply_environment(&mut item, &entry.name);
             }
             result.push(item);
+            if result.len() >= limit {
+                return result;
+            }
         }
     }
     for entry in workspace
@@ -1630,6 +1657,9 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
                     })),
                     ..Default::default()
                 });
+                if result.len() >= limit {
+                    return result;
+                }
             }
         }
     }
@@ -1665,6 +1695,9 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
                 })),
                 ..Default::default()
             });
+            if result.len() >= limit {
+                return result;
+            }
         }
     }
     for &(name, snippet, documentation) in COMMANDS {
@@ -1702,9 +1735,26 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
                 })),
                 ..CompletionItem::default()
             });
+            if result.len() >= limit {
+                return result;
+            }
         }
     }
     result
+}
+
+fn completion_candidate(
+    candidates: &mut Vec<(String, String)>,
+    seen: &mut BTreeSet<String>,
+    limit: usize,
+    prefix: &str,
+    name: &str,
+    detail: impl FnOnce() -> String,
+) -> bool {
+    if name.starts_with(prefix) && seen.insert(name.to_owned()) {
+        candidates.push((name.to_owned(), detail()));
+    }
+    candidates.len() >= limit
 }
 
 fn bibliography_completion(
@@ -1768,11 +1818,7 @@ pub(crate) fn bibliography_relation_completions(
                 .map(move |entry| (uri, entry.name.as_str(), entry.detail.as_str()))
         })
         .filter(|(_, name, _)| allowed.is_none_or(|allowed| allowed.contains(*name)));
-    let limit = if xdata {
-        workspace.config.indexing.completion_limit.saturating_add(1)
-    } else {
-        usize::MAX
-    };
+    let limit = workspace.completion_budget();
     bibliography_relation_edits(doc, offset, candidates, limit)
 }
 

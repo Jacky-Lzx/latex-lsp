@@ -267,6 +267,7 @@ pub(crate) fn completion(
         names
             .into_iter()
             .filter(|(name, _)| name.starts_with(prefix) && syntax::is_static_key(name))
+            .take(workspace.completion_budget())
             .map(|(name, detail)| CompletionItem {
                 label: name.clone(),
                 kind: Some(CompletionItemKind::FUNCTION),

@@ -63,6 +63,8 @@ pull 诊断在分析前查询有界缓存。结果同时绑定工作区修订号
 
 字符串条件上下文按文档复用源码分析，缓存键包含资源读取规则、继承的宏含义、调用参数语法及 hook 别名。每份文档最多保留两种解释，并共享进程级估算字节预算；超限时正常解析但不缓存。跨文件遍历仍检查当前含义，只有文档最终上下文改变时才重建语法并清空语义令牌、符号缓存。
 
+补全提供器在前缀过滤与去重后应用 `completionLimit + 1` 的候选预算，普通候选达到预算后停止构造条目。文献搜索先保留评分和名称排序最靠前的候选，再创建条目；路径补全有界保留当前最优候选，继续检查后续路径，并保持目录、本地文件、发行版文件的既有排序。LSP 层继续截取配置数量，并保留达到上限时的 incomplete 列表契约。
+
 [`symbols/extra_symbols.rs`](../src/symbols/extra_symbols.rs) 为术语、索引和 expl3 提供独立命名空间、项目作用域与重命名冲突检查。[`symbols/expl3.rs`](../src/symbols/expl3.rs) 单独处理语法模式和完整名称，避免改变普通 LaTeX 的控制词规则。符号结果按 Document 缓存，在文本或解析上下文变化时失效；语义令牌另受进程级令牌预算限制。[`editing/refactor.rs`](../src/editing/refactor.rs) 提供保守的正文重构和排除冲突编辑的批量修复，旧客户端命令会重新计算操作。
 
 [`parser/minted.rs`](../src/parser/minted.rs) 共享 `mintinline` / `mint` 的头部及原始代码边界，分别读取普通选项、语言参数和 fvextra 的逐字参数。宏参数中的预分词上下文与 listings 共用 `InlineTokenization`，通过 `syntax::tokenized_code_end` 读取普通 token 和分组，普通源码仍使用 fvextra 的原始字符规则。语言与代码在语法主扫描中登记不透明范围，保留命令和可执行的头部选项；语义高亮、导航与重命名读取同一份范围。`inputminted` 的第三实参通过文件参数入口读取，使用面向 Python 字符串的无引号文件名包装，与 FancyVerb 通过 `code_inputs` 共享编辑分派、项目数据角色与构建快照。minted 的设置检查独立于 listings，复用 FancyVerb 的全局执行设置保护；原生和回退模式的缺失文件错误共用精确源码回显核对及版本化拼写修复。

@@ -280,6 +280,7 @@ pub(crate) fn completion(ws: &Workspace, uri: &Url, offset: usize) -> Option<Vec
         return Some(
             result
                 .into_iter()
+                .take(ws.completion_budget())
                 .map(|(label, new_text, kind)| CompletionItem {
                     label,
                     kind: Some(kind),

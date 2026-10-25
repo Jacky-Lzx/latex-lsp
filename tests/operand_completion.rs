@@ -13,6 +13,8 @@ fn complete(marked: &str, label: &str) -> (CompletionItem, Text, usize) {
         snippets: true,
         ..Workspace::default()
     };
+    // Inspect edits for specific names across the complete command catalog.
+    workspace.config.indexing.completion_limit = 10_000;
     workspace
         .documents
         .insert(uri.clone(), Document::new(&uri, source.clone(), Some(1)));

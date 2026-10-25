@@ -385,6 +385,7 @@ pub(crate) fn completion(ws: &Workspace, uri: &Url, offset: usize) -> Option<Vec
     let items: Vec<_> = names
         .into_iter()
         .filter(|(name, _)| name.starts_with(prefix))
+        .take(ws.completion_budget())
         .map(|(name, detail)| CompletionItem {
             label: name.clone(),
             kind: Some(if variable(&name) {

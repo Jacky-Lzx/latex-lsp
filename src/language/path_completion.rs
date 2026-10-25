@@ -7,6 +7,39 @@ use std::{
     path::Path,
 };
 
+/// Retain only the best paths while preserving folder/file/distribution order.
+struct Candidates {
+    items: BTreeMap<String, CompletionItem>,
+    ranked: BTreeSet<(u8, String)>,
+    limit: usize,
+}
+
+impl Candidates {
+    fn accepts(&self, label: &str, group: u8) -> bool {
+        !self.items.contains_key(label)
+            && (self.ranked.len() < self.limit
+                || self.ranked.last().is_some_and(|(last_group, last)| {
+                    (group, label) < (*last_group, last.as_str())
+                }))
+    }
+
+    fn insert(&mut self, label: String, group: u8, item: CompletionItem) {
+        self.ranked.insert((group, label.clone()));
+        self.items.insert(label, item);
+        if self.ranked.len() > self.limit {
+            let (_, label) = self.ranked.pop_last().unwrap();
+            self.items.remove(&label);
+        }
+    }
+
+    fn finish(mut self) -> Vec<CompletionItem> {
+        self.ranked
+            .into_iter()
+            .map(|(_, label)| self.items.remove(&label).unwrap())
+            .collect()
+    }
+}
+
 pub fn complete(
     workspace: &Workspace,
     uri: &Url,
@@ -172,7 +205,11 @@ fn complete_with_argument(
         } else {
             BTreeSet::new()
         };
-    let mut candidates = BTreeMap::new();
+    let mut candidates = Candidates {
+        items: BTreeMap::new(),
+        ranked: BTreeSet::new(),
+        limit: workspace.completion_budget(),
+    };
     let allow_spaces = command != "inputminted"
         || roots
             .iter()
@@ -259,7 +296,7 @@ fn complete_with_argument(
                 continue;
             }
             let label = format!("{directory}{name}{}", if folder { "/" } else { "" });
-            if candidates.contains_key(&label) {
+            if !candidates.accepts(&label, if folder { 0 } else { 1 }) {
                 continue;
             }
             let mut new_text = format!("{directory}{name}");
@@ -387,6 +424,7 @@ fn complete_with_argument(
             }
             candidates.insert(
                 label.clone(),
+                if folder { 0 } else { 1 },
                 CompletionItem {
                     label: label.clone(),
                     // Clients filter against the text before the cursor. Keep
@@ -427,6 +465,7 @@ fn complete_with_argument(
                     stem
                 };
                 if !file.starts_with(name_prefix)
+                    || !candidates.accepts(file, 2)
                     || !insertions.insert(new_text.to_owned())
                     || !uri.to_file_path().is_ok_and(|path| path.is_file())
                 {
@@ -434,6 +473,7 @@ fn complete_with_argument(
                 }
                 candidates.insert(
                     file.clone(),
+                    2,
                     CompletionItem {
                         label: file.clone(),
                         kind: Some(CompletionItemKind::MODULE),
@@ -452,8 +492,5 @@ fn complete_with_argument(
             }
         }
     }
-    let mut result: Vec<_> = candidates.into_values().collect();
-    result.sort_by(|a, b| a.sort_text.cmp(&b.sort_text));
-    result.truncate(workspace.config.indexing.completion_limit);
-    result
+    candidates.finish()
 }

@@ -297,6 +297,11 @@ pub(crate) struct SymbolProjects {
 }
 
 impl Workspace {
+    /// Keep one extra candidate for the protocol's incomplete-list response.
+    pub(crate) fn completion_budget(&self) -> usize {
+        self.config.indexing.completion_limit.saturating_add(1)
+    }
+
     fn refresh_context(&mut self) {
         for _ in 0..8 {
             crate::symbols::string_test_context::refresh(self);

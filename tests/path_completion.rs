@@ -465,7 +465,8 @@ fn file_completions_filter_types_hidden_files_and_ignored_regions_and_bound_resu
             Text::new(source.into()).position(source.len())
         )
         .len(),
-        256
+        // Keep one extra candidate for the protocol's incomplete-list response.
+        workspace.config.indexing.completion_limit + 1
     );
 }
 

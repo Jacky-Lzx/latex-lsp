@@ -496,6 +496,7 @@ pub(crate) fn completion(
     Some(
         names
             .into_iter()
+            .take(workspace.completion_budget())
             .map(|(name, detail)| CompletionItem {
                 label: name.clone(),
                 kind: Some(CompletionItemKind::CONSTANT),

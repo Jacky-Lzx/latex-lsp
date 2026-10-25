@@ -438,6 +438,7 @@ pub(crate) fn completion(ws: &Workspace, uri: &Url, offset: usize) -> Option<Vec
                     && entry.name.starts_with(prefix)
                     && seen.insert(entry.name.clone())
             })
+            .take(ws.completion_budget())
             .map(|(_, entry)| CompletionItem {
                 label: entry.name.clone(),
                 kind: Some(CompletionItemKind::REFERENCE),

@@ -370,6 +370,7 @@ pub(crate) fn completion(
         kind.names()
             .iter()
             .filter(|name| name.starts_with(&prefix))
+            .take(workspace.completion_budget())
             .map(|name| CompletionItem {
                 label: (*name).into(),
                 kind: Some(kind.completion_kind()),

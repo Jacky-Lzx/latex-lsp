@@ -250,6 +250,7 @@ pub(crate) fn completion(
         candidates
             .into_iter()
             .filter(|(name, _)| name.to_ascii_lowercase().starts_with(&prefix))
+            .take(workspace.completion_budget())
             .map(|(name, detail)| CompletionItem {
                 label: name.clone(),
                 kind: Some(CompletionItemKind::CONSTANT),
