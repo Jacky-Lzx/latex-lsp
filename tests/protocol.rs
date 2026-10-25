@@ -17,6 +17,51 @@ struct Server {
 }
 
 #[test]
+fn background_push_diagnostics_follow_the_latest_edit_and_clear_closed_buffers() {
+    let directory = tempfile::tempdir().unwrap();
+    let uri = Url::from_file_path(directory.path().join("draft.tex")).unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":null,"capabilities":{},"initializationOptions":{"distribution":{"enabled":false}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"latex","version":1,"text":"{"}}),
+    );
+    for (version, source) in [(2, "{{"), (3, "{}"), (4, "😀{")] {
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":version},"contentChanges":[{"text":source}]}));
+    }
+    server.request(
+        2,
+        "textDocument/documentSymbol",
+        json!({"textDocument":{"uri":uri}}),
+    );
+    let latest = server.until(|message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["uri"] == uri.as_str()
+            && message["params"]["version"] == 4
+    });
+    assert_eq!(latest["params"]["diagnostics"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        latest["params"]["diagnostics"][0]["range"]["start"]["character"],
+        2
+    );
+    server.notify(
+        "textDocument/didChange",
+        json!({"textDocument":{"uri":uri,"version":5},"contentChanges":[{"text":"{{{"}]}),
+    );
+    server.notify("textDocument/didClose", json!({"textDocument":{"uri":uri}}));
+    server.until(|message| {
+        message["method"] == "textDocument/publishDiagnostics"
+            && message["params"]["uri"] == uri.as_str()
+            && message["params"]["version"].is_null()
+            && message["params"]["diagnostics"] == json!([])
+    });
+    server.request(3, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
 fn hook_condition_guards_refresh_aliases_and_exact_edits_over_stdio() {
     use latex_lsp::text::Text;
     for versioned in [false, true] {

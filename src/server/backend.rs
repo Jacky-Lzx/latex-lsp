@@ -137,6 +137,7 @@ impl Backend {
         }) {
             if let Ok(distribution) = task.wait().await {
                 let mut workspace = self.workspace.write().await;
+                workspace.diagnostic_delivery.invalidate();
                 if workspace.config.distribution == config {
                     workspace.distribution = distribution;
                 }
@@ -223,6 +224,7 @@ impl Backend {
 
     async fn reindex(&self) -> Result<serde_json::Value> {
         let mut workspace = self.workspace.write().await;
+        workspace.diagnostic_delivery.invalidate();
         let state = Arc::new(std::sync::Mutex::new(Some(std::mem::take(&mut *workspace))));
         let input = state.clone();
         let task = self.external_tasks.start(move |cancel| {
@@ -281,6 +283,7 @@ impl Backend {
             Err(error) => Err(error),
         };
         let mut workspace = self.workspace.write().await;
+        workspace.diagnostic_delivery.invalidate();
         if workspace.settings(uri).diagnostics.chktex != config
             || !workspace.documents.get(uri).is_some_and(|doc| {
                 doc.version == version && doc.version.is_some() && doc.text.source == source
@@ -313,20 +316,12 @@ impl Backend {
     async fn publish_affected(&self, affected: std::collections::BTreeSet<Url>) {
         let workspace = self.workspace.read().await;
         let delivery = workspace.diagnostic_delivery.clone();
-        let snapshots = if delivery.is_pull() {
-            vec![]
+        if delivery.is_pull() {
+            drop(workspace);
+            delivery.publish(&self.client, vec![]).await;
         } else {
-            let uris = affected.into_iter().chain(
-                workspace
-                    .documents
-                    .iter()
-                    .filter(|(_, doc)| doc.version.is_some())
-                    .map(|(uri, _)| uri.clone()),
-            );
-            workspace.diagnostic_snapshots(uris)
-        };
-        drop(workspace);
-        delivery.publish(&self.client, snapshots).await;
+            delivery.schedule(&self.client, self.workspace.clone(), affected);
+        }
     }
 
     async fn refresh_file_events(
@@ -350,6 +345,7 @@ impl Backend {
         }
         let affected = {
             let mut workspace = self.workspace.write().await;
+            workspace.diagnostic_delivery.invalidate();
             if from_watcher {
                 changes.refresh_watched(&mut workspace)
             } else {
@@ -377,6 +373,7 @@ impl Backend {
 impl Backend {
     pub(crate) async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
         let mut workspace = self.workspace.write().await;
+        workspace.diagnostic_delivery.invalidate();
         let pull_diagnostics = params
             .capabilities
             .text_document
@@ -692,18 +689,17 @@ impl Backend {
 
     pub(crate) async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let item = params.text_document;
-        self.workspace.write().await.open_with_language(
-            item.uri,
-            item.text,
-            item.version,
-            &item.language_id,
-        );
+        let mut workspace = self.workspace.write().await;
+        workspace.diagnostic_delivery.invalidate();
+        workspace.open_with_language(item.uri, item.text, item.version, &item.language_id);
+        drop(workspace);
         self.publish_open().await;
     }
 
     pub(crate) async fn did_change(&self, params: DidChangeTextDocumentParams) {
         let uri = document_uri(params.text_document.uri);
         let mut workspace = self.workspace.write().await;
+        workspace.diagnostic_delivery.invalidate();
         let Some(doc) = workspace.documents.get(&uri) else {
             return;
         };
@@ -748,6 +744,7 @@ impl Backend {
     pub(crate) async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = document_uri(params.text_document.uri);
         let mut workspace = self.workspace.write().await;
+        workspace.diagnostic_delivery.invalidate();
         workspace.close(&uri);
         workspace.lint_diagnostics.remove(&uri);
         self.semantic_cache.lock().await.remove(&uri);
@@ -781,6 +778,7 @@ impl Backend {
                     self.workspace.read().await.config.distribution != config.distribution;
                 {
                     let mut workspace = self.workspace.write().await;
+                    workspace.diagnostic_delivery.invalidate();
                     workspace.lint_diagnostics.clear();
                     project_config::invalidate();
                     workspace.config = config;
@@ -974,6 +972,7 @@ impl Backend {
             }
         }
         let mut workspace = self.workspace.write().await;
+        workspace.diagnostic_delivery.invalidate();
         match file_operations::did_rename(&mut workspace, &params.files) {
             Ok(affected) => {
                 drop(workspace);
@@ -993,6 +992,7 @@ impl Backend {
         params: DidChangeWorkspaceFoldersParams,
     ) {
         let mut workspace = self.workspace.write().await;
+        workspace.diagnostic_delivery.invalidate();
         for folder in params.event.removed {
             if let Ok(root) = folder.uri.to_file_path() {
                 workspace.roots.remove(&root);

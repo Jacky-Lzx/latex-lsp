@@ -2,10 +2,12 @@
 use crate::server::client::Client;
 use lsp_types::*;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     sync::{Arc, Mutex},
     time::Duration,
 };
+
+use crate::project::workspace::Workspace;
 
 pub(crate) type Snapshot = (Url, Vec<Diagnostic>, Option<i32>);
 pub(crate) const IDENTIFIER: &str = "latex-lsp";
@@ -17,11 +19,20 @@ struct Refresh {
     closed: bool,
 }
 
+#[derive(Default)]
+struct Push {
+    revision: u64,
+    running: bool,
+    closed: bool,
+    pending: BTreeSet<Url>,
+}
+
 /// A connection's negotiated diagnostic delivery mode.
 #[derive(Clone, Default)]
 pub struct Delivery {
     pull: bool,
     refresh: Option<Arc<Mutex<Refresh>>>,
+    push: Arc<Mutex<Push>>,
 }
 
 impl Delivery {
@@ -29,6 +40,7 @@ impl Delivery {
         Self {
             pull,
             refresh: (pull && refresh).then(Arc::default),
+            push: Arc::default(),
         }
     }
 
@@ -37,9 +49,92 @@ impl Delivery {
     }
 
     pub(crate) fn close(&self) {
+        self.push.lock().unwrap().closed = true;
         if let Some(refresh) = &self.refresh {
             refresh.lock().unwrap().closed = true;
         }
+    }
+
+    /// Called under the workspace write lock, before changing its inputs.
+    pub(crate) fn invalidate(&self) {
+        self.push.lock().unwrap().revision += 1;
+    }
+
+    /// A single worker coalesces edits and never holds a workspace lock while
+    /// analysing a snapshot or waiting for the client to receive diagnostics.
+    pub(crate) fn schedule(
+        &self,
+        client: &Client,
+        workspace: Arc<tokio::sync::RwLock<Workspace>>,
+        affected: BTreeSet<Url>,
+    ) {
+        let mut push = self.push.lock().unwrap();
+        if push.closed {
+            return;
+        }
+        push.pending.extend(affected);
+        if push.running {
+            return;
+        }
+        push.running = true;
+        drop(push);
+        let state = self.push.clone();
+        let client = client.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_millis(75)).await;
+                let (snapshot, uris, revision) = {
+                    let workspace = workspace.read().await;
+                    let push = state.lock().unwrap();
+                    if push.closed {
+                        return;
+                    }
+                    let uris: BTreeSet<_> =
+                        push.pending
+                            .iter()
+                            .cloned()
+                            .chain(workspace.documents.iter().filter_map(|(uri, doc)| {
+                                doc.version.is_some().then_some(uri.clone())
+                            }))
+                            .collect();
+                    (workspace.clone(), uris, push.revision)
+                };
+                let cancellation = state.clone();
+                let notifications = tokio::task::spawn_blocking(move || {
+                    snapshot.diagnostic_snapshots_cancelled(uris, || {
+                        let push = cancellation.lock().unwrap();
+                        push.closed || push.revision != revision
+                    })
+                })
+                .await;
+                {
+                    let mut push = state.lock().unwrap();
+                    if push.closed {
+                        return;
+                    }
+                    if push.revision != revision {
+                        continue;
+                    }
+                    push.pending.clear();
+                }
+                if let Ok(notifications) = notifications {
+                    for (uri, diagnostics, version) in notifications {
+                        {
+                            let push = state.lock().unwrap();
+                            if push.closed || push.revision != revision {
+                                break;
+                            }
+                        }
+                        client.publish_diagnostics(uri, diagnostics, version).await;
+                    }
+                }
+                let mut push = state.lock().unwrap();
+                if push.closed || push.revision == revision && push.pending.is_empty() {
+                    push.running = false;
+                    return;
+                }
+            }
+        });
     }
 
     pub(crate) async fn publish(&self, client: &Client, snapshots: Vec<Snapshot>) {

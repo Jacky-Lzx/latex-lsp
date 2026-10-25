@@ -158,6 +158,7 @@ impl BuildManager {
 
     pub(crate) async fn clean(&self, uri: Url, artifacts: bool, dry_run: bool) -> Result<Value> {
         let mut workspace = self.workspace.write().await;
+        workspace.diagnostic_delivery.invalidate();
         let root = workspace
             .root_document(&uri)
             .map_err(Error::invalid_params)?;
@@ -306,6 +307,7 @@ impl BuildManager {
         guard: Option<crate::editing::RebuildGuard>,
     ) -> Result<Value> {
         let mut workspace = self.workspace.write().await;
+        workspace.diagnostic_delivery.invalidate();
         let root = workspace
             .root_document(&uri)
             .map_err(Error::invalid_params)?;
@@ -634,6 +636,7 @@ impl BuildManager {
             let mut outcome = outcome
                 .unwrap_or_else(|error| Outcome::error(format!("Compiler task failed: {error}")));
             let mut current = workspace.write().await;
+            current.diagnostic_delivery.invalidate();
             let mut checks = checks;
             if let Some(inputs) = &outcome.inputs {
                 let recorded =

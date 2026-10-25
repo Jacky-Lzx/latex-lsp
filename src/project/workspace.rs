@@ -247,7 +247,7 @@ fn magic_directive(doc: &Document, fields: &[&str]) -> Option<crate::parser::syn
     None
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Workspace {
     pub distribution: crate::project::distribution::Distribution,
     pub index_truncated: BTreeSet<String>,
@@ -403,11 +403,23 @@ impl Workspace {
         &self,
         uris: impl IntoIterator<Item = Url>,
     ) -> Vec<(Url, Vec<lsp_types::Diagnostic>, Option<i32>)> {
+        self.diagnostic_snapshots_cancelled(uris, || false)
+    }
+
+    pub(crate) fn diagnostic_snapshots_cancelled(
+        &self,
+        uris: impl IntoIterator<Item = Url>,
+        cancelled: impl Fn() -> bool,
+    ) -> Vec<(Url, Vec<lsp_types::Diagnostic>, Option<i32>)> {
+        if cancelled() {
+            return vec![];
+        }
         let uris: BTreeSet<_> = uris.into_iter().collect();
         let mut duplicates = crate::diagnostics::project_diagnostics::duplicates(self, &uris);
         let environments = crate::diagnostics::environment_diagnostics::Index::new(self, &uris);
         let mut math = crate::diagnostics::math_diagnostics::Index::new(self, &uris);
         uris.into_iter()
+            .take_while(|_| !cancelled())
             .map(|uri| {
                 let version = self.documents.get(&uri).and_then(|doc| doc.version);
                 let mut diagnostics = self.local_and_build_diagnostics(&uri);
