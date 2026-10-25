@@ -46,6 +46,63 @@ fn workspace_search_ranks_matches_and_supports_unicode_and_subsequences() {
 }
 
 #[test]
+fn workspace_search_keeps_containers_and_stable_top_results_across_edits() {
+    let mut workspace = Workspace::default();
+    workspace.config.distribution.enabled = false;
+    let main = Url::parse("untitled:search.tex").unwrap();
+    let source = format!(
+        "\\section{{Parent}}\\subsection{{Child}}😀 \\label{{needle}}{}",
+        (0..300)
+            .rev()
+            .map(|n| format!("\\label{{needle:{n:03}}}"))
+            .collect::<String>()
+    );
+    workspace.open(main.clone(), source.clone(), 1);
+    let found = navigation::workspace_symbols(&workspace, "needle");
+    assert_eq!(found.len(), 256);
+    assert_eq!(found[0].name, "needle");
+    assert_eq!(found[255].name, "needle:254");
+    assert!(found
+        .iter()
+        .all(|symbol| symbol.container_name.as_deref() == Some("Child")));
+    for symbol in &found {
+        let text = &workspace.documents[&main].text;
+        let range = symbol.location.range;
+        assert_eq!(
+            &source[text.offset(range.start).unwrap()..text.offset(range.end).unwrap()],
+            symbol.name
+        );
+    }
+    assert_eq!(navigation::workspace_symbols(&workspace, "needle"), found);
+    // Editing an unsaved source must release its old outline; clones used by
+    // in-flight requests must retain the original source and positions.
+    let snapshot = workspace.clone();
+    workspace.open(
+        main.clone(),
+        "\r\n😀 \\section{Changed}\\label{fresh}".into(),
+        2,
+    );
+    assert!(navigation::workspace_symbols(&workspace, "needle").is_empty());
+    let fresh = navigation::workspace_symbols(&workspace, "fresh");
+    assert_eq!(fresh.len(), 1);
+    assert_eq!(fresh[0].container_name.as_deref(), Some("Changed"));
+    assert_eq!(fresh[0].location.range.start.line, 1);
+    assert_eq!(navigation::workspace_symbols(&snapshot, "needle"), found);
+    // Reopening the same URI with a different language also replaces outlines.
+    workspace.open_with_language(
+        main.clone(),
+        "@book{entry,title={Text}}".into(),
+        3,
+        "bibtex",
+    );
+    assert!(navigation::workspace_symbols(&workspace, "fresh").is_empty());
+    let entries = navigation::workspace_symbols(&workspace, "");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].name, "entry");
+    assert_eq!(entries[0].location.uri, main);
+}
+
+#[test]
 fn folds_sections_nested_environments_groups_and_comments_without_parsing_raw_text() {
     let uri = Url::parse("file:///navigation/main.tex").unwrap();
     let source = "\\section{Main}\n% first\n  % second\n\\begin{itemize}\n\\item {\nbody\n}\n\\end{itemize}\n\\subsection{Child}\n\\begin{verbatim}\n{ % ignored\n\\begin{fake}\n\\end{verbatim}\n\\section{Next}\ntext\n";

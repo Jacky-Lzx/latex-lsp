@@ -35,8 +35,9 @@ const data=__DATA__;
 const names={"initialize":"初始化","open":"打开缓冲区","edit.prose":"正文编辑处理","edit.preamble":"主文档编辑处理","edit.reference":"引用编辑处理",
 "completion.labels":"标签补全","completion.citations":"文献补全","completion.commands":"命令补全","hover":"悬停","definition":"定义跳转","references":"查找引用",
 "rename":"跨文件重命名","signature":"参数提示","symbols":"文档大纲","folding":"折叠","semantic.full":"完整语义令牌","semantic.delta.cached":"缓存语义 delta",
-"diagnostic":"重新计算诊断","diagnostic.cached":"缓存诊断","burst8.to_completion":"连续 8 次编辑 → 补全"};
-const selected=["completion.labels","completion.citations","hover","definition","references","rename","signature","diagnostic","burst8.to_completion"];
+"diagnostic":"重新计算诊断","diagnostic.cached":"缓存诊断","burst8.to_completion":"连续 8 次编辑 → 补全",
+"workspace.symbols.exact":"工作区符号 · 精确搜索","workspace.symbols.all":"工作区符号 · 全部搜索","workspace.symbols.missing":"工作区符号 · 无匹配"};
+const selected=["completion.labels","completion.citations","hover","definition","references","rename","signature","workspace.symbols.exact","workspace.symbols.all","workspace.symbols.missing","diagnostic","burst8.to_completion"];
 const scale=document.getElementById('scale'), stat=document.getElementById('stat'), all=document.getElementById('all');
 for(const key of Object.keys(data.after.scenarios)){const option=document.createElement('option');option.value=key;option.textContent=key;scale.append(option)}
 scale.value=Object.hasOwn(data.after.scenarios,'large')?'large':scale.options[0].value;
@@ -45,7 +46,7 @@ document.getElementById('method').textContent=`${p.runs} 个独立进程 × ${p.
 function render(){
  const before=data.before.scenarios[scale.value],after=data.after.scenarios[scale.value],f=after.fixture;
  document.getElementById('fixture').textContent=`${f.files} 个文件 · ${(f.bytes/1024).toFixed(1)} KiB · ${data.after.environment.platform}`;
- const keys=all.checked?Object.keys(after.metrics):selected;
+ const keys=all.checked?Object.keys(after.metrics):selected.filter(k=>Object.hasOwn(after.metrics,k));
  const max=Math.max(...keys.flatMap(k=>[before.metrics[k][stat.value],after.metrics[k][stat.value]]));
  const rows=document.getElementById('rows');rows.replaceChildren();
  for(const key of keys){

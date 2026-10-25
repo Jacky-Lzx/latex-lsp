@@ -2649,8 +2649,17 @@ fn diagnostics_for(
     diagnostics
 }
 
-#[allow(deprecated)]
 pub fn symbols(doc: &Document) -> Vec<DocumentSymbol> {
+    // An initial hierarchical response already owns the whole tree. Avoid
+    // cloning it just to populate a cache this client may never query again.
+    doc.outline.get().map_or_else(
+        || uncached_symbols(doc),
+        |snapshot| snapshot.symbols.clone(),
+    )
+}
+
+#[allow(deprecated)]
+pub(crate) fn uncached_symbols(doc: &Document) -> Vec<DocumentSymbol> {
     if doc.kind == DocumentKind::Bibtex {
         return crate::bibliography::bib_symbols::symbols(doc);
     }
@@ -2737,7 +2746,12 @@ fn insert_symbol(symbols: &mut Vec<DocumentSymbol>, symbol: DocumentSymbol) {
 /// Older clients require SymbolInformation instead of hierarchical DocumentSymbol.
 pub fn flat_symbols(doc: &Document, uri: &Url) -> Vec<SymbolInformation> {
     let mut result = Vec::new();
-    flatten_symbols(&symbols(doc), uri, None, &mut result);
+    flatten_symbols(
+        &super::symbol_cache::outline(doc).symbols,
+        uri,
+        None,
+        &mut result,
+    );
     result
 }
 

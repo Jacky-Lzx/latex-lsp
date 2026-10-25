@@ -21,6 +21,8 @@ macOS 上运行测试时，可使用 `TMPDIR=/private/tmp cargo test --locked`�
 
 开发和测试构建默认开启增量编译，复用缓存以加快修改代码后的重复编译；调试信息仍默认关闭。增量缓存会增加磁盘占用，需要节省空间时可设置 `CARGO_INCREMENTAL=0`。需要源码级调试时，可按需设置 `CARGO_PROFILE_DEV_DEBUG=2` 或 `CARGO_PROFILE_TEST_DEBUG=2`；发布构建继续使用独立配置。
 
+持续开发时，可用 `cargo clean --locked -p latex-lsp --profile dev --dry-run` 预览本包 debug 产物的占用，确认没有测试或构建运行后，去掉 `--dry-run` 清理。这会让下次开发／测试重新构建本包，保留依赖缓存、release 产物和 `target/benchmarks` 中的测量文件。不要在 benchmark 测量期间运行构建或清理。
+
 测试包含 UTF-16/增量编辑、语法容错、跨文件导航、文献补全、磁盘/未保存内容同步，以及启动真实进程验证的 stdio 协议流程。
 
 性能测量使用[连续编辑 benchmark](benchmarks.md)，在 release 进程上回放增量编辑，分别统计各语言功能和输入突发下的端到端延迟。

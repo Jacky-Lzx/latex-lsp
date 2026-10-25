@@ -256,6 +256,15 @@ def session(binary, scale, iterations, warmup, timeout, record):
                 signature = query("signature", "textDocument/signatureHelp", at("{value}", 2))
                 assert len(signature["signatures"][0]["parameters"]) == (2 if step % 2 == 0 else 1), signature
                 assert query("symbols", "textDocument/documentSymbol", document)
+                symbols = query("workspace.symbols.exact", "workspace/symbol", {"query": "sec:0:0"})
+                assert symbols and symbols[0]["name"] == "sec:0:0", symbols
+                assert symbols[0]["location"]["uri"] == uri, symbols
+                symbols = query("workspace.symbols.all", "workspace/symbol", {"query": ""})
+                assert symbols and len(symbols) <= 256, symbols
+                assert all(symbol["kind"] != 7 for symbol in symbols), symbols
+                assert query("workspace.symbols.missing", "workspace/symbol", {
+                    "query": "absent:benchmark:symbol",
+                }) == []
                 assert query("folding", "textDocument/foldingRange", document)
                 tokens = query("semantic.full", "textDocument/semanticTokens/full", document)
                 assert tokens["data"], tokens

@@ -676,3 +676,26 @@ Unicode 关键词的三引擎独立原生审阅确认 12 个有效场景，观�
 3. **带参数钩子的使用接口**：继续核验 `UseHookWithArguments`／`UseOneTimeHookWithArguments` 的声明数量覆盖、动态／歧义名称和跟随 token 的读取边界，先防止不完整编辑，再补齐交互。
 
 完成第二项后重新审阅并开始下一轮，不将现有路线图当作完整功能清单。
+
+
+本轮声明导航已在 `317a4a0` 提交；跨文件未保存版本、UTF-16／CRLF、能力协商与空结果协议回归通过。工作区符号优化已完成最终测量，精确／全部／无匹配搜索的 large p50 分别加速 3.41×／1.60×／4.36×；有界源码大纲、256 项排名队列及首次层次化大纲避免额外复制的结果见[第三轮 benchmark](benchmarks.md#2026-10-26-第三轮工作区符号搜索)。
+
+### 下一轮重新审阅：钩子读取参数的改名完整性
+
+原生审阅确认，比缺少 `UseHookWithArguments` 参数提示更高优先级的是普通 `UseHook` 的数据误改。以下文档可被 pdfLaTeX 编译；实际 LSP 将 `word` 改成 `fresh` 时返回三项编辑，编译仍成功，但日志从 `CAPTURE:\word` 变成 `CAPTURE:\fresh`，改变了字面数据：
+
+```tex
+\documentclass{article}
+\NewHookWithArguments{custom}{1}
+\AddToHookWithArguments{custom}{\typeout{CAPTURE:\detokenize{#1}}}
+\begin{document}
+\newcommand\word{Text}
+\UseHook{custom}\word
+\word
+\end{document}
+```
+
+下一轮按以下顺序实现，再进行新的 benchmark：
+
+1. **钩子调用参数的数据保护**：覆盖普通／一次性使用、带数量的接口及可确认的命名／转发调用；先拒绝会改变上述字面数据的宏改名，保留独立源码编辑。不能只根据调用处数量推断边界：已声明钩子使用声明的数量，一次性钩子的后续使用还受生命周期影响。
+2. **可变参数钩子的交互**：继续补齐可确认边界的参数提示和名称导航。原生零参数钩子后的独立 `ref` 有效，现有服务器却返回空跳转；即使调用处写成 1，已声明的零参数钩子也不吞掉该引用。无法确认的动态数量、声明来源和执行状态保持保守。

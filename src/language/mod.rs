@@ -12,3 +12,4 @@ pub mod path_completion;
 pub mod semantic;
 pub(crate) mod semantic_cache;
 pub mod signature;
+pub(crate) mod symbol_cache;

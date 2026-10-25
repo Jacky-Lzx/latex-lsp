@@ -1,5 +1,4 @@
 use crate::{
-    language::features,
     parser::syntax,
     project::workspace::{
         resolve_file_path, resolve_path, root_directive, Document, DocumentKind, Workspace,
@@ -7,17 +6,57 @@ use crate::{
 };
 use lsp_types::*;
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, BinaryHeap},
     path::PathBuf,
 };
 
+struct RankedSymbol {
+    score: u8,
+    ordinal: usize,
+    symbol: SymbolInformation,
+}
+
+impl RankedSymbol {
+    fn key(&self) -> (u8, &str, &Url, Position, usize) {
+        (
+            self.score,
+            &self.symbol.name,
+            &self.symbol.location.uri,
+            self.symbol.location.range.start,
+            self.ordinal,
+        )
+    }
+}
+
+impl PartialEq for RankedSymbol {
+    fn eq(&self, other: &Self) -> bool {
+        self.key() == other.key()
+    }
+}
+impl Eq for RankedSymbol {}
+impl PartialOrd for RankedSymbol {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for RankedSymbol {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.key().cmp(&other.key())
+    }
+}
+
+#[allow(deprecated)]
 pub fn workspace_symbols(workspace: &Workspace, query: &str) -> Vec<SymbolInformation> {
     let query = query.trim().to_lowercase();
-    let mut result = Vec::new();
+    let mut result = BinaryHeap::<RankedSymbol>::new();
+    let mut ordinal = 0;
     for (uri, doc) in &workspace.documents {
-        for symbol in features::flat_symbols(doc, uri) {
+        // Release uncached outlines after each document, including when the
+        // shared budget is full. Retain at most 256 ranked protocol results.
+        let outline = super::symbol_cache::outline(doc);
+        visit_symbols(&outline.symbols, None, &mut |symbol, container| {
             if doc.kind == DocumentKind::Bibtex && symbol.kind == SymbolKind::PROPERTY {
-                continue;
+                return;
             }
             let name = symbol.name.to_lowercase();
             let score = if name == query {
@@ -32,26 +71,60 @@ pub fn workspace_symbols(workspace: &Workspace, query: &str) -> Vec<SymbolInform
                     .chars()
                     .all(|needle| characters.any(|character| character == needle))
                 {
-                    continue;
+                    return;
                 }
                 3
             };
-            result.push((score, symbol));
+            // The ordinal preserves the old stable order for coincident symbols.
+            ordinal += 1;
+            let key = (
+                score,
+                symbol.name.as_str(),
+                uri,
+                symbol.selection_range.start,
+                ordinal,
+            );
+            if result.len() == 256 {
+                if result.peek().is_some_and(|worst| key >= worst.key()) {
+                    return;
+                }
+                result.pop();
+            }
+            result.push(RankedSymbol {
+                score,
+                ordinal,
+                symbol: SymbolInformation {
+                    name: symbol.name.clone(),
+                    kind: symbol.kind,
+                    tags: symbol.tags.clone(),
+                    deprecated: None,
+                    location: Location {
+                        uri: uri.clone(),
+                        range: symbol.selection_range,
+                    },
+                    container_name: container.map(str::to_owned),
+                },
+            });
+        });
+    }
+    result
+        .into_sorted_vec()
+        .into_iter()
+        .map(|ranked| ranked.symbol)
+        .collect()
+}
+
+fn visit_symbols<'a>(
+    symbols: &'a [DocumentSymbol],
+    container: Option<&'a str>,
+    visit: &mut impl FnMut(&'a DocumentSymbol, Option<&'a str>),
+) {
+    for symbol in symbols {
+        visit(symbol, container);
+        if let Some(children) = &symbol.children {
+            visit_symbols(children, Some(&symbol.name), visit);
         }
     }
-    result.sort_by(|(a_score, a), (b_score, b)| {
-        (a_score, &a.name, &a.location.uri, a.location.range.start).cmp(&(
-            b_score,
-            &b.name,
-            &b.location.uri,
-            b.location.range.start,
-        ))
-    });
-    result
-        .into_iter()
-        .take(256)
-        .map(|(_, symbol)| symbol)
-        .collect()
 }
 
 pub use crate::language::folding::{folding_ranges, folding_ranges_for_client};
