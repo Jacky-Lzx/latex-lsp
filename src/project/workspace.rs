@@ -697,7 +697,7 @@ impl Workspace {
         self.project_documents_with_inputs(source, root, &inputs)
     }
 
-    fn project_documents_with_inputs(
+    pub(crate) fn project_documents_with_inputs(
         &self,
         source: &Url,
         root: &Url,
@@ -856,9 +856,14 @@ impl Workspace {
 
     /// Saved sources and image dependencies used by builds and artifact checks.
     pub fn project_files(&self, root: &Url) -> BTreeSet<Url> {
-        let mut files = self.project_documents(root);
+        let inputs = crate::project::source_inputs::Index::new(self, root);
+        let mut files = self.project_documents_with_inputs(root, root, &inputs);
+        let image_calls = if inputs.incomplete {
+            BTreeMap::new()
+        } else {
+            crate::project::graphics::calls_in(self, &files)
+        };
         files.extend(crate::project::code_inputs::inputs(self, root));
-        let image_calls = crate::project::graphics::calls(self, root);
         let images: BTreeSet<_> = files
             .iter()
             .filter(|uri| {
@@ -1246,7 +1251,12 @@ impl Workspace {
         if self.roots.is_empty() {
             if let Ok(path) = uri.to_file_path() {
                 if let Some(parent) = path.parent() {
-                    self.add_root(parent.to_path_buf());
+                    // The editor text below may differ from the saved root.
+                    // Scan once, then resolve contexts after installing that
+                    // text and loading its dependencies, rather than first
+                    // analyzing a disk-only project which is immediately stale.
+                    self.roots.insert(parent.to_path_buf());
+                    self.scan(parent, 0);
                 }
             }
         }

@@ -1,6 +1,6 @@
 # TeX 发行版与宏包
 
-服务器初始化时调用 `kpsewhich --expand-path=$TEXMFDBS`，读取返回目录的 `ls-R` 文件名数据库。`usepackage`、`RequirePackage`、文档类和 `bibliographystyle` 的补全与文件跳转会查找发行版；同名项目文件优先。删除或移动后已不存在的文件不会作为结果返回。发行版源文件不会自动加入项目符号、重命名或诊断范围。
+服务器启动后在后台调用 `kpsewhich --expand-path=$TEXMFDBS`，读取返回目录的 `ls-R` 文件名数据库；发行版发现和文件监听注册不会阻塞文档打开、编辑或正向搜索。数据库就绪前，相关补全和文件跳转先使用项目内文件及内置元数据。`usepackage`、`RequirePackage`、文档类和 `bibliographystyle` 的补全与文件跳转会查找发行版；同名项目文件优先。删除或移动后已不存在的文件不会作为结果返回。发行版源文件不会自动加入项目符号、重命名或诊断范围。
 
 ```json
 {

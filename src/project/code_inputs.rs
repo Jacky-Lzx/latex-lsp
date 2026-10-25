@@ -196,7 +196,9 @@ fn displayed_inputs(workspace: &Workspace, sources: &BTreeSet<Url>, root: &Url) 
 
 fn context_sources(workspace: &Workspace, uri: &Url, root: &Url) -> BTreeSet<Url> {
     let mut explicit = workspace.source_documents_from(root, root);
-    explicit.extend(workspace.source_documents_from(uri, root));
+    if uri != root {
+        explicit.extend(workspace.source_documents_from(uri, root));
+    }
     // Only understood calls can identify data. A redefined command may execute
     // the file as real source, including settings for the other package.
     let displayed = displayed_inputs(workspace, &explicit, root);
@@ -238,6 +240,16 @@ pub(crate) fn supported(
 
 /// Uses the independent source walk so it is safe during project traversal.
 pub(crate) fn inputs(workspace: &Workspace, root: &Url) -> BTreeSet<Url> {
+    // Only these literal readers contribute inputs below. Most projects do
+    // not use them, so avoid building a second source graph just to find none.
+    if !workspace.documents.values().any(|doc| {
+        doc.syntax
+            .commands
+            .iter()
+            .any(|command| COMMANDS.contains(&command.name.as_str()))
+    }) {
+        return BTreeSet::new();
+    }
     let sources = context_sources(workspace, root, root);
     let active = crate::project::source_inputs::possible_direct_file_positions(workspace, &sources);
     COMMANDS

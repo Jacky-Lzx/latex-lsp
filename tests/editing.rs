@@ -265,7 +265,11 @@ fn include_fixes_suppress_self_inclusion_known_cycles_nonfiles_and_mismatched_wa
     let uri = Url::from_file_path(root.join("main.tex")).unwrap();
     std::fs::write(root.join("main.tex"), "\\include{chapetr}\n").unwrap();
     std::fs::create_dir(root.join("chapter.tex")).unwrap();
-    std::fs::write(root.join("chapter.TEX"), "Wrong extension.").unwrap();
+    // A case-insensitive filesystem cannot create this second fixture beside
+    // the directory above. Keep the wrong-extension candidate where possible.
+    if !root.join("chapter.TEX").exists() {
+        std::fs::write(root.join("chapter.TEX"), "Wrong extension.").unwrap();
+    }
     let mut workspace = Workspace {
         code_action_literals: true,
         ..Default::default()

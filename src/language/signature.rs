@@ -2098,6 +2098,29 @@ fn definition_spans(
     spans
 }
 
+fn merged_spans(mut spans: Vec<std::ops::Range<usize>>) -> Vec<std::ops::Range<usize>> {
+    spans.sort_unstable_by_key(|span| span.start);
+    let mut merged: Vec<std::ops::Range<usize>> = Vec::new();
+    for span in spans {
+        if let Some(previous) = merged
+            .last_mut()
+            .filter(|previous| span.start <= previous.end)
+        {
+            previous.end = previous.end.max(span.end);
+        } else {
+            merged.push(span);
+        }
+    }
+    merged
+}
+
+fn span_contains(spans: &[std::ops::Range<usize>], at: usize) -> bool {
+    spans
+        .partition_point(|span| span.start <= at)
+        .checked_sub(1)
+        .is_some_and(|index| spans[index].contains(&at))
+}
+
 fn short(value: &str) -> String {
     let mut literal = String::new();
     let mut at = 0;
@@ -3524,13 +3547,12 @@ impl<'a> CommandSignatures<'a> {
         parsed: &syntax::Syntax,
         active: &BTreeSet<usize>,
     ) -> Vec<SourceCall> {
-        let bodies = definition_body_spans(source, parsed);
+        let bodies = merged_spans(definition_body_spans(source, parsed));
         let positions = parsed
             .commands
             .iter()
             .filter(|command| {
-                active.contains(&command.span.start)
-                    || bodies.iter().any(|body| body.contains(&command.span.start))
+                active.contains(&command.span.start) || span_contains(&bodies, command.span.start)
             })
             .map(|command| command.span.start)
             .collect();
@@ -3622,14 +3644,15 @@ impl<'a> CommandSignatures<'a> {
             .iter()
             .enumerate()
             .filter_map(|(index, command)| {
-                if builtins.contains(&command.name.as_str())
+                if !positions.contains(&command.span.start)
+                    || builtins.contains(&command.name.as_str())
                     || declarations.contains(&(command.span.start, command.span.end))
                 {
                     return None;
                 }
                 let (name, start, end, _) =
                     self.invocation(source, parsed, index, &operands, &declarations)?;
-                if !positions.contains(&start) || !positions.contains(&command.span.start) {
+                if !positions.contains(&start) {
                     return None;
                 }
                 let builtin = builtins.iter().copied().find(|builtin| {
@@ -3688,26 +3711,8 @@ impl<'a> CommandSignatures<'a> {
             ParameterRead::Source
         };
         let operands = self.argument_tokens_with_literal(source, parsed, None, false, false, mode);
-        let mut bodies = definition_body_spans(source, parsed);
-        bodies.sort_unstable_by_key(|span| span.start);
-        let mut merged: Vec<std::ops::Range<usize>> = Vec::new();
-        for span in bodies {
-            if let Some(previous) = merged
-                .last_mut()
-                .filter(|previous| span.start <= previous.end)
-            {
-                previous.end = previous.end.max(span.end);
-            } else {
-                merged.push(span);
-            }
-        }
-        let active = |start| {
-            !operands.contains(&start)
-                && !merged
-                    .partition_point(|span| span.start <= start)
-                    .checked_sub(1)
-                    .is_some_and(|index| merged[index].contains(&start))
-        };
+        let bodies = merged_spans(definition_body_spans(source, parsed));
+        let active = |start| !operands.contains(&start) && !span_contains(&bodies, start);
         // A redefined endinput also ends the region we can interpret safely.
         let stop = parsed
             .commands

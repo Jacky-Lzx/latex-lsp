@@ -102,18 +102,42 @@ impl Backend {
         self.builds.cancel_progress(&params.token);
     }
 
+    /// Keep CPU-heavy reads off the transport task so a completed external
+    /// query can return while annotations are being calculated. Release the
+    /// dispatch turn after acquiring the read guard: other reads can proceed,
+    /// while the guard keeps subsequent document writes in wire order. A queued
+    /// writer also prevents later reads from overtaking that document update.
+    async fn read_query<T: Send + 'static>(
+        &self,
+        query: impl FnOnce(&Workspace) -> T + Send + 'static,
+    ) -> Result<T> {
+        let workspace = self.workspace.clone().read_owned().await;
+        dispatch::release();
+        tokio::task::spawn_blocking(move || query(&workspace))
+            .await
+            .map_err(|error| {
+                tower_lsp::jsonrpc::Error::invalid_params(format!("Analysis task failed: {error}"))
+            })
+    }
+
     async fn reload_distribution(&self) {
         let config = self.workspace.read().await.config.distribution.clone();
+        let discovery_config = config.clone();
         if let Ok(mut task) = self.external_tasks.start(move |cancel| {
             let distribution =
-                distribution::Distribution::discover_cancelled(&config, || cancel.cancelled());
+                distribution::Distribution::discover_cancelled(&discovery_config, || {
+                    cancel.cancelled()
+                });
             if cancel.cancelled() {
                 return Err(tower_lsp::jsonrpc::Error::request_cancelled());
             }
             Ok(distribution)
         }) {
             if let Ok(distribution) = task.wait().await {
-                self.workspace.write().await.distribution = distribution;
+                let mut workspace = self.workspace.write().await;
+                if workspace.config.distribution == config {
+                    workspace.distribution = distribution;
+                }
             }
         }
     }
@@ -615,6 +639,10 @@ impl LanguageServer for Backend {
     }
 
     async fn initialized(&self, _: InitializedParams) {
+        // Distribution discovery and watcher registration do not alter source
+        // text. Let document notifications and interactive requests proceed
+        // while waiting for the external tool or the client's registration ACK.
+        dispatch::release();
         self.reload_distribution().await;
         if self.workspace.read().await.watch_files {
             let binary_inputs = syntax::file_extensions("includegraphics")
@@ -988,9 +1016,9 @@ impl LanguageServer for Backend {
     ) -> Result<DocumentDiagnosticReportResult> {
         validate_diagnostic_identifier(params.identifier.as_deref())?;
         let uri = document_uri(params.text_document.uri);
-        let workspace = self.workspace.read().await;
-        let snapshot = workspace.diagnostic_snapshots([uri]).pop().unwrap();
-        drop(workspace);
+        let snapshot = self
+            .read_query(move |workspace| workspace.diagnostic_snapshots([uri]).pop().unwrap())
+            .await?;
         let report = self
             .diagnostic_cache
             .lock()
@@ -1023,22 +1051,24 @@ impl LanguageServer for Backend {
             .into_iter()
             .map(|previous| (document_uri(previous.uri), previous.value))
             .collect();
-        let workspace = self.workspace.read().await;
-        let uris = workspace
-            .documents
-            .keys()
-            .cloned()
-            .chain(
-                workspace
-                    .build_diagnostics
-                    .values()
-                    .flat_map(|project| project.keys().cloned()),
-            )
-            // Previously reported files may have been removed or renamed. Send
-            // empty reports for them so the client clears their diagnostics.
-            .chain(previous.keys().cloned());
-        let snapshots = workspace.diagnostic_snapshots(uris);
-        drop(workspace);
+        let previous_uris: Vec<_> = previous.keys().cloned().collect();
+        let snapshots = self
+            .read_query(move |workspace| {
+                let uris = workspace
+                    .documents
+                    .keys()
+                    .cloned()
+                    .chain(
+                        workspace
+                            .build_diagnostics
+                            .values()
+                            .flat_map(|project| project.keys().cloned()),
+                    )
+                    // Clear previously reported files which were removed.
+                    .chain(previous_uris);
+                workspace.diagnostic_snapshots(uris)
+            })
+            .await?;
         let mut cache = self.diagnostic_cache.lock().await;
         let items = snapshots
             .into_iter()
@@ -1239,11 +1269,15 @@ impl LanguageServer for Backend {
         params: DocumentHighlightParams,
     ) -> Result<Option<Vec<DocumentHighlight>>> {
         let params = params.text_document_position_params;
-        Ok(Some(editing::highlights(
-            &*self.workspace.read().await,
-            &document_uri(params.text_document.uri),
-            params.position,
-        )))
+        self.read_query(move |workspace| {
+            editing::highlights(
+                workspace,
+                &document_uri(params.text_document.uri),
+                params.position,
+            )
+        })
+        .await
+        .map(Some)
     }
 
     async fn linked_editing_range(
@@ -1251,21 +1285,23 @@ impl LanguageServer for Backend {
         params: LinkedEditingRangeParams,
     ) -> Result<Option<LinkedEditingRanges>> {
         let params = params.text_document_position_params;
-        let workspace = self.workspace.read().await;
-        let uri = document_uri(params.text_document.uri);
-        let Some(doc) = workspace.documents.get(&uri) else {
-            return Ok(None);
-        };
-        if doc.text.offset(params.position).is_none() {
-            return Err(tower_lsp::jsonrpc::Error::invalid_params(
-                "Invalid linked editing position",
-            ));
-        }
-        Ok(editing::linked_editing_ranges_in_workspace(
-            &workspace,
-            &uri,
-            params.position,
-        ))
+        self.read_query(move |workspace| {
+            let uri = document_uri(params.text_document.uri);
+            let Some(doc) = workspace.documents.get(&uri) else {
+                return Ok(None);
+            };
+            if doc.text.offset(params.position).is_none() {
+                return Err(tower_lsp::jsonrpc::Error::invalid_params(
+                    "Invalid linked editing position",
+                ));
+            }
+            Ok(editing::linked_editing_ranges_in_workspace(
+                workspace,
+                &uri,
+                params.position,
+            ))
+        })
+        .await?
     }
 
     async fn selection_range(
@@ -1285,12 +1321,16 @@ impl LanguageServer for Backend {
     }
 
     async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
-        Ok(Some(code_action_resolve::actions(
-            &*self.workspace.read().await,
-            &document_uri(params.text_document.uri),
-            params.range,
-            &params.context,
-        )))
+        self.read_query(move |workspace| {
+            code_action_resolve::actions(
+                workspace,
+                &document_uri(params.text_document.uri),
+                params.range,
+                &params.context,
+            )
+        })
+        .await
+        .map(Some)
     }
 
     async fn code_action_resolve(&self, action: CodeAction) -> Result<CodeAction> {
@@ -1338,12 +1378,14 @@ impl LanguageServer for Backend {
     }
 
     async fn document_color(&self, params: DocumentColorParams) -> Result<Vec<ColorInformation>> {
-        let workspace = self.workspace.read().await;
-        Ok(workspace
-            .documents
-            .get(&document_uri(params.text_document.uri))
-            .map(colors::document_colors)
-            .unwrap_or_default())
+        self.read_query(move |workspace| {
+            workspace
+                .documents
+                .get(&document_uri(params.text_document.uri))
+                .map(colors::document_colors)
+                .unwrap_or_default()
+        })
+        .await
     }
 
     async fn color_presentation(
@@ -1419,5 +1461,102 @@ impl LanguageServer for Backend {
             &*self.workspace.read().await,
             &document_uri(params.text_document.uri),
         )))
+    }
+}
+
+#[cfg(test)]
+mod read_query_tests {
+    use super::*;
+    use std::time::Duration;
+    use tokio::sync::oneshot;
+    use tower_lsp::LspService;
+
+    #[tokio::test]
+    async fn slow_analysis_allows_reads_but_keeps_writes_and_later_reads_in_order() {
+        let (service, _socket) = LspService::new(Backend::new);
+        let service = Arc::new(Backend::new(service.inner().client.clone()));
+        let mut queue = dispatch::RequestQueue::default();
+        let (started, start) = oneshot::channel();
+        let (finish, finished) = oneshot::channel();
+        let first_service = service.clone();
+        let first = tokio::spawn(queue.ordered(async move {
+            first_service
+                .read_query(move |workspace| {
+                    let _ = started.send(());
+                    let _ = finished.blocking_recv();
+                    workspace.snippets
+                })
+                .await
+                .unwrap()
+        }));
+        start.await.unwrap();
+
+        let read_service = service.clone();
+        let read = queue.ordered(async move {
+            read_service
+                .read_query(|workspace| workspace.snippets)
+                .await
+                .unwrap()
+        });
+        let result = tokio::time::timeout(Duration::from_secs(1), read).await;
+        // Unblock the worker even if the assertion fails.
+        if result.is_err() {
+            let _ = finish.send(());
+            panic!("An unrelated read waited for the slow analysis");
+        }
+        assert!(!result.unwrap());
+
+        let (writing, write_started) = oneshot::channel();
+        let writer_service = service.clone();
+        let writer = tokio::spawn(queue.ordered(async move {
+            let _ = writing.send(());
+            writer_service.workspace.write().await.snippets = true;
+        }));
+        write_started.await.unwrap();
+        let later = tokio::spawn(queue.ordered(async move {
+            service
+                .read_query(|workspace| workspace.snippets)
+                .await
+                .unwrap()
+        }));
+        assert!(!writer.is_finished());
+        assert!(!later.is_finished());
+        let _ = finish.send(());
+        assert!(!first.await.unwrap());
+        writer.await.unwrap();
+        assert!(later.await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn cancelling_analysis_keeps_its_read_guard_until_the_worker_finishes() {
+        let (service, _socket) = LspService::new(Backend::new);
+        let backend = Arc::new(Backend::new(service.inner().client.clone()));
+        let mut queue = dispatch::RequestQueue::default();
+        let (started, start) = oneshot::channel();
+        let (finish, finished) = oneshot::channel();
+        let query_backend = backend.clone();
+        let query = tokio::spawn(queue.ordered(async move {
+            query_backend
+                .read_query(move |_| {
+                    let _ = started.send(());
+                    let _ = finished.blocking_recv();
+                })
+                .await
+        }));
+        start.await.unwrap();
+        query.abort();
+        assert!(query.await.unwrap_err().is_cancelled());
+        let (writing, write_started) = oneshot::channel();
+        let writer = tokio::spawn(queue.ordered(async move {
+            let _ = writing.send(());
+            backend.workspace.write().await.snippets = true;
+        }));
+        write_started.await.unwrap();
+        assert!(!writer.is_finished());
+        let _ = finish.send(());
+        tokio::time::timeout(Duration::from_secs(1), writer)
+            .await
+            .unwrap()
+            .unwrap();
     }
 }

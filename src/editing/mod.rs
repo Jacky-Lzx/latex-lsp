@@ -579,6 +579,42 @@ fn linked_editing_ranges_with_context(
         return None;
     }
     let cursor = doc.text.offset(position)?;
+    // A linked name must be a braced argument after a literal or named
+    // command. Cursor-move requests elsewhere need no project-wide pairing.
+    // Do not resolve the command here: project aliases and comment-bounded
+    // names still receive the full execution/context checks below.
+    let name_argument = doc.syntax.commands.iter().any(|command| {
+        [
+            Some(command.span.end),
+            command
+                .argument
+                .as_ref()
+                .map(|argument| argument.outer_span.end),
+        ]
+        .into_iter()
+        .flatten()
+        .filter(|end| *end <= cursor)
+        .any(|end| {
+            let at = crate::parser::syntax::skip_space(&doc.text.source, end);
+            if at >= cursor || doc.text.source.as_bytes().get(at) != Some(&b'{') {
+                return false;
+            }
+            crate::parser::syntax::environment_name_argument(&doc.text.source, end)
+                .or_else(|| {
+                    crate::parser::syntax::group(&doc.text.source, at, b'{', b'}')
+                        .filter(|(argument, _)| argument.span.is_empty())
+                        .map(|(argument, _)| argument)
+                })
+                .is_some_and(|argument| {
+                    argument.span.start <= cursor && cursor <= argument.span.end
+                })
+        })
+    });
+    // Raw closing markers live in the parser's ignored region rather than
+    // the command index. Let the ordered walk certify those markers as well.
+    if !name_argument && !doc.syntax.ignored.iter().any(|span| span.contains(&cursor)) {
+        return None;
+    }
     let pairs = if local {
         crate::symbols::project_environments::local_linked_pairs(workspace, uri)
     } else {

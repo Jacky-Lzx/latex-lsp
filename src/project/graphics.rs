@@ -121,10 +121,14 @@ pub(crate) fn calls(
     workspace: &Workspace,
     root: &Url,
 ) -> BTreeMap<Url, Vec<crate::language::signature::SourceCall>> {
-    if crate::project::source_inputs::Index::new(workspace, root).incomplete {
+    let inputs = crate::project::source_inputs::Index::new(workspace, root);
+    if inputs.incomplete {
         return BTreeMap::new();
     }
-    calls_in(workspace, &workspace.project_documents(root))
+    calls_in(
+        workspace,
+        &workspace.project_documents_with_inputs(root, root, &inputs),
+    )
 }
 
 pub(crate) fn calls_in(

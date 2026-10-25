@@ -9207,6 +9207,127 @@ impl Server {
 }
 
 #[test]
+fn startup_document_requests_do_not_wait_for_watcher_registration_acknowledgement() {
+    let directory = tempfile::tempdir().unwrap();
+    let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+    let source = "\\documentclass{article}\\begin{document}\\section{Startup}\\end{document}";
+    std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({
+        "rootUri": Url::from_directory_path(directory.path()).unwrap(),
+        "capabilities": {"workspace":{"didChangeWatchedFiles":{"dynamicRegistration":true}},"textDocument":{"diagnostic":{}}},
+        "initializationOptions": {"distribution":{"enabled":false}}
+    }));
+    server.notify("initialized", json!({}));
+    let registration = server.until(|message| message["method"] == "client/registerCapability");
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{
+            "uri":uri,"languageId":"latex","version":1,"text":source
+        }}),
+    );
+    let symbols = server.request(
+        2,
+        "textDocument/documentSymbol",
+        json!({"textDocument":{"uri":uri}}),
+    );
+    assert!(
+        symbols
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|symbol| symbol["name"] == "Startup"),
+        "{symbols}"
+    );
+    server.send(json!({"jsonrpc":"2.0","id":registration["id"],"result":null}));
+    server.request(3, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
+#[cfg(unix)]
+fn startup_distribution_discovery_does_not_block_documents_or_restore_obsolete_settings() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().unwrap();
+    let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+    let source = "\\documentclass{article}\\usepackage{stale_startup_package}\\begin{document}\\end{document}";
+    std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+    let tree = directory.path().join("tree");
+    std::fs::create_dir_all(tree.join("tex/latex")).unwrap();
+    std::fs::write(tree.join("tex/latex/stale_startup_package.sty"), "").unwrap();
+    std::fs::write(
+        tree.join("ls-R"),
+        "./tex/latex:\nstale_startup_package.sty\n",
+    )
+    .unwrap();
+    let tool = directory.path().join("discover.sh");
+    std::fs::write(&tool, "#!/bin/sh\ncd -- \"$(dirname -- \"$0\")\"\nprintf '%s' \"$$\" > started\nwhile test ! -f release; do sleep 0.01; done\n").unwrap();
+    std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({
+        "rootUri": Url::from_directory_path(directory.path()).unwrap(),
+        "capabilities": {"textDocument":{"diagnostic":{}}},
+        "initializationOptions": {"distribution":{"enabled":true,"executable":tool,"roots":[tree]}}
+    }));
+    server.notify("initialized", json!({}));
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !directory.path().join("started").exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "discovery did not start"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{
+            "uri":uri,"languageId":"latex","version":1,"text":source
+        }}),
+    );
+    server.request(
+        2,
+        "textDocument/documentSymbol",
+        json!({"textDocument":{"uri":uri}}),
+    );
+    let pid: i32 = std::fs::read_to_string(directory.path().join("started"))
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(
+        unsafe { libc::kill(pid, 0) },
+        0,
+        "document request waited for discovery to finish or time out"
+    );
+    server.notify(
+        "workspace/didChangeConfiguration",
+        json!({"settings":{"distribution":{"enabled":false}}}),
+    );
+    server.request(
+        3,
+        "workspace/executeCommand",
+        json!({"command":"latex.indexingStatus","arguments":[]}),
+    );
+    std::fs::write(directory.path().join("release"), "").unwrap();
+    server.until(|message| {
+        message["method"] == "window/logMessage"
+            && message["params"]["message"] == "latex-lsp ready"
+    });
+    let at = source.find("stale_startup_package").unwrap();
+    let definitions = server.request(4, "textDocument/definition", json!({
+        "textDocument":{"uri":uri},"position":latex_lsp::text::Text::new(source.into()).position(at+1)
+    }));
+    assert_eq!(
+        definitions,
+        json!([]),
+        "old discovery overwrote the disabled distribution: {definitions}"
+    );
+    server.request(5, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
 fn duplicate_project_diagnostics_refresh_related_open_documents_after_edits_and_disk_changes() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
@@ -25257,7 +25378,7 @@ fn fancyvrb_inline_body_execution_follows_incremental_macro_wrapping_over_stdio(
     let mut source = "% 😀\r\n\\label{kept}\r\n\r\n\\ref{kept}\r\n".to_owned();
     std::fs::write(root.join("main.tex"), &source).unwrap();
     let mut server = Server::start();
-    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(root).unwrap(),"capabilities":{"textDocument":{"diagnostic":{}},"workspace":{"workspaceEdit":{"documentChanges":true}}}}));
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(root).unwrap(),"initializationOptions":{"distribution":{"enabled":false}},"capabilities":{"textDocument":{"diagnostic":{}},"workspace":{"workspaceEdit":{"documentChanges":true}}}}));
     server.notify("initialized", json!({}));
     server.notify(
         "textDocument/didOpen",
@@ -25522,7 +25643,7 @@ fn fvextra_environment_settings_refresh_symbols_dependencies_and_rename_over_std
         "% 😀\r\n\\usepackage{fvextra}\r\n\\label{kept}\r\n\r\n\\ref{kept}\r\n".to_owned();
     std::fs::write(root.join("main.tex"), &source).unwrap();
     let mut server = Server::start();
-    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(root).unwrap(),"capabilities":{"textDocument":{"diagnostic":{}},"workspace":{"workspaceEdit":{"documentChanges":true}}}}));
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(root).unwrap(),"initializationOptions":{"distribution":{"enabled":false}},"capabilities":{"textDocument":{"diagnostic":{}},"workspace":{"workspaceEdit":{"documentChanges":true}}}}));
     server.notify("initialized", json!({}));
     server.notify(
         "textDocument/didOpen",
