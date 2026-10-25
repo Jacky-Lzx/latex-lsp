@@ -90,6 +90,7 @@ pub struct Document {
     pub(crate) extra_symbols: std::sync::OnceLock<Vec<crate::symbols::extra_symbols::Occurrence>>,
     pub(crate) semantic_full:
         std::sync::OnceLock<std::sync::Arc<crate::language::semantic::Snapshot>>,
+    pub(crate) string_context: crate::symbols::string_test_context::Cache,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -151,6 +152,7 @@ impl Document {
             client_kind,
             semantic_full: Default::default(),
             extra_symbols: Default::default(),
+            string_context: Default::default(),
         }
     }
 
@@ -183,6 +185,7 @@ impl Document {
             self.syntax = Self::parse(&self.text, kind);
             self.semantic_full = Default::default();
             self.extra_symbols = Default::default();
+            self.string_context = Default::default();
         }
         self.kind_hint = Some(kind);
     }

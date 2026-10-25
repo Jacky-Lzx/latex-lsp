@@ -7,15 +7,134 @@ use crate::{
 };
 use lsp_types::Url;
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     ops::Range,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
 };
 
 const ONE: u8 = 1;
 const TWO: u8 = 2;
 const CUSTOM: u8 = 4;
 const UNKNOWN: u8 = ONE | TWO | CUSTOM;
+
+const MAX_CACHED_BYTES: usize = 16 * 1024 * 1024;
+static CACHED_BYTES: AtomicUsize = AtomicUsize::new(0);
+
+/// Text is owned by the Document; readers and inherited grammar distinguish
+/// interpretations of that text across roots and fixed-point rounds.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct SourceInputs {
+    meanings: BTreeMap<usize, u8>,
+    inherited: BTreeMap<String, u8>,
+    shapes: BTreeMap<usize, Arc<CommandShape>>,
+    readers: crate::project::resource_context::Readers,
+    stored: Arc<crate::language::signature::StoredCodeAliases>,
+}
+
+#[derive(Debug)]
+struct CachedSource {
+    inputs: SourceInputs,
+    source: Arc<Source>,
+    bytes: usize,
+}
+
+impl Drop for CachedSource {
+    fn drop(&mut self) {
+        CACHED_BYTES.fetch_sub(self.bytes, Ordering::Relaxed);
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct Applied {
+    meanings: Option<BTreeMap<usize, u8>>,
+    shapes: Option<BTreeMap<usize, Option<Arc<CommandShape>>>>,
+    operands: Option<BTreeMap<usize, bool>>,
+    readers: crate::project::resource_context::Readers,
+    incomplete: bool,
+    names: BTreeSet<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Cache {
+    sources: Arc<Mutex<VecDeque<Arc<CachedSource>>>>,
+    applied: Option<Applied>,
+}
+
+impl Cache {
+    fn source(doc: &crate::project::workspace::Document, inputs: SourceInputs) -> Arc<Source> {
+        {
+            let sources = doc.string_context.sources.lock().unwrap();
+            if let Some(cached) = sources.iter().find(|cached| cached.inputs == inputs) {
+                return cached.source.clone();
+            }
+        }
+        let source = Arc::new(Source::new(
+            &doc.text,
+            |command, known| {
+                inputs
+                    .meanings
+                    .get(&command.span.start)
+                    .copied()
+                    .or_else(|| {
+                        known
+                            .then(|| inputs.inherited.get(&command.name).copied())
+                            .flatten()
+                    })
+                    .unwrap_or_else(|| default_meaning(command, known))
+            },
+            &inputs.shapes,
+            &inputs.readers,
+            &inputs.stored,
+        ));
+        // Account conservatively for syntax and interpretation storage. Each
+        // document keeps at most two interpretations; the process has a budget.
+        let bytes = doc
+            .text
+            .source
+            .len()
+            .saturating_mul(8)
+            .saturating_add(
+                (inputs.meanings.len() + inputs.shapes.len() + inputs.readers.len())
+                    .saturating_mul(64),
+            )
+            .saturating_add(
+                inputs
+                    .inherited
+                    .keys()
+                    .map(|name| name.len() + 64)
+                    .sum::<usize>(),
+            )
+            .saturating_add(
+                inputs
+                    .stored
+                    .keys()
+                    .map(|name| name.len() + 64)
+                    .sum::<usize>(),
+            );
+        let mut sources = doc.string_context.sources.lock().unwrap();
+        if sources.len() >= 2 {
+            sources.pop_front();
+        }
+        if CACHED_BYTES
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                current
+                    .checked_add(bytes)
+                    .filter(|total| *total <= MAX_CACHED_BYTES)
+            })
+            .is_ok()
+        {
+            sources.push_back(Arc::new(CachedSource {
+                inputs,
+                source: source.clone(),
+                bytes,
+            }));
+        }
+        source
+    }
+}
 
 fn native(count: usize) -> u8 {
     if count == 1 {
@@ -182,6 +301,7 @@ impl Context {
     }
 }
 
+#[derive(Debug)]
 struct Assignment {
     name: String,
     source: Option<String>,
@@ -189,6 +309,7 @@ struct Assignment {
     shape: Option<Arc<CommandShape>>,
 }
 
+#[derive(Debug)]
 struct Source {
     syntax: Syntax,
     active: BTreeSet<usize>,
@@ -199,7 +320,7 @@ struct Source {
     hook_mutations: HookMutations,
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct HookMutations {
     assigned: BTreeMap<usize, BTreeSet<String>>,
     uncertain: BTreeSet<usize>,
@@ -420,23 +541,24 @@ impl Analysis {
         for round in 0..32 {
             // Start from literal grammar. Eagerly exposing every data operand
             // could let a quoted verbatim opener swallow the rest of the file.
-            let source = Source::new(
-                &doc.text,
-                |command, known| {
-                    context
-                        .get(&command.span.start)
-                        .copied()
-                        .unwrap_or_else(|| {
-                            if known && self.names.contains(&command.name) {
-                                initial.meaning(&command.name)
-                            } else {
-                                default_meaning(command, known)
-                            }
-                        })
+            let inherited = self
+                .names
+                .iter()
+                .filter_map(|name| {
+                    let meaning = initial.meaning(name);
+                    let default = data_count(name).map_or(CUSTOM, native);
+                    (meaning != default).then(|| (name.clone(), meaning))
+                })
+                .collect();
+            let source = Cache::source(
+                doc,
+                SourceInputs {
+                    meanings: context.clone(),
+                    inherited,
+                    shapes: shapes.clone(),
+                    readers: doc.syntax.contextual_resource_readers.clone(),
+                    stored: self.possible_stores.clone(),
                 },
-                &shapes,
-                &doc.syntax.contextual_resource_readers,
-                &self.possible_stores,
             );
             let visits = self.visits + 1;
             *self = checkpoint.clone();
@@ -781,6 +903,7 @@ pub(crate) fn refresh(workspace: &mut Workspace) {
                 Syntax::latex_with_readers(&doc.text, &doc.syntax.contextual_resource_readers);
             doc.semantic_full = Default::default();
             doc.extra_symbols = Default::default();
+            doc.string_context.applied = None;
         }
         return;
     }
@@ -793,12 +916,12 @@ pub(crate) fn refresh(workspace: &mut Workspace) {
             .map(|(uri, doc)| {
                 (
                     uri.clone(),
-                    Source::new(
-                        &doc.text,
-                        default_meaning,
-                        &BTreeMap::new(),
-                        &doc.syntax.contextual_resource_readers,
-                        &BTreeMap::new(),
+                    Cache::source(
+                        doc,
+                        SourceInputs {
+                            readers: doc.syntax.contextual_resource_readers.clone(),
+                            ..Default::default()
+                        },
                     ),
                 )
             })
@@ -876,6 +999,21 @@ pub(crate) fn refresh(workspace: &mut Workspace) {
         analysis.incomplete |= !analysis.missing.is_empty();
         for (uri, source) in sources {
             let doc = workspace.documents.get_mut(&uri).unwrap();
+            let applied = Applied {
+                meanings: analysis.meanings.get(&uri).cloned(),
+                shapes: analysis.shapes.get(&uri).cloned(),
+                operands: analysis.operands.get(&uri).cloned(),
+                readers: doc.syntax.contextual_resource_readers.clone(),
+                incomplete: analysis.incomplete,
+                names: if analysis.incomplete {
+                    analysis.names.clone()
+                } else {
+                    BTreeSet::new()
+                },
+            };
+            if doc.string_context.applied.as_ref() == Some(&applied) {
+                continue;
+            }
             let meanings = analysis.meanings.get(&uri);
             let mut syntax = Syntax::latex_with_resource_context(
                 &doc.text,
@@ -950,7 +1088,74 @@ pub(crate) fn refresh(workspace: &mut Workspace) {
             doc.syntax = syntax;
             doc.semantic_full = Default::default();
             doc.extra_symbols = Default::default();
+            doc.string_context.applied = Some(applied);
         }
         break;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::project::workspace::Document;
+
+    #[test]
+    fn unrelated_edits_retain_parses_and_tokens_but_imported_meanings_invalidate_them() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let main = Url::from_file_path(root.join("main.tex")).unwrap();
+        let provider = Url::from_file_path(root.join("provider.tex")).unwrap();
+        let child = Url::from_file_path(root.join("child.tex")).unwrap();
+        let other = Url::from_file_path(root.join("other.tex")).unwrap();
+        let source = r"\ifempty{\label{hidden}}{}{}\newglossaryentry{term}{name={Term},description={Text}}\gls{term}";
+        for (uri, source) in [
+            (
+                &main,
+                r"\documentclass{article}\input{provider}\input{child}",
+            ),
+            (&provider, r"\let\ifempty\ifstrempty"),
+            (&child, source),
+        ] {
+            std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+        }
+        let mut workspace = Workspace::default();
+        workspace.add_root(root.to_path_buf());
+        workspace.load_dependencies(&main, 0);
+        let doc = &workspace.documents[&child];
+        assert!(doc.syntax.labels.is_empty());
+        crate::language::semantic::tokens(doc, None).unwrap();
+        crate::symbols::extra_symbols::entries(doc);
+        let tokens = doc.semantic_full.get().unwrap().clone();
+        let parsed = Cache::source(doc, SourceInputs::default());
+        workspace.documents.insert(
+            other.clone(),
+            Document::new(&other, "Unrelated prose".into(), Some(2)),
+        );
+        workspace.load_dependencies(&other, 0);
+        let doc = &workspace.documents[&child];
+        assert!(Arc::ptr_eq(doc.semantic_full.get().unwrap(), &tokens));
+        assert!(doc.extra_symbols.get().is_some());
+        assert!(Arc::ptr_eq(
+            &Cache::source(doc, SourceInputs::default()),
+            &parsed
+        ));
+        workspace.documents.insert(
+            provider.clone(),
+            Document::new(&provider, r"\def\ifempty#1{#1}".into(), Some(2)),
+        );
+        workspace.load_dependencies(&provider, 0);
+        let doc = &workspace.documents[&child];
+        assert!(doc.syntax.labels.iter().any(|label| label.name == "hidden"));
+        assert!(doc.semantic_full.get().is_none());
+        assert!(doc.extra_symbols.get().is_none());
+    }
+
+    #[test]
+    fn oversized_sources_still_parse_without_retaining_analysis() {
+        let uri = Url::parse("untitled:large.tex").unwrap();
+        let doc = Document::new(&uri, "x".repeat(MAX_CACHED_BYTES / 8 + 1), Some(1));
+        let source = Cache::source(&doc, SourceInputs::default());
+        assert!(source.syntax.commands.is_empty());
+        assert!(doc.string_context.sources.lock().unwrap().is_empty());
     }
 }
