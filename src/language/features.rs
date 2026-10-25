@@ -559,6 +559,7 @@ fn rename_target<'a>(
         crate::symbols::saved_text::validate(workspace, &scope, kind)?;
     }
     crate::project::resource_context::validate_rename(workspace, &scope, target.name)?;
+    crate::editing::hook_argument_edits::validate(workspace, &scope, &occurrences)?;
     if matches!(target.kind, TargetKind::Label | TargetKind::Citation) {
         crate::symbols::named_references::Index::new(workspace, uri).validate(
             &scope,

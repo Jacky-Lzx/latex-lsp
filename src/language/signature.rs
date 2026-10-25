@@ -333,6 +333,28 @@ pub(crate) type StoredCodeAliases = BTreeMap<String, BTreeSet<&'static str>>;
 pub(crate) fn possible_stored_code_aliases<'a>(
     documents: impl IntoIterator<Item = (&'a str, &'a syntax::Syntax)>,
 ) -> Option<StoredCodeAliases> {
+    possible_builtin_aliases(
+        documents,
+        [
+            "AddToHook",
+            "AddToHookWithArguments",
+            "AddToHookNext",
+            "AddToHookNextWithArguments",
+            "AtBeginDocument",
+            "AtEndDocument",
+            "mkbibfootnote",
+            "mkbibfootnotetext",
+        ]
+        .into_iter()
+        .chain(HOOK_CONDITIONS.iter().copied())
+        .chain(crate::symbols::macro_mutations::COMMANDS.iter().copied()),
+    )
+}
+
+pub(crate) fn possible_builtin_aliases<'a>(
+    documents: impl IntoIterator<Item = (&'a str, &'a syntax::Syntax)>,
+    builtins: impl IntoIterator<Item = &'static str>,
+) -> Option<StoredCodeAliases> {
     let mut users = BTreeMap::<String, Vec<String>>::new();
     let mut work = 0usize;
     for (source, parsed) in documents {
@@ -349,21 +371,10 @@ pub(crate) fn possible_stored_code_aliases<'a>(
         }
     }
     let mut result = StoredCodeAliases::new();
-    let mut pending: Vec<_> = [
-        "AddToHook",
-        "AddToHookWithArguments",
-        "AddToHookNext",
-        "AddToHookNextWithArguments",
-        "AtBeginDocument",
-        "AtEndDocument",
-        "mkbibfootnote",
-        "mkbibfootnotetext",
-    ]
-    .into_iter()
-    .chain(HOOK_CONDITIONS.iter().copied())
-    .chain(crate::symbols::macro_mutations::COMMANDS.iter().copied())
-    .map(|name| (name.to_owned(), name))
-    .collect();
+    let mut pending: Vec<_> = builtins
+        .into_iter()
+        .map(|name| (name.to_owned(), name))
+        .collect();
     let mut visits = 0;
     while let Some((name, target)) = pending.pop() {
         work += name.len() + 64;
@@ -3125,6 +3136,12 @@ impl<'a> CommandSignatures<'a> {
             && self.local.get(name).map_or(name == builtin, |signature| {
                 signature.as_ref().is_some_and(|s| s.name == builtin)
             })
+    }
+
+    /// A unique replacement, including a late-bound pure forwarder, has a
+    /// parsed user grammar. Captured copies and ambiguous bindings stay unknown.
+    pub(crate) fn has_custom_signature(&self, name: &str, builtin: &str) -> bool {
+        self.local.contains_key(builtin) && self.local.get(name).is_some_and(Option::is_some)
     }
 
     pub(crate) fn literal_integer_value(&self, source: &str, after: usize) -> Option<(i32, usize)> {
