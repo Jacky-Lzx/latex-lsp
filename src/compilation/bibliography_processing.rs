@@ -74,7 +74,7 @@ impl Plan {
         };
         config.validate().map_err(Failure::error)?;
         let output = build
-            .output_path(root)
+            .auxiliary_path(root)
             .ok_or_else(|| Failure::error("Invalid bibliography output directory".into()))?;
         let job = build
             .job_name(root)

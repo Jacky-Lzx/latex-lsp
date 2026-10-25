@@ -127,7 +127,7 @@ pub(crate) fn dependencies(root: &Path, config: &BuildConfig) -> Vec<PathBuf> {
 impl Plan {
     pub(crate) fn prepare(root: &Path, build: &BuildConfig) -> Result<Self, Failure> {
         let output = build
-            .output_path(root)
+            .auxiliary_path(root)
             .ok_or_else(|| Failure::error("Invalid build output directory".into()))?;
         let mut names = BTreeSet::new();
         let mut stages = vec![];

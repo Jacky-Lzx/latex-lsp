@@ -8,6 +8,8 @@ const MAX_RC_SIZE: u64 = 64 * 1024;
 pub(super) struct Settings {
     pub output_directory: Result<Option<String>, String>,
     pub engine: Result<Option<Engine>, String>,
+    pub auxiliary_directory: Result<Option<String>, String>,
+    pub final_output_directory: Result<Option<String>, String>,
 }
 
 impl Default for Settings {
@@ -15,6 +17,8 @@ impl Default for Settings {
         Self {
             output_directory: Ok(None),
             engine: Ok(None),
+            auxiliary_directory: Ok(None),
+            final_output_directory: Ok(None),
         }
     }
 }
@@ -43,10 +47,14 @@ pub(super) fn read(path: &Path) -> Settings {
         Ok(source) => Settings {
             output_directory: output_setting(&source),
             engine: engine_setting(&source),
+            auxiliary_directory: directory_setting(&source, "$aux_dir"),
+            final_output_directory: directory_setting(&source, "$out2_dir"),
         },
         Err(error) => Settings {
             output_directory: Err(error.clone()),
-            engine: Err(error),
+            engine: Err(error.clone()),
+            auxiliary_directory: Err(error.clone()),
+            final_output_directory: Err(error),
         },
     }
 }
@@ -69,12 +77,20 @@ fn literal_engine(source: &str) -> Option<Engine> {
 }
 
 fn output_setting(source: &str) -> Result<Option<String>, String> {
-    literal_setting(source, "$out_dir")?
+    directory_setting(source, "$out_dir")
+}
+
+fn directory_setting(source: &str, setting: &str) -> Result<Option<String>, String> {
+    literal_setting(source, setting)?
         .map(|value| {
             if value.contains(['\0', '\n', '\r']) {
                 return Err("invalid directory characters".into());
             }
-            Ok(if value.is_empty() { ".".into() } else { value })
+            Ok(if value.is_empty() && setting == "$out_dir" {
+                ".".into()
+            } else {
+                value
+            })
         })
         .transpose()
 }
@@ -174,6 +190,13 @@ fn literal_setting(source: &str, setting: &str) -> Result<Option<String>, String
                                 && value.chars().all(|ch| ch.is_ascii_digit()) =>
                         {
                             Ok(Some(value.clone()))
+                        }
+                        [Token::Word(name), Token::Symbol('='), Token::Word(reference)]
+                            if name == setting
+                                && matches!(setting, "$aux_dir" | "$out2_dir")
+                                && reference == "$out_dir" =>
+                        {
+                            output_setting(source)
                         }
                         [Token::Word(target), Token::Symbol('='), Token::Word(source)]
                             if target.starts_with('$')

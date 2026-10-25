@@ -218,7 +218,7 @@ impl Snapshot {
         .map(|path| normalize_path(&path))
         .collect();
         // \include creates auxiliary files under the configured output folder.
-        if let Some(output) = config.output_path(&root_path) {
+        if let Some(output) = config.auxiliary_path(&root_path) {
             for source in &sources {
                 if let Some(doc) = workspace.documents.get(source) {
                     for command in doc

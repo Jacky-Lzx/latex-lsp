@@ -336,3 +336,94 @@ fn unsupported_perl_does_not_silently_override_rc_settings() {
         );
     }
 }
+
+#[test]
+fn separate_directories_route_artifacts_and_explicit_overrides() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = directory.path().join("main.tex");
+    std::fs::write(
+        directory.path().join(".latexmkrc"),
+        "$out_dir = 'tex'; $aux_dir = 'aux'; $out2_dir = 'final'; $pdf_mode = 5;",
+    )
+    .unwrap();
+    let config = BuildConfig::default();
+    for (extension, folder) in [
+        ("pdf", "final"),
+        ("synctex.gz", "final"),
+        ("log", "aux"),
+        ("fls", "aux"),
+        ("bbl", "aux"),
+        ("xdv", "tex"),
+    ] {
+        assert_eq!(
+            config.artifact_path(&main, extension).unwrap(),
+            directory
+                .path()
+                .join(folder)
+                .join(format!("main.{extension}"))
+        );
+    }
+    let args = config.expanded_arguments(&main).unwrap();
+    assert!(args.contains(&"-auxdir=aux".into()));
+    assert!(args.contains(&"-out2dir=final".into()));
+    let explicit = BuildConfig {
+        auxiliary_directory: Some("cache".into()),
+        final_output_directory: Some("publish".into()),
+        ..Default::default()
+    };
+    assert_eq!(
+        explicit.artifact_path(&main, "log").unwrap(),
+        directory.path().join("cache/main.log")
+    );
+    assert_eq!(
+        explicit.artifact_path(&main, "pdf").unwrap(),
+        directory.path().join("publish/main.pdf")
+    );
+}
+
+#[test]
+#[ignore = "requires latexmk, pdfLaTeX and XeLaTeX"]
+fn real_latexmk_separate_auxiliary_output_and_final_directories() {
+    for mode in [1, 5] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let main = root.join("main.tex");
+        std::fs::create_dir(root.join("chapters")).unwrap();
+        std::fs::write(root.join("chapters/part.tex"), "A chapter.").unwrap();
+        let source = "\\documentclass{article}\n\\begin{document}Hello\\include{chapters/part}\\end{document}\n";
+        std::fs::write(&main, source).unwrap();
+        std::fs::write(
+            root.join(".latexmkrc"),
+            format!("$out_dir = 'tex'; $aux_dir = 'aux'; $out2_dir = 'final'; $pdf_mode = {mode};"),
+        )
+        .unwrap();
+        for rebuild in [false, true] {
+            let outcome = if rebuild {
+                build::rebuild(&main, &BuildConfig::default(), &AtomicBool::new(false))
+            } else {
+                build::run(&main, &BuildConfig::default(), &AtomicBool::new(false))
+            };
+            assert_eq!(
+                outcome.status, "success",
+                "{}\n{}",
+                outcome.message, outcome.output
+            );
+            assert_eq!(outcome.pdf, Some(root.join("final/main.pdf")));
+            assert_eq!(outcome.log, Some(root.join("aux/main.log")));
+            for path in [
+                "aux/main.fls",
+                "aux/chapters/part.aux",
+                "final/main.synctex.gz",
+            ] {
+                assert!(root.join(path).is_file(), "{mode}: {path}");
+            }
+        }
+        let uri = Url::from_file_path(&main).unwrap();
+        let mut workspace = Workspace::default();
+        workspace.open(uri.clone(), source.into(), 1);
+        assert_eq!(
+            synctex::prepare(&workspace, &uri).unwrap().pdf,
+            root.join("final/main.pdf")
+        );
+    }
+}

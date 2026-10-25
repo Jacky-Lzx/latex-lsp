@@ -51,6 +51,8 @@ struct Record {
     // Preserve the path passed to the compiler as well as initial physical
     // artifact names: a directory alias may be retargeted while it runs.
     output_directory: Option<PathBuf>,
+    auxiliary_directory: Option<PathBuf>,
+    auxiliary_artifact: Option<PathBuf>,
     index_artifacts: BTreeSet<PathBuf>,
     bibliography_output_directory: Option<PathBuf>,
 }
@@ -84,10 +86,15 @@ impl Record {
 
     fn shared_index(&self, candidates: &BTreeSet<PathBuf>) -> Option<PathBuf> {
         self.index_artifacts.iter().find_map(|path| {
-            [Some(path.clone()), self.current_artifact(path)]
-                .into_iter()
-                .flatten()
-                .find(|path| candidates.contains(path))
+            [
+                Some(path.clone()),
+                self.auxiliary_directory.as_ref().and_then(|directory| {
+                    Some(directory.canonicalize().ok()?.join(path.file_name()?))
+                }),
+            ]
+            .into_iter()
+            .flatten()
+            .find(|path| candidates.contains(path))
         })
     }
 }
@@ -189,7 +196,16 @@ impl BuildManager {
                 .into_iter()
                 .map(artifact_binding)
                 .collect();
-        let directory = config.output_path(&root_path).map(physical);
+        let directories: Vec<_> = [
+            config.output_path(&root_path),
+            config.auxiliary_path(&root_path),
+            config.final_output_path(&root_path),
+        ]
+        .into_iter()
+        .flatten()
+        .map(&physical)
+        .collect();
+        let directory = config.output_path(&root_path).map(&physical);
         let (result, affected) = {
             // Serialize with build reservation and queued generation checks.
             // No process is cancelled implicitly by a cleanup request.
@@ -217,7 +233,15 @@ impl BuildManager {
                         .index_artifacts
                         .iter()
                         .any(|path| directory.as_ref().is_some_and(|dir| path.starts_with(dir)));
-                if record.active.is_some() && (owner == &root || shared || same_directory) {
+                if record.active.is_some()
+                    && (owner == &root
+                        || shared
+                        || same_directory
+                        || [&record.output_directory, &record.auxiliary_directory]
+                            .into_iter()
+                            .flatten()
+                            .any(|path| directories.contains(&physical(path.clone()))))
+                {
                     return Err(Error::invalid_params(format!(
                         "Wait for the active build of {owner} before cleaning its output directory"
                     )));
@@ -427,9 +451,14 @@ impl BuildManager {
             if let Some((owner, _)) = state.iter().find(|(owner, record)| {
                 *owner != &root
                     && record.active.is_some()
-                    && artifact
+                    && (artifact
                         .as_ref()
                         .is_some_and(|path| record.shares_pdf(path))
+                        || config.artifact_path(&root_path, "log").is_some_and(|path| {
+                            record.auxiliary_artifact.as_ref().is_some_and(|previous| {
+                                artifact_binding(previous.clone()) == artifact_binding(path)
+                            })
+                        }))
             }) {
                 return Err(Error::invalid_params(format!(
                     "Another active build writes the same output file: {}; wait for {} to finish or choose a different jobName or outputDirectory",
@@ -486,12 +515,14 @@ impl BuildManager {
                 .collect();
             record.checks = checks.clone();
             record.artifact = artifact;
-            record.output_directory = config.output_path(&root_path);
+            record.output_directory = config.final_output_path(&root_path);
+            record.auxiliary_directory = config.auxiliary_path(&root_path);
+            record.auxiliary_artifact = config.artifact_path(&root_path, "log");
             record.index_artifacts = index_artifacts;
             record.bibliography_output_directory =
                 config.bibliography_tool.as_ref().and_then(|_| {
                     config
-                        .output_path(&root_path)
+                        .auxiliary_path(&root_path)
                         .map(|path| crate::project::workspace::normalize_path(&path))
                 });
             self.tasks.fetch_add(1, Ordering::SeqCst);
@@ -1562,7 +1593,7 @@ fn run_inner(root: &Path, config: &BuildConfig, cancel: &AtomicBool, rebuild: bo
             Err(failure) => return Outcome::error(failure.message),
         };
     let bibliography_before = config
-        .output_path(root)
+        .auxiliary_path(root)
         .map(|output| bibliography_logs(&output))
         .unwrap_or_default();
     let mut first = run_single(root, config, cancel, rebuild, None, None);
@@ -1747,7 +1778,15 @@ fn run_single(
         };
         arguments
     };
-    let output_dir = config.output_path(root).unwrap();
+    let output_dir = config.auxiliary_path(root).unwrap();
+    for directory in [config.output_path(root), config.final_output_path(root)]
+        .into_iter()
+        .flatten()
+    {
+        if let Err(error) = std::fs::create_dir_all(directory) {
+            return Outcome::error(format!("Cannot create build directory: {error}"));
+        }
+    }
     if let Err(error) = std::fs::create_dir_all(&output_dir) {
         return Outcome::error(format!("Cannot create build directory: {error}"));
     }

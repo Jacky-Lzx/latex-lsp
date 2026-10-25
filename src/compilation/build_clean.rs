@@ -109,11 +109,51 @@ struct Entry {
     stamp: Stamp,
 }
 
+struct Directory {
+    original: PathBuf,
+    path: PathBuf,
+    target: Option<PathBuf>,
+    identity: Option<Identity>,
+}
+impl Directory {
+    fn capture(original: PathBuf) -> Result<Self, String> {
+        let path = crate::project::workspace::normalize_path(&original);
+        if original.canonicalize().ok() != path.canonicalize().ok() {
+            return Err(
+                "Cleanup requires an unambiguous output directory; choose its direct path".into(),
+            );
+        }
+        let target = match path.canonicalize() {
+            Ok(path) if path.is_dir() => Some(path),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            _ => return Err("Cannot resolve build output directory".into()),
+        };
+        let identity = target
+            .as_ref()
+            .and_then(|path| std::fs::metadata(path).ok())
+            .map(|meta| Identity::of(&meta));
+        Ok(Self {
+            original,
+            path,
+            target,
+            identity,
+        })
+    }
+    fn valid(&self) -> bool {
+        self.path.canonicalize().ok() == self.target
+            && self.original.canonicalize().ok() == self.target
+            && self
+                .target
+                .as_ref()
+                .and_then(|path| std::fs::metadata(path).ok())
+                .map(|meta| Identity::of(&meta))
+                == self.identity
+    }
+}
+
 pub(crate) struct Plan {
     pub(crate) directory: PathBuf,
-    original_directory: PathBuf,
-    target: Option<PathBuf>,
-    directory_identity: Option<Identity>,
+    directories: Vec<Directory>,
     entries: Vec<Entry>,
     skipped: Vec<Value>,
 }
@@ -128,24 +168,19 @@ impl Plan {
         let root_path = root
             .to_file_path()
             .map_err(|_| "Cleanup requires a local file")?;
-        let original_directory = config
-            .output_path(&root_path)
-            .ok_or("Invalid output directory")?;
-        let directory = crate::project::workspace::normalize_path(&original_directory);
-        if original_directory.canonicalize().ok() != directory.canonicalize().ok() {
-            return Err(
-                "Cleanup requires an unambiguous output directory; choose its direct path".into(),
-            );
-        }
-        let target = match directory.canonicalize() {
-            Ok(path) if path.is_dir() => Some(path),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            _ => return Err("Cannot resolve build output directory".into()),
-        };
-        let directory_identity = target
-            .as_ref()
-            .and_then(|path| std::fs::metadata(path).ok())
-            .map(|metadata| Identity::of(&metadata));
+        config.validate_resolution()?;
+        let directories: Vec<_> = [
+            config.output_path(&root_path),
+            config.auxiliary_path(&root_path),
+            config.final_output_path(&root_path),
+        ]
+        .into_iter()
+        .collect::<Option<Vec<_>>>()
+        .ok_or("Invalid output directory")?
+        .into_iter()
+        .map(Directory::capture)
+        .collect::<Result<_, _>>()?;
+        let directory = directories[0].path.clone();
         let mut paths: BTreeSet<_> = AUXILIARY
             .iter()
             .filter_map(|extension| config.artifact_path(&root_path, extension))
@@ -156,6 +191,18 @@ impl Plan {
                     .iter()
                     .filter_map(|extension| config.artifact_path(&root_path, extension)),
             );
+        }
+        if artifacts {
+            for directory in &directories {
+                for extension in ["pdf", "synctex", "synctex.gz"] {
+                    let mut name = config
+                        .job_name(&root_path)
+                        .ok_or("Invalid job name")?
+                        .to_os_string();
+                    name.push(format!(".{extension}"));
+                    paths.insert(directory.original.join(name));
+                }
+            }
         }
         // Explicit index jobs can have a different job name. Restrict suffixes
         // even for custom tools: configuration must not authorize deleting source.
@@ -236,9 +283,7 @@ impl Plan {
             .collect();
         let mut plan = Self {
             directory,
-            original_directory,
-            target,
-            directory_identity,
+            directories,
             entries: vec![],
             skipped: vec![],
         };
@@ -257,9 +302,12 @@ impl Plan {
             } else if original.canonicalize().ok() != resolved {
                 Some("ambiguous-path")
             } else if resolved.as_ref().is_none_or(|path| {
-                plan.target
-                    .as_ref()
-                    .is_none_or(|directory| !path.starts_with(directory))
+                !plan.directories.iter().any(|directory| {
+                    directory
+                        .target
+                        .as_ref()
+                        .is_some_and(|target| path.starts_with(target))
+                })
             }) {
                 Some("outside-output-directory")
             } else if resolved
@@ -299,14 +347,7 @@ impl Plan {
     }
 
     fn valid_directory(&self) -> bool {
-        self.directory.canonicalize().ok() == self.target
-            && self.original_directory.canonicalize().ok() == self.target
-            && self
-                .target
-                .as_ref()
-                .and_then(|path| std::fs::metadata(path).ok())
-                .map(|metadata| Identity::of(&metadata))
-                == self.directory_identity
+        self.directories.iter().all(Directory::valid)
     }
 
     fn valid_entry(&self, entry: &Entry) -> bool {
@@ -351,6 +392,41 @@ impl Plan {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn split_directory_cleanup_removes_only_known_artifacts_and_checks_each_binding() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let main = root.join("main.tex");
+        std::fs::write(&main, "Source").unwrap();
+        let uri = Url::from_file_path(&main).unwrap();
+        let config = BuildConfig {
+            output_directory: Some("tex".into()),
+            auxiliary_directory: Some("aux".into()),
+            final_output_directory: Some("final".into()),
+            ..Default::default()
+        };
+        for folder in ["tex", "aux", "final"] {
+            std::fs::create_dir(root.join(folder)).unwrap();
+        }
+        for name in [
+            "aux/main.log",
+            "aux/main.aux",
+            "tex/main.pdf",
+            "final/main.pdf",
+            "final/main.synctex.gz",
+            "final/keep.txt",
+        ] {
+            std::fs::write(root.join(name), "artifact").unwrap();
+        }
+        let plan = Plan::prepare(&Workspace::default(), &uri, &config, true).unwrap();
+        let result = plan.execute(false).unwrap();
+        assert_eq!(result["removed"].as_array().unwrap().len(), 5);
+        assert!(root.join("final/keep.txt").exists());
+        std::fs::remove_dir(root.join("aux")).unwrap();
+        std::fs::create_dir(root.join("aux")).unwrap();
+        assert!(plan.execute(false).is_err());
+    }
 
     fn fixture() -> (tempfile::TempDir, Workspace, Url, BuildConfig) {
         let dir = tempfile::tempdir().unwrap();

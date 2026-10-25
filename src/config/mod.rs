@@ -204,6 +204,8 @@ pub struct BuildConfig {
     pub rebuild_arguments: Option<Vec<String>>,
     pub engine: Option<Engine>,
     pub output_directory: Option<String>,
+    pub auxiliary_directory: Option<String>,
+    pub final_output_directory: Option<String>,
     pub root_file: Option<String>,
     pub job_name: Option<String>,
     pub on_save: bool,
@@ -221,6 +223,8 @@ impl Default for BuildConfig {
             rebuild_arguments: None,
             engine: None,
             output_directory: None,
+            auxiliary_directory: None,
+            final_output_directory: None,
             root_file: None,
             job_name: None,
             on_save: false,
@@ -430,11 +434,14 @@ impl Config {
             return Err("Formatting timeoutSeconds must be between 1 and 3600".into());
         }
         if config.build.executable.trim().is_empty()
-            || config
-                .build
-                .output_directory
-                .as_ref()
-                .is_some_and(|directory| directory.trim().is_empty())
+            || [
+                &config.build.output_directory,
+                &config.build.auxiliary_directory,
+                &config.build.final_output_directory,
+            ]
+            .into_iter()
+            .flatten()
+            .any(|directory| directory.trim().is_empty() || directory.contains(['\0', '\n', '\r']))
         {
             return Err("Build executable and outputDirectory must not be empty".into());
         }
@@ -476,7 +483,11 @@ impl BuildConfig {
     /// lookup share the same settings if the rc file changes while the tool runs.
     pub(crate) fn resolved(&self, root: &Path) -> Self {
         let mut config = self.clone();
-        if config.output_directory.is_some() && config.engine.is_some() {
+        if config.output_directory.is_some()
+            && config.engine.is_some()
+            && config.auxiliary_directory.is_some()
+            && config.final_output_directory.is_some()
+        {
             return config;
         }
         let path = self
@@ -514,6 +525,29 @@ impl BuildConfig {
                 Err(error) => config.resolution.issues.push(describe("$out_dir", error)),
             }
         }
+        for (target, setting, value) in [
+            (
+                &mut config.auxiliary_directory,
+                "$aux_dir",
+                settings.auxiliary_directory,
+            ),
+            (
+                &mut config.final_output_directory,
+                "$out2_dir",
+                settings.final_output_directory,
+            ),
+        ] {
+            if target.is_none() {
+                match value {
+                    Ok(value) => {
+                        *target = value
+                            .filter(|value| !value.is_empty())
+                            .or_else(|| config.output_directory.clone())
+                    }
+                    Err(error) => config.resolution.issues.push(describe(setting, error)),
+                }
+            }
+        }
         config.resolution.issues.sort();
         config.resolution.issues.dedup();
         config
@@ -544,6 +578,20 @@ impl BuildConfig {
         Some(root.parent()?.join(config.output_directory.as_deref()?))
     }
 
+    pub fn auxiliary_path(&self, root: &Path) -> Option<PathBuf> {
+        Some(
+            root.parent()?
+                .join(self.resolved(root).auxiliary_directory.as_deref()?),
+        )
+    }
+
+    pub fn final_output_path(&self, root: &Path) -> Option<PathBuf> {
+        Some(
+            root.parent()?
+                .join(self.resolved(root).final_output_directory.as_deref()?),
+        )
+    }
+
     pub fn job_name<'a>(&'a self, root: &'a Path) -> Option<&'a OsStr> {
         self.job_name
             .as_deref()
@@ -555,7 +603,12 @@ impl BuildConfig {
         let mut name = self.job_name(root)?.to_os_string();
         name.push(".");
         name.push(extension);
-        Some(self.output_path(root)?.join(name))
+        let directory = match extension {
+            "pdf" | "synctex" | "synctex.gz" | "ps" | "hnt" => self.final_output_path(root)?,
+            "dvi" | "xdv" => self.output_path(root)?,
+            _ => self.auxiliary_path(root)?,
+        };
+        Some(directory.join(name))
     }
 
     /// Substitute only template placeholders, never text inserted by another
@@ -702,6 +755,19 @@ impl BuildConfig {
         if let Some(engine) = self.engine {
             if let Some(argument) = arguments.iter_mut().find(|argument| *argument == "-pdf") {
                 *argument = engine.latexmk_argument().into();
+            }
+        }
+        if engine == "latexmk" {
+            for (flag, directory) in [
+                ("-auxdir", &self.auxiliary_directory),
+                ("-out2dir", &self.final_output_directory),
+            ] {
+                if let Some(directory) = directory
+                    .as_ref()
+                    .filter(|directory| Some(*directory) != self.output_directory.as_ref())
+                {
+                    arguments.insert(0, format!("{flag}={directory}"));
+                }
             }
         }
         // BibTeX's default file policy rejects hidden or parent-relative output

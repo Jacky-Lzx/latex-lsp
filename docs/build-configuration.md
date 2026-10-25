@@ -31,7 +31,7 @@ $out_dir = 'build';
 
 这样，编译、PDF / 日志定位和 SyncTeX 都使用主文档旁的 `build/`。显式的 `outputDirectory` 优先于 rc 文件；未设置时回退到 `build/latex-lsp/`。支持单引号和不含插值的双引号字符串、注释及多次直接赋值（最后一次生效）；`$out_dir = '';` 表示主文档目录。每次编译重新读取磁盘配置，编译中配置改变会使结果过期。
 
-这里采用静态读取，不执行 Perl；条件、函数、字符串拼接、环境变量插值及其他动态表达式不作求值，也不自动读取用户级或系统级 rc 文件。遇到这些用法、自定义 `arguments`、单独配置 `$aux_dir` 或 `$out2_dir` 时，请显式设置 `outputDirectory` 并让编译参数的产物位置与之保持一致。直接调用 TeX 引擎和 Tectonic 时继续使用 LSP 的输出目录设置。
+这里采用静态读取，不执行 Perl；条件、函数、字符串拼接、环境变量插值及其他动态表达式不作求值，也不自动读取用户级或系统级 rc 文件。遇到这些用法、自定义 `arguments`、使用不支持的目录表达式时，请显式设置 `outputDirectory` 并让编译参数的产物位置与之保持一致。直接调用 TeX 引擎和 Tectonic 时继续使用 LSP 的输出目录设置。
 
 `build.rebuildArguments` 单独指定强制编译的完整参数列表，也支持 `%f`、`%o`、`%j`；普通 `latex.build` 仍使用 `arguments`。自定义了 `arguments` 或使用未知编译工具时，必须显式设置 `rebuildArguments` 才能调用 `latex.rebuild`，否则在修改旧日志前报错。例如自定义 latexmk 参数时，可设 `"rebuildArguments": ["-g", "-pdf", "-interaction=nonstopmode", "-file-line-error", "-synctex=1", "-no-shell-escape", "-outdir=%o", "%f"]`；参数应包含工具所需的完整编译选项，设置 `jobName` 时也需自行传入 `%j`。使用这份自定义参数的重编译通知中，`engine` 为 `null`。
 
@@ -48,3 +48,5 @@ program 指令忽略大小写和逐字环境，只接受这三个引擎名称；
 `build.bibliographyTool` 可显式配置 [BibTeX / Biber 流程](bibliography-processing.md)，暂存文献产物、核对处理日志并运行后续 TeX 遍次；默认不启用，可与索引任务共同配置。
 
 rc 中缺少设置与无法解析是两种状态。遇到动态赋值、正则或其他无法可靠识别的 Perl 语法时，服务器在启动编译器和修改日志之前报错，列出 rc 路径、设置及原因；请显式设置对应的 `engine` / `outputDirectory`。不会将无法判断的引擎静默覆盖为 pdfLaTeX。开始、完成通知和编译状态的 `configuration` 包含 `sources` 与 `issues`。
+
+`build.auxiliaryDirectory` 与 `build.finalOutputDirectory` 分别覆盖 `$aux_dir` 和 `$out2_dir`。未设置时从项目 rc 读取，空值或缺省继承 `$out_dir`。`outputDirectory` 仍表示 TeX 输出目录；日志、recorder、文献、索引和章节辅助文件使用辅助目录，PDF 与 SyncTeX 使用最终目录。默认 latexmk 参数同步传入这些目录；清理仅删除这些目录中的已知产物，并检查每个目录的路径绑定。自定义参数需自行传递与这些设置一致的工具选项。
