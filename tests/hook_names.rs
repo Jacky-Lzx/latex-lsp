@@ -36,6 +36,18 @@ fn literal_hook_names_navigate_across_direct_named_and_forwarded_calls() {
             r"\register",
             r"\invoke",
         ),
+        (
+            r"\newenvironment{invoke}{\UseHook}{}",
+            r"\NewHook",
+            r"\AddToHook",
+            r"\invoke",
+        ),
+        (
+            r"\newenvironment{invoke}{}{\UseHook}",
+            r"\NewHook",
+            r"\AddToHook",
+            r"\endinvoke",
+        ),
     ] {
         let source =
             format!(r"{preamble}{new}{{custom}}{add}{{custom}}[mine]{{Code}}{use_hook}{{custom}}");
@@ -69,6 +81,25 @@ fn literal_hook_names_navigate_across_direct_named_and_forwarded_calls() {
         assert!(highlights[1..]
             .iter()
             .all(|item| item.kind == Some(DocumentHighlightKind::READ)));
+    }
+}
+
+#[test]
+fn static_named_mirrored_forwarders_keep_both_bare_name_fields() {
+    let source = r"\def\pair{\NewMirroredHookPair}\csuse{pair}ab\UseHook a\UseHook b";
+    let (workspace, uri) = setup(source);
+    let text = &workspace.documents[&uri].text;
+    let first = source.find("}ab").unwrap() + 1;
+    for (slot, key) in ['a', 'b'].into_iter().enumerate() {
+        let at = text.position(source.rfind(key).unwrap());
+        assert_eq!(
+            features::definitions(&workspace, &uri, at),
+            [Location {
+                uri: uri.clone(),
+                range: text.range(first + slot, first + slot + 1)
+            }]
+        );
+        assert_eq!(features::references(&workspace, &uri, at, true).len(), 2);
     }
 }
 

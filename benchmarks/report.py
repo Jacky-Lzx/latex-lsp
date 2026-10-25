@@ -45,6 +45,7 @@ for(const key of Object.keys(data.after.scenarios)){const option=document.create
 scale.value=Object.hasOwn(data.after.scenarios,'large')?'large':scale.options[0].value;
 const p=data.after.parameters;
 document.getElementById('method').textContent=`${p.runs} 个独立进程 × ${p.iterations} 个测量周期；每个进程先预热 ${p.warmup} 个周期。每周期 11 次编辑，顺序查询各项功能。初始化、打开单独统计。${p.hooks?' 包含内核钩子及其参数提示校验。':''}${p.hook_wrappers?' 每节含嵌套包装调用，测量参数数据传递保护。':''}${p.hook_environments?' 每节含环境包装，由结束正文把开始参数传入 hook。':''}`;
+if(p.hook_interfaces)document.getElementById('method').textContent+=' 每节还直接调用环境生成的 hook 转发控制序列。';
 if(data.paired){
  const report=data.paired,host=document.getElementById('paired'),note=document.createElement('p');
  const query=report.kind==='paired_definition'?'定义跳转':'改名';

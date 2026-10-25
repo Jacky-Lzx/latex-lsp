@@ -139,6 +139,24 @@ pub(crate) fn calls_in(
     else {
         return BTreeMap::new();
     };
+    // Every supported alias chain must reach the builtin, either as a control
+    // word or a literal name. Named controls can normalize source spelling, so
+    // retain full analysis whenever they occur, even without the literal text.
+    // Check all bounded sources, including recorder-only definitions, before
+    // deciding that no document can contain an image call.
+    if !documents.iter().any(|(_, doc)| {
+        doc.text.source.contains("includegraphics")
+            || doc
+                .syntax
+                .commands
+                .iter()
+                .any(|command| matches!(command.name.as_str(), "csuse" | "csname" | "endcsname"))
+    }) {
+        return documents
+            .iter()
+            .map(|(uri, _)| (uri.clone(), Vec::new()))
+            .collect();
+    }
     let signatures = crate::language::signature::CommandSignatures::source_context(
         documents
             .iter()

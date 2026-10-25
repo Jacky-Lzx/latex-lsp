@@ -179,6 +179,45 @@ fn image_aliases_from_inputs_and_local_packages_use_the_compilation_root() {
 }
 
 #[test]
+fn image_discovery_refreshes_when_an_unsaved_provider_installs_or_removes_an_alias() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let source = r"\input{aliases}\graphicspath{{assets/}}\Image{plot.png}";
+    std::fs::write(root.join("aliases.tex"), "No image definitions").unwrap();
+    let mut workspace = project(root, source);
+    let main = uri(root, "main.tex");
+    let provider = uri(root, "aliases.tex");
+    assert!(targets(&workspace, &main).is_empty());
+    for (version, definitions, expected) in [
+        (1, r"\def\Image{\includegraphics}", true),
+        (2, r"\def\Image#1{}", false),
+        (3, r"\newcommand\Image{\includegraphics}", true),
+        (4, "No image definitions", false),
+    ] {
+        workspace.open(provider.clone(), definitions.into(), version);
+        let expected_targets = if expected {
+            vec![uri(root, "assets/plot.png")]
+        } else {
+            vec![]
+        };
+        assert_eq!(
+            targets(&workspace, &main),
+            expected_targets,
+            "{definitions}"
+        );
+        let changed = changes(
+            &workspace,
+            &[rename(root, "assets/plot.png", "assets/chart.png")],
+        );
+        if expected {
+            assert_eq!(changed[&main], source.replace("{plot.png}", "{chart.png}"));
+        } else {
+            assert!(changed.is_empty(), "{definitions}: {changed:?}");
+        }
+    }
+}
+
+#[test]
 fn quoted_consumed_deferred_or_unproven_image_calls_do_not_choose_files() {
     for body in [
         r"\string\Image{plot}",

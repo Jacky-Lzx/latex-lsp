@@ -31,7 +31,7 @@ def replay(before, after, scale, args, cpu):
         with tempfile.TemporaryDirectory(prefix="latex-lsp-rename-pairs-") as directory, ExitStack() as stack:
             root = Path(directory)
             launchers = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="latex-lsp-rename-launch-")))
-            metadata = editing.fixture(root, scale, args.hooks, args.hook_wrappers, args.hook_environments)
+            metadata = editing.fixture(root, scale, args.hooks, args.hook_wrappers, args.hook_environments, args.hook_interfaces)
             main, chapter = root / "main.tex", root / "chapter0.tex"
             source = chapter.read_text()
             params = {"textDocument": {"uri": chapter.as_uri()},
@@ -126,6 +126,7 @@ def main():
     parser.add_argument("--hooks", action="store_true")
     parser.add_argument("--hook-wrappers", action="store_true")
     parser.add_argument("--hook-environments", action="store_true")
+    parser.add_argument("--hook-interfaces", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.iterations < 1 or args.runs < 1 or args.warmup < 0 or args.timeout <= 0:
@@ -134,7 +135,7 @@ def main():
     if args.cpu is not None and args.cpu not in affinity:
         parser.error("cpu must belong to the current allowed CPU set")
     cpu = args.cpu if args.cpu is not None else min(affinity, default=None)
-    args.hooks = args.hooks or args.hook_wrappers or args.hook_environments
+    args.hooks = args.hooks or args.hook_wrappers or args.hook_environments or args.hook_interfaces
     before, after = args.before.resolve(strict=True), args.after.resolve(strict=True)
     report = {
         "schema": 1, "kind": f"paired_{args.query}",
@@ -147,7 +148,8 @@ def main():
                     for label, binary in [("before", before), ("after", after)]},
         "parameters": {"iterations": args.iterations, "warmup": args.warmup, "runs": args.runs,
                        "hooks": args.hooks, "hook_wrappers": args.hook_wrappers,
-                       "hook_environments": args.hook_environments, "query": args.query},
+                       "hook_environments": args.hook_environments,
+                       "hook_interfaces": args.hook_interfaces, "query": args.query},
         "scenarios": {},
     }
     for scale in args.scales:

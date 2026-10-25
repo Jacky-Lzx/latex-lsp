@@ -53,6 +53,13 @@ python3 benchmarks/editing.py --hook-wrappers --hook-environments \
   --output target/benchmarks/hook-environments.json
 ```
 
+`--hook-interfaces` 包含 hook 负载，在主文件定义零参数环境转发器 `benchinterface`，每节直接调用其生成的开始控制序列，把紧随的名称与字面数据交给 `UseHook`。它覆盖环境生成接口的安全分析成本，可与上述两种包装负载组合；输出记录 `hook_interfaces`。
+
+```sh
+python3 benchmarks/editing.py --hook-wrappers --hook-environments --hook-interfaces \
+  --output target/benchmarks/hook-interfaces.json
+```
+
 ## 比较优化前后
 
 先保留优化前的二进制，再构建优化后的版本，依次测量，避免构建或其他 benchmark 同时运行：
@@ -260,3 +267,41 @@ python3 benchmarks/report.py \
 ```
 
 两种配对查询及环境组合会话的 smoke 通过，CI 同步覆盖。44 项 hook 相关测试、8 项显式原生测试、全目标严格 Clippy、文档、格式及差异检查通过。冻结源码后的整仓回归为 320 个目标、3365 项通过、0 失败、494 项默认跳过，其中完整串行协议为 406 项通过、29 项默认跳过。独立 HTML 的配对表及项目／分位数／指标筛选交互、全部原始样本数量与数值检查通过；预览服务仍返回 `Headless Chrome could not render the page: the browser exited unexpectedly.`，未计为视觉验证通过。
+
+## 2026-10-26 第七轮：环境控制接口与无图片项目
+
+基线为 `b41daa5`，已保护环境生成的开始／结束控制序列直接转发 hook 时的数据。新增 `--hook-interfaces`，每节通过环境生成的控制序列直接调用 hook；它可与 `--hook-wrappers --hook-environments` 组合，CI 的会话与两种配对查询同步覆盖。各项测量继续核验独立标签的完整编辑集合及精确声明位置。
+
+先后尝试跳过安全检查未使用的 hook 提示索引，以及在 hook 名称索引前筛选光标所在的候选字段。大型同核配对收益仅约 1%–3%，均已撤回；保留 `round7-without-hint-index-pairs.json` 和 `round7-definition-pairs.json`，不将它们计为最终优化。
+
+临时分阶段诊断显示，大型定义请求中的文档链接分析约花费 21–22 ms，即使项目没有任何图片，也会建立全项目图片签名和操作数分析。正式优化先检查全部有界 LaTeX 来源，包括 recorder-only 文件：若源码均不含 `includegraphics`，且无 `csuse`／`csname`／`endcsname`，则直接保留每个文档的空调用列表。静态别名链和命令复制必须有最终内置名称，命名构造则一律回退完整分析；不能只检查查询文件，也未增加跨请求缓存。含图片字样或命名构造的项目继续走原分析，因而本轮收益限于符合此条件的项目。正式二进制已移除全部诊断计时。
+
+同核交替定义探测每档 3 组进程、预热 5 对、测量 20 对；启动前绑定 CPU，打开后核验全部线程。下表均按“基线→优化后”排列；反向样本文件交换了二进制参数。
+
+| 固定快照 | 定义 p50 前／后 ms | p50 倍率 | CPU 均值前／后 ms |
+| --- | ---: | ---: | ---: |
+| small 组合 | 4.70／3.78 | 1.24× | 4.67／3.67 |
+| medium 组合 | 20.65／15.83 | 1.30× | 20.17／15.67 |
+| large 组合 | 78.08／59.41 | 1.31× | 77.67／58.83 |
+| large 组合，交换顺序 | 78.02／60.03 | 1.30× | 77.83／59.67 |
+
+大型两组 CPU 均值下降约 23%–24%；单样本 tick 仍为 10 ms，不按小项目的少量 tick 推断收益。测量期间不并行构建、测试或浏览器渲染。
+
+连续会话仍为三档项目、每档 3 个独立进程、预热 3 周期、测量 12 周期。大型组合为 10 个文件、261082 字节：定义 p50 为 80.36→62.34 ms，悬停 48.23→32.66 ms，连续 8 次编辑到补全 86.57→69.40 ms；改名则为 52.50→55.08 ms，hook 参数提示为 22.39→23.21 ms。常规大型项目的定义为 27.64→19.95 ms、悬停 16.94→10.23 ms、改名 19.75→18.86 ms。本轮未改动改名与 hook 参数提示算法，完整会话仍有波动，不能声称所有操作加速。
+
+原始数据为 `benchmarks/results/2026-10-26/round7*.json`：`interfaces-before/after` 与 `regular-before/after` 保存连续会话，`no-images-definition-pairs` 及其 `reversed` 保存正式配对；另外两个配对文件是已撤回尝试；8 份 JSON 合计 317212 字节，10560 个墙钟原始样本的数量、有限值及中位数校验通过。HTML 的配对表、项目／分位数／指标筛选已用 JS VM 校验；预览仍返回 `Headless Chrome could not render the page: the browser exited unexpectedly.`，未计为视觉验证通过。
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 benchmarks/rename_pairs.py \
+  --before target/benchmarks/latex-lsp-round7-guard \
+  --after target/benchmarks/latex-lsp-round7-no-images \
+  --query definition --hook-wrappers --hook-environments --hook-interfaces \
+  --output target/benchmarks/definition-pairs.json
+python3 benchmarks/report.py \
+  benchmarks/results/2026-10-26/round7-interfaces-before.json \
+  benchmarks/results/2026-10-26/round7-interfaces-after.json \
+  --paired benchmarks/results/2026-10-26/round7-no-images-definition-pairs.json \
+  --output target/benchmarks/round7-interfaces-report.html
+```
+
+冻结 Rust 后的完整回归为 320 个目标、3370 项通过、0 失败、495 项默认跳过，其中完整串行协议 407 项通过、29 项默认跳过。新增回归验证未保存提供文件从无图片定义到新增别名、删除和恢复时，图片导航与文件改名同步刷新；既有跨文件、命名、recorder-only、共享消费者及不完整来源回归通过。12 项显式原生测试、全目标严格 Clippy、文档、格式和差异检查通过。dev 产物在验证后清理，保留 release 基线和全部原始测量。
