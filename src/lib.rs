@@ -74,6 +74,7 @@ mod image_fixes;
 mod imports;
 mod index_diagnostics;
 mod index_processing;
+mod label_declarations;
 mod label_diagnostics;
 mod lengths;
 mod listings;

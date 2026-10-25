@@ -3451,6 +3451,71 @@ impl<'a> CommandSignatures<'a> {
         self.editing_tokens(source, parsed, ParameterRead::DeclarationData)
     }
 
+    /// Unlike editing operands, these tokens are proved never to execute.
+    /// Do not infer execution from a reader nested in an unknown user's data:
+    /// that user may remove the reader and execute the remaining tokens.
+    pub(crate) fn nonexecuting_argument_tokens(
+        &self,
+        source: &str,
+        parsed: &syntax::Syntax,
+        readers: &BTreeMap<String, usize>,
+    ) -> BTreeSet<usize> {
+        let operands = self.editing_argument_tokens(source, parsed);
+        let declarations = parsed
+            .definitions
+            .iter()
+            .map(|entry| (entry.span.start, entry.span.end))
+            .collect();
+        let mut result = BTreeSet::new();
+        for (index, command) in parsed.commands.iter().enumerate() {
+            if operands.contains(&command.span.start)
+                || parsed.control_operands.contains(&command.span.start)
+            {
+                continue;
+            }
+            let Some((name, _, end, spaces)) =
+                self.invocation(source, parsed, index, &operands, &declarations)
+            else {
+                continue;
+            };
+            if !readers
+                .get(name)
+                .is_some_and(|at| *at <= command.span.start)
+            {
+                continue;
+            }
+            if let Some(tex) = self.tex_operands.get(name).and_then(Option::as_ref) {
+                if let Some(end) = tex.end_mode(source, end, spaces, true) {
+                    mark_operand_commands(parsed, command.span.end, end, &mut result);
+                }
+                continue;
+            }
+            let builtin = (!self.local.contains_key(name))
+                .then(|| operand_builtin(name))
+                .flatten();
+            if let Some(signature) = self
+                .local
+                .get(name)
+                .and_then(Option::as_ref)
+                .or(builtin.as_ref())
+            {
+                let read = argument_tokens(
+                    (source, parsed),
+                    end,
+                    spaces,
+                    signature,
+                    true,
+                    None,
+                    &mut result,
+                );
+                if read.unfinished {
+                    mark_operand_commands(parsed, read.end, source.len(), &mut result);
+                }
+            }
+        }
+        result
+    }
+
     fn editing_tokens(
         &self,
         source: &str,

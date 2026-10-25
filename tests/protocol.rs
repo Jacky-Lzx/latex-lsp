@@ -17,6 +17,91 @@ struct Server {
 }
 
 #[test]
+fn inert_label_declarations_refresh_navigation_and_diagnostics_over_stdio() {
+    use latex_lsp::text::Text;
+
+    let directory = tempfile::tempdir().unwrap();
+    let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+    let provider = uri.join("commands.sty").unwrap();
+    let source = "% 😀\r\n\\documentclass{article}\\newcommand\\unicodeword{😀}\\input{commands.sty}\\newcommand\\discard[1]{}\\begin{document}\\discard{\\label{same}}\\typeout{\\label{same}}\\label{same}\\ref{same}\\message{\\label{ghost}}\\ref{ghost}\\end{document}";
+    std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+    std::fs::write(provider.to_file_path().unwrap(), "").unwrap();
+    let text = Text::new(source.into());
+    let real = source.rfind(r"\label{same}").unwrap() + 7;
+    let logged = source.find(r"\typeout{\label{same}").unwrap() + 16;
+    let ghost = source.rfind("ghost").unwrap();
+    let params = json!({"textDocument":{"uri":uri},"position":text.position(source.rfind("same").unwrap() + 1)});
+    let mut server = Server::start();
+    server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(directory.path()).unwrap(),"initializationOptions":{"distribution":{"enabled":false}},"capabilities":{"textDocument":{"diagnostic":{}}}}));
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":uri,"languageId":"latex","version":5,"text":source}}),
+    );
+    let location = |start| json!({"uri":uri,"range":text.range(start, start + 4)});
+    assert_eq!(
+        server.request(2, "textDocument/definition", params.clone()),
+        json!([location(real)])
+    );
+    let initial = server.request(
+        3,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":uri}}),
+    );
+    assert_eq!(initial["items"].as_array().unwrap().len(), 1, "{initial}");
+    assert_eq!(initial["items"][0]["code"], "undefined-reference");
+    assert_eq!(
+        initial["items"][0]["range"],
+        json!(text.range(ghost, ghost + 5))
+    );
+    server.notify("textDocument/didOpen", json!({"textDocument":{"uri":provider,"languageId":"latex","version":12,"text":"\\renewcommand\\typeout[1]{#1}\\renewcommand\\message[1]{#1}"}}));
+    assert_eq!(
+        server.request(4, "textDocument/definition", params.clone()),
+        json!([location(logged), location(real)])
+    );
+    let changed = server.request(
+        5,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":uri},"previousResultId":initial["resultId"]}),
+    );
+    assert_eq!(changed["kind"], "full");
+    assert_ne!(changed["resultId"], initial["resultId"]);
+    assert_eq!(changed["items"].as_array().unwrap().len(), 1, "{changed}");
+    assert_eq!(changed["items"][0]["code"], "duplicate-label");
+    assert_eq!(
+        changed["items"][0]["range"],
+        json!(text.range(real, real + 4))
+    );
+    assert_eq!(
+        changed["items"][0]["relatedInformation"][0]["location"],
+        location(logged)
+    );
+    server.notify(
+        "textDocument/didClose",
+        json!({"textDocument":{"uri":provider}}),
+    );
+    assert_eq!(
+        server.request(6, "textDocument/definition", params),
+        json!([location(real)])
+    );
+    let restored = server.request(
+        7,
+        "textDocument/diagnostic",
+        json!({"textDocument":{"uri":uri},"previousResultId":changed["resultId"]}),
+    );
+    assert_eq!(restored["items"], initial["items"]);
+    for (version, reader) in [(6, "typeout"), (7, "message")] {
+        let partial = format!("% 😀\r\n\\{reader}{{\\label{{ghost}}");
+        let partial_text = Text::new(partial.clone());
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":version},"contentChanges":[{"text":partial}]}));
+        assert_eq!(server.request(8, "textDocument/definition", json!({"textDocument":{"uri":uri},"position":partial_text.position(partial.find("ghost").unwrap() + 1)})), json!([]));
+    }
+    server.request(9, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
 fn expanded_messages_keep_keys_inert_and_macro_names_editable_over_stdio() {
     use latex_lsp::text::Text;
 

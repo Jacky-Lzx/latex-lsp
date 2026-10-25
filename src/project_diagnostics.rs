@@ -46,6 +46,7 @@ pub(crate) fn duplicates(
             continue;
         }
         let coexistence = std::cell::OnceCell::new();
+        let labels = crate::label_declarations::Index::for_scope(workspace, &project);
         let mut index = BTreeMap::<(Kind, &str), Vec<Definition>>::new();
         for uri in &project {
             let Some(doc) = workspace.documents.get(uri) else {
@@ -57,6 +58,9 @@ pub(crate) fn duplicates(
                 (Kind::Anchor, &doc.syntax.anchors),
             ] {
                 for entry in entries {
+                    if kind == Kind::Label && !labels.contains(uri, entry) {
+                        continue;
+                    }
                     if !syntax::is_static_key(&entry.name) {
                         continue;
                     }

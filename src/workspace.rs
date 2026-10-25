@@ -433,10 +433,11 @@ impl Workspace {
     }
 
     fn local_and_build_diagnostics(&self, uri: &Url) -> Vec<tower_lsp::lsp_types::Diagnostic> {
+        let labels = crate::label_declarations::Index::new(self, uri);
         let mut diagnostics = self
             .documents
             .get(uri)
-            .map(|doc| crate::features::diagnostics_at(doc, uri))
+            .map(|doc| crate::features::diagnostics_at(doc, uri, &labels))
             .unwrap_or_default();
         diagnostics.extend(
             self.lint_diagnostics

@@ -63,6 +63,7 @@ pub(crate) fn resolve_diagnostics(
         return;
     }
     let mut locations = BTreeMap::<String, BTreeMap<Kind, Locations>>::new();
+    let labels = crate::label_declarations::Index::for_scope(workspace, sources);
     for uri in sources {
         let Some(doc) = workspace.documents.get(uri) else {
             continue;
@@ -77,7 +78,9 @@ pub(crate) fn resolve_diagnostics(
             (Kind::Bibitem, &doc.syntax.citations),
         ] {
             for entry in entries {
-                if names.contains(entry.name.as_str()) {
+                if names.contains(entry.name.as_str())
+                    && (kind != Kind::Label || labels.contains(uri, entry))
+                {
                     let range = doc.text.range(entry.span.start, entry.span.end);
                     locations
                         .entry(entry.name.clone())
@@ -226,6 +229,30 @@ mod tests {
         assert_eq!(
             build_log::compilation_analysis(&diagnostics, false),
             analysis
+        );
+    }
+
+    #[test]
+    fn compiler_duplicates_do_not_retarget_labels_inside_message_data() {
+        let (mut workspace, main, child) = fixture();
+        let source = r"\typeout{\label{shared}}\label{shared}";
+        workspace.open(main.clone(), source.into(), 8);
+        let mut diagnostics = [(aux(), vec![warning("shared")])].into();
+        resolve_diagnostics(
+            &workspace,
+            &[main.clone(), child.clone()].into(),
+            &mut diagnostics,
+        );
+        assert_eq!(diagnostics.len(), 2);
+        let text = &workspace.documents[&main].text;
+        let real = source.rfind("shared").unwrap();
+        assert_eq!(diagnostics[&main].len(), 1);
+        assert_eq!(diagnostics[&main][0].range, text.range(real, real + 6));
+        assert_eq!(
+            diagnostics[&child][0].related_information.as_ref().unwrap()[0]
+                .location
+                .range,
+            text.range(real, real + 6)
         );
     }
 

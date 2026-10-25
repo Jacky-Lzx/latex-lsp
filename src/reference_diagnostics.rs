@@ -191,6 +191,7 @@ fn diagnostics_for(
         return vec![];
     }
     let scope = ws.symbol_scope(uri);
+    let declarations = crate::label_declarations::Index::new(ws, uri);
     let mut labels = BTreeSet::new();
     let mut citations = BTreeSet::new();
     let mut citation_files = BTreeMap::<&str, BTreeSet<&Url>>::new();
@@ -198,7 +199,13 @@ fn diagnostics_for(
         if !scope.contains(uri) {
             continue;
         }
-        labels.extend(doc.syntax.labels.iter().map(|entry| entry.name.as_str()));
+        labels.extend(
+            doc.syntax
+                .labels
+                .iter()
+                .filter(|entry| declarations.contains(uri, entry))
+                .map(|entry| entry.name.as_str()),
+        );
         let names = doc
             .syntax
             .citations
@@ -284,6 +291,7 @@ pub(crate) fn fixes(
         return vec![];
     };
     let scope = ws.symbol_scope(uri);
+    let declarations = crate::label_declarations::Index::new(ws, uri);
     let auxiliary = crate::auxiliary::labels(ws, uri);
     let mut result = Vec::new();
     let (section_resources, sources) = citation_contexts(ws, uri);
@@ -336,7 +344,7 @@ pub(crate) fn fixes(
                 scope.contains(*uri)
                     && citation_scope.is_none_or(|resources| resources.contains(*uri))
             })
-            .flat_map(|(_, doc)| {
+            .flat_map(|(uri, doc)| {
                 if citation {
                     doc.syntax
                         .citations
@@ -344,7 +352,11 @@ pub(crate) fn fixes(
                         .chain(&doc.syntax.bibliography_aliases)
                         .collect::<Vec<_>>()
                 } else {
-                    doc.syntax.labels.iter().collect()
+                    doc.syntax
+                        .labels
+                        .iter()
+                        .filter(|entry| declarations.contains(uri, entry))
+                        .collect()
                 }
             })
             .take(4096)

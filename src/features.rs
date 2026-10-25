@@ -1367,12 +1367,20 @@ pub fn completion(workspace: &Workspace, uri: &Url, position: Position) -> Vec<C
             None
         };
         let mut candidates = Vec::new();
+        let labels = (kind == Some(TargetKind::Label))
+            .then(|| crate::label_declarations::Index::new(workspace, uri));
         if let Some(kind) = kind {
             for (entry_uri, entry_doc) in &workspace.documents {
                 if !scope.contains(entry_uri) {
                     continue;
                 }
                 for entry in entries(entry_doc, kind) {
+                    if labels
+                        .as_ref()
+                        .is_some_and(|labels| !labels.contains(entry_uri, entry))
+                    {
+                        continue;
+                    }
                     if kind == TargetKind::Citation && !syntax::is_static_citation_key(&entry.name)
                     {
                         continue;
@@ -1820,6 +1828,14 @@ pub fn definitions(workspace: &Workspace, uri: &Url, position: Position) -> Vec<
         return vec![];
     };
     let scope = workspace.symbol_scope(uri);
+    let labels = (target.kind == TargetKind::Label)
+        .then(|| crate::label_declarations::Index::new(workspace, uri));
+    if labels
+        .as_ref()
+        .is_some_and(|labels| labels.is_data(uri, target.span.start))
+    {
+        return vec![];
+    }
     let mut result: Vec<_> = workspace
         .documents
         .iter()
@@ -1827,6 +1843,11 @@ pub fn definitions(workspace: &Workspace, uri: &Url, position: Position) -> Vec<
         .flat_map(|(uri, doc)| {
             entries(doc, target.kind)
                 .filter(|entry| target.kind.same_name(&entry.name, target.name))
+                .filter(|entry| {
+                    labels
+                        .as_ref()
+                        .is_none_or(|labels| labels.contains(uri, entry))
+                })
                 .map(|entry| Location {
                     uri: uri.clone(),
                     range: doc.text.range(entry.span.start, entry.span.end),
@@ -1889,6 +1910,14 @@ pub fn references(
         return vec![];
     };
     let crate::workspace::SymbolProjects { mut scope, regions } = workspace.symbol_projects(uri);
+    let labels = (target.kind == TargetKind::Label)
+        .then(|| crate::label_declarations::Index::new(workspace, uri));
+    if labels
+        .as_ref()
+        .is_some_and(|labels| labels.is_data(uri, target.span.start))
+    {
+        return vec![];
+    }
     let definitions: Vec<_> = workspace
         .documents
         .iter()
@@ -1896,6 +1925,11 @@ pub fn references(
         .flat_map(|(uri, doc)| {
             entries(doc, target.kind)
                 .filter(|entry| target.kind.same_name(&entry.name, target.name))
+                .filter(|entry| {
+                    labels
+                        .as_ref()
+                        .is_none_or(|labels| labels.contains(uri, entry))
+                })
                 .map(move |_| uri)
         })
         .collect();
@@ -1910,6 +1944,15 @@ pub fn references(
     let mut result: Vec<_> = all_references(workspace, uri, position, include_declaration)
         .into_iter()
         .filter(|location| scope.contains(&location.uri))
+        .filter(|location| {
+            labels.as_ref().is_none_or(|labels| {
+                workspace.documents.get(&location.uri).is_none_or(|doc| {
+                    !doc.text
+                        .offset(location.range.start)
+                        .is_some_and(|at| labels.is_data(&location.uri, at))
+                })
+            })
+        })
         .collect();
     if include_declaration && definitions.is_empty() && target.kind == TargetKind::Label {
         if let Some(location) = crate::auxiliary::definition(workspace, uri, target.name) {
@@ -2269,12 +2312,25 @@ pub fn hover(workspace: &Workspace, uri: &Url, position: Position) -> Option<Hov
     }
     let target = target(workspace, uri, offset)?;
     let scope = workspace.symbol_scope(uri);
+    let labels = (target.kind == TargetKind::Label)
+        .then(|| crate::label_declarations::Index::new(workspace, uri));
+    if labels
+        .as_ref()
+        .is_some_and(|labels| labels.is_data(uri, target.span.start))
+    {
+        return None;
+    }
     let mut value = None;
     for (entry_uri, entry_doc) in &workspace.documents {
         if !scope.contains(entry_uri) {
             continue;
         }
         if let Some(entry) = entries(entry_doc, target.kind)
+            .filter(|entry| {
+                labels
+                    .as_ref()
+                    .is_none_or(|labels| labels.contains(entry_uri, entry))
+            })
             .find(|entry| target.kind.same_name(&entry.name, target.name))
         {
             value = Some(format!(
@@ -2348,14 +2404,23 @@ pub fn hover(workspace: &Workspace, uri: &Url, position: Position) -> Option<Hov
 }
 
 pub fn diagnostics(doc: &Document) -> Vec<Diagnostic> {
-    diagnostics_for(doc, None)
+    let inactive = crate::label_declarations::local(doc);
+    diagnostics_for(doc, None, |entry| !inactive.contains(&entry.span.start))
 }
 
-pub(crate) fn diagnostics_at(doc: &Document, uri: &Url) -> Vec<Diagnostic> {
-    diagnostics_for(doc, Some(uri))
+pub(crate) fn diagnostics_at(
+    doc: &Document,
+    uri: &Url,
+    labels: &crate::label_declarations::Index,
+) -> Vec<Diagnostic> {
+    diagnostics_for(doc, Some(uri), |entry| labels.contains(uri, entry))
 }
 
-fn diagnostics_for(doc: &Document, uri: Option<&Url>) -> Vec<Diagnostic> {
+fn diagnostics_for(
+    doc: &Document,
+    uri: Option<&Url>,
+    label: impl Fn(&Entry) -> bool,
+) -> Vec<Diagnostic> {
     let mut diagnostics = doc.syntax.diagnostics.clone();
     for (code, entries) in [
         ("duplicate-label", &doc.syntax.labels),
@@ -2364,6 +2429,9 @@ fn diagnostics_for(doc: &Document, uri: Option<&Url>) -> Vec<Diagnostic> {
     ] {
         let mut seen = std::collections::BTreeMap::<&str, &Entry>::new();
         for entry in entries {
+            if code == "duplicate-label" && !label(entry) {
+                continue;
+            }
             if let Some(first) = seen.get(entry.name.as_str()) {
                 let mut diagnostic = syntax::diagnostic(
                     &doc.text,
