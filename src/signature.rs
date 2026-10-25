@@ -4188,6 +4188,8 @@ impl<'a> CommandSignatures<'a> {
                 // Resolved aliases retain their leaf's name. Builtin
                 // formatters and their pure aliases execute grouped contents;
                 // a user macro can instead discard or detokenize its argument.
+                // Message readers expand text without executing the resulting
+                // nonexpandable tokens, including declarations and callbacks.
                 let opaque = all_parameters
                     || local.contains_key(signature.name.as_str())
                     || matches!(
@@ -4197,6 +4199,8 @@ impl<'a> CommandSignatures<'a> {
                             | "lstset"
                             | "fvset"
                             | "includeonly"
+                            | "typeout"
+                            | "message"
                     );
                 let read = argument_tokens(
                     (source, parsed),
@@ -4207,7 +4211,10 @@ impl<'a> CommandSignatures<'a> {
                     literal,
                     &mut result,
                 );
-                if matches!(parameters, ParameterRead::DeclarationData) && opaque && read.unfinished
+                if opaque
+                    && read.unfinished
+                    && (matches!(parameters, ParameterRead::DeclarationData)
+                        || matches!(signature.name.as_str(), "typeout" | "message"))
                 {
                     mark_operand_tokens(parsed, read.end, source.len(), literal, &mut result);
                 }

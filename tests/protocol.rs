@@ -17,6 +17,141 @@ struct Server {
 }
 
 #[test]
+fn expanded_messages_keep_keys_inert_and_macro_names_editable_over_stdio() {
+    use latex_lsp::text::Text;
+
+    for versioned in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+        let provider = uri.join("commands.sty").unwrap();
+        std::fs::write(provider.to_file_path().unwrap(), "").unwrap();
+        std::fs::write(
+            directory.path().join("data.bib"),
+            "@book{collection,title={Raw}} @book{member,title={Member}}",
+        )
+        .unwrap();
+        let source = "% 😀\r\n\\documentclass{article}\\input{commands.sty}\\usepackage{biblatex}\\addbibresource{data.bib}\\newcommand\\word{Text}\\begin{document}\\typeout{\\label{ghost}\\ref{absentlabel}\\word}\\mkbibparens{\\message{\\mkbibparens{\\entrydata{collection}{Text}}}}\\defbibentryset{collection}{member}\\cite{collection}\\label{safe}\\ref{safe}\\word\\end{document}";
+        std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+        let text = Text::new(source.into());
+        let mut server = Server::start();
+        server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(directory.path()).unwrap(),"initializationOptions":{"distribution":{"enabled":false}},"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":versioned}},"textDocument":{"diagnostic":{}}}}));
+        server.notify("initialized", json!({}));
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"languageId":"latex","version":5,"text":source}}),
+        );
+        let ghost = source.find("ghost").unwrap();
+        let key = source.find(r"\entrydata{collection}").unwrap() + 11;
+        let blocked = |server: &mut Server, at: usize| {
+            for method in ["textDocument/prepareRename", "textDocument/rename"] {
+                server.send(json!({"jsonrpc":"2.0","id":20,"method":method,"params":{"textDocument":{"uri":uri},"position":text.position(at + 1),"newName":"fresh"}}));
+                let response = server.until(|message| message["id"] == 20);
+                assert!(
+                    response["error"]["code"] == -32602
+                        || response.get("result") == Some(&Value::Null),
+                    "{response}"
+                );
+            }
+        };
+        blocked(&mut server, ghost);
+        blocked(&mut server, key);
+        assert_eq!(
+            server.request(
+                2,
+                "textDocument/definition",
+                json!({"textDocument":{"uri":uri},"position":text.position(key + 1)})
+            ),
+            json!([])
+        );
+        let report = server.request(
+            3,
+            "textDocument/diagnostic",
+            json!({"textDocument":{"uri":uri}}),
+        );
+        assert!(
+            report["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|d| d["code"] != "undefined-reference"),
+            "{report}"
+        );
+        let edits = |edit: Value| {
+            if versioned {
+                assert_eq!(edit["documentChanges"].as_array().unwrap().len(), 1);
+                assert_eq!(
+                    edit["documentChanges"][0]["textDocument"],
+                    json!({"uri":uri,"version":5})
+                );
+                edit["documentChanges"][0]["edits"].clone()
+            } else {
+                assert_eq!(edit["changes"].as_object().unwrap().len(), 1);
+                edit["changes"][uri.as_str()].clone()
+            }
+        };
+        for (id, name, new) in [(4, "safe", "fresh"), (5, "word", "term")] {
+            let actual = edits(server.request(id, "textDocument/rename", json!({"textDocument":{"uri":uri},"position":text.position(source.rfind(name).unwrap() + 1),"newName":new})));
+            let old = if name == "word" {
+                format!(r"\{name}")
+            } else {
+                name.into()
+            };
+            let replacement = if name == "word" {
+                format!(r"\{new}")
+            } else {
+                new.into()
+            };
+            let expected = source
+                .match_indices(&old)
+                .map(
+                    |(at, _)| json!({"range":text.range(at, at + old.len()),"newText":replacement}),
+                )
+                .collect::<Vec<_>>();
+            assert_eq!(actual, json!(expected));
+        }
+        server.notify("textDocument/didOpen", json!({"textDocument":{"uri":provider,"languageId":"latex","version":12,"text":"\\renewcommand\\typeout[1]{#1}"}}));
+        let restored = edits(server.request(6, "textDocument/rename", json!({"textDocument":{"uri":uri},"position":text.position(ghost + 1),"newName":"fresh"})));
+        assert_eq!(
+            restored,
+            json!([{"range":text.range(ghost, ghost + 5),"newText":"fresh"}])
+        );
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":provider}}),
+        );
+        blocked(&mut server, ghost);
+        for (version, reader) in [(6, "typeout"), (7, "message")] {
+            let partial = format!("% 😀\r\n\\documentclass{{article}}\\input{{commands.sty}}\\usepackage{{biblatex}}\\addbibresource{{data.bib}}\\begin{{document}}\\defbibentryset{{collection}}{{member}}\\{reader}{{\\mkbibparens{{\\entrydata{{collection}}{{Text}}}}");
+            let partial_text = Text::new(partial.clone());
+            let at = partial_text.position(partial.find(r"\entrydata{collection}").unwrap() + 12);
+            server.notify("textDocument/didChange", json!({"textDocument":{"uri":uri,"version":version},"contentChanges":[{"text":partial}]}));
+            let params = json!({"textDocument":{"uri":uri},"position":at,"newName":"fresh"});
+            assert_eq!(
+                server.request(8, "textDocument/definition", params.clone()),
+                json!([])
+            );
+            for method in ["textDocument/prepareRename", "textDocument/rename"] {
+                server.send(json!({"jsonrpc":"2.0","id":30,"method":method,"params":params}));
+                let response = server.until(|message| message["id"] == 30);
+                assert!(
+                    response["error"]["code"] == -32602
+                        || response.get("result") == Some(&Value::Null),
+                    "{reader}: {response}"
+                );
+            }
+        }
+        server.notify(
+            "textDocument/didChange",
+            json!({"textDocument":{"uri":uri,"version":8},"contentChanges":[{"text":source}]}),
+        );
+        blocked(&mut server, ghost);
+        server.request(7, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
 fn label_declaration_data_rejects_edits_and_refreshes_unsaved_provider_arities() {
     use latex_lsp::text::Text;
 
