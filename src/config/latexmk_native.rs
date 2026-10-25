@@ -20,9 +20,10 @@ fn key(root: &Path, config: &BuildConfig) -> String {
     let mut environment: Vec<_> = std::env::vars_os().collect();
     environment.sort();
     format!(
-        "{}\n{}\n{environment:?}",
+        "{}\n{}\n{environment:?}\n{}",
         root.display(),
-        serde_json::to_string(&config.unresolved()).unwrap()
+        serde_json::to_string(&config.unresolved()).unwrap(),
+        config.resolution.rebuild
     )
 }
 
@@ -96,6 +97,45 @@ pub(super) fn candidates(root: &Path) -> Vec<PathBuf> {
     paths
 }
 
+/// Configuration dependencies for an explicitly supplied latexmk argument list.
+/// This does not interpret or replace the user's compiler options.
+pub(super) fn argument_dependencies(root: &Path, arguments: &[String]) -> Vec<PathBuf> {
+    let parent = root.parent().unwrap_or_else(|| Path::new("."));
+    let no_rc = arguments
+        .iter()
+        .any(|arg| matches!(arg.as_str(), "-norc" | "--norc"));
+    let mut paths = if no_rc { Vec::new() } else { candidates(root) };
+    let mut arguments = arguments.iter();
+    while let Some(argument) = arguments.next() {
+        match argument.as_str() {
+            "-r" | "--r" => {
+                if let Some(path) = arguments.next() {
+                    paths.push(parent.join(path));
+                }
+            }
+            "-e" | "--e" => {
+                arguments.next();
+            }
+            _ => {}
+        }
+    }
+    append_includes(parent, &mut paths);
+    paths
+}
+
+fn append_includes(parent: &Path, paths: &mut Vec<PathBuf>) {
+    let mut position = 0;
+    while position < paths.len() && paths.len() < 256 {
+        for include in literal_includes(&paths[position]) {
+            let include = parent.join(include);
+            if !paths.contains(&include) {
+                paths.push(include);
+            }
+        }
+        position += 1;
+    }
+}
+
 #[derive(Deserialize)]
 struct Effective {
     output: String,
@@ -116,6 +156,20 @@ pub(super) fn resolve(
 ) -> Result<BuildConfig, String> {
     let base = config.unresolved();
     let parent = root.parent().ok_or("Invalid root path")?;
+    let mut observed = candidates(root);
+    observed.extend(config.resolution.dependencies.clone());
+    append_includes(parent, &mut observed);
+    let before: Vec<_> = observed
+        .iter()
+        .map(|path| {
+            (
+                path.clone(),
+                path.canonicalize().ok(),
+                InputSnapshot::file(path),
+            )
+        })
+        .collect();
+    let wall_started = std::time::SystemTime::now();
     let mut command = Command::new(&base.executable);
     command
         .current_dir(parent)
@@ -167,6 +221,28 @@ pub(super) fn resolve(
             return Err("Too many latexmk configuration files".into());
         }
         position += 1;
+    }
+    for (path, target, contents) in &before {
+        if path.canonicalize().ok() != *target || InputSnapshot::file(path) != *contents {
+            return Err(format!(
+                "latexmk configuration changed while resolving {}; build again",
+                path.display()
+            ));
+        }
+    }
+    for path in &resolved.resolution.sources {
+        if !before
+            .iter()
+            .any(|(before, _, _)| before.canonicalize().ok() == path.canonicalize().ok())
+            && std::fs::metadata(path)
+                .and_then(|metadata| metadata.modified())
+                .is_ok_and(|modified| modified > wall_started)
+        {
+            return Err(format!(
+                "Included latexmk configuration changed while resolving {}; build again",
+                path.display()
+            ));
+        }
     }
     let engine = match effective.mode {
         0 => None,
@@ -259,21 +335,54 @@ fn literal_includes(path: &Path) -> Vec<PathBuf> {
     let Ok(source) = std::fs::read_to_string(path) else {
         return vec![];
     };
-    source
-        .lines()
-        .filter_map(|line| {
-            let line = line.trim_start();
-            let value = line
-                .strip_prefix("do ")
-                .or_else(|| line.strip_prefix("require "))?
-                .trim_start();
-            let quote = value.chars().next()?;
-            if !matches!(quote, '\'' | '"') {
-                return None;
+    let mut chars = source.chars().peekable();
+    let mut paths = Vec::new();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '#' => {
+                for ch in chars.by_ref() {
+                    if ch == '\n' {
+                        break;
+                    }
+                }
             }
-            let tail = &value[1..];
-            let value = tail.split(quote).next()?;
-            (!value.contains(['$', '@', '\\'])).then(|| PathBuf::from(value))
-        })
-        .collect()
+            '\'' | '"' | '`' => {
+                if super::latexmk::quoted(&mut chars, ch).is_none() {
+                    break;
+                }
+            }
+            ch if ch.is_ascii_alphabetic() || ch == '_' => {
+                let mut word = String::from(ch);
+                while chars
+                    .peek()
+                    .is_some_and(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
+                {
+                    word.push(chars.next().unwrap());
+                }
+                if !matches!(word.as_str(), "do" | "require" | "process_rc_file") {
+                    continue;
+                }
+                while chars.peek().is_some_and(|ch| ch.is_whitespace()) {
+                    chars.next();
+                }
+                if chars.peek() == Some(&'(') {
+                    chars.next();
+                }
+                while chars.peek().is_some_and(|ch| ch.is_whitespace()) {
+                    chars.next();
+                }
+                if let Some(quote @ ('\'' | '"')) = chars.peek().copied() {
+                    chars.next();
+                    if let Some(Some(value)) = super::latexmk::quoted(&mut chars, quote) {
+                        paths.push(PathBuf::from(value));
+                    }
+                }
+            }
+            _ => {}
+        }
+        if paths.len() >= 256 {
+            break;
+        }
+    }
+    paths
 }

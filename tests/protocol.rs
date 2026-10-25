@@ -38906,3 +38906,65 @@ fn dynamic_latexmk_layers_report_effective_paths_without_running_perl_during_sta
     server.notify("exit", Value::Null);
     server.wait_exit(0);
 }
+
+#[test]
+#[cfg(unix)]
+fn custom_latexmk_rc_dependencies_detect_changes_without_watcher_events() {
+    use std::os::unix::fs::PermissionsExt;
+    for changed in [".latexmkrc", "selected.rc", "included.rc"] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let main = root.join("main.tex");
+        let uri = Url::from_file_path(&main).unwrap();
+        std::fs::write(
+            &main,
+            "\\documentclass{article}\\begin{document}Hello\\end{document}",
+        )
+        .unwrap();
+        std::fs::write(root.join(".latexmkrc"), "$pdf_mode = 1;").unwrap();
+        std::fs::write(root.join("selected.rc"), "do './included.rc';").unwrap();
+        std::fs::write(root.join("included.rc"), "$pdf_mode = 5;").unwrap();
+        let compiler = root.join("latexmk");
+        std::fs::write(
+            &compiler,
+            r##"#!/bin/sh
+for arg do
+  case "$arg" in -outdir=*) output=${arg#-outdir=} ;; esac
+done
+mkdir -p "$output"
+touch ready
+while [ ! -f release ]; do sleep 0.02; done
+printf '%%PDF-1.4\n' > "$output/main.pdf"
+printf 'Output written on main.pdf (1 page).\n' > "$output/main.log"
+"##,
+        )
+        .unwrap();
+        std::fs::set_permissions(&compiler, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut server = Server::start();
+        server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(root).unwrap(),"capabilities":{},"initializationOptions":{"distribution":{"enabled":false},"build":{"executable":compiler,"arguments":["-norc","-r","selected.rc","-outdir=%o","%f"]}}}));
+        server.notify("initialized", json!({}));
+        server.request(
+            2,
+            "workspace/executeCommand",
+            json!({"command":"latex.build","arguments":[uri]}),
+        );
+        server.until(|message| message["method"] == "latex/buildStarted");
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !root.join("ready").exists() {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        std::fs::write(root.join(changed), "$pdf_mode = 4;").unwrap();
+        std::fs::write(root.join("release"), "").unwrap();
+        let finished = server.until(|message| message["method"] == "latex/buildFinished");
+        assert_eq!(finished["params"]["status"], "success", "{finished}");
+        assert_eq!(
+            finished["params"]["stale"],
+            changed != ".latexmkrc",
+            "{changed}: {finished}"
+        );
+        server.request(3, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}

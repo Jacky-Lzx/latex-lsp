@@ -511,3 +511,63 @@ fn native_rc_errors_and_timeouts_preserve_existing_logs_and_pre_cancel_does_not_
     assert!(outcome.message.contains("timed out"), "{}", outcome.message);
     assert!(start.elapsed() < std::time::Duration::from_secs(4));
 }
+
+#[test]
+fn inferred_directory_percent_sequences_are_literal_and_direct_engine_misconfiguration_is_rejected()
+{
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = root.join("main.tex");
+    let config = BuildConfig {
+        auxiliary_directory: Some("aux%j".into()),
+        final_output_directory: Some("final%f".into()),
+        ..Default::default()
+    };
+    for args in [
+        config.expanded_arguments(&main).unwrap(),
+        config.expanded_rebuild_arguments(&main).unwrap(),
+    ] {
+        assert!(args.contains(&"-auxdir=aux%j".into()));
+        assert!(args.contains(&"-out2dir=final%f".into()));
+    }
+    assert!(Config::parse(
+        serde_json::json!({"build":{"executable":"xelatex","auxiliaryDirectory":"aux"}})
+    )
+    .is_err());
+}
+
+#[test]
+#[ignore = "requires latexmk, pdfLaTeX and BibTeX"]
+fn real_latexmk_bibtex_uses_the_separate_hidden_auxiliary_directory() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let main = root.join("main.tex");
+    std::fs::write(&main, "\\documentclass{article}\\begin{document}\\cite{one}\\bibliographystyle{plain}\\bibliography{refs}\\end{document}").unwrap();
+    std::fs::write(
+        root.join("refs.bib"),
+        "@book{one,author={Example, A.},title={Example},publisher={Example},year={2026}}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join(".latexmkrc"),
+        "$out_dir = 'tex'; $aux_dir = '.aux'; $out2_dir = 'final'; $pdf_mode = 1;",
+    )
+    .unwrap();
+    let outcome = build::run(&main, &BuildConfig::default(), &AtomicBool::new(false));
+    assert_eq!(
+        outcome.status, "success",
+        "{}\n{}",
+        outcome.message, outcome.output
+    );
+    assert_eq!(outcome.pdf, Some(root.join("final/main.pdf")));
+    assert!(root.join(".aux/main.bbl").is_file());
+    assert!(
+        outcome
+            .diagnostics
+            .values()
+            .flatten()
+            .all(|diagnostic| !diagnostic.message.contains("undefined")),
+        "{:?}",
+        outcome.diagnostics
+    );
+}

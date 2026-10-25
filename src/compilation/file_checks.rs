@@ -755,6 +755,82 @@ mod tests {
     }
 
     #[test]
+    fn custom_latexmk_arguments_watch_only_effective_rcs_and_literal_includes() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let main = root.join("main.tex");
+        let uri = Url::from_file_path(&main).unwrap();
+        std::fs::write(&main, "Source").unwrap();
+        let rc = root.join(".latexmkrc");
+        let selected = root.join("selected rc");
+        let included = root.join("included.rc");
+        std::fs::write(&rc, "$pdf_mode = 5;").unwrap();
+        std::fs::write(&selected, "do './included.rc';").unwrap();
+        std::fs::write(&included, "$pdf_mode = 5;").unwrap();
+        let mut workspace = Workspace::default();
+        workspace.open(uri.clone(), "Source".into(), 1);
+        workspace.config.build.arguments = Some(vec![
+            "--norc".into(),
+            "--r".into(),
+            selected.to_string_lossy().into_owned(),
+            "%f".into(),
+        ]);
+        let config = workspace.build_config(&uri);
+        let before = Snapshot::capture(&workspace, &uri, &config);
+        std::fs::write(&rc, "$pdf_mode = 4;").unwrap();
+        assert!(before.changed_path().is_none());
+        let modified = std::fs::metadata(&included).unwrap().modified().unwrap();
+        std::fs::write(&included, "$pdf_mode = 4;").unwrap();
+        std::fs::File::open(&included)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+        assert_eq!(before.changed_path(), Some(included.as_path()));
+        let before = Snapshot::capture(&workspace, &uri, &config);
+        std::fs::write(&selected, "$pdf_mode = 1;").unwrap();
+        assert_eq!(before.changed_path(), Some(selected.as_path()));
+        workspace.config.build.arguments = Some(vec!["-pdf".into(), "%f".into()]);
+        let before = Snapshot::capture(&workspace, &uri, &workspace.build_config(&uri));
+        std::fs::write(&rc, "$pdf_mode = 1;").unwrap();
+        assert_eq!(before.changed_path(), Some(rc.as_path()));
+    }
+
+    #[test]
+    fn forced_custom_arguments_watch_their_own_rc_and_expand_path_templates_once() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let main = root.join("main.tex");
+        let uri = Url::from_file_path(&main).unwrap();
+        std::fs::write(&main, "Source").unwrap();
+        std::fs::create_dir(root.join("out%j")).unwrap();
+        let normal = root.join("normal.rc");
+        let forced = root.join("out%j/forced.rc");
+        std::fs::write(&normal, "$pdf_mode = 1;").unwrap();
+        std::fs::write(&forced, "$pdf_mode = 5;").unwrap();
+        let mut workspace = Workspace::default();
+        workspace.open(uri.clone(), "Source".into(), 1);
+        workspace.config.build.output_directory = Some("out%j".into());
+        workspace.config.build.arguments = Some(vec![
+            "-norc".into(),
+            "-r".into(),
+            "normal.rc".into(),
+            "%f".into(),
+        ]);
+        workspace.config.build.rebuild_arguments = Some(vec![
+            "-norc".into(),
+            "-r".into(),
+            "%o/forced.rc".into(),
+            "%f".into(),
+        ]);
+        let config = workspace.build_config(&uri).for_build_mode(&main, true);
+        let before = Snapshot::capture(&workspace, &uri, &config);
+        std::fs::write(&normal, "$pdf_mode = 4;").unwrap();
+        assert!(before.changed_path().is_none());
+        std::fs::write(&forced, "$pdf_mode = 4;").unwrap();
+        assert_eq!(before.changed_path(), Some(forced.as_path()));
+    }
+
+    #[test]
     fn moved_bibliography_history_keeps_content_fingerprints_and_tracks_the_new_output_path() {
         let directory = tempfile::tempdir().unwrap();
         let old = directory.path().join("old");

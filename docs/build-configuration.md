@@ -35,7 +35,7 @@ $out_dir = 'build';
 
 配置按系统、用户、项目顺序叠加；用户配置优先采用 `$XDG_CONFIG_HOME/latexmk/latexmkrc`，否则采用 `~/.latexmkrc`，系统配置遵守 `LATEXMKRCSYS`。每层采用 latexmk 的首个存在文件规则。主文件 program 指令和显式 LSP 设置优先于 rc。
 
-普通查询只做有界的静态读取，不执行 Perl。遇到条件、函数、字符串拼接、环境变量插值、正则或包含其他 rc 的配置时，在编译入口调用实际 latexmk 的 `-dir-report-only` 与受控的 `-e` 报告代码，获取有效引擎和目录，不启动 TeX。解析最多等待 5 秒（或更短的 `timeoutSeconds`），失败时保留旧日志并报告原因。动态配置每次开始编译时重新求值；查询、诊断和 SyncTeX 使用按配置内容与进程环境校验的最近解析结果，不因状态轮询启动进程。
+普通查询只做有界的静态读取，不执行 Perl。遇到条件、函数、字符串拼接、环境变量插值、正则或包含其他 rc 的配置时，在编译入口调用实际 latexmk 的 `-dir-report-only` 与受控的 `-e` 报告代码，获取有效引擎和目录，不启动 TeX。原生解析返回空输出目录时，采用已知的静态目录，否则采用主文件目录；需要固定位置时可显式设置 `outputDirectory`。解析最多等待 5 秒（或更短的 `timeoutSeconds`），失败时保留旧日志并报告原因。动态配置每次开始编译时重新求值；查询、诊断和 SyncTeX 使用按配置内容与进程环境校验的最近解析结果，不因状态轮询启动进程。
 
 开始、完成通知和编译状态的 `configuration` 包含 `sources`、`issues` 与 `native`。原生报告记录 latexmk 加载的配置文件，并补充字面量 `do 'file'` / `require 'file'` 的依赖；动态计算的包含路径应通过 latexmk 的 `process_rc_file` 加载，以便报告和监测它们。直接调用 TeX 引擎和 Tectonic 时继续使用 LSP 的目录设置。
 
@@ -56,4 +56,6 @@ program 指令忽略大小写和逐字环境，只接受这三个引擎名称；
 
 rc 中缺少设置与无法解析是两种状态。静态解析无法判断时会进入原生解析；两者均失败时，在启动 TeX 和替换日志前报错，不会将无法判断的引擎静默覆盖为 pdfLaTeX。
 
-`build.auxiliaryDirectory` 与 `build.finalOutputDirectory` 分别覆盖 `$aux_dir` 和 `$out2_dir`。未设置时从项目 rc 读取，空值或缺省继承 `$out_dir`。`outputDirectory` 仍表示 TeX 输出目录；日志、recorder、文献、索引和章节辅助文件使用辅助目录，PDF 与 SyncTeX 使用最终目录。默认 latexmk 参数同步传入这些目录；清理仅删除这些目录中的已知产物，并检查每个目录的路径绑定。自定义参数需自行传递与这些设置一致的工具选项。
+`build.auxiliaryDirectory` 与 `build.finalOutputDirectory` 用于默认 latexmk 调用（其他工具需自定义参数），分别覆盖 `$aux_dir` 和 `$out2_dir`。未设置时从项目 rc 读取，空值或缺省继承 `$out_dir`。`outputDirectory` 仍表示 TeX 输出目录；日志、recorder、文献、索引和章节辅助文件使用辅助目录，PDF 与 SyncTeX 使用最终目录。默认 latexmk 参数同步传入这些目录；清理仅删除这些目录中的已知产物，并检查每个目录的路径绑定。自定义参数需自行传递与这些设置一致的工具选项。
+
+自定义 `arguments` / `rebuildArguments` 保持原样调用，不自动推断其中的引擎或目录，请显式配置产物位置。rc 依赖监测独立生效：默认跟踪系统、用户和项目 rc；存在 `-norc` / `--norc` 时排除这些默认来源；每个 `-r file` / `--r file` 及其字面量包含文件仍被跟踪。配置路径支持 `%f`、`%o`、`%j`，与编译参数一样只展开一遍。强制编译使用 `rebuildArguments` 的 rc 集合；rc 内容修改、删除和候选文件创建会使正在编译的结果过期，即使编辑器没有发送文件监测事件，也会在完成时检查内容。

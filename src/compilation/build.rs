@@ -351,7 +351,10 @@ impl BuildManager {
             ));
         }
         workspace.refresh_project(&root);
-        let mut config = workspace.build_config(&root);
+        let path = root
+            .to_file_path()
+            .map_err(|_| Error::invalid_params("Compilation requires a local file"))?;
+        let mut config = workspace.build_config(&root).for_build_mode(&path, rebuild);
         if config.resolution.native || !config.resolution.issues.is_empty() {
             let path = root
                 .to_file_path()
@@ -1501,6 +1504,7 @@ fn run_with_mode(
     // PDF. latexmk may skip a source saved with identical contents even though
     // its timestamp is newer. Force one pass to establish a verified PDF and
     // recorder instead of rejecting that legitimate incremental build.
+    let config = config.for_build_mode(root, rebuild);
     let config = match config.resolve_for_build(root, cancel) {
         Ok(config) => config,
         Err(message) => return Outcome::error(message),

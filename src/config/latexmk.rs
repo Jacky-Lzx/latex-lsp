@@ -160,6 +160,22 @@ fn literal_setting(source: &str, setting: &str) -> Result<Option<String>, String
                 ) {
                     return Err(unknown());
                 }
+                // Calls may mutate settings through a function defined in an
+                // earlier rc layer, even when this statement never names them.
+                if !word.starts_with('$')
+                    && !matches!(
+                        word.as_str(),
+                        "if" | "unless" | "for" | "foreach" | "while" | "sub"
+                    )
+                {
+                    let mut following = chars.clone();
+                    while following.peek().is_some_and(|ch| ch.is_whitespace()) {
+                        following.next();
+                    }
+                    if following.peek() == Some(&'(') {
+                        return Err(unknown());
+                    }
+                }
                 if word == setting {
                     mentions_output = true;
                     if depth != 0 {
@@ -179,6 +195,9 @@ fn literal_setting(source: &str, setting: &str) -> Result<Option<String>, String
                 Token::Symbol(ch)
             }
             ';' if depth == 0 => {
+                if matches!(statement.first(), Some(Token::Word(word)) if !word.starts_with('$')) {
+                    return Err(unknown());
+                }
                 if mentions_output {
                     output = match statement.as_slice() {
                         [Token::Word(name), Token::Symbol('='), Token::String(Some(value))]
@@ -238,7 +257,7 @@ fn literal_setting(source: &str, setting: &str) -> Result<Option<String>, String
 }
 
 /// Return a decoded literal, or None for a Perl string with interpolation.
-fn quoted(
+pub(super) fn quoted(
     chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
     quote: char,
 ) -> Option<Option<String>> {
@@ -304,6 +323,8 @@ mod tests {
             ("$pdf_mode = 5; if ($flag) { $pdf_mode = 1; }", None),
             ("$pdf_mode = 5; $pdf_mode += 1;", None),
             ("$pdf_mode = 5; $pdf_mode = unknown();", None),
+            ("$pdf_mode = 5; configure_engine();", None),
+            ("$pdf_mode = 5; configure_engine 'project';", None),
         ] {
             assert_eq!(literal_engine(source), expected, "{source}");
         }

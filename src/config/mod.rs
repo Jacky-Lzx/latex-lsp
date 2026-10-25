@@ -196,6 +196,8 @@ pub struct BuildResolution {
     pub inferred: Vec<String>,
     #[serde(skip)]
     pub dependencies: Vec<PathBuf>,
+    #[serde(skip)]
+    pub rebuild: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -451,6 +453,13 @@ impl Config {
         {
             return Err("Build executable and outputDirectory must not be empty".into());
         }
+        if config.build.arguments.is_none()
+            && Path::new(&config.build.executable).file_stem() != Some(OsStr::new("latexmk"))
+            && (config.build.auxiliary_directory.is_some()
+                || config.build.final_output_directory.is_some())
+        {
+            return Err("Separate auxiliaryDirectory/finalOutputDirectory require latexmk or custom build arguments".into());
+        }
         if !(1..=3600).contains(&config.build.timeout_seconds) {
             return Err("Build timeoutSeconds must be between 1 and 3600".into());
         }
@@ -505,6 +514,7 @@ impl BuildConfig {
         let mut settings = latexmk::Settings::default();
         let mut selected = None;
         let paths = if self.arguments.is_none()
+            && !(self.resolution.rebuild && self.rebuild_arguments.is_some())
             && Path::new(&self.executable).file_stem() == Some(OsStr::new("latexmk"))
         {
             latexmk_native::candidates(root)
@@ -590,6 +600,14 @@ impl BuildConfig {
                 }
             }
         }
+        if self.arguments.is_some() || (self.resolution.rebuild && self.rebuild_arguments.is_some())
+        {
+            config.resolution.sources = config
+                .latexmkrc_paths(root)
+                .into_iter()
+                .filter(|path| crate::diagnostics::diagnostic_inputs::is_file(path))
+                .collect();
+        }
         config.resolution.issues.sort();
         config.resolution.issues.dedup();
         config
@@ -606,7 +624,10 @@ impl BuildConfig {
                 _ => {}
             }
         }
-        config.resolution = BuildResolution::default();
+        config.resolution = BuildResolution {
+            rebuild: self.resolution.rebuild,
+            ..Default::default()
+        };
         config
     }
 
@@ -634,16 +655,51 @@ impl BuildConfig {
     }
 
     pub(crate) fn latexmkrc_paths(&self, root: &Path) -> Vec<PathBuf> {
-        if self.arguments.is_some()
-            || Path::new(&self.executable).file_stem() != Some(OsStr::new("latexmk"))
-        {
-            return Vec::new();
+        if Path::new(&self.executable).file_stem() != Some(OsStr::new("latexmk")) {
+            return vec![];
         }
-        let mut paths = latexmk_native::candidates(root);
+        let arguments = if self.resolution.rebuild {
+            self.rebuild_arguments.as_ref().or(self.arguments.as_ref())
+        } else {
+            self.arguments.as_ref()
+        };
+        let mut paths = if let Some(arguments) = arguments {
+            // Expand templates once using the same configured paths as the
+            // compiler; inserted percent sequences remain literal.
+            let output = root.parent().unwrap_or_else(|| Path::new(".")).join(
+                self.output_directory
+                    .as_deref()
+                    .unwrap_or(DEFAULT_OUTPUT_DIRECTORY),
+            );
+            let job = self.job_name(root).unwrap_or_default().to_string_lossy();
+            let expanded: Vec<_> = arguments
+                .iter()
+                .map(|arg| {
+                    expand_template(
+                        arg,
+                        &root.to_string_lossy(),
+                        &output.to_string_lossy(),
+                        &job,
+                    )
+                })
+                .collect();
+            latexmk_native::argument_dependencies(root, &expanded)
+        } else {
+            latexmk_native::candidates(root)
+        };
         paths.extend(self.resolution.dependencies.clone());
         paths.sort();
         paths.dedup();
         paths
+    }
+
+    pub(crate) fn for_build_mode(&self, root: &Path, rebuild: bool) -> Self {
+        if self.rebuild_arguments.is_some() && self.resolution.rebuild != rebuild {
+            let mut config = self.unresolved();
+            config.resolution.rebuild = rebuild;
+            return config.resolved(root);
+        }
+        self.clone()
     }
 
     pub fn output_path(&self, root: &Path) -> Option<PathBuf> {
@@ -688,18 +744,27 @@ impl BuildConfig {
     /// placeholder (a real source directory can itself contain `%o` or `%j`).
     pub fn expanded_arguments(&self, root: &Path) -> Option<Vec<String>> {
         let config = self.resolved(root);
-        config.expand_arguments(root, config.arguments())
+        config.expand_arguments(root, config.arguments(), config.arguments.is_none())
     }
 
     pub fn expanded_rebuild_arguments(&self, root: &Path) -> Result<Vec<String>, String> {
         let config = self.resolved(root);
         config.validate_resolution()?;
         config
-            .expand_arguments(root, config.rebuild_arguments()?)
+            .expand_arguments(
+                root,
+                config.rebuild_arguments()?,
+                config.rebuild_arguments.is_none() && config.arguments.is_none(),
+            )
             .ok_or_else(|| "Invalid root filename".into())
     }
 
-    fn expand_arguments(&self, root: &Path, arguments: Vec<String>) -> Option<Vec<String>> {
+    fn expand_arguments(
+        &self,
+        root: &Path,
+        arguments: Vec<String>,
+        default_arguments: bool,
+    ) -> Option<Vec<String>> {
         let output = self.output_path(root)?;
         let root_name = root.to_string_lossy();
         let output_name = output.to_string_lossy();
@@ -708,26 +773,23 @@ impl BuildConfig {
             arguments
                 .into_iter()
                 .map(|argument| {
-                    let mut expanded = String::new();
-                    let mut tail = argument.as_str();
-                    while let Some(index) = tail.find('%') {
-                        expanded.push_str(&tail[..index]);
-                        let value = match tail.as_bytes().get(index + 1) {
-                            Some(b'f') => Some(root_name.as_ref()),
-                            Some(b'o') => Some(output_name.as_ref()),
-                            Some(b'j') => Some(job_name.as_ref()),
-                            _ => None,
-                        };
-                        if let Some(value) = value {
-                            expanded.push_str(value);
-                            tail = &tail[index + 2..];
-                        } else {
-                            expanded.push('%');
-                            tail = &tail[index + 1..];
-                        }
+                    if default_arguments
+                        && [
+                            self.auxiliary_directory
+                                .as_ref()
+                                .map(|directory| format!("-auxdir={directory}")),
+                            self.final_output_directory
+                                .as_ref()
+                                .map(|directory| format!("-out2dir={directory}")),
+                        ]
+                        .into_iter()
+                        .flatten()
+                        .any(|literal| literal == argument)
+                    {
+                        argument
+                    } else {
+                        expand_template(&argument, &root_name, &output_name, &job_name)
                     }
-                    expanded.push_str(tail);
-                    expanded
                 })
                 .collect(),
         )
@@ -847,8 +909,9 @@ impl BuildConfig {
         // paths. Keep latexmk's directory workaround for explicitly configured
         // paths that need it; ordinary in-project paths can preserve source cwd.
         let output = Path::new(
-            self.output_directory
+            self.auxiliary_directory
                 .as_deref()
+                .or(self.output_directory.as_deref())
                 .unwrap_or(DEFAULT_OUTPUT_DIRECTORY),
         );
         let needs_fudge = output.is_absolute() || output.components().any(|component| {
@@ -864,6 +927,29 @@ impl BuildConfig {
         }
         arguments
     }
+}
+
+fn expand_template(argument: &str, root_name: &str, output_name: &str, job_name: &str) -> String {
+    let mut expanded = String::new();
+    let mut tail = argument;
+    while let Some(index) = tail.find('%') {
+        expanded.push_str(&tail[..index]);
+        let value = match tail.as_bytes().get(index + 1) {
+            Some(b'f') => Some(root_name),
+            Some(b'o') => Some(output_name),
+            Some(b'j') => Some(job_name),
+            _ => None,
+        };
+        if let Some(value) = value {
+            expanded.push_str(value);
+            tail = &tail[index + 2..];
+        } else {
+            expanded.push('%');
+            tail = &tail[index + 1..];
+        }
+    }
+    expanded.push_str(tail);
+    expanded
 }
 
 #[cfg(test)]
