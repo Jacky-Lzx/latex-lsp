@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare validated rename requests in alternating resident release processes."""
+"""Compare validated rename or definition requests in alternating resident processes."""
 
 import argparse
 from contextlib import ExitStack
@@ -31,12 +31,18 @@ def replay(before, after, scale, args, cpu):
         with tempfile.TemporaryDirectory(prefix="latex-lsp-rename-pairs-") as directory, ExitStack() as stack:
             root = Path(directory)
             launchers = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="latex-lsp-rename-launch-")))
-            metadata = editing.fixture(root, scale, args.hooks, args.hook_wrappers)
+            metadata = editing.fixture(root, scale, args.hooks, args.hook_wrappers, args.hook_environments)
             main, chapter = root / "main.tex", root / "chapter0.tex"
             source = chapter.read_text()
             params = {"textDocument": {"uri": chapter.as_uri()},
-                      "position": editing.position(source, source.rindex("sec:0:0") + 4),
-                      "newName": "sec:renamed"}
+                      "position": editing.position(source, source.rindex("sec:0:0") + 4)}
+            if args.query == "rename":
+                params["newName"] = "sec:renamed"
+            declaration = source.index(r"\label{sec:0:0}") + len(r"\label{")
+            expected_definition = [{"uri": chapter.as_uri(), "range": {
+                "start": editing.position(source, declaration),
+                "end": editing.position(source, declaration + len("sec:0:0")),
+            }}]
             chapters, sections = editing.SCALES[scale]
             expected_files = {(root / f"chapter{i}.tex").as_uri() for i in range(chapters)}
             expected_edits = chapters * (sections + 1) + 1
@@ -80,14 +86,17 @@ def replay(before, after, scale, args, cpu):
                     server = servers[label]
                     start_cpu = cpu_seconds(server.process)
                     start = time.perf_counter_ns()
-                    result = server.request("textDocument/rename", params)
+                    result = server.request(f"textDocument/{args.query}", params)
                     elapsed = (time.perf_counter_ns() - start) / 1e6
                     end_cpu = cpu_seconds(server.process)
-                    changes = result["changes"]
-                    assert set(changes) == expected_files, changes
-                    assert sum(map(len, changes.values())) == expected_edits, changes
-                    assert all(edit["newText"] == "sec:renamed"
-                               for edits in changes.values() for edit in edits), changes
+                    if args.query == "definition":
+                        assert result == expected_definition, result
+                    else:
+                        changes = result["changes"]
+                        assert set(changes) == expected_files, changes
+                        assert sum(map(len, changes.values())) == expected_edits, changes
+                        assert all(edit["newText"] == "sec:renamed"
+                                   for edits in changes.values() for edit in edits), changes
                     if step >= args.warmup:
                         wall[label].append(elapsed)
                         if start_cpu is not None and end_cpu is not None:
@@ -113,8 +122,10 @@ def main():
     parser.add_argument("--runs", type=int, default=3)
     parser.add_argument("--timeout", type=float, default=120)
     parser.add_argument("--cpu", type=int, help="pin both servers to this allowed CPU (Linux default: first allowed CPU)")
+    parser.add_argument("--query", choices=["rename", "definition"], default="rename")
     parser.add_argument("--hooks", action="store_true")
     parser.add_argument("--hook-wrappers", action="store_true")
+    parser.add_argument("--hook-environments", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.iterations < 1 or args.runs < 1 or args.warmup < 0 or args.timeout <= 0:
@@ -123,10 +134,10 @@ def main():
     if args.cpu is not None and args.cpu not in affinity:
         parser.error("cpu must belong to the current allowed CPU set")
     cpu = args.cpu if args.cpu is not None else min(affinity, default=None)
-    args.hooks = args.hooks or args.hook_wrappers
+    args.hooks = args.hooks or args.hook_wrappers or args.hook_environments
     before, after = args.before.resolve(strict=True), args.after.resolve(strict=True)
     report = {
-        "schema": 1, "kind": "paired_rename",
+        "schema": 1, "kind": f"paired_{args.query}",
         "workload_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "fixture_script_sha256": hashlib.sha256(Path(editing.__file__).read_bytes()).hexdigest(),
         "environment": {"platform": platform.platform(), "python": platform.python_version(),
@@ -135,13 +146,14 @@ def main():
         "servers": {label: {"path": str(binary), "sha256": hashlib.sha256(binary.read_bytes()).hexdigest()}
                     for label, binary in [("before", before), ("after", after)]},
         "parameters": {"iterations": args.iterations, "warmup": args.warmup, "runs": args.runs,
-                       "hooks": args.hooks, "hook_wrappers": args.hook_wrappers},
+                       "hooks": args.hooks, "hook_wrappers": args.hook_wrappers,
+                       "hook_environments": args.hook_environments, "query": args.query},
         "scenarios": {},
     }
     for scale in args.scales:
         result = replay(before, after, scale, args, cpu)
         report["scenarios"][scale] = result
-        print(f"{scale}: wall p50 {result['wall_ms']['before']['p50_ms']:.3f} -> "
+        print(f"{scale} {args.query}: wall p50 {result['wall_ms']['before']['p50_ms']:.3f} -> "
               f"{result['wall_ms']['after']['p50_ms']:.3f} ms; "
               f"paired median {result['paired_before_over_after_median']:.2f}x; "
               f"server CPU means {result['cpu_mean_ms']}", flush=True)

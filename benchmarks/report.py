@@ -44,14 +44,15 @@ const scale=document.getElementById('scale'), stat=document.getElementById('stat
 for(const key of Object.keys(data.after.scenarios)){const option=document.createElement('option');option.value=key;option.textContent=key;scale.append(option)}
 scale.value=Object.hasOwn(data.after.scenarios,'large')?'large':scale.options[0].value;
 const p=data.after.parameters;
-document.getElementById('method').textContent=`${p.runs} 个独立进程 × ${p.iterations} 个测量周期；每个进程先预热 ${p.warmup} 个周期。每周期 11 次编辑，顺序查询各项功能。初始化、打开单独统计。${p.hooks?' 包含内核钩子及其参数提示校验。':''}${p.hook_wrappers?' 每节含嵌套包装调用，测量参数数据传递保护。':''}`;
+document.getElementById('method').textContent=`${p.runs} 个独立进程 × ${p.iterations} 个测量周期；每个进程先预热 ${p.warmup} 个周期。每周期 11 次编辑，顺序查询各项功能。初始化、打开单独统计。${p.hooks?' 包含内核钩子及其参数提示校验。':''}${p.hook_wrappers?' 每节含嵌套包装调用，测量参数数据传递保护。':''}${p.hook_environments?' 每节含环境包装，由结束正文把开始参数传入 hook。':''}`;
 if(data.paired){
  const report=data.paired,host=document.getElementById('paired'),note=document.createElement('p');
+ const query=report.kind==='paired_definition'?'定义跳转':'改名';
  const binding=report.environment.cpu===null?'未绑定 CPU':`启动前绑定 CPU ${report.environment.cpu}，打开后核验所有线程`;
  const precision=report.environment.cpu_tick_ms===null?'未采集 CPU':`CPU 为所有样本的均值，单样本精度 ${report.environment.cpu_tick_ms} ms`;
- note.textContent=`固定快照的配对改名探测：${report.parameters.runs} 组新进程，每组预热 ${report.parameters.warmup} 对，测量 ${report.parameters.iterations} 对；两版交替请求，${binding}。下表墙钟为 p50；${precision}。它不包含连续编辑；下方完整会话保留了运行时波动。`;
+ note.textContent=`固定快照的配对${query}探测：${report.parameters.runs} 组新进程，每组预热 ${report.parameters.warmup} 对，测量 ${report.parameters.iterations} 对；两版交替请求，${binding}。下表墙钟为 p50；${precision}。它不包含连续编辑；下方完整会话保留了运行时波动。`;
  host.append(note);const table=document.createElement('table');table.className='pairs';
- const heading=document.createElement('tr');for(const value of ['项目','改名 p50 · ms','速度倍率','CPU 均值 · ms']){const cell=document.createElement('th');cell.textContent=value;heading.append(cell)}table.append(heading);
+ const heading=document.createElement('tr');for(const value of ['项目',`${query} p50 · ms`,'速度倍率','CPU 均值 · ms']){const cell=document.createElement('th');cell.textContent=value;heading.append(cell)}table.append(heading);
  for(const [scale,result] of Object.entries(report.scenarios)){
   const a=result.wall_ms.before.p50_ms,b=result.wall_ms.after.p50_ms,cpu=result.cpu_mean_ms,row=document.createElement('tr');
   for(const value of [scale,`${a.toFixed(2)} → ${b.toFixed(2)}`,`${(a/b).toFixed(2)}×`,cpu.before===null?'未采集':`${cpu.before.toFixed(2)} → ${cpu.after.toFixed(2)}`]){const cell=document.createElement('td');cell.textContent=value;row.append(cell)}table.append(row);
@@ -82,7 +83,7 @@ def main():
     parser.add_argument("before", type=Path)
     parser.add_argument("after", type=Path)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--paired", type=Path, help="include a matching fixed-snapshot paired rename report")
+    parser.add_argument("--paired", type=Path, help="include a matching fixed-snapshot paired rename or definition report")
     args = parser.parse_args()
     before, after = (json.loads(path.read_text()) for path in [args.before, args.after])
     for key in ["schema", "workload_sha256", "parameters"]:
@@ -99,8 +100,8 @@ def main():
             scenario.pop("samples_ms", None)
     paired = json.loads(args.paired.read_text()) if args.paired else None
     if paired:
-        if paired.get("kind") != "paired_rename":
-            parser.error("paired input must be a paired rename report")
+        if paired.get("kind") not in {"paired_rename", "paired_definition"}:
+            parser.error("paired input must be a paired rename or definition report")
         for label, report in [("before", before), ("after", after)]:
             if paired["servers"][label]["sha256"] != report["environment"]["server_sha256"]:
                 parser.error(f"paired {label} binary differs")

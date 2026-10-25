@@ -46,6 +46,13 @@ python3 benchmarks/editing.py --hooks --output target/benchmarks/hooks.json
 python3 benchmarks/editing.py --hook-wrappers --output target/benchmarks/hook-wrappers.json
 ```
 
+`--hook-environments` 包含 hook 负载，并为每节加入一次 xparse 环境调用，环境结束正文将开始参数传给 hook。每档分别定义 16／32／64 个环境，各章节复用这些定义，用于测量环境参数绑定随定义数和调用数增长的成本。可与 `--hook-wrappers` 组合；输出记录 `hook_environments`，前后比较要求选项一致。
+
+```sh
+python3 benchmarks/editing.py --hook-wrappers --hook-environments \
+  --output target/benchmarks/hook-environments.json
+```
+
 ## 比较优化前后
 
 先保留优化前的二进制，再构建优化后的版本，依次测量，避免构建或其他 benchmark 同时运行：
@@ -217,3 +224,39 @@ python3 benchmarks/report.py \
 ```
 
 保护实现的稳定整仓基线为 319 个目标、3359 项通过、0 失败。优化后再次通过 521 项单元及相关回归、8 项 hook 协议、6 项显式原生测试和全目标严格 Clippy；原生数据保护覆盖 21 种直接／包装／命名调用，核验捕获文本、宏执行次数和实际独立标签编辑后的完整 AUX。CI 加入包装会话与配对探测短测，不设机器相关的性能门槛。dev 清理释放 9.1 GiB，测量结束时可用空间约 20 GiB。
+
+## 2026-10-26 第六轮：环境负载与无关查询的 hook 索引
+
+基线为 `0f26cef`，已保护环境包装与额外参数转发中的 hook 数据。新增 `--hook-environments`，与 `--hook-wrappers` 组合测量：large 含 10 个文件、240046 字节、64 个 xparse 环境和 512 次环境调用，结束正文把开始参数传给 hook。独立标签的全部编辑及文件集合仍经过校验。
+
+最初尝试按文档索引数据流分析中的正文所属定义。同核配对改名的 small／medium／large p50 倍率约为 0.99×／0.96×／0.99×，未显示稳定收益，因此撤回；`round6-owner-index-pairs.json` 保留此次中间实验。随后发现普通标签导航也会建立全部源码的 hook 名称索引。现在先解析光标所在文档，若该消费者解释下没有目标 hook 名称，直接结束此项分析；真正的 hook 名称查询继续扫描完整项目，并保留所有共享消费者的一致性检查。没有增加跨请求缓存。
+
+连续会话为每档 3 个独立进程，每进程预热 3 周期、测量 12 周期。大型组合负载的定义 p50 为 79.95→76.46 ms，悬停 51.00→45.36 ms，改名 47.85→48.81 ms；常规负载定义为 26.77→25.89 ms，改名 19.40→20.30 ms。会话仍有明显波动，不将这些变化解释为所有功能的普遍加速。
+
+`rename_pairs.py` 新增 `--query definition`，核对精确声明位置，沿用启动前同核绑定、打开后全部线程亲和性检查和交替请求。每档为 3 组进程，预热 5 对、测量 20 对。下表始终按“原版→优化版”排列，反向复测文件的 `before`／`after` 则交换了二进制。
+
+| 固定快照 | 定义 p50 前／后 ms | p50 倍率 | CPU 均值前／后 ms |
+| --- | ---: | ---: | ---: |
+| small 组合 | 4.51／4.34 | 1.04× | 4.83／4.67 |
+| medium 组合 | 20.03／18.32 | 1.10× | 21.33／18.50 |
+| large 组合 | 77.31／69.55 | 1.11× | 77.83／70.83 |
+| large 组合，交换顺序 | 77.40／69.21 | 1.12× | 77.00／70.50 |
+
+两组大型探测的 CPU 均值下降约 8%–9%；CPU tick 为 10 ms，不能根据小项目的少量 tick 宣称收益。结论限于避免无关 hook 索引的导航成本；配对探测没有连续编辑，不能替代完整会话。测量期间未并行运行构建、测试或浏览器渲染。
+
+全部原始数据为 `benchmarks/results/2026-10-26/round6*.json`，合计约 290 KiB：`environments-before/after` 和 `regular-before/after` 为连续会话，`definition-pairs` 及其 `reversed` 为正式配对，`owner-index-pairs` 为已撤回实验。
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 benchmarks/rename_pairs.py \
+  --before target/benchmarks/latex-lsp-round6-guard \
+  --after target/benchmarks/latex-lsp-round6-origin-first \
+  --query definition --hook-wrappers --hook-environments \
+  --output target/benchmarks/definition-pairs.json
+python3 benchmarks/report.py \
+  benchmarks/results/2026-10-26/round6-environments-before.json \
+  benchmarks/results/2026-10-26/round6-environments-after.json \
+  --paired benchmarks/results/2026-10-26/round6-definition-pairs.json \
+  --output target/benchmarks/round6-environments-report.html
+```
+
+两种配对查询及环境组合会话的 smoke 通过，CI 同步覆盖。44 项 hook 相关测试、8 项显式原生测试、全目标严格 Clippy、文档、格式及差异检查通过。冻结源码后的整仓回归为 320 个目标、3365 项通过、0 失败、494 项默认跳过，其中完整串行协议为 406 项通过、29 项默认跳过。独立 HTML 的配对表及项目／分位数／指标筛选交互、全部原始样本数量与数值检查通过；预览服务仍返回 `Headless Chrome could not render the page: the browser exited unexpectedly.`，未计为视觉验证通过。

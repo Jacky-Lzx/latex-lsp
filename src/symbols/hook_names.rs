@@ -51,6 +51,14 @@ struct Entry {
     complete: bool,
 }
 
+impl Entry {
+    fn contains(&self, offset: usize, complete: bool) -> bool {
+        (!complete || self.complete && valid(&self.name))
+            && self.span.start <= offset
+            && offset <= self.span.end
+    }
+}
+
 fn field(source: &str, after: usize) -> Option<(Span<usize>, usize, bool)> {
     let at = syntax::skip_space(source, after);
     if source.as_bytes().get(at) == Some(&b'{') {
@@ -163,7 +171,7 @@ struct Index {
 }
 
 impl Index {
-    fn new(ws: &Workspace, origin: &Url) -> Self {
+    fn new(ws: &Workspace, origin: &Url, offset: usize, complete: bool) -> Self {
         if !ws.index_truncated.is_empty()
             || !ws.documents.values().any(|doc| {
                 doc.kind == DocumentKind::Latex
@@ -216,20 +224,31 @@ impl Index {
                 docs.iter()
                     .map(|doc| (doc.text.source.as_str(), &doc.syntax)),
             );
-            for uri in consumers {
+            // All callers need an entry at this cursor. Inspect its document
+            // first so an ordinary label or command query does not index hook
+            // names in every other source. A shared source must still match in
+            // each consumer interpretation before any result can be returned.
+            for uri in consumers
+                .iter()
+                .filter(|uri| *uri == origin)
+                .chain(consumers.iter().filter(|uri| *uri != origin))
+            {
                 let Some(doc) = ws
                     .documents
-                    .get(&uri)
+                    .get(uri)
                     .filter(|doc| doc.kind == DocumentKind::Latex)
                 else {
                     continue;
                 };
                 let calls = calls(doc, &signatures);
+                if uri == origin && !calls.values().any(|entry| entry.contains(offset, complete)) {
+                    return Self::default();
+                }
                 entries = entries.saturating_add(calls.len());
                 if entries > 100_000 {
                     return Self::default();
                 }
-                interpretations.entry(uri).or_default().push(calls);
+                interpretations.entry(uri.clone()).or_default().push(calls);
             }
         }
         let mut result = Self::default();
@@ -252,11 +271,10 @@ impl Index {
     }
 
     fn target(&self, uri: &Url, offset: usize, complete: bool) -> Option<&Entry> {
-        self.entries.get(uri)?.values().find(|entry| {
-            (!complete || entry.complete && valid(&entry.name))
-                && entry.span.start <= offset
-                && offset <= entry.span.end
-        })
+        self.entries
+            .get(uri)?
+            .values()
+            .find(|entry| entry.contains(offset, complete))
     }
 
     fn entries<'a>(
@@ -292,7 +310,7 @@ impl Index {
 }
 
 pub(crate) fn definitions(ws: &Workspace, uri: &Url, offset: usize) -> Option<Vec<Location>> {
-    let index = Index::new(ws, uri);
+    let index = Index::new(ws, uri, offset, true);
     let entry = index.target(uri, offset, true)?;
     Some(index.definitions(ws, uri, &entry.name))
 }
@@ -303,7 +321,7 @@ pub(crate) fn references(
     offset: usize,
     include: bool,
 ) -> Option<Vec<Location>> {
-    let index = Index::new(ws, uri);
+    let index = Index::new(ws, uri, offset, true);
     let entry = index.target(uri, offset, true)?;
     let mut scope = ws.symbol_scope(uri);
     let definitions = index.definitions(ws, uri, &entry.name);
@@ -326,7 +344,7 @@ pub(crate) fn references(
 }
 
 pub(crate) fn hover(ws: &Workspace, uri: &Url, offset: usize) -> Option<Hover> {
-    let index = Index::new(ws, uri);
+    let index = Index::new(ws, uri, offset, true);
     let entry = index.target(uri, offset, true)?;
     Some(Hover {
         contents: HoverContents::Markup(MarkupContent {
@@ -338,7 +356,7 @@ pub(crate) fn hover(ws: &Workspace, uri: &Url, offset: usize) -> Option<Hover> {
 }
 
 pub(crate) fn completion(ws: &Workspace, uri: &Url, offset: usize) -> Option<Vec<CompletionItem>> {
-    let index = Index::new(ws, uri);
+    let index = Index::new(ws, uri, offset, false);
     let target = index.target(uri, offset, false)?;
     if target.declaration {
         return Some(vec![]);
