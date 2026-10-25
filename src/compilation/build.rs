@@ -205,7 +205,7 @@ impl BuildManager {
         .flatten()
         .map(&physical)
         .collect();
-        let directory = config.output_path(&root_path).map(&physical);
+        let directory = config.output_path(&root_path).map(physical);
         let (result, affected) = {
             // Serialize with build reservation and queued generation checks.
             // No process is cancelled implicitly by a cleanup request.
