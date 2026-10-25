@@ -14,3 +14,5 @@ jobs:
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
       - run: cargo build --locked --release
+      - name: Replay an editing session over stdio
+        run: python3 benchmarks/editing.py --scales small --iterations 2 --warmup 1 --runs 1 --output target/benchmarks/smoke.json

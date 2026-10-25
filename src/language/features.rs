@@ -574,6 +574,14 @@ pub fn prepare_rename(
     uri: &Url,
     position: Position,
 ) -> crate::rpc::Result<Option<PrepareRenameResponse>> {
+    crate::symbols::query_cache::with_cache(|| prepare_rename_query(workspace, uri, position))
+}
+
+fn prepare_rename_query(
+    workspace: &Workspace,
+    uri: &Url,
+    position: Position,
+) -> crate::rpc::Result<Option<PrepareRenameResponse>> {
     if let Some(offset) = workspace
         .documents
         .get(uri)
@@ -612,6 +620,15 @@ pub fn prepare_rename(
 }
 
 pub fn rename(
+    workspace: &Workspace,
+    uri: &Url,
+    position: Position,
+    new_name: &str,
+) -> crate::rpc::Result<Option<WorkspaceEdit>> {
+    crate::symbols::query_cache::with_cache(|| rename_query(workspace, uri, position, new_name))
+}
+
+fn rename_query(
     workspace: &Workspace,
     uri: &Url,
     position: Position,
@@ -1897,6 +1914,10 @@ pub(crate) fn bibliography_relation_edits<'a>(
 }
 
 pub fn definitions(workspace: &Workspace, uri: &Url, position: Position) -> Vec<Location> {
+    crate::project::source_inputs::with_query_cache(|| definitions_query(workspace, uri, position))
+}
+
+fn definitions_query(workspace: &Workspace, uri: &Url, position: Position) -> Vec<Location> {
     let Some(doc) = workspace.documents.get(uri) else {
         return vec![];
     };
@@ -1984,6 +2005,17 @@ pub fn definitions(workspace: &Workspace, uri: &Url, position: Position) -> Vec<
 }
 
 pub fn references(
+    workspace: &Workspace,
+    uri: &Url,
+    position: Position,
+    include_declaration: bool,
+) -> Vec<Location> {
+    crate::symbols::query_cache::with_cache(|| {
+        references_query(workspace, uri, position, include_declaration)
+    })
+}
+
+fn references_query(
     workspace: &Workspace,
     uri: &Url,
     position: Position,
@@ -2404,6 +2436,10 @@ fn all_references(
 }
 
 pub fn hover(workspace: &Workspace, uri: &Url, position: Position) -> Option<Hover> {
+    crate::project::source_inputs::with_query_cache(|| hover_query(workspace, uri, position))
+}
+
+fn hover_query(workspace: &Workspace, uri: &Url, position: Position) -> Option<Hover> {
     let doc = workspace.documents.get(uri)?;
     let offset = doc.text.offset(position)?;
     if let Some(result) = crate::symbols::hook_names::hover(workspace, uri, offset) {

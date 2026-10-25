@@ -7,7 +7,7 @@ use crate::{
 use lsp_types::Url;
 use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct Index {
     inactive: BTreeMap<Url, BTreeSet<usize>>,
 }
@@ -28,22 +28,35 @@ impl Index {
             .filter(|project| project.contains(uri) && project.is_subset(&scope))
             .collect();
         if projects.is_empty() {
-            return Self::for_scope(workspace, &scope);
+            return Self::for_scope(workspace, &scope).as_ref().clone();
         }
         let mut result = Self::default();
         for project in projects {
-            for (uri, inactive) in Self::for_scope(workspace, &project).inactive {
+            for (uri, inactive) in &Self::for_scope(workspace, &project).inactive {
                 result
                     .inactive
-                    .entry(uri)
+                    .entry(uri.clone())
                     .and_modify(|known| known.retain(|at| inactive.contains(at)))
-                    .or_insert(inactive);
+                    .or_insert_with(|| inactive.clone());
             }
         }
         result
     }
 
-    pub(crate) fn for_scope(workspace: &Workspace, scope: &BTreeSet<Url>) -> Self {
+    pub(crate) fn for_scope(workspace: &Workspace, scope: &BTreeSet<Url>) -> std::sync::Arc<Self> {
+        super::query_cache::labels(workspace, scope, || Self::build(workspace, scope))
+    }
+
+    pub(super) fn cache_bytes(&self) -> usize {
+        self.inactive
+            .iter()
+            .map(|(uri, positions)| {
+                uri.as_str().len() + 64 + positions.len() * (std::mem::size_of::<usize>() + 64)
+            })
+            .sum()
+    }
+
+    fn build(workspace: &Workspace, scope: &BTreeSet<Url>) -> Self {
         let docs: Vec<_> = workspace
             .documents
             .iter()
@@ -228,6 +241,12 @@ fn readers(
     }
     let mut definitions = BTreeMap::<&str, Vec<(bool, Option<String>, usize)>>::new();
     for doc in docs {
+        // Most chapters only consume macros. Building argument/execution
+        // positions for them cannot contribute a reader declaration, and
+        // repeats a full source scan for every consumer in the project.
+        if doc.syntax.definitions.is_empty() {
+            continue;
+        }
         if doc.syntax.definitions.len() > 4096 {
             return result;
         }

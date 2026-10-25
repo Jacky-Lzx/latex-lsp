@@ -15,6 +15,7 @@ pub(crate) mod named_colors;
 pub(crate) mod named_commands;
 pub(crate) mod named_references;
 pub(crate) mod project_environments;
+pub(crate) mod query_cache;
 pub(crate) mod reference_calls;
 pub(crate) mod saved_text;
 pub(crate) mod special_characters;

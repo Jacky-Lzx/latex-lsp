@@ -290,8 +290,33 @@ fn has_calls(doc: &Document, names: &BTreeSet<&str>) -> bool {
 }
 
 impl Index {
-    pub(crate) fn new(workspace: &Workspace, origin: &Url) -> Self {
-        Self::build(workspace, origin, None)
+    pub(crate) fn new(workspace: &Workspace, origin: &Url) -> std::sync::Arc<Self> {
+        super::query_cache::named(workspace, origin, || Self::build(workspace, origin, None))
+    }
+
+    pub(super) fn cache_bytes(&self) -> usize {
+        self.certain
+            .iter()
+            .map(|(uri, calls)| {
+                uri.as_str().len()
+                    + 64
+                    + calls
+                        .values()
+                        .map(|key| std::mem::size_of::<Key>() + key.name.capacity() + 64)
+                        .sum::<usize>()
+            })
+            .sum::<usize>()
+            + self.ambiguous.capacity() * std::mem::size_of::<(Url, bool, String)>()
+            + self
+                .ambiguous
+                .iter()
+                .map(|(uri, _, name)| uri.as_str().len() + name.capacity())
+                .sum::<usize>()
+            + self
+                .section_resources
+                .iter()
+                .map(|uri| uri.as_str().len() + 64)
+                .sum::<usize>()
     }
 
     /// Lexical evidence only: callers must independently prove every key's

@@ -14,10 +14,16 @@ const MAX_ROUNDS: usize = 32;
 const MAX_SOURCES: usize = 1024;
 
 thread_local! {
-    static QUERY: RefCell<Option<BTreeMap<(usize, Url), Index>>> = const { RefCell::new(None) };
+    static QUERY: RefCell<Option<Query>> = const { RefCell::new(None) };
 }
 
-struct Restore(Option<BTreeMap<(usize, Url), Index>>);
+#[derive(Default)]
+struct Query {
+    indexes: BTreeMap<(usize, Url), Index>,
+    projects: BTreeMap<(usize, Url, Url), BTreeSet<Url>>,
+}
+
+struct Restore(Option<Query>);
 impl Drop for Restore {
     fn drop(&mut self) {
         QUERY.with(|query| *query.borrow_mut() = self.0.take());
@@ -27,8 +33,36 @@ impl Drop for Restore {
 /// Reuse source graphs only within one immutable workspace query. In particular,
 /// no cached graph survives an editor update or a subsequent filesystem query.
 pub(crate) fn with_query_cache<T>(work: impl FnOnce() -> T) -> T {
-    let _restore = Restore(QUERY.with(|query| query.replace(Some(BTreeMap::new()))));
+    let _restore = Restore(QUERY.with(|query| query.replace(Some(Query::default()))));
     work()
+}
+
+/// Dependency traversal also resolves files and input roles. Reuse its result
+/// only for this immutable query, never across an edit or filesystem event.
+pub(crate) fn project_documents(
+    workspace: &Workspace,
+    source: &Url,
+    root: &Url,
+    compute: impl FnOnce() -> BTreeSet<Url>,
+) -> BTreeSet<Url> {
+    let key = (
+        workspace as *const Workspace as usize,
+        source.clone(),
+        root.clone(),
+    );
+    if let Some(project) = QUERY.with(|query| query.borrow().as_ref()?.projects.get(&key).cloned())
+    {
+        return project;
+    }
+    let project = compute();
+    QUERY.with(|query| {
+        if let Some(query) = query.borrow_mut().as_mut() {
+            if query.projects.len() < 16 {
+                query.projects.insert(key, project.clone());
+            }
+        }
+    });
+    project
 }
 
 #[derive(Clone, Default)]
@@ -49,14 +83,15 @@ pub(crate) struct Index {
 impl Index {
     pub fn new(workspace: &Workspace, root: &Url) -> Self {
         let key = (workspace as *const Workspace as usize, root.clone());
-        if let Some(index) = QUERY.with(|query| query.borrow().as_ref()?.get(&key).cloned()) {
+        if let Some(index) = QUERY.with(|query| query.borrow().as_ref()?.indexes.get(&key).cloned())
+        {
             return index;
         }
         let index = Self::build(workspace, root);
         QUERY.with(|query| {
             if let Some(query) = query.borrow_mut().as_mut() {
-                if query.len() < 4 {
-                    query.insert(key, index.clone());
+                if query.indexes.len() < 4 {
+                    query.indexes.insert(key, index.clone());
                 }
             }
         });
@@ -688,6 +723,52 @@ mod selection_filter_tests {
             Document::new(&main, "No input".into(), Some(2)),
         );
         assert!(!with_query_cache(|| workspace.project_documents(&main)).contains(&child));
+    }
+
+    #[test]
+    fn query_projects_distinguish_subtrees_workspaces_and_nested_queries() {
+        let directory = tempfile::tempdir().unwrap();
+        let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+        let child = Url::from_file_path(directory.path().join("child.tex")).unwrap();
+        let leaf = Url::from_file_path(directory.path().join("leaf.tex")).unwrap();
+        let mut workspace = Workspace::default();
+        for (uri, source) in [
+            (&main, r"\input{child}"),
+            (&child, r"\input{leaf}"),
+            (&leaf, "Leaf"),
+        ] {
+            std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+            workspace
+                .documents
+                .insert(uri.clone(), Document::new(uri, source.into(), Some(1)));
+        }
+        let mut other = workspace.clone();
+        other.documents.insert(
+            main.clone(),
+            Document::new(&main, "No input".into(), Some(2)),
+        );
+        with_query_cache(|| {
+            let project = workspace.project_documents(&main);
+            assert_eq!(
+                project,
+                BTreeSet::from([main.clone(), child.clone(), leaf.clone()])
+            );
+            assert_eq!(
+                workspace.project_documents_from(&child, &main),
+                BTreeSet::from([child.clone(), leaf.clone()])
+            );
+            assert_eq!(
+                other.project_documents(&main),
+                BTreeSet::from([main.clone()])
+            );
+            with_query_cache(|| {
+                assert_eq!(
+                    other.project_documents(&main),
+                    BTreeSet::from([main.clone()])
+                )
+            });
+            assert_eq!(workspace.project_documents(&main), project);
+        });
     }
 
     fn fixture(source: &str) -> (Workspace, BTreeSet<Url>) {

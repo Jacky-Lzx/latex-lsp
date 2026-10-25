@@ -419,7 +419,7 @@ impl Workspace {
         uris: impl IntoIterator<Item = Url>,
         cancelled: impl Fn() -> bool,
     ) -> Vec<(Url, Vec<lsp_types::Diagnostic>, Option<i32>)> {
-        crate::project::source_inputs::with_query_cache(|| {
+        crate::symbols::query_cache::with_cache(|| {
             self.diagnostic_snapshots_in_query(uris, cancelled)
         })
     }
@@ -723,8 +723,10 @@ impl Workspace {
     }
 
     pub(crate) fn project_documents_from(&self, source: &Url, root: &Url) -> BTreeSet<Url> {
-        let inputs = crate::project::source_inputs::Index::new(self, root);
-        self.project_documents_with_inputs(source, root, &inputs)
+        crate::project::source_inputs::project_documents(self, source, root, || {
+            let inputs = crate::project::source_inputs::Index::new(self, root);
+            self.project_documents_with_inputs(source, root, &inputs)
+        })
     }
 
     pub(crate) fn project_documents_with_inputs(
