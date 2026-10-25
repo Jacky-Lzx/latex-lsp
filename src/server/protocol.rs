@@ -169,7 +169,8 @@ async fn request(
         "completionItem/resolve" => call!(completion_resolve),
         "textDocument/hover" => call!(hover),
         "textDocument/signatureHelp" => call!(signature_help),
-        "textDocument/definition" => call!(goto_definition),
+        // Static TeX symbols use their source definition as the declaration.
+        "textDocument/declaration" | "textDocument/definition" => call!(goto_definition),
         "textDocument/references" => call!(references),
         "textDocument/prepareRename" => call!(prepare_rename),
         "textDocument/rename" => call!(rename),

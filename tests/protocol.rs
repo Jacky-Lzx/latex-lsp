@@ -17,6 +17,62 @@ struct Server {
 }
 
 #[test]
+fn declaration_navigation_tracks_unsaved_cross_file_sources() {
+    use latex_lsp::text::Text;
+    let directory = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+    let provider = main.join("definitions.tex").unwrap();
+    let source = "\\documentclass{article}\r\n\\input{definitions}\r\n\\begin{document}😀 \\word \\ref{paper}\\end{document}";
+    let initial = "😀 \\newcommand\\word{Text}\\label{paper}\r\n";
+    std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+    std::fs::write(provider.to_file_path().unwrap(), initial).unwrap();
+    let mut server = Server::start();
+    let initialized = server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(directory.path()).unwrap(),"capabilities":{"textDocument":{"declaration":{"linkSupport":true}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+    assert_eq!(initialized["capabilities"]["declarationProvider"], true);
+    server.notify("initialized", json!({}));
+    server.notify(
+        "textDocument/didOpen",
+        json!({"textDocument":{"uri":main,"languageId":"latex","version":5,"text":source}}),
+    );
+    let mut id = 2;
+    for (version, definitions) in [
+        (12, initial),
+        (13, "\r\n😀 \\newcommand\\word{Updated}\\label{paper}\r\n"),
+    ] {
+        if version == 12 {
+            server.notify("textDocument/didOpen", json!({"textDocument":{"uri":provider,"languageId":"latex","version":version,"text":definitions}}));
+        } else {
+            server.notify("textDocument/didChange", json!({"textDocument":{"uri":provider,"version":version},"contentChanges":[{"text":definitions}]}));
+        }
+        let text = Text::new(definitions.into());
+        for (needle, target) in [("word", "\\word"), ("paper", "paper")] {
+            let params = json!({"textDocument":{"uri":main},"position":Text::new(source.into()).position(source.find(needle).unwrap() + 1)});
+            let declaration = server.request(id, "textDocument/declaration", params.clone());
+            id += 1;
+            let definition = server.request(id, "textDocument/definition", params);
+            id += 1;
+            assert_eq!(declaration, definition);
+            assert_eq!(declaration.as_array().unwrap().len(), 1, "{declaration}");
+            assert_eq!(declaration[0]["uri"], provider.as_str());
+            let start = definitions.find(target).unwrap();
+            assert_eq!(
+                declaration[0]["range"],
+                json!(text.range(start, start + target.len()))
+            );
+        }
+    }
+    let empty = server.request(
+        id,
+        "textDocument/declaration",
+        json!({"textDocument":{"uri":main},"position":{"line":0,"character":0}}),
+    );
+    assert_eq!(empty, json!([]));
+    server.request(id + 1, "shutdown", Value::Null);
+    server.notify("exit", Value::Null);
+    server.wait_exit(0);
+}
+
+#[test]
 fn background_push_diagnostics_follow_the_latest_edit_and_clear_closed_buffers() {
     let directory = tempfile::tempdir().unwrap();
     let uri = Url::from_file_path(directory.path().join("draft.tex")).unwrap();
