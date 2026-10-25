@@ -195,6 +195,8 @@ fn native_hook_argument_edits_preserve_captured_text_and_executed_macro_counts()
         r"\let\usecustom\UseHook\def\UseHook#1{Text}\usecustom{custom}\word",
         r"\newcommand\invoke[1]{\UseHook{custom}#1}\invoke{\word}",
         r"\newcommand\invoke[1]{\UseHook{custom}{#1}}\invoke{\word}",
+        r"\newcommand\invoke[1]{\UseHook{custom}{#1}}\csuse{invoke}{\word}",
+        r"\newcommand\invoke[1]{\UseHook{custom}{#1}}\csname invoke\endcsname{\word}",
         r"\NewDocumentCommand\invoke{O{\word}}{\UseHook{custom}{#1}}\invoke",
         r"\newcommand\invoke[1][\word]{\UseHook{custom}{#1}}\invoke",
         r"\def\inner#1{\UseHook{custom}#1}\def\outer#1{\inner{#1}}\outer{\word}",
@@ -285,6 +287,8 @@ fn parameterized_wrappers_cannot_rename_hook_data_as_executable_macros() {
     for call in [
         r"\newcommand\invoke[1]{\UseHook{custom}#1}\invoke{\word}",
         r"\newcommand\invoke[1]{\UseHook{custom}{#1}}\invoke{\word}",
+        r"\newcommand\invoke[1]{\UseHook{custom}{#1}}\csuse{invoke}{\word}",
+        r"\newcommand\invoke[1]{\UseHook{custom}{#1}}\csname invoke\endcsname{\word}",
         r"\def\invoke#1{\UseHookWithArguments{custom}{0}#1}\invoke\word",
         r"\NewDocumentCommand\invoke{m}{\UseHook{custom}#1}\invoke{\word}",
         r"\newcommand\invoke[1][\word]{\UseHook{custom}{#1}}\invoke",

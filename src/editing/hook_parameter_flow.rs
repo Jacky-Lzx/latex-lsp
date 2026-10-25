@@ -3,7 +3,7 @@ use crate::{
     language::signature::{self, CommandShape, CommandSignatures},
     parser::syntax,
     project::workspace::{Document, DocumentKind, Workspace},
-    symbols::named_references::Context,
+    symbols::named_references::LiteralContext,
 };
 use lsp_types::Url;
 use std::{
@@ -289,7 +289,7 @@ pub(super) fn extend(
     }
     let contexts: BTreeMap<_, _> = docs
         .iter()
-        .map(|&(uri, doc)| (uri, Context::new(doc, signatures)))
+        .map(|&(uri, doc)| (uri, LiteralContext::new(doc)))
         .collect();
     let empty = BTreeSet::new();
     let alias_bodies: BTreeSet<_> = owners
@@ -347,6 +347,13 @@ pub(super) fn extend(
                 .map_or(doc.text.source.as_str(), String::as_str);
             for (index, command) in doc.syntax.commands.iter().enumerate() {
                 charge(work, 64)?;
+                // Only these lexical names can resolve to a current reader.
+                // Keep static named calls until their target has been read.
+                if !readers.contains_key(&command.name)
+                    && !matches!(command.name.as_str(), "csuse" | "csname")
+                {
+                    continue;
+                }
                 if context.literal(command.span.start)
                     || alias_bodies.contains(&(uri.clone(), command.span.start))
                     || doc.syntax.control_operands.contains(&command.span.start)

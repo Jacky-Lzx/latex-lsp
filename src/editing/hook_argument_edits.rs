@@ -83,7 +83,7 @@ fn calls(
     }) {
         return Vec::new();
     }
-    let context = crate::symbols::named_references::Context::new(doc, signatures);
+    let context = crate::symbols::named_references::LiteralContext::new(doc);
     let roots: Vec<_> = USES.iter().chain(DECLARATIONS).copied().collect();
     let alias_bodies =
         signatures.builtin_alias_body_positions(&doc.text.source, &doc.syntax, &roots);

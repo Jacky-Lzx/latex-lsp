@@ -45,6 +45,38 @@ fn contains(spans: &[Range<usize>], at: usize) -> bool {
         .checked_sub(1)
         .is_some_and(|index| spans[index].contains(&at))
 }
+/// Source facts for readers that do not inspect executable operand identities.
+pub(crate) struct LiteralContext {
+    pub(crate) declarations: BTreeSet<(usize, usize)>,
+    literal: Vec<Range<usize>>,
+}
+impl LiteralContext {
+    pub(crate) fn new(doc: &Document) -> Self {
+        let declarations = doc
+            .syntax
+            .definitions
+            .iter()
+            .map(|entry| (entry.span.start, entry.span.end))
+            .collect();
+        let literal = merged(
+            doc.syntax
+                .ignored
+                .iter()
+                .chain(&doc.syntax.literal_conversions)
+                .chain(&doc.syntax.literal_tests)
+                .cloned()
+                .collect(),
+        );
+        Self {
+            declarations,
+            literal,
+        }
+    }
+    pub(crate) fn literal(&self, at: usize) -> bool {
+        contains(&self.literal, at)
+    }
+}
+
 pub(crate) struct Context {
     operands: BTreeSet<usize>,
     pub(crate) declarations: BTreeSet<(usize, usize)>,
@@ -57,23 +89,12 @@ impl Context {
     pub(crate) fn new(doc: &Document, signatures: &CommandSignatures<'_>) -> Self {
         let source = &doc.text.source;
         let operands = signatures.editing_argument_tokens(source, &doc.syntax);
-        let declarations = doc
-            .syntax
-            .definitions
-            .iter()
-            .map(|entry| (entry.span.start, entry.span.end))
-            .collect();
+        let LiteralContext {
+            declarations,
+            literal,
+        } = LiteralContext::new(doc);
         let declaration_data = merged(crate::symbols::expl3::math_data_spans(doc));
         let bodies = merged(crate::symbols::expl3::occurrences(doc).bodies);
-        let literal: Vec<_> = doc
-            .syntax
-            .ignored
-            .iter()
-            .chain(&doc.syntax.literal_conversions)
-            .chain(&doc.syntax.literal_tests)
-            .cloned()
-            .collect();
-        let literal = merged(literal);
         let mut opaque = literal.clone();
         opaque.extend(doc.syntax.ambiguous_string_tests.iter().cloned());
         let opaque = merged(opaque);

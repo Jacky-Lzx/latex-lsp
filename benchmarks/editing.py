@@ -104,7 +104,7 @@ def position(source, offset):
             "character": len(prefix.rsplit("\n", 1)[-1].encode("utf-16-le")) // 2}
 
 
-def fixture(root, scale, hooks=False):
+def fixture(root, scale, hooks=False, hook_wrappers=False):
     chapters, sections = SCALES[scale]
     main = ("\\documentclass{article}\n\\usepackage{amsmath,biblatex}\n"
             "\\addbibresource{references.bib}\n\\newcommand{\\projectterm}[1]{\\textbf{#1}}\n"
@@ -114,6 +114,12 @@ def fixture(root, scale, hooks=False):
             "\\NewHookWithArguments{benchmark}{1}\n"
             "\\AddToHookWithArguments{benchmark}{\\typeout{#1}}\n"
             "\\begin{document}\n\\UseHookWithArguments{benchmark}{0}{Data}\n"
+        ))
+    if hook_wrappers:
+        main = main.replace("\\begin{document}\n", (
+            "\\newcommand\\benchreader[1]{\\UseHook{benchmark}{#1}}\n"
+            "\\newcommand\\benchforward[1]{\\benchreader{#1}}\n"
+            "\\begin{document}\n"
         ))
     for chapter in range(chapters):
         source = "% !TeX root = main.tex\n"
@@ -128,6 +134,8 @@ def fixture(root, scale, hooks=False):
                 "The experiment compares latency, throughput, and repeatability. "
                 "Each observation includes an independent reference measurement.\n"
             )
+            if hook_wrappers:
+                source += "\\benchforward{Literal data}\n"
         # Stable query locations followed by a region edited throughout the session.
         source += ("\\ref{sec:0:0}\n\\cite{paper0}\n\\projectterm{value}\n"
                    "\\textbf{probe}\n中文 😀 EDIT-HERE\nREFERENCE-HERE\n")
@@ -148,10 +156,10 @@ def fixture(root, scale, hooks=False):
             "sha256": digest.hexdigest()}
 
 
-def session(binary, scale, iterations, warmup, timeout, record, hooks=False):
+def session(binary, scale, iterations, warmup, timeout, record, hooks=False, hook_wrappers=False):
     with tempfile.TemporaryDirectory(prefix="latex-lsp-benchmark-") as directory:
         root = Path(directory)
-        metadata = fixture(root, scale, hooks)
+        metadata = fixture(root, scale, hooks, hook_wrappers)
         server = Server(binary, root, timeout)
         sources = {p.as_uri(): p.read_text() for p in root.glob("*.tex")}
         versions = {uri: 1 for uri in sources}
@@ -341,7 +349,9 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--baseline", type=Path)
     parser.add_argument("--hooks", action="store_true", help="include an argument-taking kernel hook in the main document")
+    parser.add_argument("--hook-wrappers", action="store_true", help="include nested hook wrappers and one call per section (implies --hooks)")
     args = parser.parse_args()
+    args.hooks = args.hooks or args.hook_wrappers
     if args.iterations < 1 or args.runs < 1 or args.warmup < 0 or args.timeout <= 0:
         parser.error("iterations/runs/timeout must be positive; warmup must be nonnegative")
     binary = args.server.resolve(strict=True)
@@ -351,7 +361,8 @@ def main():
         "platform": platform.platform(), "cpu_count": os.cpu_count(),
         "python": platform.python_version(), "server": str(binary),
         "server_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
-    }, "parameters": {"iterations": args.iterations, "warmup": args.warmup, "runs": args.runs, "hooks": args.hooks},
+    }, "parameters": {"iterations": args.iterations, "warmup": args.warmup, "runs": args.runs,
+                      "hooks": args.hooks, "hook_wrappers": args.hook_wrappers},
         "scenarios": {}}
     if baseline and (baseline["parameters"] != output["parameters"]
                      or baseline["workload_sha256"] != output["workload_sha256"]):
@@ -361,7 +372,7 @@ def main():
         for run in range(args.runs):
             print(f"{scale}: run {run + 1}/{args.runs}", file=sys.stderr, flush=True)
             metadata = session(binary, scale, args.iterations, args.warmup, args.timeout,
-                               lambda name, ms: samples.setdefault(name, []).append(ms), args.hooks)
+                               lambda name, ms: samples.setdefault(name, []).append(ms), args.hooks, args.hook_wrappers)
         metrics = {name: summary(values) for name, values in samples.items()}
         output["scenarios"][scale] = {"fixture": metadata, "metrics": metrics, "samples_ms": samples}
         if baseline and baseline["scenarios"][scale]["fixture"] != metadata:

@@ -16,5 +16,7 @@ jobs:
       - run: cargo build --locked --release
       - name: Replay an editing session over stdio
         run: python3 benchmarks/editing.py --scales small --iterations 2 --warmup 1 --runs 1 --output target/benchmarks/smoke.json
-      - name: Replay an editing session with kernel hooks
-        run: python3 benchmarks/editing.py --hooks --scales small --iterations 2 --warmup 1 --runs 1 --output target/benchmarks/hooks-smoke.json
+      - name: Replay an editing session with nested kernel hook wrappers
+        run: python3 benchmarks/editing.py --hook-wrappers --scales small --iterations 2 --warmup 1 --runs 1 --output target/benchmarks/hooks-smoke.json
+      - name: Validate the paired rename probe
+        run: PYTHONDONTWRITEBYTECODE=1 python3 benchmarks/rename_pairs.py --before target/release/latex-lsp --after target/release/latex-lsp --hook-wrappers --scales small --iterations 2 --warmup 1 --runs 1 --output target/benchmarks/pairs-smoke.json

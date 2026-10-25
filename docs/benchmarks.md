@@ -40,6 +40,12 @@ python3 benchmarks/editing.py --output target/benchmarks/latest.json
 python3 benchmarks/editing.py --hooks --output target/benchmarks/hooks.json
 ```
 
+`--hook-wrappers` 包含上述 hook 负载，并在主文档定义两层带参数包装宏，每节增加一次包装调用。它测量把调用实参传递为 hook 字面数据时的完整分析成本；独立标签的跨章节引用和改名仍进行数量及文件集合校验。输出记录 `hook_wrappers`，比较时也必须一致。
+
+```sh
+python3 benchmarks/editing.py --hook-wrappers --output target/benchmarks/hook-wrappers.json
+```
+
 ## 比较优化前后
 
 先保留优化前的二进制，再构建优化后的版本，依次测量，避免构建或其他 benchmark 同时运行：
@@ -175,3 +181,39 @@ python3 benchmarks/report.py benchmarks/results/2026-10-26/round3-before.json \
 ```
 
 本轮整仓回归 3344 项通过、490 项外部工具测试默认跳过；最终缓存范围收窄后，26 项导航／文献符号／语言角色回归、严格全目标 Clippy、release 构建和三档真实 stdio benchmark 再次通过。回归覆盖未保存更新、旧快照、UTF-16、容器、300 多项候选的排序与截断、语言切换及缓存超限后的完整结果。
+
+## 2026-10-26 第五轮：包装宏的数据流保护
+
+在 `17c9233` 补齐命令包装参数的 hook 数据保护后，新增 `--hook-wrappers` 负载：每节调用两层包装宏，将实际参数传入 hook。审阅发现，保护只需字面区间和声明位置，却构造了含完整操作数分析的引用上下文；每轮数据流传播还为无关命令做名称与上下文检查。现在复用较小的源码上下文，并先筛选可能的数据读取器名称；静态 `csuse`／`csname`、分析预算和数据边界保留。
+
+连续编辑会话仍按三档、3 个新进程 ×12 个测量周期、预热 3 周期运行。墙钟出现较大波动：首次大型包装项目改名 p50 为 36.30→38.40 ms（0.95×），交换顺序后的独立复测为 37.51→30.37 ms（1.24×）。早期只筛选名称的中间版本也出现多项未改功能同时变慢，因此不将单组会话或名称筛选单独作为稳定收益的依据。全部原始样本保留。
+
+为进一步比较改名计算，新增 `benchmarks/rename_pairs.py`：两版服务器读取同一个固定项目快照，每次依次发送相同的改名请求，逐对交换顺序；3 组新进程，每组预热 5 对、测量 20 对，共 60 对。Linux 下在启动服务器前绑定同一允许的 CPU，并在打开文件后核验全部线程的亲和性，确保 Tokio 工作线程也受约束。该探测不包含编辑和其他功能，不能替代连续会话；它同时记录墙钟原始样本和服务器 `/proc` CPU 增量。CPU 单样本分辨率为 10 ms，表内为 60 个样本的均值，尤其不根据小项目的少量 CPU tick 宣称优化。
+
+以下每行均按“原保护实现→优化后”排列；反向复测的 JSON 交换了两版的 `before`／`after` 参数。
+
+| 固定快照 | 改名 p50 前／后 ms | p50 倍率 | 服务器 CPU 均值前／后 ms |
+| --- | ---: | ---: | ---: |
+| small 包装 | 2.44／2.00 | 1.22× | 2.33／2.33 |
+| medium 包装 | 11.19／8.51 | 1.31× | 11.50／8.50 |
+| large 包装 | 33.15／25.95 | 1.28× | 34.17／26.50 |
+| large 包装，交换二进制顺序 | 38.19／30.45 | 1.25× | 39.33／30.33 |
+| large 常规 | 23.51／22.59 | 1.04× | 24.33／23.50 |
+
+大型包装的两组逐对墙钟倍率中位数约为 1.26×、1.25×，服务器 CPU 均值下降约 22%–23%。结论限于这项数据保护的改名成本；常规负载变化较小，也不声称其他功能整体加速。
+
+原始数据位于 `benchmarks/results/2026-10-26/round5*.json`。`guard` 为最早基线、`filter` 为仅筛选名称的中间版；`before`／`after` 和 `wrappers` 保存最终连续会话，`wrappers-repeat` 保存反向会话，`pairs` 保存正式配对探测。`pairs-*-main-thread` 及 `pairs-main-thread` 是早期只在启动后绑定主线程的探测，未核验 Tokio 工作线程，单独保留但不用于上述同核结论。
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 benchmarks/rename_pairs.py \
+  --before target/benchmarks/latex-lsp-round5-guard \
+  --after target/benchmarks/latex-lsp-round5-final --hook-wrappers \
+  --output target/benchmarks/pairs.json
+python3 benchmarks/report.py \
+  benchmarks/results/2026-10-26/round5-wrappers-before.json \
+  benchmarks/results/2026-10-26/round5-wrappers-after.json \
+  --paired benchmarks/results/2026-10-26/round5-pairs.json \
+  --output target/benchmarks/round5-wrappers-report.html
+```
+
+保护实现的稳定整仓基线为 319 个目标、3359 项通过、0 失败。优化后再次通过 521 项单元及相关回归、8 项 hook 协议、6 项显式原生测试和全目标严格 Clippy；原生数据保护覆盖 21 种直接／包装／命名调用，核验捕获文本、宏执行次数和实际独立标签编辑后的完整 AUX。CI 加入包装会话与配对探测短测，不设机器相关的性能门槛。dev 清理释放 9.1 GiB，测量结束时可用空间约 20 GiB。
