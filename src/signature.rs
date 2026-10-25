@@ -2982,6 +2982,21 @@ impl<'a> CommandSignatures<'a> {
         !self.local.contains_key("begin") && !self.local.contains_key("end")
     }
 
+    pub(crate) fn single_required_argument(&self, name: &str) -> bool {
+        self.local
+            .get(name)
+            .and_then(Option::as_ref)
+            .is_some_and(|signature| {
+                !signature.starred
+                    && signature.parameters.len() == 1
+                    && matches!(
+                        signature.parameters[0].kind,
+                        Kind::Required | Kind::RequiredGroup
+                    )
+            })
+            && self.tex_operands.get(name).is_none_or(Option::is_none)
+    }
+
     pub(crate) fn command_unchanged(&self, name: &str) -> bool {
         !self.local.contains_key(name)
     }
@@ -3491,6 +3506,15 @@ impl<'a> CommandSignatures<'a> {
         readers: &BTreeMap<String, usize>,
     ) -> BTreeSet<usize> {
         let operands = self.editing_argument_tokens(source, parsed);
+        // A caller may transform a replacement body or default value before
+        // executing it. Prefix maxima preserve nested declaration data.
+        let mut deferred = definition_data_spans(source, parsed);
+        deferred.sort_unstable_by_key(|span| span.start);
+        let mut end = 0;
+        for span in &mut deferred {
+            end = end.max(span.end);
+            span.end = end;
+        }
         let declarations = parsed
             .definitions
             .iter()
@@ -3511,6 +3535,13 @@ impl<'a> CommandSignatures<'a> {
             if !readers
                 .get(name)
                 .is_some_and(|at| *at <= command.span.start)
+            {
+                continue;
+            }
+            if deferred
+                .partition_point(|span| span.start <= command.span.start)
+                .checked_sub(1)
+                .is_some_and(|index| command.span.start < deferred[index].end)
             {
                 continue;
             }

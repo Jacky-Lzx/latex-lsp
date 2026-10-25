@@ -1,7 +1,7 @@
 //! Exclude declarations proved to be data, without certifying unknown code.
 use crate::{
     signature::{source_alias, CommandSignatures},
-    syntax::Entry,
+    syntax::{self, Entry},
     workspace::{Document, DocumentKind, Workspace},
 };
 use std::collections::{BTreeMap, BTreeSet};
@@ -261,7 +261,11 @@ fn readers(
             let dropped = plain
                 && alias.is_none()
                 && crate::signature::command_definition_body(&doc.text.source, &doc.syntax, entry)
-                    .is_some_and(|body| !body.value.contains('#'));
+                    .is_some_and(|body| {
+                        !body.value.contains('#')
+                            || signatures.single_required_argument(&entry.name)
+                                && data_body(&doc.text.source, &body, signatures)
+                    });
             definitions
                 .entry(&entry.name)
                 .or_default()
@@ -292,4 +296,28 @@ fn readers(
         }
     }
     result
+}
+
+/// Certify a complete direct data reader, never a substring under an unknown
+/// wrapper which could remove the reader and execute its remaining argument.
+fn data_body(source: &str, body: &syntax::Argument, signatures: &CommandSignatures<'_>) -> bool {
+    let start = syntax::skip_space(source, body.span.start);
+    let Some(command) = syntax::control_word(source, start) else {
+        return false;
+    };
+    let name = &source[command.start + 1..command.end];
+    if !matches!(name, "detokenize" | "typeout" | "message") || !signatures.command_unchanged(name)
+    {
+        return false;
+    }
+    let Some((argument, end)) =
+        syntax::group(source, syntax::skip_space(source, command.end), b'{', b'}')
+    else {
+        return false;
+    };
+    let parameter = syntax::skip_space(source, argument.span.start);
+    end <= body.span.end
+        && syntax::skip_space(source, end) == body.span.end
+        && source[parameter..].starts_with("#1")
+        && syntax::skip_space(source, parameter + 2) == argument.span.end
 }

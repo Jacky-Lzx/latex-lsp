@@ -17,6 +17,132 @@ struct Server {
 }
 
 #[test]
+fn literal_label_readers_refresh_exact_ranges_and_safe_edits_over_stdio() {
+    use latex_lsp::text::Text;
+    for versioned in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+        let provider = uri.join("commands.sty").unwrap();
+        let source = "% 😀\r\n\\documentclass{article}\\newcommand\\unicodeword{😀}\\input{commands.sty}\\newcommand\\literal[1]{\\detokenize{#1}}\\begin{document}\\literal{\\label{same}}\\label{same}\\ref{same}\\literal{\\label{ghost}}\\ref{ghost}\\label{safe}\\ref{safe}\\end{document}";
+        std::fs::write(uri.to_file_path().unwrap(), source).unwrap();
+        std::fs::write(provider.to_file_path().unwrap(), "").unwrap();
+        let text = Text::new(source.into());
+        let data = source.find("same").unwrap();
+        let real = source.rfind(r"\label{same}").unwrap() + 7;
+        let ghost = source.rfind("ghost").unwrap();
+        let params = json!({"textDocument":{"uri":uri},"position":text.position(source.rfind("same").unwrap() + 1),"newName":"fresh"});
+        let location = |start| json!({"uri":uri,"range":text.range(start, start + 4)});
+        let mut server = Server::start();
+        server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(directory.path()).unwrap(),"initializationOptions":{"distribution":{"enabled":false}},"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":versioned}},"textDocument":{"diagnostic":{}}}}));
+        server.notify("initialized", json!({}));
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":uri,"languageId":"latex","version":5,"text":source}}),
+        );
+        assert_eq!(
+            server.request(2, "textDocument/definition", params.clone()),
+            json!([location(real)])
+        );
+        let initial = server.request(
+            3,
+            "textDocument/diagnostic",
+            json!({"textDocument":{"uri":uri}}),
+        );
+        assert_eq!(initial["items"].as_array().unwrap().len(), 1, "{initial}");
+        assert_eq!(initial["items"][0]["code"], "undefined-reference");
+        assert_eq!(
+            initial["items"][0]["range"],
+            json!(text.range(ghost, ghost + 5))
+        );
+        for method in ["textDocument/prepareRename", "textDocument/rename"] {
+            server.send(json!({"jsonrpc":"2.0","id":20,"method":method,"params":params}));
+            let response = server.until(|message| message["id"] == 20);
+            assert!(
+                response["error"]["code"] == -32602 || response.get("result") == Some(&Value::Null),
+                "{response}"
+            );
+        }
+        for (name, new_name) in [("safe", "fresh"), ("literal", "reader")] {
+            let response = server.request(4, "textDocument/rename", json!({"textDocument":{"uri":uri},"position":text.position(source.rfind(name).unwrap() + 1),"newName":new_name}));
+            let old = if name == "literal" {
+                format!(r"\{name}")
+            } else {
+                name.into()
+            };
+            let new_text = if name == "literal" {
+                format!(r"\{new_name}")
+            } else {
+                new_name.into()
+            };
+            let edits = source.match_indices(&old).map(|(start, _)| json!({"range":text.range(start, start + old.len()),"newText":new_text})).collect::<Vec<_>>();
+            let expected = if versioned {
+                json!({"documentChanges":[{"textDocument":{"uri":uri,"version":5},"edits":edits}]})
+            } else {
+                json!({"changes":{uri.as_str():edits}})
+            };
+            assert_eq!(response, expected);
+        }
+        for (version, replacement, active) in [
+            (12, r"\def\detokenize#1{#1}", true),
+            (13, "", false),
+            (14, r"\renewcommand\literal[1]{#1}", true),
+        ] {
+            server.notify("textDocument/didOpen", json!({"textDocument":{"uri":provider,"languageId":"latex","version":version,"text":replacement}}));
+            let expected = if active {
+                json!([location(data), location(real)])
+            } else {
+                json!([location(real)])
+            };
+            assert_eq!(
+                server.request(5, "textDocument/definition", params.clone()),
+                expected
+            );
+            let report = server.request(
+                6,
+                "textDocument/diagnostic",
+                json!({"textDocument":{"uri":uri}}),
+            );
+            assert_eq!(report["items"].as_array().unwrap().len(), 1, "{report}");
+            assert_eq!(
+                report["items"][0]["code"],
+                if active {
+                    "duplicate-label"
+                } else {
+                    "undefined-reference"
+                }
+            );
+            if active {
+                assert_eq!(
+                    report["items"][0]["range"],
+                    json!(text.range(real, real + 4))
+                );
+                assert_eq!(
+                    report["items"][0]["relatedInformation"][0]["location"],
+                    location(data)
+                );
+            }
+        }
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":provider}}),
+        );
+        assert_eq!(
+            server.request(7, "textDocument/definition", params),
+            json!([location(real)])
+        );
+        let restored = server.request(
+            8,
+            "textDocument/diagnostic",
+            json!({"textDocument":{"uri":uri}}),
+        );
+        assert_eq!(restored["items"], initial["items"]);
+        server.request(9, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
 fn repeated_parameter_grammars_follow_unsaved_providers_without_certifying_bodies() {
     use latex_lsp::text::Text;
     for versioned in [false, true] {
