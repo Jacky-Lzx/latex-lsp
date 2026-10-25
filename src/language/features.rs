@@ -601,6 +601,9 @@ fn prepare_rename_query(
         if let Some(result) = crate::bibliography::bib_categories::prepare(workspace, uri, offset) {
             return result;
         }
+        if let Some(result) = crate::symbols::hook_names::prepare(workspace, uri, offset) {
+            return result;
+        }
     }
     if let Some(entry) = workspace.documents.get(uri).and_then(|doc| {
         doc.text
@@ -666,6 +669,9 @@ fn rename_impl(
         if let Some(result) =
             crate::bibliography::bib_categories::rename(workspace, uri, offset, new_name)
         {
+            return result;
+        }
+        if let Some(result) = crate::symbols::hook_names::rename(workspace, uri, offset, new_name) {
             return result;
         }
     }

@@ -17,6 +17,110 @@ struct Server {
 }
 
 #[test]
+fn hook_name_renames_keep_exact_namespaces_versions_and_shared_consumer_guards() {
+    use latex_lsp::text::Text;
+    for versioned in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+        let provider = main.join("hooks.tex").unwrap();
+        let consumer = main.join("unsaved.tex").unwrap();
+        let source = "% hook names\r\n\\documentclass{article}\\input{hooks}\r\n\\begin{document}😀 \\invoke{custom}\\label{custom}\\ref{custom}\\end{document}";
+        let definitions = "% provider\r\n\\NewHook{ custom }\\def\\invoke{\\UseHook}\\AddToHook{custom}[custom]{Code}";
+        std::fs::write(main.to_file_path().unwrap(), source).unwrap();
+        std::fs::write(provider.to_file_path().unwrap(), definitions).unwrap();
+        let mut server = Server::start();
+        server.request(1, "initialize", json!({"processId":null,"rootUri":Url::from_directory_path(directory.path()).unwrap(),"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":versioned}}},"initializationOptions":{"distribution":{"enabled":false}}}));
+        server.notify("initialized", json!({}));
+        server.notify(
+            "textDocument/didOpen",
+            json!({"textDocument":{"uri":main,"languageId":"latex","version":5,"text":source}}),
+        );
+        let text = Text::new(source.into());
+        let provided = Text::new(definitions.into());
+        let at = source.find("custom").unwrap();
+        let position = text.position(at + 2);
+        let declaration = definitions.find("custom").unwrap();
+        let registration = definitions.find("{custom}").unwrap() + 1;
+        let params = json!({"textDocument":{"uri":main},"position":position,"newName":"fresh"});
+        let success = |server: &mut Server, main_version: i32, provider_version: Option<i32>| {
+            assert_eq!(
+                server.request(2, "textDocument/prepareRename", params.clone()),
+                json!({"range":text.range(at,at+6),"placeholder":"custom"})
+            );
+            let own = json!([{"range":text.range(at,at+6),"newText":"fresh"}]);
+            let supplied = json!([
+                {"range":provided.range(declaration,declaration+6),"newText":"fresh"},
+                {"range":provided.range(registration,registration+6),"newText":"fresh"}
+            ]);
+            let expected = if versioned {
+                json!({"documentChanges":[
+                    {"textDocument":{"uri":provider,"version":provider_version},"edits":supplied},
+                    {"textDocument":{"uri":main,"version":main_version},"edits":own}
+                ]})
+            } else {
+                json!({"changes":{main.as_str():own,provider.as_str():supplied}})
+            };
+            assert_eq!(
+                server.request(3, "textDocument/rename", params.clone()),
+                expected
+            );
+        };
+        let blocked = |server: &mut Server| {
+            for method in ["textDocument/prepareRename", "textDocument/rename"] {
+                server.send(json!({"jsonrpc":"2.0","id":4,"method":method,"params":params}));
+                let response = server.until(|message| message["id"] == 4);
+                assert_eq!(response["error"]["code"], -32602, "{response}");
+            }
+        };
+        success(&mut server, 5, None);
+        server.notify("textDocument/didOpen", json!({"textDocument":{"uri":provider,"languageId":"latex","version":12,"text":definitions}}));
+        success(&mut server, 5, Some(12));
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":provider,"version":13},"contentChanges":[{"text":format!(r"{definitions}\def\which{{custom}}\UseHook{{\which}}") }]}));
+        blocked(&mut server);
+        let label_edits: Vec<_> = source
+            .match_indices("custom")
+            .skip(1)
+            .map(|(at, _)| json!({"range":text.range(at,at+6),"newText":"paper"}))
+            .collect();
+        let labels = if versioned {
+            json!({"documentChanges":[{"textDocument":{"uri":main,"version":5},"edits":label_edits}]})
+        } else {
+            json!({"changes":{main.as_str():label_edits}})
+        };
+        assert_eq!(server.request(5, "textDocument/rename", json!({"textDocument":{"uri":main},"position":text.position(source.rfind("custom").unwrap()+1),"newName":"paper"})), labels);
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":main,"version":7},"contentChanges":[{"text":format!("{source}\r\n")}]}));
+        blocked(&mut server);
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":provider,"version":14},"contentChanges":[{"text":definitions}]}));
+        success(&mut server, 7, Some(14));
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":provider,"version":15},"contentChanges":[{"text":format!(r"{definitions}\NewHook{{fresh}}") }]}));
+        server.send(json!({"jsonrpc":"2.0","id":6,"method":"textDocument/rename","params":params}));
+        let response = server.until(|message| message["id"] == 6);
+        assert_eq!(response["error"]["code"], -32602, "{response}");
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":provider,"version":16},"contentChanges":[{"text":definitions}]}));
+        success(&mut server, 7, Some(16));
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":provider,"version":17},"contentChanges":[{"text":format!(r"{definitions}\def\identity#1{{#1}}\let\detokenize\identity\detokenize{{\UseHook{{custom}}}}") }]}));
+        blocked(&mut server);
+        server.notify("textDocument/didChange", json!({"textDocument":{"uri":provider,"version":18},"contentChanges":[{"text":definitions}]}));
+        success(&mut server, 7, Some(18));
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":provider}}),
+        );
+        success(&mut server, 7, None);
+        server.notify("textDocument/didOpen", json!({"textDocument":{"uri":consumer,"languageId":"latex","version":11,"text":r"\documentclass{article}\input{hooks}\begin{document}\UseHook{\which}\end{document}"}}));
+        blocked(&mut server);
+        server.notify(
+            "textDocument/didClose",
+            json!({"textDocument":{"uri":consumer}}),
+        );
+        success(&mut server, 7, None);
+        server.request(1000, "shutdown", Value::Null);
+        server.notify("exit", Value::Null);
+        server.wait_exit(0);
+    }
+}
+
+#[test]
 fn hook_argument_data_guards_track_unsaved_arities_and_exact_utf16_edits() {
     use latex_lsp::text::Text;
     for versioned in [false, true] {

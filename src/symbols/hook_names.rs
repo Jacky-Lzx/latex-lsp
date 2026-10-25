@@ -10,6 +10,9 @@ use std::{
     ops::Range as Span,
 };
 
+mod edits;
+pub(crate) use edits::{prepare, rename};
+
 const COMMANDS: &[&str] = &[
     "NewHook",
     "NewReversedHook",
@@ -49,6 +52,7 @@ struct Entry {
     span: Span<usize>,
     declaration: bool,
     complete: bool,
+    grouped: bool,
 }
 
 impl Entry {
@@ -89,6 +93,33 @@ fn field(source: &str, after: usize) -> Option<(Span<usize>, usize, bool)> {
     Some((span, end, true))
 }
 
+fn name_field(source: &str, after: usize, command: &str) -> Option<(Entry, usize)> {
+    let grouped = source.as_bytes().get(syntax::skip_space(source, after)) == Some(&b'{');
+    let (mut span, end, complete) = field(source, after)?;
+    // Registration normalizes names; UseHook and the conditions use the
+    // internal control sequence with literal whitespace.
+    if !matches!(command, "UseHook" | "UseHookWithArguments")
+        && !crate::language::signature::HOOK_CONDITIONS.contains(&command)
+    {
+        let raw = &source[span.clone()];
+        span.start += raw.len() - raw.trim_start_matches([' ', '\t', '\r', '\n']).len();
+        span.end = span.start
+            + source[span.clone()]
+                .trim_end_matches([' ', '\t', '\r', '\n'])
+                .len();
+    }
+    Some((
+        Entry {
+            name: source[span.clone()].into(),
+            span,
+            declaration: command.starts_with("New"),
+            complete,
+            grouped,
+        },
+        end,
+    ))
+}
+
 fn calls(doc: &Document, signatures: &CommandSignatures<'_>) -> BTreeMap<usize, Entry> {
     let source = &doc.text.source;
     let context = crate::symbols::named_references::Context::new(doc, signatures);
@@ -121,7 +152,6 @@ fn calls(doc: &Document, signatures: &CommandSignatures<'_>) -> BTreeMap<usize, 
         } else {
             continue;
         };
-        let declaration = name.starts_with("New");
         let count = if name.starts_with("NewMirroredHookPair") {
             2
         } else {
@@ -129,33 +159,13 @@ fn calls(doc: &Document, signatures: &CommandSignatures<'_>) -> BTreeMap<usize, 
         };
         let mut after = invocation.end;
         for _ in 0..count {
-            let Some((mut span, end, complete)) = field(source, after) else {
+            let Some((entry, end)) = name_field(source, after, name) else {
                 break;
             };
             after = end;
-            // Registration normalizes names; UseHook and the conditions use
-            // the internal control sequence with literal whitespace.
-            if !matches!(name, "UseHook" | "UseHookWithArguments")
-                && !crate::language::signature::HOOK_CONDITIONS.contains(&name)
-            {
-                let raw = &source[span.clone()];
-                span.start += raw.len() - raw.trim_start_matches([' ', '\t', '\r', '\n']).len();
-                span.end = span.start
-                    + source[span.clone()]
-                        .trim_end_matches([' ', '\t', '\r', '\n'])
-                        .len();
-            }
-            let value = &source[span.clone()];
-            if valid(value) || value.is_empty() {
-                result.insert(
-                    span.start,
-                    Entry {
-                        name: value.into(),
-                        span,
-                        declaration,
-                        complete,
-                    },
-                );
+            let complete = entry.complete;
+            if valid(&entry.name) || entry.name.is_empty() {
+                result.insert(entry.span.start, entry);
             }
             if !complete {
                 break;

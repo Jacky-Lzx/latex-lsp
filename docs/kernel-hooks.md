@@ -49,7 +49,13 @@
 
 直接调用、静态 `csuse`／`csname` 和唯一纯转发别名使用同一索引。跨文件未保存定义即时生效；共享源码只在所有消费者对调用含义达成一致时提供交互。完整延迟正文保留源码导航，已确认的数据实参和被替换的内核接口不制造钩子引用。这是源码结构导航，不证明钩子已经声明或触发。
 
-名称匹配保留内核差别：声明／注册接口规范化名称首尾的普通 TeX 空白，`UseHook` 和四个条件接口保留原始名称。`NewHook{ custom }` 可被 `UseHook{custom}` 命中，而 `UseHook{ custom }` 不与其关联。普通名称中的点保持字面含义。含内部空白、依赖默认标签的 `.`／`./...` 名称、动态展开和跨注释拼接的名称暂不推断；没有源码声明的内置或自动生成钩子也没有虚构的定义位置。名称与代码标签的改名继续待独立认证。
+名称匹配保留内核差别：声明／注册接口规范化名称首尾的普通 TeX 空白，`UseHook`／`UseHookWithArguments` 和四个条件接口保留原始名称。`NewHook{ custom }` 可被 `UseHook{custom}` 命中，而 `UseHook{ custom }` 不与其关联。普通名称中的点保持字面含义。含内部空白、依赖默认标签的 `.`／`./...` 名称、动态展开和跨注释拼接的名称暂不推断；没有源码声明的内置或自动生成钩子也没有虚构的定义位置。
+
+自定义字面名称支持准备改名与完整跨文件改名。要求一个明确的源码声明，全部共享消费者均认定同一声明和接口含义；会同时更新声明、注册、使用、条件和排序等名称位置，镜像声明的另一名称保持独立。同名的引用标签、宏、代码标签和普通文本保持原义。声明／注册的首尾空白及原始注释保留；裸单 token 名称改成多字符时补上花括号，避免把新名称拆成多个参数。未保存提供文件和消费者的变化即时刷新，支持两种 WorkspaceEdit 格式及打开文档的版本号。
+
+动态或相对名称、不完整字段、未知参数数量、不同消费者的身份分歧、捕获复制及先消费自身参数的接口转发，都不能认证完整改名。目标名称不能捕获既有声明或使用，也不能进入内核或自动触发的命名空间，例如 `begindocument`、`label`、`env/...`、`cmd/...`、`file/...`、`shipout/...`。来源索引不完整、未知文件加载及可执行文献数据库代码同样拒绝编辑。
+
+初版名称编辑只认证上述静态公开接口。底层 expl3 展开／复制、内部 hook 存储访问（含旧式 `@名称hook` 代码块）、`DisableHook`／`ProvideHook` 等已弃用接口、`UseName` 等未认证的命名执行、动态控制序列声明、相关宏补丁及未知取消定义目标，可能隐藏或改变实际调用，因此保守拒绝。显式字符串执行、字符大小写转换及 catcode 修改也不参与名称编辑认证：例如 `\lowercase{\UseHook{CUSTOM}}` 会调用 `custom`，不能按源码大小写直接改名。字面读取器（包括 `\detokenize`、verbatim、URL）的源码重定义或相关补丁同样拒绝认证，避免把被解析器隐藏的可执行调用漏出编辑集。拒绝名称编辑不撤销已有只读导航；这些限制不证明任何钩子已经执行。代码标签的独立导航与改名仍待实现。
 
 使用接口根据项目内唯一、可确认的字面声明提供 `{argument 1}` 等参数提示，并将数据参数排除出引用导航。已声明的 hook 使用声明数量，覆盖调用处数量；未声明的字面 hook 使用 `WithArguments` 接口给出的 0–9 数量。直接、静态命名和纯转发调用均适用，未保存的提供文件变化刷新提示与导航边界。已声明零参数 hook 后的独立引用保留正常跳转。
 
@@ -69,4 +75,7 @@ cargo test --locked --test hook_environments -- --ignored
 cargo test --locked --test protocol hook_environment_data_guards
 cargo test --locked --test protocol generated_environment_interface_guards
 cargo test --locked --test protocol variadic_hook_help
+cargo test --locked --test hook_rename
+cargo test --locked --test hook_rename -- --ignored
+cargo test --locked --test protocol hook_name_renames_keep_exact_namespaces
 ```
