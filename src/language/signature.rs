@@ -348,12 +348,14 @@ pub(crate) fn possible_stored_code_aliases<'a>(
         .into_iter()
         .chain(HOOK_CONDITIONS.iter().copied())
         .chain(crate::symbols::macro_mutations::COMMANDS.iter().copied()),
+        false,
     )
 }
 
 pub(crate) fn possible_builtin_aliases<'a>(
     documents: impl IntoIterator<Item = (&'a str, &'a syntax::Syntax)>,
     builtins: impl IntoIterator<Item = &'static str>,
+    argument_consuming: bool,
 ) -> Option<StoredCodeAliases> {
     let mut users = BTreeMap::<String, Vec<String>>::new();
     let mut work = 0usize;
@@ -364,6 +366,14 @@ pub(crate) fn possible_builtin_aliases<'a>(
         }
         for entry in &parsed.definitions {
             if let Some(target) = source_alias(source, parsed, entry)
+                .or_else(|| {
+                    argument_consuming
+                        .then(|| {
+                            command_definition_body(source, parsed, entry)
+                                .and_then(|body| body_alias(source, &body))
+                        })
+                        .flatten()
+                })
                 .or_else(|| literal_copy_target(source, parsed, entry, false).map(|(name, _)| name))
             {
                 users.entry(target).or_default().push(entry.name.clone());
@@ -394,6 +404,51 @@ pub(crate) fn possible_builtin_aliases<'a>(
         );
     }
     Some(result)
+}
+
+/// Source aliases can consume their own operands before forwarding an
+/// interface. Their call does not have the primitive's argument boundary.
+pub(crate) fn argument_consuming_forwarders<'a>(
+    documents: impl IntoIterator<Item = (&'a str, &'a syntax::Syntax)>,
+) -> Option<BTreeSet<String>> {
+    let mut work = 0usize;
+    let mut aliases = Vec::new();
+    let mut uncertain = BTreeSet::new();
+    for (source, parsed) in documents {
+        work = work.saturating_add(source.len() + parsed.definitions.len() * 64);
+        if work > 32 * 1024 * 1024 {
+            return None;
+        }
+        for entry in &parsed.definitions {
+            if let Some(target) = command_definition_body(source, parsed, entry)
+                .and_then(|body| body_alias(source, &body))
+            {
+                if CommandShape::definition(source, parsed, entry)
+                    .is_none_or(|shape| !shape.takes_no_arguments())
+                {
+                    uncertain.insert(entry.name.clone());
+                }
+                aliases.push((entry.name.clone(), target));
+            } else if let Some((target, _)) = literal_copy_target(source, parsed, entry, false) {
+                aliases.push((entry.name.clone(), target));
+            }
+        }
+    }
+    loop {
+        let mut changed = false;
+        for (alias, target) in &aliases {
+            work = work.saturating_add(64);
+            if work > 32 * 1024 * 1024 {
+                return None;
+            }
+            if uncertain.contains(target) {
+                changed |= uncertain.insert(alias.clone());
+            }
+        }
+        if !changed {
+            return Some(uncertain);
+        }
+    }
 }
 
 // Kernel hook grammars. Registered code and unknown branches stay opaque to
@@ -1726,7 +1781,7 @@ fn body_alias(source: &str, body: &syntax::Argument) -> Option<String> {
     (syntax::skip_space(source, start + token.len()) == body.span.end).then(|| name.into())
 }
 
-fn environment_bodies(
+pub(crate) fn environment_bodies(
     source: &str,
     parsed: &syntax::Syntax,
     entry: &Entry,
@@ -1841,6 +1896,17 @@ pub(crate) struct ParameterSpans {
 }
 
 impl CommandShape {
+    pub(crate) fn environment_definition(
+        source: &str,
+        parsed: &syntax::Syntax,
+        entry: &Entry,
+    ) -> Option<Self> {
+        Some(Self {
+            signature: Some(environment_start_signature(source, parsed, entry)?),
+            tex: None,
+        })
+    }
+
     /// An undefined control consumes no operands; retaining its former alias
     /// grammar would hide the following executable token or file load.
     pub(crate) fn no_arguments() -> Self {
@@ -2153,18 +2219,24 @@ pub(crate) fn command_definition_body(
 
 /// Defaults are also possible inputs when a data-bearing optional parameter
 /// is omitted at a call. Preserve their original source locations.
-pub(crate) fn command_parameter_defaults(
+pub(crate) fn parameter_defaults(
     source: &str,
     parsed: &syntax::Syntax,
     entry: &Entry,
+    environment: bool,
 ) -> Option<Vec<(usize, std::ops::Range<usize>)>> {
     let declaration = entry.detail.strip_prefix("Defined with \\")?;
     if TexOperands::declares(entry) {
         return Some(Vec::new());
     }
-    source_definition(source, parsed, entry, false)?;
-    let at = definition_arguments_start(source, parsed, entry, false)?;
-    if syntax::declares_traditional_command(declaration) {
+    source_definition(source, parsed, entry, environment)?;
+    let at = definition_arguments_start(source, parsed, entry, environment)?;
+    if syntax::declares_traditional_command(declaration)
+        || matches!(
+            declaration,
+            "newenvironment" | "renewenvironment" | "provideenvironment"
+        )
+    {
         let Some((_, end)) = syntax::bracket_argument(source, at) else {
             return Some(Vec::new());
         };
@@ -2175,7 +2247,15 @@ pub(crate) fn command_parameter_defaults(
                 .collect(),
         );
     }
-    if !syntax::declares_document_command(declaration) {
+    if !syntax::declares_document_command(declaration)
+        && !matches!(
+            declaration,
+            "NewDocumentEnvironment"
+                | "RenewDocumentEnvironment"
+                | "ProvideDocumentEnvironment"
+                | "DeclareDocumentEnvironment"
+        )
+    {
         return Some(Vec::new());
     }
     let (specification, _) = syntax::group(source, at, b'{', b'}')?;

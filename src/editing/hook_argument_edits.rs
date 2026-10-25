@@ -69,12 +69,14 @@ fn static_name(name: &str) -> bool {
 struct Call {
     name: &'static str,
     after: usize,
+    uncertain: bool,
 }
 
 fn calls(
     doc: &Document,
     signatures: &CommandSignatures<'_>,
     possible: &signature::StoredCodeAliases,
+    uncertain: &BTreeSet<String>,
 ) -> Vec<Call> {
     // Most chapters contain no hook interface, even when their main document
     // declares one. Resolve possible names before building the full context.
@@ -119,6 +121,7 @@ fn calls(
             result.push(Call {
                 name: candidate,
                 after: invocation.end,
+                uncertain: uncertain.contains(name),
             });
         }
     }
@@ -164,12 +167,18 @@ pub(crate) fn validate(
             docs.iter()
                 .map(|doc| (doc.text.source.as_str(), &doc.syntax)),
             USES.iter().chain(DECLARATIONS).copied(),
+            true,
         )
         .ok_or_else(error)?;
         let signatures = CommandSignatures::new(
             docs.iter()
                 .map(|doc| (doc.text.source.as_str(), &doc.syntax)),
         );
+        let uncertain = signature::argument_consuming_forwarders(
+            docs.iter()
+                .map(|doc| (doc.text.source.as_str(), &doc.syntax)),
+        )
+        .ok_or_else(error)?;
         let mut arities = BTreeMap::<String, usize>::from([("label".into(), 1)]);
         let mut dynamic = false;
         let mut parsed = BTreeMap::new();
@@ -181,7 +190,10 @@ pub(crate) fn validate(
             else {
                 continue;
             };
-            let invocations = calls(doc, &signatures, &possible);
+            let invocations = calls(doc, &signatures, &possible, &uncertain);
+            if invocations.iter().any(|call| call.uncertain) {
+                return Err(error());
+            }
             for call in invocations
                 .iter()
                 .filter(|call| DECLARATIONS.contains(&call.name))
@@ -290,6 +302,7 @@ pub(crate) fn validate(
             &signatures,
             native,
             &templates,
+            &uncertain,
             &mut work,
         )
         .ok_or_else(error)?;

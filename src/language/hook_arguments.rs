@@ -59,9 +59,11 @@ impl Arities {
             return result;
         }
         let roots: Vec<_> = DECLARATIONS.iter().chain(USES).copied().collect();
-        let Some(possible) =
-            signature::possible_builtin_aliases(documents.iter().copied(), roots.iter().copied())
-        else {
+        let Some(possible) = signature::possible_builtin_aliases(
+            documents.iter().copied(),
+            roots.iter().copied(),
+            false,
+        ) else {
             result.dynamic = true;
             return result;
         };

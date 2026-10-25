@@ -495,3 +495,79 @@ fn unsaved_wrapper_bodies_defaults_and_shared_consumers_refresh_data_flow() {
         .unwrap();
     assert_eq!(changes.values().map(Vec::len).sum::<usize>(), 3);
 }
+
+#[test]
+fn argument_consuming_interface_forwarders_reject_unconfirmed_hook_boundaries() {
+    for call in [
+        r"\def\invoke#1{\UseHook}\invoke{Ignored}{custom}\word",
+        r"\def\invoke!{\UseHook}\invoke!{custom}\word",
+        r"\NewDocumentCommand\invoke{m}{\UseHook}\invoke{Ignored}{custom}\word",
+        r"\def\invoke#1{\UseHook}\csuse{invoke}{Ignored}{custom}\word",
+        r"\def\invoke#1{\UseHook}\def\outer{\invoke}\outer{Ignored}{custom}\word",
+        r"\def\invoke#1{\UseHook}\let\forward\invoke\def\invoke#1{Text}\forward{Ignored}{custom}\word",
+    ] {
+        let source = source(call);
+        let (workspace, uri) = setup(&source);
+        let at = workspace.documents[&uri]
+            .text
+            .position(source.rfind("word").unwrap() + 1);
+        let error = features::rename(&workspace, &uri, at, "fresh").expect_err(call);
+        assert!(
+            error.message.contains("hook argument data"),
+            "{call}: {error:?}"
+        );
+        assert!(
+            features::prepare_rename(&workspace, &uri, at).is_err(),
+            "{call}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires pdflatex"]
+fn native_argument_consuming_forwarders_reject_edits_that_only_change_captured_text() {
+    let source = source(r"\def\invoke#1{\UseHook}\invoke{Ignored}{custom}\word")
+        .replace(r"\word{Text}", r"\word{\typeout{EXECUTED}Text}");
+    let (workspace, uri) = setup(&source);
+    let at = workspace.documents[&uri]
+        .text
+        .position(source.rfind("word").unwrap() + 1);
+    assert!(features::rename(&workspace, &uri, at, "fresh").is_err());
+    let directory = tempfile::tempdir().unwrap();
+    let compile = |source: &str| {
+        std::fs::write(directory.path().join("main.tex"), source).unwrap();
+        let output = std::process::Command::new("pdflatex")
+            .args([
+                "-no-shell-escape",
+                "-interaction=nonstopmode",
+                "-halt-on-error",
+                "main.tex",
+            ])
+            .current_dir(directory.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        let log = std::fs::read_to_string(directory.path().join("main.log")).unwrap();
+        let captures: Vec<_> = log
+            .lines()
+            .filter(|line| line.starts_with("CAPTURE:"))
+            .map(str::to_owned)
+            .collect();
+        (
+            captures,
+            log.lines().filter(|line| *line == "EXECUTED").count(),
+            std::fs::read_to_string(directory.path().join("main.aux")).unwrap(),
+        )
+    };
+    let original = compile(&source);
+    let changed = compile(&source.replace(r"\word", r"\fresh"));
+    assert_eq!(original.0, [r"CAPTURE:\word "]);
+    assert_eq!(changed.0, [r"CAPTURE:\fresh "]);
+    assert_eq!(original.1, 1);
+    assert_eq!(original.1, changed.1);
+    assert_eq!(original.2, changed.2);
+}

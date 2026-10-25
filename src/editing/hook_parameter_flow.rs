@@ -86,7 +86,7 @@ fn normalise_native(
             data.entry(uri.clone()).or_default().push(span.start..after);
             if deficit > 0 {
                 needs
-                    .entry(owner.entry.name.clone())
+                    .entry(owner.tail.clone())
                     .or_default()
                     .insert((mask, deficit.min(9)));
             }
@@ -167,9 +167,14 @@ pub(super) fn template(doc: &Document, work: &mut usize) -> Option<Option<String
         return Some(None);
     }
     let mut slots = BTreeSet::new();
-    for entry in &doc.syntax.definitions {
-        if let Some(body) = signature::command_definition_body(&doc.text.source, &doc.syntax, entry)
-        {
+    for (entry, environment) in doc
+        .syntax
+        .definitions
+        .iter()
+        .map(|entry| (entry, false))
+        .chain(doc.syntax.environments.iter().map(|entry| (entry, true)))
+    {
+        for body in bodies(doc, entry, environment) {
             charge(work, body.span.len())?;
             slots.extend(
                 parameters(&doc.text.source, body.span)
@@ -191,10 +196,23 @@ pub(super) fn template(doc: &Document, work: &mut usize) -> Option<Option<String
     ))
 }
 
+fn bodies(doc: &Document, entry: &syntax::Entry, environment: bool) -> Vec<syntax::Argument> {
+    if environment {
+        signature::environment_bodies(&doc.text.source, &doc.syntax, entry)
+            .map_or_else(Vec::new, |(begin, end)| vec![begin, end])
+    } else {
+        signature::command_definition_body(&doc.text.source, &doc.syntax, entry)
+            .into_iter()
+            .collect()
+    }
+}
+
 struct Owner<'a> {
     uri: &'a Url,
     doc: &'a Document,
     entry: &'a syntax::Entry,
+    environment: bool,
+    tail: String,
     body: Range<usize>,
     header: Range<usize>,
     parameters: Vec<(usize, u16)>,
@@ -237,6 +255,7 @@ pub(super) fn extend(
     signatures: &CommandSignatures<'_>,
     native: Native,
     templates: &BTreeMap<Url, String>,
+    uncertain_environment_interfaces: &BTreeSet<String>,
     work: &mut usize,
 ) -> Option<Data> {
     let docs: Vec<_> = project
@@ -247,32 +266,55 @@ pub(super) fn extend(
     let mut owners = Vec::new();
     let mut aliases = Vec::new();
     for &(uri, doc) in &docs {
-        for entry in &doc.syntax.definitions {
+        for (entry, environment) in doc
+            .syntax
+            .definitions
+            .iter()
+            .map(|entry| (entry, false))
+            .chain(doc.syntax.environments.iter().map(|entry| (entry, true)))
+        {
             charge(work, 64)?;
-            if let Some(target) = signature::source_alias(&doc.text.source, &doc.syntax, entry)
+            if let Some(target) = (!environment)
+                .then(|| signature::source_alias(&doc.text.source, &doc.syntax, entry))
+                .flatten()
                 .or_else(|| {
-                    signature::literal_copy_target(&doc.text.source, &doc.syntax, entry, false)
-                        .map(|(target, _)| target)
+                    signature::literal_copy_target(
+                        &doc.text.source,
+                        &doc.syntax,
+                        entry,
+                        environment,
+                    )
+                    .map(|(target, _)| target)
                 })
             {
+                if environment {
+                    aliases.push((format!("end{}", entry.name), format!("end{target}")));
+                }
                 aliases.push((entry.name.clone(), target));
             }
-            if let Some(body) =
-                signature::command_definition_body(&doc.text.source, &doc.syntax, entry)
-            {
+            let bodies = bodies(doc, entry, environment);
+            let header_end = bodies.first().map(|body| body.outer_span.start);
+            for (index, body) in bodies.into_iter().enumerate() {
                 charge(work, body.span.len())?;
                 let parameters = parameters(&doc.text.source, body.span.clone());
                 owners.push(Owner {
                     uri,
                     doc,
                     entry,
-                    header: entry.span.end..body.outer_span.start,
+                    environment,
+                    tail: if environment && index == 1 {
+                        format!("end{}", entry.name)
+                    } else {
+                        entry.name.clone()
+                    },
+                    header: entry.span.end..header_end.unwrap(),
                     body: body.span,
                     parameters,
-                    defaults: signature::command_parameter_defaults(
+                    defaults: signature::parameter_defaults(
                         &doc.text.source,
                         &doc.syntax,
                         entry,
+                        environment,
                     ),
                 });
             }
@@ -287,6 +329,16 @@ pub(super) fn extend(
     if readers.is_empty() {
         return Some(native);
     }
+    let environment_interfaces = if owners.iter().any(|owner| owner.environment) {
+        signature::possible_builtin_aliases(
+            docs.iter()
+                .map(|(_, doc)| (doc.text.source.as_str(), &doc.syntax)),
+            ["begin", "end"],
+            true,
+        )?
+    } else {
+        BTreeMap::new()
+    };
     let contexts: BTreeMap<_, _> = docs
         .iter()
         .map(|&(uri, doc)| (uri, LiteralContext::new(doc)))
@@ -295,8 +347,9 @@ pub(super) fn extend(
     let alias_bodies: BTreeSet<_> = owners
         .iter()
         .filter(|owner| {
-            signature::source_alias(&owner.doc.text.source, &owner.doc.syntax, owner.entry)
-                .is_some()
+            !owner.environment
+                && signature::source_alias(&owner.doc.text.source, &owner.doc.syntax, owner.entry)
+                    .is_some()
         })
         .map(|owner| {
             (
@@ -320,6 +373,11 @@ pub(super) fn extend(
                 }
             }
         }
+        charge(work, owners.len().saturating_mul(8))?;
+        let environment_data = owners.iter().any(|owner| {
+            owner.environment
+                && (readers.contains_key(&owner.entry.name) || readers.contains_key(&owner.tail))
+        });
         let mut data = native.clone();
         for owner in &owners {
             if let Some(&bits) = readers.get(&owner.entry.name) {
@@ -350,6 +408,7 @@ pub(super) fn extend(
                 // Only these lexical names can resolve to a current reader.
                 // Keep static named calls until their target has been read.
                 if !readers.contains_key(&command.name)
+                    && !environment_interfaces.contains_key(&command.name)
                     && !matches!(command.name.as_str(), "csuse" | "csname")
                 {
                     continue;
@@ -372,121 +431,178 @@ pub(super) fn extend(
                         &context.declarations,
                     )
                     .unwrap_or((&command.name, command.span.clone()));
-                let Some(&bits) = readers.get(name) else {
-                    continue;
-                };
                 let spaces = !(command.name == "csuse" && invocation.end > command.span.end)
                     && syntax::control_word(source, command.span.start).is_some();
-                let mut shapes = signatures
-                    .parameter_spans(source, &doc.syntax, name, invocation.clone(), spaces)
-                    .into_iter()
-                    .collect::<Vec<_>>();
-                if shapes.is_empty() {
-                    // Copies may retain a formerly defined grammar. Inspect
-                    // possible source prototypes without certifying expansion.
-                    let mut pending = vec![name.to_owned()];
-                    let mut seen = BTreeSet::new();
-                    while let Some(name) = pending.pop() {
-                        charge(work, name.len() + 64)?;
-                        if !seen.insert(name.clone()) {
-                            continue;
-                        }
-                        charge(work, owners.len().saturating_mul(8))?;
-                        for owner in owners.iter().filter(|owner| owner.entry.name == name) {
-                            if let Some(spans) = CommandShape::definition(
-                                &owner.doc.text.source,
-                                &owner.doc.syntax,
-                                owner.entry,
-                            )
-                            .and_then(|shape| {
-                                shape.parameter_spans(
-                                    source,
-                                    &doc.syntax,
-                                    invocation.clone(),
-                                    spaces,
-                                )
-                            }) {
-                                shapes.push(spans);
-                            }
-                        }
-                        charge(work, aliases.len().saturating_mul(8))?;
-                        pending.extend(
-                            aliases
-                                .iter()
-                                .filter(|(alias, _)| *alias == name)
-                                .map(|(_, target)| target.clone()),
-                        );
-                    }
+                let mut invocations = Vec::new();
+                if readers.contains_key(name) {
+                    invocations.push((name.to_owned(), invocation.clone(), spaces));
                 }
-                if shapes.is_empty() {
-                    data.entry(uri.clone())
-                        .or_default()
-                        .push(invocation.end..source.len());
-                } else {
-                    for shape in shapes {
-                        let spans = shape.spans;
-                        charge(work, owners.len().saturating_mul(8))?;
-                        let owner = owners
-                            .iter()
-                            .filter(|owner| {
-                                owner.uri == uri && owner.body.contains(&invocation.start)
-                            })
-                            .min_by_key(|owner| owner.body.len());
-                        if owner
-                            .is_some_and(|owner| spans.iter().any(|span| span.end > owner.body.end))
-                        {
+                for &interface in environment_interfaces.get(name).into_iter().flatten() {
+                    charge(work, owners.len().saturating_mul(8) + 64)?;
+                    if !signatures.invokes_builtin(name, interface)
+                        && signatures.has_custom_signature(name, interface)
+                    {
+                        continue;
+                    }
+                    if uncertain_environment_interfaces.contains(name) {
+                        if environment_data {
                             return None;
                         }
-                        for (slot, span) in spans.iter().enumerate() {
-                            if bits & (1 << slot) != 0 {
-                                data.entry(uri.clone()).or_default().push(span.clone());
-                            }
+                        continue;
+                    }
+                    let Some(argument) =
+                        syntax::environment_name_argument(&doc.text.source, invocation.end)
+                    else {
+                        if environment_data {
+                            data.entry(uri.clone())
+                                .or_default()
+                                .push(invocation.end..source.len());
                         }
-                        for (mask, mut debt) in needs.get(name).cloned().into_iter().flatten() {
-                            let mut outer_mask = 0;
-                            for (slot, span) in spans.iter().enumerate() {
-                                if mask & (1 << slot) == 0 {
-                                    continue;
-                                }
-                                let (known, variables) =
-                                    input_bound(&doc.text.source, source, span.clone(), work)?;
-                                if shape.simple {
-                                    debt = debt.saturating_sub(known);
-                                }
-                                outer_mask |= variables;
-                            }
-                            if debt == 0 {
+                        continue;
+                    };
+                    let target = if interface == "begin" {
+                        argument.value
+                    } else {
+                        format!("end{}", argument.value)
+                    };
+                    if readers.contains_key(&target) {
+                        // A synthetic environment control starts after its name.
+                        // Do not reuse the contextual grammar of the begin token.
+                        invocations.push((
+                            target,
+                            argument.span.start..argument.outer_span.end,
+                            false,
+                        ));
+                    }
+                }
+                for (name, invocation, spaces) in invocations {
+                    let name = name.as_str();
+                    let bits = readers[name];
+                    let mut shapes = signatures
+                        .parameter_spans(source, &doc.syntax, name, invocation.clone(), spaces)
+                        .into_iter()
+                        .collect::<Vec<_>>();
+                    if shapes.is_empty() {
+                        // Copies may retain a formerly defined grammar. Inspect
+                        // possible source prototypes without certifying expansion.
+                        let mut pending = vec![name.to_owned()];
+                        let mut seen = BTreeSet::new();
+                        while let Some(name) = pending.pop() {
+                            charge(work, name.len() + 64)?;
+                            if !seen.insert(name.clone()) {
                                 continue;
                             }
-                            let mut after = shape.end;
-                            if after > 0
-                                && doc.text.source.as_bytes().get(after - 1) == Some(&b'#')
-                                && source.as_bytes().get(after - 1) == Some(&b'.')
-                            {
-                                after += 1;
-                            }
-                            let start = after;
-                            let limit = owner.map_or(source.len(), |owner| owner.body.end);
-                            while debt > 0 && syntax::skip_space(&doc.text.source, after) < limit {
-                                charge(work, 64)?;
-                                let (_, end, bit) = item(&doc.text.source, source, after)?;
-                                if end > limit {
-                                    return None;
+                            charge(work, owners.len().saturating_mul(8))?;
+                            for owner in owners.iter().filter(|owner| owner.tail == name) {
+                                let shape = if owner.environment {
+                                    if owner.tail == owner.entry.name {
+                                        CommandShape::environment_definition(
+                                            &owner.doc.text.source,
+                                            &owner.doc.syntax,
+                                            owner.entry,
+                                        )
+                                    } else {
+                                        Some(CommandShape::no_arguments())
+                                    }
+                                } else {
+                                    CommandShape::definition(
+                                        &owner.doc.text.source,
+                                        &owner.doc.syntax,
+                                        owner.entry,
+                                    )
+                                };
+                                if let Some(spans) = shape.and_then(|shape| {
+                                    shape.parameter_spans(
+                                        source,
+                                        &doc.syntax,
+                                        invocation.clone(),
+                                        spaces,
+                                    )
+                                }) {
+                                    shapes.push(spans);
                                 }
-                                outer_mask |= bit;
-                                if bit == 0 {
-                                    debt -= 1;
-                                }
-                                after = end;
                             }
-                            data.entry(uri.clone()).or_default().push(start..after);
-                            if debt > 0 {
-                                if let Some(owner) = owner {
-                                    changed |= needs
-                                        .entry(owner.entry.name.clone())
-                                        .or_default()
-                                        .insert((outer_mask, debt));
-                                    readers.entry(owner.entry.name.clone()).or_default();
+                            charge(work, aliases.len().saturating_mul(8))?;
+                            pending.extend(
+                                aliases
+                                    .iter()
+                                    .filter(|(alias, _)| *alias == name)
+                                    .map(|(_, target)| target.clone()),
+                            );
+                        }
+                    }
+                    if shapes.is_empty() {
+                        data.entry(uri.clone())
+                            .or_default()
+                            .push(invocation.end..source.len());
+                    } else {
+                        for shape in shapes {
+                            let spans = shape.spans;
+                            charge(work, owners.len().saturating_mul(8))?;
+                            let owner = owners
+                                .iter()
+                                .filter(|owner| {
+                                    owner.uri == uri && owner.body.contains(&invocation.start)
+                                })
+                                .min_by_key(|owner| owner.body.len());
+                            if owner.is_some_and(|owner| {
+                                spans.iter().any(|span| span.end > owner.body.end)
+                            }) {
+                                return None;
+                            }
+                            for (slot, span) in spans.iter().enumerate() {
+                                if bits & (1 << slot) != 0 {
+                                    data.entry(uri.clone()).or_default().push(span.clone());
+                                }
+                            }
+                            for (mask, mut debt) in needs.get(name).cloned().into_iter().flatten() {
+                                let mut outer_mask = 0;
+                                for (slot, span) in spans.iter().enumerate() {
+                                    if mask & (1 << slot) == 0 {
+                                        continue;
+                                    }
+                                    let (known, variables) =
+                                        input_bound(&doc.text.source, source, span.clone(), work)?;
+                                    if shape.simple {
+                                        debt = debt.saturating_sub(known);
+                                    }
+                                    outer_mask |= variables;
+                                }
+                                if debt == 0 {
+                                    continue;
+                                }
+                                let mut after = shape.end;
+                                if after > 0
+                                    && doc.text.source.as_bytes().get(after - 1) == Some(&b'#')
+                                    && source.as_bytes().get(after - 1) == Some(&b'.')
+                                {
+                                    after += 1;
+                                }
+                                let start = after;
+                                let limit = owner.map_or(source.len(), |owner| owner.body.end);
+                                while debt > 0
+                                    && syntax::skip_space(&doc.text.source, after) < limit
+                                {
+                                    charge(work, 64)?;
+                                    let (_, end, bit) = item(&doc.text.source, source, after)?;
+                                    if end > limit {
+                                        return None;
+                                    }
+                                    outer_mask |= bit;
+                                    if bit == 0 {
+                                        debt -= 1;
+                                    }
+                                    after = end;
+                                }
+                                data.entry(uri.clone()).or_default().push(start..after);
+                                if debt > 0 {
+                                    if let Some(owner) = owner {
+                                        changed |= needs
+                                            .entry(owner.tail.clone())
+                                            .or_default()
+                                            .insert((outer_mask, debt));
+                                        readers.entry(owner.tail.clone()).or_default();
+                                    }
                                 }
                             }
                         }
