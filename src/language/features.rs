@@ -1611,6 +1611,12 @@ fn completion_in_query(
             .take_while(|b| b.is_ascii_alphabetic() || *b == b'@')
             .count();
     let range = doc.text.range(line_start + slash + 1, command_end);
+    let allow_math = doc.syntax.control_operands.contains(&(line_start + slash))
+        || crate::language::math_context::is_math(
+            &doc.text.source,
+            &doc.syntax,
+            line_start + slash,
+        );
     // Declaration/inspection operands name a control sequence without calling
     // it. Reuse the parser's operand boundaries rather than keyword lookbehind.
     let after_command = syntax::skip_space(&doc.text.source, command_end);
@@ -1728,6 +1734,9 @@ fn completion_in_query(
         .filter(|package| loaded_packages.contains(&package.name))
     {
         for command in &package.commands {
+            if command.math_only && !allow_math {
+                continue;
+            }
             if !command.name.starts_with(prefix) || !seen.insert(command.name.clone()) {
                 continue;
             }
@@ -1760,6 +1769,9 @@ fn completion_in_query(
         }
     }
     for &(name, snippet, documentation) in COMMANDS {
+        if !allow_math && crate::project::catalog::math_command(name) {
+            continue;
+        }
         if name.starts_with(prefix) && seen.insert(name.into()) {
             let builtin_arguments = name != "thefield"
                 || crate::symbols::commands::uses_builtin(workspace, name, &scope);

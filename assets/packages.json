@@ -1,29 +1,29 @@
 [
   {"name":"amsmath","description":"Advanced mathematical typesetting.","commands":[
-    {"name":"dfrac","parameters":["numerator","denominator"],"description":"Typeset a fraction in display style."},
-    {"name":"tfrac","parameters":["numerator","denominator"],"description":"Typeset a fraction in text style."},
-    {"name":"binom","parameters":["upper","lower"],"description":"Typeset a binomial coefficient."},
-    {"name":"dbinom","parameters":["upper","lower"],"description":"Typeset a display-style binomial coefficient."},
-    {"name":"tbinom","parameters":["upper","lower"],"description":"Typeset a text-style binomial coefficient."},
-    {"name":"overset","parameters":["annotation","expression"],"description":"Place an annotation above an expression."},
-    {"name":"underset","parameters":["annotation","expression"],"description":"Place an annotation below an expression."},
-    {"name":"substack","parameters":["lines"],"description":"Stack lines in a mathematical subscript or superscript."},
-    {"name":"boxed","parameters":["expression"],"description":"Draw a box around a mathematical expression."},
-    {"name":"tag","starred":true,"parameters":["number"],"description":"Override the equation number."},
-    {"name":"notag","parameters":[],"description":"Suppress this equation number."}
+    {"name":"dfrac","math_only":true,"parameters":["numerator","denominator"],"description":"Typeset a fraction in display style."},
+    {"name":"tfrac","math_only":true,"parameters":["numerator","denominator"],"description":"Typeset a fraction in text style."},
+    {"name":"binom","math_only":true,"parameters":["upper","lower"],"description":"Typeset a binomial coefficient."},
+    {"name":"dbinom","math_only":true,"parameters":["upper","lower"],"description":"Typeset a display-style binomial coefficient."},
+    {"name":"tbinom","math_only":true,"parameters":["upper","lower"],"description":"Typeset a text-style binomial coefficient."},
+    {"name":"overset","math_only":true,"parameters":["annotation","expression"],"description":"Place an annotation above an expression."},
+    {"name":"underset","math_only":true,"parameters":["annotation","expression"],"description":"Place an annotation below an expression."},
+    {"name":"substack","math_only":true,"parameters":["lines"],"description":"Stack lines in a mathematical subscript or superscript."},
+    {"name":"boxed","math_only":true,"parameters":["expression"],"description":"Draw a box around a mathematical expression."},
+    {"name":"tag","starred":true,"math_only":true,"parameters":["number"],"description":"Override the equation number."},
+    {"name":"notag","math_only":true,"parameters":[],"description":"Suppress this equation number."}
   ]},
   {"name":"mathtools","description":"Extensions to amsmath.","requires":["amsmath"],"commands":[
-    {"name":"coloneqq","parameters":[],"description":"A colon-equals relation with aligned symbols."},
-    {"name":"mathclap","parameters":["expression"],"description":"Center a mathematical expression in a zero-width box."},
-    {"name":"smashoperator","parameters":["expression"],"description":"Remove excess width around operator limits."}
+    {"name":"coloneqq","math_only":true,"parameters":[],"description":"A colon-equals relation with aligned symbols."},
+    {"name":"mathclap","math_only":true,"parameters":["expression"],"description":"Center a mathematical expression in a zero-width box."},
+    {"name":"smashoperator","math_only":true,"parameters":["expression"],"description":"Remove excess width around operator limits."}
   ]},
   {"name":"amssymb","description":"Additional mathematical symbols.","requires":["amsfonts"],"commands":[
-    {"name":"therefore","parameters":[],"description":"The therefore mathematical symbol."},
-    {"name":"because","parameters":[],"description":"The because mathematical symbol."}
+    {"name":"therefore","math_only":true,"parameters":[],"description":"The therefore mathematical symbol."},
+    {"name":"because","math_only":true,"parameters":[],"description":"The because mathematical symbol."}
   ]},
   {"name":"amsfonts","description":"AMS mathematical alphabets.","commands":[
-    {"name":"mathbb","parameters":["letters"],"description":"Select blackboard-bold mathematical letters."},
-    {"name":"mathfrak","parameters":["letters"],"description":"Select Fraktur mathematical letters."}
+    {"name":"mathbb","math_only":true,"parameters":["letters"],"description":"Select blackboard-bold mathematical letters."},
+    {"name":"mathfrak","math_only":true,"parameters":["letters"],"description":"Select Fraktur mathematical letters."}
   ]},
   {"name":"booktabs","description":"Publication-quality tables.","commands":[
     {"name":"toprule","parameters":["[width]"],"description":"Draw the top rule of a table."},

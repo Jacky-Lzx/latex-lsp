@@ -197,7 +197,15 @@ fn snippets_expand_in_a_real_editor_without_consuming_tex_backslashes() {
         ("lim", r"lim_{x \to \infty} "),
         ("left", r"left(  \right)"),
     ] {
-        let source = format!("\\{name}");
+        let prefix = if matches!(
+            name,
+            "widehat" | "epsilon" | "sin" | "operatorname" | "langle" | "lim" | "left"
+        ) {
+            "$"
+        } else {
+            ""
+        };
+        let source = format!("{prefix}\\{name}");
         workspace
             .documents
             .insert(uri.clone(), Document::new(&uri, source.clone(), Some(1)));

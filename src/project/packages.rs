@@ -20,6 +20,8 @@ pub(crate) struct Command {
     pub description: String,
     #[serde(default)]
     pub starred: bool,
+    #[serde(default)]
+    pub math_only: bool,
 }
 
 pub(crate) fn catalog() -> &'static [Package] {

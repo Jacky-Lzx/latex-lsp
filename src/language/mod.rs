@@ -7,6 +7,7 @@ pub(crate) mod completion_resolve;
 pub(crate) mod display;
 pub mod features;
 pub(crate) mod folding;
+pub(crate) mod math_context;
 pub mod navigation;
 pub mod path_completion;
 pub mod semantic;

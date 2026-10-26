@@ -103,11 +103,11 @@ fn package_commands_have_scoped_signatures_hover_and_user_precedence() {
     let at = open(
         &mut ws,
         &uri,
-        "\\documentclass{article}\n\\usepackage{mathtools}\n\\df|",
+        "\\documentclass{article}\n\\usepackage{mathtools}\n$\\df|$",
     );
     let items = features::completion(&ws, &uri, at);
     assert!(items.iter().any(|i| i.label == "dfrac"));
-    let at = open(&mut ws, &other, "\\documentclass{article}\n\\df|");
+    let at = open(&mut ws, &other, "\\documentclass{article}\n$\\df|$");
     assert!(!features::completion(&ws, &other, at)
         .iter()
         .any(|i| i.label == "dfrac"));

@@ -611,7 +611,8 @@ fn completion_placeholders_remain_before_surrounding_tex_boundaries() {
             r"\or",
             "\n\\end{document}",
         ] {
-            let call = format!("\\{}¦{} {suffix}", &name[..2], &name[2..]);
+            let math = if name == "frac" { "$" } else { "" };
+            let call = format!("{math}\\{}¦{} {suffix}", &name[..2], &name[2..]);
             let (mut workspace, uri, position) = setup(definition, &call);
             workspace.client.snippets = true;
             let items = latex_lsp::language::features::completion(&workspace, &uri, position);
@@ -645,11 +646,11 @@ fn completion_placeholders_remain_before_surrounding_tex_boundaries() {
 }
 
 #[test]
-fn bare_text_keeps_catalog_templates_for_commands_without_required_arguments() {
+fn catalog_templates_for_commands_without_required_arguments() {
     for (call, name, expected) in [
         (r"\it¦em text", "item", "item $0"),
-        (r"\al¦pha text", "alpha", "alpha"),
-        (r"\su¦m1", "sum", "sum_{${1:i=1}}^{${2:n}} $0"),
+        (r"$\al¦pha x$", "alpha", "alpha"),
+        (r"$\su¦m1$", "sum", "sum_{${1:i=1}}^{${2:n}} $0"),
     ] {
         let (mut workspace, uri, position) = setup("", call);
         workspace.client.snippets = true;
