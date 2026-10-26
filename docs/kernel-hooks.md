@@ -86,7 +86,7 @@ cargo test --locked --test protocol hook_name_renames_keep_exact_namespaces
 
 `AtBeginDocument[label]{code}` 和 `AtEndDocument[label]{code}` 的显式标签分别归入 `begindocument` 与 `enddocument`，与相应 `AddToHook`、移除及排序规则关联；同名的开始／结束标签保持独立。读取项目内可确认的接口含义时，也检查底层 `AddToHook` 是否被源码替换。入口被改成另一已确认纯转发时，以当前内核叶接口及其参数形状解析，例如转发到 `AtEndDocument` 的开始入口归入结束 hook。未知接口或数据操作数不制造注册位置。
 
-支持直接、静态命名、传统／xparse 纯转发及环境生成的零参数接口。边界注释和首尾 TeX 空白规范化，跨注释拼接、动态及相对名称暂不推断。必选字段允许裸单 token；相邻参数的首字符优先归属于后一个字段，补全成多字符标签时自动加组。补全替换完整后缀，按 hook 和前缀筛选，支持空字段、未闭合字段及 UTF-16／CRLF 范围。未保存提供文件和共享消费者的含义变化即时刷新。
+支持直接、静态命名、传统／xparse 纯转发及环境生成的零参数接口。边界注释和首尾 TeX 空白规范化，跨注释拼接及动态名称暂不推断，相对字段只支持下述局部情形。必选字段允许裸单 token；相邻参数的首字符优先归属于后一个字段，补全成多字符标签时自动加组。补全替换完整后缀，按 hook 和前缀筛选，支持空字段、未闭合字段及 UTF-16／CRLF 范围。未保存提供文件和共享消费者的含义变化即时刷新。
 
 `DeclareDefaultHookRule` 的两个显式标签使用全局规则作用域：定义跳转返回当前项目各 hook 的同名显式注册，引用查找包含这些注册、局部规则及移除位置；补全从各 hook 的注册标签中取并集，并替换当前字段的完整后缀。全局规则字段的悬停说明其影响所有 hook。局部字段的定义跳转和补全仍限于自身 hook，但引用查找会包含同名全局规则，不把其他 hook 的注册合并进局部定义。
 
@@ -96,7 +96,9 @@ cargo test --locked --test protocol hook_name_renames_keep_exact_namespaces
 
 显式注册与移除字段中的 `top-level` 支持独立的文档级代码槽导航、引用、悬停、高亮及补全。同一 hook 的多次注册共同返回，其他 hook 保持独立；排序规则和默认设置字段不关联或推荐该槽。内核在普通 hook 中将它放在排序代码之后，在反向 hook 中放在之前，普通排序规则不改变该槽，显式移除会清空它。保留槽不提供改名。
 
-这仍是结构导航，不模拟注册时间、移除或排序后的执行状态。省略标签、`.`／`./suffix` 的上下文身份和 `*` 尚未认证，不生成相应注册导航。设置字段的支持不代表已经推断后续省略标签：内核的默认标签栈是全局的，设置跨 TeX 分组保留，包／类加载自动修改并恢复它，延迟代码中的设置在执行时才生效。代码标签改名尚未实现：全局默认规则可能连接多个 hook，局部字符串替换会改变排序，不能直接复用只读定义位置作为完整编辑集。原生回归覆盖代码块顺序、移除、实际事件、独立引用编辑前后的完整 AUX，以及四种全局规则编辑对照。把普通自定义 hook 改成 `??` 会与内核规则存储冲突，因此名称改名明确拒绝这个目标。
+紧邻字面 `PushDefaultHookLabel{base}` 的显式注册／移除字段可解析 `.` 与 `./suffix`，分别关联 `base` 与 `base/suffix` 的显式代码块。设置与调用之间仅允许 TeX 空白和注释，双方接口与数据角色均须确认，全部共享消费者必须认定相同身份。支持直接、静态命名、传统／xparse 及环境生成的纯转发入口和生命周期注册；定义／引用使用解析后的身份，范围保留原相对字段。补全仍写入 `.`／`./suffix`，排除其他 base 和 hook，并替换完整后缀。Set、Pop、其他调用、关闭分组或文件边界隔开的设置不用于该局部推断；数据中的 Push 或被 `aftergroup` 单独延后的 Push 也不能建立它。
+
+这仍是结构导航，不模拟注册时间、移除或排序后的执行状态。省略标签、更广的 `.`／`./suffix` 执行上下文、相对排序规则字段和 `*` 尚未认证，不生成相应注册导航。设置字段的支持不代表已经推断后续省略标签：内核的默认标签栈是全局的，设置跨 TeX 分组保留，包／类加载自动修改并恢复它，延迟代码中的设置在执行时才生效。代码标签改名尚未实现：全局默认规则可能连接多个 hook，局部字符串替换会改变排序，不能直接复用只读定义位置作为完整编辑集。原生回归覆盖代码块顺序、移除、实际事件、独立引用编辑前后的完整 AUX，以及四种全局规则编辑对照。把普通自定义 hook 改成 `??` 会与内核规则存储冲突，因此名称改名明确拒绝这个目标。
 
 生命周期专项还用原生事件区分开始和结束阶段，检查接口被替换或调用成为 hook 数据时不注册代码。同名普通引用键的实际两处编辑不会改变代码标签，编辑后保留全部代码块的执行顺序和完整 AUX。未保存提供文件的底层接口替换、转发目标切换、共享消费者分歧与恢复均有精确 UTF-16／CRLF stdio 回归，普通标签编辑保留当前文档版本。
 
@@ -108,6 +110,7 @@ cargo test --locked --test protocol hook_name_renames_keep_exact_namespaces
 cargo test --locked --test hook_code_labels
 cargo test --locked --test hook_code_labels -- --ignored
 cargo test --locked --test protocol global_hook_rules_refresh
+cargo test --locked --test protocol adjacent_push_relative_hook_labels_refresh
 cargo test --locked --test protocol document_level_hook_slots_refresh
 cargo test --locked --test protocol default_hook_label_settings_refresh
 cargo test --locked --test protocol hook_name_renames_keep_exact

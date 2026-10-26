@@ -7,6 +7,7 @@ use crate::{
 };
 use lsp_types::*;
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, BTreeSet},
     ops::Range as Span,
 };
@@ -86,6 +87,7 @@ struct Entry {
     // Only registration/removal fields address the kernel's separate
     // document-level slot; rules and default settings use ordinary labels.
     allows_document_slot: bool,
+    relative_base: Option<String>,
     name: String,
     span: Span<usize>,
     declaration: bool,
@@ -117,6 +119,7 @@ fn calls(doc: &Document, signatures: &CommandSignatures<'_>) -> BTreeMap<usize, 
         .collect();
     let empty = BTreeSet::new();
     let mut result = BTreeMap::new();
+    let mut last_push: Option<(usize, &str, usize)> = None;
     for (index, command) in doc.syntax.commands.iter().enumerate() {
         if declarations.contains(&command.span.start) || context.literal(command.span.start) {
             continue;
@@ -140,6 +143,7 @@ fn calls(doc: &Document, signatures: &CommandSignatures<'_>) -> BTreeMap<usize, 
             _ => None,
         };
         let default_setting = matches!(name, "PushDefaultHookLabel" | "SetDefaultHookLabel");
+        let push_setting = name == "PushDefaultHookLabel";
         let (hook, mut after) = if let Some(hook) = lifecycle {
             // The public lifecycle wrappers invoke AddToHook at registration
             // time; their own unchanged spelling does not certify its meaning.
@@ -190,8 +194,27 @@ fn calls(doc: &Document, signatures: &CommandSignatures<'_>) -> BTreeMap<usize, 
             };
             after = end;
             let span = normalized(source, span);
-            let name = &source[span.clone()];
-            if label_name(name) || optional_label && name == "top-level" || name.is_empty() {
+            let raw = &source[span.clone()];
+            // Resolve only an immediately adjacent literal Push. No intervening
+            // command, closing group, file boundary or presumed execution order
+            // is used to infer the default stack. Operand validation below must
+            // certify both invocations in every consumer interpretation.
+            let relative = last_push.filter(|(end, _, _)| {
+                optional_label
+                    && syntax::skip_space(source, *end) == command.span.start
+                    && (raw == "." || raw.starts_with("./"))
+            });
+            let name = relative.map_or(Cow::Borrowed(raw), |(_, base, _)| {
+                Cow::Owned(if raw == "." {
+                    base.into()
+                } else {
+                    format!("{base}/{}", &raw[2..])
+                })
+            });
+            if label_name(&name) || optional_label && name == "top-level" || name.is_empty() {
+                if push_setting && complete && label_name(raw) {
+                    last_push = Some((end, raw, command.span.start));
+                }
                 result.insert(
                     span.start,
                     Candidate {
@@ -202,13 +225,15 @@ fn calls(doc: &Document, signatures: &CommandSignatures<'_>) -> BTreeMap<usize, 
                             // execution context of any omitted label.
                             default_setting,
                             allows_document_slot: optional_label,
-                            name: name.into(),
+                            relative_base: relative.map(|(_, base, _)| base.into()),
+                            name: name.into_owned(),
                             span,
                             declaration,
                             complete,
                             grouped,
                         },
                         invocation: command.span.start,
+                        prerequisite: relative.map(|(_, _, at)| at),
                     },
                 );
             }
@@ -343,13 +368,29 @@ pub(crate) fn completion(ws: &Workspace, uri: &Url, offset: usize) -> Option<Vec
     let index = Index::new(ws, uri, offset, false);
     let target = index.target(uri, offset, false)?;
     let doc = ws.documents.get(uri)?;
-    let prefix = &doc.text.source[target.span.start..offset];
+    let raw_prefix = &doc.text.source[target.span.start..offset];
+    let prefix = target
+        .relative_base
+        .as_ref()
+        .map_or(Cow::Borrowed(raw_prefix), |base| {
+            Cow::Owned(
+                raw_prefix
+                    .strip_prefix("./")
+                    .map_or_else(|| base.clone(), |suffix| format!("{base}/{suffix}")),
+            )
+        });
     let scope = ws.symbol_scope(uri);
     let names: BTreeSet<_> = index
         .entries(&scope, target)
         .filter(|(other_uri, entry)| {
             entry.declaration
-                && entry.name.starts_with(prefix)
+                && entry.name.starts_with(prefix.as_ref())
+                && target.relative_base.as_ref().is_none_or(|base| {
+                    entry
+                        .name
+                        .strip_prefix(base)
+                        .is_some_and(|suffix| suffix.is_empty() || suffix.starts_with('/'))
+                })
                 && (*other_uri != uri || entry.span != target.span)
         })
         .map(|(_, entry)| entry.name.clone())
@@ -359,30 +400,36 @@ pub(crate) fn completion(ws: &Workspace, uri: &Url, offset: usize) -> Option<Vec
             .into_iter()
             .take(256)
             .take(ws.completion_budget())
-            .map(|name| CompletionItem {
-                label: name.clone(),
-                kind: Some(CompletionItemKind::REFERENCE),
-                detail: Some(if name == "top-level" {
-                    target.hook.as_ref().map_or_else(
-                        || "Document-level code slot".into(),
-                        |hook| format!("Document-level code slot in hook {hook}"),
-                    )
-                } else {
-                    target.hook.as_ref().map_or_else(
-                        || "Code label across hooks".into(),
-                        |hook| format!("Code label in hook {hook}"),
-                    )
-                }),
-                filter_text: Some(name.clone()),
-                text_edit: Some(CompletionTextEdit::Edit(TextEdit {
-                    range: doc.text.range(target.span.start, target.span.end),
-                    new_text: if target.grouped || name.len() == 1 {
-                        name
+            .map(|name| {
+                let label = target
+                    .relative_base
+                    .as_ref()
+                    .map_or_else(|| name.clone(), |base| format!(".{}", &name[base.len()..]));
+                CompletionItem {
+                    label: label.clone(),
+                    kind: Some(CompletionItemKind::REFERENCE),
+                    detail: Some(if name == "top-level" {
+                        target.hook.as_ref().map_or_else(
+                            || "Document-level code slot".into(),
+                            |hook| format!("Document-level code slot in hook {hook}"),
+                        )
                     } else {
-                        format!("{{{name}}}")
-                    },
-                })),
-                ..CompletionItem::default()
+                        target.hook.as_ref().map_or_else(
+                            || "Code label across hooks".into(),
+                            |hook| format!("Code label in hook {hook}"),
+                        )
+                    }),
+                    filter_text: Some(label.clone()),
+                    text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                        range: doc.text.range(target.span.start, target.span.end),
+                        new_text: if target.grouped || label.len() == 1 {
+                            label
+                        } else {
+                            format!("{{{label}}}")
+                        },
+                    })),
+                    ..CompletionItem::default()
+                }
             })
             .collect(),
     )

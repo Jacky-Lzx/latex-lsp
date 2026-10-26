@@ -21,6 +21,189 @@ fn locations(uri: &Url, source: &str, needle: &str) -> Vec<Location> {
 }
 
 #[test]
+fn relative_fields_require_an_adjacent_literal_push_in_the_same_token_stream() {
+    for tail in [
+        r"\PushDefaultHookLabel{alpha}\relax\AddToHook{one}[.]{B}",
+        r"{\PushDefaultHookLabel{alpha}}\AddToHook{one}[.]{B}",
+        r"\SetDefaultHookLabel{alpha}\AddToHook{one}[.]{B}",
+        r"\PushDefaultHookLabel{alpha}\PopDefaultHookLabel\AddToHook{one}[.]{B}",
+        r"\def\select{\PushDefaultHookLabel{alpha}}\select\AddToHook{one}[.]{B}",
+        r"\PushDefaultHookLabel{\which}\AddToHook{one}[.]{B}",
+        r"\def\PushDefaultHookLabel#1{}\PushDefaultHookLabel{alpha}\AddToHook{one}[.]{B}",
+        r"\string\PushDefaultHookLabel{alpha}\AddToHook{one}[.]{B}",
+        r"\detokenize{\PushDefaultHookLabel{alpha}\AddToHook{one}[.]{B}}",
+        r"\NewHookWithArguments{capture}{1}\UseHook{capture}{\PushDefaultHookLabel{alpha}\AddToHook{one}[.]{B}}",
+        r"\uppercase{\PushDefaultHookLabel{alpha}\AddToHook{one}[.]{B}}",
+        r"{\aftergroup\PushDefaultHookLabel{alpha}\AddToHook{one}[.]{B}}{beta}\PopDefaultHookLabel",
+    ] {
+        let source = format!(r"\AddToHook{{one}}[alpha]{{A}}{tail}");
+        let (workspace, uri) = setup(&source);
+        let at = workspace.documents[&uri]
+            .text
+            .position(source.find("[.]").unwrap() + 1);
+        assert!(
+            features::definitions(&workspace, &uri, at).is_empty(),
+            "{source}"
+        );
+        assert!(
+            features::references(&workspace, &uri, at, true).is_empty(),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn adjacent_push_relative_completions_keep_relative_spelling_and_full_suffix_ranges() {
+    for (field, prefix, expected) in [
+        ("[.]", 1, vec![".", "./tail"]),
+        ("[./taFAKE]", 4, vec!["./tail"]),
+        ("[./taFAKE", 4, vec!["./tail"]),
+        ("[ % before\r\n ./taFAKE % after\n]", 4, vec!["./tail"]),
+    ] {
+        let source = format!(
+            r"\AddToHook{{one}}[alpha]{{A}}\AddToHook{{one}}[alpha/tail]{{B}}\AddToHook{{one}}[alphabet]{{C}}\AddToHook{{two}}[alpha/tab]{{D}}\PushDefaultHookLabel{{alpha}}\RemoveFromHook{{one}}{field}"
+        );
+        let (workspace, uri) = setup(&source);
+        let text = &workspace.documents[&uri].text;
+        let start = source
+            .rfind("./taFAKE")
+            .unwrap_or_else(|| source.rfind("[.]").unwrap() + 1);
+        let length = if field == "[.]" { 1 } else { 8 };
+        let items = features::completion(&workspace, &uri, text.position(start + prefix));
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.label.as_str())
+                .collect::<Vec<_>>(),
+            expected,
+            "{source}"
+        );
+        for item in items {
+            assert_eq!(
+                item.text_edit,
+                Some(CompletionTextEdit::Edit(TextEdit {
+                    range: text.range(start, start + length),
+                    new_text: item.label.clone()
+                })),
+                "{source}"
+            );
+            assert_eq!(item.filter_text, Some(item.label));
+        }
+    }
+}
+
+#[test]
+fn relative_registrations_and_removal_follow_current_named_and_forwarded_push_interfaces() {
+    for (preamble, push, add, hook) in [
+        ("", r"\PushDefaultHookLabel", r"\AddToHook{one}", "one"),
+        (
+            "",
+            r"\csname PushDefaultHookLabel\endcsname",
+            r"\csname AddToHook\endcsname{one}",
+            "one",
+        ),
+        (
+            "",
+            r"\csuse{PushDefaultHookLabel}",
+            r"\AtBeginDocument",
+            "begindocument",
+        ),
+        (
+            r"\def\select{\PushDefaultHookLabel}\def\append{\AddToHook}",
+            r"\select",
+            r"\append{one}",
+            "one",
+        ),
+        (
+            r"\NewDocumentCommand\select{}{\PushDefaultHookLabel}",
+            r"\select",
+            r"\AddToHookWithArguments{one}",
+            "one",
+        ),
+        (
+            r"\newenvironment{select}{\PushDefaultHookLabel}{}",
+            r"\select",
+            r"\AtEndDocument",
+            "enddocument",
+        ),
+    ] {
+        let source = format!("{preamble}\\AddToHook{{{hook}}}[alpha]{{A}}{push} % boundary\r\n{{ alpha }}{add}[ . ]{{B}}\\PopDefaultHookLabel{push}{{alpha}}\\RemoveFromHook{{{hook}}}[.]");
+        let (workspace, uri) = setup(&source);
+        let literal = locations(&uri, &source, "alpha");
+        let selected = source.find("[ . ]").unwrap() + 2;
+        let declaration = Location::new(
+            uri.clone(),
+            workspace.documents[&uri].text.range(selected, selected + 1),
+        );
+        let at = workspace.documents[&uri]
+            .text
+            .position(source.rfind("[.]").unwrap() + 1);
+        assert_eq!(
+            features::definitions(&workspace, &uri, at),
+            [literal[0].clone(), declaration],
+            "{source}"
+        );
+        assert_eq!(
+            features::references(&workspace, &uri, at, true).len(),
+            5,
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn adjacent_literal_push_resolves_relative_registration_fields() {
+    for (relative, identity) in [(".", "alpha"), ("./tail", "alpha/tail")] {
+        let source = format!("% relative labels\r\n😀 \\AddToHook{{one}}[{identity}]{{A}}\\PushDefaultHookLabel{{alpha}} % boundary\r\n\\AddToHook{{one}}[{relative}]{{B}}\\PopDefaultHookLabel\\RemoveFromHook{{one}}[{identity}]\\AddToHook{{two}}[{identity}]{{C}}\\label{{{identity}}}\\ref{{{identity}}}");
+        let (workspace, uri) = setup(&source);
+        let literal = locations(&uri, &source, identity);
+        let at = source.find(&format!("[{relative}]")).unwrap() + 1;
+        let selected = Location::new(
+            uri.clone(),
+            workspace.documents[&uri]
+                .text
+                .range(at, at + relative.len()),
+        );
+        assert_eq!(
+            features::definitions(&workspace, &uri, selected.range.start),
+            [literal[0].clone(), selected.clone()],
+            "{source}"
+        );
+        let references = features::references(&workspace, &uri, selected.range.start, true);
+        let expected = if relative == "." {
+            vec![
+                literal[0].clone(),
+                literal[1].clone(),
+                selected.clone(),
+                literal[2].clone(),
+            ]
+        } else {
+            vec![literal[0].clone(), selected.clone(), literal[1].clone()]
+        };
+        assert_eq!(references, expected, "{source}");
+        let hover = features::hover(&workspace, &uri, selected.range.start).unwrap();
+        assert_eq!(hover.range, Some(selected.range));
+        assert!(
+            matches!(hover.contents, HoverContents::Markup(MarkupContent {value, ..}) if value.contains(identity) && value.contains("Hook: one"))
+        );
+        assert!(
+            features::prepare_rename(&workspace, &uri, selected.range.start)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            features::rename(&workspace, &uri, selected.range.start, "fresh")
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            features::definitions(&workspace, &uri, literal.last().unwrap().range.start),
+            literal[literal.len() - 2..literal.len() - 1]
+        );
+    }
+}
+
+#[test]
 fn document_level_slots_link_registrations_and_removal_within_each_hook() {
     let source = "% document slot\r\n😀 \\AddToHook{one}[top-level]{A}\\AddToHook{one}[top-level]{B}\\AddToHook{two}[top-level]{C}\\RemoveFromHook{one}[top-level]\\label{top-level}\\ref{top-level}";
     let (workspace, uri) = setup(source);
@@ -1489,13 +1672,23 @@ fn native_default_setting_fields_match_code_chunks_and_preserve_ordinary_edits()
         let (workspace, uri) = setup(&source);
         let sites = locations(&uri, &source, "alpha");
         assert_eq!(sites.len(), 5);
+        let mut definitions = sites[..2].to_vec();
+        let mut references = sites[..3].to_vec();
+        if let Some(at) = source.find("[.]") {
+            let relative = Location::new(
+                uri.clone(),
+                workspace.documents[&uri].text.range(at + 1, at + 2),
+            );
+            definitions.push(relative.clone());
+            references.push(relative);
+        }
         assert_eq!(
             features::definitions(&workspace, &uri, sites[2].range.start),
-            sites[..2]
+            definitions
         );
         assert_eq!(
             features::references(&workspace, &uri, sites[2].range.start, true),
-            sites[..3]
+            references
         );
         let (events, aux) = compile(&source);
         assert_eq!(
@@ -2025,5 +2218,98 @@ fn native_document_slots_keep_order_removal_and_ordinary_label_edits() {
         let (after, after_aux) = compile(&changed.source);
         assert_eq!(after, events);
         assert_eq!(aux, after_aux.replace("{fresh}", "{top-level}"));
+    }
+}
+
+#[test]
+fn relative_label_providers_refresh_both_invocations_and_shared_consumer_consensus() {
+    let directory = tempfile::tempdir().unwrap();
+    let main = Url::from_file_path(directory.path().join("main.tex")).unwrap();
+    let provider = main.join("hooks.tex").unwrap();
+    let other = main.join("other.tex").unwrap();
+    let source =
+        "% relative\r\n\\documentclass{article}\\input{hooks}😀 \\RemoveFromHook{one}[alpha]";
+    let supplied = r"\AddToHook{one}[alpha]{A}\def\select{\PushDefaultHookLabel}\select{alpha}\AddToHook{one}[.]{B}\PopDefaultHookLabel";
+    for (uri, text) in [(&main, source), (&provider, supplied)] {
+        std::fs::write(uri.to_file_path().unwrap(), text).unwrap();
+    }
+    let mut workspace = Workspace::default();
+    workspace.config.distribution.enabled = false;
+    workspace.open(main.clone(), source.into(), 5);
+    let at = locations(&main, source, "alpha")[0].range.start;
+    let literal = locations(&provider, supplied, "alpha")[0].clone();
+    let relative_at = supplied.find("[.]").unwrap() + 1;
+    let relative = Location::new(
+        provider.clone(),
+        workspace.documents[&provider]
+            .text
+            .range(relative_at, relative_at + 1),
+    );
+    let expected = vec![literal.clone(), relative.clone()];
+    assert_eq!(features::definitions(&workspace, &main, at), expected);
+    workspace.open(
+        provider.clone(),
+        supplied.replace(r"\PushDefaultHookLabel", r"\SetDefaultHookLabel"),
+        12,
+    );
+    assert_eq!(
+        features::definitions(&workspace, &main, at),
+        std::slice::from_ref(&literal)
+    );
+    workspace.open(provider.clone(), supplied.into(), 13);
+    assert_eq!(features::definitions(&workspace, &main, at), expected);
+    workspace.open(
+        other.clone(),
+        r"\documentclass{article}\AddToHook{one}[alpha]{Other}".into(),
+        7,
+    );
+    assert_eq!(features::definitions(&workspace, &main, at), expected);
+    workspace.open(
+        other.clone(),
+        format!(r"\def\PushDefaultHookLabel#1{{}}{source}"),
+        8,
+    );
+    assert_eq!(
+        features::definitions(&workspace, &main, at),
+        std::slice::from_ref(&literal)
+    );
+    assert!(features::definitions(&workspace, &provider, relative.range.start).is_empty());
+    workspace.open(other, source.into(), 9);
+    assert_eq!(features::definitions(&workspace, &main, at), expected);
+    workspace.open(
+        provider.clone(),
+        supplied.replace(r"\def\select{\PushDefaultHookLabel}", r"\def\select#1{}"),
+        14,
+    );
+    assert_eq!(features::definitions(&workspace, &main, at), [literal]);
+    workspace.documents.remove(&provider);
+    workspace.reload(&provider);
+    assert_eq!(features::definitions(&workspace, &main, at), expected);
+    assert_eq!(workspace.documents[&main].version, Some(5));
+}
+
+#[test]
+#[ignore = "requires native pdflatex"]
+fn native_delayed_push_does_not_establish_a_relative_registration_identity() {
+    for (registration, expected) in [
+        (
+            r"\PushDefaultHookLabel{alpha}\AddToHook{one}[.]{\typeout{EVENT:B}}\PopDefaultHookLabel",
+            vec![],
+        ),
+        (
+            r"{\aftergroup\PushDefaultHookLabel{alpha}\AddToHook{one}[.]{\typeout{EVENT:B}}}{beta}\PopDefaultHookLabel",
+            vec!["EVENT:B"],
+        ),
+    ] {
+        let source = format!(
+            r"\documentclass{{article}}\NewHook{{one}}\AddToHook{{one}}[alpha]{{\typeout{{EVENT:A}}}}\begin{{document}}{registration}\LogHook{{one}}\RemoveFromHook{{one}}[alpha]\UseHook{{one}}Text\end{{document}}"
+        );
+        let (workspace, uri) = setup(&source);
+        let at = workspace.documents[&uri]
+            .text
+            .position(source.find("[.]").unwrap() + 1);
+        let definitions = features::definitions(&workspace, &uri, at);
+        assert_eq!(definitions.is_empty(), !expected.is_empty());
+        assert_eq!(compile(&source).0, expected);
     }
 }

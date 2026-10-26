@@ -10,6 +10,8 @@ use std::collections::BTreeMap;
 pub(super) struct Candidate<E> {
     pub entry: E,
     pub invocation: usize,
+    /// An adjacent setting must also be an invocation, rather than data.
+    pub prerequisite: Option<usize>,
 }
 
 pub(super) fn index<E: Clone + Eq>(
@@ -95,7 +97,10 @@ pub(super) fn index<E: Clone + Eq>(
                 let context = super::named_references::Context::new(doc, &signatures);
                 candidates
                     .into_iter()
-                    .filter(|(_, call)| !context.operand(doc, call.invocation))
+                    .filter(|(_, call)| {
+                        !context.operand(doc, call.invocation)
+                            && call.prerequisite.is_none_or(|at| !context.operand(doc, at))
+                    })
                     .map(|(at, call)| (at, call.entry))
                     .collect()
             };

@@ -173,6 +173,7 @@ fn calls(doc: &Document, signatures: &CommandSignatures<'_>) -> BTreeMap<usize, 
                     Candidate {
                         entry,
                         invocation: command.span.start,
+                        prerequisite: None,
                     },
                 );
             }
