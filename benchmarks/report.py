@@ -40,8 +40,9 @@ const names={"initialize":"初始化","open":"打开缓冲区","edit.prose":"正
 "diagnostic":"重新计算诊断","diagnostic.cached":"缓存诊断","burst8.to_completion":"连续 8 次编辑 → 补全",
 "workspace.symbols.exact":"工作区符号 · 精确搜索","workspace.symbols.all":"工作区符号 · 全部搜索","workspace.symbols.missing":"工作区符号 · 无匹配","signature.hook":"钩子参数提示","rename.hook":"自定义 hook 名称改名",
 "definition.hook_label":"局部代码标签 · 定义","references.hook_label":"局部代码标签 · 引用","hover.hook_label":"局部代码标签 · 悬停","completion.hook_label":"局部代码标签 · 补全",
+"definition.default_hook_label":"默认标签设置 · 定义","references.default_hook_label":"默认标签设置 · 引用","hover.default_hook_label":"默认标签设置 · 悬停","completion.default_hook_label":"默认标签设置 · 补全",
 "definition.global_hook_label":"全局代码标签 · 定义","references.global_hook_label":"全局代码标签 · 引用","hover.global_hook_label":"全局代码标签 · 悬停","completion.global_hook_label":"全局代码标签 · 补全"};
-const selected=["completion.labels","completion.citations","hover","definition","references","definition.hook_label","references.hook_label","hover.hook_label","completion.hook_label","definition.global_hook_label","references.global_hook_label","hover.global_hook_label","completion.global_hook_label","rename","rename.hook","signature","signature.hook","workspace.symbols.exact","workspace.symbols.all","workspace.symbols.missing","diagnostic","burst8.to_completion"];
+const selected=["completion.labels","completion.citations","hover","definition","references","definition.hook_label","references.hook_label","hover.hook_label","completion.hook_label","definition.default_hook_label","references.default_hook_label","hover.default_hook_label","completion.default_hook_label","definition.global_hook_label","references.global_hook_label","hover.global_hook_label","completion.global_hook_label","rename","rename.hook","signature","signature.hook","workspace.symbols.exact","workspace.symbols.all","workspace.symbols.missing","diagnostic","burst8.to_completion"];
 const scale=document.getElementById('scale'), stat=document.getElementById('stat'), all=document.getElementById('all');
 for(const key of Object.keys(data.after.scenarios)){const option=document.createElement('option');option.value=key;option.textContent=key;scale.append(option)}
 scale.value=Object.hasOwn(data.after.scenarios,'large')?'large':scale.options[0].value;
@@ -51,10 +52,11 @@ if(p.hook_interfaces)document.getElementById('method').textContent+=' 每节还�
 if(p.hook_renames)document.getElementById('method').textContent+=' 逐项核验自定义 hook 的完整跨文件名称编辑。';
 if(p.hook_labels)document.getElementById('method').textContent+=' 代码标签逐项核验全部定义、引用、悬停和完整后缀补全。';
 if(p.lifecycle_labels)document.getElementById('method').textContent+=' 开始与结束阶段保持独立。';
+if(p.default_hook_labels)document.getElementById('method').textContent+=' 默认标签设置关联各 hook 的显式注册，省略注册不计入已认证定义。';
 if(p.global_hook_rules)document.getElementById('method').textContent+=' 全局规则关联多个 hook，局部定义保持自身作用域。';
 if(data.paired){
  const report=data.paired,host=document.getElementById('paired'),note=document.createElement('p');
- const query=({paired_definition:'普通定义',paired_hook_rename:'hook 名称改名',paired_hook_definition:'局部代码标签定义',paired_global_hook_definition:'全局代码标签定义',paired_hook_name_definition:'hook 名称定义',paired_rename:'普通改名'})[report.kind];
+ const query=({paired_definition:'普通定义',paired_hook_rename:'hook 名称改名',paired_hook_definition:'局部代码标签定义',paired_default_hook_definition:'默认标签设置定义',paired_global_hook_definition:'全局代码标签定义',paired_hook_name_definition:'hook 名称定义',paired_rename:'普通改名'})[report.kind];
  const binding=report.environment.cpu===null?'未绑定 CPU':`启动前绑定 CPU ${report.environment.cpu}，打开后核验所有线程`;
  const precision=report.environment.cpu_tick_ms===null?'未采集 CPU':`CPU 为所有样本的均值，单样本精度 ${report.environment.cpu_tick_ms} ms`;
  note.textContent=`固定快照的配对${query}探测：${report.parameters.runs} 组新进程，每组预热 ${report.parameters.warmup} 对，测量 ${report.parameters.iterations} 对；两版交替请求，${binding}。下表墙钟为 p50；${precision}。它不包含连续编辑；下方完整会话保留了运行时波动。`;
@@ -107,7 +109,7 @@ def main():
             scenario.pop("samples_ms", None)
     paired = json.loads(args.paired.read_text()) if args.paired else None
     if paired:
-        if paired.get("kind") not in {"paired_rename", "paired_definition", "paired_hook_rename", "paired_hook_definition", "paired_global_hook_definition", "paired_hook_name_definition"}:
+        if paired.get("kind") not in {"paired_rename", "paired_definition", "paired_hook_rename", "paired_hook_definition", "paired_default_hook_definition", "paired_global_hook_definition", "paired_hook_name_definition"}:
             parser.error("paired input must be a supported paired query report")
         for label, report in [("before", before), ("after", after)]:
             if paired["servers"][label]["sha256"] != report["environment"]["server_sha256"]:

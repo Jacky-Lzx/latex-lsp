@@ -31,7 +31,7 @@ def replay(before, after, scale, args, cpu):
         with tempfile.TemporaryDirectory(prefix="latex-lsp-rename-pairs-") as directory, ExitStack() as stack:
             root = Path(directory)
             launchers = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="latex-lsp-rename-launch-")))
-            metadata = editing.fixture(root, scale, args.hooks, args.hook_wrappers, args.hook_environments, args.hook_interfaces, args.hook_labels, args.lifecycle_labels, args.global_hook_rules)
+            metadata = editing.fixture(root, scale, args.hooks, args.hook_wrappers, args.hook_environments, args.hook_interfaces, args.hook_labels, args.lifecycle_labels, args.global_hook_rules, args.default_hook_labels)
             main, chapter = root / "main.tex", root / "chapter0.tex"
             source = chapter.read_text()
             params = {"textDocument": {"uri": chapter.as_uri()},
@@ -48,6 +48,8 @@ def replay(before, after, scale, args, cpu):
                 params["newName"] = "sec:renamed"
             elif args.query == "global-hook-definition":
                 params["position"] = editing.position(source, source.rindex("{contribution}{before}") + 4)
+            elif args.query == "default-hook-definition":
+                params["position"] = editing.position(source, source.rindex("\\SetDefaultHookLabel{contribution}") + len("\\SetDefaultHookLabel{") + 3)
             declaration_source = chapter.read_text()
             declaration = declaration_source.index(r"\label{sec:0:0}") + len(r"\label{")
             expected_definition = [{"uri": chapter.as_uri(), "range": {
@@ -58,7 +60,7 @@ def replay(before, after, scale, args, cpu):
                 expected_definition = editing.hook_label_locations({
                     path.as_uri(): path.read_text() for path in root.glob("*.tex")
                 }, lifecycle=args.lifecycle_labels)
-            elif args.query == "global-hook-definition":
+            elif args.query in {"global-hook-definition", "default-hook-definition"}:
                 expected_definition = editing.global_hook_label_locations({
                     path.as_uri(): path.read_text() for path in root.glob("*.tex")
                 })
@@ -115,11 +117,11 @@ def replay(before, after, scale, args, cpu):
                     server = servers[label]
                     start_cpu = cpu_seconds(server.process)
                     start = time.perf_counter_ns()
-                    method = {"hook-rename": "rename", "hook-definition": "definition", "global-hook-definition": "definition", "hook-name-definition": "definition"}.get(args.query, args.query)
+                    method = {"hook-rename": "rename", "hook-definition": "definition", "global-hook-definition": "definition", "default-hook-definition": "definition", "hook-name-definition": "definition"}.get(args.query, args.query)
                     result = server.request(f"textDocument/{method}", params)
                     elapsed = (time.perf_counter_ns() - start) / 1e6
                     end_cpu = cpu_seconds(server.process)
-                    if args.query in {"definition", "hook-definition", "global-hook-definition", "hook-name-definition"}:
+                    if args.query in {"definition", "hook-definition", "global-hook-definition", "default-hook-definition", "hook-name-definition"}:
                         assert result == expected_definition, result
                     elif args.query == "hook-rename":
                         assert result == {"changes": expected_hook_edits}, result
@@ -154,7 +156,7 @@ def main():
     parser.add_argument("--runs", type=int, default=3)
     parser.add_argument("--timeout", type=float, default=120)
     parser.add_argument("--cpu", type=int, help="pin both servers to this allowed CPU (Linux default: first allowed CPU)")
-    parser.add_argument("--query", choices=["rename", "definition", "hook-rename", "hook-definition", "global-hook-definition", "hook-name-definition"], default="rename")
+    parser.add_argument("--query", choices=["rename", "definition", "hook-rename", "hook-definition", "global-hook-definition", "default-hook-definition", "hook-name-definition"], default="rename")
     parser.add_argument("--hooks", action="store_true")
     parser.add_argument("--hook-wrappers", action="store_true")
     parser.add_argument("--hook-environments", action="store_true")
@@ -163,9 +165,11 @@ def main():
     parser.add_argument("--hook-labels", action="store_true")
     parser.add_argument("--lifecycle-labels", action="store_true")
     parser.add_argument("--global-hook-rules", action="store_true")
+    parser.add_argument("--default-hook-labels", action="store_true")
     args = parser.parse_args()
     args.global_hook_rules = args.global_hook_rules or args.query == "global-hook-definition"
-    args.hook_labels = args.hook_labels or args.query == "hook-definition" or args.lifecycle_labels or args.global_hook_rules
+    args.default_hook_labels = args.default_hook_labels or args.query == "default-hook-definition"
+    args.hook_labels = args.hook_labels or args.query == "hook-definition" or args.lifecycle_labels or args.global_hook_rules or args.default_hook_labels
     if args.iterations < 1 or args.runs < 1 or args.warmup < 0 or args.timeout <= 0:
         parser.error("iterations/runs/timeout must be positive; warmup must be nonnegative")
     affinity = os.sched_getaffinity(0) if hasattr(os, "sched_getaffinity") else set()
@@ -189,6 +193,7 @@ def main():
                        "hook_interfaces": args.hook_interfaces, "hook_labels": args.hook_labels,
                        "lifecycle_labels": args.lifecycle_labels,
                        "global_hook_rules": args.global_hook_rules,
+                       "default_hook_labels": args.default_hook_labels,
                        "query": args.query},
         "scenarios": {},
     }

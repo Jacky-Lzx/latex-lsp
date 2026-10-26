@@ -422,10 +422,7 @@ impl Index {
                     ..Default::default()
                 };
             }
-            let signatures = CommandSignatures::new(
-                docs.iter()
-                    .map(|doc| (doc.text.source.as_str(), &doc.syntax)),
-            );
+            let signatures = super::query_cache::project_signatures(workspace, &scope);
             let Some(potential) = copy_candidates(&docs, &mut copy_work) else {
                 return Self {
                     incomplete: true,

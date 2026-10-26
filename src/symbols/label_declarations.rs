@@ -82,11 +82,7 @@ impl Index {
             };
         }
         let sources: Vec<_> = docs.iter().map(|(_, doc)| *doc).collect();
-        let signatures = CommandSignatures::new(
-            sources
-                .iter()
-                .map(|doc| (doc.text.source.as_str(), &doc.syntax)),
-        );
+        let signatures = super::query_cache::project_signatures(workspace, scope);
         Self {
             inactive: docs
                 .into_iter()

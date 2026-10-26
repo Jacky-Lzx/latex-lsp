@@ -65,13 +65,7 @@ pub(super) fn index<E: Clone + Eq>(
         if bytes > 32 * 1024 * 1024 || commands > 100_000 || definitions > 8192 {
             return BTreeMap::new();
         }
-        let signatures = super::query_cache::signatures(ws, &scope, || {
-            CommandSignatures::new(
-                docs.iter()
-                    .map(|doc| (doc.text.source.as_str(), &doc.syntax)),
-            )
-            .into_owned()
-        });
+        let signatures = super::query_cache::project_signatures(ws, &scope);
         // All callers need an entry at this cursor. Inspect its document
         // first so an ordinary label or command query does not index hook
         // fields in every other source. A shared source must still match in

@@ -46,6 +46,16 @@ python3 benchmarks/rename_pairs.py --before target/benchmarks/before --after tar
   --query global-hook-definition --lifecycle-labels --output target/benchmarks/global-hook-pairs.json
 ```
 
+`--default-hook-labels` 隐含 `--hook-labels`，每节增加 Push／Set／省略标签注册／Pop，并在章末增加默认标签设置的定义、引用、悬停和完整后缀补全查询。定义只计当前已认证的显式注册，省略注册不计入预期结果。设置字段的定义与补全跨 hook，局部定义仍按自身 hook 过滤；两类引用均包含相应设置字段。与 `--global-hook-rules --lifecycle-labels` 组合时，三档局部定义／引用为 17／36、129／269、513／1049，全局及默认设置为 33／52、257／397、1025／1561。配对脚本的 `--query default-hook-definition` 自动启用新负载并逐次校验全部显式定义；其他选项仍可独立组合。
+
+```sh
+python3 benchmarks/editing.py --default-hook-labels --global-hook-rules --lifecycle-labels \
+  --output target/benchmarks/default-hook-labels.json
+python3 benchmarks/rename_pairs.py --before target/benchmarks/before --after target/benchmarks/after \
+  --query default-hook-definition --global-hook-rules --lifecycle-labels \
+  --output target/benchmarks/default-hook-pairs.json
+```
+
 ## 指标含义
 
 - `initialize`：初始化请求到响应，单独报告，不混入预热后的功能样本；`open` 包含打开两个缓冲区到有序屏障响应。
@@ -534,3 +544,68 @@ python3 benchmarks/rename_pairs.py \
 实际优化版 release 的八组全局规则及九组生命周期审核通过，包含精确导航、补全、普通引用实际编辑后的原生事件／完整 AUX 和保留名称拒绝。交互报告已发布，JS VM 校验覆盖三档、p50／p95、全部指标及全局配对标签；`html_preview` 返回 `Headless Chrome could not render the page: the browser exited unexpectedly.`，未计视觉验证通过。旧生命周期报告也可继续生成。
 
 优化版最终冻结回归通过：322 个目标、3401 项通过、0 失败、504 项默认跳过，其中完整串行 stdio 为 411 项通过、29 项默认跳过。90 项含原生 hook 专项、严格全目标 Clippy、文档、格式及差异检查通过；481 份 Rust 源码集合和 hash 与冻结清单一致，两版 release SHA 与原始报告一致。新增所有权、作用域／workspace 隔离、请求后刷新、嵌套 panic 恢复和缓存预算回退回归通过。测量后清理本包 dev 产物，保留 release 基线、依赖和原始样本。
+
+## 2026-10-26 第十二轮：默认标签设置与跨分析签名复用
+
+功能基线为 `ee618a4`。新负载在每节执行 Push／Set／省略标签注册／Pop，并查询设置字段的定义、引用、悬停和完整后缀补全；与全局规则、生命周期、命令／环境包装及环境生成接口组合。三档分别为 3／6／10 文件、20208／110247／405435 bytes。局部定义／引用为 17／36、129／269、513／1049，全局和默认设置为 33／52、257／397、1025／1561。所有位置独立计算；只计当前已认证的显式注册，不把省略注册计作已支持的定义。普通引用及 hook 名称的完整编辑继续逐项检查。
+
+源码审阅确认，hook 索引已共享命令签名，但同一请求的命名引用分析与标签声明数据证明仍为相同作用域重复构造签名。优化统一按精确作用域和 URI 次序选取 LaTeX 源码，三种分析共用已有的请求内签名缓存。无查询缓存时保留借用键，避免强制复制；查询内保留的结果继续拥有全部键。各自的源码／命令预算、数据角色与共享消费者检查保持，缓存仍每类最多四项、共享 8 MiB 计量预算，不跨请求复用。
+
+正式配对将两个常驻 release 进程绑定同一 CPU，并核验全部线程；交替请求，每档三组进程、各预热五对并测量三十对，然后交换启动顺序完整复测。普通定义／改名均在同一组合项目内查询普通引用键，默认设置和 hook 名称定义作为控制。下表统一按功能基线 → 优化版列出，单位 ms；反向 JSON 保留其实际参数顺序。
+
+| 查询／项目 | 首组 p50 | 交换后 p50 |
+| --- | ---: | ---: |
+| 普通定义 · small | 4.453 → 4.016 | 4.379 → 4.044 |
+| 普通定义 · medium | 22.040 → 21.413 | 21.764 → 21.183 |
+| 普通定义 · large | 88.565 → 83.916 | 87.936 → 83.216 |
+| 默认标签设置定义 · small | 2.832 → 2.817 | 2.724 → 2.708 |
+| 默认标签设置定义 · medium | 14.695 → 14.557 | 14.325 → 13.929 |
+| 默认标签设置定义 · large | 59.237 → 58.318 | 57.713 → 57.061 |
+| 普通改名 · large | 76.919 → 74.244 | 76.998 → 74.586 |
+| hook 名称定义 · large | 47.737 → 46.987 | 47.037 → 46.685 |
+
+大型普通定义两组 p50 分别改善约 5.2%／5.4%，服务器 CPU 均值为 87.778 → 83.111、87.889 → 83.000 ms，约下降 5.3%／5.6%。大型普通改名 p50 改善约 3.5%／3.1%，CPU 均值为 75.333 → 71.889、75.000 → 72.667 ms。默认字段和 hook 名称定义的变化较小，不把普通定义的收益推广到所有 hook 查询。CPU 单样本精度为 10 ms，只比较整档均值。
+
+完整连续会话每档启动三个新进程，各预热三个周期、测量二十个周期，large p50 如下。全局／默认定义、默认引用、hook 名称改名及输入突发仍有波动，不能据配对普通定义的收益宣称全面加速：
+
+| 操作 | 优化前 p50 · ms | 优化后 p50 · ms |
+| --- | ---: | ---: |
+| 普通定义 | 91.309 | 87.321 |
+| 普通引用 | 94.126 | 92.173 |
+| 普通标签补全 | 69.195 | 67.228 |
+| 局部 hook 标签定义 | 53.510 | 53.446 |
+| 全局 hook 标签定义 | 60.883 | 62.348 |
+| 默认标签设置定义 | 61.784 | 62.238 |
+| 默认标签设置引用 | 67.547 | 67.914 |
+| 默认标签设置悬停 | 51.748 | 50.662 |
+| 默认标签设置补全 | 55.508 | 53.724 |
+| 普通改名 | 78.838 | 75.812 |
+| hook 名称改名 | 61.988 | 62.763 |
+| hook 参数提示 | 32.391 | 31.923 |
+| 连续八次编辑到补全 | 97.531 | 97.869 |
+
+十份正式报告为 465282 bytes、15516 个墙钟样本；另保留两份初探，全部十二份为 475482 bytes、15636 个样本。统计量、CPU 均值、fixture、脚本与两版 release SHA 均已复算。完整普通／组合 smoke 和七种配对查询模式通过。测试关闭发行版发现、采用 pull 诊断，不包含 PDF 编译或外部格式化；结果依赖合成负载与机器。
+
+- [完整会话优化前](../benchmarks/results/2026-10-26/round12-default-settings-before.json)、[优化后](../benchmarks/results/2026-10-26/round12-default-settings-after.json)
+- [普通定义配对](../benchmarks/results/2026-10-26/round12-project-signatures-definition-pairs.json)、[交换顺序](../benchmarks/results/2026-10-26/round12-project-signatures-definition-pairs-reversed.json)
+- [默认设置定义配对](../benchmarks/results/2026-10-26/round12-project-signatures-default-hook-definition-pairs.json)、[交换顺序](../benchmarks/results/2026-10-26/round12-project-signatures-default-hook-definition-pairs-reversed.json)
+- [普通改名控制](../benchmarks/results/2026-10-26/round12-project-signatures-rename-pairs.json)、[交换顺序](../benchmarks/results/2026-10-26/round12-project-signatures-rename-pairs-reversed.json)
+- [hook 名称定义控制](../benchmarks/results/2026-10-26/round12-project-signatures-hook-name-definition-pairs.json)、[交换顺序](../benchmarks/results/2026-10-26/round12-project-signatures-hook-name-definition-pairs-reversed.json)
+- [普通定义初探](../benchmarks/results/2026-10-26/round12-project-signatures-definition-probe.json)、[默认设置初探](../benchmarks/results/2026-10-26/round12-project-signatures-default-hook-definition-probe.json)
+
+```sh
+python3 benchmarks/editing.py --server target/benchmarks/latex-lsp-round12-default-settings \
+  --default-hook-labels --global-hook-rules --lifecycle-labels --hook-wrappers \
+  --hook-environments --hook-interfaces --hook-renames --runs 3 --iterations 20 \
+  --warmup 3 --output target/benchmarks/round12-before.json
+python3 benchmarks/rename_pairs.py \
+  --before target/benchmarks/latex-lsp-round12-default-settings \
+  --after target/benchmarks/latex-lsp-round12-project-signatures \
+  --query definition --default-hook-labels --global-hook-rules --lifecycle-labels \
+  --hook-wrappers --hook-environments --hook-interfaces --runs 3 --iterations 30 \
+  --warmup 5 --output target/benchmarks/round12-pairs.json
+```
+
+优化版六项请求缓存测试、严格全目标 Clippy 及七组实际 release／原生审核通过；后者检查精确字段、补全、代码块移除及普通引用实际编辑后的事件和完整 AUX。最终冻结整仓回归为 322 个目标、3408 项通过、0 失败、505 项默认跳过，其中完整串行 stdio 为 412 项通过、29 项默认跳过。96 项含原生 hook 专项、文档、格式及差异检查通过；481 份 Rust 源码集合与 hash 匹配冻结清单，两版 release SHA 与全部原始报告一致。测量后清理本包 dev 产物，保留依赖、release 基线及原始样本。
+
+交互报告已发布；普通定义、默认字段配对及上一轮全局报告各通过十八种档位／统计量／指标组合的 JS VM 校验。`html_preview` 仍返回 `Headless Chrome could not render the page: the browser exited unexpectedly.`，未计视觉验证通过。

@@ -1,6 +1,9 @@
 //! Owned symbol analyses shared only during one immutable workspace query.
 use super::{label_declarations, named_references};
-use crate::{language::signature::CommandSignatures, project::workspace::Workspace};
+use crate::{
+    language::signature::CommandSignatures,
+    project::workspace::{DocumentKind, Workspace},
+};
 use lsp_types::Url;
 use std::{
     cell::RefCell,
@@ -127,6 +130,29 @@ pub(crate) fn signatures(
     )
 }
 
+/// Use the same ordered LaTeX sources for every analysis of a project scope.
+/// Outside an immutable query keep borrowed keys; only retained analyses need
+/// ownership of the source strings.
+pub(crate) fn project_signatures<'a>(
+    workspace: &'a Workspace,
+    scope: &BTreeSet<Url>,
+) -> Arc<CommandSignatures<'a>> {
+    let build = || {
+        CommandSignatures::new(
+            scope
+                .iter()
+                .filter_map(|uri| workspace.documents.get(uri))
+                .filter(|doc| doc.kind == DocumentKind::Latex)
+                .map(|doc| (doc.text.source.as_str(), &doc.syntax)),
+        )
+    };
+    if QUERY.with(|query| query.borrow().is_none()) {
+        Arc::new(build())
+    } else {
+        signatures(workspace, scope, || build().into_owned())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -218,6 +244,45 @@ mod tests {
             }))
             .into_owned()
         })
+    }
+
+    #[test]
+    fn project_signatures_preserve_reader_proofs_and_refresh_all_query_consumers() {
+        let uri = Url::parse("untitled:shared-analysis.tex").unwrap();
+        let source = r"\def\forward{\UseHook}\typeout{\label{ghost}}\label{live}\ref{live}";
+        let mut workspace = Workspace::default();
+        document(&mut workspace, &uri, source);
+        let scope = workspace.symbol_scope(&uri);
+        let first = super::project_signatures(&workspace, &scope);
+        assert!(!Arc::ptr_eq(
+            &first,
+            &super::project_signatures(&workspace, &scope)
+        ));
+        assert_eq!(first.forwarded_builtin("forward"), Some("UseHook"));
+        drop(first);
+        with_cache(|| {
+            let signatures = super::project_signatures(&workspace, &scope);
+            let labels = label_declarations::Index::for_scope(&workspace, &scope);
+            let entries = &workspace.documents[&uri].syntax.labels;
+            assert!(!labels.contains(&uri, &entries[0]));
+            assert!(labels.contains(&uri, &entries[1]));
+            let named = named_references::Index::new(&workspace, &uri);
+            assert!(named.target(&uri, source.rfind("live").unwrap()).is_some());
+            assert!(Arc::ptr_eq(
+                &signatures,
+                &super::project_signatures(&workspace, &scope)
+            ));
+            QUERY.with(|query| assert_eq!(query.borrow().as_ref().unwrap().signatures.len(), 1));
+        });
+        let changed = format!(r"\renewcommand\typeout[1]{{#1}}\renewcommand\ref[1]{{#1}}{source}");
+        document(&mut workspace, &uri, &changed);
+        with_cache(|| {
+            let labels = label_declarations::Index::for_scope(&workspace, &scope);
+            assert!(labels.contains(&uri, &workspace.documents[&uri].syntax.labels[0]));
+            assert!(named_references::Index::new(&workspace, &uri)
+                .target(&uri, changed.rfind("live").unwrap())
+                .is_none());
+        });
     }
 
     #[test]
