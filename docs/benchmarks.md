@@ -66,6 +66,16 @@ python3 benchmarks/rename_pairs.py --before target/benchmarks/before --after tar
   --output target/benchmarks/document-hook-pairs.json
 ```
 
+`--relative-hook-labels` 隐含 `--hook-labels`，主文档显式注册 `relative/tail`，每节增加紧邻 `PushDefaultHookLabel{relative}` 的相对 `./tail` 注册并 Pop，另一个 hook 放同名干扰，每章增加相对移除和 `./taFAKE` 补全字段。逐项核验解析身份对应的完整定义／引用、原相对字段范围、hook 作用域和保留相对拼写的完整后缀替换。三档为 17／129／513 个定义、18／133／521 项引用，可与全部既有负载组合。`--query relative-hook-definition` 自动启用该负载。
+
+```sh
+python3 benchmarks/editing.py --relative-hook-labels --lifecycle-labels \
+  --output target/benchmarks/relative-hook-labels.json
+python3 benchmarks/rename_pairs.py --before target/benchmarks/before --after target/benchmarks/after \
+  --query relative-hook-definition --lifecycle-labels \
+  --output target/benchmarks/relative-hook-pairs.json
+```
+
 ## 指标含义
 
 - `initialize`：初始化请求到响应，单独报告，不混入预热后的功能样本；`open` 包含打开两个缓冲区到有序屏障响应。
@@ -664,3 +674,72 @@ python3 benchmarks/rename_pairs.py \
 - [hook 名称定义配对](../benchmarks/results/2026-10-26/round13-local-reader-positions-hook-name-definition-pairs.json)、[交换顺序](../benchmarks/results/2026-10-26/round13-local-reader-positions-hook-name-definition-pairs-reversed.json)
 - [普通定义前置探测](../benchmarks/results/2026-10-26/round13-local-reader-positions-definition-probe.json)、[交换顺序](../benchmarks/results/2026-10-26/round13-local-reader-positions-definition-probe-reversed.json)
 - [文档级槽前置探测](../benchmarks/results/2026-10-26/round13-local-reader-positions-document-hook-definition-probe.json)、[交换顺序](../benchmarks/results/2026-10-26/round13-local-reader-positions-document-hook-definition-probe-reversed.json)
+
+
+## 2026-10-26 第十四轮：相对标签与共享读取器上下文
+
+功能基线为 `9f7c3cc`。新增 `--relative-hook-labels`，与文档级槽、默认设置、全局规则、生命周期、包装宏、环境及接口组合；完整会话还逐项检查 hook 名称的全部编辑。主文档显式注册 `relative/tail`，每节在字面 Push 后紧邻注册 `./tail`，每章加入相对移除和完整后缀补全，另一个 hook 放置同名干扰。三档分别为 3／6／10 文件、24301／140105／521977 bytes，独立核验 17／129／513 个定义及 18／133／521 项引用。普通／组合完整会话和全部九种配对查询 smoke 均通过；关闭新选项时既有 fixture 字节保持一致。
+
+审阅发现 `label_declarations::readers` 为每个消费者重复扫描同一源码作用域，检查修改接口、动态命名／加载和条件／分组。优化在一次不可变项目分析中共享三个布尔事实：两个原生读取器是否保持原义，以及自定义读取器证明是否可用。每个消费者自己的定义冲突、工作预算、局部执行位置和别名不动点仍独立核验；本地单文件路径使用相同上下文。没有新增缓存或扩大认证范围。两类声明保护专项（含原生）和七组候选 release／原生相对标签审核通过。
+
+正式配对为每档三组新进程、各预热五对并测量三十对；两版所有服务器线程绑定同一允许 CPU，交替请求，交换启动顺序再测。下表统一按功能基线 → 优化版列出 p50（ms），反向 JSON 保留实际参数顺序。
+
+| 查询 | 首组 | 交换后 |
+| --- | ---: | ---: |
+| 普通定义 · small | 4.838 → 4.727 | 4.933 → 4.874 |
+| 普通定义 · medium | 26.283 → 25.285 | 26.079 → 25.273 |
+| 普通定义 · large | 107.404 → 99.148 | 106.189 → 98.717 |
+| 相对标签定义 · small | 3.101 → 3.081 | 3.094 → 3.052 |
+| 相对标签定义 · medium | 16.780 → 16.614 | 16.779 → 16.477 |
+| 相对标签定义 · large | 67.517 → 66.117 | 66.413 → 65.374 |
+| 普通改名 · large | 92.423 → 91.479 | 93.324 → 91.154 |
+| hook 名称定义 · large | 59.620 → 58.758 | 59.489 → 58.893 |
+
+大型普通定义两组 p50 分别改善约 7.7%／7.0%，服务器 CPU 均值为 111.222 → 102.556、108.333 → 101.000 ms，下降约 7.8%／6.8%。CPU 单样本精度为 10 ms，只比较整档均值。四份前置探测同样保留，普通定义在两种顺序分别改善约 5.3%／7.5%。相对标签查询不经过本次读取器分析，虽墙钟小幅变化，CPU 未一致下降，不归因于此优化；普通改名和 hook 名称定义的变化也不足以宣称全面加速。
+
+- [完整会话功能基线](../benchmarks/results/2026-10-26/round14-relative-fields-baseline.json)、[优化版](../benchmarks/results/2026-10-26/round14-reader-context-editing.json)
+- [普通定义配对](../benchmarks/results/2026-10-26/round14-reader-context-definition-pairs.json)、[交换顺序](../benchmarks/results/2026-10-26/round14-reader-context-definition-pairs-reversed.json)
+- [相对标签定义配对](../benchmarks/results/2026-10-26/round14-reader-context-relative-hook-definition-pairs.json)、[交换顺序](../benchmarks/results/2026-10-26/round14-reader-context-relative-hook-definition-pairs-reversed.json)
+- [普通改名控制](../benchmarks/results/2026-10-26/round14-reader-context-rename-pairs.json)、[交换顺序](../benchmarks/results/2026-10-26/round14-reader-context-rename-pairs-reversed.json)
+- [hook 名称定义控制](../benchmarks/results/2026-10-26/round14-reader-context-hook-name-definition-pairs.json)、[交换顺序](../benchmarks/results/2026-10-26/round14-reader-context-hook-name-definition-pairs-reversed.json)
+- [普通定义初探](../benchmarks/results/2026-10-26/round14-reader-context-definition-probe.json)、[交换顺序](../benchmarks/results/2026-10-26/round14-reader-context-definition-probe-reversed.json)
+- [相对标签初探](../benchmarks/results/2026-10-26/round14-reader-context-relative-hook-definition-probe.json)、[交换顺序](../benchmarks/results/2026-10-26/round14-reader-context-relative-hook-definition-probe-reversed.json)
+
+完整编辑会话每档三组新进程、各预热三次并测量二十个周期，无 CPU 绑定。中断时大型档未写入完整报告，因此候选完整会话单独重新运行三档；配对报告无需重跑。large 的 p50 如下。包括未经过本次读取器分析的查询在内，多项指标均有改善，表明会话间存在整体运行条件差异，不能将全部变化归因于此优化；因果判断仍以同核双顺序配对为主。
+
+| large 完整会话 | 功能基线 p50 ms | 优化版 p50 ms |
+| --- | ---: | ---: |
+| 普通定义 | 117.478 | 101.917 |
+| 普通改名 | 101.747 | 93.266 |
+| 相对标签定义 | 74.659 | 67.595 |
+| 相对标签引用 | 75.666 | 68.492 |
+| 相对标签悬停 | 70.818 | 64.487 |
+| 相对标签补全 | 71.435 | 66.856 |
+| 默认设置定义 | 82.416 | 72.888 |
+| 全局规则定义 | 78.811 | 72.413 |
+| hook 名称改名 | 79.460 | 73.595 |
+| 连续八次编辑到补全 | 125.726 | 109.789 |
+
+测量未与构建、测试或浏览器渲染并行。十四份原始 JSON 共 570256 bytes、18876 个墙钟样本；统计量、CPU 均值、fixture、脚本及二进制 SHA 全部复算通过。功能版与优化版 release SHA-256 分别为 `e306aaa41754e5b5281f0665912482d180c64aa10febb26f97c867323d2f776f`、`9463007f8640a6fcf57636a0775bd27eeda84e119d1e6bcf52fda0ceb46f90e2`。测试关闭发行版发现、使用 pull 诊断，不包含 PDF 编译或外部格式化；结果依赖合成负载与机器。
+
+```sh
+python3 benchmarks/editing.py --server target/benchmarks/latex-lsp-round14-reader-context \
+  --relative-hook-labels --document-hook-slots --default-hook-labels \
+  --global-hook-rules --lifecycle-labels --hook-wrappers --hook-environments \
+  --hook-interfaces --hook-renames --runs 3 --iterations 20 --warmup 3 \
+  --baseline benchmarks/results/2026-10-26/round14-relative-fields-baseline.json \
+  --output target/benchmarks/round14-editing.json
+python3 benchmarks/rename_pairs.py \
+  --before target/benchmarks/latex-lsp-round14-relative-fields \
+  --after target/benchmarks/latex-lsp-round14-reader-context \
+  --query definition --relative-hook-labels --document-hook-slots \
+  --default-hook-labels --global-hook-rules --lifecycle-labels --hook-wrappers \
+  --hook-environments --hook-interfaces --runs 3 --iterations 30 --warmup 5 \
+  --output target/benchmarks/round14-definition-pairs.json
+```
+
+交互报告已发布。普通定义、相对标签定义及第十三轮旧报告兼容性各通过十八种档位／统计量／指标组合的 JS VM 校验。`html_preview` 返回 `Headless Chrome could not render the page: the browser exited unexpectedly.`，未计视觉验证通过。
+
+优化版最终冻结验证通过：322 个目标、3421 项通过、0 失败、507 项默认跳过，其中完整串行 stdio 为 414 项通过、29 项默认跳过。109 项含原生 hook 专项、严格全目标 Clippy、文档、格式及差异检查通过；481 份 Rust 源码集合及 hash 与冻结清单一致。七组实际优化版 release／原生审核通过，精确导航、补全及普通引用实际编辑保持事件和完整 AUX；两版 release SHA 与原始报告一致。
+
+最终验证后清理本包 dev 产物，释放 9.4 GiB，磁盘可用空间恢复到约 20 GiB；release 基线、依赖与全部原始测量数据保留。

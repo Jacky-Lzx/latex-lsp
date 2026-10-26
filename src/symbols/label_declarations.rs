@@ -83,6 +83,7 @@ impl Index {
         }
         let sources: Vec<_> = docs.iter().map(|(_, doc)| *doc).collect();
         let signatures = super::query_cache::project_signatures(workspace, scope);
+        let reader_context = reader_context(&sources, &signatures);
         Self {
             inactive: docs
                 .into_iter()
@@ -92,7 +93,11 @@ impl Index {
                         if doc.syntax.labels.is_empty() {
                             BTreeSet::new()
                         } else {
-                            inactive(doc, &signatures, &readers(&sources, doc, &signatures))
+                            inactive(
+                                doc,
+                                &signatures,
+                                &readers(&sources, doc, &signatures, &reader_context),
+                            )
                         },
                     )
                 })
@@ -119,7 +124,13 @@ pub(crate) fn local(doc: &Document) -> BTreeSet<usize> {
         return BTreeSet::new();
     }
     let signatures = CommandSignatures::new([(doc.text.source.as_str(), &doc.syntax)]);
-    inactive(doc, &signatures, &readers(&[doc], doc, &signatures))
+    let sources = [doc];
+    let reader_context = reader_context(&sources, &signatures);
+    inactive(
+        doc,
+        &signatures,
+        &readers(&sources, doc, &signatures, &reader_context),
+    )
 }
 
 fn inactive(
@@ -149,11 +160,14 @@ fn inactive(
         .collect()
 }
 
-fn readers(
-    docs: &[&Document],
-    consumer: &Document,
-    signatures: &CommandSignatures<'_>,
-) -> BTreeMap<String, usize> {
+#[derive(Default)]
+struct ReaderContext {
+    native: [bool; 2],
+    custom: bool,
+}
+
+/// Facts shared by all consumers of one immutable project interpretation.
+fn reader_context(docs: &[&Document], signatures: &CommandSignatures<'_>) -> ReaderContext {
     // These interfaces can change replacement text without adding a competing
     // declaration to the structural index. No execution proof survives them.
     let modifies = |name: &str| {
@@ -214,17 +228,12 @@ fn readers(
                             .is_some_and(|span| modifies(&doc.text.source[span]))
                 })
     }) {
-        return BTreeMap::new();
+        return ReaderContext::default();
     }
-    let mut result: BTreeMap<_, _> = ["typeout", "message"]
-        .into_iter()
-        .filter(|name| signatures.command_unchanged(name))
-        .map(|name| (name.to_owned(), 0))
-        .collect();
-    let mut work = 0usize;
+    let native = ["typeout", "message"].map(|name| signatures.command_unchanged(name));
     // Conditional/local installation cannot prove a user's current meaning.
     // Native readers above remain useful even when user proofs are unavailable.
-    if docs.iter().any(|doc| {
+    let custom = !docs.iter().any(|doc| {
         doc.syntax.commands.iter().any(|command| {
             command.name.starts_with("if")
                 || matches!(
@@ -232,9 +241,26 @@ fn readers(
                     "unless" | "begingroup" | "endgroup" | "bgroup" | "egroup"
                 )
         })
-    }) {
+    });
+    ReaderContext { native, custom }
+}
+
+fn readers(
+    docs: &[&Document],
+    consumer: &Document,
+    signatures: &CommandSignatures<'_>,
+    context: &ReaderContext,
+) -> BTreeMap<String, usize> {
+    let mut result: BTreeMap<_, _> = ["typeout", "message"]
+        .into_iter()
+        .zip(context.native)
+        .filter(|(_, unchanged)| *unchanged)
+        .map(|(name, _)| (name.to_owned(), 0))
+        .collect();
+    if !context.custom {
         return result;
     }
+    let mut work = 0usize;
     let mut definitions = BTreeMap::<&str, Vec<(bool, Option<String>, usize)>>::new();
     for doc in docs {
         // Most chapters only consume macros. Building argument/execution

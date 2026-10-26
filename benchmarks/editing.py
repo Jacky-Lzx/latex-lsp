@@ -105,7 +105,7 @@ def position(source, offset):
             "character": len(prefix.rsplit("\n", 1)[-1].encode("utf-16-le")) // 2}
 
 
-def fixture(root, scale, hooks=False, hook_wrappers=False, hook_environments=False, hook_interfaces=False, hook_labels=False, lifecycle_labels=False, global_hook_rules=False, default_hook_labels=False, document_hook_slots=False):
+def fixture(root, scale, hooks=False, hook_wrappers=False, hook_environments=False, hook_interfaces=False, hook_labels=False, lifecycle_labels=False, global_hook_rules=False, default_hook_labels=False, document_hook_slots=False, relative_hook_labels=False):
     chapters, sections = SCALES[scale]
     label_hook = "begindocument" if lifecycle_labels else "benchmark"
     main = ("\\documentclass{article}\n\\usepackage{amsmath,biblatex}\n"
@@ -146,6 +146,12 @@ def fixture(root, scale, hooks=False, hook_wrappers=False, hook_environments=Fal
             "\\AddToHook{benchmark.other}[top-level]{\\typeout{Other slot}}\n"
             "\\begin{document}\n"
         ))
+    if relative_hook_labels:
+        main = main.replace("\\begin{document}\n", (
+            f"\\AddToHook{{{label_hook}}}[relative/tail]{{\\typeout{{Relative explicit}}}}\n"
+            "\\AddToHook{benchmark.other}[relative/tail]{\\typeout{Other relative}}\n"
+            "\\begin{document}\n"
+        ))
     if lifecycle_labels:
         main = main.replace("\\begin{document}\n", (
             "\\AtEndDocument[contrast]{\\typeout{End}}\n\\begin{document}\n"
@@ -167,6 +173,10 @@ def fixture(root, scale, hooks=False, hook_wrappers=False, hook_environments=Fal
                 source += ("\\AtBeginDocument[contribution]{\\typeout{Contribution}}\n"
                            if lifecycle_labels else
                            "\\AddToHook{benchmark}[contribution]{\\typeout{Contribution}}\n")
+            if relative_hook_labels:
+                relative_add = "\\AtBeginDocument" if lifecycle_labels else "\\AddToHook{benchmark}"
+                source += ("\\PushDefaultHookLabel{relative}" + relative_add
+                           + "[./tail]{\\typeout{Relative contribution}}\\PopDefaultHookLabel\n")
             if document_hook_slots:
                 source += ("\\AtBeginDocument[top-level]{\\typeout{Document slot}}\n"
                            if lifecycle_labels else
@@ -191,6 +201,9 @@ def fixture(root, scale, hooks=False, hook_wrappers=False, hook_environments=Fal
         if hook_labels:
             source += (f"\\RemoveFromHook{{{label_hook}}}[contribution]\n"
                        f"\\RemoveFromHook{{{label_hook}}}[conTRIB]\n")
+        if relative_hook_labels:
+            source += (f"\\PushDefaultHookLabel{{relative}}\\RemoveFromHook{{{label_hook}}}[./tail]\\PopDefaultHookLabel\n"
+                       f"\\PushDefaultHookLabel{{relative}}\\RemoveFromHook{{{label_hook}}}[./taFAKE]\\PopDefaultHookLabel\n")
         if document_hook_slots:
             source += (f"\\RemoveFromHook{{{label_hook}}}[top-level]\n"
                        f"\\RemoveFromHook{{{label_hook}}}[toFAKE]\n")
@@ -275,10 +288,24 @@ def document_hook_slot_locations(sources, declarations_only=True, lifecycle=Fals
             for match in sorted((match for pattern in patterns for match in pattern.finditer(source)),
                                 key=lambda match: match.start(1))]
 
-def session(binary, scale, iterations, warmup, timeout, record, hooks=False, hook_wrappers=False, hook_environments=False, hook_interfaces=False, hook_renames=False, hook_labels=False, lifecycle_labels=False, global_hook_rules=False, default_hook_labels=False, document_hook_slots=False):
+
+def relative_hook_label_locations(sources, declarations_only=True, lifecycle=False):
+    """Ranges of the fixture's one explicit label and adjacent Push relative fields."""
+    hook = "begindocument" if lifecycle else "benchmark"
+    patterns = [re.compile(r"\\AddToHook\{" + hook + r"\}\[(relative/tail)\]")]
+    add = r"AtBeginDocument" if lifecycle else r"AddToHook\{" + hook + r"\}"
+    commands = add if declarations_only else "(?:" + add + r"|RemoveFromHook\{" + hook + r"\})"
+    patterns.append(re.compile(r"\\PushDefaultHookLabel\{relative\}\\" + commands + r"\[(\./tail)\]"))
+    return [{"uri": uri, "range": {"start": position(source, match.start(1)),
+                                  "end": position(source, match.end(1))}}
+            for uri, source in sorted(sources.items())
+            for match in sorted((match for pattern in patterns for match in pattern.finditer(source)),
+                                key=lambda match: match.start(1))]
+
+def session(binary, scale, iterations, warmup, timeout, record, hooks=False, hook_wrappers=False, hook_environments=False, hook_interfaces=False, hook_renames=False, hook_labels=False, lifecycle_labels=False, global_hook_rules=False, default_hook_labels=False, document_hook_slots=False, relative_hook_labels=False):
     with tempfile.TemporaryDirectory(prefix="latex-lsp-benchmark-") as directory:
         root = Path(directory)
-        metadata = fixture(root, scale, hooks, hook_wrappers, hook_environments, hook_interfaces, hook_labels, lifecycle_labels, global_hook_rules, default_hook_labels, document_hook_slots)
+        metadata = fixture(root, scale, hooks, hook_wrappers, hook_environments, hook_interfaces, hook_labels, lifecycle_labels, global_hook_rules, default_hook_labels, document_hook_slots, relative_hook_labels)
         server = Server(binary, root, timeout)
         sources = {p.as_uri(): p.read_text() for p in root.glob("*.tex")}
         versions = {uri: 1 for uri in sources}
@@ -475,6 +502,25 @@ def session(binary, scale, iterations, warmup, timeout, record, hooks=False, hoo
                         "start": position(sources[uri], start),
                         "end": position(sources[uri], start + len("toFAKE"))},
                         "newText": "top-level"}, items
+                if relative_hook_labels:
+                    params = at("[./tail]", 4)
+                    definitions = query("definition.relative_hook_label", "textDocument/definition", params)
+                    assert definitions == relative_hook_label_locations(sources, lifecycle=lifecycle_labels), definitions
+                    references = query("references.relative_hook_label", "textDocument/references", {
+                        **params, "context": {"includeDeclaration": True},
+                    })
+                    assert references == relative_hook_label_locations(sources, False, lifecycle_labels), references
+                    hover = query("hover.relative_hook_label", "textDocument/hover", params)
+                    assert "relative/tail" in hover["contents"]["value"], hover
+                    label_hook = "begindocument" if lifecycle_labels else "benchmark"
+                    assert f"Hook: {label_hook}" in hover["contents"]["value"], hover
+                    items = query("completion.relative_hook_label", "textDocument/completion", at("[./taFAKE]", 5))
+                    assert [item["label"] for item in items] == ["./tail"], items
+                    start = sources[uri].rindex("[./taFAKE]") + 1
+                    assert items[0]["textEdit"] == {"range": {
+                        "start": position(sources[uri], start),
+                        "end": position(sources[uri], start + len("./taFAKE"))},
+                        "newText": "./tail"}, items
                 if hook_renames:
                     hook_source = sources[main_uri]
                     result = query("rename.hook", "textDocument/rename", {
@@ -562,8 +608,9 @@ def main():
     parser.add_argument("--global-hook-rules", action="store_true", help="verify global default-rule labels across multiple hooks (implies --hook-labels)")
     parser.add_argument("--default-hook-labels", action="store_true", help="verify literal default-label settings across explicit hook registrations (implies --hook-labels)")
     parser.add_argument("--document-hook-slots", action="store_true", help="verify explicit document-level hook slots independently of rules and default settings (implies --hook-labels)")
+    parser.add_argument("--relative-hook-labels", action="store_true", help="verify explicit relative labels following an adjacent literal Push (implies --hook-labels)")
     args = parser.parse_args()
-    args.hook_labels = args.hook_labels or args.lifecycle_labels or args.global_hook_rules or args.default_hook_labels or args.document_hook_slots
+    args.hook_labels = args.hook_labels or args.lifecycle_labels or args.global_hook_rules or args.default_hook_labels or args.document_hook_slots or args.relative_hook_labels
     args.hooks = args.hooks or args.hook_wrappers or args.hook_environments or args.hook_interfaces or args.hook_renames or args.hook_labels
     if args.iterations < 1 or args.runs < 1 or args.warmup < 0 or args.timeout <= 0:
         parser.error("iterations/runs/timeout must be positive; warmup must be nonnegative")
@@ -581,7 +628,8 @@ def main():
                       "hook_labels": args.hook_labels, "lifecycle_labels": args.lifecycle_labels,
                       "global_hook_rules": args.global_hook_rules,
                       "default_hook_labels": args.default_hook_labels,
-                      "document_hook_slots": args.document_hook_slots},
+                      "document_hook_slots": args.document_hook_slots,
+                      "relative_hook_labels": args.relative_hook_labels},
         "scenarios": {}}
     if baseline and (baseline["parameters"] != output["parameters"]
                      or baseline["workload_sha256"] != output["workload_sha256"]):
@@ -591,7 +639,7 @@ def main():
         for run in range(args.runs):
             print(f"{scale}: run {run + 1}/{args.runs}", file=sys.stderr, flush=True)
             metadata = session(binary, scale, args.iterations, args.warmup, args.timeout,
-                               lambda name, ms: samples.setdefault(name, []).append(ms), args.hooks, args.hook_wrappers, args.hook_environments, args.hook_interfaces, args.hook_renames, args.hook_labels, args.lifecycle_labels, args.global_hook_rules, args.default_hook_labels, args.document_hook_slots)
+                               lambda name, ms: samples.setdefault(name, []).append(ms), args.hooks, args.hook_wrappers, args.hook_environments, args.hook_interfaces, args.hook_renames, args.hook_labels, args.lifecycle_labels, args.global_hook_rules, args.default_hook_labels, args.document_hook_slots, args.relative_hook_labels)
         metrics = {name: summary(values) for name, values in samples.items()}
         output["scenarios"][scale] = {"fixture": metadata, "metrics": metrics, "samples_ms": samples}
         if baseline and baseline["scenarios"][scale]["fixture"] != metadata:
