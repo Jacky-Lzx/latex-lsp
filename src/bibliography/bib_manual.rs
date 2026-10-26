@@ -1,6 +1,6 @@
 //! Native handwritten bibliography entries do not define biblatex data keys.
 use crate::{
-    language::signature::CommandSignatures, parser::syntax, project::workspace::Document,
+    parser::syntax, project::workspace::Document, symbols::commands::CommandSignatures,
     symbols::named_references::Context,
 };
 use lsp_types::Url;

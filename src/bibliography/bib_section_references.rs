@@ -2,9 +2,9 @@
 use crate::rpc as jsonrpc;
 use crate::{
     bibliography::bib_section_keys::{self, KeyGraph},
-    language::signature::CommandSignatures,
     parser::syntax,
     project::workspace::{Document, DocumentKind, Workspace},
+    symbols::commands::CommandSignatures,
     symbols::named_references::Index,
 };
 use lsp_types::{Location, PrepareRenameResponse, TextEdit, Url, WorkspaceEdit};

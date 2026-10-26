@@ -2,9 +2,9 @@
 use crate::rpc::{Error, Result};
 use crate::{
     bibliography::bib_section_files::{self, LabelBinding},
-    language::signature::CommandSignatures,
     parser::syntax::{self, Argument, Command},
     project::workspace::{Document, DocumentKind, Workspace},
+    symbols::commands::CommandSignatures,
     symbols::named_references::Context,
 };
 use lsp_types::*;

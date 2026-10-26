@@ -120,7 +120,7 @@ pub(crate) fn quoted_replacement(value: String, original: &str, following_path: 
 pub(crate) fn calls(
     workspace: &Workspace,
     root: &Url,
-) -> BTreeMap<Url, Vec<crate::language::signature::SourceCall>> {
+) -> BTreeMap<Url, Vec<crate::symbols::commands::SourceCall>> {
     let inputs = crate::project::source_inputs::Index::new(workspace, root);
     if inputs.incomplete {
         return BTreeMap::new();
@@ -134,7 +134,7 @@ pub(crate) fn calls(
 pub(crate) fn calls_in(
     workspace: &Workspace,
     sources: &BTreeSet<Url>,
-) -> BTreeMap<Url, Vec<crate::language::signature::SourceCall>> {
+) -> BTreeMap<Url, Vec<crate::symbols::commands::SourceCall>> {
     let Some(documents) = crate::project::source_inputs::bounded_latex_sources(workspace, sources)
     else {
         return BTreeMap::new();
@@ -157,7 +157,7 @@ pub(crate) fn calls_in(
             .map(|(uri, _)| (uri.clone(), Vec::new()))
             .collect();
     }
-    let signatures = crate::language::signature::CommandSignatures::source_context(
+    let signatures = crate::symbols::commands::CommandSignatures::source_context(
         documents
             .iter()
             .map(|(_, doc)| (doc.text.source.as_str(), &doc.syntax)),
@@ -315,7 +315,7 @@ fn declarations_with(workspace: &Workspace, uri: &Url, origin: &Url) -> Vec<Dire
     };
     let mut scope = workspace.project_documents(origin);
     scope.insert(uri.clone());
-    let signatures = crate::language::signature::CommandSignatures::source_context(
+    let signatures = crate::symbols::commands::CommandSignatures::source_context(
         scope.iter().filter_map(|uri| {
             workspace
                 .documents

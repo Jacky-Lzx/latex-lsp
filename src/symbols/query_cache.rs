@@ -1,8 +1,8 @@
 //! Owned symbol analyses shared only during one immutable workspace query.
 use super::{label_declarations, named_references};
 use crate::{
-    language::signature::CommandSignatures,
     project::workspace::{DocumentKind, Workspace},
+    symbols::commands::CommandSignatures,
 };
 use lsp_types::Url;
 use std::{

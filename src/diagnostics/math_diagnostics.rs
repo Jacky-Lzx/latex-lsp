@@ -1,8 +1,8 @@
 //! Conservative, opt-in math checks using static project command meanings.
 use crate::{
-    language::signature::CommandSignatures,
     parser::syntax,
     project::workspace::{Document, DocumentKind, Workspace},
+    symbols::commands::CommandSignatures,
 };
 use lsp_types::*;
 use std::{
@@ -207,20 +207,18 @@ impl Index {
             let mut users: BTreeMap<String, Vec<String>> = BTreeMap::new();
             for doc in scope.iter().filter_map(|uri| workspace.documents.get(uri)) {
                 for entry in &doc.syntax.definitions {
-                    if let Some(target) = crate::language::signature::source_alias(
-                        &doc.text.source,
-                        &doc.syntax,
-                        entry,
-                    )
-                    .or_else(|| {
-                        crate::language::signature::literal_copy_target(
-                            &doc.text.source,
-                            &doc.syntax,
-                            entry,
-                            false,
-                        )
-                        .map(|(target, _)| target)
-                    }) {
+                    if let Some(target) =
+                        crate::symbols::commands::source_alias(&doc.text.source, &doc.syntax, entry)
+                            .or_else(|| {
+                                crate::symbols::commands::literal_copy_target(
+                                    &doc.text.source,
+                                    &doc.syntax,
+                                    entry,
+                                    false,
+                                )
+                                .map(|(target, _)| target)
+                            })
+                    {
                         users.entry(target).or_default().push(entry.name.clone());
                     }
                 }

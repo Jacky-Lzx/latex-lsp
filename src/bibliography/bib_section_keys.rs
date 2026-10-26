@@ -10,9 +10,9 @@ use crate::{
         },
         bib_section_files::Registry,
     },
-    language::signature::CommandSignatures,
     parser::syntax::{self, Command},
     project::workspace::{Document, DocumentKind, Workspace},
+    symbols::commands::CommandSignatures,
     symbols::named_references::Context,
 };
 use lsp_types::{Hover, HoverContents, Location, Url};
@@ -568,14 +568,14 @@ impl Analysis<'_, '_> {
                         return None;
                     }
                     let target =
-                        crate::language::signature::source_alias(source, &doc.syntax, entry)?;
-                    let body = crate::language::signature::command_definition_body(
+                        crate::symbols::commands::source_alias(source, &doc.syntax, entry)?;
+                    let body = crate::symbols::commands::command_definition_body(
                         source,
                         &doc.syntax,
                         entry,
                     )?;
                     let at =
-                        crate::language::signature::command_declaration_start(&doc.syntax, entry)?;
+                        crate::symbols::commands::command_declaration_start(&doc.syntax, entry)?;
                     Some((at, (entry.name.clone(), target, body.span)))
                 })
                 .collect()

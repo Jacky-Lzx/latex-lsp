@@ -1,8 +1,8 @@
 //! Source-confirmed right delimiter repairs; never guess a visible delimiter.
 use crate::{
-    language::signature::CommandSignatures,
     parser::syntax::{self, QuickFix, Syntax},
     project::workspace::Document,
+    symbols::commands::CommandSignatures,
     text::Text,
 };
 use lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, TextEdit};
@@ -106,7 +106,7 @@ pub(crate) fn invocation(
         })?;
     if parsed.is_ignored(command.span.start)
         || parsed.control_operands.contains(&command.span.start)
-        || crate::language::signature::definition_body_spans(&text.source, parsed)
+        || crate::symbols::commands::definition_body_spans(&text.source, parsed)
             .iter()
             .any(|body| body.contains(&command.span.start))
     {
@@ -170,7 +170,7 @@ pub(crate) fn missing_boundary(
     if backslashes % 2 == 1
         || parsed.is_ignored(start)
         || parsed.control_operands.contains(&start)
-        || crate::language::signature::definition_body_spans(source, parsed)
+        || crate::symbols::commands::definition_body_spans(source, parsed)
             .iter()
             .any(|body| body.contains(&start))
     {

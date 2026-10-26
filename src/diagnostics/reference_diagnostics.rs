@@ -60,7 +60,7 @@ fn occurrences_for(
     {
         return vec![];
     }
-    let signatures = crate::language::signature::CommandSignatures::new(
+    let signatures = crate::symbols::commands::CommandSignatures::new(
         docs.iter()
             .map(|doc| (doc.text.source.as_str(), &doc.syntax)),
     );
@@ -68,7 +68,7 @@ fn occurrences_for(
         crate::bibliography::bib_sections::selects_resources(&docs, &signatures);
     let source = &doc.text.source;
     let operands = signatures.editing_argument_tokens(source, &doc.syntax);
-    let mut opaque = crate::language::signature::definition_data_spans(source, &doc.syntax);
+    let mut opaque = crate::symbols::commands::definition_data_spans(source, &doc.syntax);
     opaque.extend(crate::symbols::expl3::math_data_spans(doc));
     opaque.extend(doc.syntax.ignored.iter().cloned());
     opaque.extend(doc.syntax.literal_conversions.iter().cloned());

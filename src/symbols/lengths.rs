@@ -1,5 +1,5 @@
 //! Static length assignments used to verify etoolbox build diagnostics.
-use crate::{language::signature::CommandSignatures, parser::syntax};
+use crate::{parser::syntax, symbols::commands::CommandSignatures};
 use std::ops::Range;
 
 pub(crate) const BUILTINS: &[&str] = &[

@@ -1,5 +1,5 @@
 //! Static hook arities bound data operands; they do not simulate hook execution.
-use super::signature::{self, CommandSignatures};
+use super::commands::{self as signature, CommandSignatures};
 use crate::parser::syntax;
 use std::collections::{BTreeMap, BTreeSet};
 

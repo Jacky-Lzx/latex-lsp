@@ -1,11 +1,11 @@
 //! Ordered graphicx settings, shared by navigation, editing and build checks.
 use crate::{
-    language::signature::{definition_body_spans, CommandSignatures},
     parser::syntax,
     project::{
         source_inputs,
         workspace::{resolve_file_path, DocumentKind, Workspace},
     },
+    symbols::commands::{definition_body_spans, CommandSignatures},
 };
 use lsp_types::Url;
 use std::collections::{BTreeMap, BTreeSet};

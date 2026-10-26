@@ -1,8 +1,8 @@
 //! Static file provenance of explicit biblatex reference-section resources.
 use crate::{
-    language::signature::{CommandSignatures, SourceCall},
     parser::syntax::{self, Argument, Command},
     project::workspace::{resolve_file_path, Document, DocumentKind, Workspace},
+    symbols::commands::{CommandSignatures, SourceCall},
     symbols::named_references::Context,
 };
 use lsp_types::Url;
@@ -157,7 +157,7 @@ impl Registry {
         // It cannot certify an unregistered filename or a unique label here.
         for (_, doc) in docs {
             if doc.syntax.definitions.iter().any(|entry| {
-                crate::language::signature::literal_copy_target(
+                crate::symbols::commands::literal_copy_target(
                     &doc.text.source,
                     &doc.syntax,
                     entry,

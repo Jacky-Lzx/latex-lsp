@@ -509,7 +509,7 @@ pub(crate) fn labels(ws: &Workspace, uri: &Url) -> BTreeMap<String, Reference> {
         if !scope.contains(source) || doc.kind != DocumentKind::Latex {
             continue;
         }
-        let positions = crate::language::signature::CommandSignatures::source_context(
+        let positions = crate::symbols::commands::CommandSignatures::source_context(
             std::iter::once((doc.text.source.as_str(), &doc.syntax)),
         )
         .source_command_positions(&doc.text.source, &doc.syntax);
@@ -665,9 +665,10 @@ pub(crate) fn document_links(ws: &Workspace, uri: &Url, root: &Url) -> Vec<Docum
     let Some(parent) = path.parent() else {
         return vec![];
     };
-    let positions = crate::language::signature::CommandSignatures::source_context(std::iter::once(
-        (doc.text.source.as_str(), &doc.syntax),
-    ))
+    let positions = crate::symbols::commands::CommandSignatures::source_context(std::iter::once((
+        doc.text.source.as_str(),
+        &doc.syntax,
+    )))
     .source_command_positions(&doc.text.source, &doc.syntax);
     doc.syntax
         .commands

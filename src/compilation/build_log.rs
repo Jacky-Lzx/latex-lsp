@@ -1170,7 +1170,7 @@ fn missing_character_ranges(
         Some(_) => return None,
         None => start,
     };
-    let bodies = crate::language::signature::definition_body_spans(&text.source, &parsed);
+    let bodies = crate::symbols::commands::definition_body_spans(&text.source, &parsed);
     let ranges: Vec<_> = text.source[run_start..end]
         .char_indices()
         .filter(|(_, ch)| *ch == character)
@@ -1378,7 +1378,7 @@ fn file_commands_for_text(
     file_error_commands(
         &text.source,
         parsed,
-        &crate::language::signature::CommandSignatures::new([(text.source.as_str(), parsed)]),
+        &crate::symbols::commands::CommandSignatures::new([(text.source.as_str(), parsed)]),
     )
 }
 
@@ -2144,7 +2144,7 @@ fn missing_input_range(
         local = file_error_commands(
             &text.source,
             &parsed,
-            &crate::language::signature::CommandSignatures::new([(text.source.as_str(), &parsed)]),
+            &crate::symbols::commands::CommandSignatures::new([(text.source.as_str(), &parsed)]),
         );
         &local
     };
@@ -2458,7 +2458,7 @@ fn invocation_error_range(
         local = kind.invocations(
             &text.source,
             &syntax,
-            &crate::language::signature::CommandSignatures::new([(text.source.as_str(), &syntax)]),
+            &crate::symbols::commands::CommandSignatures::new([(text.source.as_str(), &syntax)]),
         );
         &local
     };
@@ -2536,7 +2536,7 @@ pub(crate) fn mismatched_environment_names(message: &str) -> Option<(&str, &str)
 pub(crate) fn environment_error_invocations_with_signatures(
     source: &str,
     parsed: &crate::parser::syntax::Syntax,
-    signatures: &crate::language::signature::CommandSignatures<'_>,
+    signatures: &crate::symbols::commands::CommandSignatures<'_>,
     command_name: &str,
 ) -> Vec<(ByteRange<usize>, ByteRange<usize>)> {
     if signatures
@@ -2563,7 +2563,7 @@ pub(crate) fn environment_error_invocations_with_signatures(
 pub(crate) fn file_error_commands(
     source: &str,
     parsed: &crate::parser::syntax::Syntax,
-    signatures: &crate::language::signature::CommandSignatures<'_>,
+    signatures: &crate::symbols::commands::CommandSignatures<'_>,
 ) -> Vec<crate::parser::syntax::Command> {
     let positions = signatures.source_command_positions(source, parsed);
     signatures
@@ -2579,7 +2579,7 @@ pub(crate) fn file_error_commands(
 pub(crate) fn file_error_invocations_with_signatures(
     source: &str,
     parsed: &crate::parser::syntax::Syntax,
-    signatures: &crate::language::signature::CommandSignatures<'_>,
+    signatures: &crate::symbols::commands::CommandSignatures<'_>,
 ) -> Vec<(ByteRange<usize>, ByteRange<usize>)> {
     let loaders_redefined = signatures
         .names()
@@ -2641,7 +2641,7 @@ fn confirmed_file_invocation(
         local = file_error_invocations_with_signatures(
             &text.source,
             &parsed,
-            &crate::language::signature::CommandSignatures::new([(text.source.as_str(), &parsed)]),
+            &crate::symbols::commands::CommandSignatures::new([(text.source.as_str(), &parsed)]),
         );
         &local
     };
@@ -4298,7 +4298,7 @@ pub(crate) fn parse_with_sources(
 }
 
 struct MacroContext<'a> {
-    signatures: crate::language::signature::CommandSignatures<'a>,
+    signatures: crate::symbols::commands::CommandSignatures<'a>,
     sources: Vec<Url>,
     paused_sources: Vec<Url>,
 }
@@ -4370,7 +4370,7 @@ impl InvocationKind {
         self,
         source: &str,
         syntax: &crate::parser::syntax::Syntax,
-        signatures: &crate::language::signature::CommandSignatures<'_>,
+        signatures: &crate::symbols::commands::CommandSignatures<'_>,
     ) -> Vec<(ByteRange<usize>, ByteRange<usize>)> {
         match self {
             Self::Literal => vec![],
@@ -4459,7 +4459,7 @@ impl ProjectSources {
         let dynamic_sources = documents
             .iter()
             .filter(|(uri, doc)| {
-                let alias_bodies = crate::language::signature::file_load_alias_body_positions(
+                let alias_bodies = crate::symbols::commands::file_load_alias_body_positions(
                     &doc.text.source,
                     &doc.syntax,
                 );
@@ -4571,7 +4571,7 @@ impl<'a> ProjectAnalysis<'a> {
                 sources,
                 paused_sources,
                 signatures:
-                    crate::language::signature::CommandSignatures::with_ambiguous_environments(
+                    crate::symbols::commands::CommandSignatures::with_ambiguous_environments(
                         documents
                             .into_iter()
                             .map(|(_, doc)| (doc.text.source.as_str(), &doc.syntax)),
@@ -5292,7 +5292,7 @@ fn locate_missing_bibliography_files(
             .any(|command| crate::bibliography::bib_resources::loads(&command.name))
     });
     let signatures = (source_aware || resource_calls).then(|| {
-        crate::language::signature::CommandSignatures::source_context(
+        crate::symbols::commands::CommandSignatures::source_context(
             documents
                 .iter()
                 .map(|(_, text, parsed)| (text.source.as_str(), parsed)),
@@ -10741,7 +10741,7 @@ mod alias_load_snapshot_tests {
                     .contains(&Url::from_file_path(&root).unwrap()),
                 dynamic,
                 "{definition}; alias tokens: {:?}; commands: {:?}",
-                crate::language::signature::file_load_alias_body_positions(
+                crate::symbols::commands::file_load_alias_body_positions(
                     definition,
                     &snapshot.documents[&Url::from_file_path(&root).unwrap()].syntax
                 ),

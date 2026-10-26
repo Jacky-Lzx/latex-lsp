@@ -1,8 +1,8 @@
 //! Locate literal compiler-reported characters and repair TeX specials.
 use crate::{
-    language::signature,
     parser::syntax::{QuickFix, Syntax},
     project::workspace::Document,
+    symbols::commands as signature,
     text::Text,
 };
 use lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range, TextEdit};

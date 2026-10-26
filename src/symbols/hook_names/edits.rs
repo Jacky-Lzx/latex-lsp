@@ -1,9 +1,9 @@
 //! Editing requires complete possible-call coverage, beyond read-only consensus.
 use super::*;
 use crate::{
-    language::signature,
     project::{source_inputs, workspace::DocumentKind},
     rpc::{Error, Result},
+    symbols::commands as signature,
 };
 
 const IDENTITY_CHANGES: &[&str] = &[

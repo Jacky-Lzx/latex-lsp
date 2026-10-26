@@ -1,5 +1,5 @@
 //! Verify etoolbox boolean and toggle operations without expanding TeX.
-use crate::{language::signature::CommandSignatures, parser::syntax};
+use crate::{parser::syntax, symbols::commands::CommandSignatures};
 use std::{
     collections::{BTreeMap, BTreeSet},
     ops::Range,

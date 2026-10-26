@@ -1,8 +1,8 @@
 //! Category hints require the current source's global members to match AUX preload.
 use crate::{
-    language::signature::CommandSignatures,
     parser::syntax,
     project::workspace::{Document, Workspace},
+    symbols::commands::CommandSignatures,
     symbols::named_references::Context,
 };
 use lsp_types::Url;

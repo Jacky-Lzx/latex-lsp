@@ -1,8 +1,8 @@
 //! Resource reader catcodes certified at their input positions.
 use crate::{
-    language::signature::{source_alias, CommandSignatures},
     parser::syntax::{self, Command, Syntax},
     project::workspace::{Document, DocumentKind, Workspace},
+    symbols::commands::{source_alias, CommandSignatures},
 };
 use lsp_types::Url;
 use std::collections::{BTreeMap, BTreeSet};

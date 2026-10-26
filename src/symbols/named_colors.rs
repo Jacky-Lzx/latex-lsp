@@ -385,7 +385,7 @@ fn occurrences(source: &str, command: &Command) -> Option<Vec<(bool, Span<usize>
 pub(crate) fn error_invocations_with_signatures(
     source: &str,
     syntax: &Syntax,
-    signatures: &crate::language::signature::CommandSignatures<'_>,
+    signatures: &crate::symbols::commands::CommandSignatures<'_>,
 ) -> Vec<(Span<usize>, Span<usize>)> {
     if signatures
         .names()
@@ -449,7 +449,7 @@ pub(crate) fn error_invocations_with_signatures(
 pub(crate) fn model_error_invocations_with_signatures(
     source: &str,
     syntax: &Syntax,
-    signatures: &crate::language::signature::CommandSignatures<'_>,
+    signatures: &crate::symbols::commands::CommandSignatures<'_>,
 ) -> Vec<(Span<usize>, Span<usize>)> {
     if signatures
         .names()
@@ -639,7 +639,7 @@ fn color_options(source: &str, command: &Command) -> bool {
 }
 
 pub(crate) fn validate(workspace: &Workspace, scope: &BTreeSet<Url>) -> jsonrpc::Result<()> {
-    let signatures = crate::language::signature::CommandSignatures::new(
+    let signatures = crate::symbols::commands::CommandSignatures::new(
         workspace
             .documents
             .iter()

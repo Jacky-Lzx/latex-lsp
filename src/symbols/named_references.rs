@@ -1,9 +1,9 @@
 //! Label/citation keys whose meanings agree in every consuming project.
 use crate::rpc as jsonrpc;
 use crate::{
-    language::signature::CommandSignatures,
     parser::syntax,
     project::workspace::{Document, DocumentKind, Workspace},
+    symbols::commands::CommandSignatures,
     symbols::reference_calls,
 };
 use lsp_types::Url;
@@ -235,7 +235,7 @@ fn copy_candidates(docs: &[&Document], work: &mut usize) -> Option<Potential> {
     let mut has_copy = false;
     for doc in docs {
         for entry in &doc.syntax.definitions {
-            let edge = crate::language::signature::literal_copy_target(
+            let edge = crate::symbols::commands::literal_copy_target(
                 &doc.text.source,
                 &doc.syntax,
                 entry,
@@ -243,7 +243,7 @@ fn copy_candidates(docs: &[&Document], work: &mut usize) -> Option<Potential> {
             )
             .map(|(target, _)| (target, true))
             .or_else(|| {
-                crate::language::signature::source_alias(&doc.text.source, &doc.syntax, entry)
+                crate::symbols::commands::source_alias(&doc.text.source, &doc.syntax, entry)
                     .map(|target| (target, false))
             });
             if let Some((target, copied)) = edge {

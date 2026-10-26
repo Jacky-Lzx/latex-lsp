@@ -1,5 +1,5 @@
 //! Static named reference calls shared by diagnostics and editing.
-use crate::{language::signature::CommandSignatures, parser::syntax};
+use crate::{parser::syntax, symbols::commands::CommandSignatures};
 use std::{collections::BTreeSet, ops::Range};
 
 pub(crate) fn named_command(

@@ -1,8 +1,8 @@
 //! Literal kernel hook names, separate from code labels and reference keys.
 use crate::{
-    language::signature::CommandSignatures,
     parser::syntax,
     project::workspace::{Document, Workspace},
+    symbols::commands::CommandSignatures,
 };
 use lsp_types::*;
 use std::{
@@ -101,7 +101,7 @@ fn name_field(source: &str, after: usize, command: &str) -> Option<(Entry, usize
     // Registration normalizes names; UseHook and the conditions use the
     // internal control sequence with literal whitespace.
     if !matches!(command, "UseHook" | "UseHookWithArguments")
-        && !crate::language::signature::HOOK_CONDITIONS.contains(&command)
+        && !crate::symbols::commands::HOOK_CONDITIONS.contains(&command)
     {
         let raw = &source[span.clone()];
         span.start += raw.len() - raw.trim_start_matches([' ', '\t', '\r', '\n']).len();

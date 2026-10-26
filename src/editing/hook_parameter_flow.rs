@@ -1,8 +1,8 @@
 //! Possible flow of source parameters into literal hook data.
 use crate::{
-    language::signature::{self, CommandShape, CommandSignatures},
     parser::syntax,
     project::workspace::{Document, DocumentKind, Workspace},
+    symbols::commands::{self as signature, CommandShape, CommandSignatures},
     symbols::named_references::LiteralContext,
 };
 use lsp_types::Url;

@@ -1,9 +1,9 @@
 //! Compiled numeric labels keep their actual refsection and refcontext.
 use crate::{
     bibliography::bib_section_keys::{self, SourceEvent},
-    language::signature::CommandSignatures,
     parser::syntax,
     project::workspace::{Document, DocumentKind, Workspace},
+    symbols::commands::CommandSignatures,
     symbols::named_references::Context,
 };
 use lsp_types::{Position, Range, Url};
@@ -94,7 +94,7 @@ fn mode(docs: &[(Url, &Document)], signatures: &CommandSignatures<'_>) -> Mode {
         let source = &doc.text.source;
         let context = Context::new(doc, signatures);
         let positions = signatures.source_command_positions(source, &doc.syntax);
-        let definitions = crate::language::signature::definition_data_spans(source, &doc.syntax);
+        let definitions = crate::symbols::commands::definition_data_spans(source, &doc.syntax);
         let assignment_bodies = signatures.builtin_alias_body_positions(
             source,
             &doc.syntax,

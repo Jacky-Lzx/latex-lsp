@@ -1,7 +1,7 @@
 //! Local refcontext toggles are restored by TeX groups, independently of
 //! globally stored entry assignments and context fields.
 use crate::{
-    language::signature::CommandSignatures, parser::syntax, project::workspace::Document,
+    parser::syntax, project::workspace::Document, symbols::commands::CommandSignatures,
     symbols::named_references::Context,
 };
 use std::ops::Range;
@@ -139,7 +139,7 @@ impl<'a, 'b> Scan<'a, 'b> {
         {
             return None;
         }
-        let definitions = crate::language::signature::definition_data_spans(source, &doc.syntax);
+        let definitions = crate::symbols::commands::definition_data_spans(source, &doc.syntax);
         for span in &definitions {
             *work += span.len();
             if *work > 32 * 1024 * 1024 {

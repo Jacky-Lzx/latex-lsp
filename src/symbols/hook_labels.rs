@@ -1,9 +1,9 @@
 //! Literal code labels in registrations, default settings and ordering rules.
 use super::hook_fields::Candidate;
 use crate::{
-    language::signature::CommandSignatures,
     parser::syntax,
     project::workspace::{Document, Workspace},
+    symbols::commands::CommandSignatures,
 };
 use lsp_types::*;
 use std::{

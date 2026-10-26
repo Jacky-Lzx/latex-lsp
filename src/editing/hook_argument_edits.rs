@@ -1,9 +1,9 @@
 //! Hook parameters are tokens, not necessarily executable source references.
 use crate::{
-    language::signature::{self, CommandSignatures},
     parser::syntax,
     project::workspace::{Document, DocumentKind, Workspace},
     rpc::{Error, Result},
+    symbols::commands::{self as signature, CommandSignatures},
 };
 use lsp_types::{Location, Url};
 use std::{

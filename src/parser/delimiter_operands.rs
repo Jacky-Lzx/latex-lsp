@@ -1,8 +1,8 @@
 //! Repair a missing operand of a directly reported math delimiter primitive.
 use crate::{
-    language::signature::CommandSignatures,
     parser::syntax::{self, QuickFix, Syntax},
     project::workspace::Document,
+    symbols::commands::CommandSignatures,
     text::Text,
 };
 use lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, TextEdit};
@@ -55,7 +55,7 @@ pub(crate) fn invocation(
     if parsed.is_ignored(command.span.start)
         || parsed.is_ignored(at)
         || parsed.control_operands.contains(&command.span.start)
-        || crate::language::signature::definition_body_spans(source, parsed)
+        || crate::symbols::commands::definition_body_spans(source, parsed)
             .iter()
             .any(|body| body.contains(&command.span.start))
     {

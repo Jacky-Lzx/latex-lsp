@@ -30,7 +30,7 @@ pub(crate) fn insertion_preserves_filename(
             else {
                 return false;
             };
-            let signatures = crate::language::signature::CommandSignatures::source_context(
+            let signatures = crate::symbols::commands::CommandSignatures::source_context(
                 documents
                     .iter()
                     .map(|(_, doc)| (doc.text.source.as_str(), &doc.syntax)),

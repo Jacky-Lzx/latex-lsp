@@ -102,7 +102,7 @@ fn fix_all(ws: &Workspace, uri: &Url, doc: &Document) -> Option<CodeAction> {
 fn selection(
     doc: &Document,
     range: Range,
-    signatures: &crate::language::signature::CommandSignatures<'_>,
+    signatures: &crate::symbols::commands::CommandSignatures<'_>,
 ) -> Option<(usize, usize, Option<usize>)> {
     if doc.kind != DocumentKind::Latex {
         return None;
@@ -450,7 +450,7 @@ pub(crate) fn actions(
     {
         return result;
     }
-    let signatures = crate::language::signature::CommandSignatures::new(
+    let signatures = crate::symbols::commands::CommandSignatures::new(
         documents
             .iter()
             .map(|doc| (doc.text.source.as_str(), &doc.syntax)),

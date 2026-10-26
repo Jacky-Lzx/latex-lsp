@@ -1,7 +1,7 @@
 //! Bounded hook fields with meanings shared by every consuming project.
 use crate::{
-    language::signature::CommandSignatures,
     project::workspace::{Document, DocumentKind, Workspace},
+    symbols::commands::CommandSignatures,
 };
 use lsp_types::Url;
 use std::collections::BTreeMap;

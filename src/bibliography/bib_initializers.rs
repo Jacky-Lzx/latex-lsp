@@ -1,8 +1,8 @@
 //! Certified biblatex text initialization for passive source entry queries.
 use crate::{
-    language::signature::CommandSignatures,
     parser::syntax::{self, Command},
     project::workspace::Document,
+    symbols::commands::CommandSignatures,
     symbols::named_references::Context,
 };
 use lsp_types::Url;

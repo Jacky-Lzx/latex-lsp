@@ -1,9 +1,9 @@
 //! Complete biblatex data selectors without treating them as citation keys.
 use crate::{
     bibliography::{bib_completion, citations},
-    language::signature,
     parser::syntax,
     project::workspace::{DocumentKind, Workspace},
+    symbols::commands as signature,
 };
 use lsp_types::*;
 use std::{collections::BTreeSet, ops::Range as Span};

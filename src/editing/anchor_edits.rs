@@ -1,9 +1,9 @@
 //! Require complete, executable identities before editing PDF destination keys.
 use crate::rpc::{Error, Result};
 use crate::{
-    language::signature::{literal_copy_target, source_alias, CommandSignatures},
     parser::syntax,
     project::workspace::{Document, DocumentKind, Workspace},
+    symbols::commands::{literal_copy_target, source_alias, CommandSignatures},
     symbols::{anchors, named_references::Context},
 };
 use lsp_types::Url;

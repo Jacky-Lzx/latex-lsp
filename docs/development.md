@@ -61,6 +61,8 @@ macOS 上运行测试时，可使用 `TMPDIR=/private/tmp cargo test --locked`�
 
 ## 代码结构与分析缓存
 
+共享命令语义归入 [`symbols/commands/`](../src/symbols/commands/mod.rs)：内置参数目录、声明读取和含义解析分别维护；hook 参数分析与声明文档也归入 `symbols`。解析、项目发现和符号查询直接依赖这些语义模块。`language/signature.rs` 负责 LSP 参数提示、活动参数位置和补全片段生成，不再作为其他子系统的命令分析入口。
+
 运行时工作区通过 [`project/store.rs`](../src/project/store.rs) 统一读写。写锁第一次被可变访问时先推进独立修订号；替换整个工作区也不会重置修订。诊断投递器只消费该修订，不再拥有分析输入的版本。客户端能力与项目构建观察分别归入 [`project/state.rs`](../src/project/state.rs) 的 `ClientCapabilities` 和 `ProjectState`。独立测试仍可直接构造工作区；服务和构建协调器的更新均经过 `WorkspaceStore::write`。
 
 工作区快照通过 [`project/documents.rs`](../src/project/documents.rs) 共享不可变文档修订；修改已有文档时采用写时复制，文本更新则替换对应修订。发行版文件索引同样共享存储。快照仍复制文档映射与项目状态，但不再逐份复制未改变文档的文本、语法和发行版索引。上下文刷新先比较已有分析，再修改确实变化的文档。
@@ -142,7 +144,7 @@ Biber 文献键位置按来源延迟建立缓存：沿源码中的声明顺序�
 
 `ifentryexists` 和 `ifentryinbib` 使用 `EntryQuery`，复用单键与代码参数路径，`Code(index)` 区分两个分支。`context_codes` 同时驱动参数解析与签名；查询命令不接受星号，也不通过源码推断查询结果。两个分支继续按普通 LaTeX 解析，其中的字面文字不进入文献引用索引，静态嵌套引用仍独立参与编辑。
 
-[`bibliography/bib_accessors.rs`](../src/bibliography/bib_accessors.rs) 为三个数据引用命令的 `Selector` 参数与三个打印命令的最终必选参数提供名称补全和悬停。选择器目录区分普通字段、字面列表与姓名列表，只列出常用默认输出名称；说明复用 `bib_completion::field_description`。打印命令使用首个不受花括号保护的右方括号读取格式与范围，共用引用解析器的空白/段落边界。名称范围复用单键注释处理与单行补全编辑，`signature::uses_builtin` 核对实际签名，拒绝用户定义或含歧义的命令；不把选择器放入文献键索引，不展开数据模型。
+[`bibliography/bib_accessors.rs`](../src/bibliography/bib_accessors.rs) 为三个数据引用命令的 `Selector` 参数与三个打印命令的最终必选参数提供名称补全和悬停。选择器目录区分普通字段、字面列表与姓名列表，只列出常用默认输出名称；说明复用 `bib_completion::field_description`。打印命令使用首个不受花括号保护的右方括号读取格式与范围，共用引用解析器的空白/段落边界。名称范围复用单键注释处理与单行补全编辑，`commands::uses_builtin` 核对实际签名，拒绝用户定义或含歧义的命令；不把选择器放入文献键索引，不展开数据模型。
 
 不带格式的 `thefield` / `strfield` 与三个 undef 检查使用同一解析器的零可选参数路径，只读取首个名称分组。成立与不成立分支不参与名称补全；签名独立记录后续代码。内置签名检查同时调用 `generated::generated_command_exists`，排除当前符号范围内的计数器、定理和条件声明所生成的同名命令；不另建派生命令索引。
 

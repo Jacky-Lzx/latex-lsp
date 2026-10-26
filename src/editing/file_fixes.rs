@@ -12,7 +12,7 @@ pub(crate) fn fixes(
     root: &Url,
     uri: &Url,
     diagnostic: &Diagnostic,
-    signatures: Option<&crate::language::signature::CommandSignatures<'_>>,
+    signatures: Option<&crate::symbols::commands::CommandSignatures<'_>>,
     comparisons: &mut usize,
 ) -> Vec<syntax::QuickFix> {
     if *comparisons >= spelling_fixes::MAX_COMPARISONS {

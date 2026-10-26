@@ -49,7 +49,7 @@ pub(crate) struct Parsed {
 // can occur after a context has already opened, including through an alias.
 pub(crate) fn has_weak(
     doc: &crate::project::workspace::Document,
-    signatures: &crate::language::signature::CommandSignatures<'_>,
+    signatures: &crate::symbols::commands::CommandSignatures<'_>,
 ) -> bool {
     let source = &doc.text.source;
     let context = crate::symbols::named_references::Context::new(doc, signatures);
@@ -253,7 +253,7 @@ impl Compiled {
 // native global templates; named/template options are rejected by parse().
 pub(crate) fn global_sorting(
     docs: &[(lsp_types::Url, &crate::project::workspace::Document)],
-    signatures: &crate::language::signature::CommandSignatures<'_>,
+    signatures: &crate::symbols::commands::CommandSignatures<'_>,
 ) -> Option<String> {
     let mut sorting = None;
     for (_, doc) in docs {

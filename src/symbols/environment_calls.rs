@@ -1,9 +1,9 @@
 //! Indirect environment name arguments interpreted in every project consuming a file.
 use crate::rpc as jsonrpc;
 use crate::{
-    language::signature::CommandSignatures,
     parser::syntax::{self, Argument},
     project::workspace::{Document, DocumentKind, Workspace},
+    symbols::commands::CommandSignatures,
 };
 use lsp_types::{Range, Url};
 use std::collections::{BTreeMap, BTreeSet};

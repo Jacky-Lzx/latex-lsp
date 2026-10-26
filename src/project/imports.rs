@@ -1,8 +1,8 @@
 //! Resolve static import-package paths while keeping imported directories scoped.
 use crate::{
-    language::signature::CommandSignatures,
     parser::syntax,
     project::workspace::{DocumentKind, Workspace},
+    symbols::commands::CommandSignatures,
 };
 use lsp_types::*;
 use std::{

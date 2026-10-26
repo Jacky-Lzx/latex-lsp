@@ -154,7 +154,7 @@ pub struct Syntax {
     pub(crate) contextual_string_operands: bool,
     /// Exact imported/custom parameter grammar when all execution contexts agree.
     pub(crate) contextual_command_shapes:
-        std::collections::BTreeMap<usize, std::sync::Arc<crate::language::signature::CommandShape>>,
+        std::collections::BTreeMap<usize, std::sync::Arc<crate::symbols::commands::CommandShape>>,
     /// Known undefinition calls; a missing static target keeps effects uncertain.
     pub(crate) command_undefinitions: std::collections::BTreeMap<usize, Option<Entry>>,
     /// Actual comments, distinguished from ignored URLs and verbatim text.
@@ -2214,7 +2214,7 @@ impl Syntax {
         let mut punctuation_operands = std::collections::BTreeSet::new();
         let mut assigned_controls = std::collections::BTreeSet::<String>::new();
         let mut conversion_arguments = std::collections::BTreeMap::new();
-        let mut inline_tokenization = crate::language::signature::InlineTokenization::default();
+        let mut inline_tokenization = crate::symbols::commands::InlineTokenization::default();
         let mut fancyverb_context = crate::parser::fancyvrb::InlineContext::default();
         let mut raw_resource_end = 0;
         let mut i = 0;
@@ -2683,7 +2683,7 @@ impl Syntax {
                                 !control_operands.contains(&previous.span.start)
                                     && !punctuation_operands
                                         .contains(&skip_space(source, previous.span.end))
-                                    && crate::language::signature::reads_brace(
+                                    && crate::symbols::commands::reads_brace(
                                         source, previous, operand,
                                     )
                             })
@@ -2918,7 +2918,7 @@ impl Syntax {
                                     !control_operands.contains(&previous.span.start)
                                         && !punctuation_operands
                                             .contains(&skip_space(source, previous.span.end))
-                                        && crate::language::signature::reads_brace(
+                                        && crate::symbols::commands::reads_brace(
                                             source, previous, operand,
                                         )
                                 })

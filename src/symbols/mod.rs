@@ -23,3 +23,8 @@ pub(crate) mod saved_text;
 pub(crate) mod special_characters;
 pub(crate) mod string_test_context;
 pub(crate) mod string_tests;
+
+pub(crate) mod commands;
+pub(crate) mod hook_arguments;
+
+pub(crate) mod command_docs;

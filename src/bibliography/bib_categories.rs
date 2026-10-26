@@ -1,9 +1,9 @@
 //! Project-consistent biblatex category names, independent of bibliography keys.
 use crate::rpc::{Error, Result};
 use crate::{
-    language::signature::CommandSignatures,
     parser::syntax,
     project::workspace::{Document, DocumentKind, Workspace},
+    symbols::commands::CommandSignatures,
 };
 use lsp_types::*;
 use std::{
@@ -433,13 +433,13 @@ impl Index {
             let mut users = BTreeMap::<String, BTreeSet<String>>::new();
             for doc in &docs {
                 for entry in &doc.syntax.definitions {
-                    let target = crate::language::signature::source_alias(
+                    let target = crate::symbols::commands::source_alias(
                         &doc.text.source,
                         &doc.syntax,
                         entry,
                     )
                     .or_else(|| {
-                        crate::language::signature::literal_copy_target(
+                        crate::symbols::commands::literal_copy_target(
                             &doc.text.source,
                             &doc.syntax,
                             entry,

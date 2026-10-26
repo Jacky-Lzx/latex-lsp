@@ -121,9 +121,9 @@ fn analyze(doc: &Document, include_data: bool) -> Analysis {
         };
     }
     let source = &doc.text.source;
-    let mut deferred = crate::language::signature::definition_body_spans(source, &doc.syntax);
+    let mut deferred = crate::symbols::commands::definition_body_spans(source, &doc.syntax);
     let mut data = if include_data {
-        crate::language::signature::definition_data_spans(source, &doc.syntax)
+        crate::symbols::commands::definition_data_spans(source, &doc.syntax)
     } else {
         vec![]
     };

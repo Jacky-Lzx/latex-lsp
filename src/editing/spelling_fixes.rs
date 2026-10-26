@@ -23,7 +23,7 @@ enum Kind {
 fn target<'a>(
     doc: &'a crate::project::workspace::Document,
     diagnostic: &'a Diagnostic,
-    signatures: Option<&crate::language::signature::CommandSignatures<'_>>,
+    signatures: Option<&crate::symbols::commands::CommandSignatures<'_>>,
 ) -> Option<(Kind, &'a str)> {
     if diagnostic.code == Some(NumberOrString::String("undefined-pdf-destination".into())) {
         let name = diagnostic.data.as_ref()?.get("destination")?.as_str()?;
@@ -241,7 +241,7 @@ fn opaque_environment(
 fn environment_end(
     doc: &crate::project::workspace::Document,
     begin: Range,
-    signatures: &crate::language::signature::CommandSignatures<'_>,
+    signatures: &crate::symbols::commands::CommandSignatures<'_>,
 ) -> Option<Range> {
     let operands = signatures.argument_tokens(&doc.text.source, &doc.syntax);
     let mut started = false;
@@ -291,7 +291,7 @@ fn environment_end(
 fn closing_environment_fix(
     doc: &crate::project::workspace::Document,
     diagnostic: &Diagnostic,
-    signatures: &crate::language::signature::CommandSignatures<'_>,
+    signatures: &crate::symbols::commands::CommandSignatures<'_>,
 ) -> Option<QuickFix> {
     let (name, expected) = build_log::mismatched_environment_names(&diagnostic.message)?;
     let data = diagnostic.data.as_ref()?;
@@ -518,7 +518,7 @@ pub fn fixes(
                     signatures
                         .entry((scope.clone(), paused.clone()))
                         .or_insert_with(|| {
-                            crate::language::signature::CommandSignatures::with_ambiguous_environments(
+                            crate::symbols::commands::CommandSignatures::with_ambiguous_environments(
                                 workspace
                                     .documents
                                     .iter()

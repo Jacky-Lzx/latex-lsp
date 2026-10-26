@@ -1761,7 +1761,7 @@ fn completion_in_query(
     for &(name, snippet, documentation) in COMMANDS {
         if name.starts_with(prefix) && seen.insert(name.into()) {
             let builtin_arguments = name != "thefield"
-                || crate::language::signature::uses_builtin(workspace, name, &scope);
+                || crate::symbols::commands::uses_builtin(workspace, name, &scope);
             let use_snippets = use_snippets
                 && builtin_arguments
                 && !crate::language::signature::has_existing_arguments(
@@ -2596,9 +2596,9 @@ fn hover_query(workspace: &Workspace, uri: &Url, position: Position) -> Option<H
     }
     if matches!(target.kind, TargetKind::Command | TargetKind::Environment) {
         let notes = if target.kind == TargetKind::Command {
-            crate::language::command_docs::for_command(workspace, &scope, target.name)
+            crate::symbols::command_docs::for_command(workspace, &scope, target.name)
         } else {
-            crate::language::command_docs::for_environment(workspace, &scope, target.name)
+            crate::symbols::command_docs::for_environment(workspace, &scope, target.name)
         };
         if let (Some(value), Some(notes)) = (value.as_mut(), notes) {
             value.push_str("\n\n");

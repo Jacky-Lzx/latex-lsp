@@ -1,8 +1,8 @@
 //! Ordered, project-specific meanings of etoolbox's literal string tests.
 use crate::{
-    language::signature::{literal_copy_target, CommandShape, CommandSignatures},
     parser::syntax::{self, Command, Syntax},
     project::workspace::{resolve_file_path, DocumentKind, Workspace},
+    symbols::commands::{literal_copy_target, CommandShape, CommandSignatures},
     symbols::string_tests::{arguments, data_count},
 };
 use lsp_types::Url;
@@ -31,7 +31,7 @@ struct SourceInputs {
     inherited: BTreeMap<String, u8>,
     shapes: BTreeMap<usize, Arc<CommandShape>>,
     readers: crate::project::resource_context::Readers,
-    stored: Arc<crate::language::signature::StoredCodeAliases>,
+    stored: Arc<crate::symbols::commands::StoredCodeAliases>,
 }
 
 #[derive(Debug)]
@@ -333,7 +333,7 @@ impl Source {
         mut literal: impl FnMut(&crate::parser::syntax::Command, bool) -> u8,
         shapes: &BTreeMap<usize, Arc<CommandShape>>,
         readers: &crate::project::resource_context::Readers,
-        possible_stores: &crate::language::signature::StoredCodeAliases,
+        possible_stores: &crate::symbols::commands::StoredCodeAliases,
     ) -> Self {
         let mut uncertain = BTreeSet::new();
         let mut lexical_probes = Vec::new();
@@ -392,15 +392,11 @@ impl Source {
                         // A pure forward expands its current leaf; capturing
                         // the wrapper's zero operands would erase that leaf's
                         // real grammar in later parameter help and analysis.
-                        shape: crate::language::signature::source_alias(
-                            &text.source,
-                            &syntax,
-                            entry,
-                        )
-                        .is_none()
-                        .then(|| CommandShape::definition(&text.source, &syntax, entry))
-                        .flatten()
-                        .map(Arc::new),
+                        shape: crate::symbols::commands::source_alias(&text.source, &syntax, entry)
+                            .is_none()
+                            .then(|| CommandShape::definition(&text.source, &syntax, entry))
+                            .flatten()
+                            .map(Arc::new),
                     });
             }
         }
@@ -487,7 +483,7 @@ impl Source {
 
 #[derive(Clone, Default)]
 struct Analysis {
-    possible_stores: Arc<crate::language::signature::StoredCodeAliases>,
+    possible_stores: Arc<crate::symbols::commands::StoredCodeAliases>,
     meanings: BTreeMap<Url, BTreeMap<usize, u8>>,
     operands: BTreeMap<Url, BTreeMap<usize, bool>>,
     names: BTreeSet<String>,
@@ -510,7 +506,7 @@ impl Analysis {
     ) {
         if stack.is_empty() {
             let scope = workspace.symbol_scope(root);
-            if let Some(possible) = crate::language::signature::possible_stored_code_aliases(
+            if let Some(possible) = crate::symbols::commands::possible_stored_code_aliases(
                 workspace
                     .documents
                     .iter()

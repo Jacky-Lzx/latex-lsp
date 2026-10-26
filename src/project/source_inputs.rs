@@ -1,8 +1,8 @@
 //! Root-specific discovery of static source loads and file references.
 use crate::{
-    language::signature::{CommandSignatures, SourceCall},
     parser::syntax,
     project::workspace::{resolve_file_path, DocumentKind, Workspace},
+    symbols::commands::{CommandSignatures, SourceCall},
 };
 use lsp_types::Url;
 use std::{

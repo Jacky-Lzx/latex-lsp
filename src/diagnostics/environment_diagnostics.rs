@@ -1,8 +1,8 @@
 //! Environment pairing interpreted separately in every consuming project.
 use crate::{
-    language::signature::{definition_body_spans, CommandSignatures},
     parser::syntax::{self, QuickFix},
     project::workspace::{Document, DocumentKind, Workspace},
+    symbols::commands::{definition_body_spans, CommandSignatures},
     symbols::environment_calls::project_contexts,
 };
 use lsp_types::{Diagnostic, Url};

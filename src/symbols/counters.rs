@@ -183,7 +183,7 @@ pub(crate) fn invocations(source: &str, command: &Command) -> Vec<(Range<usize>,
 pub(crate) fn error_invocations_with_signatures(
     source: &str,
     parsed: &syntax::Syntax,
-    signatures: &crate::language::signature::CommandSignatures<'_>,
+    signatures: &crate::symbols::commands::CommandSignatures<'_>,
 ) -> Vec<(Range<usize>, Range<usize>)> {
     if signatures.names().any(error_command) {
         return vec![];

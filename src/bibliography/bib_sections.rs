@@ -1,8 +1,8 @@
 //! Detect projects whose reference sections select independent databases.
 use crate::{
-    language::signature::{literal_copy_target, source_alias, CommandSignatures},
     parser::syntax,
     project::workspace::Document,
+    symbols::commands::{literal_copy_target, source_alias, CommandSignatures},
     symbols::named_references::Context,
 };
 use std::collections::{BTreeMap, BTreeSet};
@@ -161,7 +161,7 @@ fn discarded_commands(docs: &[&Document], signatures: &CommandSignatures<'_>) ->
             // argument behavior. A body without # is not sufficient for it.
             let dropped = plain
                 && alias.is_none()
-                && crate::language::signature::command_definition_body(
+                && crate::symbols::commands::command_definition_body(
                     &doc.text.source,
                     &doc.syntax,
                     entry,

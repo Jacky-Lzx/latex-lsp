@@ -1,9 +1,9 @@
 //! Static, project-scoped call hierarchy for uniquely declared user macros.
 use crate::rpc::{Error, ErrorCode, Result};
 use crate::{
-    language::signature::CommandSignatures,
     parser::syntax,
     project::workspace::{Document, DocumentKind, Workspace},
+    symbols::commands::CommandSignatures,
 };
 use lsp_types::*;
 use serde::{Deserialize, Serialize};
@@ -102,7 +102,7 @@ fn modified() -> Error {
     }
 }
 fn declaration_start(doc: &Document, entry: &syntax::Entry) -> usize {
-    crate::language::signature::command_declaration_start(&doc.syntax, entry)
+    crate::symbols::commands::command_declaration_start(&doc.syntax, entry)
         .unwrap_or(entry.span.start)
 }
 impl Index {
@@ -163,9 +163,9 @@ impl Index {
         let mut definitions = Vec::new();
         for (uri, doc) in &docs {
             let bodies =
-                crate::language::signature::definition_body_spans(&doc.text.source, &doc.syntax);
+                crate::symbols::commands::definition_body_spans(&doc.text.source, &doc.syntax);
             for entry in &doc.syntax.definitions {
-                let Some(body) = crate::language::signature::command_definition_body(
+                let Some(body) = crate::symbols::commands::command_definition_body(
                     &doc.text.source,
                     &doc.syntax,
                     entry,
@@ -233,7 +233,7 @@ impl Index {
                 })
                 .collect();
             let mut data: Vec<_> =
-                crate::language::signature::definition_data_spans(&doc.text.source, &doc.syntax)
+                crate::symbols::commands::definition_data_spans(&doc.text.source, &doc.syntax)
                     .into_iter()
                     .filter(|span| !eligible_data.contains(&(span.start, span.end)))
                     .collect();

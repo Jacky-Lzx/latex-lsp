@@ -107,9 +107,10 @@ fn occurrences(doc: &Document) -> Vec<Occurrence> {
         return vec![];
     }
     let source = &doc.text.source;
-    let positions = crate::language::signature::CommandSignatures::source_context(std::iter::once(
-        (source.as_str(), &doc.syntax),
-    ))
+    let positions = crate::symbols::commands::CommandSignatures::source_context(std::iter::once((
+        source.as_str(),
+        &doc.syntax,
+    )))
     .source_command_positions(source, &doc.syntax);
     let expl3 = crate::symbols::expl3::occurrences(doc);
     let mut result = Vec::new();

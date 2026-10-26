@@ -1,8 +1,8 @@
 //! Ordered source traversal for environments spanning literal input calls.
 use crate::{
-    language::signature::{definition_body_spans, CommandSignatures, EnvironmentCall},
     parser::syntax::{self, QuickFix},
     project::workspace::{resolve_file_path, DocumentKind, Workspace},
+    symbols::commands::{definition_body_spans, CommandSignatures, EnvironmentCall},
 };
 use lsp_types::{DiagnosticRelatedInformation, Location, Url};
 use std::collections::{BTreeMap, BTreeSet};

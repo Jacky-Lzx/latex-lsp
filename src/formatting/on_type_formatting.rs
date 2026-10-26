@@ -1,9 +1,9 @@
 //! Bounded local indentation; never launches a formatter or changes TeX tokens.
 use crate::rpc::Result;
 use crate::{
-    language::signature::CommandSignatures,
     parser::syntax,
     project::workspace::{Document, DocumentKind, Workspace},
+    symbols::commands::CommandSignatures,
 };
 use lsp_types::*;
 use std::collections::BTreeSet;
@@ -210,7 +210,7 @@ pub(crate) fn edits(
             .iter()
             .map(|entry| (entry.span.start, entry.span.end))
             .collect(),
-        deferred: crate::language::signature::definition_body_spans(&doc.text.source, &doc.syntax),
+        deferred: crate::symbols::commands::definition_body_spans(&doc.text.source, &doc.syntax),
         signatures,
     };
     let Some(current) = structure(doc, start, end, &context) else {

@@ -1,8 +1,8 @@
 //! Exclude declarations proved to be data, without certifying unknown code.
 use crate::{
-    language::signature::{source_alias, CommandSignatures},
     parser::syntax::{self, Entry},
     project::workspace::{Document, DocumentKind, Workspace},
+    symbols::commands::{source_alias, CommandSignatures},
 };
 use lsp_types::Url;
 use std::collections::{BTreeMap, BTreeSet};
@@ -311,7 +311,7 @@ fn readers(
                 .flatten();
             let dropped = plain
                 && alias.is_none()
-                && crate::language::signature::command_definition_body(
+                && crate::symbols::commands::command_definition_body(
                     &doc.text.source,
                     &doc.syntax,
                     entry,

@@ -95,7 +95,7 @@ impl<'a> Index<'a> {
 
 pub(crate) fn comments(doc: &Document, entry: &syntax::Entry) -> Option<String> {
     let source = &doc.text.source;
-    let declaration = crate::language::signature::command_declaration_start(&doc.syntax, entry)?;
+    let declaration = crate::symbols::commands::command_declaration_start(&doc.syntax, entry)?;
     let line_start = source[..declaration].rfind('\n').map_or(0, |at| at + 1);
     let mut prefix = &source[line_start..declaration];
     loop {
