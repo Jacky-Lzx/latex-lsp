@@ -34,6 +34,45 @@ export async function run(): Promise<void> {
   assert.equal((await status())?.status, 'idle');
   console.log('PASS activation and command registration');
 
+  const linked = await vscode.workspace.openTextDocument({ language: 'latex',
+    content: '\\begin{quote}\n\\begin{quote}Nested\\end{quote}\n\\end{quote}\n' });
+  const linkedEditor = await vscode.window.showTextDocument(linked);
+  const linkedConfig = vscode.workspace.getConfiguration('editor', linked);
+  assert.equal(linkedConfig.get('linkedEditing'), true, 'TeX linked editing is enabled by default');
+  linkedEditor.selection = new vscode.Selection(0, 9, 0, 9);
+  await new Promise(resolve => setTimeout(resolve, 800));
+  await vscode.commands.executeCommand('type', { text: 'x' });
+  await eventually('typing in begin updates only its matching end', () => linked.getText(),
+    text => text === '\\begin{quxote}\n\\begin{quote}Nested\\end{quote}\n\\end{quxote}\n');
+  await vscode.commands.executeCommand('undo');
+  await eventually('undo restores both linked names', () => linked.getText(),
+    text => text === '\\begin{quote}\n\\begin{quote}Nested\\end{quote}\n\\end{quote}\n');
+  await vscode.window.showTextDocument(linked, { selection: new vscode.Range(2, 10, 2, 10) });
+  await new Promise(resolve => setTimeout(resolve, 800));
+  assert.deepEqual(vscode.window.activeTextEditor?.selection.active, new vscode.Position(2, 10));
+  await vscode.commands.executeCommand('type', { text: '*' });
+  await eventually('typing in end updates only its matching begin', () => linked.getText(),
+    text => text === '\\begin{quote*}\n\\begin{quote}Nested\\end{quote}\n\\end{quote*}\n');
+  await vscode.window.showTextDocument(linked, { selection: new vscode.Range(0, 7, 0, 13) });
+  await new Promise(resolve => setTimeout(resolve, 800));
+  await vscode.commands.executeCommand('type', { text: 'itemize' });
+  await eventually('replacing the whole name updates both delimiters', () => linked.getText(),
+    text => text === '\\begin{itemize}\n\\begin{quote}Nested\\end{quote}\n\\end{itemize}\n');
+  console.log('PASS automatic begin/end linked typing, whole-name replacement, nested isolation, and undo');
+  await linkedConfig.update('linkedEditing', false, vscode.ConfigurationTarget.Global, true);
+  await eventually('explicit user opt-out disables linked editing',
+    () => vscode.workspace.getConfiguration('editor', linked).get('linkedEditing'), enabled => enabled === false);
+  await vscode.window.showTextDocument(linked, { selection: new vscode.Range(0, 9, 0, 9) });
+  await new Promise(resolve => setTimeout(resolve, 800));
+  await vscode.commands.executeCommand('type', { text: 'z' });
+  assert.equal(linked.getText(), '\\begin{itzemize}\n\\begin{quote}Nested\\end{quote}\n\\end{itemize}\n');
+  await linkedConfig.update('linkedEditing', undefined, vscode.ConfigurationTarget.Global, true);
+  for (const languageId of ['latex', 'tex', 'plaintex']) {
+    assert.equal(vscode.workspace.getConfiguration('editor', { uri: mainUri, languageId }).get('linkedEditing'), true);
+  }
+  assert.equal(vscode.workspace.getConfiguration('editor', { uri: mainUri, languageId: 'bibtex' }).get('linkedEditing'), false);
+  console.log('PASS linked editing respects explicit user opt-out and stays scoped to TeX languages');
+
   const reference = document.positionAt(document.getText().indexOf('sec:intro') + 2);
   const definitions = await eventually('cross-file definition',
     () => vscode.commands.executeCommand<vscode.Location[]>('vscode.executeDefinitionProvider', mainUri, reference),

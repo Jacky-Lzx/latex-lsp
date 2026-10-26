@@ -27,6 +27,11 @@
     "languages": [
       { "id": "bst", "aliases": ["BibTeX Style", "bst"], "extensions": [".bst"] }
     ],
+    "configurationDefaults": {
+      "[latex]": { "editor.linkedEditing": true },
+      "[tex]": { "editor.linkedEditing": true },
+      "[plaintex]": { "editor.linkedEditing": true }
+    },
     "configuration": {
       "title": "TeXquill",
       "properties": {

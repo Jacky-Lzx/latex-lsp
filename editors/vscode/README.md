@@ -50,7 +50,9 @@ The extension runs in trusted local file workspaces. With Remote SSH, WSL, or De
 
 Each VS Code window uses one server, supporting multiple workspace folders. `texquill.settings` supplies window-wide defaults; use `.texquill.json` for folder or project overrides. See [project settings](https://github.com/Jacky-Lzx/texquill/blob/main/docs/project-settings.md). Avoid treating a common parent directory of unrelated projects as one project root.
 
-Use VS Code's standard completion, navigation, rename, formatting, and quick fix actions. New documents support completion after selecting the LaTeX or BibTeX language mode. Save the project and its dependencies before building. On-type formatting, linked editing, and inlay hints also follow VS Code's own settings.
+Use VS Code's standard completion, navigation, rename, formatting, and quick fix actions. New documents support completion after selecting the LaTeX or BibTeX language mode. Save the project and its dependencies before building. On-type formatting and inlay hints follow VS Code's own settings.
+
+Environment name linked editing is enabled by default for LaTeX, TeX, and Plain TeX. Editing the name in a matching `\begin{name}` or `\end{name}` updates its partner, including nested environments. This uses the server's linked editing ranges and VS Code's native editing support. To disable it, set `"editor.linkedEditing": false` in the corresponding language-specific settings (for example, `[latex]`); other languages keep their existing defaults.
 
 The command palette provides:
 
