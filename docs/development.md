@@ -5,6 +5,7 @@
 Development setup, quality checks, and module responsibilities. For usage, see the [project README](../README.md).
 
 - [Build checks and tests](#build-checks-and-tests)
+- [Documentation website](documentation.md)
 - [Parsing scope](#parsing-scope)
 - [Module directories and dependency conventions](#module-directory-and-dependency-conventions)
 - [Code structure and analysis cache](#code-structure-and-analysis-cache)

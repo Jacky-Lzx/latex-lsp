@@ -4,6 +4,8 @@ A LaTeX language server written in Rust, with completion, navigation, rename, fo
 
 [Getting started](docs/install.md) · [VS Code extension](editors/vscode/README.md) · [Documentation](docs/README.md) · [Benchmarks](docs/benchmarks.md) · [MIT license](LICENSE)
 
+The documentation website can be previewed locally with `npm ci` and `npm run docs:dev`. See [website maintenance](docs/documentation.md) for production builds and GitHub Pages setup.
+
 ## LSP support and comparison with texlab
 
 Reviewed on 2026-10-26. TeXquill reflects the implementation in this repository; [texlab](https://github.com/latex-lsp/texlab) reflects `master` at commit [`94e6c09`](https://github.com/latex-lsp/texlab/tree/94e6c094ae628125073b2cf70c11dddaaa092140), retrieved on that date.
