@@ -2437,6 +2437,7 @@ pub(crate) fn has_source_sets(
 ) -> bool {
     docs.iter().any(|(_, doc)| {
         let context = Context::new(doc, signatures);
+        let positions = std::cell::OnceCell::new();
         doc.syntax
             .commands
             .iter()
@@ -2456,9 +2457,16 @@ pub(crate) fn has_source_sets(
                     .unwrap_or((&command.name, command.span.clone()));
                 name == "defbibentryset"
                     || signatures.invokes_builtin(name, "defbibentryset")
-                    // An unresolved named invocation can construct a source
-                    // declaration. Own that namespace until execution is proved.
+                    // An unresolved executed name can construct a source set.
+                    // Names stored in macro bodies or consumed as declaration
+                    // operands do not execute merely because a theme is loaded.
                     || matches!(name, "csuse" | "csname")
+                        && !doc.syntax.control_operands.contains(&command.span.start)
+                        && positions
+                            .get_or_init(|| {
+                                signatures.source_command_positions(&doc.text.source, &doc.syntax)
+                            })
+                            .contains(&command.span.start)
             })
     })
 }

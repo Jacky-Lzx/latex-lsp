@@ -442,6 +442,52 @@ fn static_unrelated_calls_and_literal_dynamic_examples_keep_ordinary_book_edits(
 }
 
 #[test]
+fn recorded_theme_name_operands_preserve_citation_completion_and_navigation() {
+    let theme = r"\ProvidesPackage{theme}
+\def\DefineOption#1#2#3{%
+  \DeclareOptionBeamer{#3}{\expandafter\def\csname theme@#1@#2\endcsname{#3}}%
+}
+\def\ifEqualOption#1#2#3{\edef\tempvar{\csname theme@#1@#2\endcsname}}
+\newcommand{\definelogo}[4]{%
+  \expandafter\providecommand\csname #1\endcsname[1][]{#2}%
+}
+\AtBeginDocument{%
+  \defbeamertemplate*{frametitle}{theme}[1][]{%
+    \csname beamer@fte#1\endcsname
+  }%
+}
+\endinput
+";
+    for prefix in ["", "pa", "Raw", "parent"] {
+        let (dir, mut ws, main, bib) = setup(&format!(r"\cite{{{prefix}}}"));
+        let path = dir.path().join("theme.sty");
+        std::fs::write(&path, theme).unwrap();
+        let uri = Url::from_file_path(path).unwrap();
+        // Themes loaded through Beamer enter the source scope through the
+        // compiler recorder, without a literal usepackage in the main file.
+        ws.recorded_inputs
+            .insert(main.clone(), std::collections::BTreeSet::from([uri]));
+        ws.refresh_project(&main);
+        let doc = &ws.documents[&main];
+        let start = doc.text.source.find(r"\cite{").unwrap() + 6;
+        let items = features::completion(&ws, &main, doc.text.position(start + prefix.len()));
+        let candidate = items.iter().find(|item| item.label == "parent");
+        assert!(candidate.is_some(), "{prefix}: {items:?}");
+        let Some(CompletionTextEdit::Edit(edit)) = &candidate.unwrap().text_edit else {
+            panic!("missing citation edit")
+        };
+        assert_eq!(edit.range, doc.text.range(start, start + prefix.len()));
+        assert_eq!(edit.new_text, "parent");
+        if prefix == "parent" {
+            assert_eq!(
+                features::definitions(&ws, &main, doc.text.position(start + 1)),
+                vec![location(&ws, &bib, "@book{", "parent")],
+            );
+        }
+    }
+}
+
+#[test]
 fn incomplete_default_project_signatures_do_not_expose_a_partial_source_union() {
     let definitions = (0..4097)
         .map(|mut i| {
