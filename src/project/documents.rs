@@ -12,6 +12,16 @@ pub type Iter<'a> = std::iter::Map<
 >;
 
 impl Documents {
+    pub(crate) fn same_revisions(&self, other: &Self) -> bool {
+        self.len() == other.len()
+            && self.0.iter().all(|(uri, doc)| {
+                other
+                    .0
+                    .get(uri)
+                    .is_some_and(|other| Arc::ptr_eq(doc, other))
+            })
+    }
+
     pub fn get(&self, uri: &Url) -> Option<&Document> {
         self.0.get(uri).map(Arc::as_ref)
     }

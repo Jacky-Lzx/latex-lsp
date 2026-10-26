@@ -149,7 +149,7 @@ impl Context {
         Self {
             inputs: vec![],
             databases: 0,
-            complete: !crate::server::output::truncated(log),
+            complete: !crate::process::output::truncated(log),
             documents: BTreeMap::new(),
             bytes: 0,
             field_warnings: fields::Warnings::new(log),

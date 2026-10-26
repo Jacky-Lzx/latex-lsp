@@ -152,7 +152,7 @@ fn texmf_paths(executable: &str, cancelled: &impl Fn() -> bool) -> Option<String
             _ => std::thread::sleep(Duration::from_millis(10)),
         }
     };
-    crate::compilation::build::kill_group(&mut child);
+    crate::process::kill_group(&mut child);
     let _ = child.wait();
     let output = reader.join().ok().flatten();
     success.then_some(output).flatten()

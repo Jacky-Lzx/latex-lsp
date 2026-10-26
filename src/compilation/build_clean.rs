@@ -240,7 +240,7 @@ impl Plan {
                     .read_to_string(&mut contents)
                     .map_err(|e| e.to_string())?;
                 if contents.len() <= 4 * 1024 * 1024
-                    && !crate::server::output::truncated(&contents)
+                    && !crate::process::output::truncated(&contents)
                     && contents.lines().count() <= 32768
                 {
                     let mut pwd = root_path.parent().unwrap().to_owned();

@@ -115,7 +115,7 @@ impl Sources {
 
 pub(crate) fn parse(root: &Path, input: &Path, transcript: &Path, log: &str) -> Report {
     let mut report = Report {
-        truncated: crate::server::output::truncated(log),
+        truncated: crate::process::output::truncated(log),
         ..Default::default()
     };
     let lines: Vec<_> = log.lines().take(32769).collect();

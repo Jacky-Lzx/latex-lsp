@@ -1,0 +1,7 @@
+//! Compiler execution API; service coordination lives in server::builds.
+mod execution;
+pub(crate) use execution::{capture, reject_outdated_pdf, run_with_mode};
+pub use execution::{rebuild, run, Outcome};
+
+// Preserve existing public callers while internal users use the owning subsystem.
+pub use crate::server::builds::{BuildFinished, BuildManager, BuildStarted};

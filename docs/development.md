@@ -39,9 +39,11 @@ macOS 上运行测试时，可使用 `TMPDIR=/private/tmp cargo test --locked`�
 
 源码按职责归入目录，每个目录通过 `mod.rs` 声明所属模块：
 
+共享子进程任务、进程组取消和有界输出读取位于内部 `process/`，供编译、格式化、ChkTeX 与发行版发现使用。
+
 | 目录 | 职责 |
 | --- | --- |
-| [`server/`](../src/server/mod.rs) | `Backend`、LSP 请求处理、有序消息分派和外部任务生命周期 |
+| [`server/`](../src/server/mod.rs) | `Backend`、LSP 请求处理、有序消息分派、构建协调和结果投递 |
 | [`config/`](../src/config/mod.rs) | 服务配置、项目覆盖和 latexmk 配置读取 |
 | [`project/`](../src/project/mod.rs) | 文档工作区、项目发现、输入与资源路径、发行版和宏包元数据 |
 | [`parser/`](../src/parser/mod.rs) | LaTeX/BibTeX 语法、token 边界及 FancyVerb、listings、minted 读取器 |
@@ -51,7 +53,7 @@ macOS 上运行测试时，可使用 `TMPDIR=/private/tmp cargo test --locked`�
 | [`editing/`](../src/editing/mod.rs) | 文件移动与重命名、重构、代码操作与快速修复 |
 | [`formatting/`](../src/formatting/mod.rs) | LaTeX/BibTeX 的全文、范围和输入时格式化 |
 | [`diagnostics/`](../src/diagnostics/mod.rs) | 源码诊断、ChkTeX 和按客户端能力投递的诊断报告 |
-| [`compilation/`](../src/compilation/mod.rs) | 后台编译、文献与索引工具、日志、产物、来源快照及 SyncTeX |
+| [`compilation/`](../src/compilation/mod.rs) | 编译执行、文献与索引工具、日志、产物、来源快照及 SyncTeX |
 
 [`lib.rs`](../src/lib.rs) 只声明子系统；[`main.rs`](../src/main.rs) 负责 stdio 服务启动和传输生命周期；[`text.rs`](../src/text.rs) 保留通用文本位置与编辑工具。LSP 协议处理集中在 [`server/backend.rs`](../src/server/backend.rs)，具体功能由所属子系统实现。
 
@@ -60,6 +62,8 @@ macOS 上运行测试时，可使用 `TMPDIR=/private/tmp cargo test --locked`�
 模块内单元测试与实现一起迁移；`tests/` 中的集成测试入口及共享夹具保持原有布局，现有 `cargo test --test <名称>` 命令继续有效。文献日志解析的子模块保留在 `bibliography/bib_diagnostics/`，其缓存与来源校验仍由父模块统一管理。
 
 ## 代码结构与分析缓存
+
+[`compilation/build/execution.rs`](../src/compilation/build/execution.rs) 只执行工具并返回 `Outcome`；[`server/builds/`](../src/server/builds/mod.rs) 管理连接内构建队列，由 `completion.rs` 校验、提交工作区结果并发送通知。原 `compilation::build::BuildManager` 等公开路径保留兼容导出，内部使用实际所属路径。TeX 与文献工具日志在 `compilation/build_log/` 内分开实现，既有公开解析入口不变。
 
 共享命令语义归入 [`symbols/commands/`](../src/symbols/commands/mod.rs)：内置参数目录、声明读取和含义解析分别维护；hook 参数分析与声明文档也归入 `symbols`。解析、项目发现和符号查询直接依赖这些语义模块。`language/signature.rs` 负责 LSP 参数提示、活动参数位置和补全片段生成，不再作为其他子系统的命令分析入口。
 
@@ -71,7 +75,7 @@ push 诊断在独立工作区快照上后台计算，75 ms 内的连续编辑合
 
 pull 诊断在分析前查询有界缓存。结果同时绑定工作区修订号与分析实际读取的磁盘路径状态，包括缺失文件、项目配置、latexmk 配置及辅助文件；这些输入未变时可直接返回 full 或 unchanged。文件观察数量和缓存字节均有预算，超限时重新分析。延迟文件通知若未改变诊断内容与文档版本，仍保留原有 resultId。
 
-语言查询和 pull 诊断按消息顺序捕获独立工作区快照，后台计算期间不持有工作区读锁；取消后的后台任务也不会阻塞编辑或保存。语言分析使用独立的四个工作名额，名额随实际计算持有至结束，取消请求不会提前释放仍在计算的名额。生成重命名、文件移动和输入时格式化编辑的查询在返回前检查工作区修订，输入变化时返回 ContentModified。命令式代码操作保留消息顺序位置直至客户端确认 applyEdit，避免后续文档通知越过尚未确认的编辑。等待诊断缓存的请求不占用交互请求的并行名额。补全、诊断、导航、引用、重命名、悬停和参数提示在单次查询内复用最多四个源码依赖图和 16 组依赖遍历结果，查询结束即清空。保存通知请求完整文本，在编译前校准该文档的快照，保留其他文档的未保存内容与编译检查。
+语言查询和 pull 诊断按消息顺序捕获独立工作区快照，后台计算期间不持有工作区读锁；取消后的后台任务也不会阻塞编辑或保存。语言分析使用独立的四个工作名额，名额随实际计算持有至结束，取消请求不会提前释放仍在计算的名额。生成重命名、文件移动和输入时格式化编辑的查询在返回前检查工作区修订，源码修订变化时返回 ContentModified；只有后台元数据变化而所有源码修订相同时，使用最新快照重算一次。命令式代码操作保留消息顺序位置直至客户端确认 applyEdit，避免后续文档通知越过尚未确认的编辑。等待诊断缓存的请求不占用交互请求的并行名额。补全、诊断、导航、引用、重命名、悬停和参数提示在单次查询内复用最多四个源码依赖图和 16 组依赖遍历结果，查询结束即清空。保存通知请求完整文本，在编译前校准该文档的快照，保留其他文档的未保存内容与编译检查。
 
 [`symbols/query_cache.rs`](../src/symbols/query_cache.rs) 为引用、重命名、重命名预检查和诊断建立符号分析缓存，并同时建立源码图缓存。命名引用、标签声明及项目命令签名三类结果各最多四项，共享 8 MiB 估算预算，超限只计算不缓存；键包含工作区身份与原始查询文档／精确项目范围。嵌套查询拥有独立缓存，正常或异常结束均恢复外层缓存，查询结束后清空缓存。补全、定义和悬停也建立符号分析及源码图缓存，按 workspace 和精确项目范围复用相同顺序的 LaTeX 来源签名；参数提示使用源码图缓存。文献分区中显式传入的资源上下文不使用普通命名引用缓存。
 

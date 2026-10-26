@@ -1,7 +1,7 @@
 //! LSP backend and protocol handlers.
 use crate::project::store::WorkspaceStore;
 use crate::{
-    compilation::{auxiliary, build, recorder, synctex},
+    compilation::{auxiliary, recorder, synctex},
     config::{self, project_config},
     diagnostics::{chktex, diagnostic, diagnostic_inputs},
     editing::{self, code_action_resolve, file_operations, refactor},
@@ -11,8 +11,9 @@ use crate::{
         semantic_cache, signature,
     },
     parser::syntax,
+    process::tasks,
     project::distribution,
-    server::{dispatch, queries, tasks},
+    server::{builds, dispatch, queries},
 };
 
 use crate::project::workspace::{self, document_uri, Workspace};
@@ -51,7 +52,7 @@ fn validate_diagnostic_identifier(identifier: Option<&str>) -> Result<()> {
 pub struct Backend {
     client: Client,
     workspace: WorkspaceStore,
-    builds: build::BuildManager,
+    builds: builds::BuildManager,
     sync_queries: synctex::Queries,
     external_tasks: tasks::Tasks,
     queries: queries::Queries,
@@ -64,7 +65,7 @@ impl Backend {
     pub fn new(client: Client) -> Self {
         let workspace = WorkspaceStore::default();
         Self {
-            builds: build::BuildManager::new(client.clone(), workspace.clone()),
+            builds: builds::BuildManager::new(client.clone(), workspace.clone()),
             sync_queries: synctex::Queries::default(),
             external_tasks: tasks::Tasks::default(),
             queries: queries::Queries::default(),
@@ -125,22 +126,35 @@ impl Backend {
 
     async fn read_edit_query<T: Send + 'static>(
         &self,
-        query: impl FnOnce(&Workspace) -> Result<T> + Send + 'static,
+        query: impl FnOnce(&Workspace) -> Result<T> + Clone + Send + 'static,
     ) -> Result<T> {
-        let (workspace, revision) = {
+        let (mut workspace, mut revision) = {
             let workspace = self.workspace.read().await;
             (workspace.clone(), self.workspace.revision())
         };
+        let documents = workspace.documents.clone();
         dispatch::release();
-        let result = self.queries.run(move |_| query(&workspace)).await?;
-        if self.workspace.revision() != revision {
-            return Err(crate::rpc::Error {
-                code: crate::rpc::ErrorCode::ServerError(-32801),
-                message: "Analysis inputs changed; request edits again".into(),
-                data: None,
-            });
+        for attempt in 0..2 {
+            let operation = query.clone();
+            let result = self.queries.run(move |_| operation(&workspace)).await?;
+            let current = self.workspace.read().await;
+            if self.workspace.revision() == revision {
+                return Ok(result);
+            }
+            // Startup discovery or build metadata can finish during a query.
+            // Recompute once with the new metadata only if every source revision
+            // is identical; changed source positions must never be reinterpreted.
+            if attempt == 1 || !documents.same_revisions(&current.documents) {
+                return Err(crate::rpc::Error {
+                    code: crate::rpc::ErrorCode::ServerError(-32801),
+                    message: "Analysis inputs changed; request edits again".into(),
+                    data: None,
+                });
+            }
+            workspace = current.clone();
+            revision = self.workspace.revision();
         }
-        Ok(result)
+        unreachable!("An edit query returns after at most two analyses")
     }
 
     async fn reload_distribution(&self) {
@@ -1695,31 +1709,51 @@ mod read_query_tests {
     use tokio::sync::oneshot;
 
     #[tokio::test]
-    async fn edit_queries_release_updates_and_reject_results_from_replaced_inputs() {
-        let (client, _outgoing) = Client::new();
-        let backend = Arc::new(Backend::new(client));
-        let mut queue = dispatch::RequestQueue::default();
-        let (started, start) = oneshot::channel();
-        let (finish, finished) = oneshot::channel();
-        let first_backend = backend.clone();
-        let first = tokio::spawn(queue.ordered(async move {
-            first_backend
-                .read_edit_query(move |_| {
-                    let _ = started.send(());
-                    let _ = finished.blocking_recv();
-                    Ok(())
-                })
+    async fn edit_queries_retry_metadata_updates_but_reject_changed_source_positions() {
+        for source_changed in [false, true] {
+            let (client, _outgoing) = Client::new();
+            let backend = Arc::new(Backend::new(client));
+            let uri = Url::parse("untitled:edit-query.tex").unwrap();
+            backend
+                .workspace
+                .write()
                 .await
-        }));
-        start.await.unwrap();
-        let writer = queue.ordered(async move {
-            let mut workspace = backend.workspace.write().await;
-            workspace.client.snippets = true;
-        });
-        let updated = tokio::time::timeout(Duration::from_secs(1), writer).await;
-        let _ = finish.send(());
-        updated.expect("An edit query blocked newer document inputs");
-        assert_eq!(i64::from(first.await.unwrap().unwrap_err().code), -32801);
+                .open(uri.clone(), "old".into(), 1);
+            let mut queue = dispatch::RequestQueue::default();
+            let (started, start) = oneshot::channel();
+            let (finish, finished) = oneshot::channel();
+            let signals = Arc::new(std::sync::Mutex::new(Some((started, finished))));
+            let first_backend = backend.clone();
+            let first = tokio::spawn(queue.ordered(async move {
+                first_backend
+                    .read_edit_query(move |workspace| {
+                        let signals = signals.lock().unwrap().take();
+                        if let Some((started, finished)) = signals {
+                            let _ = started.send(());
+                            let _ = finished.blocking_recv();
+                        }
+                        Ok(workspace.client.snippets)
+                    })
+                    .await
+            }));
+            start.await.unwrap();
+            let writer = queue.ordered(async move {
+                let mut workspace = backend.workspace.write().await;
+                workspace.client.snippets = true;
+                if source_changed {
+                    workspace.open(uri, "new".into(), 2);
+                }
+            });
+            let updated = tokio::time::timeout(Duration::from_secs(1), writer).await;
+            let _ = finish.send(());
+            updated.expect("An edit query blocked newer document inputs");
+            let result = first.await.unwrap();
+            if source_changed {
+                assert_eq!(i64::from(result.unwrap_err().code), -32801);
+            } else {
+                assert!(result.unwrap(), "The metadata update was not incorporated");
+            }
+        }
     }
 
     #[tokio::test]

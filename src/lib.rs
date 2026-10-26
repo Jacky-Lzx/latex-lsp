@@ -8,6 +8,7 @@ pub mod editing;
 mod formatting;
 pub mod language;
 pub mod parser;
+mod process;
 pub mod project;
 pub mod rpc;
 pub mod server;

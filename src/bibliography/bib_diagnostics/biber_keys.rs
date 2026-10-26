@@ -83,7 +83,7 @@ impl Sources {
     pub(super) fn new(log: &str) -> Self {
         Self {
             inputs: Vec::new(),
-            complete: !crate::server::output::truncated(log),
+            complete: !crate::process::output::truncated(log),
         }
     }
 

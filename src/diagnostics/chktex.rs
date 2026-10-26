@@ -2,7 +2,7 @@
 use crate::rpc::{Error, Result};
 use crate::{
     config::ChktexConfig,
-    server::tasks::{Cancellation, Task, Tasks},
+    process::tasks::{Cancellation, Task, Tasks},
     text::Text,
 };
 use lsp_types::*;
@@ -82,7 +82,7 @@ fn run(
             Ok(None) => std::thread::sleep(Duration::from_millis(10)),
         }
     };
-    crate::compilation::build::kill_group(&mut child);
+    crate::process::kill_group(&mut child);
     let _ = child.wait();
     let sent = writer.join();
     let output = output.join().ok().and_then(|value| value.ok());

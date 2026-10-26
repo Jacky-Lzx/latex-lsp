@@ -9,11 +9,11 @@ use lsp_types::{FormattingOptions, Range};
 use std::{collections::BTreeSet, ops::Range as Span};
 
 pub(crate) fn start(
-    tasks: &crate::server::tasks::Tasks,
+    tasks: &crate::process::tasks::Tasks,
     options: FormattingOptions,
     source: String,
     range: Option<Range>,
-) -> Result<crate::server::tasks::Task<String>> {
+) -> Result<crate::process::tasks::Task<String>> {
     formatting::validate_options(&options)?;
     tasks.start(move |cancel| run(source, &options, range, || cancel.cancelled()))
 }

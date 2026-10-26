@@ -139,7 +139,7 @@ pub(crate) fn execute(
             _ => std::thread::sleep(Duration::from_millis(25)),
         }
     };
-    crate::compilation::build::kill_group(&mut child);
+    crate::process::kill_group(&mut child);
     let _ = child.wait();
     let output = format!(
         "{}\n{}",

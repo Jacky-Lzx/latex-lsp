@@ -198,7 +198,7 @@ impl Plan {
                     inputs: crate::compilation::recorder::classified_bibliography_inputs(
                         &paths, &log,
                     ),
-                    truncated: crate::server::output::truncated(&log),
+                    truncated: crate::process::output::truncated(&log),
                 };
                 install(&staged_log, &final_log)?;
                 (Some(Box::new(report)), log)

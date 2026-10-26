@@ -21,12 +21,12 @@ use crate::{
 };
 
 pub(crate) fn start(
-    tasks: &crate::server::tasks::Tasks,
+    tasks: &crate::process::tasks::Tasks,
     config: FormattingConfig,
     options: FormattingOptions,
     source: String,
     directory: Option<PathBuf>,
-) -> Result<crate::server::tasks::Task<String>> {
+) -> Result<crate::process::tasks::Task<String>> {
     validate_options(&options)?;
     tasks.start(move |cancel| run(&config, &options, source, directory, || cancel.cancelled()))
 }
@@ -161,7 +161,7 @@ fn run(
             Ok(None) => std::thread::sleep(Duration::from_millis(10)),
         }
     };
-    crate::compilation::build::kill_group(&mut child);
+    crate::process::kill_group(&mut child);
     let _ = child.wait();
     let input = input.join();
     let output = output.join();

@@ -38,7 +38,7 @@ pub(crate) fn bibliography_outputs(
     output: &Path,
     contents: &str,
 ) -> BTreeSet<PathBuf> {
-    if crate::server::output::truncated(contents) || contents.lines().count() > 32768 {
+    if crate::process::output::truncated(contents) || contents.lines().count() > 32768 {
         return BTreeSet::new();
     }
     let Some(output) = output.canonicalize().ok() else {

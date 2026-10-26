@@ -374,7 +374,7 @@ fn query(project: &Project, arguments: &[String], cancel: &Cancellation) -> Resu
             _ => std::thread::sleep(Duration::from_millis(10)),
         }
     };
-    crate::compilation::build::kill_group(&mut child);
+    crate::process::kill_group(&mut child);
     let _ = child.wait();
     let output = stdout.join().unwrap_or_default();
     let errors = stderr.join().unwrap_or_default();
