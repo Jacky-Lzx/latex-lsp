@@ -138,7 +138,11 @@ fn definitions_references_hover_and_signatures_respect_the_active_paper() {
         let HoverContents::Markup(MarkupContent { value, .. }) = hover.contents else {
             panic!();
         };
-        assert!(value.contains("/a/"), "{value}");
+        if target_file.ends_with(".bib") {
+            assert_eq!(value, "```bibtex\n@book{book,title={Shared name}}\n```");
+        } else {
+            assert!(value.contains("/a/"), "{value}");
+        }
     }
     let position = text.position(text.source.find("second}").unwrap() + 3);
     let help = signature::help(&workspace, &main, position).unwrap();

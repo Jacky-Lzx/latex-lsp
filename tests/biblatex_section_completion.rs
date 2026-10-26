@@ -75,7 +75,7 @@ fn section_completion_uses_active_metadata_and_replaces_the_entire_key_suffix() 
             .iter()
             .find(|item| item.label == "collision")
             .unwrap_or_else(|| panic!("{body}: {items:?}"));
-        let detail = completion::preview(&item);
+        let detail = completion::preview(item);
         assert!(
             detail.contains(expected_title) && !detail.contains(expected_library),
             "{detail}"

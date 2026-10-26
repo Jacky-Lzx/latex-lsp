@@ -1,5 +1,8 @@
 use latex_lsp::{language::features, project::workspace::Workspace};
 use lsp_types::*;
+
+#[path = "support/completion.rs"]
+mod completion;
 fn setup(body: &str, bib: &str) -> (tempfile::TempDir, Workspace, Url, Url) {
     let dir = tempfile::tempdir().unwrap();
     let source = format!(
@@ -92,14 +95,10 @@ fn disjoint_aliases_are_candidates_with_their_owner_metadata_and_types() {
     for name in ["collected", "parent", "old", "member", "data-old"] {
         assert!(items.iter().any(|i| i.label == name), "{name}: {items:?}");
     }
-    assert!(items
-        .iter()
-        .find(|i| i.label == "old")
-        .unwrap()
-        .detail
-        .as_ref()
-        .unwrap()
-        .contains("Alias title"));
+    assert_eq!(
+        completion::preview(items.iter().find(|i| i.label == "old").unwrap()),
+        "```bibtex\n@book{parent,title={Alias title},ids={old}}\n```"
+    );
     let source = ws.documents[&main]
         .text
         .source

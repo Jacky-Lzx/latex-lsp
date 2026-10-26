@@ -86,12 +86,20 @@ fn ids_aliases_complete_navigate_hover_and_rename_independently_of_primary_keys(
     let HoverContents::Markup(hover) = hover.contents else {
         panic!()
     };
-    assert!(hover.value.contains("Biblatex alias for main"), "{hover:?}");
+    assert_eq!(hover.kind, MarkupKind::Markdown);
+    assert_eq!(
+        hover.value,
+        "```bibtex\n@book{main,title={Literal legacy😀},IDS={ legacy😀 , other }}\n```"
+    );
     let completion = features::completion(&workspace, &main, position)
         .into_iter()
         .find(|item| item.label == "legacy😀")
         .unwrap();
-    assert!(completion.detail.unwrap().contains("alias for main"));
+    assert!(completion.detail.is_none());
+    assert_eq!(
+        completion.documentation,
+        Some(Documentation::MarkupContent(hover))
+    );
     let relation = at(&workspace.documents[&bib], "crossref={legacy😀");
     assert!(features::completion(&workspace, &bib, relation)
         .iter()

@@ -1,5 +1,8 @@
 use latex_lsp::{language::features, project::workspace::Workspace};
 use lsp_types::*;
+
+#[path = "support/completion.rs"]
+mod completion;
 fn setup(body: &str) -> (tempfile::TempDir, Workspace, Url, Url) {
     let dir = tempfile::tempdir().unwrap();
     let source=format!("% 😀\r\n\\documentclass{{article}}\\usepackage{{biblatex}}\\DeclareBibliographyCategory{{group}}\\addbibresource{{data.bib}}\\begin{{document}}{body}\\end{{document}}");
@@ -89,15 +92,10 @@ fn early_real_requests_keep_raw_metadata_for_predicate_completion() {
     let (_dir, ws, main, _bib) =
         setup(r"\cite{parent}\ifentryinbib{par}{}{}\defbibentryset{parent}{member}\cite{parent}");
     let item = candidate(&ws, &main, r"\ifentryinbib{pa", "parent");
-    assert!(
-        item.detail.as_ref().unwrap().contains("Raw parent"),
-        "{item:?}"
+    assert_eq!(
+        completion::preview(&item),
+        "```bibtex\n@book{parent,title={Raw parent}}\n```"
     );
-    assert!(!item
-        .detail
-        .as_ref()
-        .unwrap()
-        .contains("Dynamic bibliography set"));
 }
 
 fn applied(ws: &Workspace, uri: &Url, item: CompletionItem) -> String {
@@ -160,7 +158,10 @@ fn predicate_candidates_do_not_change_request_position_cite_candidates() {
     let item = candidate(&ws, &main, r"\ifentryinbib{pa", "parent");
     assert!(item.detail.unwrap().contains("Dynamic bibliography set"));
     let item = candidate(&ws, &main, r"\cite{pa", "parent");
-    assert!(item.detail.unwrap().contains("Raw parent"));
+    assert_eq!(
+        completion::preview(&item),
+        "```bibtex\n@book{parent,title={Raw parent}}\n```"
+    );
     for early in [r"\cite{collected}", r"\cite{collected}\nocite{*}"] {
         let (_dir, ws, main, _bib) = setup(&format!(
             r"{early}\ifentryinbib{{col}}{{}}{{}}\defbibentryset{{collected}}{{member}}"
@@ -188,7 +189,7 @@ fn selected_sections_use_their_final_set_or_their_real_early_book_metadata() {
         );
         ws.open(main.clone(), source, 6);
         let item = candidate(&ws, &main, r"\ifentryinbib{pa", "parent");
-        let detail = item.detail.unwrap();
+        let detail = completion::preview(&item);
         assert!(
             detail.contains(if early {
                 "Selected parent"
@@ -199,9 +200,9 @@ fn selected_sections_use_their_final_set_or_their_real_early_book_metadata() {
         );
         assert!(!detail.contains("Raw parent"));
         if early {
-            assert!(detail.contains("selected.bib"));
+            assert!(!detail.contains("selected.bib"));
         } else {
-            assert!(detail.contains("main.tex"));
+            assert!(!detail.contains("main.tex"));
         }
     }
 }

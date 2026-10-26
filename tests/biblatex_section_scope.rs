@@ -1,6 +1,9 @@
 use latex_lsp::{editing, language::features, project::workspace::Workspace, text::Text};
 use lsp_types::*;
 
+#[path = "support/completion.rs"]
+mod completion;
+
 fn setup(header: &str) -> (tempfile::TempDir, Workspace, Url, Url, String) {
     let dir = tempfile::tempdir().unwrap();
     let source = format!(
@@ -77,9 +80,10 @@ fn selected_sections_keep_their_identities_and_reject_unproved_edits() {
             .find(|item| item.label == "collision");
         assert_eq!(candidate.is_some(), !definitions.is_empty(), "{header}");
         if let Some(candidate) = candidate {
-            let detail = candidate.detail.unwrap();
+            let detail = completion::preview(&candidate);
             assert!(
-                detail.contains("Selected") && detail.contains("section.bib"),
+                detail.contains("@book{collision,title={Selected}}")
+                    && !detail.contains("section.bib"),
                 "{header}: {detail}"
             );
         }

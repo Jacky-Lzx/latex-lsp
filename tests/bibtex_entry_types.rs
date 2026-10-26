@@ -6,6 +6,9 @@ use latex_lsp::{
 };
 use lsp_types::*;
 
+#[path = "support/completion.rs"]
+mod completion;
+
 fn insert(workspace: &mut Workspace, name: &str, source: &str) -> Url {
     let uri = Url::parse(&format!("file:///bibtex-entry-types/{name}")).unwrap();
     workspace
@@ -106,10 +109,7 @@ fn custom_type_identifiers_preserve_metadata_and_versioned_cross_file_renames() 
                 .into_iter()
                 .find(|i| i.label == old)
                 .unwrap();
-            assert!(completion
-                .detail
-                .unwrap()
-                .contains("Title: Literal book(old)"));
+            assert!(completion::preview(&completion).contains("title={Literal book(old)}"));
             assert_eq!(
                 features::references(&workspace, &main, position, true).len(),
                 3

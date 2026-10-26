@@ -1,6 +1,9 @@
 use latex_lsp::{language::features, project::workspace::Workspace, text::Text};
 use lsp_types::*;
 
+#[path = "support/completion.rs"]
+mod completion;
+
 fn setup(extra: &str, body: &str, shared: &str) -> (tempfile::TempDir, Workspace, Url) {
     let dir = tempfile::tempdir().unwrap();
     let source = format!(
@@ -43,7 +46,30 @@ fn check(ws: &Workspace, origin: &Url, marker: &str, target: Option<(&Url, &str)
         let HoverContents::Markup(contents) = hover.contents else {
             panic!()
         };
-        assert!(contents.value.contains(target.path()), "{}", contents.value);
+        if target.path().ends_with(".bib") {
+            assert_eq!(contents.kind, MarkupKind::Markdown);
+            let record = contents
+                .value
+                .strip_prefix("```bibtex\n")
+                .unwrap()
+                .strip_suffix("\n```")
+                .unwrap();
+            assert!(record.starts_with('@') && record.contains(key), "{record}");
+            assert!(dest.text.source.contains(record), "{record}");
+            assert!(
+                !contents.value.contains(target.path()),
+                "{}",
+                contents.value
+            );
+        } else if contents.value.contains("Dynamic bibliography set:") {
+            assert_eq!(contents.kind, MarkupKind::PlainText);
+            assert_eq!(
+                contents.value,
+                format!("{key}\n\nDynamic bibliography set: member")
+            );
+        } else {
+            assert!(contents.value.contains(target.path()), "{}", contents.value);
+        }
         if target.path().ends_with("section.bib") {
             assert!(
                 !contents.value.contains("Default parent"),
@@ -554,7 +580,10 @@ fn selected_relation_completion_rejects_default_only_keys_and_uses_selected_meta
         9,
     );
     let (item, updated) = completed(&ws, &bib, "crossref={par", "parent");
-    assert!(item.detail.unwrap().contains("Selected parent"));
+    assert_eq!(
+        completion::preview(&item),
+        "```bibtex\n@book{parent,title={Selected parent}}\n```"
+    );
     assert!(
         updated.contains("crossref={parent},xref={def}"),
         "{updated}"

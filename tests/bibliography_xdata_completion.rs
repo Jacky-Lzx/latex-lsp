@@ -1,5 +1,8 @@
 use latex_lsp::{language::features, project::workspace::Workspace, text::Text};
 use lsp_types::*;
+
+#[path = "support/completion.rs"]
+mod completion;
 fn project(extra: &str, body: &str, files: &[(&str, &str)]) -> (tempfile::TempDir, Workspace, Url) {
     let dir = tempfile::tempdir().unwrap();
     let source = format!(
@@ -59,21 +62,22 @@ fn xdata_candidates_require_xdata_declarations_including_ids_alias_owners() {
     let mut names: Vec<_> = candidates.iter().map(|item| item.label.as_str()).collect();
     names.sort();
     assert_eq!(names, vec!["data", "dataalias"]);
-    assert!(item(&ws, &bib, "xdata={", "data")
-        .detail
-        .unwrap()
-        .contains("Data preview"));
-    assert!(item(&ws, &bib, "xdata={", "dataalias")
-        .detail
-        .unwrap()
-        .contains("alias for data"));
+    let preview = "```bibtex\n@XDATA{data,IDS={dataalias},title={Data preview},publisher={Inherited publisher}}\n```";
+    assert_eq!(
+        completion::preview(&item(&ws, &bib, "xdata={", "data")),
+        preview
+    );
+    assert_eq!(
+        completion::preview(&item(&ws, &bib, "xdata={", "dataalias")),
+        preview
+    );
 }
 #[test]
 fn selected_xdata_candidates_keep_section_identity_and_type_filters_together() {
     let (_dir,ws,main)=project(r"\addsectionbib[label=chosen]{section.bib}",r"\newrefsection[chosen]\cite{child}",&[("refs.bib","@book{parent,title={Default book}} @xdata{defaultdata,publisher={Default}}"),("section.bib","@xdata{parent,title={Selected data},publisher={Selected publisher}} @book{ordinary} @book{child,xdata={parBAD}}")]);
     let bib = main.join("section.bib").unwrap();
     let candidate = item(&ws, &bib, "xdata={par", "parent");
-    assert!(candidate.detail.as_ref().unwrap().contains("Selected data"));
+    assert!(completion::preview(&candidate).contains("title={Selected data}"));
     assert_eq!(
         apply(&ws.documents[&bib].text.source, &candidate),
         ws.documents[&bib].text.source.replace("parBAD", "parent")
@@ -93,10 +97,10 @@ fn source_set_projects_keep_real_xdata_entries_and_remove_book_or_set_overrides(
         .map(|item| item.label)
         .collect();
     assert_eq!(names, vec!["data"]);
-    assert!(item(&ws, &bib, "xdata={", "data")
-        .detail
-        .unwrap()
-        .contains("Real data"));
+    assert_eq!(
+        completion::preview(&item(&ws, &bib, "xdata={", "data")),
+        "```bibtex\n@xdata{data,title={Real data},publisher={Real data}}\n```"
+    );
 }
 #[test]
 fn unfinished_xdata_values_keep_certified_types_and_quote_list_editing() {
@@ -138,10 +142,10 @@ fn unsaved_provider_type_changes_refresh_candidates_without_changing_consumers()
         "@XDATA{provider,title={Data preview},publisher={Data}}".into(),
         9,
     );
-    assert!(item(&ws, &bib, "xdata={pro", "provider")
-        .detail
-        .unwrap()
-        .contains("Data"));
+    assert_eq!(
+        completion::preview(&item(&ws, &bib, "xdata={pro", "provider")),
+        "```bibtex\n@XDATA{provider,title={Data preview},publisher={Data}}\n```"
+    );
     assert_eq!(ws.documents[&main].version, Some(5));
     ws.open(provider, "@book{provider,title={Book again}}".into(), 10);
     assert!(items(&ws, &bib, "xdata={pro").is_empty());

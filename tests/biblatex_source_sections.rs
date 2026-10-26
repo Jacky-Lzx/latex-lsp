@@ -36,12 +36,26 @@ fn check(ws: &Workspace, uri: &Url, position: Position, expected: &Location) {
         panic!()
     };
     assert!(
-        contents.value.contains(expected.uri.path()),
+        !contents.value.contains(expected.uri.path()),
         "{}",
         contents.value
     );
-    if expected.uri.path().ends_with("main.tex") {
-        assert!(contents.value.contains("member"), "{}", contents.value);
+    if !expected.uri.path().ends_with(".bib") {
+        assert_eq!(contents.kind, MarkupKind::PlainText);
+        assert_eq!(contents.value, "parent\n\nDynamic bibliography set: member");
+    } else {
+        assert_eq!(contents.kind, MarkupKind::Markdown);
+        let record = contents
+            .value
+            .strip_prefix("```bibtex\n")
+            .unwrap()
+            .strip_suffix("\n```")
+            .unwrap();
+        assert!(record.starts_with('@'), "{record}");
+        assert!(
+            ws.documents[&expected.uri].text.source.contains(record),
+            "{record}"
+        );
     }
 }
 #[test]

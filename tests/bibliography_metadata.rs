@@ -43,26 +43,27 @@ fn citation_metadata_reaches_hover_completion_and_symbols_without_changing_key_e
     let HoverContents::Markup(contents) = hover.contents else {
         panic!()
     };
-    assert_eq!(contents.kind, MarkupKind::PlainText);
+    assert_eq!(contents.kind, MarkupKind::Markdown);
+    assert_eq!(contents.value, "```bibtex\n@article{alpha, title={An alpha study 😀}, author=\"Ada Lovelace and Grace Hopper\", year=2026}\n```");
     let completions = features::completion(&workspace, &main, position);
     let completion = completions
         .iter()
         .find(|item| item.label == "alpha")
         .unwrap();
     let symbols = features::symbols(&workspace.documents[&database]);
-    for text in [
-        &contents.value,
-        completion.detail.as_ref().unwrap(),
-        symbols[0].detail.as_ref().unwrap(),
+    assert!(completion.detail.is_none());
+    assert_eq!(
+        completion.documentation,
+        Some(Documentation::MarkupContent(contents))
+    );
+    let text = symbols[0].detail.as_ref().unwrap();
+    for expected in [
+        "BibTeX article",
+        "Title: An alpha study 😀",
+        "Author: Ada Lovelace and Grace Hopper",
+        "Year: 2026",
     ] {
-        for expected in [
-            "BibTeX article",
-            "Title: An alpha study 😀",
-            "Author: Ada Lovelace and Grace Hopper",
-            "Year: 2026",
-        ] {
-            assert!(text.contains(expected), "{text}");
-        }
+        assert!(text.contains(expected), "{text}");
     }
     let definition = &features::definitions(&workspace, &main, position)[0];
     assert_eq!(definition.uri, database);
