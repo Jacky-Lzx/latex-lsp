@@ -7,7 +7,7 @@
 ## 入门
 
 - [安装与启动](install.md)：环境要求、构建、安装及进程协议。
-- [编辑器配置](editors.md)：Neovim 配置、其他编辑器及示例。
+- [编辑器配置](editors.md)：Neovim、VS Code 配置及示例。
 
 ## 编辑与项目
 

@@ -5,6 +5,7 @@
 先按[安装与启动](install.md)安装服务器，再配置编辑器。启动命令为 `latex-lsp --stdio`，通常由编辑器执行。
 
 - [Neovim 0.11+ 完整配置](#neovim-011-完整配置)
+- [VS Code](#vs-code)
 - [其他编辑器](#其他编辑器)
 - [示例项目](#示例项目)
 
@@ -50,6 +51,33 @@ vim.lsp.enable('latex_lsp')
 自动提示的触发字符包括 `{`、`[`、`<`、`(`、`|`、`*`、`+` 和逗号，并在常见结束分隔符处更新当前参数。其他自定义分隔符可手动请求提示。
 
 在语法错误处调用 `vim.lsp.buf.code_action()` 可选择快速修复；`vim.lsp.buf.document_highlight()` 高亮当前符号的定义和引用。Neovim 0.12 中可用 `vim.lsp.buf.selection_range(1)` 扩大语法选择范围。
+
+## VS Code
+
+仓库内的 [`editors/vscode`](../editors/vscode/README.md) 提供 VS Code 客户端扩展。服务器需单独安装；在仓库根目录执行：
+
+```sh
+cargo install --path . --locked
+cd editors/vscode
+npm ci
+npm run package
+code --install-extension latex-lsp.vsix
+```
+
+扩展默认从 PATH 启动 `latex-lsp --stdio`；也可以在用户设置中配置 `latex-lsp.serverPath` 为可执行文件绝对路径。打开 LaTeX 项目文件夹和 `.tex` / `.bib` 后自动连接。
+
+```json
+{
+  "latex-lsp.serverPath": "/absolute/path/to/latex-lsp",
+  "latex-lsp.settings": {
+    "build": { "engine": "xelatex", "onSave": true }
+  }
+}
+```
+
+`latex-lsp.settings` 使用服务端原有配置字段，修改后实时传递；默认值不变。项目差异可放入 `.latex-lsp.json`。命令面板提供编译、重编译、取消编译、状态、打开 PDF、重启服务器及输出面板入口；文档 CodeLens 也可编译。编译前需保存项目文件。
+
+扩展暂未提供 PDF 内嵌预览和 SyncTeX 双向跳转。完整安装、远端环境、工具 PATH、兼容性及开发说明见[扩展 README](../editors/vscode/README.md)。
 
 ## 其他编辑器
 

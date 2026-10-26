@@ -1,0 +1,99 @@
+{
+  "name": "latex-lsp",
+  "displayName": "LaTeX LSP",
+  "description": "LaTeX language support powered by the latex-lsp Rust language server.",
+  "version": "0.1.0",
+  "publisher": "Jacky-Lzx",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Jacky-Lzx/latex-lsp.git",
+    "directory": "editors/vscode"
+  },
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Programming Languages", "Linters", "Formatters"],
+  "keywords": ["latex", "tex", "bibtex", "lsp"],
+  "main": "./dist/extension.js",
+  "extensionKind": ["workspace"],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "LaTeX LSP starts a local language server and can run TeX tools."
+    },
+    "virtualWorkspaces": { "supported": false }
+  },
+  "activationEvents": ["onLanguage:latex", "onLanguage:tex", "onLanguage:plaintex", "onLanguage:bibtex", "onLanguage:bib", "onLanguage:bst", "onLanguage:bibtex-style"],
+  "contributes": {
+    "languages": [
+      { "id": "bst", "aliases": ["BibTeX Style", "bst"], "extensions": [".bst"] }
+    ],
+    "configuration": {
+      "title": "LaTeX LSP",
+      "properties": {
+        "latex-lsp.serverPath": {
+          "type": "string",
+          "default": "latex-lsp",
+          "scope": "machine",
+          "markdownDescription": "Path to the separately installed `latex-lsp` executable, or its name on PATH. Use an absolute path when VS Code cannot find your shell's tools."
+        },
+        "latex-lsp.serverEnvironment": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": { "type": "string" },
+          "scope": "machine",
+          "markdownDescription": "Environment variables added to the language server process. Set `PATH` here if TeX tools are unavailable to VS Code. Restarted automatically when changed."
+        },
+        "latex-lsp.settings": {
+          "type": "object",
+          "default": {},
+          "scope": "window",
+          "markdownDescription": "Server settings sent as initializationOptions and updated live. Supports `build`, `formatting`, `diagnostics`, `distribution`, `indexing`, and `inlayHints`. Omitted values use server defaults. Use `.latex-lsp.json` for settings specific to a project or workspace folder.",
+          "additionalProperties": false,
+          "properties": {
+            "build": { "type": "object", "description": "Build tools, engine, paths, arguments, timeout, and onSave." },
+            "formatting": { "type": "object", "description": "LaTeX and BibTeX formatting settings." },
+            "diagnostics": { "type": "object", "description": "Static checks and ChkTeX settings." },
+            "distribution": { "type": "object", "description": "TeX distribution discovery settings." },
+            "indexing": { "type": "object", "description": "Workspace indexing limits and exclusions." },
+            "inlayHints": { "type": "object", "description": "Reference and citation inlay hints." }
+          }
+        },
+        "latex-lsp.trace.server": {
+          "type": "string",
+          "enum": ["off", "messages", "verbose"],
+          "default": "off",
+          "scope": "window",
+          "description": "Trace language server communication in the LaTeX LSP trace output."
+        }
+      }
+    },
+    "commands": [
+      { "command": "latex-lsp.build", "title": "Build", "category": "LaTeX LSP" },
+      { "command": "latex-lsp.rebuild", "title": "Rebuild", "category": "LaTeX LSP" },
+      { "command": "latex-lsp.cancelBuild", "title": "Cancel Build", "category": "LaTeX LSP" },
+      { "command": "latex-lsp.buildStatus", "title": "Show Build Status", "category": "LaTeX LSP" },
+      { "command": "latex-lsp.openPdf", "title": "Open PDF", "category": "LaTeX LSP" },
+      { "command": "latex-lsp.restart", "title": "Restart Server", "category": "LaTeX LSP" },
+      { "command": "latex-lsp.showOutput", "title": "Show Output", "category": "LaTeX LSP" }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "check": "tsc -p . --noEmit",
+    "watch": "tsc -p . --watch",
+    "vscode:prepublish": "npm run compile",
+    "package": "vsce package --out latex-lsp.vsix",
+    "test": "npm run compile && node scripts/test.cjs"
+  },
+  "dependencies": { "vscode-languageclient": "^9.0.1" },
+  "overrides": {
+    "@azure/msal-node": { "uuid": "^11.1.1" }
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "1.85.0",
+    "@vscode/test-electron": "^2.5.2",
+    "@vscode/vsce": "^3.6.0",
+    "typescript": "^5.9.3"
+  }
+}

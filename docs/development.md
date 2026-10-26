@@ -11,6 +11,8 @@
 
 ## 构建检查与测试
 
+VS Code 客户端位于 [`editors/vscode/`](../editors/vscode/README.md)，使用独立的 npm 依赖锁、TypeScript 构建与 VSIX 打包流程。`npm test` 在真实 VS Code Extension Host 中连接 Rust 服务端，使用隔离配置和项目验证语言功能、编译与重启；开发与运行要求见扩展 README。客户端适配留在该目录，编辑器无关能力继续由 Rust 服务端实现。
+
 ```sh
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings

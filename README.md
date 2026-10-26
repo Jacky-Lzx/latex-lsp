@@ -2,7 +2,7 @@
 
 Rust 编写的 LaTeX 语言服务器，支持补全、导航、重命名、格式化、编译与诊断。
 
-[快速开始](docs/install.md) · [文档](docs/README.md) · [性能测试](docs/benchmarks.md) · [MIT 许可证](LICENSE)
+[快速开始](docs/install.md) · [VS Code 扩展](editors/vscode/README.md) · [文档](docs/README.md) · [性能测试](docs/benchmarks.md) · [MIT 许可证](LICENSE)
 
 ## LSP 支持情况与 texlab 对比
 
