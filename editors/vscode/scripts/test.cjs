@@ -22,7 +22,7 @@ async function main() {
   await fs.access(server);
   // realpath avoids /var vs /private/var URI aliases on macOS.
   const temporaryRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'texquill-vscode-')));
-  const workspace = path.join(temporaryRoot, 'project');
+  const workspace = path.join(temporaryRoot, 'project with spaces');
   const userData = path.join(temporaryRoot, 'user-data');
   try {
     await fs.mkdir(workspace);

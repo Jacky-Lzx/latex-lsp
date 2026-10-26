@@ -1,5 +1,6 @@
 import { AnnotationMode, GlobalWorkerOptions, getDocument } from './vendor/pdf.mjs';
 import { EventBus, PDFLinkService, PDFViewer } from './vendor/pdf_viewer.mjs';
+import { fromViewportPoint, highlightRectangle, toPdfPoint } from './coordinates.mjs';
 
 export async function start(vscode) {
   const config = JSON.parse(document.querySelector('meta[name="texquill-pdf-config"]').content);
@@ -30,6 +31,9 @@ export async function start(vscode) {
   const persisted = vscode.getState();
   let currentPdfUri = persisted?.pdfUri;
   let saved = normalizeState(persisted);
+  let source = persisted?.source;
+  let navigation = 0;
+  let highlightTimer;
   let resizeFrame;
 
   function normalizeState(state) {
@@ -80,6 +84,38 @@ export async function start(vscode) {
     viewer.update();
   }
 
+  function clearHighlight() {
+    clearTimeout(highlightTimer);
+    document.querySelector('.synctex-highlight')?.remove();
+  }
+
+  async function navigate(message) {
+    const current = ++navigation;
+    const location = message.location;
+    const activePdf = pdf;
+    if (!activePdf || documentState !== 'ready' || message.revision !== documentRevision
+      || !Number.isSafeInteger(location?.page) || location.page < 1 || location.page > activePdf.numPages
+      || !Number.isFinite(location.x) || !Number.isFinite(location.y)) return;
+    const pdfPage = await activePdf.getPage(location.page);
+    if (current !== navigation || activePdf !== pdf || documentState !== 'ready') return;
+    restoring = false;
+    const page = viewer.getPageView(location.page - 1);
+    if (!page.pdfPage) page.setPdfPage(pdfPage);
+    const [x, y] = toPdfPoint(page.viewport, location);
+    viewer.scrollPageIntoView({ pageNumber: location.page,
+      destArray: [null, { name: 'XYZ' }, x, y, null], ignoreDestinationZoom: true, center: 'both' });
+    viewer.update();
+    clearHighlight();
+    const marker = document.createElement('div');
+    marker.className = 'synctex-highlight';
+    marker.setAttribute('role', 'img');
+    marker.setAttribute('aria-label', 'Source location');
+    for (const [property, value] of Object.entries(highlightRectangle(page.viewport, location))) marker.style[property] = `${value}px`;
+    page.div.append(marker);
+    highlightTimer = setTimeout(clearHighlight, 2500);
+    report('navigated', { id: message.id, location });
+  }
+
   eventBus.on('pagesinit', () => {
     restoreView();
     controls();
@@ -100,7 +136,7 @@ export async function start(vscode) {
     report('rendered', { page: event.pageNumber });
   });
   eventBus.on('pagechanging', controls);
-  eventBus.on('scalechanging', controls);
+  eventBus.on('scalechanging', () => { clearHighlight(); controls(); });
   eventBus.on('updateviewarea', ({ location }) => {
     if (!pdf || restoring) return;
     const page = viewer.getPageView(location.pageNumber - 1).div;
@@ -109,14 +145,17 @@ export async function start(vscode) {
       left: (container.scrollLeft - page.offsetLeft) / page.offsetWidth,
       top: (container.scrollTop - page.offsetTop) / page.offsetHeight,
     };
-    vscode.setState({ ...saved, pdfUri: currentPdfUri });
-    report('view', { page: saved.page, scale: saved.scale });
+    vscode.setState({ ...saved, pdfUri: currentPdfUri, source });
+    report('view', { page: viewer.currentPageNumber, scale: saved.scale });
   });
 
   async function loadDocument(message) {
     const current = ++revision;
+    navigation++;
+    clearHighlight();
     currentPdfUri = message.pdfUri ?? currentPdfUri;
-    vscode.setState({ ...saved, pdfUri: currentPdfUri });
+    source = message.source ?? source;
+    vscode.setState({ ...saved, pdfUri: currentPdfUri, source });
     const pending = loadingTask;
     loadingTask = undefined;
     if (pending && pending !== pdf?.loadingTask) void pending.destroy().catch(() => {});
@@ -173,6 +212,21 @@ export async function start(vscode) {
   element('zoom-in').addEventListener('click', () => zoom(1.2));
   element('zoom-out').addEventListener('click', () => zoom(1 / 1.2));
   element('reload').addEventListener('click', () => vscode.postMessage({ type: 'reload' }));
+  container.addEventListener('click', event => {
+    if (event.button !== 0 || !(event.ctrlKey || event.metaKey) || documentState !== 'ready') return;
+    const pageElement = event.target.closest('.page');
+    if (!pageElement) return;
+    const page = viewer.getPageView(Number(pageElement.dataset.pageNumber) - 1);
+    if (!page?.pdfPage) return;
+    const bounds = page.div.getBoundingClientRect();
+    const point = fromViewportPoint(page.viewport,
+      (event.clientX - bounds.left - page.div.clientLeft) * page.viewport.width / page.div.clientWidth,
+      (event.clientY - bounds.top - page.div.clientTop) * page.viewport.height / page.div.clientHeight);
+    if (point.x < 0 || point.y < 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    report('inverseSearch', { page: page.id, ...point });
+  }, true);
   for (const event of ['wheel', 'pointerdown', 'keydown']) {
     container.addEventListener(event, () => { restoring = false; }, { passive: true });
   }
@@ -188,6 +242,11 @@ export async function start(vscode) {
   window.addEventListener('message', ({ data }) => {
     if (data?.type === 'document' && typeof data.url === 'string' && Number.isSafeInteger(data.revision)) {
       void loadDocument(data);
+    } else if (data?.type === 'navigate') {
+      void navigate(data).catch(error => busy(`Could not locate source in PDF: ${error.message ?? error}`, true));
+    } else if (data?.type === 'source') {
+      source = data.source;
+      vscode.setState({ ...saved, pdfUri: currentPdfUri, source });
     }
   });
   // Loading and refreshing only update the document. They never focus or reveal

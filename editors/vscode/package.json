@@ -67,23 +67,32 @@
         }
       }
     },
+    "keybindings": [
+      { "command": "texquill.forwardSearch", "key": "ctrl+alt+j", "mac": "cmd+alt+j", "when": "editorTextFocus && editorLangId =~ /^(latex|tex|plaintex)$/" }
+    ],
+    "menus": {
+      "editor/context": [
+        { "command": "texquill.forwardSearch", "when": "resourceScheme == file && editorLangId =~ /^(latex|tex|plaintex)$/", "group": "navigation@20" }
+      ]
+    },
     "commands": [
       { "command": "texquill.build", "title": "Build", "category": "TeXquill" },
       { "command": "texquill.rebuild", "title": "Rebuild", "category": "TeXquill" },
       { "command": "texquill.cancelBuild", "title": "Cancel Build", "category": "TeXquill" },
       { "command": "texquill.buildStatus", "title": "Show Build Status", "category": "TeXquill" },
       { "command": "texquill.openPdf", "title": "Open PDF", "category": "TeXquill" },
+      { "command": "texquill.forwardSearch", "title": "Forward Search (TeX to PDF)", "category": "TeXquill", "enablement": "resourceScheme == file && editorLangId =~ /^(latex|tex|plaintex)$/" },
       { "command": "texquill.restart", "title": "Restart Server", "category": "TeXquill" },
       { "command": "texquill.showOutput", "title": "Show Output", "category": "TeXquill" }
     ]
   },
   "scripts": {
     "compile": "tsc -p . && node scripts/build-preview.cjs",
-    "check": "tsc -p . --noEmit && node --check media/preview/main.mjs && node --check scripts/build-preview.cjs",
+    "check": "tsc -p . --noEmit && node --check media/preview/main.mjs && node --check scripts/build-preview.cjs && node --check media/preview/coordinates.mjs",
     "watch": "tsc -p . --watch",
     "vscode:prepublish": "npm run compile",
     "package": "vsce package --out texquill.vsix",
-    "test": "npm run compile && node scripts/test.cjs"
+    "test": "npm run compile && node --test scripts/test-coordinates.mjs && node scripts/test.cjs"
   },
   "dependencies": { "vscode-languageclient": "^9.0.1" },
   "overrides": {

@@ -49,7 +49,7 @@ export function previewHtml(webview: vscode.Webview, assets: vscode.Uri): string
     </div>
     <button id="reload" title="Reload PDF" aria-label="Reload PDF">↻</button>
   </header>
-  <div id="viewer-container" role="main" aria-label="PDF document" aria-busy="true" tabindex="0">
+  <div id="viewer-container" role="main" aria-label="PDF document" title="Ctrl/Cmd+click to go to the TeX source" aria-busy="true" tabindex="0">
     <div id="viewer" class="pdfViewer"></div>
   </div>
   <div id="status" role="status" aria-live="polite">Loading PDF…</div>

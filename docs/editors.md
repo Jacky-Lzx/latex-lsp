@@ -78,7 +78,7 @@ By default, the extension launches `texquill --stdio` from PATH. Alternatively, 
 
 `texquill.settings` uses the server's existing configuration fields and sends updates live, preserving server defaults. Use `.texquill.json` for project overrides. The command palette provides build, rebuild, cancellation, status, Open PDF, restart, and output actions; document code lenses also trigger builds. Save project files before building.
 
-Open PDF uses the built-in PDF.js preview beside the source without moving keyboard focus. Successful builds, including build on save, refresh the preview while preserving the reading position. SyncTeX navigation is not yet available. See the [extension README](../editors/vscode/README.md) for installation, remote environments, tool PATH configuration, compatibility, and development.
+Open PDF uses the built-in PDF.js preview beside the source without moving keyboard focus. Successful builds, including build on save, refresh the preview while preserving the reading position. Use Ctrl+Alt+J (Cmd+Alt+J on macOS) for source-to-PDF SyncTeX search, and Ctrl+click (Cmd+click on macOS) in the PDF to return to its source line. See the [extension README](../editors/vscode/README.md) for installation, remote environments, tool PATH configuration, compatibility, and development.
 
 ## Other editors
 

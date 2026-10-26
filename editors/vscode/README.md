@@ -61,6 +61,7 @@ The command palette provides:
 | TeXquill: Cancel Build | Cancel the current document's build, or all builds when no editor is active. |
 | TeXquill: Show Build Status | Write the current project's status to the output panel. |
 | TeXquill: Open PDF | Open a successfully built PDF beside the source in the built-in viewer, keeping focus in the source editor. |
+| TeXquill: Forward Search (TeX to PDF) | Locate the source cursor in the built-in PDF preview without moving keyboard focus. |
 | TeXquill: Restart Server | Stop the old server, reconnect, and resynchronize open documents. |
 | TeXquill: Show Output | Show server logs and build results. |
 
@@ -72,7 +73,16 @@ After a successful build, run **TeXquill: Open PDF** from the source editor. The
 
 The toolbar supports page navigation, zoom, fit width, fit page, and manual reload. Text can be selected and copied. Successful TeXquill builds refresh open previews while retaining their page, zoom, and relative scroll position; enable `texquill.settings.build.onSave` for save-triggered builds and refreshes. Failed or stale builds leave the displayed PDF unchanged. Refreshing never activates the preview, including when you switch editors during a build. Clicking the preview still focuses it normally.
 
-Preview tabs and their reading state can be restored when VS Code reloads. The viewer does not yet provide document search, a table of contents, printing, annotation editing, or SyncTeX navigation. PDF scripting and external links are disabled. PDF.js and its worker, character maps, fonts, and decoder resources ship in the VSIX with their license; opening a preview does not require a CDN or a local HTTP server.
+Preview tabs, their reading state, and their source association can be restored when VS Code reloads. The viewer does not yet provide document search, a table of contents, printing, or annotation editing. PDF scripting and external links are disabled. PDF.js and its worker, character maps, fonts, and decoder resources ship in the VSIX with their license; opening a preview does not require a CDN or a local HTTP server.
+
+### SyncTeX navigation
+
+Save and build the project first. The server uses the `synctex` executable from its PATH and the compiler's `.synctex` or `.synctex.gz` output. Default build arguments enable SyncTeX; custom compiler arguments must enable it explicitly (for example, `-synctex=1` with pdfLaTeX, XeLaTeX, or LuaLaTeX).
+
+- **TeX to PDF:** press **Ctrl+Alt+J** (**Cmd+Alt+J** on macOS), run **TeXquill: Forward Search (TeX to PDF)**, or use the source editor's context menu. The preview opens beside the source when needed, scrolls to the first matching location, and briefly highlights its typesetting box. Keyboard focus stays in the source editor.
+- **PDF to TeX:** **Ctrl+click** (**Cmd+click** on macOS) a location in the built-in preview. The extension opens the corresponding source file in the source editor group and moves the cursor to its line. Ordinary clicks and text selection keep their usual behavior.
+
+Both directions support included TeX files and preserve the side PDF. Coordinates account for zoom and page rotation. The server owns project/artifact lookup and rejects unsaved sources, stale PDFs, and incomplete or failed builds; save and rebuild when asked. SyncTeX typically maps to source lines, rather than exact character columns. See the [query protocol](https://github.com/Jacky-Lzx/texquill/blob/main/docs/synctex.md) for details.
 
 Running TeXquill alongside other LaTeX language services can produce duplicate completion, diagnostics, or builds. Use one language service and automatic build workflow per workspace.
 
@@ -92,7 +102,7 @@ npm test
 npm run package
 ```
 
-By default, `npm test` downloads stable VS Code and runs real host tests with isolated temporary user data, extension directories, and LaTeX projects. It requires pdfLaTeX and a graphical environment. Tests cover cross-file navigation and rename, untitled completion, BibTeX, code lens builds, actual built-in PDF rendering, preview focus, rebuild/save refreshes, rapid reloads, hidden tabs, invalid PDF recovery, live settings, build on save, cancellation and child process cleanup, diagnostics, unsaved content synchronization after restart, and reconnection after correcting an invalid executable path. On headless Linux, use `xvfb-run -a npm test`.
+By default, `npm test` checks coordinate transforms with real PDF.js viewports, downloads stable VS Code, and runs real host tests with isolated temporary user data, extension directories, and LaTeX projects. It requires pdfLaTeX, `synctex`, and a graphical environment. Tests cover cross-file navigation and rename, untitled completion, BibTeX, code lens builds, actual built-in PDF rendering, SyncTeX round trips and unsaved-source rejection, preview focus, rebuild/save refreshes, rapid reloads, hidden tabs, invalid PDF recovery, live settings, build on save, cancellation and child process cleanup, diagnostics, unsaved content synchronization after restart, and reconnection after correcting an invalid executable path. On headless Linux, use `xvfb-run -a npm test`.
 
 Use `VSCODE_EXECUTABLE_PATH` to select an installed VS Code executable and `TEXQUILL_TEST_SERVER` to select the server. On macOS:
 

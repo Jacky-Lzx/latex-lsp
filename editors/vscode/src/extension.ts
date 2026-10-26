@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
 import { LanguageClient, TransportKind } from 'vscode-languageclient/node';
 import { PdfPreviewProvider } from './preview/provider';
+import { SyncTexNavigation } from './synctex';
+import { type InverseSearch } from './preview/protocol';
 
 const languages = ['latex', 'tex', 'plaintex', 'bibtex', 'bib', 'bst', 'bibtex-style'];
 type BuildStatus = {
@@ -8,6 +10,7 @@ type BuildStatus = {
   stale?: boolean;
   message?: string;
   pdfUri?: string;
+  rootUri?: string;
 };
 
 class LatexExtension implements vscode.Disposable {
@@ -124,6 +127,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<{ prev
   const output = vscode.window.createOutputChannel('TeXquill');
   const previews = new PdfPreviewProvider(context, output);
   const controller = new LatexExtension(output, previews);
+  const navigation = new SyncTexNavigation((command, args) => controller.execute(command, args), previews);
   extension = controller;
   context.subscriptions.push(output, controller, previews);
 
@@ -151,14 +155,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<{ prev
     });
   }
   register('openPdf', async uri => {
-    const result = await controller.execute<BuildStatus>('latex.buildStatus', [documentUri(uri)]);
+    const source = { uri: documentUri(uri), column: vscode.window.activeTextEditor?.viewColumn };
+    const result = await controller.execute<BuildStatus>('latex.buildStatus', [source.uri]);
     if (result.status !== 'success' || result.stale || !result.pdfUri) {
       throw new Error('Build this project successfully before opening its PDF.');
     }
     const pdf = vscode.Uri.parse(result.pdfUri, true);
     if (pdf.scheme !== 'file') throw new Error('The build did not return a local PDF.');
-    await previews.open(pdf);
+    await previews.open(pdf, true, { ...source, uri: result.rootUri ?? source.uri });
   });
+  register('forwardSearch', uri => navigation.forward(uri));
+  context.subscriptions.push(vscode.commands.registerCommand('texquill.inverseSearch', async (point: InverseSearch) => {
+    try { return await navigation.inverse(point); }
+    catch (error) {
+      output.appendLine(String(error));
+      void vscode.window.showErrorMessage(`TeXquill: ${error instanceof Error ? error.message : String(error)}`);
+      throw error;
+    }
+  }), previews.onDidRequestInverseSearch(point => {
+    void vscode.commands.executeCommand('texquill.inverseSearch', point).then(undefined, () => {});
+  }));
   register('restart', () => controller.restart());
   register('showOutput', () => output.show(true));
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(event => {

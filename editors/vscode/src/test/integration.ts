@@ -3,6 +3,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { pdfViewType, type PdfPreviewProvider } from '../preview/provider';
+import { type PdfLocation } from '../preview/protocol';
 
 async function eventually<T>(description: string, operation: () => Thenable<T> | T, accepts: (value: T) => boolean): Promise<T> {
   const deadline = Date.now() + 30_000;
@@ -80,7 +81,7 @@ export async function run(): Promise<void> {
   assert.ok(symbols!.some(symbol => symbol.name.includes('example')));
   console.log('PASS BibTeX language activation');
 
-  const sourceEditor = await vscode.window.showTextDocument(document);
+  let sourceEditor = await vscode.window.showTextDocument(document);
   const sourceGroup = vscode.window.tabGroups.activeTabGroup;
   const sourceSelection = new vscode.Selection(reference, reference);
   sourceEditor.selection = sourceSelection;
@@ -119,6 +120,52 @@ export async function run(): Promise<void> {
   assert.equal(vscode.window.tabGroups.all.flatMap(group => group.tabs).filter(isPdf).length, 1);
   assertSourceFocus(sourceSelection);
   console.log('PASS built-in PDF rendering beside TeX without moving focus or duplicating tabs');
+
+  type Forward = { rootUri: string; pdfUri: string; locations: PdfLocation[] };
+  const pageTwoSelection = new vscode.Selection(5, 3, 5, 3);
+  sourceEditor.selection = pageTwoSelection;
+  const forward = await vscode.commands.executeCommand<Forward>('texquill.forwardSearch');
+  assert.equal(forward!.pdfUri, pdfUri.toString());
+  assert.equal(forward!.locations[0].page, 2);
+  await eventually('forward search scrolls and highlights page two', preview,
+    result => result?.page === 2 && result.navigation?.page === 2 && result.renderedPages.includes(2));
+  assertSourceFocus(pageTwoSelection);
+  console.log('PASS real SyncTeX forward search highlights page two without moving TeX focus');
+
+  const chapter = await vscode.workspace.openTextDocument(chapterUri);
+  const chapterEditor = await vscode.window.showTextDocument(chapter, { viewColumn: sourceGroup.viewColumn });
+  chapterEditor.selection = new vscode.Selection(0, 6, 0, 6);
+  const chapterForward = await vscode.commands.executeCommand<Forward>('texquill.forwardSearch', chapterUri);
+  assert.equal(chapterForward!.rootUri, mainUri.toString());
+  await eventually('included source forwards to its PDF', preview,
+    result => result?.navigation?.page === 1 && result.page === 1);
+  assert.equal(vscode.window.activeTextEditor, chapterEditor);
+  await previews.open(pdfUri, false);
+  const hit = chapterForward!.locations[0];
+  const inverse = await vscode.commands.executeCommand<{ locations: vscode.Location[] }>('texquill.inverseSearch', {
+    pdfUri: pdfUri.toString(), revision: preview()!.revision, page: hit.page, x: hit.x, y: hit.y,
+  });
+  assert.equal(inverse!.locations[0].uri, chapterUri.toString());
+  assert.equal(vscode.window.activeTextEditor?.document.uri.toString(), chapterUri.toString());
+  assert.equal(vscode.window.activeTextEditor?.selection.active.line, 0);
+  assert.equal(vscode.window.tabGroups.activeTabGroup, sourceGroup, 'inverse search reuses the source group');
+  assert.ok(pdfGroup.tabs.some(isPdf), 'inverse search preserves the side PDF');
+  assert.equal((await vscode.commands.executeCommand('texquill.inverseSearch', {
+    pdfUri: pdfUri.toString(), revision: preview()!.revision - 1, ...hit,
+  })), undefined, 'old PDF revisions cannot initiate an inverse jump');
+  console.log('PASS real SyncTeX inverse search returns to an included file in the source group');
+  sourceEditor = await vscode.window.showTextDocument(document, { viewColumn: sourceGroup.viewColumn });
+  sourceEditor.selection = sourceSelection;
+  await sourceEditor.edit(edit => edit.insert(new vscode.Position(3, 0), 'Unsaved. '));
+  await assert.rejects(() => Promise.resolve(vscode.commands.executeCommand('texquill.forwardSearch')), /unsaved|save|changed/i);
+  await assert.rejects(() => Promise.resolve(vscode.commands.executeCommand('texquill.inverseSearch', {
+    pdfUri: pdfUri.toString(), revision: preview()!.revision, ...hit,
+  })), /unsaved|save|changed/i);
+  await sourceEditor.edit(edit => edit.delete(new vscode.Range(3, 0, 3, 'Unsaved. '.length)));
+  await document.save();
+  sourceEditor.selection = sourceSelection;
+  assertSourceFocus(sourceSelection);
+  console.log('PASS SyncTeX rejects unsaved sources in both directions');
 
   await vscode.commands.executeCommand('texquill.rebuild', mainUri);
   const second = await eventually('rebuild completes', status,
@@ -206,6 +253,30 @@ export async function run(): Promise<void> {
     'concurrent open requests reuse one preview');
   assertSourceFocus(savedSelection);
   console.log('PASS closing and concurrently reopening a PDF');
+
+  await vscode.window.tabGroups.close(vscode.window.tabGroups.all.flatMap(group => group.tabs).find(isPdf)!);
+  await vscode.commands.executeCommand('texquill.forwardSearch');
+  await eventually('forward search opens a closed PDF and delivers its pending destination', preview,
+    result => result?.status === 'ready' && !!result.navigation);
+  assert.equal(previews.getSource(pdfUri)?.uri, mainUri.toString());
+  assertSourceFocus(savedSelection);
+  console.log('PASS forward search opens a new preview and preserves its source association');
+
+  const sharedGroup = vscode.window.tabGroups.all.find(group => group.tabs.some(isPdf))!;
+  const sharedEditor = await vscode.window.showTextDocument(document, { viewColumn: sharedGroup.viewColumn, preview: false });
+  sharedEditor.selection = new vscode.Selection(5, 2, 5, 2);
+  const sharedForward = await vscode.commands.executeCommand<Forward>('texquill.forwardSearch', mainUri);
+  assert.equal(sharedForward!.locations[0].page, 2, 'forward search uses the focused source when it has multiple editors');
+  await eventually('PDF moves beside the source when both shared a group', preview,
+    result => result?.navigation?.page === 2 && result.renderedPages.includes(2));
+  assert.equal(vscode.window.activeTextEditor, sharedEditor, 'revealing the PDF does not replace the focused source');
+  assert.equal(vscode.window.tabGroups.activeTabGroup, sharedGroup);
+  assert.ok(!sharedGroup.tabs.some(isPdf), 'PDF has moved to another group');
+  await vscode.window.tabGroups.close(sharedGroup.activeTab!);
+  await vscode.window.showTextDocument(document, { viewColumn: sourceGroup.viewColumn });
+  await vscode.commands.executeCommand('texquill.openPdf');
+  assertSourceFocus(savedSelection);
+  console.log('PASS forward search preserves focus even when source and hidden PDF shared a group');
 
   await config.update('settings', {
     distribution: { enabled: false },

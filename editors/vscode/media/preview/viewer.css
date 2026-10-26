@@ -21,4 +21,5 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 1px s
 #status { position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%); max-width: calc(100% - 32px); padding: 8px 12px; border-radius: 4px; background: var(--vscode-editorWidget-background, #292b30); border: 1px solid var(--vscode-widget-border, #444); box-shadow: 0 2px 8px #0003; }
 #status[hidden] { display: none; }
 #status.error { color: var(--vscode-errorForeground, #f48771); }
+.synctex-highlight { position: absolute; pointer-events: none; z-index: 5; border: 2px solid #e5a000; border-radius: 3px; background: #ffc10738; }
 @media (max-width: 420px) { #toolbar { gap: 4px; padding-inline: 5px; } .page-label { display: none; } .controls { gap: 2px; } #zoom { width: 90px; } }

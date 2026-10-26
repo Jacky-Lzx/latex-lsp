@@ -5,11 +5,16 @@
 Query the location mapping between source code and PDF for editor and preview plug-in integration. For compilation configuration and product validity rules, see [Compilation](build.md).
 
 - [Use](#purpose)
+- [VS Code preview](#vs-code-preview)
 - [Query protocol and return results](#query-protocol-and-return-results)
 
 ## Purpose
 
 - SyncTeX query: source code lines locate PDF page numbers/coordinates, and PDF coordinates inversely check source code lines; return data for use by editors or PDF preview plug-ins to check unsaved sources and expired products.
+
+## VS Code preview
+
+The built-in viewer supports both directions after saving and successfully compiling with SyncTeX enabled. Use **TeXquill: Forward Search (TeX to PDF)** or Ctrl+Alt+J (Cmd+Alt+J on macOS) to reveal and highlight the source cursor's PDF location while keeping source focus. Ctrl+click (Cmd+click on macOS) in the PDF opens the corresponding source file and line. The extension passes these queries to the server; it does not discover roots or run a separate SyncTeX process. See the [extension guide](../editors/vscode/README.md#synctex-navigation) for setup and limitations.
 
 ## Query protocol and return results
 
