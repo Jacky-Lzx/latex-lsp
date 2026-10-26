@@ -623,6 +623,45 @@ fn document_symbols_include_headings_labels_and_macros() {
 }
 
 #[test]
+fn document_symbols_keep_empty_headings_with_nonempty_names_and_original_ranges() {
+    for title in ["", "  \t", "\r\n  ", "\u{2003}"] {
+        let source = format!(
+            "\\section{{Parent}}\n\\subsection*{{{title}}}\n\\label{{child}}\n\\section{{}}\n\\label{{peer}}"
+        );
+        let uri = uri("empty-headings.tex");
+        let doc = Document::new(&uri, source.clone(), Some(1));
+        let symbols = features::symbols(&doc);
+        assert_eq!(symbols.len(), 2);
+        assert_eq!(symbols[0].name, "Parent");
+        let child = &symbols[0].children.as_ref().unwrap()[0];
+        assert_eq!(child.name, "\\subsection", "{source}");
+        assert_eq!(child.children.as_ref().unwrap()[0].name, "child");
+        let start = source.find("\\subsection*{").unwrap() + "\\subsection*{".len();
+        assert_eq!(
+            child.selection_range,
+            doc.text.range(start, start + title.len())
+        );
+        let next = source.rfind("\\section").unwrap();
+        assert_eq!(child.range.end, doc.text.position(next));
+        assert_eq!(symbols[0].range.end, doc.text.position(next));
+        assert_eq!(symbols[1].name, "\\section");
+        assert_eq!(symbols[1].children.as_ref().unwrap()[0].name, "peer");
+        // Flattening populates the shared outline cache; both response paths
+        // must preserve the same safe names and hierarchy.
+        let flat = features::flat_symbols(&doc, &uri);
+        assert_eq!(
+            flat.iter()
+                .map(|symbol| symbol.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Parent", "\\subsection", "child", "\\section", "peer"]
+        );
+        assert_eq!(flat[2].container_name.as_deref(), Some("\\subsection"));
+        assert_eq!(flat[4].container_name.as_deref(), Some("\\section"));
+        assert_eq!(features::symbols(&doc), symbols);
+    }
+}
+
+#[test]
 fn indexes_closed_files_and_keeps_unsaved_content() {
     let directory = tempfile::tempdir().unwrap();
     let chapter = directory.path().join("chapter.tex");

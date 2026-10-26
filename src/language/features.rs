@@ -2749,7 +2749,13 @@ pub(crate) fn uncached_symbols(doc: &Document) -> Vec<DocumentSymbol> {
             .map(|(_, command, _)| command.span.start)
             .unwrap_or(doc.text.source.len());
         result.push(DocumentSymbol {
-            name: argument.value.clone(),
+            // Empty titles are common while editing, but clients require a
+            // nonblank symbol name. Keep the heading and its children intact.
+            name: if argument.value.trim().is_empty() {
+                format!("\\{}", command.name)
+            } else {
+                argument.value.clone()
+            },
             detail: Some(command.name.clone()),
             kind: SymbolKind::NAMESPACE,
             tags: None,

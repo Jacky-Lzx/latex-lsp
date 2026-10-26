@@ -51,6 +51,26 @@ export async function run(): Promise<void> {
   assert.ok(completions!.items.length > 0);
   console.log('PASS untitled document completion');
 
+  const outline = await vscode.workspace.openTextDocument({
+    language: 'latex',
+    content: '\\section{Parent}\n\\subsection{}\n\\label{child}\n\\section{ \t }\n\\label{peer}',
+  });
+  const outlineEditor = await vscode.window.showTextDocument(outline);
+  const outlineNames = (symbols: vscode.DocumentSymbol[]): string[] =>
+    symbols.flatMap(symbol => [symbol.name, ...outlineNames(symbol.children)]);
+  const outlineSymbols = await eventually('outline with empty headings',
+    () => vscode.commands.executeCommand<vscode.DocumentSymbol[]>('vscode.executeDocumentSymbolProvider', outline.uri),
+    result => !!result?.length);
+  assert.deepEqual(outlineNames(outlineSymbols!), ['Parent', '\\subsection', 'child', '\\section', 'peer']);
+  assert.equal(outlineSymbols![0].children[0].children[0].name, 'child');
+  assert.equal(outlineSymbols![1].children[0].name, 'peer');
+  const titlePosition = outline.positionAt(outline.getText().indexOf('\\subsection{') + '\\subsection{'.length);
+  await outlineEditor.edit(edit => edit.insert(titlePosition, 'Recovered'));
+  await eventually('outline refresh after filling an empty heading',
+    () => vscode.commands.executeCommand<vscode.DocumentSymbol[]>('vscode.executeDocumentSymbolProvider', outline.uri),
+    result => !!result && outlineNames(result).includes('Recovered'));
+  console.log('PASS empty heading outlines and live title updates');
+
   const bib = await vscode.workspace.openTextDocument(vscode.Uri.file(path.join(root, 'references.bib')));
   await vscode.window.showTextDocument(bib);
   const symbols = await eventually('BibTeX symbols',
